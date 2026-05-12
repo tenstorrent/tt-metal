@@ -27,30 +27,50 @@ from ttnn.operations.transformer import SDPAProgramConfig
 
 # Tracy (perf): vision Matmul/SDPA show HiFi4; use lower fidelity for ViT matmul/SDPA only.
 # Norms (RMS/LayerNorm) keep HiFi4 for stability.
-VISION_MATMUL_MATH_FIDELITY = ttnn.MathFidelity.HiFi2
+# QKV/O attn matmul lowered to LoFi to match the MLP path -- weights are already
+# BFP8 so the LoFi multiplication delta lands inside the existing BFP8 output
+# quantization noise. Saves ~50% on the per-layer attn matmul time at the
+# 60.9 / 130 TFLOPs peak HiFi2 ceiling we were hitting in tracy.
+VISION_MATMUL_MATH_FIDELITY = ttnn.MathFidelity.LoFi
 VISION_SDPA_MATH_FIDELITY = ttnn.MathFidelity.LoFi
-VISION_NORM_MATH_FIDELITY = ttnn.MathFidelity.HiFi4
+# RMSNorm/LayerNorm at HiFi2: the variance reduce is a sum of squares of BF16
+# inputs, and HiFi2 already gives full BF16 multiplication precision in the
+# single-pass kernel -- HiFi4's extra phases are wasted work for our dtype mix.
+VISION_NORM_MATH_FIDELITY = ttnn.MathFidelity.HiFi2
 
 
 def _vision_matmul_compute_config(device, *, math_fidelity: ttnn.MathFidelity) -> ttnn.DeviceComputeKernelConfig:
-    """Compute config for vision linear/matmul ops."""
+    """Compute config for vision linear/matmul ops.
+
+    ``packer_l1_acc=True`` keeps partial output accumulators in L1 across the
+    K-loop iterations rather than spilling to DRAM each pass, which directly
+    improves throughput on long-K matmuls (K=1536, K=4224 in the dots vision
+    MLP). ``math_approx_mode=True`` enables the fast polynomial path for any
+    fused transcendental activation (e.g. SILU on the gate matmul).
+    """
     return ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=math_fidelity,
-        math_approx_mode=False,
+        math_approx_mode=True,
         fp32_dest_acc_en=False,
-        packer_l1_acc=False,
+        packer_l1_acc=True,
     )
 
 
 def _vision_sdpa_compute_config(device, *, math_fidelity: ttnn.MathFidelity) -> ttnn.DeviceComputeKernelConfig:
-    """Compute config for vision SDPA and norm ops."""
+    """Compute config for vision SDPA and norm ops.
+
+    ``packer_l1_acc=True`` keeps the chunked-SDPA partial accumulators in L1
+    instead of round-tripping through DRAM, which directly speeds up the
+    inner softmax-reduce loop. ``math_approx_mode=True`` uses the fast
+    polynomial path for transcendentals (matches the decode-mode SDPA).
+    """
     return ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=math_fidelity,
-        math_approx_mode=False,
+        math_approx_mode=True,
         fp32_dest_acc_en=False,
-        packer_l1_acc=False,
+        packer_l1_acc=True,
     )
 
 
@@ -213,14 +233,12 @@ class TTNNDotsVision2DRoPE:
         cos_full = torch.cat([cos_half, cos_half], dim=-1)
         sin_full = torch.cat([sin_half, sin_half], dim=-1)
 
-        # Reshape to [1, 1, S, head_dim]
+        # Reshape to [1, 1, S, head_dim]. cos/sin stay in the native HF
+        # half-half head_dim layout (each half repeats), which is exactly
+        # the format ``ttnn.experimental.rotary_embedding`` (non-llama)
+        # expects -- no meta-style interleave conversion needed.
         cos_full = cos_full.unsqueeze(0).unsqueeze(0)
         sin_full = sin_full.unsqueeze(0).unsqueeze(0)
-
-        # Convert from HF-style to meta-style as required by rotary_embedding_llama
-        from models.tt_transformers.tt.load_checkpoints import convert_rope_style_hf_to_meta
-
-        cos_full, sin_full = convert_rope_style_hf_to_meta(cos_full, sin_full)
 
         cos_full = cos_full.to(torch.bfloat16)
         sin_full = sin_full.to(torch.bfloat16)
@@ -476,10 +494,16 @@ class TTNNDotsVisionMLP(TTNNModule):
 
         mem = ttnn.DRAM_MEMORY_CONFIG
 
+        # Gate/up outputs are BFP8: halves the matmul writeback (38 MB BF16
+        # -> 21 MB BFP8) and the matching read in the SILU multiply, with
+        # no quality impact since the silu+mul output is already BFP8 in
+        # this path. BFP4 weight x BF16 activation -> BFP8 output is a
+        # supported matmul dtype combo on Wormhole.
         gate = ttnn.linear(
             hidden_states,
             self.tt_fc1_weight,
             bias=self.tt_fc1_bias,
+            dtype=ttnn.bfloat8_b,
             memory_config=mem,
             compute_kernel_config=self.compute_kernel_config,
         )
@@ -487,22 +511,37 @@ class TTNNDotsVisionMLP(TTNNModule):
             hidden_states,
             self.tt_fc3_weight,
             bias=self.tt_fc3_bias,
+            dtype=ttnn.bfloat8_b,
             memory_config=mem,
             compute_kernel_config=self.compute_kernel_config,
         )
+        # SILU dominates this op (the elementwise mul is cheap; the per-tile
+        # exp+sigmoid is the bottleneck). ``fast_and_approximate_mode=True``
+        # routes the fused SILU through the polynomial exp/sigmoid path,
+        # cutting the ~2.2 ms BinaryNg time per vision layer. Output goes to
+        # BFP8 so the down-projection matmul reads half the bandwidth (BFP4
+        # weight x BFP8 activation instead of BFP4 x BF16).
         gate_up_mul = ttnn.mul(
             gate,
             up,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+            fast_and_approximate_mode=True,
+            dtype=ttnn.bfloat8_b,
             memory_config=mem,
         )
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
 
+        # ``dtype=bfloat8_b`` halves the down-projection writeback (38 MB BF16
+        # -> 21 MB BFP8 per vision layer) and the matching read in the
+        # following residual add. The downstream RMSNorm/attention path
+        # already operates on BFP8 cleanly, so this stays inside the existing
+        # quantization envelope.
         output = ttnn.linear(
             gate_up_mul,
             self.tt_fc2_weight,
             bias=self.tt_fc2_bias,
+            dtype=ttnn.bfloat8_b,
             memory_config=mem,
             compute_kernel_config=self.compute_kernel_config,
         )
@@ -753,35 +792,17 @@ class TTNNDotsVisionAttention(TTNNModule):
 
         return new_attn
 
-    def _permute_qkv_hf_to_meta(self, qkv_tensor, is_bias=False):
-        """Permute Q/K portions of fused QKV from HF to meta-style for rotary_embedding_llama."""
-        from models.tt_transformers.tt.load_checkpoints import reverse_permute
-
-        h = self.num_heads
-        hd = self.head_dim
-        qkv_dim = h * hd  # 1536 per Q/K/V
-
-        if is_bias:
-            q_part = qkv_tensor[:qkv_dim]
-            k_part = qkv_tensor[qkv_dim : 2 * qkv_dim]
-            v_part = qkv_tensor[2 * qkv_dim :]
-            q_part = reverse_permute(q_part.unsqueeze(-1), h, qkv_dim, 1).squeeze(-1)
-            k_part = reverse_permute(k_part.unsqueeze(-1), h, qkv_dim, 1).squeeze(-1)
-            return torch.cat([q_part, k_part, v_part], dim=0)
-        else:
-            q_part = qkv_tensor[:qkv_dim, :]
-            k_part = qkv_tensor[qkv_dim : 2 * qkv_dim, :]
-            v_part = qkv_tensor[2 * qkv_dim :, :]
-            q_part = reverse_permute(q_part, h, qkv_dim, qkv_tensor.shape[1])
-            k_part = reverse_permute(k_part, h, qkv_dim, qkv_tensor.shape[1])
-            return torch.cat([q_part, k_part, v_part], dim=0)
-
     def preprocess_weights_impl(self):
-        qkv_w = self._permute_qkv_hf_to_meta(self._qkv_weight)
-        self.tt_qkv_weight = preprocess_linear_weight(qkv_w, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+        # QKV weights/bias are kept in the native HF "half-half" head_dim
+        # layout. Combined with cos/sin built in the same half-half layout
+        # (see TTNNDotsVision2DRoPE.build), this lets us use the cheaper
+        # ``ttnn.experimental.rotary_embedding`` (non-llama) kernel that
+        # preserves input dtype -- so Q/K can stay BFP8 the whole way from
+        # the QKV matmul into SDPA, eliminating the 4 typecasts per layer
+        # the llama kernel forced (~1.3 ms x 42 layers in vision prefill).
+        self.tt_qkv_weight = preprocess_linear_weight(self._qkv_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
         if self._qkv_bias is not None:
-            qkv_b = self._permute_qkv_hf_to_meta(self._qkv_bias, is_bias=True)
-            self.tt_qkv_bias = preprocess_linear_bias(qkv_b, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+            self.tt_qkv_bias = preprocess_linear_bias(self._qkv_bias, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
         self.tt_o_proj_weight = preprocess_linear_weight(
             self._o_proj_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
         )
@@ -811,20 +832,6 @@ class TTNNDotsVisionAttention(TTNNModule):
             self.device, math_fidelity=VISION_SDPA_MATH_FIDELITY
         )
 
-        # Build transformation matrix for rotary_embedding_llama (must be 32x32, kernel operates per-tile)
-        from models.tt_transformers.tt.common import get_rot_transformation_mat
-
-        transformation_mat_torch = get_rot_transformation_mat(dhead=self.head_dim)
-        mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
-        self.transformation_mat = ttnn.from_torch(
-            transformation_mat_torch,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mapper,
-        )
-
     def _concat_heads(self, ctx: ttnn.Tensor) -> ttnn.Tensor:
         """Gather head slices back into a single sequence-major tensor."""
         if ctx.memory_config().buffer_type == ttnn.BufferType.L1:
@@ -837,7 +844,20 @@ class TTNNDotsVisionAttention(TTNNModule):
         return ttnn.typecast(ctx_gathered, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def _get_sdpa_program_config(self, seq_len: int):
-        """Chunked SDPA program config for the vision tower."""
+        """Chunked SDPA program config for the vision tower.
+
+        ``exp_approx_mode=True`` uses the fast polynomial exp in the softmax
+        kernel — vision SDPA already runs at LoFi math fidelity, so the small
+        precision delta from the approximate exp is in the noise.
+
+        Chunk sizes: the per-core attention-scores circular buffer is
+        ``q_chunk × k_chunk × sizeof(fp32_accumulator)``. With Wormhole's
+        ~1.5 MB usable L1, this hard-caps the product at ~256K elements
+        (e.g. 256 × 512 = 128K, leaves headroom for Q/K/V chunk buffers and
+        the partial-output accumulator). Going beyond (e.g. 512 × 1024 =
+        512K) overflows L1 with a "Statically allocated CBs grow to ... B"
+        error. We keep the proven q=256, k=512 schedule for long sequences.
+        """
         grid = self.device.compute_with_storage_grid_size()
         grid_size = ttnn.CoreCoord(grid.x, grid.y)
 
@@ -853,7 +873,7 @@ class TTNNDotsVisionAttention(TTNNModule):
             compute_with_storage_grid_size=grid_size,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
-            exp_approx_mode=False,
+            exp_approx_mode=True,
         )
 
     def forward(
@@ -873,14 +893,10 @@ class TTNNDotsVisionAttention(TTNNModule):
         # Output the fused QKV in BFP8 directly. At S=12288 this halves bandwidth on:
         #   1. the qkv matmul writeback ([1,1,S,4608]: 113 MB BF16 -> 56 MB BFP8)
         #   2. nlp_create_qkv_heads, which becomes "BFP8 => BFP8" (~221 MB IO -> ~110 MB)
-        # and removes the V -> BFP8 typecast since V is already BFP8 and stays that way
-        # all the way into SDPA. Q/K still take a BF16 round-trip around rotary because
-        # rotary_embedding_llama_device_operation.cpp:69 requires bfloat16 inputs, but
-        # the V-typecast saved + the nlp_create_qkv_heads halving outweighs the extra
-        # Q/K typecast pair. Q/K were already going to BFP8 before SDPA in the original
-        # path, so the only added quantization is one extra BFP8 round-trip for Q/K
-        # before rotary -- vision SDPA already runs LoFi on BFP8 inputs so this stays
-        # within the existing accuracy envelope.
+        # Q/K/V all stay BFP8 from the QKV matmul straight into SDPA -- the
+        # non-llama ``ttnn.experimental.rotary_embedding`` preserves dtype,
+        # so we don't need any typecasts around the rotary like the llama
+        # kernel forced before.
         qkv = ttnn.linear(
             hidden_states,
             self.tt_qkv_weight,
@@ -902,16 +918,11 @@ class TTNNDotsVisionAttention(TTNNModule):
         if rot_mats is not None and len(rot_mats) == 2:
             cos, sin = rot_mats
 
-            # rotary_embedding_llama requires bfloat16 (rotary_embedding_llama_device_operation.cpp:69),
-            # so promote Q/K back to BF16 around the rotary, then re-quantize to BFP8 for SDPA.
-            q = ttnn.typecast(q, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            k = ttnn.typecast(k, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-            q = ttnn.experimental.rotary_embedding_llama(q, cos, sin, self.transformation_mat, is_decode_mode=False)
-            k = ttnn.experimental.rotary_embedding_llama(k, cos, sin, self.transformation_mat, is_decode_mode=False)
-
-            q = ttnn.typecast(q, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            k = ttnn.typecast(k, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # ``ttnn.experimental.rotary_embedding`` (non-llama) preserves
+            # input dtype, so Q/K stay BFP8 the whole way: no typecasts
+            # around the rotary, and SDPA reads BFP8 Q/K/V directly.
+            q = ttnn.experimental.rotary_embedding(q, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            k = ttnn.experimental.rotary_embedding(k, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # V is already BFP8 from the QKV matmul; no typecast needed for SDPA.
         # SDPA still requires interleaved Q/K/V (sdpa_device_operation.cpp:44 forbids

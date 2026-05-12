@@ -34,6 +34,20 @@ def _tp_requires_ccl(device):
     return not (hasattr(device, "shape") and list(device.shape)[-1] == 1)
 
 
+def _ccl_num_links(device) -> int:
+    """Number of ethernet links to use for reduce_scatter / all_gather.
+
+    Pinned to 1 for now: the dots_ocr decode trace re-uses the same CCL
+    semaphores across reduce_scatter and all_gather inside a single layer,
+    and the multi-link path on this CCL stack reorders completions which
+    triggers ``Event Order Issue`` (expected event N but got M). The
+    tt_transformers / gemma3 paths that use ``num_links=2`` go through the
+    newer global-semaphore CCL APIs (``tt_ccl.line_*``), which dots_ocr does
+    not. Until we migrate to that path, stay on 1 link to keep correctness.
+    """
+    return 1
+
+
 def _largest_divisor_at_most(value: int, limit: int) -> int:
     for candidate in range(min(value, limit), 0, -1):
         if value % candidate == 0:
@@ -49,9 +63,6 @@ def _out_subblock_w(per_core_n: int, out_subblock_h: int = 1) -> int:
 
 
 def _dp_prefill_matmul_program_config(device, input_shape, weight_shape):
-    if _tp_requires_ccl(device):
-        return None
-
     seq_len = int(input_shape[2])
     if seq_len <= 32:
         return None
@@ -103,14 +114,11 @@ def _dp_decode_matmul_program_config(device, input_shape, weight_shape):
     4 for ``in0_block_w``. Same shape pattern as
     ``qwen_moe._make_sparse_matmul_program_config``, which is the proven
     decode-mode config for DRAM-interleaved input + weights in tt-symbiote.
-    """
-    if _tp_requires_ccl(device):
-        # Multi-device with CCL: leave to the default config — the CCL paths
-        # (reduce_scatter / all_gather) require specific output layouts that
-        # custom decode configs may perturb. The single-device decode path is
-        # the case that benefits.
-        return None
 
+    Multi-device CCL safe: the matmul writes to ``DRAM_INTERLEAVED`` regardless
+    of the program_config (program_config tunes matmul kernel internals only),
+    so reduce_scatter / all_gather see the same input layout either way.
+    """
     seq_len = int(input_shape[-2])
     if seq_len > 32:
         return None  # not a decode shape
@@ -128,10 +136,16 @@ def _dp_decode_matmul_program_config(device, input_shape, weight_shape):
     num_cores = max(1, grid_x * grid_y)
     per_core_n = max(1, math.ceil(n_tiles / num_cores))
 
+    # For very large N (e.g. lm_head N=151936 → per_core_n≈75) the per-core
+    # L1 footprint of 1D-mcast becomes tight (output tiles + weight cache +
+    # circular buffers) and the default ttnn config is typically as fast or
+    # faster. Bail out and let the auto-config handle it.
+    if per_core_n > 32:
+        return None
+
     # Cap in0_block_w so the per-core L1 weight cache stays within ~256 KB.
     # Each weight tile is ~1 KB for BFP8 / ~2 KB for BF16; using BFP8 lower
-    # bound here keeps us safe even on huge-N matmuls (e.g. lm_head with
-    # per_core_N=75 tiles for N=151936 / 64 cores).
+    # bound here keeps us safe even on huge-N matmuls.
     weight_tile_bytes = 1024
     max_l1_weight_bytes = 256 * 1024
     max_in0_block_w_for_l1 = max(1, max_l1_weight_bytes // (per_core_n * weight_tile_bytes))
@@ -155,14 +169,12 @@ def _dp_decode_matmul_program_config(device, input_shape, weight_shape):
 def _dp_matmul_program_config(device, input_shape, weight_shape):
     """Pick decode vs prefill matmul program config based on input seq length.
 
-    Multi-device CCL paths continue to use the default (None). On single-device
-    inference, decode-shape matmuls (M<=32) get an explicit 1D-mcast config
-    tuned for ``per_core_M=1``; prefill-shape matmuls reuse the existing 2D
-    program config helper.
+    Decode-shape matmuls (M<=32) get an explicit 1D-mcast config tuned for
+    ``per_core_M=1``; prefill-shape matmuls reuse the existing 2D program
+    config helper. Both work for single-device and multi-device (CCL) paths
+    — the matmul kernel writes to DRAM regardless of program_config, so
+    downstream reduce_scatter / all_gather see the same tensor layout.
     """
-    if _tp_requires_ccl(device):
-        return None
-
     seq_len = int(input_shape[-2])
     if seq_len <= 32:
         return _dp_decode_matmul_program_config(device, input_shape, weight_shape)
@@ -301,7 +313,13 @@ class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
 
     @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
-        """Forward pass through linear layer."""
+        """Forward pass through linear layer.
+
+        On single-device (no CCL), bias is folded directly into the matmul
+        kernel via ``ttnn.linear(bias=...)`` to eliminate the post-matmul
+        BinaryNg add. With CCL we must keep bias post-reduce_scatter so the
+        bias is not summed across devices.
+        """
         if input_tensor.layout != ttnn.TILE_LAYOUT:
             input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         input_tensor_shape = list(input_tensor.shape)
@@ -309,24 +327,27 @@ class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
         while len(input_shape) < 4:
             input_shape.insert(1, 1)  # Add batch dimensions if needed
         input_tensor = ttnn.reshape(input_tensor, input_shape)
+        needs_ccl = _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device)
+        fused_bias = None if needs_ccl else self.tt_bias
         tt_output = ttnn.linear(
             input_tensor,
             self.tt_weight,
+            bias=fused_bias,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
             program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
-        if _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device):
+        if needs_ccl:
             tt_output = ttnn.reduce_scatter(
                 tt_output,
                 dim=3,
-                num_links=1,
+                num_links=_ccl_num_links(self.device),
                 cluster_axis=1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=ttnn.Topology.Linear,
             )
-        if self.tt_bias is not None:
-            tt_output += self.tt_bias
+            if self.tt_bias is not None:
+                tt_output += self.tt_bias
         tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
         return tt_output
 
@@ -339,6 +360,11 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
         The input is column-sharded across devices. After matmul each device
         holds a partial sum.  all_reduce sums the partials so every device
         gets the full output (replicated).
+
+        On single-device (no CCL), bias is fused into the matmul kernel via
+        ``ttnn.linear(bias=...)`` to remove a separate device op. With CCL,
+        the bias must be added AFTER the all-reduce so it is not summed
+        ``num_devices`` times.
         """
 
         if input_tensor.layout != ttnn.TILE_LAYOUT:
@@ -352,10 +378,17 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
             input_shape.insert(1, 1)  # Add batch dimensions if needed
         input_tensor = ttnn.reshape(input_tensor, input_shape)
 
-        # Matmul: partial sum on each device
+        needs_ccl = _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device)
+        # ``_bias_fused_into_matmul`` is set in move_weights_to_device_impl when
+        # bias is prepared as replicated/divided so it can be fused into the
+        # matmul (post-RS, the divided contributions sum back to the full
+        # bias on each N-shard). For single-device, bias is already fused.
+        bias_fused = bool(getattr(self, "_bias_fused_into_matmul", False))
+        fused_bias = self.tt_bias if (not needs_ccl) or bias_fused else None
         tt_output = ttnn.linear(
             input_tensor,
             self.tt_weight,
+            bias=fused_bias,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
             program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
@@ -363,25 +396,28 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
         # Decompose all_reduce into reduce_scatter + all_gather for trace compatibility.
         # ttnn.all_reduce internally allocates an intermediate buffer dynamically, which
         # is incompatible with TTNN trace capture (requires stable buffer addresses).
-        if _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device):
+        if needs_ccl:
+            num_links = _ccl_num_links(self.device)
             tt_output = ttnn.reduce_scatter(
                 tt_output,
                 dim=3,
-                num_links=1,
+                num_links=num_links,
                 cluster_axis=1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=ttnn.Topology.Linear,
             )
+            # Fallback: if bias was not fused (e.g. legacy sharded mapper
+            # path), add it here while the tensor is still N-sharded.
+            if self.tt_bias is not None and not bias_fused:
+                tt_output += self.tt_bias
             tt_output = ttnn.all_gather(
                 tt_output,
                 dim=3,
-                num_links=1,
+                num_links=num_links,
                 cluster_axis=1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=ttnn.Topology.Linear,
             )
-        if self.tt_bias is not None:
-            tt_output += self.tt_bias
 
         tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
         return tt_output
@@ -487,6 +523,10 @@ class TTNNLinearIReplicatedWColSharded(TTNNLinearInputReplicatedWeightSharded):
         post-matmul add but saves one device op per call. (For the column-
         sharded all-reduced variants the bias *must* stay post-CCL — fusing
         would cause the bias to be summed num_devices times by the all-reduce.)
+
+        Both ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` (decode) and
+        ``MatmulMultiCoreReuseMultiCastProgramConfig`` (prefill) accept a fused
+        ``bias`` tensor in the ttnn matmul kernel, so we always pass the bias.
         """
         if input_tensor.layout != ttnn.TILE_LAYOUT:
             input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -495,25 +535,15 @@ class TTNNLinearIReplicatedWColSharded(TTNNLinearInputReplicatedWeightSharded):
         while len(input_shape) < 4:
             input_shape.insert(1, 1)  # Add batch dimensions if needed
         input_tensor = ttnn.reshape(input_tensor, input_shape)
-        # Decode (M==1 tile) hits the default ttnn auto-config which picks
-        # in0_block_w=1 — flagged as suboptimal by the perf trace summary.
-        # _dp_matmul_program_config returns a tuned 1D-mcast decode config
-        # for single-device decode and falls back to None otherwise.
         program_config = _dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape)
-        # MatmulMultiCoreReuseMultiCast1D does not support bias-fusion the way
-        # the 2D mcast variant does, so when the decode program config is
-        # active we add bias as a post-matmul op instead of fusing it.
-        is_decode_pc = isinstance(program_config, ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig)
         tt_output = ttnn.linear(
             input_tensor,
             self.tt_weight,
-            bias=None if is_decode_pc else self.tt_bias,
+            bias=self.tt_bias,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
             program_config=program_config,
         )
-        if is_decode_pc and self.tt_bias is not None:
-            tt_output = ttnn.add(tt_output, self.tt_bias)
         tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
         return tt_output
 
@@ -527,6 +557,13 @@ class TTNNLinearLLamaIColShardedWAllReduced(TTNNLinearIColShardedWAllReduced):
     fp32_dest_acc_en=False doubles the dst register size (4 -> 8 tiles), roughly
     halving the number of matmul passes for these decode-bound projections —
     matches the working pattern in qwen_attention.py / linear_intelligent.py.
+
+    Bias-fusion (multi-device): we replicate the bias on every device but
+    pre-divide by ``num_devices`` so it can be fused directly into the matmul
+    kernel. After ``reduce_scatter`` sums the per-device partials, the
+    contribution from each device's ``bias/k`` adds up to the full bias on
+    the relevant N-shard, exactly matching the original behaviour. This
+    eliminates one ``ttnn.add`` per layer in TP decode (~28 ops/token).
     """
 
     def move_weights_to_device_impl(self):
@@ -538,12 +575,24 @@ class TTNNLinearLLamaIColShardedWAllReduced(TTNNLinearIColShardedWAllReduced):
                 weights_mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
             )
         if isinstance(self.tt_bias_host, torch.Tensor):
+            num_devices = _linear_mesh_num_devices(self.device)
+            multi_device_ccl = num_devices > 1 and _tp_requires_ccl(self.device)
+            if multi_device_ccl:
+                bias_torch = self.tt_bias_host / float(num_devices)
+                bias_mapper = ttnn.replicate_tensor_to_mesh_mapper(self.device)
+                self._bias_fused_into_matmul = True
+            else:
+                bias_torch = self.tt_bias_host
+                bias_mapper = _tp_mesh_mapper(self.device, self.input_dim)
+                self._bias_fused_into_matmul = False
             self.tt_bias_host = preprocess_linear_bias(
-                self.tt_bias_host,
+                bias_torch,
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
-                weights_mesh_mapper=_tp_mesh_mapper(self.device, self.input_dim),
+                weights_mesh_mapper=bias_mapper,
             )
+        else:
+            self._bias_fused_into_matmul = False
         self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
         self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
