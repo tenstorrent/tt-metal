@@ -525,13 +525,8 @@ Tensor fmod(
     const Tensor& input,
     float scalar,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    auto resolved = sub_core_grids;
-    if (sub_device_id.has_value() && !resolved.has_value()) {
-        resolved = input.device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
-    }
-    // unary_fmod does not support sub_core_grids yet
+    const std::optional<CoreRangeSet>& /*sub_core_grids*/,
+    const std::optional<tt::tt_metal::SubDeviceId>& /*sub_device_id*/) {
     return ttnn::unary_fmod(input, scalar, output_mem_config);
 }
 

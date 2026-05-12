@@ -209,7 +209,6 @@ void bind_binary_inplace_operation(
             input_tensor_b_activations (List[str], optional): list of activation functions to apply to input_b. Defaults to `None`.
             sub_core_grids (CoreRangeSet, optional): sub core grids. Defaults to `None`.
             sub_device_id (ttnn.SubDeviceId, optional): sub device ID for core resolution. Mutually exclusive with sub_core_grids. Defaults to `None`.
-            sub_device_id (ttnn.SubDeviceId, optional): sub device ID for core resolution. Mutually exclusive with sub_core_grids. Defaults to ``None``.
 
         {6}
 
@@ -669,7 +668,6 @@ void bind_bitwise_binary_ops_operation(
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): restrict execution to a subset of cores (e.g. for subdevice use). Defaults to `None`.
             sub_device_id (ttnn.SubDeviceId, optional): sub device ID — the op resolves cores internally. Mutually exclusive with sub_core_grids. Defaults to `None`.
-            sub_device_id (ttnn.SubDeviceId, optional): sub device ID for core resolution. Mutually exclusive with sub_core_grids. Defaults to ``None``.
 
         Returns:
             ttnn.Tensor: the output tensor.
