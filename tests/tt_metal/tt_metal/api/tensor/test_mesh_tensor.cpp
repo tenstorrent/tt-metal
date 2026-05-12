@@ -182,8 +182,9 @@ TEST_F(MeshTensorDeviceTest, IsValuelessAfterMoveReturnsTrueAfterMoveConstructio
     auto original = MeshTensor::allocate_on_device(*mesh_device_, spec, TensorTopology());
     MeshTensor moved(std::move(original));
 
-    EXPECT_TRUE(original.is_valueless_after_move());
-    EXPECT_FALSE(moved.is_valueless_after_move());
+    // Intentional use-after-move: verifying valueless-after-move semantics.
+    EXPECT_TRUE(original.is_valueless_after_move());  // NOLINT(bugprone-use-after-move)
+    EXPECT_FALSE(moved.is_valueless_after_move());    // NOLINT(bugprone-use-after-move)
 }
 
 TEST_F(MeshTensorDeviceTest, IsValuelessAfterMoveReturnsTrueAfterMoveAssignment) {
@@ -198,8 +199,9 @@ TEST_F(MeshTensorDeviceTest, IsValuelessAfterMoveReturnsTrueAfterMoveAssignment)
 
     target = std::move(source);
 
-    EXPECT_TRUE(source.is_valueless_after_move());
-    EXPECT_FALSE(target.is_valueless_after_move());
+    // Intentional use-after-move: verifying valueless-after-move semantics.
+    EXPECT_TRUE(source.is_valueless_after_move());   // NOLINT(bugprone-use-after-move)
+    EXPECT_FALSE(target.is_valueless_after_move());  // NOLINT(bugprone-use-after-move)
 }
 
 TEST_F(MeshTensorDeviceTest, ConstructionWithTooSmallBufferFails) {
