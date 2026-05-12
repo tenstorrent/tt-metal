@@ -54,8 +54,13 @@ class Pi0_5SuffixEmbedding(SuffixEmbedding):
 
     def embed_timestep_adarms(self, timestep: torch.Tensor) -> torch.Tensor:
         """
-        sincos(t) -> Linear -> swish -> Linear  ->  adarms_cond
+        sincos(t) -> Linear -> silu -> Linear -> silu -> adarms_cond
         Output shape: (batch, expert_width)
+
+        The trailing silu matches openpi/lerobot pi05 reference
+        (modeling_pi05.py time_mlp_func / pi0_pytorch.py time_mlp_func) —
+        without it adarms_cond has the wrong distribution and the scale/
+        shift/gate modulations produced from it flip sign of model outputs.
         """
         sincos = create_sinusoidal_pos_embedding(
             timestep,
@@ -70,7 +75,8 @@ class Pi0_5SuffixEmbedding(SuffixEmbedding):
         x = F.silu(x)
         w_out = self.time_mlp_out_weight.to(x.dtype)
         b_out = self.time_mlp_out_bias.to(x.dtype) if self.time_mlp_out_bias is not None else None
-        return F.linear(x, w_out, b_out)
+        x = F.linear(x, w_out, b_out)
+        return F.silu(x)
 
     def embed_suffix(
         self,

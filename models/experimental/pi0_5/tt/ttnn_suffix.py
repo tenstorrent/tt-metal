@@ -65,7 +65,11 @@ class Pi0_5SuffixEmbeddingTTNN(SuffixEmbeddingTTNN):
         self.indices = ttnn.arange(0, 512, 1, device=device, dtype=ttnn.float32)
 
     def embed_adarms_cond(self, timestep: "ttnn.Tensor") -> "ttnn.Tensor":
-        """sincos(t) -> Linear -> silu -> Linear  -> adarms_cond."""
+        """sincos(t) -> Linear -> silu -> Linear -> silu -> adarms_cond.
+
+        The trailing silu matches openpi/lerobot pi05 reference; without it
+        the scale/shift/gate modulations downstream flip sign of model outputs.
+        """
         sincos = create_sinusoidal_pos_embedding_ttnn(
             timestep,
             self.config.expert_width,
@@ -89,7 +93,7 @@ class Pi0_5SuffixEmbeddingTTNN(SuffixEmbeddingTTNN):
             memory_config=ttnn.L1_MEMORY_CONFIG,
             core_grid=self.core_grid,
         )
-        return x
+        return ttnn.silu(x)
 
     def embed_suffix(
         self,
