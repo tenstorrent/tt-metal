@@ -8,11 +8,6 @@ This is the end-to-end pipeline for the Mistral-Small-3.1-24B-Instruct-2503 mode
 The `MistralTransformer` class inherits from the `Transformer` class in tt_transformers.
 It overrides `prepare_inputs_prefill` to run inference on the vision model and
 pass the resulting visual tokens to the text model along with text tokens.
-
-Decode host inputs: ``prepare_decode_inputs_host`` is overridden to split per-step
-dynamic fields (tokens, positions, RoPE indices) from the typically static paged
-``page_table`` (Phase B helper split) so callers can refresh only what changes
-each decode step.
 """
 
 
@@ -49,48 +44,6 @@ class MistralTransformer(Transformer):
 
     def ttnn_decode_forward(self, *args, **kwargs):
         return super().ttnn_decode_forward(*args, **kwargs)
-
-    def prepare_decode_dynamic_inputs_host(self, tokens, current_pos):
-        """
-        Host tensors that change every decode step: token ids (tile-padded), position
-        ids, and RoPE index tables. Same semantics as the first three return values
-        of ``Transformer.prepare_decode_inputs_host``.
-        """
-        tokens_tt, current_pos_tt, rope_idxs, _ = super().prepare_decode_inputs_host(
-            tokens, current_pos, page_table=None
-        )
-        return tokens_tt, current_pos_tt, rope_idxs
-
-    def prepare_decode_static_page_table_host(self, page_table):
-        """
-        Host tensor for the paged-attention page table when it is stable across many
-        decode steps. Same layout / mesh mapping as ``Transformer.prepare_decode_inputs_host``.
-        Returns ``None`` when ``page_table`` is ``None``.
-        """
-        if page_table is None:
-            return None
-        batch_size = page_table.shape[0]
-        return ttnn.from_torch(
-            page_table,
-            device=None,
-            dtype=ttnn.int32,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.mesh_device,
-                dims=(None, -2) if (self.args.is_galaxy and batch_size > 1) else (None, None),
-                mesh_shape=self.args.cluster_shape,
-            ),
-        )
-
-    def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
-        """
-        Same 4-tuple as the base class: ``(tokens, current_pos_tt, rope_idxs, page_table_tt)``,
-        built from :meth:`prepare_decode_dynamic_inputs_host` and
-        :meth:`prepare_decode_static_page_table_host` so static vs dynamic work can be
-        reused independently (e.g. trace replay input refresh).
-        """
-        tokens_tt, current_pos_tt, rope_idxs = self.prepare_decode_dynamic_inputs_host(tokens, current_pos)
-        page_table_tt = self.prepare_decode_static_page_table_host(page_table)
-        return tokens_tt, current_pos_tt, rope_idxs, page_table_tt
 
     def prepare_prefill_inputs_trace(
         self, tokens, page_table=None, chunk_page_table=None, batch_size=1, user_id=0, **kwargs
