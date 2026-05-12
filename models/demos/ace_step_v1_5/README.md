@@ -26,14 +26,6 @@ python3 models/demos/ace_step_v1_5/run_prompt_to_wav.py \
 On first run, any missing model checkpoints are automatically downloaded from HuggingFace
 into `~/.cache/huggingface/hub/ACE-Step-1.5-checkpoints/`.
 
-### Prerequisites
-
-Install the extra dependency (from the `python_env` virtualenv):
-
-```bash
-pip install torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cpu
-```
-
 ### CLI options
 
 | Option | Type | Default | Description |
@@ -53,7 +45,6 @@ pip install torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cpu
 | `--cfg_interval_end` | `float` | `1.0` | Timestep fraction where CFG ends (1.0 = end). |
 | `--use_adg` | flag | auto | Use ADG guidance on host after TTNN forward. Defaults to on for base, off for turbo. Use `--no-use_adg` to force off. |
 | `--out` | `str` | `ttnn_out.wav` | Output WAV file path. |
-| `--fast-preprocess` | flag | off | Skip 5 Hz LM + AceStepHandler; use lightweight Qwen-only preprocessing. Auto-selected if torchaudio is not installed. |
 | `--use-official-lm` | flag | off | Run the full official `generate_music` path (LLM + handlers, CPU only). Does not use TTNN; useful for A/B comparison. |
 | `--ace-step-repo-root` | `str` | auto | Path to the ACE-Step-1.5 repo (contains `acestep/`). Auto-detected from well-known locations or `ACE_STEP_REPO_ROOT` env var. |
 | `--no-ttnn-strict` | flag | off | Do not set `throw_exception_on_fallback` (may hide silent TTNN fallbacks to PyTorch). |
