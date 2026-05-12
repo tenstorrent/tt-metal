@@ -324,12 +324,21 @@ class TTNNDotsOCRAttention(TTNNModule):
             cur_pos_tt = self._get_cur_pos_device_tensor(cache_position, batch_size)
 
         qkv_states = self._project_qkv_fused(hidden_states, batch_size, seq_length)
+
+        # Decode (seq_length=1): qkv_states is tiny (B*1*(q_dim+2*kv_dim) bf16, ~9 KB).
+        # Routing it to L1 lets nlp_create_qkv_heads run on `(in0:l1_interleaved)` instead
+        # of the slower `dram_interleaved` bucket — same pattern as the MLP slice fix.
+        is_decode = int(seq_length) == 1
+        nlp_heads_mc = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
+        if is_decode and qkv_states.memory_config().buffer_type != ttnn.BufferType.L1:
+            qkv_states = ttnn.to_memory_config(qkv_states, ttnn.L1_MEMORY_CONFIG)
+
         query_states, key_states, value_states = ttnn.experimental.nlp_create_qkv_heads(
             qkv_states,
             num_heads=self.num_attention_heads,
             num_kv_heads=self.num_key_value_heads,
             transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=nlp_heads_mc,
         )
         ttnn.deallocate(qkv_states)
 
@@ -342,11 +351,12 @@ class TTNNDotsOCRAttention(TTNNModule):
             cos, sin = decode_cos_sin
         else:
             cos, sin = self._rotary_setup.get_cos_sin_for_decode(cur_pos_tt)
-        # K can route through L1 for the post-rotary slice (it's reshaped/sharded before
-        # paged_update_on_device, which accepts any input memory layout). Q must stay in
-        # DRAM through paged_sdpa_decode (`Q_memcfg.buffer_type() == DRAM` is asserted in
-        # sdpa_decode_device_operation.cpp:89), so leave its rotary output as default.
-        query_states = ttnn.experimental.rotary_embedding(query_states, cos, sin)
+        # K stays in L1 (reshaped/sharded before paged_update_on_device which accepts any
+        # memory layout). Q must end up DRAM for paged_sdpa_decode (`Q_memcfg.buffer_type()
+        # == DRAM` asserted in sdpa_decode_device_operation.cpp:89). Since rotary_embedding
+        # defaults its output memory_config to the input's, we explicitly request DRAM
+        # for Q because nlp_create_qkv_heads now produces L1 in decode.
+        query_states = ttnn.experimental.rotary_embedding(query_states, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         key_states = ttnn.experimental.rotary_embedding(key_states, cos, sin, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         if query_states.shape[2] != seq_length:

@@ -870,10 +870,22 @@ class TTNNDotsVisionAttention(TTNNModule):
         h = self.num_heads
         hd = self.head_dim
 
+        # Output the fused QKV in BFP8 directly. At S=12288 this halves bandwidth on:
+        #   1. the qkv matmul writeback ([1,1,S,4608]: 113 MB BF16 -> 56 MB BFP8)
+        #   2. nlp_create_qkv_heads, which becomes "BFP8 => BFP8" (~221 MB IO -> ~110 MB)
+        # and removes the V -> BFP8 typecast since V is already BFP8 and stays that way
+        # all the way into SDPA. Q/K still take a BF16 round-trip around rotary because
+        # rotary_embedding_llama_device_operation.cpp:69 requires bfloat16 inputs, but
+        # the V-typecast saved + the nlp_create_qkv_heads halving outweighs the extra
+        # Q/K typecast pair. Q/K were already going to BFP8 before SDPA in the original
+        # path, so the only added quantization is one extra BFP8 round-trip for Q/K
+        # before rotary -- vision SDPA already runs LoFi on BFP8 inputs so this stays
+        # within the existing accuracy envelope.
         qkv = ttnn.linear(
             hidden_states,
             self.tt_qkv_weight,
             bias=self.tt_qkv_bias,
+            dtype=ttnn.bfloat8_b,
             memory_config=mem,
             compute_kernel_config=self.compute_kernel_config,
         )
@@ -890,12 +902,21 @@ class TTNNDotsVisionAttention(TTNNModule):
         if rot_mats is not None and len(rot_mats) == 2:
             cos, sin = rot_mats
 
+            # rotary_embedding_llama requires bfloat16 (rotary_embedding_llama_device_operation.cpp:69),
+            # so promote Q/K back to BF16 around the rotary, then re-quantize to BFP8 for SDPA.
+            q = ttnn.typecast(q, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            k = ttnn.typecast(k, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
             q = ttnn.experimental.rotary_embedding_llama(q, cos, sin, self.transformation_mat, is_decode_mode=False)
             k = ttnn.experimental.rotary_embedding_llama(k, cos, sin, self.transformation_mat, is_decode_mode=False)
 
-        q = ttnn.typecast(q, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        k = ttnn.typecast(k, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        v = ttnn.typecast(v, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            q = ttnn.typecast(q, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            k = ttnn.typecast(k, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # V is already BFP8 from the QKV matmul; no typecast needed for SDPA.
+        # SDPA still requires interleaved Q/K/V (sdpa_device_operation.cpp:44 forbids
+        # sharded inputs) and at S=12288 the BFP8 Q+K+V (~54 MB) plus SDPA's static
+        # circular buffers exceed the per-core L1 budget — keep these tensors on DRAM.
 
         if cu_seqlens is None:
             program_config = self._get_sdpa_program_config(s)

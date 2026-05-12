@@ -14,7 +14,7 @@ from models.experimental.tt_symbiote.core.module import (
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearLLamaIColShardedWAllReducedFusedGateUp,
     TTNNLinearLLamaIColShardedWRowSharded,
-    _dp_prefill_matmul_program_config,
+    _dp_matmul_program_config,
     _tp_requires_ccl,
     _tp_mesh_mapper,
     _linear_mesh_num_devices,
@@ -102,7 +102,7 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
             dtype=ttnn.bfloat8_b if _mlp_bfp8_activation_enabled() else None,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
-            program_config=_dp_prefill_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
+            program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
         if _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device):
             tt_output = ttnn.reduce_scatter(
@@ -158,7 +158,7 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
             dtype=ttnn.bfloat8_b if _mlp_down_bfp8_output_enabled() else None,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
-            program_config=_dp_prefill_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
+            program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
         if _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device):
             tt_output = ttnn.reduce_scatter(

@@ -90,6 +90,85 @@ def _dp_prefill_matmul_program_config(device, input_shape, weight_shape):
     )
 
 
+def _dp_decode_matmul_program_config(device, input_shape, weight_shape):
+    """Decode-mode (M==1 tile) matmul program config.
+
+    Decode shape M=32 (one tile after rounding to TILE_SIZE) is bandwidth-bound
+    on weight reads. The default ttnn auto-config selects ``in0_block_w=1`` for
+    these matmuls (the perf-trace summary explicitly flags this as suboptimal:
+    "in0_block_w=1 is small, try in0_block_w=2 or above"), so we set an
+    explicit ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` with
+    ``per_core_M=1`` (only one M tile in decode), ``mcast_in0=True`` to share
+    the small input across all cores, and the largest divisor of K_tiles up to
+    4 for ``in0_block_w``. Same shape pattern as
+    ``qwen_moe._make_sparse_matmul_program_config``, which is the proven
+    decode-mode config for DRAM-interleaved input + weights in tt-symbiote.
+    """
+    if _tp_requires_ccl(device):
+        # Multi-device with CCL: leave to the default config — the CCL paths
+        # (reduce_scatter / all_gather) require specific output layouts that
+        # custom decode configs may perturb. The single-device decode path is
+        # the case that benefits.
+        return None
+
+    seq_len = int(input_shape[-2])
+    if seq_len > 32:
+        return None  # not a decode shape
+
+    grid = device.compute_with_storage_grid_size()
+    grid_x, grid_y = int(grid.x), int(grid.y)
+
+    k_dim = int(weight_shape[-2])
+    n_dim = int(weight_shape[-1])
+
+    tile = ttnn.TILE_SIZE
+    k_tiles = math.ceil(k_dim / tile)
+    n_tiles = math.ceil(n_dim / tile)
+
+    num_cores = max(1, grid_x * grid_y)
+    per_core_n = max(1, math.ceil(n_tiles / num_cores))
+
+    # Cap in0_block_w so the per-core L1 weight cache stays within ~256 KB.
+    # Each weight tile is ~1 KB for BFP8 / ~2 KB for BF16; using BFP8 lower
+    # bound here keeps us safe even on huge-N matmuls (e.g. lm_head with
+    # per_core_N=75 tiles for N=151936 / 64 cores).
+    weight_tile_bytes = 1024
+    max_l1_weight_bytes = 256 * 1024
+    max_in0_block_w_for_l1 = max(1, max_l1_weight_bytes // (per_core_n * weight_tile_bytes))
+    in0_block_w_cap = min(4, max_in0_block_w_for_l1)
+    in0_block_w = _largest_divisor_at_most(k_tiles, in0_block_w_cap)
+
+    out_subblock_h = 1
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(grid_x, grid_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=_out_subblock_w(per_core_n, out_subblock_h),
+        per_core_M=1,
+        per_core_N=per_core_n,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
+def _dp_matmul_program_config(device, input_shape, weight_shape):
+    """Pick decode vs prefill matmul program config based on input seq length.
+
+    Multi-device CCL paths continue to use the default (None). On single-device
+    inference, decode-shape matmuls (M<=32) get an explicit 1D-mcast config
+    tuned for ``per_core_M=1``; prefill-shape matmuls reuse the existing 2D
+    program config helper.
+    """
+    if _tp_requires_ccl(device):
+        return None
+
+    seq_len = int(input_shape[-2])
+    if seq_len <= 32:
+        return _dp_decode_matmul_program_config(device, input_shape, weight_shape)
+    return _dp_prefill_matmul_program_config(device, input_shape, weight_shape)
+
+
 def _linear_mesh_num_devices(device) -> int:
     """Rank count on the active mesh. Single-device meshes cannot use fabric CCLs."""
     if device is None or not hasattr(device, "get_num_devices"):
@@ -235,7 +314,7 @@ class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
             self.tt_weight,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
-            program_config=_dp_prefill_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
+            program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
         if _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device):
             tt_output = ttnn.reduce_scatter(
@@ -279,7 +358,7 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
             self.tt_weight,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
-            program_config=_dp_prefill_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
+            program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
         # Decompose all_reduce into reduce_scatter + all_gather for trace compatibility.
         # ttnn.all_reduce internally allocates an intermediate buffer dynamically, which
@@ -416,13 +495,25 @@ class TTNNLinearIReplicatedWColSharded(TTNNLinearInputReplicatedWeightSharded):
         while len(input_shape) < 4:
             input_shape.insert(1, 1)  # Add batch dimensions if needed
         input_tensor = ttnn.reshape(input_tensor, input_shape)
+        # Decode (M==1 tile) hits the default ttnn auto-config which picks
+        # in0_block_w=1 — flagged as suboptimal by the perf trace summary.
+        # _dp_matmul_program_config returns a tuned 1D-mcast decode config
+        # for single-device decode and falls back to None otherwise.
+        program_config = _dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape)
+        # MatmulMultiCoreReuseMultiCast1D does not support bias-fusion the way
+        # the 2D mcast variant does, so when the decode program config is
+        # active we add bias as a post-matmul op instead of fusing it.
+        is_decode_pc = isinstance(program_config, ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig)
         tt_output = ttnn.linear(
             input_tensor,
             self.tt_weight,
-            bias=self.tt_bias,
+            bias=None if is_decode_pc else self.tt_bias,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
+            program_config=program_config,
         )
+        if is_decode_pc and self.tt_bias is not None:
+            tt_output = ttnn.add(tt_output, self.tt_bias)
         tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
         return tt_output
 
