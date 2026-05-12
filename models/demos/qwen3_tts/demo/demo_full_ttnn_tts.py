@@ -322,18 +322,9 @@ def run_full_ttnn_tts(
         print(f"Total wall time: {total_time:.2f}s")
         print("=" * 80)
 
-        result = {
-            "steady_ms_per_frame": float(timings.get("steady_avg_decode_ms", 0.0)),
-            "avg_ms_per_frame": float(timings.get("avg_decode_ms", 0.0)),
-            "steady_frames_per_sec": float(timings.get("steady_frames_per_sec", 0.0)),
-            "num_frames": int(num_frames),
-            "output_wav": output_path,
-        }
     finally:
         ttnn.close_device(device)
         print("\nDevice closed")
-
-    return result
 
 
 def get_default_reference_path():
