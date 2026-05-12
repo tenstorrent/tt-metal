@@ -53,7 +53,6 @@ void generate_bcast_scaler() {
 
 void kernel_main() {
 #ifdef ARCH_QUASAR
-    uint32_t src_addr = get_arg(args::src_addr);
     uint32_t num_tiles = get_arg(args::num_tiles);
 #else
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -74,8 +73,7 @@ void kernel_main() {
 #endif
 
 #ifdef ARCH_QUASAR
-    const auto src_a =
-        TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), src_addr, tile_bytes);
+    const auto src_a = TensorAccessor(ta::src_tensor);
 #else
     constexpr auto src_args = TensorAccessorArgs<0>();
     const auto src_a = TensorAccessor(src_args, src_addr);

@@ -17,7 +17,6 @@
 
 void kernel_main() {
 #ifdef ARCH_QUASAR
-    uint32_t dst_addr = get_arg(args::dst_addr);
     uint32_t num_tiles = get_arg(args::num_tiles);
 #else
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -36,7 +35,7 @@ void kernel_main() {
     uint32_t tile_bytes = get_tile_size(cb_id_out0);
 #endif
 #ifdef ARCH_QUASAR
-    const auto s = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), dst_addr, tile_bytes);
+    const auto s = TensorAccessor(ta::dst_tensor);
 #else
     const auto s = TensorAccessor(dst_args, dst_addr);
 #endif

@@ -42,6 +42,7 @@
 #include <umd/device/types/arch.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -407,11 +408,21 @@ static experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines build
     return reduce_defines;
 }
 
+// Build a TensorSpec describing a flat DRAM-interleaved buffer of `total_entries`
+// pages, each `entry_size` bytes. Used to bind src/dst tensors as TensorParameters
+// to the reader/writer kernels via the Metal 2.0 named TensorAccessor ctor.
+static inline tt::tt_metal::TensorSpec make_flat_dram_tensor_spec(uint32_t entry_size, uint32_t total_entries) {
+    const uint32_t entry_size_words = entry_size / sizeof(uint32_t);
+    auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
+    auto memory_config =
+        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+    auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::UINT32, page_config, memory_config);
+    return tt::tt_metal::TensorSpec(tt::tt_metal::Shape{total_entries, entry_size_words}, tensor_layout);
+}
+
 void run_single_core_reduce_program_quasar(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ReduceConfig& test_config) {
     const experimental::metal2_host_api::NodeCoord node{0, 0};
-    auto& cq = mesh_device->mesh_command_queue();
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
 
     const ReduceDims dims = compute_and_validate_reduce_dims(test_config);
 
@@ -420,16 +431,12 @@ void run_single_core_reduce_program_quasar(
         scaler = std::sqrt(scaler);
     }
 
-    distributed::DeviceLocalBufferConfig src_local_config{
-        .page_size = dims.single_tile_bytes, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
-    distributed::ReplicatedBufferConfig src_buffer_config{.size = dims.dram_buffer_size};
-
-    distributed::DeviceLocalBufferConfig dst_local_config{
-        .page_size = dims.single_tile_bytes, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
-    distributed::ReplicatedBufferConfig dst_buffer_config{.size = dims.output_size_bytes};
-
-    auto src_dram_buffer = distributed::MeshBuffer::create(src_buffer_config, src_local_config, mesh_device.get());
-    auto dst_dram_buffer = distributed::MeshBuffer::create(dst_buffer_config, dst_local_config, mesh_device.get());
+    const uint32_t num_input_pages = dims.dram_buffer_size / dims.single_tile_bytes;
+    const uint32_t num_output_pages = dims.output_size_bytes / dims.single_tile_bytes;
+    auto in_tensor = MeshTensor::allocate_on_device(
+        *mesh_device, make_flat_dram_tensor_spec(dims.single_tile_bytes, num_input_pages), TensorTopology{});
+    auto out_tensor = MeshTensor::allocate_on_device(
+        *mesh_device, make_flat_dram_tensor_spec(dims.single_tile_bytes, num_output_pages), TensorTopology{});
 
     constexpr uint32_t num_buffer_tiles = 32;
     constexpr uint32_t num_output_buffer_tiles = 32;
@@ -439,6 +446,8 @@ void run_single_core_reduce_program_quasar(
     constexpr const char* READER = "reader";
     constexpr const char* WRITER = "writer";
     constexpr const char* COMPUTE = "compute";
+    constexpr const char* IN_TENSOR = "in_tensor";
+    constexpr const char* OUT_TENSOR = "out_tensor";
 
     // Match pre-migration behavior: legacy DataflowBufferConfig set enable_implicit_sync=false on all 3 DFBs.
     experimental::metal2_host_api::DataflowBufferSpec src0_dfb_spec{
@@ -477,10 +486,10 @@ void run_single_core_reduce_program_quasar(
         uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
         reader_cta_bindings = {{"scaler", packed_scaler_value}};
         reader_defines.emplace_back("REDUCE_SCALER", "1");
-        reader_named_runtime_args = {"src_addr", "N", "Ht", "Wt", "HtWt"};
+        reader_named_runtime_args = {"N", "Ht", "Wt", "HtWt"};
     } else {
         reader_kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank_reduce.cpp";
-        reader_named_runtime_args = {"src_addr", "num_tiles", "scaler"};
+        reader_named_runtime_args = {"num_tiles", "scaler"};
     }
 
     experimental::metal2_host_api::KernelSpec reader_spec{
@@ -501,6 +510,7 @@ void run_single_core_reduce_program_quasar(
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
+        .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .compile_time_arg_bindings = reader_cta_bindings,
         .runtime_arguments_schema = {.named_runtime_args = reader_named_runtime_args},
         .config_spec =
@@ -521,7 +531,8 @@ void run_single_core_reduce_program_quasar(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "num_tiles"}},
+        .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
+        .runtime_arguments_schema = {.named_runtime_args = {"num_tiles"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
@@ -572,6 +583,11 @@ void run_single_core_reduce_program_quasar(
         .program_id = "single_core_reduce",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {src0_dfb_spec, src1_dfb_spec, dst_dfb_spec},
+        .tensor_parameters =
+            {
+                {.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
+                {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()},
+            },
         .work_units = {wu},
     };
 
@@ -581,18 +597,10 @@ void run_single_core_reduce_program_quasar(
     std::unordered_map<std::string, uint32_t> reader_named_rtas;
     uint32_t writer_num_tiles;
     if (test_config.reduce_dim == ReduceDim::H) {
-        reader_named_rtas = {
-            {"src_addr", src_dram_buffer->address()},
-            {"N", dims.N},
-            {"Ht", dims.Ht},
-            {"Wt", dims.Wt},
-            {"HtWt", dims.Ht * dims.Wt}};
+        reader_named_rtas = {{"N", dims.N}, {"Ht", dims.Ht}, {"Wt", dims.Wt}, {"HtWt", dims.Ht * dims.Wt}};
         writer_num_tiles = dims.num_tensor_tiles / dims.Ht;
     } else {
-        reader_named_rtas = {
-            {"src_addr", src_dram_buffer->address()},
-            {"num_tiles", dims.num_tensor_tiles},
-            {"scaler", *reinterpret_cast<uint32_t*>(&scaler)}};
+        reader_named_rtas = {{"num_tiles", dims.num_tensor_tiles}, {"scaler", *reinterpret_cast<uint32_t*>(&scaler)}};
         writer_num_tiles = test_config.reduce_dim == ReduceDim::W ? (dims.num_tensor_tiles / dims.Wt)
                                                                   : (dims.num_tensor_tiles / (dims.Wt * dims.Ht));
     }
@@ -605,24 +613,27 @@ void run_single_core_reduce_program_quasar(
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
-            .named_runtime_args =
-                {{.node = node, .args = {{"dst_addr", dst_dram_buffer->address()}, {"num_tiles", writer_num_tiles}}}},
+            .named_runtime_args = {{.node = node, .args = {{"num_tiles", writer_num_tiles}}}},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = COMPUTE,
         },
     };
+    params.tensor_args = {
+        {.tensor_parameter_name = IN_TENSOR, .tensor = in_tensor},
+        {.tensor_parameter_name = OUT_TENSOR, .tensor = out_tensor},
+    };
     experimental::metal2_host_api::SetProgramRunParameters(program, params);
 
     vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         dims.dram_buffer_size, test_config.data_gen_rand_max, test_config.data_gen_seed, test_config.data_gen_offset);
-    distributed::WriteShard(cq, src_dram_buffer, src_vec, zero_coord);
+    tt_metal::detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), src_vec);
 
     auto* dev = mesh_device->get_devices()[0];
     tt_metal::detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec;
-    distributed::ReadShard(cq, result_vec, dst_dram_buffer, zero_coord);
+    tt_metal::detail::ReadFromBuffer(*out_tensor.mesh_buffer().get_reference_buffer(), result_vec);
 
     validate_reduce_result(result_vec, dims.num_golden_elements, test_config, src_vec, get_scaler(test_config));
 

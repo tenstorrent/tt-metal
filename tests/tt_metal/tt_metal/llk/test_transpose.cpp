@@ -38,6 +38,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -129,7 +130,7 @@ void validate_transpose_wh(
 }
 
 // Reads the destination buffer, checks the expected size, and validates the transpose result.
-// Shared between the Quasar (Metal 2.0) and legacy launch paths.
+// Used by the legacy (non-Quasar) launch path.
 static void read_and_validate_transpose_result(
     const std::shared_ptr<tt_metal::Buffer>& dst_dram_buffer,
     const std::vector<uint32_t>& src_vec,
@@ -142,6 +143,32 @@ static void read_and_validate_transpose_result(
     validate_transpose_wh(src_vec, shape, result_vec);
 }
 
+// Quasar (Metal 2.0) variant: reads the destination tensor's underlying reference buffer
+// instead of a raw shared_ptr<Buffer>. Shape/size check and golden comparison are shared
+// with the legacy path via validate_transpose_wh().
+static void read_and_validate_transpose_result_quasar(
+    const MeshTensor& dst_tensor,
+    const std::vector<uint32_t>& src_vec,
+    const std::vector<uint32_t>& shape,
+    const TransposeDims& dims) {
+    std::vector<uint32_t> result_vec;
+    tt_metal::detail::ReadFromBuffer(*dst_tensor.mesh_buffer().get_reference_buffer(), result_vec);
+    EXPECT_EQ(result_vec.size(), dims.NC * dims.H * dims.W / 2);
+    validate_transpose_wh(src_vec, shape, result_vec);
+}
+
+// Build a TensorSpec describing a flat DRAM-interleaved buffer of `total_entries`
+// pages, each `entry_size` bytes. Used to bind src/dst tensors as TensorParameters
+// to the reader/writer kernels via the Metal 2.0 named TensorAccessor ctor.
+static inline tt::tt_metal::TensorSpec make_flat_dram_tensor_spec(uint32_t entry_size, uint32_t total_entries) {
+    const uint32_t entry_size_words = entry_size / sizeof(uint32_t);
+    auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
+    auto memory_config =
+        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+    auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::UINT32, page_config, memory_config);
+    return tt::tt_metal::TensorSpec(tt::tt_metal::Shape{total_entries, entry_size_words}, tensor_layout);
+}
+
 void run_single_core_transpose_quasar(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TransposeConfig& test_config) {
     auto* device = mesh_device->get_devices()[0];
@@ -152,16 +179,10 @@ void run_single_core_transpose_quasar(
 
     uint32_t dram_buffer_size = test_config.single_tile_size * num_tensor_tiles;
 
-    tt_metal::InterleavedBufferConfig dram_config{
-        .device = device,
-        .size = dram_buffer_size,
-        .page_size = test_config.single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
-
-    auto src_dram_buffer = CreateBuffer(dram_config);
-    auto dst_dram_buffer = CreateBuffer(dram_config);
-    uint32_t dram_buffer_src_addr = src_dram_buffer->address();
-    uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
+    auto in_tensor = MeshTensor::allocate_on_device(
+        *mesh_device, make_flat_dram_tensor_spec(test_config.single_tile_size, num_tensor_tiles), TensorTopology{});
+    auto out_tensor = MeshTensor::allocate_on_device(
+        *mesh_device, make_flat_dram_tensor_spec(test_config.single_tile_size, num_tensor_tiles), TensorTopology{});
 
     constexpr uint32_t num_buffer_tiles = 32;
     constexpr uint32_t num_output_buffer_tiles = 32;
@@ -171,6 +192,8 @@ void run_single_core_transpose_quasar(
     constexpr const char* READER = "reader";
     constexpr const char* WRITER = "writer";
     constexpr const char* COMPUTE = "compute";
+    constexpr const char* IN_TENSOR = "in_tensor";
+    constexpr const char* OUT_TENSOR = "out_tensor";
 
     experimental::metal2_host_api::DataflowBufferSpec input_dfb_spec{
         .unique_id = INPUT_DFB,
@@ -199,7 +222,8 @@ void run_single_core_transpose_quasar(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .runtime_arguments_schema = {.named_runtime_args = {"src_addr", "N", "Ht", "Wt", "HtWt"}},
+        .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
+        .runtime_arguments_schema = {.named_runtime_args = {"N", "Ht", "Wt", "HtWt"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
@@ -218,7 +242,8 @@ void run_single_core_transpose_quasar(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "num_tiles"}},
+        .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
+        .runtime_arguments_schema = {.named_runtime_args = {"num_tiles"}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
@@ -264,6 +289,11 @@ void run_single_core_transpose_quasar(
         .program_id = "transpose_wh",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
+        .tensor_parameters =
+            {
+                {.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
+                {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()},
+            },
         .work_units = {wu},
     };
 
@@ -273,27 +303,28 @@ void run_single_core_transpose_quasar(
     params.kernel_run_params = {
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = READER,
-            .named_runtime_args =
-                {{.node = node,
-                  .args = {{"src_addr", dram_buffer_src_addr}, {"N", NC}, {"Ht", Ht}, {"Wt", Wt}, {"HtWt", Ht * Wt}}}},
+            .named_runtime_args = {{.node = node, .args = {{"N", NC}, {"Ht", Ht}, {"Wt", Wt}, {"HtWt", Ht * Wt}}}},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
-            .named_runtime_args =
-                {{.node = node, .args = {{"dst_addr", dram_buffer_dst_addr}, {"num_tiles", num_tensor_tiles}}}},
+            .named_runtime_args = {{.node = node, .args = {{"num_tiles", num_tensor_tiles}}}},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = COMPUTE,
         },
     };
+    params.tensor_args = {
+        {.tensor_parameter_name = IN_TENSOR, .tensor = in_tensor},
+        {.tensor_parameter_name = OUT_TENSOR, .tensor = out_tensor},
+    };
     experimental::metal2_host_api::SetProgramRunParameters(program, params);
 
     vector<uint32_t> src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 100.0f, 0x1234);
-    tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
+    tt_metal::detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), src_vec);
 
     tt_metal::detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
 
-    read_and_validate_transpose_result(dst_dram_buffer, src_vec, test_config.shape, dims);
+    read_and_validate_transpose_result_quasar(out_tensor, src_vec, test_config.shape, dims);
 }
 
 void run_single_core_transpose_legacy(
