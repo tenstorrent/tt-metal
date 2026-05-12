@@ -158,15 +158,29 @@ def create_program_descriptor(
 
     compute_ct_args = [CB_INPUT_TILES, CB_OUTPUT_TILES, CB_ACCUMULATOR]
 
+    # UnpackToDestFp32 closes the only precision leak left when fp32_dest_acc=True:
+    # the unpacker path from a Float32 L1 CB into DEST otherwise truncates to TF32
+    # (~10-bit mantissa) on SrcA/SrcB. Set it explicitly on every Float32 CB the
+    # compute kernel re-reads — most importantly cb_accumulator (read once per
+    # outer lgamma iteration, 4 round-trips through L1 per output element) and
+    # cb_input_tiles (read 4 times per output element). cb_output_tiles is
+    # write-only from the compute side; the mode is irrelevant there.
+    # Surfaced by the numerical_stability analysis next to this file.
+    compute_config = ttnn.ComputeConfigDescriptor(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=True,
+    )
+    unpack_modes = [ttnn.UnpackToDestMode.Default] * 32
+    unpack_modes[CB_INPUT_TILES] = ttnn.UnpackToDestMode.UnpackToDestFp32
+    unpack_modes[CB_ACCUMULATOR] = ttnn.UnpackToDestMode.UnpackToDestFp32
+    compute_config.unpack_to_dest_mode = unpack_modes
+
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "multigammaln_lanczos_compute.cpp"),
         core_ranges=all_cores,
         compile_time_args=compute_ct_args,
         runtime_args=compute_rt_args,
-        config=ttnn.ComputeConfigDescriptor(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            fp32_dest_acc_en=True,
-        ),
+        config=compute_config,
     )
 
     return ttnn.ProgramDescriptor(

@@ -1,0 +1,16 @@
+{"event":"start","details":"begin numerical stability analysis of multigammaln_lanczos","ts":"2026-05-12"}
+{"event":"file_read","details":"read reference methodology at tt_metal/third_party/tt_ops_code_gen/references/numerical_stability_analysis_reference.md"}
+{"event":"file_read","details":"read multigammaln_lanczos.py entry point"}
+{"event":"file_read","details":"read multigammaln_lanczos_program_descriptor.py (HiFi4 + fp32_dest_acc_en=True, all CBs float32, no UnpackToDestMode set, no math_approx_mode set)"}
+{"event":"file_read","details":"read kernels/multigammaln_lanczos_compute.cpp (per-tile 4xLanczos-6 with cb_accumulator round-trip and unary_ne pole mask on a)"}
+{"event":"file_read","details":"read kernels/multigammaln_lanczos_reader.cpp (streaming reader, 1 push per tile, compute reads tile 4x without popping)"}
+{"event":"file_read","details":"read kernels/multigammaln_lanczos_writer.cpp (standard interleaved writer)"}
+{"event":"file_read","details":"read op_design.md for algorithm verification"}
+{"event":"design_decision","details":"confirmed math_approx_mode defaults to false in Python ComputeConfigDescriptor binding (program_descriptors.cpp:618) — recip_tile/log_tile run in PRECISE mode"}
+{"event":"design_decision","details":"identified per-tile accumulation chain: 4 lgamma evaluations -> 4 fp32 round-trips through cb_accumulator (Float32 CB, but UnpackToDestMode=Default, NOT UnpackToDestFp32)"}
+{"event":"design_decision","details":"identified pole mask applied to 'a' (D2) not 'result' (D0), avoiding NaN*0=NaN; verified by reading kernel lines 167-179"}
+{"event":"design_decision","details":"counted Lanczos error sources per lgamma: 6 recip + 6 mul_unary scalar + 6 add_binary, plus 2 log_tile, 1 sub of similar-magnitude (catastrophic cancellation candidate at log(temp) - (a + 3.581))"}
+{"event":"design_decision","details":"identified key observation: op is SFPU-only — math_fidelity HiFi4 setting has no effect; math_approx_mode is the real precision lever (correctly at false)"}
+{"event":"design_decision","details":"identified one-line improvement: setting unpack_to_dest_mode[cb_accumulator]=UnpackToDestFp32 would close the TF32 truncation edge on reload"}
+{"event":"file_write","details":"wrote numerical_stability.md to ttnn/ttnn/operations/multigammaln_lanczos/numerical_stability.md"}
+{"event":"end","details":"analysis complete"}
