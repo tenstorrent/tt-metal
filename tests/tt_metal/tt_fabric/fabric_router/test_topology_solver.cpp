@@ -5046,64 +5046,6 @@ TEST_F(TopologySolverTest, SatStress_MeshOnMesh_StrictChannels) {
     EXPECT_TRUE(dfs_result.success) << "DFS STRICT should also succeed: " << dfs_result.error_message;
 }
 
-    constexpr size_t N = 32;
-    auto target_graph = create_1d_ring_graph<TestTargetNode>(N);
-    auto global_graph = create_2d_mesh_graph<TestGlobalNode>(8, 8);
-
-    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
-
-    constraints.add_required_constraint(static_cast<TestTargetNode>(0), std::set<TestGlobalNode>{0, 1, 8, 9});
-
-    for (size_t i = 0; i < N; ++i) {
-        constraints.add_forbidden_constraint(static_cast<TestTargetNode>(i), static_cast<TestGlobalNode>(63));
-    }
-
-    std::set<std::pair<TestTargetNode, TestGlobalNode>> card_pairs;
-    for (size_t i = 0; i < 4; ++i) {
-        for (TestGlobalNode g : {0, 1, 8, 9}) {
-            card_pairs.insert({static_cast<TestTargetNode>(i), g});
-        }
-    }
-    constraints.add_cardinality_constraint(card_pairs, 2);
-
-    auto sat_result = solve_topology_mapping(
-        target_graph,
-        global_graph,
-        constraints,
-        ConnectionValidationMode::RELAXED,
-        /* quiet_mode= */ true,
-        TopologyMappingSolverEngine::Sat);
-    EXPECT_TRUE(sat_result.success) << "SAT should embed 32-ring in 8×8 mesh with forbidden+required+card: "
-                                    << sat_result.error_message;
-    EXPECT_EQ(sat_result.target_to_global.size(), N);
-
-    auto t0_global = sat_result.target_to_global.at(static_cast<TestTargetNode>(0));
-    EXPECT_TRUE(t0_global == 0 || t0_global == 1 || t0_global == 8 || t0_global == 9)
-        << "Required: target 0 must map to {0,1,8,9}, got " << t0_global;
-
-    for (size_t i = 0; i < N; ++i) {
-        auto g = sat_result.target_to_global.at(static_cast<TestTargetNode>(i));
-        EXPECT_NE(g, static_cast<TestGlobalNode>(63)) << "Forbidden: target " << i << " must not map to 63";
-    }
-
-    size_t card_satisfied = 0;
-    for (const auto& [tn, gn] : card_pairs) {
-        if (sat_result.target_to_global.contains(tn) && sat_result.target_to_global.at(tn) == gn) {
-            card_satisfied++;
-        }
-    }
-    EXPECT_GE(card_satisfied, 2u) << "Cardinality constraint: at least 2 pairs satisfied";
-
-    auto dfs_result = solve_topology_mapping(
-        target_graph,
-        global_graph,
-        constraints,
-        ConnectionValidationMode::RELAXED,
-        /* quiet_mode= */ true,
-        TopologyMappingSolverEngine::Dfs);
-    EXPECT_TRUE(dfs_result.success) << "DFS should also succeed: " << dfs_result.error_message;
-}
-
 // 32-node ring on 8×8 mesh with forbidden + required + cardinality constraints.
 TEST_F(TopologySolverTest, SatStress_RingOnMesh_Forbidden_Required_Cardinality) {
     constexpr size_t N = 32;
