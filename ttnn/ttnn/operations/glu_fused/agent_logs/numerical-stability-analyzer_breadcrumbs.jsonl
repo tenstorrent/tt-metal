@@ -1,0 +1,9 @@
+{"event":"read_reference","details":"Read numerical_stability_analysis_reference.md (497 lines) — confirmed methodology"}
+{"event":"read_entry_point","details":"Read glu_fused.py — validates fp32 + TILE_LAYOUT + rank4 + W%64==0 + H%32==0; calls ttnn.generic_op"}
+{"event":"read_program_descriptor","details":"Read glu_fused_program_descriptor.py — HiFi4, fp32_dest_acc_en=True, UnpackToDestFp32 on both input CBs. No math_approx_mode passed (defaults). No packer_l1_acc set."}
+{"event":"read_compute_kernel","details":"Read glu_fused_compute.cpp — sfpu_chain: Load A->D0, Load B->D1, Sigmoid<Approx::Exact, D1>, SfpuMul<D0,D1,D0>. SfpuBatching::Auto, WaitAndPopPerTile, PerTile output, INPUT_AND_OUTPUT format reconfig."}
+{"event":"read_reader_kernel","details":"Read glu_fused_reader.cpp — pushes A and B tiles per output tile, no compute. No precision events here."}
+{"event":"check_sigmoid_impl","details":"Sigmoid<Approx::Exact> -> sigmoid_tile<RC, false>. WH impl uses 6-piece piecewise-linear LUT (lut2) with FP16-stored coefficients — NOT 1/(1+exp(-x)). Both approx and non-approx use same LUT on WH (modes diverge only on certain SFPU ops)."}
+{"event":"check_sfpumul","details":"SfpuMul -> mul_binary_tile — pure SFPU elementwise multiply, NOT FPU. Math fidelity does not affect SFPU multiply. Operates lane-wise on fp32 DEST values."}
+{"event":"identify_error_sources","details":"Two precision events per output tile: (1) sigmoid LUT (bounded ~2-3% relative error due to piecewise-linear fit), (2) one fp32 packer round-trip-out on output. No accumulation, no reduction, no subtraction, no division."}
+{"event":"write_report","details":"Writing numerical_stability.md"}
