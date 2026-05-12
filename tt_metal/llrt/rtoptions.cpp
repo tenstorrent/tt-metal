@@ -743,8 +743,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (fast dispatch mode)
         // Usage: export TT_METAL_SLOW_DISPATCH_MODE=1
         case EnvVarID::TT_METAL_SLOW_DISPATCH_MODE:
-            this->using_slow_dispatch = true;
-            this->fast_dispatch = false;
+            this->using_slow_dispatch = is_env_enabled(value);
+            this->fast_dispatch = !is_env_enabled(value);
             break;
 
         // TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN

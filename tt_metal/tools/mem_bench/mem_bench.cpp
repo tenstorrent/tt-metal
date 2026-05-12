@@ -586,7 +586,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Force TT_METAL options
-    setenv("TT_METAL_SLOW_DISPATCH_MODE", "true", true);
+    setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", true);
     setenv("TT_METAL_CLEAR_L1", "1", true);
     // May be overridden by the user
     setenv("TT_LOGGER_LEVEL", "FATAL", false);

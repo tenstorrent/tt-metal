@@ -19,7 +19,8 @@ using namespace tt::tt_metal;
  */
 
 int main() {
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
+    const char* slow_dispatch_env = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    if (slow_dispatch_env != nullptr && slow_dispatch_env[0] == '1') {
         TT_THROW("Test not supported w/ slow dispatch, exiting");
     }
 

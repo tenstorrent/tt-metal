@@ -75,7 +75,9 @@ int main() {
         int device_id = 0;
         std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
-        const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
+        const char* slow_dispatch_env = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        const bool slow_dispatch_enabled = slow_dispatch_env != nullptr && slow_dispatch_env[0] == '1';
+        const auto USE_FAST_DISPATCH = !slow_dispatch_enabled;
 
         constexpr int device_loop_count = 150;
 
