@@ -75,7 +75,7 @@ jobs:
       - name: Resolve SKU and model selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150,wh_galaxy_perf"
+          ALL_SKUS="wh_n150,wh_galaxy_perf,wh_galaxy_perf_g05glx04,wh_galaxy_perf_g14glx04,wh_galaxy_perf_g14glx03,wh_galaxy_perf_g04glx01,wh_galaxy_perf_g04glx03"
           EVENT="${{ github.event_name }}"
           if [[ "$EVENT" == "workflow_dispatch" ]]; then
             SKU_INPUT="${{ inputs.sku || 'all' }}"
