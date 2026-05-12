@@ -7,13 +7,16 @@
 Pure-PyTorch counterpart of ``ttnn_impl/e2e_model.py``.  Every stage runs on
 the host via PyTorch so the output can be compared against the TTNN
 implementation for PCC validation.
+
+Standalone functions :func:`run_torch_denoise_loop` and :func:`decode_with_vae`
+are exported for reuse by other scripts (e.g. the prompt-to-wav demo).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List
+from typing import Callable, List, Optional
 
 import numpy as np
 import torch
@@ -52,6 +55,120 @@ def _build_t_schedule(
         s = float(shift)
         t = [s * x / (1.0 + (s - 1.0) * x) for x in t]
     return t
+
+
+# ---------------------------------------------------------------------------
+# Standalone helpers – importable by demo scripts to avoid code duplication.
+# ---------------------------------------------------------------------------
+
+
+def run_torch_denoise_loop(
+    pipe: AceStepV15TorchPipeline,
+    t_schedule: List[float],
+    frames: int,
+    enc_hs: torch.Tensor,
+    ctx_lat: torch.Tensor,
+    null_emb: Optional[torch.Tensor],
+    do_cfg: bool,
+    seed: int,
+    cfg_fn: Optional[Callable[[int, float, torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+    progress_fn: Optional[Callable[[int, int, float, float], None]] = None,
+) -> torch.Tensor:
+    """Run the PyTorch DiT denoising loop.
+
+    Args:
+        pipe: PyTorch pipeline instance.
+        t_schedule: Descending timestep floats.  The function Euler-steps
+            toward ``t = 0`` after the last entry.
+        frames: Temporal frame count.
+        enc_hs: Encoder hidden states ``[B, S, D]``.
+        ctx_lat: Context latents ``[B, T, 128]``.
+        null_emb: Null-condition embedding for CFG (broadcastable to *enc_hs*).
+            Falls back to zeros when ``None`` and *do_cfg* is ``True``.
+        do_cfg: Whether classifier-free guidance is active (batch doubles).
+        seed: RNG seed for initial noise.
+        cfg_fn: ``(step_idx, t_curr, xt, vt_cond, vt_uncond) -> vt`` guidance
+            combiner.  Defaults to returning *vt_cond* unchanged.
+        progress_fn: ``(step_idx, num_steps, t_curr, dt)`` called after each step.
+
+    Returns:
+        Denoised latents ``[B, frames, 64]`` on CPU float32.
+    """
+    num_steps = len(t_schedule)
+
+    torch.manual_seed(seed)
+    xt = torch.randn((1, frames, 64), dtype=torch.float32)
+    xt = xt.to(device=enc_hs.device, dtype=enc_hs.dtype)
+
+    if do_cfg and null_emb is None:
+        null_emb = torch.zeros_like(enc_hs)
+
+    if cfg_fn is None:
+
+        def cfg_fn(
+            _si: int, _t: float, _xt: torch.Tensor, vt_cond: torch.Tensor, _vt_uncond: torch.Tensor
+        ) -> torch.Tensor:
+            return vt_cond
+
+    with torch.inference_mode():
+        for step_idx in range(num_steps):
+            t_curr_f = float(t_schedule[step_idx])
+            t_next_f = float(t_schedule[step_idx + 1]) if step_idx < num_steps - 1 else 0.0
+            dt = t_curr_f - t_next_f
+
+            if do_cfg:
+                enc2 = torch.cat([enc_hs, null_emb.expand_as(enc_hs)], dim=0)
+                ctx2 = torch.cat([ctx_lat, ctx_lat], dim=0)
+                xt2 = torch.cat([xt, xt], dim=0)
+
+                acoustic = pipe.forward(
+                    xt_bt64=xt2,
+                    context_latents_bt128=ctx2,
+                    timestep_index=step_idx,
+                    encoder_hidden_states_btd=enc2,
+                )
+            else:
+                acoustic = pipe.forward(
+                    xt_bt64=xt,
+                    context_latents_bt128=ctx_lat,
+                    timestep_index=step_idx,
+                    encoder_hidden_states_btd=enc_hs,
+                )
+
+            vt2 = acoustic.to(torch.float32)
+            if do_cfg:
+                vt = cfg_fn(step_idx, t_curr_f, xt, vt2[0:1], vt2[1:2])
+            else:
+                vt = vt2
+            xt = xt - vt * dt
+
+            if progress_fn is not None:
+                progress_fn(step_idx, num_steps, t_curr_f, dt)
+
+    return xt.float().cpu()
+
+
+def decode_with_vae(
+    vae: torch.nn.Module,
+    pred_latents: torch.Tensor,
+    torch_dev: torch.device,
+) -> torch.Tensor:
+    """Decode DiT latents to a waveform via the Oobleck VAE.
+
+    Args:
+        vae: Loaded ``AutoencoderOobleck`` instance.
+        pred_latents: ``[B, frames, 64]`` latents from the denoising loop.
+        torch_dev: Device for the VAE forward pass.
+
+    Returns:
+        Waveform ``[B, channels, samples]`` normalized to ``[-1, 1]``.
+    """
+    with torch.inference_mode():
+        lat = pred_latents.transpose(1, 2).contiguous().to(device=torch_dev, dtype=next(vae.parameters()).dtype)
+        wav = vae.decode(lat).sample.float().cpu()
+        peak = wav.abs().amax(dim=[1, 2], keepdim=True).clamp(min=1e-8)
+        wav = (wav / peak).clamp(-1.0, 1.0)
+    return wav
 
 
 class AceStepE2EModelTorch:
@@ -223,75 +340,16 @@ class AceStepE2EModelTorch:
         Returns:
             pred_latents [1, frames, 64] on CPU.
         """
-        frames = self.frames
-        gs = self.config.guidance_scale
-        do_cfg = gs > 1.0 + 1e-6
-        t_schedule = self.t_schedule
-        num_steps = len(t_schedule)
-
-        torch.manual_seed(self.config.seed)
-        noise = torch.randn((1, frames, 64), dtype=torch.float32)
-        xt = noise
-
-        for step_idx in range(num_steps - 1):
-            t_curr_f = float(t_schedule[step_idx])
-            t_next_f = float(t_schedule[step_idx + 1])
-            dt = t_curr_f - t_next_f
-
-            if do_cfg:
-                enc2 = torch.cat([enc_hs, self.null_emb.expand_as(enc_hs)], dim=0)
-                ctx2 = torch.cat([ctx_lat, ctx_lat], dim=0)
-                xt2 = torch.cat([xt, xt], dim=0)
-
-                acoustic = self.pipe.forward(
-                    xt_bt64=xt2,
-                    context_latents_bt128=ctx2,
-                    timestep_index=step_idx,
-                    encoder_hidden_states_btd=enc2,
-                )
-            else:
-                acoustic = self.pipe.forward(
-                    xt_bt64=xt,
-                    context_latents_bt128=ctx_lat,
-                    timestep_index=step_idx,
-                    encoder_hidden_states_btd=enc_hs,
-                )
-
-            vt2 = acoustic.to(torch.float32)
-            if do_cfg:
-                vt = vt2[0:1]
-            else:
-                vt = vt2
-            xt = xt - vt * float(dt)
-
-        # Final step toward t=0
-        t_curr_f = float(t_schedule[-1])
-        if do_cfg:
-            enc2 = torch.cat([enc_hs, self.null_emb.expand_as(enc_hs)], dim=0)
-            ctx2 = torch.cat([ctx_lat, ctx_lat], dim=0)
-            xt2 = torch.cat([xt, xt], dim=0)
-
-            acoustic = self.pipe.forward(
-                xt_bt64=xt2,
-                context_latents_bt128=ctx2,
-                timestep_index=num_steps - 1,
-                encoder_hidden_states_btd=enc2,
-            )
-        else:
-            acoustic = self.pipe.forward(
-                xt_bt64=xt,
-                context_latents_bt128=ctx_lat,
-                timestep_index=num_steps - 1,
-                encoder_hidden_states_btd=enc_hs,
-            )
-
-        vt2 = acoustic.to(torch.float32)
-        if do_cfg:
-            vt = vt2[0:1]
-        else:
-            vt = vt2
-        xt = xt - vt * float(t_curr_f)
-        return xt
+        return run_torch_denoise_loop(
+            pipe=self.pipe,
+            t_schedule=self.t_schedule,
+            frames=self.frames,
+            enc_hs=enc_hs,
+            ctx_lat=ctx_lat,
+            null_emb=self.null_emb,
+            do_cfg=self.config.guidance_scale > 1.0 + 1e-6,
+            seed=self.config.seed,
+        )
 
     def decode_vae(self, pred_latents: torch.Tensor) -> torch.Tensor:
         """Decode latents to waveform via the Oobleck VAE.
@@ -302,16 +360,7 @@ class AceStepE2EModelTorch:
         Returns:
             waveform [1, channels, samples] normalized to [-1, 1].
         """
-        with torch.inference_mode():
-            lat = (
-                pred_latents.transpose(1, 2)
-                .contiguous()
-                .to(device=self.torch_dev, dtype=next(self.vae.parameters()).dtype)
-            )
-            wav = self.vae.decode(lat).sample.float().cpu()
-            peak = wav.abs().amax(dim=[1, 2], keepdim=True).clamp(min=1e-8)
-            wav = (wav / peak).clamp(-1.0, 1.0)
-        return wav
+        return decode_with_vae(self.vae, pred_latents, self.torch_dev)
 
     def generate(self, prompt: str) -> torch.Tensor:
         """Full end-to-end: text prompt → waveform tensor.
