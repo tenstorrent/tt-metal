@@ -220,48 +220,33 @@ def _generate_mxfp4_face(size, const_face, const_value, sfpu, negative_values=Fa
     return _exclude_mx_subnormals(face_data, DataFormat.MxFp4)
 
 
-def _generate_mxfp4_face(size, const_face, const_value, sfpu, negative_values=False):
+def _generate_mxint8_face(size, const_face, const_value, sfpu, negative_values=False):
     """
-    Generate test data for MXFP4 format (E2M1) using normal distribution scaled to format range.
+    Generate test data for MxInt8 format (signed S1.6 with implicit 2^-6 scale + E8M0 block exp).
 
-    MXFP4 E2M1 has a very limited representable range:
-    - Max normal: ±6.0
-    - Min normal: ±1.0
-    - Max/Min subnormal: ±0.5
+    MxInt8 OCP semantics:
+    - Element range (symmetric): ±127/64 ≈ ±1.984375
+    - Smallest representable nonzero magnitude: 1/64 ≈ 0.015625
+    - No NaN, no Inf, no subnormals
 
-    Uses conservative scaling (50% of max normal = 3.0) to avoid saturation while creating
-    diverse test data. This larger percentage (vs 5% for FP8) is needed due to FP4's
-    extremely limited range and precision (only 16 possible values).
-
-    Args:
-        size: Number of elements to generate
-        const_face: If True, generate constant values
-        const_value: Value to use if const_face is True
-        sfpu: If True, add SFPU-friendly offset
-        negative_values: If True, include negative values in the distribution
-
-    Returns:
-        torch.Tensor of bfloat16 values suitable for MXFP4 quantization
+    Uses a normal distribution scaled to 50% of max to avoid heavy saturation while
+    keeping good coverage of the representable range. No subnormal exclusion is
+    needed since MxInt has no subnormal regime — sub-1/64 values simply quantize
+    toward zero, which is a valid representable value.
     """
     if const_face:
         return torch.ones(size, dtype=torch.bfloat16) * const_value
 
-    # Scale factor: use 50% of format's max normal value (6.0)
-    # This gives us a range of approximately [-3.0, 3.0] for normal distribution
-    # which provides good coverage of FP4's representable range without excessive saturation
-    scale = 0.5 * MX_FORMAT_MAX_NORMAL[DataFormat.MxFp4]  # 0.5 * 6.0 = 3.0
-
+    scale = 0.5 * MX_INT_MAX[DataFormat.MxInt8]  # ≈ 0.992
     face_data = torch.randn(size, dtype=torch.bfloat16) * scale
 
-    # If negative_values is False, use absolute values to keep data positive
     if not negative_values:
         face_data = torch.abs(face_data)
 
-    # Add SFPU-friendly offset if needed
     if sfpu:
         face_data += 0.1
 
-    return _exclude_mx_subnormals(face_data, DataFormat.MxFp4)
+    return face_data
 
 
 def generate_identity_face_tensor(
