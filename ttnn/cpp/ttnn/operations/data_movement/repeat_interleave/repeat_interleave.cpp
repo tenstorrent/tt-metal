@@ -32,7 +32,12 @@ ttnn::Tensor repeat_interleave(
     }
 
     ttnn::Tensor rm_input = input_a;
-    bool typecast = input_a.dtype() != DataType::BFLOAT16;
+    // Block-float dtypes need bf16 unpacking for ROW_MAJOR; UINT8 is converted because the
+    // tilize/untilize kernels don't support it (uint8 values are exactly representable in bf16).
+    bool typecast =
+        input_a.dtype() == DataType::BFLOAT8_B ||
+        input_a.dtype() == DataType::BFLOAT4_B ||
+        input_a.dtype() == DataType::UINT8;
     if (typecast) {
         rm_input = ttnn::typecast(rm_input, DataType::BFLOAT16, mem_config);
     }
