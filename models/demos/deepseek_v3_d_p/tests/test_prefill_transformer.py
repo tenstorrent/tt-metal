@@ -898,6 +898,7 @@ def test_prefill_transformer_from_trace(
     report_and_clear()
 
     logger.info(f"Cache status: TTNN={ttnn_cache_complete}, dequant_method={dequant_method}")
+    logger.info(f"Cache lookup path: {effective_cache_path}")
 
     if not ttnn_cache_complete:
         logger.info(f"TTNN weight cache incomplete — building from HF weights (dequant={dequant_method})...")
