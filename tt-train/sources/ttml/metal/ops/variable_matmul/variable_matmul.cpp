@@ -14,9 +14,16 @@ ttnn::Tensor variable_matmul(
     const VariableMatmulConfig& config,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     uint32_t in0_row_offset_tiles,
-    uint32_t effective_M_tiles) {
+    uint32_t effective_M_tiles,
+    uint32_t in0_k_offset_tiles) {
     return ttnn::prim::ttml_variable_matmul(
-        input_tensor, weight_tensor, config, compute_kernel_config, in0_row_offset_tiles, effective_M_tiles);
+        input_tensor,
+        weight_tensor,
+        config,
+        compute_kernel_config,
+        in0_row_offset_tiles,
+        effective_M_tiles,
+        in0_k_offset_tiles);
 }
 
 }  // namespace ttml::metal

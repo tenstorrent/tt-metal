@@ -181,8 +181,9 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                 continue;
             }
 
-            auto X_e = slice_rows(grouped_value, row_lo, row_hi, hidden_dim);
             auto dY_e = slice_rows(dY, row_lo, row_hi, hidden_dim);
+            // X_e elided: dW_gate/dW_up use K-axis offset on grouped_value directly.
+            const uint32_t row_lo_tiles = row_lo / 32U;
             const auto& w_gate_e = w_gate[e]->get_value();
             const auto& w_up_e = w_up[e]->get_value();
             const auto& w_down_e = w_down[e]->get_value();
@@ -219,11 +220,25 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             d_activated_e.deallocate();
 
             // dW_gate_e = X_e^T @ d_gate_proj_e,  dW_up_e = X_e^T @ d_up_proj_e — added directly to per-expert grads.
-            auto dW_gate_e = ttml::metal::variable_matmul(X_e, d_gate_proj_e, kVarMmConfigTransposeA);
+            // Read grouped_value's [row_lo, row_hi) rows directly via K-axis offset (no slice).
+            auto dW_gate_e = ttml::metal::variable_matmul(
+                grouped_value,
+                d_gate_proj_e,
+                kVarMmConfigTransposeA,
+                std::nullopt,
+                /*in0_row_offset_tiles=*/0U,
+                /*effective_M_tiles=*/0U,
+                /*in0_k_offset_tiles=*/row_lo_tiles);
             w_gate[e]->add_grad(dW_gate_e);
-            auto dW_up_e = ttml::metal::variable_matmul(X_e, d_up_proj_e, kVarMmConfigTransposeA);
+            auto dW_up_e = ttml::metal::variable_matmul(
+                grouped_value,
+                d_up_proj_e,
+                kVarMmConfigTransposeA,
+                std::nullopt,
+                /*in0_row_offset_tiles=*/0U,
+                /*effective_M_tiles=*/0U,
+                /*in0_k_offset_tiles=*/row_lo_tiles);
             w_up[e]->add_grad(dW_up_e);
-            X_e.deallocate();
 
             // dX_e = d_gate_proj_e @ w_gate_e^T  +  d_up_proj_e @ w_up_e^T
             auto dX_via_gate_e = ttml::metal::variable_matmul(d_gate_proj_e, w_gate_e, kVarMmConfigTransposeB);

@@ -121,9 +121,13 @@ void kernel_main() {
     // hot path used by all backward calls).
     uint32_t in0_row_offset_tiles = 0U;
     uint32_t parent_M_tiles_stride = 0U;
+    uint32_t in0_k_offset_tiles = 0U;
+    uint32_t parent_K_tiles_stride = 0U;
     if constexpr (use_offset) {
         in0_row_offset_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 3);
         parent_M_tiles_stride = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 4);
+        in0_k_offset_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 5);
+        parent_K_tiles_stride = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 6);
     }
 
     // Storage layout: without transpose_a the input is stored as [M, K]; with it, as [K, M].
@@ -289,7 +293,9 @@ void kernel_main() {
                         k_block * K_block_tiles,
                         (k_block + 1) * K_block_tiles,
                         in0_row_offset_tiles,
-                        parent_M_tiles_stride);
+                        parent_M_tiles_stride,
+                        in0_k_offset_tiles,
+                        parent_K_tiles_stride);
                 } else {
                     // Get from previous device
                     noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);
