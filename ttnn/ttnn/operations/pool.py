@@ -50,15 +50,15 @@ ttnn.attach_golden_function(ttnn.max_pool2d, golden_maxpool2d)
 
 
 def global_avg_pool2d(input_tensor, *, memory_config=None, dtype=None):
-    """Global average pooling. Wrapper around avg_pool2d.
+    """Global average pooling.
 
-    Mirrors PyTorch where global pooling has no dedicated op — it always routes through
-    pool2d/adaptive_avg_pool2d. avg_pool2d's pool2d() entry point detects the global-pool
-    case (kernel == input spatial, no padding/dilation) and runs a single pool_sum reduction.
+    For interleaved inputs this routes through avg_pool2d, which detects the
+    global-pool case (kernel == input spatial) and runs a fast pool_sum reduction.
 
-    The caller does not need to flatten to (1, 1, N*H*W, C); the fast path inside pool2d()
-    handles rank-4 NHWC directly via an explicit logical+padded reshape so it preserves
-    pad-to-tile zero-padding from legacy callers.
+    For ND-sharded (or any sharded) inputs the avg_pool2d sliding-window path
+    cannot be used because it requires interleaved TILE input.  In that case we
+    fall back to ``ttnn.mean`` on the second-to-last dimension — this is exactly
+    what the old C++ ``global_avg_pool2d`` device op did via ``pool_sum``.
 
     Args:
         input_tensor: Input tensor in NHWC format. Rank 2 [H,W], 3 [H,W,C], or 4 [N,H,W,C] accepted.
@@ -82,6 +82,16 @@ def global_avg_pool2d(input_tensor, *, memory_config=None, dtype=None):
         N, C = 1, 1
     else:
         raise ValueError(f"global_avg_pool2d expects rank 2, 3, or 4 input, got rank {rank}")
+
+    # ND-sharded / sharded inputs cannot go through avg_pool2d's sliding-window
+    # kernel — it needs interleaved TILE input and will OOM trying to allocate
+    # L1_SMALL buffers on the sharded grid.  Use a plain reduction instead,
+    # matching the original C++ global_avg_pool2d behaviour (pool_sum on dim -2).
+    input_is_sharded = input_tensor.is_sharded()
+    if input_is_sharded:
+        mem_cfg = memory_config if memory_config is not None else input_tensor.memory_config()
+        result = ttnn.mean(input_tensor, dim=-2, keepdim=True, memory_config=mem_cfg)
+        return result
 
     out_dtype = dtype if dtype is not None else ttnn.bfloat16
     result = ttnn.avg_pool2d(
