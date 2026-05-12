@@ -1,5 +1,6 @@
 version: 1
 description: Centralized perf/accuracy targets for models CI.
+# Default tolerance used by validation is 1.15 (15%)
 # Entry status semantics:
 # - active: target is enforced by validation and used for perf/accuracy checks.
 # - TODO: explicit gap placeholder; excluded from normal target resolution and treated as missing/TODO by validator.
@@ -13,7 +14,8 @@ targets:
             seq_len: 1024
             status: active
             perf:
-              prefill_time_to_token: 0.025
+              prefill_time_to_first_token: 25
+              prefill_tolerance: 1.15
               decode_t/s/u: 66.0
               decode_t/s: 2112.0
               decode_tolerance: 1.15
@@ -35,7 +37,8 @@ targets:
             seq_len: 1024
             status: active
             perf:
-              prefill_time_to_token: 0.062
+              prefill_time_to_first_token: 62
+              prefill_tolerance: 1.15
               decode_t/s/u: 35.0
               decode_t/s: 1120.0
               decode_tolerance: 1.15
@@ -57,7 +60,8 @@ targets:
             seq_len: 1024
             status: active
             perf:
-              prefill_time_to_token: 0.12
+              prefill_time_to_first_token: 120
+              prefill_tolerance: 1.15
               decode_t/s/u: 21.0
               decode_t/s: 672.0
               decode_tolerance: 1.15
@@ -97,9 +101,11 @@ targets:
             seq_len: 1024
             status: active
             perf:
-              prefill_time_to_token: 0.035
+              prefill_time_to_first_token: 35
+              prefill_tolerance: 1.15
               decode_t/s/u: 22.0
               decode_t/s: 704.0
+              decode_tolerance: 1.15
             accuracy: {}
           - batch_size: 1
             seq_len: 1024
@@ -118,9 +124,11 @@ targets:
             seq_len: 1024
             status: active
             perf:
-              prefill_time_to_token: 0.09
+              prefill_time_to_first_token: 90
+              prefill_tolerance: 1.15
               decode_t/s/u: 21.0
               decode_t/s: 672.0
+              decode_tolerance: 1.15
             accuracy: {}
           - batch_size: 1
             seq_len: 1024
@@ -139,7 +147,8 @@ targets:
             seq_len: 1024
             status: active
             perf:
-              prefill_time_to_token: 0.24
+              prefill_time_to_first_token: 240
+              prefill_tolerance: 1.4
               decode_t/s/u: 13.25
               decode_t/s: 424.0
               decode_tolerance: 1.4
@@ -156,9 +165,11 @@ targets:
             seq_len: 1024
             status: active
             perf:
-              prefill_time_to_token: 0.1
+              prefill_time_to_first_token: 100
+              prefill_tolerance: 1.15
               decode_t/s/u: 20.0
               decode_t/s: 640.0
+              decode_tolerance: 1.15
             accuracy: {}
           - batch_size: 1
             seq_len: 1024
@@ -177,9 +188,11 @@ targets:
             seq_len: 1024
             status: active
             perf:
-              prefill_time_to_token: 0.043
+              prefill_time_to_first_token: 43
+              prefill_tolerance: 1.15
               decode_t/s/u: 24.0
               decode_t/s: 768.0
+              decode_tolerance: 1.15
             accuracy: {}
           - batch_size: 1
             seq_len: 1024
@@ -198,9 +211,11 @@ targets:
             seq_len: 1024
             status: active
             perf:
-              prefill_time_to_token: 0.073
+              prefill_time_to_first_token: 73
+              prefill_tolerance: 1.15
               decode_t/s/u: 16.0
               decode_t/s: 512.0
+              decode_tolerance: 1.15
             accuracy: {}
           - batch_size: 1
             seq_len: 1024
@@ -222,6 +237,7 @@ targets:
               prefill_t/s: 285.0
               decode_t/s/u: 24.0
               decode_t/s: 24.0
+              decode_tolerance: 1.15
             accuracy: {}
 
   gemma-3-27b:
@@ -236,6 +252,7 @@ targets:
               prefill_t/s: 265.0
               decode_t/s/u: 13.0
               decode_t/s: 13.0
+              decode_tolerance: 1.15
             accuracy: {}
 
   gemma-4-e2b:
@@ -303,9 +320,11 @@ targets:
             seq_len: 128
             status: active
             perf:
-              prefill_time_to_token: 0.4
+              prefill_time_to_first_token: 400
+              prefill_tolerance: 1.15
               decode_t/s/u: 12.0
               decode_t/s: 2200.0
+              decode_tolerance: 1.15
             accuracy: {}
       wh_galaxy_perf:
         entries:
@@ -313,9 +332,11 @@ targets:
             seq_len: 128
             status: active
             perf:
-              prefill_time_to_token: 0.25
+              prefill_time_to_first_token: 250
+              prefill_tolerance: 1.15
               decode_t/s/u: 5.0
               decode_t/s: 650.0
+              decode_tolerance: 1.15
             accuracy: {}
 
   gpt-oss-120b:
@@ -327,9 +348,11 @@ targets:
             seq_len: 128
             status: active
             perf:
-              prefill_time_to_token: 1.7
+              prefill_time_to_first_token: 1700
+              prefill_tolerance: 1.15
               decode_t/s/u: 8.0
               decode_t/s: 2200.0
+              decode_tolerance: 1.15
             accuracy: {}
       wh_galaxy_perf:
         entries:
@@ -337,9 +360,11 @@ targets:
             seq_len: 128
             status: active
             perf:
-              prefill_time_to_token: 0.4
+              prefill_time_to_first_token: 400
+              prefill_tolerance: 1.15
               decode_t/s/u: 3.0
               decode_t/s: 380.0
+              decode_tolerance: 1.15
             accuracy: {}
 
   distil-whisper-large-v3:
@@ -351,8 +376,10 @@ targets:
             seq_len: null
             status: active
             perf:
-              prefill_time_to_token: 0.13
+              prefill_time_to_first_token: 130
+              prefill_tolerance: 1.15
               decode_t/s/u: 124.0
+              decode_tolerance: 1.15
             accuracy: {}
       wh_llmbox_perf:
         entries:
@@ -360,8 +387,10 @@ targets:
             seq_len: null
             status: active
             perf:
-              prefill_time_to_token: 0.14
+              prefill_time_to_first_token: 140
+              prefill_tolerance: 1.15
               decode_t/s/u: 105.0
+              decode_tolerance: 1.15
             accuracy: {}
       wh_galaxy_perf:
         entries:
@@ -369,8 +398,10 @@ targets:
             seq_len: null
             status: active
             perf:
-              prefill_time_to_token: 0.22
+              prefill_time_to_first_token: 220
+              prefill_tolerance: 1.15
               decode_t/s/u: 77.5
+              decode_tolerance: 1.15
             accuracy: {}
 
   # Active e2e combinations with no centralized target yet must remain explicit TODOs.
@@ -511,7 +542,8 @@ targets:
             seq_len: 1024
             status: active
             perf:
-              prefill_time_to_token: 0.19
+              prefill_time_to_first_token: 190
+              prefill_tolerance: 1.27
               decode_t/s/u: 22.4
               decode_t/s: 716.8
               decode_tolerance: 1.27
@@ -556,7 +588,8 @@ targets:
             seq_len: 1024
             status: active
             perf:
-              prefill_time_to_token: 0.105
+              prefill_time_to_first_token: 105
+              prefill_tolerance: 1.27
               decode_t/s/u: 20.7
               decode_t/s: 662.4
               decode_tolerance: 1.27
@@ -577,7 +610,8 @@ targets:
             seq_len: 1024
             status: active
             perf:
-              prefill_time_to_token: 0.05393
+              prefill_time_to_first_token: 53.93
+              prefill_tolerance: 1.4
               decode_t/s/u: 67.82
               decode_t/s: 2170.24
               decode_tolerance: 1.4
@@ -646,7 +680,8 @@ targets:
             seq_len: 128
             status: active
             perf:
-              prefill_time_to_token: 0.06858
+              prefill_time_to_first_token: 68.58
+              prefill_tolerance: 1.27
               decode_t/s/u: 25.66
               decode_t/s: 821.12
               decode_tolerance: 1.27

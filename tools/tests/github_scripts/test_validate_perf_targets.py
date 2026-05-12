@@ -258,6 +258,58 @@ def test_validate_perf_targets_supports_compile_and_prefill_decode_metrics(tmp_p
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_validate_perf_targets_supports_new_metric_names_and_ttft_ms_targets(tmp_path):
+    (tmp_path / "generated/benchmark_data").mkdir(parents=True)
+    (tmp_path / "models").mkdir(parents=True)
+    (tmp_path / "tests/pipeline_reorg").mkdir(parents=True)
+
+    _write_complete_run(
+        tmp_path / "generated/benchmark_data/complete_run_1.json",
+        model="demo-model",
+        batch_size=4,
+        seq_len=128,
+        decode_tsu=33.0,
+        extra_measurements=[
+            {"step_name": "inference_prefill", "name": "time_to_token", "value": 0.11},
+            {"step_name": "inference_decode", "name": "tokens/s", "value": 140.0},
+        ],
+    )
+
+    targets = {
+        "version": 1,
+        "targets": {
+            "demo-model": {
+                "aliases": [],
+                "skus": {
+                    "wh_n150": {
+                        "entries": [
+                            {
+                                "batch_size": 4,
+                                "seq_len": 128,
+                                "status": "active",
+                                "perf": {
+                                    "prefill_time_to_first_token": 120.0,
+                                    "prefill_tolerance": 1.15,
+                                    "decode_t/s/u": 30.0,
+                                    "decode_t/s": 130.0,
+                                    "decode_tolerance": 1.2,
+                                },
+                                "accuracy": {},
+                            }
+                        ]
+                    }
+                },
+            }
+        },
+    }
+    (tmp_path / "models/model_targets.yaml").write_text(yaml.safe_dump(targets), encoding="utf-8")
+    tests_yaml = [{"model": "demo-model", "skus": {"wh_n150": {"tier": 1}}, "team": "models"}]
+    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(yaml.safe_dump(tests_yaml), encoding="utf-8")
+
+    result = _run_validator(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_validate_perf_targets_detects_regression(tmp_path):
     (tmp_path / "generated/benchmark_data").mkdir(parents=True)
     (tmp_path / "models").mkdir(parents=True)

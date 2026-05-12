@@ -21,7 +21,7 @@ except ModuleNotFoundError:
     from models.demos.utils import model_targets
 
 LOWER_IS_BETTER_METRICS = {
-    "prefill_time_to_token",
+    "prefill_time_to_first_token",
     "compile_prefill",
     "compile_decode",
 }
@@ -40,7 +40,7 @@ METRIC_NAME_MAP = {
     "compile_prefill": ("compile_prefill", "time(s)"),
     "compile_decode": ("compile_decode", "time(s)"),
     "prefill_t/s": ("inference_prefill", "tokens/s"),
-    "prefill_time_to_token": ("inference_prefill", "time_to_token"),
+    "prefill_time_to_first_token": ("inference_prefill", "time_to_token"),
     "prefill_decode_t/s/u": ("inference_prefill_decode", "tokens/s/user"),
     "decode_t/s": ("inference_decode", "tokens/s"),
     "decode_t/s/u": ("inference_decode", "tokens/s/user"),
@@ -55,13 +55,14 @@ ALLOWED_TARGET_METRIC_NAMES = {
     "decode_t/s/u",
     "prefill_decode_t/s/u",
     "prefill_t/s",
-    "prefill_time_to_token",
+    "prefill_time_to_first_token",
     "top1",
     "top5",
 }
 TOLERANCE_FAMILY_ALIASES = {
     "decode_t/s": "decode_tolerance",
     "decode_t/s/u": "decode_tolerance",
+    "prefill_time_to_first_token": "prefill_tolerance",
 }
 
 
@@ -105,7 +106,14 @@ def _measurement_lookup(benchmark_json: dict[str, Any]) -> dict[tuple[str, str],
 def _extract_metric_value(metric_name: str, lookup: dict[tuple[str, str], float]) -> float | None:
     """Resolve a metric value, failing on ambiguous unqualified metric names."""
     if metric_name in METRIC_NAME_MAP:
-        return lookup.get(METRIC_NAME_MAP[metric_name])
+        value = lookup.get(METRIC_NAME_MAP[metric_name])
+        if value is None:
+            return None
+        if metric_name == "prefill_time_to_first_token":
+            # model_targets.yaml stores TTFT in milliseconds after migration,
+            # while benchmark payloads still expose time_to_token in seconds.
+            return value * 1000.0
+        return value
 
     matches: list[tuple[str, str, float]] = []
     for (step_name, name), value in lookup.items():
@@ -203,6 +211,11 @@ def _validate_targets_schema(targets_yaml: dict[str, Any]) -> list[str]:
                 if not isinstance(entry, dict):
                     errors.append(f"Model '{model_name}' sku '{sku_name}' entry #{idx} must be a dict")
                     continue
+                if "batch_size" not in entry or "seq_len" not in entry:
+                    errors.append(
+                        f"Model '{model_name}' sku '{sku_name}' entry #{idx} must define both "
+                        "'batch_size' and 'seq_len' keys"
+                    )
                 status = str(entry.get("status", "active")).lower()
                 if status not in {"active", "todo"}:
                     errors.append(
