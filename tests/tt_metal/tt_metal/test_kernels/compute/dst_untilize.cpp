@@ -9,6 +9,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #ifdef ARCH_QUASAR
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #else
 #include "api/dataflow/circular_buffer.h"
 #endif

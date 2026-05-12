@@ -10,7 +10,9 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
-#ifndef ARCH_QUASAR
+#ifdef ARCH_QUASAR
+#include "experimental/kernel_args.h"
+#else
 #include "api/dataflow/circular_buffer.h"
 #endif
 
