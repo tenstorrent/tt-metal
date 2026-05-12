@@ -95,6 +95,8 @@ jobs:
       PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
       PRTE_MCA_prte_fwd_environment: "true"
       PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/venv/bin"
+      HOME: /home/user
+      PIP_CACHE_DIR: /home/user/.cache/pip
       LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
       TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
       TT_METAL_CACHE: /home/user/.cache
