@@ -225,16 +225,33 @@ class TtDPTReassembleLayer:
 
 
 class TtDPTFusionStage:
-    """Top-down fusion of the four reassembled feature maps.
+    """Top-down fusion matching HF DepthAnythingFeatureFusionStage exactly.
 
-    Iterates from the deepest (index 3) to the shallowest (index 0):
-    upsample the running feature, add the projected scale feature, then
-    apply two residual conv blocks.
+    HF fusion_stage.forward(features):
+        hidden_states = features[::-1]  # reverse: deepest first
+        for idx, (hidden_state, layer) in enumerate(...):
+            size = next_level_shape if not last else None
+            if first:
+                fused = layer(hidden_state, residual=None, size=size)
+            else:
+                fused = layer(fused, hidden_state, size=size)
 
-    Each scale goes through:
-      1. neck_conv:   C_i -> 256  (3x3 conv from DPTNeck.convs)
-      2. projection:  256 -> 256  (1x1 conv from fusion layer, done as linear)
-    Without step 1, the matmul crashes because C_i=1024 != weight_rows=256.
+    HF DepthAnythingFeatureFusionLayer.forward(hidden_state, residual=None, size=None):
+        if residual is not None:
+            if shapes differ: residual = interpolate(residual, hidden_state.shape[2:])
+            hidden_state = hidden_state + residual_layer1(residual)
+        hidden_state = residual_layer2(hidden_state)
+        hidden_state = interpolate(hidden_state, scale_factor=2 or size=size)
+        hidden_state = projection(hidden_state)  # 1x1 conv
+        return hidden_state
+
+    HF DepthAnythingPreActResidualLayer.forward(x):
+        residual = x
+        x = activation1(x)  # ReLU BEFORE conv (pre-activation!)
+        x = convolution1(x)
+        x = activation2(x)  # ReLU
+        x = convolution2(x)
+        return x + residual
     """
 
     # Input channel counts for each reassembly output level
@@ -245,11 +262,13 @@ class TtDPTFusionStage:
         self.device = device
 
     # ------------------------------------------------------------------
-    def _residual_block(self, x, params):
-        """Two 3x3 convolutions with a skip connection."""
+    def _pre_act_residual_block(self, x, params):
+        """PRE-activation residual: ReLU → conv1 → ReLU → conv2 → add skip."""
         residual = x
         batch_size, channels, h, w = x.shape
 
+        # activation1 (ReLU) BEFORE convolution1
+        x = ttnn.relu(x)
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
         x, [h, w] = ttnn_conv2d(
@@ -264,6 +283,8 @@ class TtDPTFusionStage:
             w,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+        # activation2 (ReLU)
         x = ttnn.relu(x)
 
         x, [h, w] = ttnn_conv2d(
@@ -279,21 +300,84 @@ class TtDPTFusionStage:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Residual add -- both must be TILE + DRAM to avoid layout mismatches.
+        # Skip connection
         residual = _dram_tile(residual)
         x = _dram_tile(x)
         return ttnn.add(residual, x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     # ------------------------------------------------------------------
+    def _bilinear_upsample(self, x, target_h=None, target_w=None, scale=2):
+        """Approximate bilinear upsample with nearest-neighbor + matching dims.
+
+        ttnn only supports nearest-neighbor, so we use it as an approximation.
+        When target_h/w given, upsample to at least that size then slice.
+        """
+        batch_size, channels, h, w = x.shape
+
+        if target_h is not None and target_w is not None:
+            # Compute integer scale that covers target
+            scale = max((target_h + h - 1) // h, (target_w + w - 1) // w)
+
+        x = ttnn_upsample(x, scale_factor=scale)
+        h_up, w_up = h * scale, w * scale
+
+        if target_h is not None and target_w is not None:
+            if h_up != target_h or w_up != target_w:
+                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+                x = ttnn.slice(x, (0, 0, 0, 0), (batch_size, channels, target_h, target_w))
+            return x, target_h, target_w
+        return x, h_up, w_up
+
+    # ------------------------------------------------------------------
+    def _projection_1x1(self, x, params):
+        """1x1 convolution implemented as ttnn.linear after BCHW→BHWC reshape."""
+        batch_size, channels, h, w = x.shape
+        x = ttnn.permute(x, (0, 2, 3, 1))  # (B, H, W, C)
+        x = _dram_tile(x)
+        x = ttnn.reshape(x, (batch_size, h * w, channels))
+        x = ttnn.linear(
+            x,
+            params.weight,
+            bias=params.bias,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        x = ttnn.reshape(x, (batch_size, h, w, 256))
+        x = ttnn.permute(x, (0, 3, 1, 2))  # (B, 256, H, W)
+        return x
+
+    # ------------------------------------------------------------------
     def __call__(self, features):
-        """features: list of 4 tensors (B, C_i, H_i, W_i), index 0=shallow."""
-        x = None
-        for i in range(3, -1, -1):
-            params = self.parameters.layers[i]
-            feat_i = features[i]  # (B, C_i, H_i, W_i)
+        """features: list of 4 tensors (B, C_i, H_i, W_i), index 0=shallow.
+
+        HF processes in REVERSE (deepest first).
+
+        HF neck.forward:
+            reassembled = reassemble_stage(hidden_states)   # [0..3]
+            convolved = [convs[i](reassembled[i]) for i]    # convs[i] with features[i]
+            output = fusion_stage(convolved)                # reverses internally
+
+        HF fusion_stage.forward(hidden_states):
+            hidden_states = hidden_states[::-1]  # [3,2,1,0]
+            for idx, (hs, layer) in enumerate(zip(hidden_states, self.layers)):
+                ...
+            So: layers[0] processes convolved[3] (deepest)
+                layers[1] processes convolved[2]
+                layers[2] processes convolved[1]
+                layers[3] processes convolved[0] (shallowest)
+
+        Our parameters.layers[i] bundles:
+            - neck_conv from neck.convs[i]  (expects features[i])
+            - projection/residuals from fusion_stage.layers[i]
+        So neck_conv[i] must be applied to features[i],
+        but fusion layers[i] must process convolved[3-i].
+        """
+        # Step 1: Apply neck_convs — parameters.layers[i].neck_conv for features[i]
+        convolved = []
+        for i in range(4):
+            params = self.parameters.layers[i]  # neck_conv[i] expects features[i]
+            feat_i = features[i]
             batch_size, in_ch, h_i, w_i = feat_i.shape
 
-            # Step 1: neck_conv -- 3x3 conv: C_i -> 256
             feat_i = ttnn.to_layout(feat_i, ttnn.ROW_MAJOR_LAYOUT)
             feat_i, [h_i, w_i] = ttnn_conv2d(
                 feat_i,
@@ -307,50 +391,73 @@ class TtDPTFusionStage:
                 w_i,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            convolved.append(feat_i)
 
-            # Step 2: fusion projection  256 -> 256 (1x1 conv as linear)
-            # ttnn_conv2d returns (B, 256, H, W) -- must permute to BHWC before linear
-            feat_i = ttnn.permute(feat_i, (0, 2, 3, 1))  # (B, H, W, 256)
-            feat_i = _dram_tile(feat_i)  # ensure TILE layout for linear
-            feat_i = ttnn.reshape(feat_i, (batch_size, h_i * w_i, 256))
-            feat_i = ttnn.linear(
-                feat_i,
-                params.projection.weight,
-                bias=params.projection.bias,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+        # Step 2: Fusion — process in reverse (deepest first)
+        # reversed = [convolved[3], convolved[2], convolved[1], convolved[0]]
+        # layers[0] → convolved[3], layers[1] → convolved[2], etc.
+        reversed_features = convolved[::-1]
+        fused = None
 
-            # Back to (B, 256, H_i, W_i)
-            feat_i = ttnn.reshape(feat_i, (batch_size, h_i, w_i, 256))
-            feat_i = ttnn.permute(feat_i, (0, 3, 1, 2))  # (B, 256, H_i, W_i)
+        for idx in range(4):
+            # HF: fusion_stage.layers[idx] processes reversed_features[idx]
+            fusion_params = self.parameters.layers[idx]  # fusion layers[idx]
+            hidden_state = reversed_features[idx]
 
-            if x is None:
-                # Deepest level -- nothing to add yet.
-                x = feat_i
+            # Target upsample size = next level's spatial dims
+            if idx < 3:
+                next_feat = reversed_features[idx + 1]
+                target_h, target_w = next_feat.shape[2], next_feat.shape[3]
             else:
-                x_up = ttnn_upsample(x, scale_factor=2)
+                target_h, target_w = None, None  # scale_factor=2
 
-                # Fix spatial mismatch from odd grid sizes.
-                # e.g. 37 / stride-2 = 19; 19 * 2 = 38 ≠ 37.
-                # Slice the upsampled tensor to match the target feature's dims.
-                _, _, h_target, w_target = feat_i.shape
-                _, _, h_up, w_up = x_up.shape
-                if h_up != h_target or w_up != w_target:
-                    x_up = ttnn.to_layout(x_up, ttnn.ROW_MAJOR_LAYOUT)
-                    x_up = ttnn.slice(
-                        x_up,
-                        (0, 0, 0, 0),
-                        (x_up.shape[0], x_up.shape[1], h_target, w_target),
+            if fused is None:
+                # First layer (deepest) — no residual
+                hidden_state = self._pre_act_residual_block(
+                    hidden_state, fusion_params.residual_layer2
+                )
+                if target_h is not None:
+                    hidden_state, _, _ = self._bilinear_upsample(
+                        hidden_state, target_h, target_w
+                    )
+                else:
+                    hidden_state, _, _ = self._bilinear_upsample(hidden_state, scale=2)
+                hidden_state = self._projection_1x1(hidden_state, fusion_params.projection)
+                fused = hidden_state
+            else:
+                # Subsequent layers:
+                # fused = running result, hidden_state = new feature from this level
+                new_feature = hidden_state
+
+                # Match spatial dims if needed
+                fh, fw = fused.shape[2], fused.shape[3]
+                nh, nw = new_feature.shape[2], new_feature.shape[3]
+                if fh != nh or fw != nw:
+                    new_feature, _, _ = self._bilinear_upsample(
+                        new_feature, target_h=fh, target_w=fw
                     )
 
-                x_up = _dram_tile(x_up)
-                feat_i = _dram_tile(feat_i)
-                x = ttnn.add(x_up, feat_i, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                # residual_layer1(new_feature) + fused
+                res1_out = self._pre_act_residual_block(
+                    new_feature, fusion_params.residual_layer1
+                )
+                fused = _dram_tile(fused)
+                res1_out = _dram_tile(res1_out)
+                fused = ttnn.add(fused, res1_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-            x = self._residual_block(x, params.residual_layer1)
-            x = self._residual_block(x, params.residual_layer2)
+                # residual_layer2
+                fused = self._pre_act_residual_block(fused, fusion_params.residual_layer2)
 
-        return x  # (B, 256, H_out, W_out)
+                # Upsample to next level
+                if target_h is not None:
+                    fused, _, _ = self._bilinear_upsample(fused, target_h, target_w)
+                else:
+                    fused, _, _ = self._bilinear_upsample(fused, scale=2)
+
+                # 1x1 projection
+                fused = self._projection_1x1(fused, fusion_params.projection)
+
+        return fused  # (B, 256, H_out, W_out)
 
 
 # ============================================================================
