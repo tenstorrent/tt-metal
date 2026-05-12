@@ -25,6 +25,19 @@
  * LLK PACK
  *************************************************************************/
 
+// TODO NC: Remove as the part of tt-metal#34499
+template <bool untilize = false, bool zero_output = false, bool tilize = false /*unused*/>
+inline void llk_pack_mop_config(const uint32_t output, std::uint32_t num_tiles = 1) {
+    const std::uint32_t output_id = get_output_id(output);
+    const std::uint32_t num_faces = get_output_num_faces(output_id);
+    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
+    const bool partial_face = get_output_partial_face(output_id) && IS_BFP_FORMAT((uint)pack_dst_format[output_id]);
+    const bool narrow_tile = get_output_narrow_tile(output_id);
+
+    _llk_pack_mop_config_<untilize, zero_output>(
+        pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
+}
+
 inline void llk_pack_set_fp32_dest_acc(bool enable) { _llk_pack_set_fp32_dest_acc_(enable); }
 
 template <bool is_fp32_dest_acc_en>
@@ -348,11 +361,6 @@ inline void llk_pack_fast_tilize_block(
 
 inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_(); }
 
-template <uint WaitRes = p_stall::NONE>
-inline void llk_packer_set_math_semaphore() {
-    _llk_packer_set_math_semaphore_<WaitRes>();
-}
-
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_dest_section_done() {
     _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
@@ -376,11 +384,7 @@ inline void llk_pack_dest_init(const std::uint32_t pack_output = 16) {
     _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en, untilize>(face_r_dim, narrow_tile);
 }
 
-inline void llk_pack_debug_dump(std::uint8_t* data, std::uint32_t byte_size) { _llk_pack_debug_dump_(data, byte_size); }
-
-inline void llk_pack_debug_dump_seek(std::uint8_t offset) { _llk_pack_debug_dump_seek_(offset); }
-
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en = false>
 inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const std::uint32_t output_id = get_output_id(new_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
