@@ -1,5 +1,9 @@
 """
-ACE-Step v1.5 demo: official-style host preprocessing + TTNN DiT sampler + host VAE.
+ACE-Step v1.5 demo: official-style host preprocessing + TTNN DiT sampler + VAE decode.
+
+Latent diffusion runs on TTNN; VAE decode uses the TTNN Oobleck port from ``ign/ACE_perf`` by default
+(HF-style ``ckpt_dir/vae/`` with ``config.json``). Long latent sequences are decoded in overlapping
+time tiles so ``ttnn.conv1d`` stays within L1 limits. Pass ``--torch-vae`` for PyTorch ``AutoencoderOobleck``.
 
 By default this matches ``torch_ref/run_prompt_to_wav.py --use-official-acestep`` for **Phase 1**
 (5 Hz LM / CoT, audio codes, handler ``preprocess_batch``, TTNN Qwen3 caption encoder via
@@ -79,6 +83,15 @@ def _configure_ttnn_runtime(*, no_ttnn_strict: bool) -> None:
     _prepend_ttnn_pkg_to_syspath()
     if not no_ttnn_strict:
         os.environ["TTNN_CONFIG_OVERRIDES"] = '{"throw_exception_on_fallback": true}'
+
+
+def _open_tt_device(ttnn: Any, *, device_id: int) -> Any:
+    """Open device with L1 small arena sized for conv/VAE (same default as ``tests/conftest.py`` / ign/ACE_perf)."""
+    return ttnn.open_device(
+        device_id=int(device_id),
+        l1_small_size=int(os.environ.get("ACE_STEP_L1_SMALL_SIZE", "98304")),
+        trace_region_size=128 << 20,
+    )
 
 
 def _build_t_schedule(*, shift: float, infer_steps: int, timesteps: str | None, variant: str) -> list[float]:
@@ -246,7 +259,7 @@ def _ensure_variant(name: str, ckpt_dir: Path) -> Path:
 
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="ACE-Step v1.5: HF-style preprocessing + TTNN DiT + host VAE.",
+        description="ACE-Step v1.5: HF preprocessing + TTNN DiT + TTNN or PyTorch VAE decode.",
     )
     ap.add_argument("--prompt", type=str, required=True)
     ap.add_argument(
@@ -314,6 +327,33 @@ def main() -> None:
         "--no-ttnn-strict",
         action="store_true",
         help="Do not set throw_exception_on_fallback (may hide TTNN fallbacks).",
+    )
+    ap.add_argument(
+        "--torch-vae",
+        action="store_true",
+        help=(
+            "Decode latents with PyTorch Diffusers AutoencoderOobleck on GPU/CPU. "
+            "Default: TTNN Oobleck decoder (requires ckpt_dir/vae/config.json + weights)."
+        ),
+    )
+    ap.add_argument(
+        "--vae-chunk-latents",
+        type=int,
+        default=32,
+        help=(
+            "TTNN VAE only: maximum latent time length per decode tile (overlap-add for longer clips). "
+            "If decode still overflows L1, lower this value. "
+            "Override with env ACE_STEP_VAE_CHUNK_LATENTS."
+        ),
+    )
+    ap.add_argument(
+        "--vae-overlap-latents",
+        type=int,
+        default=4,
+        help=(
+            "TTNN VAE only: latent-frame overlap between tiles (min 4 internally when possible). "
+            "Override with env ACE_STEP_VAE_OVERLAP_LATENTS."
+        ),
     )
     args = ap.parse_args()
 
@@ -506,7 +546,7 @@ def main() -> None:
         if not qwen_safetensors.is_file():
             raise FileNotFoundError(f"Missing Qwen embedding weights at {qwen_safetensors}")
 
-        dev = ttnn.open_device(device_id=int(args.device_id))
+        dev = _open_tt_device(ttnn, device_id=int(args.device_id))
         if hasattr(dev, "enable_program_cache"):
             dev.enable_program_cache()
         dev_opened_for_ttnn_text_encoder = True
@@ -654,7 +694,7 @@ def main() -> None:
         if not args.no_ttnn_strict and hasattr(ttnn, "CONFIG") and hasattr(ttnn.CONFIG, "throw_exception_on_fallback"):
             ttnn.CONFIG.throw_exception_on_fallback = True
 
-        dev = ttnn.open_device(device_id=int(args.device_id))
+        dev = _open_tt_device(ttnn, device_id=int(args.device_id))
         if hasattr(dev, "enable_program_cache"):
             dev.enable_program_cache()
         dev_opened_for_ttnn_text_encoder = True
@@ -699,12 +739,13 @@ def main() -> None:
         typecast_bf16_any_to_fp32_tile,
     )
     from models.demos.ace_step_v1_5.ttnn_impl.full_pipeline import AceStepV15TTNNPipeline
+    from models.demos.ace_step_v1_5.ttnn_impl.oobleck_vae_decoder import TtOobleckVaeDecoder
 
     if not args.no_ttnn_strict and hasattr(ttnn, "CONFIG") and hasattr(ttnn.CONFIG, "throw_exception_on_fallback"):
         ttnn.CONFIG.throw_exception_on_fallback = True
 
     if not dev_opened_for_ttnn_text_encoder:
-        dev = ttnn.open_device(device_id=int(args.device_id))
+        dev = _open_tt_device(ttnn, device_id=int(args.device_id))
         if hasattr(dev, "enable_program_cache"):
             dev.enable_program_cache()
 
@@ -716,6 +757,9 @@ def main() -> None:
         """TTNN staging: never call ``.numpy()`` on tensors that may still require grad."""
         return t.detach().to(dtype=torch.float32).cpu().contiguous().numpy()
 
+    pred_latents: Any = None  # Torch [B,T,C_lat] when --torch-vae
+    wav_bct_cpu: Any = None  # Torch [B, audio_ch, samples] after TTNN VAE (CPU)
+
     try:
         pipe = AceStepV15TTNNPipeline(
             device=dev,
@@ -723,6 +767,26 @@ def main() -> None:
             timesteps_host=timesteps_host,
             expected_input_length=int(frames),
         )
+
+        tt_vae: TtOobleckVaeDecoder | None = None
+        if not bool(args.torch_vae):
+            vae_cfg = vae_dir / "config.json"
+            if not vae_cfg.is_file():
+                raise FileNotFoundError(
+                    f"TTNN VAE expects a Hugging Face-style folder at {vae_dir} (config.json). "
+                    "Install the VAE checkpoint there or pass --torch-vae for PyTorch decode."
+                )
+            act_dtype_vae = getattr(ttnn, "bfloat16", None)
+            if act_dtype_vae is None:
+                raise RuntimeError("TTNN VAE needs ttnn.bfloat16; build may be incomplete.")
+            tt_vae = TtOobleckVaeDecoder.from_hf_vae_dir(
+                str(vae_dir),
+                device=dev,
+                latent_frames=int(frames),
+                batch_size=1,
+                activation_dtype=act_dtype_vae,
+                weights_dtype=act_dtype_vae,
+            )
 
         _ensure_acestep_on_path()
 
@@ -873,8 +937,18 @@ def main() -> None:
             log_line=f"[ttnn] final t={t_curr_final:.5f}",
         )
 
-        # Host VAE (Diffusers) requires a Torch tensor; this is the only device→Torch copy of latents.
-        pred_latents = ttnn.to_torch(xt_tt, dtype=torch.float32).contiguous()
+        if tt_vae is not None:
+            vae_cs = int(os.environ.get("ACE_STEP_VAE_CHUNK_LATENTS", str(int(args.vae_chunk_latents))))
+            vae_ov = int(os.environ.get("ACE_STEP_VAE_OVERLAP_LATENTS", str(int(args.vae_overlap_latents))))
+            wav_tt = tt_vae.decode_tiled(xt_tt, chunk_size=vae_cs, overlap=vae_ov)
+            wav_ntc = ttnn.to_torch(wav_tt, dtype=torch.float32).contiguous()
+            try:
+                ttnn.deallocate(wav_tt)
+            except Exception:
+                pass
+            wav_bct_cpu = wav_ntc.permute(0, 2, 1).detach().cpu()
+        else:
+            pred_latents = ttnn.to_torch(xt_tt, dtype=torch.float32).contiguous()
 
         try:
             ttnn.deallocate(enc_tt_pipe)
@@ -887,14 +961,20 @@ def main() -> None:
     finally:
         ttnn.close_device(dev)
 
-    from diffusers.models import AutoencoderOobleck
+    if wav_bct_cpu is not None:
+        wav = wav_bct_cpu.float()
+        peak = wav.abs().amax(dim=[1, 2], keepdim=True).clamp(min=1e-8)
+        wav = (wav / peak).clamp(-1.0, 1.0)
+    else:
+        if pred_latents is None:
+            raise RuntimeError("Internal error: latent decode path neither TTNN nor PyTorch.")
 
-    vae = AutoencoderOobleck.from_pretrained(str(vae_dir)).eval().to(torch_dev)
-    with torch.inference_mode():
-        lat = pred_latents.transpose(1, 2).contiguous().to(device=torch_dev, dtype=next(vae.parameters()).dtype)
-        wav = vae.decode(lat).sample.float().cpu()
-        # Full peak normalize so quiet VAE outputs (|x| << 1) are still audible in WAV players.
-        # The old rule only scaled when peak > 1.0, which often leaves TTNN latents' decode near-silent.
+        from diffusers.models import AutoencoderOobleck
+
+        vae = AutoencoderOobleck.from_pretrained(str(vae_dir)).eval().to(torch_dev)
+        with torch.inference_mode():
+            lat = pred_latents.transpose(1, 2).contiguous().to(device=torch_dev, dtype=next(vae.parameters()).dtype)
+            wav = vae.decode(lat).sample.float().cpu()
         peak = wav.abs().amax(dim=[1, 2], keepdim=True).clamp(min=1e-8)
         wav = (wav / peak).clamp(-1.0, 1.0)
 
