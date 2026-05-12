@@ -99,6 +99,94 @@ def shuffle_tensor_tiles(tensor, tile_size, num_banks, subblock_k=None, subblock
     return shuffled
 
 
+def _software_quantize_per_tile(b_np, assignment, tile_w=32):
+    """Apply per-tile BFP quantize-dequantize matching CompressedTensor's hardware behavior.
+
+    Replicates what the hardware sees after DRAM decompression: each 32x32 tile is
+    quantize-dequantized according to its precision code (0=bfp8, 1=bfp4, 2=bfp2, 3=bfp0).
+    Result is the software reference for "this is what the hardware should compute against".
+    """
+    import numpy as np
+
+    from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import quantize_dequantize_bfp
+
+    code_to_mant_bits = {0: 7, 1: 3, 2: 1}  # bfp8, bfp4, bfp2; bfp0 (code 3) zeros the tile
+    K, N = b_np.shape
+    tiles_h, tiles_w = K // tile_w, N // tile_w
+    assert assignment.shape == (tiles_h, tiles_w), f"assignment shape {assignment.shape} != ({tiles_h}, {tiles_w})"
+    out = np.asarray(b_np, dtype=np.float32).copy()
+    for tr in range(tiles_h):
+        for tc in range(tiles_w):
+            code = int(assignment[tr, tc])
+            r0, c0 = tr * tile_w, tc * tile_w
+            tile = out[r0 : r0 + tile_w, c0 : c0 + tile_w]
+            if code == 3:
+                tile[:] = 0.0
+            elif code in code_to_mant_bits:
+                tile[:] = quantize_dequantize_bfp(tile, code_to_mant_bits[code])
+            else:
+                raise ValueError(f"unknown precision code {code} at tile ({tr}, {tc})")
+    return out
+
+
+def _compute_pcc(golden, calculated):
+    """Direct Pearson correlation between two tensors (any shape, broadcast to flat).
+
+    Returns a float in [-1, 1]. Used when we need the numerical PCC value rather than
+    a pass/fail boolean from comp_pcc.
+    """
+    a = golden.float().flatten()
+    b = calculated.float().flatten()
+    a_c = a - a.mean()
+    b_c = b - b.mean()
+    denom = a_c.norm() * b_c.norm()
+    if denom < 1e-12:
+        return 1.0 if (a_c.norm() < 1e-12 and b_c.norm() < 1e-12) else 0.0
+    return float((a_c * b_c).sum() / denom)
+
+
+def _shuffle_assignment_blocked(assignment, num_banks, subblock_k=None, subblock_n=1):
+    """Apply the same per-shard blocked permutation as shuffle_tensor_tiles to a 2D
+    assignment-code array. For (subblock_k=K_tiles, subblock_n=1) reduces to the simple
+    column-major-within-shard shuffle that moe.shuffle_dram_assignment applies. For
+    smaller subblock_k (K-parallel mode) groups tiles into subblock_k blocks contiguously
+    so each K-slice's tiles land at the start of the shard.
+    """
+    import numpy as np
+
+    tiles_h, tiles_w = assignment.shape
+    K_tiles = tiles_h
+    if tiles_w % num_banks != 0:
+        raise ValueError(f"tiles_w ({tiles_w}) must be divisible by num_banks ({num_banks})")
+    per_N_tiles = tiles_w // num_banks
+    num_tiles_per_shard = K_tiles * per_N_tiles
+
+    if subblock_k is None:
+        subblock_k = K_tiles
+    assert K_tiles % subblock_k == 0, f"K_tiles ({K_tiles}) must be divisible by subblock_k ({subblock_k})"
+    assert per_N_tiles % subblock_n == 0, f"per_N_tiles ({per_N_tiles}) must be divisible by subblock_n ({subblock_n})"
+
+    num_n_groups = per_N_tiles // subblock_n
+    block_size = subblock_k * subblock_n
+
+    i = np.arange(num_tiles_per_shard)
+    block_idx = i // block_size
+    pos_in_block = i % block_size
+    local_k = pos_in_block // subblock_n
+    local_n = pos_in_block % subblock_n
+    n_group = block_idx % num_n_groups
+    k_sub = block_idx // num_n_groups
+    global_k = k_sub * subblock_k + local_k
+    global_n = n_group * subblock_n + local_n
+    source_idx = global_k * per_N_tiles + global_n
+
+    result = np.empty_like(assignment)
+    for b in range(num_banks):
+        shard = assignment[:, b * per_N_tiles : (b + 1) * per_N_tiles].reshape(-1)
+        result[:, b * per_N_tiles : (b + 1) * per_N_tiles] = shard[source_idx].reshape(K_tiles, per_N_tiles)
+    return result
+
+
 def _build_down_grid(device):
     """
     Build 112-core down-proj grid, adapting to device grid size.
@@ -524,8 +612,13 @@ def _validate_dram_output(
     tp_expert=True,
     cores_per_dram_bank=1,
     k_parallel_per_bank=1,
+    pccs_out=None,
 ):
     """Validate per-expert DRAM output from dram_core_grid output tensor.
+
+    When pccs_out is a list, append (dev_idx, expert_id, label, pcc_value) tuples to it
+    and skip the per-expert assertion. Caller can then aggregate / compare PCCs across
+    configurations. Default (None) preserves existing assertion-mode behavior.
 
     For k_parallel_per_bank > 1 (cross-core K-reduction):
       - Reducer cores (k_slice_idx == k_parallel-1) hold the final full-K result
@@ -581,9 +674,14 @@ def _validate_dram_output(
                     # Sender holds its K-slice partial — raw, no silu.
                     mm_result = torch_a[:, k_start:k_end].float() @ torch_b_all[eidx][dev_idx][k_start:k_end, :].float()
                 torch_expected = mm_result.bfloat16()
-                passing, msg = comp_pcc(torch_expected, expert_output, pcc_threshold)
-                logger.info(f"Device {dev_idx} expert {eidx} (DRAM {label}) PCC: {msg}")
-                assert passing, f"Device {dev_idx} expert {eidx} (DRAM {label}) failed: {msg}"
+                if pccs_out is not None:
+                    pcc_val = _compute_pcc(torch_expected, expert_output)
+                    pccs_out.append((dev_idx, eidx, label, pcc_val))
+                    logger.info(f"Device {dev_idx} expert {eidx} (DRAM {label}) PCC: {pcc_val:.6f} (collected)")
+                else:
+                    passing, msg = comp_pcc(torch_expected, expert_output, pcc_threshold)
+                    logger.info(f"Device {dev_idx} expert {eidx} (DRAM {label}) PCC: {msg}")
+                    assert passing, f"Device {dev_idx} expert {eidx} (DRAM {label}) failed: {msg}"
 
 
 def _validate_dram_output_accum(
@@ -1091,8 +1189,16 @@ def _run_standard(
     fmt_ratios=None,
     k_parallel_per_bank=1,
     num_loop_iters=1,
+    n_program_invocations=1,
 ):
-    """Standard path: WIDTH_SHARDED SRAM, per-expert output slices on compute_core_grid."""
+    """Standard path: WIDTH_SHARDED SRAM, per-expert output slices on compute_core_grid.
+
+    n_program_invocations > 1 calls ExpertKernel.op repeatedly with identical inputs and
+    asserts every invocation's output is bitwise identical to the first. Probes for races
+    and inter-call state leakage (e.g. the documented K-reduction race at
+    matmul_expert_compressed_dram.hpp:470-474). Output tensors are rebuilt per invocation;
+    DRAM weight tensors, fmt tables, and the activation/index tensors are reused.
+    """
     cores_per_dram_bank = n_parallel_per_bank * k_parallel_per_bank
     tile_w = 32
     sram_id_set = set(sram_expert_ids)
@@ -1258,32 +1364,111 @@ def _run_standard(
         if has_sram
         else ({}, {}, None)
     )
-    result = ExpertKernel.op(
-        a_tensor,
-        sram_cts,
-        dram_cts,
-        out_tensor,
-        index_tensor,
-        num_active_experts=num_active_experts,
-        subblock_k=subblock_k,
-        subblock_n=subblock_n,
-        dram_core_grid=dram_core_grid,
-        dram_meta_tensors=dram_meta_tensors,
-        dram_per_core_n=dram_per_core_N,
-        has_sram=has_sram,
-        sram_core_grid=sram_core_grid,
-        sram_fmt_tensors=sram_fmt_tensors,
-        sram_base_addr_tensors=sram_base_addr_tensors,
-        sram_k_offsets=sram_k_offsets,
-        n_parallel_per_bank=n_parallel_per_bank,
-        k_parallel_per_bank=k_parallel_per_bank,
-        sram_per_core_n=sram_per_core_N,
-        sram_k_per_core=Kt,
-        sram_output_tensor=sram_out_tensor,
-        dram_fuse_silu=dram_fuse_silu,
-        tp_expert=tp_expert,
-        num_loop_iters=num_loop_iters,
-    )
+
+    reference_outputs = None
+    mismatches = []
+    extra_mismatch_count = 0
+    MAX_STORED_MISMATCHES = 1000
+    progress_every = max(1, n_program_invocations // 10)
+
+    for invocation in range(n_program_invocations):
+        if invocation > 0:
+            out_tensor = _build_dram_output(
+                mesh_device,
+                M,
+                dram_per_core_N,
+                num_dram_for_output,
+                num_dram_cores,
+                num_devices,
+                dram_core_grid,
+                tile_w,
+                dram_fuse_silu=dram_fuse_silu,
+            )
+            if has_sram:
+                sram_out_tensor = _build_sram_output(
+                    mesh_device,
+                    M,
+                    sram_per_core_N,
+                    num_active_experts,
+                    num_sram_cores_active,
+                    num_devices,
+                    sram_core_grid,
+                    tile_w,
+                )
+
+        result = ExpertKernel.op(
+            a_tensor,
+            sram_cts,
+            dram_cts,
+            out_tensor,
+            index_tensor,
+            num_active_experts=num_active_experts,
+            subblock_k=subblock_k,
+            subblock_n=subblock_n,
+            dram_core_grid=dram_core_grid,
+            dram_meta_tensors=dram_meta_tensors,
+            dram_per_core_n=dram_per_core_N,
+            has_sram=has_sram,
+            sram_core_grid=sram_core_grid,
+            sram_fmt_tensors=sram_fmt_tensors,
+            sram_base_addr_tensors=sram_base_addr_tensors,
+            sram_k_offsets=sram_k_offsets,
+            n_parallel_per_bank=n_parallel_per_bank,
+            k_parallel_per_bank=k_parallel_per_bank,
+            sram_per_core_n=sram_per_core_N,
+            sram_k_per_core=Kt,
+            sram_output_tensor=sram_out_tensor,
+            dram_fuse_silu=dram_fuse_silu,
+            tp_expert=tp_expert,
+            num_loop_iters=num_loop_iters,
+        )
+
+        if n_program_invocations > 1:
+            current = [ttnn.to_torch(d).clone() for d in ttnn.get_device_tensors(result)]
+            if reference_outputs is None:
+                reference_outputs = current
+            else:
+                for dev_idx, (ref_dev, cur_dev) in enumerate(zip(reference_outputs, current)):
+                    if not torch.equal(ref_dev, cur_dev):
+                        if len(mismatches) < MAX_STORED_MISMATCHES:
+                            n_diff = int((ref_dev != cur_dev).sum().item())
+                            delta = (ref_dev.float() - cur_dev.float()).abs()
+                            mismatches.append(
+                                (
+                                    invocation,
+                                    dev_idx,
+                                    n_diff,
+                                    float(delta.max().item()),
+                                    float(delta.mean().item()),
+                                )
+                            )
+                        else:
+                            extra_mismatch_count += 1
+
+            if (invocation + 1) % progress_every == 0:
+                total = len(mismatches) + extra_mismatch_count
+                logger.info(
+                    f"  multi-invocation: {invocation + 1}/{n_program_invocations} done, {total} divergent so far"
+                )
+
+    if n_program_invocations > 1:
+        total_mismatches = len(mismatches) + extra_mismatch_count
+        if total_mismatches:
+            logger.error(
+                f"NON-DETERMINISTIC: {total_mismatches} divergent (invocation, device) pairs "
+                f"across {n_program_invocations} invocations"
+            )
+            for inv, dev, n_diff, max_d, mean_d in mismatches[:10]:
+                logger.error(
+                    f"  invocation {inv} device {dev}: {n_diff} differing elements, "
+                    f"max|delta|={max_d:.4g}, mean|delta|={mean_d:.4g}"
+                )
+        assert not total_mismatches, (
+            f"ExpertKernel non-deterministic across {n_program_invocations} program invocations: "
+            f"{total_mismatches} divergent (invocation, device) pairs "
+            f"(first at invocation {mismatches[0][0]} device {mismatches[0][1]})"
+        )
+
     if active_sram:
         _validate_sram_output(
             sram_out_tensor,
@@ -1763,6 +1948,7 @@ def _run_hybrid_expert_multi_device(
     fmt_ratios=None,
     k_parallel_per_bank=1,
     num_loop_iters=1,
+    n_program_invocations=1,
 ):
     """Dispatcher: delegate to the appropriate variant.
 
@@ -1779,6 +1965,11 @@ def _run_hybrid_expert_multi_device(
             not accum_experts
         ), "Expert parallel (tp_expert=False) processes 1 expert per device, accum not applicable"
     slice_k = sram_k_parallel > 1
+    if n_program_invocations > 1:
+        assert not slice_k and not accum_experts, (
+            "n_program_invocations > 1 is only supported on the standard path "
+            "(no SRAM K-parallel, no expert accumulation)"
+        )
     if slice_k:
         _run_slice_k(
             mesh_device,
@@ -1851,6 +2042,7 @@ def _run_hybrid_expert_multi_device(
             fmt_ratios,
             k_parallel_per_bank=k_parallel_per_bank,
             num_loop_iters=num_loop_iters,
+            n_program_invocations=n_program_invocations,
         )
 
 
@@ -2632,4 +2824,882 @@ def test_matmul_expert_bspm_sparse_activation(bh_2d_mesh_device):
         bspm_expert_configs=[(0, 0), (1, 0), (2, 0), (3, 0)],  # 4 registered experts
         active_expert_ids=[0, 2],  # sparse: only experts 0 and 2 selected this step
         pcc_threshold=0.90,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Race / determinism probes — multi-invocation under K-parallel mixed precision.
+#
+# These tests target the inter-call race documented at
+# matmul_expert_compressed_dram.hpp:470-474 (sender can issue next iteration's
+# writes before reducer finishes, overwriting L1). The race lives in the
+# k_parallel_per_bank > 1 path and is masked by uniform precision because both
+# fmt double-buffer slots carry identical bytes — only mixed precision makes
+# slot-vs-slot content differ, so race surfaces here are mixed-precision-only.
+#
+# Shape and params mirror test_benchmark_gate_proj (production R1 gate-proj).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "formats_per_device, fmt_ratios",
+    [
+        (["bfp4", "bfp0"], {"bfp4": 77.8, "bfp0": 22.2}),
+        (["bfp4", "bfp2", "bfp0"], {"bfp4": 74.4, "bfp2": 7.3, "bfp0": 18.3}),
+    ],
+    ids=["bfp4_bfp0", "bfp4_bfp2_bfp0"],
+)
+def test_matmul_expert_race_probe_back_to_back(device, formats_per_device, fmt_ratios):
+    """Probe documented inter-call race: call ExpertKernel.op twice with identical inputs.
+
+    Production gate-proj config (K=7168, N=256, k_parallel_per_bank=2, dram_fuse_silu).
+    On a clean kernel both invocations must produce bitwise-identical output. If the
+    second invocation diverges, the K-reduction back-to-back race is reproduced.
+    """
+    _run_hybrid_expert_multi_device(
+        device,
+        M=1,
+        K=7168,
+        N=256,
+        num_experts=8,
+        sram_expert_ids=[],
+        dram_expert_ids=list(range(8)),
+        active_expert_ids=[2, 3, 4, 5, 6, 7, 1, 0],
+        formats_per_device=[formats_per_device],
+        dram_fuse_silu=True,
+        num_subblocks_k=4,
+        num_subblocks_n=1,
+        n_parallel_per_bank=1,
+        k_parallel_per_bank=2,
+        fmt_distribution="uniform",
+        fmt_ratios=fmt_ratios,
+        num_loop_iters=1,
+        n_program_invocations=2,
+    )
+
+
+def test_matmul_expert_determinism(device):
+    """100-invocation determinism probe at production gate-proj config (3-way mixed).
+
+    Catches any intra-call or inter-call non-determinism that 2-invocation back-to-back
+    might miss. If the back-to-back test passes but this fails, the race is rare and
+    requires more invocations to surface. If both pass, the kernel is reproducible at
+    this shape/grid — bug is elsewhere (real-BSPM specifics, inter-op state, etc).
+    """
+    _run_hybrid_expert_multi_device(
+        device,
+        M=1,
+        K=7168,
+        N=256,
+        num_experts=8,
+        sram_expert_ids=[],
+        dram_expert_ids=list(range(8)),
+        active_expert_ids=[2, 3, 4, 5, 6, 7, 1, 0],
+        formats_per_device=[["bfp4", "bfp2", "bfp0"]],
+        dram_fuse_silu=True,
+        num_subblocks_k=4,
+        num_subblocks_n=1,
+        n_parallel_per_bank=1,
+        k_parallel_per_bank=2,
+        fmt_distribution="uniform",
+        fmt_ratios={"bfp4": 74.4, "bfp2": 7.3, "bfp0": 18.3},
+        num_loop_iters=1,
+        n_program_invocations=100,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Real-BSPM race probes — production tile patterns from BitSculpt layer file.
+#
+# Synthetic mixed-precision tests use uniform per-column precision (every N-column
+# carries the same K-row pattern, every expert carries the same fmt_ratios). Real
+# BSPMs vary per-tile in both K and N, and per-expert distributions differ wildly.
+# This stresses block_sizes / fmt_per_expert_bytes indexing and the fmt
+# double-buffer's slot-to-slot byte delta under irregular patterns the synthetic
+# path cannot generate.
+#
+# Default path expects: $BSPM_RESULTS_DIR/deepseek-r1-0528/layer_16/precision_eval/
+#   precision_map_B_3.5.bspm (10.5 MB, 256 experts × 3 projs at 3.5 b/e).
+# ---------------------------------------------------------------------------
+
+
+def _run_dram_bspm_kparallel(
+    mesh_device,
+    M,
+    K,
+    N,
+    bspm_path,
+    bspm_expert_configs,
+    active_expert_ids,
+    pcc_threshold=0.85,
+    num_subblocks_k=None,
+    num_subblocks_n=None,
+    n_parallel_per_bank=1,
+    k_parallel_per_bank=1,
+    dram_fuse_silu=False,
+    n_program_invocations=1,
+    num_loop_iters=1,
+    precision_override=None,
+    return_pccs=False,
+    bspm_full_n=None,
+    software_quantized_golden=False,
+):
+    """DRAM-only ExpertKernel with real BSPM assignments + K-parallel + multi-invocation.
+
+    Mirrors _run_standard's structure (which is known to work with K-parallel mixed
+    precision) but replaces the synthetic CompressedTensorAssigner with real BSPM-loaded
+    per-tile precision codes. Weights remain random per slot; only the assignment
+    pattern is from BitSculpt.
+
+    bspm_expert_configs: list of (expert_idx, proj_idx) tuples — one per slot.
+    active_expert_ids: slot indices to mark active in the index tensor.
+    """
+    import numpy as np
+
+    from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_expert
+
+    tile_w = 32
+    cores_per_dram_bank = n_parallel_per_bank * k_parallel_per_bank
+    num_experts = len(bspm_expert_configs)
+    num_devices = mesh_device.get_num_devices()
+    mesh_rows, mesh_cols = mesh_device.shape[0], mesh_device.shape[1]
+
+    grids = _setup_core_grids(mesh_device, cores_per_dram_bank, 0, None, has_sram=False)
+    dram_cores_list = grids["dram_cores_list"]
+    dram_core_grid = grids["dram_core_grid"]
+    compute_core_grid = grids["compute_core_grid"]
+    num_dram_cores = len(dram_cores_list)
+    num_banks = num_dram_cores // cores_per_dram_bank
+    num_cores = compute_core_grid.num_cores()
+
+    Kt, dram_per_core_N, subblock_k, subblock_n, N_dram_per_device = _compute_dram_matmul_params(
+        K,
+        N,
+        tile_w,
+        num_banks,
+        num_dram_cores,
+        num_dram_cores,
+        cores_per_dram_bank,
+        num_subblocks_k,
+        num_subblocks_n,
+        k_parallel_per_bank=k_parallel_per_bank,
+    )
+    assert N_dram_per_device == N, f"N_dram_per_device ({N_dram_per_device}) != N ({N}): DRAM padding not supported"
+
+    num_subblocks_k_v = Kt // subblock_k
+    shuffle_subblock_k = Kt // k_parallel_per_bank if k_parallel_per_bank > 1 else None
+
+    dram_grid_size = mesh_device.dram_grid_size()
+    dram_grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1),
+            )
+        ]
+    )
+    shard_width = dram_per_core_N * tile_w * n_parallel_per_bank
+    dram_b_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(dram_grid, [K, shard_width], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    torch.manual_seed(0)
+    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
+
+    # tt-metal COMPRESSED_FORMATS indices: bfp8=0, bfp4=1, bfp2=2, bfp0=3.
+    _UNIFORM_CODE = {"bfp8": 0, "bfp4": 1, "bfp2": 2, "bfp0": 3}
+    if isinstance(precision_override, str):
+        assert (
+            precision_override in _UNIFORM_CODE
+        ), f"precision_override must be one of {list(_UNIFORM_CODE)} or a dict of ratios, got {precision_override!r}"
+    elif isinstance(precision_override, dict):
+        assert precision_override, "precision_override dict must be non-empty"
+        for fmt in precision_override:
+            assert fmt in _UNIFORM_CODE, f"unknown format {fmt!r} in precision_override (valid: {list(_UNIFORM_CODE)})"
+
+    # BSPM file is built at the full N width (e.g. 2048 for R1 gate_proj/up_proj). When the
+    # test runs at a smaller N (e.g. the per-device tensor-parallel slice 256), set bspm_full_n
+    # to the on-disk width and we'll slice the loaded assignment to the first N columns.
+    bspm_load_n = bspm_full_n if bspm_full_n is not None else N
+    assert bspm_load_n >= N, f"bspm_full_n ({bspm_load_n}) must be >= N ({N})"
+    bspm_tile_cols = bspm_load_n // tile_w
+    n_tile_cols = N // tile_w
+
+    dram_cts = []
+    torch_b_all = {}
+    for slot_idx, (expert_idx, proj_idx) in enumerate(bspm_expert_configs):
+        if precision_override is None:
+            assignment_full = load_bspm_for_expert(
+                str(bspm_path),
+                expert_idx=expert_idx,
+                proj_idx=proj_idx,
+                tile_rows=K // tile_w,
+                tile_cols=bspm_tile_cols,
+            )
+            assignment = assignment_full[:, :n_tile_cols] if bspm_load_n != N else assignment_full
+        elif isinstance(precision_override, dict):
+            # Synthetic mix: per-tile random sampling from the supplied ratios.
+            rng = np.random.RandomState(slot_idx + 42)
+            formats_list = list(precision_override.keys())
+            codes_arr = np.array([_UNIFORM_CODE[f] for f in formats_list], dtype=np.int8)
+            probs = np.array([float(precision_override[f]) for f in formats_list], dtype=float)
+            probs = probs / probs.sum()
+            flat_codes = rng.choice(codes_arr, size=(K // tile_w) * n_tile_cols, p=probs)
+            assignment = flat_codes.astype(np.int8).reshape(K // tile_w, n_tile_cols)
+        else:
+            assignment = np.full((K // tile_w, n_tile_cols), _UNIFORM_CODE[precision_override], dtype=np.int8)
+        assignment_shuffled = _shuffle_assignment_blocked(
+            assignment, num_banks, subblock_k=shuffle_subblock_k, subblock_n=subblock_n
+        )
+
+        per_dev_weights = []
+        per_dev_shuffled = []
+        for dev_idx in range(num_devices):
+            torch.manual_seed(slot_idx * 1000 + dev_idx + 7)
+            b = torch.randn(K, N_dram_per_device).float()
+            per_dev_weights.append(b)
+            per_dev_shuffled.append(
+                shuffle_tensor_tiles(b, tile_w, num_banks, subblock_k=shuffle_subblock_k, subblock_n=subblock_n)
+            )
+        if software_quantized_golden:
+            # Replace each slot's golden weight with its software-quantized version so
+            # _validate_dram_output's golden computes A @ B_software_quant — PCC then
+            # reflects ONLY the kernel-vs-software discrepancy, not the quantization cost.
+            torch_b_all[slot_idx] = [
+                torch.from_numpy(_software_quantize_per_tile(b.numpy(), assignment, tile_w)) for b in per_dev_weights
+            ]
+        else:
+            torch_b_all[slot_idx] = per_dev_weights
+
+        b_4d = torch.stack(per_dev_shuffled).reshape(mesh_rows, mesh_cols, K, N_dram_per_device)
+        assignment_4d = np.tile(assignment_shuffled, (num_devices, 1))
+
+        ct = CompressedTensor(
+            b_4d,
+            assignment_4d,
+            device=mesh_device,
+            memory_config=dram_b_mem,
+            per_core_allocation=False,
+            mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)]),
+        )
+        label = f"override={precision_override}" if precision_override else f"expert={expert_idx}, proj={proj_idx}"
+        logger.info(f"  CT slot {slot_idx} ({label}): {ct.tile_counts}")
+        if isinstance(precision_override, str):
+            assert (
+                ct.tile_counts.get(precision_override, 0) > 0
+            ), f"Slot {slot_idx}: expected {precision_override} tiles from uniform override"
+        elif isinstance(precision_override, dict):
+            for fmt, weight in precision_override.items():
+                if weight > 0:
+                    assert (
+                        ct.tile_counts.get(fmt, 0) > 0
+                    ), f"Slot {slot_idx}: expected {fmt} tiles from mix override {precision_override}"
+        dram_cts.append(ct)
+
+    if precision_override is None:
+        total_counts = {"bfp8": 0, "bfp4": 0, "bfp2": 0, "bfp0": 0}
+        for ct in dram_cts:
+            for fmt, count in ct.tile_counts.items():
+                total_counts[fmt] = total_counts.get(fmt, 0) + count
+        total_tiles = sum(total_counts.values()) or 1
+        mixed_tiles = total_counts.get("bfp2", 0) + total_counts.get("bfp0", 0)
+        mixed_pct = 100.0 * mixed_tiles / total_tiles
+        logger.info(
+            f"  BSPM slice global distribution across {len(dram_cts)} slots: {total_counts} "
+            f"({mixed_pct:.2f}% bfp2+bfp0)"
+        )
+        if mixed_tiles == 0:
+            logger.warning(
+                f"All {len(dram_cts)} slots loaded uniform precision (no bfp2/bfp0 tiles). "
+                f"This slice does NOT exercise mixed-precision behavior — pick different "
+                f"(expert, proj) tuples, a different layer, or a different bspm_n_offset."
+            )
+
+    dram_meta_flags = [1] * num_experts
+    is_dram_flags = list(dram_meta_flags)
+
+    dram_meta_tensors = create_dram_expert_tensors_multi_device(
+        mesh_device,
+        dram_cts,
+        subblock_k,
+        num_subblocks_k_v,
+        dram_per_core_N,
+        n_parallel_per_bank=n_parallel_per_bank,
+        num_total_experts=num_experts,
+        is_dram_flags=dram_meta_flags,
+        subblock_n=subblock_n,
+        k_parallel_per_bank=k_parallel_per_bank,
+    )
+
+    a_tensor = _build_activation_tensor(torch_a, mesh_device, compute_core_grid, num_cores, M, K, tile_w)
+    index_tensor = _build_index_tensor(active_expert_ids, mesh_device, compute_core_grid, num_cores, is_dram_flags)
+
+    num_active_experts = len(active_expert_ids)
+    out_tensor = _build_dram_output(
+        mesh_device,
+        M,
+        dram_per_core_N,
+        num_active_experts,
+        num_dram_cores,
+        num_devices,
+        dram_core_grid,
+        tile_w,
+        dram_fuse_silu=dram_fuse_silu,
+    )
+
+    reference_outputs = None
+    mismatches = []
+    extra_mismatch_count = 0
+    MAX_STORED_MISMATCHES = 1000
+    progress_every = max(1, n_program_invocations // 10)
+
+    for invocation in range(n_program_invocations):
+        if invocation > 0:
+            out_tensor = _build_dram_output(
+                mesh_device,
+                M,
+                dram_per_core_N,
+                num_active_experts,
+                num_dram_cores,
+                num_devices,
+                dram_core_grid,
+                tile_w,
+                dram_fuse_silu=dram_fuse_silu,
+            )
+
+        result = ExpertKernel.op(
+            a_tensor,
+            [],
+            dram_cts,
+            out_tensor,
+            index_tensor,
+            num_active_experts=num_active_experts,
+            subblock_k=subblock_k,
+            subblock_n=subblock_n,
+            dram_core_grid=dram_core_grid,
+            dram_meta_tensors=dram_meta_tensors,
+            dram_per_core_n=dram_per_core_N,
+            has_sram=False,
+            sram_core_grid=None,
+            sram_fmt_tensors={},
+            sram_k_offsets=None,
+            n_parallel_per_bank=n_parallel_per_bank,
+            k_parallel_per_bank=k_parallel_per_bank,
+            sram_per_core_n=0,
+            sram_k_per_core=Kt,
+            sram_output_tensor=None,
+            dram_fuse_silu=dram_fuse_silu,
+            tp_expert=True,
+            num_loop_iters=num_loop_iters,
+        )
+
+        if n_program_invocations > 1:
+            current = [ttnn.to_torch(d).clone() for d in ttnn.get_device_tensors(result)]
+            if reference_outputs is None:
+                reference_outputs = current
+            else:
+                for dev_idx, (ref_dev, cur_dev) in enumerate(zip(reference_outputs, current)):
+                    if not torch.equal(ref_dev, cur_dev):
+                        if len(mismatches) < MAX_STORED_MISMATCHES:
+                            n_diff = int((ref_dev != cur_dev).sum().item())
+                            delta = (ref_dev.float() - cur_dev.float()).abs()
+                            mismatches.append(
+                                (
+                                    invocation,
+                                    dev_idx,
+                                    n_diff,
+                                    float(delta.max().item()),
+                                    float(delta.mean().item()),
+                                )
+                            )
+                        else:
+                            extra_mismatch_count += 1
+
+            if (invocation + 1) % progress_every == 0:
+                total = len(mismatches) + extra_mismatch_count
+                logger.info(
+                    f"  multi-invocation: {invocation + 1}/{n_program_invocations} done, {total} divergent so far"
+                )
+
+    if n_program_invocations > 1:
+        total_mismatches = len(mismatches) + extra_mismatch_count
+        if total_mismatches:
+            logger.error(
+                f"NON-DETERMINISTIC (real BSPM): {total_mismatches} divergent (invocation, device) "
+                f"pairs across {n_program_invocations} invocations"
+            )
+            for inv, dev, n_diff, max_d, mean_d in mismatches[:10]:
+                logger.error(
+                    f"  invocation {inv} device {dev}: {n_diff} differing elements, "
+                    f"max|delta|={max_d:.4g}, mean|delta|={mean_d:.4g}"
+                )
+        assert not total_mismatches, (
+            f"ExpertKernel non-deterministic with real BSPMs across {n_program_invocations} invocations: "
+            f"{total_mismatches} divergent (invocation, device) pairs "
+            f"(first at invocation {mismatches[0][0]} device {mismatches[0][1]})"
+        )
+
+    collected_pccs = [] if return_pccs else None
+    _validate_dram_output(
+        result,
+        torch_a,
+        torch_b_all,
+        active_expert_ids,
+        num_active_experts,
+        dram_per_core_N,
+        num_dram_cores,
+        pcc_threshold,
+        dram_fuse_silu,
+        tile_w,
+        M=M,
+        tp_expert=True,
+        cores_per_dram_bank=cores_per_dram_bank,
+        k_parallel_per_bank=k_parallel_per_bank,
+        pccs_out=collected_pccs,
+    )
+    if return_pccs:
+        return {
+            "pccs": collected_pccs,
+            "tile_counts_per_slot": [dict(ct.tile_counts) for ct in dram_cts],
+            "slot_configs": list(bspm_expert_configs),
+        }
+
+
+def _resolve_layer16_bspm():
+    """Locate layer-16 BSPM. Prefer $BSPM_RESULTS_DIR, else the on-disk default path."""
+    import os
+    from pathlib import Path
+
+    bspm_dir = os.environ.get("BSPM_RESULTS_DIR")
+    if bspm_dir:
+        candidate = Path(bspm_dir) / "deepseek-r1-0528" / "layer_16" / "precision_eval" / "precision_map_B_3.5.bspm"
+    else:
+        candidate = Path(
+            "/home/mtairum/bit_sculpt/results/deepseek-r1-0528/layer_16/precision_eval/precision_map_B_3.5.bspm"
+        )
+    if not candidate.exists():
+        pytest.skip(f"Layer 16 BSPM not found at {candidate}")
+    return candidate
+
+
+@pytest.mark.skip_post_commit
+def test_matmul_expert_real_bspm_pcc(device):
+    """Three-way PCC comparison: all-bfp4, all-bfp2, and real layer-16 BSPMs.
+
+    Runs the same kernel/activation/weight setup three times with different per-tile
+    precision assignments, computing per-(device, expert, K-slice) PCC against the FP
+    torch golden for each. Logs all three distributions for visual comparison.
+
+    Expectation: all_bfp4_pcc > all_bfp2_pcc (sanity — kernel is internally consistent
+    with the precision tier), and real BSPM PCC lands somewhere in between or near
+    all_bfp2 (real BSPMs at 3.5 b/e zero out ~10–20% of tiles, which is a strict
+    information loss vs uniform bfp2). If real BSPM PCC is dramatically below
+    all_bfp2_pcc (e.g. < 0.5), the kernel likely has a real-BSPM-specific correctness
+    bug — not just quantization noise.
+    """
+    import statistics
+
+    bspm_path = _resolve_layer16_bspm()
+
+    common_kwargs = dict(
+        M=1,
+        K=7168,
+        N=256,  # per-device tensor-parallel slice of gate_proj's N=2048 (TP=8 in production)
+        bspm_full_n=2048,  # BSPM file is built at the full gate_proj N width
+        bspm_path=bspm_path,
+        bspm_expert_configs=[(i, 0) for i in range(8)],
+        active_expert_ids=list(range(8)),
+        num_subblocks_k=4,
+        num_subblocks_n=1,
+        n_parallel_per_bank=1,
+        k_parallel_per_bank=2,
+        dram_fuse_silu=True,
+        n_program_invocations=1,
+        return_pccs=True,
+    )
+
+    results = {}
+    for label, override in [("all_bfp4", "bfp4"), ("all_bfp2", "bfp2"), ("real_bspm", None)]:
+        logger.info(f"=== {label} run ===")
+        ret = _run_dram_bspm_kparallel(device, precision_override=override, **common_kwargs)
+        # ret is dict: {"pccs": [(dev_idx, eidx, label, pcc), ...],
+        #               "tile_counts_per_slot": [...],
+        #               "slot_configs": [...]}
+        pccs_list = ret["pccs"]
+        values = [v for _, _, _, v in pccs_list]
+        reducer_values = [v for _, _, lbl, v in pccs_list if lbl == "reducer"]
+        # Build per-(dev, slot) reducer PCC lookup for cross-config correlation below.
+        reducer_by_slot = {(dev, eid): v for dev, eid, lbl, v in pccs_list if lbl == "reducer"}
+        results[label] = {
+            "all": values,
+            "reducer": reducer_values,
+            "mean": statistics.mean(values),
+            "min": min(values),
+            "max": max(values),
+            "reducer_mean": statistics.mean(reducer_values) if reducer_values else float("nan"),
+            "reducer_min": min(reducer_values) if reducer_values else float("nan"),
+            "reducer_by_slot": reducer_by_slot,
+            "tile_counts_per_slot": ret["tile_counts_per_slot"],
+            "slot_configs": ret["slot_configs"],
+        }
+        logger.info(
+            f"  {label}: n={len(values)} samples, mean={results[label]['mean']:.6f}, "
+            f"min={results[label]['min']:.6f}, max={results[label]['max']:.6f}, "
+            f"reducer_mean={results[label]['reducer_mean']:.6f}, reducer_min={results[label]['reducer_min']:.6f}"
+        )
+
+    logger.info("=== three-way summary (reducer only) ===")
+    logger.info(
+        f"  all_bfp4  mean={results['all_bfp4']['reducer_mean']:.6f}  min={results['all_bfp4']['reducer_min']:.6f}"
+    )
+    logger.info(
+        f"  real_bspm mean={results['real_bspm']['reducer_mean']:.6f}  min={results['real_bspm']['reducer_min']:.6f}"
+    )
+    logger.info(
+        f"  all_bfp2  mean={results['all_bfp2']['reducer_mean']:.6f}  min={results['all_bfp2']['reducer_min']:.6f}"
+    )
+
+    # Per-slot diagnostic: which (device, slot) shows the largest real-BSPM regression vs
+    # uniform bounds? Sort ascending by real_bspm reducer PCC and dump the bottom slots
+    # alongside their bfp4/bfp2 PCCs and the slot's tile distribution. This identifies
+    # exactly which expert + tile pattern triggers low PCC.
+    real_keys = sorted(results["real_bspm"]["reducer_by_slot"].items(), key=lambda kv: kv[1])
+    logger.info("=== per-slot reducer PCC (real_bspm, sorted ascending) ===")
+    logger.info(
+        f"  {'dev':>3} {'slot':>4}  {'real_bspm':>10}  {'all_bfp4':>10}  {'all_bfp2':>10}   tile_counts (real_bspm)"
+    )
+    for (dev, eid), real_pcc in real_keys:
+        bfp4_pcc = results["all_bfp4"]["reducer_by_slot"].get((dev, eid), float("nan"))
+        bfp2_pcc = results["all_bfp2"]["reducer_by_slot"].get((dev, eid), float("nan"))
+        # The slot's tile_counts (only differs in real_bspm config; uniform configs are uniform).
+        tc = (
+            results["real_bspm"]["tile_counts_per_slot"][eid]
+            if eid < len(results["real_bspm"]["tile_counts_per_slot"])
+            else {}
+        )
+        logger.info(f"  {dev:>3} {eid:>4}  {real_pcc:>10.6f}  {bfp4_pcc:>10.6f}  {bfp2_pcc:>10.6f}   {tc}")
+
+    # Sanity: bfp4 should beat bfp2 (the kernel must be at least internally consistent
+    # with the precision tier under uniform precision — this is the bound we already trust).
+    assert results["all_bfp4"]["reducer_mean"] > results["all_bfp2"]["reducer_mean"], (
+        f"bfp4 mean PCC ({results['all_bfp4']['reducer_mean']:.6f}) did not beat bfp2 mean "
+        f"({results['all_bfp2']['reducer_mean']:.6f}) — kernel inconsistent across uniform precision tiers"
+    )
+
+    # Catch dramatic real-BSPM-specific failure: mixed precision shouldn't collapse to garbage.
+    # Loose bound — bfp0 tiles can legitimately drop real-BSPM PCC below uniform bfp2.
+    assert results["real_bspm"]["reducer_min"] > 0.3, (
+        f"real BSPM min reducer PCC ({results['real_bspm']['reducer_min']:.6f}) is below 0.3 — "
+        f"likely a real-BSPM-specific kernel correctness bug (not just quantization noise)"
+    )
+
+
+@pytest.mark.skip_post_commit
+def test_matmul_expert_real_bspm_back_to_back(device):
+    """Real layer-16 BSPMs, 2 back-to-back invocations at production K-parallel + fuse_silu.
+
+    Combines the real-BSPM tile-pattern stress with the documented inter-call race
+    precondition. If this fails but test_matmul_expert_real_bspm_pcc passes, the bug
+    requires both real tile patterns AND back-to-back invocation.
+    """
+    bspm_path = _resolve_layer16_bspm()
+    _run_dram_bspm_kparallel(
+        device,
+        M=1,
+        K=7168,
+        N=256,  # per-device tensor-parallel slice of gate_proj
+        bspm_full_n=2048,
+        bspm_path=bspm_path,
+        bspm_expert_configs=[(i, 0) for i in range(8)],
+        active_expert_ids=list(range(8)),
+        pcc_threshold=0.85,
+        num_subblocks_k=4,
+        num_subblocks_n=1,
+        n_parallel_per_bank=1,
+        k_parallel_per_bank=2,
+        dram_fuse_silu=True,
+        n_program_invocations=2,
+    )
+
+
+@pytest.mark.skip_post_commit
+def test_matmul_expert_synthetic_mix_pcc(device):
+    """Four-way PCC comparison with synthetic bfp4/bfp2 mixes (no zeros).
+
+    Runs the same kernel/activation/weight setup four times at production gate-proj shape
+    (K=7168, N=256 per-device, k_parallel=2, fuse_silu) with per-tile precision assignments
+    randomly sampled from controlled ratios. No bfp0, so isolates whether the kernel handles
+    bfp4+bfp2 mixes correctly independent of any zero-tile-specific behavior.
+
+    Expectation: PCC ordering should be monotonic in bfp4 fraction:
+        all_bfp4 > mix_75_25 > mix_50_50 > all_bfp2.
+    If the two mixes land in between, the kernel handles bfp4/bfp2 mixes correctly and the
+    real-BSPM slot-3 anomaly is specifically a bfp0-related bug.
+    """
+    import statistics
+
+    # BSPM path required by the helper signature but unused when precision_override is set.
+    # Pass a real one anyway so we don't have to special-case its absence inside the helper.
+    bspm_path = _resolve_layer16_bspm()
+
+    common_kwargs = dict(
+        M=1,
+        K=7168,
+        N=256,
+        bspm_full_n=2048,
+        bspm_path=bspm_path,
+        bspm_expert_configs=[(i, 0) for i in range(8)],
+        active_expert_ids=list(range(8)),
+        num_subblocks_k=4,
+        num_subblocks_n=1,
+        n_parallel_per_bank=1,
+        k_parallel_per_bank=2,
+        dram_fuse_silu=True,
+        n_program_invocations=1,
+        return_pccs=True,
+    )
+
+    configs = [
+        ("all_bfp4", "bfp4"),
+        ("mix_75_25", {"bfp4": 75, "bfp2": 25}),
+        ("mix_50_50", {"bfp4": 50, "bfp2": 50}),
+        ("all_bfp2", "bfp2"),
+    ]
+
+    results = {}
+    for label, override in configs:
+        logger.info(f"=== {label} run ===")
+        ret = _run_dram_bspm_kparallel(device, precision_override=override, **common_kwargs)
+        pccs_list = ret["pccs"]
+        reducer_values = [v for _, _, lbl, v in pccs_list if lbl == "reducer"]
+        reducer_by_slot = {(dev, eid): v for dev, eid, lbl, v in pccs_list if lbl == "reducer"}
+        results[label] = {
+            "reducer": reducer_values,
+            "reducer_mean": statistics.mean(reducer_values) if reducer_values else float("nan"),
+            "reducer_min": min(reducer_values) if reducer_values else float("nan"),
+            "reducer_max": max(reducer_values) if reducer_values else float("nan"),
+            "reducer_by_slot": reducer_by_slot,
+            "tile_counts_per_slot": ret["tile_counts_per_slot"],
+        }
+        logger.info(
+            f"  {label}: reducer_mean={results[label]['reducer_mean']:.6f}, "
+            f"reducer_min={results[label]['reducer_min']:.6f}, "
+            f"reducer_max={results[label]['reducer_max']:.6f}"
+        )
+
+    logger.info("=== four-way summary (reducer only) ===")
+    for label, _ in configs:
+        logger.info(
+            f"  {label:>10}  mean={results[label]['reducer_mean']:.6f}  "
+            f"min={results[label]['reducer_min']:.6f}  max={results[label]['reducer_max']:.6f}"
+        )
+
+    bfp4_mean = results["all_bfp4"]["reducer_mean"]
+    bfp2_mean = results["all_bfp2"]["reducer_mean"]
+    mix_75_mean = results["mix_75_25"]["reducer_mean"]
+    mix_50_mean = results["mix_50_50"]["reducer_mean"]
+
+    # Sanity: uniform bounds must be ordered correctly.
+    assert bfp4_mean > bfp2_mean, (
+        f"bfp4 mean PCC ({bfp4_mean:.6f}) did not beat bfp2 mean ({bfp2_mean:.6f}); "
+        f"kernel inconsistent across uniform precision tiers"
+    )
+
+    # Both mixes should land between the bounds. Allow a small tolerance (0.01) for noise.
+    tol = 0.01
+    assert bfp2_mean - tol <= mix_50_mean <= bfp4_mean + tol, (
+        f"mix_50_50 mean PCC ({mix_50_mean:.6f}) outside [{bfp2_mean:.6f}, {bfp4_mean:.6f}] bounds — "
+        f"kernel mishandles 50/50 bfp4/bfp2 mix"
+    )
+    assert bfp2_mean - tol <= mix_75_mean <= bfp4_mean + tol, (
+        f"mix_75_25 mean PCC ({mix_75_mean:.6f}) outside [{bfp2_mean:.6f}, {bfp4_mean:.6f}] bounds — "
+        f"kernel mishandles 75/25 bfp4/bfp2 mix"
+    )
+
+    # Monotonicity: more bfp4 should mean higher PCC. Allow small tolerance for noise.
+    assert mix_75_mean + tol >= mix_50_mean, (
+        f"mix_75_25 mean PCC ({mix_75_mean:.6f}) did not exceed mix_50_50 ({mix_50_mean:.6f}) — "
+        f"non-monotonic precision response, possible kernel mix-handling bug"
+    )
+
+
+@pytest.mark.skip_post_commit
+def test_matmul_expert_zero_fraction_sweep(device):
+    """Sweep bfp0 fraction to find where kernel correctness collapses (if at all).
+
+    Per-tile precision codes are randomly sampled from each config's ratios. Random
+    distribution decouples ratio from spatial pattern — if a config collapses here, the
+    bug is purely about per-tile bfp0 fraction; if it doesn't, the real-BSPM slot-3
+    anomaly needs that specific *clustered* tile pattern, not just the ratio.
+
+    `slot3_ratios` exactly matches real-BSPM slot 3 proportions
+    (3% bfp4 / 9.5% bfp2 / 87.5% bfp0 → PCC 0.327 in test_matmul_expert_real_bspm_pcc).
+
+    No tight assertions — this is a diagnostic sweep. Just confirms the kernel finishes
+    and prints the per-config table for inspection.
+    """
+    import statistics
+
+    bspm_path = _resolve_layer16_bspm()
+
+    common_kwargs = dict(
+        M=1,
+        K=7168,
+        N=256,
+        bspm_full_n=2048,
+        bspm_path=bspm_path,
+        bspm_expert_configs=[(i, 0) for i in range(8)],
+        active_expert_ids=list(range(8)),
+        num_subblocks_k=4,
+        num_subblocks_n=1,
+        n_parallel_per_bank=1,
+        k_parallel_per_bank=2,
+        dram_fuse_silu=True,
+        n_program_invocations=1,
+        return_pccs=True,
+    )
+
+    configs = [
+        ("all_bfp4", "bfp4"),
+        ("mix_zero_25", {"bfp4": 75, "bfp0": 25}),
+        ("mix_zero_50", {"bfp4": 50, "bfp0": 50}),
+        ("mix_zero_75", {"bfp4": 25, "bfp0": 75}),
+        ("mix_zero_90", {"bfp4": 10, "bfp0": 90}),
+        ("slot3_ratios", {"bfp4": 3, "bfp2": 9.5, "bfp0": 87.5}),
+    ]
+
+    results = {}
+    for label, override in configs:
+        logger.info(f"=== {label} run ===")
+        ret = _run_dram_bspm_kparallel(device, precision_override=override, **common_kwargs)
+        pccs_list = ret["pccs"]
+        reducer_values = [v for _, _, lbl, v in pccs_list if lbl == "reducer"]
+        # Aggregate tile counts across slots so we can verify the realized distribution.
+        agg_tile_counts = {"bfp8": 0, "bfp4": 0, "bfp2": 0, "bfp0": 0}
+        for tc in ret["tile_counts_per_slot"]:
+            for fmt, count in tc.items():
+                agg_tile_counts[fmt] = agg_tile_counts.get(fmt, 0) + count
+        total = sum(agg_tile_counts.values()) or 1
+        bfp0_pct = 100.0 * agg_tile_counts.get("bfp0", 0) / total
+        results[label] = {
+            "reducer_mean": statistics.mean(reducer_values) if reducer_values else float("nan"),
+            "reducer_min": min(reducer_values) if reducer_values else float("nan"),
+            "reducer_max": max(reducer_values) if reducer_values else float("nan"),
+            "realized_bfp0_pct": bfp0_pct,
+            "tile_counts": agg_tile_counts,
+        }
+        logger.info(
+            f"  {label}: reducer_mean={results[label]['reducer_mean']:.6f}, "
+            f"reducer_min={results[label]['reducer_min']:.6f}, "
+            f"reducer_max={results[label]['reducer_max']:.6f}, "
+            f"realized_bfp0_pct={bfp0_pct:.2f}%, counts={agg_tile_counts}"
+        )
+
+    logger.info("=== bfp0-fraction sweep summary (reducer only) ===")
+    logger.info(f"  {'config':>13}  {'bfp0%':>6}  {'mean':>10}  {'min':>10}  {'max':>10}")
+    for label, _ in configs:
+        r = results[label]
+        logger.info(
+            f"  {label:>13}  {r['realized_bfp0_pct']:>5.2f}%  "
+            f"{r['reducer_mean']:>10.6f}  {r['reducer_min']:>10.6f}  {r['reducer_max']:>10.6f}"
+        )
+
+    # Single sanity check: uniform bfp4 must still work. Everything else is diagnostic —
+    # the cliff (if any) is the signal we're after, not a pass/fail.
+    assert results["all_bfp4"]["reducer_mean"] > 0.95, (
+        f"all_bfp4 mean PCC ({results['all_bfp4']['reducer_mean']:.6f}) below 0.95 — "
+        f"kernel regression independent of zero-fraction sweep"
+    )
+
+
+@pytest.mark.skip_post_commit
+def test_matmul_expert_kernel_vs_software_quantized(device):
+    """Direct hardware-vs-software comparison: PCC against a *software-quantized* golden.
+
+    Standard tests compare kernel output to torch_a @ B_unquantized — PCC then mixes
+    quantization cost and kernel correctness. This test compares kernel output to
+    torch_a @ B_software_quant, where B_software_quant applies the same per-tile BFP
+    quantize-dequantize that the hardware should be doing. If the kernel is doing the
+    math correctly, PCC must be near 1.0 regardless of precision distribution.
+
+    Configs span uniform bfp4 → 90% bfp0 → real BSPM slot 3, covering the same range
+    where the FP-golden PCC collapsed from 0.99 → 0.29. If kernel is correct, all
+    configs should produce kernel-vs-software PCC > 0.999. Any config below ~0.99 is
+    a real hardware-vs-software discrepancy.
+    """
+    import statistics
+
+    bspm_path = _resolve_layer16_bspm()
+
+    common_kwargs = dict(
+        M=1,
+        K=7168,
+        N=256,
+        bspm_full_n=2048,
+        bspm_path=bspm_path,
+        bspm_expert_configs=[(i, 0) for i in range(8)],
+        active_expert_ids=list(range(8)),
+        num_subblocks_k=4,
+        num_subblocks_n=1,
+        n_parallel_per_bank=1,
+        k_parallel_per_bank=2,
+        dram_fuse_silu=True,
+        n_program_invocations=100,
+        return_pccs=True,
+        software_quantized_golden=True,
+    )
+
+    configs = [
+        ("all_bfp4", "bfp4"),
+        ("all_bfp2", "bfp2"),
+        ("mix_50_50_bfp4_bfp2", {"bfp4": 50, "bfp2": 50}),
+        ("mix_zero_50", {"bfp4": 50, "bfp0": 50}),
+        ("mix_zero_90", {"bfp4": 10, "bfp0": 90}),
+        ("slot3_ratios", {"bfp4": 3, "bfp2": 9.5, "bfp0": 87.5}),
+        ("real_bspm_layer16", None),
+    ]
+
+    results = {}
+    for label, override in configs:
+        logger.info(f"=== {label} run (vs software-quantized golden) ===")
+        ret = _run_dram_bspm_kparallel(device, precision_override=override, **common_kwargs)
+        pccs_list = ret["pccs"]
+        reducer_values = [v for _, _, lbl, v in pccs_list if lbl == "reducer"]
+        results[label] = {
+            "reducer_mean": statistics.mean(reducer_values) if reducer_values else float("nan"),
+            "reducer_min": min(reducer_values) if reducer_values else float("nan"),
+            "reducer_max": max(reducer_values) if reducer_values else float("nan"),
+            "reducer_values": reducer_values,
+        }
+        logger.info(
+            f"  {label}: kernel-vs-software reducer_mean={results[label]['reducer_mean']:.6f}, "
+            f"min={results[label]['reducer_min']:.6f}, max={results[label]['reducer_max']:.6f}"
+        )
+
+    logger.info("=== kernel-vs-software-quantized summary (reducer only) ===")
+    logger.info(f"  {'config':>22}  {'mean':>10}  {'min':>10}  {'max':>10}")
+    for label, _ in configs:
+        r = results[label]
+        logger.info(f"  {label:>22}  {r['reducer_mean']:>10.6f}  {r['reducer_min']:>10.6f}  {r['reducer_max']:>10.6f}")
+
+    # If the kernel is correct, kernel output should match A @ B_software_quant to high
+    # precision (bfloat16 accumulator + per-tile BFP roundoff matches the software emulator
+    # bit-for-bit, modulo a tiny K-reduction summation order effect). Threshold 0.999 is
+    # tight enough to catch any real discrepancy while tolerating accumulator order noise.
+    SOFTWARE_MATCH_THRESHOLD = 0.999
+    failures = []
+    for label, _ in configs:
+        if results[label]["reducer_min"] < SOFTWARE_MATCH_THRESHOLD:
+            failures.append((label, results[label]["reducer_min"], results[label]["reducer_mean"]))
+
+    if failures:
+        logger.error("Hardware-vs-software discrepancy detected:")
+        for label, lo, mean in failures:
+            logger.error(f"  {label}: min PCC {lo:.6f}, mean {mean:.6f} (threshold {SOFTWARE_MATCH_THRESHOLD})")
+    assert not failures, (
+        f"Hardware-vs-software match failed for {len(failures)} config(s): "
+        f"{[(lbl, f'{lo:.4f}') for lbl, lo, _ in failures]}. "
+        f"Threshold {SOFTWARE_MATCH_THRESHOLD}."
     )
