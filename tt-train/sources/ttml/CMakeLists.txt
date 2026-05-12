@@ -71,6 +71,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/softmax_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/scaled_dot_product_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/swiglu_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/moe_ffn_swiglu_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/unary_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rand_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/randn_op.cpp
