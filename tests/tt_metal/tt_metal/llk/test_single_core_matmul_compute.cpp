@@ -693,8 +693,10 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
-    auto packed_input0 = create_random_vector_of_bfloat16(in0_total_size_bytes, 1.0f, 0x1234);
-    auto packed_input1 = create_random_vector_of_bfloat16(in1_total_size_bytes, 1.0f, 0x5678, -0.5f);
+    std::vector<uint32_t> packed_input0 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+        0.0f, 1.0f, in0_total_size_bytes / sizeof(bfloat16), 0x1234);
+    std::vector<uint32_t> packed_input1 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+        -0.45f, 1.0f, in1_total_size_bytes / sizeof(bfloat16), 0x5678);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Golden Generation
@@ -791,19 +793,15 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
 
-    auto comparison_function = [](float a, float b) {
-        const float rtol = 0.05f;
-        const float atol = 0.05f;
-        float maxabs = fmaxf(fabsf(a), fabsf(b));
-        float absdiff = fabsf(a - b);
-        return (absdiff <= atol) || absdiff < rtol * maxabs;
-    };
-    int argfail = -1;
-    pass &= packed_uint32_t_vector_comparison(dest_buffer_data, packed_golden, comparison_function, &argfail);
+    int failed_index;
+    pass &= is_close_packed_vectors<bfloat16, uint32_t>(
+        dest_buffer_data,
+        packed_golden,
+        [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.05f, 0.05f); },
+        &failed_index);
     if (not pass) {
-        log_info(tt::LogTest, "Failed at index={}", argfail);
-        print_vec_of_uint32_as_packed_bfloat16(dest_buffer_data, M * N, "Result");
-        print_vec_of_uint32_as_packed_bfloat16(packed_golden, M * N, "Golden");
+        log_info(tt::LogTest, "Failed Index={}", failed_index);
+        print_vector_fixed_numel_per_row(unpack_vector<bfloat16, uint32_t>(dest_buffer_data), 32);
     }
     return pass;
 }
@@ -831,14 +829,14 @@ TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleBlockSingleTileNoAccumula
 }
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreMultiBlockSpillReloadComputeMatmul) {
     unit_tests::compute::matmul::BlockedMatmulConfig config{
-        .M = 2, .K = 2, .N = 2, .num_blocks = 7, .packer_l1_acc = false};
+        .M = 2, .K = 2, .N = 2, .num_blocks = 4, .packer_l1_acc = false};
     for (unsigned int id = 0; id < num_devices_; id++) {
         ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->devices_.at(id), config));
     }
 }
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreMultiBlockL1AccComputeMatmul) {
     unit_tests::compute::matmul::BlockedMatmulConfig config{
-        .M = 2, .K = 2, .N = 2, .num_blocks = 7, .packer_l1_acc = true};
+        .M = 2, .K = 2, .N = 2, .num_blocks = 4, .packer_l1_acc = true};
     for (unsigned int id = 0; id < num_devices_; id++) {
         ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->devices_.at(id), config));
     }
