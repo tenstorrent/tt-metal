@@ -1,3 +1,2 @@
 # Reference tensors are generated locally — do not commit
 *.pt
-run_metadata.json
