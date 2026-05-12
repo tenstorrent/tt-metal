@@ -216,7 +216,7 @@ XtensorAdapter<typename Expression::value_type> concat_ndim(
         xt::dynamic_view(result.expr(), indices) = expr;
 
         for (int i = static_cast<int>(dims.size()) - 1; i >= 0; --i) {
-            if (++current_indices[i] < num_chunks[i]) {
+            if (++current_indices[i] < static_cast<size_t>(num_chunks[i])) {
                 break;
             }
             current_indices[i] = 0;
