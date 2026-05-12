@@ -119,7 +119,7 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       use-artifacts-from-run: 25724057331
       build-wheel: true
-      tracy: true
+      tracy: false
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   blackhole-e2e-tests:
