@@ -42,6 +42,15 @@ enum class BriscCommandState : std::uint32_t
     UPDATE_START_ADDR_CACHE_AND_START = 3,
 };
 
+// Written to `brisc_counter` as the LAST step of firmware init. The host polls
+// for this value after deasserting BRISC reset to confirm the firmware has
+// finished init and entered the polling loop. Required for read-pumped sim
+// targets (TTSim) where host writes alone do not advance the clock — without
+// this handshake, the host's first command write can race with the firmware's
+// own zero-init of the command slots. The sentinel is overwritten by the
+// regular protocol counter as soon as the first command is processed.
+constexpr std::uint32_t BRISC_BOOT_READY_SENTINEL = 0xB001CAFEU;
+
 void reset_state(std::uint32_t& counter)
 {
     counter++;
@@ -57,9 +66,13 @@ int main()
 
     ckernel::store_blocking(brisc_command_buffer, 0);
     ckernel::store_blocking(brisc_command_buffer + 1, 0);
-    ckernel::store_blocking(brisc_counter, 0);
     ckernel::store_blocking(brisc_bread0, 0);
     ckernel::store_blocking(brisc_bread1, 0);
+
+    // LAST init step: publish the boot-ready sentinel so the host can confirm
+    // the firmware is in the polling loop before it issues any command. Uses
+    // commit_store (store + spin-readback) for a hard visibility guarantee.
+    commit_store(brisc_counter, BRISC_BOOT_READY_SENTINEL);
 
 #ifdef ARCH_WORMHOLE
     // Array for keeping last known addresses of _start symbol in kernel ELF, for T[0-2]

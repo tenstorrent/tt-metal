@@ -144,7 +144,7 @@ void JitBuildEnv::init(
     this->cflags_ +=
         "-MMD "
         "-fno-use-cxa-atexit "
-        "-Wall -Werror -Wno-unknown-pragmas "
+        "-Wall -Werror "
         "-Wno-deprecated-declarations "
         "-Wno-error=multistatement-macros -Wno-error=parentheses "
         "-Wno-error=unused-but-set-variable -Wno-unused-variable "

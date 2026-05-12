@@ -1464,7 +1464,7 @@ class PackGolden:
         """
         Get the ReLU type from the configuration.
         """
-        relu_type = PackerReluType(relu_config & 0x3)
+        relu_type = PackerReluType.from_bits(relu_config & 0x3)
         return relu_type
 
     @staticmethod
@@ -1481,7 +1481,7 @@ class PackGolden:
         Returns:
             float: The threshold value, or None if ReLU is disabled
         """
-        relu_type = PackerReluType(relu_config & 0x3)
+        relu_type = PackerReluType.from_bits(relu_config & 0x3)
 
         match relu_type:
             case PackerReluType.NoRelu:
