@@ -2,9 +2,9 @@
 Types and small helpers mirrored from ``acestep.inference`` for TTNN demos.
 
 ``acestep.inference`` imports ``acestep.audio_utils`` (``torchaudio``) at module
-load time.  The default ``run_prompt_to_wav`` path only needs ``GenerationParams``,
-``GenerationConfig``, and the repaint/LM metadata helpers — keep them here so a
-Metal-only env does not require ``torchaudio``.
+load time.  The ``run_prompt_to_wav`` path only needs ``GenerationParams``,
+``GenerationConfig``, and the repaint/LM metadata helpers — keep them here to
+avoid pulling in the full ``acestep.inference`` import chain.
 
 Keep in sync with ACE-Step ``acestep/inference.py`` when upstream adds fields.
 """
