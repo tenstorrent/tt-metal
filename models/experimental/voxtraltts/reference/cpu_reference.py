@@ -9,12 +9,19 @@ import torch
 from safetensors.torch import safe_open
 from transformers import MistralConfig, MistralForCausalLM
 
+from models.experimental.voxtraltts.reference.cpu_flow_matching_acoustic import (
+    AudioSpecialTokens,
+    FlowMatchingAudioTransformerRef,
+    build_audio_model_args_from_voxtral_config,
+)
 from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_MODEL, load_voxtral_config
 from models.experimental.voxtraltts.reference.voxtral_request import (
     compose_speech_request,
     get_instruct_tokenizer,
     load_mistral_tokenizer,
 )
+
+_ACOUSTIC_CFG_ALPHA = 1.2
 
 
 def _resolve_model_file(model_name_or_path: str, filename: str) -> Path:
@@ -175,10 +182,6 @@ class VoxtralCPUReference:
             raise RuntimeError(f"Missing text-model weights: {missing[:10]} ... total={len(missing)}")
         self.text_model.to(device=self.device, dtype=self.dtype).eval()
 
-        from vllm_omni.model_executor.models.voxtral_tts.voxtral_tts_audio_generation import (
-            AudioSpecialTokens,
-            FlowMatchingAudioTransformer,
-        )
         from vllm_omni.model_executor.models.voxtral_tts.voxtral_tts_audio_tokenizer import (
             VoxtralTTSAudioTokenizer,
         )
@@ -186,8 +189,10 @@ class VoxtralCPUReference:
         self.audio_special_tokens = AudioSpecialTokens
         self.hf_audio_config = _audio_config_namespace(model_name_or_path)
         fake_config = _fake_vllm_config(self.hf_audio_config)
-        self.acoustic_transformer = FlowMatchingAudioTransformer(self.hf_audio_config.audio_config["audio_model_args"])
+        audio_model_args = build_audio_model_args_from_voxtral_config(self.config)
+        self.acoustic_transformer = FlowMatchingAudioTransformerRef(audio_model_args)
         self.audio_tokenizer = VoxtralTTSAudioTokenizer(vllm_config=fake_config)
+        self._acoustic_cfg_alpha = _ACOUSTIC_CFG_ALPHA
         self._load_audio_weights()
         self.acoustic_transformer.to(device=self.device, dtype=self.dtype).eval()
         self.audio_tokenizer.to(device=self.device, dtype=self.dtype).eval()
@@ -276,8 +281,9 @@ class VoxtralCPUReference:
         past_key_values = outputs.past_key_values
         generated_codes = []
 
+        cfg_alpha = torch.tensor(self._acoustic_cfg_alpha, device=hidden.device, dtype=hidden.dtype)
         for _ in range(max_tokens):
-            audio_codes = self.acoustic_transformer(hidden).to(torch.long)
+            audio_codes = self.acoustic_transformer(hidden, cfg_alpha).to(torch.long)
             generated_codes.append(audio_codes[0].detach().cpu())
             if int(audio_codes[0, 0].item()) == self.end_audio_id:
                 break
