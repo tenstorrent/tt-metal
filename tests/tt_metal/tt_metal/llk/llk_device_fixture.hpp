@@ -55,7 +55,7 @@ inline LLKSharedDevices& shared_state_storage() {
     return state;
 }
 
-inline bool detect_slow_dispatch() { return getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr; }
+inline bool detect_slow_dispatch() { const char* v = getenv("TT_METAL_SLOW_DISPATCH_MODE"); return v && v[0] == '1'; }
 
 // Host architecture from UMD (works before SetUp() fills arch_ on the fixture).
 inline tt::ARCH detect_arch() { return tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()); }

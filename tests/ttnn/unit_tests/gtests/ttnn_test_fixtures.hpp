@@ -33,8 +33,8 @@ protected:
 
 public:
     bool check_dispatch_mode() {
-        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        return slow_dispatch == nullptr;
+        const char* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        return !(slow_dispatch && slow_dispatch[0] == '1');
     }
 
     TTNNFixtureBase() : TTNNFixtureBase(DEFAULT_TRACE_REGION_SIZE, DEFAULT_L1_SMALL_SIZE) {}

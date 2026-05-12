@@ -46,8 +46,8 @@ protected:
 
     bool validate_dispatch_mode() {
         this->slow_dispatch_ = false;
-        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch) {
+        const char* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (slow_dispatch && slow_dispatch[0] == \'1\') {
             log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             this->slow_dispatch_ = false;
             return false;
@@ -125,8 +125,8 @@ protected:
 
     bool validate_dispatch_mode() {
         this->slow_dispatch_ = false;
-        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch) {
+        const char* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (slow_dispatch && slow_dispatch[0] == \'1\') {
             log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             this->slow_dispatch_ = false;
             return false;
@@ -217,8 +217,8 @@ protected:
     inline static uint32_t shared_max_cbs_ = 0;
 
     static void SetUpTestSuite() {
-        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch) {
+        const char* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (slow_dispatch && slow_dispatch[0] == \'1\') {
             return;
         }
         create_shared_devices();
@@ -256,8 +256,8 @@ protected:
 private:
     bool validate_dispatch_mode() {
         slow_dispatch_ = false;
-        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch) {
+        const char* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (slow_dispatch && slow_dispatch[0] == \'1\') {
             log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             return false;
         }
@@ -329,8 +329,8 @@ protected:
 
     void SetUp() override {
         this->slow_dispatch_ = false;
-        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch) {
+        const char* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (slow_dispatch && slow_dispatch[0] == \'1\') {
             log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             this->slow_dispatch_ = true;
             GTEST_SKIP();

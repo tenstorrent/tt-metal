@@ -21,8 +21,8 @@ using namespace tt;
 int main(int argc, char** argv) {
     bool pass = true;
 
-    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
+    const char* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    TT_FATAL(slow_dispatch_mode && slow_dispatch_mode[0] == \'1\', "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     try {
         ////////////////////////////////////////////////////////////////////////////
