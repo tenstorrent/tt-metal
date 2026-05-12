@@ -59,9 +59,14 @@ def _tt_position_ids(input_ids: ttnn.Tensor, pad_id: int) -> ttnn.Tensor:
     Positions start at ``pad_id + 1`` for the first non-padding token; padding positions receive ``pad_id``.
     No host download is performed; the operation runs entirely in ttnn.
     """
-    ids_tile = ttnn.to_layout(input_ids, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    had_tile_convert = input_ids.get_layout() != ttnn.TILE_LAYOUT
+    if had_tile_convert:
+        ids_tile = ttnn.to_layout(input_ids, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    else:
+        ids_tile = input_ids
     mask = ttnn.ne(ids_tile, pad_id)
-    ttnn.deallocate(ids_tile)
+    if had_tile_convert:
+        ttnn.deallocate(ids_tile)
     mask_i32 = ttnn.typecast(mask, ttnn.int32)
     ttnn.deallocate(mask)
     cumsum = ttnn.cumsum(mask_i32, dim=1, dtype=ttnn.int32)
@@ -70,7 +75,8 @@ def _tt_position_ids(input_ids: ttnn.Tensor, pad_id: int) -> ttnn.Tensor:
     ttnn.deallocate(mask_i32)
     pos = ttnn.add(pos, pad_id, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     pos = ttnn.typecast(pos, ttnn.uint32)
-    pos = ttnn.to_layout(pos, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if pos.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+        pos = ttnn.to_layout(pos, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     return pos
 
 
@@ -1167,8 +1173,11 @@ class TTSeamlessM4Tv2Model:
             raise RuntimeError(f"t2u logits shape {t2u_shape} has rank < 2.")
         vb = int(t2u_shape[-1])
         ulen = int(t2u_shape[-2])
-        t2u_logits_rm = ttnn.to_layout(t2u_logits_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(t2u_logits_tt)
+        if t2u_logits_tt.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            t2u_logits_rm = ttnn.to_layout(t2u_logits_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(t2u_logits_tt)
+        else:
+            t2u_logits_rm = t2u_logits_tt
         t2u_logits = ttnn.to_torch(ttnn.from_device(t2u_logits_rm)).to(torch.float32)
         ttnn.deallocate(t2u_logits_rm)
         pad_mask = ttnn.to_torch(ttnn.from_device(padding_tt)).to(torch.bool)

@@ -504,8 +504,11 @@ class TTSeamlessM4Tv2CodeHifiGan:
         # for arbitrary (non-tile-aligned) trailing-dim sizes, so we briefly drop layout.
         padded: list[ttnn.Tensor] = []
         for wav_b, t_b in zip(wavs, wav_lens):
-            wav_rm = ttnn.to_layout(wav_b, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(wav_b)
+            if wav_b.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+                wav_rm = ttnn.to_layout(wav_b, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(wav_b)
+            else:
+                wav_rm = wav_b
             if t_b == t_wav_max:
                 padded.append(wav_rm)
             else:
