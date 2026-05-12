@@ -27,6 +27,10 @@ float LambdaScheduler::get_last_lr() const {
 float LambdaScheduler::get_current_lr() const {
     return get_optimizer()->get_lr();
 }
+// NOTE: ``m_lr_lambda`` is a type-erased ``std::function`` and cannot be
+// introspected (no equivalent of Python's callable ``__dict__``), so it is not
+// part of the saved state. Callers must reconstruct the scheduler with the
+// same ``lr_lambda`` before restoring state.
 void LambdaScheduler::set_state_dict(const serialization::StateDict &dict) {
     m_last_step = serialization::get_value_type<size_t>(dict, "m_last_step");
     m_last_lr = serialization::get_value_type<float>(dict, "m_last_lr");

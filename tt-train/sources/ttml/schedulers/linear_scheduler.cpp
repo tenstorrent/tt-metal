@@ -38,12 +38,18 @@ void LinearScheduler::step() {
 void LinearScheduler::set_state_dict(const serialization::StateDict& dict) {
     m_last_step = serialization::get_value_type<size_t>(dict, "m_last_step");
     m_last_lr = serialization::get_value_type<float>(dict, "m_last_lr");
+    m_start_factor = serialization::get_value_type<float>(dict, "m_start_factor");
+    m_end_factor = serialization::get_value_type<float>(dict, "m_end_factor");
+    m_total_steps = serialization::get_value_type<int>(dict, "m_total_steps");
 }
 
 serialization::StateDict LinearScheduler::get_state_dict() const {
     serialization::StateDict res;
     res["m_last_step"] = m_last_step;
     res["m_last_lr"] = m_last_lr;
+    res["m_start_factor"] = m_start_factor;
+    res["m_end_factor"] = m_end_factor;
+    res["m_total_steps"] = m_total_steps;
     return res;
 };
 
