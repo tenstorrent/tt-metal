@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     const auto gamma_grad_addr = get_arg_val<uint32_t>(0);
@@ -26,24 +29,37 @@ void kernel_main() {
 
     const auto start_tile_idx = tile_offset;
 
-    const auto gamma_grad_l1_read_addr = get_read_ptr(cb_id_gamma_grad);
-    const auto beta_grad_l1_read_addr = get_read_ptr(cb_id_beta_grad);
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_gamma_grad(cb_id_gamma_grad);
+    experimental::CircularBuffer cb_beta_grad(cb_id_beta_grad);
+    const auto gamma_grad_tile_bytes = get_tile_size(cb_id_gamma_grad);
+    const auto beta_grad_tile_bytes = get_tile_size(cb_id_beta_grad);
 
     for (uint32_t w_idx = 0; w_idx < num_cols_per_core; w_idx++) {
         if (gamma_grad_has_value) {
             // gamma_grad (1, 1, 1, W)
-            cb_wait_front(cb_id_gamma_grad, onetile);
-            noc_async_write_tile(w_idx + start_tile_idx, gamma_grad_addrg, gamma_grad_l1_read_addr);
-            noc_async_write_barrier();
-            cb_pop_front(cb_id_gamma_grad, onetile);
+            cb_gamma_grad.wait_front(onetile);
+            noc.async_write(
+                cb_gamma_grad,
+                gamma_grad_addrg,
+                gamma_grad_tile_bytes,
+                {.offset_bytes = 0},
+                {.page_id = w_idx + start_tile_idx});
+            noc.async_write_barrier();
+            cb_gamma_grad.pop_front(onetile);
         }  // gamma_grad_has_value
 
         if (beta_grad_has_value) {
             // beta_grad (1, 1, 1, W)
-            cb_wait_front(cb_id_beta_grad, onetile);
-            noc_async_write_tile(w_idx + start_tile_idx, beta_grad_addrg, beta_grad_l1_read_addr);
-            noc_async_write_barrier();
-            cb_pop_front(cb_id_beta_grad, onetile);
+            cb_beta_grad.wait_front(onetile);
+            noc.async_write(
+                cb_beta_grad,
+                beta_grad_addrg,
+                beta_grad_tile_bytes,
+                {.offset_bytes = 0},
+                {.page_id = w_idx + start_tile_idx});
+            noc.async_write_barrier();
+            cb_beta_grad.pop_front(onetile);
         }  // beta_grad_has_value
 
     }  // num_cols_per_core loop

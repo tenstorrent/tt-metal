@@ -3,9 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/core_local_mem.h"
+#include "experimental/tensor.h"
 
 template <typename T>
 void read_mean_rstd(
+    const experimental::Noc& noc,
     uint32_t cb_id,
     uint32_t tile_offset,
     uint32_t normalized_dims,
@@ -18,13 +23,14 @@ void read_mean_rstd(
     using namespace tt::constants;
     constexpr uint32_t onetile = 1;
 
+    experimental::CircularBuffer cb(cb_id);
     const uint32_t cb_tile_bytes = get_tile_size(cb_id);
     const auto cb_dtype_bytes = cb_tile_bytes / (TILE_HEIGHT * TILE_WIDTH);
 
-    cb_reserve_back(cb_id, onetile);
+    cb.reserve_back(onetile);
 
-    uint32_t l1_write_addr = get_write_ptr(cb_id);
-    auto l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr);
+    uint32_t l1_write_addr = cb.get_write_ptr();
+    experimental::CoreLocalMem<volatile uint16_t> l1_ptr(l1_write_addr);
     if (normalized_dims == 1) {
         for (uint32_t src_h = 0; src_h < 2; src_h++) {
             auto tile_idx = tile_offset + outer_idx;
@@ -43,14 +49,14 @@ void read_mean_rstd(
 
             auto src_idx = get_tilized_idx(0, src_h * FACE_WIDTH);
 
-            auto dst_noc_addr = get_noc_addr(noc_id, addrg);
+            noc.async_read(
+                addrg,
+                cb,
+                cb_dtype_bytes * FACE_HEIGHT,
+                {.page_id = noc_id, .offset_bytes = tilized_idx * cb_dtype_bytes},
+                {.offset_bytes = src_idx * cb_dtype_bytes});
 
-            noc_async_read(
-                dst_noc_addr + tilized_idx * cb_dtype_bytes,
-                l1_write_addr + src_idx * cb_dtype_bytes,
-                cb_dtype_bytes * FACE_HEIGHT);
-
-            noc_async_read_barrier();
+            noc.async_read_barrier();
         }
 
         // rotate data
@@ -73,17 +79,20 @@ void read_mean_rstd(
 
         auto noc_id = n * Ht * Wt + ht * Wt + wt;
 
-        auto dst_noc_addr = get_noc_addr(noc_id, addrg);
-        noc_async_read(
-            dst_noc_addr + tilized_idx * cb_dtype_bytes, l1_write_addr + tilized_idx * cb_dtype_bytes, cb_dtype_bytes);
+        noc.async_read(
+            addrg,
+            cb,
+            cb_dtype_bytes,
+            {.page_id = noc_id, .offset_bytes = tilized_idx * cb_dtype_bytes},
+            {.offset_bytes = tilized_idx * cb_dtype_bytes});
 
-        noc_async_read_barrier();
+        noc.async_read_barrier();
         if (idx != 0) {
             l1_ptr[0] = l1_ptr[tilized_idx];
         }
     }
 
-    cb_push_back(cb_id, onetile);
+    cb.push_back(onetile);
 }
 
 void kernel_main() {
@@ -141,29 +150,39 @@ void kernel_main() {
 
     const uint32_t start_tile_idx = tile_offset;
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_output_grad(cb_id_output_grad);
+    experimental::CircularBuffer cb_input(cb_id_input);
+    const auto output_grad_tile_bytes = get_tile_size(cb_id_output_grad);
+    const auto input_tile_bytes = get_tile_size(cb_id_input);
+
     for (uint32_t w_idx = 0; w_idx < num_cols_per_core; w_idx++) {
         for (uint32_t outer_idx = 0; outer_idx < num_outer; outer_idx++) {
             // output_grad (N, C, H, W)
             const uint32_t dy_tile_idx = num_inner * outer_idx + w_idx + start_tile_idx;
-            cb_reserve_back(cb_id_output_grad, onetile);
-            uint32_t output_grad_l1_write_ptr = get_write_ptr(cb_id_output_grad);
-            noc_async_read_tile(dy_tile_idx, output_grad_addrg, output_grad_l1_write_ptr);
-            noc_async_read_barrier();
-            cb_push_back(cb_id_output_grad, onetile);
+            cb_output_grad.reserve_back(onetile);
+            noc.async_read(
+                output_grad_addrg,
+                cb_output_grad,
+                output_grad_tile_bytes,
+                {.page_id = dy_tile_idx},
+                {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_output_grad.push_back(onetile);
 
             if (gamma_grad_has_value) {
                 // input (N, C, H, W)
                 const uint32_t x_tile_idx = num_inner * outer_idx + w_idx + start_tile_idx;
-                cb_reserve_back(cb_id_input, onetile);
-                uint32_t input_l1_write_ptr = get_write_ptr(cb_id_input);
-                noc_async_read_tile(x_tile_idx, input_addrg, input_l1_write_ptr);
-                noc_async_read_barrier();
-                cb_push_back(cb_id_input, onetile);
+                cb_input.reserve_back(onetile);
+                noc.async_read(input_addrg, cb_input, input_tile_bytes, {.page_id = x_tile_idx}, {.offset_bytes = 0});
+                noc.async_read_barrier();
+                cb_input.push_back(onetile);
 
                 uint32_t mean_rstd_tile_offset = tile_offset / num_inner;
 
                 // mean
                 read_mean_rstd(
+                    noc,
                     cb_id_mean,
                     mean_rstd_tile_offset,
                     normalized_dims,
@@ -176,6 +195,7 @@ void kernel_main() {
 
                 // rstd
                 read_mean_rstd(
+                    noc,
                     cb_id_rstd,
                     mean_rstd_tile_offset,
                     normalized_dims,

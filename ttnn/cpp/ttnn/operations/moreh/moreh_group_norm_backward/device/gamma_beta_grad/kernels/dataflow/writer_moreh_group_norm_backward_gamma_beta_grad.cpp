@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/core_local_mem.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     int i{0};
@@ -38,8 +42,12 @@ void kernel_main() {
     constexpr uint32_t TILE_H = 32;
     constexpr uint32_t TILE_W = 32;
 
-    const auto gamma_grad_l1_read_ptr = get_read_ptr(cb_id_gamma_grad);
-    const auto beta_grad_l1_read_ptr = get_read_ptr(cb_id_beta_grad);
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_gamma_grad(cb_id_gamma_grad);
+    experimental::CircularBuffer cb_beta_grad(cb_id_beta_grad);
+
+    const auto gamma_grad_l1_read_ptr = cb_gamma_grad.get_read_ptr();
+    const auto beta_grad_l1_read_ptr = cb_beta_grad.get_read_ptr();
 
     for (uint32_t outer_idx = 0; outer_idx < num_channels_per_core; ++outer_idx) {
         auto c_idx = outer_idx + (tile_offset / HtWt);
@@ -53,35 +61,39 @@ void kernel_main() {
         if (gamma_grad_has_value) {
             // gamma_grad (1, 1, 1, C)
             const auto gamma_grad_dtype_bytes = gamma_grad_tile_bytes / (TILE_H * TILE_W);
-            cb_wait_front(cb_id_gamma_grad, onetile);
+            cb_gamma_grad.wait_front(onetile);
             if (tilized_gamma_beta_idx_in_tile != 0) {
-                auto gamma_grad_ptr = reinterpret_cast<uint16_t*>(gamma_grad_l1_read_ptr);
+                experimental::CoreLocalMem<uint16_t> gamma_grad_ptr(gamma_grad_l1_read_ptr);
                 gamma_grad_ptr[tilized_gamma_beta_idx_in_tile] = gamma_grad_ptr[0];
             }
-            const auto gamma_grad_noc_addr = get_noc_addr(gamma_beta_tile_idx, gamma_grad_addrg);
-            noc_async_write(
-                gamma_grad_l1_read_ptr + tilized_gamma_beta_idx_in_tile * gamma_grad_dtype_bytes,
-                gamma_grad_noc_addr + tilized_gamma_beta_idx_in_tile * gamma_grad_dtype_bytes,
-                gamma_grad_dtype_bytes);
-            noc_async_write_barrier();
-            cb_pop_front(cb_id_gamma_grad, onetile);
+            noc.async_write(
+                cb_gamma_grad,
+                gamma_grad_addrg,
+                gamma_grad_dtype_bytes,
+                {.offset_bytes = tilized_gamma_beta_idx_in_tile * gamma_grad_dtype_bytes},
+                {.page_id = gamma_beta_tile_idx,
+                 .offset_bytes = tilized_gamma_beta_idx_in_tile * gamma_grad_dtype_bytes});
+            noc.async_write_barrier();
+            cb_gamma_grad.pop_front(onetile);
         }
 
         if (beta_grad_has_value) {
             // beta_grad (1, 1, 1, C)
             const auto beta_grad_dtype_bytes = beta_grad_tile_bytes / (TILE_H * TILE_W);
-            cb_wait_front(cb_id_beta_grad, onetile);
+            cb_beta_grad.wait_front(onetile);
             if (tilized_gamma_beta_idx_in_tile != 0) {
-                auto beta_grad_ptr = reinterpret_cast<uint16_t*>(beta_grad_l1_read_ptr);
+                experimental::CoreLocalMem<uint16_t> beta_grad_ptr(beta_grad_l1_read_ptr);
                 beta_grad_ptr[tilized_gamma_beta_idx_in_tile] = beta_grad_ptr[0];
             }
-            const auto beta_grad_noc_addr = get_noc_addr(gamma_beta_tile_idx, beta_grad_addrg);
-            noc_async_write(
-                beta_grad_l1_read_ptr + tilized_gamma_beta_idx_in_tile * beta_grad_dtype_bytes,
-                beta_grad_noc_addr + tilized_gamma_beta_idx_in_tile * beta_grad_dtype_bytes,
-                beta_grad_dtype_bytes);
-            noc_async_write_barrier();
-            cb_pop_front(cb_id_beta_grad, onetile);
+            noc.async_write(
+                cb_beta_grad,
+                beta_grad_addrg,
+                beta_grad_dtype_bytes,
+                {.offset_bytes = tilized_gamma_beta_idx_in_tile * beta_grad_dtype_bytes},
+                {.page_id = gamma_beta_tile_idx,
+                 .offset_bytes = tilized_gamma_beta_idx_in_tile * beta_grad_dtype_bytes});
+            noc.async_write_barrier();
+            cb_beta_grad.pop_front(onetile);
         }
 
     }  // outer_idx loop

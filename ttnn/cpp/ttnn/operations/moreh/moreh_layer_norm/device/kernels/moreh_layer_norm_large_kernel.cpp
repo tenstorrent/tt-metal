@@ -4,6 +4,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
+#include "experimental/circular_buffer.h"
 
 ALWI bool need_to_do_mask_h(uint32_t w_idx, uint32_t origin_num_h_tiles, uint32_t origin_num_w_tiles) {
     return ((w_idx / origin_num_w_tiles) + 1) % origin_num_h_tiles == 0;
@@ -24,40 +25,58 @@ void kernel_main() {
 
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
 
-    constexpr auto cb_x = tt::CBIndex::c_0;       // input
-    constexpr auto cb_scaler = tt::CBIndex::c_1;  // scaler
-    constexpr auto cb_eps = tt::CBIndex::c_2;     // epsilon
-    constexpr auto cb_gamma = tt::CBIndex::c_3;   // gamma
-    constexpr auto cb_beta = tt::CBIndex::c_4;    // beta
-    constexpr auto cb_mask_h = tt::CBIndex::c_5;  // mask_h
-    constexpr auto cb_mask_w = tt::CBIndex::c_6;  // mask_w
+    constexpr auto cb_x = tt::CBIndex::c_0;
+    experimental::CircularBuffer cb_x_obj(cb_x);  // input
+    constexpr auto cb_scaler = tt::CBIndex::c_1;
+    experimental::CircularBuffer cb_scaler_obj(cb_scaler);  // scaler
+    constexpr auto cb_eps = tt::CBIndex::c_2;
+    experimental::CircularBuffer cb_eps_obj(cb_eps);  // epsilon
+    constexpr auto cb_gamma = tt::CBIndex::c_3;
+    experimental::CircularBuffer cb_gamma_obj(cb_gamma);  // gamma
+    constexpr auto cb_beta = tt::CBIndex::c_4;
+    experimental::CircularBuffer cb_beta_obj(cb_beta);  // beta
+    constexpr auto cb_mask_h = tt::CBIndex::c_5;
+    experimental::CircularBuffer cb_mask_h_obj(cb_mask_h);  // mask_h
+    constexpr auto cb_mask_w = tt::CBIndex::c_6;
+    experimental::CircularBuffer cb_mask_w_obj(cb_mask_w);  // mask_w
 
-    constexpr auto cb_out = tt::CBIndex::c_16;   // output
-    constexpr auto cb_mean = tt::CBIndex::c_17;  // mean
-    constexpr auto cb_rstd = tt::CBIndex::c_18;  // rstd
+    constexpr auto cb_out = tt::CBIndex::c_16;
+    experimental::CircularBuffer cb_out_obj(cb_out);  // output
+    constexpr auto cb_mean = tt::CBIndex::c_17;
+    experimental::CircularBuffer cb_mean_obj(cb_mean);  // mean
+    constexpr auto cb_rstd = tt::CBIndex::c_18;
+    experimental::CircularBuffer cb_rstd_obj(cb_rstd);  // rstd
 
-    constexpr auto cb_ex = tt::CBIndex::c_24;          // E[x]
-    constexpr auto cb_xmm = tt::CBIndex::c_25;         // x - E[x]
-    constexpr auto cb_xmm2 = tt::CBIndex::c_26;        // (x - E[x])^2
-    constexpr auto cb_xmm2sum = tt::CBIndex::c_27;     // Sum[(x - E[x])^2]
-    constexpr auto cb_var = tt::CBIndex::c_28;         // E[(x - E[x])^2] = Var[x]
-    constexpr auto cb_recip_std = tt::CBIndex::c_29;   // 1.0/(sqrt(Var[x] + eps))
-    constexpr auto cb_gamma_beta = tt::CBIndex::c_30;  // p * gamm + beta
-    constexpr auto cb_xsum = tt::CBIndex::c_31;        // Sum[x]
+    constexpr auto cb_ex = tt::CBIndex::c_24;
+    experimental::CircularBuffer cb_ex_obj(cb_ex);  // E[x]
+    constexpr auto cb_xmm = tt::CBIndex::c_25;
+    experimental::CircularBuffer cb_xmm_obj(cb_xmm);  // x - E[x]
+    constexpr auto cb_xmm2 = tt::CBIndex::c_26;
+    experimental::CircularBuffer cb_xmm2_obj(cb_xmm2);  // (x - E[x])^2
+    constexpr auto cb_xmm2sum = tt::CBIndex::c_27;
+    experimental::CircularBuffer cb_xmm2sum_obj(cb_xmm2sum);  // Sum[(x - E[x])^2]
+    constexpr auto cb_var = tt::CBIndex::c_28;
+    experimental::CircularBuffer cb_var_obj(cb_var);  // E[(x - E[x])^2] = Var[x]
+    constexpr auto cb_recip_std = tt::CBIndex::c_29;
+    experimental::CircularBuffer cb_recip_std_obj(cb_recip_std);  // 1.0/(sqrt(Var[x] + eps))
+    constexpr auto cb_gamma_beta = tt::CBIndex::c_30;
+    experimental::CircularBuffer cb_gamma_beta_obj(cb_gamma_beta);  // p * gamm + beta
+    constexpr auto cb_xsum = tt::CBIndex::c_31;
+    experimental::CircularBuffer cb_xsum_obj(cb_xsum);  // Sum[x]
 
     constexpr uint32_t onetile = 1;
 
-    cb_wait_front(cb_scaler, onetile);  // comes from the reader
-    cb_wait_front(cb_eps, onetile);     // comes from the reader
+    cb_scaler_obj.wait_front(onetile);  // comes from the reader
+    cb_eps_obj.wait_front(onetile);     // comes from the reader
 
     constexpr bool do_mask_h = (origin_H % TILE_HEIGHT) != 0 && !is_lastdim_layernorm;
     constexpr bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
 
     if (do_mask_h) {
-        cb_wait_front(cb_mask_h, onetile);
+        cb_mask_h_obj.wait_front(onetile);
     }
     if (do_mask_w) {
-        cb_wait_front(cb_mask_w, onetile);
+        cb_mask_w_obj.wait_front(onetile);
     }
 
     constexpr uint32_t dst0 = 0;
@@ -73,12 +92,12 @@ void kernel_main() {
          * cb_xsum
          */
         for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx += block_size) {
-            cb_wait_front(cb_x, block_size);
+            cb_x_obj.wait_front(block_size);
             for (uint32_t j = 0; j < block_size; j++) {
                 const uint32_t w_idx = inner_idx + j;
                 if (w_idx == 0) {
                     tile_regs_acquire();
-                    cb_reserve_back(cb_xsum, onetile);
+                    cb_xsum_obj.reserve_back(onetile);
 
                     copy_tile_init_with_dt(cb_x);
                     copy_tile(cb_x, first_tile, dst0);  // input
@@ -100,13 +119,14 @@ void kernel_main() {
 
                     tile_regs_wait();
                     pack_tile_with_dt(dst0, cb_xsum);
-                    cb_push_back(cb_xsum, onetile);
+                    cb_xsum_obj.push_back(onetile);
                     tile_regs_release();
                 } else {
                     tile_regs_acquire();
                     // I use cb_ex temporarily.
                     constexpr auto cb_tmp = cb_ex;
-                    cb_reserve_back(cb_tmp, onetile);
+                    experimental::CircularBuffer cb_tmp_obj(cb_tmp);
+                    cb_tmp_obj.reserve_back(onetile);
 
                     copy_tile_init_with_dt(cb_x);
                     copy_tile(cb_x, j, j);  // input
@@ -130,13 +150,13 @@ void kernel_main() {
 
                     tile_regs_wait();
                     pack_tile_with_dt(j, cb_tmp);
-                    cb_push_back(cb_tmp, onetile);
+                    cb_tmp_obj.push_back(onetile);
                     tile_regs_release();
 
                     tile_regs_acquire();
-                    cb_wait_front(cb_tmp, onetile);
-                    cb_wait_front(cb_xsum, onetile);
-                    cb_reserve_back(cb_xsum, onetile);
+                    cb_tmp_obj.wait_front(onetile);
+                    cb_xsum_obj.wait_front(onetile);
+                    cb_xsum_obj.reserve_back(onetile);
 
                     add_tiles_init_with_dt(cb_xsum, cb_tmp);
                     add_tiles(cb_xsum, cb_tmp, first_tile, first_tile, dst0);
@@ -145,13 +165,13 @@ void kernel_main() {
                     tile_regs_wait();
                     pack_tile_with_dt(dst0, cb_xsum);
 
-                    cb_pop_front(cb_tmp, onetile);
-                    cb_pop_front(cb_xsum, onetile);
-                    cb_push_back(cb_xsum, onetile);
+                    cb_tmp_obj.pop_front(onetile);
+                    cb_xsum_obj.pop_front(onetile);
+                    cb_xsum_obj.push_back(onetile);
                     tile_regs_release();
                 }
             }  // block_size loop
-            cb_pop_front(cb_x, block_size);
+            cb_x_obj.pop_front(block_size);
         }  // num_inner loop
 
         /*
@@ -161,11 +181,11 @@ void kernel_main() {
         compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
             cb_xsum, cb_scaler, cb_ex, compute_kernel_lib::ReduceInputBlockShape::single());
 
-        cb_wait_front(cb_ex, onetile);
+        cb_ex_obj.wait_front(onetile);
         if (mean_has_value) {
             // Write on cb_mean.
             tile_regs_acquire();
-            cb_reserve_back(cb_mean, onetile);
+            cb_mean_obj.reserve_back(onetile);
 
             copy_tile_init_with_dt(cb_ex, is_lastdim_layernorm);
             copy_tile(cb_ex, first_tile, dst0);
@@ -174,7 +194,7 @@ void kernel_main() {
             tile_regs_wait();
             pack_tile_with_dt(dst0, cb_mean);
 
-            cb_push_back(cb_mean, onetile);
+            cb_mean_obj.push_back(onetile);
             tile_regs_release();
         }
         // We don't pop cb_ex here.
@@ -184,8 +204,8 @@ void kernel_main() {
          * xmm
          */
         for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx += block_size) {
-            cb_wait_front(cb_x, block_size);
-            cb_reserve_back(cb_xmm, block_size);
+            cb_x_obj.wait_front(block_size);
+            cb_xmm_obj.reserve_back(block_size);
             for (uint32_t j = 0; j < block_size; j++) {
                 tile_regs_acquire();
                 if (is_lastdim_layernorm) {
@@ -201,15 +221,15 @@ void kernel_main() {
                 pack_tile_with_dt(j, cb_xmm);
                 tile_regs_release();
             }  // block_size loop
-            cb_pop_front(cb_x, block_size);
-            cb_push_back(cb_xmm, block_size);
+            cb_x_obj.pop_front(block_size);
+            cb_xmm_obj.push_back(block_size);
 
             /*
              * mask xmm
              */
             if (do_mask_h || do_mask_w) {
-                cb_wait_front(cb_xmm, block_size);
-                cb_reserve_back(cb_xmm, block_size);
+                cb_xmm_obj.wait_front(block_size);
+                cb_xmm_obj.reserve_back(block_size);
                 for (uint32_t j = 0; j < block_size; j++) {
                     tile_regs_acquire();
 
@@ -239,16 +259,16 @@ void kernel_main() {
                     pack_tile_with_dt(j, cb_xmm);
                     tile_regs_release();
                 }  // block_size loop
-                cb_pop_front(cb_xmm, block_size);
-                cb_push_back(cb_xmm, block_size);
+                cb_xmm_obj.pop_front(block_size);
+                cb_xmm_obj.push_back(block_size);
             }
 
             /*
              * (x - E[x])^2
              * cb_xmm2
              */
-            cb_wait_front(cb_xmm, block_size);
-            cb_reserve_back(cb_xmm2, block_size);
+            cb_xmm_obj.wait_front(block_size);
+            cb_xmm2_obj.reserve_back(block_size);
             for (uint32_t j = 0; j < block_size; j++) {
                 tile_regs_acquire();
                 mul_tiles_init_with_dt(cb_xmm, cb_xmm);
@@ -260,18 +280,18 @@ void kernel_main() {
 
                 tile_regs_release();
             }  // block_size loop
-            cb_pop_front(cb_xmm, block_size);
-            cb_push_back(cb_xmm2, block_size);
+            cb_xmm_obj.pop_front(block_size);
+            cb_xmm2_obj.push_back(block_size);
 
             /*
              * Sum[(x-E[x])^2]
              * cb_xmm2sum
              */
-            cb_wait_front(cb_xmm2, block_size);
+            cb_xmm2_obj.wait_front(block_size);
             for (uint32_t j = 0; j < block_size; j++) {
                 if (inner_idx == 0 && j == 0) {
                     tile_regs_acquire();
-                    cb_reserve_back(cb_xmm2sum, onetile);
+                    cb_xmm2sum_obj.reserve_back(onetile);
 
                     copy_tile_init_with_dt(cb_xmm2);
                     copy_tile(cb_xmm2, first_tile, dst0);
@@ -280,12 +300,12 @@ void kernel_main() {
                     tile_regs_wait();
                     pack_tile_with_dt(dst0, cb_xmm2sum);
 
-                    cb_push_back(cb_xmm2sum, onetile);
+                    cb_xmm2sum_obj.push_back(onetile);
                     tile_regs_release();
                 } else {
                     tile_regs_acquire();
-                    cb_wait_front(cb_xmm2sum, onetile);
-                    cb_reserve_back(cb_xmm2sum, onetile);
+                    cb_xmm2sum_obj.wait_front(onetile);
+                    cb_xmm2sum_obj.reserve_back(onetile);
 
                     add_tiles_init_with_dt(cb_xmm2sum, cb_xmm2);
                     add_tiles(cb_xmm2sum, cb_xmm2, first_tile, j, dst0);
@@ -294,12 +314,12 @@ void kernel_main() {
                     tile_regs_wait();
                     pack_tile_with_dt(dst0, cb_xmm2sum);
 
-                    cb_pop_front(cb_xmm2sum, onetile);
-                    cb_push_back(cb_xmm2sum, onetile);
+                    cb_xmm2sum_obj.pop_front(onetile);
+                    cb_xmm2sum_obj.push_back(onetile);
                     tile_regs_release();
                 }
             }  // block_size loop
-            cb_pop_front(cb_xmm2, block_size);
+            cb_xmm2_obj.pop_front(block_size);
         }  // num_inner loop
         // Do not pop cb_ex here, we need it later.
 
@@ -315,8 +335,8 @@ void kernel_main() {
          * cb_recip_std
          */
         tile_regs_acquire();
-        cb_wait_front(cb_var, onetile);
-        cb_reserve_back(cb_recip_std, onetile);
+        cb_var_obj.wait_front(onetile);
+        cb_recip_std_obj.reserve_back(onetile);
 
         add_tiles_init_with_dt(cb_var, cb_eps);
         add_tiles(cb_var, cb_eps, first_tile, first_tile, dst0);
@@ -328,15 +348,15 @@ void kernel_main() {
         tile_regs_wait();
         pack_tile_with_dt(dst0, cb_recip_std);
 
-        cb_pop_front(cb_var, onetile);
-        cb_push_back(cb_recip_std, onetile);
+        cb_var_obj.pop_front(onetile);
+        cb_recip_std_obj.push_back(onetile);
         tile_regs_release();
 
-        cb_wait_front(cb_recip_std, onetile);
+        cb_recip_std_obj.wait_front(onetile);
         if (rstd_has_value) {
             // Write on cb_rstd.
             tile_regs_acquire();
-            cb_reserve_back(cb_rstd, onetile);
+            cb_rstd_obj.reserve_back(onetile);
 
             copy_tile_init_with_dt(cb_recip_std, is_lastdim_layernorm);
             copy_tile(cb_recip_std, first_tile, dst0);
@@ -345,7 +365,7 @@ void kernel_main() {
             tile_regs_wait();
             pack_tile_with_dt(dst0, cb_rstd);
 
-            cb_push_back(cb_rstd, onetile);
+            cb_rstd_obj.push_back(onetile);
             tile_regs_release();
         }
 
@@ -355,13 +375,14 @@ void kernel_main() {
          * cb_out
          */
         constexpr auto cb_reuse = cb_xmm;
+        experimental::CircularBuffer cb_reuse_obj(cb_reuse);
         for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx += block_size) {
             /*
              * x - E[x]
              * cb_reuse(==cb_xmm)
              */
-            cb_wait_front(cb_x, block_size);
-            cb_reserve_back(cb_reuse, block_size);
+            cb_x_obj.wait_front(block_size);
+            cb_reuse_obj.reserve_back(block_size);
             for (uint32_t j = 0; j < block_size; j++) {
                 tile_regs_acquire();
                 if (is_lastdim_layernorm) {
@@ -377,16 +398,17 @@ void kernel_main() {
                 pack_tile_with_dt(j, cb_reuse);
                 tile_regs_release();
             }  // block_size loop
-            cb_pop_front(cb_x, block_size);
-            cb_push_back(cb_reuse, block_size);
+            cb_x_obj.pop_front(block_size);
+            cb_reuse_obj.push_back(block_size);
 
             /*
              * (x - E[x]) * 1.0/sqrt(Var[x] + eps)
              * cb_gamma_beta_or_out
              */
             constexpr auto cb_gamma_beta_or_out = (gamma_has_value || beta_has_value) ? cb_gamma_beta : cb_out;
-            cb_wait_front(cb_reuse, block_size);
-            cb_reserve_back(cb_gamma_beta_or_out, block_size);
+            experimental::CircularBuffer cb_gamma_beta_or_out_obj(cb_gamma_beta_or_out);
+            cb_reuse_obj.wait_front(block_size);
+            cb_gamma_beta_or_out_obj.reserve_back(block_size);
             for (uint32_t j = 0; j < block_size; j++) {
                 tile_regs_acquire();
                 if (is_lastdim_layernorm) {
@@ -402,15 +424,16 @@ void kernel_main() {
                 pack_tile_with_dt(j, cb_gamma_beta_or_out);
                 tile_regs_release();
             }  // block_size loop
-            cb_pop_front(cb_reuse, block_size);
-            cb_push_back(cb_gamma_beta_or_out, block_size);
+            cb_reuse_obj.pop_front(block_size);
+            cb_gamma_beta_or_out_obj.push_back(block_size);
 
             // * gamma
             if (gamma_has_value) {
                 constexpr auto cb_outg = beta_has_value ? cb_gamma_beta : cb_out;
-                cb_wait_front(cb_gamma_beta_or_out, block_size);
-                cb_wait_front(cb_gamma, block_size);
-                cb_reserve_back(cb_outg, block_size);
+                experimental::CircularBuffer cb_outg_obj(cb_outg);
+                cb_gamma_beta_or_out_obj.wait_front(block_size);
+                cb_gamma_obj.wait_front(block_size);
+                cb_outg_obj.reserve_back(block_size);
                 for (uint32_t j = 0; j < block_size; j++) {
                     tile_regs_acquire();
                     if (is_groupnorm) {
@@ -431,16 +454,16 @@ void kernel_main() {
                     pack_tile_with_dt(j, cb_outg);
                     tile_regs_release();
                 }  // block_size loop
-                cb_pop_front(cb_gamma_beta_or_out, block_size);
-                cb_pop_front(cb_gamma, block_size);
-                cb_push_back(cb_outg, block_size);
+                cb_gamma_beta_or_out_obj.pop_front(block_size);
+                cb_gamma_obj.pop_front(block_size);
+                cb_outg_obj.push_back(block_size);
             }
 
             // + beta
             if (beta_has_value) {
-                cb_wait_front(cb_gamma_beta, block_size);
-                cb_wait_front(cb_beta, block_size);
-                cb_reserve_back(cb_out, block_size);
+                cb_gamma_beta_obj.wait_front(block_size);
+                cb_beta_obj.wait_front(block_size);
+                cb_out_obj.reserve_back(block_size);
                 for (uint32_t j = 0; j < block_size; j++) {
                     tile_regs_acquire();
                     if (is_groupnorm) {
@@ -461,21 +484,21 @@ void kernel_main() {
                     pack_tile_with_dt(j, cb_out);
                     tile_regs_release();
                 }  // block_size loop
-                cb_pop_front(cb_gamma_beta, block_size);
-                cb_pop_front(cb_beta, block_size);
-                cb_push_back(cb_out, block_size);
+                cb_gamma_beta_obj.pop_front(block_size);
+                cb_beta_obj.pop_front(block_size);
+                cb_out_obj.push_back(block_size);
             }
         }  // num_inner loop
-        cb_pop_front(cb_recip_std, onetile);
-        cb_pop_front(cb_ex, onetile);
+        cb_recip_std_obj.pop_front(onetile);
+        cb_ex_obj.pop_front(onetile);
     }  // num_rows_per_core loop
-    cb_pop_front(cb_scaler, onetile);
-    cb_pop_front(cb_eps, onetile);
+    cb_scaler_obj.pop_front(onetile);
+    cb_eps_obj.pop_front(onetile);
 
     if (do_mask_h) {
-        cb_pop_front(cb_mask_h, onetile);
+        cb_mask_h_obj.pop_front(onetile);
     }
     if (do_mask_w) {
-        cb_pop_front(cb_mask_w, onetile);
+        cb_mask_w_obj.pop_front(onetile);
     }
 }

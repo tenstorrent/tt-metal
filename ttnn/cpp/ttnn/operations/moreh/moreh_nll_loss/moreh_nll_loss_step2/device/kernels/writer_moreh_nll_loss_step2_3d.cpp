@@ -4,6 +4,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     using namespace tt::constants;
@@ -24,26 +27,30 @@ void kernel_main() {
     uint32_t Wt = (W + TILE_WIDTH - 1) / TILE_WIDTH;
 
     constexpr uint32_t onetile = 1;
+
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_out(cb_output);
+
     uint32_t end_id = start_id + num_tiles_per_core;
     for (uint32_t i = start_id; i < end_id; ++i) {
-        // output: (N, d1)
-        // noc_id = nt * Wt + wt
-        cb_wait_front(cb_output, onetile);
+        cb_out.wait_front(onetile);
         uint32_t n = i / Wf;
         uint32_t w = (i % Wf) * FACE_WIDTH;
         uint32_t nt = n / TILE_HEIGHT;
         uint32_t wt = w / TILE_WIDTH;
 
-        uint32_t output_l1_write_addr = get_read_ptr(cb_output);
-
         uint32_t noc_id = nt * Wt + wt;
         uint32_t noc_offset;
         get_noc_offset(n, w, element_size, noc_offset);
 
-        uint64_t dst_noc_addr = get_noc_addr(noc_id, output_addrg, noc_offset);
-        noc_async_write(output_l1_write_addr, dst_noc_addr, NOC_MINIMUM_READ_SIZE);
-        noc_async_write_barrier();
+        noc.async_write(
+            cb_out,
+            output_addrg,
+            NOC_MINIMUM_READ_SIZE,
+            {.offset_bytes = 0},
+            {.page_id = noc_id, .offset_bytes = noc_offset});
+        noc.async_write_barrier();
 
-        cb_pop_front(cb_output, onetile);
+        cb_out.pop_front(onetile);
     }
 }

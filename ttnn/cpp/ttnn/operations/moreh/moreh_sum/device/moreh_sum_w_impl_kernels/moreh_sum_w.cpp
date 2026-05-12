@@ -4,6 +4,7 @@
 
 #include "api/compute/matmul.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     uint32_t Ht = get_compile_time_arg_val(0);
@@ -12,24 +13,30 @@ void kernel_main() {
     constexpr uint32_t origin_W = get_compile_time_arg_val(3);
 
     auto cb_input = tt::CBIndex::c_0;
+    experimental::CircularBuffer cb_input_obj(cb_input);
     constexpr auto cb_scaler = tt::CBIndex::c_2;
+    experimental::CircularBuffer cb_scaler_obj(cb_scaler);
     constexpr auto cb_mask_w = tt::CBIndex::c_3;
+    experimental::CircularBuffer cb_mask_w_obj(cb_mask_w);
     constexpr auto cb_accum_dst = tt::CBIndex::c_24;
+    experimental::CircularBuffer cb_accum_dst_obj(cb_accum_dst);
     constexpr auto cb_masked_input = tt::CBIndex::c_25;
+    experimental::CircularBuffer cb_masked_input_obj(cb_masked_input);
     constexpr auto cb_out = tt::CBIndex::c_16;
+    experimental::CircularBuffer cb_out_obj(cb_out);
     constexpr uint32_t TILE_W = 32;
     constexpr bool do_mask_w = (origin_W % TILE_W) != 0;
 
     binary_op_init_common(cb_input, cb_scaler, cb_out);
 
-    cb_wait_front(cb_scaler, 1);  // scaler tile from the reader
+    cb_scaler_obj.wait_front(1);  // scaler tile from the reader
 
     constexpr int onetile = 1;
     int reduce_dst_idx = 0;
     const uint32_t mask_dst_idx = reduce_dst_idx + 1;
 
     if (do_mask_w) {
-        cb_wait_front(cb_mask_w, onetile);
+        cb_mask_w_obj.wait_front(onetile);
     }
 
     for (uint32_t nc = 0; nc < NC; nc++) {
@@ -42,29 +49,29 @@ void kernel_main() {
             if (!is_w_single_tile) {
                 tile_regs_acquire();
                 for (uint32_t wt = 0; wt < Wt - 1; ++wt) {
-                    cb_wait_front(cb_input, onetile);
+                    cb_input_obj.wait_front(onetile);
 #if defined FP32_DEST_ACC_EN
                     reconfig_data_format(cb_input, cb_scaler);
 #endif
                     mm_init_short(cb_input, cb_scaler, false);
                     matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
 
-                    cb_pop_front(cb_input, onetile);
+                    cb_input_obj.pop_front(onetile);
                 }
                 tile_regs_commit();
-                cb_reserve_back(cb_accum_dst, onetile);
+                cb_accum_dst_obj.reserve_back(onetile);
                 tile_regs_wait();
 #if defined FP32_DEST_ACC_EN
                 pack_reconfig_data_format(cb_accum_dst);
 #endif
                 pack_tile(reduce_dst_idx, cb_accum_dst);
                 tile_regs_release();
-                cb_push_back(cb_accum_dst, onetile);
+                cb_accum_dst_obj.push_back(onetile);
             }
 
             if (do_mask_w) {
                 tile_regs_acquire();
-                cb_wait_front(cb_input, onetile);
+                cb_input_obj.wait_front(onetile);
 #if defined FP32_DEST_ACC_EN
                 reconfig_data_format_srca(cb_input);
 #endif
@@ -75,26 +82,26 @@ void kernel_main() {
                 mask_tile(reduce_dst_idx, mask_dst_idx);
                 tile_regs_commit();
 
-                cb_reserve_back(cb_masked_input, onetile);
+                cb_masked_input_obj.reserve_back(onetile);
                 tile_regs_wait();
 #if defined FP32_DEST_ACC_EN
                 pack_reconfig_data_format(cb_masked_input);
 #endif
                 pack_tile(reduce_dst_idx, cb_masked_input);
                 tile_regs_release();
-                cb_push_back(cb_masked_input, onetile);
+                cb_masked_input_obj.push_back(onetile);
 
-                cb_pop_front(cb_input, onetile);
+                cb_input_obj.pop_front(onetile);
                 cb_input = cb_masked_input;
             }
 
             tile_regs_acquire();
-            cb_wait_front(cb_input, onetile);
+            cb_input_obj.wait_front(onetile);
             if (!is_w_single_tile) {
 #if defined FP32_DEST_ACC_EN
                 reconfig_data_format_srca(cb_accum_dst);
 #endif
-                cb_wait_front(cb_accum_dst, onetile);
+                cb_accum_dst_obj.wait_front(onetile);
                 copy_tile_to_dst_init_short(cb_accum_dst);
                 copy_tile(cb_accum_dst, 0, reduce_dst_idx);
             }
@@ -106,24 +113,24 @@ void kernel_main() {
             matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
             tile_regs_commit();
 
-            cb_reserve_back(cb_out, onetile);
+            cb_out_obj.reserve_back(onetile);
             tile_regs_wait();
 #if defined FP32_DEST_ACC_EN
             pack_reconfig_data_format(cb_out);
 #endif
             pack_tile(reduce_dst_idx, cb_out);
             tile_regs_release();
-            cb_push_back(cb_out, onetile);
+            cb_out_obj.push_back(onetile);
 
-            cb_pop_front(cb_input, onetile);
+            cb_input_obj.pop_front(onetile);
             if (!is_w_single_tile) {
-                cb_pop_front(cb_accum_dst, onetile);
+                cb_accum_dst_obj.pop_front(onetile);
             }
         }
     }
 
     if (do_mask_w) {
-        cb_pop_front(cb_mask_w, onetile);
+        cb_mask_w_obj.pop_front(onetile);
     }
-    cb_pop_front(cb_scaler, onetile);
+    cb_scaler_obj.pop_front(onetile);
 }

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "api/debug/dprint.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     int i{0};
@@ -38,22 +39,27 @@ void kernel_main() {
 
     binary_op_init_common(tt::CB::c_in0, tt::CB::c_in0, tt::CB::c_out0);
 
-    cb_wait_front(cb_one, onetile);      // comes from the reader
-    cb_wait_front(cb_decimal, onetile);  // comes from the reader
+    experimental::CircularBuffer cb_x_obj(cb_x);
+    experimental::CircularBuffer cb_one_obj(cb_one);
+    experimental::CircularBuffer cb_decimal_obj(cb_decimal);
+    experimental::CircularBuffer cb_mask_w_obj(cb_mask_w);
+    experimental::CircularBuffer cb_xabs_obj(cb_xabs);
+
+    cb_one_obj.wait_front(onetile);
+    cb_decimal_obj.wait_front(onetile);
 
     constexpr uint32_t TILE_W = 32;
     const bool do_mask_w = (origin_w % TILE_W) != 0;
     const auto mask_w = do_mask_w ? (origin_w % TILE_W) : TILE_W;
 
     if (do_mask_w) {
-        cb_wait_front(cb_mask_w, onetile);  // comes from the reader
+        cb_mask_w_obj.wait_front(onetile);
     }
     for (uint32_t row_idx = 0; row_idx < num_rows_per_core; ++row_idx) {
         for (uint32_t col_idx = 0; col_idx < Wt; ++col_idx) {
-            // |x|
             tile_regs_acquire();
-            cb_wait_front(cb_x, onetile);  // comes from the reader
-            cb_reserve_back(cb_xabs, onetile);
+            cb_x_obj.wait_front(onetile);
+            cb_xabs_obj.reserve_back(onetile);
 
             copy_tile_init_with_dt(cb_x);
             copy_tile(cb_x, 0, dst0);
@@ -74,16 +80,16 @@ void kernel_main() {
             pack_tile_with_dt(dst0, cb_xabs);
             tile_regs_release();
 
-            cb_pop_front(cb_x, onetile);
-            cb_push_back(cb_xabs, onetile);
+            cb_x_obj.pop_front(onetile);
+            cb_xabs_obj.push_back(onetile);
 
             power_tile_to_cb(cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_y, p, p_is_negative);
         }
     }
 
-    cb_pop_front(cb_one, onetile);
-    cb_pop_front(cb_decimal, onetile);
+    cb_one_obj.pop_front(onetile);
+    cb_decimal_obj.pop_front(onetile);
     if (do_mask_w) {
-        cb_pop_front(cb_mask_w, onetile);
+        cb_mask_w_obj.pop_front(onetile);
     }
 }

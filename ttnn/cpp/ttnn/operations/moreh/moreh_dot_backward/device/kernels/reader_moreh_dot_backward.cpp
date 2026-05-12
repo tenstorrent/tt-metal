@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     uint32_t has_input_grad = get_arg_val<uint32_t>(0);
@@ -22,35 +25,36 @@ void kernel_main() {
     constexpr uint32_t cb_id_in2 = 2;
     constexpr uint32_t onetile = 1;
 
-    uint32_t l1_write_addr_in0;
     const auto s0 = TensorAccessor(src0_args, src0_addr);
-    uint32_t l1_write_addr_in1;
     const auto s1 = TensorAccessor(src1_args, src1_addr);
-
-    uint32_t l1_write_addr_in2;
     const auto s2 = TensorAccessor(src2_args, src2_addr);
 
-    cb_reserve_back(cb_id_in0, onetile);
-    l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-    noc_async_read_tile(0, s0, l1_write_addr_in0);
-    noc_async_read_barrier();
-    cb_push_back(cb_id_in0, onetile);
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in0(cb_id_in0);
+    experimental::CircularBuffer cb_in1(cb_id_in1);
+    experimental::CircularBuffer cb_in2(cb_id_in2);
+    const auto in0_tile_bytes = get_tile_size(cb_id_in0);
+    const auto in1_tile_bytes = get_tile_size(cb_id_in1);
+    const auto in2_tile_bytes = get_tile_size(cb_id_in2);
+
+    cb_in0.reserve_back(onetile);
+    noc.async_read(s0, cb_in0, in0_tile_bytes, {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read_barrier();
+    cb_in0.push_back(onetile);
 
     for (uint32_t i = start_id; i < start_id + num_tiles; i++) {
         if (has_input_grad) {
-            cb_reserve_back(cb_id_in2, onetile);
-            l1_write_addr_in2 = get_write_ptr(cb_id_in2);
-            noc_async_read_tile(i, s2, l1_write_addr_in2);
-            noc_async_read_barrier();
-            cb_push_back(cb_id_in2, onetile);
+            cb_in2.reserve_back(onetile);
+            noc.async_read(s2, cb_in2, in2_tile_bytes, {.page_id = i}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_in2.push_back(onetile);
         }
 
         if (has_other_grad) {
-            cb_reserve_back(cb_id_in1, onetile);
-            l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-            noc_async_read_tile(i, s1, l1_write_addr_in1);
-            noc_async_read_barrier();
-            cb_push_back(cb_id_in1, onetile);
+            cb_in1.reserve_back(onetile);
+            noc.async_read(s1, cb_in1, in1_tile_bytes, {.page_id = i}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_in1.push_back(onetile);
         }
     }
 }

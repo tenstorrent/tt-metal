@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     // compile-time args
@@ -19,13 +22,16 @@ void kernel_main() {
 
     const auto output_addrg = TensorAccessor(output_args, output_addr);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_out_obj(cb_id_out);
+    const auto out_tile_bytes = get_tile_size(cb_id_out);
+
     for (uint32_t i = start_id; i < start_id + num_tiles; i++) {
         uint32_t write_tile_id = i;
-        cb_wait_front(cb_id_out, onetile);
+        cb_out_obj.wait_front(onetile);
 
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out);
-        noc_async_write_tile(write_tile_id, output_addrg, l1_read_addr);
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_out, onetile);
+        noc.async_write(cb_out_obj, output_addrg, out_tile_bytes, {.offset_bytes = 0}, {.page_id = write_tile_id});
+        noc.async_write_barrier();
+        cb_out_obj.pop_front(onetile);
     }
 }

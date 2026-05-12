@@ -4,6 +4,7 @@
 
 #include "api/compute/eltwise_unary/sfpu_int_sum.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t num_rows = get_compile_time_arg_val(0);
@@ -12,6 +13,7 @@ void kernel_main() {
 
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_mask_w = tt::CBIndex::c_1;
+    experimental::CircularBuffer cb_mask_w_obj(cb_mask_w);
     constexpr auto cb_intermed0 = tt::CBIndex::c_24;
     constexpr auto cb_out0 = tt::CBIndex::c_16;
     constexpr uint32_t TILE_W = 32;
@@ -24,7 +26,7 @@ void kernel_main() {
     unary_op_init_common(cb_in0, cb_out0);
 
     if (do_mask_w) {
-        cb_wait_front(cb_mask_w, onetile);
+        cb_mask_w_obj.wait_front(onetile);
     }
 
     for (uint32_t row = 0; row < num_rows; ++row) {

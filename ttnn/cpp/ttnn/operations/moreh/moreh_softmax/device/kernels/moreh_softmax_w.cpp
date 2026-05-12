@@ -6,18 +6,29 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
+    experimental::CircularBuffer cb_in0_obj(cb_in0);
     constexpr auto cb_mask = tt::CBIndex::c_1;
+    experimental::CircularBuffer cb_mask_obj(cb_mask);
     constexpr auto cb_max_scaler = tt::CBIndex::c_2;
+    experimental::CircularBuffer cb_max_scaler_obj(cb_max_scaler);
     constexpr auto cb_sum_scaler = tt::CBIndex::c_3;
+    experimental::CircularBuffer cb_sum_scaler_obj(cb_sum_scaler);
     constexpr auto cb_out0 = tt::CBIndex::c_16;
+    experimental::CircularBuffer cb_out0_obj(cb_out0);
     constexpr auto cb_exps = tt::CBIndex::c_24;
+    experimental::CircularBuffer cb_exps_obj(cb_exps);
     constexpr auto cb_recipsumexps = tt::CBIndex::c_25;
+    experimental::CircularBuffer cb_recipsumexps_obj(cb_recipsumexps);
     constexpr auto cb_max = tt::CBIndex::c_26;
+    experimental::CircularBuffer cb_max_obj(cb_max);
     constexpr auto cb_x_m_max = tt::CBIndex::c_27;
+    experimental::CircularBuffer cb_x_m_max_obj(cb_x_m_max);
     constexpr auto cb_tmp = tt::CBIndex::c_28;
+    experimental::CircularBuffer cb_tmp_obj(cb_tmp);
 
     binary_op_init_common(cb_in0, cb_max_scaler, cb_out0);
 
@@ -28,9 +39,9 @@ void kernel_main() {
     uint32_t N = get_compile_time_arg_val(0);
     uint32_t Wt = get_compile_time_arg_val(1);
 
-    cb_wait_front(cb_mask, onetile);
-    cb_wait_front(cb_max_scaler, onetile);
-    cb_wait_front(cb_sum_scaler, onetile);
+    cb_mask_obj.wait_front(onetile);
+    cb_max_scaler_obj.wait_front(onetile);
+    cb_sum_scaler_obj.wait_front(onetile);
 
     for (uint32_t n = 0; n < N; ++n) {
         // find max value
@@ -41,7 +52,7 @@ void kernel_main() {
                 cb_tmp, cb_max_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::single());
         } else {
             // Phase 1: bulk reduce of Wt-1 full tiles into cb_max (pack preserves full DEST).
-            cb_reserve_back(cb_max, 1);
+            cb_max_obj.reserve_back(1);
 
             tile_regs_acquire();
 #if defined FP32_DEST_ACC_EN
@@ -49,7 +60,7 @@ void kernel_main() {
 #endif
             reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in0, cb_max_scaler, cb_max);
             for (uint32_t x = 0; x < Wt - 1; ++x) {
-                cb_wait_front(cb_in0, x + 1);
+                cb_in0_obj.wait_front(x + 1);
                 reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in0, cb_max_scaler, x, 0, dst0);
             }
             reduce_uninit();
@@ -59,13 +70,13 @@ void kernel_main() {
             pack_tile_with_dt(dst0, cb_max);
             tile_regs_release();
 
-            cb_push_back(cb_max, 1);
+            cb_max_obj.push_back(1);
 
             // Phase 2: merge the masked last tile into cb_max.
             mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, Wt - 1, 0, /*pop0=*/0, /*popm=*/0);
 
-            cb_wait_front(cb_max, 1);
-            cb_wait_front(cb_tmp, 1);
+            cb_max_obj.wait_front(1);
+            cb_tmp_obj.wait_front(1);
 
             tile_regs_acquire();
             copy_tile_init_with_dt(cb_max);
@@ -83,15 +94,15 @@ void kernel_main() {
             pack_tile_with_dt(dst0, cb_max);
             tile_regs_release();
 
-            cb_pop_front(cb_max, 1);
-            cb_pop_front(cb_tmp, 1);
-            cb_push_back(cb_max, 1);
+            cb_max_obj.pop_front(1);
+            cb_tmp_obj.pop_front(1);
+            cb_max_obj.push_back(1);
         }
 
         // compute x - max(x)
-        cb_reserve_back(cb_x_m_max, Wt);
-        cb_wait_front(cb_in0, Wt);
-        cb_wait_front(cb_max, 1);
+        cb_x_m_max_obj.reserve_back(Wt);
+        cb_in0_obj.wait_front(Wt);
+        cb_max_obj.wait_front(1);
 
         for (uint32_t w = 0; w < Wt; ++w) {
             tile_regs_acquire();
@@ -103,13 +114,13 @@ void kernel_main() {
             pack_tile_with_dt(dst0, cb_x_m_max);
             tile_regs_release();
         }
-        cb_pop_front(cb_max, 1);
-        cb_pop_front(cb_in0, Wt);
-        cb_push_back(cb_x_m_max, Wt);
+        cb_max_obj.pop_front(1);
+        cb_in0_obj.pop_front(Wt);
+        cb_x_m_max_obj.push_back(Wt);
 
         // compute exp(x - max(x))
-        cb_reserve_back(cb_exps, Wt);
-        cb_wait_front(cb_x_m_max, Wt);
+        cb_exps_obj.reserve_back(Wt);
+        cb_x_m_max_obj.wait_front(Wt);
         for (uint32_t w = 0; w < Wt; ++w) {
             tile_regs_acquire();
             copy_tile_init_with_dt(cb_x_m_max);
@@ -136,7 +147,7 @@ void kernel_main() {
             pack_tile_with_dt(dst0, cb_exps);
             tile_regs_release();
         }
-        cb_push_back(cb_exps, Wt);
+        cb_exps_obj.push_back(Wt);
 
 #ifdef LOG
         // log(sum) - pop tiles after reduce
@@ -169,12 +180,12 @@ void kernel_main() {
 #endif
 
         // compute final result
-        cb_reserve_back(cb_out0, Wt);
-        cb_wait_front(cb_x_m_max, Wt);
-        cb_wait_front(cb_recipsumexps, 1);
+        cb_out0_obj.reserve_back(Wt);
+        cb_x_m_max_obj.wait_front(Wt);
+        cb_recipsumexps_obj.wait_front(1);
 
 #ifndef LOG
-        cb_wait_front(cb_exps, Wt);
+        cb_exps_obj.wait_front(Wt);
 #endif
 
         for (uint32_t w = 0; w < Wt; w += onetile) {
@@ -201,11 +212,11 @@ void kernel_main() {
 #endif
         }
 
-        cb_pop_front(cb_recipsumexps, 1);
-        cb_pop_front(cb_x_m_max, Wt);
-        cb_push_back(cb_out0, Wt);
+        cb_recipsumexps_obj.pop_front(1);
+        cb_x_m_max_obj.pop_front(Wt);
+        cb_out0_obj.push_back(Wt);
 #ifndef LOG
-        cb_pop_front(cb_exps, Wt);
+        cb_exps_obj.pop_front(Wt);
 #endif
     }
 }

@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     const auto param_addr = get_arg_val<uint32_t>(0);
@@ -31,33 +34,45 @@ void kernel_main() {
     const auto max_exp_avg_sq_addrg = TensorAccessor(max_exp_avg_sq_args, max_exp_avg_sq_addr);
 #endif
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_param(cb_id_param);
+    experimental::CircularBuffer cb_exp_avg(cb_id_exp_avg);
+    experimental::CircularBuffer cb_exp_avg_sq(cb_id_exp_avg_sq);
+#ifdef AMSGRAD
+    experimental::CircularBuffer cb_max_exp_avg_sq(cb_id_max_exp_avg_sq);
+#endif
+
+    const auto param_tile_bytes = get_tile_size(cb_id_param);
+    const auto exp_avg_tile_bytes = get_tile_size(cb_id_exp_avg);
+    const auto exp_avg_sq_tile_bytes = get_tile_size(cb_id_exp_avg_sq);
+#ifdef AMSGRAD
+    const auto max_exp_avg_sq_tile_bytes = get_tile_size(cb_id_max_exp_avg_sq);
+#endif
+
     constexpr uint32_t onetile = 1;
     uint32_t end_id = start_id + num_tiles_per_core;
     for (uint32_t i = start_id; i < end_id; ++i) {
-        cb_wait_front(cb_id_param, onetile);
-        uint32_t param_l1_write_addr = get_read_ptr(cb_id_param);
-        noc_async_write_tile(i, param_addrg, param_l1_write_addr);
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_param, onetile);
+        cb_param.wait_front(onetile);
+        noc.async_write(cb_param, param_addrg, param_tile_bytes, {.offset_bytes = 0}, {.page_id = i});
+        noc.async_write_barrier();
+        cb_param.pop_front(onetile);
 
-        cb_wait_front(cb_id_exp_avg, onetile);
-        uint32_t exp_avg_l1_write_addr = get_read_ptr(cb_id_exp_avg);
-        noc_async_write_tile(i, exp_avg_addrg, exp_avg_l1_write_addr);
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_exp_avg, onetile);
+        cb_exp_avg.wait_front(onetile);
+        noc.async_write(cb_exp_avg, exp_avg_addrg, exp_avg_tile_bytes, {.offset_bytes = 0}, {.page_id = i});
+        noc.async_write_barrier();
+        cb_exp_avg.pop_front(onetile);
 
-        cb_wait_front(cb_id_exp_avg_sq, onetile);
-        uint32_t exp_avg_sq_l1_write_addr = get_read_ptr(cb_id_exp_avg_sq);
-        noc_async_write_tile(i, exp_avg_sq_addrg, exp_avg_sq_l1_write_addr);
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_exp_avg_sq, onetile);
+        cb_exp_avg_sq.wait_front(onetile);
+        noc.async_write(cb_exp_avg_sq, exp_avg_sq_addrg, exp_avg_sq_tile_bytes, {.offset_bytes = 0}, {.page_id = i});
+        noc.async_write_barrier();
+        cb_exp_avg_sq.pop_front(onetile);
 
 #ifdef AMSGRAD
-        cb_wait_front(cb_id_max_exp_avg_sq, onetile);
-        uint32_t max_exp_avg_sq_l1_write_addr = get_read_ptr(cb_id_max_exp_avg_sq);
-        noc_async_write_tile(i, max_exp_avg_sq_addrg, max_exp_avg_sq_l1_write_addr);
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_max_exp_avg_sq, onetile);
+        cb_max_exp_avg_sq.wait_front(onetile);
+        noc.async_write(
+            cb_max_exp_avg_sq, max_exp_avg_sq_addrg, max_exp_avg_sq_tile_bytes, {.offset_bytes = 0}, {.page_id = i});
+        noc.async_write_barrier();
+        cb_max_exp_avg_sq.pop_front(onetile);
 #endif
     }
 }

@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     int i{0};
@@ -24,20 +27,24 @@ void kernel_main() {
     constexpr auto coef_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     const auto coef_addrg = TensorAccessor(coef_args, clip_coef_clamped_addr);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_input(cb_id_input);
+    experimental::CircularBuffer cb_clip_coef(cb_id_clip_coef_clamped);
+    const auto input_tile_bytes = get_tile_size(cb_id_input);
+    const auto clip_coef_tile_bytes = get_tile_size(cb_id_clip_coef_clamped);
+
     // clip_coef_clamped
-    const auto clip_coef_clamped_l1_write_ptr = get_write_ptr(cb_id_clip_coef_clamped);
-    cb_reserve_back(cb_id_clip_coef_clamped, onetile);
-    noc_async_read_tile(0, coef_addrg, clip_coef_clamped_l1_write_ptr);
-    noc_async_read_barrier();
-    cb_push_back(cb_id_clip_coef_clamped, onetile);
+    cb_clip_coef.reserve_back(onetile);
+    noc.async_read(coef_addrg, cb_clip_coef, clip_coef_tile_bytes, {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read_barrier();
+    cb_clip_coef.push_back(onetile);
 
     // input
-    const auto input_l1_write_ptr = get_write_ptr(cb_id_input);
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
-        cb_reserve_back(cb_id_input, onetile);
-        noc_async_read_tile(tile_idx, input_addrg, input_l1_write_ptr);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_input, onetile);
+        cb_input.reserve_back(onetile);
+        noc.async_read(input_addrg, cb_input, input_tile_bytes, {.page_id = tile_idx}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cb_input.push_back(onetile);
     }
 
 }  // void kernel_main()

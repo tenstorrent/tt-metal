@@ -6,18 +6,22 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     constexpr auto cb_y = tt::CBIndex::c_0;
+    experimental::CircularBuffer cb_y_obj(cb_y);
     constexpr auto cb_dy = tt::CBIndex::c_1;
+    experimental::CircularBuffer cb_dy_obj(cb_dy);
     constexpr auto cb_bcast_scaler = tt::CBIndex::c_2;
     constexpr auto cb_mask = tt::CBIndex::c_3;
     constexpr auto cb_dx = tt::CBIndex::c_16;
 
     constexpr auto cb_ydy = tt::CBIndex::c_24;  // y * dy
     constexpr auto cb_sum = tt::CBIndex::c_25;
+    experimental::CircularBuffer cb_sum_obj(cb_sum);
     constexpr auto cb_inter2 = tt::CBIndex::c_26;
 
     binary_op_init_common(cb_y, cb_bcast_scaler, cb_dx);
@@ -64,9 +68,9 @@ void kernel_main() {
             sub_tiles_to_cb(cb_dy, cb_inter2, cb_dx, w, 0, /*pop0=*/0, /*pop1=*/1);
         }
 
-        cb_pop_front(cb_sum, onetile);
-        cb_pop_front(cb_y, Wt);
-        cb_pop_front(cb_dy, Wt);
+        cb_sum_obj.pop_front(onetile);
+        cb_y_obj.pop_front(Wt);
+        cb_dy_obj.pop_front(Wt);
 #else
         // step 1, compute y * dy
         for (uint32_t w = 0; w < Wt; ++w) {
@@ -97,9 +101,9 @@ void kernel_main() {
 #endif
         }
 
-        cb_pop_front(cb_sum, onetile);
-        cb_pop_front(cb_dy, Wt);
-        cb_pop_front(cb_y, Wt);
+        cb_sum_obj.pop_front(onetile);
+        cb_dy_obj.pop_front(Wt);
+        cb_y_obj.pop_front(Wt);
 #endif
     }
 }

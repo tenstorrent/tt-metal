@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -52,20 +55,35 @@ void kernel_main() {
     fill_cb_with_value(cb_scalar_args, weight_decay);
     fill_cb_with_value(cb_scalar_args, one);
 
-    uint32_t l1_write_addr;
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_param_in_obj(cb_param_in);
+    experimental::CircularBuffer cb_grad_obj(cb_grad);
+    const auto param_in_tile_bytes = get_tile_size(cb_param_in);
+    const auto grad_tile_bytes = get_tile_size(cb_grad);
+#if defined(MOMENTUM) && defined(MOMENTUM_INITIALIZED)
+    experimental::CircularBuffer cb_momentum_in_obj(cb_momentum_in);
+    const auto momentum_in_tile_bytes = get_tile_size(cb_momentum_in);
+#endif
 
     uint32_t curr_tile = tile_offset;
 
     for (uint32_t i = 0; i < num_tiles; i += onetile) {
-        // param_in
-        noc_async_read_tile_helper(cb_param_in, onetile, curr_tile, param_in);
+        cb_param_in_obj.reserve_back(onetile);
+        noc.async_read(param_in, cb_param_in_obj, param_in_tile_bytes, {.page_id = curr_tile}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cb_param_in_obj.push_back(onetile);
 
-        // grad
-        noc_async_read_tile_helper(cb_grad, onetile, curr_tile, grad);
+        cb_grad_obj.reserve_back(onetile);
+        noc.async_read(grad, cb_grad_obj, grad_tile_bytes, {.page_id = curr_tile}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cb_grad_obj.push_back(onetile);
 
-// momentum
 #if defined(MOMENTUM) && defined(MOMENTUM_INITIALIZED)
-        noc_async_read_tile_helper(cb_momentum_in, onetile, curr_tile, momentum_in);
+        cb_momentum_in_obj.reserve_back(onetile);
+        noc.async_read(
+            momentum_in, cb_momentum_in_obj, momentum_in_tile_bytes, {.page_id = curr_tile}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cb_momentum_in_obj.push_back(onetile);
 #endif
         curr_tile++;
     }

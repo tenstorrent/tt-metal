@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/core_local_mem.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     int i{0};
@@ -91,11 +95,21 @@ void kernel_main() {
     const auto rstd_dtype_bytes = mean_tile_bytes / (TILE_H * TILE_W);
     const auto start_mean_rstd_idx = tile_offset / num_inner_tiles;
 
-    const auto output_grad_l1_write_ptr = get_write_ptr(cb_id_output_grad);
-    const auto input_l1_write_ptr = get_write_ptr(cb_id_input);
-    const auto mean_l1_write_ptr = get_write_ptr(cb_id_mean);
-    const auto rstd_l1_write_ptr = get_write_ptr(cb_id_rstd);
-    const auto gamma_l1_write_ptr = get_write_ptr(cb_id_gamma);
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_output_grad(cb_id_output_grad);
+    experimental::CircularBuffer cb_input(cb_id_input);
+    experimental::CircularBuffer cb_mean(cb_id_mean);
+    experimental::CircularBuffer cb_rstd(cb_id_rstd);
+    experimental::CircularBuffer cb_gamma(cb_id_gamma);
+
+    const auto output_grad_tile_bytes = get_tile_size(cb_id_output_grad);
+    const auto input_tile_bytes = get_tile_size(cb_id_input);
+    const auto rstd_tile_bytes = get_tile_size(cb_id_rstd);
+    const auto gamma_tile_bytes = get_tile_size(cb_id_gamma);
+
+    const auto mean_l1_write_ptr = cb_mean.get_write_ptr();
+    const auto rstd_l1_write_ptr = cb_rstd.get_write_ptr();
+    const auto gamma_l1_write_ptr = cb_gamma.get_write_ptr();
 
     uint32_t mean_rstd_idx, mean_rstd_n_idx, mean_rstd_g_idx;
     uint32_t mean_rstd_tile_h_idx, mean_rstd_tile_w_idx;
@@ -125,39 +139,44 @@ void kernel_main() {
             get_tilized_idx(mean_rstd_h_idx_in_tile, mean_rstd_w_idx_in_tile, TILE_H, TILE_W);
 
         // mean (1, 1, N, num_groups)
-        cb_reserve_back(cb_id_mean, onetile);
-        noc_async_read_tile(mean_rstd_tile_idx, mean_addrg, mean_l1_write_ptr);
-        noc_async_read_barrier();
+        cb_mean.reserve_back(onetile);
+        noc.async_read(mean_addrg, cb_mean, mean_tile_bytes, {.page_id = mean_rstd_tile_idx}, {.offset_bytes = 0});
+        noc.async_read_barrier();
         if (tilized_mean_rstd_idx_in_tile != 0) {
-            auto mean_ptr = reinterpret_cast<uint16_t*>(mean_l1_write_ptr);
+            experimental::CoreLocalMem<uint16_t> mean_ptr(mean_l1_write_ptr);
             mean_ptr[0] = mean_ptr[tilized_mean_rstd_idx_in_tile];
         }
-        cb_push_back(cb_id_mean, onetile);
+        cb_mean.push_back(onetile);
 
         // rstd (1, 1, N, num_groups)
-        cb_reserve_back(cb_id_rstd, onetile);
-        noc_async_read_tile(mean_rstd_tile_idx, rstd_addrg, rstd_l1_write_ptr);
-        noc_async_read_barrier();
+        cb_rstd.reserve_back(onetile);
+        noc.async_read(rstd_addrg, cb_rstd, rstd_tile_bytes, {.page_id = mean_rstd_tile_idx}, {.offset_bytes = 0});
+        noc.async_read_barrier();
         if (tilized_mean_rstd_idx_in_tile != 0) {
-            auto rstd_ptr = reinterpret_cast<uint16_t*>(rstd_l1_write_ptr);
+            experimental::CoreLocalMem<uint16_t> rstd_ptr(rstd_l1_write_ptr);
             rstd_ptr[0] = rstd_ptr[tilized_mean_rstd_idx_in_tile];
         }
-        cb_push_back(cb_id_rstd, onetile);
+        cb_rstd.push_back(onetile);
 
         for (uint32_t inner_idx = 0; inner_idx < num_inner_tiles; ++inner_idx) {
             // input (N, C, H, W)
             input_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx;
-            cb_reserve_back(cb_id_input, onetile);
-            noc_async_read_tile(input_tile_idx, input_addrg, input_l1_write_ptr);
-            noc_async_read_barrier();
-            cb_push_back(cb_id_input, onetile);
+            cb_input.reserve_back(onetile);
+            noc.async_read(input_addrg, cb_input, input_tile_bytes, {.page_id = input_tile_idx}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_input.push_back(onetile);
 
             // output_grad (N, C, H, W)
             output_grad_tile_idx = input_tile_idx;
-            cb_reserve_back(cb_id_output_grad, onetile);
-            noc_async_read_tile(output_grad_tile_idx, output_grad_addrg, output_grad_l1_write_ptr);
-            noc_async_read_barrier();
-            cb_push_back(cb_id_output_grad, onetile);
+            cb_output_grad.reserve_back(onetile);
+            noc.async_read(
+                output_grad_addrg,
+                cb_output_grad,
+                output_grad_tile_bytes,
+                {.page_id = output_grad_tile_idx},
+                {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_output_grad.push_back(onetile);
 
             if (gamma_has_value) {
                 // gamma (1, 1, 1, C)
@@ -165,24 +184,30 @@ void kernel_main() {
                 const auto gamma_tile_idx = gamma_c_idx / TILE_W;
                 const auto gamma_w_idx_in_tile = gamma_c_idx % TILE_W;
                 const auto tilized_gamma_idx_in_tile = get_tilized_idx(0, gamma_w_idx_in_tile, TILE_H, TILE_W);
-                cb_reserve_back(cb_id_gamma, onetile);
-                noc_async_read_tile(gamma_tile_idx, gamma_addrg, gamma_l1_write_ptr);
-                noc_async_read_barrier();
+                cb_gamma.reserve_back(onetile);
+                noc.async_read(
+                    gamma_addrg, cb_gamma, gamma_tile_bytes, {.page_id = gamma_tile_idx}, {.offset_bytes = 0});
+                noc.async_read_barrier();
                 if (tilized_gamma_idx_in_tile != 0) {
-                    auto gamma_ptr = reinterpret_cast<uint16_t*>(gamma_l1_write_ptr);
+                    experimental::CoreLocalMem<uint16_t> gamma_ptr(gamma_l1_write_ptr);
                     gamma_ptr[0] = gamma_ptr[tilized_gamma_idx_in_tile];
                 }
-                cb_push_back(cb_id_gamma, onetile);
+                cb_gamma.push_back(onetile);
             }
         }  // inner_idx loop
 
         for (uint32_t inner_idx = 0; inner_idx < num_inner_tiles; ++inner_idx) {
             // output_grad (N, C, H, W)
             output_grad_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx;
-            cb_reserve_back(cb_id_output_grad, onetile);
-            noc_async_read_tile(output_grad_tile_idx, output_grad_addrg, output_grad_l1_write_ptr);
-            noc_async_read_barrier();
-            cb_push_back(cb_id_output_grad, onetile);
+            cb_output_grad.reserve_back(onetile);
+            noc.async_read(
+                output_grad_addrg,
+                cb_output_grad,
+                output_grad_tile_bytes,
+                {.page_id = output_grad_tile_idx},
+                {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_output_grad.push_back(onetile);
 
             if (gamma_has_value) {
                 // gamma (1, 1, 1, C)
@@ -190,22 +215,23 @@ void kernel_main() {
                 const auto gamma_tile_idx = gamma_c_idx / TILE_W;
                 const auto gamma_w_idx_in_tile = gamma_c_idx % TILE_W;
                 const auto tilized_gamma_idx_in_tile = get_tilized_idx(0, gamma_w_idx_in_tile, TILE_H, TILE_W);
-                cb_reserve_back(cb_id_gamma, onetile);
-                noc_async_read_tile(gamma_tile_idx, gamma_addrg, gamma_l1_write_ptr);
-                noc_async_read_barrier();
+                cb_gamma.reserve_back(onetile);
+                noc.async_read(
+                    gamma_addrg, cb_gamma, gamma_tile_bytes, {.page_id = gamma_tile_idx}, {.offset_bytes = 0});
+                noc.async_read_barrier();
                 if (tilized_gamma_idx_in_tile != 0) {
-                    auto gamma_ptr = reinterpret_cast<uint16_t*>(gamma_l1_write_ptr);
+                    experimental::CoreLocalMem<uint16_t> gamma_ptr(gamma_l1_write_ptr);
                     gamma_ptr[0] = gamma_ptr[tilized_gamma_idx_in_tile];
                 }
-                cb_push_back(cb_id_gamma, onetile);
+                cb_gamma.push_back(onetile);
             }
 
             // input (N, C, H, W)
             input_tile_idx = output_grad_tile_idx;
-            cb_reserve_back(cb_id_input, onetile);
-            noc_async_read_tile(input_tile_idx, input_addrg, input_l1_write_ptr);
-            noc_async_read_barrier();
-            cb_push_back(cb_id_input, onetile);
+            cb_input.reserve_back(onetile);
+            noc.async_read(input_addrg, cb_input, input_tile_bytes, {.page_id = input_tile_idx}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_input.push_back(onetile);
         }  // inner_idx loop
     }  // outer_idx loop
 

@@ -4,6 +4,9 @@
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     // Runtime arguments
@@ -43,22 +46,22 @@ void kernel_main() {
         generate_mask_h<uint16_t>(cb_mask, mask_h);
     }
 
-    // Read ublocks from src0 to CB0, then push ublocks to compute kernel
-    uint32_t l1_write_addr_in = 0;
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in_obj(cb_in);
+
     uint32_t curr_tile = tile_offset;
     for (uint32_t i = 0; i < N; i += onetile) {
         uint32_t w_idx = curr_tile % Wt;
         uint32_t nc_idx = curr_tile / Wt;
         uint32_t tile_idx = nc_idx * Ht * Wt + w_idx;
-        cb_reserve_back(cb_in, Ht);
-        l1_write_addr_in = get_write_ptr(cb_in);
+        cb_in_obj.reserve_back(Ht);
         for (uint32_t h = 0; h < Ht; h++) {
-            noc_async_read_tile(tile_idx, src_in, l1_write_addr_in);
-            l1_write_addr_in += src_in_tile_bytes;
+            noc.async_read(
+                src_in, cb_in_obj, src_in_tile_bytes, {.page_id = tile_idx}, {.offset_bytes = h * src_in_tile_bytes});
             tile_idx += Wt;
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_in, Ht);
+        noc.async_read_barrier();
+        cb_in_obj.push_back(Ht);
         curr_tile += 1;
     }
 }

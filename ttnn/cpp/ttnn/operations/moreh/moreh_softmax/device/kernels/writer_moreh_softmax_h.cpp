@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     // Runtime args
@@ -21,21 +24,22 @@ void kernel_main() {
     constexpr auto out_args = TensorAccessorArgs<0>();
     const auto s = TensorAccessor(out_args, dst_addr);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_out_obj(cb_id_out);
+
     uint32_t curr_tile = tile_offset;
     for (uint32_t i = 0; i < N; i++) {
         uint32_t w_idx = curr_tile % Wt;
         uint32_t nc_idx = curr_tile / Wt;
         uint32_t tile_idx = nc_idx * Ht * Wt + w_idx;
 
-        cb_wait_front(cb_id_out, Ht);
-        auto l1_read_addr = get_read_ptr(cb_id_out);
+        cb_out_obj.wait_front(Ht);
         for (uint32_t h = 0; h < Ht; h++) {
-            noc_async_write_tile(tile_idx, s, l1_read_addr);
-            l1_read_addr += tile_bytes;
+            noc.async_write(cb_out_obj, s, tile_bytes, {.offset_bytes = h * tile_bytes}, {.page_id = tile_idx});
             tile_idx += Wt;
         }
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_out, Ht);
+        noc.async_write_barrier();
+        cb_out_obj.pop_front(Ht);
         curr_tile += 1;
     }
 }

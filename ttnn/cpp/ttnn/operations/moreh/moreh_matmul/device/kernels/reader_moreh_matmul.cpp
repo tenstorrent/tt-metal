@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 static constexpr int32_t MAX_NUM_DIMENSIONS = 8;
 
@@ -109,13 +112,22 @@ void kernel_main() {
     uint32_t input_step_count = (transpose_input) ? (input_stride[1]) : (input_stride[0]);
     uint32_t other_step_count = (transpose_other) ? (other_stride[0]) : (other_stride[1]);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in0(cb_id_in0);
+    experimental::CircularBuffer cb_in1(cb_id_in1);
+    const auto in0_tile_bytes = get_tile_size(cb_id_in0);
+    const auto in1_tile_bytes = get_tile_size(cb_id_in1);
+#ifdef FUSE_BIAS
+    experimental::CircularBuffer cb_in4(cb_id_in4);
+    const auto in4_tile_bytes = get_tile_size(cb_id_in4);
+#endif
+
 #ifdef FUSE_BIAS
     if (is_scalar_bias && num_output_tiles > 0) {
-        cb_reserve_back(cb_id_in4, onetile);
-        uint32_t l1_write_addr_in4 = get_write_ptr(cb_id_in4);
-        noc_async_read_tile(0, s_bias, l1_write_addr_in4);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in4, onetile);
+        cb_in4.reserve_back(onetile);
+        noc.async_read(s_bias, cb_in4, in4_tile_bytes, {.page_id = 0}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cb_in4.push_back(onetile);
     }
 #endif
 
@@ -126,19 +138,15 @@ void kernel_main() {
         uint32_t other_tidx = get_tidx(output_idxes, other_stride, other_not_bcast, transpose_other, false);
 
         for (uint32_t kt = 0; kt < Kt; kt++) {
-            // read input, other tile
-            cb_reserve_back(cb_id_in0, onetile);
-            cb_reserve_back(cb_id_in1, onetile);
+            cb_in0.reserve_back(onetile);
+            cb_in1.reserve_back(onetile);
 
-            uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-            noc_async_read_tile(input_tidx, s0, l1_write_addr_in0);
+            noc.async_read(s0, cb_in0, in0_tile_bytes, {.page_id = input_tidx}, {.offset_bytes = 0});
+            noc.async_read(s1, cb_in1, in1_tile_bytes, {.page_id = other_tidx}, {.offset_bytes = 0});
+            noc.async_read_barrier();
 
-            uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-            noc_async_read_tile(other_tidx, s1, l1_write_addr_in1);
-            noc_async_read_barrier();
-
-            cb_push_back(cb_id_in0, onetile);
-            cb_push_back(cb_id_in1, onetile);
+            cb_in0.push_back(onetile);
+            cb_in1.push_back(onetile);
 
             input_tidx += input_step_count;
             other_tidx += other_step_count;
@@ -146,11 +154,10 @@ void kernel_main() {
 #ifdef FUSE_BIAS
         if constexpr (!is_scalar_bias) {
             uint32_t bias_tidx = output_idxes[0];
-            cb_reserve_back(cb_id_in4, onetile);
-            uint32_t l1_write_addr_in4 = get_write_ptr(cb_id_in4);
-            noc_async_read_tile(bias_tidx, s_bias, l1_write_addr_in4);
-            noc_async_read_barrier();
-            cb_push_back(cb_id_in4, onetile);
+            cb_in4.reserve_back(onetile);
+            noc.async_read(s_bias, cb_in4, in4_tile_bytes, {.page_id = bias_tidx}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_in4.push_back(onetile);
         }
 #endif
 

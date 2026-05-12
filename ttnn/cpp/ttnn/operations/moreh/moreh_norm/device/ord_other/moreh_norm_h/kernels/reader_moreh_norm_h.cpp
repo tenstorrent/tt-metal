@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     int i{0};
@@ -34,7 +37,9 @@ void kernel_main() {
         generate_mask_h(cb_id_mask_h, mask_h);
     }
 
-    const auto input_l1_write_ptr = get_write_ptr(cb_id_input);
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_input(cb_id_input);
+    const auto input_tile_bytes = get_tile_size(cb_id_input);
 
     auto start_output_tile_idx = tile_offset;
     for (uint32_t col_idx = 0; col_idx < num_cols_per_core; ++col_idx) {
@@ -43,10 +48,10 @@ void kernel_main() {
 
         auto input_tile_idx = outer_idx * Ht * Wt + inner_idx;
         for (uint32_t row_idx = 0; row_idx < Ht; ++row_idx) {
-            cb_reserve_back(cb_id_input, 1);
-            noc_async_read_tile(input_tile_idx, s, input_l1_write_ptr);
-            noc_async_read_barrier();
-            cb_push_back(cb_id_input, 1);
+            cb_input.reserve_back(1);
+            noc.async_read(s, cb_input, input_tile_bytes, {.page_id = input_tile_idx}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_input.push_back(1);
             input_tile_idx += Wt;
         }
 

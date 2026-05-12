@@ -4,6 +4,9 @@
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 #include <cstdint>
 
@@ -43,37 +46,36 @@ void kernel_main() {
         generate_mask_w<uint16_t>(cb_mask, mask_w);
     }
 
-    // Read ublocks from src0 to CB0, then push ublocks to compute kernel
-    uint32_t l1_write_addr_in = 0;
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in_obj(cb_in);
+    const auto in_tile_bytes = get_tile_size(cb_in);
+
     uint32_t curr_tile = tile_offset;
     for (uint32_t i = 0; i < N; i += onetile) {
         uint32_t curr_offset_i = curr_tile;
         for (uint32_t w = 0; w < Wt; w++) {
-            cb_reserve_back(cb_in, onetile);
-            l1_write_addr_in = get_write_ptr(cb_in);
-            noc_async_read_tile(curr_tile, src_in, l1_write_addr_in);
-            noc_async_read_barrier();
-            cb_push_back(cb_in, onetile);
+            cb_in_obj.reserve_back(onetile);
+            noc.async_read(src_in, cb_in_obj, in_tile_bytes, {.page_id = curr_tile}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_in_obj.push_back(onetile);
             curr_tile++;
         }
 
         curr_tile = curr_offset_i;
         for (uint32_t w = 0; w < Wt; w++) {
-            cb_reserve_back(cb_in, onetile);
-            l1_write_addr_in = get_write_ptr(cb_in);
-            noc_async_read_tile(curr_tile, src_in, l1_write_addr_in);
-            noc_async_read_barrier();
-            cb_push_back(cb_in, onetile);
+            cb_in_obj.reserve_back(onetile);
+            noc.async_read(src_in, cb_in_obj, in_tile_bytes, {.page_id = curr_tile}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_in_obj.push_back(onetile);
             curr_tile++;
         }
 
         curr_tile = curr_offset_i;
         for (uint32_t w = 0; w < Wt; w++) {
-            cb_reserve_back(cb_in, onetile);
-            l1_write_addr_in = get_write_ptr(cb_in);
-            noc_async_read_tile(curr_tile, src_in, l1_write_addr_in);
-            noc_async_read_barrier();
-            cb_push_back(cb_in, onetile);
+            cb_in_obj.reserve_back(onetile);
+            noc.async_read(src_in, cb_in_obj, in_tile_bytes, {.page_id = curr_tile}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_in_obj.push_back(onetile);
             curr_tile++;
         }
     }

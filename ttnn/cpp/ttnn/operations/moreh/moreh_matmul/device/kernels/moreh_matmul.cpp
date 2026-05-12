@@ -6,6 +6,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/transpose_wh.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
+#include "experimental/circular_buffer.h"
 
 ////////////////////
 // global variables
@@ -17,15 +18,21 @@ constexpr uint32_t MASK_TILE_H_IDX = 0;
 constexpr uint32_t MASK_TILE_W_IDX = 1;
 constexpr uint32_t MASK_TILE_HW_IDX = 2;
 constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
+experimental::CircularBuffer cb_in0_obj(cb_in0);
 constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
+experimental::CircularBuffer cb_in1_obj(cb_in1);
 constexpr uint32_t cb_in2 = tt::CBIndex::c_2;
+experimental::CircularBuffer cb_in2_obj(cb_in2);
 constexpr uint32_t cb_in3 = tt::CBIndex::c_3;
+experimental::CircularBuffer cb_in3_obj(cb_in3);
 constexpr uint32_t bias_cb_id = tt::CBIndex::c_4;
 constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
 constexpr uint32_t cb_intermed0 = tt::CBIndex::c_24;
+experimental::CircularBuffer cb_intermed0_obj(cb_intermed0);
 constexpr uint32_t cb_intermed1 = tt::CBIndex::c_25;
 constexpr uint32_t cb_intermed2 = tt::CBIndex::c_26;
 constexpr uint32_t cb_intermed3 = tt::CBIndex::c_27;
+experimental::CircularBuffer cb_intermed3_obj(cb_intermed3);
 
 ////////////////////
 // inline functions
@@ -47,14 +54,14 @@ FORCE_INLINE void transpose_wh_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t i
     tile_regs_acquire();
     transpose_wh_tile(icb, itile, idst);
     tile_regs_commit();
-    cb_reserve_back(ocb, onetile);
+    ocb_obj.reserve_back(onetile);
     tile_regs_wait();
 #if defined FP32_DEST_ACC_EN
     pack_reconfig_data_format(ocb);
 #endif
     pack_tile(idst, ocb);
     tile_regs_release();
-    cb_push_back(ocb, onetile);
+    ocb_obj.push_back(onetile);
 }
 
 FORCE_INLINE void transpose_tile(uint32_t& mm_src, bool transpose, bool need_mask, bool is_input) {
@@ -63,9 +70,9 @@ FORCE_INLINE void transpose_tile(uint32_t& mm_src, bool transpose, bool need_mas
     }
 
     if (need_mask) {
-        cb_wait_front(mm_src, onetile);
+        mm_src_obj.wait_front(onetile);
         transpose_wh_tile_to_cb(mm_src, mm_src);
-        cb_pop_front(mm_src, onetile);
+        mm_src_obj.pop_front(onetile);
     } else {
         uint32_t trans_src = (is_input) ? (cb_in0) : (cb_in1);
         mm_src = (is_input) ? (cb_intermed1) : (cb_intermed2);
@@ -74,14 +81,14 @@ FORCE_INLINE void transpose_tile(uint32_t& mm_src, bool transpose, bool need_mas
 }
 
 FORCE_INLINE void pack_onetile_to_cb(uint32_t ocb = 16, uint32_t idst = 0) {
-    cb_reserve_back(ocb, onetile);
+    ocb_obj.reserve_back(onetile);
     tile_regs_wait();
 #if defined FP32_DEST_ACC_EN
     pack_reconfig_data_format(ocb);
 #endif
     pack_tile(idst, ocb);
     tile_regs_release();
-    cb_push_back(ocb, onetile);
+    ocb_obj.push_back(onetile);
 }
 
 FORCE_INLINE void mask_tile_to_cb(
@@ -149,8 +156,8 @@ FORCE_INLINE void mask_tile_to_cb(
 template <bool is_scalar_bias>
 FORCE_INLINE void bias_add() {
     pack_onetile_to_cb(cb_intermed3);
-    cb_wait_front(cb_intermed3, onetile);
-    cb_wait_front(bias_cb_id, onetile);
+    cb_intermed3_obj.wait_front(onetile);
+    bias_cb_id_obj.wait_front(onetile);
     tile_regs_acquire();
     if (is_scalar_bias) {
 #if defined FP32_DEST_ACC_EN
@@ -167,9 +174,9 @@ FORCE_INLINE void bias_add() {
     }
     tile_regs_commit();
 
-    cb_pop_front(cb_intermed3, onetile);
+    cb_intermed3_obj.pop_front(onetile);
     if constexpr (!is_scalar_bias) {
-        cb_pop_front(bias_cb_id, onetile);
+        bias_cb_id_obj.pop_front(onetile);
     }
 }
 #endif
@@ -195,11 +202,11 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
     }
 
     if (need_input_mask_h || need_input_mask_w) {
-        cb_wait_front(cb_in2, num_mask_tiles);
+        cb_in2_obj.wait_front(num_mask_tiles);
     }
 
     if (need_other_mask_h || need_other_mask_w) {
-        cb_wait_front(cb_in3, num_mask_tiles);
+        cb_in3_obj.wait_front(num_mask_tiles);
     }
 
 #pragma GCC unroll 0
@@ -222,8 +229,8 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
             uint32_t mm_src0 = cb_in0;
             uint32_t mm_src1 = cb_in0;
 
-            cb_wait_front(cb_in0, onetile);
-            cb_wait_front(cb_in1, onetile);
+            cb_in0_obj.wait_front(onetile);
+            cb_in1_obj.wait_front(onetile);
 
             mm_src0 = cb_in0;
             mm_src1 = cb_in1;
@@ -259,21 +266,21 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
             ////////////////////
             tile_regs_acquire();
             if (enable_reload) {
-                cb_wait_front(cb_intermed0, onetile);
+                cb_intermed0_obj.wait_front(onetile);
 #if defined FP32_DEST_ACC_EN
                 reconfig_data_format_srca(cb_intermed0);
 #endif
                 copy_tile_to_dst_init_short(cb_intermed0);
                 copy_tile(cb_intermed0, 0, 0);
-                cb_pop_front(cb_intermed0, onetile);
+                cb_intermed0_obj.pop_front(onetile);
             }
 
             if (transpose_input || need_input_mask) {
-                cb_wait_front(mm_src0, onetile);
+                mm_src0_obj.wait_front(onetile);
             }
 
             if (transpose_other || need_other_mask) {
-                cb_wait_front(mm_src1, onetile);
+                mm_src1_obj.wait_front(onetile);
             }
 
 #if defined FP32_DEST_ACC_EN
@@ -283,14 +290,14 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
             matmul_tiles(mm_src0, mm_src1, 0, 0, 0);
             tile_regs_commit();
 
-            cb_pop_front(cb_in0, onetile);
-            cb_pop_front(cb_in1, onetile);
+            cb_in0_obj.pop_front(onetile);
+            cb_in1_obj.pop_front(onetile);
 
             if (transpose_input || need_input_mask) {
-                cb_pop_front(mm_src0, onetile);
+                mm_src0_obj.pop_front(onetile);
             }
             if (transpose_other || need_other_mask) {
-                cb_pop_front(mm_src1, onetile);
+                mm_src1_obj.pop_front(onetile);
             }
 
             if (last_out) {
@@ -318,11 +325,11 @@ FORCE_INLINE void matmul(uint32_t num_output_tiles, uint32_t Kt) {
     for (uint32_t i = 0; i < num_output_tiles; ++i) {
         tile_regs_acquire();
         for (uint32_t kt = 0; kt < Kt; kt++) {
-            cb_wait_front(cb_in0, onetile);
-            cb_wait_front(cb_in1, onetile);
+            cb_in0_obj.wait_front(onetile);
+            cb_in1_obj.wait_front(onetile);
             matmul_tiles(cb_in0, cb_in1, 0, 0, 0);
-            cb_pop_front(cb_in0, onetile);
-            cb_pop_front(cb_in1, onetile);
+            cb_in0_obj.pop_front(onetile);
+            cb_in1_obj.pop_front(onetile);
         }
         tile_regs_commit();
         pack_onetile_to_cb(cb_out0);
@@ -330,6 +337,11 @@ FORCE_INLINE void matmul(uint32_t num_output_tiles, uint32_t Kt) {
 }
 
 void kernel_main() {
+    experimental::CircularBuffer bias_cb_id_obj(bias_cb_id);
+    experimental::CircularBuffer mm_src_obj(mm_src);
+    experimental::CircularBuffer mm_src0_obj(mm_src0);
+    experimental::CircularBuffer mm_src1_obj(mm_src1);
+    experimental::CircularBuffer ocb_obj(ocb);
     // compile-time args
     constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t Mt = get_compile_time_arg_val(1);

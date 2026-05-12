@@ -6,17 +6,27 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
+    experimental::CircularBuffer cb_in0_obj(cb_in0);
     constexpr auto cb_mask = tt::CBIndex::c_1;
+    experimental::CircularBuffer cb_mask_obj(cb_mask);
     constexpr auto cb_max_scaler = tt::CBIndex::c_2;
+    experimental::CircularBuffer cb_max_scaler_obj(cb_max_scaler);
     constexpr auto cb_sum_scaler = tt::CBIndex::c_3;
+    experimental::CircularBuffer cb_sum_scaler_obj(cb_sum_scaler);
     constexpr auto cb_out0 = tt::CBIndex::c_16;
+    experimental::CircularBuffer cb_out0_obj(cb_out0);
     constexpr auto cb_exps = tt::CBIndex::c_24;
+    experimental::CircularBuffer cb_exps_obj(cb_exps);
     constexpr auto cb_recipsumexps = tt::CBIndex::c_25;
+    experimental::CircularBuffer cb_recipsumexps_obj(cb_recipsumexps);
     constexpr auto cb_max = tt::CBIndex::c_26;
+    experimental::CircularBuffer cb_max_obj(cb_max);
     constexpr auto cb_x_m_max = tt::CBIndex::c_27;
+    experimental::CircularBuffer cb_x_m_max_obj(cb_x_m_max);
     constexpr auto cb_tmp = tt::CBIndex::c_28;
 
     constexpr int dst0 = 0;
@@ -28,9 +38,9 @@ void kernel_main() {
     uint32_t N = get_compile_time_arg_val(0);
     uint32_t Ht = get_compile_time_arg_val(1);
 
-    cb_wait_front(cb_mask, onetile);
-    cb_wait_front(cb_max_scaler, onetile);
-    cb_wait_front(cb_sum_scaler, onetile);
+    cb_mask_obj.wait_front(onetile);
+    cb_max_scaler_obj.wait_front(onetile);
+    cb_sum_scaler_obj.wait_front(onetile);
 
     for (uint32_t n = 0; n < N; ++n) {
         // find max value
@@ -55,9 +65,9 @@ void kernel_main() {
         }
 
         // compute x - max(x)
-        cb_reserve_back(cb_x_m_max, Ht);
-        cb_wait_front(cb_in0, Ht);
-        cb_wait_front(cb_max, 1);
+        cb_x_m_max_obj.reserve_back(Ht);
+        cb_in0_obj.wait_front(Ht);
+        cb_max_obj.wait_front(1);
 
         for (uint32_t h = 0; h < Ht; ++h) {
             tile_regs_acquire();
@@ -69,13 +79,13 @@ void kernel_main() {
             pack_tile_with_dt(dst0, cb_x_m_max);
             tile_regs_release();
         }
-        cb_pop_front(cb_max, 1);
-        cb_pop_front(cb_in0, Ht);
-        cb_push_back(cb_x_m_max, Ht);
+        cb_max_obj.pop_front(1);
+        cb_in0_obj.pop_front(Ht);
+        cb_x_m_max_obj.push_back(Ht);
 
         // compute exp(x - max(x))
-        cb_reserve_back(cb_exps, Ht);
-        cb_wait_front(cb_x_m_max, Ht);
+        cb_exps_obj.reserve_back(Ht);
+        cb_x_m_max_obj.wait_front(Ht);
         for (uint32_t h = 0; h < Ht; ++h) {
             tile_regs_acquire();
             copy_tile_init_with_dt(cb_x_m_max);
@@ -102,7 +112,7 @@ void kernel_main() {
             pack_tile_with_dt(dst0, cb_exps);
             tile_regs_release();
         }
-        cb_push_back(cb_exps, Ht);
+        cb_exps_obj.push_back(Ht);
 
 #ifdef LOG
         // log(sum) - pop tiles after reduce
@@ -135,11 +145,11 @@ void kernel_main() {
 #endif
 
         // compute final result
-        cb_reserve_back(cb_out0, Ht);
-        cb_wait_front(cb_x_m_max, Ht);
-        cb_wait_front(cb_recipsumexps, 1);
+        cb_out0_obj.reserve_back(Ht);
+        cb_x_m_max_obj.wait_front(Ht);
+        cb_recipsumexps_obj.wait_front(1);
 #ifndef LOG
-        cb_wait_front(cb_exps, Ht);
+        cb_exps_obj.wait_front(Ht);
 #endif
 
         for (uint32_t h = 0; h < Ht; h += onetile) {
@@ -166,11 +176,11 @@ void kernel_main() {
 #endif
         }
 
-        cb_pop_front(cb_recipsumexps, 1);
-        cb_pop_front(cb_x_m_max, Ht);
-        cb_push_back(cb_out0, Ht);
+        cb_recipsumexps_obj.pop_front(1);
+        cb_x_m_max_obj.pop_front(Ht);
+        cb_out0_obj.push_back(Ht);
 #ifndef LOG
-        cb_pop_front(cb_exps, Ht);
+        cb_exps_obj.pop_front(Ht);
 #endif
     }
 }

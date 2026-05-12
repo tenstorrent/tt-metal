@@ -4,6 +4,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t num_cols_per_core = get_compile_time_arg_val(0);
@@ -16,26 +17,41 @@ void kernel_main() {
     constexpr bool is_lastdim_layernorm = get_compile_time_arg_val(7) == 1;
     constexpr bool is_groupnorm = get_compile_time_arg_val(8) == 1;
 
-    constexpr auto cb_dy = tt::CBIndex::c_0;      // output_grad(==dy)
-    constexpr auto cb_x = tt::CBIndex::c_1;       // input(==x)
-    constexpr auto cb_mean = tt::CBIndex::c_2;    // mean
-    constexpr auto cb_rstd = tt::CBIndex::c_3;    // rstd
-    constexpr auto cb_scaler = tt::CBIndex::c_4;  // scaler
-    constexpr auto cb_mask_h = tt::CBIndex::c_5;  // mask_h
-    constexpr auto cb_mask_w = tt::CBIndex::c_6;  // mask_w
+    constexpr auto cb_dy = tt::CBIndex::c_0;
+    experimental::CircularBuffer cb_dy_obj(cb_dy);  // output_grad(==dy)
+    constexpr auto cb_x = tt::CBIndex::c_1;
+    experimental::CircularBuffer cb_x_obj(cb_x);  // input(==x)
+    constexpr auto cb_mean = tt::CBIndex::c_2;
+    experimental::CircularBuffer cb_mean_obj(cb_mean);  // mean
+    constexpr auto cb_rstd = tt::CBIndex::c_3;
+    experimental::CircularBuffer cb_rstd_obj(cb_rstd);  // rstd
+    constexpr auto cb_scaler = tt::CBIndex::c_4;
+    experimental::CircularBuffer cb_scaler_obj(cb_scaler);  // scaler
+    constexpr auto cb_mask_h = tt::CBIndex::c_5;
+    experimental::CircularBuffer cb_mask_h_obj(cb_mask_h);  // mask_h
+    constexpr auto cb_mask_w = tt::CBIndex::c_6;
+    experimental::CircularBuffer cb_mask_w_obj(cb_mask_w);  // mask_w
 
     // Sum[y * dy]
-    constexpr auto cb_dgamma = tt::CBIndex::c_16;  // gamma_grad(==dgamma)
+    constexpr auto cb_dgamma = tt::CBIndex::c_16;
+    experimental::CircularBuffer cb_dgamma_obj(cb_dgamma);  // gamma_grad(==dgamma)
     // Sum[dy]
-    constexpr auto cb_dbeta = tt::CBIndex::c_17;  // beta_grad(==dbeta)
+    constexpr auto cb_dbeta = tt::CBIndex::c_17;
+    experimental::CircularBuffer cb_dbeta_obj(cb_dbeta);  // beta_grad(==dbeta)
 
     // y = (x - mean) * rstd
-    constexpr auto cb_y = tt::CBIndex::c_24;       // output(==y)
-    constexpr auto cb_ydy = tt::CBIndex::c_25;     // y * dy
-    constexpr auto cb_dyadd = tt::CBIndex::c_26;   // Add[dy]
-    constexpr auto cb_ydyadd = tt::CBIndex::c_27;  // Add[y * dy]
-    constexpr auto cb_xmm = tt::CBIndex::c_28;     // x - mean
-    constexpr auto cb_dycopy = tt::CBIndex::c_29;  // dycopy
+    constexpr auto cb_y = tt::CBIndex::c_24;
+    experimental::CircularBuffer cb_y_obj(cb_y);  // output(==y)
+    constexpr auto cb_ydy = tt::CBIndex::c_25;
+    experimental::CircularBuffer cb_ydy_obj(cb_ydy);  // y * dy
+    constexpr auto cb_dyadd = tt::CBIndex::c_26;
+    experimental::CircularBuffer cb_dyadd_obj(cb_dyadd);  // Add[dy]
+    constexpr auto cb_ydyadd = tt::CBIndex::c_27;
+    experimental::CircularBuffer cb_ydyadd_obj(cb_ydyadd);  // Add[y * dy]
+    constexpr auto cb_xmm = tt::CBIndex::c_28;
+    experimental::CircularBuffer cb_xmm_obj(cb_xmm);  // x - mean
+    constexpr auto cb_dycopy = tt::CBIndex::c_29;
+    experimental::CircularBuffer cb_dycopy_obj(cb_dycopy);  // dycopy
 
     constexpr uint32_t onetile = 1;
 
@@ -57,13 +73,13 @@ void kernel_main() {
     constexpr auto cb_out_init = gamma_grad_has_value ? cb_dgamma : cb_dbeta;
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_0, cb_out_init);
 
-    cb_wait_front(cb_scaler, onetile);  // comes from the reader
+    cb_scaler_obj.wait_front(onetile);  // comes from the reader
 
     if (do_mask_h) {
-        cb_wait_front(cb_mask_h, onetile);
+        cb_mask_h_obj.wait_front(onetile);
     }
     if (do_mask_w) {
-        cb_wait_front(cb_mask_w, onetile);
+        cb_mask_w_obj.wait_front(onetile);
     }
 
     uint32_t h_idx;
@@ -81,8 +97,8 @@ void kernel_main() {
             // Compute cb_dycopy
             // deepcopy and mask(optional)
             tile_regs_acquire();
-            cb_wait_front(cb_dy, onetile);  // comes from the reader
-            cb_reserve_back(cb_dycopy, onetile);
+            cb_dy_obj.wait_front(onetile);  // comes from the reader
+            cb_dycopy_obj.reserve_back(onetile);
 
             copy_tile_init_with_dt(cb_dy);
             copy_tile(cb_dy, 0, dst0);
@@ -107,16 +123,16 @@ void kernel_main() {
             tile_regs_wait();
             pack_tile_with_dt(dst0, cb_dycopy);
 
-            cb_pop_front(cb_dy, onetile);
-            cb_push_back(cb_dycopy, onetile);
+            cb_dy_obj.pop_front(onetile);
+            cb_dycopy_obj.push_back(onetile);
             tile_regs_release();
 
             // Compute cb_dyadd
-            cb_wait_front(cb_dycopy, onetile);
+            cb_dycopy_obj.wait_front(onetile);
             if (beta_grad_has_value) {
                 if (inner_idx == 0) {
                     tile_regs_acquire();
-                    cb_reserve_back(cb_dyadd, onetile);
+                    cb_dyadd_obj.reserve_back(onetile);
 
                     copy_tile_init_with_dt(cb_dycopy);
                     copy_tile(cb_dycopy, 0, dst0);
@@ -125,12 +141,12 @@ void kernel_main() {
                     tile_regs_wait();
                     pack_tile_with_dt(dst0, cb_dyadd);
 
-                    cb_push_back(cb_dyadd, onetile);
+                    cb_dyadd_obj.push_back(onetile);
                     tile_regs_release();
                 } else {
                     tile_regs_acquire();
-                    cb_wait_front(cb_dyadd, onetile);
-                    cb_reserve_back(cb_dyadd, onetile);
+                    cb_dyadd_obj.wait_front(onetile);
+                    cb_dyadd_obj.reserve_back(onetile);
 
                     add_tiles_init_with_dt(cb_dyadd, cb_dycopy);
                     add_tiles(cb_dyadd, cb_dycopy, 0, 0, dst0);
@@ -139,8 +155,8 @@ void kernel_main() {
                     tile_regs_wait();
                     pack_tile_with_dt(dst0, cb_dyadd);
 
-                    cb_pop_front(cb_dyadd, onetile);
-                    cb_push_back(cb_dyadd, onetile);
+                    cb_dyadd_obj.pop_front(onetile);
+                    cb_dyadd_obj.push_back(onetile);
                     tile_regs_release();
                 }
             }  // beta_grad_has_value
@@ -150,9 +166,9 @@ void kernel_main() {
                 // Compute cb_xmm
                 // x - mean and mask(optional)
                 tile_regs_acquire();
-                cb_wait_front(cb_x, onetile);     // comes from the reader
-                cb_wait_front(cb_mean, onetile);  // comes from the reader
-                cb_reserve_back(cb_xmm, onetile);
+                cb_x_obj.wait_front(onetile);     // comes from the reader
+                cb_mean_obj.wait_front(onetile);  // comes from the reader
+                cb_xmm_obj.reserve_back(onetile);
 
                 if (is_lastdim_layernorm) {
                     sub_bcast_cols_init_short_with_dt(cb_x, cb_mean);
@@ -182,17 +198,17 @@ void kernel_main() {
                 tile_regs_wait();
                 pack_tile_with_dt(dst0, cb_xmm);
 
-                cb_pop_front(cb_x, onetile);
-                cb_pop_front(cb_mean, onetile);
-                cb_push_back(cb_xmm, onetile);
+                cb_x_obj.pop_front(onetile);
+                cb_mean_obj.pop_front(onetile);
+                cb_xmm_obj.push_back(onetile);
                 tile_regs_release();
 
                 // Compute cb_y
                 // (x - mean) * rstd
                 tile_regs_acquire();
-                cb_wait_front(cb_xmm, onetile);
-                cb_wait_front(cb_rstd, onetile);  // comes from the reader
-                cb_reserve_back(cb_y, onetile);
+                cb_xmm_obj.wait_front(onetile);
+                cb_rstd_obj.wait_front(onetile);  // comes from the reader
+                cb_y_obj.reserve_back(onetile);
 
                 if (is_lastdim_layernorm) {
                     mul_bcast_cols_init_short_with_dt(cb_xmm, cb_rstd);
@@ -206,15 +222,15 @@ void kernel_main() {
                 tile_regs_wait();
                 pack_tile_with_dt(dst0, cb_y);
 
-                cb_pop_front(cb_xmm, onetile);
-                cb_pop_front(cb_rstd, onetile);
-                cb_push_back(cb_y, onetile);
+                cb_xmm_obj.pop_front(onetile);
+                cb_rstd_obj.pop_front(onetile);
+                cb_y_obj.push_back(onetile);
                 tile_regs_release();
 
                 // Compute cb_ydy
                 tile_regs_acquire();
-                cb_wait_front(cb_y, onetile);
-                cb_reserve_back(cb_ydy, onetile);
+                cb_y_obj.wait_front(onetile);
+                cb_ydy_obj.reserve_back(onetile);
 
                 mul_tiles_init_with_dt(cb_y, cb_dycopy);
                 mul_tiles(cb_y, cb_dycopy, 0, 0, dst0);
@@ -223,15 +239,15 @@ void kernel_main() {
                 tile_regs_wait();
                 pack_tile_with_dt(dst0, cb_ydy);
 
-                cb_pop_front(cb_y, onetile);
-                cb_push_back(cb_ydy, onetile);
+                cb_y_obj.pop_front(onetile);
+                cb_ydy_obj.push_back(onetile);
                 tile_regs_release();
 
                 // Compute cb_ydyadd
                 if (inner_idx == 0) {
                     tile_regs_acquire();
-                    cb_wait_front(cb_ydy, onetile);
-                    cb_reserve_back(cb_ydyadd, onetile);
+                    cb_ydy_obj.wait_front(onetile);
+                    cb_ydyadd_obj.reserve_back(onetile);
 
                     copy_tile_init_with_dt(cb_ydy);
                     copy_tile(cb_ydy, 0, dst0);
@@ -240,14 +256,14 @@ void kernel_main() {
                     tile_regs_wait();
                     pack_tile_with_dt(dst0, cb_ydyadd);
 
-                    cb_pop_front(cb_ydy, onetile);
-                    cb_push_back(cb_ydyadd, onetile);
+                    cb_ydy_obj.pop_front(onetile);
+                    cb_ydyadd_obj.push_back(onetile);
                     tile_regs_release();
                 } else {
                     tile_regs_acquire();
-                    cb_wait_front(cb_ydy, onetile);
-                    cb_wait_front(cb_ydyadd, onetile);
-                    cb_reserve_back(cb_ydyadd, onetile);
+                    cb_ydy_obj.wait_front(onetile);
+                    cb_ydyadd_obj.wait_front(onetile);
+                    cb_ydyadd_obj.reserve_back(onetile);
 
                     add_tiles_init_with_dt(cb_ydyadd, cb_ydy);
                     add_tiles(cb_ydyadd, cb_ydy, 0, 0, dst0);
@@ -256,14 +272,14 @@ void kernel_main() {
                     tile_regs_wait();
                     pack_tile_with_dt(dst0, cb_ydyadd);
 
-                    cb_pop_front(cb_ydy, onetile);
-                    cb_pop_front(cb_ydyadd, onetile);
-                    cb_push_back(cb_ydyadd, onetile);
+                    cb_ydy_obj.pop_front(onetile);
+                    cb_ydyadd_obj.pop_front(onetile);
+                    cb_ydyadd_obj.push_back(onetile);
                     tile_regs_release();
                 }
             }  // gamma_grad_has_value
 
-            cb_pop_front(cb_dycopy, onetile);
+            cb_dycopy_obj.pop_front(onetile);
         }  // inner_idx loop
 
         if (gamma_grad_has_value) {
@@ -275,8 +291,8 @@ void kernel_main() {
             } else {
                 // Just copy
                 tile_regs_acquire();
-                cb_wait_front(cb_ydyadd, onetile);
-                cb_reserve_back(cb_dgamma, onetile);
+                cb_ydyadd_obj.wait_front(onetile);
+                cb_dgamma_obj.reserve_back(onetile);
 
                 copy_tile_init_with_dt(cb_ydyadd);
                 copy_tile(cb_ydyadd, 0, dst0);
@@ -285,8 +301,8 @@ void kernel_main() {
                 tile_regs_wait();
                 pack_tile_with_dt(dst0, cb_dgamma);
 
-                cb_pop_front(cb_ydyadd, onetile);
-                cb_push_back(cb_dgamma, onetile);
+                cb_ydyadd_obj.pop_front(onetile);
+                cb_dgamma_obj.push_back(onetile);
                 tile_regs_release();
             }
         }  // gamma_grad_has_value
@@ -300,8 +316,8 @@ void kernel_main() {
             } else {
                 // Just copy
                 tile_regs_acquire();
-                cb_wait_front(cb_dyadd, onetile);
-                cb_reserve_back(cb_dbeta, onetile);
+                cb_dyadd_obj.wait_front(onetile);
+                cb_dbeta_obj.reserve_back(onetile);
 
                 copy_tile_init_with_dt(cb_dyadd);
                 copy_tile(cb_dyadd, 0, dst0);
@@ -310,19 +326,19 @@ void kernel_main() {
                 tile_regs_wait();
                 pack_tile_with_dt(dst0, cb_dbeta);
 
-                cb_pop_front(cb_dyadd, onetile);
-                cb_push_back(cb_dbeta, onetile);
+                cb_dyadd_obj.pop_front(onetile);
+                cb_dbeta_obj.push_back(onetile);
                 tile_regs_release();
             }
         }  // beta_grad_has_value
 
     }  // outer_idx loop
-    cb_pop_front(cb_scaler, onetile);
+    cb_scaler_obj.pop_front(onetile);
 
     if (do_mask_h) {
-        cb_pop_front(cb_mask_h, onetile);
+        cb_mask_h_obj.pop_front(onetile);
     }
     if (do_mask_w) {
-        cb_pop_front(cb_mask_w, onetile);
+        cb_mask_w_obj.pop_front(onetile);
     }
 }

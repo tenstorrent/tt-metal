@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 static constexpr int32_t MAX_NUM_DIMENSIONS = 8;
 
 inline uint32_t get_output_grad_tile(
@@ -77,17 +80,19 @@ void kernel_main() {
     scaler.f = 0.0f;
     fill_cb_with_value(cb_id_in1, scaler.u);
 
-    uint32_t l1_write_addr_in0;
     const auto output_grad_addrg = TensorAccessor(output_grad_args, output_grad_addr);
+
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in0_obj(cb_id_in0);
+    const auto in0_tile_bytes = get_tile_size(cb_id_in0);
 
     for (uint32_t i = start_id; i < start_id + num_output_tiles; i++) {
         auto read_tile_id = get_output_grad_tile(
             i, input_grad_rank, output_grad_dim, output_grad_stride, input_grad_dim, input_grad_stride, need_bcast_dim);
 
-        cb_reserve_back(cb_id_in0, onetile);
-        l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-        noc_async_read_tile(read_tile_id, output_grad_addrg, l1_write_addr_in0);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in0, onetile);
+        cb_in0_obj.reserve_back(onetile);
+        noc.async_read(output_grad_addrg, cb_in0_obj, in0_tile_bytes, {.page_id = read_tile_id}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cb_in0_obj.push_back(onetile);
     }
 }

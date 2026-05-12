@@ -4,6 +4,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
+#include "experimental/circular_buffer.h"
 
 ALWI bool need_to_do_mask_h(uint32_t w_idx, uint32_t origin_num_h_tiles, uint32_t origin_num_w_tiles) {
     return ((w_idx / origin_num_w_tiles) + 1) % origin_num_h_tiles == 0;
@@ -20,33 +21,48 @@ void kernel_main() {
 
     binary_op_init_common(tt::CBIndex::c_1, tt::CBIndex::c_2, tt::CBIndex::c_16);
 
-    constexpr auto cb_dy = tt::CBIndex::c_0;         // output_grad(==dy)
-    constexpr auto cb_x = tt::CBIndex::c_1;          // input(==x)
-    constexpr auto cb_mean = tt::CBIndex::c_2;       // mean
-    constexpr auto cb_rstd = tt::CBIndex::c_3;       // rstd
-    constexpr auto cb_scaler = tt::CBIndex::c_4;     // scaler
-    constexpr auto cb_n_recip_n = tt::CBIndex::c_5;  // n_recip_n
-    constexpr auto cb_gamma = tt::CBIndex::c_6;      // gamma
-    constexpr auto cb_mask_h_w = tt::CBIndex::c_7;   // mask_h_w
+    constexpr auto cb_dy = tt::CBIndex::c_0;
+    experimental::CircularBuffer cb_dy_obj(cb_dy);  // output_grad(==dy)
+    constexpr auto cb_x = tt::CBIndex::c_1;
+    experimental::CircularBuffer cb_x_obj(cb_x);  // input(==x)
+    constexpr auto cb_mean = tt::CBIndex::c_2;
+    experimental::CircularBuffer cb_mean_obj(cb_mean);  // mean
+    constexpr auto cb_rstd = tt::CBIndex::c_3;
+    experimental::CircularBuffer cb_rstd_obj(cb_rstd);  // rstd
+    constexpr auto cb_scaler = tt::CBIndex::c_4;
+    experimental::CircularBuffer cb_scaler_obj(cb_scaler);  // scaler
+    constexpr auto cb_n_recip_n = tt::CBIndex::c_5;
+    experimental::CircularBuffer cb_n_recip_n_obj(cb_n_recip_n);  // n_recip_n
+    constexpr auto cb_gamma = tt::CBIndex::c_6;
+    experimental::CircularBuffer cb_gamma_obj(cb_gamma);  // gamma
+    constexpr auto cb_mask_h_w = tt::CBIndex::c_7;
+    experimental::CircularBuffer cb_mask_h_w_obj(cb_mask_h_w);  // mask_h_w
 
     // dx = ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * (rstd / n)
-    constexpr auto cb_dx = tt::CBIndex::c_16;  // input_grad(==dx)
+    constexpr auto cb_dx = tt::CBIndex::c_16;
+    experimental::CircularBuffer cb_dx_obj(cb_dx);  // input_grad(==dx)
 
     // y = (x - mean) * rstd
-    constexpr auto cb_dycopy = tt::CBIndex::c_24;       // copy output_grad(==dycopy)
-    constexpr auto cb_y = tt::CBIndex::c_25;            // output(==y)
-    constexpr auto cb_dysum = tt::CBIndex::c_26;        // Sum[dy]
-    constexpr auto cb_ydysum = tt::CBIndex::c_27;       // Sum[y * dy]
-    constexpr auto cb_recip_nrstd = tt::CBIndex::c_28;  // rstd / n
+    constexpr auto cb_dycopy = tt::CBIndex::c_24;
+    experimental::CircularBuffer cb_dycopy_obj(cb_dycopy);  // copy output_grad(==dycopy)
+    constexpr auto cb_y = tt::CBIndex::c_25;
+    experimental::CircularBuffer cb_y_obj(cb_y);  // output(==y)
+    constexpr auto cb_dysum = tt::CBIndex::c_26;
+    experimental::CircularBuffer cb_dysum_obj(cb_dysum);  // Sum[dy]
+    constexpr auto cb_ydysum = tt::CBIndex::c_27;
+    experimental::CircularBuffer cb_ydysum_obj(cb_ydysum);  // Sum[y * dy]
+    constexpr auto cb_recip_nrstd = tt::CBIndex::c_28;
+    experimental::CircularBuffer cb_recip_nrstd_obj(cb_recip_nrstd);  // rstd / n
 
-    constexpr auto cb_tmp1 = tt::CBIndex::c_29;  // tmp1
+    constexpr auto cb_tmp1 = tt::CBIndex::c_29;
+    experimental::CircularBuffer cb_tmp1_obj(cb_tmp1);  // tmp1
     constexpr auto cb_tmp2 = tt::CBIndex::c_30;  // tmp2
     constexpr auto cb_tmp3 = tt::CBIndex::c_31;  // tmp3
 
     constexpr uint32_t onetile = 1;
 
-    cb_wait_front(cb_scaler, onetile);  // comes from the reader
-    cb_wait_front(cb_n_recip_n, 2);     // comes from the reader
+    cb_scaler_obj.wait_front(onetile);  // comes from the reader
+    cb_n_recip_n_obj.wait_front(2);     // comes from the reader
 
     constexpr uint32_t TILE_H = 32;
     constexpr uint32_t TILE_W = 32;
@@ -58,7 +74,7 @@ void kernel_main() {
     constexpr uint32_t origin_Wt = (origin_W + TILE_W - 1) / TILE_W;
 
     if (do_mask_h || do_mask_w) {
-        cb_wait_front(cb_mask_h_w, 2);  // comes from the reader
+        cb_mask_h_w_obj.wait_front(2);  // comes from the reader
     }
 
     constexpr uint32_t NCHt = num_rows_per_core;
@@ -66,13 +82,13 @@ void kernel_main() {
     constexpr uint32_t dst1 = 1;
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        cb_wait_front(cb_mean, onetile);  // comes from the reader
-        cb_wait_front(cb_rstd, onetile);  // comes from the reader
+        cb_mean_obj.wait_front(onetile);  // comes from the reader
+        cb_rstd_obj.wait_front(onetile);  // comes from the reader
 
         // Compute cb_recip_nrstd
         // rstd / n
         tile_regs_acquire();
-        cb_reserve_back(cb_recip_nrstd, onetile);
+        cb_recip_nrstd_obj.reserve_back(onetile);
 
         if (is_lastdim_layernorm) {
             mul_bcast_cols_init_short_with_dt(cb_n_recip_n, cb_rstd);
@@ -86,18 +102,19 @@ void kernel_main() {
         tile_regs_wait();
         pack_tile_with_dt(dst0, cb_recip_nrstd);
 
-        cb_push_back(cb_recip_nrstd, onetile);
+        cb_recip_nrstd_obj.push_back(onetile);
         tile_regs_release();
 
         // y = (x - mean) * rstd
-        cb_reserve_back(cb_y, Wt);
+        cb_y_obj.reserve_back(Wt);
         for (uint32_t wt = 0; wt < Wt; wt++) {
             // Compute cb_xmm
             // x - mean and mask(optional)
             constexpr auto cb_xmm = cb_tmp2;
+            experimental::CircularBuffer cb_xmm_obj(cb_xmm);
             tile_regs_acquire();
-            cb_wait_front(cb_x, onetile);  // comes from the reader
-            cb_reserve_back(cb_xmm, onetile);
+            cb_x_obj.wait_front(onetile);  // comes from the reader
+            cb_xmm_obj.reserve_back(onetile);
 
             if (is_lastdim_layernorm) {
                 sub_bcast_cols_init_short_with_dt(cb_x, cb_mean);
@@ -127,14 +144,14 @@ void kernel_main() {
             tile_regs_wait();
             pack_tile_with_dt(dst0, cb_xmm);
 
-            cb_pop_front(cb_x, onetile);
-            cb_push_back(cb_xmm, onetile);
+            cb_x_obj.pop_front(onetile);
+            cb_xmm_obj.push_back(onetile);
             tile_regs_release();
 
             // Compute cb_y
             // (x - mean) * rstd
             tile_regs_acquire();
-            cb_wait_front(cb_xmm, onetile);
+            cb_xmm_obj.wait_front(onetile);
 
             if (is_lastdim_layernorm) {
                 mul_bcast_cols_init_short_with_dt(cb_xmm, cb_rstd);
@@ -148,20 +165,20 @@ void kernel_main() {
             tile_regs_wait();
             pack_tile_with_dt(dst0, cb_y);
 
-            cb_pop_front(cb_xmm, onetile);
-            cb_push_back(cb_y, onetile);
+            cb_xmm_obj.pop_front(onetile);
+            cb_y_obj.push_back(onetile);
             tile_regs_release();
         }  // Wt loop
 
         // Copy cb_dy to cb_dycopy
-        cb_reserve_back(cb_dycopy, Wt);
+        cb_dycopy_obj.reserve_back(Wt);
         for (uint32_t wt = 0; wt < Wt; wt++) {
             if (gamma_has_value) {
                 // Compute cb_dycopy
                 // dycopy = dy * gamma and mask(optional)
                 tile_regs_acquire();
-                cb_wait_front(cb_dy, onetile);     // comes from the reader
-                cb_wait_front(cb_gamma, onetile);  // comes from the reader
+                cb_dy_obj.wait_front(onetile);     // comes from the reader
+                cb_gamma_obj.wait_front(onetile);  // comes from the reader
 
                 if (is_groupnorm) {
                     mul_tiles_bcast_scalar_init_short_with_dt(cb_dy, cb_gamma);
@@ -196,15 +213,15 @@ void kernel_main() {
                 tile_regs_wait();
                 pack_tile_with_dt(dst0, cb_dycopy);
 
-                cb_pop_front(cb_dy, onetile);
-                cb_pop_front(cb_gamma, onetile);
-                cb_push_back(cb_dycopy, onetile);
+                cb_dy_obj.pop_front(onetile);
+                cb_gamma_obj.pop_front(onetile);
+                cb_dycopy_obj.push_back(onetile);
                 tile_regs_release();
             } else {
                 // Compute cb_dycopy
                 // dycopy = dy and mask(optional)
                 tile_regs_acquire();
-                cb_wait_front(cb_dy, onetile);  // comes from the reader
+                cb_dy_obj.wait_front(onetile);  // comes from the reader
 
                 copy_tile_init_with_dt(cb_dy);
                 copy_tile(cb_dy, 0, dst0);
@@ -229,19 +246,20 @@ void kernel_main() {
                 tile_regs_wait();
                 pack_tile_with_dt(dst0, cb_dycopy);
 
-                cb_pop_front(cb_dy, onetile);
-                cb_push_back(cb_dycopy, onetile);
+                cb_dy_obj.pop_front(onetile);
+                cb_dycopy_obj.push_back(onetile);
                 tile_regs_release();
             }
         }  // Wt loop
 
         // Compute cb_dyadd
         constexpr auto cb_dyadd = cb_tmp1;
-        cb_wait_front(cb_dycopy, Wt);
+        experimental::CircularBuffer cb_dyadd_obj(cb_dyadd);
+        cb_dycopy_obj.wait_front(Wt);
         for (uint32_t wt = 0; wt < Wt; wt++) {
             if (wt == 0) {
                 tile_regs_acquire();
-                cb_reserve_back(cb_dyadd, onetile);
+                cb_dyadd_obj.reserve_back(onetile);
 
                 copy_tile_init_with_dt(cb_dycopy);
                 copy_tile(cb_dycopy, 0, dst0);
@@ -250,12 +268,12 @@ void kernel_main() {
                 tile_regs_wait();
                 pack_tile_with_dt(dst0, cb_dyadd);
 
-                cb_push_back(cb_dyadd, onetile);
+                cb_dyadd_obj.push_back(onetile);
                 tile_regs_release();
             } else {
                 tile_regs_acquire();
-                cb_wait_front(cb_dyadd, onetile);
-                cb_reserve_back(cb_dyadd, onetile);
+                cb_dyadd_obj.wait_front(onetile);
+                cb_dyadd_obj.reserve_back(onetile);
 
                 add_tiles_init_with_dt(cb_dyadd, cb_dycopy);
                 add_tiles(cb_dyadd, cb_dycopy, 0, wt, dst0);
@@ -264,8 +282,8 @@ void kernel_main() {
                 tile_regs_wait();
                 pack_tile_with_dt(dst0, cb_dyadd);
 
-                cb_pop_front(cb_dyadd, onetile);
-                cb_push_back(cb_dyadd, onetile);
+                cb_dyadd_obj.pop_front(onetile);
+                cb_dyadd_obj.push_back(onetile);
                 tile_regs_release();
             }
         }  // Wt loop
@@ -278,12 +296,14 @@ void kernel_main() {
 
         // Compute cb_ydy and cb_ydyadd
         constexpr auto cb_ydy = cb_tmp2;
+        experimental::CircularBuffer cb_ydy_obj(cb_ydy);
         constexpr auto cb_ydyadd = cb_tmp3;
-        cb_wait_front(cb_y, Wt);
+        experimental::CircularBuffer cb_ydyadd_obj(cb_ydyadd);
+        cb_y_obj.wait_front(Wt);
         for (uint32_t wt = 0; wt < Wt; wt++) {
             // Compute cb_ydy
             tile_regs_acquire();
-            cb_reserve_back(cb_ydy, onetile);
+            cb_ydy_obj.reserve_back(onetile);
 
             mul_tiles_init_with_dt(cb_y, cb_dycopy);
             mul_tiles(cb_y, cb_dycopy, wt, wt, dst0);
@@ -292,14 +312,14 @@ void kernel_main() {
             tile_regs_wait();
             pack_tile_with_dt(dst0, cb_ydy);
 
-            cb_push_back(cb_ydy, onetile);
+            cb_ydy_obj.push_back(onetile);
             tile_regs_release();
 
             // Compute cb_ydyadd
             if (wt == 0) {
                 tile_regs_acquire();
-                cb_wait_front(cb_ydy, onetile);
-                cb_reserve_back(cb_ydyadd, onetile);
+                cb_ydy_obj.wait_front(onetile);
+                cb_ydyadd_obj.reserve_back(onetile);
 
                 copy_tile_init_with_dt(cb_ydy);
                 copy_tile(cb_ydy, 0, dst0);
@@ -308,14 +328,14 @@ void kernel_main() {
                 tile_regs_wait();
                 pack_tile_with_dt(dst0, cb_ydyadd);
 
-                cb_pop_front(cb_ydy, onetile);
-                cb_push_back(cb_ydyadd, onetile);
+                cb_ydy_obj.pop_front(onetile);
+                cb_ydyadd_obj.push_back(onetile);
                 tile_regs_release();
             } else {
                 tile_regs_acquire();
-                cb_wait_front(cb_ydy, onetile);
-                cb_wait_front(cb_ydyadd, onetile);
-                cb_reserve_back(cb_ydyadd, onetile);
+                cb_ydy_obj.wait_front(onetile);
+                cb_ydyadd_obj.wait_front(onetile);
+                cb_ydyadd_obj.reserve_back(onetile);
 
                 add_tiles_init_with_dt(cb_ydyadd, cb_ydy);
                 add_tiles(cb_ydyadd, cb_ydy, 0, 0, dst0);
@@ -324,9 +344,9 @@ void kernel_main() {
                 tile_regs_wait();
                 pack_tile_with_dt(dst0, cb_ydyadd);
 
-                cb_pop_front(cb_ydy, onetile);
-                cb_pop_front(cb_ydyadd, onetile);
-                cb_push_back(cb_ydyadd, onetile);
+                cb_ydy_obj.pop_front(onetile);
+                cb_ydyadd_obj.pop_front(onetile);
+                cb_ydyadd_obj.push_back(onetile);
                 tile_regs_release();
             }
         }  // Wt loop
@@ -339,15 +359,16 @@ void kernel_main() {
 
         // Compute cb_dx
         // ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * (rstd / n)
-        cb_wait_front(cb_dysum, onetile);
-        cb_wait_front(cb_ydysum, onetile);
-        cb_wait_front(cb_recip_nrstd, onetile);
+        cb_dysum_obj.wait_front(onetile);
+        cb_ydysum_obj.wait_front(onetile);
+        cb_recip_nrstd_obj.wait_front(onetile);
         for (uint32_t wt = 0; wt < Wt; wt++) {
             // Compute cb_ndy
             // n * dy
             constexpr auto cb_ndy = cb_tmp1;
+            experimental::CircularBuffer cb_ndy_obj(cb_ndy);
             tile_regs_acquire();
-            cb_reserve_back(cb_ndy, onetile);
+            cb_ndy_obj.reserve_back(onetile);
 
             mul_tiles_init_with_dt(cb_n_recip_n, cb_dycopy);
             mul_tiles(cb_n_recip_n, cb_dycopy, 0, wt, dst0);
@@ -356,15 +377,16 @@ void kernel_main() {
             tile_regs_wait();
             pack_tile_with_dt(dst0, cb_ndy);
 
-            cb_push_back(cb_ndy, onetile);
+            cb_ndy_obj.push_back(onetile);
             tile_regs_release();
 
             // cb_ndymdysum
             // n * dy - Sum[dy]
             constexpr auto cb_ndymdysum = cb_tmp2;
+            experimental::CircularBuffer cb_ndymdysum_obj(cb_ndymdysum);
             tile_regs_acquire();
-            cb_wait_front(cb_ndy, onetile);
-            cb_reserve_back(cb_ndymdysum, onetile);
+            cb_ndy_obj.wait_front(onetile);
+            cb_ndymdysum_obj.reserve_back(onetile);
 
             if (is_lastdim_layernorm) {
                 sub_bcast_cols_init_short_with_dt(cb_ndy, cb_dysum);
@@ -378,15 +400,16 @@ void kernel_main() {
             tile_regs_wait();
             pack_tile_with_dt(dst0, cb_ndymdysum);
 
-            cb_pop_front(cb_ndy, onetile);
-            cb_push_back(cb_ndymdysum, onetile);
+            cb_ndy_obj.pop_front(onetile);
+            cb_ndymdysum_obj.push_back(onetile);
             tile_regs_release();
 
             // Compute cb_yydysum
             // y * Sum[y * dy]
             constexpr auto cb_yydysum = cb_tmp3;
+            experimental::CircularBuffer cb_yydysum_obj(cb_yydysum);
             tile_regs_acquire();
-            cb_reserve_back(cb_yydysum, onetile);
+            cb_yydysum_obj.reserve_back(onetile);
 
             if (is_lastdim_layernorm) {
                 mul_bcast_cols_init_short_with_dt(cb_y, cb_ydysum);
@@ -400,15 +423,15 @@ void kernel_main() {
             tile_regs_wait();
             pack_tile_with_dt(dst0, cb_yydysum);
 
-            cb_push_back(cb_yydysum, onetile);
+            cb_yydysum_obj.push_back(onetile);
             tile_regs_release();
 
             // Compute cb_tmp1
             // (n * dy - Sum[dy]) - (y * Sum[y * dy])
             tile_regs_acquire();
-            cb_wait_front(cb_ndymdysum, onetile);
-            cb_wait_front(cb_yydysum, onetile);
-            cb_reserve_back(cb_tmp1, onetile);
+            cb_ndymdysum_obj.wait_front(onetile);
+            cb_yydysum_obj.wait_front(onetile);
+            cb_tmp1_obj.reserve_back(onetile);
 
             sub_tiles_init_with_dt(cb_ndymdysum, cb_yydysum);
             sub_tiles(cb_ndymdysum, cb_yydysum, 0, 0, dst0);
@@ -417,16 +440,16 @@ void kernel_main() {
             tile_regs_wait();
             pack_tile_with_dt(dst0, cb_tmp1);
 
-            cb_pop_front(cb_ndymdysum, onetile);
-            cb_pop_front(cb_yydysum, onetile);
-            cb_push_back(cb_tmp1, onetile);
+            cb_ndymdysum_obj.pop_front(onetile);
+            cb_yydysum_obj.pop_front(onetile);
+            cb_tmp1_obj.push_back(onetile);
             tile_regs_release();
 
             // Compute cb_dx
             // ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * (rstd / n)
             tile_regs_acquire();
-            cb_wait_front(cb_tmp1, onetile);
-            cb_reserve_back(cb_dx, onetile);
+            cb_tmp1_obj.wait_front(onetile);
+            cb_dx_obj.reserve_back(onetile);
 
             mul_tiles_init_with_dt(cb_tmp1, cb_recip_nrstd);
             mul_tiles(cb_tmp1, cb_recip_nrstd, 0, 0, dst0);
@@ -435,24 +458,24 @@ void kernel_main() {
             tile_regs_wait();
             pack_tile_with_dt(dst0, cb_dx);
 
-            cb_pop_front(cb_tmp1, onetile);
-            cb_push_back(cb_dx, onetile);
+            cb_tmp1_obj.pop_front(onetile);
+            cb_dx_obj.push_back(onetile);
             tile_regs_release();
         }  // Wt loop
-        cb_pop_front(cb_dycopy, Wt);
-        cb_pop_front(cb_y, Wt);
+        cb_dycopy_obj.pop_front(Wt);
+        cb_y_obj.pop_front(Wt);
 
-        cb_pop_front(cb_recip_nrstd, onetile);
-        cb_pop_front(cb_dysum, onetile);
-        cb_pop_front(cb_ydysum, onetile);
+        cb_recip_nrstd_obj.pop_front(onetile);
+        cb_dysum_obj.pop_front(onetile);
+        cb_ydysum_obj.pop_front(onetile);
 
-        cb_pop_front(cb_mean, onetile);
-        cb_pop_front(cb_rstd, onetile);
+        cb_mean_obj.pop_front(onetile);
+        cb_rstd_obj.pop_front(onetile);
     }  // NCHt loop
-    cb_pop_front(cb_scaler, onetile);
-    cb_pop_front(cb_n_recip_n, 2);
+    cb_scaler_obj.pop_front(onetile);
+    cb_n_recip_n_obj.pop_front(2);
 
     if (do_mask_h || do_mask_w) {
-        cb_wait_front(cb_mask_h_w, 2);
+        cb_mask_h_w_obj.wait_front(2);
     }
 }

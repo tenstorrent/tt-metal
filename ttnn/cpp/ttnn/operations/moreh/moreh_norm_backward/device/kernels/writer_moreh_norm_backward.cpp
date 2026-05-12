@@ -5,6 +5,9 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     // compile time args
@@ -21,13 +24,21 @@ void kernel_main() {
     // input_grad
     const auto input_grad_addrg = TensorAccessor(input_grad_args, input_grad_addr);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_input_grad(cb_id_input_grad);
+    const auto input_grad_tile_bytes = get_tile_size(cb_id_input_grad);
+
     auto input_grad_tile_idx = tile_offset;
     for (uint32_t idx = 0; idx < num_input_tiles_per_core; ++idx) {
-        cb_wait_front(cb_id_input_grad, 1);
-        const auto input_grad_l1_read_addr = get_read_ptr(cb_id_input_grad);
-        noc_async_write_tile(input_grad_tile_idx, input_grad_addrg, input_grad_l1_read_addr);
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_input_grad, 1);
+        cb_input_grad.wait_front(1);
+        noc.async_write(
+            cb_input_grad,
+            input_grad_addrg,
+            input_grad_tile_bytes,
+            {.offset_bytes = 0},
+            {.page_id = input_grad_tile_idx});
+        noc.async_write_barrier();
+        cb_input_grad.pop_front(1);
         input_grad_tile_idx++;
     }
 

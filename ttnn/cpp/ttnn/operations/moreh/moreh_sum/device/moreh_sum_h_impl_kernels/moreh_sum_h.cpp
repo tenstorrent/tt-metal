@@ -4,6 +4,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     uint32_t Ht = get_compile_time_arg_val(0);
@@ -12,24 +13,28 @@ void kernel_main() {
     constexpr uint32_t origin_H = get_compile_time_arg_val(3);
 
     constexpr auto cb_input = tt::CBIndex::c_0;
+    experimental::CircularBuffer cb_input_obj(cb_input);
     constexpr auto cb_scaler = tt::CBIndex::c_2;
+    experimental::CircularBuffer cb_scaler_obj(cb_scaler);
     constexpr auto cb_mask_h = tt::CBIndex::c_3;
+    experimental::CircularBuffer cb_mask_h_obj(cb_mask_h);
     constexpr auto cb_accum_dst = tt::CBIndex::c_24;
     constexpr auto cb_masked_input = tt::CBIndex::c_25;
+    experimental::CircularBuffer cb_masked_input_obj(cb_masked_input);
     constexpr auto cb_out = tt::CBIndex::c_16;
     constexpr uint32_t TILE_H = 32;
     constexpr bool do_mask_h = (origin_H % TILE_H) != 0;
 
     binary_op_init_common(cb_input, cb_input, cb_out);
 
-    cb_wait_front(cb_scaler, 1);  // scaler tile from the reader
+    cb_scaler_obj.wait_front(1);  // scaler tile from the reader
 
     constexpr int onetile = 1;
     int reduce_dst_idx = 0;
     const uint32_t mask_dst_idx = reduce_dst_idx + 1;
 
     if (do_mask_h) {
-        cb_wait_front(cb_mask_h, onetile);
+        cb_mask_h_obj.wait_front(onetile);
     }
 
     for (uint32_t nc = 0; nc < NC; nc++) {
@@ -48,7 +53,7 @@ void kernel_main() {
             // Optional masking of last H tile
             if constexpr (do_mask_h) {
                 tile_regs_acquire();
-                cb_wait_front(cb_input, onetile);
+                cb_input_obj.wait_front(onetile);
 #if defined FP32_DEST_ACC_EN
                 reconfig_data_format_srca(cb_input);
 #endif
@@ -59,16 +64,16 @@ void kernel_main() {
                 mask_tile(reduce_dst_idx, mask_dst_idx);
                 tile_regs_commit();
 
-                cb_reserve_back(cb_masked_input, onetile);
+                cb_masked_input_obj.reserve_back(onetile);
                 tile_regs_wait();
 #if defined FP32_DEST_ACC_EN
                 pack_reconfig_data_format(cb_masked_input);
 #endif
                 pack_tile(reduce_dst_idx, cb_masked_input);
                 tile_regs_release();
-                cb_push_back(cb_masked_input, onetile);
+                cb_masked_input_obj.push_back(onetile);
 
-                cb_pop_front(cb_input, onetile);
+                cb_input_obj.pop_front(onetile);
 
                 // Phase 2 with masked input: Reduce final masked tile with accumulation
                 compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
@@ -94,7 +99,7 @@ void kernel_main() {
     }
 
     if (do_mask_h) {
-        cb_pop_front(cb_mask_h, onetile);
+        cb_mask_h_obj.pop_front(onetile);
     }
-    cb_pop_front(cb_scaler, onetile);
+    cb_scaler_obj.pop_front(onetile);
 }

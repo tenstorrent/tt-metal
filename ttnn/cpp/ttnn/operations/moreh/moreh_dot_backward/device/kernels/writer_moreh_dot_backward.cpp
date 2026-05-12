@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     uint32_t has_input_grad = get_arg_val<uint32_t>(0);
@@ -24,22 +27,26 @@ void kernel_main() {
 
     const auto s1 = TensorAccessor(dst1_args, dst1_addr);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_out0(cb_id_out0);
+    experimental::CircularBuffer cb_out1(cb_id_out1);
+    const auto out0_tile_bytes = get_tile_size(cb_id_out0);
+    const auto out1_tile_bytes = get_tile_size(cb_id_out1);
+
     uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; i++) {
         if (has_input_grad) {
-            cb_wait_front(cb_id_out0, onetile);
-            uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
-            noc_async_write_tile(i, s0, l1_read_addr);
-            noc_async_write_barrier();
-            cb_pop_front(cb_id_out0, onetile);
+            cb_out0.wait_front(onetile);
+            noc.async_write(cb_out0, s0, out0_tile_bytes, {.offset_bytes = 0}, {.page_id = i});
+            noc.async_write_barrier();
+            cb_out0.pop_front(onetile);
         }
 
         if (has_other_grad) {
-            cb_wait_front(cb_id_out1, onetile);
-            uint32_t l1_read_addr = get_read_ptr(cb_id_out1);
-            noc_async_write_tile(i, s1, l1_read_addr);
-            noc_async_write_barrier();
-            cb_pop_front(cb_id_out1, onetile);
+            cb_out1.wait_front(onetile);
+            noc.async_write(cb_out1, s1, out1_tile_bytes, {.offset_bytes = 0}, {.page_id = i});
+            noc.async_write_barrier();
+            cb_out1.pop_front(onetile);
         }
     }
 }

@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "experimental/circular_buffer.h"
+#include "experimental/core_local_mem.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     using namespace tt::constants;
@@ -38,14 +41,17 @@ void kernel_main() {
     const auto addrg_target = TensorAccessor(target_args, target_addr);
     constexpr uint32_t onetile = 1;
 
+    experimental::CircularBuffer cb_target_obj(cb_target);
+    experimental::CircularBuffer cb_output_grad_obj(cb_output_grad);
+    experimental::CircularBuffer cb_input_grad_obj(cb_input_grad);
 #if defined(WEIGHT)
+    experimental::CircularBuffer cb_weight_obj(cb_weight);
     const auto addrg_weight = TensorAccessor(weight_args, weight_addr);
 
-    // weight: (1, C)
     read_line(cb_weight, cb_weight_scratch, addrg_weight, Ct);
 
-    cb_wait_front(cb_weight, Ct);
-    auto weight_l1_ptr = get_read_ptr<uint16_t>(cb_weight);
+    cb_weight_obj.wait_front(Ct);
+    experimental::CoreLocalMem<volatile uint16_t> weight_l1_ptr(cb_weight_obj.get_read_ptr());
 #endif
 
     const auto addrg_output_grad = TensorAccessor(output_grad_args, output_grad_addr);
@@ -60,29 +66,27 @@ void kernel_main() {
         uint32_t nt = n / TILE_HEIGHT;
         uint32_t ct = nct % Ct;
 
-        // target: (N, W)
         auto target_noc_id = nt * Wt + wt;
         read_tile(cb_target, addrg_target, target_noc_id);
 
-        // output_grad: (N, W)
         auto output_grad_noc_id = nt * Wt + wt;
         read_tile(cb_output_grad, addrg_output_grad, output_grad_noc_id);
 
-        cb_reserve_back(cb_input_grad, onetile);
-        cb_wait_front(cb_target, onetile);
-        cb_wait_front(cb_output_grad, onetile);
+        cb_input_grad_obj.reserve_back(onetile);
+        cb_target_obj.wait_front(onetile);
+        cb_output_grad_obj.wait_front(onetile);
 
-        auto input_grad_l1_ptr = get_write_ptr<uint16_t>(cb_input_grad);
-        auto target_l1_ptr = get_read_ptr<int32_t>(cb_target);
-        auto output_grad_l1_ptr = get_read_ptr<uint16_t>(cb_output_grad);
+        experimental::CoreLocalMem<volatile uint16_t> input_grad_l1_ptr(cb_input_grad_obj.get_write_ptr());
+        experimental::CoreLocalMem<volatile int32_t> target_l1_ptr(cb_target_obj.get_read_ptr());
+        experimental::CoreLocalMem<volatile uint16_t> output_grad_l1_ptr(cb_output_grad_obj.get_read_ptr());
 
         for (uint32_t h = 0; h < TILE_HEIGHT; h++) {
             for (uint32_t w = 0; w < TILE_WIDTH; w++) {
-                uint32_t nw_tilized_idx = get_tilized_idx(n % TILE_HEIGHT, w);  // target(n, w)
+                uint32_t nw_tilized_idx = get_tilized_idx(n % TILE_HEIGHT, w);
                 int32_t target_val = target_l1_ptr[nw_tilized_idx];
 
                 uint32_t c = ct * TILE_HEIGHT + h;
-                uint32_t input_grad_idx = get_tilized_idx(h, w);  // input_grad(c, w)
+                uint32_t input_grad_idx = get_tilized_idx(h, w);
 
                 uint16_t input_grad_val;
 
@@ -103,10 +107,10 @@ void kernel_main() {
             }
         }
 
-        cb_push_back(cb_input_grad, onetile);
+        cb_input_grad_obj.push_back(onetile);
 
-        cb_pop_front(cb_target, onetile);
+        cb_target_obj.pop_front(onetile);
 
-        cb_pop_front(cb_output_grad, onetile);
+        cb_output_grad_obj.pop_front(onetile);
     }
 }

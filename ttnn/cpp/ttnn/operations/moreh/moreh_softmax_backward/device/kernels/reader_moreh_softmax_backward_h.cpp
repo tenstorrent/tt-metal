@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     uint32_t y_addr = get_arg_val<uint32_t>(0);
@@ -31,30 +34,30 @@ void kernel_main() {
     const auto y_in = TensorAccessor(y_args, y_addr);
     const auto dy_in = TensorAccessor(dy_args, dy_addr);
 
-    // TODO(AP): cleanup, probably with named args/param pack/reflection.
     generate_bcast_scaler(cb_scaler, scaler);
     generate_mask_h(cb_mask, mask_h);
 
-    // read ublocks from src0 to CB0, then push ublocks to compute (unpacker)
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_y_obj(cb_y);
+    experimental::CircularBuffer cb_dy_obj(cb_dy);
+    const auto y_tile_bytes = get_tile_size(cb_y);
+    const auto dy_tile_bytes = get_tile_size(cb_dy);
+
     uint32_t curr_tile = tile_offset;
     for (uint32_t i = 0; i < N; i += onetile) {
         uint32_t w_idx = curr_tile % Wt;
         uint32_t nc_idx = curr_tile / Wt;
         uint32_t tile_idx = nc_idx * Ht * Wt + w_idx;
         for (uint32_t h = 0; h < Ht; h++) {
-            // read y
-            cb_reserve_back(cb_y, onetile);
-            l1_write_addr_in = get_write_ptr(cb_y);
-            noc_async_read_tile(tile_idx, y_in, l1_write_addr_in);
-            noc_async_read_barrier();
-            cb_push_back(cb_y, onetile);
+            cb_y_obj.reserve_back(onetile);
+            noc.async_read(y_in, cb_y_obj, y_tile_bytes, {.page_id = tile_idx}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_y_obj.push_back(onetile);
 
-            // read dy
-            cb_reserve_back(cb_dy, onetile);
-            l1_write_addr_in = get_write_ptr(cb_dy);
-            noc_async_read_tile(tile_idx, dy_in, l1_write_addr_in);
-            noc_async_read_barrier();
-            cb_push_back(cb_dy, onetile);
+            cb_dy_obj.reserve_back(onetile);
+            noc.async_read(dy_in, cb_dy_obj, dy_tile_bytes, {.page_id = tile_idx}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_dy_obj.push_back(onetile);
 
             tile_idx += Wt;
         }

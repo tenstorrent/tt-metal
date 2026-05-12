@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/core_local_mem.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     int i{0};
@@ -77,40 +81,59 @@ void kernel_main() {
     const uint32_t beta_tile_bytes = get_tile_size(cb_id_beta);
     const auto beta_addrg = TensorAccessor(beta_args, beta_addr);
 
-    const auto input_l1_write_ptr = get_write_ptr(cb_id_input);
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_input(cb_id_input);
+    experimental::CircularBuffer cb_gamma(cb_id_gamma);
+    experimental::CircularBuffer cb_beta(cb_id_beta);
+
     uint32_t input_tile_idx;
     for (uint32_t outer_idx = 0; outer_idx < num_rows_per_core; ++outer_idx) {
         // For E[x]
         for (uint32_t inner_idx = 0; inner_idx < num_inner_tiles; inner_idx += block_size) {
-            cb_reserve_back(cb_id_input, block_size);
+            cb_input.reserve_back(block_size);
             for (uint32_t r = 0; r < block_size; r++) {
                 input_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx + r;
-                noc_async_read_tile(input_tile_idx, input_addrg, input_l1_write_ptr + r * input_tile_bytes);
+                noc.async_read(
+                    input_addrg,
+                    cb_input,
+                    input_tile_bytes,
+                    {.page_id = input_tile_idx},
+                    {.offset_bytes = r * input_tile_bytes});
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_id_input, block_size);
+            noc.async_read_barrier();
+            cb_input.push_back(block_size);
         }  // inner_idx loop
 
         // For Var[x]
         for (uint32_t inner_idx = 0; inner_idx < num_inner_tiles; inner_idx += block_size) {
-            cb_reserve_back(cb_id_input, block_size);
+            cb_input.reserve_back(block_size);
             for (uint32_t r = 0; r < block_size; r++) {
                 input_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx + r;
-                noc_async_read_tile(input_tile_idx, input_addrg, input_l1_write_ptr + r * input_tile_bytes);
+                noc.async_read(
+                    input_addrg,
+                    cb_input,
+                    input_tile_bytes,
+                    {.page_id = input_tile_idx},
+                    {.offset_bytes = r * input_tile_bytes});
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_id_input, block_size);
+            noc.async_read_barrier();
+            cb_input.push_back(block_size);
         }  // inner_idx loop
 
         // For (x - E[x]) * (1.0/(sqrt(E[(x-E[x])^2] + eps)))
         for (uint32_t inner_idx = 0; inner_idx < num_inner_tiles; inner_idx += block_size) {
-            cb_reserve_back(cb_id_input, block_size);
+            cb_input.reserve_back(block_size);
             for (uint32_t r = 0; r < block_size; r++) {
                 input_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx + r;
-                noc_async_read_tile(input_tile_idx, input_addrg, input_l1_write_ptr + r * input_tile_bytes);
+                noc.async_read(
+                    input_addrg,
+                    cb_input,
+                    input_tile_bytes,
+                    {.page_id = input_tile_idx},
+                    {.offset_bytes = r * input_tile_bytes});
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_id_input, block_size);
+            noc.async_read_barrier();
+            cb_input.push_back(block_size);
 
             // input (N, C, H, W)
             // input_tile_idx = n * C * Ht * Wt + c * Ht * Wt + h * Wt + w
@@ -119,14 +142,19 @@ void kernel_main() {
             // gamma (1, 1, 1, C)
             if (gamma_has_value) {
                 uint32_t gamma_tile_idx;
-                const auto gamma_l1_write_ptr = get_write_ptr(cb_id_gamma);
-                cb_reserve_back(cb_id_gamma, block_size);
+                const auto gamma_l1_write_ptr = cb_gamma.get_write_ptr();
+                cb_gamma.reserve_back(block_size);
                 for (uint32_t r = 0; r < block_size; r++) {
                     input_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx + r;
                     gamma_tile_idx = get_gamma_beta_tile_idx(input_tile_idx, HtWt, C, TILE_W);
-                    noc_async_read_tile(gamma_tile_idx, gamma_addrg, gamma_l1_write_ptr + r * gamma_tile_bytes);
+                    noc.async_read(
+                        gamma_addrg,
+                        cb_gamma,
+                        gamma_tile_bytes,
+                        {.page_id = gamma_tile_idx},
+                        {.offset_bytes = r * gamma_tile_bytes});
                 }
-                noc_async_read_barrier();
+                noc.async_read_barrier();
 
                 uint32_t tilized_gamma_idx_in_tile;
                 for (uint32_t q = 0; q < block_size; q++) {
@@ -134,24 +162,29 @@ void kernel_main() {
                     tilized_gamma_idx_in_tile =
                         get_tilized_gamma_beta_idx_in_tile(input_tile_idx, HtWt, C, TILE_H, TILE_W);
                     if (tilized_gamma_idx_in_tile != 0) {
-                        auto gamma_ptr = reinterpret_cast<uint16_t*>(gamma_l1_write_ptr + q * gamma_tile_bytes);
+                        experimental::CoreLocalMem<uint16_t> gamma_ptr(gamma_l1_write_ptr + q * gamma_tile_bytes);
                         gamma_ptr[0] = gamma_ptr[tilized_gamma_idx_in_tile];
                     }
                 }
-                cb_push_back(cb_id_gamma, block_size);
+                cb_gamma.push_back(block_size);
             }
 
             // beta (1, 1, 1, C)
             if (beta_has_value) {
                 uint32_t beta_tile_idx;
-                const auto beta_l1_write_ptr = get_write_ptr(cb_id_beta);
-                cb_reserve_back(cb_id_beta, block_size);
+                const auto beta_l1_write_ptr = cb_beta.get_write_ptr();
+                cb_beta.reserve_back(block_size);
                 for (uint32_t r = 0; r < block_size; r++) {
                     input_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx + r;
                     beta_tile_idx = get_gamma_beta_tile_idx(input_tile_idx, HtWt, C, TILE_W);
-                    noc_async_read_tile(beta_tile_idx, beta_addrg, beta_l1_write_ptr + r * beta_tile_bytes);
+                    noc.async_read(
+                        beta_addrg,
+                        cb_beta,
+                        beta_tile_bytes,
+                        {.page_id = beta_tile_idx},
+                        {.offset_bytes = r * beta_tile_bytes});
                 }
-                noc_async_read_barrier();
+                noc.async_read_barrier();
 
                 uint32_t tilized_beta_idx_in_tile;
                 for (uint32_t q = 0; q < block_size; q++) {
@@ -159,11 +192,11 @@ void kernel_main() {
                     tilized_beta_idx_in_tile =
                         get_tilized_gamma_beta_idx_in_tile(input_tile_idx, HtWt, C, TILE_H, TILE_W);
                     if (tilized_beta_idx_in_tile != 0) {
-                        auto beta_ptr = reinterpret_cast<uint16_t*>(beta_l1_write_ptr + q * beta_tile_bytes);
+                        experimental::CoreLocalMem<uint16_t> beta_ptr(beta_l1_write_ptr + q * beta_tile_bytes);
                         beta_ptr[0] = beta_ptr[tilized_beta_idx_in_tile];
                     }
                 }
-                cb_push_back(cb_id_beta, block_size);
+                cb_beta.push_back(block_size);
             }
         }  // inner_idx loop
     }  // outer_idx loop

@@ -4,6 +4,9 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 void kernel_main() {
     ArgFetcher arg_fetcher;
     const uint32_t src0_addr = arg_fetcher.get_next_arg_val<uint32_t>();
@@ -28,18 +31,20 @@ void kernel_main() {
         generate_mask_h_w(cb_id_mask_h_w, mask_h, mask_w);
     }
 
-    uint32_t l1_write_addr_in0;
     const auto s0 = TensorAccessor(src0_args, src0_addr);
+
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in0(cb_id_in0);
+    const auto in0_tile_bytes = get_tile_size(cb_id_in0);
 
     constexpr uint32_t onetile = 1;
     for (uint32_t wt = 0; wt < Wt_per_core; ++wt) {
         uint32_t read_tile_id = start_id + wt;
         for (uint32_t b = 0; b < batch_num; ++b) {
-            cb_reserve_back(cb_id_in0, onetile);
-            l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-            noc_async_read_tile(read_tile_id, s0, l1_write_addr_in0);
-            noc_async_read_barrier();
-            cb_push_back(cb_id_in0, onetile);
+            cb_in0.reserve_back(onetile);
+            noc.async_read(s0, cb_in0, in0_tile_bytes, {.page_id = read_tile_id}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_in0.push_back(onetile);
             read_tile_id += Wt;
         }
     }

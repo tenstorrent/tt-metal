@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -14,13 +17,14 @@ void kernel_main() {
 
     constexpr auto cb_in = tt::CBIndex::c_0;
 
-    uint32_t l1_write_addr_in;
-
-    // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
 
     constexpr auto in_args = TensorAccessorArgs<0>();
     const auto src_in = TensorAccessor(in_args, src_addr);
+
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in_obj(cb_in);
+    const auto in_tile_bytes = get_tile_size(cb_in);
 
     uint32_t curr_tile = tile_offset;
     for (uint32_t i = 0; i < num_tiles; i += onetile) {
@@ -30,31 +34,28 @@ void kernel_main() {
 
         uint32_t dim_stride = inner_size;
         for (uint32_t d = 0; d < dim_size; d++) {
-            cb_reserve_back(cb_in, onetile);
-            l1_write_addr_in = get_write_ptr(cb_in);
-            noc_async_read_tile(tile_idx, src_in, l1_write_addr_in);
-            noc_async_read_barrier();
-            cb_push_back(cb_in, onetile);
+            cb_in_obj.reserve_back(onetile);
+            noc.async_read(src_in, cb_in_obj, in_tile_bytes, {.page_id = tile_idx}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_in_obj.push_back(onetile);
             tile_idx += dim_stride;
         }
 
         tile_idx = outer_idx * outer_stride + inner_idx;
         for (uint32_t d = 0; d < dim_size; d++) {
-            cb_reserve_back(cb_in, onetile);
-            l1_write_addr_in = get_write_ptr(cb_in);
-            noc_async_read_tile(tile_idx, src_in, l1_write_addr_in);
-            noc_async_read_barrier();
-            cb_push_back(cb_in, onetile);
+            cb_in_obj.reserve_back(onetile);
+            noc.async_read(src_in, cb_in_obj, in_tile_bytes, {.page_id = tile_idx}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_in_obj.push_back(onetile);
             tile_idx += dim_stride;
         }
 
         tile_idx = outer_idx * outer_stride + inner_idx;
         for (uint32_t d = 0; d < dim_size; d++) {
-            cb_reserve_back(cb_in, onetile);
-            l1_write_addr_in = get_write_ptr(cb_in);
-            noc_async_read_tile(tile_idx, src_in, l1_write_addr_in);
-            noc_async_read_barrier();
-            cb_push_back(cb_in, onetile);
+            cb_in_obj.reserve_back(onetile);
+            noc.async_read(src_in, cb_in_obj, in_tile_bytes, {.page_id = tile_idx}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_in_obj.push_back(onetile);
             tile_idx += dim_stride;
         }
         curr_tile += 1;

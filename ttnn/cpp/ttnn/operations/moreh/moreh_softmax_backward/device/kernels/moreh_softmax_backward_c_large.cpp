@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "ttnn/kernel/compute/moreh_common.hpp"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t onetile = 1;
@@ -15,6 +16,7 @@ void kernel_main() {
 
     constexpr auto cb_ydy = tt::CBIndex::c_24;  // y * dy
     constexpr auto cb_sum = tt::CBIndex::c_25;
+    experimental::CircularBuffer cb_sum_obj(cb_sum);
     constexpr auto cb_dy_m_sum = tt::CBIndex::c_26;  // dy - sum
 
     uint32_t N = get_compile_time_arg_val(0);
@@ -45,7 +47,7 @@ void kernel_main() {
             // dy - sum * exp(y)
             sub_tiles_to_cb(cb_dy, cb_inter2, cb_dx);
         }
-        cb_pop_front(cb_sum, onetile);
+        cb_sum_obj.pop_front(onetile);
 #else
         // compute sum(y * dy)
         for (uint32_t i = 0; i < dim_size; ++i) {
@@ -78,7 +80,7 @@ void kernel_main() {
             mul_tiles_and_negative_to_cb(cb_dy_m_sum, cb_y, cb_dx);
 #endif
         }
-        cb_pop_front(cb_sum, onetile);
+        cb_sum_obj.pop_front(onetile);
 #endif
     }
 }

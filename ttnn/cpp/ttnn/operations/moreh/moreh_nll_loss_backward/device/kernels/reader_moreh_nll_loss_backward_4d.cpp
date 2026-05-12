@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "experimental/circular_buffer.h"
+#include "experimental/core_local_mem.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     using namespace tt::constants;
@@ -44,14 +47,16 @@ void kernel_main() {
     const auto addrg_output_grad = TensorAccessor(output_grad_args, output_grad_addr);
     constexpr uint32_t onetile = 1;
 
+    experimental::CircularBuffer cb_target_obj(cb_target);
+    experimental::CircularBuffer cb_tmp_weight_obj(cb_tmp_weight);
 #if defined(WEIGHT)
+    experimental::CircularBuffer cb_weight_obj(cb_weight);
     const auto addrg_weight = TensorAccessor(weight_args, weight_addr);
 
-    // weight: (1, C)
     read_line(cb_weight, cb_weight_scratch, addrg_weight, weight_num_tile);
 
-    cb_wait_front(cb_weight, weight_num_tile);
-    auto weight_l1_ptr = get_read_ptr<uint16_t>(cb_weight);
+    cb_weight_obj.wait_front(weight_num_tile);
+    experimental::CoreLocalMem<volatile uint16_t> weight_l1_ptr(cb_weight_obj.get_read_ptr());
 #endif
 
 #if defined(DIVISOR)
@@ -72,11 +77,11 @@ void kernel_main() {
         uint32_t target_noc_id = n * num_inner_tile + inner;
         read_tile(cb_target, addrg_target, target_noc_id);
 
-        cb_reserve_back(cb_tmp_weight, onetile);
-        cb_wait_front(cb_target, onetile);
+        cb_tmp_weight_obj.reserve_back(onetile);
+        cb_target_obj.wait_front(onetile);
 
-        auto tmp_weight_l1_ptr = get_write_ptr<FP32_DEST_ACC_FTYPE>(cb_tmp_weight);
-        auto target_l1_ptr = get_read_ptr<int32_t>(cb_target);
+        experimental::CoreLocalMem<volatile FP32_DEST_ACC_FTYPE> tmp_weight_l1_ptr(cb_tmp_weight_obj.get_write_ptr());
+        experimental::CoreLocalMem<volatile int32_t> target_l1_ptr(cb_target_obj.get_read_ptr());
 
         for (uint32_t h = 0; h < TILE_HEIGHT; h++) {
             for (uint32_t w = 0; w < TILE_WIDTH; w++) {
@@ -98,8 +103,8 @@ void kernel_main() {
             }
         }
 
-        cb_push_back(cb_tmp_weight, onetile);
+        cb_tmp_weight_obj.push_back(onetile);
 
-        cb_pop_front(cb_target, onetile);
+        cb_target_obj.pop_front(onetile);
     }
 }

@@ -5,14 +5,18 @@
 #include <cstdint>
 
 #include "ttnn/kernel/compute/moreh_common.hpp"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
+    experimental::CircularBuffer cb_in0_obj(cb_in0);
     constexpr auto cb_out0 = tt::CBIndex::c_16;
     constexpr auto cb_exps = tt::CBIndex::c_24;
     constexpr auto cb_recipsumexps = tt::CBIndex::c_25;
+    experimental::CircularBuffer cb_recipsumexps_obj(cb_recipsumexps);
     constexpr auto cb_add = tt::CBIndex::c_26;
     constexpr auto cb_max = tt::CBIndex::c_27;
+    experimental::CircularBuffer cb_max_obj(cb_max);
     constexpr auto cb_tmp = tt::CBIndex::c_28;
 
     constexpr uint32_t onetile = 1;
@@ -30,8 +34,8 @@ void kernel_main() {
             if (i == 0) {
                 copy_tile_to_cb(cb_in0, cb_max);
             } else {
-                cb_wait_front(cb_in0, onetile);
-                cb_wait_front(cb_max, onetile);
+                cb_in0_obj.wait_front(onetile);
+                cb_max_obj.wait_front(onetile);
 
                 tile_regs_acquire();
 
@@ -45,15 +49,15 @@ void kernel_main() {
                 binary_max_tile(dst0, dst1, dst0);
                 tile_regs_commit();
 
-                cb_pop_front(cb_max, onetile);
-                cb_reserve_back(cb_max, onetile);
+                cb_max_obj.pop_front(onetile);
+                cb_max_obj.reserve_back(onetile);
 
                 tile_regs_wait();
                 pack_tile_with_dt(dst0, cb_max);
                 tile_regs_release();
 
-                cb_push_back(cb_max, onetile);
-                cb_pop_front(cb_in0, onetile);
+                cb_max_obj.push_back(onetile);
+                cb_in0_obj.pop_front(onetile);
             }
         }
 
@@ -85,7 +89,7 @@ void kernel_main() {
 #endif
 
         // step 3, compute final result
-        cb_wait_front(cb_recipsumexps, onetile);
+        cb_recipsumexps_obj.wait_front(onetile);
         for (uint32_t i = 0; i < dim_size; ++i) {
 #ifdef LOG
 #ifdef SOFTMAX
@@ -118,7 +122,7 @@ void kernel_main() {
 #endif
         }
 
-        cb_pop_front(cb_recipsumexps, onetile);
-        cb_pop_front(cb_max, onetile);
+        cb_recipsumexps_obj.pop_front(onetile);
+        cb_max_obj.pop_front(onetile);
     }
 }

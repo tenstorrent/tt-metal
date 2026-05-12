@@ -4,6 +4,9 @@
 
 #include <algorithm>
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "experimental/circular_buffer.h"
+#include "experimental/core_local_mem.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     using namespace tt::constants;
@@ -60,7 +63,14 @@ void kernel_main() {
     uint32_t Wt = (W + TILE_WIDTH - 1) / TILE_WIDTH;
     uint32_t Ct = (C + TILE_HEIGHT - 1) / TILE_HEIGHT;
 
-    // iterate from start_id to end_id
+    experimental::CircularBuffer cb_input_obj(cb_input);
+    experimental::CircularBuffer cb_target_obj(cb_target);
+    experimental::CircularBuffer cb_tmp_input_obj(cb_tmp_input);
+#if defined(WEIGHT)
+    experimental::CircularBuffer cb_weight_obj(cb_weight);
+    experimental::CircularBuffer cb_tmp_weight_obj(cb_tmp_weight);
+#endif
+
     uint32_t end_id = start_id + num_tiles_per_core;
     for (uint32_t i = start_id; i < end_id; ++i) {
         uint32_t n = i / Wf;
@@ -68,8 +78,6 @@ void kernel_main() {
         auto nt = n / TILE_HEIGHT;
         auto wt = w / TILE_WIDTH;
 
-        // taret shape (N, d1)
-        // noc_id = nt * Wt + wt
         uint32_t traget_noc_id = nt * Wt + wt;
         uint32_t target_offset;
         get_noc_offset(n, w, target_element_size, target_offset);
@@ -81,61 +89,52 @@ void kernel_main() {
             target_offset);
 
 #if defined(WEIGHT)
-        cb_reserve_back(cb_tmp_weight, onetile);
-
-        auto tmp_weight_l1_ptr = get_write_ptr<FP32_DEST_ACC_FTYPE>(cb_tmp_weight);
+        cb_tmp_weight_obj.reserve_back(onetile);
+        experimental::CoreLocalMem<volatile FP32_DEST_ACC_FTYPE> tmp_weight_l1_ptr(cb_tmp_weight_obj.get_write_ptr());
 #endif
 
-        cb_reserve_back(cb_tmp_input, onetile);
-        cb_wait_front(cb_target, onetile);
+        cb_tmp_input_obj.reserve_back(onetile);
+        cb_target_obj.wait_front(onetile);
 
-        auto tmp_input_l1_ptr = get_write_ptr<FP32_DEST_ACC_FTYPE>(cb_tmp_input);
-        auto target_l1_ptr = get_read_ptr<int32_t>(cb_target);
+        experimental::CoreLocalMem<volatile FP32_DEST_ACC_FTYPE> tmp_input_l1_ptr(cb_tmp_input_obj.get_write_ptr());
+        experimental::CoreLocalMem<volatile int32_t> target_l1_ptr(cb_target_obj.get_read_ptr());
 
         uint32_t idx_max = std::min(w + FACE_WIDTH, W);
         for (uint32_t idx = 0; idx < idx_max; idx++) {
             int32_t target_val = target_l1_ptr[idx];
 
             if (target_val != ignore_index && (0 <= target_val && target_val < static_cast<int32_t>(C))) {
-                // read input
-                // input: (N, C, d1)
-                // noc_id: n * Ct * Wt + c * Wt + d1
-                //         n * Ct * Wt + target_val / TILE_HEIGHT * Wt + w / TILE_WIDTH
                 uint32_t noc_id = (n * Ct * Wt) + (target_val / TILE_HEIGHT) * Wt + (w / TILE_WIDTH);
                 uint32_t tilized_idx = get_tilized_idx(target_val, w + idx);
                 read_value(cb_input, addrg_input, noc_id, tilized_idx);
 
-                cb_wait_front(cb_input, onetile);
-                auto input_l1_ptr = get_read_ptr<uint16_t>(cb_input);
+                cb_input_obj.wait_front(onetile);
+                experimental::CoreLocalMem<volatile uint16_t> input_l1_ptr(cb_input_obj.get_read_ptr());
 
                 tmp_input_l1_ptr[idx] = fp32_dest_acc_cast(input_l1_ptr[tilized_idx]);
 
-                cb_pop_front(cb_input, onetile);
+                cb_input_obj.pop_front(onetile);
 #if defined(WEIGHT)
-                // read weight
-                // weight: (1, C)
-                // noc_id: target_val / TILE_WIDTH
                 {
                     uint32_t noc_id = target_val / TILE_WIDTH;
                     uint32_t tilized_idx = get_tilized_idx(0, target_val);
                     read_value(cb_weight, addrg_weight, noc_id, tilized_idx);
 
-                    cb_wait_front(cb_weight, onetile);
-                    auto weight_l1_ptr = get_read_ptr<uint16_t>(cb_weight);
+                    cb_weight_obj.wait_front(onetile);
+                    experimental::CoreLocalMem<volatile uint16_t> weight_l1_ptr(cb_weight_obj.get_read_ptr());
 
                     tmp_weight_l1_ptr[idx] = fp32_dest_acc_cast(weight_l1_ptr[tilized_idx]);
-                    cb_pop_front(cb_weight, onetile);
+                    cb_weight_obj.pop_front(onetile);
                 }
 #endif
             } else {
-                // set zero
                 tmp_input_l1_ptr[idx] = fp32_dest_acc_cast(0.0f);
             }
         }
-        cb_push_back(cb_tmp_input, onetile);
+        cb_tmp_input_obj.push_back(onetile);
 #if defined(WEIGHT)
-        cb_push_back(cb_tmp_weight, onetile);
+        cb_tmp_weight_obj.push_back(onetile);
 #endif
-        cb_pop_front(cb_target, onetile);
+        cb_target_obj.pop_front(onetile);
     }
 }

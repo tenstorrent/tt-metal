@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 static constexpr int32_t MAX_NUM_DIMENSIONS = 8;
 
@@ -90,28 +93,34 @@ void kernel_main() {
 
     fill_cb_with_value(cb_id_decimal, decimal);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_input(cb_id_input);
+    experimental::CircularBuffer cb_output(cb_id_output);
+    experimental::CircularBuffer cb_output_grad(cb_id_output_grad);
+    const auto input_tile_bytes = get_tile_size(cb_id_input);
+    const auto output_tile_bytes = get_tile_size(cb_id_output);
+    const auto output_grad_tile_bytes = get_tile_size(cb_id_output_grad);
+
     for (uint32_t i = start_id; i < start_id + num_output_tiles; i++) {
         uint32_t input_tile_id = i;
         auto read_tile_id = get_output_grad_tile(
             i, input_grad_rank, output_grad_dim, output_grad_stride, input_grad_dim, input_grad_stride, need_bcast_dim);
 
-        cb_reserve_back(cb_id_input, 1);
-        const auto input_l1_write_ptr = get_write_ptr(cb_id_input);
-        noc_async_read_tile(input_tile_id, input_addrg, input_l1_write_ptr);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_input, 1);
+        cb_input.reserve_back(1);
+        noc.async_read(input_addrg, cb_input, input_tile_bytes, {.page_id = input_tile_id}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cb_input.push_back(1);
 
-        cb_reserve_back(cb_id_output, 1);
-        const auto output_l1_write_ptr = get_write_ptr(cb_id_output);
-        noc_async_read_tile(read_tile_id, output_addrg, output_l1_write_ptr);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_output, 1);
+        cb_output.reserve_back(1);
+        noc.async_read(output_addrg, cb_output, output_tile_bytes, {.page_id = read_tile_id}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cb_output.push_back(1);
 
-        cb_reserve_back(cb_id_output_grad, 1);
-        const auto output_grad_l1_write_ptr = get_write_ptr(cb_id_output_grad);
-        noc_async_read_tile(read_tile_id, output_grad_addrg, output_grad_l1_write_ptr);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_output_grad, 1);
+        cb_output_grad.reserve_back(1);
+        noc.async_read(
+            output_grad_addrg, cb_output_grad, output_grad_tile_bytes, {.page_id = read_tile_id}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cb_output_grad.push_back(1);
     }
 
 }  // void kernel_main()
