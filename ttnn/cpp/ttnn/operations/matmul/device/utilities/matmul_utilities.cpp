@@ -87,7 +87,7 @@ bool is_input_batched(const ttnn::Shape& shape) {
     }
 
     auto is_batched = false;
-    for (auto i = 0; i < shape.rank() - 2; ++i) {
+    for (size_t i = 0; i < shape.rank() - 2; ++i) {
         if (shape[i] > 1) {
             is_batched = true;
             break;
@@ -130,7 +130,7 @@ ttnn::Shape compute_matmul_output_shape(
     }
 
     // Copy dimensions from input_shape_a except the last one
-    for (auto index = 0; index < a_rank - 1; ++index) {
+    for (size_t index = 0; index < a_rank - 1; ++index) {
         output_shape[rank_difference + index] = input_shape_a[index];
     }
 
@@ -153,7 +153,7 @@ ttnn::Shape compute_matmul_output_shape(
     // Handle the case where b_rank == 1, remove the last dimension
     if (b_rank == 1) [[unlikely]] {
         ttnn::SmallVector<uint32_t> new_shape(output_shape.rank() - 1);
-        for (auto index = 0; index < output_shape.rank() - 1; ++index) {
+        for (size_t index = 0; index < output_shape.rank() - 1; ++index) {
             new_shape[index] = output_shape[index];
         }
         output_shape = ttnn::Shape(new_shape);

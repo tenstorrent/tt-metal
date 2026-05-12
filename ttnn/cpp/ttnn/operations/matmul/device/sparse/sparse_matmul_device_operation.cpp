@@ -124,14 +124,14 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
     // Check that nnz is less than or equal to the length of all batch dimensions
     uint32_t batch_length_A = 1;
     if (a_shape_padded.rank() > 2) {
-        for (int i = 0; i < a_shape_padded.rank() - 2; ++i) {
+        for (size_t i = 0; i < a_shape_padded.rank() - 2; ++i) {
             batch_length_A *= a_shape_padded[i];
         }
     }
 
     uint32_t batch_length_B = 1;
     if (b_shape_padded.rank() > 2) {
-        for (int i = 0; i < b_shape_padded.rank() - 2; ++i) {
+        for (size_t i = 0; i < b_shape_padded.rank() - 2; ++i) {
             batch_length_B *= b_shape_padded[i];
         }
     }

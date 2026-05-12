@@ -147,10 +147,10 @@ static MatmulMultiCoreReuseProgramFactory::cached_program_t create_program(
                 {"cb_out", tt::CBIndex::c_16},
                 {"cb_intermed0", (uint32_t)24}}});
 
-    for (int output_idx_y = 0; output_idx_y < num_blocks_y; output_idx_y++) {
-        for (int output_idx_x = 0; output_idx_x < num_blocks_x; output_idx_x++) {
-            int core_idx_x = num_blocks_read % num_cores_x;
-            int core_idx_y = num_blocks_read / num_cores_x;
+    for (uint32_t output_idx_y = 0; output_idx_y < num_blocks_y; output_idx_y++) {
+        for (uint32_t output_idx_x = 0; output_idx_x < num_blocks_x; output_idx_x++) {
+            uint32_t core_idx_x = num_blocks_read % num_cores_x;
+            uint32_t core_idx_y = num_blocks_read / num_cores_x;
             CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
 
             // Write runtime args to device
@@ -243,10 +243,10 @@ void MatmulMultiCoreReuseProgramFactory::override_runtime_arguments(
     auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
 
     uint32_t num_blocks_read = 0;
-    for (int output_idx_y = 0; output_idx_y < num_blocks_y; output_idx_y++) {
-        for (int output_idx_x = 0; output_idx_x < num_blocks_x; output_idx_x++) {
-            int core_idx_x = num_blocks_read % num_cores_x;
-            int core_idx_y = num_blocks_read / num_cores_x;
+    for (uint32_t output_idx_y = 0; output_idx_y < num_blocks_y; output_idx_y++) {
+        for (uint32_t output_idx_x = 0; output_idx_x < num_blocks_x; output_idx_x++) {
+            uint32_t core_idx_x = num_blocks_read % num_cores_x;
+            uint32_t core_idx_y = num_blocks_read / num_cores_x;
             CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
 
             {

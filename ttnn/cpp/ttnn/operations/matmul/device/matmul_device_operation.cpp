@@ -273,7 +273,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             return true;
         };
 
-        for (auto i = 0; i < a_shape.rank() - 2; i++) {
+        for (size_t i = 0; i < a_shape.rank() - 2; i++) {
             TT_FATAL(
                 a_shape[i] == b_shape[i] || (i == 1 && in0_reuse()),
                 "bmm (non-bcast matmul) expects input tensors of shapes "
