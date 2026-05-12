@@ -43,22 +43,21 @@ struct VariableMatmulParams {
     //   are processed. For transpose_a, "row" means the M-axis of the matmul (= stored col
     //   axis of the input).
     //
+    // Which side is the parent (and which provides matmul-K) is picked at create() time:
+    //   - in1_k_offset > 0  OR  K_w > K_in  →  weight is parent, matmul-K = K_in
+    //   - otherwise                         →  input is parent (or equal), matmul-K = K_w
+    //
     // K-axis offset (in0_k_offset_tiles):
-    //   shifts the start of the in0 K-range read by this many tiles. The matmul-K count
-    //   still comes from the weight (the K==K_w validation), so the caller specifies only
-    //   the offset; in0 is interpreted as a larger parent tensor of which we read the
-    //   range [k_offset, k_offset + K) tiles. For non-transpose, this offsets along the
-    //   input's stored col axis (matmul-K). For transpose_a, it offsets along the input's
-    //   stored row axis (matmul-K).
+    //   Shifts the start of the in0 K-range read by this many tiles. matmul-K = K_w; in0
+    //   is interpreted as a larger parent of which we read [k_offset, k_offset + K_w).
+    //   For non-transpose this offsets along in0's stored col axis (matmul-K); for
+    //   transpose_a it offsets along in0's stored row axis (matmul-K).
     //
     // in1_k_offset_tiles:
-    //   K-axis offset on the weight (in1), analogous to in0_k_offset_tiles. The weight
-    //   is treated as a parent buffer with K extent K_in1 >= matmul-K; we slice
-    //   [k_offset, k_offset + K) on the weight's K axis (= storage row axis when not
-    //   transpose_b, storage col axis when transpose_b). The matmul-K count must match
-    //   the in0 side (either K_in0 == K_in1 == K_matmul, or both come from a common
-    //   parent slice). When in1_k_offset > 0, the weight's K_in extent dictates the
-    //   matmul-K count (the caller must size things so the in0 K matches the slice).
+    //   K-axis offset on the weight (in1), analogous to in0_k_offset_tiles. matmul-K = K_in;
+    //   the weight is interpreted as a larger parent of which we read
+    //   [k_offset, k_offset + K_in) on its K axis (= storage row axis when not transpose_b,
+    //   storage col axis when transpose_b). Cannot be combined with in0_k_offset > 0.
     //
     // out_row_offset_tiles:
     //   When an output tensor is provided in tensor_args_t, the matmul writes its

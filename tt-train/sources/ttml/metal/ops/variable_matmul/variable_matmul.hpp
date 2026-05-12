@@ -16,22 +16,27 @@ namespace ttml::metal {
 // Re-export config type for convenience
 using VariableMatmulConfig = ttml::metal::ops::variable_matmul::device::VariableMatmulConfig;
 
-// Variable-M matmul: compiles at most 2 programs (one per transpose variant),
-// then dispatches any M shape without recompilation.
+// Variable-M and variable-K matmul: M and K are runtime args. The program cache
+// keys on (N, transpose flags, grid), so a single cached program services any
+// (M, K) pair within a transpose variant.
 //
-// Optional read-at-offset support:
-//   - in0_row_offset_tiles: tile offset on the in0 matmul-M axis (input treated as a
-//     parent buffer).
+// Optional read-at-offset support (input/weight treated as parent buffers):
+//   - in0_row_offset_tiles: tile offset on the in0 matmul-M axis.
 //   - effective_M_tiles: M tile count to actually process (0 = use input's full M).
-//   - in0_k_offset_tiles: tile offset on the in0 matmul-K axis. The K count comes from
-//     the weight (no effective_K argument); in0 is read as if it had a larger K extent
-//     and we slice [k_offset, k_offset + K) tiles.
-//   - in1_k_offset_tiles: tile offset on the in1 matmul-K axis. The matmul-K count comes
-//     from in0 (when in1_k_offset > 0, in0's K determines matmul-K). The weight is read
-//     as if it had a larger K extent and we slice [k_offset, k_offset + K) tiles.
-//     Cannot be combined with in0_k_offset_tiles > 0.
-// All defaults preserve "use the whole input" behavior. These are runtime args —
-// different offset/length values reuse the same cached program.
+//   - in0_k_offset_tiles: tile offset on the in0 matmul-K axis. The K count comes
+//     from the weight (no effective_K argument); in0 is read as if it had a larger
+//     K extent and we slice [k_offset, k_offset + K) tiles.
+//   - in1_k_offset_tiles: tile offset on the in1 matmul-K axis. When set, in0's K
+//     determines matmul-K; the weight is read as if it had a larger K extent and
+//     we slice [k_offset, k_offset + K) tiles. Cannot be combined with in0_k_offset.
+//
+// Optional write-at-offset support (output treated as a parent buffer):
+//   - output_tensor: pre-allocated output to write into.
+//   - out_row_offset_tiles: tile offset on the output's M axis. matmul-N must equal
+//     parent-N. When omitted, a fresh output tensor is allocated and returned.
+//
+// All defaults preserve "use the whole input, allocate fresh output" behavior.
+// All offsets/lengths are runtime args — different values reuse the same cached program.
 //
 // Tile alignment: all offsets/counts must be in TILE_HEIGHT (32) units. With transpose_a,
 // "row" still means the matmul-M axis (= input's stored *col* axis) and "k_offset" still
