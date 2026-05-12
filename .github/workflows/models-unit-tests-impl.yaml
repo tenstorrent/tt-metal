@@ -106,11 +106,13 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        # WH runners host weights and tt_cache under /mnt/MLPerf; BH runners
-        # host the equivalent layout under /localdev/blackhole_demos/huggingface_data.
-        # Map the BH path onto /mnt/MLPerf/huggingface inside the container so a
-        # single test cmd referencing /mnt/MLPerf/... resolves correctly on both.
-        - ${{ startsWith(matrix.test-group.sku, 'bh_') && format('/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw') || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
+        # bh_p150_perf and the WH SKUs run on machines that host the canonical HF
+        # / tt_cache layout under /mnt/MLPerf, so the standard mount works as-is.
+        # bh_llmbox and bh_quietbox_2 are local-disk BH runners whose equivalent
+        # layout lives at /localdev/blackhole_demos/huggingface_data — map that
+        # host path onto /mnt/MLPerf/huggingface inside the container so a single
+        # test cmd referencing /mnt/MLPerf/... resolves on both cache modes.
+        - ${{ (matrix.test-group.sku == 'bh_llmbox' || matrix.test-group.sku == 'bh_quietbox_2') && format('/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw') || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
       options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
     defaults:
       run:

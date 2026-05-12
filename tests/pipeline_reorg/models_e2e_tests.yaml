@@ -420,7 +420,7 @@
     wh_llmbox_perf:
       timeout: 15
       tier: 2
-    bh_p150:
+    bh_p150_perf:
       timeout: 15
       tier: 2
     bh_llmbox:
