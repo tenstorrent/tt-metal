@@ -28,7 +28,7 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     tt::umd::ClusterDescriptor & cluster_desc,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     tt::TargetDevice target_device_type,
-    bool run_global_discovery,
+    bool run_global_discovery = true,
     bool run_live_discovery = true);
 
 // Free function to query local ethernet metrics
