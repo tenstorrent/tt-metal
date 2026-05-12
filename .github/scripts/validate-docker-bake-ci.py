@@ -8,7 +8,6 @@ import shutil
 import subprocess
 import sys
 
-
 BAKE_FILE = "dockerfile/docker-bake.hcl"
 HARBOR_PREFIX = "harbor.ci.tenstorrent.net/"
 REPO = "ghcr.io/tenstorrent/tt-metal"
@@ -183,22 +182,14 @@ def main() -> int:
         if not target.get("tags"):
             raise AssertionError(f"{name} has no tag after CI overrides")
         if not output_matches(target.get("output"), BAKE_OUTPUT):
-            raise AssertionError(
-                f"{name} output override was not preserved "
-                f"(got {target.get('output')!r})"
-            )
+            raise AssertionError(f"{name} output override was not preserved " f"(got {target.get('output')!r})")
         for context in target.get("contexts", {}).values():
             if context.startswith("docker-image://") and HARBOR_PREFIX not in context:
-                raise AssertionError(
-                    f"{name} context did not use Harbor prefix: {context}"
-                )
+                raise AssertionError(f"{name} context did not use Harbor prefix: {context}")
 
     if harbor_prefixed(f"{REPO}/image:tag") != f"{HARBOR_PREFIX}{REPO}/image:tag":
         raise AssertionError("Harbor prefix composition failed")
-    if (
-        harbor_prefixed(f"{HARBOR_PREFIX}{REPO}/image:tag")
-        != f"{HARBOR_PREFIX}{REPO}/image:tag"
-    ):
+    if harbor_prefixed(f"{HARBOR_PREFIX}{REPO}/image:tag") != f"{HARBOR_PREFIX}{REPO}/image:tag":
         raise AssertionError("Harbor prefix composition double-prefixed an image")
     if harbor_prefixed(f"{REPO}/image:tag", "") != f"{REPO}/image:tag":
         raise AssertionError("Fallback prefix composition failed")
