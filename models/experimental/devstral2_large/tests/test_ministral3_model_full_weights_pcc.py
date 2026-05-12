@@ -2,9 +2,19 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Full-depth PCC: HF ``Ministral3Model`` vs ``TtMinistral3Model`` with the full Devstral-2 text-trunk checkpoint.
+"""Full-depth PCC: **text-only** HF ``Ministral3Model`` vs :class:`~models.experimental.devstral2_large.tt.tt_ministral3_model.TtMinistral3Model`.
+
+The TT stack implements the Hugging Face **language** backbone only—``embed_tokens``, all
+decoder ``layers``, final ``norm``, and HF-format RoPE tables—**not** ``lm_head`` and not
+vision towers (see ``tt_ministral3_model.py`` module doc). Checkpoints are filtered to text
+trunk tensors via :func:`_text_trunk_sd`; multimodal Hub layouts are flattened only so
+``ModelArgs`` / ``Ministral3Config`` match the Devstral-2 snapshot.
 
 Opt-in: ``DEVSTRAL2_FULL_MODEL_PCC=1``.
+
+The full-weights PCC test persists HF inputs and reference hidden states to ``.pt`` files,
+drops the Hugging Face module from RAM, and calls ``malloc_trim`` on Linux before the
+TTNN model runs.
 
 **Checkpoint resolution**
 
@@ -29,7 +39,12 @@ the device.  All slow disk I/O therefore runs with no device open at all.
 
 from __future__ import annotations
 
+import ctypes
+import gc
 import os
+import shutil
+import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -61,6 +76,25 @@ from models.tt_transformers.tt.model_config import ModelArgs, PrecisionSetting, 
 # ---------------------------------------------------------------------------
 
 
+def _torch_load_pt(path: Path):
+    """Load a ``torch.save`` payload written by this test (trusted local file)."""
+    try:
+        return torch.load(path, map_location="cpu", weights_only=False)
+    except TypeError:
+        return torch.load(path, map_location="cpu")
+
+
+def _release_pytorch_cpu_ram() -> None:
+    """Best-effort return of freed CPU tensor memory to the OS (no CUDA involved)."""
+    gc.collect()
+    gc.collect()
+    if sys.platform == "linux":
+        try:
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except OSError:
+            pass
+
+
 def _resolve_ckpt_dir(repo_id: str) -> Path:
     """Return the directory that holds ``model.safetensors.index.json``."""
     explicit = os.environ.get("DEVSTRAL2_WEIGHTS_DIR")
@@ -76,7 +110,7 @@ def _resolve_ckpt_dir(repo_id: str) -> Path:
     from huggingface_hub import snapshot_download
 
     try:
-        snap = snapshot_download(repo_id, local_files_only=True)
+        snap = snapshot_download(repo_id, local_files_only=False)
     except Exception as exc:
         pytest.skip(
             f"Devstral-2 weights not in HF cache ({exc}). "
@@ -120,9 +154,9 @@ def _text_trunk_sd(raw: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
 def _preloaded_devstral2_weights():
     """Load every shard from disk before any TT device is opened.
 
-    Returns a dict ``{hf_key: bf16_tensor}`` for the text trunk, or skips
-    the test module if the checkpoint is unavailable or the opt-in env var
-    is not set.
+    Returns ``{hf_key: bf16_tensor}`` for the **text trunk** only (language-model / ``Ministral3Model``
+    keys; vision and projector tensors removed), or skips the module if the checkpoint is
+    unavailable or ``DEVSTRAL2_FULL_MODEL_PCC`` is not set.
     """
     if os.environ.get("DEVSTRAL2_FULL_MODEL_PCC") != "1":
         pytest.skip(
@@ -163,6 +197,8 @@ def _preloaded_devstral2_weights():
 
 @pytest.fixture
 def trust_remote_ministral(monkeypatch):
+    """``ModelArgs`` needs Devstral's multimodal Hub config; the PCC itself is **text trunk only**."""
+
     from models.tt_transformers.tt import model_config as mc
 
     orig_set = mc.ModelArgs._set_hf_params
@@ -241,13 +277,21 @@ def test_ministral3_model_pcc_devstral2_large_full_weights_all_layers(
     devstral2_123b_dummy_config_path,
     _preloaded_devstral2_weights,
 ):
-    """PCC test: HF ``Ministral3Model`` vs ``TtMinistral3Model`` with real 123 B weights.
+    """PCC: HF ``Ministral3Model`` **text backbone** vs ``TtMinistral3Model``.
 
-    Weights were already loaded by ``_preloaded_devstral2_weights`` (module scope) before
-    this function runs, so the device has been open for only ~1 s by the time we hit the
-    first device operation — well inside the 10 s ARC watchdog window.
+    Matches :class:`~models.experimental.devstral2_large.tt.tt_ministral3_model.TtMinistral3Model`:
+    ``embed_tokens`` → decoder ``layers`` → final ``norm`` (HF ``last_hidden_state``); no
+    ``lm_head``, no vision. Reference uses an explicit causal ``attention_mask``; TT uses
+    causal attention on device (``attention_mask`` ignored on TT).
+
+    Weights are pre-loaded (module scope) as **text trunk** keys only. After the HF forward,
+    ``inputs.pt`` / ``ref_out.pt`` are written, the HF module is freed, and the CPU heap is
+    trimmed before ``TtMinistral3Model``. ``ref_out`` is reloaded from disk just before PCC.
+
+    Device opens shortly before TT work so the ARC watchdog window stays safe. Peak RAM
+    during the HF reference is ``hf_sd`` plus a full ``Ministral3Model`` copy.
     """
-    # hf_sd: {hf_key: bf16_tensor} for the text trunk (pre-loaded before device opened)
+    # hf_sd: text-trunk HF keys only (vision stripped in ``_text_trunk_sd``)
     hf_sd = _preloaded_devstral2_weights
 
     monkeypatch.setenv("HF_MODEL", DEVSTRAL2_LARGE_REPO_ID)
@@ -270,6 +314,7 @@ def test_ministral3_model_pcc_devstral2_large_full_weights_all_layers(
         meta_sd = _build_meta_state_dict(hf_sd, text_cfg)
     except Exception as exc:
         pytest.skip(f"HF→meta key conversion failed: {exc}")
+    logger.info("HF→meta state dict ready (still shares storage with hf_sd where possible)")
 
     # ---- set precision overrides for bf16 PCC comparison ----
     for _lid, dopt in model_args.decoders_optimizations.decoder_optimizations.items():
@@ -280,22 +325,26 @@ def test_ministral3_model_pcc_devstral2_large_full_weights_all_layers(
     _force_mlp_weight_dtypes_bf16(model_args)
     _force_replicated_rmsnorm(model_args)
 
-    # ---- reference HF model (CPU bf16) ----
-    # Strip the leading "model." from hf_sd keys to match Ministral3Model.load_state_dict
+    # ---- reference HF model (CPU bf16), persist I/O, then drop all HF-only RAM ----
+    # ``hf_sd`` already holds one full bf16 copy; ``load_state_dict`` duplicates into
+    # ``Ministral3Model``. After the forward we write ``inputs.pt`` / ``ref_out.pt``,
+    # delete the HF model and in-memory ref tensors, and trim the CPU heap before TTNN.
     text_cfg._attn_implementation = "eager"
     ref_weights = {k[len("model.") :]: v for k, v in hf_sd.items() if k.startswith("model.")}
     ref_weights.pop("lm_head.weight", None)
+    logger.info(
+        "Allocating HF Ministral3Model + load_state_dict (peak host RAM ≈ hf_sd + full model copy; "
+        "OOM kill here is not the TTNN path)"
+    )
     hf_model = Ministral3Model(text_cfg).eval().to(torch.bfloat16)
     hf_model.load_state_dict(ref_weights, strict=True)
     logger.info("Reference Ministral3Model loaded")
 
-    # ---- inputs ----
     torch.manual_seed(42)
     gen = torch.Generator(device="cpu").manual_seed(42)
     input_ids = torch.randint(0, text_cfg.vocab_size, (batch_size, seq_len), dtype=torch.long, generator=gen)
     position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
 
-    # ---- reference forward pass ----
     inputs_embeds = hf_model.embed_tokens(input_ids)
     causal_mask = create_causal_mask(
         config=text_cfg,
@@ -310,48 +359,92 @@ def test_ministral3_model_pcc_devstral2_large_full_weights_all_layers(
         position_ids=position_ids,
         use_cache=False,
     ).last_hidden_state
+    ref_out = ref_out.detach().to(dtype=torch.bfloat16, device="cpu", copy=True).contiguous()
     logger.info(f"Reference output shape: {ref_out.shape}")
 
-    # ---- TT model construction (device ops start here — ARC WDT is reset by dispatch) ----
-    tt_ccl = TT_CCL(mesh_device)
-    transformation_mats = {"decode": None, "prefill": None}
-    tt_model = TtMinistral3Model(
-        model_args,
-        mesh_device,
-        tt_ccl,
-        dtype,
-        meta_sd,
-        weight_cache_path=model_args.weight_cache_path(dtype),
-        transformation_mats=transformation_mats,
-    )
-    logger.info("TtMinistral3Model constructed")
+    expected_shape = (batch_size, seq_len, text_cfg.hidden_size)
+    assert ref_out.shape == expected_shape, f"HF text backbone output shape {ref_out.shape} != {expected_shape}"
 
-    # ---- TT forward pass ----
-    tokens_4d = input_ids.reshape(1, 1, 1, -1).to(torch.int32)
-    input_ids_tt = ttnn.from_torch(
-        tokens_4d,
-        device=mesh_device,
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-    tt_out = tt_model(
-        input_ids=input_ids_tt,
-        mode=Mode.PREFILL,
-        batch_size=batch_size,
-    ).last_hidden_state
+    tmp_dir = Path(tempfile.mkdtemp(prefix="devstral2_full_pcc_"))
+    inputs_pt = tmp_dir / "inputs.pt"
+    ref_out_pt = tmp_dir / "ref_out.pt"
+    try:
+        torch.save(
+            {"input_ids": input_ids.cpu().contiguous(), "position_ids": position_ids.cpu().contiguous()},
+            inputs_pt,
+        )
+        torch.save({"ref_out": ref_out}, ref_out_pt)
+        logger.info(f"Wrote reference cache to {tmp_dir} (inputs.pt, ref_out.pt)")
 
-    # ---- gather TT output ----
-    out_last = int(tt_out.shape[-1])
-    if out_last == model_args.dim:
-        tt_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
-    else:
-        tt_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
-    tt_torch = tt_torch.reshape(ref_out.shape)
+        del hf_model, ref_weights, inputs_embeds, causal_mask, ref_out, input_ids, position_ids
+        _release_pytorch_cpu_ram()
 
-    # ---- PCC comparison ----
-    pcc_required = 0.99
-    passing, pcc_message = comp_pcc(ref_out, tt_torch, pcc_required)
-    logger.info(comp_allclose(ref_out, tt_torch))
-    logger.info(f"PCC (Ministral3Model full weights, {text_cfg.num_hidden_layers} layers): {pcc_message}")
-    assert passing, f"PCC below {pcc_required}: {pcc_message}"
+        inputs_bundle = _torch_load_pt(inputs_pt)
+        input_ids = inputs_bundle["input_ids"]
+        position_ids_cpu = inputs_bundle["position_ids"]
+        del inputs_bundle
+        _release_pytorch_cpu_ram()
+
+        logger.info("Starting TT_CCL / TtMinistral3Model (HF reference module already freed)")
+        # ---- TT model construction (device ops start here — ARC WDT is reset by dispatch) ----
+        tt_ccl = TT_CCL(mesh_device)
+        transformation_mats = {"decode": None, "prefill": None}
+        tt_model = TtMinistral3Model(
+            model_args,
+            mesh_device,
+            tt_ccl,
+            dtype,
+            meta_sd,
+            weight_cache_path=model_args.weight_cache_path(dtype),
+            transformation_mats=transformation_mats,
+        )
+        logger.info("TtMinistral3Model constructed (text stack: embed → layers → norm; no lm_head)")
+
+        # ---- TT forward pass (same ``input_ids`` / ``position_ids`` as HF text reference) ----
+        tokens_4d = input_ids.reshape(1, 1, 1, -1).to(torch.int32)
+        input_ids_tt = ttnn.from_torch(
+            tokens_4d,
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        position_ids_tt = ttnn.from_torch(
+            position_ids_cpu.to(torch.int32),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        tt_out = tt_model(
+            input_ids=input_ids_tt,
+            position_ids=position_ids_tt,
+            mode=Mode.PREFILL,
+            batch_size=batch_size,
+        ).last_hidden_state
+
+        # ---- gather TT output ----
+        out_last = int(tt_out.shape[-1])
+        if out_last == model_args.dim:
+            tt_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
+        else:
+            tt_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+
+        ref_bundle = _torch_load_pt(ref_out_pt)
+        ref_out = ref_bundle["ref_out"]
+        del ref_bundle
+        _release_pytorch_cpu_ram()
+
+        tt_torch = tt_torch.reshape(ref_out.shape)
+        assert tt_torch.shape == expected_shape, f"TT text backbone output shape {tt_torch.shape} != {expected_shape}"
+
+        # ---- PCC: HF ``Ministral3Model`` last_hidden_state vs ``TtMinistral3Model`` (text only) ----
+        pcc_required = 0.99
+        passing, pcc_message = comp_pcc(ref_out, tt_torch, pcc_required)
+        logger.info(comp_allclose(ref_out, tt_torch))
+        logger.info(
+            f"PCC (text Ministral3Model vs TtMinistral3Model, {text_cfg.num_hidden_layers} layers): {pcc_message}"
+        )
+        assert passing, f"PCC below {pcc_required}: {pcc_message}"
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
