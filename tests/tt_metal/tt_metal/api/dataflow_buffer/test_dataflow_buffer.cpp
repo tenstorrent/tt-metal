@@ -8,6 +8,7 @@
 #include <numeric>
 #include <optional>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -70,7 +71,7 @@ void execute_program_and_verify_impl(
     Read&& read_output,
     bool verify_output,
     std::optional<std::vector<uint32_t>> expected_output) {
-    write_input(in_handle, input);
+    std::forward<Write>(write_input)(in_handle, input);
 
     if (mesh_device->get_devices()[0]->arch() == ARCH::QUASAR) {
         // TODO #38042: Need to wait for data to be written, the barrier needs to be uplifted for Quasar
@@ -89,7 +90,7 @@ void execute_program_and_verify_impl(
     detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
 
     std::vector<uint32_t> output;
-    read_output(out_handle, output);
+    std::forward<Read>(read_output)(out_handle, output);
 
     if (verify_output) {
         const std::vector<uint32_t>& expected = expected_output ? *expected_output : input;
@@ -126,7 +127,7 @@ void execute_program_and_verify(
         distributed::ReadShard(cq, vec, buf, zero_coord, true);
     };
     execute_program_and_verify_impl(
-        mesh_device, program, in_buffer, out_buffer, input, write, read, verify_output, expected_output);
+        mesh_device, program, in_buffer, out_buffer, input, write, read, verify_output, std::move(expected_output));
 }
 
 // Metal 2.0 MeshTensor path: I/O through the bound tensor's underlying reference buffer.
@@ -145,7 +146,7 @@ void execute_program_and_verify(
         detail::ReadFromBuffer(*t.mesh_buffer().get_reference_buffer(), vec);
     };
     execute_program_and_verify_impl(
-        mesh_device, program, in_tensor, out_tensor, input, write, read, verify_output, expected_output);
+        mesh_device, program, in_tensor, out_tensor, input, write, read, verify_output, std::move(expected_output));
 }
 
 // Build a TensorSpec describing a flat DRAM-interleaved buffer of `total_entries`
