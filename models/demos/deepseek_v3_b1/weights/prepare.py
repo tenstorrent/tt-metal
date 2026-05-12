@@ -17,6 +17,7 @@ with :class:`~weights.cache.CacheConfig` and the ``prepare_*`` functions
 from __future__ import annotations
 
 import hashlib
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -60,6 +61,7 @@ KV_B12_SPEC = KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 GATE_UP_SPEC = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor
 from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_layer
+from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import quantize_dequantize_bfp
 from models.demos.deepseek_v3_b1.weights.transforms.attention import preprocess_kv_b12, preprocess_q_ab_kv_a
 from models.demos.deepseek_v3_b1.weights.transforms.moe import (
     _tp_factors,
@@ -1178,6 +1180,48 @@ def prepare_moe_routed_experts_bspm(
     return routed
 
 
+def _apply_bspm_dequant_to_weight(
+    weight_np: np.ndarray,
+    codes_2d: np.ndarray,
+    tile_size: int = 32,
+) -> np.ndarray:
+    """Apply per-tile BFP quantize-dequantize using BSPM codes; return fp32 numpy.
+
+    codes_2d: (tile_rows, tile_cols) tt-metal-encoded uint8/int8 codes
+        (0=bfp8/mant=7, 1=bfp4/mant=3, 2=bfp2/mant=1, 3=bfp0/zero).
+    weight_np: (K, N) float numpy. K and N must be tile-aligned.
+
+    Vectorized: one quantize_dequantize_bfp call per active precision tier,
+    composited via the tile-code mask. Seconds per expert/projection vs hours
+    for a per-tile Python loop.
+    """
+    K, N = weight_np.shape
+    assert K % tile_size == 0 and N % tile_size == 0, f"weight shape {(K, N)} not tile-aligned to {tile_size}"
+    tile_rows = K // tile_size
+    tile_cols = N // tile_size
+    codes_2d = np.asarray(codes_2d, dtype=np.uint8)
+    if codes_2d.shape != (tile_rows, tile_cols):
+        raise ValueError(f"BSPM codes shape {codes_2d.shape} != weight tile grid {(tile_rows, tile_cols)}")
+    w_np = np.ascontiguousarray(weight_np, dtype=np.float32)
+
+    has_bfp8 = bool((codes_2d == 0).any())
+    has_bfp2 = bool((codes_2d == 2).any())
+    has_bfp0 = bool((codes_2d == 3).any())
+    w_bfp4 = quantize_dequantize_bfp(w_np, mant_bits=3)
+    w_bfp2 = quantize_dequantize_bfp(w_np, mant_bits=1) if has_bfp2 else None
+    w_bfp8 = quantize_dequantize_bfp(w_np, mant_bits=7) if has_bfp8 else None
+
+    code_grid = codes_2d.repeat(tile_size, axis=0).repeat(tile_size, axis=1)
+    out = w_bfp4.copy()
+    if has_bfp2:
+        out = np.where(code_grid == 2, w_bfp2, out)
+    if has_bfp8:
+        out = np.where(code_grid == 0, w_bfp8, out)
+    if has_bfp0:
+        out = np.where(code_grid == 3, 0.0, out)
+    return out.astype(np.float32)
+
+
 def prepare_moe_routed_experts_bspm_tp8(
     device,
     state_dict: dict[str, torch.Tensor],
@@ -1256,6 +1300,26 @@ def prepare_moe_routed_experts_bspm_tp8(
         bspm_data = load_bspm_for_layer(str(bspm_path))
         logger.info("  BSPM TP8 mixed-precision compression for {} experts", bspm_data["n_experts"])
 
+    # Diagnostic: BSPM_DEQUANT_TO_BFP4=1 applies BSPM mixed-precision quantization
+    # in software (per-tile quantize-dequantize), then uploads the result through
+    # the uniform-bfp4 storage path (the kernel sees uniform-bfp4 tiles). The math
+    # is the same as the compressed-tile dispatch kernel would produce; this mode
+    # isolates the mixed-precision math from the compressed-tile kernel code path.
+    dequant_to_bfp4 = bspm_data is not None and os.environ.get("BSPM_DEQUANT_TO_BFP4", "0") == "1"
+    bspm_codes_for_dequant: np.ndarray | None = None
+    if dequant_to_bfp4:
+        logger.info(
+            "BSPM_DEQUANT_TO_BFP4=1 for layer {}: applying BSPM in software, "
+            "routing weights through uniform bfloat4_b TP8 storage "
+            "(mixed-precision math, uniform-bfp4 kernel path)",
+            layer_idx,
+        )
+        bspm_codes_for_dequant = bspm_data["codes"]
+        # Force the per-projection assignment-build below to take the uniform-bfp4
+        # fallback path. The on-device assignment is uniform bfp4; the underlying
+        # values carry the BSPM mixed-precision quantization error baked in.
+        bspm_data = None
+
     # (proj_name, shard_dim, subblock_k, subblock_n) — must match the kernel's
     # DRAM read pattern in setup_matmul_expert_dram.
     # - gate/up use K-split (k_parallel_per_bank=2): subblock_k=112 = Kt//k_parallel
@@ -1292,6 +1356,10 @@ def prepare_moe_routed_experts_bspm_tp8(
             N_padded_per_device = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
 
         target_name = f"routed_{proj_name}"
+        if bspm_codes_for_dequant is not None:
+            # Distinct cache key so dequant-mode entries don't collide with the regular
+            # uniform-bfp4 cache (the on-disk tiles differ even though the assignment is uniform).
+            target_name = f"{target_name}_bspm_dequant_{bspm_variant}_{bspm_budget:.1f}"
         K_flat = tp * K_per_device  # cache stores TP8 weights as 2D-flattened mesh
 
         # Build per-expert logical assignments (pre-slice, pre-shuffle).
@@ -1312,6 +1380,21 @@ def prepare_moe_routed_experts_bspm_tp8(
             uniform_assignment = np.ones((tiles_h_full, N // tile_w), dtype=np.int8)
             all_assignments = [uniform_assignment] * num_routed_experts
 
+        # Per-expert dequant-codes (only used in BSPM_DEQUANT_TO_BFP4 mode). Reshape and
+        # slice off padding columns so codes match the unpadded weight tile grid.
+        dequant_codes_per_expert: list[np.ndarray] | None = None
+        if bspm_codes_for_dequant is not None:
+            if num_routed_experts > bspm_codes_for_dequant.shape[0]:
+                raise ValueError(
+                    f"Requested {num_routed_experts} experts, but BSPM only has " f"{bspm_codes_for_dequant.shape[0]}"
+                )
+            dequant_codes_per_expert = [
+                np.ascontiguousarray(
+                    bspm_codes_for_dequant[e, proj_idx].reshape(tiles_w_full_padded, tiles_h_full).T[:, : N // tile_w]
+                )
+                for e in range(num_routed_experts)
+            ]
+
         for e, key in enumerate(keys):
             assignment_logical = all_assignments[e]
             assignment_hash = hashlib.sha256(np.ascontiguousarray(assignment_logical).tobytes()).hexdigest()[:16]
@@ -1328,13 +1411,18 @@ def prepare_moe_routed_experts_bspm_tp8(
                 source=SourceTensorSelection(names=(key,)),
                 target=tgt,
             )
+            dequant_codes = dequant_codes_per_expert[e] if dequant_codes_per_expert is not None else None
             ct = get_or_create_bspm_expert_tp8(
                 cache_config.cache,
                 fp,
                 device,
                 raw_tensors=lambda _k=key: {_k: state_dict[_k]},
-                preprocess=lambda tensors, _k=key, _a=assignment_logical: CompressedTensorBuildInputs(
-                    w=tensors[_k].T.contiguous().float().numpy(),
+                preprocess=lambda tensors, _k=key, _a=assignment_logical, _dc=dequant_codes: CompressedTensorBuildInputs(
+                    w=(
+                        _apply_bspm_dequant_to_weight(tensors[_k].T.contiguous().float().numpy(), _dc)
+                        if _dc is not None
+                        else tensors[_k].T.contiguous().float().numpy()
+                    ),
                     assignment=_a,
                 ),
                 mesh_shape=mesh_shape,
@@ -1347,7 +1435,12 @@ def prepare_moe_routed_experts_bspm_tp8(
             )
             results[proj_idx].append(ct)
             if (e + 1) % 32 == 0:
-                mode = "BSPM TP8" if bspm_data is not None else "compressed TP8 (uniform)"
+                if bspm_data is not None:
+                    mode = "BSPM TP8"
+                elif bspm_codes_for_dequant is not None:
+                    mode = "BSPM-dequant uniform-bfp4 TP8"
+                else:
+                    mode = "compressed TP8 (uniform)"
                 logger.info("  {}: uploaded {}/{} experts ({})", proj_name, e + 1, num_routed_experts, mode)
 
     routed = MoERoutedExpertWeights(
