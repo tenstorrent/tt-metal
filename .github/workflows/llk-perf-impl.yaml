@@ -61,7 +61,7 @@ jobs:
     runs-on: ${{ matrix.test-group.runs_on }}
     timeout-minutes: ${{ matrix.test-group.timeout }}
     container:
-      image: ${{ needs.build-images.outputs.llk-ci-image }}
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
       options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
     steps:
       - name: Checkout code

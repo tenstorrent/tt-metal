@@ -129,22 +129,22 @@ on:
         description: >-
           Docker tag for the CI Build Docker image for building TT-Metalium et al
         value: >-
-          ${{ inputs.ci-build-docker-image || jobs.build-docker-image.outputs.ci-build-image }}
+          ${{ inputs.ci-build-docker-image || jobs.build-docker-image.outputs.ci-build-tag }}
       ci-test-docker-image:
         description: "Docker tag for the CI Test Docker image for testing TT-Metalium et al"
-        value: ${{ inputs.ci-test-docker-image || jobs.build-docker-image.outputs.ci-test-image }}
+        value: ${{ inputs.ci-test-docker-image || jobs.build-docker-image.outputs.ci-test-tag }}
       dev-docker-image:
         description: "Docker tag for the dev Docker image for developing TT-Metalium et al"
-        value: ${{ inputs.dev-docker-image || jobs.build-docker-image.outputs.dev-image }}
+        value: ${{ inputs.dev-docker-image || jobs.build-docker-image.outputs.dev-tag }}
       basic-dev-docker-image:
         description: "Docker tag for the basic dev Docker image for basic development"
-        value: ${{ inputs.basic-dev-docker-image || jobs.build-docker-image.outputs.basic-dev-image }}
+        value: ${{ inputs.basic-dev-docker-image || jobs.build-docker-image.outputs.basic-dev-tag }}
       basic-ttnn-runtime-docker-image:
         description: "Docker tag for the basic TTNN runtime Docker image for running TTNN"
-        value: ${{ inputs.basic-ttnn-runtime-docker-image || jobs.build-docker-image.outputs.basic-ttnn-runtime-image }}
+        value: ${{ inputs.basic-ttnn-runtime-docker-image || jobs.build-docker-image.outputs.basic-ttnn-runtime-tag }}
       manylinux-docker-image:
         description: "Docker tag for the ManyLinux Docker image"
-        value: ${{ inputs.manylinux-docker-image || jobs.build-docker-image.outputs.manylinux-image }}
+        value: ${{ inputs.manylinux-docker-image || jobs.build-docker-image.outputs.manylinux-tag }}
       packages-artifact-name:
         description: "Name to give download-artifact to get the packages"
         value: >-
@@ -364,7 +364,7 @@ jobs:
             (startsWith(inputs.ci-build-docker-image, 'harbor.ci.tenstorrent.net/') &&
               inputs.ci-build-docker-image ||
               format('{0}{1}', inputs.harbor-prefix, inputs.ci-build-docker-image))) ||
-          format('{0}{1}', inputs.harbor-prefix, needs.build-docker-image.outputs.ci-build-image || 'docker-image-unresolved!')
+          format('{0}{1}', inputs.harbor-prefix, needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!')
         }}
       env:
         CCACHE_REMOTE_ONLY: "true"
@@ -634,7 +634,7 @@ jobs:
             (startsWith(inputs.manylinux-docker-image, 'harbor.ci.tenstorrent.net/') &&
               inputs.manylinux-docker-image ||
               format('{0}{1}', inputs.harbor-prefix, inputs.manylinux-docker-image))) ||
-          format('{0}{1}', inputs.harbor-prefix, needs.build-docker-image.outputs.manylinux-image || 'docker-image-unresolved!')
+          format('{0}{1}', inputs.harbor-prefix, needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!')
         }}
       ref: ${{ inputs.ref || '' }}
       tracy: ${{ inputs.tracy }}

@@ -54,7 +54,7 @@ jobs:
     uses: ./.github/workflows/llk-ttsim-regression.yaml
     secrets: inherit
     with:
-      docker_image: ${{ needs.build-images.outputs.llk-ci-image }}
+      docker_image: ${{ needs.build-images.outputs.llk-ci-tag }}
       # Defaults on workflow_call inputs are only used when the caller omits
       # them entirely. On workflow_dispatch inputs are strings, so cast them
       # to the numbers the reusable workflow expects; on schedule they are

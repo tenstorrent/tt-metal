@@ -12,7 +12,7 @@ name: "Build all Docker images"
 #
 # NAMING CONVENTION: Outputs use "ubuntu-XXXX-*-tag" format to distinguish
 # platform-specific images. These map to build-artifact.yaml inputs like:
-#   ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-build-image }}
+#   ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-build-tag }}
 # =============================================================================
 
 env:
@@ -31,44 +31,44 @@ on:
         description: "Force rebuild of all Docker images even if they exist in registry"
     outputs:
       # Ubuntu 22.04 images (from build-docker-artifact platform=Ubuntu 22.04)
-      ubuntu-2204-ci-build-image:
+      ubuntu-2204-ci-build-tag:
         description: "Docker tag for Ubuntu 22.04 CI Build image"
-        value: ${{ jobs.build-2204.outputs.ci-build-image }}
-      ubuntu-2204-ci-test-image:
+        value: ${{ jobs.build-2204.outputs.ci-build-tag }}
+      ubuntu-2204-ci-test-tag:
         description: "Docker tag for Ubuntu 22.04 CI Test image"
-        value: ${{ jobs.build-2204.outputs.ci-test-image }}
-      ubuntu-2204-dev-image:
+        value: ${{ jobs.build-2204.outputs.ci-test-tag }}
+      ubuntu-2204-dev-tag:
         description: "Docker tag for Ubuntu 22.04 Dev image"
-        value: ${{ jobs.build-2204.outputs.dev-image }}
-      ubuntu-2204-basic-dev-image:
+        value: ${{ jobs.build-2204.outputs.dev-tag }}
+      ubuntu-2204-basic-dev-tag:
         description: "Docker tag for Ubuntu 22.04 Basic Dev image"
-        value: ${{ jobs.build-2204.outputs.basic-dev-image }}
-      ubuntu-2204-basic-ttnn-runtime-image:
+        value: ${{ jobs.build-2204.outputs.basic-dev-tag }}
+      ubuntu-2204-basic-ttnn-runtime-tag:
         description: "Docker tag for Ubuntu 22.04 Basic TTNN Runtime image"
-        value: ${{ jobs.build-2204.outputs.basic-ttnn-runtime-image }}
+        value: ${{ jobs.build-2204.outputs.basic-ttnn-runtime-tag }}
       # Ubuntu 24.04 images (from build-docker-artifact platform=Ubuntu 24.04)
-      ubuntu-2404-ci-build-image:
+      ubuntu-2404-ci-build-tag:
         description: "Docker tag for Ubuntu 24.04 CI Build image"
-        value: ${{ jobs.build-2404.outputs.ci-build-image }}
-      ubuntu-2404-ci-test-image:
+        value: ${{ jobs.build-2404.outputs.ci-build-tag }}
+      ubuntu-2404-ci-test-tag:
         description: "Docker tag for Ubuntu 24.04 CI Test image"
-        value: ${{ jobs.build-2404.outputs.ci-test-image }}
-      ubuntu-2404-dev-image:
+        value: ${{ jobs.build-2404.outputs.ci-test-tag }}
+      ubuntu-2404-dev-tag:
         description: "Docker tag for Ubuntu 24.04 Dev image"
-        value: ${{ jobs.build-2404.outputs.dev-image }}
-      ubuntu-2404-basic-dev-image:
+        value: ${{ jobs.build-2404.outputs.dev-tag }}
+      ubuntu-2404-basic-dev-tag:
         description: "Docker tag for Ubuntu 24.04 Basic Dev image"
-        value: ${{ jobs.build-2404.outputs.basic-dev-image }}
-      ubuntu-2404-basic-ttnn-runtime-image:
+        value: ${{ jobs.build-2404.outputs.basic-dev-tag }}
+      ubuntu-2404-basic-ttnn-runtime-tag:
         description: "Docker tag for Ubuntu 24.04 Basic TTNN Runtime image"
-        value: ${{ jobs.build-2404.outputs.basic-ttnn-runtime-image }}
+        value: ${{ jobs.build-2404.outputs.basic-ttnn-runtime-tag }}
       # ManyLinux image (shared; same tag from either platform run)
-      manylinux-image:
+      manylinux-tag:
         description: "Docker tag for ManyLinux image"
-        value: ${{ jobs.build-2204.outputs.manylinux-image }}
-      llk-ci-image:
+        value: ${{ jobs.build-2204.outputs.manylinux-tag }}
+      llk-ci-tag:
         description: "Docker tag for LLK CI image (Ubuntu 22.04)"
-        value: ${{ jobs.preflight.outputs.llk-ci-image }}
+        value: ${{ jobs.preflight.outputs.llk-ci-tag }}
   workflow_dispatch:
     inputs:
       force-rebuild:
@@ -97,7 +97,7 @@ jobs:
       tool-data: ${{ steps.tool-data.outputs.data }}
       platform-2204-data: ${{ steps.platform-2204.outputs.data }}
       platform-2404-data: ${{ steps.platform-2404.outputs.data }}
-      llk-ci-image: ${{ steps.llk-check.outputs.llk-ci-image }}
+      llk-ci-tag: ${{ steps.llk-check.outputs.llk-ci-tag }}
       llk-needs-build: ${{ steps.llk-check.outputs.llk-needs-build }}
     steps:
       - name: Checkout repo
@@ -180,7 +180,7 @@ jobs:
           fi
           DOCKER_TAG=$(./.github/scripts/llk-get-docker-tag.sh)
           TAG="ghcr.io/${{ github.repository }}/tt-llk-ci-ubuntu-22-04:${DOCKER_TAG}"
-          echo "llk-ci-image=$TAG" >> "$GITHUB_OUTPUT"
+          echo "llk-ci-tag=$TAG" >> "$GITHUB_OUTPUT"
           if docker manifest inspect "$TAG" > /dev/null 2>&1; then
             echo "LLK CI image exists"
             echo "llk-needs-build=false" >> "$GITHUB_OUTPUT"
@@ -289,14 +289,14 @@ jobs:
         id: images-2204
         run: |
           IMAGES=$(jq -n \
-            --arg ci_build '${{ needs.build-2204.outputs.ci-build-image }}' \
-            --arg ci_test '${{ needs.build-2204.outputs.ci-test-image }}' \
-            --arg dev '${{ needs.build-2204.outputs.dev-image }}' \
-            --arg basic_dev '${{ needs.build-2204.outputs.basic-dev-image }}' \
-            --arg basic_ttnn '${{ needs.build-2204.outputs.basic-ttnn-runtime-image }}' \
-            --arg manylinux '${{ needs.build-2204.outputs.manylinux-image }}' \
-            --arg venv_build '${{ needs.build-2204.outputs.python-ci-build-venv-image }}' \
-            --arg venv_test '${{ needs.build-2204.outputs.python-ci-test-venv-image }}' \
+            --arg ci_build '${{ needs.build-2204.outputs.ci-build-tag }}' \
+            --arg ci_test '${{ needs.build-2204.outputs.ci-test-tag }}' \
+            --arg dev '${{ needs.build-2204.outputs.dev-tag }}' \
+            --arg basic_dev '${{ needs.build-2204.outputs.basic-dev-tag }}' \
+            --arg basic_ttnn '${{ needs.build-2204.outputs.basic-ttnn-runtime-tag }}' \
+            --arg manylinux '${{ needs.build-2204.outputs.manylinux-tag }}' \
+            --arg venv_build '${{ needs.build-2204.outputs.python-ci-build-venv-tag }}' \
+            --arg venv_test '${{ needs.build-2204.outputs.python-ci-test-venv-tag }}' \
             '[ $ci_build, $ci_test, $dev, $basic_dev, $basic_ttnn, $manylinux, $venv_build, $venv_test ] | map(select(. != ""))')
           {
             echo "list<<EOF"
@@ -315,13 +315,13 @@ jobs:
         id: images-2404
         run: |
           IMAGES=$(jq -n \
-            --arg ci_build '${{ needs.build-2404.outputs.ci-build-image }}' \
-            --arg ci_test '${{ needs.build-2404.outputs.ci-test-image }}' \
-            --arg dev '${{ needs.build-2404.outputs.dev-image }}' \
-            --arg basic_dev '${{ needs.build-2404.outputs.basic-dev-image }}' \
-            --arg basic_ttnn '${{ needs.build-2404.outputs.basic-ttnn-runtime-image }}' \
-            --arg venv_build '${{ needs.build-2404.outputs.python-ci-build-venv-image }}' \
-            --arg venv_test '${{ needs.build-2404.outputs.python-ci-test-venv-image }}' \
+            --arg ci_build '${{ needs.build-2404.outputs.ci-build-tag }}' \
+            --arg ci_test '${{ needs.build-2404.outputs.ci-test-tag }}' \
+            --arg dev '${{ needs.build-2404.outputs.dev-tag }}' \
+            --arg basic_dev '${{ needs.build-2404.outputs.basic-dev-tag }}' \
+            --arg basic_ttnn '${{ needs.build-2404.outputs.basic-ttnn-runtime-tag }}' \
+            --arg venv_build '${{ needs.build-2404.outputs.python-ci-build-venv-tag }}' \
+            --arg venv_test '${{ needs.build-2404.outputs.python-ci-test-venv-tag }}' \
             '[ $ci_build, $ci_test, $dev, $basic_dev, $basic_ttnn, $venv_build, $venv_test ] | map(select(. != ""))')
           {
             echo "list<<EOF"
@@ -340,5 +340,5 @@ jobs:
         uses: ./.github/actions/prewarm-images
         with:
           harbor-prefix: ${{ needs.preflight.outputs.harbor-prefix }}
-          images: '["${{ needs.preflight.outputs.llk-ci-image }}"]'
+          images: '["${{ needs.preflight.outputs.llk-ci-tag }}"]'
           title: "LLK CI image"

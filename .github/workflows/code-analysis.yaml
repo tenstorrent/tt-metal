@@ -144,7 +144,7 @@ jobs:
     uses: ./.github/workflows/resolve-docker-pull-refs.yaml
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-      ci-build-docker-image: ${{ inputs.ci-build-docker-image || needs.build-docker-image.outputs.ci-build-image }}
+      ci-build-docker-image: ${{ inputs.ci-build-docker-image || needs.build-docker-image.outputs.ci-build-tag }}
 
   # Full scan: single job that analyzes everything
   clang-tidy-full:

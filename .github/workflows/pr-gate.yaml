@@ -121,13 +121,13 @@ jobs:
     uses: ./.github/workflows/resolve-docker-pull-refs.yaml
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-      ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-image }}
-      ci-test-docker-image: ${{ needs.build-docker-images.outputs.ci-test-image }}
-      dev-docker-image: ${{ needs.build-docker-images.outputs.dev-image }}
-      basic-dev-docker-image: ${{ needs.build-docker-images.outputs.basic-dev-image }}
-      basic-ttnn-runtime-docker-image: ${{ needs.build-docker-images.outputs.basic-ttnn-runtime-image }}
-      manylinux-docker-image: ${{ needs.build-docker-images.outputs.manylinux-image }}
-      llk-ci-docker-image: ${{ needs.build-docker-images.outputs.llk-ci-image }}
+      ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
+      ci-test-docker-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
+      dev-docker-image: ${{ needs.build-docker-images.outputs.dev-tag }}
+      basic-dev-docker-image: ${{ needs.build-docker-images.outputs.basic-dev-tag }}
+      basic-ttnn-runtime-docker-image: ${{ needs.build-docker-images.outputs.basic-ttnn-runtime-tag }}
+      manylinux-docker-image: ${{ needs.build-docker-images.outputs.manylinux-tag }}
+      llk-ci-docker-image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
 
   asan-build:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
@@ -256,7 +256,7 @@ jobs:
     uses: ./.github/workflows/docs-latest-public.yaml
     secrets: inherit
     with:
-      docker-image: ${{ needs.build-docker-images.outputs.ci-test-image }}
+      docker-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
 
   metalium-examples:

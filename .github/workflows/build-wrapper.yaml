@@ -4,27 +4,27 @@ on:
   workflow_call:
     inputs:
       # Pre-built Docker image tags (optional - if provided, skips docker build)
-      ubuntu-2204-ci-build-image:
+      ubuntu-2204-ci-build-tag:
         required: false
         type: string
         default: ""
-      ubuntu-2204-dev-image:
+      ubuntu-2204-dev-tag:
         required: false
         type: string
         default: ""
-      ubuntu-2204-manylinux-image:
+      ubuntu-2204-manylinux-tag:
         required: false
         type: string
         default: ""
-      ubuntu-2404-ci-build-image:
+      ubuntu-2404-ci-build-tag:
         required: false
         type: string
         default: ""
-      ubuntu-2404-dev-image:
+      ubuntu-2404-dev-tag:
         required: false
         type: string
         default: ""
-      ubuntu-2404-manylinux-image:
+      ubuntu-2404-manylinux-tag:
         required: false
         type: string
         default: ""
@@ -105,7 +105,7 @@ jobs:
   # build-dispatch is for direct workflow_dispatch calls only
   build-dispatch:
     needs: check-harbor
-    if: ${{ inputs.ubuntu-2204-ci-build-image == '' && inputs.platform != '' }}
+    if: ${{ inputs.ubuntu-2204-ci-build-tag == '' && inputs.platform != '' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -127,7 +127,7 @@ jobs:
   # or when called via workflow_call without the platform dropdown
   build:
     needs: check-harbor
-    if: ${{ inputs.ubuntu-2204-ci-build-image != '' || inputs.platform == '' }}
+    if: ${{ inputs.ubuntu-2204-ci-build-tag != '' || inputs.platform == '' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -168,11 +168,11 @@ jobs:
       fetch-depth: ${{ inputs.fetch-depth }}
       # Pass pre-built docker image tags based on platform
       ci-build-docker-image: ${{
-        (matrix.config.platform == 'Ubuntu 24.04' && inputs.ubuntu-2404-ci-build-image) ||
-        inputs.ubuntu-2204-ci-build-image }}
+        (matrix.config.platform == 'Ubuntu 24.04' && inputs.ubuntu-2404-ci-build-tag) ||
+        inputs.ubuntu-2204-ci-build-tag }}
       dev-docker-image: ${{
-        (matrix.config.platform == 'Ubuntu 24.04' && inputs.ubuntu-2404-dev-image) ||
-        inputs.ubuntu-2204-dev-image }}
+        (matrix.config.platform == 'Ubuntu 24.04' && inputs.ubuntu-2404-dev-tag) ||
+        inputs.ubuntu-2204-dev-tag }}
       manylinux-docker-image: ${{
-        (matrix.config.platform == 'Ubuntu 24.04' && inputs.ubuntu-2404-manylinux-image) ||
-        inputs.ubuntu-2204-manylinux-image }}
+        (matrix.config.platform == 'Ubuntu 24.04' && inputs.ubuntu-2404-manylinux-tag) ||
+        inputs.ubuntu-2204-manylinux-tag }}
