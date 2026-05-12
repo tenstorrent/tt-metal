@@ -10,11 +10,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple, Union
 import torch
 
 from .bfp_format_utils import bfp4b_to_float16b
-from .format_config import (
-    MXFP8_E4M3_MAX_NORMAL,
-    MXFP8_E5M2_MAX_NORMAL,
-    DataFormat,
-)
+from .format_config import MX_FORMAT_MAX_NORMAL, DataFormat
 from .llk_params import format_dict
 from .tile_constants import (
     DEFAULT_TILE_C_DIM,
@@ -543,26 +539,38 @@ def _clamp_mx_tensors(
     if stimuli_format_A.is_mx_format() and stimuli_format_B.is_mx_format():
         if stimuli_format_A != stimuli_format_B:
             srcA_tensor = torch.clamp(
-                srcA_tensor, -MXFP8_E4M3_MAX_NORMAL, MXFP8_E4M3_MAX_NORMAL
+                srcA_tensor,
+                -MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P],
+                MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P],
             )
             srcB_tensor = torch.clamp(
-                srcB_tensor, -MXFP8_E4M3_MAX_NORMAL, MXFP8_E4M3_MAX_NORMAL
+                srcB_tensor,
+                -MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P],
+                MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P],
             )
 
     # Clamp inputs based on output format to prevent excessive rounding errors
     if output_format == DataFormat.MxFp8P:
         srcA_tensor = torch.clamp(
-            srcA_tensor, -MXFP8_E4M3_MAX_NORMAL, MXFP8_E4M3_MAX_NORMAL
+            srcA_tensor,
+            -MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P],
+            MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P],
         )
         srcB_tensor = torch.clamp(
-            srcB_tensor, -MXFP8_E4M3_MAX_NORMAL, MXFP8_E4M3_MAX_NORMAL
+            srcB_tensor,
+            -MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P],
+            MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P],
         )
     elif output_format == DataFormat.MxFp8R:
         srcA_tensor = torch.clamp(
-            srcA_tensor, -MXFP8_E5M2_MAX_NORMAL, MXFP8_E5M2_MAX_NORMAL
+            srcA_tensor,
+            -MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8R],
+            MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8R],
         )
         srcB_tensor = torch.clamp(
-            srcB_tensor, -MXFP8_E5M2_MAX_NORMAL, MXFP8_E5M2_MAX_NORMAL
+            srcB_tensor,
+            -MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8R],
+            MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8R],
         )
 
     return srcA_tensor, srcB_tensor
@@ -1657,9 +1665,13 @@ def _default_spec_for_format(stimuli_format: DataFormat) -> StimuliSpec:
     (e.g. positive ranges for floats, half-range for integers).
     """
     if stimuli_format == DataFormat.MxFp8R:
-        return StimuliSpec.gaussian(mean=0.1, std=0.05 * MXFP8_E5M2_MAX_NORMAL)
+        return StimuliSpec.gaussian(
+            mean=0.1, std=0.05 * MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8R]
+        )
     if stimuli_format == DataFormat.MxFp8P:
-        return StimuliSpec.gaussian(mean=0.1, std=0.05 * MXFP8_E4M3_MAX_NORMAL)
+        return StimuliSpec.gaussian(
+            mean=0.1, std=0.05 * MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P]
+        )
     if stimuli_format == DataFormat.Bfp8_b:
         return StimuliSpec(distribution=_default_bfp8b_face)
     if stimuli_format == DataFormat.Bfp4_b:
