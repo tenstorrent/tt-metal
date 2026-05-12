@@ -513,7 +513,18 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         if not isinstance(prompt_lens, list):
             prompt_lens = prompt_lens.tolist()
 
-        prefill_seq_lens = [get_padded_prefill_len(seq_len) for seq_len in prompt_lens]
+        # Pad to the *uncached* suffix length, not the full prompt length.
+        # With prefix caching, only (seq_len - num_cached) new tokens are fed to the
+        # kernel (see prefill_ids construction below), so padding by full seq_len makes
+        # the kernel run far more compute than necessary for high-hit-rate workloads.
+        # int() cast handles numpy.int64 from vLLM (bit_length() needs a Python int).
+        num_cached_per_user = (
+            [int(n) for n in start_pos] if start_pos is not None else [0] * len(prompt_lens)
+        )
+        prefill_seq_lens = [
+            get_padded_prefill_len(int(seq_len) - num_cached)
+            for seq_len, num_cached in zip(prompt_lens, num_cached_per_user)
+        ]
         # Row-sharded batched prefill: process 1 user per row per iteration.
         # Only used when device sampling is active (sampling_params is not None)
         # and the prompt uses the harmony chat template (first token is <|start|>=200006).
@@ -546,6 +557,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             and len(set(prefill_seq_lens)) == 1
             and self.data_parallel == 1
             and not getattr(self.model_args[0], "disable_batched_prefill", False)
+            # Batched prefill feeds full tokens with num_cached_tokens=0 forced downstream
+            # (see prefill_forward_single_user_text call below); incompatible with prefix-cache
+            # reuse where prefill_ids is already sliced to the uncached suffix.
+            and all(n == 0 for n in num_cached_per_user)
         )
 
         if use_batched_prefill and sampling_on_device_requested:
