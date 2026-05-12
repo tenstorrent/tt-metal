@@ -22,9 +22,10 @@ function(CHECK_COMPILERS)
 
     # Clang on Linux often leaves CMAKE_(C|CXX)_COMPILER_(AR|RANLIB) unset (no llvm-ar
     # beside the driver). CMake still prefers those for language-specific static archives,
-    # which yields literal *-NOTFOUND in Ninja rules; Tracy also prefixes link/archive
-    # steps with ccache (RULE_LAUNCH_LINK), so the failure surfaces as ccache not finding
-    # the "compiler". Fall back to the global archiver from the initial toolchain probe.
+    # which yields literal *-NOTFOUND in Ninja rules. Tracy used to set RULE_LAUNCH_LINK to
+    # ccache (see tt_metal/third_party/tracy/cmake/config.cmake); that also prefixes archive
+    # (ar) steps and breaks when COMPILER_AR is wrong. Fall back to the global archiver from
+    # the initial toolchain probe; Clang toolchain files also seed CMAKE_AR/CMAKE_RANLIB early.
     #
     # CMake can also leave CMAKE_AR itself empty while still writing CMAKE_C_COMPILER_AR to
     # the sentinel CMAKE_C_COMPILER_AR-NOTFOUND, so the old logic (which required CMAKE_AR to
