@@ -1,5 +1,9 @@
 name: "Build Evaluation Image"
-# Push-oriented workflow (GHCR / optional Harbor evaluation registry). Not part of CI pull-prefix centralization.
+# Push-oriented workflow (GHCR / optional Harbor evaluation registry).
+# Intentionally does NOT use check-harbor.yaml or resolve-docker-pull-refs:
+# this workflow pushes images *to* Harbor/GHCR rather than pulling CI images
+# *through* Harbor. Tool image tags used as BuildKit contexts are canonical
+# ghcr.io refs resolved directly by the builder, not via pull-through cache.
 
 permissions:
   contents: read
