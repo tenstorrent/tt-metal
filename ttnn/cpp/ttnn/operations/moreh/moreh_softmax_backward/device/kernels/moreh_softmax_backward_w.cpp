@@ -150,6 +150,13 @@ void kernel_main() {
     uint32_t Wt = get_compile_time_arg_val(1);
 
     for (uint32_t n = 0; n < N; ++n) {
+        // Chain `wait_per_tile` only stalls for 1 tile, but downstream BinaryFpu/Unary
+        // chain calls use Pinned-index access at w = 0..Wt-1 with WaitNoPop policy.
+        // Reader pushes tiles one at a time, so wait the full row upfront here to
+        // guarantee tile w is in-CB before any pinned access (mirrors old API's
+        // `cb_wait_front(icb, itile+1)`).
+        cb_wait_front(cb_y, Wt);
+        cb_wait_front(cb_dy, Wt);
 #ifdef LOG
         // sum(dy)
         if (Wt == 1) {
