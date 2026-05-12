@@ -14,7 +14,7 @@
 namespace tt::llrt {
 
 const std::unordered_set<ChipId>& get_devices_controlled_by_mmio_device(
-    tt::umd::ClusterDescriptor, ChipId mmio_device_id);
+    tt::umd::ClusterDescriptor& cluster_descriptor, ChipId mmio_device_id);
 
 std::map<ChipId, std::vector<std::vector<ChipId>>> discover_tunnels_from_mmio_device(
     tt::umd::ClusterDescriptor& cluster_desc);
