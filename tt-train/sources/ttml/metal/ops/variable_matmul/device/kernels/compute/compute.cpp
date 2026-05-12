@@ -14,6 +14,7 @@
 #include "api/compute/tilize.h"
 #include "api/compute/transpose_wh.h"
 #include "api/compute/untilize.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     copy_tile_to_dst_init_short(in_cb);
@@ -223,33 +224,59 @@ void add_bias_and_addcmul_block(
     cb_pop_front(intermediate_cb, out_block_num_tiles);
 }
 
-// Transpose every tile of a block from src_cb into dst_cb. Caller must have at least
-// num_tiles tiles ready in src_cb (already cb_wait_front'd). This function pops src_cb
-// and pushes dst_cb. One tile per acquire/commit cycle to avoid any dest-register
-// sizing assumptions.
+// Transpose every tile of a block from src_cb into dst_cb. Modeled after ttnn::matmul's
+// transpose_tile_block in bmm_large_block_zm_fused_bias_activation.cpp. Streams the
+// src CB in chunks of ChunkSize tiles (default 4 = FP32-dest cap), calling
+// wait_front/pop_front per chunk so the matmul consumer of dst_cb can start reading as
+// soon as the first chunk is packed — overlapping transpose with subsequent state
+// reconfig and matmul tile fetches.
 //
 // IMPORTANT: forces the L1 packer accumulator OFF for the transpose packs, otherwise
 // the outer matmul loop's `llk_pack_reconfig_l1_acc(1)` (enabled after k=0 so matmul
 // accumulates into intermediate_cb) would also affect these packs and the transposed
 // tiles would accumulate in dst_cb across K-iterations, corrupting in0_transposed_cb.
 // Caller is responsible for restoring the accumulator state afterwards.
-inline void transpose_in0_block(uint32_t src_cb, uint32_t dst_cb, uint32_t num_tiles) {
-    reconfig_data_format_srca(src_cb);
-    transpose_wh_init_short(src_cb);
-    pack_reconfig_data_format(dst_cb);
+template <uint32_t NumTiles, uint32_t ChunkSize = 4>
+inline void transpose_in0_block_streamed(uint32_t src_cb, uint32_t dst_cb) {
+    constexpr uint32_t kFullChunks = NumTiles / ChunkSize;
+    constexpr uint32_t kTail = NumTiles % ChunkSize;
+
     PACK((llk_pack_reconfig_l1_acc(0)));
 
-    cb_reserve_back(dst_cb, num_tiles);
-    for (uint32_t i = 0; i < num_tiles; ++i) {
+    for (uint32_t b = 0; b < kFullChunks; ++b) {
+        cb_wait_front(src_cb, ChunkSize);
         tile_regs_acquire();
-        transpose_wh_tile(src_cb, i, /*dst=*/0);
+        for (uint32_t j = 0; j < ChunkSize; ++j) {
+            transpose_wh_tile(src_cb, j, /*dst=*/j);
+        }
         tile_regs_commit();
+        cb_pop_front(src_cb, ChunkSize);
+
+        cb_reserve_back(dst_cb, ChunkSize);
         tile_regs_wait();
-        pack_tile(0, dst_cb);
+        for (uint32_t j = 0; j < ChunkSize; ++j) {
+            pack_tile(j, dst_cb);
+        }
         tile_regs_release();
+        cb_push_back(dst_cb, ChunkSize);
     }
-    cb_push_back(dst_cb, num_tiles);
-    cb_pop_front(src_cb, num_tiles);
+    if constexpr (kTail > 0) {
+        cb_wait_front(src_cb, kTail);
+        tile_regs_acquire();
+        for (uint32_t j = 0; j < kTail; ++j) {
+            transpose_wh_tile(src_cb, j, /*dst=*/j);
+        }
+        tile_regs_commit();
+        cb_pop_front(src_cb, kTail);
+
+        cb_reserve_back(dst_cb, kTail);
+        tile_regs_wait();
+        for (uint32_t j = 0; j < kTail; ++j) {
+            pack_tile(j, dst_cb);
+        }
+        tile_regs_release();
+        cb_push_back(dst_cb, kTail);
+    }
 }
 
 // Slightly modified from compute_common.hpp
@@ -405,40 +432,48 @@ void kernel_main() {
                     // this reuse iter it is already false — we cannot rely on it here.
                     const bool is_reuse_iter = (k_block == 0) && (n_block_iter > 0);
                     if (!is_reuse_iter) {
-                        cb_wait_front(in0_cb, in0_block_num_tiles);
-                        transpose_in0_block(in0_cb, in0_transposed_cb, in0_block_num_tiles);
-                        // transpose pass disrupts matmul state — re-init.
-                        mm_block_init_short(
+                        DeviceZoneScopedN("TRANSPOSE-A");
+                        // State setup for transpose (one-time per K-iter, before streaming).
+                        reconfig_data_format_srca(in1_cb, in0_cb);
+                        transpose_wh_init_short(in0_cb);
+                        pack_reconfig_data_format(in0_transposed_cb);
+                        transpose_in0_block_streamed<in0_block_num_tiles>(in0_cb, in0_transposed_cb);
+                        // Restore matmul state. The "_with_dt" variant handles the srcA data
+                        // format switch from in0_cb to in0_cb_for_matmul in one go.
+                        mm_block_init_short_with_dt(
                             in0_cb_for_matmul,
                             in1_cb,
+                            in0_cb,
                             transpose_b,
                             current_subblock_w,
                             current_subblock_h,
                             K_block_tiles);
-                        reconfig_data_format(in1_cb, in0_cb_for_matmul);
                         pack_reconfig_data_format(intermediate_cb);
-                        // transpose_in0_block disabled the L1 packer accumulator so its packs
-                        // would overwrite, not accumulate. Restore it to the right state for
-                        // the matmul pack: enabled after k=0 (so the matmul accumulates into
+                        // transpose_in0_block_streamed disabled the L1 packer accumulator so
+                        // its packs would overwrite. Restore it to the right state for the
+                        // matmul pack: enabled after k=0 (so the matmul accumulates into
                         // intermediate_cb across K-iterations), disabled at k=0 itself.
                         PACK((llk_pack_reconfig_l1_acc(k_block == 0 ? 0 : 1)));
                     }
                 }
 
-                cb_wait_front(in0_cb_for_matmul, in0_block_num_tiles);
-                cb_wait_front(in1_cb, in1_block_num_tiles);
+                {
+                    DeviceZoneScopedN("MATMUL-K-ITER");
+                    cb_wait_front(in0_cb_for_matmul, in0_block_num_tiles);
+                    cb_wait_front(in1_cb, in1_block_num_tiles);
 
-                matmul_blocks(
-                    in0_cb_for_matmul,
-                    in1_cb,
-                    intermediate_cb,
-                    current_M_block_tiles,
-                    current_N_block_tiles,
-                    N_block_tiles,
-                    K_block_tiles,
-                    current_subblock_h,
-                    current_subblock_w,
-                    transpose_b);
+                    matmul_blocks(
+                        in0_cb_for_matmul,
+                        in1_cb,
+                        intermediate_cb,
+                        current_M_block_tiles,
+                        current_N_block_tiles,
+                        N_block_tiles,
+                        K_block_tiles,
+                        current_subblock_h,
+                        current_subblock_w,
+                        transpose_b);
+                }
 
                 if (k_block == K_num_blocks - 1) {
                     /**
