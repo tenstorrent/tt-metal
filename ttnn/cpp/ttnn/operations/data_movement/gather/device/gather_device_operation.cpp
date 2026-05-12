@@ -58,7 +58,7 @@ void GatherDeviceOperation::validate_on_program_cache_miss(
         "Index tensor must be of type UINT32 or UINT16. Got: {}",
         tensor_args.input_index_tensor.dtype());
 
-    for (int i = 0; i < input_tensor_rank - 1; ++i) {
+    for (size_t i = 0; i < input_tensor_rank - 1; ++i) {
         // Validate all dimensions except the last one, as the tensor has been transposed
         // to move the gather dimension to the last position.
         // Improvement idea: Consider removing transposition and handling arbitrary dimensions directly in the kernel.

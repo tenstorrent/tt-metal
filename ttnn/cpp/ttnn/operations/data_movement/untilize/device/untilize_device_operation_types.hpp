@@ -40,7 +40,7 @@ struct UntilizeSharedVariables {
     tt::tt_metal::KernelHandle writer_kernel_id{};
     tt::tt_metal::CBHandle cb_src0{};
     tt::tt_metal::CBHandle cb_output{};
-    std::vector<CoreCoord> cores_with_runtime_args;
+    std::vector<CoreCoord> cores_with_runtime_args = {};
     bool has_uneven_sharding = false;
 };
 

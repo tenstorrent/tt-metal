@@ -503,9 +503,9 @@ public:
             output_slice_width_end - actual_pad_left + ((int)kernel_size[1] - 1) * dilation[1];
 
         int pad_bottom_offset =
-            output_slice_height_end < output_height ? (expanded_input_height_end - 1) % (int)stride[0] : 0;
+            output_slice_height_end < static_cast<int>(output_height) ? (expanded_input_height_end - 1) % (int)stride[0] : 0;
         int pad_right_offset =
-            output_slice_width_end < output_width ? (expanded_input_width_end - 1) % (int)stride[1] : 0;
+            output_slice_width_end < static_cast<int>(output_width) ? (expanded_input_width_end - 1) % (int)stride[1] : 0;
 
         int input_slice_height_end = ((expanded_input_height_end - 1) / stride[0]) + 1;
         int input_slice_width_end = ((expanded_input_width_end - 1) / stride[1]) + 1;
@@ -546,7 +546,7 @@ public:
             pad_top = actual_pad_top;
             input_slice_height_start = 0;
         }
-        if (output_slice_height_end == output_height) {
+        if (output_slice_height_end == static_cast<int>(output_height)) {
             pad_bottom = actual_pad_bottom;
             input_slice_height_end = std::get<0>(input_shape);
             this_output_pad[0] = output_padding[0];
@@ -555,7 +555,7 @@ public:
             pad_left = actual_pad_left;
             input_slice_width_start = 0;
         }
-        if (output_slice_width_end == output_width) {
+        if (output_slice_width_end == static_cast<int>(output_width)) {
             pad_right = actual_pad_right;
             input_slice_width_end = std::get<1>(input_shape);
             this_output_pad[1] = output_padding[1];

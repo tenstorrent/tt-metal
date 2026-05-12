@@ -60,7 +60,7 @@ struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation = std::nullopt;
     bool mcast_in0{};
     bool gather_in0{};
-    CoreRangeSet hop_cores;
+    CoreRangeSet hop_cores = {};
     std::size_t num_global_cb_receivers{};
     bool untilize_out{};
 };

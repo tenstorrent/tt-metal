@@ -1123,7 +1123,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         } else {
             // NOTE: using same var for x as well, this is intentional
             act_mcast_noc_y.reserve(in_num_cores_x);
-            for (int32_t core_idx_x = 0; core_idx_x < in_num_cores_x; ++core_idx_x) {
+            for (uint32_t core_idx_x = 0; core_idx_x < in_num_cores_x; ++core_idx_x) {
                 act_mcast_noc_y.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
             }
         }

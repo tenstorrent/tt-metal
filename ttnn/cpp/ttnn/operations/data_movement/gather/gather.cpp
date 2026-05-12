@@ -183,9 +183,9 @@ Tensor gather(
         dim,
         input_tensor_rank);
 
-    const bool input_tensor_is_dim_last_idx = (normalized_dim == input_tensor_rank - 1);
+    const bool input_tensor_is_dim_last_idx = (normalized_dim == static_cast<int8_t>(input_tensor_rank) - 1);
     const bool input_tensor_is_rank_le_4d = input_tensor_rank <= 4;
-    const bool input_index_tensor_is_dim_last_idx = (normalized_dim == index_tensor_rank - 1);
+    const bool input_index_tensor_is_dim_last_idx = (normalized_dim == static_cast<int8_t>(index_tensor_rank) - 1);
     const bool index_tensor_is_rank_le_4d = index_tensor_rank <= 4;
 
     const auto memory_config_value = memory_config.has_value() ? memory_config.value() : input_tensor.memory_config();

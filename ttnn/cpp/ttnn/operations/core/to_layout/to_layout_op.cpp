@@ -224,7 +224,7 @@ Tensor to_layout_impl(
     }
     if (layout == ttnn::TILE_LAYOUT) {
         SmallVector<uint32_t> padded_input_start;
-        for (int index = 0; index < padded_output_shape.rank(); ++index) {
+        for (size_t index = 0; index < padded_output_shape.rank(); ++index) {
             padded_input_start.push_back(0);
         }
         tensor = tensor.pad(ttnn::Shape(padded_output_shape), ttnn::Shape(std::move(padded_input_start)), pad_value);
