@@ -180,6 +180,14 @@ class TransformerBlock(Module):
                 ccl_manager=ccl_manager,
             )
 
+        self.ff_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
 
@@ -338,9 +346,11 @@ class TransformerBlock(Module):
         spatial_normed = self.ccl_manager.all_gather_persistent_buffer(
             spatial_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
         )
-        spatial_ff = ttnn.squeeze(self.ff(ttnn.unsqueeze(spatial_normed, 0)), 0)
-        spatial_ff = spatial_ff * spatial_gate_ff
-        spatial = spatial + spatial_ff
+        spatial_ff = ttnn.squeeze(
+            self.ff(ttnn.unsqueeze(spatial_normed, 0), compute_kernel_config=self.ff_compute_kernel_config), 0
+        )
+        spatial_gate_ff = ttnn.typecast(spatial_gate_ff, dtype=ttnn.bfloat16)
+        spatial = ttnn.addcmul(spatial, spatial_ff, spatial_gate_ff)
 
         if self.context_pre_only:
             return spatial, None
@@ -357,9 +367,11 @@ class TransformerBlock(Module):
         prompt_normed = self.ccl_manager.all_gather_persistent_buffer(
             prompt_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
         )
-        prompt_ff = ttnn.squeeze(self.ff_context(ttnn.unsqueeze(prompt_normed, 0)), 0)
-        prompt_ff = prompt_ff * prompt_gate_ff
-        prompt = prompt + prompt_ff
+        prompt_ff = ttnn.squeeze(
+            self.ff_context(ttnn.unsqueeze(prompt_normed, 0), compute_kernel_config=self.ff_compute_kernel_config), 0
+        )
+        prompt_gate_ff = ttnn.typecast(prompt_gate_ff, dtype=ttnn.bfloat16)
+        prompt = ttnn.addcmul(prompt, prompt_ff, prompt_gate_ff)
 
         return spatial, prompt
 
