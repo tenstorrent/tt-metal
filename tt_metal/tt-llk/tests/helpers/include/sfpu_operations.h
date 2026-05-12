@@ -21,6 +21,7 @@
 #include "sfpu/ckernel_sfpu_abs.h"
 #include "sfpu/ckernel_sfpu_activations.h"
 #include "sfpu/ckernel_sfpu_binary.h"
+#include "sfpu/ckernel_sfpu_celu.h"
 #include "sfpu/ckernel_sfpu_elu.h"
 #include "sfpu/ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_exp2.h"
@@ -179,17 +180,15 @@ void call_unary_sfpu_operation(
     }
     else if constexpr (OPERATION == SfpuType::celu)
     {
-        // Two _calculate_activation_ overloads (runtime params vs none) — cast so Callable deduces.
-        SFPU_CALL_CAST(
+        SFPU_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
-            _calculate_activation_,
-            (APPROX_MODE, ActivationType::Celu, ITERATIONS),
-            (void (*)(std::uint32_t, std::uint32_t)),
+            _calculate_celu_,
+            (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
             dst_index,
             vector_mode,
-            0x41200000u /* alpha = 10.0f */,
-            0x3DCCCCCDu /* alpha_recip = 0.1f */);
+            0x3f800000u /* alpha = 1.0f */,
+            0x3f800000u /* 1/alpha = 1.0f */);
     }
     else if constexpr (OPERATION == SfpuType::cosine)
     {
@@ -204,7 +203,7 @@ void call_unary_sfpu_operation(
             (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
             dst_index,
             vector_mode,
-            0x3f800000 /* alpha = 1.0f */);
+            0x3f800000u /* alpha = 1.0f */);
     }
     else if constexpr (OPERATION == SfpuType::exp2)
     {
