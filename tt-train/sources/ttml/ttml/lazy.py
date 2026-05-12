@@ -10,8 +10,6 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Callable, Optional
 
-import ttnn
-
 from ttml.modules.parameter import Parameter, TensorMetadata
 
 _lazy_init_enabled: ContextVar[bool] = ContextVar("ttml_lazy_init_enabled", default=False)
@@ -36,9 +34,12 @@ def lazy_init():
         _lazy_init_enabled.reset(token)
 
 
-def replicate_mesh_mapper_config(mesh: Any) -> ttnn.MeshMapperConfig:
-    """All-replicate placement on the given mesh (for non-sharded weights)."""
-    return ttnn.MeshMapperConfig([ttnn.PlacementReplicate() for _ in mesh.shape])
+def _replicate_tensor_to_mesh_mapper() -> Any | None:
+    """Return a TensorToMesh replicate mapper for non-sharded mesh parameters."""
+    import ttml
+
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+    return ttml.core.distributed.replicate_tensor_to_mesh_mapper(device)
 
 
 def _collect_lazy_parameter_slots(root: Any) -> list[tuple[Any, str]]:
@@ -66,8 +67,8 @@ def materialize_module(
     Args:
         root: Model root (subclass of :class:`~ttml.modules.module_base.AbstractModuleBase`).
         mesh_device: Optional mesh; when ``None``, uses :func:`ttml.maybe_mesh`. When the
-            mesh has multiple devices and a parameter has no mapper, a full replicate
-            :class:`ttnn.MeshMapperConfig` is applied so weights are not left single-device.
+            mesh has multiple devices and a parameter has no mapper, a TensorToMesh replicate
+            mapper is applied so weights are not left single-device.
         layout_plan: Optional ``(full_param_path, metadata) -> mapper | None``. A non-``None``
             return overrides the metadata's mapper for that parameter.
         on_device_init: Reserved for future on-device random init parity with host path.
@@ -100,7 +101,7 @@ def materialize_module(
             if override is not None:
                 mapper = override
         if mapper is None and mesh is not None and mesh.num_devices() > 1:
-            return replicate_mesh_mapper_config(mesh)
+            return _replicate_tensor_to_mesh_mapper()
         return mapper
 
     tensor_by_metadata_id: dict[int, Any] = {}

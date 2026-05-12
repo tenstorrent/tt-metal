@@ -11,6 +11,17 @@ from ttml.modules import AbstractModuleBase, LinearLayer, Parameter, TensorMetad
 from ttml.modules.parameter import LAZY_PARAMETER_ACCESS_MSG
 
 
+@pytest.fixture(autouse=True)
+def _close_device_between_lazy_init_tests():
+    """Eager ``LinearLayer`` / ``ops.rand`` opens the global mesh via ``get_device()``; without a reset,
+    ``open_device()`` in device tests raises *open_device was called after the device was created*.
+    """
+    ctx = ttml.autograd.AutoContext.get_instance()
+    ctx.close_device()
+    yield
+    ctx.close_device()
+
+
 class _TieModel(AbstractModuleBase):
     """Two linear layers sharing one Parameter (weight tying)."""
 
@@ -58,6 +69,17 @@ def test_inplace_init_on_lazy_parameter_raises():
         ttml.init.uniform_(layer.weight, -0.1, 0.1)
 
 
+def test_lazy_parameter_keeps_explicit_mapper():
+    mapper = object()
+
+    with ttml.lazy_init():
+        param = Parameter(ttml.init.uniform()(shape=(1, 1, 32, 32), mapper=mapper))
+
+    meta = param.peek_tensor()
+    assert isinstance(meta, TensorMetadata)
+    assert meta.mapper is mapper
+
+
 def test_eager_linear_unchanged():
     layer = LinearLayer(64, 32, has_bias=False)
     assert not isinstance(layer.weight.peek_tensor(), TensorMetadata)
@@ -66,43 +88,41 @@ def test_eager_linear_unchanged():
 
 @pytest.mark.requires_device
 def test_materialize_then_parameters_and_forward():
-    ttml.autograd.AutoContext.get_instance().open_device()
-    try:
-        with ttml.lazy_init():
-            layer = LinearLayer(64, 32, has_bias=True)
+    ttml.autograd.AutoContext.get_instance().get_device()
 
-        assert len(dict(layer.parameters())) == 0
-        ttml.materialize_module(layer)
-        params = dict(layer.parameters())
-        assert len(params) >= 2
+    with ttml.lazy_init():
+        layer = LinearLayer(64, 32, has_bias=True)
 
-        import numpy as np
-        import ttnn
+    assert len(dict(layer.parameters())) == 0
+    ttml.materialize_module(layer)
+    params = dict(layer.parameters())
+    assert len(params) >= 2
 
-        x = ttml.autograd.Tensor.from_numpy(
-            np.random.randn(1, 1, 4, 64).astype("float32"),
-            layout=ttnn.Layout.TILE,
-            new_type=ttnn.DataType.BFLOAT16,
-        )
-        y = layer(x)
-        assert y is not None
-    finally:
-        ttml.autograd.AutoContext.get_instance().close_device()
+    import numpy as np
+    import ttnn
+
+    x = ttml.autograd.Tensor.from_numpy(
+        np.random.randn(1, 1, 4, 64).astype("float32"),
+        layout=ttnn.Layout.TILE,
+        new_type=ttnn.DataType.BFLOAT16,
+    )
+    y = layer(x)
+    assert y is not None
 
 
 @pytest.mark.requires_device
 def test_lazy_weight_tying_same_storage():
-    ttml.autograd.AutoContext.get_instance().open_device()
-    try:
-        with ttml.lazy_init():
-            m = _TieModel()
+    ttml.autograd.AutoContext.get_instance().get_device()
 
-        ttml.materialize_module(m)
-        w_a = m.a.weight.tensor
-        w_b = m.b.weight.tensor
-        assert w_a.get_value() is w_b.get_value()
-    finally:
-        ttml.autograd.AutoContext.get_instance().close_device()
+    with ttml.lazy_init():
+        m = _TieModel()
+
+    ttml.materialize_module(m)
+    assert m.a.weight is m.b.weight
+    w_a = m.a.weight.tensor
+    w_b = m.b.weight.tensor
+    # Same underlying weights; ``get_value()`` may still return distinct ttnn.Tensor handles.
+    assert w_a is w_b
 
 
 def test_is_lazy_init_enabled_only_inside_context():
