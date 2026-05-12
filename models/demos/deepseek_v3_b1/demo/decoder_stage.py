@@ -669,6 +669,12 @@ def create_decoder_block_tensors(
         "gate_proj_weights": routed_gate,
         "up_proj_weights": routed_up,
         "down_proj_weights": routed_down,
+        # Optional SRAM-resident routed weights — populated by the weight loader when
+        # SRAM placement is configured. None on weight objects without sram_* fields,
+        # which means n_sram_active stays 0 → SRAM chain skips uniformly.
+        "sram_gate_proj_weights": getattr(weights, "sram_gate_proj", None),
+        "sram_up_proj_weights": getattr(weights, "sram_up_proj", None),
+        "sram_down_proj_weights": getattr(weights, "sram_down_proj", None),
         "final_output_mem_config": final_output_mem_config,
         "final_output_total_width": final_output_total_width,
         # Shared expert weights
@@ -867,6 +873,9 @@ class DecoderStage(StageKind):
             gate_proj_weights_tensor=d["gate_proj_weights"],
             up_proj_weights_tensor=d["up_proj_weights"],
             down_proj_weights_tensor=d["down_proj_weights"],
+            sram_gate_proj_weights_tensor=d.get("sram_gate_proj_weights"),
+            sram_up_proj_weights_tensor=d.get("sram_up_proj_weights"),
+            sram_down_proj_weights_tensor=d.get("sram_down_proj_weights"),
             moe_final_output_tensor=None,
             rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
             shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
