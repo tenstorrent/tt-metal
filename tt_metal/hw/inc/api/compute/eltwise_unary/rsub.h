@@ -7,7 +7,6 @@
 #include "api/compute/common_globals.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_binop_with_scalar.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_rsub_int32.h"
 #endif
 
@@ -30,13 +29,20 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void rsub_tile(uint32_t idst, uint32_t scalar) {
-    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, RSUB_UNARY>(idst, scalar)));
+    MATH((SFPU_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binop_with_scalar,
+        (APPROX, RSUB_UNARY, 8),
+        idst,
+        (int)VectorMode::RC,
+        scalar)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rsub_tile_init() { MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar_init())); }
+ALWI void rsub_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unused>())); }
 
 // clang-format off
 /**

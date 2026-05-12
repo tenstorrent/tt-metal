@@ -8,13 +8,15 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_mask.h"
+#include "ckernel_sfpu_mask.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
 
 ALWI void mask_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_mask_init()));  // TODO(AP): move out init
+    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::mask>()));  // TODO(AP): move out init
 }
 
 // clang-format off
@@ -40,11 +42,16 @@ ALWI void mask_tile_init() {
  */
 // clang-format on
 ALWI void mask_tile(uint32_t idst_data, uint32_t idst2_mask, DataFormat data_format = DataFormat::Float16_b) {
-    MATH((llk_math_eltwise_unary_sfpu_mask<true>(idst_data, data_format)));
+    MATH(
+        if (data_format == DataFormat::Float16_b || data_format == DataFormat::Float16) {
+            SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_mask, (true), idst_data, (int)VectorMode::RC);
+        } else if (data_format == DataFormat::Int32) {
+            SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_int_mask, (true), idst_data, (int)VectorMode::RC);
+        });
 }
 
 ALWI void mask_posinf_tile(uint32_t idst_data, uint32_t idst2_mask) {
-    MATH((llk_math_eltwise_unary_sfpu_mask_posinf<true>(idst_data)));
+    MATH((SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_mask_posinf, (true), idst_data, (int)VectorMode::RC)));
 }
 
 }  // namespace ckernel

@@ -6,7 +6,9 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_reshuffle_rows.h"
+#include "ckernel_sfpu_reshuffle_rows.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -28,12 +30,19 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void reshuffle_rows_tile(uint32_t idst, uint32_t idx_addr) {
-    MATH((llk_math_eltwise_unary_sfpu_reshuffle_rows<APPROX>(idst, idx_addr)));
+    MATH((SFPU_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_reshuffle_rows,
+        (APPROX),
+        idst,
+        (int)VectorMode::RC_custom,
+        idx_addr)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void reshuffle_rows_tile_init() { MATH((llk_math_eltwise_unary_sfpu_reshuffle_rows_init())); }
+ALWI void reshuffle_rows_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::reshuffle_rows>())); }
 
 }  // namespace ckernel

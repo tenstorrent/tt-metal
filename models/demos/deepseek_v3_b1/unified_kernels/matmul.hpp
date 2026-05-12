@@ -18,8 +18,7 @@
 #include "api/compute/experimental/pack_block.h"
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_exp.h"
-#include "llk_math_eltwise_unary_sfpu_sigmoid.h"
-#include "llk_math_eltwise_unary_sfpu_silu.h"
+#include "llk_math_unary_sfpu_api.h"
 #endif
 #endif
 

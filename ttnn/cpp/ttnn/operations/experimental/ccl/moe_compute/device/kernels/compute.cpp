@@ -18,7 +18,7 @@
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_binary.h"
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
-#include "llk_math_eltwise_unary_sfpu_silu.h"
+#include "llk_math_unary_sfpu_api.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 

@@ -285,7 +285,7 @@ inline __attribute__((always_inline)) void _sfpu_check_and_call_(
  * the original definition), so it maps to SFPU_CALL rather than SFPU_CALL_MODE.
  */
 #define SFPU_FOUR_PARAM_KERNEL_FP32_FIRST_FN(FN, APPROXIMATE, FP32, ITER, LEGACY_COMPAT, DST_IDX, MODE) \
-    SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, FN, (APPROXIMATE, FP32, ITER, LEGACY_COMPAT), DST_IDX, MODE)
+    SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, FN, (APPROXIMATE, FP32, ITER, LEGACY_COMPAT), DST_IDX, MODE);
 
 /*
  * SFPU_TEMPLATE_PARAMS_KERNEL_FN already takes vector_mode as a runtime
@@ -293,7 +293,7 @@ inline __attribute__((always_inline)) void _sfpu_check_and_call_(
  */
 #define SFPU_TEMPLATE_PARAMS_KERNEL_FN(                                                                      \
     FN, APPROXIMATE, IS_FP32_DEST_ACC_EN, SCALE_EN, CLAMP_NEGATIVE, ITERATIONS, DST_IDX, VECTOR_MODE, SCALE) \
-    SFPU_CALL(                                                                                               \
+    SFPU_CALL(                                                                                               \;
         DST_SYNC_MODE,                                                                                       \
         DST_ACCUM_MODE,                                                                                      \
         FN,                                                                                                  \
@@ -305,55 +305,61 @@ inline __attribute__((always_inline)) void _sfpu_check_and_call_(
 // ----- runtime-mode invocation aliases (LLK wrapper layer) ------------------
 
 #define SFPU_ONE_PARAM_KERNEL(FN, APPROXIMATE, DST_IDX, VECTOR_MODE) \
-    SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, FN, (APPROXIMATE), DST_IDX, VECTOR_MODE)
+            SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, FN, (APPROXIMATE), DST_IDX, VECTOR_MODE);
 
 #define SFPU_TWO_PARAM_KERNEL(FN, APPROXIMATE, T2, DST_IDX, VECTOR_MODE) \
-    SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, FN, (APPROXIMATE, T2), DST_IDX, VECTOR_MODE)
+            SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, FN, (APPROXIMATE, T2), DST_IDX, VECTOR_MODE);
 
 #define SFPU_TWO_PARAM_KERNEL_ONE_RUNTIME(FN, APPROXIMATE, T2, DST_IDX, VECTOR_MODE, PARAM0) \
-    SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, FN, (APPROXIMATE, T2), DST_IDX, VECTOR_MODE, PARAM0)
+            SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, FN, (APPROXIMATE, T2), DST_IDX, VECTOR_MODE, PARAM0);
 
 #define SFPU_THREE_PARAM_KERNEL_ITER_FIRST(FN, APPROXIMATE, ITER, FP32, DST_IDX, VECTOR_MODE) \
-    SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, FN, (APPROXIMATE, ITER, FP32), DST_IDX, VECTOR_MODE)
+            SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, FN, (APPROXIMATE, ITER, FP32), DST_IDX, VECTOR_MODE);
 
 #define SFPU_THREE_PARAM_KERNEL_FP32_FIRST(FN, APPROXIMATE, FP32, ITER, DST_IDX, VECTOR_MODE) \
-    SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, FN, (APPROXIMATE, FP32, ITER), DST_IDX, VECTOR_MODE)
+            SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, FN, (APPROXIMATE, FP32, ITER), DST_IDX, VECTOR_MODE);
 
-/*
- * Complex multi-statement aliases
- *
- * These two macros expand to a *sequence* of statements (a static_assert and a
- * constexpr definition followed by the SFPU call) rather than a single
- * expression, so they cannot be aliased to SFPU_CALL_MODE. We rewrite their
- * bodies to call the new helper directly, preserving structure and behavior
- * (and gaining the dst-bound assert). They forward the ambient
- * DST_SYNC_MODE / DST_ACCUM_MODE explicitly to the helper.
- */
+        /*
+         * Complex multi-statement aliases
+         *
+         * These two macros expand to a *sequence* of statements (a static_assert and a
+         * constexpr definition followed by the SFPU call) rather than a single
+         * expression, so they cannot be aliased to SFPU_CALL_MODE. We rewrite their
+         * bodies to call the new helper directly, preserving structure and behavior
+         * (and gaining the dst-bound assert). They forward the ambient
+         * DST_SYNC_MODE / DST_ACCUM_MODE explicitly to the helper.
+         */
 
-#define SFPU_UNARY_ONE_PARAM_KERNEL_DATA_FORMAT_EXTRA_PARAM(                                                        \
-    FN, MODE, APPROXIMATE, DATA_FORMAT, EXTRA_PARAM, DST_IDX, PARAM0)                                               \
-    static_assert(                                                                                                  \
-        DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 || DATA_FORMAT == DataFormat::UInt16, \
-        "Unsupported data format. Supported: Int32, UInt32, UInt16");                                               \
-    constexpr InstrModLoadStore _INSTRUCTION_MODE =                                                                 \
-        (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;                   \
-    ::ckernel::_sfpu_check_and_call_<DST_SYNC_MODE, DST_ACCUM_MODE>(                                                \
-        ckernel::sfpu::FN<APPROXIMATE, _INSTRUCTION_MODE, EXTRA_PARAM>, DST_IDX, (int)VectorMode::MODE, PARAM0)
+#define SFPU_UNARY_ONE_PARAM_KERNEL_DATA_FORMAT_EXTRA_PARAM(                                      \
+            FN, MODE, APPROXIMATE, DATA_FORMAT, EXTRA_PARAM, DST_IDX, PARAM0)                             \
+            static_assert(                                                                                \
+                DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 ||                  \
+                    DATA_FORMAT == DataFormat::UInt16,                                                    \
+                "Unsupported data format. Supported: Int32, UInt32, UInt16");                             \
+            constexpr InstrModLoadStore _INSTRUCTION_MODE =                                               \
+                (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32; \
+            ::ckernel::_sfpu_check_and_call_<DST_SYNC_MODE, DST_ACCUM_MODE>(                              \
+                ckernel::sfpu::FN<APPROXIMATE, _INSTRUCTION_MODE, EXTRA_PARAM>,                           \
+                DST_IDX,                                                                                  \
+                (int)VectorMode::MODE,                                                                    \
+                PARAM0)
 
-#define SFPU_UNARY_KERNEL_THREE_TEMPLATE_ARGS_FN(FN, APPROXIMATE, DATA_FORMAT, ITERATIONS, DST_IDX, MODE)          \
-    static_assert(                                                                                                 \
-        DATA_FORMAT == DataFormat::Float32 || DATA_FORMAT == DataFormat::Float16_b ||                              \
-            DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 ||                               \
-            DATA_FORMAT == DataFormat::UInt16 || DATA_FORMAT == DataFormat::Bfp8_b ||                              \
-            DATA_FORMAT == DataFormat::Bfp4_b,                                                                     \
-        "Unsupported data format. Supported data formats are: Float32, Float16_b, Int32, UInt32, UInt16, Bfp8_b, " \
-        "Bfp4_b.");                                                                                                \
-    constexpr InstrModLoadStore INSTRUCTION_MODE =                                                                 \
-        (DATA_FORMAT == DataFormat::Float32 || DATA_FORMAT == DataFormat::Float16_b ||                             \
-         DATA_FORMAT == DataFormat::Bfp8_b || DATA_FORMAT == DataFormat::Bfp4_b)                                   \
-            ? InstrModLoadStore::DEFAULT                                                                           \
-        : (DATA_FORMAT == DataFormat::UInt16)                                     ? InstrModLoadStore::LO16        \
-        : (DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32) ? InstrModLoadStore::INT32       \
-                                                                                  : InstrModLoadStore::DEFAULT;    \
-    ::ckernel::_sfpu_check_and_call_<DST_SYNC_MODE, DST_ACCUM_MODE>(                                               \
-        ckernel::sfpu::FN<APPROXIMATE, INSTRUCTION_MODE, ITERATIONS>, DST_IDX, (int)VectorMode::MODE)
+#define SFPU_UNARY_KERNEL_THREE_TEMPLATE_ARGS_FN(FN, APPROXIMATE, DATA_FORMAT, ITERATIONS, DST_IDX, MODE)  \
+            static_assert(                                                                                         \
+                DATA_FORMAT == DataFormat::Float32 || DATA_FORMAT == DataFormat::Float16_b ||                      \
+                    DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 ||                       \
+                    DATA_FORMAT == DataFormat::UInt16 || DATA_FORMAT == DataFormat::Bfp8_b ||                      \
+                    DATA_FORMAT == DataFormat::Bfp4_b,                                                             \
+                "Unsupported data format. Supported data formats are: Float32, Float16_b, Int32, UInt32, UInt16, " \
+                "Bfp8_b, "                                                                                         \
+                "Bfp4_b.");                                                                                        \
+            constexpr InstrModLoadStore INSTRUCTION_MODE =                                                         \
+                (DATA_FORMAT == DataFormat::Float32 || DATA_FORMAT == DataFormat::Float16_b ||                     \
+                 DATA_FORMAT == DataFormat::Bfp8_b || DATA_FORMAT == DataFormat::Bfp4_b)                           \
+                    ? InstrModLoadStore::DEFAULT                                                                   \
+                : (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16                                    \
+                : (DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32)                          \
+                    ? InstrModLoadStore::INT32                                                                     \
+                    : InstrModLoadStore::DEFAULT;                                                                  \
+            ::ckernel::_sfpu_check_and_call_<DST_SYNC_MODE, DST_ACCUM_MODE>(                                       \
+                ckernel::sfpu::FN<APPROXIMATE, INSTRUCTION_MODE, ITERATIONS>, DST_IDX, (int)VectorMode::MODE)

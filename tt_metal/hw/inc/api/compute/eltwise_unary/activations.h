@@ -6,7 +6,13 @@
 
 #include "api/compute/common_globals.h"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
-#include "llk_math_eltwise_unary_sfpu_activations.h"
+#include "ckernel_sfpu_celu.h"
+#include "ckernel_sfpu_hardshrink.h"
+#include "ckernel_sfpu_softshrink.h"
+#include "ckernel_sfpu_softsign.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
+#include "sfpu/ckernel_sfpu_activations.h"
 #endif
 
 namespace ckernel {
@@ -25,19 +31,37 @@ namespace ckernel {
 */
 // clang-format on
 ALWI void hardsigmoid_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_hardsigmoid<APPROX, ckernel::ActivationType::Hardsigmoid>(idst)));
+    MATH((SFPU_CALL_CAST(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _calculate_activation_,
+        (APPROX, ckernel::ActivationType::Hardsigmoid, 8),
+        (void (*)()),
+        idst,
+        (int)VectorMode::RC)));
 }
 
 ALWI void hardsigmoid_tile_pack(uint32_t idst) {
-    PACK((llk_math_eltwise_unary_sfpu_hardsigmoid<APPROX, ckernel::ActivationType::Hardsigmoid>(idst)));
+    PACK((SFPU_CALL_CAST(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _calculate_activation_,
+        (APPROX, ckernel::ActivationType::Hardsigmoid, 8),
+        (void (*)()),
+        idst,
+        (int)VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void hardsigmoid_tile_init() { MATH((llk_math_eltwise_unary_sfpu_hardsigmoid_init<APPROX>())); }
+ALWI void hardsigmoid_tile_init() {
+    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::hardsigmoid>(ckernel::sfpu::_init_hardsigmoid_<APPROX>)));
+}
 
-ALWI void hardsigmoid_tile_init_pack() { PACK((llk_math_eltwise_unary_sfpu_hardsigmoid_init<APPROX>())); }
+ALWI void hardsigmoid_tile_init_pack() {
+    PACK((llk_math_eltwise_unary_sfpu_init<SfpuType::hardsigmoid>(ckernel::sfpu::_init_hardsigmoid_<APPROX>)));
+}
 
 // clang-format off
 /**
@@ -52,12 +76,16 @@ ALWI void hardsigmoid_tile_init_pack() { PACK((llk_math_eltwise_unary_sfpu_hards
 * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
 */
 // clang-format on
-ALWI void softsign_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_softsign<APPROX>(idst))); }
+ALWI void softsign_tile(uint32_t idst) {
+    MATH((SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_softsign, (APPROX, 8), idst, (int)VectorMode::RC)));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void softsign_tile_init() { MATH((llk_math_eltwise_unary_sfpu_softsign_init<APPROX>())); }
+ALWI void softsign_tile_init() {
+    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::softsign>(ckernel::sfpu::init_softsign<APPROX>)));
+}
 
 // clang-format off
 /**
@@ -75,13 +103,21 @@ ALWI void softsign_tile_init() { MATH((llk_math_eltwise_unary_sfpu_softsign_init
 */
 // clang-format on
 ALWI void celu_tile(uint32_t idst, uint32_t alpha, uint32_t alpha_recip) {
-    MATH((llk_math_eltwise_unary_sfpu_celu<APPROX, DST_ACCUM_MODE>(idst, alpha, alpha_recip)));
+    MATH((SFPU_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_celu,
+        (APPROX, DST_ACCUM_MODE, 8),
+        idst,
+        (int)VectorMode::RC,
+        alpha,
+        alpha_recip)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void celu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_celu_init())); }
+ALWI void celu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::celu>())); }
 
 // clang-format off
  /**
@@ -97,14 +133,15 @@ ALWI void celu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_celu_init())); }
  * | param0          | The λ value for the Softshrink formulation                                 | uint32   |                                                       | True     |
  */
  // clang-format on
- ALWI void softshrink_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_softshrink<APPROX>(idst, param0)));
+ALWI void softshrink_tile(uint32_t idst, uint32_t param0) {
+    MATH((SFPU_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_softshrink, (APPROX, 8), idst, (int)VectorMode::RC, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void softshrink_tile_init() { MATH((llk_math_eltwise_unary_sfpu_softshrink_init())); }
+ALWI void softshrink_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::softshrink>())); }
 
 // clang-format off
 /**
@@ -124,12 +161,13 @@ ALWI void softshrink_tile_init() { MATH((llk_math_eltwise_unary_sfpu_softshrink_
 */
 // clang-format on
 ALWI void hardshrink_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_hardshrink<APPROX>(idst, param0)));
+    MATH((SFPU_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_hardshrink, (APPROX, 8), idst, (int)VectorMode::RC, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void hardshrink_tile_init() { MATH((llk_math_eltwise_unary_sfpu_hardshrink_init())); }
+ALWI void hardshrink_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::hardshrink>())); }
 
 }  // namespace ckernel

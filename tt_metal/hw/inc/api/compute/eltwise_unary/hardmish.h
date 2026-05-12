@@ -6,7 +6,9 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_hardmish.h"
+#include "ckernel_sfpu_hardmish.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -33,11 +35,13 @@ namespace ckernel {
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void hardmish_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_hardmish<APPROX>(idst))); }
+ALWI void hardmish_tile(uint32_t idst) {
+    MATH((SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, hardmish, (APPROX, 8), idst, (int)VectorMode::RC)));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void hardmish_tile_init() { MATH((llk_math_eltwise_unary_sfpu_hardmish_init())); }
+ALWI void hardmish_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::hardmish>())); }
 
 }  // namespace ckernel

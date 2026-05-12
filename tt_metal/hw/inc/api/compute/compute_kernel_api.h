@@ -37,10 +37,7 @@
 #include "llk_pack_api.h"
 #include "llk_io_pack.h"
 #ifndef ARCH_QUASAR
-#include "llk_math_eltwise_unary_sfpu_silu.h"
-#include "llk_math_eltwise_unary_sfpu_tanh.h"
-#include "llk_math_eltwise_unary_sfpu_sigmoid.h"
-#include "llk_math_eltwise_unary_sfpu_activations.h"
+#include "llk_math_unary_sfpu_api.h"
 #endif
 #define PACK(x) x
 #else

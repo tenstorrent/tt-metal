@@ -5,7 +5,7 @@
 #pragma once
 
 #include "llk_math_eltwise_unary_sfpu_init.h"
-#include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "ckernel_sfpu_cast_fp32_to_fp16a.h"
 
 namespace ckernel {
@@ -16,8 +16,7 @@ inline void llk_math_eltwise_unary_sfpu_cast_fp32_to_fp16a_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_cast_fp32_to_fp16a(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_(
-        ckernel::sfpu::calculate_cast_fp32_to_fp16a<APPROXIMATE>, dst_index, vector_mode);
+    SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_cast_fp32_to_fp16a, (APPROXIMATE), dst_index, vector_mode);
 }
 
 }  // namespace ckernel
