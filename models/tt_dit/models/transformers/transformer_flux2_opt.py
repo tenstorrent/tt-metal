@@ -191,10 +191,18 @@ class Flux2SingleTransformerBlock(Module):
         c = ttnn.concat([c, c_mlp], dim=-1)
         del x_mlp, c_mlp
 
-        x = gate_msa * self.proj_out(x)
-        c = gate_msa * self.proj_out(c)
+        if self._ccl_manager.topology == ttnn.Topology.Ring:
+            # Ring: fuse RS + addcmul at the final write step.
+            # Computes: spatial/prompt + proj_out(x/c) * gate_msa
+            spatial = self.proj_out.forward_fused_addcmul(x, spatial, gate_msa, scalar=1.0)
+            prompt = self.proj_out.forward_fused_addcmul(c, prompt, gate_msa, scalar=1.0)
+        else:
+            x = gate_msa * self.proj_out(x)
+            c = gate_msa * self.proj_out(c)
+            spatial = spatial + x
+            prompt = prompt + c
 
-        return spatial + x, prompt + c
+        return spatial, prompt
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/transformers/transformer_flux.py
