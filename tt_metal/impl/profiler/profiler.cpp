@@ -1556,7 +1556,7 @@ void DeviceProfiler::readRiscProfilerResults(
             };
             std::vector<PreSentinelMarker> pre_sentinel_markers;
 
-            for (int index = bufferRiscShift; index < (bufferRiscShift + bufferEndIndex);
+            for (uint32_t index = bufferRiscShift; index < (bufferRiscShift + bufferEndIndex);
                  index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE) {
                 if (!newRunStart && data_buffer.at(index) == 0 && data_buffer.at(index + 1) == 0) {
                     newRunStart = true;
@@ -1571,7 +1571,7 @@ void DeviceProfiler::readRiscProfilerResults(
                         kernel_profiler::PacketTypes pre_packet_type = get_packet_type(timer_id);
                         if (pre_packet_type == kernel_profiler::TS_DATA) {
                             uint32_t time_L = data_buffer.at(index + 1);
-                            int data_index = index + kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
+                            uint32_t data_index = index + kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
                             // Skip truncated TS_DATA at the end of this risc's region.
                             if (data_index + 1 < bufferRiscShift + bufferEndIndex) {
                                 uint64_t data_H = data_buffer.at(data_index);
@@ -1638,7 +1638,7 @@ void DeviceProfiler::readRiscProfilerResults(
                                 }
 
                                 TT_ASSERT(
-                                    riscNumRead == riscEndIndex,
+                                    riscNumRead == static_cast<uint32_t>(riscEndIndex),
                                     "Unexpected risc id, expected {}, read {}. In core {},{} {} at run {}, index {}",
                                     riscEndIndex,
                                     riscNumRead,

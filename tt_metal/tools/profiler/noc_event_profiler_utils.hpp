@@ -126,7 +126,7 @@ inline void dumpRoutingInfo(const std::filesystem::path& filepath) {
                          {"ethernet_channels", nlohmann::ordered_json::object()}});
                 }
 
-                for (int j = 0; j < eth_routing_planes_in_dir.size(); j++) {
+                for (size_t j = 0; j < eth_routing_planes_in_dir.size(); j++) {
                     ChipId eth_channel = eth_routing_planes_in_dir[j];
                     device_routing_planes[j]["ethernet_channels"][enchantum::to_string(direction)] = eth_channel;
                 }
@@ -139,7 +139,7 @@ inline void dumpRoutingInfo(const std::filesystem::path& filepath) {
 
     topology_json["eth_chan_to_coord"] = nlohmann::ordered_json::object();
     auto physical_chip_id = *(cluster.get_cluster_desc()->get_all_chips().begin());
-    for (int j = 0; j < cluster.get_soc_desc(physical_chip_id).get_num_eth_channels(); j++) {
+    for (uint32_t j = 0; j < cluster.get_soc_desc(physical_chip_id).get_num_eth_channels(); j++) {
         tt::umd::CoreCoord edm_eth_core =
             cluster.get_soc_desc(physical_chip_id).get_eth_core_for_channel(j, CoordSystem::NOC0);
         topology_json["eth_chan_to_coord"][std::to_string(j)] = {edm_eth_core.x, edm_eth_core.y};

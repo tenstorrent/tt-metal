@@ -138,7 +138,7 @@ void RelayMux::ConfigureCore() {}
 int RelayMux::GetWorkerChannelIndex(int worker_id, tt::tt_fabric::FabricMuxChannelType channel_type) const {
     const auto& kernels = channel_type == tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL ? upstream_kernels_
                                                                                                  : downstream_kernels_;
-    for (int i = 0; i < kernels.size(); ++i) {
+    for (int i = 0; i < static_cast<int>(kernels.size()); ++i) {
         if (kernels[i]->GetNodeId() == worker_id) {
             return i;
         }
@@ -190,7 +190,7 @@ int get_num_hops(const ContextDescriptor& descriptor, ChipId mmio_dev_id, ChipId
             "Unexpected tunnel size {}. Max tunnel size expected {}",
             tunnel.size(),
             k_MaxTunnelSize);
-        for (int hop = 0; hop < tunnel.size(); ++hop) {
+        for (int hop = 0; hop < static_cast<int>(tunnel.size()); ++hop) {
             if (tunnel[hop] == downstream_dev_id) {
                 return hop;
             }

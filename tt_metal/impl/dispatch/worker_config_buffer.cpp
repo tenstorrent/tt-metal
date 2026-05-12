@@ -25,7 +25,7 @@ void WorkerConfigBufferMgr::init_add_buffer(uint32_t base_addr, uint32_t size) {
     this->end_addrs_.push_back(base_addr + size);
 
     for (auto& entry : this->entries_) {
-        entry.push_back({0, 0});
+        entry.push_back({0, 0, 0});
     }
 
     // when free == alloc, buffer is empty

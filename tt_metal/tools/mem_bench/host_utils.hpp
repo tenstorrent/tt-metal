@@ -75,7 +75,7 @@ double copy_to_hugepage(
     }
 
     auto start = get_current_time_seconds();
-    for (int i = 0; i < num_pages; ++i) {
+    for (size_t i = 0; i < num_pages; ++i) {
         tt::tt_metal::memcpy_to_device<fence>((void*)(hugepage_addr), (void*)(src_addr), page_size);
 
         // 64 bit host address alignment

@@ -408,7 +408,8 @@ void configure_cross_host_kernels(
                 sender_kernel_path,
                 my_coord,
                 tt::tt_metal::EthernetConfig{
-                    .noc = noc_id, .processor = erisc_id, .compile_args = {packet_size_bytes, packet_size_words}, .defines = {}});
+                    .noc = noc_id, .processor = erisc_id, .compile_args = {packet_size_bytes,
+            .named_compile_args = {}, packet_size_words}, .defines = {}});
             tt::tt_metal::SetRuntimeArgs(
                 my_program, sender_kernel, my_coord, {src_eth_l1_byte_address, dst_eth_l1_byte_address, data_size});
         } else {
@@ -416,7 +417,8 @@ void configure_cross_host_kernels(
                 my_program,
                 receiver_kernel_path,
                 my_coord,
-                tt::tt_metal::EthernetConfig{.noc = noc_id, .processor = erisc_id, .compile_args = {}, .defines = {}});
+                tt::tt_metal::EthernetConfig{.noc = noc_id, .processor = erisc_id, .compile_args = {,
+            .named_compile_args = {}}, .defines = {}});
             tt::tt_metal::SetRuntimeArgs(my_program, receiver_kernel, my_coord, {data_size});
         }
     }

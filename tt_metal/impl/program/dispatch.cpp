@@ -734,6 +734,7 @@ BatchedTransfers assemble_runtime_args_commands(
                         .data = tt::stl::Span<const uint8_t>(
                             reinterpret_cast<uint8_t*>(kernel->common_runtime_args().data()), size),
                         .cbs = {},
+                        .dfbs = {},
                         .rta_data = &kernel->common_runtime_args_data()}};
             }
         }
@@ -970,10 +971,12 @@ public:
                         std::vector<Transfer>{
                             {{.start = start_addr,
                               .data = tt::stl::Span<const uint8_t>(
-                                  reinterpret_cast<const uint8_t*>(&semaphore_data.back()), sizeof(uint32_t))}}};
+                                  reinterpret_cast<const uint8_t*>(&semaphore_data.back()), sizeof(uint32_t)),
+                              .cbs = {},
+                              .dfbs = {}}}};
                 }
             } else if (semaphore.core_type() == CoreType::ETH) {
-                unicast_semaphore_cmds.push_back({.dst = semaphore.offset(), .size = sizeof(uint32_t)});
+                unicast_semaphore_cmds.push_back({.sub_cmds = {}, .data = {}, .payload = {}, .dst = semaphore.offset(), .size = sizeof(uint32_t)});
                 auto& unicast_cmds = unicast_semaphore_cmds.back();
                 // TODO: we only fast dispatch to active eth...
                 std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
@@ -1115,7 +1118,8 @@ public:
                     {.start = start_addr,
                      .data = tt::stl::Span<const uint8_t>(
                          reinterpret_cast<const uint8_t*>(cb_config_payload.data()), max_index * sizeof(uint32_t)),
-                     .cbs = circular_buffers_on_corerange}};
+                     .cbs = circular_buffers_on_corerange,
+                     .dfbs = {}}};
                 i++;
             }
         }
@@ -1200,6 +1204,7 @@ public:
             batched_transfers[std::make_pair(noc_xy_addr, core_range.size())][start_addr] = std::vector<Transfer>{
                 {.start = start_addr,
                  .data = tt::stl::Span<const uint8_t>(payload.data(), max_byte_end),
+                 .cbs = {},
                  .dfbs = dfbs_on_corerange}};
             i++;
         }
@@ -2842,7 +2847,8 @@ TraceNode create_trace_node(ProgramImpl& program, IDevice* device, uint32_t num_
         num_workers,
         std::move(rta_data),
         std::move(all_cb_configs_payloads),
-        std::move(all_dfb_configs_payloads)};
+        std::move(all_dfb_configs_payloads),
+        {}};
 }
 
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle) {
@@ -2904,7 +2910,7 @@ void reset_worker_dispatch_state_on_device(
 
     tt::tt_metal::DeviceCommandCalculator calculator;
     if (reset_launch_msg_state) {
-        for (int i = 0; i < num_sub_devices; ++i) {
+        for (uint32_t i = 0; i < num_sub_devices; ++i) {
             calculator.add_dispatch_go_signal_mcast();
         }
         if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {

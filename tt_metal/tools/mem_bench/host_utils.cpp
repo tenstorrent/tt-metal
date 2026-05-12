@@ -46,18 +46,18 @@ double get_current_time_seconds() {
 
 std::vector<int> get_mmio_device_ids(int number_of_devices, int numa_node) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto pcie_devices = cluster.number_of_pci_devices();
+    const int pcie_devices = static_cast<int>(cluster.number_of_pci_devices());
     std::vector<int> device_ids;
 
     // Assumes PCIe device IDs are iterated first
-    for (int device_id = 0; device_id < pcie_devices && device_ids.size() < number_of_devices; ++device_id) {
+    for (int device_id = 0; device_id < pcie_devices && device_ids.size() < static_cast<size_t>(number_of_devices); ++device_id) {
         // Not an MMIO device
         if (cluster.get_associated_mmio_device(device_id) != device_id) {
             continue;
         }
 
         auto associated_node = cluster.get_numa_node_for_device(device_id);
-        if (numa_node == -1 || associated_node == numa_node) {
+        if (numa_node == -1 || static_cast<int>(associated_node) == numa_node) {
             device_ids.push_back(device_id);
             std::cout << "Using Device: " << device_id << std::endl;
         }
@@ -68,11 +68,11 @@ std::vector<int> get_mmio_device_ids(int number_of_devices, int numa_node) {
 
 std::vector<int> get_mmio_device_ids_unique_nodes(int number_of_devices) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto pcie_devices = cluster.number_of_pci_devices();
+    const int pcie_devices = static_cast<int>(cluster.number_of_pci_devices());
     std::vector<int> device_ids;
     std::unordered_set<uint32_t> numa_nodes;
 
-    for (int device_id = 0; device_id < pcie_devices && device_ids.size() < number_of_devices; ++device_id) {
+    for (int device_id = 0; device_id < pcie_devices && device_ids.size() < static_cast<size_t>(number_of_devices); ++device_id) {
 
         auto associated_node = cluster.get_numa_node_for_device(device_id);
         if (!numa_nodes.contains(associated_node)) {
@@ -92,7 +92,7 @@ int get_number_of_mmio_devices() {
 
 bool is_valid_mmio_device(int device_id) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto pcie_devices = cluster.number_of_pci_devices();
+    const int pcie_devices = static_cast<int>(cluster.number_of_pci_devices());
 
     if (device_id < 0 || device_id >= pcie_devices) {
         return false;

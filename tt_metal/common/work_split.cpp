@@ -34,7 +34,7 @@ uint32_t merge_num_sticks_to_read(uint32_t num_sticks_to_read, uint32_t stick_si
 std::tuple<uint32_t, uint32_t> get_max_cores_divisible_by_tiles_per_core_tiles(
     const uint32_t& num_tiles, const uint32_t& num_cores_max, bool request_even) {
     uint32_t num_cores = 1;
-    for (int i = 2; i <= num_cores_max; i++) {
+    for (uint32_t i = 2; i <= num_cores_max; i++) {
         if ((num_tiles % i) == 0) {
             num_cores = i;
         }
