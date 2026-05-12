@@ -27,9 +27,13 @@ from ._ttml import NamedParameters
 
 # --- Python subpackages ---
 from . import autograd
+from . import lazy
 from . import init
 from . import models
 from . import modules
+
+# Lazy / deferred parameter initialization (Python-side)
+from .lazy import is_lazy_init_enabled, lazy_init, materialize_module, replicate_mesh_mapper_config
 
 # --- Re-export _ttml submodules that have no Python package counterpart ---
 # These are pure C++ nanobind submodules; making them attributes of ttml

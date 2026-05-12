@@ -145,6 +145,10 @@ class TrainingConfig(BaseTrainingConfig):
         self.num_epochs = self.epochs
         self.model_save_interval = self.save_every
 
+        # Deferred Python Parameter init: build with `ttml.lazy_init()` then
+        # `ttml.materialize_module()` immediately (same init ops / order as eager).
+        self.lazy_parameter_init = bool(tc.get("lazy_parameter_init", False))
+
 
 @dataclass
 class ModelExperimentalConfig:
@@ -1028,6 +1032,35 @@ def create_model_from_config(model_config: ModelConfig, use_tp: bool = False) ->
         raise ValueError(f"Unsupported model type: {model_config.model_type}")
 
 
+def instantiate_model_from_config(
+    model_config: ModelConfig,
+    lazy_init: bool,
+    *,
+    use_tp: bool = False,
+    track_memory: bool = False,
+) -> Model:
+    """Create model; optionally defer Python :class:`~ttml.modules.parameter.Parameter` allocation.
+
+    When ``lazy_init`` is True, uses ``with ttml.lazy_init():`` then
+    :func:`ttml.materialize_module` so the same ``ttml.init.*`` factories run
+    after device open and ``set_seed`` (same numerical init as eager construction).
+
+    When ``track_memory`` is True and ``lazy_init`` is True, records device memory
+    snapshots after the lazy context (metadata-only, minimal weight DRAM) and after
+    materialization (weights allocated). Requires an active capture (e.g. ``--track-memory``).
+    """
+    if lazy_init:
+        with ttml.lazy_init():
+            model = create_model_from_config(model_config, use_tp=use_tp)
+        if track_memory:
+            MemoryUsageTracker.snapshot("LAZY_INIT_AFTER_CONTEXT")
+        ttml.materialize_module(model)
+        if track_memory:
+            MemoryUsageTracker.snapshot("LAZY_INIT_AFTER_MATERIALIZE")
+        return model
+    return create_model_from_config(model_config, use_tp=use_tp)
+
+
 def save_checkpoint(
     checkpoint_path: str,
     step: int,
@@ -1307,7 +1340,14 @@ def main():
             "step thereafter. Columns: step,layer,expert,prob."
         ),
     )
-
+    parser.add_argument(
+        "--lazy-parameter-init",
+        action="store_true",
+        help=(
+            "Defer Python Parameter allocation (lazy metadata + materialize). "
+            "Same init as eager when device and seed are unchanged before model build."
+        ),
+    )
     args = parser.parse_args()
 
     print("=" * 70)
@@ -1358,6 +1398,8 @@ def main():
         training_config.clip_grad_norm_max_norm = args.clip_grad_norm
     if args.sequence_length is not None:
         model_config.max_sequence_length = args.sequence_length
+    if args.lazy_parameter_init:
+        training_config.lazy_parameter_init = True
 
     # Only checkpoint when explicitly requested via --model_save_path.
     # No model_path in YAML -> no checkpointing.
@@ -1554,11 +1596,18 @@ def main():
             print(f"    Max sequence length: {model_config.max_sequence_length}")
             print(f"    Runner type: {runner_type_str}")
             print(f"    Weight tying: {weight_tying_str}")
+            if training_config.lazy_parameter_init:
+                print("    lazy_parameter_init: True (ttml.lazy_init + materialize_module)")
 
             # Create model. Pass use_tp so Llama configures ColumnParallelLinear
             # against the "tp" axis of the active mesh (no-op for non-Llama and
             # an error for non-Llama with TP).
-            model = create_model_from_config(model_config, use_tp=device_config.enable_tp)
+            model = instantiate_model_from_config(
+                model_config,
+                lazy_init=training_config.lazy_parameter_init,
+                use_tp=device_config.enable_tp,
+                track_memory=args.track_memory,
+            )
             if args.print_summary:
                 summary(model)
 
