@@ -892,7 +892,7 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
                         if isinstance(_ms_val, list) and len(_ms_val) == 2:
                             return tuple(_ms_val)
     except Exception:
-        pass
+        pass  # Intentionally ignored: master config parsing is best-effort, fall through to env var / auto-detect
     # Env var override (used when master JSON is not available)
     shape = get_mesh_shape()
     if shape:
@@ -1004,7 +1004,7 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
         try:
             per_dev_ndim = len(device_tensors[0].shape)
         except Exception:
-            pass
+            pass  # Intentionally ignored: shape query may fail on deallocated tensors, treat as unknown
 
     if per_dev_ndim is not None:
         if any(_is_shard(p) and p.dim >= per_dev_ndim for p in placements):

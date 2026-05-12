@@ -264,7 +264,7 @@ def run(
                 try:
                     apply_tensor_placement_topology(ttnn_tensors[i], tp, actual_mesh)
                 except Exception:
-                    pass
+                    pass  # Intentionally ignored: topology application is best-effort, fallback to default
 
     output_tensor = ttnn.concat(ttnn_tensors, dim=dim_value, **op_kwargs)
     # Use arg0[0]'s tensor_placement to drive the mesh composer (all inputs share

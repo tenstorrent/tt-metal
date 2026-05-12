@@ -197,7 +197,7 @@ def run(
                     else:
                         q_mem_cfg = parsed_q_mem
                 except Exception:
-                    pass
+                    pass  # Intentionally ignored: memory config parsing is best-effort, fallback to default
         elif not isinstance(traced_input_a_mem, str):
             q_mem_cfg = traced_input_a_mem
 

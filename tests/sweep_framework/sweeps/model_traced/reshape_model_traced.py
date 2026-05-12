@@ -292,7 +292,7 @@ def run(
             try:
                 apply_tensor_placement_topology(input_tensor, input_a_tensor_placement, (1, 2))
             except Exception:
-                pass
+                pass  # Intentionally ignored: topology application is best-effort, fallback to default
         else:
             input_tensor = ttnn.from_torch(torch_input, dtype=input_a_dtype, layout=input_a_layout)
 

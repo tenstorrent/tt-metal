@@ -619,7 +619,7 @@ def run(
                         try:
                             apply_tensor_placement_topology(tt_input, input_a_tensor_placement, mesh_shape)
                         except Exception:
-                            pass
+                            pass  # Intentionally ignored: topology application is best-effort, fallback to default
 
             else:
                 # Use _get_tensors helper for generality format
@@ -741,7 +741,7 @@ def run(
                             try:
                                 apply_tensor_placement_topology(tt_input, input_a_tensor_placement, mesh_shape)
                             except Exception:
-                                pass
+                                pass  # Intentionally ignored: topology application is best-effort, fallback to default
                         tt_out_tensor = ttnn.experimental.all_gather_async(tt_input, **op_kwargs)
                     else:
                         _ag_kwargs = dict(
@@ -769,7 +769,7 @@ def run(
                             try:
                                 apply_tensor_placement_topology(tt_input, input_a_tensor_placement, mesh_shape)
                             except Exception:
-                                pass
+                                pass  # Intentionally ignored: topology application is best-effort, fallback to default
                         tt_out_tensor = ttnn.experimental.all_gather_async(
                             tt_input,
                             persistent_output_buffer,
