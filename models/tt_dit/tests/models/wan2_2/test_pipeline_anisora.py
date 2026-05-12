@@ -82,7 +82,7 @@ def test_pipeline_inference(
         num_frames=num_frames,
     )
 
-    prompt = os.environ.get("PROMPT") or "An anime girl smiling, soft lighting, cinematic."
+    prompt = "An anime girl smiling, soft lighting, cinematic."
 
     def run(*, prompt, number, seed):
         logger.info(f"Running AniSora inference with prompt: '{prompt}'")
@@ -187,19 +187,22 @@ def test_pipeline_inference_random_weights(
     num_frames = 81
     num_inference_steps = 4
 
-    pipeline = AniSoraPipeline.create_pipeline(
-        mesh_device=mesh_device,
-        sp_axis=sp_axis,
-        tp_axis=tp_axis,
-        num_links=num_links,
-        dynamic_load=dynamic_load,
-        topology=topology,
-        is_fsdp=is_fsdp,
-        height=height,
-        width=width,
-        num_frames=num_frames,
-        random_weights=True,
-    )
+    os.environ["TT_DIT_RANDOM_WEIGHTS"] = "1"
+    try:
+        pipeline = AniSoraPipeline.create_pipeline(
+            mesh_device=mesh_device,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+            num_links=num_links,
+            dynamic_load=dynamic_load,
+            topology=topology,
+            is_fsdp=is_fsdp,
+            height=height,
+            width=width,
+            num_frames=num_frames,
+        )
+    finally:
+        os.environ.pop("TT_DIT_RANDOM_WEIGHTS", None)
 
     prompt = "smoke test — random weights, output is meaningless"
     logger.info(f"Random-weight smoke test: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")

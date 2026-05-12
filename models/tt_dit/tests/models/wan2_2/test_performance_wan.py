@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import statistics
 
 import numpy as np
@@ -115,11 +114,7 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type, topolog
     else:
         pipeline_cls = WanPipelineI2V
         expected_metrics = i2v_metrics(mesh_device, height)
-        prompt_image_path = os.environ.get("PROMPT_IMAGE")
-        if prompt_image_path:
-            image_prompt = Image.open(prompt_image_path).convert("RGB")
-        else:
-            image_prompt = create_fractal_image(width, height)
+        image_prompt = create_fractal_image(width, height)
 
     # Only WH 4x8 uses ring; BH 4x8 linear is the distinct Linear case at this mesh shape.
     if tuple(mesh_device.shape) == (4, 8) and topology == ttnn.Topology.Linear:
@@ -217,10 +212,8 @@ def test_pipeline_performance(
     tp_factor = tuple(mesh_device.shape)[tp_axis]
 
     # Test prompts
-    _custom_prompt = os.environ.get("PROMPT")
     prompts = [
-        _custom_prompt
-        or """Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.""",
+        """Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.""",
         """A close-up of a beautiful butterfly landing on a flower, wings gently moving in the breeze.""",
         """A neon-lit alley in a sprawling cyberpunk metropolis at night, rain-slick streets reflecting glowing holograms, dense atmosphere, flying cars in the sky, people in high-tech streetwear — ultra-detailed, cinematic lighting, 4K""",
         """A colossal whale floating through a desert sky like a blimp, casting a long shadow over sand dunes, people in ancient robes watching in awe, golden hour lighting, dreamlike color palette — surrealism, concept art, Greg Rutkowski style""",
@@ -278,9 +271,8 @@ def test_pipeline_performance(
     for i in range(num_perf_runs):
         logger.info(f"Performance run {i+1}/{num_perf_runs}...")
 
-        # Use prompts[0] (PROMPT env var if set, else first default) so the
-        # measured run uses the prompt the caller intended.
-        prompt_idx = i % len(prompts)
+        # Run pipeline with different prompt
+        prompt_idx = (i + 1) % len(prompts)
         with benchmark_profiler("run", iteration=i):
             with torch.no_grad():
                 result = pipeline(

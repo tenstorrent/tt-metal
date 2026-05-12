@@ -29,7 +29,6 @@ from the base diffusers repo (~12 GB total).
 from __future__ import annotations
 
 import os
-from contextlib import nullcontext
 
 from ...utils import cache
 from ...utils.lightx2v_loader import load_lightx2v_state_dict
@@ -69,8 +68,10 @@ class AniSoraPipeline(WanPipelineI2V):
         self._allow_download = allow_download
         self._random_weights = random_weights
 
-        ctx = _patch_torch_transformer_random() if random_weights else nullcontext()
-        with ctx:
+        if random_weights:
+            with _patch_torch_transformer_random():
+                super().__init__(*args, **kwargs)
+        else:
             super().__init__(*args, **kwargs)
 
     def _prepare_transformer(self, idx: int):
@@ -105,19 +106,6 @@ class AniSoraPipeline(WanPipelineI2V):
         )
 
     @staticmethod
-    def create_pipeline(*args, random_weights: bool | None = None, **kwargs):
+    def create_pipeline(*args, **kwargs):
         kwargs["checkpoint_name"] = kwargs.get("checkpoint_name") or AniSoraPipeline.BASE_DIFFUSERS_REPO
-        if "allow_download" in kwargs:
-            allow = kwargs.pop("allow_download")
-            if allow:
-                os.environ["TT_DIT_ALLOW_HF_DOWNLOAD"] = "1"
-        if "anisora_local_dir" in kwargs:
-            val = kwargs.pop("anisora_local_dir")
-            if val is not None:
-                os.environ["ANISORA_LOCAL_DIR"] = val
-        if random_weights:
-            os.environ["TT_DIT_RANDOM_WEIGHTS"] = "1"
-        try:
-            return WanPipeline.create_pipeline(*args, pipeline_class=AniSoraPipeline, **kwargs)
-        finally:
-            os.environ.pop("TT_DIT_RANDOM_WEIGHTS", None)
+        return WanPipeline.create_pipeline(*args, pipeline_class=AniSoraPipeline, **kwargs)

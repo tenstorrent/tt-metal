@@ -389,26 +389,4 @@ class WanLoraPipelineI2V(WanPipelineI2V):
     @staticmethod
     def create_pipeline(*args, **kwargs):
         kwargs["checkpoint_name"] = kwargs.get("checkpoint_name") or "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
-        # WanPipeline.create_pipeline drops kwargs it doesn't recognize, so
-        # surface the LoRA settings via env vars that __init__ already reads.
-        # Save previous values so we can restore after the call.
-        _env_keys = ("LORA_HIGH_PATH", "LORA_LOW_PATH", "LORA_SCALE")
-        saved = {k: os.environ.get(k) for k in _env_keys}
-        if "lora_high_path" in kwargs:
-            os.environ["LORA_HIGH_PATH"] = kwargs.pop("lora_high_path")
-        if "lora_low_path" in kwargs:
-            val = kwargs.pop("lora_low_path")
-            if val is not None:
-                os.environ["LORA_LOW_PATH"] = val
-            else:
-                os.environ.pop("LORA_LOW_PATH", None)
-        if "lora_scale" in kwargs:
-            os.environ["LORA_SCALE"] = str(kwargs.pop("lora_scale"))
-        try:
-            return WanPipeline.create_pipeline(*args, pipeline_class=WanLoraPipelineI2V, **kwargs)
-        finally:
-            for k in _env_keys:
-                if saved[k] is None:
-                    os.environ.pop(k, None)
-                else:
-                    os.environ[k] = saved[k]
+        return WanPipeline.create_pipeline(*args, pipeline_class=WanLoraPipelineI2V, **kwargs)

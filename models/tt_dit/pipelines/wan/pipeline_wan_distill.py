@@ -24,7 +24,6 @@ from the base diffusers repo (~12 GB total).
 """
 from __future__ import annotations
 
-import contextlib
 import os
 
 import torch
@@ -117,8 +116,10 @@ class WanDistillPipelineI2V(WanPipelineI2V):
         self._allow_download = allow_download
         self._random_weights = random_weights
 
-        ctx = _patch_torch_transformer_random() if random_weights else contextlib.nullcontext()
-        with ctx:
+        if random_weights:
+            with _patch_torch_transformer_random():
+                super().__init__(*args, **kwargs)
+        else:
             super().__init__(*args, **kwargs)
 
     def prepare_text_conditioning(self, tt_model, prompt_embeds, buffer, traced=False):
@@ -166,19 +167,6 @@ class WanDistillPipelineI2V(WanPipelineI2V):
         )
 
     @staticmethod
-    def create_pipeline(*args, random_weights: bool | None = None, **kwargs):
+    def create_pipeline(*args, **kwargs):
         kwargs["checkpoint_name"] = kwargs.get("checkpoint_name") or WanDistillPipelineI2V.BASE_DIFFUSERS_REPO
-        if "allow_download" in kwargs:
-            allow = kwargs.pop("allow_download")
-            if allow:
-                os.environ["TT_DIT_ALLOW_HF_DOWNLOAD"] = "1"
-        if "lightx2v_local_dir" in kwargs:
-            val = kwargs.pop("lightx2v_local_dir")
-            if val is not None:
-                os.environ["LIGHTX2V_LOCAL_DIR"] = val
-        if random_weights:
-            os.environ["TT_DIT_RANDOM_WEIGHTS"] = "1"
-        try:
-            return WanPipeline.create_pipeline(*args, pipeline_class=WanDistillPipelineI2V, **kwargs)
-        finally:
-            os.environ.pop("TT_DIT_RANDOM_WEIGHTS", None)
+        return WanPipeline.create_pipeline(*args, pipeline_class=WanDistillPipelineI2V, **kwargs)

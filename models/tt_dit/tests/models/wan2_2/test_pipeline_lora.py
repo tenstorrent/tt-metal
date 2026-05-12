@@ -78,8 +78,7 @@ def test_pipeline_inference(
     guidance_scale = float(os.environ.get("GUIDANCE_SCALE", "3.5"))
     guidance_scale_2 = float(os.environ.get("GUIDANCE_SCALE_2", str(guidance_scale)))
     lora_scale = float(os.environ.get("LORA_SCALE", "1.0"))
-    _prev_boundary = os.environ.get("BOUNDARY_RATIO")
-    os.environ.setdefault("BOUNDARY_RATIO", "0.875")
+    boundary_ratio = float(os.environ.get("BOUNDARY_RATIO", "0.875"))
 
     pipeline = WanLoraPipelineI2V.create_pipeline(
         mesh_device=mesh_device,
@@ -92,12 +91,9 @@ def test_pipeline_inference(
         height=height,
         width=width,
         num_frames=num_frames,
-        lora_high_path=os.environ["LORA_HIGH_PATH"],
-        lora_low_path=os.environ.get("LORA_LOW_PATH"),
-        lora_scale=lora_scale,
     )
 
-    prompt = os.environ.get("PROMPT") or "A golden retriever running on a sandy beach, waves in the background"
+    prompt = "A golden retriever running on a sandy beach, waves in the background"
 
     def run(*, prompt, number, seed):
         logger.info(f"Running LoRA inference with prompt: '{prompt}'")
@@ -145,19 +141,13 @@ def test_pipeline_inference(
         except ImportError:
             logger.info("Could not export video - imageio_ffmpeg not available")
 
-    try:
-        if no_prompt:
-            run(prompt=prompt, number=0, seed=42)
-        else:
-            for i in itertools.count():
-                new_prompt = input("Enter the input prompt, or q to exit: ")
-                if new_prompt:
-                    prompt = new_prompt
-                if prompt[0] == "q":
-                    break
-                run(prompt=prompt, number=i, seed=i)
-    finally:
-        if _prev_boundary is None:
-            os.environ.pop("BOUNDARY_RATIO", None)
-        else:
-            os.environ["BOUNDARY_RATIO"] = _prev_boundary
+    if no_prompt:
+        run(prompt=prompt, number=0, seed=42)
+    else:
+        for i in itertools.count():
+            new_prompt = input("Enter the input prompt, or q to exit: ")
+            if new_prompt:
+                prompt = new_prompt
+            if prompt[0] == "q":
+                break
+            run(prompt=prompt, number=i, seed=i)
