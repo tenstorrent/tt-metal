@@ -70,6 +70,12 @@ runs:
             continue
           fi
 
+          # Basic validation: image refs must contain a ':' (tag) or '@sha256:' (digest)
+          if [[ "$ghcr_tag" != *":"* && "$ghcr_tag" != *"@sha256:"* ]]; then
+            echo "::warning::Skipping invalid image ref (no tag or digest): $ghcr_tag"
+            continue
+          fi
+
           harbor_tag="${HARBOR_PREFIX}${ghcr_tag}"
 
           echo "Pulling $harbor_tag (to warm Harbor cache)..."
