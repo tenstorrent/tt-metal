@@ -75,7 +75,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
     accumulated_total_per_dim[0] = 1;
 
     log_debug(tt::LogOp, "Output Shape : {}, Input Shape : {}", actual_output_shape, input_shape);
-    for (int32_t i = 1; i < num_dims; i++) {
+    for (int32_t i = 1; i < static_cast<int32_t>(num_dims); i++) {
         uint32_t num_output_dim = actual_output_shape[-(i + 1)];
         uint32_t num_total_dim = input_shape[-(i + 1)];
         uint32_t num_input_dim = (num_total_dim - num_output_dim) * accumulated_total_per_dim[i - 1];
@@ -84,7 +84,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
         accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
     }
 
-    for (int i = 0; i < num_dims; i++) {
+    for (uint32_t i = 0; i < num_dims; i++) {
         log_debug(
             tt::LogOp,
             "i = {}, num_output_sticks_per_dim: {}, num_input_sticks_per_dim: {}, accumulated_total_per_dim: {}",
@@ -198,7 +198,7 @@ PaddedSliceRMProgramFactory::cached_program_t PaddedSliceRMProgramFactory::creat
 
     const ttnn::Shape output_shape = output.logical_shape();
     ttnn::Shape actual_output_shape = output_tensor_end;
-    for (int i = 0; i < output_shape.rank(); i++) {
+    for (size_t i = 0; i < output_shape.rank(); i++) {
         actual_output_shape[i] = output_tensor_end[i] - output_tensor_start[i];
     }
 
