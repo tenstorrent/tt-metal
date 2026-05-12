@@ -519,9 +519,9 @@ void ElfFile::Impl::Elf<Is64>::LoadImage() {
         // If it's allocatable, make sure it's in a segment.
         if (section.sh_flags & SHF_ALLOC && !FindSegment(section)) {
             std::string_view sec_name = GetName(section);
-            if (sec_name.starts_with(".device_print")) {
-                // Special case: .device_print sections are used for
-                // debug printing, and are not mapped into memory.
+            if (sec_name.starts_with(".device_print") || sec_name == ".debug_assert_msgs") {
+                // Special case: these sections are file-only debug metadata
+                // with fixed VMAs outside device memory — not mapped into device L1.
                 continue;
             }
             TT_THROW(
