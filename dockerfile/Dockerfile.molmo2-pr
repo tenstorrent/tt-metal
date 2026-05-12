@@ -4,7 +4,7 @@
 # Thin overlay image: extends the dev base with Molmo2 PR changes.
 # Copies only the changed model files on top of the existing base.
 
-FROM ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dev-ubuntu-22.04-amd64:0.12.0-735b65d-7a07a97
+FROM ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dev-ubuntu-22.04-amd64:0.11.0-2f4681f6119-8f36910
 
 USER root
 
