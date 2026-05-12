@@ -13,13 +13,23 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_block.hpp"
 
-#if BINARY_OP_TYPE == EltwiseBinaryType::ELWADD
-constexpr auto FPU_OP = compute_kernel_lib::BinaryFpuOp::Add;
-#elif BINARY_OP_TYPE == EltwiseBinaryType::ELWSUB
-constexpr auto FPU_OP = compute_kernel_lib::BinaryFpuOp::Sub;
-#elif BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL
-constexpr auto FPU_OP = compute_kernel_lib::BinaryFpuOp::Mul;
-#endif
+namespace eltwise_binary_kernel_detail {
+template <ckernel::EltwiseBinaryType T>
+struct FpuOpForBinaryType;
+template <>
+struct FpuOpForBinaryType<ckernel::EltwiseBinaryType::ELWADD> {
+    static constexpr auto value = compute_kernel_lib::BinaryFpuOp::Add;
+};
+template <>
+struct FpuOpForBinaryType<ckernel::EltwiseBinaryType::ELWSUB> {
+    static constexpr auto value = compute_kernel_lib::BinaryFpuOp::Sub;
+};
+template <>
+struct FpuOpForBinaryType<ckernel::EltwiseBinaryType::ELWMUL> {
+    static constexpr auto value = compute_kernel_lib::BinaryFpuOp::Mul;
+};
+}  // namespace eltwise_binary_kernel_detail
+constexpr auto FPU_OP = eltwise_binary_kernel_detail::FpuOpForBinaryType<ckernel::BINARY_OP_TYPE>::value;
 
 template <
     tt::CBIndex cb_bcast,
@@ -28,8 +38,9 @@ template <
     tt::CBIndex cb_post_lhs,
     tt::CBIndex cb_pre_rhs,
     tt::CBIndex cb_post_rhs,
-    tt::CBIndex cb_out>
-ALWI void process_tile(uint32_t freq, uint32_t tile_start, uint32_t num_tiles_per_cycle) {
+    tt::CBIndex cb_out,
+    uint32_t num_tiles_per_cycle>
+ALWI void process_tile(uint32_t freq, uint32_t tile_start) {
     using namespace ckernel;
     using namespace compute_kernel_lib;
 
@@ -149,12 +160,26 @@ void kernel_main() {
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        process_tile<cb_bcast, cb_llk_post, cb_pre_lhs, cb_post_lhs, cb_pre_rhs, cb_post_rhs, cb_out>(
-            tile_freq, tile_start, num_tiles_per_cycle);
+        process_tile<
+            cb_bcast,
+            cb_llk_post,
+            cb_pre_lhs,
+            cb_post_lhs,
+            cb_pre_rhs,
+            cb_post_rhs,
+            cb_out,
+            num_tiles_per_cycle>(tile_freq, tile_start);
     }
 
     if (remaining_iterations > 0) {
-        process_tile<cb_bcast, cb_llk_post, cb_pre_lhs, cb_post_lhs, cb_pre_rhs, cb_post_rhs, cb_out>(
-            remaining_iterations, tile_start, num_tiles_per_cycle);
+        process_tile<
+            cb_bcast,
+            cb_llk_post,
+            cb_pre_lhs,
+            cb_post_lhs,
+            cb_pre_rhs,
+            cb_post_rhs,
+            cb_out,
+            num_tiles_per_cycle>(remaining_iterations, tile_start);
     }
 }

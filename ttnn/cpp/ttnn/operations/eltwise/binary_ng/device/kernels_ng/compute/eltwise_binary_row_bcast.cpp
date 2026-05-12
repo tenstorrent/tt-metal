@@ -15,13 +15,23 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_block.hpp"
 
-#if BINARY_OP_TYPE == EltwiseBinaryType::ELWADD
-constexpr auto FPU_OP = compute_kernel_lib::BinaryFpuOp::Add;
-#elif BINARY_OP_TYPE == EltwiseBinaryType::ELWSUB
-constexpr auto FPU_OP = compute_kernel_lib::BinaryFpuOp::Sub;
-#elif BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL
-constexpr auto FPU_OP = compute_kernel_lib::BinaryFpuOp::Mul;
-#endif
+namespace eltwise_binary_kernel_detail {
+template <ckernel::EltwiseBinaryType T>
+struct FpuOpForBinaryType;
+template <>
+struct FpuOpForBinaryType<ckernel::EltwiseBinaryType::ELWADD> {
+    static constexpr auto value = compute_kernel_lib::BinaryFpuOp::Add;
+};
+template <>
+struct FpuOpForBinaryType<ckernel::EltwiseBinaryType::ELWSUB> {
+    static constexpr auto value = compute_kernel_lib::BinaryFpuOp::Sub;
+};
+template <>
+struct FpuOpForBinaryType<ckernel::EltwiseBinaryType::ELWMUL> {
+    static constexpr auto value = compute_kernel_lib::BinaryFpuOp::Mul;
+};
+}  // namespace eltwise_binary_kernel_detail
+constexpr auto FPU_OP = eltwise_binary_kernel_detail::FpuOpForBinaryType<ckernel::BINARY_OP_TYPE>::value;
 
 void kernel_main() {
     using namespace compute_kernel_lib;

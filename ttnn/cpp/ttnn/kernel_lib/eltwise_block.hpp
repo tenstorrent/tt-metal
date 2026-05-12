@@ -47,7 +47,7 @@
  * equals the element's required value.
  *
  * Block-element `init()` bodies no longer emit reconfig — they program only the
- * per-op LLK shape (`add_tiles_init`, `init_bcast`, `copy_tile_init`).
+ * per-op LLK shape (`add_tiles_init`, math+unpack bcast short init, `copy_tile_init`).
  *
  * @section block_path_carry_skip CARRY / SKIP element classification (D6)
  *
@@ -60,9 +60,9 @@
  * @section block_caller_init_contract Caller-init contract — reminder
  *
  * Block-using kernels follow the same caller-init contract as streaming chains. See
- * `eltwise_chain.hpp` `@section caller_init_contract` for the table; the only block-
- * specific note is that `init_bcast<...>(CbA, CbB, ocb)` in `BlockBinaryFpu::init()`
- * is per-element (chain-owned), not BIG-init.
+ * `eltwise_chain.hpp` `@section caller_init_contract` for the table. `BlockBinaryFpu::init()`
+ * uses the math+unpack short bcast init (mirrors streaming `BinaryFpu`); pack-side
+ * configure stays as `compute_kernel_hw_startup` programmed it.
  */
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
@@ -145,7 +145,6 @@ template <
     uint32_t CbB,
     BinaryFpuOp Op,
     uint32_t BlockSize,
-    uint32_t CbOut = 0,
     Dst BaseDst = Dst::D0,
     BroadcastDim Bcast = BroadcastDim::None,
     BinaryDataFormatReconfig DF = BinaryDataFormatReconfig::None,
@@ -157,6 +156,10 @@ template <
 struct BlockBinaryFpu : BinaryFpuTag {
     static_assert(
         to_u32(BaseDst) + BlockSize <= DEST_AUTO_LIMIT, "BlockBinaryFpu: BaseDst + BlockSize exceeds DEST_AUTO_LIMIT");
+    static_assert(
+        DF != BinaryDataFormatReconfig::Output && DF != BinaryDataFormatReconfig::InputAndOutput,
+        "BlockBinaryFpu: pack-side DF reconfig must live on the BlockPackTile element "
+        "(PackTileReconfig::Output), not on BlockBinaryFpu. Only None / Input are valid here.");
 
     static constexpr uint32_t cb_a_id() { return CbA; }
     static constexpr uint32_t cb_b_id() { return CbB; }
@@ -169,20 +172,19 @@ struct BlockBinaryFpu : BinaryFpuTag {
     static constexpr bool same_cb = (CbA == CbB);
     static constexpr uint32_t block_size = BlockSize;
 
-    // Prev-CB fold (D7): BlockBinaryFpu touches srca (CbA), srcb (CbB), and pack
-    // (CbOut) when the corresponding reconfig is opted in. Reconfig is fold-driven
-    // — `emit_pre_element_transitions` emits the elided sequence before init().
-    static constexpr uint32_t reconfig_srca_cb =
-        (DF == BinaryDataFormatReconfig::Input || DF == BinaryDataFormatReconfig::InputAndOutput) ? CbA : NO_PREV_CB;
-    static constexpr uint32_t reconfig_srcb_cb =
-        (DF == BinaryDataFormatReconfig::Input || DF == BinaryDataFormatReconfig::InputAndOutput) ? CbB : NO_PREV_CB;
-    static constexpr uint32_t reconfig_pack_cb =
-        ((DF == BinaryDataFormatReconfig::Output || DF == BinaryDataFormatReconfig::InputAndOutput) && CbOut != 0)
-            ? CbOut
-            : NO_PREV_CB;
+    // Prev-CB fold (D7): BlockBinaryFpu touches srca (CbA) and srcb (CbB) only.
+    // Pack-side reconfig is owned by BlockPackTile (PackTileReconfig::Output) — not
+    // duplicated here. `emit_pre_element_transitions` emits the elided srca/srcb
+    // sequence before init().
+    static constexpr uint32_t reconfig_srca_cb = (DF == BinaryDataFormatReconfig::Input) ? CbA : NO_PREV_CB;
+    static constexpr uint32_t reconfig_srcb_cb = (DF == BinaryDataFormatReconfig::Input) ? CbB : NO_PREV_CB;
+    static constexpr uint32_t reconfig_pack_cb = NO_PREV_CB;
 
-    // F-PERF-3 (D7): srca / srcb / pack reconfig are fold-driven; init() programs
-    // only the per-op LLK shape.
+    // F-PERF-3 (D7): srca / srcb reconfig is fold-driven; init() programs only the
+    // per-op LLK shape. Bcast uses `_init_short`-equivalent (math+unpack only) — the
+    // original `init_bcast<>()` BIG init (hw_configure + pack_dest_init + sync_init)
+    // is undefined mid-MAIN; pack-side configure was already programmed by
+    // `compute_kernel_hw_startup`. Mirrors streaming `BinaryFpu` (eltwise_chain.inl).
     static ALWI void init() {
         if constexpr (Bcast == BroadcastDim::None) {
             if constexpr (Op == BinaryFpuOp::Add) {
@@ -197,8 +199,12 @@ struct BlockBinaryFpu : BinaryFpuTag {
             constexpr auto et = (Op == BinaryFpuOp::Add)   ? ckernel::EltwiseBinaryType::ELWADD
                                 : (Op == BinaryFpuOp::Sub) ? ckernel::EltwiseBinaryType::ELWSUB
                                                            : ckernel::EltwiseBinaryType::ELWMUL;
-            constexpr uint32_t ocb = (CbOut != 0) ? CbOut : CbA;
-            init_bcast<et, bt>(CbA, CbB, ocb);
+            if constexpr (Op == BinaryFpuOp::Mul) {
+                MATH((llk_math_eltwise_binary_init_with_operands<et, bt, MATH_FIDELITY>(CbA, CbB)));
+            } else {
+                MATH((llk_math_eltwise_binary_init_with_operands<et, bt, MathFidelity::LoFi>(CbA, CbB)));
+            }
+            UNPACK((llk_unpack_AB_init<bt>(CbA, CbB)));
         }
     }
 

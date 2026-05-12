@@ -6,15 +6,23 @@
 #include "api/compute/common.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
-#if BCAST_LLKOP == EltwiseBinaryType::ELWADD
-constexpr auto FPU_OP = compute_kernel_lib::BinaryFpuOp::Add;
-#elif BCAST_LLKOP == EltwiseBinaryType::ELWSUB
-constexpr auto FPU_OP = compute_kernel_lib::BinaryFpuOp::Sub;
-#elif BCAST_LLKOP == EltwiseBinaryType::ELWMUL
-constexpr auto FPU_OP = compute_kernel_lib::BinaryFpuOp::Mul;
-#else
-#error "BCAST_LLKOP must be one of ELWADD / ELWSUB / ELWMUL"
-#endif
+namespace bcast_kernel_detail {
+template <ckernel::EltwiseBinaryType T>
+struct FpuOpForBinaryType;
+template <>
+struct FpuOpForBinaryType<ckernel::EltwiseBinaryType::ELWADD> {
+    static constexpr auto value = compute_kernel_lib::BinaryFpuOp::Add;
+};
+template <>
+struct FpuOpForBinaryType<ckernel::EltwiseBinaryType::ELWSUB> {
+    static constexpr auto value = compute_kernel_lib::BinaryFpuOp::Sub;
+};
+template <>
+struct FpuOpForBinaryType<ckernel::EltwiseBinaryType::ELWMUL> {
+    static constexpr auto value = compute_kernel_lib::BinaryFpuOp::Mul;
+};
+}  // namespace bcast_kernel_detail
+constexpr auto FPU_OP = bcast_kernel_detail::FpuOpForBinaryType<ckernel::EltwiseBinaryType::BCAST_LLKOP>::value;
 
 void kernel_main() {
     using namespace compute_kernel_lib;

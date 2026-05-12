@@ -12,16 +12,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_block.hpp"
 
-#if BINARY_OP_TYPE == EltwiseBinaryType::ELWADD
-constexpr auto FPU_OP = compute_kernel_lib::BinaryFpuOp::Add;
-#elif BINARY_OP_TYPE == EltwiseBinaryType::ELWSUB
-constexpr auto FPU_OP = compute_kernel_lib::BinaryFpuOp::Sub;
-#elif BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL
-constexpr auto FPU_OP = compute_kernel_lib::BinaryFpuOp::Mul;
-#else
-#error "BINARY_OP_TYPE must be ELWADD / ELWSUB / ELWMUL"
-#endif
-
 void kernel_main() {
     using namespace compute_kernel_lib;
 
@@ -35,16 +25,21 @@ void kernel_main() {
     constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs;
     constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs;
 
-#ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
-#endif
-
     // D5/D8: caller-side BIG init at the top of MAIN().
     compute_kernel_hw_startup(cb_post_lhs, cb_post_rhs, cb_out);
 
 #if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST)
     // Activations path — keep raw.
     binary_op_init_common(cb_post_lhs, cb_post_rhs, cb_out);
+#endif
+
+    // PACK_RELU must follow pack init — llk_pack_init / llk_pack_hw_configure reset
+    // the pack-config register that holds the RELU enable bit. Order matches main.
+#ifdef PACK_RELU
+    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+#endif
+
+#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST)
     PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, 1);
     cb_wait_front(cb_post_rhs, 1);
     auto process_tiles = [&](uint32_t n) {

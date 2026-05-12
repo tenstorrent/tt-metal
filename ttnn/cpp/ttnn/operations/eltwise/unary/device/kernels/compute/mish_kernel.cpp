@@ -7,6 +7,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_trig.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_activations.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"
 
 namespace cklib = compute_kernel_lib;
