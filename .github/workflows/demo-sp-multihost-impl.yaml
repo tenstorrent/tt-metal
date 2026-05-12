@@ -136,7 +136,6 @@ jobs:
         id: get-allocation-data
         with:
           allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
-          namespace: ttop-ci
 
       - name: Create test environment
         uses: ./.github/actions/ttop-create-environment
@@ -147,6 +146,7 @@ jobs:
           allocationNamespace: ttop-ci
           workerRepository: ${{ steps.parse-image.outputs.repository }}
           workerTag: ${{ steps.parse-image.outputs.tag }}
+          useDevHostMount: 'true'
           sharedVolumeEnabled: 'true'
 
       - name: Setup tt-run for test
