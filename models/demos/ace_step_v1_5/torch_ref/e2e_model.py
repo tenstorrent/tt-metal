@@ -146,7 +146,7 @@ class AceStepE2EModelTorch:
         text_hidden_states: torch.Tensor,
         attn_mask: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Build conditioning tensors for the DiT (fast-preprocess path).
+        """Build conditioning tensors for the DiT.
 
         Returns:
             (enc_hs [1, S, D], enc_mask [1, S], ctx_lat [1, T, 128])
