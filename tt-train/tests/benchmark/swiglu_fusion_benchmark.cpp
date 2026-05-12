@@ -10,14 +10,13 @@
 #include <cstdint>
 #include <cstdlib>
 #include <numeric>
-#include <random>
-#include <sstream>
 #include <string>
 #include <tt-metalium/distributed.hpp>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
+#include "benchmark_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "models/llama.hpp"
 #include "ops/losses.hpp"
@@ -77,39 +76,6 @@ size_t cumulative_peak_from_captured_traces() {
             static_cast<long long>(usage.total_allocations) - static_cast<long long>(usage.total_deallocations);
     }
     return static_cast<size_t>(std::max(0LL, cumulative_peak));
-}
-
-std::vector<uint32_t> parse_u32_csv(const std::string& csv) {
-    std::vector<uint32_t> out;
-    std::stringstream ss(csv);
-    std::string token;
-    while (std::getline(ss, token, ',')) {
-        if (token.empty()) {
-            continue;
-        }
-        out.push_back(static_cast<uint32_t>(std::stoul(token)));
-    }
-    return out;
-}
-
-std::vector<std::string> parse_string_csv(const std::string& csv) {
-    std::vector<std::string> out;
-    std::stringstream ss(csv);
-    std::string token;
-    while (std::getline(ss, token, ',')) {
-        if (token.empty()) {
-            continue;
-        }
-        out.push_back(token);
-    }
-    return out;
-}
-
-bool model_is_enabled(const SweepConfig& cfg, const std::string& name) {
-    if (cfg.model_filter.empty()) {
-        return true;
-    }
-    return std::find(cfg.model_filter.begin(), cfg.model_filter.end(), name) != cfg.model_filter.end();
 }
 
 RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t batch_size, bool use_fused) {
@@ -296,13 +262,13 @@ int main() {
             sweep_cfg.num_measure = static_cast<uint32_t>(std::stoul(env_measure));
         }
         if (const char* env_batches = std::getenv("TTML_SWIGLU_BENCH_BATCHES")) {
-            auto parsed = parse_u32_csv(env_batches);
+            auto parsed = ttml::benchmark_utils::parse_u32_csv(env_batches);
             if (!parsed.empty()) {
                 sweep_cfg.batch_sizes = std::move(parsed);
             }
         }
         if (const char* env_models = std::getenv("TTML_SWIGLU_BENCH_MODELS")) {
-            sweep_cfg.model_filter = parse_string_csv(env_models);
+            sweep_cfg.model_filter = ttml::benchmark_utils::parse_string_csv(env_models);
         }
         const auto& models = all_models();
 
@@ -321,7 +287,7 @@ int main() {
         fmt::print("Runs full training-like step: model forward + CE loss + backward + AdamW step.\n");
 
         for (const auto& model : models) {
-            if (!model_is_enabled(sweep_cfg, model.name)) {
+            if (!ttml::benchmark_utils::name_is_enabled(sweep_cfg.model_filter, model.name)) {
                 continue;
             }
             std::vector<RowSummary> rows;

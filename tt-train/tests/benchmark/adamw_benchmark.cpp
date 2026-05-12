@@ -5,12 +5,11 @@
 
 #include <chrono>
 
-#include "core/tt_tensor_utils.hpp"
+#include "benchmark_utils.hpp"
 #include "metal/optimizers/adamw/adamw.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
-#include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 
 namespace {
@@ -51,7 +50,7 @@ void BM_AdamW(benchmark::State& state) {
 
     const auto dtype = ttnn::DataType::BFLOAT16;
     const ttnn::Shape shape(adamw_shape.shape);
-    const uint32_t seed = static_cast<uint32_t>(std::hash<std::string>{}(adamw_shape.name));
+    const uint32_t seed = ttml::benchmark_utils::seed_from_name(adamw_shape.name);
     const auto tensor_spec = ttnn::TensorSpec(
         shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG));
 

@@ -6,8 +6,9 @@
 
 #include <chrono>
 
+#include "benchmark_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "metal/operations.hpp"
+#include "metal/ops/frobenius_normalize/frobenius_normalize.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -53,7 +54,7 @@ void BM_FrobeniusNormalize_Fused(benchmark::State& state) {
     device->enable_program_cache();
 
     const ttnn::Shape shape(frobenius_shape.shape);
-    const uint32_t seed = static_cast<uint32_t>(std::hash<std::string>{}(frobenius_shape.name));
+    const uint32_t seed = ttml::benchmark_utils::seed_from_name(frobenius_shape.name);
 
     const auto data = ttml::test_utils::make_uniform_vector<float>(shape.volume(), -1.0f, 1.0f, seed);
     auto input = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(data, shape, device.get());
@@ -95,7 +96,7 @@ void BM_FrobeniusNormalize_Composite(benchmark::State& state) {
     device->enable_program_cache();
 
     const ttnn::Shape shape(frobenius_shape.shape);
-    const uint32_t seed = static_cast<uint32_t>(std::hash<std::string>{}(frobenius_shape.name));
+    const uint32_t seed = ttml::benchmark_utils::seed_from_name(frobenius_shape.name);
 
     const auto data = ttml::test_utils::make_uniform_vector<float>(shape.volume(), -1.0f, 1.0f, seed);
     auto input = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(data, shape, device.get());

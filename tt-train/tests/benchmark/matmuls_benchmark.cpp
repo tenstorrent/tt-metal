@@ -11,8 +11,6 @@
 #include <llrt/tt_cluster.hpp>
 #include <memory>
 #include <optional>
-#include <random>
-#include <span>
 #include <string>
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/base_types.hpp>
@@ -20,16 +18,14 @@
 #include <tt-metalium/device.hpp>
 #include <vector>
 
+#include "benchmark_utils.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "impl/context/metal_context.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/device.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 
 struct CoreGridConfig {
@@ -271,7 +267,7 @@ void BM_TTTrainMatmulComparison(benchmark::State& state) {
 
         // Create inputs once per shape so each grid config sees identical tensors
         const auto dtype = ttnn::DataType::BFLOAT16;
-        const uint32_t seed = static_cast<uint32_t>(std::hash<std::string>{}(matmul_shape.name));
+        const uint32_t seed = ttml::benchmark_utils::seed_from_name(matmul_shape.name);
 
         ttnn::Shape a_shape(matmul_shape.a_shape);
         ttnn::Shape b_shape(matmul_shape.b_shape);

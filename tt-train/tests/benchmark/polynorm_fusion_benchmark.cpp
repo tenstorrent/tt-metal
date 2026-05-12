@@ -29,11 +29,9 @@
 #include <benchmark/benchmark.h>
 #include <fmt/format.h>
 
-#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <tt-metalium/distributed.hpp>
@@ -42,6 +40,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
+#include "benchmark_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/polynorm_op.hpp"
 #include "test_utils/random_data.hpp"
@@ -96,50 +95,6 @@ double speedup_x(double baseline, double fused) {
     return baseline / fused;
 }
 
-std::string join_u32_csv(const std::vector<uint32_t>& values) {
-    std::string out;
-    for (size_t i = 0; i < values.size(); ++i) {
-        if (i > 0) {
-            out += ",";
-        }
-        out += std::to_string(values[i]);
-    }
-    return out;
-}
-
-std::vector<uint32_t> parse_u32_csv(const std::string& csv) {
-    std::vector<uint32_t> out;
-    std::stringstream ss(csv);
-    std::string token;
-    while (std::getline(ss, token, ',')) {
-        if (token.empty()) {
-            continue;
-        }
-        out.push_back(static_cast<uint32_t>(std::stoul(token)));
-    }
-    return out;
-}
-
-std::vector<std::string> parse_string_csv(const std::string& csv) {
-    std::vector<std::string> out;
-    std::stringstream ss(csv);
-    std::string token;
-    while (std::getline(ss, token, ',')) {
-        if (token.empty()) {
-            continue;
-        }
-        out.push_back(token);
-    }
-    return out;
-}
-
-bool model_is_enabled(const SweepConfig& cfg, const std::string& name) {
-    if (cfg.model_filter.empty()) {
-        return true;
-    }
-    return std::find(cfg.model_filter.begin(), cfg.model_filter.end(), name) != cfg.model_filter.end();
-}
-
 SweepConfig load_sweep_config_from_env() {
     SweepConfig sweep_cfg{};
     if (const char* env_warmup = std::getenv("TTML_POLYNORM_BENCH_WARMUP")) {
@@ -149,13 +104,13 @@ SweepConfig load_sweep_config_from_env() {
         sweep_cfg.num_measure = static_cast<uint32_t>(std::stoul(env_measure));
     }
     if (const char* env_batches = std::getenv("TTML_POLYNORM_BENCH_BATCHES")) {
-        auto parsed = parse_u32_csv(env_batches);
+        auto parsed = ttml::benchmark_utils::parse_u32_csv(env_batches);
         if (!parsed.empty()) {
             sweep_cfg.batch_sizes = std::move(parsed);
         }
     }
     if (const char* env_models = std::getenv("TTML_POLYNORM_BENCH_MODELS")) {
-        sweep_cfg.model_filter = parse_string_csv(env_models);
+        sweep_cfg.model_filter = ttml::benchmark_utils::parse_string_csv(env_models);
     }
     if (sweep_cfg.num_measure == 0U) {
         throw std::invalid_argument("TTML_POLYNORM_BENCH_MEASURE must be greater than zero.");
@@ -168,7 +123,7 @@ std::vector<BenchmarkCase> make_benchmark_cases(const SweepConfig& cfg) {
     const auto& models = all_models();
     cases.reserve(models.size() * cfg.batch_sizes.size());
     for (uint32_t model_index = 0; model_index < models.size(); ++model_index) {
-        if (!model_is_enabled(cfg, models[model_index].name)) {
+        if (!ttml::benchmark_utils::name_is_enabled(cfg.model_filter, models[model_index].name)) {
             continue;
         }
         for (const auto batch_size : cfg.batch_sizes) {
@@ -415,7 +370,7 @@ int main(int argc, char** argv) {
         fmt::print(
             "preset models=tinyllama,undisclosed-model batches={} warmup={} measure={} "
             "seq_lens=tinyllama:2048,undisclosed-model:4096\n",
-            join_u32_csv(g_sweep_cfg.batch_sizes),
+            ttml::benchmark_utils::join_u32_csv(g_sweep_cfg.batch_sizes),
             g_sweep_cfg.num_warmup,
             g_sweep_cfg.num_measure);
         fmt::print(
