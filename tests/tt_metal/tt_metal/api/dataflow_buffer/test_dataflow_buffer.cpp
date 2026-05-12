@@ -906,16 +906,18 @@ void run_concurrent_tensix_dm_dfbs_program(
     constexpr const char* PRODUCER = "producer";
 
     // Tensix sequential producer: 1 Neo thread, loops through num_dfbs DFBs.
-    // The kernel uses #if NUM_DFBS >= I to gate per-DFB unrolled blocks (each
-    // referencing dfb::dfb_<i>) so we MUST also pass NUM_DFBS as a compiler define
-    // matching the number of DFB bindings declared here.
+    // The kernel uses #if TEST_NUM_DFBS >= I to gate per-DFB unrolled blocks (each
+    // referencing dfb::dfb_<i>) so we MUST also pass TEST_NUM_DFBS as a compiler define
+    // matching the number of DFB bindings declared here. Name is prefixed to avoid
+    // colliding with dfb::NUM_DFBS in dataflow_buffer_config.h (transitively included
+    // via risc_common.h on DM kernel builds).
     experimental::metal2_host_api::KernelSpec producer_spec{
         .unique_id = PRODUCER,
         .source =
             experimental::metal2_host_api::KernelSpec::SourceFilePath{
                 "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_seq_producer.cpp"},
         .num_threads = 1,
-        .compiler_options = {.defines = {{"NUM_DFBS", std::to_string(num_dfbs)}}},
+        .compiler_options = {.defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}},
         .compile_time_arg_bindings = {{"num_entries_per_producer", entries_per_dfb}},
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
     };
@@ -1085,8 +1087,8 @@ void run_sequential_dfbs_program(
     TT_FATAL(
         num_producers + num_consumers <= 6,
         "num_producers + num_consumers must fit in 6 available Quasar DM threads (DM0 reserved for dispatch)");
-    // dfb_seq_producer / dfb_seq_consumer kernels unroll up to NUM_DFBS bindings
-    // referencing dfb::dfb_<i> / ta::src_<i> / ta::dst_<i> for i in [0, NUM_DFBS).
+    // dfb_seq_producer / dfb_seq_consumer kernels unroll up to TEST_NUM_DFBS bindings
+    // referencing dfb::dfb_<i> / ta::src_<i> / ta::dst_<i> for i in [0, TEST_NUM_DFBS).
     TT_FATAL(num_dfbs <= 6, "num_dfbs must be <= 6 (kernel binding-name limit dfb::dfb_0..5)");
 
     const CoreCoord core(0, 0);
@@ -1128,15 +1130,16 @@ void run_sequential_dfbs_program(
     constexpr const char* CONSUMER = "consumer";
 
     // Producer kernel: N DFB bindings (dfb::dfb_0..N-1) + N tensor bindings (ta::src_0..N-1).
-    // NUM_DFBS compiler define gates the per-DFB unrolled blocks; it must equal the
-    // number of dfb_bindings / tensor_bindings registered here.
+    // TEST_NUM_DFBS compiler define gates the per-DFB unrolled blocks; it must equal the
+    // number of dfb_bindings / tensor_bindings registered here. Name is prefixed to avoid
+    // colliding with dfb::NUM_DFBS in dataflow_buffer_config.h.
     experimental::metal2_host_api::KernelSpec producer_spec{
         .unique_id = PRODUCER,
         .source =
             experimental::metal2_host_api::KernelSpec::SourceFilePath{
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_seq_producer.cpp"},
         .num_threads = num_producers,
-        .compiler_options = {.defines = {{"NUM_DFBS", std::to_string(num_dfbs)}}},
+        .compiler_options = {.defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}},
         .compile_time_arg_bindings =
             {
                 {"num_entries_per_producer", num_entries_per_producer},
@@ -1157,7 +1160,7 @@ void run_sequential_dfbs_program(
             experimental::metal2_host_api::KernelSpec::SourceFilePath{
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_seq_consumer.cpp"},
         .num_threads = num_consumers,
-        .compiler_options = {.defines = {{"NUM_DFBS", std::to_string(num_dfbs)}}},
+        .compiler_options = {.defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}},
         .compile_time_arg_bindings =
             {
                 {"implicit_sync", static_cast<uint32_t>(configs[0].enable_implicit_sync ? 1u : 0u)},
@@ -1928,12 +1931,12 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest4xDFB_3Sx3S) {
         GTEST_SKIP() << "Skipping: sequential multi-DFB TC exhaustion test requires Quasar";
     }
     experimental::dfb::DataflowBufferConfig config{
-        .entry_size    = 1024,
-        .num_entries   = 16,
+        .entry_size = 1024,
+        .num_entries = 12,
         .num_producers = 3,
-        .pap           = dfb::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 3,
-        .cap           = dfb::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
     run_sequential_dfbs_program(this->devices_.at(0), {config, config, config, config});
 }

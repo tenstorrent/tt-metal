@@ -23,10 +23,11 @@
 //   args::num_dfbs                  - same as legacy CTA[0]
 //   args::num_entries_per_producer  - same as legacy CTA[1]
 // QUASAR compiler defines:
-//   NUM_DFBS                        - matches args::num_dfbs; gates per-DFB binding
+//   TEST_NUM_DFBS                   - matches args::num_dfbs; gates per-DFB binding
 //                                     dispatch (each unrolled case references
 //                                     dfb::dfb_<i> which only exists for declared
-//                                     bindings).
+//                                     bindings). Prefixed to avoid collision with
+//                                     dfb::NUM_DFBS in dataflow_buffer_config.h.
 
 #include "api/dataflow/dataflow_buffer.h"
 #ifdef ARCH_QUASAR
@@ -49,22 +50,22 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
     constexpr uint32_t num_entries_per_producer = get_arg(args::num_entries_per_producer);
 
-#if NUM_DFBS >= 1
+#if TEST_NUM_DFBS >= 1
     DFB_T6_SEQ_PRODUCE(0);
 #endif
-#if NUM_DFBS >= 2
+#if TEST_NUM_DFBS >= 2
     DFB_T6_SEQ_PRODUCE(1);
 #endif
-#if NUM_DFBS >= 3
+#if TEST_NUM_DFBS >= 3
     DFB_T6_SEQ_PRODUCE(2);
 #endif
-#if NUM_DFBS >= 4
+#if TEST_NUM_DFBS >= 4
     DFB_T6_SEQ_PRODUCE(3);
 #endif
-#if NUM_DFBS >= 5
+#if TEST_NUM_DFBS >= 5
     DFB_T6_SEQ_PRODUCE(4);
 #endif
-#if NUM_DFBS >= 6
+#if TEST_NUM_DFBS >= 6
     DFB_T6_SEQ_PRODUCE(5);
 #endif
 #else

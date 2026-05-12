@@ -33,7 +33,9 @@
 //   args::entries_per_consumer_0 .. _5
 //   args::is_blocked_0 .. _5
 // QUASAR compiler defines:
-//   NUM_DFBS                       - matches the kernel's binding count (1..6)
+//   TEST_NUM_DFBS                  - matches the kernel's binding count (1..6).
+//                                    Prefixed to avoid collision with
+//                                    dfb::NUM_DFBS in dataflow_buffer_config.h.
 
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
@@ -78,22 +80,22 @@ void kernel_main() {
 
     Noc noc;
 
-#if NUM_DFBS >= 1
+#if TEST_NUM_DFBS >= 1
     DFB_SEQ_CONSUME(0);
 #endif
-#if NUM_DFBS >= 2
+#if TEST_NUM_DFBS >= 2
     DFB_SEQ_CONSUME(1);
 #endif
-#if NUM_DFBS >= 3
+#if TEST_NUM_DFBS >= 3
     DFB_SEQ_CONSUME(2);
 #endif
-#if NUM_DFBS >= 4
+#if TEST_NUM_DFBS >= 4
     DFB_SEQ_CONSUME(3);
 #endif
-#if NUM_DFBS >= 5
+#if TEST_NUM_DFBS >= 5
     DFB_SEQ_CONSUME(4);
 #endif
-#if NUM_DFBS >= 6
+#if TEST_NUM_DFBS >= 6
     DFB_SEQ_CONSUME(5);
 #endif
 #else

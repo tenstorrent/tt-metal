@@ -9,9 +9,11 @@
 // source buffer:
 //   - Legacy: src_addr[i] passed via runtime args, dfb_id is a runtime loop var.
 //   - QUASAR: each DFB binds via dfb::dfb_<i> + ta::src_<i> (compile-time names);
-//             the kernel unrolls one block per declared DFB. NUM_DFBS compiler
+//             the kernel unrolls one block per declared DFB. TEST_NUM_DFBS compiler
 //             define gates how many ta::src_<i> bindings the kernel references
-//             (must match the host's KernelSpec bindings count).
+//             (must match the host's KernelSpec bindings count). The name is
+//             prefixed to avoid collision with dfb::NUM_DFBS from
+//             dataflow_buffer_config.h.
 //
 // After all producers call dfb.finish() for DFB_i, the barrier ensures they have
 // all completed before any of them advances to DFB_i+1.  The consumer kernel uses
@@ -32,7 +34,7 @@
 //   args::implicit_sync
 //   args::num_producers            - #DM producer threads in this kernel
 // QUASAR compiler defines:
-//   NUM_DFBS                       - matches the kernel's binding count
+//   TEST_NUM_DFBS                  - matches the kernel's binding count
 
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
@@ -74,22 +76,22 @@ void kernel_main() {
 
     Noc noc;
 
-#if NUM_DFBS >= 1
+#if TEST_NUM_DFBS >= 1
     DFB_SEQ_PRODUCE(0);
 #endif
-#if NUM_DFBS >= 2
+#if TEST_NUM_DFBS >= 2
     DFB_SEQ_PRODUCE(1);
 #endif
-#if NUM_DFBS >= 3
+#if TEST_NUM_DFBS >= 3
     DFB_SEQ_PRODUCE(2);
 #endif
-#if NUM_DFBS >= 4
+#if TEST_NUM_DFBS >= 4
     DFB_SEQ_PRODUCE(3);
 #endif
-#if NUM_DFBS >= 5
+#if TEST_NUM_DFBS >= 5
     DFB_SEQ_PRODUCE(4);
 #endif
-#if NUM_DFBS >= 6
+#if TEST_NUM_DFBS >= 6
     DFB_SEQ_PRODUCE(5);
 #endif
 #else
