@@ -144,7 +144,7 @@ void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
             "Error, Output tensor shape should have same number of dimensions as input tensor but has {}",
             output_shape.size());
         for (size_t i = 0; i < input_shape.size(); ++i) {
-            if (i == args.dim) {
+            if (i == static_cast<size_t>(args.dim)) {
                 TT_FATAL(
                     output_shape[i] <= input_shape[i] * args.ring_size,
                     "Error, Output tensor shape at dimension {} should be {} but has {}",
