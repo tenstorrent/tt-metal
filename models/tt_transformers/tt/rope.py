@@ -409,7 +409,6 @@ def get_rot_mats_hf(
     seq_len: int,
     theta: float,
     rope_scaling: Optional[RopeScaling],
-    rotary_dim: Optional[int] = None,
     datatype: Any = ttnn.bfloat16,
     layout: ttnn.Layout = ttnn.TILE_LAYOUT,
 ) -> List[ttnn.Tensor]:
@@ -424,15 +423,10 @@ def get_rot_mats_hf(
     """
     from models.tt_transformers.tt.common import precompute_freqs
 
-    if rotary_dim is None:
-        rotary_dim = head_dim
-    if rotary_dim <= 0 or rotary_dim > head_dim:
-        raise ValueError(f"Invalid rotary_dim={rotary_dim} for head_dim={head_dim}")
-
     # Generate HF-format cos/sin directly
     # precompute_freqs returns cos/sin in shape [seq_len, head_dim//2]
     cos_freqs, sin_freqs = precompute_freqs(
-        rotary_dim,
+        head_dim,
         seq_len * 2,  # Generate for 2*seq_len to match compute_gather_cos_sin behavior
         theta,
         rope_scaling.factor if rope_scaling else None,
@@ -441,17 +435,10 @@ def get_rot_mats_hf(
     )
 
     # HF format: concat freqs with itself [c0, c1, ..., c_{d/2-1}, c0, c1, ..., c_{d/2-1}]
-    # cos_freqs and sin_freqs are [seq_len*2, rotary_dim//2], we need [seq_len, head_dim]
+    # cos_freqs and sin_freqs are [seq_len*2, head_dim//2], we need [seq_len, head_dim]
     # Take first seq_len rows and duplicate
-    cos_hf = torch.cat([cos_freqs[:seq_len], cos_freqs[:seq_len]], dim=-1)  # [seq_len, rotary_dim]
-    sin_hf = torch.cat([sin_freqs[:seq_len], sin_freqs[:seq_len]], dim=-1)  # [seq_len, rotary_dim]
-
-    # Phi-1 uses partial rotary. Pad the remaining dimensions so HF-style RoPE
-    # leaves them unchanged.
-    if rotary_dim < head_dim:
-        pad = head_dim - rotary_dim
-        cos_hf = torch.nn.functional.pad(cos_hf, (0, pad), value=1.0)
-        sin_hf = torch.nn.functional.pad(sin_hf, (0, pad), value=0.0)
+    cos_hf = torch.cat([cos_freqs[:seq_len], cos_freqs[:seq_len]], dim=-1)  # [seq_len, head_dim]
+    sin_hf = torch.cat([sin_freqs[:seq_len], sin_freqs[:seq_len]], dim=-1)  # [seq_len, head_dim]
 
     # Add batch dimensions: [1, 1, seq_len, head_dim]
     cos_hf = cos_hf.unsqueeze(0).unsqueeze(0)
@@ -493,7 +480,6 @@ class HfRotarySetupOld(LightweightModule):
         datatype: ttnn.DataType = ttnn.bfloat16,
         shard_batch_to_mesh_dim: Optional[int] = 1,  # Those are kept for API compatibility with RotarySetup
         prefetcher: Optional[Prefetcher] = None,
-        rotary_dim: Optional[int] = None,
     ) -> None:
         super().__init__()
         if use_qk_fused:
@@ -511,7 +497,6 @@ class HfRotarySetupOld(LightweightModule):
             seq_len=max_seq_len,
             theta=rope_theta,
             rope_scaling=rope_scaling,
-            rotary_dim=rotary_dim,
             datatype=datatype,
         )
 
@@ -521,7 +506,6 @@ class HfRotarySetupOld(LightweightModule):
             seq_len=max_seq_len,
             theta=rope_theta,
             rope_scaling=rope_scaling,
-            rotary_dim=rotary_dim,
             datatype=datatype,
         )
 
@@ -631,7 +615,6 @@ class HfRotarySetup(LightweightModule):
         datatype: ttnn.DataType = ttnn.bfloat16,
         shard_batch_to_mesh_dim: Optional[int] = 1,  # Kept for API compatibility
         prefetcher: Optional[Prefetcher] = None,
-        rotary_dim: Optional[int] = None,
     ) -> None:
         super().__init__()
         if use_qk_fused:
@@ -661,7 +644,6 @@ class HfRotarySetup(LightweightModule):
             seq_len=max_seq_len,
             theta=rope_theta,
             rope_scaling=rope_scaling,
-            rotary_dim=rotary_dim,
             datatype=datatype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
@@ -672,7 +654,6 @@ class HfRotarySetup(LightweightModule):
             seq_len=max_seq_len,
             theta=rope_theta,
             rope_scaling=rope_scaling,
-            rotary_dim=rotary_dim,
             datatype=datatype,
         )
 

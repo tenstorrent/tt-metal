@@ -129,12 +129,34 @@ class ModelOptimizations:
                 }
             )
         else:
-            if (
+            if base_model_name_lower.startswith("phi-1"):
+                logger.info(
+                    f"Model {model_name} uses Phi-1 topology and is sensitive to attention/KV precision, using BF16/HIFI4 attention in accuracy mode"
+                )
+                inst = cls(
+                    {
+                        "TensorPrecision": {
+                            TensorGroup.WQKV: PrecisionSetting.BF16,
+                            TensorGroup.KV_CACHE: PrecisionSetting.BF16,
+                            TensorGroup.WO: PrecisionSetting.BF16,
+                        },
+                        "OpFidelity": {
+                            OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2_FP16,
+                            OpGroup.LI_FF2: MathFidelitySetting.HIFI2_FP16,
+                            OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI4,
+                            OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI4,
+                            OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4,
+                            OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                            OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI4,
+                            OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI4,
+                        },
+                    }
+                )
+            elif (
                 base_model_name.startswith("Llama-3")
                 or base_model_name.startswith("Mistral-7B")
                 or base_model_name.startswith("Phi-3-mini")
                 or base_model_name.startswith("phi-4")
-                or base_model_name_lower.startswith("phi-1")
                 or base_model_name.startswith("Meta-Llama-3")
             ):
                 if model_name.startswith("phi-4"):
@@ -158,11 +180,6 @@ class ModelOptimizations:
                 if model_name.startswith("Phi-3-mini"):  # TODO: Only do this for N150
                     logger.info(
                         f"Model {model_name} is running out of L1 memory under standard accuracy settings, using FP16 accumulate in attention prefill QKV Matmul"
-                    )
-                    settings["OpFidelity"][OpGroup.LI_QKV_PREFILL] = MathFidelitySetting.HIFI2_FP16
-                if base_model_name_lower.startswith("phi-1"):
-                    logger.info(
-                        f"Model {model_name} uses Phi-1 topology, keeping BFP8 attention and FP16 MLP accumulation for memory/perf balance"
                     )
                     settings["OpFidelity"][OpGroup.LI_QKV_PREFILL] = MathFidelitySetting.HIFI2_FP16
                 inst = cls(settings)
@@ -3086,13 +3103,7 @@ class ModelArgs:
             state_dict = standardize_hf_keys(state_dict)
             if self.use_hf_rope:
                 # For Attention: skip QKV format conversion
-                state_dict = convert_hf_to_meta_no_qkv_permute(
-                    state_dict,
-                    self.head_dim,
-                    self.n_heads,
-                    self.n_kv_heads,
-                    model_type=self.model_type,
-                )
+                state_dict = convert_hf_to_meta_no_qkv_permute(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
             else:
                 # Standard: convert to Meta format
                 state_dict = convert_hf_to_meta(
