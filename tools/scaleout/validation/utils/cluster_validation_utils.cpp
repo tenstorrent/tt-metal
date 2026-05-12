@@ -293,7 +293,7 @@ void configure_local_kernels(
                 .processor = erisc_id,
                 .compile_args =
                     fwd ? std::vector<uint32_t>{packet_size_bytes, packet_size_words} : std::vector<uint32_t>{},
-                .defines = {}});
+                .defines = {}, .named_compile_args = {}});
 
         auto neighbor_kernel = tt::tt_metal::CreateKernel(
             neighbor_program,
@@ -304,7 +304,7 @@ void configure_local_kernels(
                 .processor = erisc_id,
                 .compile_args =
                     fwd ? std::vector<uint32_t>{} : std::vector<uint32_t>{packet_size_bytes, packet_size_words},
-                .defines = {}});
+                .defines = {}, .named_compile_args = {}});
         tt::tt_metal::SetRuntimeArgs(
             fwd ? curr_program : neighbor_program,
             fwd ? curr_kernel : neighbor_kernel,
@@ -408,8 +408,7 @@ void configure_cross_host_kernels(
                 sender_kernel_path,
                 my_coord,
                 tt::tt_metal::EthernetConfig{
-                    .noc = noc_id, .processor = erisc_id, .compile_args = {packet_size_bytes,
-            .named_compile_args = {}, packet_size_words}, .defines = {}});
+                    .noc = noc_id, .processor = erisc_id, .compile_args = {packet_size_bytes, packet_size_words}, .defines = {}, .named_compile_args = {}});
             tt::tt_metal::SetRuntimeArgs(
                 my_program, sender_kernel, my_coord, {src_eth_l1_byte_address, dst_eth_l1_byte_address, data_size});
         } else {
@@ -417,8 +416,7 @@ void configure_cross_host_kernels(
                 my_program,
                 receiver_kernel_path,
                 my_coord,
-                tt::tt_metal::EthernetConfig{.noc = noc_id, .processor = erisc_id, .compile_args = {,
-            .named_compile_args = {}}, .defines = {}});
+                tt::tt_metal::EthernetConfig{.noc = noc_id, .processor = erisc_id, .compile_args = {}, .defines = {}, .named_compile_args = {}});
             tt::tt_metal::SetRuntimeArgs(my_program, receiver_kernel, my_coord, {data_size});
         }
     }

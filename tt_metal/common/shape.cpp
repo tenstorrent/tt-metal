@@ -50,7 +50,7 @@ uint32_t Shape::get_normalized_index(std::int64_t index) const {
     std::int64_t rank = static_cast<std::int64_t>(this->rank());
     std::uint64_t normalized_index = index >= 0 ? index : rank + index;
     TT_FATAL(
-        normalized_index < rank,
+        normalized_index < static_cast<uint64_t>(rank),
         "Index is out of bounds for the rank, should be between 0 and {} however is {}",
         rank - 1,
         normalized_index);
