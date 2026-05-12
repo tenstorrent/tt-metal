@@ -10,6 +10,12 @@ from loguru import logger
 from models.demos.utils.model_targets import resolve_perf_targets
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler, perf_target_check
 
+TOLERANCE_FAMILY_ALIASES = {
+    "decode_t/s": "decode_tolerance",
+    "decode_t/s/u": "decode_tolerance",
+    "prefill_time_to_first_token": "prefill_tolerance",
+}
+
 
 class PerfRegressionWarning(UserWarning):
     """Warning emitted when measured perf drifts from configured thresholds."""
@@ -167,6 +173,23 @@ def verify_perf(
     }
     expected_measurements = expected_measurements_default if expected_measurements is None else expected_measurements
 
+    def metric_tolerance(metric_name: str) -> float:
+        explicit_keys = [
+            f"{metric_name}_tolerance",
+            f"{metric_name.replace('/', '_')}_tolerance",
+        ]
+        family_alias = TOLERANCE_FAMILY_ALIASES.get(metric_name)
+        if family_alias:
+            explicit_keys.append(family_alias)
+        for key in explicit_keys:
+            tolerance = expected_perf_metrics.get(key)
+            if isinstance(tolerance, (int, float)) and not isinstance(tolerance, bool):
+                return float(tolerance)
+        generic_tolerance = expected_perf_metrics.get("tolerance")
+        if isinstance(generic_tolerance, (int, float)) and not isinstance(generic_tolerance, bool):
+            return float(generic_tolerance)
+        return float(high_tol_percentage)
+
     # Default metrics where lower is better
     lower_is_better_metrics_default = {
         "prefill_time_to_first_token",
@@ -191,21 +214,23 @@ def verify_perf(
             continue
 
         if key in lower_is_better_metrics:
+            tolerance = metric_tolerance(key)
             # For metrics where lower is better (e.g., TTFT)
             if measurements[key] > expected_perf_metrics[key]:  # Higher than expected is bad
                 does_pass = False
                 logger.warning(f"{key} ({measurements[key]}) is higher than expected {expected_perf_metrics[key]}")
-            elif measurements[key] < expected_perf_metrics[key] * (2 - high_tol_percentage):  # Much lower than expected
+            elif measurements[key] < expected_perf_metrics[key] * (2 - tolerance):  # Much lower than expected
                 does_pass = False
                 logger.warning(
                     f"{key} ({measurements[key]}) is much lower than expected {expected_perf_metrics[key]}. Please update the expected perf."
                 )
         else:
+            tolerance = metric_tolerance(key)
             # For metrics where higher is better (e.g., throughput)
             if measurements[key] < expected_perf_metrics[key]:  # Lower than expected is bad
                 does_pass = False
                 logger.warning(f"{key} ({measurements[key]}) is lower than expected {expected_perf_metrics[key]}")
-            elif measurements[key] > expected_perf_metrics[key] * high_tol_percentage:  # Much higher than expected
+            elif measurements[key] > expected_perf_metrics[key] * tolerance:  # Much higher than expected
                 does_pass = False
                 logger.warning(
                     f"{key} ({measurements[key]}) is much higher than expected {expected_perf_metrics[key]}. Please update the expected perf."

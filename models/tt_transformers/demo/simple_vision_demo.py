@@ -630,9 +630,7 @@ def test_multimodal_demo_text(
             batch_size=max_batch_size,
             seq_len=input_seq_len,
         )
-        perf_tolerance = (
-            float(perf_targets.get("decode_tolerance", perf_targets.get("tolerance", 1.15))) if perf_targets else 1.15
-        )
+        perf_tolerance = float(perf_targets.get("tolerance", 1.15)) if perf_targets else 1.15
 
         benchmark_targets = {}
         if perf_targets:

@@ -808,7 +808,7 @@ def test_parse_args_rejects_removed_high_tol_percentage_flag(monkeypatch):
         "argv",
         [
             "validate_perf_targets.py",
-            "--legacy-high-tol",
+            "--high-tol-percentage",
             "1.2",
         ],
     )
