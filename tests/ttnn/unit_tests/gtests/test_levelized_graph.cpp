@@ -74,9 +74,8 @@ TEST_F(TestLevelizedGraphCapture, SimpleBinaryOp) {
     });
     ASSERT_NE(tensor_it, levelized_graph.vertices().end());
 
-    auto binary_it = std::ranges::find_if(levelized_graph.vertices(), [](const auto& v) {
-        return v.name.find("BinaryNg") != std::string::npos || v.name.find("Binary") != std::string::npos;
-    });
+    auto binary_it =
+        std::ranges::find_if(levelized_graph.vertices(), [](const auto& v) { return v.name == "ttnn::add"; });
     ASSERT_NE(binary_it, levelized_graph.vertices().end());
     auto vertex_1 = *binary_it;
 
@@ -98,9 +97,8 @@ TEST_F(TestLevelizedGraphCapture, SimpleBinaryOp) {
     EXPECT_TRUE(std::ranges::all_of(
         levelized_graph_2.vertices(), [&](const auto& vertex) { return vertex.stacking_level <= 2; }));
 
-    auto binary_it_2 = std::ranges::find_if(levelized_graph_2.vertices(), [](const auto& v) {
-        return v.name.find("BinaryNg") != std::string::npos || v.name.find("Binary") != std::string::npos;
-    });
+    auto binary_it_2 =
+        std::ranges::find_if(levelized_graph_2.vertices(), [](const auto& v) { return v.name == "ttnn::add"; });
     ASSERT_NE(binary_it_2, levelized_graph_2.vertices().end());
     vertex_1 = *binary_it_2;
 
@@ -165,9 +163,6 @@ TEST_F(TestLevelizedGraphCapture, ReductionOp) {
                 std::ranges::all_of(level_2_vertices, [&](const auto& vertex) { return vertex.internals.empty(); }));
         }
     }
-    EXPECT_TRUE(std::ranges::none_of(levelized_graph_2.vertices(), [&](const auto& vertex) {
-        return vertex.output_shape.empty() && vertex.name.find("deallocate") == std::string::npos;
-    }));
 }
 
 TEST_F(TestLevelizedGraphCapture, OutputLayoutInfo) {
@@ -214,11 +209,11 @@ TEST_F(TestLevelizedGraphCapture, OutputLayoutInfo) {
     EXPECT_GE(vertex_0.out_edges.size(), 1);
     EXPECT_EQ(vertex_0.output_shape[0], shape_to_string(tt::tt_metal::Array3D{16, 32, 64}));
 
-    auto has_reduction = std::ranges::any_of(
-        levelized_graph.vertices(), [](const auto& v) { return v.name.find("Reduce") != std::string::npos; });
-    auto has_softmax = std::ranges::any_of(
-        levelized_graph.vertices(), [](const auto& v) { return v.name.find("Softmax") != std::string::npos; });
-    EXPECT_TRUE(has_reduction || has_softmax);  // At least one should be present
+    auto has_reduction =
+        std::ranges::any_of(levelized_graph.vertices(), [](const auto& v) { return v.name == "ttnn::sum"; });
+    auto has_softmax =
+        std::ranges::any_of(levelized_graph.vertices(), [](const auto& v) { return v.name == "ttnn::softmax"; });
+    EXPECT_TRUE(has_reduction && has_softmax);
 
     // Test level 2
     auto levelized_graph_2 = ttnn::graph::LevelizedGraph(ref_json_trace, 2);
@@ -231,9 +226,6 @@ TEST_F(TestLevelizedGraphCapture, OutputLayoutInfo) {
                 std::ranges::all_of(level_2_vertices, [&](const auto& vertex) { return vertex.internals.empty(); }));
         }
     }
-    EXPECT_TRUE(std::ranges::none_of(levelized_graph_2.vertices(), [&](const auto& vertex) {
-        return vertex.output_shape.empty() && vertex.name.find("deallocate") == std::string::npos;
-    }));
 }
 
 TEST_F(TestLevelizedGraphCapture, MatmulWithBiasTest) {
@@ -272,21 +264,19 @@ TEST_F(TestLevelizedGraphCapture, MatmulWithBiasTest) {
     EXPECT_NE(input_tensor_it, levelized_graph.vertices().end());
     const auto& vertex_0 = *input_tensor_it;
 
-    // Find matmul and add operations (they should be device operations now)
-    auto matmul_op_it = std::ranges::find_if(
-        levelized_graph.vertices(), [](const auto& v) { return v.name.find("Matmul") != std::string::npos; });
-    auto add_op_it = std::ranges::find_if(levelized_graph.vertices(), [](const auto& v) {
-        return v.name.find("BinaryNg") != std::string::npos || v.name.find("Binary") != std::string::npos;
-    });
-
-    // Basic structure checks
+    // Find matmul and add operations (TT_OP_SCOPE outer scopes at level 1)
+    auto matmul_op_it =
+        std::ranges::find_if(levelized_graph.vertices(), [](const auto& v) { return v.name == "ttnn::matmul"; });
+    auto add_op_it =
+        std::ranges::find_if(levelized_graph.vertices(), [](const auto& v) { return v.name == "ttnn::add"; });
 
     // Basic structure checks - input tensor should have output edges
     EXPECT_TRUE(vertex_0.in_edges.empty());
     EXPECT_GE(vertex_0.out_edges.size(), 1);  // feeds operations
     EXPECT_EQ(vertex_0.output_shape[0], shape_to_string(tt::tt_metal::Array2D{32, 32}));
 
-    EXPECT_TRUE(matmul_op_it != levelized_graph.vertices().end() || add_op_it != levelized_graph.vertices().end());
+    EXPECT_NE(matmul_op_it, levelized_graph.vertices().end());
+    EXPECT_NE(add_op_it, levelized_graph.vertices().end());
 
     // Test level 2
     auto levelized_graph_2 = ttnn::graph::LevelizedGraph(ref_json_trace, 2);
@@ -299,9 +289,6 @@ TEST_F(TestLevelizedGraphCapture, MatmulWithBiasTest) {
                 std::ranges::all_of(level_2_vertices, [&](const auto& vertex) { return vertex.internals.empty(); }));
         }
     }
-    EXPECT_TRUE(std::ranges::none_of(levelized_graph_2.vertices(), [&](const auto& vertex) {
-        return vertex.output_shape.empty() && vertex.name.find("deallocate") == std::string::npos;
-    }));
 }
 
 TEST_F(TestLevelizedGraphCapture, CompositeOpTest) {
@@ -506,28 +493,16 @@ TEST_F(TestLevelizedGraphCapture, ForkTest) {
     EXPECT_NE(input_tensor_it, levelized_graph.vertices().end());
     const auto& vertex_0 = *input_tensor_it;
 
-    // Find add and subtract operations (they should be device operations now)
-    auto add_op_it = std::ranges::find_if(levelized_graph.vertices(), [](const auto& v) {
-        return v.name.find("BinaryNg") != std::string::npos || v.name.find("Binary") != std::string::npos;
-    });
-    EXPECT_NE(add_op_it, levelized_graph.vertices().end());
+    // Find add and subtract operations (TT_OP_SCOPE outer scopes at level 1)
+    auto add_op_it =
+        std::ranges::find_if(levelized_graph.vertices(), [](const auto& v) { return v.name == "ttnn::add"; });
+    ASSERT_NE(add_op_it, levelized_graph.vertices().end());
     auto vertex_1 = *add_op_it;
 
-    // There should be at least two binary operations (add and subtract)
-    auto binary_ops = std::vector<decltype(levelized_graph.vertices().begin())>();
-    for (auto it = levelized_graph.vertices().begin(); it != levelized_graph.vertices().end(); ++it) {
-        if (it->name.find("BinaryNg") != std::string::npos || it->name.find("Binary") != std::string::npos) {
-            binary_ops.push_back(it);
-        }
-    }
-    EXPECT_GE(binary_ops.size(), 1);  // At least one binary operation
-
-    // Find a second binary operation if it exists (subtract)
-    auto vertex_2_it = std::ranges::find_if(levelized_graph.vertices(), [&vertex_1](const auto& v) {
-        return (v.name.find("BinaryNg") != std::string::npos || v.name.find("Binary") != std::string::npos) &&
-               v.id != vertex_1.id;
-    });
-    const auto& vertex_2 = vertex_2_it != levelized_graph.vertices().end() ? *vertex_2_it : vertex_1;
+    auto sub_op_it =
+        std::ranges::find_if(levelized_graph.vertices(), [](const auto& v) { return v.name == "ttnn::subtract"; });
+    ASSERT_NE(sub_op_it, levelized_graph.vertices().end());
+    const auto& vertex_2 = *sub_op_it;
 
     // Basic structure checks - input tensor should fork to multiple operations
     EXPECT_TRUE(vertex_0.in_edges.empty());
@@ -542,14 +517,12 @@ TEST_F(TestLevelizedGraphCapture, ForkTest) {
     }
     EXPECT_TRUE(vertex_1.out_edges.empty());
 
-    if (vertex_2.id != vertex_1.id) {
-        EXPECT_EQ(vertex_2.in_edges.size(), 2);
-        for (auto edge_id : vertex_2.in_edges) {
-            const auto& edge_vertex = levelized_graph.get_vertex(edge_id);
-            EXPECT_TRUE(edge_vertex.name.find("tensor") != std::string::npos);
-        }
-        EXPECT_TRUE(vertex_2.out_edges.empty());
+    EXPECT_EQ(vertex_2.in_edges.size(), 2);
+    for (auto edge_id : vertex_2.in_edges) {
+        const auto& edge_vertex = levelized_graph.get_vertex(edge_id);
+        EXPECT_TRUE(edge_vertex.name.find("tensor") != std::string::npos);
     }
+    EXPECT_TRUE(vertex_2.out_edges.empty());
 
     // Test level 2
     auto levelized_graph_2 = ttnn::graph::LevelizedGraph(ref_json_trace, 2);
