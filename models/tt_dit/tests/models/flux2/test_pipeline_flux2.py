@@ -12,12 +12,13 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 
 from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
-from ....utils.test import line_params, ring_params, ring_params_8k
+from ....utils.test import line_params, line_params_8k, ring_params, ring_params_8k
 
 # Flux2 VAE uses conv2d which needs L1_SMALL buffers.
 line_params_flux2 = {**line_params, "l1_small_size": 32768}
 ring_params_flux2 = {**ring_params, "l1_small_size": 32768}
 ring_params_8k_flux2 = {**ring_params_8k, "l1_small_size": 32768}
+line_params_8k_flux2 = {**line_params_8k, "l1_small_size": 32768}
 
 
 @pytest.mark.parametrize(
