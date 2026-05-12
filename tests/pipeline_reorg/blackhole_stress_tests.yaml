@@ -14,36 +14,11 @@
 #   team: The team that owns the test.
 
 # For max allowed timeout refer to .github/time_budget.yaml
-
-# Blackhole multi-card fabric stress tests
-- id: bh-fabric-stability-stress
-  name: fabric stability nightly tests
-  cmd: TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ./tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_short_running.yaml
-  skus:
-    bh_deskbox:
-      timeout: 15
-    bh_llmbox:
-      timeout: 15
-    bh_loudbox:
-      timeout: 15
-    bh_p300:
-      timeout: 15
-    bh_quietbox_2:
-      timeout: 15
-  owner_id: U0883RN6CRE # William Ly
-  team: scaleout
-
-# Blackhole ttnn stress tests
-- id: bh-ttnn-stress
-  name: ttnn stress tests
-  cmd: pytest tests/ttnn/stress_tests/
-  skus:
-    bh_p150b_civ2:
-      timeout: 45
-    bh_llmbox:
-      timeout: 45
-  owner_id: U084DDYSWCW # Adrian Morrison
-  team: ttnn
+#
+# NOTE: the lightweight post-commit stress suites (bh-fabric-stability-stress, bh-ttnn-stress) used
+# to live here but are now part of the Blackhole e2e pipeline — see
+# tests/pipeline_reorg/blackhole_e2e_tests.yaml. This file is for the heavy / weekly stress tests
+# only (currently the Llama3.1-8B N-device model-stress matrix).
 
 # Blackhole Llama3.1-8B N-device stress tests
 - id: bh-llama3_1-8b-1-device-stress

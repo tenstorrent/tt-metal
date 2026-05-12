@@ -32,8 +32,6 @@ on:
         default: "all"
         options:
           - all
-          - bh-fabric-stability-stress
-          - bh-ttnn-stress
           - bh-llama3_1-8b-1-device-stress
           - bh-llama3_1-8b-2-device-stress
           - bh-llama3_1-8b-2-device-stress-lfc

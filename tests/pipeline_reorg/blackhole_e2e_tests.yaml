@@ -1,5 +1,7 @@
 # This file defines the test matrix for the Blackhole e2e pipeline (e2e, integration, perf, unit,
-# DeepSeek prefill). Stress lives separately: `blackhole_stress_tests.yaml` + blackhole-stress-tests.yaml.
+# DeepSeek prefill, plus the two lightweight stress suites that historically gated post-commit on BH
+# — see the `--- stress ---` section below). Heavy / weekly model stress (Llama3.1-8B N-device,
+# etc.) lives separately in `blackhole_stress_tests.yaml` + blackhole-stress-tests.yaml.
 
 # Each entry represents a parallel job with the following keys:
 #   id: Stable slug for workflow_dispatch / jq filtering.
@@ -165,7 +167,34 @@
   owner_id: U08ARDXARPF # Ilija Anastasijevic
   team: ttnn
 
-# Stress tests: tests/pipeline_reorg/blackhole_stress_tests.yaml + blackhole-stress-tests.yaml
+# --- stress (continuous gate; heavy / weekly stress lives in blackhole_stress_tests.yaml) ---
+- id: bh-fabric-stability-stress
+  name: fabric stability nightly tests
+  cmd: TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ./tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_short_running.yaml
+  skus:
+    bh_deskbox:
+      timeout: 15
+    bh_llmbox:
+      timeout: 15
+    bh_loudbox:
+      timeout: 15
+    bh_p300:
+      timeout: 15
+    bh_quietbox_2:
+      timeout: 15
+  owner_id: U0883RN6CRE # William Ly
+  team: scaleout
+
+- id: bh-ttnn-stress
+  name: ttnn stress tests
+  cmd: pytest tests/ttnn/stress_tests/
+  skus:
+    bh_p150b_civ2:
+      timeout: 45
+    bh_llmbox:
+      timeout: 45
+  owner_id: U084DDYSWCW # Adrian Morrison
+  team: ttnn
 
 # --- deepseek_prefill ---
 - id: bh-lb-deepseek-prefill

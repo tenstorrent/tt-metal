@@ -85,21 +85,15 @@ ttnn:
     wh_llmbox: 90
     wh_galaxy: 70
     bh_galaxy: 70
-    # Blackhole e2e pipeline (formerly unit/integration/perf for ttnn):
-    # bh_p150b_civ2 = 10 (ttnn sharding/unit).
-    # multi-card SKUs = 60 (ccl nightly integration) + 60 (sdpa nightly integration) + 10 (ring sdpa perf) = 130.
-    bh_p150b_civ2: 10
+    bh_p150b_civ2: 55
     bh_deskbox: 130
-    bh_llmbox: 130
+    bh_llmbox: 175
     bh_loudbox: 130
     bh_p300: 130
     bh_quietbox_2: 130
   integration:
     wh_llmbox: 30
     wh_galaxy: 350
-  stress:
-    bh_llmbox: 45
-    bh_p150b_civ2: 45
 
 shield:
   e2e:
@@ -112,11 +106,6 @@ scaleout:
     wh_galaxy: 25
   stress:
     wh_galaxy_perf: 120
-    bh_deskbox: 15
-    bh_llmbox: 15
-    bh_loudbox: 15
-    bh_p300: 15
-    bh_quietbox_2: 15
   integration:
     wh_llmbox: 40
   health:
@@ -134,13 +123,11 @@ scaleout:
     bh_galaxy: 60
     bh_sp1: 90
     bh_sp4: 150
-    # Blackhole e2e pipeline (formerly unit/integration/perf for scaleout):
-    # multi-card SKUs = 20 (fabric+ttnn UDM unit) + 15 (fabric infra integration) + 15 (fabric sanity benchmark perf) = 50.
-    bh_deskbox: 50
-    bh_llmbox: 50
-    bh_loudbox: 50
-    bh_p300: 50
-    bh_quietbox_2: 50
+    bh_deskbox: 65
+    bh_llmbox: 65
+    bh_loudbox: 65
+    bh_p300: 65
+    bh_quietbox_2: 65
 
 runtime:
   sanity:
@@ -208,9 +195,6 @@ models:
     wh_n150: 100
     wh_n300: 15
     wh_galaxy_perf: 120
-    # Blackhole e2e pipeline (formerly e2e/integration/deepseek_prefill for models):
-    # bh_p150b_civ2 = 30 (panoptic-deeplab demo) + 10 (panoptic-deeplab integration) + 15 (bevformer integration) = 55.
-    # bh_loudbox / bh_quietbox_2 absorb the former deepseek_prefill budgets.
     bh_p150b_civ2: 55
     bh_loudbox: 68
     bh_quietbox_2: 40
