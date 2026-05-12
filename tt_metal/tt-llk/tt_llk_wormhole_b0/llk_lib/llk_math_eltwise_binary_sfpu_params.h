@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <utility>
 
-#include "llk_assert.h"
 #include "llk_math_eltwise_binary_sfpu.h"
 #include "llk_sfpu_types.h"
 
@@ -19,7 +18,7 @@ inline void _llk_math_eltwise_binary_sfpu_params_(
     int vector_mode = static_cast<int>(VectorMode::RC),
     Args&&... args)
 {
-    _llk_math_eltwise_binary_sfpu_start_<DST_SYNC_MODE>(0);
+    _llk_math_eltwise_binary_sfpu_start_(0);
 
     VectorMode mode = static_cast<VectorMode>(vector_mode);
 

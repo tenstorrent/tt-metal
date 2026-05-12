@@ -57,7 +57,7 @@ class UnarySfpu(Sfpu):
         batch_dims: tuple,
         batch_tile_cnt: int,
     ) -> torch.Tensor:
-        format_input = operation.src_a.data_format
+        format_input = operation.output.data_format
         format_output = operation.output.data_format
         dest_acc = config.dest_acc
 
@@ -84,10 +84,13 @@ class UnarySfpu(Sfpu):
         block: BlockData,
     ) -> str:
         stage = operation.stage_id
+        dest_acc = config.dest_acc.cpp_enum_value
+        approx_mode = self.approx_mode.cpp_enum_value
+        op = f"SfpuType::{self.operation.cpp_enum_value}"
 
         return (
             f"// Operation {stage}: Unary {self.operation.cpp_enum_value} SFPU\n"
-            f"_llk_math_eltwise_unary_sfpu_init_<SfpuType::{self.operation.cpp_enum_value}>();\n"
+            f"test_utils::call_unary_sfpu_operation_init<{op}, {approx_mode}, {dest_acc}, {self.iterations}>();\n"
         )
 
     def calculate(
@@ -103,9 +106,10 @@ class UnarySfpu(Sfpu):
         op = f"SfpuType::{self.operation.cpp_enum_value}"
 
         return (
-            f"_llk_math_eltwise_unary_sfpu_start_<dest_sync{stage}>({self.dest_idx});\n"
-            f"test_utils::call_sfpu_operation<{approx_mode}, {dest_acc}, {self.iterations}>({op}, math_format{stage}, {self.fill_const_value});\n"
-            f"_llk_math_eltwise_unary_sfpu_done_();\n"
+            f"test_utils::call_unary_sfpu_operation<"
+            f"dest_sync{stage}, {dest_acc}, "
+            f"{op}, {approx_mode}, {dest_acc}, {self.iterations}"
+            f">({self.dest_idx}, {config.sentinel.math_format}, {self.fill_const_value});\n"
         )
 
     def __str__(self) -> str:

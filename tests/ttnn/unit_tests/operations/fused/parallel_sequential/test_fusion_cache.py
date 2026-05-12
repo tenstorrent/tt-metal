@@ -1034,6 +1034,7 @@ class TestProgramKeyCacheIntegration:
 
     def test_inline_cache_hit(self, device):
         """Second inline call with same config objects hits the program key cache."""
+        torch.manual_seed(0)
         clear_build_cache()
         q_cores = cores(0, 0, 3, 3)
         q_shard_w = 96

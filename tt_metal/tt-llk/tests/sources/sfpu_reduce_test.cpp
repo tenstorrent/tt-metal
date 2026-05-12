@@ -95,7 +95,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 LLK_ASSERT(
                     (tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                     "Block tile index exceeds maximum destination tiles");
-                _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(tile);
+                _llk_math_eltwise_unary_sfpu_start_(tile);
                 ckernel::sfpu::_calculate_reduce_<POOL_TYPE, REDUCE_DIM, static_cast<DataFormat>(formats.math)>();
             }
 
@@ -117,12 +117,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 i, formats.math, formats.math);
         }
 
-        _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(0);
+        _llk_math_eltwise_unary_sfpu_start_(0);
         ckernel::sfpu::_calculate_reduce_<POOL_TYPE, REDUCE_DIM, static_cast<DataFormat>(formats.math)>(BLOCK_CT_DIM, BLOCK_RT_DIM);
 
 #ifdef ADD_TOP_ROW
         _llk_math_eltwise_binary_sfpu_init_<SfpuType::add_top_row>();
-        _llk_math_eltwise_binary_sfpu_start_<DstSync::SyncHalf>(0);
+        _llk_math_eltwise_binary_sfpu_start_(0);
         ckernel::sfpu::_init_add_top_row_();
 
         for (int i = 1; i < num_tiles_in_block * num_blocks; ++i)
@@ -144,6 +144,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -159,7 +160,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
 #endif
 
-    _llk_pack_init_<false, false>(formats.pack_dst);
+    _llk_pack_init_wrapper_<false, false>(formats.pack_dst);
 
 #ifdef ARCH_BLACKHOLE
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

@@ -6,15 +6,15 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "ckernel_sfpu_binary_comp.h"
-#include "llk_math_eltwise_binary_sfpu_macros.h"
+#include "llk_math_eltwise_binary_sfpu_binary_comp.h"
 #endif
 
 namespace ckernel {
 
 // clang-format off
 /**
- * Performs an elementwise comparison operation with the two integer inputs: y = comparison_op(x0,x1)
+ * Performs an elementwise comparison operation with two integer inputs: y = comparison_op(x0,x1)
+ * Supports Int32, UInt32 and UInt16 data formats (selected via the data_format template parameter).
  * Output overwrites odst in DST.
  *
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
@@ -24,83 +24,9 @@ namespace ckernel {
  *
  * Return value: None
  *
- * | Argument       | Description                                                           | Type     | Valid Range                                           | Required |
- * |----------------|-----------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst0          | The index of the tile in DST register buffer to use as first operand  | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | idst1          | The index of the tile in DST register buffer to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
- */
-// clang-format on
-ALWI void lt_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_binary_comp_int32,
-        (APPROX, 8, SfpuType::lt),
-        idst0,
-        idst1,
-        odst,
-        (int)VectorMode::RC)));
-}
-
-ALWI void gt_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_binary_comp_int32,
-        (APPROX, 8, SfpuType::gt),
-        idst0,
-        idst1,
-        odst,
-        (int)VectorMode::RC)));
-}
-
-ALWI void ge_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_binary_comp_int32,
-        (APPROX, 8, SfpuType::ge),
-        idst0,
-        idst1,
-        odst,
-        (int)VectorMode::RC)));
-}
-
-ALWI void le_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_binary_comp_int32,
-        (APPROX, 8, SfpuType::le),
-        idst0,
-        idst1,
-        odst,
-        (int)VectorMode::RC)));
-}
-
-/**
- * Please refer to documentation for any_init.
- */
-ALWI void lt_int32_tile_init() { MATH((SFPU_BINARY_INIT(lt))); }
-
-ALWI void gt_int32_tile_init() { MATH((SFPU_BINARY_INIT(gt))); }
-
-ALWI void ge_int32_tile_init() { MATH((SFPU_BINARY_INIT(ge))); }
-
-ALWI void le_int32_tile_init() { MATH((SFPU_BINARY_INIT(le))); }
-
-// clang-format off
-/**
- * Performs an elementwise comparison operation with the two uint16 inputs: y = comparison_op(x0,x1)
- * Output overwrites odst in DST.
- *
- * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
- * on the compute engine.
- * A maximum of 4 tiles from each operand can be loaded into DST at once, for a total of 8 tiles,
- * when using 16 bit formats.
- *
- * Return value: None
+ * | Template Param | Description                                                           | Valid Values                             | Required |
+ * |----------------|-----------------------------------------------------------------------|------------------------------------------|----------|
+ * | data_format    | Data format of the integer operands                                   | DataFormat::Int32/UInt32/UInt16          | True     |
  *
  * | Argument       | Description                                                           | Type     | Valid Range                                           | Required |
  * |----------------|-----------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
@@ -109,37 +35,49 @@ ALWI void le_int32_tile_init() { MATH((SFPU_BINARY_INIT(le))); }
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-
-ALWI void lt_uint16_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_binary_comp_uint16,
-        (APPROX, 8, SfpuType::lt),
-        idst0,
-        idst1,
-        odst,
-        (int)VectorMode::RC)));
+template <DataFormat data_format>
+ALWI void lt_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_lt_int<APPROX, data_format>(idst0, idst1, odst)));
 }
 
-ALWI void gt_uint16_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_binary_comp_uint16,
-        (APPROX, 8, SfpuType::gt),
-        idst0,
-        idst1,
-        odst,
-        (int)VectorMode::RC)));
+template <DataFormat data_format>
+ALWI void gt_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_gt_int<APPROX, data_format>(idst0, idst1, odst)));
+}
+
+template <DataFormat data_format>
+ALWI void le_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_le_int<APPROX, data_format>(idst0, idst1, odst)));
+}
+
+template <DataFormat data_format>
+ALWI void ge_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_ge_int<APPROX, data_format>(idst0, idst1, odst)));
 }
 
 /**
- * Please refer to documentation for any_init.
+ * The following functions initialize the relational operations. They should be invoked prior to calling the execution
+ * API. Please refer to execution API documentation (lt_int_tile/gt_int_tile/le_int_tile/ge_int_tile) to find out more
+ * about the relational operations.
  */
+template <DataFormat data_format>
+ALWI void lt_int_tile_init() {
+    MATH((llk_math_eltwise_binary_sfpu_lt_int_init<data_format>()));
+}
 
-ALWI void lt_uint16_tile_init() { MATH((SFPU_BINARY_INIT(lt))); }
+template <DataFormat data_format>
+ALWI void gt_int_tile_init() {
+    MATH((llk_math_eltwise_binary_sfpu_gt_int_init<data_format>()));
+}
 
-ALWI void gt_uint16_tile_init() { MATH((SFPU_BINARY_INIT(gt))); }
+template <DataFormat data_format>
+ALWI void le_int_tile_init() {
+    MATH((llk_math_eltwise_binary_sfpu_le_int_init<data_format>()));
+}
+
+template <DataFormat data_format>
+ALWI void ge_int_tile_init() {
+    MATH((llk_math_eltwise_binary_sfpu_ge_int_init<data_format>()));
+}
 
 }  // namespace ckernel

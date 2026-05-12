@@ -5,7 +5,7 @@
 
 """
 Usage:
-    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--triage-summary-path=<path>]
+    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--disable-elf-cache] [--triage-summary-path=<path>]
 
 Options:
     --remote-exalens                 Connect to remote exalens server.
@@ -23,6 +23,7 @@ Options:
                                      Level 2 (-vv): Include internal debug fields (RD PTR, Base, Offset, Kernel XIP Path)
     --disable-colors                 Disable colored output. [default: False]
     --disable-progress               Disable progress bars. [default: False]
+    --disable-elf-cache              Re-parse ELF files on every access instead of caching. [default: False]
     --triage-summary-path=<path>     Write a triage summary file to the given path (used by CI for hang reports).
 
 Description:
@@ -86,6 +87,26 @@ from typing import Any, Callable, Iterable, TypeVar
 from types import ModuleType
 
 
+def _raise_open_file_limit(desired: int = 65536) -> None:
+    """
+    Raise the open file limit for the current process to the desired value if possible.
+    This is necessary to avoid hitting the open file limit when processing many ELF files with the elf cache enabled.
+    If the file limit is already at or above the desired value, this function does nothing.
+    """
+    try:
+        import resource
+
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        new_soft = desired if hard == resource.RLIM_INFINITY else min(desired, hard)
+        if new_soft <= soft:
+            return
+        resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft, hard))
+    except (ImportError, OSError, ValueError) as e:
+        utils.WARN(
+            f"Failed to raise open file limit: {e}. This may cause issues when processing many ELF files. Consider increasing the limit manually (ulimit -n {desired})."
+        )
+
+
 class ScriptPriority(Enum):
     LOW = 0
     MEDIUM = 1
@@ -120,14 +141,20 @@ def triage_singleton(run_method: Callable[[ScriptArguments, Context], T], /) -> 
         len(signature.parameters) == 2 and "args" in signature.parameters and "context" in signature.parameters
     ), "run_method must have two arguments (args, context)."
 
-    # Create simple cache
-    cache: dict[tuple[int, int], T] = {}
+    # Cache results and exceptions so repeat calls don't re-run on already-failed setup.
+    cache: dict[tuple[int, int], tuple[bool, Any]] = {}
 
     def cache_wrapper(args: ScriptArguments, context: Context) -> T:
         cache_key = (id(args), id(context))
         if cache_key not in cache:
-            cache[cache_key] = run_method(args, context)
-        return cache[cache_key]
+            try:
+                cache[cache_key] = (True, run_method(args, context))
+            except Exception as e:
+                cache[cache_key] = (False, e)
+        ok, payload = cache[cache_key]
+        if not ok:
+            raise payload
+        return payload
 
     return cache_wrapper
 
@@ -224,7 +251,8 @@ class TriageScript:
             return result
         except TimeoutDeviceRegisterError:
             raise
-        except ValueError as e:
+        except (ValueError, TTTriageError) as e:
+            # User-facing exceptions: surface the message only, no traceback noise.
             if log_error:
                 self.failed = True
                 self.failure_message = f"{e}"
@@ -328,6 +356,23 @@ class TriageScript:
                 script.depends.append(scripts[dep])
         return scripts
 
+    @staticmethod
+    def discover_all_in_directory(directory: str) -> dict[str, "TriageScript"]:
+        directory = os.path.abspath(directory)
+        scripts: dict[str, TriageScript] = {}
+        for fname in os.listdir(directory):
+            if not fname.endswith(".py") or fname == os.path.basename(__file__):
+                continue
+            script_path = os.path.join(directory, fname)
+            try:
+                triage_script = TriageScript.load(script_path)
+                if triage_script.config.disabled:
+                    continue
+            except Exception:
+                continue
+            scripts[script_path] = triage_script
+        return scripts
+
 
 def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScript]:
     # Build script dependents graph and script missing dependencies map
@@ -424,6 +469,7 @@ def create_progress() -> Progress:
 
 def process_arguments(args: ScriptArguments) -> None:
     init_console_and_verbosity(args)
+    _raise_open_file_limit()
 
 
 def parse_arguments(
@@ -827,15 +873,19 @@ def run_script(
         if not os.path.exists(script_path):
             raise FileNotFoundError(f"Script {script_path} does not exist.")
 
-    # Load script and its dependencies
+    # Load script and its dependencies (drives execution order).
     scripts = TriageScript.load_all(script_path)
 
     # Find execution order of scripts
     script_queue = resolve_execution_order(scripts)
 
-    # Parse arguments
+    # Parse arguments using every script's options
     if args is None:
-        args = parse_arguments(scripts, script_path, argv)
+        all_scripts = TriageScript.discover_all_in_directory(os.path.dirname(script_path))
+        # Ensure the target and its deps are present even if discovery missed them somehow.
+        for path, script in scripts.items():
+            all_scripts.setdefault(path, script)
+        args = parse_arguments(all_scripts, script_path, argv)
 
     # Initialize context if not provided
     if context is None:
@@ -885,7 +935,6 @@ def main():
 
     # Enumerate all scripts in application directory
     application_path = os.path.abspath(os.path.dirname(__file__))
-    script_files = [f for f in os.listdir(application_path) if f.endswith(".py") and f != os.path.basename(__file__)]
 
     # To avoid multiple imports of this script, we add it to sys.modules
     my_name = os.path.splitext(os.path.basename(__file__))[0]
@@ -894,19 +943,7 @@ def main():
 
     # Load tt-triage scripts
     # TODO: do we need to check for subdirectories?
-    scripts: dict[str, TriageScript] = {}
-    base_path = application_path
-    for script in script_files:
-        script_path = os.path.join(base_path, script)
-        try:
-            triage_script = TriageScript.load(script_path)
-            if triage_script.config.disabled:
-                utils.DEBUG(f"Script {script_path} is disabled, skipping...")
-                continue
-        except Exception as e:
-            utils.DEBUG(f"Failed to load script {script_path}: {e}")
-            continue
-        scripts[script_path] = triage_script
+    scripts = TriageScript.discover_all_in_directory(application_path)
 
     # Resolve dependencies
     for script in scripts.values():
@@ -949,8 +986,9 @@ def main():
             for script in script_queue:
                 progress.update(scripts_task, description=f"Running {script.name}")
                 if not all(not dep.failed for dep in script.depends):
-                    utils.INFO(f"{script.name}:")
-                    utils.WARN(f"  Cannot run script due to failed dependencies.")
+                    # Silently mark as skipped — the original root-cause failure already
+                    # printed its own message; cascading "Cannot run due to failed dependencies"
+                    # lines for every downstream script are noise.
                     script.failed = True
                     script.failure_message = "Cannot run script due to failed dependencies."
                 else:
@@ -993,6 +1031,10 @@ def main():
             utils.INFO(f"Triage summary written to {triage_summary_path}")
         except Exception as e:
             utils.WARN(f"Failed to write triage summary: {e}")
+
+    from elfs_cache import run as get_elfs_cache
+
+    get_elfs_cache(args, context).log_stats()
 
     # Remove nanobind leak check to avoid false positives on exit
     os._exit(0)

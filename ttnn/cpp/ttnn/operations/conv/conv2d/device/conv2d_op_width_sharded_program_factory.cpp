@@ -399,6 +399,25 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
         .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
         .enable_act_double_buffer = enable_act_double_buffer,
         .enable_weights_double_buffer = enable_weights_double_buffer};
+
+    std::vector<std::vector<uint16_t>> conv_sharded_input_top_left_indices =
+        ttnn::operations::sliding_window::generate_sliding_window_op_config(
+            op_trace_metadata, shard_boundaries, stride_w, true, act_block_h_datums, 0);
+
+    // create sharded ttnn config tensors
+    Tensor conv_reader_indices_tensor = ttnn::operations::sliding_window::construct_on_host_config_tensor(
+        conv_sharded_input_top_left_indices, parallel_config, config_tensors_in_dram);
+    conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
+        conv_reader_indices_tensor, parallel_config, false, a.device(), config_tensors_in_dram);
+
+    log_trace(tt::LogOp, "Conv2D Config Tensor : {}", conv_reader_indices_tensor);
+    const tt::tt_metal::DeviceStorage& conv_reader_indices_storage = conv_reader_indices_tensor.device_storage();
+
+    // Pass the actual DRAM/L1-small config buffer page size into get_cb_info so the predicted
+    // READER_INDICES CB footprint matches the CB this factory creates. Without this, the in-DRAM
+    // path was sized to the worst case (1 uint16 per output row), holding spare L1 that is never
+    // populated by the reader kernel.
+    const uint32_t reader_indices_actual_page_size = conv_reader_indices_storage.get_buffer()->page_size();
     std::vector<CBInfo> cb_info = get_cb_info(
         compute_kernel_config,
         block_config,
@@ -415,34 +434,8 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
         has_bias,
         false,
         skip_activation_mcast,
-        input_channels_padded);
-
-    std::vector<std::vector<uint16_t>> conv_sharded_input_top_left_indices =
-        ttnn::operations::sliding_window::generate_sliding_window_op_config(
-            op_trace_metadata, shard_boundaries, stride_w, true, act_block_h_datums, 0);
-
-    // create sharded ttnn config tensors
-    Tensor conv_reader_indices_tensor = ttnn::operations::sliding_window::construct_on_host_config_tensor(
-        conv_sharded_input_top_left_indices, parallel_config, config_tensors_in_dram);
-    conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
-        conv_reader_indices_tensor, parallel_config, false, a.device(), config_tensors_in_dram);
-
-    log_trace(tt::LogOp, "Conv2D Config Tensor : {}", conv_reader_indices_tensor);
-    const tt::tt_metal::DeviceStorage& conv_reader_indices_storage = conv_reader_indices_tensor.device_storage();
-
-    if (config_tensors_in_dram) {
-        // The actual CB reader size is difficult to calculate in calculate_L1_size. So instead keep the CB size as the
-        // maximum possible size.
-        TT_FATAL(
-            access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size >=
-                conv_reader_indices_storage.get_buffer()->page_size(),
-            "CB page size {} should be greater than the config tensor page size {}",
-            access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size,
-            conv_reader_indices_storage.get_buffer()->page_size());
-    } else {
-        access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size =
-            conv_reader_indices_storage.get_buffer()->page_size();
-    }
+        input_channels_padded,
+        reader_indices_actual_page_size);
 
     // call function to allocate circular buffers
     allocate_cbs(cb_info, program, all_reader_cores, a, output, conv_reader_indices_tensor);
@@ -639,7 +632,8 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
         }
     }
 
-    post_conv2d_op_memory_checks(program, operation_attributes, tensor_args, output_tensor);
+    post_conv2d_op_memory_checks(
+        program, operation_attributes, tensor_args, output_tensor, reader_indices_actual_page_size);
     return cached_program_t{
         std::move(program),
         shared_variables_t{

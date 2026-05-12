@@ -26,9 +26,8 @@ The MoE dispatch/combine operations implement expert-parallel token routing acro
 | `experts_per_chip` | `= num_routed_experts // dispatch_group_size` |
 | `expert_dispatch_table` | Maps expert ID → destination chip ID within dispatch axis |
 | `metadata_len` | 5 fields: `(src_chip, token_idx, topk_idx, expert_id, weight)` |
-| `capacity_factor` | Multiplier for expected load to handle imbalanced routing |
-| `max_dispatched_tokens_per_expert` | `= balanced_load * capacity_factor` |
-| `balanced_load` | `= dispatch_group_size * seq_len_per_chip * num_experts_per_tok // num_routed_experts` |
+| `max_dispatched_tokens_per_expert` | Per-expert theoretical upper bound = `dispatch_group_size * seq_len_per_chip` (full sequence length of the dispatch group) |
+| `max_dispatch_buffer_token_size` | Total token capacity of the per-chip dispatch buffer (shared across all local experts); sized internally by `compute_constants` as a fixed multiple of `max_dispatched_tokens_per_expert` |
 
 ## 3. Grid Topologies
 
@@ -203,7 +202,6 @@ seq_len_per_chip = 32
 emb_dim = 7168
 num_routed_experts = 16
 num_experts_per_tok = 4
-capacity_factor = 2
 ```
 
 ### Derived Values
@@ -213,9 +211,9 @@ dispatch_group_size = 2
 num_dispatch_groups = 1
 experts_per_chip = 16 // 2 = 8
 
-# Load balancing
-balanced_load = 2 * 32 * 4 // 16 = 16  # tokens per expert under perfect balance
-max_dispatched_tokens_per_expert = 16 * 2 = 32  # with capacity_factor=2
+# Buffer sizing (see compute_constants)
+max_dispatched_tokens_per_expert = 2 * 32 = 64        # per-expert upper bound (full sequence)
+max_dispatch_buffer_token_size = 128                  # total per-chip buffer capacity
 
 metadata_len = 5
 ```

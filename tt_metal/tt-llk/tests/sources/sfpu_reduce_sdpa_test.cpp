@@ -90,6 +90,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 
 #include "ckernel_sfpu_reduce_custom.h"
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -106,7 +107,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
 #endif
 
-    _llk_pack_init_<false, false>(formats.pack_dst);
+    _llk_pack_init_wrapper_<false, false>(formats.pack_dst);
 
     // Initialize destination for packing
 #ifdef ARCH_BLACKHOLE
@@ -123,7 +124,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     ckernel::sfpu::_init_reduce_max_col_subblock_4x2_<DataFormat::Float16_b>();
 
-    _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(0);
+    _llk_math_eltwise_unary_sfpu_start_(0);
     ckernel::sfpu::_reduce_max_col_subblock_4x2_prologue_();
     ckernel::sfpu::_calculate_reduce_max_col_subblock_4x2_<PoolType::MAX, REDUCE_COL, DataFormat::Float16_b>(BLOCK_RT_DIM);
 

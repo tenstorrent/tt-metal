@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstring>
 #include <chrono>
 #include <cstdlib>
 #include <optional>
@@ -25,7 +26,6 @@
 #include "command_queue_common.hpp"
 #include "system_memory_cq_interface.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/tt_io.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <tracy/Tracy.hpp>
@@ -115,8 +115,8 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
     prefetcher_cores(num_hw_cqs),
     prefetch_q_dev_ptrs(num_hw_cqs),
     prefetch_q_dev_fences(num_hw_cqs) {
-    this->prefetch_q_writers.reserve(num_hw_cqs);
-    this->completion_q_writers.reserve(num_hw_cqs);
+    this->prefetch_q_windows.reserve(num_hw_cqs);
+    this->completion_q_windows.reserve(num_hw_cqs);
 
     if (is_mock_device()) {
         this->cq_size = 65536;
@@ -182,6 +182,16 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
     this->channel_offset = DispatchSettings::MAX_HUGEPAGE_SIZE * get_umd_channel(channel) +
                            (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
 
+    static constexpr uint32_t AUX_PAGES_PER_CQ = 2;
+    uint32_t per_cq_reduction = AUX_PAGES_PER_CQ * DispatchSettings::TRANSFER_PAGE_SIZE;
+    this->cq_size -= per_cq_reduction;
+
+    uint32_t total_cq_space = static_cast<uint32_t>(num_hw_cqs) * this->cq_size;
+    this->free_region_start_ = this->channel_offset + total_cq_space;
+    this->free_region_size_ = static_cast<uint32_t>(num_hw_cqs) * per_cq_reduction;
+    this->free_region_host_ptr_ = this->cq_sysmem_start + total_cq_space;
+    this->free_region_bump_ = 0;
+
     this->init_dispatch_core_interfaces(num_hw_cqs, channel);
 }
 
@@ -201,7 +211,8 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
         auto prefetcher_virtual = ctx.get_cluster().get_virtual_coordinate_from_logical_coordinates(
             prefetcher_core.chip, CoreCoord(prefetcher_core.x, prefetcher_core.y), core_type);
         this->prefetcher_cores[cq_id] = tt_cxy_pair(prefetcher_core.chip, prefetcher_virtual.x, prefetcher_virtual.y);
-        this->prefetch_q_writers.emplace_back(ctx.get_cluster().get_static_tlb_writer(this->prefetcher_cores[cq_id]));
+        this->prefetch_q_windows.emplace_back(
+            ctx.get_cluster().get_static_tlb_window(this->prefetcher_cores[cq_id]));
 
         tt_cxy_pair completion_queue_writer_core =
             ctx.get_dispatch_core_manager().completion_queue_writer_core(this->device_id, channel, cq_id);
@@ -219,8 +230,11 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
         auto [completion_tlb_offset, completion_tlb_size] = completion_interface_tlb_data;
 
         this->completion_byte_addrs[cq_id] = completion_q_rd_ptr % completion_tlb_size;
-        this->completion_q_writers.emplace_back(ctx.get_cluster().get_static_tlb_writer(tt_cxy_pair(
-            completion_queue_writer_core.chip, completion_queue_writer_virtual.x, completion_queue_writer_virtual.y)));
+        this->completion_q_windows.emplace_back(
+            ctx.get_cluster().get_static_tlb_window(tt_cxy_pair(
+                completion_queue_writer_core.chip,
+                completion_queue_writer_virtual.x,
+                completion_queue_writer_virtual.y)));
 
         const uint32_t alignment =
             is_dram_backed() ? ctx.hal().get_alignment(HalMemType::DRAM) : ctx.hal().get_alignment(HalMemType::HOST);
@@ -601,7 +615,7 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
     const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
 
     uint32_t read_ptr_and_toggle = cq_interface.completion_fifo_rd_ptr | (cq_interface.completion_fifo_rd_toggle << 31);
-    this->completion_q_writers[cq_id].write(this->completion_byte_addrs[cq_id], read_ptr_and_toggle);
+    this->completion_q_windows[cq_id]->write32(this->completion_byte_addrs[cq_id], read_ptr_and_toggle);
     auto& ctx = tt::tt_metal::MetalContext::instance(this->context_id);
     const uint32_t completion_q_rd_ptr =
         ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD);
@@ -805,7 +819,7 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
     if (stall_prefetcher) {
         command_size_16B |= (1 << ((sizeof(DispatchSettings::prefetch_q_entry_type) * 8) - 1));
     }
-    this->prefetch_q_writers[cq_id].write(this->prefetch_q_dev_ptrs[cq_id], command_size_16B);
+    this->prefetch_q_windows[cq_id]->write16(this->prefetch_q_dev_ptrs[cq_id], command_size_16B);
     this->prefetch_q_dev_ptrs[cq_id] += sizeof(DispatchSettings::prefetch_q_entry_type);
 }
 
@@ -823,6 +837,29 @@ uint32_t SystemMemoryManager::get_dram_region_base_addr() const {
 uint32_t SystemMemoryManager::get_dram_region_bank_id() const {
     TT_FATAL(this->is_dram_backed(), "CQs are not DRAM backed");
     return 0;
+}
+
+std::pair<void*, uint32_t> SystemMemoryManager::allocate_region(uint32_t size) {
+    if (free_region_host_ptr_ == nullptr || free_region_size_ == 0) {
+        return {nullptr, 0};
+    }
+
+    static constexpr uint32_t kMinAlignment = 64;
+    uint32_t aligned_size = tt::align(size, kMinAlignment);
+    TT_FATAL(
+        free_region_bump_ + aligned_size <= free_region_size_,
+        "Hugepage auxiliary region exhausted: requested {} bytes ({} aligned), {} of {} used",
+        size,
+        aligned_size,
+        free_region_bump_,
+        free_region_size_);
+
+    void* host_ptr = free_region_host_ptr_ + free_region_bump_;
+    uint32_t device_addr = free_region_start_ + free_region_bump_;
+    free_region_bump_ += aligned_size;
+
+    std::memset(host_ptr, 0, aligned_size);
+    return {host_ptr, device_addr};
 }
 
 }  // namespace tt::tt_metal

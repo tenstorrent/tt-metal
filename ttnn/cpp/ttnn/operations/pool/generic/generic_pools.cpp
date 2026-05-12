@@ -13,12 +13,14 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::pool {
@@ -273,8 +275,27 @@ static std::vector<Tensor> pool2d_L1(
         tt::round_up(output_nhw, num_cores_nhw * (is_out_tiled ? tt::constants::TILE_HEIGHT : 1));
     uint32_t output_shard_height_padded = output_nhw_padded / num_cores_nhw;
     uint32_t output_c = channels;
-    uint32_t output_c_padded = tt::round_up(
-        output_c, num_cores_c * (is_out_tiled ? tt::constants::TILE_WIDTH : tt::constants::TILE_WIDTH / 2));
+    // When the last per-shard tile is strictly less than one full face wide (channels % 32 < 16),
+    // round up to TILE_WIDTH so the packer always writes 2 full faces without reconfiguring.
+    // When channels % 32 == FACE_WIDTH the last tile has exactly one face and no extra padding is needed.
+    // Use ceiling division so that for WIDTH/BLOCK sharding, where channels may not divide evenly,
+    // we check the maximum per-shard channel count and avoid false partial-tile detection.
+    // E.g. channels=290, num_cores_c=19: ceil(290/19)=16 = FACE_WIDTH → no tile pad needed.
+    //      channels=290, num_cores_c=1:  ceil(290/1)=290, 290%32=2 → tile pad needed.
+    uint32_t channels_per_shard = tt::div_up(output_c, num_cores_c);
+    uint32_t cps_mod_tile = channels_per_shard % tt::constants::TILE_WIDTH;
+    // For TILE output the shard width must be TILE_WIDTH-aligned regardless; for ROW_MAJOR we
+    // only round up to TILE_WIDTH when the partial last tile is strictly less than one full face
+    // wide (cps_mod_tile < FACE_WIDTH) AND there is at least one preceding full tile per core
+    // (channels_per_shard > FACE_WIDTH). When the only tile per core is partial and fits in one
+    // face, the kernel packs just 1 face — so FACE_WIDTH alignment matches the kernel output and
+    // avoids creating per-shard internal padding that breaks downstream consumers (e.g.
+    // sharded_to_interleaved, slice_write).
+    bool needs_tile_pad = !is_out_tiled && cps_mod_tile > 0 && cps_mod_tile < tt::constants::FACE_WIDTH &&
+                          channels_per_shard > tt::constants::FACE_WIDTH;
+    uint32_t base_alignment =
+        (is_out_tiled || needs_tile_pad) ? tt::constants::TILE_WIDTH : tt::constants::TILE_WIDTH / 2;
+    uint32_t output_c_padded = tt::round_up(output_c, num_cores_c * base_alignment);
     uint32_t output_shard_width_padded = output_c_padded / num_cores_c;
     log_debug(
         tt::LogOp,
@@ -304,9 +325,17 @@ static std::vector<Tensor> pool2d_L1(
     };
 
     // call the halo uop
+    const auto resolved_compute_kernel_config = init_device_compute_kernel_config(
+        tt::tt_metal::hal::get_arch(),
+        compute_kernel_config,
+        tt::tt_metal::MathFidelity::HiFi4,
+        /*default_approx_mode=*/true,
+        /*default_fp32_acc=*/input_tensor_sharded.dtype() == DataType::FLOAT32,
+        /*default_l1_acc=*/false);
     Tensor haloed_tensor = ttnn::halo(
         input_tensor_sharded,
         sliding_window_config,
+        resolved_compute_kernel_config,
         get_bf16_pool_init_value(pool_type),  // pad_val
         false,
         parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,

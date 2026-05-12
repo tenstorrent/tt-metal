@@ -30,7 +30,7 @@ The `tt_llk_quasar/llk_lib` directory contains the Low-Level Kernel (LLK) librar
 | 12 | `llk_pack_common.h` | Pack |
 | 13 | `llk_pack_matmul.h` | Pack |
 | 14 | `llk_pack_untilize.h` | Pack |
-| 15 | `llk_srcs_tdma.h` | TDMA |
+| 15 | `llk_srcs.h` | TDMA |
 | 16 | `llk_unpack_binary_broadcast_operands.h` | Unpack |
 | 17 | `llk_unpack_binary_operands.h` | Unpack |
 | 18 | `llk_unpack_common.h` | Unpack |

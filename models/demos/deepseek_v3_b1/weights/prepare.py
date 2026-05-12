@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import time
 from dataclasses import dataclass
+from dataclasses import replace as _dataclass_replace
 from pathlib import Path
 from typing import Any
 
@@ -48,15 +49,46 @@ from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC,
     QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
 )
+from models.demos.deepseek_v3_b1.weights.sram_slots import (
+    SramCompressedExpertSlots,
+    _compute_sram_trim_budget,
+    prepare_compressed_sram_slots,
+)
+from models.demos.deepseek_v3_b1.weights.transforms.sram_experts import SramExpertCoreGrids, SramHotExpertConfig
+from models.demos.deepseek_v3_b1.weights.upload import UploadableMixin, eager_upload_l1_lockstep
 
 Q_AB_KV_A_SPEC = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 O_PROJ_GATE_MM_NORMS_SPEC = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
-MERGED_TP4_SPEC = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC.tp4_merged_fusion_group_spec()
 KV_B12_SPEC = KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 GATE_UP_SPEC = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
-from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor
+from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, CompressedTensorAssigner
 from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_layer
 from models.demos.deepseek_v3_b1.weights.transforms.attention import preprocess_kv_b12, preprocess_q_ab_kv_a
+from models.demos.deepseek_v3_b1.weights.transforms.tp4_attention import (
+    build_gate_mm_tp4_spec,
+    build_merged_attention_block_tp4_spec,
+    pack_o_proj_weights_tp4_shuffled,
+)
+
+# On a 4x2 mesh the attention block's weights are packed as two independent
+# per-core fusion artefacts (see tp4_attention.py):
+#   * MERGED_TP4_ATTENTION_BLOCK_SPEC: the whole attention block *except*
+#     gate_mm -- o_proj (TP4-shuffled) + RMSNorm gammas + q_a + q_b +
+#     kv_a, packed across the ~115-core union of their per-tensor core
+#     sets.
+#   * MERGED_TP4_GATE_SPEC: gate_mm alone, on its narrow 8-core slab. Kept
+#     out of the attention-block spec so the 8-core allocation doesn't
+#     wait on a lockstep reservation across the 115-core attention-block
+#     buffer.
+#
+# TODO(refactor): end goal is one source spec per tensor, with FusionGroupSpecs
+# just assembling those per-tensor specs -- this removes the coarse bundles
+# (``O_PROJ_GATE_MM_RMSNORM_GAMMA_*``, ``QAB_KVA_PROJ_*``) that today force
+# the cross-spec ``_named`` / ``_region`` helpers in ``tp4_attention.py``, and
+# makes it easy to re-bundle tensors into different fusion artefacts without
+# touching the underlying spec objects.
+MERGED_TP4_ATTENTION_BLOCK_SPEC = build_merged_attention_block_tp4_spec()
+MERGED_TP4_GATE_SPEC = build_gate_mm_tp4_spec()
 from models.demos.deepseek_v3_b1.weights.transforms.moe import (
     _tp_factors,
     mlp_routed_dense_stacked_torch_for_cache,
@@ -73,7 +105,7 @@ _GATE_BIAS_TILE = ttnn.Tile([16, 16])
 
 
 @dataclass
-class AttentionWeights:
+class AttentionWeights(UploadableMixin):
     """Attention fusion groups: q_ab_kv_a + kv_b12 + o_proj_gate_mm_norms."""
 
     q_a_proj: OverlappedTensor
@@ -91,7 +123,7 @@ class AttentionWeights:
 
 
 @dataclass
-class SharedExpertWeights:
+class SharedExpertWeights(UploadableMixin):
     """Shared expert gate_up fusion group + standalone shared_down_proj."""
 
     shared_gate_proj: OverlappedTensor
@@ -100,7 +132,7 @@ class SharedExpertWeights:
 
 
 @dataclass
-class DenseRoutedExpertWeights:
+class DenseRoutedExpertWeights(UploadableMixin):
     """Routed expert weights for dense layers (single tensor per proj)."""
 
     routed_gate_proj: ttnn.Tensor
@@ -178,7 +210,7 @@ def _assert_moe_routed_expert_list_contiguous(tensors: list[ttnn.Tensor], name: 
 
 
 @dataclass
-class MoERoutedExpertWeights:
+class MoERoutedExpertWeights(UploadableMixin):
     """Routed expert weights for MoE layers (list of tensors, one per expert).
 
     When on device, each of ``routed_gate_proj``, ``routed_up_proj``, and ``routed_down_proj`` must
@@ -197,7 +229,7 @@ class MoERoutedExpertWeights:
 
 
 @dataclass
-class DeepSeekV3DenseLayerWeights:
+class DeepSeekV3DenseLayerWeights(UploadableMixin):
     """Weights for a dense layer (0..first_k_dense_replace-1).
 
     Has the 3 attention fusion groups and o_proj + norms (no gate_mm).
@@ -231,7 +263,7 @@ class DeepSeekV3DenseLayerWeights:
 
 
 @dataclass
-class DeepSeekV3MoELayerWeights:
+class DeepSeekV3MoELayerWeights(UploadableMixin):
     """Weights for an MoE layer (first_k_dense_replace..num_layers-1).
 
     Extends dense with gate_mm and shared expert projections.
@@ -267,33 +299,42 @@ class DeepSeekV3MoELayerWeights:
     routed_up_proj: list[ttnn.Tensor]
     routed_down_proj: list[ttnn.Tensor]
 
+    # Optional SRAM hot expert slots (per-core CompressedTensor)
+    sram_slots: SramCompressedExpertSlots | None = None
+
 
 @dataclass
-class DeepSeekV3EmbeddingLayerWeights:
+class DeepSeekV3EmbeddingLayerWeights(UploadableMixin):
     """Weights for the embedding layer."""
 
     embedding: ttnn.Tensor
 
 
 @dataclass
-class DeepSeekV3LMHeadWeights:
+class DeepSeekV3LMHeadWeights(UploadableMixin):
     """Weights for the LM head and final RMSNorm."""
 
-    lm_head: ttnn.Tensor
-    final_norm: ttnn.Tensor  # model.norm.weight, (1, 7168)
+    lm_head: ttnn.Tensor  # lm_head.weight, (vocab_size, hidden_size) (with final_norm folded into weight matrix)
 
 
 @dataclass
-class DeepSeekV3MTPWeights:
+class DeepSeekV3MTPWeights(UploadableMixin):
     """Weights for the MTP (Multi-Token Prediction) speculative decode layer.
 
     HF state dict keys live under ``model.layers.{mtp_layer_idx}.*`` (layer 61 for DeepSeek V3).
     The MTP decoder block (layer 61) is a regular MoE layer loaded separately.
+
+    NOTE: h_gamma and e_gamma are folded into eh_projection.
     """
 
-    h_gamma: ttnn.Tensor  # model.layers.61.hnorm.weight
-    e_gamma: ttnn.Tensor  # model.layers.61.enorm.weight
-    eh_projection: ttnn.Tensor  # model.layers.61.eh_proj.weight
+    eh_projection: ttnn.Tensor  # model.layers.61.eh_proj.weight (with h_gamma and e_gamma folded into weight matrix)
+
+
+@dataclass
+class DeepSeekV3SpecWeights(UploadableMixin):
+    """Weights used only by the speculative verify LM-head stage."""
+
+    lm_head: ttnn.Tensor  # LM head projection (with shared_head_norm folded into weight matrix)
 
 
 # MoE routed experts (DeepSeek V3 config: n_routed_experts=256).
@@ -360,18 +401,27 @@ _EMBEDDING_TARGET = TensorTarget(
     transform_version=1,
 )
 
-_LM_HEAD_TARGET = TensorTarget(
-    name="lm_head",
-    dtype=ttnn.bfloat8_b,
-    layout=ttnn.TILE_LAYOUT,
-    memory_config=ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(_LM_HEAD_MATMUL_CORE_GRID, (_LM_HEAD_K, _LM_HEAD_N_PER_CORE), ttnn.ShardOrientation.ROW_MAJOR),
-    ),
-    mesh_mapper_config=ShardMeshMapper(dim=1),
-    transform_version=1,
-)
+
+def _lm_head_target(name: str) -> TensorTarget:
+    return TensorTarget(
+        name=name,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                _LM_HEAD_MATMUL_CORE_GRID, (_LM_HEAD_K, _LM_HEAD_N_PER_CORE), ttnn.ShardOrientation.ROW_MAJOR
+            ),
+        ),
+        mesh_mapper_config=ShardMeshMapper(dim=1),
+        transform_version=3,
+    )
+
+
+_LM_HEAD_TARGET = _lm_head_target("lm_head")
+_LM_HEAD_FOLDED_NORM_TARGET = _lm_head_target("lm_head_folded_norm")
+_LM_HEAD_FOLDED_SPEC_NORM_TARGET = _lm_head_target("lm_head_folded_shared_head_norm")
 
 _FINAL_NORM_TARGET = TensorTarget(
     name="final_norm",
@@ -379,7 +429,7 @@ _FINAL_NORM_TARGET = TensorTarget(
     layout=ttnn.TILE_LAYOUT,
     memory_config=_NORM_MEM_CONFIG,
     tile_shape=(1, 32),
-    transform_version=1,
+    transform_version=3,
 )
 
 
@@ -390,25 +440,27 @@ def _mtp_norm_target(name: str) -> TensorTarget:
         layout=ttnn.TILE_LAYOUT,
         memory_config=_NORM_MEM_CONFIG,
         tile_shape=(1, 32),
-        transform_version=1,
+        transform_version=3,
     )
 
 
 def _mtp_eh_proj_target(K: int, N: int) -> TensorTarget:
+    k_per_device = K // 8
     n_per_bank = N // _MTP_NUM_DRAM_BANKS
     eh_shard_grid = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_MTP_NUM_DRAM_BANKS - 1, 0))}
     )
     return TensorTarget(
-        name="mtp_eh_projection",
+        name="mtp_eh_projection_folded_eh_gamma",
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.DRAM,
-            ttnn.ShardSpec(eh_shard_grid, (K, n_per_bank), ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(eh_shard_grid, (k_per_device, n_per_bank), ttnn.ShardOrientation.ROW_MAJOR),
         ),
-        transform_version=1,
+        transform_version=3,
+        mesh_mapper_config=ShardMeshMapper(dim=0),
     )
 
 
@@ -713,6 +765,7 @@ def prepare_attention_weights(
     kv_views = cache_config.cache.get_or_create(
         kv_fp,
         device,
+        move_to_device=move_to_device,
         preprocess=_preprocess_kv_b12,
         raw_tensors=lambda: {kv_b_key: state_dict[kv_b_key]},
     )
@@ -721,24 +774,23 @@ def prepare_attention_weights(
     kv_b1_proj = kv_views["kv_b1_proj"]
     kv_b2_proj = kv_views["kv_b2_proj"]
 
-    # -- mla_tp == 2: merged buffer (o_proj + gate_mm + norms + q_ab + kv_a) --
+    # -- mla_tp == 2: merged layout, two independent per-core fusion artefacts --
+    # The attention-block artefact (o_proj + norms + q_ab + kv_a) and the
+    # standalone gate_mm live in separate FusionGroupSpecs so the narrow
+    # gate_mm slab isn't forced to participate in the attention-block
+    # buffer's 115-core lockstep reservation.
     if mla_tp == 2:
         q_ab_keys = (q_a_key, q_b_key, kv_a_key)
 
-        def _preprocess_merged(t: dict[str, torch.Tensor], *, include_gate: bool) -> dict[str, torch.Tensor]:
+        def _preprocess_merged_attention_block(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
             o_proj = t[o_proj_key].T.contiguous()
-            o_proj = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC.pack_o_proj_weights_tp4_shuffled(o_proj)
-            if include_gate:
-                gate_mm = t[gate_key].T.contiguous()
-            else:
-                gate_mm = torch.zeros(D.HIDDEN_SIZE, D.GATE_NUM_INDICES, dtype=torch.bfloat16, device=o_proj.device)
+            o_proj = pack_o_proj_weights_tp4_shuffled(o_proj)
             q_a = t[q_a_key].T.contiguous()
             q_b = deinterleave_q_b_proj(t[q_b_key])
             kv_a = t[kv_a_key].T.contiguous()
             q_ab_kv_a = preprocess_q_ab_kv_a(q_a, q_b, kv_a, mesh_shape)
             return {
                 "o_proj": o_proj,
-                "gate_mm": gate_mm,
                 "attn_norm": t[attn_norm_key].unsqueeze(0),
                 "q_norm": t[q_norm_key].unsqueeze(0),
                 "kv_norm": t[kv_norm_key].unsqueeze(0),
@@ -746,21 +798,40 @@ def prepare_attention_weights(
                 **q_ab_kv_a,
             }
 
+        attention_block_src = (o_proj_key, attn_norm_key, q_norm_key, kv_norm_key, ffn_norm_key) + q_ab_keys
+        attention_block_fp = cache_config.context.fingerprint(
+            source=SourceTensorSelection(names=attention_block_src),
+            target=MERGED_TP4_ATTENTION_BLOCK_SPEC,
+        )
+        attention_block_views = cache_config.cache.get_or_create(
+            attention_block_fp,
+            device,
+            move_to_device=move_to_device,
+            preprocess=_preprocess_merged_attention_block,
+            raw_tensors=lambda: {k: state_dict[k] for k in attention_block_src},
+        )
+        if not isinstance(attention_block_views, dict):
+            raise TypeError("expected dict[str, OverlappedTensor] for merged attention-block cache entry")
+
         if is_moe:
             gate_key = _key(layer_idx, "mlp.gate.weight")
-            merged_src = (o_proj_key, gate_key, attn_norm_key, q_norm_key, kv_norm_key, ffn_norm_key) + q_ab_keys
-            merged_fp = cache_config.context.fingerprint(
-                source=SourceTensorSelection(names=merged_src),
-                target=MERGED_TP4_SPEC,
+
+            def _preprocess_gate_mm(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+                return {"gate_mm": t[gate_key].T.contiguous()}
+
+            gate_fp = cache_config.context.fingerprint(
+                source=SourceTensorSelection(names=(gate_key,)),
+                target=MERGED_TP4_GATE_SPEC,
             )
-            merged_views = cache_config.cache.get_or_create(
-                merged_fp,
+            gate_views = cache_config.cache.get_or_create(
+                gate_fp,
                 device,
-                preprocess=lambda t: _preprocess_merged(t, include_gate=True),
-                raw_tensors=lambda: {k: state_dict[k] for k in merged_src},
+                move_to_device=move_to_device,
+                preprocess=_preprocess_gate_mm,
+                raw_tensors=lambda: {gate_key: state_dict[gate_key]},
             )
-            if not isinstance(merged_views, dict):
-                raise TypeError("expected dict[str, OverlappedTensor] for merged cache entry")
+            if not isinstance(gate_views, dict):
+                raise TypeError("expected dict[str, OverlappedTensor] for gate_mm cache entry")
 
             _bias_key = _key(layer_idx, "mlp.gate.e_score_correction_bias")
             target = _gate_bias_target(layer_idx)
@@ -771,6 +842,7 @@ def prepare_attention_weights(
             gate_bias_tt = cache_config.cache.get_or_create(
                 fingerprint,
                 device,
+                move_to_device=move_to_device,
                 preprocess=lambda t: {target.name: t[_bias_key].reshape(16, 16).T.contiguous().to(torch.bfloat16)},
                 raw_tensors=lambda: {_bias_key: state_dict[_bias_key]},
             )
@@ -783,34 +855,22 @@ def prepare_attention_weights(
                 time.perf_counter() - t0,
             )
             return AttentionWeights(
-                q_a_proj=merged_views["q_a_proj"],
-                q_b_proj=merged_views["q_b_proj"],
-                kv_a_proj=merged_views["kv_a_proj"],
-                o_proj=merged_views["o_proj"],
-                gate_mm=merged_views["gate_mm"],
-                attn_norm=merged_views["attn_norm"],
-                q_norm=merged_views["q_norm"],
-                kv_norm=merged_views["kv_norm"],
-                ffn_norm=merged_views["ffn_norm"],
+                q_a_proj=attention_block_views["q_a_proj"],
+                q_b_proj=attention_block_views["q_b_proj"],
+                kv_a_proj=attention_block_views["kv_a_proj"],
+                o_proj=attention_block_views["o_proj"],
+                gate_mm=gate_views["gate_mm"],
+                attn_norm=attention_block_views["attn_norm"],
+                q_norm=attention_block_views["q_norm"],
+                kv_norm=attention_block_views["kv_norm"],
+                ffn_norm=attention_block_views["ffn_norm"],
                 kv_b1_proj=kv_b1_proj,
                 kv_b2_proj=kv_b2_proj,
                 gate_bias=gate_bias_tt,
             )
 
-        # Dense merged path
-        merged_src_dense = (o_proj_key, attn_norm_key, q_norm_key, kv_norm_key, ffn_norm_key) + q_ab_keys
-        merged_fp_dense = cache_config.context.fingerprint(
-            source=SourceTensorSelection(names=merged_src_dense),
-            target=MERGED_TP4_SPEC,
-        )
-        merged_views = cache_config.cache.get_or_create(
-            merged_fp_dense,
-            device,
-            preprocess=lambda t: _preprocess_merged(t, include_gate=False),
-            raw_tensors=lambda: {k: state_dict[k] for k in merged_src_dense},
-        )
-        if not isinstance(merged_views, dict):
-            raise TypeError("expected dict[str, OverlappedTensor] for merged cache entry")
+        # Dense merged path: no gate_mm at all.
+        merged_views = attention_block_views
 
         logger.debug(
             "Attention fusion groups (dense, merged) for layer {} in {:.3f}s",
@@ -848,6 +908,7 @@ def prepare_attention_weights(
     q_ab_views = cache_config.cache.get_or_create(
         q_ab_fp,
         device,
+        move_to_device=move_to_device,
         preprocess=_preprocess_q_ab_kv_a,
         raw_tensors=lambda: {k: state_dict[k] for k in (q_a_key, q_b_key, kv_a_key)},
     )
@@ -886,6 +947,7 @@ def prepare_attention_weights(
         o_views = cache_config.cache.get_or_create(
             o_fp,
             device,
+            move_to_device=move_to_device,
             preprocess=_preprocess_o_proj_moe,
             raw_tensors=lambda: {k: state_dict[k] for k in o_src},
         )
@@ -901,6 +963,7 @@ def prepare_attention_weights(
         gate_bias_tt = cache_config.cache.get_or_create(
             fingerprint,
             device,
+            move_to_device=move_to_device,
             preprocess=lambda t: {target.name: t[_bias_key].reshape(16, 16).T.contiguous().to(torch.bfloat16)},
             raw_tensors=lambda: {_bias_key: state_dict[_bias_key]},
         )
@@ -953,6 +1016,7 @@ def prepare_attention_weights(
     o_views = cache_config.cache.get_or_create(
         o_fp_dense,
         device,
+        move_to_device=move_to_device,
         preprocess=_preprocess_o_proj_dense,
         raw_tensors=lambda: {k: state_dict[k] for k in o_src_dense},
     )
@@ -1021,6 +1085,7 @@ def prepare_shared_expert_weights(
         gu_views = cache_config.cache.get_or_create(
             gu_fp,
             device,
+            move_to_device=move_to_device,
             preprocess=_preprocess_gate_up_moe,
             raw_tensors=lambda: {gate_k: state_dict[gate_k], up_k: state_dict[up_k]},
         )
@@ -1043,6 +1108,7 @@ def prepare_shared_expert_weights(
         shared_down_proj = cache_config.cache.get_or_create(
             sd_fp,
             device,
+            move_to_device=move_to_device,
             preprocess=_preprocess_shared_down_moe,
             raw_tensors=lambda: {down_k: state_dict[down_k]},
         )
@@ -1068,6 +1134,7 @@ def prepare_shared_expert_weights(
         gu_views = cache_config.cache.get_or_create(
             gu_fp,
             device,
+            move_to_device=move_to_device,
             preprocess=_preprocess_gate_up_dense,
             raw_tensors=lambda: {gate_k: state_dict[gate_k], up_k: state_dict[up_k]},
         )
@@ -1089,6 +1156,7 @@ def prepare_shared_expert_weights(
         shared_down_proj = cache_config.cache.get_or_create(
             sd_fp,
             device,
+            move_to_device=move_to_device,
             preprocess=_preprocess_shared_down_dense,
             raw_tensors=lambda: {down_k: state_dict[down_k]},
         )
@@ -1264,6 +1332,7 @@ def prepare_routed_expert_weights(
             gw = cache_config.cache.get_or_create(
                 fp_g,
                 device,
+                move_to_device=move_to_device,
                 preprocess=lambda t, _gk=gk: {
                     "routed_gate_proj": moe_routed_expert_torch_for_cache(t[_gk].T.contiguous(), num_banks)
                 },
@@ -1281,6 +1350,7 @@ def prepare_routed_expert_weights(
             uw = cache_config.cache.get_or_create(
                 fp_u,
                 device,
+                move_to_device=move_to_device,
                 preprocess=lambda t, _uk=uk: {
                     "routed_up_proj": moe_routed_expert_torch_for_cache(t[_uk].T.contiguous(), num_banks)
                 },
@@ -1298,6 +1368,7 @@ def prepare_routed_expert_weights(
             dw = cache_config.cache.get_or_create(
                 fp_d,
                 device,
+                move_to_device=move_to_device,
                 preprocess=lambda t, _dk=dk: {
                     "routed_down_proj": moe_routed_expert_torch_for_cache(t[_dk].T.contiguous(), num_banks)
                 },
@@ -1359,18 +1430,21 @@ def prepare_routed_expert_weights(
         routed_gate_proj = cache_config.cache.get_or_create(
             fp_g,
             device,
+            move_to_device=move_to_device,
             preprocess=_pre_routed_gate,
             raw_tensors=lambda: {gate_k: state_dict[gate_k]},
         )
         routed_up_proj = cache_config.cache.get_or_create(
             fp_u,
             device,
+            move_to_device=move_to_device,
             preprocess=_pre_routed_up,
             raw_tensors=lambda: {up_k: state_dict[up_k]},
         )
         routed_down_proj = cache_config.cache.get_or_create(
             fp_d,
             device,
+            move_to_device=move_to_device,
             preprocess=_pre_routed_down,
             raw_tensors=lambda: {down_k: state_dict[down_k]},
         )
@@ -1435,6 +1509,23 @@ def prepare_dense_layer_weights(
     return result
 
 
+# Combined per-core cap for persistent attention weights + SRAM-hot experts.
+# Applies to every core in the SRAM binding set (gate ∪ up ∪ down grids):
+# ``attn_bytes[c] + sram_hot_expert_bytes[c] <= _COMBINED_ATTN_SRAM_CAP_BYTES``.
+# Shared expert L1 weights are intentionally *not* counted here -- they are
+# staged after the SRAM trim runs and land below the SRAM band in the
+# ``worker_l1_size - cap`` reserve along with runtime scratch (CBs, activation
+# shards, allocator bookkeeping).  Raise the cap only if scratch + shared
+# headroom measurements confirm it's safe.
+_COMBINED_ATTN_SRAM_CAP_BYTES = 960 * 1024
+
+
+# Dataclass field names of the shared expert L1 weights inside
+# :class:`DeepSeekV3MoELayerWeights` -- skipped by ``eager_upload_l1_lockstep``
+# so they don't contribute to the SRAM trim's per-core ``initial_lowest_addr``.
+_SHARED_EXPERT_FIELDS = ("shared_gate_proj", "shared_up_proj", "shared_down_proj")
+
+
 def prepare_moe_layer_weights(
     device,
     state_dict: dict[str, torch.Tensor],
@@ -1446,11 +1537,39 @@ def prepare_moe_layer_weights(
     bspm_dir: Path | None = None,
     bspm_variant: BspmVariant = BspmVariant.B,
     bspm_budget: float = 3.5,
+    sram_hot_experts: SramHotExpertConfig | None = None,
+    sram_core_grids: SramExpertCoreGrids | None = None,
+    sram_assigner: CompressedTensorAssigner | None = None,
+    worker_l1_size: int | None = None,
+    combined_attn_sram_cap_bytes: int = _COMBINED_ATTN_SRAM_CAP_BYTES,
 ) -> DeepSeekV3MoELayerWeights:
     """Prepare fused weights for a single MoE decoder layer.
 
     ``bspm_dir``, when provided, must be the model-specific BSPM subdirectory
     (e.g. ``results/deepseek-r1-0528``), not the results root.
+
+    When ``sram_hot_experts`` includes ``layer_idx``, the listed experts are
+    treated as a *ranked candidate list* and loaded into L1 SRAM slots as
+    per-core CompressedTensors under an address-based budget:
+
+        l1_top_addr   = worker_l1_unreserved_base + worker_l1_size
+        boundary_addr = l1_top_addr - combined_attn_sram_cap_bytes
+
+    Each candidate expert is accepted only when, for every core in its
+    binding grid, its predicted per-core footprint would leave the new
+    lowest occupied L1 address at or above ``boundary_addr``.  After each
+    accepted expert lands on device the per-core lowest-address map is
+    refreshed from the real allocator so prediction drift stays bounded to
+    one expert.  ``worker_l1_size - cap`` (~471 KiB at the 960 KiB default)
+    is implicitly reserved for runtime scratch (CBs, activation shards,
+    allocator bookkeeping).
+
+    ``sram_core_grids``, ``sram_assigner``, and ``worker_l1_size`` are
+    required whenever ``sram_hot_experts`` specifies this layer.  Each
+    projection (gate / up / down) has a distinct ``N`` and must be given
+    its own tile-aligned grid via :class:`SramExpertCoreGrids`; a
+    symmetric single-grid layout (e.g. for unit tests) can be built with
+    :meth:`SramExpertCoreGrids.uniform`.
     """
     logger.info("Preparing MoE layer {}...", layer_idx)
     t0 = time.perf_counter()
@@ -1480,6 +1599,7 @@ def prepare_moe_layer_weights(
     assert isinstance(attn.gate_mm, OverlappedTensor)
     assert attn.gate_bias is not None
     assert isinstance(routed, MoERoutedExpertWeights)
+
     result = DeepSeekV3MoELayerWeights(
         q_a_proj=attn.q_a_proj,
         q_b_proj=attn.q_b_proj,
@@ -1499,7 +1619,90 @@ def prepare_moe_layer_weights(
         routed_gate_proj=routed.routed_gate_proj,
         routed_up_proj=routed.routed_up_proj,
         routed_down_proj=routed.routed_down_proj,
+        sram_slots=None,
     )
+
+    sram_expert_indices = (sram_hot_experts or {}).get(layer_idx)
+    if sram_expert_indices:
+        assert sram_core_grids is not None, "sram_core_grids required when sram_hot_experts specifies this layer"
+        assert sram_assigner is not None, "sram_assigner required when sram_hot_experts specifies this layer"
+        assert worker_l1_size is not None, "worker_l1_size required when sram_hot_experts specifies this layer"
+
+        # Attn-first regime: stage attention's L1 lockstep tensors on device
+        # *now* so the SRAM trim sees real allocator addresses for them.
+        # Shared expert L1 weights are intentionally kept host-staged so they
+        # don't count against the (attn + SRAM) cap; they get uploaded later
+        # by two_phase_upload and land below the SRAM band in the
+        # `worker_l1_size - cap` reserve (top-down L1 allocation).  DRAM
+        # tensors also stay host-staged for the caller's two_phase_upload.
+        if not move_to_device:
+            result = eager_upload_l1_lockstep(
+                device,
+                result,
+                skip_fields=_SHARED_EXPERT_FIELDS,
+            )
+
+        persistent_attn_tensors = [
+            result.q_a_proj,
+            result.q_b_proj,
+            result.kv_a_proj,
+            result.o_proj,
+            result.gate_mm,
+            result.attn_norm,
+            result.q_norm,
+            result.kv_norm,
+            result.ffn_norm,
+            result.gate_bias,
+            result.kv_b1_proj,
+            result.kv_b2_proj,
+        ]
+        boundary_addr, attn_lowest_addr, l1_top_addr = _compute_sram_trim_budget(
+            device,
+            persistent_attn_tensors,
+            sram_core_grids,
+            worker_l1_size,
+            combined_attn_sram_cap_bytes,
+        )
+        initial_min_addr = min(attn_lowest_addr.values(), default=l1_top_addr)
+        attn_max_per_core = l1_top_addr - initial_min_addr
+        sram_headroom = initial_min_addr - boundary_addr
+        below_cap_reserve = max(0, worker_l1_size - combined_attn_sram_cap_bytes)
+        logger.info(
+            "SRAM L1 budget (layer {}): cap={} bytes/core (attn+SRAM only), "
+            "l1_top={} (worker_l1_size={}), boundary_addr={}, "
+            "attn_max~={} bytes/core, sram_headroom={} bytes/core, "
+            "below_cap_reserve={} bytes/core (shared experts + runtime scratch)",
+            layer_idx,
+            combined_attn_sram_cap_bytes,
+            l1_top_addr,
+            worker_l1_size,
+            boundary_addr,
+            attn_max_per_core,
+            sram_headroom,
+            below_cap_reserve,
+        )
+
+        sram_slots = prepare_compressed_sram_slots(
+            device=device,
+            state_dict=state_dict,
+            layer_idx=layer_idx,
+            initial_expert_indices=sram_expert_indices,
+            core_grids=sram_core_grids,
+            assigner=sram_assigner,
+            # SRAM slots are per-core L1 CompressedTensors and must be
+            # allocated directly on device; there is no host-stage path
+            # (two_phase_upload carries them through unchanged via the
+            # SramCompressedExpertSlots passthrough marker).  This is
+            # independent of `move_to_device`, which controls the DRAM
+            # weight path.
+            move_to_device=True,
+            boundary_addr=boundary_addr,
+            initial_lowest_addr=attn_lowest_addr,
+            l1_top_addr=l1_top_addr,
+            cache_config=cache_config,
+        )
+        result = _dataclass_replace(result, sram_slots=sram_slots)
+
     logger.info("MoE layer {} done in {:.3f}s", layer_idx, time.perf_counter() - t0)
     return result
 
@@ -1532,6 +1735,7 @@ def prepare_embedding_weights(
     embedding_tt = cache_config.cache.get_or_create(
         fingerprint,
         device,
+        move_to_device=move_to_device,
         preprocess=_preprocess_embedding,
         raw_tensors=lambda: {_src_key: state_dict[_src_key]},
     )
@@ -1555,6 +1759,9 @@ def prepare_lm_head_weights(
         cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
     logger.info("Preparing LM head weights...")
     _lm_key = "lm_head.weight"
+    _norm_key = "model.norm.weight"
+    lm_target = _LM_HEAD_FOLDED_NORM_TARGET
+    src_names = (_lm_key, _norm_key)
 
     def _preprocess_lm_head(t):
         lm_w = t[_lm_key]
@@ -1562,54 +1769,94 @@ def prepare_lm_head_weights(
             _LM_HEAD_VOCAB_SIZE,
             _LM_HEAD_K,
         ), f"Expected lm_head shape ({_LM_HEAD_VOCAB_SIZE}, {_LM_HEAD_K}), got {lm_w.shape}"
-        return {"lm_head": lm_w.T.contiguous()}
+        lm_w = lm_w * t[_norm_key]
+        return {lm_target.name: lm_w.T.contiguous()}
 
     lm_fingerprint = cache_config.context.fingerprint(
-        source=SourceTensorSelection(names=(_lm_key,)),
-        target=_LM_HEAD_TARGET,
+        source=SourceTensorSelection(names=src_names),
+        target=lm_target,
     )
+    raw = lambda: {k: state_dict[k] for k in src_names}
     lm_head_tt = cache_config.cache.get_or_create(
         lm_fingerprint,
         device,
+        move_to_device=move_to_device,
         preprocess=_preprocess_lm_head,
-        raw_tensors=lambda: {_lm_key: state_dict[_lm_key]},
+        raw_tensors=raw,
     )
-
-    _norm_key = "model.norm.weight"
-
-    def _preprocess_final_norm(t):
-        norm_w = t[_norm_key]
-        assert norm_w.shape == (D.HIDDEN_SIZE,), f"Expected final norm shape ({D.HIDDEN_SIZE},), got {norm_w.shape}"
-        return {"final_norm": norm_w.unsqueeze(0).contiguous()}
-
-    norm_fingerprint = cache_config.context.fingerprint(
-        source=SourceTensorSelection(names=(_norm_key,)),
-        target=_FINAL_NORM_TARGET,
-    )
-    final_norm_tt = cache_config.cache.get_or_create(
-        norm_fingerprint,
-        device,
-        preprocess=_preprocess_final_norm,
-        raw_tensors=lambda: {_norm_key: state_dict[_norm_key]},
-    )
-
-    return DeepSeekV3LMHeadWeights(lm_head=lm_head_tt, final_norm=final_norm_tt)
+    return DeepSeekV3LMHeadWeights(lm_head=lm_head_tt)
 
 
 def _transform_eh_proj(eh_proj_weight_T: torch.Tensor) -> torch.Tensor:
     """Pad to DRAM bank alignment and tile-shuffle. Input: already transposed (K, N)."""
     K, N = eh_proj_weight_T.shape
+    num_devices = 8
+    k_per_device = K // num_devices
+    assert K % num_devices == 0, f"eh_proj K={K} must be divisible by {num_devices} devices"
     assert N % _MTP_NUM_DRAM_BANKS == 0, f"eh_proj N={N} must be divisible by {_MTP_NUM_DRAM_BANKS} DRAM banks"
     n_per_bank = N // _MTP_NUM_DRAM_BANKS
     padded_N = _MTP_NUM_DRAM_BANKS * n_per_bank
-    eh_padded = torch.zeros((K, padded_N), dtype=eh_proj_weight_T.dtype)
-    eh_padded[:, :N] = eh_proj_weight_T
-    return shuffle_dram_tiles(eh_padded, 32, _MTP_NUM_DRAM_BANKS).contiguous()
+    device_slices = []
+    for d in range(num_devices):
+        slice_d = eh_proj_weight_T[d * k_per_device : (d + 1) * k_per_device, :]
+        padded_d = torch.zeros((k_per_device, padded_N), dtype=slice_d.dtype)
+        padded_d[:, :N] = slice_d
+        device_slices.append(shuffle_dram_tiles(padded_d, 32, _MTP_NUM_DRAM_BANKS))
+    return torch.cat(device_slices, dim=0).contiguous()
 
 
-def _mtp_eh_proj_preprocess(raw: dict[str, torch.Tensor], src_key: str, target_name: str) -> dict[str, torch.Tensor]:
-    """Preprocess eh_proj for cache: transpose, pad to DRAM bank alignment, tile-shuffle."""
-    return {target_name: _transform_eh_proj(raw[src_key].T.contiguous())}
+def _mtp_eh_proj_preprocess(
+    raw: dict[str, torch.Tensor], src_key: str, h_key: str, e_key: str, target_name: str
+) -> dict[str, torch.Tensor]:
+    """Preprocess eh_proj for cache: transpose, optionally fold gammas, pad, tile-shuffle."""
+    proj_t = raw[src_key].T.contiguous()
+    gamma = torch.cat([raw[e_key], raw[h_key]], dim=0).unsqueeze(1)
+    proj_t = proj_t * gamma
+    return {target_name: _transform_eh_proj(proj_t)}
+
+
+def prepare_spec_weights(
+    state_dict: dict[str, torch.Tensor],
+    device,
+    *,
+    mtp_layer_idx: int = _MTP_LAYER_IDX,
+    move_to_device: bool = False,
+    cache_config: CacheConfig | None = None,
+) -> DeepSeekV3SpecWeights:
+    """Prepare weights used only by the speculative verify stage.
+
+    Always prepares the LM head projection for the spec stage.
+    NOTE: shared_head_norm is pre-multiplied into the MTP LM head weight matrix.
+    """
+    if cache_config is None:
+        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
+
+    _lm_key = "lm_head.weight"
+    _norm_key = _key(mtp_layer_idx, "shared_head.norm.weight")
+    lm_target = _LM_HEAD_FOLDED_SPEC_NORM_TARGET
+    src_names = (_lm_key, _norm_key)
+
+    def _preprocess_spec_lm_head(t):
+        lm_w = t[_lm_key]
+        assert lm_w.shape == (
+            _LM_HEAD_VOCAB_SIZE,
+            _LM_HEAD_K,
+        ), f"Expected lm_head shape ({_LM_HEAD_VOCAB_SIZE}, {_LM_HEAD_K}), got {lm_w.shape}"
+        norm_spec = t[_norm_key].unsqueeze(0)
+        lm_w = lm_w * norm_spec
+        return {lm_target.name: lm_w.T.contiguous()}
+
+    fingerprint = cache_config.context.fingerprint(
+        source=SourceTensorSelection(names=src_names),
+        target=lm_target,
+    )
+    spec_lm_head_tt = cache_config.cache.get_or_create(
+        fingerprint,
+        device,
+        preprocess=_preprocess_spec_lm_head,
+        raw_tensors=lambda: {k: state_dict[k] for k in src_names},
+    )
+    return DeepSeekV3SpecWeights(lm_head=spec_lm_head_tt)
 
 
 def prepare_mtp_weights(
@@ -1622,47 +1869,35 @@ def prepare_mtp_weights(
 ) -> DeepSeekV3MTPWeights:
     """Prepare lightweight MTP projection/norm weights from state dict.
 
-    Only the MTP-specific tensors (h_gamma, e_gamma, eh_projection) are prepared here.
-    The MTP decoder block (layer 61) is a regular MoE layer handled through ``prepare_moe_layer_weights``.
+    Prepares only the base-stage MTP tensors (h_gamma, e_gamma, eh_projection).
+    Spec-stage-only weights like ``shared_head_norm`` are handled separately by
+    ``prepare_spec_weights``. The MTP decoder block (layer 61) is a regular MoE
+    layer handled through ``prepare_moe_layer_weights``.
     """
     if cache_config is None:
         cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
     logger.info("Preparing MTP weights (layer {})...", mtp_layer_idx)
     t0 = time.perf_counter()
 
+    h_gamma_tt = None
+    e_gamma_tt = None
     _h_key = _key(mtp_layer_idx, "hnorm.weight")
-    h_target = _mtp_norm_target("mtp_h_gamma")
-    h_fingerprint = cache_config.context.fingerprint(source=SourceTensorSelection(names=(_h_key,)), target=h_target)
-    h_gamma_tt = cache_config.cache.get_or_create(
-        h_fingerprint,
-        device,
-        preprocess=lambda t: {h_target.name: t[_h_key].unsqueeze(0).contiguous()},
-        raw_tensors=lambda: {_h_key: state_dict[_h_key]},
-    )
-
     _e_key = _key(mtp_layer_idx, "enorm.weight")
-    e_target = _mtp_norm_target("mtp_e_gamma")
-    e_fingerprint = cache_config.context.fingerprint(source=SourceTensorSelection(names=(_e_key,)), target=e_target)
-    e_gamma_tt = cache_config.cache.get_or_create(
-        e_fingerprint,
-        device,
-        preprocess=lambda t: {e_target.name: t[_e_key].unsqueeze(0).contiguous()},
-        raw_tensors=lambda: {_e_key: state_dict[_e_key]},
-    )
-
     _eh_key = _key(mtp_layer_idx, "eh_proj.weight")
+
     eh_target = _mtp_eh_proj_target(K=2 * _LM_HEAD_K, N=_LM_HEAD_K)
-    eh_fingerprint = cache_config.context.fingerprint(source=SourceTensorSelection(names=(_eh_key,)), target=eh_target)
+    eh_src_names = (_eh_key, _e_key, _h_key)
+    eh_fingerprint = cache_config.context.fingerprint(
+        source=SourceTensorSelection(names=eh_src_names), target=eh_target
+    )
     eh_proj_tt = cache_config.cache.get_or_create(
         eh_fingerprint,
         device,
-        preprocess=lambda t: _mtp_eh_proj_preprocess(t, _eh_key, eh_target.name),
-        raw_tensors=lambda: {_eh_key: state_dict[_eh_key]},
+        move_to_device=move_to_device,
+        preprocess=lambda t: _mtp_eh_proj_preprocess(t, _eh_key, _h_key, _e_key, eh_target.name),
+        raw_tensors=lambda: {k: state_dict[k] for k in eh_src_names},
     )
-
     logger.info("MTP weights prepared in {:.3f}s", time.perf_counter() - t0)
     return DeepSeekV3MTPWeights(
-        h_gamma=h_gamma_tt,
-        e_gamma=e_gamma_tt,
         eh_projection=eh_proj_tt,
     )
