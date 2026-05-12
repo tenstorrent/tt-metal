@@ -7,7 +7,10 @@ multigammaln_lanczos — ProgramDescriptor.
 CB layout (see op_design.md):
     cb_input_tiles      (0)   — reader → compute, double-buffered (2 pages)
     cb_output_tiles     (16)  — compute → writer, double-buffered (2 pages)
-    cb_accumulator      (24)  — compute → compute, intra-tile RMW (2 pages)
+
+Refinement 1 eliminated the previous ``cb_accumulator`` intermediate: the
+global lgamma accumulator now lives in DST (D0) for the entire duration of
+the 4 Lanczos sub-evaluations, removing 4 L1 round-trips per output element.
 
 Work distribution:
     - Per-tile elementwise: each input tile is one independent work unit.
@@ -21,6 +24,7 @@ Work distribution:
 Compute config (hard-coded per Phase 0 spec):
     math_fidelity   = HiFi4
     fp32_dest_acc_en = True
+    unpack_to_dest_mode[cb_input_tiles] = UnpackToDestFp32
 """
 
 from pathlib import Path
@@ -55,15 +59,11 @@ def create_program_descriptor(
     ) = ttnn.split_work_to_cores(grid_size, total_tiles)
 
     # ========== 3. Circular Buffers ==========
-    # CB indices follow convention: 0-7 input, 16-23 output, 24-31 intermediate.
+    # CB indices follow convention: 0-7 input, 16-23 output.
+    # Refinement 1: cb_accumulator (index 24) is no longer needed — the global
+    # lgamma accumulator stays in DST across all 4 lgamma iterations.
     CB_INPUT_TILES = 0
     CB_OUTPUT_TILES = 16
-    CB_ACCUMULATOR = 24
-
-    # Intermediate accumulator is float32 (matches input/output) — sized for
-    # the read-modify-write cycle that holds the front (previous accumulator)
-    # and the back (new accumulator) simultaneously. Two pages is the minimum.
-    accumulator_page_size = ttnn.tile_size(ttnn.float32)
 
     cb_input_tiles_descriptor = ttnn.CBDescriptor(
         total_size=2 * input_page_size,
@@ -85,18 +85,6 @@ def create_program_descriptor(
                 buffer_index=CB_OUTPUT_TILES,
                 data_format=output_tensor.dtype,
                 page_size=output_page_size,
-            )
-        ],
-    )
-
-    cb_accumulator_descriptor = ttnn.CBDescriptor(
-        total_size=2 * accumulator_page_size,
-        core_ranges=all_cores,
-        format_descriptors=[
-            ttnn.CBFormatDescriptor(
-                buffer_index=CB_ACCUMULATOR,
-                data_format=ttnn.float32,
-                page_size=accumulator_page_size,
             )
         ],
     )
@@ -156,23 +144,21 @@ def create_program_descriptor(
         config=ttnn.WriterConfigDescriptor(),
     )
 
-    compute_ct_args = [CB_INPUT_TILES, CB_OUTPUT_TILES, CB_ACCUMULATOR]
+    compute_ct_args = [CB_INPUT_TILES, CB_OUTPUT_TILES]
 
-    # UnpackToDestFp32 closes the only precision leak left when fp32_dest_acc=True:
-    # the unpacker path from a Float32 L1 CB into DEST otherwise truncates to TF32
-    # (~10-bit mantissa) on SrcA/SrcB. Set it explicitly on every Float32 CB the
-    # compute kernel re-reads — most importantly cb_accumulator (read once per
-    # outer lgamma iteration, 4 round-trips through L1 per output element) and
-    # cb_input_tiles (read 4 times per output element). cb_output_tiles is
-    # write-only from the compute side; the mode is irrelevant there.
-    # Surfaced by the numerical_stability analysis next to this file.
+    # UnpackToDestFp32 on cb_input_tiles closes the only remaining precision
+    # leak: the unpacker path from a Float32 L1 CB into DEST otherwise truncates
+    # to TF32 (~10-bit mantissa) on SrcA/SrcB. The compute kernel re-reads
+    # cb_input_tiles many times per output element (≥ 2 copy_tile loads per
+    # lgamma iteration × 4 iterations = 8 reads), so this matters.
+    # cb_accumulator was removed in Refinement 1, so its UnpackToDestFp32 entry
+    # is no longer needed.
     compute_config = ttnn.ComputeConfigDescriptor(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         fp32_dest_acc_en=True,
     )
     unpack_modes = [ttnn.UnpackToDestMode.Default] * 32
     unpack_modes[CB_INPUT_TILES] = ttnn.UnpackToDestMode.UnpackToDestFp32
-    unpack_modes[CB_ACCUMULATOR] = ttnn.UnpackToDestMode.UnpackToDestFp32
     compute_config.unpack_to_dest_mode = unpack_modes
 
     compute_kernel = ttnn.KernelDescriptor(
@@ -189,6 +175,5 @@ def create_program_descriptor(
         cbs=[
             cb_input_tiles_descriptor,
             cb_output_tiles_descriptor,
-            cb_accumulator_descriptor,
         ],
     )
