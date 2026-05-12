@@ -1,5 +1,8 @@
 version: 1
 description: Centralized perf/accuracy targets for models CI.
+# Entry status semantics:
+# - active: target is enforced by validation and used for perf/accuracy checks.
+# - TODO: explicit gap placeholder; excluded from normal target resolution and treated as missing/TODO by validator.
 targets:
   llama3.2-1b:
     aliases: ["Llama-3.2-1B", "meta-llama/Llama-3.2-1B-Instruct"]
