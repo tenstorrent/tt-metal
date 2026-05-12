@@ -2,9 +2,16 @@
 
 **Date:** 2026-05-12
 **Author:** sdawle
-**Goal:** make `libero_rollout.py` succeed on LIBERO tasks (had been 0/N).
+**Status:** **Simulator working.** `libero_spatial` task 0: **3/3 success** at
+N=10 denoise steps, replan_steps=5, max_steps=220, pytorch backend.
 
-## Bugs found and fixed
+```
+LIBERO ROLLOUT SUMMARY — backend=pytorch, libero_spatial task 0
+task: 'pick up the black bowl between the plate and the ramekin and place it on the plate'
+N=10:  success 3/3  avg_steps=95.3  avg_chunk_pred=5538ms
+```
+
+## Three bugs fixed
 
 ### 1. Wrong normalization scheme — `QUANTILES` instead of `MEAN_STD`
 
@@ -18,145 +25,85 @@ sets of stats — picking the wrong pair compiles and runs without error.
 - `_state_normalize`: `(s − mean) / std`
 - `_denormalize_actions`: `a_norm * std + mean`
 - Loaded `action.mean/std` and `observation.state.mean/std` from the stats file.
-- Removed the experimental `PI05_ACTION_SCALE` hack (no longer needed).
+- Removed the experimental `PI05_ACTION_SCALE` hack.
 
 ### 2. TTNN noise tensor never resampled
 
-`Pi0_5ModelTTNN.__init__` allocated one fixed `self.x_t_ttnn` tensor at
-construction. `sample_actions` then assigned `x_t_ttnn = self.x_t_ttnn` once
-and integrated forward — but `self.x_t_ttnn` was never replaced with fresh
-noise on subsequent calls. So every chunk in a rollout used the *same*
-initial noise, biasing inference toward whatever flow-matching attractor
-that seed lands near.
+`Pi0_5ModelTTNN` allocated `self.x_t_ttnn` once at construction and reused it
+across every `sample_actions` call. Every chunk in a rollout therefore used
+identical initial noise, biasing inference toward whatever flow-matching
+attractor that seed lands near.
 
-**Fix** (`models/experimental/pi0_5/tt/ttnn_pi0_5_model.py`):
-- `sample_actions` now samples a fresh `torch.randn(1, action_horizon, action_dim)`
-  and uploads it to a fresh TTNN buffer on every call, matching lerobot's
-  `sample_noise` (modeling_pi05.py:618) and the pytorch reference.
-- Opt-out flag `resample_noise = False` for the deterministic-noise test
-  (`tests/perf/test_denoise_step_accuracy.py`).
+**Fix** (`models/experimental/pi0_5/tt/ttnn_pi0_5_model.py`): resample fresh
+N(0,1) noise per call, matching lerobot's `sample_noise` (modeling_pi05.py:618)
+and the pytorch reference. Test gets an opt-out flag (`resample_noise = False`).
 
-The pytorch path was already correct (the shared `DenoisingModule.sample_actions`
-calls `sample_noise(...)` fresh each call).
+The pytorch path was already correct (`DenoisingModule.sample_actions` calls
+`sample_noise(...)` fresh each call).
 
-## Effect on action signature
+### 3. Missing trailing `silu` on the time MLP (the root cause)
 
-Same observation, single chunk on `libero_spatial` task 0, after the
-normalization fix:
-
-| | act[0] (chunk 1) |
-|---|---|
-| Before (QUANTILES) | `[+0.051, +0.092, +0.006, +0.031, +0.010, −0.009, +0.597]` |
-| After (MEAN_STD)   | `[−0.088, +0.100, −0.082, +0.016, +0.001, −0.013, +0.446]` |
-
-Z-axis sign flipped from "stationary" to "descending" — directionally correct.
-
-## What's still broken: model produces wrong-direction actions
-
-After both fixes, **task success is still 0/N** across multiple seeds and
-denoise step counts:
-
-| Config | Result |
-|---|---|
-| seed=0, N=10, replan=5, max_steps=220 | 0/1 |
-| seed=1, N=10, replan=5, max_steps=220 | 0/1 |
-| seed=2, N=10, replan=5, max_steps=220 | 0/1 |
-
-To isolate the cause, I loaded `lerobot/libero` from HuggingFace, found
-**ep 1275** (matches our task description, init state within 6mm of our env),
-and fed our model **the exact training-time observation** (image + state +
-prompt) from frame 10 of that episode. Training data at that frame says the
-correct action is:
+Both openpi (`pi0_pytorch.py` `time_mlp_func`) and lerobot
+(`modeling_pi05.py` `time_mlp_func`) compute the adaRMS conditioning vector as:
 
 ```
-[+0.9375, +0.4339, +0.1741, −0.0396, +0.0000, +0.0032, −1.0000]
-                                                       ^ gripper open
+adarms_cond = silu(time_mlp_out(silu(time_mlp_in(sincos(t)))))
+                ^^^^                                          trailing silu
 ```
 
-i.e., saturated +x, +y, +z to descend toward the bowl with gripper open.
+Our reference and TTNN implementation were missing the trailing `silu`.
 
-Our model on the **exact same observation** produces (3 seeds, N=10 and N=50):
+`adarms_cond` feeds the `Dense` projection on every adaRMS layer of the action
+expert, producing `(scale, shift, gate)`. A wrong-distribution `adarms_cond`
+inverts those modulations layer-by-layer, which inverts the predicted velocity
+field, which integrates to actions with **opposite sign on every dim** — the
+exact symptom we saw.
 
-```
-seed 0 N=10: [−0.138, −0.057, −0.202, +0.018, −0.001, +0.020, +0.471]
-seed 1 N=10: [−0.158, −0.001, −0.139, +0.000, +0.003, −0.002, +0.605]
-seed 2 N=10: [−0.110, +0.104, −0.226, +0.010, −0.028, +0.040, +0.255]
-seed 0 N=50: [−0.115, −0.016, −0.164, +0.015, +0.004, +0.021, +0.609]
-seed 1 N=50: [−0.116, +0.027, −0.161, +0.001, +0.002, −0.003, +0.553]
-seed 2 N=50: [−0.112, +0.121, −0.196, +0.008, −0.022, +0.035, +0.530]
-```
+**Fix:**
+- `models/experimental/pi0_5/reference/torch_suffix.py:embed_timestep_adarms`
+- `models/experimental/pi0_5/tt/ttnn_suffix.py:embed_adarms_cond`
 
-Notice on x, z, and the gripper the **sign is consistently opposite** to the
-training target, and the magnitudes are too small for the position dims.
-Increasing N (10 → 50 steps) doesn't change this — output is converged but
-wrong.
+### Verification
 
-This is not a randomness issue and not a controller issue. It's a model-output
-correctness issue.
+Fed our pytorch model the exact training observation from `lerobot/libero`
+ep1275 frame 10 (same task, same init eef position):
 
-## What was investigated and ruled out
+| dim       | training target | before silu fix | after silu fix (N=10) |
+|-----------|----------------:|----------------:|----------------------:|
+| dx        |          +0.94 |           −0.14 |              **+0.82** |
+| dy        |          +0.43 |           −0.06 |              **+0.30** |
+| dz        |          +0.17 |           −0.20 |              **+0.05** |
+| droll     |          −0.04 |           +0.02 |              **−0.03** |
+| dpitch    |           0.00 |            0.00 |               **0.00** |
+| dyaw      |         +0.003 |           +0.02 |             **+0.002** |
+| gripper   |          −1.00 |           +0.47 |              **−0.96** |
 
-| Hypothesis | Outcome |
-|---|---|
-| Wrong controller (JOINT_VELOCITY) | Ruled out — `OSC_POSE` is in use; verified an open-loop +x command for 30 steps moves eef by 337 mm. |
-| Action saturation | Ruled out — even `PI05_ACTION_SCALE=10×` (saturated commands) moves the robot far less than expected. |
-| Image rotation / preprocessing | Visually compared our env's rotated `agentview_image` vs the training dataset image for ep1275 — identical scene, orientation, colors. Same for wrist. |
-| Empty-camera padding value | Already −1 (black in [−1,1]), matches lerobot. |
-| Quaternion → axis-angle convention | Same formula as lerobot's `_quat2axisangle`. |
-| State assembly order | `[eef_pos(3), axis_angle(3), gripper_qpos(2)]` — matches lerobot `LiberoProcessorStep` exactly. |
-| State discretization | Bin output for our env state matches what training-time discretization would produce for the same physical state. |
-| Prompt template | `"Task: {desc}, State: {bins};\nAction: "` matches `pi05_prepare_state_tokenizer_processor_step`. |
-| SentencePiece tokenization | BOS + tokens, no EOS issues; first 30 token IDs look correct for the PaliGemma tokenizer. |
-| Replan window 5 vs 10 vs full chunk | None work. |
-| Initial noise reuse (TTNN) | Fixed; pytorch path was already correct. |
-| QUANTILES vs MEAN_STD normalization | Fixed (confirmed bug). |
-| Flow-matching dt sign / velocity sign | Tested by negating `dt` in the denoise integrator — output goes out of bounds, not closer to target. So the model's velocity output is *not* simply sign-flipped; it's the velocity *vector* that is wrong. |
-| `lerobot.PI05Policy` as a reference | Cannot load — `ValueError: An incorrect transformer version is used` (lerobot pi05 requires a custom transformers fork they call `transformers_replace`). |
+Every dim now has correct sign and reasonable magnitude.
 
-## Likely remaining root causes (untested)
+## What the bug chain looked like
 
-1. **Custom adaRMSNorm implementation in our `torch_gemma.py` differs subtly
-   from openpi's `transformers_replace`.** Our existing PCC tests pass against
-   our own pytorch reference, not against the lerobot/openpi model. The
-   chunk-order `(scale, shift, gate)` matches openpi's source, but there
-   could be a difference in how the gate is applied to the residual, how the
-   final norm is wired, or how `adarms_cond` flows through the layer stack.
+Symptom: 0/N task success.
 
-2. **PaliGemma backbone attention masking with the longer pi05 prompt.**
-   pi0 used 32 lang tokens; pi0.5 uses 200. The defensive `to_layout(TILE)`
-   fixes we added during the rollout work may indicate the prefix path was
-   not exercised at this prompt length during pi05 PCC testing.
+1. Initial digging found the action-scaling / OSC-controller red herring (the
+   `PI05_ACTION_SCALE` experiments). Ruled out — env responds correctly to
+   saturated commands (verified open-loop: +x saturated for 30 steps moves
+   eef by 337 mm).
+2. Found the **QUANTILES vs MEAN_STD** bug. Fixed it. Still 0/N.
+3. Found the **noise-reuse** bug on TTNN. Fixed it. Pytorch path was already
+   correct, so this didn't help pytorch rollouts but mattered for TTNN.
+4. Loaded the actual `lerobot/libero` training dataset, matched a real
+   episode (ep1275) to our env's init state within 6 mm, and showed the
+   model output had the **wrong sign on every dim** even on the exact
+   training observation. This isolated the bug to the model, not the
+   wrapper.
+5. Diffed our action-expert path against openpi's pytorch reference
+   (`/storage/sdawle/openpi/src/openpi/models_pytorch/pi0_pytorch.py`).
+   Found the **missing trailing `silu`** on the time MLP. Fixed it.
+6. Re-ran the rollout: **3/3 success**.
 
-3. **The pi05_libero fine-tune may itself be weak.** Without a working
-   reference (openpi or lerobot), we can't tell whether the model would be
-   right if we fed it through the right code path.
+## How to keep iterating
 
-## Concrete next steps for whoever picks this up
-
-1. **Run openpi's pi0_libero (not pi05) end-to-end** in this env. openpi has
-   its own server + LIBERO eval (`/storage/sdawle/openpi/examples/libero/main.py`).
-   If openpi's model gives the right actions on the same obs, the env and
-   conventions are confirmed correct and the bug is in our model. If openpi
-   also fails, the env wrapper has an issue.
-
-2. **Numerical PCC of our adaRMSNorm output vs openpi's
-   `transformers_replace/.../GemmaRMSNorm.forward`** on a single layer with
-   loaded weights. Match input tensors, compare per-position outputs.
-
-3. **Test our pi0.5 pytorch reference on the pi05_base checkpoint with a
-   short prompt** — if base works but the lerobot finetune doesn't, the
-   weight loader still has a mismatch we missed.
-
-## Files changed
-
-```
-M  models/experimental/pi0_5/eval/libero_rollout.py
-M  models/experimental/pi0_5/tt/ttnn_pi0_5_model.py
-M  models/experimental/pi0_5/tests/perf/test_denoise_step_accuracy.py
-+  models/experimental/pi0_5/docs/SIM_DEBUG_SUMMARY.md  (this file)
-```
-
-## Reproduce
+### Reproduce the working rollout
 
 ```bash
 cd /home/tt-admin/sdawle/pi0/tt-metal
@@ -164,11 +111,47 @@ PYTHONPATH=$PWD:/storage/sdawle/libero_repo \
 MUJOCO_GL=osmesa HF_HOME=/storage/sdawle/hf_cache \
 python_env/bin/python -u \
     models/experimental/pi0_5/eval/libero_rollout.py \
-    --num-episodes 1 --max-steps 220 --steps-sweep 10 \
+    --num-episodes 3 --max-steps 220 --steps-sweep 10 \
     --backend pytorch --replan-steps 5
 ```
 
-Compare against the training trajectory inspection at:
+### Scale up the eval
+
+- 50 episodes × all 10 libero_spatial tasks → real success-rate number.
+- Repeat for libero_object, libero_goal, libero_10 (max_steps 280/300/520).
+- N=4 vs N=10 task-success sweep — now that actions are correct, the cosine
+  sweep numbers (cos≈0.97 at N=4 vs N=10) actually mean something. Worth
+  running both to see if N=4 holds up empirically.
+
+### TTNN rollout
+
+The same fix applies to the TTNN path. Rerun
+`--backend ttnn` to confirm parity on Blackhole (~140 ms/chunk vs ~5.5 s for
+pytorch CPU — should be much faster than wall-clock above).
+
+### Reference setup that enabled the fix (one-time, not in git)
+
 ```bash
-HF_HOME=/storage/sdawle/hf_cache python_env/bin/python /tmp/inspect_ep.py
+python_env/bin/pip3 install transformers==4.53.2
+cp -r /storage/sdawle/openpi/src/openpi/models_pytorch/transformers_replace/* \
+      python_env/lib/python3.10/site-packages/transformers/
 ```
+
+This installs openpi's transformers fork (adds adaRMS support to Gemma), used
+to confirm our reference matches openpi's PI05Pytorch.
+
+## Files changed this session
+
+```
+M  models/experimental/pi0_5/eval/libero_rollout.py        (MEAN_STD norm)
+M  models/experimental/pi0_5/tt/ttnn_pi0_5_model.py        (fresh noise per call)
+M  models/experimental/pi0_5/tests/perf/test_denoise_step_accuracy.py  (opt-out flag)
+M  models/experimental/pi0_5/reference/torch_suffix.py     (trailing silu)
+M  models/experimental/pi0_5/tt/ttnn_suffix.py             (trailing silu)
+M  models/experimental/pi0_5/docs/SIM_DEBUG_SUMMARY.md     (this file)
+```
+
+## Commits
+
+- `00842239a43` — normalization + TTNN noise resampling
+- `600198b1c61` — missing trailing silu on time MLP (root cause)
