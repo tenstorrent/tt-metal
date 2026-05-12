@@ -366,3 +366,168 @@ def chunk_gated_delta_rule(
     o = o.reshape(B, H, -1, V)[:, :, :T]
     o = o.transpose(1, 2).contiguous()
     return o, final_state
+
+
+def chunk_gated_delta_rule(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    g: torch.Tensor,
+    beta: torch.Tensor,
+    chunk_size: int = 64,
+    scale: float = None,
+    initial_state: torch.Tensor = None,
+    output_final_state: bool = False,
+    use_qk_l2norm: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """
+    Chunked gated delta rule -- optimized PyTorch reference for prefill.
+
+    Mathematically identical to `chunked_deltanet.chunk_gated_delta_rule`,
+    but rewritten to remove the two Python-level inner loops that the
+    unfused reference relies on:
+
+      1. The intra-chunk forward-substitution that builds (I - A)^{-1}
+         token-by-token is replaced by ONE batched
+         `torch.linalg.solve_triangular`. The two right-hand sides
+         (v_beta and k_beta*decay) are stacked on the feature axis so a
+         single solve produces both `v_corrected` and `k_cumdecay`. The
+         inverse is never materialized.
+
+      2. Everything inside the chunk-walk loop that does NOT depend on
+         the running state S (intra-chunk attention scores, decay-scaled
+         queries, tail-weighted keys, per-chunk total-decay factors) is
+         hoisted out and computed across all chunks in parallel. The
+         remaining loop is just the unavoidable sequential state update.
+
+    Real GPU-level kernel fusion (single Triton kernel for the WY rep,
+    one for the chunk-walk, etc.) is what `fla.ops.gated_delta_rule.chunk`
+    does. This file stays pure PyTorch and is meant as a fast,
+    differentiable reference for verification.
+
+    Recurrence (same as before):
+
+        S_t = diag(exp(g_t)) * S_{t-1} + k_t (outer) (v_t - S_{t-1}^T k_t) * beta_t
+        o_t = S_t^T q_t
+
+    Args:
+        q: [B, T, H, K] query
+        k: [B, T, H, K] key
+        v: [B, T, H, V] value
+        g: [B, T, H] log-space decay gate
+        beta: [B, T, H] write strength (sigmoid output)
+        chunk_size: number of tokens per chunk
+        scale: attention scale factor, defaults to 1/sqrt(K)
+        initial_state: [B, H, K, V] previous recurrent state
+        output_final_state: whether to return the final state
+        use_qk_l2norm: apply L2 normalization to q, k
+
+    Returns:
+        output:      [B, T, H, V]
+        final_state: [B, H, K, V] or None
+    """
+    # ==================================================================
+    # Step 1: Prepare inputs -- normalize, transpose, pad, scale.
+    # ==================================================================
+    if use_qk_l2norm:
+        q = q * torch.rsqrt((q * q).sum(dim=-1, keepdim=True) + 1e-6)
+        k = k * torch.rsqrt((k * k).sum(dim=-1, keepdim=True) + 1e-6)
+
+    if scale is None:
+        scale = q.shape[-1] ** -0.5
+
+    # [B, T, H, D] -> [B, H, T, D], promote to fp32 for accumulation precision.
+    q, k, v, beta, g = [x.transpose(1, 2).contiguous().to(torch.float32) for x in (q, k, v, beta, g)]
+
+    T = q.shape[-2]
+    pad_len = (chunk_size - (T % chunk_size)) % chunk_size
+    if pad_len > 0:
+        q = F.pad(q, (0, 0, 0, pad_len))
+        k = F.pad(k, (0, 0, 0, pad_len))
+        v = F.pad(v, (0, 0, 0, pad_len))
+        beta = F.pad(beta, (0, pad_len))
+        g = F.pad(g, (0, pad_len))
+
+    B, H, L, K = q.shape
+    V = v.shape[-1]
+    num_chunks = L // chunk_size
+
+    q = q * scale
+    k_beta = k * beta[..., None]
+    v_beta = v * beta[..., None]
+
+    # ==================================================================
+    # Step 2: Per-chunk views [B, H, nC, C, D] and cumulative log-decay.
+    # ==================================================================
+    q_c = q.reshape(B, H, num_chunks, chunk_size, K)
+    k_c = k.reshape(B, H, num_chunks, chunk_size, K)
+    k_beta_c = k_beta.reshape(B, H, num_chunks, chunk_size, K)
+    v_beta_c = v_beta.reshape(B, H, num_chunks, chunk_size, V)
+    g_c = g.reshape(B, H, num_chunks, chunk_size)
+
+    decay = g_c.cumsum(dim=-1)  # [B, H, nC, C]
+    decay_exp = decay.exp().unsqueeze(-1)  # [B, H, nC, C, 1]
+
+    # ==================================================================
+    # Step 3: Masks. L_mask[i,j] = exp(decay[i] - decay[j]) for j <= i.
+    # ==================================================================
+    mask_causal = torch.triu(
+        torch.ones(chunk_size, chunk_size, dtype=torch.bool, device=q.device),
+        diagonal=1,
+    )
+    L_mask = (decay.unsqueeze(-1) - decay.unsqueeze(-2)).tril().exp().tril()  # [B, H, nC, C, C]
+
+    # ==================================================================
+    # Step 4: WY representation via ONE batched triangular solve.
+    # ------------------------------------------------------------------
+    # Intra-chunk feedback is  (I + strict_lower(A_raw)) X = RHS  where
+    #   A_raw[i,j] = (k_beta_i . k_j) * L_mask[i,j].
+    #
+    # The unfused reference builds X^{-1} explicitly via a Python loop
+    # over `chunk_size` positions. We instead solve for both RHSs at
+    # once by stacking them on the feature axis. `unitriangular=True`
+    # tells `solve_triangular` to treat the diagonal as 1 and ignore
+    # the strict-upper entries, so no masking / I-add is needed.
+    # ==================================================================
+    A_raw = (k_beta_c @ k_c.transpose(-1, -2)) * L_mask  # [B, H, nC, C, C]
+    rhs = torch.cat([v_beta_c, k_beta_c * decay_exp], dim=-1)  # [B, H, nC, C, V+K]
+    sol = torch.linalg.solve_triangular(A_raw, rhs, upper=False, unitriangular=True)
+    v_corrected, k_cumdecay = sol.split([V, K], dim=-1)
+
+    # ==================================================================
+    # Step 5: Vectorize per-chunk quantities that do NOT depend on S.
+    # ------------------------------------------------------------------
+    #   intra_attn : decay-scaled causal attention scores per chunk
+    #   q_decayed  : queries weighted by per-position decay (state read)
+    #   k_tail     : keys weighted to align in-chunk writes with chunk end
+    #   full_decay : per-chunk total-decay multiplier for S
+    # ==================================================================
+    intra_attn = (q_c @ k_c.transpose(-1, -2) * L_mask).masked_fill(mask_causal, 0)
+    q_decayed = q_c * decay_exp  # [B, H, nC, C, K]
+
+    total_decay = decay[..., -1:]  # [B, H, nC, 1]
+    full_decay = total_decay.exp().unsqueeze(-1)  # [B, H, nC, 1, 1]
+    tail_weight = (total_decay - decay).exp().unsqueeze(-1)  # [B, H, nC, C, 1]
+    k_tail = k_c * tail_weight  # [B, H, nC, C, K]
+
+    # ==================================================================
+    # Step 6: Sequential chunk walk on S (only unavoidable part).
+    # ==================================================================
+    S = torch.zeros(B, H, K, V, device=q.device, dtype=q.dtype)
+    if initial_state is not None:
+        S = initial_state.to(torch.float32)
+
+    o = torch.empty_like(v_corrected)
+    for i in range(num_chunks):
+        v_new = v_corrected[:, :, i] - k_cumdecay[:, :, i] @ S
+        o[:, :, i] = q_decayed[:, :, i] @ S + intra_attn[:, :, i] @ v_new
+        S = S * full_decay[:, :, i] + k_tail[:, :, i].transpose(-1, -2) @ v_new
+
+    final_state = S if output_final_state else None
+
+    # ==================================================================
+    # Step 7: Un-chunk, un-pad, restore [B, T, H, V] layout.
+    # ==================================================================
+    o = o.reshape(B, H, -1, V)[:, :, :T]
+    o = o.transpose(1, 2).contiguous()
+    return o, final_state

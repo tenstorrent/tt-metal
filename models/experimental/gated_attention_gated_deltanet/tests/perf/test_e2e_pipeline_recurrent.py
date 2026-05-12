@@ -223,17 +223,17 @@ def create_recurrent_gated_delta_rule_pipeline_model(
     [{"l1_small_size": 98304, "trace_region_size": 10000000, "num_command_queues": 2}],
     indirect=True,
 )
-@pytest.mark.parametrize("num_iterations", [2])
+@pytest.mark.parametrize("num_iterations", [32])
 @pytest.mark.parametrize(
     "seq_len, chunk_size, batch_size, num_heads, head_k_dim, head_v_dim",
     [
         # chunk_size is unused (kept for parity with test_fused_chunked_delta_rule_ttnn matrix);
         # recurrent path loops over the full seq_len token-by-token, so seq_len is bounded.
         # (1, 64, 2, 4, 128, 256),
-        # (2, 64, 2, 4, 128, 256),
-        # (4, 64, 2, 4, 128, 256),
-        # (8, 64, 2, 4, 128, 256),
-        # (16, 64, 2, 4, 128, 256),
+        (2, 64, 2, 4, 128, 256),
+        (4, 64, 2, 4, 128, 256),
+        (8, 64, 2, 4, 128, 256),
+        (16, 64, 2, 4, 128, 256),
         (32, 64, 2, 4, 128, 256),
     ],
 )

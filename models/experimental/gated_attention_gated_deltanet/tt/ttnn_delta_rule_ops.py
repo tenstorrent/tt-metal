@@ -464,7 +464,7 @@ def recurrent_delta_rule_step_ttnn(
     V = v_t.shape[2]
 
     # Optimize: combine layout and memory config conversion
-    h = ttnn.to_layout(h, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+    # h = ttnn.to_layout(h, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # Cache compute config if not provided
     if read_query_compute_cfg is None:

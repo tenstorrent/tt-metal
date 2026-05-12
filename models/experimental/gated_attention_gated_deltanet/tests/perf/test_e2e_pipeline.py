@@ -225,16 +225,19 @@ def create_fused_chunked_delta_rule_pipeline_model(
     [{"l1_small_size": 98304, "trace_region_size": 10000000, "num_command_queues": 2}],
     indirect=True,
 )
-@pytest.mark.parametrize("num_iterations", [2])
+@pytest.mark.parametrize("num_iterations", [32])
 @pytest.mark.parametrize(
     "seq_len, chunk_size, batch_size, num_heads, head_k_dim, head_v_dim",
-    [(512, 64, 2, 4, 128, 256)],
-    # [(1, 64, 2, 4, 128, 256)],
-    # [(64, 64, 2, 4, 128, 256)],
-    # [(128, 64, 2, 4, 128, 256)],
-    # [(1, 64, 2, 4, 128, 256)],
-    # [(64, 64, 1, 4, 128, 256)],
-    # [(128, 64, 2, 4, 128, 256)],
+    [
+        # [(512, 64, 2, 4, 128, 256)],
+        # [(1, 64, 2, 4, 128, 256)],
+        (64, 64, 2, 4, 128, 256),
+        (128, 64, 2, 4, 128, 256),
+        (256, 64, 2, 4, 128, 256),
+        # [(1, 64, 2, 4, 128, 256)],
+        # [(64, 64, 1, 4, 128, 256)],
+        # [(128, 64, 2, 4, 128, 256)],
+    ],
 )
 @pytest.mark.timeout(900)
 def test_fused_chunked_delta_rule_e2e_pipeline(
