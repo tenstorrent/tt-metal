@@ -23,10 +23,25 @@ from __future__ import annotations
 
 import math
 
+import torch
 import ttnn
 
 from models.tt_transformers.tt.attention import Attention
 from models.tt_transformers.tt.common import Mode
+
+
+def _devstral_kv_cache_alloc_len(configuration) -> int:
+    """
+    Third dimension size for dense KV tensors when demos set ``ModelArgs.max_kv_cache_seq_len``.
+    Keeps tt_transformers Attention unchanged for other models.
+    """
+    cap = getattr(configuration, "max_kv_cache_seq_len", None)
+    if cap is None:
+        return int(configuration.max_seq_len)
+    kv = int(cap)
+    if kv > int(configuration.max_seq_len):
+        raise ValueError(f"max_kv_cache_seq_len ({kv}) exceeds max_seq_len ({configuration.max_seq_len})")
+    return kv
 
 
 class TtMinistralAttention(Attention):
@@ -64,6 +79,40 @@ class TtMinistralAttention(Attention):
 
         self.rotary_embedding_decode = rotary_embedding_decode_wrapped
         self.rotary_embedding_prefill = rotary_embedding_prefill_wrapped
+
+    def init_kv_cache(self, configuration, weight_cache_path):
+        """
+        Same as ``Attention.init_kv_cache`` but allocates the dense KV buffers with length
+        ``max_kv_cache_seq_len`` when set on ``configuration`` (``ModelArgs``), so RoPE /
+        ``max_seq_len`` can stay at 262k while DRAM tracks a smaller run-bound cap.
+        """
+        if self.paged_attention_config:
+            super().init_kv_cache(configuration, weight_cache_path)
+            self._kv_alloc_seq_len = int(configuration.max_seq_len)
+            return
+
+        kv_slots = _devstral_kv_cache_alloc_len(configuration)
+
+        cache_k = torch.zeros((self.batch_size_per_device_group, self.n_local_kv_heads, kv_slots, self.head_dim))
+        cache_v = torch.zeros((self.batch_size_per_device_group, self.n_local_kv_heads, kv_slots, self.head_dim))
+
+        self.layer_past = [
+            ttnn.as_tensor(
+                k_or_v,
+                dtype=self.kv_cache_dtype,
+                layout=self.args.get_attn_weights_layout(),
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                cache_file_name=(
+                    f"{weight_cache_path}/kvcache_{k_or_v.shape}"
+                    if weight_cache_path and not configuration.dummy_weights
+                    else None
+                ),
+            )
+            for k_or_v in [cache_k, cache_v]
+        ]
+        self._kv_alloc_seq_len = kv_slots
 
     def _llama4_scaling_enabled(self) -> bool:
         return self.llama_4_scaling_beta is not None and self.original_max_position_embeddings is not None
@@ -162,6 +211,14 @@ class TtMinistralAttention(Attention):
         """
         self._ministral_prefill_position_ids_tt = position_ids
         try:
+            if int(x_11SH.shape[0]) == 1:
+                seq_len_chk = int(x_11SH.shape[-2])
+                cap = getattr(self, "_kv_alloc_seq_len", self.max_seq_len)
+                if seq_len_chk > cap:
+                    raise RuntimeError(
+                        f"Prefill seq_len ({seq_len_chk}) exceeds KV allocation ({cap}); "
+                        "Increase ModelArgs.max_kv_cache_seq_len / max_seq_len or shorten prompt."
+                    )
             return super().forward_prefill(
                 x_11SH,
                 rot_mats,
