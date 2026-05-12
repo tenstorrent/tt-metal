@@ -670,6 +670,7 @@ Tensor sum(
     float scalar,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    TT_OP_SCOPE("ttnn::sum", input_tensor_arg);
     return operations::reduction::reduce<reduction_common::ReduceType::Sum>(
         input_tensor_arg,
         dim_arg,
@@ -690,6 +691,7 @@ Tensor mean(
     float scalar,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    TT_OP_SCOPE("ttnn::mean", input_tensor_arg);
     return operations::reduction::reduce<reduction_common::ReduceType::Mean>(
         input_tensor_arg,
         dim_arg,
@@ -710,6 +712,7 @@ Tensor max(
     float scalar,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    TT_OP_SCOPE("ttnn::max", input_tensor_arg);
     /* Scaling is applied after reduction, so flip the op for negative scalars:
      * max(s * x) = s * min(x) when s < 0.*/
     if (scalar < 0.0f) {
@@ -743,6 +746,7 @@ Tensor min(
     float scalar,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    TT_OP_SCOPE("ttnn::min", input_tensor_arg);
     /* Scaling is applied after reduction, so flip the op for negative scalars:
      * min(s * x) = s * max(x) when s < 0.*/
     if (scalar < 0.0f) {

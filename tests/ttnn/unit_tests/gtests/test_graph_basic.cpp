@@ -208,6 +208,7 @@ TEST_F(TestScopedGraphCapture, ScopedGraphCapture) {
             ttnn::graph::extract_calltrace(json_trace),
             std::vector<std::string>(
                 {"tt::tt_metal::create_device_tensor",
+                 "ttnn::softmax",
                  "SoftmaxDeviceOperation",
                  "tt::tt_metal::create_device_tensor",
                  "Tensor::deallocate",

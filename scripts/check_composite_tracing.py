@@ -5,8 +5,9 @@
 CI validation script: ensures all C++ operations bound via bind_function<>
 have TT_OP_SCOPE / FunctionScope instrumentation in their implementation.
 
-Scans all nanobind .cpp files for bind_function<"name"> calls, then verifies
-that a matching TT_OP_SCOPE("fqn") exists in the codebase.
+Scans all nanobind source files (.cpp and .hpp) for bind_function<"name">
+calls, then verifies that a matching TT_OP_SCOPE("fqn") exists in the
+codebase.
 
 Usage: python scripts/check_composite_tracing.py
 Exit code 0 = all operations traced, 1 = missing traces found.
@@ -27,14 +28,15 @@ MACRO_INVOCATION_RE = re.compile(r"(?:DEFINE_UNARY_NG_OP\w*|TTNN_BINARY_OP_\w+)\
 MACRO_STRINGIFY_RE = re.compile(r'"ttnn::"\s*#')
 
 
-def iter_cpp_files():
-    yield from SCAN_ROOT.rglob("*.cpp")
+def iter_source_files():
+    for pattern in ("*.cpp", "*.hpp"):
+        yield from SCAN_ROOT.rglob(pattern)
 
 
 def parse_nanobind_files():
     """Find every bind_function<"name"[,"namespace"]> occurrence and return {fqn: op_name}."""
     ops = {}
-    for path in iter_cpp_files():
+    for path in iter_source_files():
         try:
             text = path.read_text(errors="replace")
         except OSError:
@@ -53,7 +55,7 @@ def find_trace_literals():
     """Scan once and return the set of trace name string literals found in the codebase."""
     trace_literal_re = re.compile(r'"((?:ttnn|tt)::[A-Za-z0-9_:]+)"')
     found = set()
-    for path in iter_cpp_files():
+    for path in iter_source_files():
         try:
             text = path.read_text(errors="replace")
         except OSError:
@@ -70,7 +72,7 @@ def find_macro_traced_ops():
     such macros.
     """
     macro_files = []
-    for path in iter_cpp_files():
+    for path in iter_source_files():
         try:
             text = path.read_text(errors="replace")
         except OSError:
