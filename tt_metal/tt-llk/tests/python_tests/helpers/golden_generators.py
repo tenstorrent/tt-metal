@@ -1256,11 +1256,10 @@ class MatmulGolden(FidelityMasking):
                 res += partial
 
         if tilize:
-            tilize_format = result_format if data_format.is_mx_format() else data_format
             res = tilize_block(
                 res,
                 dimensions=(input_A_dimensions[0], input_B_dimensions[1]),
-                stimuli_format=tilize_format,
+                stimuli_format=data_format,
             ).flatten()
         return res
 

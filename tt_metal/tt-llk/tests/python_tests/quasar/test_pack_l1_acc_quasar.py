@@ -39,7 +39,9 @@ from helpers.utils import passed_test
 
 INPUT_DIMENSIONS = [[512, 64], [192, 512]]
 TILE_DIMENSIONS = [32, 32]
-# Complete list of formats that are supported with L1 accumulation
+# Complete list of formats that are supported with L1 accumulation as the
+# OUTPUT format. MX formats (MxInt8) are allowed only as INPUT — accumulation
+# happens on the packed output in L1, and MX formats do not support L1 acc.
 PACK_L1_ACC_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
@@ -48,6 +50,7 @@ PACK_L1_ACC_FORMATS = input_output_formats(
         DataFormat.Int32,
         DataFormat.Int8,
         DataFormat.UInt8,
+        DataFormat.MxInt8,
     ]
 )
 
@@ -69,6 +72,11 @@ def generate_qsr_pack_l1_acc_combinations(
         """Check if the format conversion is supported by packer. These format conversions are NOT dependent on the dest register mode."""
         # Skip if mixing integer and non-integer formats
         if in_fmt.is_integer() ^ out_fmt.is_integer():
+            return False
+        # MX formats are not L1-accumulation-capable as the output; allow them
+        # only on the input side. (Confirmed experimentally — MX-output combos
+        # fail.)
+        if out_fmt.is_mx_format():
             return False
         return True
 
@@ -126,6 +134,13 @@ def test_pack_l1_acc_quasar(
     boot_mode=BootMode.DEFAULT,
 ):
     (formats, dest_acc) = formats_dest_acc
+
+    # MX formats REQUIRE implied_math_format=Yes on Quasar (bypass format inference pipeline)
+    if (
+        formats.input_format.is_mx_format()
+        and implied_math_format == ImpliedMathFormat.No
+    ):
+        pytest.skip("MX formats require implied_math_format=Yes on Quasar")
 
     tile_rows, tile_cols = TILE_DIMENSIONS
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(
@@ -218,6 +233,9 @@ def test_pack_l1_acc_quasar(
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
         boot_mode=boot_mode,
+        # MX inputs need format inference disabled so the C++ side's
+        # IMPLIED_MATH_FORMAT setting drives the math format.
+        disable_format_inference=formats.input_format.is_mx_format(),
     )
 
     res_from_L1 = configuration.run().result

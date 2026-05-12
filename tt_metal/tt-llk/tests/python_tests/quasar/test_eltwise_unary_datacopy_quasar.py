@@ -104,6 +104,7 @@ DATACOPY_FORMATS = input_output_formats(
         DataFormat.Float16_b,
         DataFormat.Float16,
         DataFormat.MxFp4,
+        DataFormat.MxInt8,
     ]
 )
 ALL_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(

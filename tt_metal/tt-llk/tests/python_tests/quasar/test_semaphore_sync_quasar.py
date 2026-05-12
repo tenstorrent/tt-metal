@@ -42,6 +42,7 @@ from helpers.utils import passed_test
         [
             DataFormat.Float16_b,
             DataFormat.MxFp4,
+            DataFormat.MxInt8,
         ],
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],

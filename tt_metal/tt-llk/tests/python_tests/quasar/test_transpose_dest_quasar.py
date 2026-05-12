@@ -133,6 +133,7 @@ TRANSPOSE_DEST_FORMATS = input_output_formats(
         DataFormat.Int32,
         DataFormat.Int8,
         DataFormat.UInt8,
+        DataFormat.MxInt8,
     ],
 )
 
@@ -172,7 +173,14 @@ def test_transpose_dest_quasar(
         src_A = torch.randint(lo, hi, (n,), dtype=torch.int32).reshape_as(src_A)
         src_B = torch.randint(lo, hi, (n,), dtype=torch.int32).reshape_as(src_B)
 
-    if formats.input_format == DataFormat.Float32:
+    if (
+        formats.input_format == DataFormat.Float32
+        and not formats.output_format.is_mx_format()
+    ):
+        # The *10000 scaling stresses Int32/Float32 output paths with large
+        # values, but MxInt8 cannot represent that dynamic range losslessly
+        # (block-exp at ~14, per-element step ~256). Keep small-range stimuli
+        # for MX outputs so quantization stays within tolerance.
         n = src_A.numel()
         src_A = (torch.randn(n, dtype=torch.float32) * 10000.0).reshape_as(src_A)
         src_B = (torch.randn(n, dtype=torch.float32) * 10000.0).reshape_as(src_B)

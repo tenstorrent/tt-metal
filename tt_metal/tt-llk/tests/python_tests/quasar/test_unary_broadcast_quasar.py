@@ -61,6 +61,7 @@ def get_valid_dest_acc_unary_broadcast(formats):
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
             DataFormat.MxFp4,
+            DataFormat.MxInt8,
         ],
         same=True,
     ),
