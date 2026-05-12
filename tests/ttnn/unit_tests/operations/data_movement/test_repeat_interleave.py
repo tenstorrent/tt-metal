@@ -28,6 +28,16 @@ def test_repeat_interleave(device, repeats, dim, dtype):
     assert_equal(torch_result, output)
 
 
+@pytest.mark.parametrize("repeats", [2, 3])
+def test_repeat_interleave_1d(device, repeats):
+    torch_input_tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.bfloat16)
+    torch_result = torch.repeat_interleave(torch_input_tensor, repeats, dim=0)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.repeat_interleave(input_tensor, repeats, dim=0)
+    output = ttnn.to_torch(output)
+    assert_equal(torch_result, output)
+
+
 @pytest.mark.skip(reason="ttnn.repeat_interleave only supports `repeats` as int")
 def test_repeat_interleave_with_repeat_tensor(device):
     torch_input_tensor = torch.rand(1, 2, 32, 32, dtype=torch.bfloat16)
