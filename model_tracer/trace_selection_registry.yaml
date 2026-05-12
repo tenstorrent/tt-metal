@@ -53,7 +53,7 @@ targets:
         - llama-3.2-1b
         - whisper_2
         - whisper_3
-      trace: [7, 25, 17, 18, 19, 20]
+      trace: [25, 17, 18, 19, 20, 28]
 
 registry:
   - trace_id: 1
@@ -260,3 +260,17 @@ registry:
     loaded_at: '2026-05-08'
     notes: ''
     pytest_args: null
+
+  - trace_id: 28
+    status: draft
+    models: [efficientnetb0]
+    hardware: {board_type: Wormhole, device_series: n300, card_count: 1}
+    trace_uid: c5049518-bbed-4868-8b53-8511d7c9c459
+    tt_metal_sha: 792026806c687855b9e61dacd31f86ba92de7015
+    config_count: 163
+    loaded_at: '2026-05-12'
+    notes: ''
+    pytest_args: null
+    tt_kmd: "TT-KMD 2.5.0"
+    tt_smi: "4.0.0"
+    tt_firmware: "19.7.1.0"
