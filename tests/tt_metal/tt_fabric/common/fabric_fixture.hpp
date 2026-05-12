@@ -61,6 +61,9 @@ public:
     inline static std::map<ChipId, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_map_;
     inline static std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
     inline static bool slow_dispatch_;
+    // Set to true when SetUpTestSuite fails — all tests in the suite will SKIP rather than
+    // crash with an unhandled exception.  Reset by DoTearDownTestSuite.
+    inline static bool setup_failed_ = false;
 
     const std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& get_devices() const { return devices_; }
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& get_device(ChipId id) const {
@@ -68,6 +71,9 @@ public:
     }
 
     void SetUp() override {
+        if (setup_failed_) {
+            GTEST_SKIP() << "BaseFabricFixture setup failed — hardware may be degraded.";
+        }
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
         if (num_devices < 2) {
             log_info(tt::LogTest, "Skipping fabric tests as there are less than 2 devices available");
@@ -80,6 +86,7 @@ public:
         std::optional<uint8_t> num_routing_planes = std::nullopt,
         tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED,
         tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED) {
+        setup_failed_ = false;
         slow_dispatch_ = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch_) {
             log_info(tt::LogTest, "Running fabric api tests with slow dispatch");
@@ -111,14 +118,39 @@ public:
             fabric_config, reliability_mode, num_routing_planes, fabric_tensix_config, fabric_udm_mode);
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        devices_map_ = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
-            ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config, {}, DEFAULT_WORKER_L1_SIZE);
+        // Exception-safe device creation: if create_unit_meshes throws (e.g. UMD topology
+        // discovery timeout when remote erisc is dead), clean up fabric config so the global
+        // Metal state is left consistent for subsequent test suites.
+        try {
+            devices_map_ = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
+                ids,
+                DEFAULT_L1_SMALL_SIZE,
+                DEFAULT_TRACE_REGION_SIZE,
+                1,
+                dispatch_core_config,
+                {},
+                DEFAULT_WORKER_L1_SIZE);
+        } catch (const std::exception& e) {
+            log_error(
+                tt::LogTest,
+                "DoSetUpTestSuite: create_unit_meshes failed: {}. Cleaning up fabric config and skipping all tests.",
+                e.what());
+            try {
+                tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+            } catch (...) {
+            }
+            devices_map_.clear();
+            devices_.clear();
+            setup_failed_ = true;
+            return;
+        }
         for (auto& [id, device] : devices_map_) {
             devices_.push_back(device);
         }
     }
 
     static void DoTearDownTestSuite() {
+        setup_failed_ = false;
         for (auto& [id, device] : devices_map_) {
             device->close();
         }

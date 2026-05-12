@@ -31,8 +31,7 @@ struct AddUnaryParam {
     uint32_t w;
 };
 
-class AddUnaryFixture : public TTNNFixtureWithSuiteDevice<AddUnaryFixture>,
-                        public testing::WithParamInterface<AddUnaryParam> {};
+class AddUnaryFixture : public TTNNUnitMeshCQSharedFixture, public testing::WithParamInterface<AddUnaryParam> {};
 
 TEST_P(AddUnaryFixture, CompareWithTorchReference) {
     auto param = GetParam();

@@ -218,10 +218,26 @@ protected:
         if (slow_dispatch) {
             return;
         }
-        create_shared_devices();
+        try {
+            create_shared_devices();
+        } catch (const std::exception& e) {
+            log_warning(tt::LogTest, "Failed to create shared devices: {}", e.what());
+            // Ensure statics are in a clean state so SetUp() can skip or retry.
+            force_release_shared_devices();
+        }
     }
 
-    static void TearDownTestSuite() { destroy_shared_devices(); }
+    static void TearDownTestSuite() {
+        try {
+            destroy_shared_devices();
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogTest,
+                "TearDownTestSuite: destroy_shared_devices threw: {}. Force-releasing stale state.",
+                e.what());
+            force_release_shared_devices();
+        }
+    }
 
     void SetUp() override {
         if (!validate_dispatch_mode()) {
@@ -230,8 +246,19 @@ protected:
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         if (needs_recovery_ || !devices_valid_) {
-            destroy_shared_devices();
-            create_shared_devices();
+            try {
+                destroy_shared_devices();
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogTest, "SetUp: destroy_shared_devices threw during recovery: {}. Force-releasing.", e.what());
+                force_release_shared_devices();
+            }
+            try {
+                create_shared_devices();
+            } catch (const std::exception& e) {
+                log_warning(tt::LogTest, "SetUp: create_shared_devices failed during recovery: {}.", e.what());
+                force_release_shared_devices();
+            }
         }
         if (shared_devices_.empty()) {
             GTEST_SKIP() << "No local devices available for testing (all devices are remote-only)";
@@ -311,9 +338,29 @@ private:
     }
 
     static void destroy_shared_devices() {
+        // Close devices before clearing the maps: shared_devices_ holds shared_ptr aliases
+        // into shared_reserved_devices_.  Clearing shared_devices_ first could drop the
+        // last reference and destroy a MeshDevice before close() is called on it, which
+        // skips the driver-level teardown and leaks hardware state.  Closing via
+        // shared_reserved_devices_ (which always holds the owning references) while both
+        // maps are still live ensures close() runs on a valid object every time.
+        for (auto& [id, device] : shared_reserved_devices_) {
+            device->close();
+        }
         shared_devices_.clear();
         shared_reserved_devices_.clear();
         devices_valid_ = false;
+    }
+
+    // Force-release all shared state without calling close().  Used when close() has already
+    // thrown or the device is in an unrecoverable state.  Dropping the shared_ptrs lets the
+    // MeshDevice destructor attempt cleanup (which calls close_impl), but even if that fails
+    // the statics are left in a clean "no devices" state so the next suite can start fresh.
+    static void force_release_shared_devices() {
+        shared_devices_.clear();
+        shared_reserved_devices_.clear();
+        devices_valid_ = false;
+        needs_recovery_ = false;
     }
 };
 

@@ -78,7 +78,7 @@ struct CreateTensorParams {
 
 }  // namespace
 
-class CreateTensorTest : public ttnn::TTNNFixtureWithSuiteDevice<CreateTensorTest>,
+class CreateTensorTest : public ttnn::TTNNUnitMeshCQSharedFixture,
                          public ::testing::WithParamInterface<CreateTensorParams> {};
 
 TEST_P(CreateTensorTest, Tile) {
@@ -103,7 +103,7 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& value) 
 
 using CombinationInputParams =
     std::tuple<ttnn::Shape, tt::tt_metal::DataType, tt::tt_metal::Layout, tt::tt_metal::MemoryConfig>;
-class EmptyTensorTest : public ttnn::TTNNFixtureWithSuiteDevice<EmptyTensorTest>,
+class EmptyTensorTest : public ttnn::TTNNUnitMeshCQSharedFixture,
                         public ::testing::WithParamInterface<CombinationInputParams> {};
 
 TEST_P(EmptyTensorTest, Combinations) {
@@ -240,7 +240,7 @@ INSTANTIATE_TEST_SUITE_P(
 // Tensor constructor (using get_device_bypass_deallocate_check()) should be
 // reverted to use get_device() with proper is_allocated() checks.
 // =============================================================================
-class TensorFromDeallocatedStorageTest : public ttnn::TTNNFixtureWithSuiteDevice<TensorFromDeallocatedStorageTest> {};
+using TensorFromDeallocatedStorageTest = ttnn::TTNNUnitMeshCQSharedFixture;
 
 TEST_F(TensorFromDeallocatedStorageTest, ConstructingTensorFromDeallocatedStoragePreservesMeshDevice) {
     // This test verifies the workaround for issue #40716:

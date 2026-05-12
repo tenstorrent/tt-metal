@@ -51,7 +51,7 @@ INSTANTIATE_TEST_SUITE_P(
         MeshShape(1, 8),
         MeshShape(8, 1)));
 
-using BigMeshDualRankTest2x4 = MeshDevice2x4Fixture;
+using BigMeshDualRankTest2x4 = MeshDevice2x4SharedFixture;
 
 TEST(BigMeshDualRankTest, DistributedContext) {
     const auto& dctx = MetalContext::instance().global_distributed_context();

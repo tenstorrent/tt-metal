@@ -175,6 +175,12 @@
   owner_id: U084B1CES7M # Borys Bradel
   merge_gate: false
 
+# Bundled together because each subdir has its own conftest.py for fixture config
+# (e.g. deepseek/conftest.py provides a module-scoped shared device fixture); a
+# single pytest invocation lets these per-directory conftests amortize setup/teardown
+# across tests in the same dir. Transformers currently lacks a general shared-device
+# fixture (only prefetcher_multi_device_mesh is module-scoped) and may dominate
+# wall-clock here; revisit splitting once that conftest gains broader sharing.
 - name: "ttnn misc ops group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/debug tests/ttnn/unit_tests/operations/deepseek tests/ttnn/unit_tests/operations/point_to_point tests/ttnn/unit_tests/operations/transformers -xv -m "not disable_fast_runtime_mode"'
   skus:

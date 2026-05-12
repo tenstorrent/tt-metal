@@ -5,7 +5,9 @@
 #pragma once
 
 #include <algorithm>
+#include <cstdlib>
 #include <functional>
+#include <map>
 #include <random>
 
 #include "gtest/gtest.h"
@@ -14,6 +16,7 @@
 #include <tt-metalium/mesh_device.hpp>
 
 #include "tests/tt_metal/test_utils/env_vars.hpp"
+#include "tt_metal/tt_metal/common/command_queue_fixture.hpp"
 
 #include "ttnn/device.hpp"
 #include "ttnn/types.hpp"
@@ -46,62 +49,15 @@ public:
     }
 };
 
-class TTNNFixtureWithDevice : public TTNNFixtureBase {
+class TTNNUnitMeshCQSharedFixture : public ::tt::tt_metal::UnitMeshCQSingleCardSharedFixture {
 protected:
     tt::tt_metal::distributed::MeshDevice* device_ = nullptr;
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device_holder_;
 
     void SetUp() override {
-        device_holder_ = ttnn::open_mesh_device(/*device_id=*/0, l1_small_size_, trace_region_size_);
-        device_ = device_holder_.get();
-    }
-
-    void TearDown() override { device_->close(); }
-
-    TTNNFixtureWithDevice() = default;
-
-    TTNNFixtureWithDevice(int trace_region_size, int l1_small_size) :
-        TTNNFixtureBase(trace_region_size, l1_small_size) {}
-};
-
-// CRTP-based fixture that shares the device across all tests in a parameterized test suite.
-// Each derived class gets its own static device instance, providing isolation between suites
-// while avoiding repeated device init/teardown within a suite.
-//
-// Usage:
-//   class MyTests : public TTNNFixtureWithSuiteDevice<MyTests>,
-//                   public ::testing::WithParamInterface<MyParams> {};
-//
-template <typename Derived>
-class TTNNFixtureWithSuiteDevice : public TTNNFixtureBase {
-    friend Derived;
-
-    TTNNFixtureWithSuiteDevice() = default;
-
-protected:
-    static tt::tt_metal::distributed::MeshDevice* device_;
-    static std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device_holder_;
-
-public:
-    static void SetUpTestSuite() {
-        device_holder_ = ttnn::open_mesh_device(/*device_id=*/0, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE);
-        device_ = device_holder_.get();
-    }
-
-    static void TearDownTestSuite() {
-        if (device_holder_) {
-            device_holder_->close();
-            device_holder_.reset();
-            device_ = nullptr;
-        }
+        ::tt::tt_metal::UnitMeshCQSingleCardSharedFixture::SetUp();
+        device_ = devices_.empty() ? nullptr : devices_[0].get();
     }
 };
-
-template <typename Derived>
-tt::tt_metal::distributed::MeshDevice* TTNNFixtureWithSuiteDevice<Derived>::device_ = nullptr;
-
-template <typename Derived>
-std::shared_ptr<tt::tt_metal::distributed::MeshDevice> TTNNFixtureWithSuiteDevice<Derived>::device_holder_ = nullptr;
 
 class MultiCommandQueueSingleDeviceFixture : public TTNNFixtureBase {
 protected:
@@ -126,9 +82,127 @@ protected:
     void TearDown() override { device_->close(); }
 };
 
+// Suite-shared 2-CQ single-card mesh. Mirrors UnitMeshCQSingleCardSharedFixture's recovery
+// semantics but creates the unit mesh with num_cqs=2 (and ETH dispatch on T3K). Use only
+// for tests that do not mutate persistent device state across tests; multi-thread tests
+// that race on the 2-CQ lifecycle must keep using MultiCommandQueueSingleDeviceFixture.
+class TTNNUnitMesh2CQSingleCardSharedFixture : public TTNNFixtureBase {
+protected:
+    inline static std::shared_ptr<tt::tt_metal::distributed::MeshDevice> shared_device_;
+    inline static bool device_valid_ = false;
+    inline static bool needs_recovery_ = false;
+
+    tt::tt_metal::distributed::MeshDevice* device_ = nullptr;
+
+    static void SetUpTestSuite() {
+        if (!suite_can_create_device()) {
+            return;
+        }
+        try {
+            create_shared_device();
+        } catch (const std::exception& e) {
+            log_warning(tt::LogTest, "Failed to create shared 2-CQ single-card device: {}", e.what());
+            force_release_shared_device();
+        }
+    }
+
+    static void TearDownTestSuite() {
+        try {
+            destroy_shared_device();
+        } catch (const std::exception& e) {
+            log_warning(tt::LogTest, "TearDownTestSuite: destroy_shared_device threw: {}. Force-releasing.", e.what());
+            force_release_shared_device();
+        }
+    }
+
+    void SetUp() override {
+        if (!check_dispatch_mode()) {
+            GTEST_SKIP() << "Skipping test, since it can only be run in Fast Dispatch Mode.";
+        }
+        if (needs_recovery_ || !device_valid_) {
+            try {
+                destroy_shared_device();
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogTest, "SetUp: destroy_shared_device threw during recovery: {}. Force-releasing.", e.what());
+                force_release_shared_device();
+            }
+            try {
+                create_shared_device();
+            } catch (const std::exception& e) {
+                log_warning(tt::LogTest, "SetUp: create_shared_device failed during recovery: {}.", e.what());
+                force_release_shared_device();
+            }
+        }
+        if (!shared_device_) {
+            GTEST_SKIP() << "Shared 2-CQ single-card device not available.";
+        }
+        device_ = shared_device_.get();
+    }
+
+    void TearDown() override {
+        if (HasFailure()) {
+            needs_recovery_ = true;
+        }
+    }
+
+private:
+    static bool suite_can_create_device() {
+        if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
+            return false;
+        }
+        return true;
+    }
+
+    static void create_shared_device() {
+        const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        const auto num_devices = GetNumAvailableDevices();
+        DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
+        if (arch == tt::ARCH::WORMHOLE_B0 and num_devices != 1) {
+            dispatch_core_type = DispatchCoreType::ETH;
+        }
+        shared_device_ = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(
+            0, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 2, DispatchCoreConfig{dispatch_core_type});
+        device_valid_ = static_cast<bool>(shared_device_);
+        needs_recovery_ = false;
+    }
+
+    static void destroy_shared_device() {
+        if (shared_device_) {
+            shared_device_->close();
+        }
+        shared_device_.reset();
+        device_valid_ = false;
+    }
+
+    static void force_release_shared_device() {
+        shared_device_.reset();
+        device_valid_ = false;
+        needs_recovery_ = false;
+    }
+};
+
+// Suite-level shared T3K meshes (8× unit mesh, 2 CQs, Ethernet dispatch). Mirrors recovery behavior of
+// UnitMeshCQSingleCardSharedFixture: one create per suite, recreate after failure, no per-test close.
 class MultiCommandQueueT3KFixture : public TTNNFixtureBase {
 protected:
+    inline static std::map<tt::ChipId, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> shared_devs_;
+    inline static bool devices_valid_ = false;
+    inline static bool needs_recovery_ = false;
+
     std::map<tt::ChipId, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devs;
+
+    static void SetUpTestSuite() {
+        if (suite_can_create_devices()) {
+            try {
+                create_shared_devs();
+            } catch (const std::exception& e) {
+                log_warning(tt::LogTest, "Failed to create shared T3K devices: {}", e.what());
+            }
+        }
+    }
+
+    static void TearDownTestSuite() { destroy_shared_devs(); }
 
     void SetUp() override {
         if (!check_dispatch_mode()) {
@@ -139,19 +213,61 @@ protected:
             GTEST_SKIP() << "Skipping T3K Multi CQ test suite on non T3K machine.";
         }
 
-        // Enable Ethernet Dispatch for Multi-CQ tests.
-        devs = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
+        if (needs_recovery_ || !devices_valid_) {
+            if (suite_can_create_devices()) {
+                destroy_shared_devs();
+                try {
+                    create_shared_devs();
+                } catch (const std::exception& e) {
+                    log_warning(tt::LogTest, "Failed to recreate shared T3K devices: {}", e.what());
+                }
+            }
+        }
+
+        if (shared_devs_.empty()) {
+            GTEST_SKIP() << "Skipping T3K Multi CQ test suite (shared devices not available).";
+        }
+
+        devs = shared_devs_;
+    }
+
+    void TearDown() override {
+        if (HasFailure()) {
+            needs_recovery_ = true;
+        }
+    }
+
+private:
+    static bool suite_can_create_devices() {
+        if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
+            return false;
+        }
+        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
+            return false;
+        }
+        if (GetNumAvailableDevices() < 8) {
+            return false;
+        }
+        return true;
+    }
+
+    static void create_shared_devs() {
+        shared_devs_ = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
             {0, 1, 2, 3, 4, 5, 6, 7},
             DEFAULT_L1_SMALL_SIZE,
             DEFAULT_TRACE_REGION_SIZE,
             2,
             DispatchCoreConfig{DispatchCoreType::ETH});
+        devices_valid_ = true;
+        needs_recovery_ = false;
     }
 
-    void TearDown() override {
-        for (auto& [_, dev] : devs) {
-            dev->close();
+    static void destroy_shared_devs() {
+        for (auto& [id, device] : shared_devs_) {
+            device->close();
         }
+        shared_devs_.clear();
+        devices_valid_ = false;
     }
 };
 

@@ -319,7 +319,8 @@ void run_width_reduction_interleaved_test(
 // Width-Distributed Tests (1x4 Mesh) - Interleaved
 // ============================================================================
 
-using MeshDevice1x4Fabric2DUDMFixture = tt::tt_metal::MeshDevice1x4Fabric2DUDMFixture;
+// Shared fixture: single device open per suite, recover after failure — avoids per-test FABRIC_2D+UDM reinit.
+using MeshDevice1x4Fabric2DUDMFixture = tt::tt_metal::MeshDevice1x4Fabric2DUDMSharedFixture;
 
 TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestWidthReductionInterleaved2D_Small) {
     // Small 2D tensor: (4, 16) tiles = (128, 512) elements
@@ -361,7 +362,7 @@ TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestWidthReductionInterleaved4D) {
 // Block-Distributed Tests (2x4 Mesh) - Interleaved
 // ============================================================================
 
-using MeshDevice2x4Fabric2DUDMFixture = tt::tt_metal::MeshDevice2x4Fabric2DUDMFixture;
+using MeshDevice2x4Fabric2DUDMFixture = tt::tt_metal::MeshDevice2x4Fabric2DUDMSharedFixture;
 
 TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestWidthReductionInterleaved2D_Small) {
     // Small 2D tensor: (8, 16) tiles = (256, 512) elements

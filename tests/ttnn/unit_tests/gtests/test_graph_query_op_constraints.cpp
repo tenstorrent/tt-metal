@@ -204,7 +204,7 @@ const auto g_block_shard_1_1_1600_256_tiled_to_32_cores = ttnn::TensorSpec(
 // Unary tests
 // ============================================================================
 
-class EltwiseUnaryOpIfTest : public TTNNFixtureWithSuiteDevice<EltwiseUnaryOpIfTest>,
+class EltwiseUnaryOpIfTest : public TTNNUnitMeshCQSharedFixture,
                              public testing::WithParamInterface<std::tuple<ttnn::TensorSpec>> {};
 
 TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
@@ -442,7 +442,7 @@ INSTANTIATE_TEST_SUITE_P(
 // Softmax tests
 // ============================================================================
 
-class SoftmaxOpIfTest : public TTNNFixtureWithSuiteDevice<SoftmaxOpIfTest>,
+class SoftmaxOpIfTest : public TTNNUnitMeshCQSharedFixture,
                         public testing::WithParamInterface<std::tuple<ttnn::TensorSpec, int>> {};
 
 TEST_P(SoftmaxOpIfTest, Softmax) {
@@ -504,7 +504,7 @@ INSTANTIATE_TEST_SUITE_P(
 // Binary tests
 // ============================================================================
 
-class EltwiseBinaryOpIfTest : public TTNNFixtureWithSuiteDevice<EltwiseBinaryOpIfTest>,
+class EltwiseBinaryOpIfTest : public TTNNUnitMeshCQSharedFixture,
                               public testing::WithParamInterface<std::tuple<ttnn::TensorSpec, ttnn::TensorSpec>> {};
 
 TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
@@ -726,7 +726,7 @@ INSTANTIATE_TEST_SUITE_P(
 // ============================================================================
 
 class MatmulOpIfTest
-    : public TTNNFixtureWithSuiteDevice<MatmulOpIfTest>,
+    : public TTNNUnitMeshCQSharedFixture,
       public testing::WithParamInterface<
           std::
               tuple<ttnn::TensorSpec, ttnn::TensorSpec, std::optional<ttnn::operations::matmul::MatmulProgramConfig>>> {
@@ -835,7 +835,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .transpose_mcast = false,
                 .fused_activation = std::nullopt})));
 
-class Conv2dOpIfTest : public ttnn::TTNNFixtureWithSuiteDevice<Conv2dOpIfTest>,
+class Conv2dOpIfTest : public ttnn::TTNNUnitMeshCQSharedFixture,
                        public ::testing::WithParamInterface<std::optional<ttnn::prim::Conv2dConfig>> {};
 
 TEST_P(Conv2dOpIfTest, Conv2d) {
@@ -920,7 +920,7 @@ INSTANTIATE_TEST_SUITE_P(
 // Transformer tests
 // ============================================================================
 
-class SplitQKVAndSplitHeadsOpIfTest : public ttnn::TTNNFixtureWithDevice {};
+class SplitQKVAndSplitHeadsOpIfTest : public ttnn::TTNNUnitMeshCQSharedFixture {};
 
 TEST_F(SplitQKVAndSplitHeadsOpIfTest, SplitQueryKeyValueAndSplitHeads) {
     const auto& input_spec = ttnn::TensorSpec(

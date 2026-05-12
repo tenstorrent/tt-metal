@@ -24,7 +24,7 @@ namespace ttnn::operations::matmul::test {
 // ones(32,32) * full(32,32, 0.5) = full(32,32, 16.0)
 // ============================================================
 
-class SingleTileMatmulFixture : public TTNNFixtureWithSuiteDevice<SingleTileMatmulFixture> {};
+class SingleTileMatmulFixture : public TTNNUnitMeshCQSharedFixture {};
 
 TEST_F(SingleTileMatmulFixture, SingleTileMatmul) {
     auto& device = *device_;
@@ -51,7 +51,7 @@ TEST_F(SingleTileMatmulFixture, SingleTileMatmul) {
 // ones(64,64) * full(64,64, 0.25) = full(64,64, 16.0)
 // ============================================================
 
-class MultiTileMatmulFixture : public TTNNFixtureWithSuiteDevice<MultiTileMatmulFixture> {};
+class MultiTileMatmulFixture : public TTNNUnitMeshCQSharedFixture {};
 
 TEST_F(MultiTileMatmulFixture, MultiTileMatmul) {
     auto& device = *device_;

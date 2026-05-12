@@ -32,7 +32,7 @@ struct RelationalUnaryParam {
     uint32_t w;
 };
 
-class RelationalUnaryFixture : public TTNNFixtureWithSuiteDevice<RelationalUnaryFixture>,
+class RelationalUnaryFixture : public TTNNUnitMeshCQSharedFixture,
                                public testing::WithParamInterface<RelationalUnaryParam> {};
 
 static ttnn::Tensor make_int_tensor(ttnn::MeshDevice& device, uint32_t h, uint32_t w, int32_t fill_value) {

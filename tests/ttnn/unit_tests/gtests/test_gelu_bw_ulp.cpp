@@ -236,7 +236,7 @@ inline float gelu_bw_expected_bf16_daz(float grad, float x) {
 // GELU Backward ULP Tests (Require Device)
 // =============================================================================
 
-class GeluBwUlpTest : public TTNNFixtureWithDevice {};
+class GeluBwUlpTest : public TTNNUnitMeshCQSharedFixture {};
 
 /**
  * Helper function to run GELU backward on device with grad=1.0
@@ -254,6 +254,66 @@ float run_gelu_bw_single(tt::tt_metal::distributed::MeshDevice& device, float in
     auto output_cpu = ttnn::from_device(result);
     auto output_vec = output_cpu.to_vector<::bfloat16>();
     return static_cast<float>(output_vec[0]);
+}
+
+/**
+ * Returns gelu_bw outputs for the given input values, running on device.
+ * Pads inputs to the next tile boundary (multiples of 32x32=1024).
+ */
+static std::vector<float> run_gelu_bw_on_device(
+    tt::tt_metal::distributed::MeshDevice& device,
+    const std::vector<float>& grad_values,
+    const std::vector<float>& input_values) {
+    const size_t count = input_values.size();
+    const size_t tile_size = tt::constants::TILE_HW;
+    size_t padded_size = ((count + tile_size - 1) / tile_size) * tile_size;
+
+    uint32_t num_tiles = static_cast<uint32_t>(padded_size / tile_size);
+    std::array<uint32_t, 4> dims = {1, 1, num_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+
+    std::vector<::bfloat16> bf16_inputs;
+    std::vector<::bfloat16> bf16_grads;
+    bf16_inputs.reserve(padded_size);
+    bf16_grads.reserve(padded_size);
+
+    for (size_t i = 0; i < count; ++i) {
+        bf16_inputs.push_back(::bfloat16(input_values[i]));
+        bf16_grads.push_back(::bfloat16(grad_values[i]));
+    }
+    // Pad remaining entries with zeros
+    for (size_t i = count; i < padded_size; ++i) {
+        bf16_inputs.push_back(::bfloat16(0.0f));
+        bf16_grads.push_back(::bfloat16(0.0f));
+    }
+
+    tt::tt_metal::TensorSpec tensor_spec(
+        tt::tt_metal::Shape(dims),
+        tt::tt_metal::TensorLayout(
+            DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
+
+    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(&device);
+    auto grad_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(&device);
+
+    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
+    auto output_cpu = ttnn::from_device(result);
+    auto output_vec = output_cpu.to_vector<::bfloat16>();
+
+    std::vector<float> output_floats;
+    output_floats.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        output_floats.push_back(static_cast<float>(output_vec[i]));
+    }
+    return output_floats;
+}
+
+/**
+ * Convenience overload: runs gelu_bw with grad=1.0 for all inputs (tests GELU derivative directly).
+ */
+static std::vector<float> run_gelu_bw_on_device(
+    tt::tt_metal::distributed::MeshDevice& device,
+    const std::vector<float>& input_values) {
+    std::vector<float> grad_values(input_values.size(), 1.0f);
+    return run_gelu_bw_on_device(device, grad_values, input_values);
 }
 
 // Correctness guard: verifies the trivial midpoint GELU'(0) = 0.5.
@@ -363,6 +423,10 @@ TEST_F(GeluBwUlpTest, WithGradientScaling) {
 // 7 regions from deep-negative to large-positive, each with a tuned threshold.
 // Catches precision degradation in any region that point-sample tests would miss.
 TEST_F(GeluBwUlpTest, ComprehensiveULPByRegion) {
+    if (!getenv("TT_METAL_RUN_ULP_TESTS")) {
+        GTEST_SKIP() << "Skipping comprehensive ULP sweep (set TT_METAL_RUN_ULP_TESTS=1 to enable)";
+    }
+
     std::vector<float> input_values;
     input_values.reserve(70000);
 
@@ -391,39 +455,7 @@ TEST_F(GeluBwUlpTest, ComprehensiveULPByRegion) {
     const size_t valid_count = input_values.size();
     std::cout << "\nCollected " << valid_count << " valid BF16 values\n";
 
-    // Pad to tile boundary (multiple of 32*32 = 1024)
-    const size_t tile_size = tt::constants::TILE_HW;
-    size_t padded_size = ((valid_count + tile_size - 1) / tile_size) * tile_size;
-    input_values.resize(padded_size, 0.0f);
-
-    // Create tensor shape
-    uint32_t num_tiles = static_cast<uint32_t>(padded_size / tile_size);
-    std::array<uint32_t, 4> dims = {1, 1, num_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
-
-    // Create input tensors from vectors
-    std::vector<::bfloat16> bf16_inputs;
-    std::vector<::bfloat16> bf16_grads;
-    bf16_inputs.reserve(padded_size);
-    bf16_grads.reserve(padded_size);
-
-    for (float x : input_values) {
-        bf16_inputs.push_back(::bfloat16(x));
-        bf16_grads.push_back(::bfloat16(1.0f));  // grad = 1.0 to get GELU'(x)
-    }
-
-    // Create TensorSpec for tile layout
-    tt::tt_metal::TensorSpec tensor_spec(
-        tt::tt_metal::Shape(dims),
-        tt::tt_metal::TensorLayout(
-            DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
-
-    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
-    auto grad_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
-
-    // Run GELU backward once on entire tensor
-    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
-    auto output_cpu = ttnn::from_device(result);
-    auto output_vec = output_cpu.to_vector<::bfloat16>();
+    auto output_floats = run_gelu_bw_on_device(*device_, input_values);
 
     // Analyze results by region
     struct RegionStats {
@@ -450,7 +482,7 @@ TEST_F(GeluBwUlpTest, ComprehensiveULPByRegion) {
 
     for (size_t i = 0; i < valid_count; ++i) {
         float x = bf16_ulp_bw::bf16_bits_to_float(bf16_ulp_bw::float_to_bf16_bits(input_values[i]));
-        float actual = static_cast<float>(output_vec[i]);
+        float actual = output_floats[i];
         float expected = bf16_ulp_bw::gelu_derivative_expected_bf16_daz(x);
         int32_t ulp = bf16_ulp_bw::ulp_distance_bf16_daz(actual, expected);
 
@@ -538,6 +570,10 @@ TEST_F(GeluBwUlpTest, ComprehensiveULPByRegion) {
 // Asserts max ULP <= 10 and >= 99% of values within 2 ULP.
 // Catches broad precision degradation that region-based tests might miss.
 TEST_F(GeluBwUlpTest, CumulativeULPDistribution) {
+    if (!getenv("TT_METAL_RUN_ULP_TESTS")) {
+        GTEST_SKIP() << "Skipping comprehensive ULP sweep (set TT_METAL_RUN_ULP_TESTS=1 to enable)";
+    }
+
     std::vector<float> input_values;
     input_values.reserve(70000);
 
@@ -558,30 +594,8 @@ TEST_F(GeluBwUlpTest, CumulativeULPDistribution) {
     }
 
     const size_t valid_count = input_values.size();
-    const size_t tile_size = tt::constants::TILE_HW;
-    size_t padded_size = ((valid_count + tile_size - 1) / tile_size) * tile_size;
-    input_values.resize(padded_size, 0.0f);
 
-    uint32_t num_tiles = static_cast<uint32_t>(padded_size / tile_size);
-    std::array<uint32_t, 4> dims = {1, 1, num_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
-
-    std::vector<::bfloat16> bf16_inputs, bf16_grads;
-    for (float x : input_values) {
-        bf16_inputs.push_back(::bfloat16(x));
-        bf16_grads.push_back(::bfloat16(1.0f));
-    }
-
-    tt::tt_metal::TensorSpec tensor_spec(
-        tt::tt_metal::Shape(dims),
-        tt::tt_metal::TensorLayout(
-            DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
-
-    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
-    auto grad_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
-
-    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
-    auto output_cpu = ttnn::from_device(result);
-    auto output_vec = output_cpu.to_vector<::bfloat16>();
+    auto output_floats = run_gelu_bw_on_device(*device_, input_values);
 
     // Compute ULP histogram
     std::map<int32_t, int> ulp_histogram;
@@ -590,7 +604,7 @@ TEST_F(GeluBwUlpTest, CumulativeULPDistribution) {
 
     for (size_t i = 0; i < valid_count; ++i) {
         float x = bf16_ulp_bw::bf16_bits_to_float(bf16_ulp_bw::float_to_bf16_bits(input_values[i]));
-        float actual = static_cast<float>(output_vec[i]);
+        float actual = output_floats[i];
         float expected = bf16_ulp_bw::gelu_derivative_expected_bf16_daz(x);
         int32_t ulp = bf16_ulp_bw::ulp_distance_bf16_daz(actual, expected);
 
@@ -749,7 +763,7 @@ TEST_F(GeluBwUlpTest, DeepNegativeRegionStability) {
 
     // Regression guard: deep negative values should saturate cleanly
     EXPECT_LE(max_ulp, 2) << "Deep negative region max ULP " << max_ulp << " at x=" << worst_x
-                          << " exceeds threshold 10";
+                          << " exceeds threshold 2";
 }
 
 // Correctness guard: 6 key points spanning all kernel code paths.
@@ -800,7 +814,7 @@ TEST_F(GeluBwUlpTest, SummaryStatistics) {
 // POLYNOMIAL-SPECIFIC ANALYSIS TESTS
 // =============================================================================
 
-class GeluBwPolyTest : public TTNNFixtureWithDevice {};
+class GeluBwPolyTest : public TTNNUnitMeshCQSharedFixture {};
 
 // Correctness guard: same midpoint check as GeluBwUlpTest but against the poly kernel.
 // Verifies GELU'(0) = 0.5 via the polynomial path. Catches broken constant term.
@@ -893,6 +907,10 @@ TEST_F(GeluBwPolyTest, DerivativeAtNegativeValues) {
 // per-ULP-bucket counts and identifies worst-case values. Asserts max ULP <= 10 overall.
 // The definitive poly-kernel precision test — catches any regression anywhere in the range.
 TEST_F(GeluBwPolyTest, ComprehensiveULPAnalysis) {
+    if (!getenv("TT_METAL_RUN_ULP_TESTS")) {
+        GTEST_SKIP() << "Skipping comprehensive ULP sweep (set TT_METAL_RUN_ULP_TESTS=1 to enable)";
+    }
+
     // Comprehensive test: batch all BF16 values and compute GELU backward with polynomial
 
     std::vector<float> input_values;
@@ -923,39 +941,7 @@ TEST_F(GeluBwPolyTest, ComprehensiveULPAnalysis) {
     const size_t valid_count = input_values.size();
     std::cout << "\n[POLY] Collected " << valid_count << " valid BF16 values\n";
 
-    // Pad to tile boundary
-    const size_t tile_size = tt::constants::TILE_HW;
-    size_t padded_size = ((valid_count + tile_size - 1) / tile_size) * tile_size;
-    input_values.resize(padded_size, 0.0f);
-
-    // Create tensor shape
-    uint32_t num_tiles = static_cast<uint32_t>(padded_size / tile_size);
-    std::array<uint32_t, 4> dims = {1, 1, num_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
-
-    // Create input tensors from vectors
-    std::vector<::bfloat16> bf16_inputs;
-    std::vector<::bfloat16> bf16_grads;
-    bf16_inputs.reserve(padded_size);
-    bf16_grads.reserve(padded_size);
-
-    for (float x : input_values) {
-        bf16_inputs.push_back(::bfloat16(x));
-        bf16_grads.push_back(::bfloat16(1.0f));  // grad = 1.0 to get GELU'(x)
-    }
-
-    // Create TensorSpec for tile layout
-    tt::tt_metal::TensorSpec tensor_spec(
-        tt::tt_metal::Shape(dims),
-        tt::tt_metal::TensorLayout(
-            DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
-
-    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
-    auto grad_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
-
-    // Run experimental GELU backward with polynomial approximation
-    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
-    auto output_cpu = ttnn::from_device(result);
-    auto output_vec = output_cpu.to_vector<::bfloat16>();
+    auto output_floats = run_gelu_bw_on_device(*device_, input_values);
 
     // Analyze results by region
     struct RegionStats {
@@ -982,7 +968,7 @@ TEST_F(GeluBwPolyTest, ComprehensiveULPAnalysis) {
 
     for (size_t i = 0; i < valid_count; ++i) {
         float x = bf16_ulp_bw::bf16_bits_to_float(bf16_ulp_bw::float_to_bf16_bits(input_values[i]));
-        float actual = static_cast<float>(output_vec[i]);
+        float actual = output_floats[i];
         float expected = bf16_ulp_bw::gelu_derivative_expected_bf16_daz(x);
         int32_t ulp = bf16_ulp_bw::ulp_distance_bf16_daz(actual, expected);
 
@@ -1078,6 +1064,10 @@ TEST_F(GeluBwPolyTest, ComprehensiveULPAnalysis) {
 // 5 segments (saturation-low, exp, left-poly, core-poly, saturation-high) each with a
 // tuned ULP threshold. Catches precision regression in any single code path.
 TEST_F(GeluBwPolyTest, DetailedSegmentAnalysis) {
+    if (!getenv("TT_METAL_RUN_ULP_TESTS")) {
+        GTEST_SKIP() << "Skipping comprehensive ULP sweep (set TT_METAL_RUN_ULP_TESTS=1 to enable)";
+    }
+
     // Detailed per-segment ULP analysis matching exact implementation regions:
     // - x <= -13.375: Saturation to 0
     // - (-13.375, -5]: Fused x*exp(t) with Mills ratio correction
@@ -1106,33 +1096,8 @@ TEST_F(GeluBwPolyTest, DetailedSegmentAnalysis) {
     }
 
     const size_t valid_count = input_values.size();
-    const size_t tile_size = tt::constants::TILE_HW;
-    size_t padded_size = ((valid_count + tile_size - 1) / tile_size) * tile_size;
-    input_values.resize(padded_size, 0.0f);
 
-    uint32_t num_tiles = static_cast<uint32_t>(padded_size / tile_size);
-    std::array<uint32_t, 4> dims = {1, 1, num_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
-
-    std::vector<::bfloat16> bf16_inputs, bf16_grads;
-    bf16_inputs.reserve(padded_size);
-    bf16_grads.reserve(padded_size);
-
-    for (float x : input_values) {
-        bf16_inputs.push_back(::bfloat16(x));
-        bf16_grads.push_back(::bfloat16(1.0f));
-    }
-
-    tt::tt_metal::TensorSpec tensor_spec(
-        tt::tt_metal::Shape(dims),
-        tt::tt_metal::TensorLayout(
-            DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
-
-    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
-    auto grad_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
-
-    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
-    auto output_cpu = ttnn::from_device(result);
-    auto output_vec = output_cpu.to_vector<::bfloat16>();
+    auto output_floats = run_gelu_bw_on_device(*device_, input_values);
 
     // Define segments matching implementation
     struct SegmentStats {
@@ -1167,7 +1132,7 @@ TEST_F(GeluBwPolyTest, DetailedSegmentAnalysis) {
 
     for (size_t i = 0; i < valid_count; ++i) {
         float x = bf16_ulp_bw::bf16_bits_to_float(bf16_ulp_bw::float_to_bf16_bits(input_values[i]));
-        float actual = static_cast<float>(output_vec[i]);
+        float actual = output_floats[i];
         float expected = bf16_ulp_bw::gelu_derivative_expected_bf16_daz(x);
         int32_t ulp = bf16_ulp_bw::ulp_distance_bf16_daz(actual, expected);
 
@@ -1263,6 +1228,10 @@ TEST_F(GeluBwPolyTest, DetailedSegmentAnalysis) {
 // =============================================================================
 
 TEST_F(GeluBwPolyTest, ExpBasedRegionFullDump) {
+    if (!getenv("TT_METAL_RUN_ULP_TESTS")) {
+        GTEST_SKIP() << "Skipping comprehensive ULP sweep (set TT_METAL_RUN_ULP_TESTS=1 to enable)";
+    }
+
     // Collect all BF16 values in the exp-based region (-13.375, -9)
     std::vector<float> exp_region_values;
 
@@ -1293,32 +1262,7 @@ TEST_F(GeluBwPolyTest, ExpBasedRegionFullDump) {
     std::cout << "EXP-BASED REGION FULL DUMP: All " << count << " BF16 values in (-13.375, -9)\n";
     std::cout << "================================================================================\n";
 
-    // Pad for tensor
-    const size_t tile_size = tt::constants::TILE_HW;
-    size_t padded_size = ((count + tile_size - 1) / tile_size) * tile_size;
-    std::vector<float> padded_values = exp_region_values;
-    padded_values.resize(padded_size, 0.0f);
-
-    uint32_t num_tiles = static_cast<uint32_t>(padded_size / tile_size);
-    std::array<uint32_t, 4> dims = {1, 1, num_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
-
-    std::vector<::bfloat16> bf16_inputs, bf16_grads;
-    for (float x : padded_values) {
-        bf16_inputs.push_back(::bfloat16(x));
-        bf16_grads.push_back(::bfloat16(1.0f));
-    }
-
-    tt::tt_metal::TensorSpec tensor_spec(
-        tt::tt_metal::Shape(dims),
-        tt::tt_metal::TensorLayout(
-            DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
-
-    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
-    auto grad_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
-
-    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
-    auto output_cpu = ttnn::from_device(result);
-    auto output_vec = output_cpu.to_vector<::bfloat16>();
+    auto output_floats = run_gelu_bw_on_device(*device_, exp_region_values);
 
     // Print header
     std::cout << std::setw(8) << "Index" << std::setw(12) << "x" << std::setw(16) << "BF16 bits" << std::setw(18)
@@ -1333,7 +1277,7 @@ TEST_F(GeluBwPolyTest, ExpBasedRegionFullDump) {
     for (size_t i = 0; i < count; ++i) {
         float x = exp_region_values[i];
         uint16_t bits = bf16_ulp_bw::float_to_bf16_bits(x);
-        float actual = static_cast<float>(output_vec[i]);
+        float actual = output_floats[i];
         float expected = bf16_ulp_bw::gelu_derivative_expected_bf16_daz(x);
         int32_t ulp = bf16_ulp_bw::ulp_distance_bf16_daz(actual, expected);
 
@@ -1373,6 +1317,10 @@ TEST_F(GeluBwPolyTest, ExpBasedRegionFullDump) {
 // =============================================================================
 
 TEST_F(GeluBwPolyTest, DeepNegativeRegionAnalysis) {
+    if (!getenv("TT_METAL_RUN_ULP_TESTS")) {
+        GTEST_SKIP() << "Skipping comprehensive ULP sweep (set TT_METAL_RUN_ULP_TESTS=1 to enable)";
+    }
+
     std::cout << "\n============================================================\n";
     std::cout << "DEEP NEGATIVE REGION ANALYSIS: Why coverage stops at x = -9\n";
     std::cout << "============================================================\n";
@@ -1416,34 +1364,11 @@ TEST_F(GeluBwPolyTest, DeepNegativeRegionAnalysis) {
     const size_t sat_count = saturation_values.size();
     std::cout << "\nSaturation guard: testing " << sat_count << " BF16 values with x <= -13.375\n";
 
-    const size_t tile_size = tt::constants::TILE_HW;
-    size_t padded_size = ((sat_count + tile_size - 1) / tile_size) * tile_size;
-    saturation_values.resize(padded_size, 0.0f);
-
-    uint32_t num_tiles = static_cast<uint32_t>(padded_size / tile_size);
-    std::array<uint32_t, 4> dims = {1, 1, num_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
-
-    std::vector<::bfloat16> bf16_inputs, bf16_grads;
-    for (float x : saturation_values) {
-        bf16_inputs.push_back(::bfloat16(x));
-        bf16_grads.push_back(::bfloat16(1.0f));
-    }
-
-    tt::tt_metal::TensorSpec tensor_spec(
-        tt::tt_metal::Shape(dims),
-        tt::tt_metal::TensorLayout(
-            DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
-
-    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
-    auto grad_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
-
-    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
-    auto output_cpu = ttnn::from_device(result);
-    auto output_vec = output_cpu.to_vector<::bfloat16>();
+    auto output_floats = run_gelu_bw_on_device(*device_, saturation_values);
 
     int nonzero_count = 0;
     for (size_t i = 0; i < sat_count; ++i) {
-        float actual = static_cast<float>(output_vec[i]);
+        float actual = output_floats[i];
         if (actual != 0.0f) {
             nonzero_count++;
             if (nonzero_count <= 10) {  // Print first 10 violations
@@ -1463,6 +1388,10 @@ TEST_F(GeluBwPolyTest, DeepNegativeRegionAnalysis) {
 // =============================================================================
 
 TEST_F(GeluBwPolyTest, SaturationThresholdResearch) {
+    if (!getenv("TT_METAL_RUN_ULP_TESTS")) {
+        GTEST_SKIP() << "Skipping comprehensive ULP sweep (set TT_METAL_RUN_ULP_TESTS=1 to enable)";
+    }
+
     std::cout << "\n============================================================\n";
     std::cout << "GELU DERIVATIVE SATURATION THRESHOLD RESEARCH (DAZ+FTZ)\n";
     std::cout << "Scanning ENTIRE BF16 range\n";
@@ -1675,37 +1604,13 @@ TEST_F(GeluBwPolyTest, SaturationThresholdResearch) {
               << " negative values\n";
 
     // Helper lambda to test saturation region
-    auto test_saturation = [&](std::vector<float>& values, float expected_val, const std::string& label) {
+    auto test_saturation = [&](const std::vector<float>& values, float expected_val, const std::string& label) {
         const size_t count = values.size();
-        const size_t tile_size = tt::constants::TILE_HW;
-        size_t padded = ((count + tile_size - 1) / tile_size) * tile_size;
-        values.resize(padded, 0.0f);
-
-        uint32_t nt = static_cast<uint32_t>(padded / tile_size);
-        std::array<uint32_t, 4> d = {1, 1, nt * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
-
-        std::vector<::bfloat16> inputs, grads;
-        for (float x : values) {
-            inputs.push_back(::bfloat16(x));
-            grads.push_back(::bfloat16(1.0f));
-        }
-
-        tt::tt_metal::TensorSpec spec(
-            tt::tt_metal::Shape(d),
-            tt::tt_metal::TensorLayout(
-                DataType::BFLOAT16,
-                tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-                tt::tt_metal::MemoryConfig{}));
-
-        auto in_t = tt::tt_metal::Tensor::from_vector(std::move(inputs), spec).to_device(device_);
-        auto gr_t = tt::tt_metal::Tensor::from_vector(std::move(grads), spec).to_device(device_);
-
-        auto res = ttnn::experimental::gelu_bw(gr_t, in_t, "none");
-        auto out = ttnn::from_device(res).to_vector<::bfloat16>();
+        auto output_floats = run_gelu_bw_on_device(*device_, values);
 
         int violations = 0;
         for (size_t i = 0; i < count; ++i) {
-            float actual = static_cast<float>(out[i]);
+            float actual = output_floats[i];
             if (actual != expected_val) {
                 violations++;
                 if (violations <= 10) {

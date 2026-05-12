@@ -37,9 +37,9 @@ using ::testing::Pointwise;
 using ::testing::SizeIs;
 using ::testing::ThrowsMessage;
 
-using MeshTensorTest = GenericMeshDeviceFixture;
-using MeshTensorTest1x2 = MeshDevice1x2Fixture;
-using MeshTensorTest2x4 = MeshDevice2x4Fixture;
+using MeshTensorTest = GenericMeshDeviceSharedFixture;
+using MeshTensorTest1x2 = MeshDevice1x2SharedFixture;
+using MeshTensorTest2x4 = MeshDevice2x4SharedFixture;
 
 TEST(MeshTensorHostTest, ToHostAlreadyOnHost) {
     const ttnn::Shape shape{1, 1, 32, 32};

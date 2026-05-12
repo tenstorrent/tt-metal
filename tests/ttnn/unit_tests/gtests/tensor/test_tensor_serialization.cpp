@@ -31,7 +31,7 @@ TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtype) {
     return TensorSpec(shape, TensorLayout(dtype, Layout::ROW_MAJOR, MemoryConfig{}));
 }
 
-using TensorSerializationFlatbufferTest = GenericMeshDeviceFixture;
+using TensorSerializationFlatbufferTest = GenericMeshDeviceSharedFixture;
 
 TEST_F(TensorSerializationFlatbufferTest, ReplicatedTensorRoundtrip) {
     TemporaryFile test_file("flatbuffer.tensorbin");
@@ -122,7 +122,7 @@ TEST_F(TensorSerializationFlatbufferTest, WithMemoryConfig) {
     }
 }
 
-using TensorSerializationFlatbuffer2x4Test = MeshDevice2x4Fixture;
+using TensorSerializationFlatbuffer2x4Test = MeshDevice2x4SharedFixture;
 
 TEST_F(TensorSerializationFlatbuffer2x4Test, Shard1DTensorRoundtrip) {
     TemporaryFile test_file("shard1d_flatbuffer.tensorbin");

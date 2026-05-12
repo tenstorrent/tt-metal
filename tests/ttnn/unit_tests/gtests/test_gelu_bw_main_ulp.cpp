@@ -235,7 +235,7 @@ inline float gelu_bw_expected_bf16_daz(float grad, float x) {
 // GELU Backward ULP Tests (Require Device)
 // =============================================================================
 
-class GeluBwMainUlpTest : public TTNNFixtureWithDevice {};
+class GeluBwMainUlpTest : public TTNNUnitMeshCQSharedFixture {};
 
 /**
  * Helper function to run GELU backward on device with grad=1.0
@@ -802,7 +802,7 @@ TEST_F(GeluBwMainUlpTest, SummaryStatistics) {
 // POLYNOMIAL-SPECIFIC ANALYSIS TESTS
 // =============================================================================
 
-class GeluBwMainPolyTest : public TTNNFixtureWithDevice {};
+class GeluBwMainPolyTest : public TTNNUnitMeshCQSharedFixture {};
 
 // Correctness guard: same midpoint check as GeluBwMainUlpTest but against the poly kernel.
 // Verifies GELU'(0) = 0.5 via the polynomial path. Catches broken constant term.

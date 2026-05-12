@@ -22,7 +22,7 @@ TensorSpec make_test_tensor_spec() {
     return TensorSpec(ttnn::Shape{1, 1, 32, 32}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
 }
 
-using DeallocateTest = GenericMeshDeviceFixture;
+using DeallocateTest = GenericMeshDeviceSharedFixture;
 
 TEST_F(DeallocateTest, HostTensorDeallocate) {
     Tensor tensor = allocate_tensor_on_host(make_test_tensor_spec(), mesh_device_.get());

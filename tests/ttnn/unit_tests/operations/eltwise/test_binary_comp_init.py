@@ -5,6 +5,13 @@
 import torch
 import pytest
 import ttnn
+
+# All tests in this module are parametrized over DRAM / L1 output memory
+# configs.  The comparison ops' program-cache key does not include the output
+# memory config, so a DRAM-compiled program is incorrectly reused for L1
+# (producing wrong results).  Until the C++ cache key is fixed, each
+# parametrize variant must get its own device to avoid cross-contamination.
+pytestmark = pytest.mark.requires_fresh_device
 from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range,
     data_gen_with_range_dtype,

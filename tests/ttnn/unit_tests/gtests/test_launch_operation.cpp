@@ -113,7 +113,9 @@ TEST(LaunchOperationTest, MeshDeviceOperationAdapterGetName) {
         "ExampleDeviceOperation");
 }
 
-using LaunchOperation2x4Test = tt::tt_metal::MeshDevice2x4Fixture;
+using LaunchOperation2x4Test = tt::tt_metal::MeshDevice2x4SharedFixture;
+// CachingHeterogeneousDispatch asserts an empty program cache at start, so it requires a fresh device.
+using LaunchOperation2x4PerTestTest = tt::tt_metal::MeshDevice2x4Fixture;
 
 TEST_F(LaunchOperation2x4Test, UniformTensor) {
     const TensorSpec tensor_spec = TensorSpec(
@@ -233,7 +235,7 @@ TEST_F(LaunchOperation2x4Test, LaunchOpFilterTensorShards) {
             ttnn::MeshCoordinate{0, 1}));
 }
 
-TEST_F(LaunchOperation2x4Test, CachingHeterogeneousDispatch) {
+TEST_F(LaunchOperation2x4PerTestTest, CachingHeterogeneousDispatch) {
     EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 0);
 
     auto full_tensor = make_tensor_with_num_shards(8, mesh_device_.get());

@@ -26,7 +26,7 @@ using ::testing::SizeIs;
 using ::testing::ThrowsMessage;
 using ::tt::tt_metal::distributed::MeshShape;
 
-using UnitMeshUtils2x4Test = ::tt::tt_metal::MeshDevice2x4Fixture;
+using UnitMeshUtils2x4Test = ::tt::tt_metal::MeshDevice2x4SharedFixture;
 
 TEST_F(UnitMeshUtils2x4Test, AggregateAndDisaggregate) {
     auto unit_meshes = mesh_device_->create_submeshes(MeshShape(1, 1));

@@ -27,9 +27,8 @@ echo "Running fabric unit tests now...";
 # Host side tests that require a card: Topology Mapping in Control Plane
 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MeshGraphValidation*"
 
-./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
-./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
-./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricTrafficGeneratorKernelIntegrationTest.*"
+# Folded into a single binary invocation (identical env) to save process-start cost
+./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*:Fabric1D*Fixture.*:FabricTrafficGeneratorKernelIntegrationTest.*"
 
 #############################################
 # FABRIC SANITY TESTS                       #

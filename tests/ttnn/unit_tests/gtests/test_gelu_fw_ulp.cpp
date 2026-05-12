@@ -198,7 +198,7 @@ inline float gelu_expected_bf16_daz(float x) {
 // GELU Forward ULP Tests (Require Device)
 // =============================================================================
 
-class GeluFwUlpTest : public TTNNFixtureWithDevice {};
+class GeluFwUlpTest : public TTNNUnitMeshCQSharedFixture {};
 
 /**
  * Helper function to run forward GELU on device for a single value.

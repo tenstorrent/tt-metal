@@ -34,7 +34,10 @@
     wh_galaxy_perf_uf:
       timeout: 20
 
-# Unusure why fabric test commands are duplicated, but keeping from original test matrix.
+# NOTE: original matrix duplicated the four fabric_unit_tests calls back-to-back.
+# Dropped on branch nsexton/0-batch-t3k-ttnn-unit (commit b0181b9b701) because each
+# call is deterministic and re-running it inside the same job adds 4 extra process
+# starts + telemetry without coverage gain.
 - id: galaxy-fabric-unit-suite
   name: Galaxy Fabric tests
   model: fabric
@@ -43,10 +46,6 @@
   auto_triage: true
   cmd: |
     mkdir -p generated/test_reports
-    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.*TG*
-    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
-    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
-    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric*MuxFixture.*"
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.*TG*
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"

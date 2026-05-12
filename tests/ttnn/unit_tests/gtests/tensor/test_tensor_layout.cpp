@@ -47,7 +47,10 @@ struct TensorLayoutTestParams {
 };
 }  // namespace
 
-class TensorLayoutComputeTests : public ::testing::TestWithParam<TensorLayoutTestParams> {};
+// Inherit from TTNNUnitMeshCQSharedFixture so tensor_creation_works cases can reuse the
+// suite-shared device instead of opening a fresh one per parametrized case.
+class TensorLayoutComputeTests : public ttnn::TTNNUnitMeshCQSharedFixture,
+                                 public ::testing::WithParamInterface<TensorLayoutTestParams> {};
 
 TEST_P(TensorLayoutComputeTests, TensorLayout_Generic) {
     const auto& params = GetParam();
@@ -58,7 +61,7 @@ TEST_P(TensorLayoutComputeTests, TensorLayout_Generic) {
     EXPECT_EQ(layout.compute_strides(params.inputs.shape), params.expected.strides);
 
     if (params.expected.tensor_creation_works) {
-        test_utils::test_tensor_on_device(params.inputs.shape, layout);
+        test_utils::test_tensor_on_device(params.inputs.shape, layout, device_);
     }
 }
 
@@ -180,7 +183,9 @@ struct LegacyPaddingRoundtripTestParams {
     Shape padded_shape;
 };
 
-class TensorLayoutLegacyPaddingRoundtipTests : public ::testing::TestWithParam<LegacyPaddingRoundtripTestParams> {};
+class TensorLayoutLegacyPaddingRoundtipTests : public ttnn::TTNNUnitMeshCQSharedFixture,
+                                               public ::testing::WithParamInterface<LegacyPaddingRoundtripTestParams> {
+};
 
 TEST_P(TensorLayoutLegacyPaddingRoundtipTests, Tensor_LagacyPaddingRoundtrip) {
     const auto& params = GetParam();
@@ -188,7 +193,7 @@ TEST_P(TensorLayoutLegacyPaddingRoundtipTests, Tensor_LagacyPaddingRoundtrip) {
         DataType::BFLOAT16, Layout::ROW_MAJOR, DefaultMemoryConfig, params.shape, params.padded_shape);
     EXPECT_EQ(layout.compute_padded_shape(params.shape), params.padded_shape);
 
-    test_utils::test_tensor_on_device(params.shape, layout);
+    test_utils::test_tensor_on_device(params.shape, layout, device_);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -331,7 +336,8 @@ struct TilePaddedAlignmentTestParams {
     tt::tt_metal::Shape2D expected_physical_shape;
 };
 
-class TensorLayoutTilePaddedAlignmentTests : public ::testing::TestWithParam<TilePaddedAlignmentTestParams> {};
+class TensorLayoutTilePaddedAlignmentTests : public ttnn::TTNNUnitMeshCQSharedFixture,
+                                             public ::testing::WithParamInterface<TilePaddedAlignmentTestParams> {};
 
 TEST_P(TensorLayoutTilePaddedAlignmentTests, Tensor_TilePaddedAlignmentRegression) {
     const auto& params = GetParam();
@@ -361,7 +367,7 @@ TEST_P(TensorLayoutTilePaddedAlignmentTests, Tensor_TilePaddedAlignmentRegressio
     // host buffer of `compute_packed_buffer_size_bytes` into it must succeed.
     // (With the buggy alignment the device allocation would be smaller than
     // the host buffer, triggering the buffer.cpp TT_FATAL.)
-    test_utils::test_tensor_on_device(params.shape, layout);
+    test_utils::test_tensor_on_device(params.shape, layout, device_);
 }
 
 INSTANTIATE_TEST_SUITE_P(

@@ -98,12 +98,14 @@ TensorSpec get_nd_sharding_tensor_spec(
 }  // namespace
 
 class NDShardingTests
-    : public ttnn::TTNNFixtureWithSuiteDevice<NDShardingTests>,
+    : public ttnn::TTNNUnitMeshCQSharedFixture,
       public ::testing::WithParamInterface<std::tuple<NDShardingParams, BufferType, ShardOrientation>> {};
 
 TEST_P(NDShardingTests, LoopbackTest) {
     const auto& [params, buffer_type, orientation] = GetParam();
-    auto tensor_spec = get_nd_sharding_tensor_spec(params, buffer_type, orientation, device_holder_);
+    // devices_[0] is the first suite-level shared MeshDevice from TTNNUnitMeshCQSharedFixture
+    // (previously device_holder_, a per-test locally-owned shared_ptr from MultiCommandQueueSingleDeviceFixture)
+    auto tensor_spec = get_nd_sharding_tensor_spec(params, buffer_type, orientation, devices_[0]);
 
     size_t volume = params.shape.volume();
     std::vector<uint16_t> data(volume);
@@ -122,7 +124,9 @@ TEST_P(NDShardingTests, LoopbackTest) {
 
 TEST_P(NDShardingTests, RegionWriteReadTest) {
     const auto& [params, buffer_type, orientation] = GetParam();
-    auto tensor_spec = get_nd_sharding_tensor_spec(params, buffer_type, orientation, device_holder_);
+    // devices_[0] is the first suite-level shared MeshDevice from TTNNUnitMeshCQSharedFixture
+    // (previously device_holder_, a per-test locally-owned shared_ptr from MultiCommandQueueSingleDeviceFixture)
+    auto tensor_spec = get_nd_sharding_tensor_spec(params, buffer_type, orientation, devices_[0]);
 
     size_t volume = params.shape.volume();
     std::vector<uint16_t> data(volume);
@@ -213,8 +217,7 @@ TEST_P(NdToLegacyShardingTests, NdToLegacySharding) {
     }
 }
 
-class BufferDistributionSpecCreationTests
-    : public ttnn::TTNNFixtureWithSuiteDevice<BufferDistributionSpecCreationTests> {};
+using BufferDistributionSpecCreationTests = ttnn::TTNNUnitMeshCQSharedFixture;
 
 TEST_F(BufferDistributionSpecCreationTests, LegacyAndNdShardSpecCreateBufferDistributionSpec) {
     const Shape shape({3, 64, 64});
@@ -243,7 +246,7 @@ TEST_F(BufferDistributionSpecCreationTests, LegacyAndNdShardSpecCreateBufferDist
     }
 }
 
-class NdShardingOpCompatTests : public ttnn::TTNNFixtureWithSuiteDevice<NdShardingOpCompatTests>,
+class NdShardingOpCompatTests : public ttnn::TTNNUnitMeshCQSharedFixture,
                                 public ::testing::WithParamInterface<NDShardingOpCompatParams> {};
 
 TEST_P(NdShardingOpCompatTests, TestAdd) {
@@ -275,7 +278,7 @@ TEST_P(NdShardingOpCompatTests, TestAdd) {
     }
 }
 
-class NDShardingPerfTests : public ttnn::TTNNFixtureWithDevice {};
+class NDShardingPerfTests : public ttnn::TTNNUnitMeshCQSharedFixture {};
 
 TEST_F(NDShardingPerfTests, TestBatchShardingPerf) {
     CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6}));
@@ -330,7 +333,7 @@ TEST_F(NDShardingPerfTests, TestBatchShardingPerf) {
     EXPECT_TRUE(small_shards_nd_sharding_time_ns < block_2d_sharding_time_ns * 6);
 }
 
-class NDShardingBufferSizeTests : public ttnn::TTNNFixtureWithSuiteDevice<NDShardingBufferSizeTests>,
+class NDShardingBufferSizeTests : public ttnn::TTNNUnitMeshCQSharedFixture,
                                   public ::testing::WithParamInterface<NDShardingBufferSizeParams> {};
 
 TEST_P(NDShardingBufferSizeTests, TestBufferSize) {
