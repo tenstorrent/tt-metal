@@ -9,8 +9,11 @@ Data source: real Tourism Monthly batch from hf-internal-testing/tourism-monthly
 Model: huggingface/time-series-transformer-tourism-monthly (pinned revision)
 """
 
+import sys
 import torch
 import json
+import transformers
+import huggingface_hub
 from pathlib import Path
 from transformers import TimeSeriesTransformerForPrediction
 from huggingface_hub import hf_hub_download
@@ -170,6 +173,10 @@ def main():
         "dataset_repo":                    DATASET_REPO,
         "dataset_file":                    DATASET_FILE,
         "dataset_revision":                DATASET_REVISION,
+        "python_version":                  sys.version,
+        "torch_version":                   torch.__version__,
+        "transformers_version":            transformers.__version__,
+        "huggingface_hub_version":         huggingface_hub.__version__,
         "context_length":                  cfg.context_length,
         "prediction_length":               cfg.prediction_length,
         "num_time_features":               cfg.num_time_features,
