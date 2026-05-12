@@ -670,10 +670,6 @@ def test_e2e_vision_text_pipeline(
     if validation_passed and len(results) > 0:
         logger.info("E2E vision-text pipeline test PASSED!")
         logger.info(f"Successfully generated {len(results)} tokens")
-
-        # Log generated tokens for debugging
-        for i, result in enumerate(results[:5]):
-            logger.info(f"Token {i}: {result.token} -> '{result.text}'")
     else:
         logger.error("E2E pipeline test failed")
         assert False, f"E2E pipeline failed - generated {len(results)} tokens, validation: {validation_passed}"
