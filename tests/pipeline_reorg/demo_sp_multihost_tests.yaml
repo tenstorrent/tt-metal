@@ -78,14 +78,14 @@
 
     echo "=== SP4 superpod: running tt-run ==="
     TT_METAL_SLOW_DISPATCH_MODE=1 tt-run \
-      --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_superpod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
+      --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_superpod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output --wdir /home/user/tt-metal -x PYTHONPATH" \
       --rank-binding blitz_decode_pipeline_rank_binding_superpod_ci.yaml \
-      bash -lc 'cd /home/user/tt-metal && python3 -m models.demos.deepseek_v3_b1.demo.cli \
+      python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 2048 \
         --weights real \
         --cache-path /home/esmal/cache \
         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
-        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized'
+        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
   skus:
     bh_sp4:
       timeout: 150
