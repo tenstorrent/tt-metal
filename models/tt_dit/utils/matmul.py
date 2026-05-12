@@ -286,8 +286,10 @@ fused_mmrs_configs = {
 def get_fused_mmrs_config(M, K, N, device_core_grid, num_links):
     config = fused_mmrs_configs.get(device_core_grid, {})
     if len(config) == 0:
+        logger.warning(f"No known fused MM/RS config for {device_core_grid} core grid, using default")
+    elif (M, K, N) not in config:
         logger.warning(
-            f"No known best MM/RS blocking for (M, K, N) = ({M}, {K}, {N}) on {device_core_grid} core grid; using default"
+            f"No known fused MM/RS config for (M, K, N) = ({M}, {K}, {N}) on {device_core_grid} core grid, using default"
         )
     config = config.get((M, K, N), default_fused_mmrs_config)
     return config.get_params(device_core_grid, num_links)
