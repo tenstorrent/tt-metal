@@ -1153,7 +1153,8 @@ inline void _calculate_reduce_(std::uint32_t block_ct_dim = 1, std::uint32_t blo
         {
             static_assert(pool_type == PoolType::MAX, "Row reduction (REDUCE_ROW) currently only supports MAX pool type");
             static_assert(
-                INSTRUCTION_MODE == InstrModLoadStore::FP32 || INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::FP16B,
+                INSTRUCTION_MODE == InstrModLoadStore::FP32 || INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::FP16B ||
+                    INSTRUCTION_MODE == InstrModLoadStore::DEFAULT,
                 "Row MAX reduction supports FP32, FP16B, and INT32 (sign-magnitude) instruction modes");
             perform_reduce_row_max<INSTRUCTION_MODE>(block_ct_dim, block_rt_dim);
         }
