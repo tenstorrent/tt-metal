@@ -973,7 +973,6 @@ def test_persistent_moe_15_stages(
 
         # ── Stage 0: drive pipeline with multiple tokens ──
         if is_stage0:
-            start_time = time.time()
             for iteration in range(iterations):
                 token_size_datums = token_size_bytes // dtype_size(ttnn.uint32)
                 num_elements = embedding_size_bytes // 2

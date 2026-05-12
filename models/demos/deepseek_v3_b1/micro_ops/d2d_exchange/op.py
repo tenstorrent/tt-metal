@@ -29,8 +29,6 @@ ParallelSocketInterface:
   are dispatched together via a single generic_op call.
 """
 
-from loguru import logger
-
 import ttnn
 
 
@@ -306,12 +304,6 @@ class SocketInterface:
                 # Initialize downstream as sender socket
                 self.downstream_socket = self.downstream_socket_pair[0]
                 ds_recv_addr = int(self.downstream_socket_pair[1].get_config_buffer_address())
-                print(
-                    f"[SocketInterface] downstream_socket_pair created: "
-                    f"recv_core_coord={recv_core_coord} -> downstream_core_coord={downstream_core_coord} "
-                    f"downstream_receiver[1].config_addr={ds_recv_addr}",
-                    flush=True,
-                )
 
         self.page_size = page_size
         self.send_core_coord = send_core_coord
@@ -911,16 +903,6 @@ class ParallelSocketInterface:
         if self.mesh_device is not None:
             owner_mesh_id = self.mesh_device.get_system_mesh_id()
 
-        logger.info(
-            "ParallelSocketInterface init: "
-            f"num_channels={num_channels}, page_size={page_size}, fifo_size={socket_fifo_size}, "
-            f"local_socket={self.local_socket} (True => create_socket_pair on one mesh; "
-            f"False => MeshSocket cross-rank), "
-            f"owner_mesh_device_system_mesh_id={owner_mesh_id}, "
-            f"sender_mesh({_mesh_wr_summary(sender_mesh)}), "
-            f"receiver_mesh({_mesh_wr_summary(receiver_mesh)}), "
-            f"receiver_use_reader_config={receiver_use_reader_config}"
-        )
         for i in range(num_channels):
             sc, rc = self.send_core_coords[i], self.recv_core_coords[i]
             same_device = str(sc.device_coord) == str(rc.device_coord)
@@ -940,22 +922,6 @@ class ParallelSocketInterface:
                 if self._downstream_sockets[i] is not None
                 else ("local_pair" if self._downstream_socket_pairs[i] is not None else "none")
             )
-            logger.info(
-                f"ParallelSocketInterface ch[{i}]: internal={internal_kind}, "
-                f"send_meshcore={sc}, recv_meshcore={rc}, "
-                f"same_device_coord={same_device}, same_logical_core={same_core}, "
-                f"upstream={upstream_kind}, downstream={downstream_kind}"
-            )
-            if not self.local_socket and not (same_device and same_core):
-                logger.info(
-                    f"ParallelSocketInterface ch[{i}]: cross-mesh hop uses different send/recv mesh cores "
-                    f"(expected when sender column != receiver column for MeshSocket handshake alignment)."
-                )
-            if self.local_socket and not (same_device and same_core):
-                logger.warning(
-                    f"ParallelSocketInterface ch[{i}]: local_socket=True but send/recv mesh cores differ — "
-                    f"create_socket_pair path expects same-mesh local relay; verify cores."
-                )
 
         all_core_ranges = []
         seen_cores = set()
@@ -995,12 +961,6 @@ class ParallelSocketInterface:
                 if bdc == dc:
                     return bp
             return None
-
-        logger.info(
-            "ParallelSocketInterface.build_programs: "
-            f"num_channels={self.num_channels}, local_socket={self.local_socket}, "
-            f"base_programs_provided={bool(base_programs)}"
-        )
 
         device_program_entries = []
 
@@ -1058,10 +1018,6 @@ class ParallelSocketInterface:
                     )
                     device_program_entries.append((self.recv_core_coords[i].device_coord, prog))
 
-        logger.info(
-            "ParallelSocketInterface.build_programs: produced "
-            f"{len(device_program_entries)} (device_coord, program) entries"
-        )
         return device_program_entries
 
     def run(self):
