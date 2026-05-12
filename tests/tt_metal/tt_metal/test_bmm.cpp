@@ -269,20 +269,6 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
     int argfail = -1;
     bool pass = validate_bmm_result(p, src0_vec, src1_vec, result_vec, &argfail);
     EXPECT_TRUE(pass) << "Failure position=" << argfail;
-    auto& rt = MetalContext::instance().rtoptions();
-    if (rt.get_watcher_enabled()) {
-        // Watcher thread sleeps interval_ms between dumps; without a pause here the mesh
-        // fixture often tears down before the next poll, so stack_usage never reaches the log.
-        const int interval_ms = rt.get_watcher_interval();
-        const int wait_ms = std::max(interval_ms, 25) + 200;
-        log_info(
-            tt::LogTest,
-            "TriscStackTouch: watcher poll interval is {} ms; sleeping {} ms so the watcher can dump stack lines "
-            "(use TT_METAL_WATCHER=50ms for a shorter interval).",
-            interval_ms,
-            wait_ms);
-        std::this_thread::sleep_for(std::chrono::milliseconds(wait_ms));
-    }
 }
 
 // This needs to be a separate test because we don't have a way of querying the correct compute grid size

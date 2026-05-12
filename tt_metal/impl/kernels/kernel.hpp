@@ -640,6 +640,7 @@ public:
             "per Tensix engine must match number of compute cores per cluster that have been reserved");
         TT_FATAL(
             std::is_sorted(compute_processors_.begin(), compute_processors_.end()), "Compute cores must be ordered");
+        this->set_compiler_include_paths(config_.compiler_include_paths);
     }
 
     ~QuasarComputeKernel() override = default;
