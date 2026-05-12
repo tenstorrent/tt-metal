@@ -60,18 +60,18 @@ static Tensor conv_group_weight_zero_pad_helper(
         auto original_strides = compute_strides(original_weight_shape);
         auto output_strides = compute_strides(output_weight_shape);
 
-        for (int curr_batch_idx = 0; curr_batch_idx < original_weight_shape[0]; curr_batch_idx++) {
-            int new_batch_idx = curr_batch_idx;
+        for (uint32_t curr_batch_idx = 0; curr_batch_idx < original_weight_shape[0]; curr_batch_idx++) {
+            uint32_t new_batch_idx = curr_batch_idx;
 
             auto group_size = original_weight_shape[0] / num_groups;
             auto group_index = curr_batch_idx / group_size;
             auto group_id = std::min(group_index, num_groups - 1);
-            int new_channel_start_idx = group_id * original_weight_shape[1];
+            uint32_t new_channel_start_idx = group_id * original_weight_shape[1];
 
-            for (int j = 0; j < original_weight_shape[1]; j++) {
-                for (int d = 0; d < original_weight_shape[2]; d++) {
-                    for (int k = 0; k < original_weight_shape[3]; k++) {
-                        for (int m = 0; m < original_weight_shape[4]; m++) {
+            for (uint32_t j = 0; j < original_weight_shape[1]; j++) {
+                for (uint32_t d = 0; d < original_weight_shape[2]; d++) {
+                    for (uint32_t k = 0; k < original_weight_shape[3]; k++) {
+                        for (uint32_t m = 0; m < original_weight_shape[4]; m++) {
                             auto value_flat_input_index = tt::tt_metal::compute_flat_indices(
                                 ttnn::SmallVector<uint32_t>{
                                     (uint32_t)curr_batch_idx, (uint32_t)j, (uint32_t)d, (uint32_t)k, (uint32_t)m},
