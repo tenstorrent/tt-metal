@@ -92,7 +92,7 @@ jobs:
       PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
       PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
       PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
-      PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
+      PRTE_MCA_prte_default_hostfile: /etc/ttop/hostfile
       PRTE_MCA_prte_fwd_environment: "true"
       PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/venv/bin"
       HOME: /home/user
@@ -187,11 +187,15 @@ jobs:
         run: |
           MAX_RECOVERY_ATTEMPTS=3
 
+          echo "--- Pre-check: tt-smi visibility on all hosts ---"
+          mpirun --hostfile /etc/ttop/hostfile --pernode --tag-output \
+            bash -lc 'echo "$(hostname): $(tt-smi --snapshot_no_tty --snapshot | jq -r .host_info.Driver)"' || true
+
           for attempt in $(seq 1 "$MAX_RECOVERY_ATTEMPTS"); do
             echo "=== Recovery attempt $attempt of $MAX_RECOVERY_ATTEMPTS ==="
 
             echo "--- Resetting cards with tt-smi ---"
-            if ! mpirun --pernode --tag-output tt-smi -glx_reset; then
+            if ! mpirun --hostfile /etc/ttop/hostfile --pernode --tag-output tt-smi -glx_reset; then
               echo "WARNING: Reset failed on attempt $attempt"
               if [ "$attempt" -eq "$MAX_RECOVERY_ATTEMPTS" ]; then
                 echo "ERROR: Reset failed after $MAX_RECOVERY_ATTEMPTS attempts"
@@ -206,7 +210,7 @@ jobs:
             sleep 5
 
             echo "--- Running cluster validation ---"
-            if mpirun --pernode --tag-output \
+            if mpirun --hostfile /etc/ttop/hostfile --pernode --tag-output \
               /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
               --send-traffic \
               --hard-fail \
