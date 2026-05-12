@@ -4,7 +4,6 @@
 
 #include "impl/memory_tracking/shm_tracking_processor.hpp"
 #include "impl/memory_tracking/memory_stats_shm.hpp"
-#include "impl/context/metal_context.hpp"
 #include "impl/device/device_impl.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -25,15 +24,7 @@ static ShmBufferType to_shm_buffer_type(BufferType type) {
     }
 }
 
-ShmTrackingProcessor::ShmTrackingProcessor() :
-    // Process-global graph processor: avoid implicitly initializing the silicon default context.
-    // Use any existing MetalContext's rtoptions; shm_verbose is a process-wide flag.
-    verbose_enabled_([]() {
-        if (auto* ctx = MetalContext::find_any_existing_instance()) {
-            return ctx->rtoptions().get_shm_verbose();
-        }
-        return MetalContext::instance().rtoptions().get_shm_verbose();
-    }()) {}
+ShmTrackingProcessor::ShmTrackingProcessor(bool verbose) : verbose_enabled_(verbose) {}
 
 void ShmTrackingProcessor::track_allocate(const Buffer* buffer) {
     if (!buffer || !buffer->device()) {

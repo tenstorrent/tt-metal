@@ -46,7 +46,25 @@ public:
     BuildEnvManager& operator=(const BuildEnvManager&) = delete;
     BuildEnvManager(BuildEnvManager&&) = delete;
     BuildEnvManager& operator=(BuildEnvManager&&) = delete;
+
+    // Returns the process-wide singleton, seeding its HAL on first call from the supplied
+    // ContextId's MetalContext. Subsequent calls return the same singleton regardless of
+    // which ContextId is passed -- the parameter is therefore advisory after first seeding.
+    // It exists to make the BuildEnvManager-to-MetalContext dependency explicit at the API
+    // surface so a future per-ContextId BuildEnvManager refactor (#38445 follow-up) has the
+    // right shape already.
+    static BuildEnvManager& get_instance(ContextId context_id);
+
+    // Legacy no-arg accessor for callers that only have a build_id / device pointer in scope.
+    // Asserts that the singleton has already been seeded (driven by MetalContext::create_*),
+    // which is true for every reader that runs after a MetalEnv has been constructed.
     static BuildEnvManager& get_instance();
+
+    // Internal seeding entry: seeds the singleton with the supplied HAL on first call,
+    // no-op thereafter. Takes a HAL by reference so callers that already hold
+    // g_instance_mutex (e.g. MetalContext::create_*) can seed without re-entering
+    // MetalContext::instance(ContextId). Idempotent and thread-safe.
+    static void seed_if_unseeded_with_hal(const Hal& hal);
 
     // Add a new build environment for the corresponding device id and num_hw_cqs. Also generates the build key and
     // build states.  This requires a live device to be available at device_id.
