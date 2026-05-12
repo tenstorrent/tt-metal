@@ -16,6 +16,13 @@
 
 constexpr uint32_t onetile = 1U;
 
+inline constexpr uint32_t round_up(uint32_t a, uint32_t b) {
+    if ((b & (b - 1U)) == 0U) {
+        return (a + (b - 1U)) & -b;
+    }
+    return ((a + b - 1U) / b) * b;
+}
+
 // IEEE 754 bit representations for compile-time template parameters
 constexpr uint32_t FP32_ONE_BITS = 0x3F800000;    // 1.0f
 constexpr uint32_t FP32_ZERO_BITS = 0x00000000;   // 0.0f
