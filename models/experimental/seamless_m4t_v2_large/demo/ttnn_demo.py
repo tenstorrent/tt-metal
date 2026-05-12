@@ -210,7 +210,11 @@ def main() -> None:
         original_default = ttnn.GetDefaultDevice()
     except Exception:
         original_default = None
-    device = ttnn.open_device(device_id=0, l1_small_size=32768)
+    # 65536 B L1_SMALL is the value used by the speech-generation PCC tests
+    # (``test_code_hifigan.py`` and ``test_seamless_m4t_v2_model.py``). 32768 B works for the
+    # text-only path but is not enough for S2ST: speech-encoder + T2U + vocoder chained back-to-back
+    # exhausts L1_SMALL before the vocoder's ``_resblock`` conv1d can allocate.
+    device = ttnn.open_device(device_id=0, l1_small_size=65536)
     ttnn.SetDefaultDevice(device)
 
     try:
