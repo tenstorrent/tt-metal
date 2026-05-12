@@ -17,6 +17,7 @@
 #endif
 #include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
+#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 #ifdef TRISC_PACK
 #include "llk_pack_api.h"
@@ -79,8 +80,9 @@ ALWI void sfpu_post_mul_tile(uint32_t dst, uint32_t scaler_bits) {
 
 }  // namespace detail
 
-// Per output tile: (1) optional cross-tile binary fold along reduce axis, (2) sfpu_reduce in DST.
-// Binary fold and sfpu_reduce each reprogram SFPCONFIG; re-init before each step every iteration.
+// =============================================================================
+// Main Reduce Function Implementation
+// =============================================================================
 
 template <ckernel::PoolType pool_type, ckernel::ReduceDim reduce_dim, DataFormat format>
 ALWI void reduce_sfpu(
@@ -89,30 +91,26 @@ ALWI void reduce_sfpu(
     uint32_t output_cb_id,
     ReduceInputBlockShape input_block_shape,
     uint32_t post_mul_scaler_bits) {
-#ifndef REDUCE_POST_MUL
-    (void)post_mul_scaler_bits;
-#endif
+    // =============================================================================
+    // Static Assertions (compile-time validation)
+    // =============================================================================
     static_assert(pool_type == ckernel::PoolType::MAX, "reduce_sfpu: MAX only; MIN dispatches to reduce_sfpu_{h,w}_neg.cpp");
     static_assert(
         reduce_dim == ckernel::ReduceDim::REDUCE_ROW || reduce_dim == ckernel::ReduceDim::REDUCE_COL,
         "reduce_sfpu: REDUCE_ROW or REDUCE_COL only");
     static_assert(format == DataFormat::Int32 || format == DataFormat::Float32, "reduce_sfpu: Int32 or Float32 only");
 
+#ifndef REDUCE_POST_MUL
+    (void)post_mul_scaler_bits;
+#endif
     constexpr uint32_t onetile = 1;
 
-    // Two DST registers used per output tile:
-    //   acc_dst  - running max/min (initialised from the first input tile)
-    //   work_dst - holds each subsequent input tile while the binary fold
-    //              (binary_*_tile / binary_*_int32_tile) merges it into acc_dst.
-    constexpr uint32_t acc_dst = 0;
-    constexpr uint32_t work_dst = 1;
+    constexpr uint32_t dst_idx = 0;
+    constexpr uint32_t next_dst_idx = 1;
 
     const uint32_t Ht = input_block_shape.rows;
     const uint32_t Wt = input_block_shape.cols;
     const uint32_t NC = input_block_shape.batches;
-
-    const uint32_t tiles_per_output = (reduce_dim == ckernel::ReduceDim::REDUCE_ROW) ? Wt : Ht;
-    const bool needs_cross_tile_fold = tiles_per_output > 1;
 
     init_sfpu(input_cb_id, output_cb_id);
     copy_tile_to_dst_init_short(input_cb_id);
@@ -121,41 +119,105 @@ ALWI void reduce_sfpu(
 
     detail::sfpu_reduce_pack_mask_config<reduce_dim>();
 
-    const uint32_t outer_count = (reduce_dim == ckernel::ReduceDim::REDUCE_ROW) ? Ht : Wt;
+    if constexpr (reduce_dim == ckernel::ReduceDim::REDUCE_COL) {
+        // =================================================================
+        // REDUCE_COL: H reduction - each column -> 1 output tile (Wt outputs per batch)
+        // Need chunking due to DEST register limits
+        // StreamingPolicy: Tiles arrive in N C W_skip H W_chunk order (chunked by chunk_size)
+        // PreloadedPolicy: Tiles in row-major order, indexed as batch_offset + ht*stride + wt
+        // =================================================================
 
-    for (uint32_t nc = 0; nc < NC; ++nc) {
-        for (uint32_t i = 0; i < outer_count; ++i) {
-            tile_regs_acquire();
+        // Auto-detect chunk size from DEST register capacity
+        // Both reader (dataflow) and compute kernels compute this identically via DEST_AUTO_LIMIT
+        constexpr uint32_t chunk_size = DEST_AUTO_LIMIT;
+        constexpr uint32_t col_work_dst = chunk_size;
+        const bool needs_cross_tile_fold = Ht > 1;
 
-            if (needs_cross_tile_fold) {
-                detail::sfpu_reduce_max_fold_init<format>();
-            }
+        for (uint32_t nc = 0; nc < NC; ++nc) {
+            for (uint32_t wt_base = 0; wt_base < Wt; wt_base += chunk_size) {
+                const uint32_t chunk_end = (wt_base + chunk_size < Wt) ? (wt_base + chunk_size) : Wt;
+                const uint32_t current_chunk = chunk_end - wt_base;
 
-            cb_wait_front(input_cb_id, onetile);
-            copy_tile(input_cb_id, 0, acc_dst);
-            cb_pop_front(input_cb_id, onetile);
+                tile_regs_acquire();
 
-            for (uint32_t k = 1; k < tiles_per_output; ++k) {
-                cb_wait_front(input_cb_id, onetile);
-                copy_tile(input_cb_id, 0, work_dst);
-                detail::sfpu_reduce_max_fold_tile<format>(acc_dst, work_dst, acc_dst);
-                cb_pop_front(input_cb_id, onetile);
-            }
+                if (needs_cross_tile_fold) {
+                    detail::sfpu_reduce_max_fold_init<format>();
+                }
 
-            sfpu_reduce_init<pool_type, format>();
-            sfpu_reduce<pool_type, format, reduce_dim>(acc_dst, /*ct_dim=*/1, /*rt_dim=*/1);
+                for (uint32_t ht = 0; ht < Ht; ++ht) {
+                    for (uint32_t k = 0; k < current_chunk; ++k) {
+                        cb_wait_front(input_cb_id, onetile);
+                        if (ht == 0) {
+                            copy_tile(input_cb_id, 0, k);  // init acc[k] with first row's tile
+                        } else {
+                            copy_tile(input_cb_id, 0, col_work_dst);
+                            detail::sfpu_reduce_max_fold_tile<format>(k, col_work_dst, k);
+                        }
+                        cb_pop_front(input_cb_id, onetile);
+                    }
+                }
+
+                sfpu_reduce_init<pool_type, format>();
+                for (uint32_t k = 0; k < current_chunk; ++k) {
+                    sfpu_reduce<pool_type, format, reduce_dim>(k, /*ct_dim=*/1, /*rt_dim=*/1);
+                }
 
 #ifdef REDUCE_POST_MUL
-            detail::sfpu_post_mul_tile<format>(acc_dst, post_mul_scaler_bits);
+                for (uint32_t k = 0; k < current_chunk; ++k) {
+                    detail::sfpu_post_mul_tile<format>(k, post_mul_scaler_bits);
+                }
 #endif
 
-            tile_regs_commit();
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t k = 0; k < current_chunk; ++k) {
+                    cb_reserve_back(output_cb_id, onetile);
+                    pack_tile(k, output_cb_id);
+                    cb_push_back(output_cb_id, onetile);
+                }
+                tile_regs_release();
+            }
+        }
+    } else {
+        // =================================================================
+        // REDUCE_ROW: W reduction - each row -> 1 output tile (Ht outputs per batch)
+        // =================================================================
+        const bool needs_cross_tile_fold = Wt > 1;
 
-            cb_reserve_back(output_cb_id, onetile);
-            tile_regs_wait();
-            pack_tile(acc_dst, output_cb_id);
-            tile_regs_release();
-            cb_push_back(output_cb_id, onetile);
+        for (uint32_t nc = 0; nc < NC; ++nc) {
+            for (uint32_t ht = 0; ht < Ht; ++ht) {
+                tile_regs_acquire();
+
+                if (needs_cross_tile_fold) {
+                    detail::sfpu_reduce_max_fold_init<format>();
+                }
+
+                cb_wait_front(input_cb_id, onetile);
+                copy_tile(input_cb_id, 0, dst_idx);
+                cb_pop_front(input_cb_id, onetile);
+
+                for (uint32_t wt = 1; wt < Wt; ++wt) {
+                    cb_wait_front(input_cb_id, onetile);
+                    copy_tile(input_cb_id, 0, next_dst_idx);
+                    detail::sfpu_reduce_max_fold_tile<format>(dst_idx, next_dst_idx, dst_idx);
+                    cb_pop_front(input_cb_id, onetile);
+                }
+
+                sfpu_reduce_init<pool_type, format>();
+                sfpu_reduce<pool_type, format, reduce_dim>(dst_idx, /*ct_dim=*/1, /*rt_dim=*/1);
+
+#ifdef REDUCE_POST_MUL
+                detail::sfpu_post_mul_tile<format>(dst_idx, post_mul_scaler_bits);
+#endif
+
+                tile_regs_commit();
+
+                cb_reserve_back(output_cb_id, onetile);
+                tile_regs_wait();
+                pack_tile(dst_idx, output_cb_id);
+                tile_regs_release();
+                cb_push_back(output_cb_id, onetile);
+            }
         }
     }
 
