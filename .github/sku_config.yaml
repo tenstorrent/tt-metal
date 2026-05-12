@@ -51,6 +51,7 @@ skus:
       - topology-6u
       - in-service
 
+  # g05glx04 (failing with SDPA)
   wh_galaxy_perf_g05glx04:
     runs_on:
       - arch-wormhole_b0
@@ -59,6 +60,7 @@ skus:
       - in-service
       - g05glx04
 
+  # g14glx04 (failing on tilize, NO TAG - ASK INFRA TO ADD LABEL)
   wh_galaxy_perf_g14glx04:
     runs_on:
       - arch-wormhole_b0
@@ -67,6 +69,7 @@ skus:
       - in-service
       - g14glx04
 
+  # g14glx03 (passing, no tag)
   wh_galaxy_perf_g14glx03:
     runs_on:
       - arch-wormhole_b0
@@ -75,6 +78,7 @@ skus:
       - in-service
       - g14glx03
 
+  # g04glx01 (failing on matmul)
   wh_galaxy_perf_g04glx01:
     runs_on:
       - arch-wormhole_b0
@@ -83,6 +87,7 @@ skus:
       - in-service
       - g04glx01
 
+  # g04glx03 (unsure of status)
   wh_galaxy_perf_g04glx03:
     runs_on:
       - arch-wormhole_b0
