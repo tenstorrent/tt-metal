@@ -208,7 +208,7 @@ void bind_binary_inplace_operation(
             input_tensor_a_activations (List[str], optional): list of activation functions to apply to input_a. Defaults to `None`.
             input_tensor_b_activations (List[str], optional): list of activation functions to apply to input_b. Defaults to `None`.
             sub_core_grids (CoreRangeSet, optional): sub core grids. Defaults to `None`.
-            sub_device_id (SubDeviceId, optional): sub device ID for core resolution. Mutually exclusive with sub_core_grids. Defaults to `None`.
+            sub_device_id (ttnn.SubDeviceId, optional): sub device ID for core resolution. Mutually exclusive with sub_core_grids. Defaults to `None`.
 
         {6}
 

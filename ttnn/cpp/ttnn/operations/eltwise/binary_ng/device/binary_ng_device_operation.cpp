@@ -521,15 +521,6 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     using OperationType = ttnn::operations::binary_ng::BinaryNgDeviceOperation;
 
-    // Resolve sub_device_id to sub_core_grids if provided
-    auto resolved_sub_core_grids = sub_core_grids;
-    if (sub_device_id.has_value()) {
-        TT_FATAL(!sub_core_grids.has_value(), "Cannot specify both sub_core_grids and sub_device_id");
-        auto* device = input_tensor_a.device();
-        resolved_sub_core_grids =
-            device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
-    }
-
     // Validate storage type for input tensors
     TT_FATAL(
         input_tensor_a.storage_type() == StorageType::DEVICE,
@@ -540,6 +531,15 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         input_tensor_b.storage_type() == StorageType::DEVICE,
         "Input tensor B must be on device, got storage type: {}",
         input_tensor_b.storage_type());
+
+    // Resolve sub_device_id to sub_core_grids if provided (after device validation)
+    auto resolved_sub_core_grids = sub_core_grids;
+    if (sub_device_id.has_value()) {
+        TT_FATAL(!sub_core_grids.has_value(), "Cannot specify both sub_core_grids and sub_device_id");
+        auto* device = input_tensor_a.device();
+        resolved_sub_core_grids =
+            device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
+    }
 
     auto subtile_broadcast_type = ttnn::operations::binary_ng::get_subtile_broadcast_type(
         input_tensor_a.logical_shape()[-2],
