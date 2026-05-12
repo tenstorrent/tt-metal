@@ -268,6 +268,13 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         N_tiles,                             // 20: N_tiles_per_chunk (= N_tiles when N_chunks=1)
         in3_tile_size,                       // 21: in3_tile_size (dummy, no AG)
         static_cast<uint32_t>(transpose_a),  // 22: transpose_a
+        // 23: use_offset — when false (caller has offset_tiles=0 and effective_M_tiles=0),
+        // the kernel skips the per-tile offset add in the address formula. The runtime
+        // args still carry offset / parent_M_tiles_stride for hot reload, but they're
+        // not read. This avoids paying the per-tile address-compute overhead for the
+        // common (no offset) case (e.g. all moe-ffn backward calls).
+        static_cast<uint32_t>(
+            operation_attributes.in0_row_offset_tiles > 0 || operation_attributes.effective_M_tiles > 0),
     };
     append_accessors(in0_sender_compile_time_args, input_tensor, output_tensor);
 
@@ -303,6 +310,9 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         N_tiles,  // N_tiles_per_chunk
         in3_tile_size,
         static_cast<uint32_t>(transpose_a),  // 22: transpose_a
+        static_cast<uint32_t>(
+            operation_attributes.in0_row_offset_tiles > 0 ||
+            operation_attributes.effective_M_tiles > 0),  // 23: use_offset
     };
     append_accessors(in0_receiver_compile_time_args, input_tensor, output_tensor);
 

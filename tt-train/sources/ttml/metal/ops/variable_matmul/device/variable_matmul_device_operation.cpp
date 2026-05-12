@@ -121,7 +121,11 @@ VariableMatmulDeviceOperation::spec_return_value_t VariableMatmulDeviceOperation
     // With transpose_b, the weight is stored as [N, K] so N is at logical[-2].
     const uint32_t N = config.transpose_b ? in1.logical_shape()[-2] : in1.logical_shape()[-1];
     // M dimension: use effective_M_tiles when provided (offset-read mode); otherwise derive
-    // from the input tensor's full M dim ([- 1] if transpose_a, else [-2]).
+    // from the input tensor's full M dim ([-1] if transpose_a, else [-2]).
+    // NB: the original code only set output_shape[-1] = N and inherited [-2] from in0 —
+    // that was a latent bug for transpose_a (output was sized [M_e, N] instead of [H, N]),
+    // hidden by the matmul kernel writing past the buffer end. Fixing this exposes the
+    // real DRAM cost of the larger gradient tensors in the moe-ffn backward.
     const uint32_t M_from_input = config.transpose_a ? in0.logical_shape()[-1] : in0.logical_shape()[-2];
     const uint32_t M = (operation_attributes.effective_M_tiles > 0)
                            ? (operation_attributes.effective_M_tiles * tt::constants::TILE_HEIGHT)
@@ -151,6 +155,10 @@ ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(
     const auto& a = tensor_args.input_tensor;
     const bool transpose_a = operation_attributes.config.transpose_a;
     const bool transpose_b = operation_attributes.config.transpose_b;
+    // use_offset is a compile-time kernel knob: when true, the address formula adds
+    // in0_row_offset_tiles to the M-axis. Splitting on this gives two cached programs
+    // (offset-enabled / disabled) but keeps the (offset=0) hot path at baseline cost.
+    const bool use_offset = operation_attributes.in0_row_offset_tiles > 0 || operation_attributes.effective_M_tiles > 0;
     // physical_volume / padded[-1] gives the count along the *stored* outer dim. With
     // transpose_a that's K-tiles; without, M-tiles. Either way, actual_M (for the matmul) is
     // along the stored *other* dim: padded_shape[-2] when transpose_a, [-1] otherwise — both
@@ -174,7 +182,8 @@ ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(
         w.dtype(),
         w.logical_shape(),
         transpose_a,
-        transpose_b);
+        transpose_b,
+        use_offset);
 }
 
 }  // namespace ttml::metal::ops::variable_matmul::device
