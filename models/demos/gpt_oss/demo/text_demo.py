@@ -172,6 +172,11 @@ def prepare_gpt_oss_generator_args(
     return model_args, model, page_table, tt_kv_cache, tokenizer, processor, paged_attention_config
 
 
+# run_in_ci=True selects the variants that fire under CI=true; everything else
+# is skipped in setup. Long-sequence prefill variants (prefill_1k / 64k / 128k)
+# are kept out of CI because runner availability is limited and we only want
+# the canonical prefill_128 sanity to run on every push. Local / release
+# invocations can still target them explicitly with -k.
 @pytest.mark.timeout(7200)
 @pytest.mark.parametrize(
     "input_prompts, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, page_params, sampling_params, enable_decode_trace, enable_prefill_trace, warmup_prefill, users_row_sharded, long_context_mode, stop_at_eos, run_in_ci",
@@ -208,7 +213,7 @@ def prepare_gpt_oss_generator_args(
             False,  # users_row_sharded
             False,  # long_context_mode
             True,  # stop_at_eos
-            True,  # run_in_ci
+            False,  # run_in_ci
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
@@ -293,7 +298,7 @@ def prepare_gpt_oss_generator_args(
             False,  # users_row_sharded
             False,  # long_context_mode
             False,  # stop_at_eos
-            True,  # run_in_ci
+            False,  # run_in_ci
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",  # input_prompts
@@ -310,7 +315,7 @@ def prepare_gpt_oss_generator_args(
             False,  # users_row_sharded
             False,  # long_context_mode
             False,  # stop_at_eos
-            True,  # run_in_ci
+            False,  # run_in_ci
         ),
         # Batch 128
         (
