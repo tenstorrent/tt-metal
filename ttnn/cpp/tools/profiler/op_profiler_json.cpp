@@ -99,7 +99,7 @@ static json get_kernels_json(ChipId device_id, const Program& program) {
         for (const auto& binary_meta : kernel.binary_meta) {
             auto key = fmt::format(
                 "{}_{}_{}_max_kernel_size", core_type_name, processor_class_name, binary_meta.processor_type);
-            if (kernelSizes.value(key, 0) < binary_meta.packed_size) {
+            if (static_cast<std::size_t>(kernelSizes.value(key, 0)) < binary_meta.packed_size) {
                 kernelSizes[key] = binary_meta.packed_size;
             }
         }

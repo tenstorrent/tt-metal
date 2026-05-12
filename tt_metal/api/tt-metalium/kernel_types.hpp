@@ -64,11 +64,11 @@ struct DataMovementConfig {
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0;  // For data transfer kernels: NCRISC & BRISC
     NOC noc = NOC::RISCV_0_default;
     NOC_MODE noc_mode = NOC_MODE::DM_DEDICATED_NOC;
-    std::vector<uint32_t> compile_args;
+    std::vector<uint32_t> compile_args = {};
     // Will cause CompileProgram to emit a file hlk_defines_generated.h
     // Each unique combination of defines will produce a unique compiled instantiation
     // This file is then automatically included in the generated compiled kernel files
-    std::map<std::string, std::string> defines;
+    std::map<std::string, std::string> defines = {};
     // Both compile_args and named_compile_args contain compile time arguments
     // The former is accessed by index, the latter by name
     // Can be used in new/existing kernels by explicitly defining them in the config
@@ -76,11 +76,11 @@ struct DataMovementConfig {
     //     std::unordered_map<std::string, uint32_t> named_compile_args = {{"arg1", 5}, {"arg2", 7}};
     //     CreateKernel(program, "kernel.cpp", core, DataMovementConfig{.compile_args = compile_args,
     //     .named_compile_args = named_compile_args})
-    std::unordered_map<std::string, uint32_t> named_compile_args;
+    std::unordered_map<std::string, uint32_t> named_compile_args = {};
     // Set the compiler and linker optimization level
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2;
     // Provide include paths for the kernel compiler (-I)
-    std::vector<std::filesystem::path> compiler_include_paths;
+    std::vector<std::filesystem::path> compiler_include_paths = {};
 };
 
 struct ReaderDataMovementConfig : public DataMovementConfig {
@@ -105,14 +105,14 @@ struct ComputeConfig {
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
     bool dst_full_sync_en = false;
-    std::vector<UnpackToDestMode> unpack_to_dest_mode;
+    std::vector<UnpackToDestMode> unpack_to_dest_mode = {};
     bool bfp8_pack_precise = false;
     bool math_approx_mode = false;
-    std::vector<uint32_t> compile_args;
+    std::vector<uint32_t> compile_args = {};
     // Will cause CompileProgram to emit a file hlk_defines_generated.h
     // Each unique combination of defines will produce a unique compiled instantiation
     // This file is then automatically included in the generated compiled kernel files
-    std::map<std::string, std::string> defines;
+    std::map<std::string, std::string> defines = {};
     // Both compile_args and named_compile_args contain compile time arguments
     // The former is accessed by index, the latter by name
     // Can be used in new/existing kernels by explicitly defining them in the config
@@ -120,11 +120,11 @@ struct ComputeConfig {
     //     std::unordered_map<std::string, uint32_t> named_compile_args = {{"arg1", 5}, {"arg2", 7}};
     //     CreateKernel(program, "kernel.cpp", core, ComputeConfig{.compile_args = compile_args, .named_compile_args =
     //     named_compile_args})
-    std::unordered_map<std::string, uint32_t> named_compile_args;
+    std::unordered_map<std::string, uint32_t> named_compile_args = {};
     // Set the compiler and linker optimization level
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O3;
     // Provide include paths for the kernel compiler (-I)
-    std::vector<std::filesystem::path> compiler_include_paths;
+    std::vector<std::filesystem::path> compiler_include_paths = {};
 };
 
 // These are only used in op_profiler, are unstable and have not been designed for general use.

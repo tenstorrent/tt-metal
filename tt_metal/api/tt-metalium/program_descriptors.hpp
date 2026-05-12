@@ -64,8 +64,8 @@ struct CBDescriptor {
 
     uint32_t total_size = 0;
     CoreRangeSet core_ranges;
-    FormatDescriptors format_descriptors;
-    FormatDescriptors remote_format_descriptors;
+    FormatDescriptors format_descriptors = {};
+    FormatDescriptors remote_format_descriptors = {};
 
     // TODO: Investigate avoiding storing pointers here
     Buffer* buffer = nullptr;

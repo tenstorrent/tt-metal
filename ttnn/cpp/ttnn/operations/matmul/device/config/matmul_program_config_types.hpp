@@ -32,7 +32,7 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
     std::size_t per_core_M{};
     std::size_t per_core_N{};
     bool transpose_mcast{};
-    std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
+    std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation = std::nullopt;
     bool fuse_batch = true;
     std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
 };
@@ -59,7 +59,7 @@ struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     std::size_t per_core_M{};
     std::size_t per_core_N{};
     bool fuse_batch{};
-    std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
+    std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation = std::nullopt;
     bool mcast_in0{};
     bool gather_in0{};
     CoreRangeSet hop_cores;
@@ -72,14 +72,14 @@ struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
     std::size_t in0_block_w{};
     std::size_t per_core_M{};
     std::size_t per_core_N{};
-    std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
+    std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation = std::nullopt;
 };
 
 struct MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig {
     std::size_t in0_block_w{};
     std::size_t per_core_M{};
     std::size_t per_core_N{};
-    std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
+    std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation = std::nullopt;
 };
 
 struct MatmulMultiCoreProgramConfig {

@@ -56,7 +56,7 @@ std::vector<BufferInfo> get_buffers(const std::vector<tt::tt_metal::distributed:
             std::map<uint32_t, uint32_t> bank_to_num_pages;
             if (buffer->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
                 uint32_t bank_id = 0;
-                for (int page_index = 0; page_index < num_pages; page_index++) {
+                for (uint32_t page_index = 0; page_index < num_pages; page_index++) {
                     if (!bank_to_num_pages.contains(bank_id)) {
                         bank_to_num_pages[bank_id] = 0;
                     }
