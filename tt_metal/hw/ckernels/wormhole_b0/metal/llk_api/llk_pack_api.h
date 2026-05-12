@@ -25,19 +25,6 @@
  * LLK PACK
  *************************************************************************/
 
-// TODO NC: Remove as the part of tt-metal#34499
-template <bool untilize = false, bool zero_output = false, bool tilize = false /*unused*/>
-inline void llk_pack_mop_config(const uint32_t output, std::uint32_t num_tiles = 1) {
-    const std::uint32_t output_id = get_output_id(output);
-    const std::uint32_t num_faces = get_output_num_faces(output_id);
-    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
-    const bool partial_face = get_output_partial_face(output_id) && IS_BFP_FORMAT((uint)pack_dst_format[output_id]);
-    const bool narrow_tile = get_output_narrow_tile(output_id);
-
-    _llk_pack_mop_config_<untilize, zero_output>(
-        pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
-}
-
 inline void llk_pack_set_fp32_dest_acc(bool enable) { _llk_pack_set_fp32_dest_acc_(enable); }
 
 template <bool is_fp32_dest_acc_en>
@@ -99,7 +86,11 @@ inline void llk_pack_untilize_hw_configure_disaggregated(
     llk_pack_untilize_hw_configure<is_fp32_dest_acc_en, untilize>(&llk_pack_params, face_r_dim, num_faces);
 }
 
-template <bool untilize = false, bool zero_output = false, bool tilize = false /*unused*/>
+template <
+    bool untilize = false,
+    bool zero_output = false,
+    bool tilize = false /*unused*/,
+    bool skip_addrmod_config = false>
 inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t num_tiles = 1) {
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
@@ -107,10 +98,12 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    LLK_ASSERT_BLOCK(are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-        pack_src_format[output_id], pack_dst_format[output_id], face_r_dim));
+    if constexpr (!skip_addrmod_config) {
+        LLK_ASSERT_BLOCK(are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
+            pack_src_format[output_id], pack_dst_format[output_id], face_r_dim));
+    }
 
-    _llk_pack_init_<untilize, zero_output>(
+    _llk_pack_init_<untilize, zero_output, tilize, skip_addrmod_config>(
         pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
 }
 
@@ -387,7 +380,7 @@ inline void llk_pack_debug_dump(std::uint8_t* data, std::uint32_t byte_size) { _
 
 inline void llk_pack_debug_dump_seek(std::uint8_t offset) { _llk_pack_debug_dump_seek_(offset); }
 
-template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const std::uint32_t output_id = get_output_id(new_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
@@ -395,7 +388,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, is_tile_dim_reconfig_en>(
+    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         get_local_cb_interface(output_id).fifo_page_size,
@@ -406,7 +399,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
 }
 
 // TODO NC: Clean up as the part of tt-metal#34499
-template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const std::uint32_t new_output) {
     std::uint32_t old_output_id = get_output_id(old_output);
     std::uint32_t new_output_id = get_output_id(new_output);
@@ -414,10 +407,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const 
     if ((pack_dst_format[old_output_id] != pack_dst_format[new_output_id]) &&
         (pack_dst_format[old_output_id] != (uint)DataFormat::Invalid) &&
         (pack_dst_format[new_output_id] != (uint)DataFormat::Invalid)) {
-        llk_pack_reconfig_data_format<is_fp32_dest_acc_en, is_tile_dim_reconfig_en>(new_output);
-    } else if constexpr (is_tile_dim_reconfig_en) {
-        // Same format but different tile dims
-        llk_pack_mop_config<false, false>(new_output);
+        llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(new_output);
     }
 }
 

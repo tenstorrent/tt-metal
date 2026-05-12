@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -93,6 +94,20 @@ def create_parser() -> argparse.ArgumentParser:
         help="Relaxed acceptance delta for the MTP verification stage",
     )
     parser.add_argument(
+        "--enable-sram-hot-experts",
+        action="store_true",
+        help=(
+            "Pin the highest-frequency routed experts to per-core L1 via "
+            "prepare_compressed_sram_slots. Requires TT_METAL_ALLOCATOR_MODE_HYBRID=1."
+        ),
+    )
+    parser.add_argument(
+        "--sram-hot-experts-ceiling",
+        type=int,
+        default=64,
+        help="Maximum number of SRAM-pinned hot experts per MoE layer (top-N by routing frequency).",
+    )
+    parser.add_argument(
         "--launch-only",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -152,13 +167,14 @@ def run_demo(
     top_k: int = 1,
     top_p: float = 1.0,
     temperature: float = 0.6,
+    enable_sram_hot_experts: bool = False,
+    sram_hot_experts_ceiling: int = 64,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
     iterations = max_new_tokens
     logger.info(f"Starting DeepSeek V3 B1 demo (iterations={iterations})")
 
     with open_mesh_device() as mesh_device:
-        # Initialize model pipeline
         model_pipeline = ModelPipeline(
             mesh_device=mesh_device,
             weights_mode=weights_mode,
@@ -174,6 +190,8 @@ def run_demo(
             top_k=top_k,
             top_p=top_p,
             temperature=temperature,
+            enable_sram_hot_experts=enable_sram_hot_experts,
+            sram_hot_experts_ceiling=sram_hot_experts_ceiling,
         )
 
         my_mesh_id = mesh_device.get_system_mesh_id()
@@ -241,6 +259,9 @@ def main(argv: list[str] | None = None) -> int:
         if not index_path.is_file():
             parser.error(f"--model-path must contain model.safetensors.index.json (missing {index_path})")
 
+    if args.enable_sram_hot_experts and os.environ.get("TT_METAL_ALLOCATOR_MODE_HYBRID") != "1":
+        parser.error("--enable-sram-hot-experts requires TT_METAL_ALLOCATOR_MODE_HYBRID=1; export it before launching.")
+
     io_socket_descriptor_prefix = args.io_socket_descriptor_prefix
     if args.launch_only and io_socket_descriptor_prefix is None:
         io_socket_descriptor_prefix = "deepseek"
@@ -263,6 +284,8 @@ def main(argv: list[str] | None = None) -> int:
         top_k=args.top_k,
         top_p=args.top_p,
         temperature=args.temperature,
+        enable_sram_hot_experts=args.enable_sram_hot_experts,
+        sram_hot_experts_ceiling=args.sram_hot_experts_ceiling,
     )
     print(end="", file=sys.stdout, flush=True)
     return 0

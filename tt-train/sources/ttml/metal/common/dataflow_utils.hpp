@@ -16,6 +16,13 @@
 
 constexpr uint32_t onetile = 1U;
 
+inline constexpr uint32_t round_up(uint32_t a, uint32_t b) {
+    if ((b & (b - 1U)) == 0U) {
+        return (a + (b - 1U)) & -b;
+    }
+    return ((a + b - 1U) / b) * b;
+}
+
 // IEEE 754 bit representations for compile-time template parameters
 constexpr uint32_t FP32_ONE_BITS = 0x3F800000;    // 1.0f
 constexpr uint32_t FP32_ZERO_BITS = 0x00000000;   // 0.0f
@@ -125,6 +132,22 @@ inline void fill_reserved_tiles_with_zero(uint32_t cb_id, uint32_t start_slot, u
         for (uint32_t i = 0; i < num_u32_per_tile; ++i) {
             ptr[i] = 0;
         }
+    }
+}
+
+/**
+ * Zero-fill an L1 region asynchronously by issuing NoC reads from the hardware zero region
+ * (`MEM_ZEROS_BASE`).
+ *
+ * Caller must call `noc_async_read_barrier()` before consuming `write_addr`.
+ */
+inline void fill_zeros_async(uint32_t write_addr, uint32_t bytes) {
+    const uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+    while (bytes > 0U) {
+        const uint32_t read_size = bytes > MEM_ZEROS_SIZE ? MEM_ZEROS_SIZE : bytes;
+        noc_async_read(zeros_noc_addr, write_addr, read_size);
+        write_addr += read_size;
+        bytes -= read_size;
     }
 }
 

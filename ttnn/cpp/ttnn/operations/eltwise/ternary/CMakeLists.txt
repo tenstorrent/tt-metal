@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_eltwise_ternary ${LIB_TYPE})
 add_library(TTNN::Ops::Eltwise::Ternary ALIAS ttnn_op_eltwise_ternary)
 
@@ -18,17 +20,13 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES common/ternary_op_types.hpp ternary.hpp
+        FILES ${TTNN_OP_ELTWISE_TERNARY_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        ternary_composite_op.cpp
-        ternary.cpp
-        device/ternary_device_operation.cpp
-        device/ternary_program_factory.cpp
-        device/ternary_op_utils.cpp
+        ${TTNN_OP_ELTWISE_TERNARY_SRCS}
 )
 
 target_include_directories(ttnn_op_eltwise_ternary PRIVATE ${FixmeOpIncDirs})
