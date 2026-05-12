@@ -8,13 +8,13 @@ PI0.5 LIBERO rollout evaluator — N=10 vs N=4 task success measurement.
 Pipeline:
   obs (LIBERO env)
     → resize images to 224x224, normalize to [-1,1]
-    → QUANTILE-normalize state via stats from finetune checkpoint
+    → MEAN_STD-normalize state via stats from finetune checkpoint
     → discretize state to 256 bins → string
     → prompt = f"Task: {desc}, State: {bins};\\nAction: "
     → SentencePiece tokenize (max_len=200)
   Pi0_5Model.sample_actions(images, masks, tokens, lang_masks)
     → (B, 50, 32) normalized action chunk
-    → take first 7 dims, inverse-QUANTILE denorm
+    → take first 7 dims, MEAN_STD denormalize (a_raw = a_norm * std + mean)
     → env.step each of the 50 actions
 
 Run:
@@ -92,18 +92,21 @@ class Pi0_5LiberoAdapter:
         self.sp = sentencepiece.SentencePieceProcessor()
         self.sp.load(tokenizer_path)
 
-        # Normalizer stats (action.q01/q99, observation.state.q01/q99)
+        # Normalizer stats. The pi05_libero finetune was trained with MEAN_STD
+        # (see policy_preprocessor.json: norm_map={"ACTION": "MEAN_STD", "STATE": "MEAN_STD"})
+        # — not QUANTILES. The safetensors file contains BOTH; using the wrong
+        # one silently produces actions in the wrong scale/offset.
         stats_path = os.path.join(
             checkpoint_dir,
             "policy_preprocessor_step_2_normalizer_processor.safetensors",
         )
         flat = load_file(stats_path)
-        self.action_q01 = flat["action.q01"].float().numpy()  # (7,)
-        self.action_q99 = flat["action.q99"].float().numpy()
-        self.state_q01 = flat["observation.state.q01"].float().numpy()  # (8,)
-        self.state_q99 = flat["observation.state.q99"].float().numpy()
-        self.real_action_dim = len(self.action_q01)
-        self.real_state_dim = len(self.state_q01)
+        self.action_mean = flat["action.mean"].float().numpy()  # (7,)
+        self.action_std = flat["action.std"].float().numpy()
+        self.state_mean = flat["observation.state.mean"].float().numpy()  # (8,)
+        self.state_std = flat["observation.state.std"].float().numpy()
+        self.real_action_dim = len(self.action_mean)
+        self.real_state_dim = len(self.state_mean)
 
         # Model
         cfg = Pi0_5ModelConfig()
@@ -159,11 +162,11 @@ class Pi0_5LiberoAdapter:
 
     # --- state ---
     def _state_normalize(self, state: np.ndarray) -> np.ndarray:
-        """QUANTILES normalization → padded to max_state_dim. No clipping
-        (matches lerobot's NormalizerProcessorStep QUANTILES forward formula).
+        """MEAN_STD normalization → padded to max_state_dim. Matches the
+        finetune's preprocessor (norm_map STATE: MEAN_STD).
         """
         eps = 1e-8
-        s = 2.0 * (state - self.state_q01) / (self.state_q99 - self.state_q01 + eps) - 1.0
+        s = (state - self.state_mean) / (self.state_std + eps)
         padded = np.zeros(self.max_state_dim, dtype=np.float32)
         padded[: len(s)] = s
         return padded
@@ -196,10 +199,12 @@ class Pi0_5LiberoAdapter:
 
     # --- action denorm ---
     def _denormalize_actions(self, actions_norm: np.ndarray) -> np.ndarray:
-        """(chunk, max_action_dim) normalized → (chunk, real_action_dim) raw."""
-        eps = 1e-8
+        """(chunk, max_action_dim) normalized → (chunk, real_action_dim) raw.
+        MEAN_STD inverse: a_raw = a_norm * std + mean. Matches the finetune's
+        postprocessor (norm_map ACTION: MEAN_STD).
+        """
         a = actions_norm[:, : self.real_action_dim]
-        a = (a + 1.0) * (self.action_q99 - self.action_q01) / 2.0 + self.action_q01
+        a = a * self.action_std + self.action_mean
         return a
 
     # --- main entry: predict a chunk given LIBERO obs ---
@@ -413,8 +418,17 @@ def run_episode(
         )
         dt = time.perf_counter() - t0
         inference_times.append(dt)
-        print(f"      chunk {len(inference_times)} at step {n_steps}: pred {dt:.1f}s", flush=True)
-        # Apply each action in the chunk
+        # Debug: dump the first action of the first 2 chunks so we can sanity-check direction.
+        if len(inference_times) <= 2:
+            print(
+                f"      chunk {len(inference_times)} at step {n_steps}: pred {dt:.2f}s "
+                f"act[0]={np.array2string(chunk[0], precision=3, suppress_small=True)} "
+                f"eef={np.array2string(obs['robot0_eef_pos'], precision=3, suppress_small=True)}",
+                flush=True,
+            )
+        else:
+            print(f"      chunk {len(inference_times)} at step {n_steps}: pred {dt:.2f}s", flush=True)
+        # Apply each action in the chunk.
         for a in chunk[:chunk_action_horizon]:
             obs, _, done, _ = env.step(a.astype(np.float64))
             n_steps += 1

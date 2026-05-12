@@ -97,7 +97,11 @@ def _set_num_steps(model, n: int) -> None:
 
 
 def _set_initial_noise(model, device, seed: int) -> None:
-    """Replace model.x_t_ttnn with a fresh (deterministic) noise tensor."""
+    """Replace model.x_t_ttnn with a fresh (deterministic) noise tensor.
+
+    Disables the per-call resampling in `sample_actions` so the deterministic
+    noise placed here is actually used.
+    """
     g = torch.Generator().manual_seed(seed)
     cfg = model.config
     noise = torch.randn(1, cfg.action_horizon, cfg.action_dim, generator=g)
@@ -108,6 +112,7 @@ def _set_initial_noise(model, device, seed: int) -> None:
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
+    model.resample_noise = False
 
 
 def _run_one(model, image_ttnn, img_mask, lang_tokens_ttnn, lang_masks_ttnn) -> torch.Tensor:

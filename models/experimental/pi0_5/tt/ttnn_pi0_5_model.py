@@ -56,6 +56,9 @@ class Pi0_5ModelTTNN:
         pad_steps = ((self.denoise_config.num_steps + 31) // 32) * 32
         self.timestep_indices = ttnn.arange(0, pad_steps, 1, device=self.device, dtype=ttnn.bfloat16)
 
+        # Initial noise tensor; resampled fresh on each sample_actions call to
+        # match lerobot/openpi reference behavior (see sample_actions below).
+        # Allocated once and reused as a destination buffer.
         x_t_torch = torch.randn(1, config.action_horizon, config.action_dim)
         self.x_t_ttnn = ttnn.from_torch(
             x_t_torch,
@@ -168,7 +171,24 @@ class Pi0_5ModelTTNN:
             ttnn.deallocate(idx)
             ttnn.deallocate(vals)
 
-        x_t_ttnn = self.x_t_ttnn
+        # Resample fresh N(0, 1) noise each call — matches lerobot's
+        # sample_noise (modeling_pi05.py:618) and the pytorch reference. Reusing
+        # one fixed noise tensor across calls (the prior bug) made every chunk
+        # in a rollout converge to the same flow-matching attractor, biasing
+        # inference toward whatever modes that seed lands near.
+        # Tests that need deterministic noise can set `self.resample_noise = False`
+        # and pre-populate `self.x_t_ttnn` (see tests/perf/test_denoise_step_accuracy.py).
+        if getattr(self, "resample_noise", True):
+            fresh_noise = torch.randn(1, self.config.action_horizon, self.config.action_dim)
+            x_t_ttnn = ttnn.from_torch(
+                fresh_noise,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+        else:
+            x_t_ttnn = self.x_t_ttnn
         fast_path = batch_size == 1
 
         for i in range(num_steps):
