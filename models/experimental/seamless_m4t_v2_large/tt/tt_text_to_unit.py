@@ -145,22 +145,98 @@ def _expand_4d_padding_additive_b1(
 def _hard_upsample_nlc(
     enc: ttnn.Tensor, repeats: Sequence[int], *, device: ttnn.Device, hidden_size: int
 ) -> ttnn.Tensor:
-    """HF ``_hard_upsample`` for batch 1: ``enc`` is ``[1, T, H]`` tile; ``repeats`` length ``T``."""
-    parts: list[ttnn.Tensor] = []
+    """HF ``_hard_upsample`` for batch 1: ``enc`` is ``[1, T, H]`` tile; ``repeats`` length ``T``.
+
+    Stage 2.2b: variable repeat-interleave as one device matmul.
+
+    The previous per-slot Python loop (``slice`` + ``repeat_interleave`` +
+    pairwise ``concat``) dispatched ~100 device ops per call, with each row
+    Slice/Concat triggering a Tilize round-trip (~70-90 us each, ~15 ms total
+    across both upsampler calls per forward).  We replace it with the same
+    cumsum + comparisons + matmul pattern that ``tt_code_hifigan.py`` already
+    uses to implement HF's ``repeat_interleave``:
+
+      1. Compute inclusive / exclusive cumulative duration boundaries on host
+         (Python ints; no torch).
+      2. Upload them as ROW_MAJOR float32 device tensors via the
+         ``ttnn.Tensor(data_list, ...)`` Python binding, which accepts a
+         Python list directly -- no ``torch`` import needed.
+      3. Build the expansion matrix ``H[1, sum_r, T]`` on device where
+         ``H[f, t] = 1`` iff ``cumsum_prev[t] <= f < cumsum_inc[t]``.  Each
+         output row picks exactly one input row.
+      4. ``out = H @ enc`` gives ``[1, sum_r, H]`` in one matmul.
+
+    Same math as ``enc[i]`` repeated ``r[i]`` times: every output row is a
+    linear combination of input rows with a single 1.0 selecting one row.
+    """
     enc_seq = len(repeats)
-    for t, r in enumerate(repeats):
-        r = int(r)
-        if r <= 0:
-            continue
-        row = ttnn.slice(enc, [0, t, 0], [1, t + 1, hidden_size])
-        row = ttnn.reshape(row, (1, 1, hidden_size))
-        reped = ttnn.repeat_interleave(row, r, dim=1)
-        parts.append(reped)
-    if not parts:
+    repeats_int = [int(r) for r in repeats]
+    if any(r < 0 for r in repeats_int):
+        raise ValueError(f"_hard_upsample_nlc: negative repeat in {repeats_int!r}")
+
+    cumsum_inc_list: list[int] = []
+    acc = 0
+    for r in repeats_int:
+        acc += r
+        cumsum_inc_list.append(acc)
+    sum_r = acc
+    if sum_r <= 0:
         raise ValueError("_hard_upsample_nlc: empty output (all repeat counts zero).")
-    out = parts[0]
-    for p in parts[1:]:
-        out = ttnn.concat([out, p], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    cumsum_prev_list = [0] + cumsum_inc_list[:-1]
+
+    # Upload boundary vectors via the ``ttnn.Tensor`` constructor (Python-list
+    # path -- no torch); ROW_MAJOR first, then tilize for broadcast ops.
+    cumsum_inc_rm = ttnn.Tensor(
+        [float(x) for x in cumsum_inc_list],
+        [1, enc_seq],
+        ttnn.float32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        device,
+    )
+    cumsum_prev_rm = ttnn.Tensor(
+        [float(x) for x in cumsum_prev_list],
+        [1, enc_seq],
+        ttnn.float32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        device,
+    )
+    cumsum_inc = ttnn.to_layout(cumsum_inc_rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    cumsum_prev = ttnn.to_layout(cumsum_prev_rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(cumsum_inc_rm)
+    ttnn.deallocate(cumsum_prev_rm)
+
+    frame_idx = ttnn.arange(
+        start=0,
+        end=sum_r,
+        step=1,
+        dtype=ttnn.float32,
+        device=device,
+    )
+
+    # Broadcast layout: cumsum_* -> [1, 1, T]; frame_idx -> [1, sum_r, 1].
+    # ge/lt broadcast to [1, sum_r, T]; the resulting H[f, t] is 1 iff the
+    # half-open boundary range ``[cumsum_prev[t], cumsum_inc[t])`` contains f.
+    c_b = ttnn.reshape(cumsum_inc, (1, 1, enc_seq))
+    cp_b = ttnn.reshape(cumsum_prev, (1, 1, enc_seq))
+    f_b = ttnn.reshape(frame_idx, (1, sum_r, 1))
+    ttnn.deallocate(frame_idx)
+
+    lower = ttnn.ge(f_b, cp_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    upper = ttnn.lt(f_b, c_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(c_b)
+    ttnn.deallocate(cp_b)
+    ttnn.deallocate(f_b)
+
+    H_mask = ttnn.logical_and(lower, upper, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(lower)
+    ttnn.deallocate(upper)
+    H = ttnn.typecast(H_mask, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(H_mask)
+
+    # H: [1, sum_r, T] bf16 TILE; enc: [1, T, hidden] bf16 TILE.
+    # out: [1, sum_r, hidden]
+    out = ttnn.matmul(H, enc, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(H)
     return out
 
 
@@ -224,10 +300,36 @@ def _conv1d_same(
         x_rm = x_tile
     # Host ROW_MAJOR conv weights: pass through to conv1d so conv2d prepares + uploads (no invalid device weights).
 
+    # stream conv weights from DRAM as ``bfloat8_b`` (block-float8).
+    # The decoder convs are DRAM-bandwidth-bound -- ``PM FPU UTIL`` is ~5% per
+    # call and the kernel spends most of its time streaming a ``[7168, 1024]``
+    # weight tensor (14 MB at bf16) per call across 12 conv calls per forward.
+    # bf8 halves the per-weight byte count, which directly halves the DRAM
+    # bytes the kernel waits on.  Activations and accumulators stay at bf16/fp32
+    # (``fp32_dest_acc_en=True`` in the compute config), so per-tile rounding is
+    # preserved -- the bf8 hit is a one-time weight quantization, the same
+    # recipe used for FFN/attention matmuls in Stage 1.
+    #
+    # enable conv-side double buffering.
+    # ``enable_weights_double_buffer`` allocates two L1 slots for incoming
+    # weight tiles so the data-movement kernel can prefetch tile ``N+1`` while
+    # the matrix engine multiplies tile ``N``.  For a bandwidth-bound conv this
+    # turns the serial ``read -> compute -> read -> compute`` pattern into an
+    # overlapped pipeline (~30% less DRAM-stall time per call).
+    # ``enable_act_double_buffer`` does the same for activation tiles.
+    # Both flags are pure scheduling optimizations; no math changes, so PCC is
+    # unaffected.
+    #
+    # ``enable_activation_reuse`` is intentionally NOT enabled: the runtime
+    # check ``act_block_h_ntiles > output_image_width_ntiles`` fails for these
+    # convs (auto-sharding gives ``act_block_h=1 tile`` while output width is
+    # 18 tiles), so the kernel refuses the flag with ``TT_FATAL``.
     conv_kwargs = dict(
-        weights_dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat8_b,
         shard_layout=None,
         deallocate_activation=True,
+        enable_weights_double_buffer=True,
+        enable_act_double_buffer=True,
     )
     if activation:
         # ``Conv1dConfig.activation`` is bound as ``UnaryWithParam`` in Python;
