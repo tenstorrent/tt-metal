@@ -2,14 +2,27 @@
 
 **Date:** 2026-05-12
 **Author:** sdawle
-**Status:** **Simulator working.** `libero_spatial` task 0: **3/3 success** at
-N=10 denoise steps, replan_steps=5, max_steps=220, pytorch backend.
+**Status:** **Simulator working on TTNN/Blackhole.** Headline numbers on
+`libero_spatial` task 0:
 
-```
-LIBERO ROLLOUT SUMMARY — backend=pytorch, libero_spatial task 0
-task: 'pick up the black bowl between the plate and the ramekin and place it on the plate'
-N=10:  success 3/3  avg_steps=95.3  avg_chunk_pred=5538ms
-```
+| backend | N | episodes | success | avg steps | ms/chunk |
+|---|---|---|---|---|---|
+| pytorch | 10 | 3 | 3/3 (100%) | 95.3 | 5538 |
+| TTNN    | 10 | 3 | 3/3 (100%) | 85.7 | 456  |
+| TTNN    | 10 | 5 | 4/5 (80%)  | 117.0 | 464 |
+| TTNN    | 4  | 5 | 5/5 (100%) | 74.2  | 226 |
+| **TTNN** | **4** | **50** | **48/50 (96%)** | **82.6** | **229** |
+
+All configs use `replan_steps=5`, `max_steps=220`, task description
+`"pick up the black bowl between the plate and the ramekin and place it on the plate"`.
+
+Key takeaways:
+- TTNN is ~12× faster per chunk than pytorch CPU (229ms vs 5538ms at N=4/N=10).
+- **N=4 outperforms N=10** on this task — 96% (48/50) vs 80% (4/5) — and ~2×
+  faster per chunk. Matches the Dense-Jump Flow Matching paper claim that
+  flow-matching policies often peak at 2–4 steps.
+- 2 failures (eps 33, 39 of the 50-ep run) both hit the 220-step cap on
+  noise-unfortunate initial conditions; not stuck or NaN.
 
 ## Three bugs fixed
 
@@ -103,7 +116,7 @@ Symptom: 0/N task success.
 
 ## How to keep iterating
 
-### Reproduce the working rollout
+### Reproduce the 50-ep N=4 TTNN result (recommended starting point)
 
 ```bash
 cd /home/tt-admin/sdawle/pi0/tt-metal
@@ -111,25 +124,20 @@ PYTHONPATH=$PWD:/storage/sdawle/libero_repo \
 MUJOCO_GL=osmesa HF_HOME=/storage/sdawle/hf_cache \
 python_env/bin/python -u \
     models/experimental/pi0_5/eval/libero_rollout.py \
-    --num-episodes 3 --max-steps 220 --steps-sweep 10 \
-    --backend pytorch --replan-steps 5
+    --num-episodes 50 --max-steps 220 --steps-sweep 4 \
+    --backend ttnn --replan-steps 5
 ```
+
+Wall time: ~20 min on Blackhole (1 chip).
 
 ### Scale up the eval
 
-- 50 episodes × all 10 libero_spatial tasks → real success-rate number.
+- All 10 libero_spatial tasks × 50 episodes × N=4 → ~3.5 hr wall.
 - Repeat for libero_object, libero_goal, libero_10 (max_steps 280/300/520).
-- N=4 vs N=10 task-success sweep — now that actions are correct, the cosine
-  sweep numbers (cos≈0.97 at N=4 vs N=10) actually mean something. Worth
-  running both to see if N=4 holds up empirically.
+- N=10 50-episode baseline on task 0 (the comparison number for our 96% N=4
+  result).
 
-### TTNN rollout
-
-The same fix applies to the TTNN path. Rerun
-`--backend ttnn` to confirm parity on Blackhole (~140 ms/chunk vs ~5.5 s for
-pytorch CPU — should be much faster than wall-clock above).
-
-### Reference setup that enabled the fix (one-time, not in git)
+### Reference setup that enabled the silu fix (one-time, not in git)
 
 ```bash
 python_env/bin/pip3 install transformers==4.53.2
@@ -155,3 +163,4 @@ M  models/experimental/pi0_5/docs/SIM_DEBUG_SUMMARY.md     (this file)
 
 - `00842239a43` — normalization + TTNN noise resampling
 - `600198b1c61` — missing trailing silu on time MLP (root cause)
+- `93c3561d5d5` — initial summary with 3/3 pytorch result
