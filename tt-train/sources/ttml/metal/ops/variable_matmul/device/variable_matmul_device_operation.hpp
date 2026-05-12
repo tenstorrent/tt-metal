@@ -51,6 +51,7 @@ ttnn::Tensor ttml_variable_matmul(
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     uint32_t in0_row_offset_tiles = 0,
     uint32_t effective_M_tiles = 0,
-    uint32_t in0_k_offset_tiles = 0);
+    uint32_t in0_k_offset_tiles = 0,
+    uint32_t in1_k_offset_tiles = 0);
 
 }  // namespace ttnn::prim
