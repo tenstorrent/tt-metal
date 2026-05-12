@@ -9,6 +9,7 @@ fast-tilize numbers are directly comparable in the nightly perf dashboard.
 """
 
 import pytest
+from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import PerfRunType
 from helpers.param_config import input_output_formats, parametrize
@@ -20,8 +21,6 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
-
-from conftest import skip_for_quasar, skip_for_wormhole
 
 
 # ---------------------------------------------------------------------------
