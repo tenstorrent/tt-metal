@@ -65,11 +65,14 @@ def main():
         repo_type="dataset",
         revision=DATASET_REVISION,
     )
-    # Load to CPU explicitly; fall back for older torch versions without weights_only
+    # Require weights_only=True for safe deserialization — fail fast otherwise
     try:
         batch = torch.load(file, map_location="cpu", weights_only=True)
     except TypeError:
-        batch = torch.load(file, map_location="cpu")
+        raise RuntimeError(
+            f"torch {torch.__version__} does not support weights_only=True. "
+            "Please upgrade to torch>=1.13 for safe deserialization."
+        )
 
     past_values                 = batch["past_values"]
     past_time_features          = batch["past_time_features"]
@@ -166,17 +169,13 @@ def main():
         torch.save(tensor, SAVE_DIR / f"{name}.pt")
         print(f"  {name}: {tensor.shape}")
 
-    # ── Save config ───────────────────────────────────────────────────────────
+    # ── Save static provenance config (committed) ─────────────────────────────
     config_dict = {
         "model_id":                        MODEL_ID,
         "model_revision":                  MODEL_REVISION,
         "dataset_repo":                    DATASET_REPO,
         "dataset_file":                    DATASET_FILE,
         "dataset_revision":                DATASET_REVISION,
-        "python_version":                  sys.version,
-        "torch_version":                   torch.__version__,
-        "transformers_version":            transformers.__version__,
-        "huggingface_hub_version":         huggingface_hub.__version__,
         "context_length":                  cfg.context_length,
         "prediction_length":               cfg.prediction_length,
         "num_time_features":               cfg.num_time_features,
@@ -194,13 +193,25 @@ def main():
         "num_static_categorical_features": cfg.num_static_categorical_features,
         "cardinality":                     cfg.cardinality,
         "embedding_dimension":             cfg.embedding_dimension,
-        "batch_size":                      B,
         "past_len":                        past_len,
     }
     with open(SAVE_DIR / "config.json", "w") as f:
         json.dump(config_dict, f, indent=2)
 
+    # ── Save runtime metadata (gitignored, not committed) ─────────────────────
+    run_metadata = {
+        "batch_size":              B,
+        "python_version":          sys.version,
+        "torch_version":           torch.__version__,
+        "transformers_version":    transformers.__version__,
+        "huggingface_hub_version": huggingface_hub.__version__,
+    }
+    with open(SAVE_DIR / "run_metadata.json", "w") as f:
+        json.dump(run_metadata, f, indent=2)
+
     print(f"\nAll reference tensors saved to {SAVE_DIR}/")
+    print("Static provenance: reference/config.json")
+    print("Runtime metadata:  reference/run_metadata.json (gitignored)")
     print("Use these to validate each TTNN component against PCC per-layer and 5% tolerance end-to-end.")
 
 
