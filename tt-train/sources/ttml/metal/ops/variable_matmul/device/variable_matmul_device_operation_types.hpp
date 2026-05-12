@@ -36,16 +36,26 @@ struct VariableMatmulParams {
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
 
     // Read-at-offset support — lets variable_matmul read a sub-range of the input tensor
-    // without materializing a slice. The input tensor is treated as a parent buffer; only
-    // the rows [in0_row_offset_tiles, in0_row_offset_tiles + effective_M_tiles) are processed.
-    // Defaults preserve "use the whole input" behavior.
-    // - in0_row_offset_tiles: tile offset added when computing in0 tile DRAM addresses
-    // - effective_M_tiles: M tile count to actually process (0 = derive from input shape)
-    // For transpose_a, "row" means the M-axis of the matmul (= stored col axis of the input).
-    // These are RUNTIME args (excluded from program hash) so different offset/length values
-    // hit the same cached program.
+    // without materializing a slice. The input tensor is treated as a parent buffer.
+    //
+    // M-axis offset (in0_row_offset_tiles + effective_M_tiles):
+    //   only the M-rows [in0_row_offset_tiles, in0_row_offset_tiles + effective_M_tiles)
+    //   are processed. For transpose_a, "row" means the M-axis of the matmul (= stored col
+    //   axis of the input).
+    //
+    // K-axis offset (in0_k_offset_tiles):
+    //   shifts the start of the in0 K-range read by this many tiles. The matmul-K count
+    //   still comes from the weight (the K==K_w validation), so the caller specifies only
+    //   the offset; in0 is interpreted as a larger parent tensor of which we read the
+    //   range [k_offset, k_offset + K) tiles. For non-transpose, this offsets along the
+    //   input's stored col axis (matmul-K). For transpose_a, it offsets along the input's
+    //   stored row axis (matmul-K).
+    //
+    // Defaults preserve "use the whole input" behavior. All offsets are RUNTIME args
+    // (excluded from program hash) so different offset values hit the same cached program.
     uint32_t in0_row_offset_tiles = 0;
     uint32_t effective_M_tiles = 0;
+    uint32_t in0_k_offset_tiles = 0;
 };
 
 struct VariableMatmulInputs {

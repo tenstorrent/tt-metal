@@ -71,16 +71,16 @@ struct TensorShape2D {
 };
 
 /**
- * Read a block of in0 from a potentially padded tensor, optionally at an M-row offset
- * into the source tensor (the source is treated as a parent buffer; we read just the
- * sub-range starting at `in0_row_offset_tiles`). Bounds check on matmul-M uses
- * `effective_m_bound` (the logically valid range), independent of the storage stride.
+ * Read a block of in0 from a potentially padded tensor, optionally at an M-row and/or K-col
+ * offset into the source tensor (the source is treated as a parent buffer; we read just the
+ * sub-range starting at (in0_row_offset_tiles, in0_k_offset_tiles)). Bounds check on
+ * matmul-M/K uses the effective `shape`, independent of the parent stride.
  *
  * Iteration order is always M-outer, K-inner (CB layout = [M, K] tile-major). When
- * TransposeA is true, the physical tensor is stored as [K, M_parent] instead of
- * [M_parent, K]; the address formula uses `parent_M_tiles_stride` for the K-row stride
- * (which equals the parent tensor's M extent in tiles, regardless of effective M).
- * For non-transpose, the row stride is K_tiles (= shape.logical_d1) — independent of M.
+ * TransposeA is true, the physical tensor is stored as [K_parent, M_parent] instead of
+ * [M_parent, K_parent]; the address formula uses `parent_M_tiles_stride` for the K-row
+ * stride. For non-transpose, the row stride is `parent_K_tiles_stride` (= parent K tile
+ * count, used only when UseOffset).
  *
  * `shape` carries the matmul-coordinate effective sizes (logical_d0=effective_M for
  * non-transpose / logical_d0=K for transpose, logical_d1=K_tiles or effective_M).
@@ -112,7 +112,9 @@ void read_in0_block_sync(
     uint32_t d1_start,
     uint32_t d1_end,
     uint32_t in0_row_offset_tiles,
-    uint32_t parent_M_tiles_stride) {
+    uint32_t parent_M_tiles_stride,
+    uint32_t in0_k_offset_tiles,
+    uint32_t parent_K_tiles_stride) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
@@ -136,15 +138,17 @@ void read_in0_block_sync(
                     uint32_t tile_id;
                     if constexpr (TransposeA) {
                         if constexpr (UseOffset) {
-                            // [K, M_parent] storage: K-row * M_parent_tiles + (M-col + offset)
-                            tile_id = j * parent_M_tiles_stride + (i + in0_row_offset_tiles);
+                            // [K_parent, M_parent] storage:
+                            // (K-row + k_offset) * M_parent_tiles + (M-col + m_offset)
+                            tile_id = (j + in0_k_offset_tiles) * parent_M_tiles_stride + (i + in0_row_offset_tiles);
                         } else {
                             tile_id = j * shape.logical_d1 + i;
                         }
                     } else {
                         if constexpr (UseOffset) {
-                            // [M_parent, K] storage: (M-row + offset) * K_tiles + K-col
-                            tile_id = (i + in0_row_offset_tiles) * shape.logical_d1 + j;
+                            // [M_parent, K_parent] storage:
+                            // (M-row + m_offset) * K_parent_tiles + (K-col + k_offset)
+                            tile_id = (i + in0_row_offset_tiles) * parent_K_tiles_stride + (j + in0_k_offset_tiles);
                         } else {
                             tile_id = i * shape.logical_d1 + j;
                         }

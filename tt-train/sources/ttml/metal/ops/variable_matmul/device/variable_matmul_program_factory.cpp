@@ -110,21 +110,21 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     auto in1_tensor_shape = weight_tensor.padded_shape();
     const bool transpose_a = config.transpose_a;
     const bool transpose_b = config.transpose_b;
-    // With transpose_a, input is stored as [K, M], so K = padded[-2] and M = padded[-1].
-    uint32_t K = transpose_a ? in0_tensor_shape[-2] : in0_tensor_shape[-1];
-    // Weight is stored as [N, K] when transpose_b is set, so N = padded[-2] and K_w = padded[-1].
+    // Matmul-K comes from the weight (the K==K_w validation enforces this for no-offset
+    // calls). With k-offset enabled, the input has a larger K extent and we slice it; the
+    // matmul-K count is still the weight's.
+    uint32_t K_w = transpose_b ? in1_tensor_shape[-1] : in1_tensor_shape[-2];
     uint32_t N = transpose_b ? in1_tensor_shape[-2] : in1_tensor_shape[-1];
-
-    uint32_t K_tiles = K / tt::constants::TILE_WIDTH;
+    uint32_t K_tiles = K_w / tt::constants::TILE_WIDTH;
     uint32_t N_tiles = N / tt::constants::TILE_WIDTH;
+    // The input's actual K extent — equals K_w when no k-offset, larger when k-offset > 0.
+    // Used for the DRAM row-stride and for k-offset bounds validation.
+    uint32_t K_in = transpose_a ? in0_tensor_shape[-2] : in0_tensor_shape[-1];
+    uint32_t parent_K_tiles = K_in / tt::constants::TILE_WIDTH;
 
-    // physical_volume / stored_inner gives count along the stored outer dim. With transpose_a
-    // that's K-tiles; the actual M is along the stored inner dim (which is M when transpose_a).
-    // This is the PARENT input's M — used for hash/grid stability and for the DRAM stride
-    // when reading at an offset. The matmul actually processes effective_M_tiles, which may
-    // be smaller (offset-read mode).
-    uint32_t parent_M =
-        transpose_a ? (input_tensor.physical_volume() / in0_tensor_shape[-2]) : (input_tensor.physical_volume() / K);
+    // M extent of the input — independent of K offsets. parent_M is the input's stored M
+    // dimension (matmul-M = stored inner when transpose_a, stored outer otherwise).
+    uint32_t parent_M = transpose_a ? in0_tensor_shape[-1] : in0_tensor_shape[-2];
     uint32_t parent_M_tiles = parent_M / tt::constants::TILE_HEIGHT;
 
     // effective_M_tiles overrides for offset-read mode; otherwise process the whole input.
@@ -180,7 +180,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     uint32_t out_cb_num_tiles = out_block_num_tiles * double_buffer_factor;
     uint32_t interm_cb_num_tiles = out_block_num_tiles;  // not double buffered
 
-    log_debug(tt::LogOp, "variable_matmul: actual_M={}, K={}, N={}", actual_M, K, N);
+    log_debug(tt::LogOp, "variable_matmul: actual_M={}, K={}, N={}", actual_M, K_w, N);
     log_debug(
         tt::LogOp,
         "variable_matmul: actual_M_tiles_per_core={}, actual_M_blocks_per_core={}",
@@ -274,7 +274,8 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         // not read. This avoids paying the per-tile address-compute overhead for the
         // common (no offset) case (e.g. all moe-ffn backward calls).
         static_cast<uint32_t>(
-            operation_attributes.in0_row_offset_tiles > 0 || operation_attributes.effective_M_tiles > 0),
+            operation_attributes.in0_row_offset_tiles > 0 || operation_attributes.effective_M_tiles > 0 ||
+            operation_attributes.in0_k_offset_tiles > 0 || parent_K_tiles > K_tiles),
     };
     append_accessors(in0_sender_compile_time_args, input_tensor, output_tensor);
 
@@ -311,8 +312,8 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         in3_tile_size,
         static_cast<uint32_t>(transpose_a),  // 22: transpose_a
         static_cast<uint32_t>(
-            operation_attributes.in0_row_offset_tiles > 0 ||
-            operation_attributes.effective_M_tiles > 0),  // 23: use_offset
+            operation_attributes.in0_row_offset_tiles > 0 || operation_attributes.effective_M_tiles > 0 ||
+            operation_attributes.in0_k_offset_tiles > 0 || parent_K_tiles > K_tiles),  // 23: use_offset
     };
     append_accessors(in0_receiver_compile_time_args, input_tensor, output_tensor);
 
@@ -499,6 +500,8 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         // 16: actual_M_blocks_per_core
         // 17: in0_row_offset_tiles      (offset into parent input's M axis, in tiles)
         // 18: parent_M_tiles_stride     (parent M tile count; used as K-row stride for transpose_a)
+        // 19: in0_k_offset_tiles        (offset into parent input's K axis, in tiles)
+        // 20: parent_K_tiles_stride     (parent K tile count; used as M-row stride for non-transpose)
         std::vector<uint32_t> in0_args = {
             in0_addr,
             0U,  // in2_addr (no bias)
@@ -519,6 +522,8 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
             actual_M_blocks_per_core,
             operation_attributes.in0_row_offset_tiles,
             parent_M_tiles,
+            operation_attributes.in0_k_offset_tiles,
+            parent_K_tiles,
         };
 
         if (in1_idx == 0) {
@@ -617,6 +622,7 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
     const auto& a_padded = input_tensor.padded_shape();
     const bool transpose_a = operation_attributes.config.transpose_a;
     uint32_t parent_M_tiles = (transpose_a ? a_padded[-1] : a_padded[-2]) / tt::constants::TILE_HEIGHT;
+    uint32_t parent_K_tiles = (transpose_a ? a_padded[-2] : a_padded[-1]) / tt::constants::TILE_WIDTH;
     uint32_t actual_M_tiles =
         (operation_attributes.effective_M_tiles > 0) ? operation_attributes.effective_M_tiles : parent_M_tiles;
     uint32_t actual_padded_M_tiles = tt::round_up(actual_M_tiles, sv.in0_parallel_axis_cores);
@@ -643,6 +649,8 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
     constexpr uint32_t IN0_ACTUAL_M_BLOCKS_IDX = 16;
     constexpr uint32_t IN0_ROW_OFFSET_TILES_IDX = 17;
     constexpr uint32_t IN0_PARENT_M_TILES_STRIDE_IDX = 18;
+    constexpr uint32_t IN0_K_OFFSET_TILES_IDX = 19;
+    constexpr uint32_t IN0_PARENT_K_TILES_STRIDE_IDX = 20;
 
     // in1 runtime arg indices
     constexpr uint32_t IN1_ADDR_IDX = 0;
@@ -678,6 +686,8 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
             args[IN0_ACTUAL_M_BLOCKS_IDX] = actual_M_blocks_per_core;
             args[IN0_ROW_OFFSET_TILES_IDX] = operation_attributes.in0_row_offset_tiles;
             args[IN0_PARENT_M_TILES_STRIDE_IDX] = parent_M_tiles;
+            args[IN0_K_OFFSET_TILES_IDX] = operation_attributes.in0_k_offset_tiles;
+            args[IN0_PARENT_K_TILES_STRIDE_IDX] = parent_K_tiles;
         } else {
             auto& args = in0_receiver_rt[core.x][core.y];
             args[IN0_M_START_IDX] = M_start_tile;
@@ -688,6 +698,8 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
             args[IN0_ACTUAL_M_BLOCKS_IDX] = actual_M_blocks_per_core;
             args[IN0_ROW_OFFSET_TILES_IDX] = operation_attributes.in0_row_offset_tiles;
             args[IN0_PARENT_M_TILES_STRIDE_IDX] = parent_M_tiles;
+            args[IN0_K_OFFSET_TILES_IDX] = operation_attributes.in0_k_offset_tiles;
+            args[IN0_PARENT_K_TILES_STRIDE_IDX] = parent_K_tiles;
         }
 
         // Update in1 args

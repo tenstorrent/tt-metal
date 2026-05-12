@@ -19,20 +19,26 @@ using VariableMatmulConfig = ttml::metal::ops::variable_matmul::device::Variable
 // Variable-M matmul: compiles at most 2 programs (one per transpose variant),
 // then dispatches any M shape without recompilation.
 //
-// Optional read-at-offset support: `in0_row_offset_tiles` is added to in0 tile addresses
-// (treats input_tensor as a parent buffer), and `effective_M_tiles` overrides the M tile
-// count that's actually processed (0 = use input's full M). Together they let the caller
-// process a sub-range of the parent tensor without materializing a slice. These are
-// runtime args — different (offset, length) values reuse the same cached program.
+// Optional read-at-offset support:
+//   - in0_row_offset_tiles: tile offset on the in0 matmul-M axis (input treated as a
+//     parent buffer).
+//   - effective_M_tiles: M tile count to actually process (0 = use input's full M).
+//   - in0_k_offset_tiles: tile offset on the in0 matmul-K axis. The K count comes from
+//     the weight (no effective_K argument); in0 is read as if it had a larger K extent
+//     and we slice [k_offset, k_offset + K) tiles.
+// All defaults preserve "use the whole input" behavior. These are runtime args —
+// different offset/length values reuse the same cached program.
 //
-// Tile alignment: both must be in TILE_HEIGHT (32) units. With transpose_a, "row" still
-// means the matmul-M axis (which maps to the input's stored *col* axis).
+// Tile alignment: all offsets/counts must be in TILE_HEIGHT (32) units. With transpose_a,
+// "row" still means the matmul-M axis (= input's stored *col* axis) and "k_offset" still
+// means the matmul-K axis (= input's stored *row* axis).
 ttnn::Tensor variable_matmul(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const VariableMatmulConfig& config,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     uint32_t in0_row_offset_tiles = 0,
-    uint32_t effective_M_tiles = 0);
+    uint32_t effective_M_tiles = 0,
+    uint32_t in0_k_offset_tiles = 0);
 
 }  // namespace ttml::metal

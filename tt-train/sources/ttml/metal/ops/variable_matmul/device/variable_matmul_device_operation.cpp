@@ -53,7 +53,7 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
 
     // With transpose_a, the input is stored as [K, M], so M is at [-1] and K at [-2].
     const uint32_t M_parent = config.transpose_a ? a_logical[-1] : a_logical[-2];
-    const uint32_t K = config.transpose_a ? a_logical[-2] : a_logical[-1];
+    const uint32_t K_in = config.transpose_a ? a_logical[-2] : a_logical[-1];
     // When transpose_b, the weight is stored as [N, K] and K matches w_logical[-1].
     const uint32_t K_w = config.transpose_b ? w_logical[-1] : w_logical[-2];
 
@@ -61,11 +61,22 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
     // input tensor's full M when caller didn't specify a sub-range.
     const uint32_t effective_M_tiles = operation_attributes.effective_M_tiles;
     const uint32_t offset_tiles = operation_attributes.in0_row_offset_tiles;
+    const uint32_t k_offset_tiles = operation_attributes.in0_k_offset_tiles;
     const uint32_t M_parent_tiles = M_parent / TILE_HEIGHT;
+    const uint32_t K_in_tiles = K_in / TILE_WIDTH;
+    const uint32_t K_w_tiles = K_w / TILE_WIDTH;
     const uint32_t M = (effective_M_tiles > 0) ? (effective_M_tiles * TILE_HEIGHT) : M_parent;
 
-    TT_FATAL(K == K_w, "variable_matmul inner dimensions must match, got K={} and K_w={}", K, K_w);
-    TT_FATAL(M > 0 && K > 0, "variable_matmul dimensions must be positive");
+    // K-axis: input is read as a parent buffer with K extent K_in; the matmul itself processes
+    // K_w tiles starting at k_offset_tiles. Input's K_in may be larger than the weight's K_w
+    // (parent-buffer mode), or equal (the simple case).
+    TT_FATAL(
+        k_offset_tiles + K_w_tiles <= K_in_tiles,
+        "variable_matmul k_offset {} + K_w tiles {} exceeds input K tiles {}",
+        k_offset_tiles,
+        K_w_tiles,
+        K_in_tiles);
+    TT_FATAL(M > 0 && K_w > 0, "variable_matmul dimensions must be positive");
     TT_FATAL(
         M % TILE_HEIGHT == 0, "variable_matmul actual M ({}) must be a multiple of TILE_HEIGHT ({})", M, TILE_HEIGHT);
     TT_FATAL(
@@ -156,9 +167,17 @@ ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(
     const bool transpose_a = operation_attributes.config.transpose_a;
     const bool transpose_b = operation_attributes.config.transpose_b;
     // use_offset is a compile-time kernel knob: when true, the address formula adds
-    // in0_row_offset_tiles to the M-axis. Splitting on this gives two cached programs
-    // (offset-enabled / disabled) but keeps the (offset=0) hot path at baseline cost.
-    const bool use_offset = operation_attributes.in0_row_offset_tiles > 0 || operation_attributes.effective_M_tiles > 0;
+    // M-offset and K-offset to the respective axes. Splitting on this gives two cached
+    // programs (offset-enabled / disabled) but keeps the (offset=0) hot path at baseline.
+    // Parent-K mode: input has a larger K extent than the weight's. This sets use_offset
+    // even with k_offset=0, since the kernel needs the parent stride to read correctly.
+    const uint32_t K_in_tiles =
+        (transpose_a ? a.logical_shape()[-2] : a.logical_shape()[-1]) / tt::constants::TILE_WIDTH;
+    const uint32_t K_w_tiles =
+        (transpose_b ? w.logical_shape()[-1] : w.logical_shape()[-2]) / tt::constants::TILE_WIDTH;
+    const bool use_offset = operation_attributes.in0_row_offset_tiles > 0 ||
+                            operation_attributes.effective_M_tiles > 0 || operation_attributes.in0_k_offset_tiles > 0 ||
+                            K_in_tiles > K_w_tiles;
     // physical_volume / padded[-1] gives the count along the *stored* outer dim. With
     // transpose_a that's K-tiles; without, M-tiles. Either way, actual_M (for the matmul) is
     // along the stored *other* dim: padded_shape[-2] when transpose_a, [-1] otherwise — both
@@ -196,7 +215,8 @@ ttnn::Tensor ttml_variable_matmul(
     const ttml::metal::ops::variable_matmul::device::VariableMatmulConfig& config,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     uint32_t in0_row_offset_tiles,
-    uint32_t effective_M_tiles) {
+    uint32_t effective_M_tiles,
+    uint32_t in0_k_offset_tiles) {
     using OperationType = ttml::metal::ops::variable_matmul::device::VariableMatmulDeviceOperation;
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(),
@@ -212,6 +232,7 @@ ttnn::Tensor ttml_variable_matmul(
             .compute_kernel_config = kernel_config_val,
             .in0_row_offset_tiles = in0_row_offset_tiles,
             .effective_M_tiles = effective_M_tiles,
+            .in0_k_offset_tiles = in0_k_offset_tiles,
         },
         OperationType::tensor_args_t{.input_tensor = input_tensor, .weight_tensor = weight_tensor});
 }
