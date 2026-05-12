@@ -441,3 +441,70 @@ TEST(LambdaSchedulerTest, StateDictRoundTripRestoresStepAndLR) {
         EXPECT_FLOAT_EQ(src.get_last_lr(), dst.get_last_lr());
     }
 }
+
+TEST(SequentialSchedulerTest, StateDictSavesAllChildSchedulers) {
+    // Build a Linear-warmup -> Linear-decay chain and step partway into the
+    // *second* child. The state dict must contain entries for BOTH children
+    // (not just the currently-active one), and restoring into a destination
+    // chain constructed with different hyperparameters must overwrite both
+    // children's hyperparameters.
+    constexpr float kStartLr = 0.3e-3F;
+    auto src_opt = std::make_unique<ttml::optimizers::MockOptimizer>(kStartLr);
+
+    std::vector<std::unique_ptr<ttml::schedulers::LRSchedulerBase>> src_children;
+    src_children.push_back(std::make_unique<ttml::schedulers::LinearScheduler>(
+        src_opt.get(), /*start_factor=*/0.0F, /*end_factor=*/1.0F, /*total_steps=*/10));
+    src_children.push_back(std::make_unique<ttml::schedulers::LinearScheduler>(
+        src_opt.get(), /*start_factor=*/1.0F, /*end_factor=*/0.1F, /*total_steps=*/50));
+    ttml::schedulers::SequentialScheduler src(
+        src_opt.get(), std::move(src_children), /*milestones=*/std::vector<size_t>{10U, 50U});
+
+    // Run through all of child 0 (warmup) plus 5 steps of child 1 (decay) so
+    // child 0 is "spent" but its state is still meaningfully saved.
+    for (int i = 0; i < 15; ++i) {
+        src.step();
+    }
+    EXPECT_EQ(ttml::serialization::get_value_type<size_t>(src.get_state_dict(), "m_current_scheduler_index"), 1U);
+
+    auto state = src.get_state_dict();
+
+    // Both children's hyperparameters are present under their per-index prefix.
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(state, "scheduler_0/m_start_factor"), 0.0F);
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(state, "scheduler_0/m_end_factor"), 1.0F);
+    EXPECT_EQ(ttml::serialization::get_value_type<int>(state, "scheduler_0/m_total_steps"), 10);
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(state, "scheduler_1/m_start_factor"), 1.0F);
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(state, "scheduler_1/m_end_factor"), 0.1F);
+    EXPECT_EQ(ttml::serialization::get_value_type<int>(state, "scheduler_1/m_total_steps"), 50);
+
+    // Both children also persist their per-child step counters.
+    EXPECT_EQ(ttml::serialization::get_value_type<size_t>(state, "scheduler_0/m_last_step"), 10U);
+    EXPECT_EQ(ttml::serialization::get_value_type<size_t>(state, "scheduler_1/m_last_step"), 5U);
+
+    // Destination chain uses deliberately wrong hyperparameters in BOTH
+    // children -- the round trip must overwrite them.
+    auto dst_opt = std::make_unique<ttml::optimizers::MockOptimizer>(kStartLr);
+    std::vector<std::unique_ptr<ttml::schedulers::LRSchedulerBase>> dst_children;
+    dst_children.push_back(std::make_unique<ttml::schedulers::LinearScheduler>(
+        dst_opt.get(), /*start_factor=*/0.5F, /*end_factor=*/0.5F, /*total_steps=*/999));
+    dst_children.push_back(std::make_unique<ttml::schedulers::LinearScheduler>(
+        dst_opt.get(), /*start_factor=*/0.5F, /*end_factor=*/0.5F, /*total_steps=*/999));
+    ttml::schedulers::SequentialScheduler dst(
+        dst_opt.get(), std::move(dst_children), /*milestones=*/std::vector<size_t>{10U, 50U});
+
+    dst.set_state_dict(state);
+
+    auto dst_state = dst.get_state_dict();
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(dst_state, "scheduler_0/m_start_factor"), 0.0F);
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(dst_state, "scheduler_0/m_end_factor"), 1.0F);
+    EXPECT_EQ(ttml::serialization::get_value_type<int>(dst_state, "scheduler_0/m_total_steps"), 10);
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(dst_state, "scheduler_1/m_start_factor"), 1.0F);
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(dst_state, "scheduler_1/m_end_factor"), 0.1F);
+    EXPECT_EQ(ttml::serialization::get_value_type<int>(dst_state, "scheduler_1/m_total_steps"), 50);
+
+    // And the resumed chain must follow the same LR trajectory as the source.
+    for (int i = 0; i < 30; ++i) {
+        src.step();
+        dst.step();
+        EXPECT_FLOAT_EQ(src.get_last_lr(), dst.get_last_lr()) << "step " << i;
+    }
+}
