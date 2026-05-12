@@ -66,12 +66,28 @@ constexpr bool is_fp32_input_format() {
     return format == 0;  // Float32
 }
 
+template <uint32_t output_cb>
+constexpr bool is_fp32_output_format() {
+#if defined(UCK_CHLKC_PACK)
+    constexpr auto format = pack_dst_format[output_cb];
+#else
+    constexpr auto format = unpack_src_format[output_cb];
+#endif
+    return format == 0;  // Float32
+}
+
 template <uint32_t block_width_tiles, uint32_t input_cb, uint32_t output_cb>
 constexpr bool can_use_fast_tilize() {
+    // Float32 OUTPUT is unsupported: fast-tilize's pack path uses Read_32b=0
+    // (bf16-stride stepping through DEST), which truncates fp32 DEST to bf16.
+    // That truncation is acceptable for bf16/bfp output but destroys precision
+    // for fp32 output, producing garbage results in downstream fp32 consumers
+    // (see attn_matmul_fp32 regression).
     return block_width_tiles < 256 &&
            has_32x32_tiles<output_cb>() &&
            !get_dst_full_sync_enabled() &&
-           has_supported_fast_tilize_format<input_cb>();
+           has_supported_fast_tilize_format<input_cb>() &&
+           !is_fp32_output_format<output_cb>();
 }
 
 // =============================================================================
@@ -135,10 +151,14 @@ ALWI void tilize(
         // Reconfigure srcA for unpack
         reconfig_data_format_srca(input_cb);
 
+#ifndef ARCH_BLACKHOLE
         if constexpr (use_fast) {
-            // Reconfigure srcB only in fast mode
+            // WH fast-tilize uses both SrcA and SrcB; reconfigure SrcB to match input.
+            // BH fast-tilize only uses SrcA — SrcB must not be touched so matmul
+            // weights stay configured correctly.
             reconfig_data_format_srcb(input_cb);
         }
+#endif
     }
 
     if constexpr (use_pack_reconfig) {
@@ -213,7 +233,7 @@ ALWI void tilize(
         init_uninit_mode == tilize_config::InitUninitMode::UninitOnly) {
 
         if constexpr (use_fast) {
-            fast_tilize_uninit(input_cb, output_cb);
+            fast_tilize_uninit(input_cb, output_cb, block_width_tiles);
         } else {
             tilize_uninit(input_cb, output_cb);
         }
