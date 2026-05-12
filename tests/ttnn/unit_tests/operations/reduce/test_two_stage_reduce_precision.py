@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -153,6 +153,9 @@ _MAX_4D_DIMS_MULTI = [
     [0, 2, 3],  # N + H + W
 ]
 
+# Tile padding for max: use a very negative value so it can never be the max.
+_MAX_PAD_VALUE = -1e6
+
 
 @pytest.mark.parametrize(
     "shape, dim",
@@ -179,6 +182,8 @@ def test_max_two_stage_precision(device, shape, dim):
         torch_ref = torch.amax(torch_input.float(), dim=dim, keepdim=True)
 
     tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    # Fill tile padding with a very negative sentinel so it can never be the max.
+    tt_input = ttnn.fill_implicit_tile_padding(tt_input, _MAX_PAD_VALUE)
     tt_output = ttnn.max(tt_input, dim=dim, keepdim=True)
     tt_output = ttnn.to_torch(tt_output)
 
