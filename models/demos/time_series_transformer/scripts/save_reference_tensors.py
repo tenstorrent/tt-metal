@@ -16,17 +16,20 @@ from transformers import TimeSeriesTransformerForPrediction
 from huggingface_hub import hf_hub_download
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-MODEL_ID       = "huggingface/time-series-transformer-tourism-monthly"
-MODEL_REVISION = "2a40ad41f6ffe61e7bef6099b08c6c2fce36ac35"  # pinned commit hash
+MODEL_ID          = "huggingface/time-series-transformer-tourism-monthly"
+MODEL_REVISION    = "2a40ad41f6ffe61e7bef6099b08c6c2fce36ac35"
 
-DATASET_REPO   = "hf-internal-testing/tourism-monthly-batch"
-DATASET_FILE   = "train-batch.pt"
+DATASET_REPO      = "hf-internal-testing/tourism-monthly-batch"
+DATASET_FILE      = "train-batch.pt"
+DATASET_REVISION  = "81c7ee3cf3317e51beb97327df55926cd5bbfadb"  # pinned commit hash
 
-SAVE_DIR = Path(__file__).resolve().parent / "reference_tensors"
-SAVE_DIR.mkdir(parents=True, exist_ok=True)
+SAVE_DIR = Path(__file__).resolve().parent.parent / "reference"
 
 
 def main():
+    # Move directory creation inside main — avoids import-time side effects
+    SAVE_DIR.mkdir(parents=True, exist_ok=True)
+
     # ── Load model ────────────────────────────────────────────────────────────
     print("Loading HuggingFace reference model...")
     model = TimeSeriesTransformerForPrediction.from_pretrained(
@@ -58,6 +61,7 @@ def main():
         repo_id=DATASET_REPO,
         filename=DATASET_FILE,
         repo_type="dataset",
+        revision=DATASET_REVISION,
     )
     batch = torch.load(file)
 
@@ -69,21 +73,25 @@ def main():
     future_time_features        = batch["future_time_features"]
 
     # ── Fix shapes ────────────────────────────────────────────────────────────
-    # Real batch stores past_values and past_observed_mask as [B, T].
-    # The model expects [B, T, input_size] — unsqueeze the last dim if needed.
     if past_values.dim() == 2:
         past_values = past_values.unsqueeze(-1)
     if past_observed_mask.dim() == 2:
         past_observed_mask = past_observed_mask.unsqueeze(-1)
 
-    # Derive past_len from config — avoids relying on private _past_length attr
-    past_len = cfg.context_length + max(cfg.lags_sequence)
+    # ── Validate past_len against actual tensor ───────────────────────────────
+    expected_past_len = cfg.context_length + max(cfg.lags_sequence)
+    actual_past_len   = past_values.shape[1]
+    assert actual_past_len == expected_past_len, (
+        f"past_len mismatch: config expects {expected_past_len}, "
+        f"actual tensor is {actual_past_len}"
+    )
+    past_len = actual_past_len
     B        = past_values.shape[0]
 
     print(f"  batch_size:             {B}")
     print(f"  past_len:               {past_len}")
-    print(f"  past_values shape:      {past_values.shape}")   # expect [64, 61, 1]
-    print(f"  past_observed_mask:     {past_observed_mask.shape}")  # expect [64, 61, 1]
+    print(f"  past_values shape:      {past_values.shape}")
+    print(f"  past_observed_mask:     {past_observed_mask.shape}")
     print(f"  future_time_features:   {future_time_features.shape}")
 
     # ── Save inputs ───────────────────────────────────────────────────────────
@@ -108,17 +116,14 @@ def main():
                 captured[name] = output.last_hidden_state.detach()
         return fn
 
-    # Encoder hooks — iterate up to cfg.encoder_layers for robustness
+    # Iterate actual layer list — avoids config/module count mismatch
     model.model.encoder.register_forward_hook(make_hook("encoder_output"))
-    for i in range(cfg.encoder_layers):
-        layer = model.model.encoder.layers[i]
+    for i, layer in enumerate(model.model.encoder.layers):
         layer.self_attn.register_forward_hook(make_hook(f"encoder_layer{i}_attn"))
         layer.fc1.register_forward_hook(make_hook(f"encoder_layer{i}_fc1"))
         layer.fc2.register_forward_hook(make_hook(f"encoder_layer{i}_fc2"))
 
-    # Decoder hooks — iterate up to cfg.decoder_layers for robustness
-    for i in range(cfg.decoder_layers):
-        layer = model.model.decoder.layers[i]
+    for i, layer in enumerate(model.model.decoder.layers):
         layer.self_attn.register_forward_hook(make_hook(f"decoder_layer{i}_self_attn"))
         layer.encoder_attn.register_forward_hook(make_hook(f"decoder_layer{i}_cross_attn"))
         layer.fc1.register_forward_hook(make_hook(f"decoder_layer{i}_fc1"))
@@ -159,6 +164,7 @@ def main():
         "model_revision":                  MODEL_REVISION,
         "dataset_repo":                    DATASET_REPO,
         "dataset_file":                    DATASET_FILE,
+        "dataset_revision":                DATASET_REVISION,
         "context_length":                  cfg.context_length,
         "prediction_length":               cfg.prediction_length,
         "num_time_features":               cfg.num_time_features,

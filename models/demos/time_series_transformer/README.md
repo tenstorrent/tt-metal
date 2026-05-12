@@ -8,7 +8,7 @@ This demo provides a TTNN implementation of the HuggingFace
 `TimeSeriesTransformerForPrediction` model for monthly tourism forecasting.
 
 - HF checkpoint: `huggingface/time-series-transformer-tourism-monthly`
-- Dataset: Tourism Monthly (via `hf-internal-testing/tourism-monthly-batch`)
+- Dataset: Tourism Monthly (`hf-internal-testing/tourism-monthly-batch`)
 - Distribution output: Student-T
 - Validation: PCC per-layer + 5% tolerance end-to-end (NLL/CRPS/MAE)
 
@@ -36,8 +36,8 @@ Run from the repo root:
 python models/demos/time_series_transformer/scripts/save_reference_tensors.py
 ```
 
-Generated files appear in `scripts/reference/` and include all encoder/decoder
+Generated files appear in `reference/` and include all encoder/decoder
 intermediate outputs for PCC validation against the TTNN port.
 
-Model is pinned to revision `2a40ad41f6ffe61e7bef6099b08c6c2fce36ac35`
-for reproducibility.
+Model pinned to revision `2a40ad41f6ffe61e7bef6099b08c6c2fce36ac35`.
+Dataset pinned to revision `81c7ee3cf3317e51beb97327df55926cd5bbfadb`.
