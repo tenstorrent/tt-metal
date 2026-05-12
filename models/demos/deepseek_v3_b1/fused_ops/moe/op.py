@@ -4243,10 +4243,6 @@ class MoeOp:
         _update_ncrisc_ct("reduce_is_residual_device", is_residual_device)
         _update_trisc_ct("reduce_is_residual_device", is_residual_device)
 
-        # Local sender core physical NOC coords (needed for both reduce-to-sender sync
-        # and the per-chip persistent signal in forward mode).
-        sender_core_physical = routed_ctx.device.worker_core_from_logical_core(routed_ctx.sender_core)
-
         persistent_signal_eligible = self.persistent_next_iter_sem_addr != 0 and self.downstream_sockets is not None
         if ctx.enable_forward:
             is_persistent_device = persistent_signal_eligible and is_exit_col

@@ -108,14 +108,8 @@ def build_worker_grid_excluding_cores(device_grid_size, excluded_cores):
 )
 @pytest.mark.parametrize("vocab_size, embedding_dim", [(64, 7168)])
 @pytest.mark.parametrize("token_id", [0])
-# TODO(#43070): Root-cause this exact Blackhole FABRIC_2D_TORUS_Y mesh setup failure and remove the temporary skip.
-@pytest.mark.skip(
-    reason="[SKIP REASON]: mesh_device setup for "
-    "test_bcast_moe_reduce_pipeline[blackhole-0-64-7168-device_params0-mesh_device0] hit Fabric Router "
-    "Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43070"
-)
 @pytest.mark.timeout(12000)
-def test_bcast_moe_reduce_pipeline(
+def test_fwd_moe_reduce_pipeline(
     mesh_device, vocab_size, embedding_dim, token_id, device_params, get_reference_model_state_dict
 ):
     if not is_slow_dispatch():
@@ -789,13 +783,7 @@ def test_bcast_moe_reduce_pipeline(
 )
 @pytest.mark.parametrize("vocab_size, embedding_dim", [(64, 7168)])
 @pytest.mark.parametrize("token_id", [0])
-@pytest.mark.parametrize("iterations", [10])
-# TODO(#43070): Root-cause this exact Blackhole FABRIC_2D_TORUS_Y mesh setup failure and remove the temporary skip.
-@pytest.mark.skip(
-    reason="[SKIP REASON]: mesh_device setup for "
-    "test_persistent_mode_pipeline[blackhole-10-7168-device_params0-mesh_device0] hit Fabric Router "
-    "Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43070"
-)
+@pytest.mark.parametrize("iterations", [100])
 @pytest.mark.timeout(12000)
 def test_persistent_reduce_pipeline_multi_exit_nodes(
     mesh_device, vocab_size, embedding_dim, iterations, token_id, device_params, get_reference_model_state_dict

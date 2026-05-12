@@ -796,8 +796,6 @@ class PipelineBlock:
                 receiver_mesh=MeshWrapper(mesh_device),
                 receiver_use_reader_config=entry_use_reader,
             )
-            ds_sock = entry_si.get_downstream_socket()
-            ds_addr = int(ds_sock.get_config_buffer_address()) if ds_sock is not None else 0
             self.entry_socket_interface.append(entry_si)
 
         assert len(actual_exit_coords) == len(actual_entry_coords), (
@@ -853,24 +851,6 @@ class PipelineBlock:
                     receiver_mesh=MeshWrapper(rank=ns.rank, mesh_id=ns.mesh_id),
                 )
             self.exit_socket_interface.append(exit_si)
-
-        if self.my_stage_idx >= 2:
-            pc_prev = self.pipeline_config[prev_stage]
-            pc_curr = self.pipeline_config[self.my_stage_idx]
-            pc_next = self.pipeline_config[next_cfg_idx]
-            if use_multi_upstream and len(exit_upstream_cores) > 0:
-                exit_variant = "multi_upstream_workers"
-            elif use_multi_upstream:
-                exit_variant = "multi_upstream_entry_downstream_only"
-            else:
-                exit_variant = "single_upstream_passthrough"
-            for i in range(num_channels):
-                prev_exit_dc = _blitz_mesh_coord_for_parallel_row(pc_prev.exit_node_coord, i)
-                this_entry_dc = _blitz_mesh_coord_for_parallel_row(pc_curr.entry_node_coord, i)
-                this_exit_dc = _blitz_mesh_coord_for_parallel_row(pc_curr.exit_node_coord, i)
-                next_entry_dc = _blitz_mesh_coord_for_parallel_row(pc_next.entry_node_coord, i)
-                caller_entry = actual_entry_coords[i]
-                caller_exit = actual_exit_coords[i]
 
     def _dispatch_parallel_device_programs(self):
         """Collect programs from all per-device socket interfaces and dispatch in a single generic_op."""
