@@ -194,23 +194,23 @@ TEST_F(MoeFfnSwigluForwardTest, Small_E2_H64_I128) {
     RunCase({/*E*/ 2U, /*H*/ 64U, /*I*/ 128U, /*counts*/ {48U, 16U}});
 }
 
-TEST_F(MoeFfnSwigluForwardTest, EmptyExpert) {
+TEST_F(MoeFfnSwigluForwardTest, NIGHTLY_EmptyExpert) {
     RunCase({/*E*/ 3U, /*H*/ 64U, /*I*/ 128U, /*counts*/ {32U, 0U, 40U}});
 }
 
-TEST_F(MoeFfnSwigluForwardTest, Medium_E4_H512_I1408) {
+TEST_F(MoeFfnSwigluForwardTest, NIGHTLY_Medium_E4_H512_I1408) {
     RunCase({/*E*/ 4U, /*H*/ 512U, /*I*/ 1408U, /*counts*/ {200U, 150U, 100U, 180U}});
 }
 
-TEST_F(MoeFfnSwigluForwardTest, AlignedShapes_E4_H512_I1024) {
+TEST_F(MoeFfnSwigluForwardTest, NIGHTLY_AlignedShapes_E4_H512_I1024) {
     RunCase({/*E*/ 4U, /*H*/ 512U, /*I*/ 1024U, /*counts*/ {64U, 96U, 32U, 128U}});
 }
 
-TEST_F(MoeFfnSwigluForwardTest, AlignedShapes_E4_H4096_I512) {
+TEST_F(MoeFfnSwigluForwardTest, NIGHTLY_AlignedShapes_E4_H4096_I512) {
     RunCase({/*E*/ 4U, /*H*/ 4096U, /*I*/ 512U, /*counts*/ {64U, 32U, 96U, 64U}});
 }
 
-TEST_F(MoeFfnSwigluForwardTest, TrailingPad_E3_H64_I128) {
+TEST_F(MoeFfnSwigluForwardTest, NIGHTLY_TrailingPad_E3_H64_I128) {
     RunCase({/*E*/ 3U, /*H*/ 64U, /*I*/ 128U, /*counts*/ {32U, 16U, 48U}, /*tail_pad_tiles*/ 5U});
 }
 
@@ -228,7 +228,7 @@ protected:
     }
 };
 
-TEST_F(MoeFfnSwigluBackwardTest, GradientsRunAndShapesMatch) {
+TEST_F(MoeFfnSwigluBackwardTest, NIGHTLY_GradientsRunAndShapesMatch) {
     using namespace ttml;
 
     constexpr uint32_t E = 3U;
