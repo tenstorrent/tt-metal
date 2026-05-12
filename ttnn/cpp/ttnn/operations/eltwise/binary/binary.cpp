@@ -791,7 +791,7 @@ Tensor where_operation_with_scalar(
         none,          // post_activations
         scalar_value,  // scalar
         sub_core_grids,
-        sub_device_id);  // sub_core_grids
+        sub_device_id);
 }
 
 template Tensor where_operation_with_scalar<BinaryOpType::WHERE_TST>(
