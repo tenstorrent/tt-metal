@@ -443,8 +443,8 @@ static Tensor std_var_impl(
         // reduction dims.  dim is already sorted ascending by generate_reduce_dim.
         ttnn::SmallVector<int64_t> perm;
         perm.reserve(rank);
-        for (uint32_t i = 0; i < rank; ++i) {
-            if (std::find(dim.begin(), dim.end(), static_cast<int>(i)) == dim.end()) {
+        for (int i = 0; i < rank; ++i) {
+            if (std::find(dim.begin(), dim.end(), i) == dim.end()) {
                 perm.push_back(static_cast<int64_t>(i));
             }
         }
