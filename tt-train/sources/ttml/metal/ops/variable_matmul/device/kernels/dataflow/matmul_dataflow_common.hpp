@@ -236,7 +236,10 @@ void read_in1_block_sync(
  * Write a block of output to a potentially padded tensor.
  * Skip writing when M >= logical_M or N >= logical_N
  */
-template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
+// When UseOutOffset is true, the output tensor is a parent buffer; we write into rows
+// [out_row_offset_tiles, out_row_offset_tiles + actual_M) of it. matmul-N must equal
+// the parent's N (caller-validated), so shape.logical_d1 is still the correct N stride.
+template <uint32_t M_block_tiles, uint32_t N_block_tiles, bool UseOutOffset, typename TensorAccessorType>
 void write_block_sync(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
@@ -245,7 +248,8 @@ void write_block_sync(
     uint32_t d0_start,
     uint32_t d0_end,
     uint32_t d1_start,
-    uint32_t d1_end) {
+    uint32_t d1_end,
+    uint32_t out_row_offset_tiles) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
@@ -258,7 +262,13 @@ void write_block_sync(
                 read_ptr += tile_size_bytes;
                 continue;
             }
-            uint32_t tile_id = i * shape.logical_d1 + j;
+            uint32_t row;
+            if constexpr (UseOutOffset) {
+                row = i + out_row_offset_tiles;
+            } else {
+                row = i;
+            }
+            uint32_t tile_id = row * shape.logical_d1 + j;
             noc_async_write_tile(tile_id, tensor_accessor, read_ptr);
             read_ptr += tile_size_bytes;
         }
@@ -347,7 +357,7 @@ void read_ternary_blocks_sync(
  * This write method is more granular, waiting on a row of output tiles
  * in the output CB before writing those out, rather than waiting on the entire block.
  */
-template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
+template <uint32_t M_block_tiles, uint32_t N_block_tiles, bool UseOutOffset, typename TensorAccessorType>
 void write_block_sync_granular(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
@@ -356,17 +366,24 @@ void write_block_sync_granular(
     uint32_t d0_start,
     uint32_t d0_end,
     uint32_t d1_start,
-    uint32_t d1_end) {
+    uint32_t d1_end,
+    uint32_t out_row_offset_tiles) {
     for (uint32_t m_id = 0; m_id < M_block_tiles; m_id++) {
         cb_wait_front(cb_id_out, N_block_tiles);
         uint32_t m_tile = d0_start + m_id;
         if (m_tile < d0_end && m_tile < shape.logical_d0) {
             uint32_t out_read_ptr = get_read_ptr(cb_id_out);
+            uint32_t row;
+            if constexpr (UseOutOffset) {
+                row = m_tile + out_row_offset_tiles;
+            } else {
+                row = m_tile;
+            }
             for (uint32_t n_tile_id = d1_start; n_tile_id < d1_end; n_tile_id++) {
                 if (n_tile_id >= shape.logical_d1) {
                     break;
                 }
-                uint32_t tile_id = m_tile * shape.logical_d1 + n_tile_id;
+                uint32_t tile_id = row * shape.logical_d1 + n_tile_id;
                 noc_async_write_tile(tile_id, tensor_accessor, out_read_ptr);
                 out_read_ptr += tile_size_bytes;
             }

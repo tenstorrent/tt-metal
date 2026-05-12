@@ -136,10 +136,39 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
 
     const uint32_t max_dest_volume = get_dest_reg_count(operation_attributes.compute_kernel_config);
     TT_FATAL(cfg.subblock_h * cfg.subblock_w <= max_dest_volume, "subblock_h * subblock_w must be <= max_dest_volume");
+
+    // Write-at-offset validation
+    if (tensor_args.output_tensor.has_value()) {
+        const auto& out = tensor_args.output_tensor.value();
+        const auto& out_logical = out.logical_shape();
+        const uint32_t matmul_N = config.transpose_b ? w_logical[-2] : w_logical[-1];
+        const uint32_t out_M_tiles = out_logical[-2] / TILE_HEIGHT;
+        const uint32_t out_N = out_logical[-1];
+        const uint32_t out_offset = operation_attributes.out_row_offset_tiles;
+        const uint32_t M_tiles_actual = M / TILE_HEIGHT;
+        TT_FATAL(out.layout() == Layout::TILE, "variable_matmul output tensor must be TILE layout");
+        TT_FATAL(out.dtype() == act_tensor.dtype(), "variable_matmul output dtype must match input dtype");
+        TT_FATAL(out_N == matmul_N, "variable_matmul output N ({}) must match matmul N ({})", out_N, matmul_N);
+        TT_FATAL(
+            out_offset + M_tiles_actual <= out_M_tiles,
+            "variable_matmul out_row_offset {} + actual_M tiles {} exceeds output M tiles {}",
+            out_offset,
+            M_tiles_actual,
+            out_M_tiles);
+    } else {
+        TT_FATAL(
+            operation_attributes.out_row_offset_tiles == 0U,
+            "variable_matmul out_row_offset_tiles > 0 requires a caller-provided output tensor");
+    }
 }
 
 VariableMatmulDeviceOperation::spec_return_value_t VariableMatmulDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Write-at-offset: when caller provides an output tensor, its spec is the parent's
+    // (not the matmul-sized one) — the kernel writes into a row-range of it.
+    if (tensor_args.output_tensor.has_value()) {
+        return tensor_args.output_tensor->tensor_spec();
+    }
     const auto& in0 = tensor_args.input_tensor;
     const auto& in1 = tensor_args.weight_tensor;
     const auto& config = operation_attributes.config;
@@ -167,6 +196,9 @@ VariableMatmulDeviceOperation::spec_return_value_t VariableMatmulDeviceOperation
 
 VariableMatmulDeviceOperation::tensor_return_value_t VariableMatmulDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.output_tensor.has_value()) {
+        return tensor_args.output_tensor.value();
+    }
     const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
     auto* device = tensor_args.input_tensor.device();
     return create_device_tensor(output_spec, device);
@@ -224,7 +256,9 @@ ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(
         use_offset_in1,
         // When in1 is the parent, the matmul-K CTA is derived from in0's K extent —
         // capture it explicitly so different in0 K shapes get distinct cached programs.
-        in1_parent_k_mode ? K_in_tiles : 0U);
+        in1_parent_k_mode ? K_in_tiles : 0U,
+        // Write-at-offset toggles a CTA path. Boolean only (offset value is RT-only).
+        tensor_args.output_tensor.has_value());
 }
 
 }  // namespace ttml::metal::ops::variable_matmul::device
@@ -239,7 +273,9 @@ ttnn::Tensor ttml_variable_matmul(
     uint32_t in0_row_offset_tiles,
     uint32_t effective_M_tiles,
     uint32_t in0_k_offset_tiles,
-    uint32_t in1_k_offset_tiles) {
+    uint32_t in1_k_offset_tiles,
+    std::optional<ttnn::Tensor> output_tensor,
+    uint32_t out_row_offset_tiles) {
     using OperationType = ttml::metal::ops::variable_matmul::device::VariableMatmulDeviceOperation;
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(),
@@ -257,8 +293,13 @@ ttnn::Tensor ttml_variable_matmul(
             .effective_M_tiles = effective_M_tiles,
             .in0_k_offset_tiles = in0_k_offset_tiles,
             .in1_k_offset_tiles = in1_k_offset_tiles,
+            .out_row_offset_tiles = out_row_offset_tiles,
         },
-        OperationType::tensor_args_t{.input_tensor = input_tensor, .weight_tensor = weight_tensor});
+        OperationType::tensor_args_t{
+            .input_tensor = input_tensor,
+            .weight_tensor = weight_tensor,
+            .output_tensor = output_tensor,
+        });
 }
 
 }  // namespace ttnn::prim
