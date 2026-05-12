@@ -24,6 +24,11 @@
 //   3. fmt 11 disallows non-void pointer formatting via a static_assert in
 //      make_arg, before any custom formatter is consulted.  Containers like
 //      vector<IDevice*> require special handling at the container level.
+//
+// However, <fmt/std.h> CAN be included alongside this header for types we
+// do not cover (e.g. std::thread::id, std::bitset, std::source_location).
+// The std::filesystem::path formatter below is guarded with #ifndef FMT_STD_H_
+// so that it yields to fmt's own formatter when fmt/std.h is present.
 
 #pragma once
 
@@ -64,15 +69,37 @@ struct fmt::formatter<T> {
 };
 
 // ---- std::filesystem::path ----
+//
+// When <fmt/std.h> has already been included it provides its own (richer)
+// formatter for std::filesystem::path.  Skip ours to avoid a duplicate full
+// specialization that would shadow fmt's partial specialization and break
+// fmt::path's internal use of the `:g` format specifier.
+//
+// When <fmt/std.h> is included *after* this header, our full specialization
+// (formatter<path, char>) takes priority over fmt's partial specialization
+// (formatter<path, Char>).  We therefore support the same `g` (generic path)
+// spec so that fmt::path::generic_display_string() compiles correctly.
 
+#ifndef FMT_STD_H_
 template <>
 struct fmt::formatter<std::filesystem::path> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
+        auto it = ctx.begin();
+        if (it != ctx.end() && *it == 'g') {
+            generic_ = true;
+            ++it;
+        }
+        return it;
+    }
 
     auto format(const std::filesystem::path& p, format_context& ctx) const -> format_context::iterator {
-        return fmt::format_to(ctx.out(), "{}", p.string());
+        return fmt::format_to(ctx.out(), "{}", generic_ ? p.generic_string() : p.string());
     }
+
+private:
+    bool generic_ = false;
 };
+#endif
 
 // ---- ttsl::StrongType  (fully inline – dereferences to inner T) ----
 
