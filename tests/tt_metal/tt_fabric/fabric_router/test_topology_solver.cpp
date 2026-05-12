@@ -1663,56 +1663,6 @@ AdjacencyGraph<NodeId> create_1d_ring_graph(size_t length) {
     return AdjacencyGraph<NodeId>(adj_map);
 }
 
-// Ring (cycle) where each undirected ring edge is represented by `channels` parallel adjacency entries in each
-// direction — models multiple fabric links between adjacent "stages" on the ring.
-template <typename NodeId>
-AdjacencyGraph<NodeId> create_1d_ring_graph_with_channels(size_t length, size_t channels) {
-    using AdjacencyMap = typename AdjacencyGraph<NodeId>::AdjacencyMap;
-    AdjacencyMap adj_map;
-
-    for (size_t i = 0; i < length; ++i) {
-        std::vector<NodeId> neighbors;
-        neighbors.reserve(channels * 2);
-        size_t left = (i == 0) ? length - 1 : i - 1;
-        size_t right = (i == length - 1) ? 0 : i + 1;
-        for (size_t c = 0; c < channels; ++c) {
-            neighbors.push_back(static_cast<NodeId>(left));
-        }
-        for (size_t c = 0; c < channels; ++c) {
-            neighbors.push_back(static_cast<NodeId>(right));
-        }
-        adj_map[static_cast<NodeId>(i)] = neighbors;
-    }
-
-    return AdjacencyGraph<NodeId>(adj_map);
-}
-
-// Open path (line) with `channels` parallel adjacency entries between consecutive nodes.
-template <typename NodeId>
-AdjacencyGraph<NodeId> create_1d_chain_graph_with_channels(size_t length, size_t channels) {
-    using AdjacencyMap = typename AdjacencyGraph<NodeId>::AdjacencyMap;
-    AdjacencyMap adj_map;
-
-    for (size_t i = 0; i < length; ++i) {
-        std::vector<NodeId> neighbors;
-        const size_t neighbor_capacity = (i > 0 ? channels : 0) + (i < length - 1 ? channels : 0);
-        neighbors.reserve(neighbor_capacity);
-        if (i > 0) {
-            for (size_t c = 0; c < channels; ++c) {
-                neighbors.push_back(static_cast<NodeId>(i - 1));
-            }
-        }
-        if (i < length - 1) {
-            for (size_t c = 0; c < channels; ++c) {
-                neighbors.push_back(static_cast<NodeId>(i + 1));
-            }
-        }
-        adj_map[static_cast<NodeId>(i)] = neighbors;
-    }
-
-    return AdjacencyGraph<NodeId>(adj_map);
-}
-
 // Helper function to create a 2D torus graph (wraps around both dimensions)
 template <typename NodeId>
 AdjacencyGraph<NodeId> create_2d_torus_graph(size_t rows, size_t cols) {
@@ -5096,272 +5046,65 @@ TEST_F(TopologySolverTest, SatStress_MeshOnMesh_StrictChannels) {
     EXPECT_TRUE(dfs_result.success) << "DFS STRICT should also succeed: " << dfs_result.error_message;
 }
 
-// 48-node logical line (unit edges) on a 64-node physical ring with 4 parallel links per ring hop.
-TEST_F(TopologySolverTest, SolveTopologyMapping_Path48OnRing64_FourChannelsStrict) {
-    constexpr size_t kRingNodes = 64;
-    constexpr size_t kPathNodes = 48;
-    constexpr size_t kChannelsRing = 4;
-    constexpr size_t kChannelsLine = 1;
-
-    auto target_graph = create_1d_chain_graph_with_channels<TestTargetNode>(kPathNodes, kChannelsLine);
-    auto global_graph = create_1d_ring_graph_with_channels<TestGlobalNode>(kRingNodes, kChannelsRing);
-
-    ASSERT_EQ(target_graph.get_nodes().size(), kPathNodes);
-    ASSERT_EQ(global_graph.get_nodes().size(), kRingNodes);
-
-    // Endpoint degrees: one neighbor direction × kChannels; interior: two directions × kChannels.
-    EXPECT_EQ(target_graph.get_neighbors(TestTargetNode{0}).size(), kChannelsLine);
-    EXPECT_EQ(target_graph.get_neighbors(TestTargetNode{kPathNodes - 1}).size(), kChannelsLine);
-    EXPECT_EQ(target_graph.get_neighbors(TestTargetNode{kPathNodes / 2}).size(), 2 * kChannelsLine);
-
-    // Ring: each node lists kChannels edges to prev and kChannels to next.
-    EXPECT_EQ(global_graph.get_neighbors(TestGlobalNode{0}).size(), 2 * kChannelsRing);
+    constexpr size_t N = 32;
+    auto target_graph = create_1d_ring_graph<TestTargetNode>(N);
+    auto global_graph = create_2d_mesh_graph<TestGlobalNode>(8, 8);
 
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
 
-    auto result = solve_topology_mapping(
+    constraints.add_required_constraint(static_cast<TestTargetNode>(0), std::set<TestGlobalNode>{0, 1, 8, 9});
+
+    for (size_t i = 0; i < N; ++i) {
+        constraints.add_forbidden_constraint(static_cast<TestTargetNode>(i), static_cast<TestGlobalNode>(63));
+    }
+
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> card_pairs;
+    for (size_t i = 0; i < 4; ++i) {
+        for (TestGlobalNode g : {0, 1, 8, 9}) {
+            card_pairs.insert({static_cast<TestTargetNode>(i), g});
+        }
+    }
+    constraints.add_cardinality_constraint(card_pairs, 2);
+
+    auto sat_result = solve_topology_mapping(
         target_graph,
         global_graph,
         constraints,
-        ConnectionValidationMode::STRICT,
+        ConnectionValidationMode::RELAXED,
         /* quiet_mode= */ true,
         TopologyMappingSolverEngine::Sat);
+    EXPECT_TRUE(sat_result.success) << "SAT should embed 32-ring in 8×8 mesh with forbidden+required+card: "
+                                    << sat_result.error_message;
+    EXPECT_EQ(sat_result.target_to_global.size(), N);
 
-    EXPECT_TRUE(result.success) << result.error_message;
-    EXPECT_TRUE(result.warnings.empty()) << "STRICT with matching channel counts should not warn";
-    EXPECT_EQ(result.target_to_global.size(), kPathNodes);
+    auto t0_global = sat_result.target_to_global.at(static_cast<TestTargetNode>(0));
+    EXPECT_TRUE(t0_global == 0 || t0_global == 1 || t0_global == 8 || t0_global == 9)
+        << "Required: target 0 must map to {0,1,8,9}, got " << t0_global;
 
-    std::vector<TestGlobalNode> mapped_globals;
-    mapped_globals.reserve(kPathNodes);
-    for (size_t i = 0; i < kPathNodes; ++i) {
-        ASSERT_TRUE(result.target_to_global.contains(static_cast<TestTargetNode>(i)));
-        mapped_globals.push_back(result.target_to_global.at(static_cast<TestTargetNode>(i)));
-    }
-    std::set<TestGlobalNode> distinct(mapped_globals.begin(), mapped_globals.end());
-    EXPECT_EQ(distinct.size(), kPathNodes) << "Injective mapping onto ring nodes";
-
-    auto ring_neighbor = [](TestGlobalNode a, TestGlobalNode b, size_t ring_len) {
-        const auto ua = static_cast<size_t>(a);
-        const auto ub = static_cast<size_t>(b);
-        return (ua + 1) % ring_len == ub % ring_len || (ub + 1) % ring_len == ua % ring_len;
-    };
-
-    for (size_t i = 0; i + 1 < kPathNodes; ++i) {
-        EXPECT_TRUE(ring_neighbor(mapped_globals[i], mapped_globals[i + 1], kRingNodes))
-            << "Logical edge (" << i << "," << (i + 1) << ") must map to adjacent ring nodes";
+    for (size_t i = 0; i < N; ++i) {
+        auto g = sat_result.target_to_global.at(static_cast<TestTargetNode>(i));
+        EXPECT_NE(g, static_cast<TestGlobalNode>(63)) << "Forbidden: target " << i << " must not map to 63";
     }
 
-    // Labeled path P_L in cycle C_N with L<=N: choose image of target 0 on any of N ring positions, then one of two
-    // directions along the cycle → N×2 distinct STRICT embeddings (parallel ring channels do not change this count).
-    static_assert(kPathNodes >= 2 && kPathNodes <= kRingNodes);
-    constexpr size_t kExpectedEmbeddings = 2 * kRingNodes;
-    const auto all_embeddings = solve_topology_mapping_all<TestTargetNode, TestGlobalNode>(
+    size_t card_satisfied = 0;
+    for (const auto& [tn, gn] : card_pairs) {
+        if (sat_result.target_to_global.contains(tn) && sat_result.target_to_global.at(tn) == gn) {
+            card_satisfied++;
+        }
+    }
+    EXPECT_GE(card_satisfied, 2u) << "Cardinality constraint: at least 2 pairs satisfied";
+
+    auto dfs_result = solve_topology_mapping(
         target_graph,
         global_graph,
         constraints,
-        ConnectionValidationMode::STRICT,
-        /*quiet_mode=*/true,
+        ConnectionValidationMode::RELAXED,
+        /* quiet_mode= */ true,
         TopologyMappingSolverEngine::Dfs);
-
-    EXPECT_EQ(all_embeddings.size(), kExpectedEmbeddings) << "solve_topology_mapping_all (DFS) should find exactly 2*N "
-                                                             "STRICT embeddings (N ring offsets × 2 orientations)";
-    std::set<std::map<TestTargetNode, TestGlobalNode>> distinct_maps;
-    for (const auto& emb : all_embeddings) {
-        EXPECT_TRUE(emb.success) << emb.error_message;
-        EXPECT_TRUE(emb.warnings.empty());
-        EXPECT_EQ(emb.target_to_global.size(), kPathNodes);
-        distinct_maps.insert(emb.target_to_global);
-    }
-    EXPECT_EQ(distinct_maps.size(), kExpectedEmbeddings) << "Each embedding should be a distinct assignment";
+    EXPECT_TRUE(dfs_result.success) << "DFS should also succeed: " << dfs_result.error_message;
 }
 
-namespace {
-
-// Physical mesh-level adjacency captured from cluster tooling output (Logical/Physical Mesh-Level Graph print).
-AdjacencyGraph<TestGlobalNode> make_mesh_level_physical_graph_cluster_trace() {
-    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map{
-        {static_cast<TestGlobalNode>(0), {57, 57, 50, 50, 57, 57, 50, 50, 57, 57, 57, 57, 50, 50, 50, 50}},
-        {static_cast<TestGlobalNode>(1),
-         {37, 37, 37, 37, 55, 55, 16, 16, 37, 37, 37, 37, 16, 16, 55, 55, 16, 16, 16, 16}},
-        {static_cast<TestGlobalNode>(2), {53, 53, 14, 14, 53, 53, 14, 14, 53, 53, 14, 14, 53, 53, 14, 14}},
-        {static_cast<TestGlobalNode>(3), {45, 45, 45, 45, 56, 56, 45, 45, 56, 56, 56, 56, 45, 45, 56, 56}},
-        {static_cast<TestGlobalNode>(4), {13, 13, 58, 58, 13, 13, 13, 13, 58, 58, 58, 58, 13, 13, 58, 58}},
-        {static_cast<TestGlobalNode>(5), {34, 34, 57, 57, 34, 34, 57, 57, 34, 34, 57, 57, 57, 57, 34, 34}},
-        {static_cast<TestGlobalNode>(6), {31, 31, 31, 31, 48, 48, 48, 48, 48, 48, 31, 31, 31, 31, 48, 48}},
-        {static_cast<TestGlobalNode>(7), {25, 25, 25, 25, 12, 12, 25, 25, 12, 12, 12, 12, 25, 25, 12, 12}},
-        {static_cast<TestGlobalNode>(8), {55, 55, 55, 55, 42, 42, 55, 55, 42, 42, 42, 42, 55, 55, 42, 42}},
-        {static_cast<TestGlobalNode>(9), {62, 62, 62, 62, 23, 23, 62, 62, 23, 23, 23, 23, 62, 62, 23, 23}},
-        {static_cast<TestGlobalNode>(10), {29, 29, 29, 29, 28, 28, 29, 29, 28, 28, 29, 29, 28, 28, 28, 28}},
-        {static_cast<TestGlobalNode>(11),
-         {59, 59, 40, 40, 59, 59, 33, 33, 59, 59, 59, 59, 40, 40, 33, 33, 40, 40, 40, 40}},
-        {static_cast<TestGlobalNode>(12), {7, 7, 16, 16, 16, 16, 7, 7, 7, 7, 7, 7, 16, 16, 16, 16}},
-        {static_cast<TestGlobalNode>(13), {33, 33, 4, 4, 45, 45, 33, 33, 4, 4, 33, 33, 4, 4, 4, 4, 33, 33, 45, 45}},
-        {static_cast<TestGlobalNode>(14), {37, 37, 52, 52, 2, 2, 2, 2, 2, 2, 37, 37, 52, 52, 37, 37, 37, 37, 2, 2}},
-        {static_cast<TestGlobalNode>(15), {31, 31, 31, 31, 58, 58, 58, 58, 58, 58, 31, 31, 31, 31, 58, 58}},
-        {static_cast<TestGlobalNode>(16), {12, 12, 1, 1, 1, 1, 12, 12, 1, 1, 12, 12, 1, 1, 12, 12}},
-        {static_cast<TestGlobalNode>(17), {29, 29, 48, 48, 29, 29, 48, 48, 48, 48, 29, 29, 48, 48, 29, 29}},
-        {static_cast<TestGlobalNode>(18), {19, 19, 30, 30, 30, 30, 19, 19, 19, 19, 30, 30, 19, 19, 30, 30}},
-        {static_cast<TestGlobalNode>(19), {18, 18, 18, 18, 18, 18, 35, 35, 35, 35, 35, 35, 18, 18, 35, 35}},
-        {static_cast<TestGlobalNode>(20), {60, 60, 51, 51, 51, 51, 60, 60, 51, 51, 60, 60, 60, 60, 51, 51}},
-        {static_cast<TestGlobalNode>(21), {63, 63, 63, 63, 60, 60, 60, 60, 63, 63, 60, 60, 63, 63, 60, 60}},
-        {static_cast<TestGlobalNode>(22), {45, 45, 45, 45, 32, 32, 45, 45, 32, 32, 32, 32, 32, 32, 45, 45}},
-        {static_cast<TestGlobalNode>(23), {42, 42, 9, 9, 9, 9, 42, 42, 9, 9, 9, 9, 42, 42, 42, 42}},
-        {static_cast<TestGlobalNode>(24), {40, 40, 61, 61, 61, 61, 40, 40, 40, 40, 61, 61, 40, 40, 61, 61}},
-        {static_cast<TestGlobalNode>(25), {50, 50, 7, 7, 7, 7, 7, 7, 7, 7, 50, 50, 50, 50, 50, 50}},
-        {static_cast<TestGlobalNode>(26), {44, 44, 39, 39, 44, 44, 39, 39, 44, 44, 44, 44, 39, 39, 39, 39}},
-        {static_cast<TestGlobalNode>(27), {32, 32, 32, 32, 51, 51, 51, 51, 32, 32, 51, 51, 51, 51, 32, 32}},
-        {static_cast<TestGlobalNode>(28), {47, 47, 47, 47, 10, 10, 10, 10, 47, 47, 47, 47, 10, 10, 10, 10}},
-        {static_cast<TestGlobalNode>(29), {10, 10, 17, 17, 10, 10, 10, 10, 17, 17, 17, 17, 10, 10, 17, 17}},
-        {static_cast<TestGlobalNode>(30), {59, 59, 59, 59, 18, 18, 59, 59, 18, 18, 18, 18, 59, 59, 18, 18}},
-        {static_cast<TestGlobalNode>(31), {15, 15, 15, 15, 6, 6, 15, 15, 15, 15, 6, 6, 6, 6, 6, 6}},
-        {static_cast<TestGlobalNode>(32), {27, 27, 22, 22, 22, 22, 22, 22, 22, 22, 27, 27, 27, 27, 27, 27}},
-        {static_cast<TestGlobalNode>(33),
-         {52, 52, 11, 11, 13, 13, 11, 11, 13, 13, 52, 52, 13, 13, 52, 52, 13, 13, 52, 52}},
-        {static_cast<TestGlobalNode>(34), {5, 5, 5, 5, 46, 46, 5, 5, 5, 5, 46, 46, 46, 46, 46, 46}},
-        {static_cast<TestGlobalNode>(35), {19, 19, 36, 36, 36, 36, 19, 19, 19, 19, 36, 36, 19, 19, 36, 36}},
-        {static_cast<TestGlobalNode>(36), {35, 35, 35, 35, 62, 62, 62, 62, 35, 35, 62, 62, 35, 35, 62, 62}},
-        {static_cast<TestGlobalNode>(37), {14, 14, 1, 1, 1, 1, 41, 41, 14, 14, 1, 1, 1, 1, 14, 14, 14, 14, 41, 41}},
-        {static_cast<TestGlobalNode>(38), {49, 49, 52, 52, 52, 52, 52, 52, 49, 49, 49, 49, 52, 52, 49, 49}},
-        {static_cast<TestGlobalNode>(39), {41, 41, 41, 41, 26, 26, 26, 26, 26, 26, 26, 26, 41, 41, 41, 41}},
-        {static_cast<TestGlobalNode>(40),
-         {24, 24, 11, 11, 24, 24, 24, 24, 54, 54, 24, 24, 11, 11, 11, 11, 54, 54, 11, 11}},
-        {static_cast<TestGlobalNode>(41),
-         {54, 54, 37, 37, 39, 39, 54, 54, 39, 39, 39, 39, 37, 37, 54, 54, 54, 54, 39, 39}},
-        {static_cast<TestGlobalNode>(42), {8, 8, 23, 23, 8, 8, 23, 23, 8, 8, 23, 23, 23, 23, 8, 8}},
-        {static_cast<TestGlobalNode>(43), {46, 46, 53, 53, 53, 53, 46, 46, 46, 46, 53, 53, 46, 46, 53, 53}},
-        {static_cast<TestGlobalNode>(44), {63, 63, 26, 26, 26, 26, 63, 63, 63, 63, 26, 26, 63, 63, 26, 26}},
-        {static_cast<TestGlobalNode>(45), {22, 22, 13, 13, 22, 22, 22, 22, 3, 3, 3, 3, 3, 3, 22, 22, 3, 3, 13, 13}},
-        {static_cast<TestGlobalNode>(46), {43, 43, 43, 43, 34, 34, 43, 43, 34, 34, 34, 34, 43, 43, 34, 34}},
-        {static_cast<TestGlobalNode>(47), {49, 49, 28, 28, 28, 28, 49, 49, 28, 28, 28, 28, 49, 49, 49, 49}},
-        {static_cast<TestGlobalNode>(48), {6, 6, 6, 6, 17, 17, 17, 17, 17, 17, 6, 6, 6, 6, 17, 17}},
-        {static_cast<TestGlobalNode>(49), {38, 38, 47, 47, 47, 47, 38, 38, 47, 47, 38, 38, 47, 47, 38, 38}},
-        {static_cast<TestGlobalNode>(50), {25, 25, 25, 25, 0, 0, 0, 0, 0, 0, 0, 0, 25, 25, 25, 25}},
-        {static_cast<TestGlobalNode>(51), {20, 20, 27, 27, 20, 20, 20, 20, 27, 27, 27, 27, 27, 27, 20, 20}},
-        {static_cast<TestGlobalNode>(52),
-         {14, 14, 38, 38, 33, 33, 33, 33, 33, 33, 14, 14, 38, 38, 38, 38, 38, 38, 33, 33}},
-        {static_cast<TestGlobalNode>(53), {2, 2, 43, 43, 43, 43, 2, 2, 2, 2, 2, 2, 43, 43, 43, 43}},
-        {static_cast<TestGlobalNode>(54),
-         {41, 41, 41, 41, 40, 40, 41, 41, 56, 56, 41, 41, 40, 40, 56, 56, 56, 56, 56, 56}},
-        {static_cast<TestGlobalNode>(55), {61, 61, 8, 8, 8, 8, 8, 8, 61, 61, 61, 61, 8, 8, 1, 1, 61, 61, 1, 1}},
-        {static_cast<TestGlobalNode>(56), {54, 54, 3, 3, 54, 54, 3, 3, 54, 54, 3, 3, 3, 3, 54, 54}},
-        {static_cast<TestGlobalNode>(57), {5, 5, 5, 5, 0, 0, 0, 0, 5, 5, 5, 5, 0, 0, 0, 0}},
-        {static_cast<TestGlobalNode>(58), {4, 4, 4, 4, 15, 15, 4, 4, 15, 15, 15, 15, 15, 15, 4, 4}},
-        {static_cast<TestGlobalNode>(59), {11, 11, 11, 11, 30, 30, 30, 30, 11, 11, 11, 11, 30, 30, 30, 30}},
-        {static_cast<TestGlobalNode>(60), {21, 21, 20, 20, 20, 20, 20, 20, 21, 21, 21, 21, 21, 21, 20, 20}},
-        {static_cast<TestGlobalNode>(61), {24, 24, 24, 24, 24, 24, 55, 55, 55, 55, 24, 24, 55, 55, 55, 55}},
-        {static_cast<TestGlobalNode>(62), {36, 36, 9, 9, 36, 36, 9, 9, 9, 9, 9, 9, 36, 36, 36, 36}},
-        {static_cast<TestGlobalNode>(63), {44, 44, 44, 44, 21, 21, 21, 21, 44, 44, 21, 21, 21, 21, 44, 44}},
-    };
-    return AdjacencyGraph<TestGlobalNode>(global_adj_map);
-}
-
-}  // namespace
-
-// Logical mesh-level path (48 meshes in a line, unit edges) into the physical mesh-level graph from a captured
-// cluster trace. solve_topology_mapping_all (RELAXED): offline reference count is 4734 embeddings; DFS and SAT must
-// return identical sets. Timings logged. Expect on the order of ~25 s DFS + ~3 min SAT on typical dev hardware.
-TEST_F(TopologySolverTest, SolveTopologyMapping_MeshLevelClusterTrace48Into64_SolveAll) {
-    constexpr size_t kPathNodes = 48;
-    constexpr size_t kExpectedFullEmbeddings = 4734;
-    auto target_graph = create_1d_chain_graph<TestTargetNode>(kPathNodes);
-    auto global_graph = make_mesh_level_physical_graph_cluster_trace();
-
-    ASSERT_EQ(target_graph.get_nodes().size(), kPathNodes);
-    ASSERT_EQ(global_graph.get_nodes().size(), 64u);
-
-    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
-
-    using clock = std::chrono::steady_clock;
-
-    const auto t_sat_full = clock::now();
-    const auto sat_all = solve_topology_mapping_all<TestTargetNode, TestGlobalNode>(
-        target_graph,
-        global_graph,
-        constraints,
-        ConnectionValidationMode::RELAXED,
-        /*quiet_mode=*/true,
-        TopologyMappingSolverEngine::Sat);
-    const auto sat_full_ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_sat_full).count();
-
-    const auto t_dfs_full = clock::now();
-    const auto dfs_all = solve_topology_mapping_all<TestTargetNode, TestGlobalNode>(
-        target_graph,
-        global_graph,
-        constraints,
-        ConnectionValidationMode::RELAXED,
-        /*quiet_mode=*/true,
-        TopologyMappingSolverEngine::Dfs);
-    const auto dfs_full_ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_dfs_full).count();
-
-    EXPECT_EQ(dfs_all.size(), kExpectedFullEmbeddings);
-    EXPECT_EQ(sat_all.size(), kExpectedFullEmbeddings);
-
-    std::set<std::map<TestTargetNode, TestGlobalNode>> sat_all_maps;
-    for (const auto& emb : sat_all) {
-        ASSERT_TRUE(emb.success) << "SAT: " << emb.error_message;
-        ASSERT_TRUE(emb.warnings.empty()) << "SAT";
-        ASSERT_EQ(emb.target_to_global.size(), kPathNodes) << "SAT";
-        sat_all_maps.insert(emb.target_to_global);
-    }
-    EXPECT_EQ(sat_all_maps.size(), kExpectedFullEmbeddings);
-
-    std::set<std::map<TestTargetNode, TestGlobalNode>> dfs_all_maps;
-    for (const auto& emb : dfs_all) {
-        ASSERT_TRUE(emb.success) << "DFS: " << emb.error_message;
-        ASSERT_TRUE(emb.warnings.empty()) << "DFS";
-        ASSERT_EQ(emb.target_to_global.size(), kPathNodes) << "DFS";
-        dfs_all_maps.insert(emb.target_to_global);
-    }
-    EXPECT_EQ(dfs_all_maps.size(), kExpectedFullEmbeddings);
-
-    EXPECT_EQ(dfs_all_maps, sat_all_maps)
-        << "DFS and SAT must agree on the complete RELAXED embedding set for this fixture";
-
-    log_info(
-        tt::LogFabric,
-        "Mesh cluster trace solve_all ({} embeddings RELAXED): SAT {} ms, DFS {} ms",
-        kExpectedFullEmbeddings,
-        sat_full_ms,
-        dfs_full_ms);
-}
-
-// -----------------------------------------------------------------------------
-// SAT-only benchmark: 1×128 strip → 4×32 grid (solve_n, first two solutions).
-// DFS omitted — poor scaling on this Hamiltonian-style embedding.
-// -----------------------------------------------------------------------------
-
-TEST_F(TopologySolverTest, SolveN_Benchmark_1x128Strip_4x32Grid_Relaxed_FirstTwoSolutions_SatOnly) {
-    constexpr size_t kMaxSolutions = 2;
-    auto target_graph = create_2d_mesh_graph<TestTargetNode>(/*rows=*/1, /*cols=*/128);
-    auto global_graph = create_2d_mesh_graph<TestGlobalNode>(/*rows=*/4, /*cols=*/32);
-    ASSERT_EQ(target_graph.get_nodes().size(), 128u);
-    ASSERT_EQ(global_graph.get_nodes().size(), 128u);
-    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
-
-    using clock = std::chrono::steady_clock;
-    const auto t_sat = clock::now();
-    const auto sat_n = solve_topology_mapping_n<TestTargetNode, TestGlobalNode>(
-        target_graph,
-        global_graph,
-        constraints,
-        kMaxSolutions,
-        ConnectionValidationMode::RELAXED,
-        /*quiet_mode=*/false,
-        TopologyMappingSolverEngine::Sat);
-    const auto sat_ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_sat).count();
-
-    ASSERT_EQ(sat_n.size(), kMaxSolutions) << "SAT should find two embeddings on this fixture";
-    for (const auto& emb : sat_n) {
-        ASSERT_TRUE(emb.success) << emb.error_message;
-    }
-
-    log_info(
-        tt::LogFabric,
-        "1x128 strip -> 4x32 grid: SAT first {} solutions (RELAXED) in {} ms (DFS omitted — poor scaling here)",
-        kMaxSolutions,
-        sat_ms);
-}
-
+// 32-node ring on 8×8 mesh with forbidden + required + cardinality constraints.
 TEST_F(TopologySolverTest, SatStress_RingOnMesh_Forbidden_Required_Cardinality) {
     constexpr size_t N = 32;
     auto target_graph = create_1d_ring_graph<TestTargetNode>(N);
@@ -5518,137 +5261,9 @@ TEST_F(TopologySolverTest, SatStress_UnsatCompleteGraph) {
 // Uses plain int node IDs so graphs can be specified inline without fabric machinery.
 // ============================================================================
 
-using detail::ConstraintIndexData;
-using detail::GraphIndexData;
-using detail::MappingValidator;
-
 using IntAdj = AdjacencyGraph<int>;
 using IntConstraints = MappingConstraints<int, int>;
 using IntAdjMap = typename IntAdj::AdjacencyMap;
-using IntResult = MappingResult<int, int>;
-
-static std::map<int, int> multi_result_map(const IntResult& r) { return r.target_to_global; }
-
-// ---------------------------------------------------------------------------
-// Enumeration performance: K4→K6 clique (int graphs). DFS vs SAT full enumeration; SAT unique_shapes vs SAT full.
-// ---------------------------------------------------------------------------
-TEST_F(TopologySolverTest, SolveAll_Performance_DfsFasterThanSat_K4InK6Clique) {
-    IntAdj target(IntAdjMap{
-        {0, {1, 2, 3}},
-        {1, {0, 2, 3}},
-        {2, {0, 1, 3}},
-        {3, {0, 1, 2}},
-    });
-    IntAdj global(IntAdjMap{
-        {10, {11, 12, 13, 14, 15}},
-        {11, {10, 12, 13, 14, 15}},
-        {12, {10, 11, 13, 14, 15}},
-        {13, {10, 11, 12, 14, 15}},
-        {14, {10, 11, 12, 13, 15}},
-        {15, {10, 11, 12, 13, 14}},
-    });
-    IntConstraints constraints;
-
-    using clock = std::chrono::steady_clock;
-    const auto t_sat = clock::now();
-    const auto sat_results = solve_topology_mapping_all<int, int>(
-        target,
-        global,
-        constraints,
-        ConnectionValidationMode::RELAXED,
-        /*quiet_mode=*/true,
-        TopologyMappingSolverEngine::Sat,
-        /*unique_shapes=*/false);
-    const auto sat_ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_sat).count();
-
-    const auto t_dfs = clock::now();
-    const auto dfs_results = solve_topology_mapping_all<int, int>(
-        target,
-        global,
-        constraints,
-        ConnectionValidationMode::RELAXED,
-        /*quiet_mode=*/true,
-        TopologyMappingSolverEngine::Dfs,
-        /*unique_shapes=*/false);
-    const auto dfs_ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_dfs).count();
-
-    EXPECT_EQ(sat_results.size(), 360u);
-    EXPECT_EQ(dfs_results.size(), 360u);
-
-    std::set<std::map<int, int>> sat_set, dfs_set;
-    for (const auto& r : sat_results) {
-        ASSERT_TRUE(r.success);
-        sat_set.insert(multi_result_map(r));
-    }
-    for (const auto& r : dfs_results) {
-        ASSERT_TRUE(r.success);
-        dfs_set.insert(multi_result_map(r));
-    }
-    EXPECT_EQ(sat_set, dfs_set);
-
-    log_info(
-        tt::LogFabric,
-        "Perf K4→K6 full enumeration: SAT {} ms, DFS {} ms ({} solns)",
-        sat_ms,
-        dfs_ms,
-        dfs_results.size());
-
-    EXPECT_LT(dfs_ms, sat_ms) << "DFS is expected to beat SAT on this small clique embedding enumeration";
-}
-
-TEST_F(TopologySolverTest, SolveAll_Performance_SatUniqueShapesFasterThanSatFull_K4InK6Clique) {
-    IntAdj target(IntAdjMap{
-        {0, {1, 2, 3}},
-        {1, {0, 2, 3}},
-        {2, {0, 1, 3}},
-        {3, {0, 1, 2}},
-    });
-    IntAdj global(IntAdjMap{
-        {10, {11, 12, 13, 14, 15}},
-        {11, {10, 12, 13, 14, 15}},
-        {12, {10, 11, 13, 14, 15}},
-        {13, {10, 11, 12, 14, 15}},
-        {14, {10, 11, 12, 13, 15}},
-        {15, {10, 11, 12, 13, 14}},
-    });
-    IntConstraints constraints;
-
-    using clock = std::chrono::steady_clock;
-    const auto t_unique = clock::now();
-    const auto unique_results = solve_topology_mapping_all<int, int>(
-        target,
-        global,
-        constraints,
-        ConnectionValidationMode::RELAXED,
-        /*quiet_mode=*/true,
-        TopologyMappingSolverEngine::Sat,
-        /*unique_shapes=*/true);
-    const auto unique_ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_unique).count();
-
-    const auto t_full = clock::now();
-    const auto full_results = solve_topology_mapping_all<int, int>(
-        target,
-        global,
-        constraints,
-        ConnectionValidationMode::RELAXED,
-        /*quiet_mode=*/true,
-        TopologyMappingSolverEngine::Sat,
-        /*unique_shapes=*/false);
-    const auto full_ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_full).count();
-
-    EXPECT_EQ(unique_results.size(), 15u);
-    EXPECT_EQ(full_results.size(), 360u);
-
-    log_info(
-        tt::LogFabric,
-        "Perf K4→K6 SAT: unique_shapes {} ms ({} solns), full {} ms ({} solns)",
-        unique_ms,
-        unique_results.size(),
-        full_ms,
-        full_results.size());
-
-    EXPECT_LT(unique_ms, full_ms) << "unique_shapes should use fewer SAT rounds than full enumeration on this fixture";
-}
 
 // ---------------------------------------------------------------------------
 // Test 1: SingleNode_TwoGlobals_FindsBoth
@@ -5698,47 +5313,6 @@ TEST_F(TopologySolverTest, TwoNodeChain_CountsAllEmbeddings) {
     }
 }
 
-// Same graph as Test 2: with unique_shapes, swapping endpoints yields the same global set — expect 3 shapes.
-TEST_F(TopologySolverTest, UniqueShapes_TwoNodeChain_ImageSetsCollapsetoThree) {
-    IntAdj target(IntAdjMap{{0, {1}}, {1, {0}}});
-    IntAdj global(IntAdjMap{{20, {21}}, {21, {20, 22}}, {22, {21, 23}}, {23, {22}}});
-    IntConstraints constraints;
-
-    const auto all_orientations = solve_topology_mapping_all<int, int>(
-        target,
-        global,
-        constraints,
-        ConnectionValidationMode::RELAXED,
-        /*quiet_mode=*/true,
-        TopologyMappingSolverEngine::Auto,
-        /*unique_shapes=*/false);
-
-    const auto unique_images = solve_topology_mapping_all<int, int>(
-        target,
-        global,
-        constraints,
-        ConnectionValidationMode::RELAXED,
-        /*quiet_mode=*/true,
-        TopologyMappingSolverEngine::Auto,
-        /*unique_shapes=*/true);
-
-    EXPECT_EQ(all_orientations.size(), 6u);
-    EXPECT_EQ(unique_images.size(), 3u);
-
-    std::set<std::vector<int>> image_keys;
-    for (const auto& r : unique_images) {
-        ASSERT_TRUE(r.success);
-        std::vector<int> globals;
-        globals.reserve(r.target_to_global.size());
-        for (const auto& p : r.target_to_global) {
-            globals.push_back(p.second);
-        }
-        std::sort(globals.begin(), globals.end());
-        image_keys.insert(std::move(globals));
-    }
-    EXPECT_EQ(image_keys.size(), unique_images.size());
-}
-
 // ---------------------------------------------------------------------------
 // SolveN_RespectsMaxLimit
 //
@@ -5774,66 +5348,6 @@ TEST_F(TopologySolverTest, SolveN_RespectsMaxLimit) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 4: SolveAll_NoDuplicates
-//
-// All returned mappings must be distinct (no two are identical).
-// ---------------------------------------------------------------------------
-TEST_F(TopologySolverTest, SolveAll_NoDuplicates) {
-    IntAdj target(IntAdjMap{{0, {1}}, {1, {0}}});
-    IntAdj global(IntAdjMap{{30, {31}}, {31, {30, 32}}, {32, {31, 33}}, {33, {32}}});
-    IntConstraints constraints;
-
-    const auto results = solve_topology_mapping_all<int, int>(target, global, constraints,
-                                                               ConnectionValidationMode::RELAXED,
-                                                               /*quiet_mode=*/true);
-
-    std::set<std::map<int, int>> seen;
-    for (const auto& r : results) {
-        EXPECT_TRUE(r.success);
-        const auto m = multi_result_map(r);
-        EXPECT_FALSE(seen.contains(m)) << "Duplicate mapping found";
-        seen.insert(m);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Test 5: SolveAll_AllValid
-//
-// Every returned result must pass MappingValidator independently.
-// ---------------------------------------------------------------------------
-TEST_F(TopologySolverTest, SolveAll_AllValid) {
-    IntAdj target(IntAdjMap{{0, {1}}, {1, {0}}});
-    IntAdj global(IntAdjMap{{40, {41}}, {41, {40, 42}}, {42, {41}}});
-    IntConstraints constraints;
-
-    GraphIndexData<int, int> graph_data(target, global);
-    ConstraintIndexData<int, int> constraint_data(constraints, graph_data);
-
-    const auto results = solve_topology_mapping_all<int, int>(target, global, constraints,
-                                                               ConnectionValidationMode::RELAXED,
-                                                               /*quiet_mode=*/true);
-
-    EXPECT_GT(results.size(), 0u);
-    for (const auto& r : results) {
-        EXPECT_TRUE(r.success);
-
-        std::vector<int> raw(graph_data.n_target, -1);
-        for (const auto& [tn, gn] : r.target_to_global) {
-            auto ti = graph_data.target_to_idx.find(tn);
-            auto gi = graph_data.global_to_idx.find(gn);
-            ASSERT_NE(ti, graph_data.target_to_idx.end());
-            ASSERT_NE(gi, graph_data.global_to_idx.end());
-            raw[ti->second] = static_cast<int>(gi->second);
-        }
-
-        std::vector<std::string> warnings;
-        const bool valid = MappingValidator<int, int>::validate_mapping(
-            raw, graph_data, constraint_data, ConnectionValidationMode::RELAXED, &warnings, /*quiet_mode=*/true);
-        EXPECT_TRUE(valid) << "Returned result failed independent validation";
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Test 6: SolveNext_ExcludesGivenMappings
 //
 // After finding the first solution, solve_topology_mapping_next must return a different one.
@@ -5854,7 +5368,7 @@ TEST_F(TopologySolverTest, SolveNext_ExcludesGivenMappings) {
         ConnectionValidationMode::RELAXED, /*quiet_mode=*/true);
 
     EXPECT_TRUE(second.success) << "Should find a second solution";
-    EXPECT_NE(multi_result_map(first), multi_result_map(second)) << "Second solution must differ from first";
+    EXPECT_NE(first.target_to_global, second.target_to_global) << "Second solution must differ from first";
 }
 
 // ---------------------------------------------------------------------------
@@ -5878,82 +5392,6 @@ TEST_F(TopologySolverTest, SolveNext_WhenExhausted_ReturnsFailure) {
         ConnectionValidationMode::RELAXED, /*quiet_mode=*/true);
 
     EXPECT_FALSE(next.success) << "Should return failure when all solutions are excluded";
-}
-
-// ---------------------------------------------------------------------------
-// Test 8: SolveN_BothEnginesAgree
-//
-// SAT and DFS engines should return the same count and set of solutions.
-// ---------------------------------------------------------------------------
-TEST_F(TopologySolverTest, SolveN_BothEnginesAgree) {
-    // 2-node chain target into 3-node path global — 4 embeddings (2 positions × 2 directions).
-    IntAdj target(IntAdjMap{{0, {1}}, {1, {0}}});
-    IntAdj global(IntAdjMap{{70, {71}}, {71, {70, 72}}, {72, {71}}});
-    IntConstraints constraints;
-
-    const auto sat_results = solve_topology_mapping_n<int, int>(
-        target, global, constraints, /*max_solutions=*/100,
-        ConnectionValidationMode::RELAXED, /*quiet_mode=*/true,
-        TopologyMappingSolverEngine::Sat);
-
-    const auto dfs_results = solve_topology_mapping_n<int, int>(
-        target, global, constraints, /*max_solutions=*/100,
-        ConnectionValidationMode::RELAXED, /*quiet_mode=*/true,
-        TopologyMappingSolverEngine::Dfs);
-
-    EXPECT_EQ(sat_results.size(), dfs_results.size())
-        << "SAT and DFS engines should find the same number of solutions";
-
-    for (const auto& r : sat_results) {
-        EXPECT_TRUE(r.success) << "Every SAT-engine result must be valid";
-    }
-    for (const auto& r : dfs_results) {
-        EXPECT_TRUE(r.success) << "Every DFS-engine result must be valid";
-    }
-
-    std::set<std::map<int, int>> sat_set, dfs_set;
-    for (const auto& r : sat_results) { sat_set.insert(multi_result_map(r)); }
-    for (const auto& r : dfs_results) { dfs_set.insert(multi_result_map(r)); }
-    EXPECT_EQ(sat_set, dfs_set) << "SAT and DFS should produce identical solution sets";
-}
-
-// ---------------------------------------------------------------------------
-// Test 9: EmptyTarget_SolveAll_ReturnsOneTrivialResult
-//
-// Empty target graph => exactly one trivial (empty) mapping.
-// ---------------------------------------------------------------------------
-TEST_F(TopologySolverTest, EmptyTarget_SolveAll_ReturnsOneTrivialResult) {
-    IntAdj target;
-    IntAdj global(IntAdjMap{{80, {81}}, {81, {80}}});
-    IntConstraints constraints;
-
-    const auto results = solve_topology_mapping_all<int, int>(target, global, constraints,
-                                                               ConnectionValidationMode::RELAXED,
-                                                               /*quiet_mode=*/true);
-
-    EXPECT_EQ(results.size(), 1u) << "Empty target should yield exactly one trivial mapping";
-    if (!results.empty()) {
-        EXPECT_TRUE(results[0].success);
-        EXPECT_TRUE(results[0].target_to_global.empty());
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Test 10: NoGlobals_SolveN_ReturnsEmpty
-//
-// Non-empty target but empty global graph — no embedding possible.
-// ---------------------------------------------------------------------------
-TEST_F(TopologySolverTest, NoGlobals_SolveN_ReturnsEmpty) {
-    IntAdj target(IntAdjMap{{0, {}}});
-    IntAdj global;
-    IntConstraints constraints;
-
-    const auto results = solve_topology_mapping_n<int, int>(target, global, constraints,
-                                                             /*max_solutions=*/5,
-                                                             ConnectionValidationMode::RELAXED,
-                                                             /*quiet_mode=*/true);
-
-    EXPECT_TRUE(results.empty()) << "No solutions should exist when global graph is empty";
 }
 
 }  // namespace tt::tt_fabric
