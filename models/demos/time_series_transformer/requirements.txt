@@ -11,8 +11,8 @@ numpy>=1.21.0
 pytest>=7.0.0
 loguru>=0.7.0
 
-# HF model + dataset — pinned to versions used to generate reference tensors
-# (see reference/config.json for exact versions used)
+# HF model + dataset dependencies used to generate reference tensors
+# (see reference/run_metadata.json for exact runtime versions used)
 transformers==5.8.0
 datasets>=2.0.0
 huggingface_hub==1.14.0

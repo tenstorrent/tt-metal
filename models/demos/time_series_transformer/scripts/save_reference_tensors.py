@@ -71,7 +71,7 @@ def main():
     except TypeError:
         raise RuntimeError(
             f"torch {torch.__version__} does not support weights_only=True. "
-            "Please upgrade to torch>=1.13 for safe deserialization."
+            f"Please upgrade to torch>=2.0.0 for this demo's safe deserialization path."
         )
 
     past_values                 = batch["past_values"]
