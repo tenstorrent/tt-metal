@@ -10,22 +10,6 @@ Validates that:
 
 from __future__ import annotations
 
-import os
-import sys
-from pathlib import Path
-
-_repo = Path(__file__).resolve().parents[4]
-if str(_repo) not in sys.path:
-    sys.path.insert(0, str(_repo))
-try:
-    from tests.scripts.ompi_singleton_env import apply_ompi_singleton_workaround_env
-
-    apply_ompi_singleton_workaround_env()
-except ImportError:
-    if os.environ.get("TT_METAL_OMPI_SINGLETON_WORKAROUND", "1") != "0":
-        os.environ.setdefault("OMPI_MCA_plm", "isolated")
-        os.environ.setdefault("PRTE_MCA_plm", "isolated")
-
 import pytest
 import torch
 from loguru import logger

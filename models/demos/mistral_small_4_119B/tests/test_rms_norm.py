@@ -7,25 +7,17 @@ and :class:`RMSNorm` (single-device ``ttnn.rms_norm``) against torch reference.
 
 On single-device meshes, the all_gather in ``DistributedRMSNorm`` is a no-op
 (mesh extent ≤ 1), so both classes are exercisable.
+
+Synthetic tests use a tiny ``Mistral4Config`` and random-init gamma. Checkpoint tests load
+real layer-norm gammas from ``models/mistral_small_4/`` (layer 0) when a snapshot is present.
+``q_a`` / ``kv_a`` / ``input_layernorm`` widths use the **checkpoint tensor length**; if that
+differs from ``config.json`` text fields, a warning is logged and parity still runs on the
+loaded gamma (Hub snapshots can disagree with parsed ``Mistral4Config``).
 """
 
 from __future__ import annotations
 
-import os
-import sys
 from pathlib import Path
-
-_repo = Path(__file__).resolve().parents[4]
-if str(_repo) not in sys.path:
-    sys.path.insert(0, str(_repo))
-try:
-    from tests.scripts.ompi_singleton_env import apply_ompi_singleton_workaround_env
-
-    apply_ompi_singleton_workaround_env()
-except ImportError:
-    if os.environ.get("TT_METAL_OMPI_SINGLETON_WORKAROUND", "1") != "0":
-        os.environ.setdefault("OMPI_MCA_plm", "isolated")
-        os.environ.setdefault("PRTE_MCA_plm", "isolated")
 
 import pytest
 import torch
@@ -33,6 +25,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.mistral_small_4_119B.tt.decoder_checkpoint import read_decoder_layer_weight
+from models.demos.mistral_small_4_119B.tt.moe.moe import mistral4_text_config_from_snapshot
 from models.demos.mistral_small_4_119B.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.mistral_small_4_119B.tt.rms_norm.rms_norm import RMSNorm
 from models.demos.mistral_small_4_119B.tt_utils.ccl import CCL
@@ -99,14 +93,25 @@ def _run_rms_norm_test(
     hf_config,
     tmp_path: Path,
     mesh_device,
+    gamma_checkpoint: torch.Tensor | None = None,
 ):
-    """Core test logic shared across parametrized tests."""
+    """Core test logic shared across parametrized tests.
+
+    If ``gamma_checkpoint`` is set, it must be 1-D ``[hidden_size]`` bf16/float; it becomes the
+    reference and TT norm gamma (real checkpoint slice). Otherwise a random-init HF RMSNorm is used.
+    """
     from transformers.models.mistral4.modeling_mistral4 import Mistral4RMSNorm
 
     num_module_layers = mesh_device.shape[0]
 
     # ── Reference model ──────────────────────────────────────────────
     reference_model = Mistral4RMSNorm(hidden_size, eps=hf_config.rms_norm_eps).eval()
+    if gamma_checkpoint is not None:
+        g = gamma_checkpoint.detach().to(torch.float32).contiguous()
+        assert g.ndim == 1 and g.shape[0] == hidden_size, (g.shape, hidden_size)
+        with torch.no_grad():
+            reference_model.weight.copy_(g)
+        torch.manual_seed(123)
     state_dict = reference_model.to(torch.bfloat16).state_dict()
 
     torch_input = torch.randn(num_module_layers, 1, seq_len, hidden_size, dtype=torch.bfloat16)
@@ -177,7 +182,7 @@ def _run_rms_norm_test(
         deallocate_weight_config_tensors(weight_config)
 
 
-# ── Tests: DistributedRMSNorm ────────────────────────────────────────────
+# ── Tests: DistributedRMSNorm (synthetic) ─────────────────────────────────
 
 
 @pytest.mark.parametrize("mode, seq_len", [("decode", 8), ("prefill", 64)])
@@ -196,7 +201,7 @@ def test_distributed_rms_norm_hidden_size(device, tmp_path, mode, seq_len):
     )
 
 
-# ── Tests: RMSNorm (non-distributed, used for kv/q layernorm in MLA) ────
+# ── Tests: RMSNorm (synthetic, MLA-ish widths) ────────────────────────────
 
 
 @pytest.mark.parametrize("mode, seq_len", [("decode", 8), ("prefill", 64)])
@@ -228,6 +233,120 @@ def test_rms_norm_q_lora_rank(device, tmp_path, mode, seq_len):
         hf_config=hf_config,
         tmp_path=tmp_path,
         mesh_device=device,
+    )
+
+
+def _mistral4_snapshot_dir() -> Path:
+    return Path(__file__).resolve().parents[1] / "models" / "mistral_small_4"
+
+
+def _hf_config_and_snapshot_dir():
+    pytest.importorskip("transformers.models.mistral4.configuration_mistral4")
+    snap = _mistral4_snapshot_dir()
+    if not (snap / "config.json").is_file():
+        pytest.skip("No local Mistral snapshot (config.json)")
+    if not (snap / "model.safetensors.index.json").is_file():
+        pytest.skip("No model.safetensors.index.json")
+    return mistral4_text_config_from_snapshot(snap), snap
+
+
+def _require_tile_rms_hidden(h: int) -> None:
+    if h % ttnn.TILE_SIZE != 0:
+        pytest.skip(
+            f"RMSNorm hidden {h} not divisible by TILE_SIZE ({ttnn.TILE_SIZE}); "
+            "convert_weights reshape requires tile alignment."
+        )
+
+
+# ── Checkpoint tests (layer 0 gammas from sharded snapshot) ───────────────
+
+
+@pytest.mark.parametrize("mode, seq_len", [("decode", 8), ("prefill", 64)])
+def test_distributed_rms_norm_hidden_size_checkpoint(device, tmp_path, mode, seq_len):
+    """``DistributedRMSNorm`` vs torch using real ``input_layernorm.weight`` (layer 0)."""
+    hf_config, snap = _hf_config_and_snapshot_dir()
+    try:
+        gamma = read_decoder_layer_weight(snap, 0, "input_layernorm.weight").to(torch.bfloat16).contiguous()
+    except (KeyError, FileNotFoundError, RuntimeError) as exc:
+        pytest.skip(str(exc))
+    if gamma.ndim != 1:
+        pytest.skip(f"input_layernorm.weight expected 1-D, got shape {tuple(gamma.shape)}")
+    h = int(gamma.shape[0])
+    h_cfg = int(hf_config.hidden_size)
+    if h != h_cfg:
+        logger.warning(
+            f"input_layernorm length {h} != text_config.hidden_size {h_cfg}; using checkpoint length for parity"
+        )
+    _require_tile_rms_hidden(h)
+    _run_rms_norm_test(
+        RMSNormClass=DistributedRMSNorm,
+        hidden_size=h,
+        mode=mode,
+        seq_len=seq_len,
+        batch_size_per_row=8,
+        hf_config=hf_config,
+        tmp_path=tmp_path,
+        mesh_device=device,
+        gamma_checkpoint=gamma,
+    )
+
+
+@pytest.mark.parametrize("mode, seq_len", [("decode", 8), ("prefill", 64)])
+def test_rms_norm_q_a_layernorm_checkpoint(device, tmp_path, mode, seq_len):
+    """``RMSNorm`` vs torch using real ``self_attn.q_a_layernorm.weight`` (width = tensor length)."""
+    hf_config, snap = _hf_config_and_snapshot_dir()
+    try:
+        gamma = read_decoder_layer_weight(snap, 0, "self_attn.q_a_layernorm.weight").to(torch.bfloat16).contiguous()
+    except (KeyError, FileNotFoundError, RuntimeError) as exc:
+        pytest.skip(str(exc))
+    if gamma.ndim != 1:
+        pytest.skip(f"q_a_layernorm.weight expected 1-D, got shape {tuple(gamma.shape)}")
+    h = int(gamma.shape[0])
+    if h != hf_config.q_lora_rank:
+        logger.warning(
+            f"q_a_layernorm dim {h} != text_config.q_lora_rank {hf_config.q_lora_rank}; using checkpoint dim"
+        )
+    _require_tile_rms_hidden(h)
+    _run_rms_norm_test(
+        RMSNormClass=RMSNorm,
+        hidden_size=h,
+        mode=mode,
+        seq_len=seq_len,
+        batch_size_per_row=8,
+        hf_config=hf_config,
+        tmp_path=tmp_path,
+        mesh_device=device,
+        gamma_checkpoint=gamma,
+    )
+
+
+@pytest.mark.parametrize("mode, seq_len", [("decode", 8), ("prefill", 64)])
+def test_rms_norm_kv_a_layernorm_checkpoint(device, tmp_path, mode, seq_len):
+    """``RMSNorm`` vs torch using real ``self_attn.kv_a_layernorm.weight`` (width = tensor length)."""
+    hf_config, snap = _hf_config_and_snapshot_dir()
+    try:
+        gamma = read_decoder_layer_weight(snap, 0, "self_attn.kv_a_layernorm.weight").to(torch.bfloat16).contiguous()
+    except (KeyError, FileNotFoundError, RuntimeError) as exc:
+        pytest.skip(str(exc))
+    if gamma.ndim != 1:
+        pytest.skip(f"kv_a_layernorm.weight expected 1-D, got shape {tuple(gamma.shape)}")
+    h = int(gamma.shape[0])
+    expected = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
+    if h != expected:
+        logger.warning(
+            f"kv_a_layernorm dim {h} != text_config kv_lora_rank+rope ({expected}); using checkpoint dim for parity"
+        )
+    _require_tile_rms_hidden(h)
+    _run_rms_norm_test(
+        RMSNormClass=RMSNorm,
+        hidden_size=h,
+        mode=mode,
+        seq_len=seq_len,
+        batch_size_per_row=8,
+        hf_config=hf_config,
+        tmp_path=tmp_path,
+        mesh_device=device,
+        gamma_checkpoint=gamma,
     )
 
 

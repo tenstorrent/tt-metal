@@ -122,40 +122,59 @@ class Mistral4LMHead(AbstractModule):
         n_per_device = vocab_size // mesh_cols if mesh_cols > 0 else vocab_size
         # Pad vocab per device to tile boundary
         n_per_device_padded = math.ceil(n_per_device / tile_size) * tile_size
-        K_tiles = hidden_dim // tile_size
-        N_tiles = n_per_device_padded // tile_size
 
-        grid_size = mesh_device.compute_with_storage_grid_size()
-        num_cores = grid_size.x * grid_size.y
-        per_core_N = math.ceil(N_tiles / num_cores)
+        # MatmulMultiCoreReuseMultiCast1DProgramConfig with a full 119B-class vocab on few cores
+        # oversubscribes L1 circular buffers (TT_THROW in program.cpp: static CB region > max L1).
+        # Use DRAM matmul (no fixed 1D reuse grid) like prefill when the per-device output width is large.
+        _DRAM_LM_HEAD_DECODE_VOCAB_PAD_THRESHOLD = 4096
+        use_dram_lm_decode = n_per_device_padded > _DRAM_LM_HEAD_DECODE_VOCAB_PAD_THRESHOLD
 
-        in0_block_w = 32
-        while K_tiles % in0_block_w != 0 and in0_block_w > 1:
-            in0_block_w //= 2
+        if use_dram_lm_decode:
+            lm_head_config = LinearConfig(
+                input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                transpose_b=True,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
+            )
+            logits_mem = ttnn.DRAM_MEMORY_CONFIG
+            gather_mem = ttnn.DRAM_MEMORY_CONFIG
+        else:
+            K_tiles = hidden_dim // tile_size
+            N_tiles = n_per_device_padded // tile_size
 
-        out_subblock_w = min(per_core_N, 4)
-        while out_subblock_w > 1 and per_core_N % out_subblock_w != 0:
-            out_subblock_w -= 1
+            grid_size = mesh_device.compute_with_storage_grid_size()
+            num_cores = grid_size.x * grid_size.y
+            per_core_N = math.ceil(N_tiles / num_cores)
 
-        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(grid_size.x, grid_size.y),
-            in0_block_w=in0_block_w,
-            out_subblock_h=1,
-            out_subblock_w=out_subblock_w,
-            per_core_M=1,
-            per_core_N=per_core_N,
-            fuse_batch=True,
-            fused_activation=None,
-            mcast_in0=True,
-        )
+            in0_block_w = 32
+            while K_tiles % in0_block_w != 0 and in0_block_w > 1:
+                in0_block_w //= 2
 
-        lm_head_config = LinearConfig(
-            input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-            transpose_b=True,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
-            program_config=program_config,
-        )
+            out_subblock_w = min(per_core_N, 4)
+            while out_subblock_w > 1 and per_core_N % out_subblock_w != 0:
+                out_subblock_w -= 1
+
+            program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(grid_size.x, grid_size.y),
+                in0_block_w=in0_block_w,
+                out_subblock_h=1,
+                out_subblock_w=out_subblock_w,
+                per_core_M=1,
+                per_core_N=per_core_N,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+
+            lm_head_config = LinearConfig(
+                input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                transpose_b=True,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
+                program_config=program_config,
+            )
+            logits_mem = ttnn.L1_MEMORY_CONFIG
+            gather_mem = ttnn.L1_MEMORY_CONFIG
 
         return {
             "final_norm": norm_config,
@@ -164,10 +183,10 @@ class Mistral4LMHead(AbstractModule):
                 mesh_device=MeshDeviceStub(mesh_device.shape),
                 cluster_axis=1,
                 dim=-1,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=gather_mem,
             ),
             "input_memory_config": ttnn.DRAM_MEMORY_CONFIG,
-            "output_memory_config": ttnn.L1_MEMORY_CONFIG,
+            "output_memory_config": logits_mem,
         }
 
     @classmethod

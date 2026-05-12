@@ -119,4 +119,123 @@ def read_decoder_layer_tensors_from_sharded_checkpoint(
     return relative, prefix
 
 
-__all__ = ["read_decoder_layer_tensors_from_sharded_checkpoint"]
+def read_decoder_layer_weight(model_dir: str | Path, layer_idx: int, relative_key: str) -> torch.Tensor:
+    """Load one tensor from a decoder layer in a sharded ``safetensors`` tree.
+
+    ``relative_key`` is the key returned by :func:`read_decoder_layer_tensors_from_sharded_checkpoint`,
+    e.g. ``\"input_layernorm.weight\"`` or ``\"self_attn.q_a_layernorm.weight\"``.
+    """
+    tensors, _ = read_decoder_layer_tensors_from_sharded_checkpoint(model_dir, layer_idx)
+    if relative_key not in tensors:
+        sample = sorted(tensors.keys())[:20]
+        raise KeyError(f"Missing {relative_key!r} in layer {layer_idx}; sample keys: {sample}")
+    return tensors[relative_key]
+
+
+def _pick_lm_head_checkpoint_keys(weight_map: dict[str, str]) -> tuple[str, str]:
+    """Resolve full checkpoint keys for final RMSNorm and vocab projection (or tied embeddings)."""
+    norm_key = None
+    for cand in (
+        "language_model.model.norm.weight",
+        "model.language_model.model.norm.weight",
+    ):
+        if cand in weight_map:
+            norm_key = cand
+            break
+    if norm_key is None:
+        matches = [k for k in weight_map if k.endswith(".model.norm.weight") and ".layers." not in k]
+        if not matches:
+            raise KeyError("Could not find final RMSNorm (model.norm) weight in checkpoint index")
+        norm_key = sorted(matches, key=lambda s: (len(s), s))[0]
+
+    lm_key = None
+    for cand in (
+        "language_model.lm_head.weight",
+        "model.lm_head.weight",
+        "lm_head.weight",
+    ):
+        if cand in weight_map:
+            lm_key = cand
+            break
+    if lm_key is None:
+        for cand in (
+            "language_model.model.embed_tokens.weight",
+            "model.language_model.embed_tokens.weight",
+        ):
+            if cand in weight_map:
+                lm_key = cand
+                break
+    if lm_key is None:
+        raise KeyError(
+            "Could not find lm_head.weight or tied embed_tokens.weight in checkpoint index "
+            "(extend _pick_lm_head_checkpoint_keys if your snapshot uses different names)."
+        )
+
+    return norm_key, lm_key
+
+
+def read_lm_head_checkpoint_tensors(model_dir: str | Path) -> dict[str, torch.Tensor]:
+    """Load final norm + LM projection tensors from a Hugging Face sharded ``safetensors`` tree.
+
+    Returns keys expected by :meth:`Mistral4LMHead.convert_weights`:
+
+    - ``norm.weight`` — shape ``[hidden_size]``
+    - ``lm_head.weight`` — shape ``[vocab_size, hidden_size]`` (may be read from tied ``embed_tokens``)
+
+    Only the shards that contain these tensors are opened (no full-model load).
+    """
+    model_dir = Path(model_dir).resolve()
+    weight_map = _load_index(model_dir)
+    norm_key, lm_key = _pick_lm_head_checkpoint_keys(weight_map)
+    shard_groups = _shard_groups([norm_key, lm_key], weight_map)
+    raw: dict[str, torch.Tensor] = {}
+    for shard_name, keys in shard_groups.items():
+        raw.update(_read_shard_tensors(model_dir / shard_name, keys))
+
+    return {
+        "norm.weight": raw[norm_key],
+        "lm_head.weight": raw[lm_key],
+    }
+
+
+def _pick_embed_tokens_checkpoint_key(weight_map: dict[str, str]) -> str:
+    for cand in (
+        "language_model.model.embed_tokens.weight",
+        "model.language_model.embed_tokens.weight",
+    ):
+        if cand in weight_map:
+            return cand
+    matches = [
+        k
+        for k in weight_map
+        if k.endswith("embed_tokens.weight") and "vision" not in k.lower() and "image" not in k.lower()
+    ]
+    if not matches:
+        raise KeyError(
+            "Could not find embed_tokens.weight in checkpoint index "
+            "(extend _pick_embed_tokens_checkpoint_key for your snapshot layout)."
+        )
+    return sorted(matches, key=lambda s: (len(s), s))[0]
+
+
+def read_embed_tokens_checkpoint_tensor(model_dir: str | Path) -> torch.Tensor:
+    """Load ``embed_tokens.weight`` ``[vocab_size, hidden_size]`` from sharded ``safetensors`` (CPU bf16).
+
+    Opens only the shard(s) that contain this tensor.
+    """
+    model_dir = Path(model_dir).resolve()
+    weight_map = _load_index(model_dir)
+    key = _pick_embed_tokens_checkpoint_key(weight_map)
+    shard_groups = _shard_groups([key], weight_map)
+    raw: dict[str, torch.Tensor] = {}
+    for shard_name, keys in shard_groups.items():
+        raw.update(_read_shard_tensors(model_dir / shard_name, keys))
+    return raw[key]
+
+
+__all__ = [
+    "read_decoder_layer_tensors_from_sharded_checkpoint",
+    "read_decoder_layer_weight",
+    "read_embed_tokens_checkpoint_tensor",
+    "read_lm_head_checkpoint_tensors",
+]
