@@ -82,7 +82,7 @@ class TtMobileNetV2Conv2D:
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
         )
 
     def __call__(self, x):

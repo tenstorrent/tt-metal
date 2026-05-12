@@ -50,7 +50,7 @@ class Conv:
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
             fp32_dest_acc_en=False,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
             math_approx_mode=True,
         )
         self.conv_output_dtype = conv_param.dtype
@@ -128,7 +128,7 @@ class Conv_transpose:
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
             fp32_dest_acc_en=False,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
             math_approx_mode=True,
         )
         # check if conv_params contains tile layout and set tile if it does

@@ -36,7 +36,7 @@ class TtnnUFLDV2Conv2D:
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
             fp32_dest_acc_en=False,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
             math_approx_mode=True,
         )
         self.conv_output_dtype = self.activation_dtype
