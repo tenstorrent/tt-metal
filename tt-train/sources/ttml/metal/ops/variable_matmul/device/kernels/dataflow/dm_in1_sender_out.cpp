@@ -11,8 +11,7 @@
 void kernel_main() {
     // Indices 0, 1, 9 are unused placeholders (kept for compile-time arg layout compatibility).
     // Actual M_tiles, padded_M_tiles, M_blocks_per_core come from runtime args.
-    constexpr uint32_t K_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t padded_K_tiles = get_compile_time_arg_val(3);
+    // Indices 2, 3 are unused placeholders. K_tiles comes from runtime args (variable-K).
     constexpr uint32_t N_tiles = get_compile_time_arg_val(4);
     constexpr uint32_t padded_N_tiles = get_compile_time_arg_val(5);
     constexpr uint32_t M_block_tiles = get_compile_time_arg_val(6);
@@ -107,6 +106,10 @@ void kernel_main() {
     if constexpr (use_out_offset) {
         out_row_offset_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 5);
     }
+    // Variable-K: matmul-K extent from runtime; padded_K and K_num_blocks derived using
+    // K_block_tiles (CTA). One cached program services any K value.
+    const uint32_t K_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 6);
+    const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
 
     // Storage layout: without transpose_b the weight is stored as [K, N]; with it, as [N, K].
     const TensorShape2D in1_shape = transpose_b ? TensorShape2D(N_tiles, K_tiles, padded_N_tiles, padded_K_tiles)
@@ -114,7 +117,7 @@ void kernel_main() {
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
     const TensorShape2D out0_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
 
-    constexpr uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
+    const uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 

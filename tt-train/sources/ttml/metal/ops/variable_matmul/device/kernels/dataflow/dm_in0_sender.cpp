@@ -9,10 +9,8 @@
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
 
 void kernel_main() {
-    // Indices 0, 1, 9 are unused placeholders (kept for compile-time arg layout compatibility).
-    // Actual M_tiles, padded_M_tiles, M_blocks_per_core come from runtime args.
-    constexpr uint32_t K_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t padded_K_tiles = get_compile_time_arg_val(3);
+    // Indices 0, 1, 2, 3, 9 are unused placeholders (kept for compile-time arg layout compatibility).
+    // Actual M_tiles, padded_M_tiles, M_blocks_per_core, K_tiles come from runtime args.
     constexpr uint32_t N_tiles = get_compile_time_arg_val(4);
     constexpr uint32_t padded_N_tiles = get_compile_time_arg_val(5);
     constexpr uint32_t M_block_tiles = get_compile_time_arg_val(6);
@@ -134,6 +132,10 @@ void kernel_main() {
     if constexpr (use_out_offset) {
         out_row_offset_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 7);
     }
+    // Variable-K: K extent comes from runtime. padded_K_tiles / K_num_blocks derived from
+    // K_tiles + K_block_tiles (CTA). One cached program services any K value.
+    const uint32_t K_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 8);
+    const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
 
     // Storage layout: without transpose_a the input is stored as [M, K]; with it, as [K, M].
     // shape carries the MATMUL-coord effective sizes — used for bounds checks.
@@ -142,7 +144,7 @@ void kernel_main() {
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
     const TensorShape2D out0_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
 
-    constexpr uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
+    const uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 

@@ -23,6 +23,7 @@ struct VariableMatmulProgramFactory {
         uint32_t in0_parallel_axis_cores{};
         uint32_t in1_parallel_axis_cores{};
         uint32_t M_block_tiles{};
+        uint32_t K_block_tiles{};
         uint32_t N_tiles_per_core{};
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
