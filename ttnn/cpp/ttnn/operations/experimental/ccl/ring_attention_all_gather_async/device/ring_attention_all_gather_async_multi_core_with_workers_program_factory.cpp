@@ -202,7 +202,7 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
     std::set<CoreRange> sender_forward_core_ranges;
     std::set<CoreRange> sender_backward_core_ranges;
 
-    for (int i = 0; i < sender_worker_cores.size(); i++) {
+    for (size_t i = 0; i < sender_worker_cores.size(); i++) {
         const auto& core = sender_worker_cores[i];
         if (i % 2 == 1) {
             sender_forward_core_ranges.insert(CoreRange(core));
@@ -596,7 +596,7 @@ void ring_attention_all_gather_async_multicore_with_workers_override_runtime_arg
     auto& worker_writer_sender_backward_runtime_args_by_core =
         GetRuntimeArgs(program, worker_sender_writer_backward_kernel_id);
 
-    for (int link = 0; link < num_links; link++) {
+    for (uint32_t link = 0; link < num_links; link++) {
         auto& worker_reader_sender_forward_runtime_args =
             worker_reader_sender_forward_runtime_args_by_core[sender_worker_cores[1 + (link * 2)].x]
                                                              [sender_worker_cores[1 + (link * 2)].y];

@@ -29,7 +29,7 @@ struct MinimalMatmulParams {
     std::optional<tt::tt_metal::DataType> output_dtype = std::nullopt;
 
     // Fused addcmul: ternary_a + scalar * matmul_output * ternary_b
-    std::optional<float> fused_ternary_scalar;
+    std::optional<float> fused_ternary_scalar = std::nullopt;
 
     DeviceComputeKernelConfig compute_kernel_config;
     int32_t chunks = 1;  // Number of output tensors to split into (default 1 for backward compat)

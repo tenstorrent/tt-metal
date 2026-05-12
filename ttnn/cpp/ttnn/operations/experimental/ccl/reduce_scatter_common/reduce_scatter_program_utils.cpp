@@ -116,7 +116,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> reduce_scatter_map_nd_to_4d(const ttnn:
 
     const uint32_t c_dims_end = shape.rank() - 2;
     uint32_t b_dims_end;
-    if (rank_diff >= 1 && dim <= rank_diff) {
+    if (rank_diff >= 1 && dim <= static_cast<uint32_t>(rank_diff)) {
         b_dims_end = dim;
         normalized_dim = 1;
     } else if (rank_diff == -1 && dim == 0) {

@@ -30,7 +30,7 @@ struct StridedAllGatherAsyncParams {
 
 struct StridedAllGatherAsyncInputs {
     const Tensor input_tensor;
-    const std::optional<Tensor> persistent_output_buffer;
+    const std::optional<Tensor> persistent_output_buffer = std::nullopt;
 };
 
 }  // namespace ttnn::experimental::prim
