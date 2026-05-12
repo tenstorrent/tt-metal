@@ -466,3 +466,18 @@ def test_concat_large_page_l1_budget(device, shapes, dim):
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output_tensor, output)
+
+
+def test_concat_rank_mismatch_raises(device):
+    """Rank-mismatched inputs to ttnn.concat must raise a clear error, not crash with an index OOB.
+
+    Regression test for https://github.com/tenstorrent/tt-metal/issues/44094
+    """
+    a = torch.randn(1, 50, 1024, dtype=torch.bfloat16)
+    b = torch.randn(50, 1024, dtype=torch.bfloat16)
+
+    ta = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    tb = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+
+    with pytest.raises(RuntimeError, match="ttnn.concat"):
+        ttnn.concat([ta, tb], dim=1)

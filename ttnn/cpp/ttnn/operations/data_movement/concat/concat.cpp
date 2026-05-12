@@ -300,22 +300,20 @@ ttnn::Tensor concat(
             const auto& ft_shape = first_tensor.logical_shape();
             const auto& t_shape = t.logical_shape();
 
-            const bool ranks_match = ft_shape.rank() == t_shape.rank();
-            bool non_concat_dims_match = true;
-            for (int i = 0; i < ft_shape.rank(); i++) {
-                non_concat_dims_match &= dim == i or t_shape[i] == ft_shape[i];
+            if (ft_shape.rank() != t_shape.rank()) {
+                return false;
             }
-            // bool non_concat_padded_dims_match = true;
-            // for(int i = 0; i < ft_shape.rank(); i++) {
-            //     non_concat_padded_dims_match &= dim == i or t_shape.with_tile_padding()[i] ==
-            //     ft_shape.with_tile_padding()[i];
-            // }
-            return ranks_match and non_concat_dims_match;  // and non_concat_padded_dims_match;
+            for (int i = 0; i < ft_shape.rank(); i++) {
+                if (dim != i and t_shape[i] != ft_shape[i]) {
+                    return false;
+                }
+            }
+            return true;
         });
 
     TT_FATAL(
         shapes_match,
-        "All dimensions must be the same size except for the dimension along which the contenation is taking place.");
+        "ttnn.concat: all input tensors must have the same rank and matching sizes on every non-concat dimension.");
 
     auto compute_output_shape = [](const std::vector<ttnn::Tensor>& tensors, int dim) -> ttnn::Shape {
         ttnn::Shape shape_out = tensors[0].logical_shape();
