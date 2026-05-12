@@ -24,7 +24,8 @@ from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 class TtMinistralMLP(LightweightModule):
     # Prefill FF1/FF3: factory ``ttnn.linear`` + reuse-mcast program blows L1 on 5k×32k-class matmuls.
     # Chunk activations (cap below) and run **minimal_matmul** on non-Galaxy (same idea as FF2 for long seq).
-    _PREFILL_MLP_M_CAP = 32
+    _PREFILL_MLP_M_CAP = 128
+    _SHORT_PREFILL_MAX_GRID_CORES = 110
 
     def __init__(
         self,
@@ -146,8 +147,18 @@ class TtMinistralMLP(LightweightModule):
 
         # ``ttnn.linear`` + reuse-mcast program config blows L1 on wide (~5k × ~32k) prefill matmuls.
         # Use the same minimal matmul path as FF2 for long prefills (smaller static CBs); Galaxy keeps linear.
+        x_to_deallocate_after_ff13 = None
         if mode == Mode.PREFILL and not TG:
             grid = self.args.mlp1_3_grid(cfg_seq)
+            if cfg_seq <= self._PREFILL_MLP_M_CAP:
+                max_grid = self.args.max_grid_size
+                grid_y = min(max_grid.y, self._SHORT_PREFILL_MAX_GRID_CORES)
+                grid_x = min(max_grid.x, self._SHORT_PREFILL_MAX_GRID_CORES // grid_y)
+                grid = (grid_x, grid_y)
+                x_l1 = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+                if x_l1 is not x:
+                    x_to_deallocate_after_ff13 = x
+                x = x_l1
             mmc_ff13 = ttnn.MinimalMatmulConfig(
                 M_block_size=8,
                 K_block_size=8,
@@ -159,13 +170,17 @@ class TtMinistralMLP(LightweightModule):
                 self.w1,
                 compute_kernel_config=li_ff1_3_compute_kernel_cfg,
                 config=mmc_ff13,
+                dtype=ttnn.bfloat8_b,
             )
             w3_out = ttnn.experimental.minimal_matmul(
                 x,
                 self.w3,
                 compute_kernel_config=li_ff1_3_compute_kernel_cfg,
                 config=mmc_ff13,
+                dtype=ttnn.bfloat8_b,
             )
+            if x_to_deallocate_after_ff13 is not None:
+                ttnn.deallocate(x_to_deallocate_after_ff13)
         else:
             pc_1 = self.args.get_mlp_ff1_3_prg_config(mode, cfg_seq, self.prefetcher)
             pc_3 = self.args.get_mlp_ff1_3_prg_config(mode, cfg_seq, self.prefetcher)
