@@ -691,7 +691,7 @@ ALWI void max_reduce_with_indices_init() {
  * | rt_dim          | Tile dimension along rows (runtime); must be 1 when reduce_dim is REDUCE_COL    | uint32_t  | >= 1; default 1
  */
 // clang-format on
-template <PoolType pool_type, DataFormat format, ReduceDim reduce_dim=ReduceDim::REDUCE_COL>
+template <PoolType pool_type, DataFormat format, ReduceDim reduce_dim = ReduceDim::REDUCE_COL>
 ALWI void sfpu_reduce(uint32_t idst, uint32_t ct_dim = 1, uint32_t rt_dim = 1) {
     static_assert(
         reduce_dim == ReduceDim::REDUCE_COL ||
@@ -829,11 +829,7 @@ ALWI void dbg_read_dest_acc_row(int row_addr, uint32_t* rd_data) {
 // clang-format on
 template <DataFormat fmt>
 ALWI void dbg_read_dest_tile(uint32_t tile_id, void* dst_buffer, bool enable_swizzle = true) {
-    static_assert(
-        fmt == DataFormat::Float32 || fmt == DataFormat::Float16 || fmt == DataFormat::Float16_b ||
-            fmt == DataFormat::Int32 || fmt == DataFormat::UInt32 || fmt == DataFormat::UInt16 ||
-            fmt == DataFormat::Int8 || fmt == DataFormat::UInt8,
-        "dbg_read_dest_tile: unsupported DataFormat");
+    static_assert(dbg_dest_fmt_supported(fmt), "dbg_read_dest_tile: unsupported DataFormat");
     MATH((dbg_dump_dest_tile<MathThreadId>(fmt, tile_id, dst_buffer, enable_swizzle)));
 }
 
@@ -860,11 +856,7 @@ ALWI void dbg_read_dest_tile(uint32_t tile_id, void* dst_buffer, bool enable_swi
 // clang-format on
 template <DataFormat fmt>
 ALWI void dbg_write_dest_tile(uint32_t tile_id, const void* src_buffer, bool enable_swizzle = true) {
-    static_assert(
-        fmt == DataFormat::Float32 || fmt == DataFormat::Float16 || fmt == DataFormat::Float16_b ||
-            fmt == DataFormat::Int32 || fmt == DataFormat::UInt32 || fmt == DataFormat::UInt16 ||
-            fmt == DataFormat::Int8 || fmt == DataFormat::UInt8,
-        "dbg_write_dest_tile: unsupported DataFormat");
+    static_assert(dbg_dest_fmt_supported(fmt), "dbg_write_dest_tile: unsupported DataFormat");
     MATH((dbg_write_dest_tile<MathThreadId>(fmt, tile_id, src_buffer, enable_swizzle)));
 }
 

@@ -155,6 +155,12 @@ inline void dbg_thread_unhalt()
     }
 }
 
+constexpr bool dbg_dest_fmt_supported(DataFormat fmt)
+{
+    return fmt == DataFormat::Float32 || fmt == DataFormat::Float16 || fmt == DataFormat::Float16_b || fmt == DataFormat::Int32 || fmt == DataFormat::UInt32 ||
+           fmt == DataFormat::UInt16 || fmt == DataFormat::Int8 || fmt == DataFormat::UInt8;
+}
+
 // Dump a single tile from the DEST register through the RISC-V memory-mapped
 // dest register.
 //
@@ -172,10 +178,7 @@ inline void dbg_dump_dest_tile(DataFormat fmt, std::uint32_t tile_id, void *dst_
         thread_id == ThreadId::MathThreadId || thread_id == ThreadId::PackThreadId || thread_id == ThreadId::UnpackThreadId,
         "Thread must be UnpackThreadId, MathThreadId, or PackThreadId");
 
-    LLK_ASSERT(
-        fmt == DataFormat::Float32 || fmt == DataFormat::Float16 || fmt == DataFormat::Float16_b || fmt == DataFormat::Int32 || fmt == DataFormat::UInt32 ||
-            fmt == DataFormat::UInt16 || fmt == DataFormat::Int8 || fmt == DataFormat::UInt8,
-        "dbg_dump_dest_tile: unsupported DataFormat");
+    LLK_ASSERT(dbg_dest_fmt_supported(fmt), "dbg_dump_dest_tile: unsupported DataFormat");
 
     constexpr std::uint32_t TILE_ELEMENTS = TILE_HEIGHT * TILE_WIDTH;
 
@@ -235,10 +238,7 @@ inline void dbg_write_dest_tile(DataFormat fmt, std::uint32_t tile_id, const voi
         thread_id == ThreadId::MathThreadId || thread_id == ThreadId::PackThreadId || thread_id == ThreadId::UnpackThreadId,
         "Thread must be UnpackThreadId, MathThreadId, or PackThreadId");
 
-    LLK_ASSERT(
-        fmt == DataFormat::Float32 || fmt == DataFormat::Float16 || fmt == DataFormat::Float16_b || fmt == DataFormat::Int32 || fmt == DataFormat::UInt32 ||
-            fmt == DataFormat::UInt16 || fmt == DataFormat::Int8 || fmt == DataFormat::UInt8,
-        "dbg_write_dest_tile: unsupported DataFormat");
+    LLK_ASSERT(dbg_dest_fmt_supported(fmt), "dbg_write_dest_tile: unsupported DataFormat");
 
     constexpr std::uint32_t TILE_ELEMENTS = TILE_HEIGHT * TILE_WIDTH;
 
