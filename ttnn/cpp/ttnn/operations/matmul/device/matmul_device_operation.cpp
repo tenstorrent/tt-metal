@@ -64,36 +64,6 @@ void validate_matmul_foundational_matrix_dimensions(
         Kt_b);
 }
 
-struct TinyTileCombo {
-    bool transpose_tile;
-    uint32_t tile_w;
-    uint32_t tile_h;
-    bool has_bias;
-};
-
-constexpr TinyTileCombo kTinyTileSupportedCombos[] = {
-    {false, 16, 16, false},
-    {false, 16, 16, true},
-    {false, 16, 32, false},
-    {false, 32, 16, false},
-    {false, 32, 16, true},
-    {false, 32, 32, false},
-    {false, 32, 32, true},
-    {true, 32, 16, false},
-    {true, 32, 16, true},
-    {true, 32, 32, false},
-    {true, 32, 32, true},
-};
-
-bool is_tiny_tile_combo_supported(bool transpose_tile, uint32_t tile_w, uint32_t tile_h, bool has_bias) {
-    for (const auto& c : kTinyTileSupportedCombos) {
-        if (c.transpose_tile == transpose_tile && c.tile_w == tile_w && c.tile_h == tile_h && c.has_bias == has_bias) {
-            return true;
-        }
-    }
-    return false;
-}
-
 bool matmul_program_config_fuses_batch_dim_for_m(const operations::matmul::MatmulProgramConfig& program_config) {
     return std::visit(
         [](const auto& cfg) -> bool {
@@ -128,8 +98,7 @@ void validate_matmul_tile_configuration_and_alignment(
     const ttnn::Shape& b_shape_padded,
     const tt::tt_metal::Tile& in0_tile,
     const tt::tt_metal::Tile& in1_tile,
-    const operations::matmul::MatmulProgramConfig& chosen_program_config,
-    bool has_bias) {
+    const operations::matmul::MatmulProgramConfig& chosen_program_config) {
     TT_FATAL(
         a_shape_padded[-1] % in0_tile.get_width() == 0,
         "Input A padded width (K) {} must be divisible by in0 tile width {}",
@@ -190,17 +159,6 @@ void validate_matmul_tile_configuration_and_alignment(
             "matmul with non-optimized program config does not "
             "support tiny tile");
     }
-
-    const auto& raw_in1_tile = input_tensor_b.tensor_spec().tile();
-    const bool in1_transpose_tile_flag = raw_in1_tile.get_transpose_of_faces();
-    TT_FATAL(
-        is_tiny_tile_combo_supported(in1_transpose_tile_flag, in1_tile.get_width(), in0_tile.get_height(), has_bias),
-        "Unsupported tiny-tile matmul combination (mirror _TINY_TILE_SUPPORTED_COMBOS in "
-        "tests/ttnn/unit_tests/operations/matmul/test_matmul.py): transpose_tile={} tile_w={} tile_h={} has_bias={}",
-        in1_transpose_tile_flag,
-        in1_tile.get_width(),
-        in0_tile.get_height(),
-        has_bias);
 }
 
 void validate_matmul_block_and_subblock_configuration(
@@ -726,14 +684,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         attributes);
 
     validate_matmul_tile_configuration_and_alignment(
-        input_tensor_a,
-        input_tensor_b,
-        a_shape_padded,
-        b_shape_padded,
-        in0_tile,
-        in1_tile,
-        chosen_program_config,
-        optional_bias.has_value());
+        input_tensor_a, input_tensor_b, a_shape_padded, b_shape_padded, in0_tile, in1_tile, chosen_program_config);
     TT_FATAL(
         attributes.output_tile.value().get_tile_shape()[0] == in0_tile.get_height() &&
             attributes.output_tile.value().get_tile_shape()[1] == in1_tile.get_width(),
