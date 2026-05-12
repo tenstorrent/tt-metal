@@ -170,5 +170,22 @@ class FuserConfigSchema(BaseModel):
     @classmethod
     def load(cls, test_name: str):
         yaml_path = FUSER_CONFIG_DIR / f"{test_name}.yaml"
-        schema = cls.validate_file(yaml_path)
+        if not yaml_path.exists():
+            raise FileNotFoundError(f"File not found: {yaml_path}")
+
+        with open(yaml_path, "r") as f:
+            config_dict = yaml.safe_load(f)
+
+        supported_archs = config_dict.pop("supported_archs", None)
+        if supported_archs is not None:
+            if arch.value not in supported_archs:
+                pytest.skip(f"Test '{test_name}' not supported on {arch.value}")
+
+        try:
+            schema = cls.model_validate(config_dict)
+        except ValidationError as e:
+            raise ValueError(
+                f"Validation failed for {yaml_path.name}:\n{format_validation_error(e)}"
+            ) from None
+
         return schema.to_fuser_config(test_name)
