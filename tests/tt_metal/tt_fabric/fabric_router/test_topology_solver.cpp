@@ -5289,51 +5289,178 @@ TEST_F(TopologySolverTest, SolveN_RespectsMaxLimit) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Test 6: SolveNext_ExcludesGivenMappings
-//
-// After finding the first solution, solve_topology_mapping_next must return a different one.
-// ---------------------------------------------------------------------------
-TEST_F(TopologySolverTest, SolveNext_ExcludesGivenMappings) {
+// solve_topology_mapping_next (stateless + exhausted) and TopologyMappingEnumerationSession (incremental SAT):
+// results match solve_n, one SAT solve per next(), reuse faster than N fresh sessions.
+TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
+    // (A) Second mapping differs from first; no session.
+    {
+        IntAdj target(IntAdjMap{{0, {}}});
+        IntAdj global(IntAdjMap{{50, {}}, {51, {}}, {52, {}}});
+        IntConstraints constraints;
+        const auto first = solve_topology_mapping<int, int>(
+            target, global, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true);
+        ASSERT_TRUE(first.success);
+        std::vector<std::map<int, int>> excluded{first.target_to_global};
+        const auto second = solve_topology_mapping_next<int, int>(
+            target, global, constraints, excluded, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true);
+        EXPECT_TRUE(second.success);
+        EXPECT_NE(first.target_to_global, second.target_to_global);
+    }
+    // (B) Exhausted space => success=false.
+    {
+        IntAdj target(IntAdjMap{{0, {}}});
+        IntAdj global(IntAdjMap{{60, {}}});
+        IntConstraints constraints;
+        const auto first = solve_topology_mapping<int, int>(
+            target, global, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true);
+        ASSERT_TRUE(first.success);
+        std::vector<std::map<int, int>> excluded{first.target_to_global};
+        const auto next = solve_topology_mapping_next<int, int>(
+            target, global, constraints, excluded, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true);
+        EXPECT_FALSE(next.success);
+    }
+
+    // (C) Incremental SAT session vs solve_n + timing vs fresh sessions.
     IntAdj target(IntAdjMap{{0, {}}});
-    IntAdj global(IntAdjMap{{50, {}}, {51, {}}, {52, {}}});
+    IntAdj global(IntAdjMap{
+        {100, {}},
+        {101, {}},
+        {102, {}},
+        {103, {}},
+        {104, {}},
+        {105, {}},
+        {106, {}},
+        {107, {}},
+        {108, {}},
+        {109, {}},
+        {110, {}},
+        {111, {}},
+    });
     IntConstraints constraints;
 
-    const auto first = solve_topology_mapping<int, int>(target, global, constraints,
-                                                         ConnectionValidationMode::RELAXED,
-                                                         /*quiet_mode=*/true);
-    ASSERT_TRUE(first.success);
+    constexpr size_t kRounds = 8;
+    std::vector<std::map<int, int>> expected_prefix;
+    expected_prefix.reserve(kRounds);
+    {
+        TopologyMappingEnumerationSession<int, int> probe;
+        std::vector<std::map<int, int>> ex;
+        for (size_t i = 0; i < kRounds; ++i) {
+            const auto r = probe.next(
+                target,
+                global,
+                constraints,
+                ex,
+                ConnectionValidationMode::RELAXED,
+                /*quiet_mode=*/true,
+                TopologyMappingSolverEngine::Sat,
+                false);
+            ASSERT_TRUE(r.success) << "probe round " << i;
+            expected_prefix.push_back(r.target_to_global);
+            ex.push_back(r.target_to_global);
+        }
+    }
 
-    std::vector<std::map<int, int>> excluded{first.target_to_global};
-    const auto second = solve_topology_mapping_next<int, int>(
-        target, global, constraints, excluded,
-        ConnectionValidationMode::RELAXED, /*quiet_mode=*/true);
+    TopologyMappingEnumerationSession<int, int> check_calls;
+    std::vector<std::map<int, int>> ex_acc;
+    std::set<std::map<int, int>> session_maps;
+    for (size_t i = 0; i < kRounds; ++i) {
+        const auto r = check_calls.next(
+            target,
+            global,
+            constraints,
+            ex_acc,
+            ConnectionValidationMode::RELAXED,
+            true,
+            TopologyMappingSolverEngine::Sat,
+            false);
+        ASSERT_TRUE(r.success);
+        ASSERT_TRUE(session_maps.insert(r.target_to_global).second);
+        EXPECT_EQ(r.target_to_global, expected_prefix[i]);
+        ex_acc.push_back(r.target_to_global);
+    }
+    EXPECT_EQ(check_calls.sat_solve_calls(), kRounds);
 
-    EXPECT_TRUE(second.success) << "Should find a second solution";
-    EXPECT_NE(first.target_to_global, second.target_to_global) << "Second solution must differ from first";
-}
+    const auto batch = solve_topology_mapping_n<int, int>(
+        target,
+        global,
+        constraints,
+        kRounds,
+        ConnectionValidationMode::RELAXED,
+        true,
+        TopologyMappingSolverEngine::Sat,
+        false);
+    ASSERT_EQ(batch.size(), kRounds);
+    std::set<std::map<int, int>> batch_maps;
+    for (const auto& r : batch) {
+        ASSERT_TRUE(r.success);
+        batch_maps.insert(r.target_to_global);
+    }
+    EXPECT_EQ(session_maps, batch_maps);
 
-// ---------------------------------------------------------------------------
-// Test 7: SolveNext_WhenExhausted_ReturnsFailure
-//
-// Exclude all possible solutions — the next call must return success=false.
-// ---------------------------------------------------------------------------
-TEST_F(TopologySolverTest, SolveNext_WhenExhausted_ReturnsFailure) {
-    IntAdj target(IntAdjMap{{0, {}}});
-    IntAdj global(IntAdjMap{{60, {}}});
-    IntConstraints constraints;
+    {
+        TopologyMappingEnumerationSession<int, int> warmup;
+        std::vector<std::map<int, int>> ex;
+        for (size_t i = 0; i < kRounds; ++i) {
+            const auto r = warmup.next(
+                target,
+                global,
+                constraints,
+                ex,
+                ConnectionValidationMode::RELAXED,
+                true,
+                TopologyMappingSolverEngine::Sat,
+                false);
+            ASSERT_TRUE(r.success);
+            ex.push_back(r.target_to_global);
+        }
+    }
 
-    const auto first = solve_topology_mapping<int, int>(target, global, constraints,
-                                                         ConnectionValidationMode::RELAXED,
-                                                         /*quiet_mode=*/true);
-    ASSERT_TRUE(first.success);
+    using clock = std::chrono::steady_clock;
+    const auto t_fresh_start = clock::now();
+    for (size_t i = 0; i < kRounds; ++i) {
+        TopologyMappingEnumerationSession<int, int> fresh;
+        std::vector<std::map<int, int>> ex;
+        for (size_t j = 0; j < i; ++j) {
+            ex.push_back(expected_prefix[j]);
+        }
+        const auto r = fresh.next(
+            target,
+            global,
+            constraints,
+            ex,
+            ConnectionValidationMode::RELAXED,
+            true,
+            TopologyMappingSolverEngine::Sat,
+            false);
+        ASSERT_TRUE(r.success);
+        EXPECT_EQ(r.target_to_global, expected_prefix[i]);
+    }
+    const auto fresh_ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_fresh_start).count();
 
-    std::vector<std::map<int, int>> excluded{first.target_to_global};
-    const auto next = solve_topology_mapping_next<int, int>(
-        target, global, constraints, excluded,
-        ConnectionValidationMode::RELAXED, /*quiet_mode=*/true);
+    const auto t_reuse_start = clock::now();
+    {
+        TopologyMappingEnumerationSession<int, int> session;
+        std::vector<std::map<int, int>> ex;
+        for (size_t i = 0; i < kRounds; ++i) {
+            const auto r = session.next(
+                target,
+                global,
+                constraints,
+                ex,
+                ConnectionValidationMode::RELAXED,
+                true,
+                TopologyMappingSolverEngine::Sat,
+                false);
+            ASSERT_TRUE(r.success);
+            ex.push_back(r.target_to_global);
+        }
+    }
+    const auto reuse_ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_reuse_start).count();
 
-    EXPECT_FALSE(next.success) << "Should return failure when all solutions are excluded";
+    RecordProperty("fresh_session_total_ms", static_cast<int>(fresh_ms));
+    RecordProperty("reuse_session_total_ms", static_cast<int>(reuse_ms));
+    EXPECT_LT(reuse_ms, fresh_ms);
+    EXPECT_LT(reuse_ms * 2, fresh_ms);
 }
 
 }  // namespace tt::tt_fabric

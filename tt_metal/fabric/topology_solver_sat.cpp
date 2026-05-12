@@ -279,7 +279,68 @@ void topology_sat_add_shape_clause_or_unsat(
     solver.add(0);
 }
 
+// Exclude one complete assignment (or its image-set shape when unique_shapes) — same logic as topology_sat_search_n.
+bool topology_sat_add_blocking_clause_for_mapping_impl(
+    TopologySatSolver& solver, TopologySatHardEncoding& enc, const std::vector<int>& raw_mapping, bool unique_shapes) {
+    if (unique_shapes) {
+        const auto shape_key = topology_mapping_shape_key(raw_mapping);
+        std::vector<int> shape_clause;
+        if (!topology_sat_build_shape_blocking_clause(enc, shape_key, shape_clause)) {
+            if (!enc.assign_lit.empty() && !enc.assign_lit[0].empty()) {
+                const int lit = enc.assign_lit[0][0];
+                solver.add(lit);
+                solver.add(0);
+                solver.add(-lit);
+                solver.add(0);
+            } else {
+                solver.add(1);
+                solver.add(0);
+                solver.add(-1);
+                solver.add(0);
+            }
+        } else {
+            for (int lit : shape_clause) {
+                solver.add(lit);
+            }
+            solver.add(0);
+        }
+        return true;
+    }
+    const size_t nt = enc.assign_lit.size();
+    std::vector<int> new_blocking;
+    new_blocking.reserve(nt);
+    for (size_t t = 0; t < nt; ++t) {
+        const int chosen_global = raw_mapping[t];
+        if (chosen_global < 0) {
+            return false;
+        }
+        const auto& globs = enc.allowed_global_idx[t];
+        const auto& lits = enc.assign_lit[t];
+        bool found_k = false;
+        for (size_t k = 0; k < globs.size(); ++k) {
+            if (static_cast<int>(globs[k]) == chosen_global) {
+                new_blocking.push_back(-lits[k]);
+                found_k = true;
+                break;
+            }
+        }
+        if (!found_k) {
+            return false;
+        }
+    }
+    for (int lit : new_blocking) {
+        solver.add(lit);
+    }
+    solver.add(0);
+    return true;
+}
+
 }  // namespace
+
+bool topology_sat_add_blocking_clause_for_mapping(
+    TopologySatSolver& solver, TopologySatHardEncoding& enc, const std::vector<int>& raw_mapping, bool unique_shapes) {
+    return topology_sat_add_blocking_clause_for_mapping_impl(solver, enc, raw_mapping, unique_shapes);
+}
 
 // ── Cardinality Encoding Primitives ──────────────────────────────────────────
 
@@ -1431,60 +1492,8 @@ bool topology_sat_search_n(
             }
         }
 
-        if (unique_shapes) {
-            const auto shape_key = topology_mapping_shape_key(all_mappings_out.back());
-            std::vector<int> shape_clause;
-            if (!topology_sat_build_shape_blocking_clause(enc, shape_key, shape_clause)) {
-                if (!enc.assign_lit.empty() && !enc.assign_lit[0].empty()) {
-                    const int lit = enc.assign_lit[0][0];
-                    solver.add(lit);
-                    solver.add(0);
-                    solver.add(-lit);
-                    solver.add(0);
-                } else {
-                    solver.add(1);
-                    solver.add(0);
-                    solver.add(-1);
-                    solver.add(0);
-                }
-            } else {
-                for (int lit : shape_clause) {
-                    solver.add(lit);
-                }
-                solver.add(0);
-            }
-        } else {
-            const size_t nt = enc.assign_lit.size();
-            std::vector<int> new_blocking;
-            new_blocking.reserve(nt);
-            bool block_ok = true;
-            for (size_t t = 0; t < nt && block_ok; ++t) {
-                const int chosen_global = all_mappings_out.back()[t];
-                if (chosen_global < 0) {
-                    block_ok = false;
-                    break;
-                }
-                const auto& globs = enc.allowed_global_idx[t];
-                const auto& lits = enc.assign_lit[t];
-                bool found_k = false;
-                for (size_t k = 0; k < globs.size(); ++k) {
-                    if (static_cast<int>(globs[k]) == chosen_global) {
-                        new_blocking.push_back(-lits[k]);
-                        found_k = true;
-                        break;
-                    }
-                }
-                if (!found_k) {
-                    block_ok = false;
-                }
-            }
-            if (!block_ok) {
-                break;
-            }
-            for (int lit : new_blocking) {
-                solver.add(lit);
-            }
-            solver.add(0);
+        if (!topology_sat_add_blocking_clause_for_mapping(solver, enc, all_mappings_out.back(), unique_shapes)) {
+            break;
         }
     }
 

@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <algorithm>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -662,9 +663,12 @@ std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_all(
 /**
  * @brief Find a valid topology mapping that differs from all previously found ones.
  *
- * For the DFS engine, runs search_n with max_solutions = excluded_mappings.size() + 1 and
- * skips any result that matches an excluded mapping. For the SAT engine, each excluded mapping
- * is encoded as an upfront blocking clause before the first solve.
+ * For the DFS engine, each call runs one bounded search_n(excluded.size()+1) and picks the first
+ * non-excluded model (session reuse does not yet amortize DFS work across calls).
+ *
+ * For the SAT engine, pass a non-null \p reuse_session across a monotone growing \p excluded_mappings
+ * prefix to reuse one CaDiCaL instance: hard constraints are encoded once; only new blocking clauses
+ * are appended between solves (incremental AllSAT).
  *
  * Returns a result with success=false when no new mapping exists.
  *
@@ -677,8 +681,14 @@ std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_all(
  * @param solver_engine Which backend to use
  * @param unique_shapes If true, excluded_mappings block their global image sets (not just exact assignments); see
  *        solve_topology_mapping_n
+ * @param reuse_session If non-null, reuses one SAT/DFS encoder state across calls so each `next` adds only new
+ *        blocking clauses (SAT) or a single bounded DFS batch (DFS), instead of re-enumerating from scratch. The same
+ *        session must be used for a monotone growing `excluded_mappings` prefix on the same graphs/constraints.
  * @return A new MappingResult not matching any excluded mapping, or success=false if exhausted
  */
+template <typename TargetNode, typename GlobalNode>
+class TopologyMappingEnumerationSession;
+
 template <typename TargetNode, typename GlobalNode>
 MappingResult<TargetNode, GlobalNode> solve_topology_mapping_next(
     const AdjacencyGraph<TargetNode>& target_graph,
@@ -688,11 +698,10 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping_next(
     ConnectionValidationMode connection_validation_mode = ConnectionValidationMode::RELAXED,
     bool quiet_mode = false,
     TopologyMappingSolverEngine solver_engine = TopologyMappingSolverEngine::Auto,
-    bool unique_shapes = false);
+    bool unique_shapes = false,
+    TopologyMappingEnumerationSession<TargetNode, GlobalNode>* reuse_session = nullptr);
 
 namespace detail {
-
-/** Sorted list of global indices used by a mapping (image set key for unique_shapes). */
 inline std::vector<int> topology_mapping_shape_key(const std::vector<int>& mapping) {
     std::vector<int> key;
     key.reserve(mapping.size());
@@ -977,6 +986,10 @@ bool topology_sat_search_n(
     bool unique_shapes,
     const std::vector<std::vector<int>>& initial_forbidden_shape_keys,
     TopologySearchState& state);
+
+/** Ruling out one model: exact assignment or shape clause per unique_shapes (matches topology_sat_search_n). */
+bool topology_sat_add_blocking_clause_for_mapping(
+    TopologySatSolver& solver, TopologySatHardEncoding& enc, const std::vector<int>& raw_mapping, bool unique_shapes);
 
 /**
  * @brief Unified heuristic for node selection and candidate generation
@@ -1434,6 +1447,53 @@ struct MappingValidator {
 };
 
 }  // namespace detail
+
+/**
+ * @brief Reusable incremental enumeration for repeated solve_topology_mapping_next calls.
+ *
+ * SAT reuses one CaDiCaL instance: hard CNF once, then each next() only strengthens with new blocking clauses.
+ * DFS runs a single bounded search_n per next() (no persistent DFS iterator yet).
+ */
+template <typename TargetNode, typename GlobalNode>
+class TopologyMappingEnumerationSession {
+public:
+    TopologyMappingEnumerationSession() = default;
+    TopologyMappingEnumerationSession(const TopologyMappingEnumerationSession&) = delete;
+    TopologyMappingEnumerationSession& operator=(const TopologyMappingEnumerationSession&) = delete;
+    TopologyMappingEnumerationSession(TopologyMappingEnumerationSession&&) noexcept = default;
+    TopologyMappingEnumerationSession& operator=(TopologyMappingEnumerationSession&&) noexcept = default;
+    ~TopologyMappingEnumerationSession();
+
+    void reset() noexcept;
+
+    MappingResult<TargetNode, GlobalNode> next(
+        const AdjacencyGraph<TargetNode>& target_graph,
+        const AdjacencyGraph<GlobalNode>& global_graph,
+        const MappingConstraints<TargetNode, GlobalNode>& constraints,
+        const std::vector<std::map<TargetNode, GlobalNode>>& excluded_mappings,
+        ConnectionValidationMode connection_validation_mode = ConnectionValidationMode::RELAXED,
+        bool quiet_mode = false,
+        TopologyMappingSolverEngine solver_engine = TopologyMappingSolverEngine::Auto,
+        bool unique_shapes = false);
+
+    size_t sat_solve_calls() const noexcept { return sat_solve_calls_; }
+
+private:
+    bool ready_{false};
+    bool quiet_{false};
+    bool unique_shapes_{false};
+    bool use_sat_{false};
+    size_t sat_exclusions_encoded_{0};
+    size_t sat_solve_calls_{0};
+    AdjacencyGraph<TargetNode> snap_target_{};
+    AdjacencyGraph<GlobalNode> snap_global_{};
+    TopologyMappingSolverEngine engine_{TopologyMappingSolverEngine::Auto};
+    ConnectionValidationMode mode_{ConnectionValidationMode::RELAXED};
+    std::optional<detail::GraphIndexData<TargetNode, GlobalNode>> graph_data_;
+    std::optional<detail::ConstraintIndexData<TargetNode, GlobalNode>> constraint_data_;
+    std::unique_ptr<detail::TopologySatSolver> sat_solver_{};
+    detail::TopologySatHardEncoding sat_enc_{};
+};
 
 }  // namespace tt::tt_fabric
 
