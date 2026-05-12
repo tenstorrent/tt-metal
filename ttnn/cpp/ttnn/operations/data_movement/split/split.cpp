@@ -114,7 +114,7 @@ std::vector<ttnn::Tensor> split(
     // in this case.
     uint32_t padded_tiles_in_split_dim = input_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH;
     bool output_tiles_evenly_split = (padded_tiles_in_split_dim % detail::TWO_CHUNKS == 0);
-    if (is_equal_two_way_split && normalized_dim == input_shape.rank() - 1 && input_tensor.layout() == Layout::TILE &&
+    if (is_equal_two_way_split && normalized_dim == static_cast<int64_t>(input_shape.rank()) - 1 && input_tensor.layout() == Layout::TILE &&
         input_shape.rank() >= 2 && fits_in_core_grid && input_shape[-2] / tt::constants::TILE_HEIGHT >= 2 &&
         input_shape[-1] / tt::constants::TILE_WIDTH >= 2 && output_tiles_evenly_split) {
         ttnn::Tensor input_tensor_4d;
