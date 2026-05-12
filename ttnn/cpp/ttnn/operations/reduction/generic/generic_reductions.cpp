@@ -301,7 +301,7 @@ static Tensor std_var_impl(
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool use_legacy) {
     auto input_shape = input_tensor_arg.logical_shape();
-    auto rank = input_shape.size();
+    int rank = static_cast<int>(input_shape.size());
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
 
     uint64_t reduced_volume = 1;
