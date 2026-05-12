@@ -136,9 +136,9 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
 
-  # Full scan: single job that analyzes everything (main, config changes)
+  # Full scan: single job that analyzes everything
   clang-tidy-full:
-    name: "\U0001F916 Clang Tidy (Full)"
+    name: 🤖 Clang Tidy (Full)
     needs: [ build-docker-image, determine-scan-type ]
     if: >-
       ${{ always() && !failure() && !cancelled() &&
