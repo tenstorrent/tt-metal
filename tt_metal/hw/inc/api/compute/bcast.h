@@ -223,7 +223,7 @@ ALWI void mul_tiles_bcast_rows(
 }
 
 /**
- * Please refer to documentation for sub_tiles_bcast
+ * Please refer to documentation for add_tiles_bcast
  */
 ALWI void add_tiles_bcast_rows(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
@@ -237,7 +237,21 @@ ALWI void add_tiles_bcast_rows(
 }
 
 /**
- * Please refer to documentation for sub_tiles_bcast
+ * Shorthand template instantiation of sub_tiles_bcast.
+ */
+ALWI void sub_tiles_bcast_rows(
+    uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
+    MATH((llk_math_eltwise_binary<
+          EltwiseBinaryType::ELWSUB,
+          BroadcastType::ROW,
+          DST_ACCUM_MODE,
+          MathFidelity::LoFi,
+          EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true)));
+    UNPACK((llk_unpack_AB<BroadcastType::ROW>(icb0, icb1, itile0, itile1, bcast_row_idx)));
+}
+
+/**
+ * Please refer to documentation for add_tiles_bcast
  */
 ALWI void add_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
     MATH((llk_math_eltwise_binary<
