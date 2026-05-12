@@ -25,6 +25,7 @@ tt::tt_metal::KernelHandle generate_erisc_datamover_kernel(const FabricEriscData
         .noc = edm_kernel_config.noc_id,
         .processor = edm_kernel_config.risc_id,
         .compile_args = edm_kernel_config.compile_time_args,
+        .defines = {},
         .named_compile_args = edm_kernel_config.named_compile_time_args,
     };
     if (edm_kernel_config.opt_level.has_value()) {

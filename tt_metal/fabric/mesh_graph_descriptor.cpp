@@ -527,7 +527,7 @@ void MeshGraphDescriptor::validate_architecture_consistency(
         }
 
         // Check that the number of dimensions is not greater than the maximum allowed for the architecture
-        if (mesh.device_topology().dims_size() > max_num_dims) {
+        if (static_cast<uint32_t>(mesh.device_topology().dims_size()) > max_num_dims) {
             error_messages.push_back(fmt::format(
                 "Architecture devices allow a maximum of {} dimensions, but {} were provided (Mesh: {})",
                 max_num_dims,
@@ -575,7 +575,7 @@ void MeshGraphDescriptor::validate_switch_descriptors(
         }
 
         // Check that the number of dimensions is not greater than the maximum allowed for the architecture
-        if (switch_desc.device_topology().dims_size() > max_num_dims) {
+        if (static_cast<uint32_t>(switch_desc.device_topology().dims_size()) > max_num_dims) {
             error_messages.push_back(fmt::format(
                 "Architecture devices allow a maximum of {} dimensions, but {} were provided (Switch: {})",
                 max_num_dims,
@@ -590,7 +590,7 @@ void MeshGraphDescriptor::validate_switch_descriptors(
             num_devices *= dim;
         }
         for (const auto& express_conn : switch_desc.express_connections()) {
-            if (express_conn.src() >= num_devices || express_conn.dst() >= num_devices) {
+            if (static_cast<uint32_t>(express_conn.src()) >= num_devices || static_cast<uint32_t>(express_conn.dst()) >= num_devices) {
                 error_messages.push_back(
                     fmt::format("Express connection destination is out of bounds (Switch: {})", switch_desc.name()));
             }
