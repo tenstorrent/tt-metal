@@ -938,7 +938,7 @@ void FabricTensixDatamoverMuxBuilder::create_and_compile(tt::tt_metal::Program& 
         get_kernel_file_path(),
         my_core_logical_,
         tt::tt_metal::DataMovementConfig{
-            .processor = processor, .noc = noc, .compile_args = get_compile_time_args(), .defines = {}});
+            .processor = processor, .noc = noc, .compile_args = get_compile_time_args(), .defines = {}, .named_compile_args = {}, .compiler_include_paths = {}});
 
     // Set runtime arguments
     tt::tt_metal::SetRuntimeArgs(program, mux_kernel, my_core_logical_, get_runtime_args(program));
@@ -1199,7 +1199,7 @@ void FabricTensixDatamoverRelayBuilder::create_and_compile(tt::tt_metal::Program
         "tt_metal/fabric/impl/kernels/edm_fabric/fabric_router_relay_extension.cpp",
         my_core_logical_,
         tt::tt_metal::DataMovementConfig{
-            .processor = processor, .noc = noc, .compile_args = get_compile_time_args(), .defines = {}});
+            .processor = processor, .noc = noc, .compile_args = get_compile_time_args(), .defines = {}, .named_compile_args = {}, .compiler_include_paths = {}});
 
     // Set runtime arguments
     tt::tt_metal::SetRuntimeArgs(program, relay_kernel, my_core_logical_, get_runtime_args(program));

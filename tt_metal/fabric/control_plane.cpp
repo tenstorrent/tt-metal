@@ -879,14 +879,14 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
             const auto src_fabric_node_id = FabricNodeId(mesh_id, src_fabric_chip_id);
             this->intra_mesh_routing_tables_[src_fabric_node_id].resize(
                 num_ports_per_chip);  // contains more entries than needed, this size is for all eth channels on chip
-            for (int i = 0; i < num_ports_per_chip; i++) {
+            for (uint32_t i = 0; i < num_ports_per_chip; i++) {
                 // Size the routing table to the number of chips in the mesh
                 this->intra_mesh_routing_tables_[src_fabric_node_id][i].resize(
                     router_intra_mesh_routing_table[mesh_id_val][src_fabric_chip_id].size());
             }
             // Dst is looped over all chips in the mesh, regardless of whether they are local or not
             for (ChipId dst_fabric_chip_id = 0;
-                 dst_fabric_chip_id < router_intra_mesh_routing_table[mesh_id_val][src_fabric_chip_id].size();
+                 dst_fabric_chip_id < static_cast<ChipId>(router_intra_mesh_routing_table[mesh_id_val][src_fabric_chip_id].size());
                  dst_fabric_chip_id++) {
                 // Target direction is the direction to the destination chip for all ethernet channesl
                 const auto& target_direction =
@@ -931,13 +931,13 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
             const auto src_fabric_node_id = FabricNodeId(src_mesh_id, src_fabric_chip_id);
             this->inter_mesh_routing_tables_[src_fabric_node_id].resize(
                 num_ports_per_chip);  // contains more entries than needed
-            for (int i = 0; i < num_ports_per_chip; i++) {
+            for (uint32_t i = 0; i < num_ports_per_chip; i++) {
                 // Size the routing table to the number of meshes
                 this->inter_mesh_routing_tables_[src_fabric_node_id][i].resize(
                     router_inter_mesh_routing_table[src_mesh_id_val][src_fabric_chip_id].size());
             }
             for (ChipId dst_mesh_id_val = 0;
-                 dst_mesh_id_val < router_inter_mesh_routing_table[src_mesh_id_val][src_fabric_chip_id].size();
+                 dst_mesh_id_val < static_cast<ChipId>(router_inter_mesh_routing_table[src_mesh_id_val][src_fabric_chip_id].size());
                  dst_mesh_id_val++) {
                 // Target direction is the direction to the destination mesh for all ethernet channesl
                 const auto& target_direction =
@@ -949,7 +949,7 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
                 for (const auto& [direction, eth_chans_on_side] :
                      this->router_port_directions_to_physical_eth_chan_map_.at(src_fabric_node_id)) {
                     for (const auto& src_chan_id : eth_chans_on_side) {
-                        if (src_mesh_id_val == dst_mesh_id_val) {
+                        if (src_mesh_id_val == static_cast<uint32_t>(dst_mesh_id_val)) {
                             TT_ASSERT(
                                 (target_direction == RoutingDirection::C),
                                 "ControlPlane: Expecting same direction for inter mesh routing");
@@ -1484,7 +1484,7 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
         auto src_chip_id = src_fabric_node_id.chip_id;
         auto dst_mesh_id = dst_fabric_node_id.mesh_id;
         auto dst_chip_id = dst_fabric_node_id.chip_id;
-        if (i >= tt::tt_fabric::MAX_MESH_SIZE * tt::tt_fabric::MAX_NUM_MESHES) {
+        if (static_cast<uint32_t>(i) >= tt::tt_fabric::MAX_MESH_SIZE * tt::tt_fabric::MAX_NUM_MESHES) {
             log_warning(
                 tt::LogFabric, "Could not find a route between {} and {}", src_fabric_node_id, dst_fabric_node_id);
             return {};
@@ -1839,7 +1839,7 @@ void ControlPlane::write_routing_info_to_devices(MeshId mesh_id, ChipId chip_id)
             i, static_cast<std::uint8_t>(eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY));
     }
 
-    for (ChipId dst_chip_id = 0; dst_chip_id < router_intra_mesh_routing_table[*mesh_id][chip_id].size();
+    for (ChipId dst_chip_id = 0; dst_chip_id < static_cast<ChipId>(router_intra_mesh_routing_table[*mesh_id][chip_id].size());
          dst_chip_id++) {
         if (chip_id == dst_chip_id) {
             routing_info.intra_mesh_direction_table.set_original_direction(
@@ -2117,7 +2117,7 @@ void ControlPlane::print_routing_tables() const {
     ss << "Control Plane: IntraMesh Routing Tables" << std::endl;
     for (const auto& [fabric_node_id, chip_routing_table] : this->intra_mesh_routing_tables_) {
         ss << fabric_node_id << ":" << std::endl;
-        for (int eth_chan = 0; eth_chan < chip_routing_table.size(); eth_chan++) {
+        for (size_t eth_chan = 0; eth_chan < chip_routing_table.size(); eth_chan++) {
             ss << "   Eth Chan " << eth_chan << ": ";
             for (const auto& dst_chan_id : chip_routing_table[eth_chan]) {
                 ss << (std::uint16_t)dst_chan_id << " ";
@@ -2132,7 +2132,7 @@ void ControlPlane::print_routing_tables() const {
 
     for (const auto& [fabric_node_id, chip_routing_table] : this->inter_mesh_routing_tables_) {
         ss << fabric_node_id << ":" << std::endl;
-        for (int eth_chan = 0; eth_chan < chip_routing_table.size(); eth_chan++) {
+        for (size_t eth_chan = 0; eth_chan < chip_routing_table.size(); eth_chan++) {
             ss << "   Eth Chan " << eth_chan << ": ";
             for (const auto& dst_chan_id : chip_routing_table[eth_chan]) {
                 ss << (std::uint16_t)dst_chan_id << " ";
@@ -2583,8 +2583,8 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
     std::vector<uint8_t> serialized_remote_data;
     auto my_rank = *(distributed_context.rank());
 
-    for (std::size_t bcast_root = 0; bcast_root < *(distributed_context.size()); ++bcast_root) {
-        if (my_rank == bcast_root) {
+    for (std::size_t bcast_root = 0; static_cast<int>(bcast_root) < *(distributed_context.size()); ++bcast_root) {
+        if (my_rank == static_cast<int>(bcast_root)) {
             // Issue the broadcast from the current process to all other processes in the world
             int local_data_size_bytes = serialized_data.size();  // Send data size first
             distributed_context.broadcast(
@@ -2758,7 +2758,7 @@ void ControlPlane::collect_and_merge_intermesh_exit_fabric_node_ids_from_all_hos
     std::vector<uint8_t> serialized_remote;
     auto my_rank = *(distributed_context.rank());
 
-    for (std::size_t bcast_root = 0; bcast_root < *(distributed_context.size()); ++bcast_root) {
+    for (std::size_t bcast_root = 0; static_cast<int>(bcast_root) < *(distributed_context.size()); ++bcast_root) {
         if (my_rank == static_cast<int>(bcast_root)) {
             int local_data_size_bytes = static_cast<int>(serialized_local.size());
             distributed_context.broadcast(
@@ -2879,7 +2879,7 @@ void ControlPlane::collect_and_merge_intermesh_exit_peer_fabric_node_id_pairs_fr
     std::vector<uint8_t> serialized_remote;
     auto my_rank = *(distributed_context.rank());
 
-    for (std::size_t bcast_root = 0; bcast_root < *(distributed_context.size()); ++bcast_root) {
+    for (std::size_t bcast_root = 0; static_cast<int>(bcast_root) < *(distributed_context.size()); ++bcast_root) {
         if (my_rank == static_cast<int>(bcast_root)) {
             int local_data_size_bytes = static_cast<int>(serialized_local.size());
             distributed_context.broadcast(
@@ -2987,7 +2987,7 @@ std::vector<PortDescriptor> ControlPlane::propose_port_descriptors_for_exit_node
         // is constant for the lifetime of this function).
         auto try_assign_port = [&](bool use_z_direction) -> bool {
             for (const auto& [port_id_pair, port_chip_id] : sorted_edge_ports) {
-                if (exit_node_chip != port_chip_id) {
+                if (exit_node_chip != static_cast<uint32_t>(port_chip_id)) {
                     continue;
                 }
                 auto port_direction = port_id_pair.first;
@@ -3607,7 +3607,7 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
                                                  ChipId candidate_chip_id,
                                                  std::optional<RoutingDirection> current_dir,
                                                  RoutingDirection candidate_dir) -> bool {
-        return edge_node.chip_id == candidate_chip_id &&
+        return static_cast<ChipId>(edge_node.chip_id) == candidate_chip_id &&
                ((!current_dir.has_value()) || current_dir.value() == candidate_dir);
     };
 

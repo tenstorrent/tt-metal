@@ -705,7 +705,7 @@ void TopologyMapper::broadcast_chip_info_to_hosts(const std::vector<std::size_t>
     if (target_rank == -1) {
         // Broadcast to all peers (excluding self)
         for (std::size_t peer = 0; peer < world_size; ++peer) {
-            if (peer != my_rank) {
+            if (static_cast<int>(peer) != my_rank) {
                 target_ranks.push_back(peer);
             }
         }
@@ -846,7 +846,7 @@ void TopologyMapper::receive_chip_info_from_host(std::size_t source_rank) {
     }
 
     auto my_rank = *distributed_context.rank();
-    if (my_rank == source_rank) {
+    if (my_rank == static_cast<int>(source_rank)) {
         return;  // receiver does not receive from itself
     }
 

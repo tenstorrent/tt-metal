@@ -124,7 +124,7 @@ bool resolve_hostname_uniqueness(
     if (my_rank == controller_rank) {
         std::vector<std::string> hostnames = {};
         hostnames.push_back(get_host_name());
-        for (std::size_t rank = 0; rank < *(distributed_context->size()); rank++) {
+        for (std::size_t rank = 0; static_cast<int>(rank) < *(distributed_context->size()); rank++) {
             if (rank != controller_rank) {
                 std::size_t peer_hostname_size = 0;
                 distributed_context->recv(
@@ -144,7 +144,7 @@ bool resolve_hostname_uniqueness(
         }
         all_hostnames_unique = std::set<std::string>(hostnames.begin(), hostnames.end()).size() == hostnames.size();
 
-        for (std::size_t rank = 0; rank < *(distributed_context->size()); rank++) {
+        for (std::size_t rank = 0; static_cast<int>(rank) < *(distributed_context->size()); rank++) {
             if (rank != controller_rank) {
                 distributed_context->send(
                     tt::stl::Span<std::byte>(
@@ -454,7 +454,7 @@ void exchange_metadata(
 
     if (issue_gather) {
         receiver_ranks.insert(controller_rank);
-        for (std::size_t rank = 0; rank < *(distributed_context->size()); rank++) {
+        for (std::size_t rank = 0; static_cast<int>(rank) < *(distributed_context->size()); rank++) {
             if (rank != controller_rank) {
                 sender_ranks.insert(rank);
             }
