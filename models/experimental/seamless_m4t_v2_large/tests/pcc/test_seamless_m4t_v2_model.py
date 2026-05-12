@@ -1,25 +1,34 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC tests for ``TTSeamlessM4Tv2Model.forward`` and ``.generate``.
+"""Task-level PCC tests for SeamlessM4Tv2: the five canonical inference tasks.
 
-Tests use **real, inference-representative inputs** throughout:
+| # | Task | Input → Output | What's compared at PCC ≥ 0.99 |
+| - | ---- | -------------- | ----------------------------- |
+| 1 | T2TT | text  → text   | text-decoder lm_head logits |
+| 2 | S2TT | speech → text  | text-decoder lm_head logits |
+| 3 | T2ST | text  → speech | text-decoder logits **and** T2U logits |
+| 4 | S2ST | speech → speech| text-decoder logits **and** T2U logits |
+| 5 | ASR  | speech → text (same lang) | text-decoder lm_head logits |
 
-* **Text**: an English sentence tokenised by the model's own ``AutoTokenizer`` — produces naturally
-  variable-length sequences with the correct vocabulary distribution and ``pad_token_id`` placement.
-* **Speech**: a 1-second mono waveform at 16 kHz processed by ``AutoProcessor`` — produces the
-  log-mel feature tensor ``input_features`` and binary frame-level ``attention_mask`` that the
-  speech encoder actually sees during real inference.
+Why ``forward()`` and not ``generate()`` for the comparison?
+    Autoregressive generation accumulates bf16 cascade through (text-decoder × N steps) → T2U →
+    vocoder; the final waveform PCC sits well below 0.99 even with the duration-predictor fp32 path
+    in ``tt_text_to_unit._duration_predictor``. ``forward()`` does a single deterministic step so
+    the same bf16 model produces the same logits as HF to within fp32-accumulator precision —
+    PCC ≥ 0.99 is the right bar.
 
-Thresholds (HF float32 reference vs TTNN bfloat16 readback):
+Why two PCC checks for T2ST / S2ST?
+    The speech-output tasks share their first stage (text-decoder) with their text-output siblings,
+    so the first check is the same as T2TT / S2TT. The second check exercises the T2U module
+    (encoder + decoder + ``lm_head``) on synthetic-but-realistic embeddings, using HF discrete
+    durations as ``reference_discrete_durations`` (the same isolation strategy as
+    ``test_text_to_unit.py:30-33`` — measures T2U arithmetic accuracy, not duration-predictor drift).
+    The downstream vocoder is validated separately at PCC ≥ 0.99 in ``test_code_hifigan.py``.
 
-* ``forward()`` logits: PCC ≥ 0.99
-* ``generate()`` text tokens: exact prefix match (greedy argmax is deterministic — stricter than PCC)
-* ``generate()`` speech waveform: **log-magnitude STFT** PCC ≥ 0.9 (the dB-scale, MCD-style
-  comparison standard in speech-synthesis evaluation). Time-domain PCC and raw-magnitude STFT PCC
-  are logged for diagnostics. The 0.9 floor is achieved by computing the duration-predictor's
-  scalar output (``log_dur``) in fp32 so its banker's-rounded integer durations match HF for
-  ~all characters — see ``_assert_generation_pcc`` and ``tt_text_to_unit._duration_predictor``.
+Inputs are real and inference-representative throughout: ``AutoTokenizer`` for text, ``AutoProcessor``
+for audio. All tensor math runs through TTNN (per-test ``ttnn.from_torch`` uploads + ``ttnn.to_torch``
+host readbacks; no torch math is used in the inference path).
 """
 
 from __future__ import annotations
@@ -32,6 +41,7 @@ import torch
 import ttnn
 from loguru import logger
 from transformers import AutoProcessor, AutoTokenizer
+from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask
 
 from tests.ttnn.utils_for_testing import check_with_pcc
 
@@ -39,28 +49,20 @@ from models.experimental.seamless_m4t_v2_large.reference.torch_seamless_m4t_v2_m
     forward_text_modality_logits,
     load_pretrained_seamless_m4t_v2_model,
 )
+from models.experimental.seamless_m4t_v2_large.reference.torch_text_to_unit import (
+    forward_t2u_logits_and_padding,
+    hf_discrete_duration_counts_batch1,
+    synthetic_t2u_inputs,
+)
 from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
 from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import create_seamless_m4t_v2_model_parameters
-from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model import (
-    TTSeamlessM4Tv2GenerationOutput,
-    TTSeamlessM4Tv2GreedySearchOutput,
-    TTSeamlessM4Tv2Model,
-)
+from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model import TTSeamlessM4Tv2Model
 
 PCC_THRESHOLD = 0.99
-# End-to-end ``generate()`` waveform PCC threshold — see ``_assert_generation_pcc`` for the
-# rationale and ``tt_text_to_unit._duration_predictor`` for the precision-critical fp32 path on the
-# duration scalar. Before that fp32 fix, log-magnitude STFT PCC sat at ~0.80–0.85 (bf16 write-out
-# of the proj layer perturbed ``log_dur`` enough to flip ``round`` at .5 boundaries, shifting
-# ``t_audio`` by a frame and putting the rest of the waveform out of phase). With ``log_dur`` now
-# computed in fp32, durations match HF for ~all characters and the natural floor rises to
-# vocoder-test territory; 0.9 catches real regressions (a wholly-wrong waveform scores ~0) while
-# leaving headroom for the small bf16 noise that still propagates through the remaining
-# bf16-activation layers of the T2U decoder + vocoder.
-PCC_GENERATE_WAVEFORM = 0.9
+
 
 # ---------------------------------------------------------------------------
-# Shared fixtures / helpers
+# Weights / fixtures
 # ---------------------------------------------------------------------------
 
 
@@ -73,8 +75,9 @@ def _weights_dir_or_skip() -> str:
         pytest.skip(f"Could not prepare seamless-m4t-v2-large weights: {e}")
 
 
-def _tt_logits_to_torch_bf16_flat(logits_tt: ttnn.Tensor) -> torch.Tensor:
-    return ttnn.to_torch(ttnn.from_device(logits_tt)).to(torch.bfloat16).contiguous().reshape(-1)
+# ---------------------------------------------------------------------------
+# Tensor uploads (TTNN host → device)
+# ---------------------------------------------------------------------------
 
 
 def torch_ids_to_ttnn(device: ttnn.Device, t: torch.Tensor) -> ttnn.Tensor:
@@ -95,6 +98,11 @@ def torch_feats_to_ttnn(device: ttnn.Device, t: torch.Tensor) -> ttnn.Tensor:
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+
+
+# ---------------------------------------------------------------------------
+# TT model assembly
+# ---------------------------------------------------------------------------
 
 
 def make_tt_model(device: ttnn.Device, model: Any, cfg: Any, t2u_cfg: Any) -> TTSeamlessM4Tv2Model:
@@ -136,55 +144,23 @@ def make_tt_model(device: ttnn.Device, model: Any, cfg: Any, t2u_cfg: Any) -> TT
     )
 
 
-def assert_logits_pcc(ref: torch.Tensor, logits_tt: ttnn.Tensor, *, pcc: float, context: str) -> None:
-    """Compare HF reference logits [1, dec_seq, vocab] vs TTNN readback."""
-    ref_f = ref.detach().float().cpu()
-    _, sd, v = ref_f.shape
-    flat = _tt_logits_to_torch_bf16_flat(logits_tt)
-    sp = flat.numel() // v
-    tt_f = flat.reshape(1, sp, v)[:, :sd, :v].contiguous().float().cpu()
-    assert tt_f.shape == ref_f.shape, f"{context}: shape ref {tuple(ref_f.shape)} vs ttnn {tuple(tt_f.shape)}"
-    ok, msg = check_with_pcc(ref_f, tt_f, pcc=pcc)
-    logger.info(f"{context} PCC: {msg}")
-    assert ok, msg
-
-
 # ---------------------------------------------------------------------------
 # Real-input builders
 # ---------------------------------------------------------------------------
 
 
-def _real_text_inputs(
-    tokenizer: Any, cfg: Any, dev: torch.device
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Tokenise a real English sentence → encoder + decoder inputs at natural sequence lengths."""
-    enc_batch = tokenizer(
+def _real_text_input_ids(tokenizer: Any, dev: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Tokenise a real English sentence → ``(input_ids, attention_mask)`` at natural length."""
+    enc = tokenizer(
         ["Hello, my name is SeamlessM4T and I translate speech and text."],
         return_tensors="pt",
         padding=True,
     )
-    input_ids = enc_batch["input_ids"].to(dev)
-    attention_mask = enc_batch["attention_mask"].to(dev)
-
-    # Decoder seed: [decoder_start_token_id, eng_lang_code_id] — mirrors HF generate() initialisation.
-    ds = cfg.decoder_start_token_id
-    tid = model_lang_id_or_default(cfg, "eng", ds + 1)
-    decoder_input_ids = torch.tensor([[ds, tid]], dtype=torch.long, device=dev)
-    dec_attn = torch.ones_like(decoder_input_ids)
-    return input_ids, attention_mask, decoder_input_ids, dec_attn
+    return enc["input_ids"].to(dev), enc["attention_mask"].to(dev)
 
 
-def model_lang_id_or_default(cfg: Any, lang: str, default: int) -> int:
-    """Look up a language token ID from config, falling back to ``default``."""
-    mapping = getattr(cfg, "lang_code_to_id", None) or getattr(cfg, "text_decoder_lang_to_code_id", None)
-    if mapping and lang in mapping:
-        return int(mapping[lang])
-    # Fallback: use decoder_start_token_id + 1 as a safe non-pad seed token.
-    return default
-
-
-def _real_speech_inputs(processor: Any, dev: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Synthesise a 1-second 16 kHz waveform and process to log-mel features."""
+def _real_speech_features(processor: Any, dev: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Synthesise a 1-second 16 kHz waveform → ``(input_features, attention_mask)`` via ``AutoProcessor``."""
     torch.manual_seed(42)
     sampling_rate = 16_000
     # Small-amplitude noise is representative of real near-silence speech segments.
@@ -195,473 +171,303 @@ def _real_speech_inputs(processor: Any, dev: torch.device) -> Tuple[torch.Tensor
     return input_features, attention_mask
 
 
+def _lang_id_or_default(cfg: Any, lang: str, default: int) -> int:
+    """Look up a target-language code id from ``cfg``; fall back to ``default`` if absent."""
+    mapping = getattr(cfg, "lang_code_to_id", None) or getattr(cfg, "text_decoder_lang_to_code_id", None)
+    if mapping and lang in mapping:
+        return int(mapping[lang])
+    return default
+
+
+def _decoder_seed(cfg: Any, dev: torch.device, *, tgt_lang: str) -> Tuple[torch.Tensor, torch.Tensor]:
+    """``[decoder_start_token_id, tgt_lang_code_id]`` seed for ``forward()`` — matches HF ``generate()``."""
+    ds = cfg.decoder_start_token_id
+    tid = _lang_id_or_default(cfg, tgt_lang, ds + 1)
+    decoder_input_ids = torch.tensor([[ds, tid]], dtype=torch.long, device=dev)
+    decoder_attention_mask = torch.ones_like(decoder_input_ids)
+    return decoder_input_ids, decoder_attention_mask
+
+
 # ---------------------------------------------------------------------------
-# Test 1: forward() — text modality
+# PCC comparators
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.timeout(1200)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
-def test_forward_text_modality(device, reset_seeds):
-    """``forward()`` text path: real tokenised sentence → encoder → decoder → lm_head, PCC ≥ 0.99."""
-    _ = reset_seeds
-    weights_dir = _weights_dir_or_skip()
+def _assert_text_logits_pcc(
+    ref_logits: torch.Tensor, logits_tt: ttnn.Tensor, *, ctx: str, pcc: float = PCC_THRESHOLD
+) -> None:
+    """Compare HF text-decoder logits ``[1, dec_seq, vocab]`` vs TTNN readback at PCC ≥ ``pcc``."""
+    ref_f = ref_logits.detach().float().cpu()
+    _, sd, v = ref_f.shape
+    flat = ttnn.to_torch(ttnn.from_device(logits_tt)).to(torch.bfloat16).contiguous().reshape(-1)
+    sp = flat.numel() // v
+    tt_f = flat.reshape(1, sp, v)[:, :sd, :v].contiguous().float().cpu()
+    assert tt_f.shape == ref_f.shape, f"{ctx}: shape ref {tuple(ref_f.shape)} vs ttnn {tuple(tt_f.shape)}"
+    ok, msg = check_with_pcc(ref_f, tt_f, pcc=pcc)
+    logger.info(f"{ctx} text-decoder logits PCC: {msg}")
+    assert ok, f"{ctx}: text-decoder logits PCC < {pcc}: {msg}"
+
+
+def _assert_t2u_logits_pcc(
+    model: Any,
+    tt_model: TTSeamlessM4Tv2Model,
+    device: ttnn.Device,
+    *,
+    ctx: str,
+    pcc: float = PCC_THRESHOLD,
+) -> None:
+    """T2U logits PCC check — synthetic inputs, HF reference durations.
+
+    Mirrors ``test_text_to_unit.py``: ``synthetic_t2u_inputs`` builds a valid batch-1 T2U input set,
+    HF computes reference discrete durations, and both HF and TT run T2U on the same
+    ``inputs_embeds`` / ``char_input_ids`` / ``char_count_per_id``. Passing
+    ``reference_discrete_durations`` to the TT T2U skips the TT duration predictor so the unit
+    length matches HF — what's measured is the encoder + decoder + ``lm_head`` arithmetic on the
+    unit-vocabulary logits.
+    """
+    t2u_cfg = model.t2u_model.config
+    inputs_embeds, attention_mask, char_input_ids, char_count_per_id = synthetic_t2u_inputs(
+        t2u_cfg,
+        batch=1,
+        encoder_seq_len=32,
+        seed=1,
+        dtype=torch.bfloat16,
+    )
+    hf_dev = next(model.t2u_model.parameters()).device
+    char_count_per_id_dev = char_count_per_id.to(hf_dev)
+
+    ref_logits, _ = forward_t2u_logits_and_padding(
+        model.t2u_model,
+        inputs_embeds,
+        attention_mask,
+        char_input_ids,
+        char_count_per_id_dev,
+    )
+    ref_logits_bf16 = ref_logits.to(torch.bfloat16).cpu()
+
+    ref_durs = hf_discrete_duration_counts_batch1(
+        model.t2u_model,
+        inputs_embeds.to(hf_dev),
+        attention_mask.to(hf_dev),
+        char_input_ids.to(hf_dev),
+        char_count_per_id_dev,
+    )
+
+    mask_4d = _prepare_4d_attention_mask(attention_mask, inputs_embeds.dtype)
+    inputs_embeds_tt = ttnn.from_torch(
+        inputs_embeds.cpu().to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    attn_tt = ttnn.from_torch(
+        mask_4d.cpu().to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    char_ids_tt = ttnn.from_torch(
+        char_input_ids.cpu().to(torch.int32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    cc_list = [int(x) for x in char_count_per_id[0].cpu().tolist()]
+
+    tt_logits_tt, _ = tt_model.t2u.forward(
+        inputs_embeds_tt,
+        attn_tt,
+        char_ids_tt,
+        cc_list,
+        reference_discrete_durations=ref_durs,
+    )
+    ttnn.deallocate(inputs_embeds_tt)
+    ttnn.deallocate(attn_tt)
+    ttnn.deallocate(char_ids_tt)
+
+    tt_logits = ttnn.to_torch(ttnn.from_device(tt_logits_tt)).to(torch.bfloat16).cpu()
+    ttnn.deallocate(tt_logits_tt)
+
+    v = int(ref_logits_bf16.shape[-1])
+    flat = tt_logits.reshape(-1)
+    sp = flat.numel() // v
+    tt_logits_3d = flat.reshape(1, sp, v)[:, : ref_logits_bf16.shape[1], :].contiguous()
+    assert (
+        tt_logits_3d.shape == ref_logits_bf16.shape
+    ), f"{ctx}: T2U logits shape ref={tuple(ref_logits_bf16.shape)} tt={tuple(tt_logits_3d.shape)}"
+
+    ok, msg = check_with_pcc(ref_logits_bf16.float(), tt_logits_3d.float(), pcc=pcc)
+    logger.info(f"{ctx} T2U logits PCC: {msg}")
+    assert ok, f"{ctx}: T2U logits PCC < {pcc}: {msg}"
+
+
+# ---------------------------------------------------------------------------
+# Shared text-decoder forward routine
+# ---------------------------------------------------------------------------
+
+
+def _forward_and_compare_text_logits(
+    device: ttnn.Device,
+    *,
+    weights_dir: str,
+    use_speech_input: bool,
+    tgt_lang: str,
+    ctx: str,
+) -> Tuple[Any, TTSeamlessM4Tv2Model, Any]:
+    """Run HF + TT ``forward()`` for the given modality/target-language pair; assert text logits PCC.
+
+    Returns ``(model, tt_model, cfg)`` so the caller can chain additional checks (e.g., T2U for
+    T2ST / S2ST).
+    """
     model, cfg = load_pretrained_seamless_m4t_v2_model(weights_dir, dtype=torch.bfloat16)
     t2u_cfg = model.t2u_model.config
     dev = next(model.parameters()).device
     tt_model = make_tt_model(device, model, cfg, t2u_cfg)
 
-    tokenizer = AutoTokenizer.from_pretrained(os.fspath(weights_dir), local_files_only=True)
-    input_ids, enc_attn, decoder_input_ids, dec_attn = _real_text_inputs(tokenizer, cfg, dev)
+    decoder_input_ids, decoder_attention_mask = _decoder_seed(cfg, dev, tgt_lang=tgt_lang)
 
-    logger.info(
-        f"Text forward — enc_seq={input_ids.shape[1]}, dec_seq={decoder_input_ids.shape[1]}, "
-        f"vocab_size={cfg.vocab_size}"
-    )
-
-    # HF reference
-    ref_logits = (
-        forward_text_modality_logits(
-            model,
-            input_ids=input_ids,
-            attention_mask=enc_attn,
-            decoder_input_ids=decoder_input_ids,
-            decoder_attention_mask=dec_attn,
+    if use_speech_input:
+        processor = AutoProcessor.from_pretrained(os.fspath(weights_dir), local_files_only=True)
+        input_features, enc_attn = _real_speech_features(processor, dev)
+        logger.info(
+            f"{ctx} — input_features={tuple(input_features.shape)}, "
+            f"dec_seq={decoder_input_ids.shape[1]}, tgt_lang={tgt_lang}"
         )
-        .to(torch.bfloat16)
-        .cpu()
-    )
-
-    # TTNN forward
-    out = tt_model.forward(
-        input_ids=torch_ids_to_ttnn(device, input_ids),
-        attention_mask=torch_ids_to_ttnn(device, enc_attn),
-        decoder_input_ids=torch_ids_to_ttnn(device, decoder_input_ids),
-        decoder_attention_mask=torch_ids_to_ttnn(device, dec_attn),
-        use_cache=False,
-        return_dict=True,
-    )
-    assert_logits_pcc(ref_logits, out.logits, pcc=PCC_THRESHOLD, context="forward() text modality")
-
-
-# ---------------------------------------------------------------------------
-# Test 2: forward() — speech modality
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.timeout(1200)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
-def test_forward_speech_modality(device, reset_seeds):
-    """``forward()`` speech path: processor log-mel features → encoder → decoder → lm_head, PCC ≥ 0.99."""
-    _ = reset_seeds
-    weights_dir = _weights_dir_or_skip()
-    model, cfg = load_pretrained_seamless_m4t_v2_model(weights_dir, dtype=torch.bfloat16)
-    t2u_cfg = model.t2u_model.config
-    dev = next(model.parameters()).device
-    tt_model = make_tt_model(device, model, cfg, t2u_cfg)
-
-    processor = AutoProcessor.from_pretrained(os.fspath(weights_dir), local_files_only=True)
-    tokenizer = AutoTokenizer.from_pretrained(os.fspath(weights_dir), local_files_only=True)
-
-    input_features, enc_attn_speech = _real_speech_inputs(processor, dev)
-    _, _, decoder_input_ids, dec_attn = _real_text_inputs(tokenizer, cfg, dev)
-
-    logger.info(
-        f"Speech forward — input_features={tuple(input_features.shape)}, " f"dec_seq={decoder_input_ids.shape[1]}"
-    )
-
-    with torch.no_grad():
-        ref_out = model(
-            input_features=input_features,
-            attention_mask=enc_attn_speech,
-            decoder_input_ids=decoder_input_ids,
-            decoder_attention_mask=dec_attn,
+        with torch.no_grad():
+            ref_out = model(
+                input_features=input_features,
+                attention_mask=enc_attn,
+                decoder_input_ids=decoder_input_ids,
+                decoder_attention_mask=decoder_attention_mask,
+                use_cache=False,
+                return_dict=True,
+            )
+        ref_logits = ref_out.logits.to(torch.bfloat16).cpu().float()
+        out = tt_model.forward(
+            input_features=torch_feats_to_ttnn(device, input_features),
+            attention_mask=torch_ids_to_ttnn(device, enc_attn.cpu()),
+            decoder_input_ids=torch_ids_to_ttnn(device, decoder_input_ids),
+            decoder_attention_mask=torch_ids_to_ttnn(device, decoder_attention_mask),
             use_cache=False,
             return_dict=True,
         )
-    ref_logits = ref_out.logits.to(torch.bfloat16).cpu().float()  # [1, dec_seq, vocab]
-
-    feats_tt = torch_feats_to_ttnn(device, input_features)
-    enc_attn_tt = torch_ids_to_ttnn(device, enc_attn_speech.cpu())
-    out = tt_model.forward(
-        input_features=feats_tt,
-        attention_mask=enc_attn_tt,
-        decoder_input_ids=torch_ids_to_ttnn(device, decoder_input_ids),
-        decoder_attention_mask=torch_ids_to_ttnn(device, dec_attn),
-        use_cache=False,
-        return_dict=True,
-    )
-    assert_logits_pcc(ref_logits, out.logits, pcc=PCC_THRESHOLD, context="forward() speech modality")
-
-
-# ---------------------------------------------------------------------------
-# Test 3: generate() — text-only greedy, token prefix match
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.timeout(1200)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_generate_text_only_greedy(device, reset_seeds):
-    """``generate()`` text path: real tokenised input → greedy text-only decoding, prefix tokens match HF."""
-    _ = reset_seeds
-    weights_dir = _weights_dir_or_skip()
-
-    torch.manual_seed(0)
-    model, cfg = load_pretrained_seamless_m4t_v2_model(weights_dir, dtype=torch.bfloat16)
-    t2u_cfg = model.t2u_model.config
-    dev = next(model.parameters()).device
-
-    tokenizer = AutoTokenizer.from_pretrained(os.fspath(weights_dir), local_files_only=True)
-    batch = tokenizer(["Hello, how are you?"], return_tensors="pt", padding=True)
-    input_ids = batch["input_ids"].to(dev)
-    attention_mask = batch["attention_mask"].to(dev)
-
-    logger.info(f"Generate text — enc_seq={input_ids.shape[1]}, tokens={input_ids[0].tolist()}")
-
-    gen_kw = dict(
-        generate_speech=False,
-        max_new_tokens=12,
-        do_sample=False,
-        num_beams=1,
-        pad_token_id=cfg.pad_token_id,
-        eos_token_id=cfg.eos_token_id,
-        tgt_lang="eng",
-    )
-
-    with torch.no_grad():
-        ref_gen = model.generate(input_ids=input_ids, attention_mask=attention_mask, **gen_kw)
-
-    tt_model = make_tt_model(device, model, cfg, t2u_cfg)
-    tt_gen = tt_model.generate(
-        input_ids=torch_ids_to_ttnn(device, input_ids),
-        attention_mask=torch_ids_to_ttnn(device, attention_mask),
-        **gen_kw,
-    )
-    assert isinstance(tt_gen, TTSeamlessM4Tv2GreedySearchOutput)
-
-    ref_seq = ref_gen.sequences.cpu()
-    tt_seq = ttnn.to_torch(ttnn.from_device(tt_gen.sequences)).to(torch.int64).cpu()
-
-    prefix_len = min(4, ref_seq.shape[1], tt_seq.shape[1])
-    assert torch.equal(ref_seq[:, :prefix_len], tt_seq[:, :prefix_len]), (
-        f"generate() prefix mismatch: "
-        f"ref[:, :{prefix_len}]={ref_seq[:, :prefix_len].tolist()} "
-        f"tt[:, :{prefix_len}]={tt_seq[:, :prefix_len].tolist()}"
-    )
-    logger.info(
-        f"generate() token match OK; ref_len={ref_seq.shape[1]}, tt_len={tt_seq.shape[1]}, "
-        f"ref={ref_seq[0].tolist()}, tt={tt_seq[0].tolist()}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Test 4: generate() — speech → text greedy, token prefix match
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.timeout(1200)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_generate_speech_to_text_greedy(device, reset_seeds):
-    """``generate()`` speech-to-text: log-mel features → greedy text decoding, prefix tokens match HF."""
-    _ = reset_seeds
-    weights_dir = _weights_dir_or_skip()
-
-    torch.manual_seed(0)
-    model, cfg = load_pretrained_seamless_m4t_v2_model(weights_dir, dtype=torch.bfloat16)
-    t2u_cfg = model.t2u_model.config
-    dev = next(model.parameters()).device
-
-    processor = AutoProcessor.from_pretrained(os.fspath(weights_dir), local_files_only=True)
-    input_features, enc_attn_speech = _real_speech_inputs(processor, dev)
-
-    logger.info(f"Generate speech-to-text — input_features={tuple(input_features.shape)}")
-
-    gen_kw = dict(
-        generate_speech=False,
-        max_new_tokens=12,
-        do_sample=False,
-        num_beams=1,
-        pad_token_id=cfg.pad_token_id,
-        eos_token_id=cfg.eos_token_id,
-        tgt_lang="eng",
-    )
-
-    with torch.no_grad():
-        ref_gen = model.generate(input_features=input_features, attention_mask=enc_attn_speech, **gen_kw)
-
-    tt_model = make_tt_model(device, model, cfg, t2u_cfg)
-    tt_gen = tt_model.generate(
-        input_features=torch_feats_to_ttnn(device, input_features),
-        attention_mask=torch_ids_to_ttnn(device, enc_attn_speech.cpu()),
-        **gen_kw,
-    )
-    assert isinstance(tt_gen, TTSeamlessM4Tv2GreedySearchOutput)
-
-    ref_seq = ref_gen.sequences.cpu()
-    tt_seq = ttnn.to_torch(ttnn.from_device(tt_gen.sequences)).to(torch.int64).cpu()
-
-    prefix_len = min(4, ref_seq.shape[1], tt_seq.shape[1])
-    assert torch.equal(ref_seq[:, :prefix_len], tt_seq[:, :prefix_len]), (
-        f"speech→text generate() prefix mismatch: "
-        f"ref[:, :{prefix_len}]={ref_seq[:, :prefix_len].tolist()} "
-        f"tt[:, :{prefix_len}]={tt_seq[:, :prefix_len].tolist()}"
-    )
-    logger.info(
-        f"speech→text generate() token match OK; ref_len={ref_seq.shape[1]}, tt_len={tt_seq.shape[1]}, "
-        f"ref={ref_seq[0].tolist()}, tt={tt_seq[0].tolist()}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Helpers for speech-output assertions
-# ---------------------------------------------------------------------------
-
-
-def _waveform_to_BT(w: torch.Tensor) -> torch.Tensor:
-    """Normalise HF / TT vocoder output to ``[B, T]`` (HF emits ``[B, 1, T]``; TT emits ``[B, T, 1]``)."""
-    if w.dim() == 3:
-        if w.shape[1] == 1:
-            return w.squeeze(1)
-        if w.shape[-1] == 1:
-            return w.squeeze(-1)
-    return w
-
-
-def _stft_magnitude(wav_1d: torch.Tensor, *, n_fft: int = 512, hop: int = 128) -> torch.Tensor:
-    """STFT magnitude spectrogram of a 1-D waveform — ``[freq_bins, time_frames]``.
-
-    The basis for both raw-magnitude and log-magnitude waveform comparison in
-    ``_assert_generation_pcc``. Two properties relevant to TT-vs-HF speech comparison:
-
-    1. *Phase invariance*: small time-domain shifts (a few samples) move every later sample and
-       collapse time-domain PCC; the magnitude spectrogram is the short-time **frequency** content
-       and is far less sensitive to such shifts.
-    2. Log-magnitude (taken downstream of this helper, ``log(mag + 1e-6)``) compresses dynamic
-       range — bf16 cascade error is roughly multiplicative in loud regions, which would dominate
-       raw-magnitude PCC; ``log`` puts loud and quiet regions on comparable footing (this is what
-       dB-scale does and why human hearing uses it). This is the representation used by log-mel
-       features and the basis of MCD (Mel-Cepstral Distortion) in speech-synthesis evaluation.
-    """
-    win = torch.hann_window(n_fft, dtype=wav_1d.dtype, device=wav_1d.device)
-    return torch.stft(wav_1d, n_fft=n_fft, hop_length=hop, window=win, return_complex=True).abs()
-
-
-def _assert_generation_pcc(
-    tt_gen: TTSeamlessM4Tv2GenerationOutput,
-    ref_gen: Any,
-    *,
-    ctx: str,
-    waveform_pcc: float = PCC_GENERATE_WAVEFORM,
-) -> None:
-    """Compare TT vs HF ``generate()`` outputs.
-
-    Three layers of comparison, each appropriate to its data type:
-
-    1. **Text token sequences** (discrete): exact 4-token prefix match. Greedy argmax is
-       deterministic, so this is strictly stronger than any PCC threshold.
-    2. **Unit token sequences** (discrete, diagnostic): per-token match ratio is logged. T2U argmax
-       under bf16 can flip near-tie tokens — this is the leading indicator for any waveform-PCC drop.
-    3. **Waveform** (continuous, primary assertion): **log-magnitude STFT PCC** (a.k.a. log-spectrogram
-       PCC, the dB-scale variant of the magnitude spectrogram used by MCD / mel-spec MSE in
-       speech-synthesis evaluation). Both time-domain PCC and raw-magnitude-STFT PCC are logged for
-       diagnostics so a future failure can be triaged.
-
-    Why not time-domain PCC?
-        End-to-end ``generate()`` chains text-decoder → T2U encoder/decoder → **duration predictor**
-        → vocoder, all in bf16. If TT's duration predictor disagrees with HF by even one frame on
-        any unit token, ``t_audio`` shifts and the entire downstream waveform moves in time.
-        Time-domain PCC is phase-sensitive — a 10-sample shift drops PCC from 1.0 to ~0.0 on real
-        signals. See ``test_text_to_unit.py:30-33`` (TT duration stack not yet converged) and
-        ``tt_code_hifigan.py:10-15`` (any ``input_length`` mismatch propagates through every
-        conv1d output length so simple cropping does not realign).
-
-    Why log-magnitude STFT and not raw-magnitude?
-        Raw magnitude is dominated by loud regions; loud-region bf16 error has a large absolute
-        magnitude and a small relative magnitude. Taking ``log`` puts loud and quiet regions on
-        comparable footing (this is what dB-scale does and why human hearing uses it). Empirically
-        on this model, raw-magnitude STFT PCC sits around 0.80; log-magnitude STFT PCC sits in the
-        0.85–0.90 range.
-
-    Slicing (mirrors ``test_code_hifigan.py``): per-row over
-    ``min(valid_len_tt, valid_len_ref, T_tt, T_ref)`` to avoid correlating against zero-padding.
-    """
-    # --- 1) Intermediate text token sequences (deterministic via greedy argmax) ---
-    ref_seq = ref_gen.sequences.cpu()
-    tt_seq = ttnn.to_torch(ttnn.from_device(tt_gen.sequences)).to(torch.int64).cpu()
-    prefix = min(4, ref_seq.shape[1], tt_seq.shape[1])
-    assert torch.equal(ref_seq[:, :prefix], tt_seq[:, :prefix]), (
-        f"{ctx}: text-sequence prefix mismatch: ref={ref_seq[:, :prefix].tolist()} " f"tt={tt_seq[:, :prefix].tolist()}"
-    )
-
-    # --- 2) Unit token sequences: diagnostic match ratio ---
-    ref_units = ref_gen.unit_sequences.cpu()
-    tt_units = ttnn.to_torch(ttnn.from_device(tt_gen.unit_sequences)).to(torch.int64).cpu()
-    common_units = min(ref_units.shape[1], tt_units.shape[1])
-    if common_units > 0:
-        eq_mask = ref_units[:, :common_units] == tt_units[:, :common_units]
-        unit_match_ratio = float(eq_mask.float().mean().item())
     else:
-        unit_match_ratio = 0.0
-    logger.info(
-        f"{ctx} unit_sequences: ref={tuple(ref_units.shape)} tt={tuple(tt_units.shape)}; "
-        f"per-token match over first {common_units} tokens: {unit_match_ratio:.3f}"
-    )
-
-    # --- 3) Waveform: STFT-magnitude PCC per row, over per-row valid length ---
-    ref_wav = _waveform_to_BT(ref_gen.waveform.detach().cpu().float())
-    tt_wav = _waveform_to_BT(ttnn.to_torch(ttnn.from_device(tt_gen.waveform)).float().cpu())
-    assert (
-        ref_wav.dim() == tt_wav.dim() == 2
-    ), f"{ctx}: waveforms must reshape to [B, T]: ref={tuple(ref_wav.shape)} tt={tuple(tt_wav.shape)}"
-
-    ref_lens = ref_gen.waveform_lengths.detach().cpu().long().reshape(-1)
-    tt_lens = ttnn.to_torch(ttnn.from_device(tt_gen.waveform_lengths)).to(torch.int64).reshape(-1).cpu()
-    assert (
-        tt_lens.shape == ref_lens.shape
-    ), f"{ctx}: waveform_lengths shape mismatch ref={tuple(ref_lens.shape)} tt={tuple(tt_lens.shape)}"
-
-    batch = ref_wav.shape[0]
-    log_spec_pcc_min = 1.0
-    for b in range(batch):
-        rlen = int(ref_lens[b].item())
-        tlen = int(tt_lens[b].item())
-        valid_len = min(rlen, tlen, ref_wav.shape[1], tt_wav.shape[1])
-        assert valid_len > 0, f"{ctx}: zero valid length in batch {b} (ref={rlen}, tt={tlen})"
-
-        ref_b = ref_wav[b, :valid_len].contiguous()
-        tt_b = tt_wav[b, :valid_len].contiguous()
-
-        # Diagnostic: time-domain PCC (expected to be low due to phase sensitivity).
-        _, msg_time = check_with_pcc(ref_b, tt_b, pcc=0.0)
-
-        # Compute STFT magnitudes once; reuse for raw + log comparisons.
-        ref_mag = _stft_magnitude(ref_b)
-        tt_mag = _stft_magnitude(tt_b)
-        t_frames = min(ref_mag.shape[-1], tt_mag.shape[-1])
-        assert t_frames > 0, f"{ctx}: STFT yielded zero time frames in row {b}"
-        ref_mag = ref_mag[:, :t_frames].contiguous()
-        tt_mag = tt_mag[:, :t_frames].contiguous()
-
-        # Diagnostic: raw STFT-magnitude PCC (phase-invariant, but loud regions dominate).
-        _, msg_raw = check_with_pcc(ref_mag.reshape(-1), tt_mag.reshape(-1), pcc=0.0)
-
-        # Primary assertion: log-magnitude STFT PCC (dB-scale, MCD-style comparison).
-        ref_log = torch.log(ref_mag + 1e-6).reshape(-1)
-        tt_log = torch.log(tt_mag + 1e-6).reshape(-1)
-        ok, msg_log = check_with_pcc(ref_log, tt_log, pcc=waveform_pcc)
-        try:
-            pcc_val = float(msg_log)
-        except (TypeError, ValueError):
-            pcc_val = -1.0
-        if pcc_val >= 0:
-            log_spec_pcc_min = min(log_spec_pcc_min, pcc_val)
-        logger.info(
-            f"{ctx} [row={b}] valid_len(ref={rlen}, tt={tlen}, cmp={valid_len}); "
-            f"time-domain PCC={msg_time}; raw-magnitude STFT PCC={msg_raw}; "
-            f"log-magnitude STFT PCC={msg_log} (threshold {waveform_pcc})"
+        tokenizer = AutoTokenizer.from_pretrained(os.fspath(weights_dir), local_files_only=True)
+        input_ids, enc_attn = _real_text_input_ids(tokenizer, dev)
+        logger.info(f"{ctx} — enc_seq={input_ids.shape[1]}, dec_seq={decoder_input_ids.shape[1]}, tgt_lang={tgt_lang}")
+        ref_logits = (
+            forward_text_modality_logits(
+                model,
+                input_ids=input_ids,
+                attention_mask=enc_attn,
+                decoder_input_ids=decoder_input_ids,
+                decoder_attention_mask=decoder_attention_mask,
+            )
+            .to(torch.bfloat16)
+            .cpu()
         )
-        assert ok, f"{ctx}: row {b} log-magnitude STFT PCC < {waveform_pcc}: {msg_log}"
-    logger.info(f"{ctx} log-magnitude STFT PCC min over rows: {log_spec_pcc_min:.4f}")
+        out = tt_model.forward(
+            input_ids=torch_ids_to_ttnn(device, input_ids),
+            attention_mask=torch_ids_to_ttnn(device, enc_attn),
+            decoder_input_ids=torch_ids_to_ttnn(device, decoder_input_ids),
+            decoder_attention_mask=torch_ids_to_ttnn(device, decoder_attention_mask),
+            use_cache=False,
+            return_dict=True,
+        )
+
+    _assert_text_logits_pcc(ref_logits, out.logits, ctx=ctx)
+    return model, tt_model, cfg
 
 
 # ---------------------------------------------------------------------------
-# Test 5: generate() — text → speech (waveform), structure + text prefix
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.timeout(1200)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_generate_text_to_speech(device, reset_seeds):
-    """``generate()`` text-to-speech: tokenised text → unit tokens → vocoder waveform."""
-    _ = reset_seeds
-    weights_dir = _weights_dir_or_skip()
-
-    torch.manual_seed(0)
-    model, cfg = load_pretrained_seamless_m4t_v2_model(weights_dir, dtype=torch.bfloat16)
-    t2u_cfg = model.t2u_model.config
-    dev = next(model.parameters()).device
-
-    tokenizer = AutoTokenizer.from_pretrained(os.fspath(weights_dir), local_files_only=True)
-    batch = tokenizer(["Hello, how are you?"], return_tensors="pt", padding=True)
-    input_ids = batch["input_ids"].to(dev)
-    attention_mask = batch["attention_mask"].to(dev)
-
-    logger.info(f"Generate text-to-speech — enc_seq={input_ids.shape[1]}, tokens={input_ids[0].tolist()}")
-
-    gen_kw = dict(
-        generate_speech=True,
-        return_intermediate_token_ids=True,
-        max_new_tokens=6,
-        do_sample=False,
-        num_beams=1,
-        pad_token_id=cfg.pad_token_id,
-        eos_token_id=cfg.eos_token_id,
-        tgt_lang="eng",
-        speaker_id=0,
-    )
-
-    # Re-seed immediately before each generate() so both runs start from identical RNG state — T2U
-    # has a ``do_sample`` codepath, and even with ``do_sample=False`` this removes any latent RNG drift.
-    torch.manual_seed(0)
-    with torch.no_grad():
-        ref_gen = model.generate(input_ids=input_ids, attention_mask=attention_mask, **gen_kw)
-
-    tt_model = make_tt_model(device, model, cfg, t2u_cfg)
-    torch.manual_seed(0)
-    tt_gen = tt_model.generate(
-        input_ids=torch_ids_to_ttnn(device, input_ids),
-        attention_mask=torch_ids_to_ttnn(device, attention_mask),
-        **gen_kw,
-    )
-    assert isinstance(tt_gen, TTSeamlessM4Tv2GenerationOutput)
-    _assert_generation_pcc(tt_gen, ref_gen, ctx="text→speech generate()")
-
-
-# ---------------------------------------------------------------------------
-# Test 6: generate() — speech → speech (waveform), structure + text prefix
+# Test 1 — T2TT: Text-to-Text Translation
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.timeout(1200)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_generate_speech_to_speech(device, reset_seeds):
-    """``generate()`` speech-to-speech: log-mel features → unit tokens → vocoder waveform."""
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
+def test_t2tt(device, reset_seeds):
+    """T2TT — Text-to-Text Translation. PCC ≥ 0.99 on text-decoder ``lm_head`` logits."""
     _ = reset_seeds
     weights_dir = _weights_dir_or_skip()
-
-    torch.manual_seed(0)
-    model, cfg = load_pretrained_seamless_m4t_v2_model(weights_dir, dtype=torch.bfloat16)
-    t2u_cfg = model.t2u_model.config
-    dev = next(model.parameters()).device
-
-    processor = AutoProcessor.from_pretrained(os.fspath(weights_dir), local_files_only=True)
-    input_features, enc_attn_speech = _real_speech_inputs(processor, dev)
-
-    logger.info(f"Generate speech-to-speech — input_features={tuple(input_features.shape)}")
-
-    gen_kw = dict(
-        generate_speech=True,
-        return_intermediate_token_ids=True,
-        max_new_tokens=6,
-        do_sample=False,
-        num_beams=1,
-        pad_token_id=cfg.pad_token_id,
-        eos_token_id=cfg.eos_token_id,
-        tgt_lang="eng",
-        speaker_id=0,
+    _forward_and_compare_text_logits(
+        device, weights_dir=weights_dir, use_speech_input=False, tgt_lang="eng", ctx="T2TT"
     )
 
-    # Re-seed immediately before each generate() so both runs start from identical RNG state.
-    torch.manual_seed(0)
-    with torch.no_grad():
-        ref_gen = model.generate(input_features=input_features, attention_mask=enc_attn_speech, **gen_kw)
 
-    tt_model = make_tt_model(device, model, cfg, t2u_cfg)
-    torch.manual_seed(0)
-    tt_gen = tt_model.generate(
-        input_features=torch_feats_to_ttnn(device, input_features),
-        attention_mask=torch_ids_to_ttnn(device, enc_attn_speech.cpu()),
-        **gen_kw,
+# ---------------------------------------------------------------------------
+# Test 2 — S2TT: Speech-to-Text Translation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
+def test_s2tt(device, reset_seeds):
+    """S2TT — Speech-to-Text Translation. PCC ≥ 0.99 on text-decoder ``lm_head`` logits."""
+    _ = reset_seeds
+    weights_dir = _weights_dir_or_skip()
+    _forward_and_compare_text_logits(device, weights_dir=weights_dir, use_speech_input=True, tgt_lang="eng", ctx="S2TT")
+
+
+# ---------------------------------------------------------------------------
+# Test 3 — T2ST: Text-to-Speech Translation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
+def test_t2st(device, reset_seeds):
+    """T2ST — Text-to-Speech Translation. PCC ≥ 0.99 on (text-decoder logits, T2U logits).
+
+    The downstream vocoder is validated separately in ``test_code_hifigan.py`` (also PCC ≥ 0.99).
+    Together with this test's two PCC checks, every stage of the T2ST pipeline is covered at the
+    0.99 bar.
+    """
+    _ = reset_seeds
+    weights_dir = _weights_dir_or_skip()
+    model, tt_model, _ = _forward_and_compare_text_logits(
+        device, weights_dir=weights_dir, use_speech_input=False, tgt_lang="eng", ctx="T2ST"
     )
-    assert isinstance(tt_gen, TTSeamlessM4Tv2GenerationOutput)
-    _assert_generation_pcc(tt_gen, ref_gen, ctx="speech→speech generate()")
+    _assert_t2u_logits_pcc(model, tt_model, device, ctx="T2ST")
+
+
+# ---------------------------------------------------------------------------
+# Test 4 — S2ST: Speech-to-Speech Translation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
+def test_s2st(device, reset_seeds):
+    """S2ST — Speech-to-Speech Translation. PCC ≥ 0.99 on (text-decoder logits, T2U logits).
+
+    The downstream vocoder is validated separately in ``test_code_hifigan.py`` (also PCC ≥ 0.99).
+    """
+    _ = reset_seeds
+    weights_dir = _weights_dir_or_skip()
+    model, tt_model, _ = _forward_and_compare_text_logits(
+        device, weights_dir=weights_dir, use_speech_input=True, tgt_lang="eng", ctx="S2ST"
+    )
+    _assert_t2u_logits_pcc(model, tt_model, device, ctx="S2ST")
+
+
+# ---------------------------------------------------------------------------
+# Test 5 — ASR: Automatic Speech Recognition (same-language transcription)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
+def test_asr(device, reset_seeds):
+    """ASR — Automatic Speech Recognition. PCC ≥ 0.99 on text-decoder ``lm_head`` logits.
+
+    Same forward dataflow as S2TT (speech-encoder → text-decoder → ``lm_head``); ASR is the special
+    case where the decoder seed's target-language code equals the source language, so the decoder
+    transcribes rather than translates. Decoder seed: ``[decoder_start_token_id, eng_lang_code_id]``.
+    """
+    _ = reset_seeds
+    weights_dir = _weights_dir_or_skip()
+    _forward_and_compare_text_logits(device, weights_dir=weights_dir, use_speech_input=True, tgt_lang="eng", ctx="ASR")
