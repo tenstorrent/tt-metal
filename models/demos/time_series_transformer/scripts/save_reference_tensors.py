@@ -21,13 +21,12 @@ MODEL_REVISION    = "2a40ad41f6ffe61e7bef6099b08c6c2fce36ac35"
 
 DATASET_REPO      = "hf-internal-testing/tourism-monthly-batch"
 DATASET_FILE      = "train-batch.pt"
-DATASET_REVISION  = "81c7ee3cf3317e51beb97327df55926cd5bbfadb"  # pinned commit hash
+DATASET_REVISION  = "81c7ee3cf3317e51beb97327df55926cd5bbfadb"
 
 SAVE_DIR = Path(__file__).resolve().parent.parent / "reference"
 
 
 def main():
-    # Move directory creation inside main — avoids import-time side effects
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
 
     # ── Load model ────────────────────────────────────────────────────────────
@@ -63,7 +62,11 @@ def main():
         repo_type="dataset",
         revision=DATASET_REVISION,
     )
-    batch = torch.load(file)
+    # Load to CPU explicitly; fall back for older torch versions without weights_only
+    try:
+        batch = torch.load(file, map_location="cpu", weights_only=True)
+    except TypeError:
+        batch = torch.load(file, map_location="cpu")
 
     past_values                 = batch["past_values"]
     past_time_features          = batch["past_time_features"]
@@ -81,10 +84,11 @@ def main():
     # ── Validate past_len against actual tensor ───────────────────────────────
     expected_past_len = cfg.context_length + max(cfg.lags_sequence)
     actual_past_len   = past_values.shape[1]
-    assert actual_past_len == expected_past_len, (
-        f"past_len mismatch: config expects {expected_past_len}, "
-        f"actual tensor is {actual_past_len}"
-    )
+    if actual_past_len != expected_past_len:
+        raise ValueError(
+            f"past_len mismatch: config expects {expected_past_len}, "
+            f"actual tensor is {actual_past_len}"
+        )
     past_len = actual_past_len
     B        = past_values.shape[0]
 
@@ -107,13 +111,14 @@ def main():
     captured = {}
 
     def make_hook(name):
-        def fn(module, input, output):
+        # 'inputs' avoids shadowing Python's built-in input()
+        def fn(module, inputs, output):
             if isinstance(output, torch.Tensor):
-                captured[name] = output.detach()
+                captured[name] = output.detach().cpu()
             elif isinstance(output, tuple):
-                captured[name] = output[0].detach()
+                captured[name] = output[0].detach().cpu()
             else:
-                captured[name] = output.last_hidden_state.detach()
+                captured[name] = output.last_hidden_state.detach().cpu()
         return fn
 
     # Iterate actual layer list — avoids config/module count mismatch
@@ -145,10 +150,10 @@ def main():
     # ── Save outputs ──────────────────────────────────────────────────────────
     print("\nSaving outputs:")
 
-    torch.save(out.encoder_last_hidden_state, SAVE_DIR / "encoder_last_hidden_state.pt")
-    torch.save(out.loc,                       SAVE_DIR / "loc.pt")
-    torch.save(out.scale,                     SAVE_DIR / "scale.pt")
-    torch.save(out.static_features,           SAVE_DIR / "static_features.pt")
+    torch.save(out.encoder_last_hidden_state.cpu(), SAVE_DIR / "encoder_last_hidden_state.pt")
+    torch.save(out.loc.cpu(),                       SAVE_DIR / "loc.pt")
+    torch.save(out.scale.cpu(),                     SAVE_DIR / "scale.pt")
+    torch.save(out.static_features.cpu(),           SAVE_DIR / "static_features.pt")
     print(f"  encoder_last_hidden_state: {out.encoder_last_hidden_state.shape}")
     print(f"  loc:                       {out.loc.shape}")
     print(f"  scale:                     {out.scale.shape}")
