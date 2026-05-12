@@ -130,7 +130,7 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryAtt
             im3_t == Wt + block_size, "im3_t {} == Width in tiles {} + num_dest_regs to use {}", im3_t, Wt, block_size);
     }
     TT_FATAL(Wt % block_size == 0, "Wt: {} must be divisible by one of the numbers in the range from 8 to 1.", Wt);
-    TT_FATAL((block_size != -1), "Wt: {} must be divisible by one of the numbers in the range from 8 to 1.", Wt);
+    TT_FATAL((block_size != static_cast<uint32_t>(-1)), "Wt: {} must be divisible by one of the numbers in the range from 8 to 1.", Wt);
     TT_FATAL(
         im0_t % block_size == 0,
         "Size of cb: {} must be divisible by the size of block used by the reader and compute kernel.",
