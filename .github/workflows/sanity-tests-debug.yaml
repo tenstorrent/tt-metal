@@ -123,7 +123,7 @@ jobs:
     name: blackhole nightly debug run (Ubuntu 22.04${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' && ' with watcher' || '' }}${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' && ' with LLK asserts' || '' }})
     needs: [determine-debug-flags, build-artifacts-ubuntu-22]
     if: ${{ always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-blackhole-tests) }}
-    uses: ./.github/workflows/blackhole-sanity-tests.yaml
+    uses: ./.github/workflows/blackhole-post-commit.yaml
     secrets: inherit
     with:
       build-type: RelWithDebInfo
@@ -131,6 +131,8 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       enable-watcher: ${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' }}
       enable-llk-asserts: ${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' }}
+      schedule-runs-all-tests: false
+      run-profiler-regression: ${{ needs.determine-debug-flags.outputs.enable-watcher != 'true' }}
       dev-docker-image: ${{ needs.build-artifacts-ubuntu-22.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifacts-ubuntu-22.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifacts-ubuntu-22.outputs.wheel-artifact-name }}
@@ -160,7 +162,7 @@ jobs:
     name: blackhole nightly debug run (Ubuntu 24.04${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' && ' with watcher' || '' }}${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' && ' with LLK asserts' || '' }})
     needs: [determine-debug-flags, build-artifacts-ubuntu-24]
     if: ${{ always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-blackhole-tests) }}
-    uses: ./.github/workflows/blackhole-sanity-tests.yaml
+    uses: ./.github/workflows/blackhole-post-commit.yaml
     secrets: inherit
     with:
       build-type: RelWithDebInfo
@@ -168,6 +170,8 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       enable-watcher: ${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' }}
       enable-llk-asserts: ${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' }}
+      schedule-runs-all-tests: false
+      run-profiler-regression: ${{ needs.determine-debug-flags.outputs.enable-watcher != 'true' }}
       dev-docker-image: ${{ needs.build-artifacts-ubuntu-24.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifacts-ubuntu-24.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifacts-ubuntu-24.outputs.wheel-artifact-name }}
