@@ -34,14 +34,6 @@ Tensor clamp(
     std::optional<Tensor> max = std::nullopt,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<Tensor>& output_tensor = std::nullopt);
-Tensor glu(
-    const Tensor& input_a, int32_t dim = -1, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-Tensor reglu(
-    const Tensor& input_a, int32_t dim = -1, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-Tensor geglu(
-    const Tensor& input_a, int32_t dim = -1, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-Tensor swiglu(
-    const Tensor& input_a, int32_t dim = -1, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor logical_not_(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor tril(
     const Tensor& input_a, int32_t diag = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);

@@ -1864,58 +1864,7 @@ void py_module(nb::module_& mod) {
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc",
         R"doc(Host memory is not supported.)doc");
 
-    // Unary ops with dim parameter
-    bind_unary_operation_with_dim_parameter<"glu", &ttnn::glu>(
-        mod,
-        "dim",
-        "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)",
-        "Split the tensor into two parts, apply the GLU function on the second tensor, and then perform multiplication "
-        "with the first tensor.",
-        R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(System memory is not supported.
 
-           Last dimension of input tensor should be divisible by 64.
-
-        )doc");
-
-    bind_unary_operation_with_dim_parameter<"reglu", &ttnn::reglu>(
-        mod,
-        "dim",
-        "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)",
-        "Split the tensor into two parts, apply the ReLU function on the second tensor, and then perform "
-        "multiplication with the first tensor.",
-        R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(System memory is not supported.
-
-           Last dimension of input tensor should be divisible by 64.
-
-        )doc");
-
-    bind_unary_operation_with_dim_parameter<"geglu", &ttnn::geglu>(
-        mod,
-        "dim",
-        "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)",
-        "Split the tensor into two parts, apply the GELU function on the second tensor, and then perform "
-        "multiplication with the first tensor.",
-        R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(System memory is not supported.
-
-           Last dimension of input tensor should be divisible by 64.
-
-        )doc");
-
-    bind_unary_operation_with_dim_parameter<"swiglu", &ttnn::swiglu>(
-        mod,
-        "dim",
-        "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)",
-        "Split the tensor into two parts, apply the SiLU function on the second tensor, and then perform "
-        "multiplication with the first tensor.",
-        R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(System memory is not supported.
-
-           Last dimension of input tensor should be divisible by 64.
-
-        )doc");
 
     // Other unaries (unary chain operations)
     bind_softplus(mod);

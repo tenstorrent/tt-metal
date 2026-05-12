@@ -57,27 +57,6 @@ Tensor _std(
     return ttnn::sqrt(_variance_impl(y, mean_y, y_minus_mean_y, output_mem_config));
 }
 
-std::vector<Tensor> split_tensor_for_glu(
-    const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> t_split;
-    ttnn::Shape inshape(input_a.padded_shape());
-    TT_FATAL(((inshape[dim] / 2) % tt::constants::TILE_WIDTH == 0), "Split tensor dimension should be in full tile");
-    ttnn::SmallVector<uint32_t> s_a = {0, 0, 0, 0};
-    ttnn::SmallVector<uint32_t> e_a = {input_a.padded_shape()[0], inshape[1], inshape[2], inshape[3] / 2};
-
-    ttnn::SmallVector<uint32_t> s_b = {0, 0, 0, inshape[3] / 2};
-    ttnn::SmallVector<uint32_t> e_b = {inshape[0], inshape[1], inshape[2], inshape[3]};
-
-    auto step = ttnn::SmallVector<uint32_t>({1, 1, 1, 1});
-    Tensor t_a = ttnn::slice(input_a, s_a, e_a, step, output_mem_config);
-    Tensor t_b = ttnn::slice(input_a, s_b, e_b, step, output_mem_config);
-
-    t_split.emplace_back(t_a);
-    t_split.emplace_back(t_b);
-
-    return t_split;
-}
-
 using HWFunctionT = std::function<Tensor(const Tensor& y, const std::optional<MemoryConfig>&)>;
 Tensor _make_global_from_hw_impl(
     const HWFunctionT& fn, const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
@@ -222,60 +201,6 @@ Tensor clamp(
         max.value(),
         temp,
         output_memory_config);
-}
-
-// Gated Linear Unit activation: matmul(split[0],sigmoid(split[1]))
-Tensor glu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_ASSERT(dim == -1 || dim == 3, "last dim GLU only supported at this time ");
-    if (dim == -1) {
-        dim = 3;
-    }
-    std::vector<Tensor> ab = detail::split_tensor_for_glu(input_a, dim, output_mem_config);
-    Tensor sigmoid_b = ttnn::sigmoid(
-        ab[1], (int)operations::unary::VecMode::RC, operations::unary::SigmoidMode::ACCURATE, output_mem_config);
-    Tensor glu_result = ttnn::multiply(ab[0], sigmoid_b, std::nullopt, output_mem_config);
-    return glu_result;
-}
-
-// ReLU Gated Linear Unit activation: matmul(split[0],relu(split[1]))
-Tensor reglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_ASSERT(dim == -1 || dim == 3, "last dim REGLU only supported at this time ");
-    if (dim == -1) {
-        dim = 3;
-    }
-    std::vector<Tensor> ab = detail::split_tensor_for_glu(input_a, dim, output_mem_config);
-    Tensor relu_b = ttnn::relu(ab[1], output_mem_config);
-    Tensor reglu_result = ttnn::multiply(ab[0], relu_b, std::nullopt, output_mem_config);
-    return reglu_result;
-}
-
-// Gaussian Error Gated Linear Unit activation: matmul(split[0],gelu(split[1]))
-Tensor geglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_ASSERT(dim == -1 || dim == 3, "last dim GEGLU only supported at this time ");
-    if (dim == -1) {
-        dim = 3;
-    }
-
-    std::vector<Tensor> ab = detail::split_tensor_for_glu(input_a, dim, output_mem_config);
-
-    constexpr bool fast_appx = true;
-    Tensor gelu_b = ttnn::gelu(ab[1], fast_appx, output_mem_config);
-    Tensor geglu_result = ttnn::multiply(ab[0], gelu_b, std::nullopt, output_mem_config);
-    return geglu_result;
-}
-
-// Swish Gated Linear Unit activation: matmul(split[0],swish(split[1]))
-Tensor swiglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_ASSERT(dim == -1 || dim == 3, "last dim SWIGLU only supported at this time ");
-    if (dim == -1) {
-        dim = 3;
-    }
-
-    std::vector<Tensor> ab = detail::split_tensor_for_glu(input_a, dim, output_mem_config);
-
-    Tensor swish_b = ttnn::swish(ab[1], output_mem_config);
-    Tensor swiglu_result = ttnn::multiply(ab[0], swish_b, std::nullopt, output_mem_config);
-    return swiglu_result;
 }
 
 // tril : select lower triangular region of input matrix
