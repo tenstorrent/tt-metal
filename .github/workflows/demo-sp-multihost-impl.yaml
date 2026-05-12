@@ -97,7 +97,6 @@ jobs:
       PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       HOME: /home/user
       PIP_CACHE_DIR: /home/user/.cache/pip
-      PYTHONPATH: /home/user/tt-metal
       LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
       TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
       TT_METAL_CACHE: /home/user/.cache
