@@ -449,10 +449,19 @@ jobs:
           # traced topology (e.g., 4x8 for Galaxy, 1x2 for N300).
           MESH=$(python3 -c "
           import json, glob, sys, os
+          test_group = os.environ.get('TEST_GROUP_NAME', '').lower()
           arch = os.environ.get('ARCH_NAME', '').lower()
           arch_filter = 'wormhole' if 'wormhole' in arch else ('blackhole' if 'blackhole' in arch else '')
           for f in glob.glob('/work/tests/sweep_framework/vectors_export/*.json'):
-              if arch_filter and arch_filter not in f.lower():
+              fname = os.path.basename(f).lower()
+              # Filter by test_group_name (e.g. wormhole_n300_1c) to avoid
+              # picking up Galaxy vectors (wormhole_tt_galaxy_wh_32c) on N300.
+              if test_group and test_group not in fname:
+                  if arch_filter and arch_filter not in fname:
+                      continue
+                  elif arch_filter and arch_filter in fname:
+                      continue  # same arch family but wrong test_group
+              elif not test_group and arch_filter and arch_filter not in fname:
                   continue
               with open(f) as fh:
                   data = json.load(fh)
@@ -537,22 +546,24 @@ jobs:
               echo "[two-pass] $axis partition has no vectors for batch modules — skipping"
               return 0
             fi
-            # Check if any vector file in this partition has vectors for
-            # the current arch.  When all vectors are for a different arch
-            # (e.g. wormhole ROW vectors on a blackhole runner), the sweep
-            # runner loads 0 vectors and generic_ops_tracer exits 1 on the
-            # "0 trace files" check.  Skip the pass entirely in that case.
+            # Check if any vector file in this partition matches the current
+            # test group.  Use TEST_GROUP_NAME (e.g. wormhole_n300_1c) to
+            # avoid matching Galaxy vectors on N300 runners and vice versa.
+            local tg="${TEST_GROUP_NAME:-}"
             local arch_tag="${ARCH_NAME:-}"
-            if [[ -n "$arch_tag" ]]; then
+            if [[ -n "$tg" || -n "$arch_tag" ]]; then
               local arch_matched=0
               for f in "$vectors_dir"/*.json; do
-                [[ "$(basename "$f")" == "generation_manifest.json" ]] && continue
-                if [[ "$(basename "$f")" == *"$arch_tag"* ]] || [[ "$(basename "$f")" == *"$(echo "$arch_tag" | cut -d_ -f1)"* ]]; then
+                local bname="$(basename "$f")"
+                [[ "$bname" == "generation_manifest.json" ]] && continue
+                if [[ -n "$tg" && "$bname" == *"$tg"* ]]; then
+                  arch_matched=1; break
+                elif [[ -z "$tg" ]] && [[ "$bname" == *"$arch_tag"* || "$bname" == *"$(echo "$arch_tag" | cut -d_ -f1)"* ]]; then
                   arch_matched=1; break
                 fi
               done
               if [[ "$arch_matched" == "0" ]]; then
-                echo "[two-pass] $axis partition has no vectors for arch $arch_tag — skipping"
+                echo "[two-pass] $axis partition has no vectors for ${tg:-$arch_tag} — skipping"
                 return 0
               fi
             fi
