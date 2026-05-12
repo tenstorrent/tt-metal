@@ -50,7 +50,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
     const std::vector<autograd::TensorPtr>& w_up,
     const std::vector<autograd::TensorPtr>& w_down) {
     const auto& grouped_value = grouped->get_value();
-    const auto grouped_shape = grouped_value.logical_shape();
+    const auto& grouped_shape = grouped_value.logical_shape();
     const uint32_t token_capacity = grouped_shape[-2];
     const uint32_t hidden_dim = grouped_shape[-1];
     const uint32_t num_experts = static_cast<uint32_t>(w_gate.size());
@@ -62,7 +62,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         throw std::runtime_error("moe_ffn_swiglu_fw: w_gate/w_up/w_down must have the same length.");
     }
 
-    const auto wg0_shape = w_gate[0]->get_value().logical_shape();
+    const auto& wg0_shape = w_gate[0]->get_value().logical_shape();
     if (wg0_shape[-2] != hidden_dim) {
         throw std::runtime_error("moe_ffn_swiglu_fw: w_gate[0] inner dim must equal grouped's hidden_dim.");
     }
@@ -172,7 +172,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                                    gate_proj_parts = std::move(gate_proj_parts),
                                    up_proj_parts = std::move(up_proj_parts),
                                    num_experts]() mutable {
-        auto dY = out->get_grad();
+        const auto dY = out->get_grad();
         const auto& grouped_value = grouped->get_value();
         const auto& grouped_shape = grouped_value.logical_shape();
 
@@ -183,6 +183,12 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             ttml::core::empty(grouped_shape, &ttml::autograd::ctx().get_device(), grouped_value.memory_config());
         auto dX_via_up =
             ttml::core::empty(grouped_shape, &ttml::autograd::ctx().get_device(), grouped_value.memory_config());
+
+        // Fused silu·multiply spans for the bw recomputation of activated_e (same pattern as fwd).
+        using EltwiseUnary = ttnn::operations::unary::EltwiseUnaryWithParam;
+        const EltwiseUnary silu_act{ttnn::operations::unary::UnaryOpType::SILU};
+        const ttsl::Span<const EltwiseUnary> no_acts;
+        const ttsl::Span<const EltwiseUnary> silu_lhs(&silu_act, 1);
 
         std::size_t nonempty_idx = 0U;
         for (uint32_t e = 0; e < num_experts; ++e) {
@@ -202,13 +208,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             const auto& w_up_e = w_up[e]->get_value();
             const auto& w_down_e = w_down[e]->get_value();
 
-            // Recompute activated_e from saved gate_proj_e, up_proj_e using
-            // the same fused silu·multiply pattern as the forward.
-            using EltwiseUnary = ttnn::operations::unary::EltwiseUnaryWithParam;
-            const EltwiseUnary silu_act{ttnn::operations::unary::UnaryOpType::SILU};
-            const ttsl::Span<const EltwiseUnary> no_acts;
-            const ttsl::Span<const EltwiseUnary> silu_lhs(&silu_act, 1);
-
+            // Recompute activated_e from saved gate_proj_e, up_proj_e (fused silu·multiply).
             auto& gate_proj_e = gate_proj_parts[nonempty_idx];
             auto& up_proj_e = up_proj_parts[nonempty_idx];
             ++nonempty_idx;
