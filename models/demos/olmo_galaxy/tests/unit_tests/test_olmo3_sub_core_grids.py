@@ -38,28 +38,31 @@ def _enumerate_cores(crs: ttnn.CoreRangeSet) -> set:
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": True}],
     indirect=True,
 )
-def test_olmo3_sub_core_grids_includes_col4(mesh_device):
-    """After the col-4-free change, self.sub_core_grids must be a single
-    contiguous rectangle cols 1-6 × rows 0-9 = 60 cores, including col 4."""
+def test_olmo3_sub_core_grids_is_cols0_to_6_contiguous(mesh_device):
+    """After widening col 0 in as well, self.sub_core_grids must be a single
+    contiguous rectangle cols 0-6 × rows 0-9 = 70 cores. Col 0 is freed
+    because the original long-prefill NOC-hang heuristic no longer applies
+    (no specific reproducer remains, and demo parametrizations confirm no
+    regression)."""
     args = TtOlmoModelArgs(mesh_device, max_batch_size=32, max_seq_len=128 * 1024)
 
     cores = _enumerate_cores(args.sub_core_grids)
 
-    # Col 4 must be present, all 10 rows.
+    # Col 0 must now be present, all 10 rows.
+    for y in range(10):
+        assert (0, y) in cores, f"col 0 row {y} missing from sub_core_grids"
+
+    # Col 4 must still be present (Wormhole prefetcher right-sender, but
+    # OLMo3 has use_prefetcher=False).
     for y in range(10):
         assert (4, y) in cores, f"col 4 row {y} missing from sub_core_grids"
-
-    # Col 0 must still be excluded — flagged for long-prefill NOC hangs
-    # (separate follow-up to widen).
-    for y in range(10):
-        assert (0, y) not in cores, f"col 0 row {y} unexpectedly in sub_core_grids"
 
     # Col 7 must still be excluded — dispatch core when dispatch_core_axis=COL.
     for y in range(10):
         assert (7, y) not in cores, f"col 7 row {y} unexpectedly in sub_core_grids (dispatch col)"
 
-    # Expected exactly cols 1-6 × rows 0-9 = 60 cores.
-    expected = {(x, y) for x in range(1, 7) for y in range(10)}
+    # Expected exactly cols 0-6 × rows 0-9 = 70 cores.
+    expected = {(x, y) for x in range(0, 7) for y in range(10)}
     assert cores == expected, f"sub_core_grids = {sorted(cores)} vs expected {sorted(expected)}"
 
 
