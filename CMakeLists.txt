@@ -249,7 +249,11 @@ include(tracy)
 
 if(ENABLE_TRACY AND TARGET TracyClient)
     message(STATUS "Adding -Wno-unused-variable to TracyClient")
-    target_compile_options(TracyClient PRIVATE -Wno-unused-variable)
+    target_compile_options(TracyClient PRIVATE
+        -Wno-unused-variable
+        -Wno-unused-parameter
+        -Wno-missing-field-initializers
+    )
 endif()
 
 add_library(metal_common_pch STATIC)

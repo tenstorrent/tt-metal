@@ -157,7 +157,7 @@ TEST_F(SmallVectorTrackedTest, CopyConstructorSmallAndLarge) {
     // Now create a vector that requires heap storage and copy it.
     Vec large;
     // Push more than the inline capacity to force heap allocation.
-    for (int i = 0; i < kInlineCapacity + 4; ++i) {
+    for (int i = 0; i < static_cast<int>(kInlineCapacity) + 4; ++i) {
         large.emplace_back(i);
     }
     auto* const largeData = large.data();
@@ -191,7 +191,7 @@ TEST_F(SmallVectorTrackedTest, MoveConstructorSmallAndLarge) {
     }
     {
         Vec large;
-        for (int i = 0; i < kInlineCapacity + 2; ++i) {
+        for (int i = 0; i < static_cast<int>(kInlineCapacity) + 2; ++i) {
             large.emplace_back(i);
         }
         // Force allocation beyond inline capacity
@@ -215,7 +215,7 @@ TEST_F(SmallVectorTrackedTest, MoveConstructorSmallAndLarge) {
 TEST_F(SmallVectorTrackedTest, DestructorCalls) {
     {
         Vec vec;
-        for (int i = 0; i < kInlineCapacity; ++i) {
+        for (int i = 0; i < static_cast<int>(kInlineCapacity); ++i) {
             vec.emplace_back(i);
         }
         EXPECT_EQ(Tracked::dtorCount, 0);
@@ -239,7 +239,7 @@ TEST_F(SmallVectorIntTest, PushWithinSmallBufferKeepsInplaceStorage) {
     vec.push_back(0);
     auto* initialPtr = vec.data();
     auto initialCap = vec.capacity();
-    for (int i = 1; i < kInlineCapacity; ++i) {
+    for (int i = 1; i < static_cast<int>(kInlineCapacity); ++i) {
         vec.push_back(i);
         EXPECT_EQ(vec.data(), initialPtr);
         EXPECT_EQ(vec.capacity(), initialCap);
@@ -249,7 +249,7 @@ TEST_F(SmallVectorIntTest, PushWithinSmallBufferKeepsInplaceStorage) {
 
 TEST_F(SmallVectorIntTest, PushBeyondSmallBufferTriggersHeapAllocation) {
     Vec vec;
-    for (int i = 0; i < kInlineCapacity; ++i) {
+    for (int i = 0; i < static_cast<int>(kInlineCapacity); ++i) {
         vec.push_back(i);
     }
     auto* const smallPtr = vec.data();
@@ -394,7 +394,7 @@ TEST_F(SmallVectorIntTest, SwapExchangesContentsAndStorage) {
     Vec small{1, 2, 3};
     Vec large;
     // Force large to allocate on the heap by pushing beyond inline capacity.
-    for (int i = 0; i < kInlineCapacity + 2; ++i) {
+    for (int i = 0; i < static_cast<int>(kInlineCapacity) + 2; ++i) {
         large.push_back(i + 10);
     }
     std::size_t largeCap = large.capacity();
@@ -457,7 +457,7 @@ TEST_F(SmallVectorIntTest, SizeCapacityAndEmpty) {
     EXPECT_EQ(vec.size(), 1u);
     auto smallCap = vec.capacity();
     // Fill up to small buffer capacity.
-    for (int i = 1; i < kInlineCapacity; ++i) {
+    for (int i = 1; i < static_cast<int>(kInlineCapacity); ++i) {
         vec.push_back(i + 1);
     }
     EXPECT_EQ(vec.size(), kInlineCapacity);

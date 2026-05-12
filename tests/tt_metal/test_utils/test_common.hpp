@@ -238,7 +238,7 @@ inline void validate_remaining_args(const std::vector<std::string>& remaining_ar
         return;
     }
     std::cout << "Remaining test_args:" << std::endl;
-    for (int i = 1; i < remaining_args.size(); i++) {
+    for (std::size_t i = 1; i < remaining_args.size(); i++) {
         std::cout << "\t" << remaining_args.at(i) << std::endl;
     }
     throw std::runtime_error("Not all test_args were parsed");
