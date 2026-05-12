@@ -339,7 +339,7 @@ void matmul_blocks(
 }
 
 void kernel_main() {
-    constexpr uint32_t K_num_blocks = get_compile_time_arg_val(0);
+    // Index 0 (K_num_blocks): kept for arg layout compat; actual value from runtime args.
     constexpr uint32_t M_block_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t K_block_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t N_block_tiles = get_compile_time_arg_val(3);
@@ -357,6 +357,10 @@ void kernel_main() {
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     // Variable-M: actual M_blocks_per_core from runtime args
     const uint32_t M_blocks_per_core = get_arg_val<uint32_t>(argidx++);
+    // Variable-K: K extent comes from runtime; K_num_blocks derived using K_block_tiles (CTA).
+    const uint32_t K_tiles = get_arg_val<uint32_t>(argidx++);
+    const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
+    const uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
 
 #ifdef FUSE_TERNARY
     const uint32_t fused_ternary_scalar_uint = get_arg_val<uint32_t>(argidx++);
