@@ -179,7 +179,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_PerCoreBuffer_Correc
     desc.kernels = {kd};
 
     Program program{desc};
-    ResolvedBindings resolved = resolve_bindings(program, desc, {buf_a.get()});
+    ResolvedBindings resolved = resolve_bindings(program, desc, std::vector<Buffer*>{buf_a.get()});
 
     ASSERT_EQ(resolved.rt_args.size(), 1u);
     EXPECT_TRUE(resolved.cbs.empty());
@@ -205,7 +205,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_BufferAtNonZeroArgId
     desc.kernels = {kd};
 
     Program program{desc};
-    ResolvedBindings resolved = resolve_bindings(program, desc, {buf_a.get()});
+    ResolvedBindings resolved = resolve_bindings(program, desc, std::vector<Buffer*>{buf_a.get()});
 
     ASSERT_EQ(resolved.rt_args.size(), 1u);
     EXPECT_EQ(resolved.rt_args[0].arg_idx, 1u);
@@ -226,7 +226,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_TwoBuffers_CorrectIn
     desc.kernels = {kd};
 
     Program program{desc};
-    ResolvedBindings resolved = resolve_bindings(program, desc, {buf_a.get(), buf_b.get()});
+    ResolvedBindings resolved = resolve_bindings(program, desc, std::vector<Buffer*>{buf_a.get(), buf_b.get()});
 
     ASSERT_EQ(resolved.rt_args.size(), 2u);
     // Bindings should be recorded in arg-index order.
@@ -248,7 +248,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CommonBuffer_IsCommo
     desc.kernels = {kd};
 
     Program program{desc};
-    ResolvedBindings resolved = resolve_bindings(program, desc, {buf_a.get()});
+    ResolvedBindings resolved = resolve_bindings(program, desc, std::vector<Buffer*>{buf_a.get()});
 
     ASSERT_EQ(resolved.rt_args.size(), 1u);
     const auto& b = resolved.rt_args[0];
@@ -267,7 +267,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_NoBufferArgs_Returns
     desc.kernels = {kd};
 
     Program program{desc};
-    ResolvedBindings resolved = resolve_bindings(program, desc, {});
+    ResolvedBindings resolved = resolve_bindings(program, desc, std::vector<Buffer*>{});
 
     EXPECT_TRUE(resolved.empty());
 }
@@ -284,7 +284,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ApplyResolvedBindings_PatchesPerCore
     desc.kernels = {kd};
 
     Program program{desc};
-    ResolvedBindings resolved = resolve_bindings(program, desc, {buf_a.get()});
+    ResolvedBindings resolved = resolve_bindings(program, desc, std::vector<Buffer*>{buf_a.get()});
 
     // Pre-apply: arg[0] should be buf_a's address.
     RuntimeArgsData& before = GetRuntimeArgs(program, 0, {0, 0});
@@ -292,7 +292,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ApplyResolvedBindings_PatchesPerCore
     EXPECT_EQ(before[1], 42u);  // uint32 arg unchanged
 
     // Apply with buf_b.
-    apply_resolved_bindings(program, resolved, {buf_b.get()});
+    apply_resolved_bindings(program, resolved, std::vector<Buffer*>{buf_b.get()});
 
     RuntimeArgsData& after = GetRuntimeArgs(program, 0, {0, 0});
     EXPECT_EQ(after[0], buf_b->address());
@@ -311,14 +311,14 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ApplyResolvedBindings_PatchesCommonA
     desc.kernels = {kd};
 
     Program program{desc};
-    ResolvedBindings resolved = resolve_bindings(program, desc, {buf_a.get()});
+    ResolvedBindings resolved = resolve_bindings(program, desc, std::vector<Buffer*>{buf_a.get()});
 
     // Pre-apply: common arg[1] should be buf_a's address.
     RuntimeArgsData& before = GetCommonRuntimeArgs(program, 0);
     EXPECT_EQ(before[0], 77u);
     EXPECT_EQ(before[1], buf_a->address());
 
-    apply_resolved_bindings(program, resolved, {buf_b.get()});
+    apply_resolved_bindings(program, resolved, std::vector<Buffer*>{buf_b.get()});
 
     RuntimeArgsData& after = GetCommonRuntimeArgs(program, 0);
     EXPECT_EQ(after[0], 77u);
@@ -339,16 +339,16 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ApplyResolvedBindings_RepeatedApplic
     desc.kernels = {kd};
 
     Program program{desc};
-    ResolvedBindings resolved = resolve_bindings(program, desc, {buf_a.get()});
+    ResolvedBindings resolved = resolve_bindings(program, desc, std::vector<Buffer*>{buf_a.get()});
 
-    apply_resolved_bindings(program, resolved, {buf_b.get()});
+    apply_resolved_bindings(program, resolved, std::vector<Buffer*>{buf_b.get()});
     EXPECT_EQ(GetRuntimeArgs(program, 0, {0, 0})[0], buf_b->address());
 
-    apply_resolved_bindings(program, resolved, {buf_c.get()});
+    apply_resolved_bindings(program, resolved, std::vector<Buffer*>{buf_c.get()});
     EXPECT_EQ(GetRuntimeArgs(program, 0, {0, 0})[0], buf_c->address());
 
     // Apply back to buf_a.
-    apply_resolved_bindings(program, resolved, {buf_a.get()});
+    apply_resolved_bindings(program, resolved, std::vector<Buffer*>{buf_a.get()});
     EXPECT_EQ(GetRuntimeArgs(program, 0, {0, 0})[0], buf_a->address());
 }
 
@@ -380,7 +380,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CbOnlyBuffers_Return
     });
 
     Program program{desc};
-    ResolvedBindings resolved = resolve_bindings(program, desc, {buf_l1.get()});
+    ResolvedBindings resolved = resolve_bindings(program, desc, std::vector<Buffer*>{buf_l1.get()});
 
     // No rt_arg bindings were declared, so both rt_args and cbs must be empty.
     EXPECT_TRUE(resolved.rt_args.empty());
@@ -413,7 +413,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_DuplicateBuffer_Retu
     // tensor_buffers reflects "X used twice" — the same Buffer* appears at
     // both slots.  resolve_bindings must report empty so the adapter takes
     // the slow path.
-    ResolvedBindings resolved = resolve_bindings(program, desc, {buf_a.get(), buf_a.get()});
+    ResolvedBindings resolved = resolve_bindings(program, desc, std::vector<Buffer*>{buf_a.get(), buf_a.get()});
 
     EXPECT_TRUE(resolved.empty());
     EXPECT_TRUE(resolved.rt_args.empty());
@@ -434,7 +434,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_BufferNotInTensorLis
     Program program{desc};
 
     // buf_a is not in the tensor list — should throw.
-    EXPECT_ANY_THROW(resolve_bindings(program, desc, {buf_other.get()}));
+    EXPECT_ANY_THROW(resolve_bindings(program, desc, std::vector<Buffer*>{buf_other.get()}));
 }
 
 // Regression: a scalar runtime arg whose value happens to numerically equal a
@@ -464,7 +464,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_ScalarMatchingBuffer
     desc.kernels = {kd};
 
     Program program{desc};
-    EXPECT_NO_THROW(resolve_bindings(program, desc, {buf_a.get()}));
+    EXPECT_NO_THROW(resolve_bindings(program, desc, std::vector<Buffer*>{buf_a.get()}));
 }
 
 // Regression: same idea for common runtime args.
@@ -479,7 +479,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CommonScalarMatching
     desc.kernels = {kd};
 
     Program program{desc};
-    EXPECT_NO_THROW(resolve_bindings(program, desc, {buf_a.get()}));
+    EXPECT_NO_THROW(resolve_bindings(program, desc, std::vector<Buffer*>{buf_a.get()}));
 }
 
 }  // namespace
