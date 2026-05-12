@@ -164,10 +164,38 @@ jobs:
 
       - name: Reset cards for ${{ matrix.test-group.name }}
         working-directory: /tmp
-        timeout-minutes: 10
+        timeout-minutes: 20
         run: |
-          mpirun --tag-output --pernode \
-            bash -c 'sudo ipmitool raw 0x30 0x8B 0xF 0xFF 0x0 0xF && sleep 300'
+          MAX_RECOVERY_ATTEMPTS=3
+
+          for attempt in $(seq 1 "$MAX_RECOVERY_ATTEMPTS"); do
+            echo "=== Recovery attempt $attempt of $MAX_RECOVERY_ATTEMPTS ==="
+
+            echo "--- Resetting cards with tt-smi ---"
+            if ! mpirun --pernode --tag-output tt-smi -glx_reset; then
+              echo "WARNING: Reset failed on attempt $attempt"
+            else
+              echo "--- Running cluster validation ---"
+              if mpirun --pernode --tag-output \
+                /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
+                --send-traffic \
+                --hard-fail \
+                --cabling-descriptor-path /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
+                --deployment-descriptor-path /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto \
+                --num-iterations 10; then
+                echo "SUCCESS: Recovery completed on attempt $attempt"
+                exit 0
+              fi
+            fi
+
+            if [ "$attempt" -lt "$MAX_RECOVERY_ATTEMPTS" ]; then
+              echo "Sleeping 30s before retry..."
+              sleep 30
+            fi
+          done
+
+          echo "ERROR: Recovery failed after $MAX_RECOVERY_ATTEMPTS attempts"
+          exit 1
 
       - name: Delete reset environment
         if: always()
