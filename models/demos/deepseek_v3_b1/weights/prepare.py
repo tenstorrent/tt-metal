@@ -40,7 +40,10 @@ from models.demos.deepseek_v3_b1.weights.cache import (
     SourceTensorSelection,
     TensorTarget,
 )
-from models.demos.deepseek_v3_b1.weights.cache.bspm_expert_cache import get_or_create_bspm_expert
+from models.demos.deepseek_v3_b1.weights.cache.bspm_expert_cache import (
+    get_or_create_bspm_expert,
+    get_or_create_bspm_expert_tp8,
+)
 from models.demos.deepseek_v3_b1.weights.overlap.packing import OverlappedTensor
 from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     DOWN_PROJ_SINGLE_DEVICE_SPEC,
@@ -91,7 +94,6 @@ MERGED_TP4_ATTENTION_BLOCK_SPEC = build_merged_attention_block_tp4_spec()
 MERGED_TP4_GATE_SPEC = build_gate_mm_tp4_spec()
 from models.demos.deepseek_v3_b1.weights.transforms.moe import (
     _tp_factors,
-    mlp_routed_dense_stacked_torch_for_cache,
     moe_routed_expert_torch_for_cache,
     preprocess_gate_up,
     shared_down_torch_for_cache,
@@ -133,11 +135,17 @@ class SharedExpertWeights(UploadableMixin):
 
 @dataclass
 class DenseRoutedExpertWeights(UploadableMixin):
-    """Routed expert weights for dense layers (single tensor per proj)."""
+    """Routed expert weights for dense layers (per-projection list of TP8 ``CompressedTensor``s).
 
-    routed_gate_proj: ttnn.Tensor
-    routed_up_proj: ttnn.Tensor
-    routed_down_proj: ttnn.Tensor
+    The dense MLP's routed portion (``INTERMEDIATE_SIZE - MOE_INTERMEDIATE_SIZE``) is split
+    into ``_dn_num_routed`` chunks each shaped like a single MoE routed expert, then loaded
+    through the same TP8 ``CompressedTensor`` path the MoE layers use so both feed
+    ``MoeRoutedExpertOp.setup_matmul_expert_dram``.
+    """
+
+    routed_gate_proj: list[ttnn.Tensor]
+    routed_up_proj: list[ttnn.Tensor]
+    routed_down_proj: list[ttnn.Tensor]
 
 
 # Must match MoeRoutedExpertOp.setup_dram_matmul(..., num_subblocks_k=4) for stride checks.
@@ -169,31 +177,10 @@ def _assert_moe_routed_expert_list_contiguous(tensors: list[ttnn.Tensor], name: 
     if len(tensors) < 2:
         return
 
-    # CompressedTensor wraps a ttnn.Tensor in .data — unwrap for device check.
     first = tensors[0]
-    check_tensor = first.data if isinstance(first, CompressedTensor) else first
-    if not ttnn.is_tensor_storage_on_device(check_tensor):
-        return
-
     if isinstance(first, CompressedTensor):
-        # CompressedTensor path: stride is variable-size (packed bytes), not tile-formula.
-        # Deduce expected stride from the gap between first two experts.
-        addrs = [t.buffer_address() for t in tensors]
-        stride = addrs[1] - addrs[0]
-        if stride <= 0:
-            raise AssertionError(
-                f"{name} expert DRAM addresses not strictly increasing: addrs={addrs}. "
-                "Experts may overlap or be placed out-of-order."
-            )
-        for i in range(len(tensors)):
-            expected = addrs[0] + i * stride
-            actual = addrs[i]
-            if actual != expected:
-                raise AssertionError(
-                    f"{name}[{i}] DRAM layout not contiguous for DRAMStreamingMatmul: "
-                    f"expected buffer_address {expected}, got {actual} (deduced stride {stride} bytes per expert). "
-                    "Allocate all experts of one projection in one batch before the next projection."
-                )
+        return
+    if not ttnn.is_tensor_storage_on_device(first):
         return
 
     stride = _moe_routed_expert_stride_bytes(first)
@@ -256,10 +243,11 @@ class DeepSeekV3DenseLayerWeights(UploadableMixin):
     shared_up_proj: OverlappedTensor
     shared_down_proj: ttnn.Tensor
 
-    # From get_tt_mlp_routed_expert_weights (1 DRAM expert per device)
-    routed_gate_proj: ttnn.Tensor
-    routed_up_proj: ttnn.Tensor
-    routed_down_proj: ttnn.Tensor
+    # From prepare_dense_routed_experts_compressed_tp8 (TP8 CompressedTensor list, one per chunk).
+    # Same plumbing as MoE routed experts so both feed setup_matmul_expert_dram.
+    routed_gate_proj: list[ttnn.Tensor]
+    routed_up_proj: list[ttnn.Tensor]
+    routed_down_proj: list[ttnn.Tensor]
 
 
 @dataclass
@@ -515,33 +503,6 @@ def _moe_routed_expert_tensor_target(name: str, K: int, N: int, device) -> Tenso
     )
 
 
-def _dense_routed_stacked_tensor_target(name: str, K: int, N: int, device) -> TensorTarget:
-    """TensorTarget for dense MLP routed projection (all experts stacked on mesh)."""
-    tile_w = 32
-    num_banks = device.dram_grid_size().x
-    N_padded = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
-    per_core_N = N_padded // num_banks
-    dram_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
-            )
-        }
-    )
-    shard_spec = ttnn.ShardSpec(dram_grid, [K, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
-    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
-    return TensorTarget(
-        name=name,
-        dtype=ttnn.bfloat4_b,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=mem_config,
-        tile_shape=(32, 32),
-        mesh_mapper_config=Shard2dMeshMapper(dims=(0, 1)),
-        transform_version=1,
-    )
-
-
 def deinterleave_q_b_proj(q_b_proj: torch.Tensor, num_heads: int | None = None) -> torch.Tensor:
     """Convert q_b_proj.weight from HF interleaved to [ALL_NOPE | ALL_ROPE] layout.
 
@@ -573,6 +534,11 @@ def deinterleave_q_b_proj(q_b_proj: torch.Tensor, num_heads: int | None = None) 
 def _key(layer_idx: int, suffix: str) -> str:
     """State dict key under model.layers.{layer_idx}."""
     return f"model.layers.{layer_idx}.{suffix}"
+
+
+def _device_mesh_shape(device) -> tuple[int, int]:
+    """Return ``(mesh_rows, mesh_cols)`` for ``device``, or ``(1, 1)`` for single device."""
+    return (device.shape[0], device.shape[1]) if device.get_num_devices() > 1 else (1, 1)
 
 
 def create_gate_bias_tensor(raw_tensor: torch.Tensor, device, *, move_to_device: bool = False) -> ttnn.Tensor:
@@ -728,7 +694,7 @@ def prepare_attention_weights(
 ) -> AttentionWeights:
     """Prepare attention fusion groups for one layer (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms)."""
     if cache_config is None:
-        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
+        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device, mesh_shape=_device_mesh_shape(device))
     mla_tp, _ = _tp_factors(device)
     mesh_shape = (device.shape[0], device.shape[1]) if device.get_num_devices() > 1 else (1, 1)
 
@@ -1055,7 +1021,7 @@ def prepare_shared_expert_weights(
 ) -> SharedExpertWeights:
     """Prepare shared expert weights (gate_up fusion group + shared_down_proj) for one layer."""
     if cache_config is None:
-        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
+        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device, mesh_shape=_device_mesh_shape(device))
     logger.debug("Converting shared expert weights for layer {} (is_moe={})", layer_idx, is_moe)
     t0 = time.perf_counter()
     _, moe_tp = _tp_factors(device)
@@ -1258,6 +1224,316 @@ def prepare_moe_routed_experts_bspm(
     return routed
 
 
+def prepare_moe_routed_experts_bspm_tp8(
+    device,
+    state_dict: dict[str, torch.Tensor],
+    layer_idx: int,
+    num_routed_experts: int,
+    num_banks: int,
+    mesh_shape: tuple[int, int],
+    *,
+    bspm_path: Path | None = None,
+    bspm_variant: BspmVariant = BspmVariant.B,
+    bspm_budget: float = 3.5,
+    cache_config: CacheConfig | None = None,
+    move_to_device: bool,
+) -> MoERoutedExpertWeights:
+    """Upload MoE routed experts as TP8-sharded CompressedTensor objects.
+
+    When ``bspm_path`` exists, its mixed-precision assignments are sliced into the
+    same TP8 layout as the weights.  When ``bspm_path is None`` the helper falls
+    back to a uniform BFP4 assignment (matching the previous compressed TP8
+    path).  When ``bspm_path`` is supplied but the file does not exist, this
+    function raises :class:`FileNotFoundError` rather than silently falling back —
+    silent fallback would let a misconfigured ``--bspm-dir`` quietly degrade to
+    uniform BFP4.
+
+    Caching
+    -------
+    Every ``(layer, expert, projection)`` is keyed individually in
+    ``cache_config.cache``.  Subsequent runs with the same BSPM file and the
+    same mesh layout skip slicing/packing and load directly from the on-disk
+    compact-tile blob (``tiles.bin`` + ``assignment.npy``) under
+    ``cache_root/objects/<id[:2]>/<id>/``.
+
+    Each fingerprint comprises:
+
+    - ``source`` — the HF state-dict key for that expert/projection.
+    - ``mesh_shape`` (carried by :class:`Fingerprint`) — differentiates
+      single-device, 4×2, 2×4, etc., so caches built for different mesh
+      topologies never collide.
+    - :class:`CompressedTensorTarget` with:
+
+      - ``name`` — ``routed_<gate|up|down>_proj`` (implicitly captures
+        ``shard_dim`` since gate/up are column-parallel and down is
+        row-parallel).
+      - ``K`` — *flattened* TP8 storage K, i.e.
+        ``mesh_rows*mesh_cols*K_per_device``.  TP8 weights are written to
+        the cache as a 2D ``(K_flat, N_padded_per_device)`` blob so they fit
+        the existing compact-tile pack/unpack primitives; the 4D mesh shape
+        is reconstructed at load time inside
+        :func:`get_or_create_bspm_expert_tp8`'s ``reconstruct`` callback.
+      - ``N_padded`` — *per-device* ``N_padded_per_device`` (matches the
+        per-rank :class:`MemoryConfig` used to upload to each device).
+      - ``num_banks`` — ``device.dram_grid_size().x``.
+      - ``bspm_variant``, ``bspm_budget`` — the BSPM allocation parameters.
+      - ``assignment_hash`` — sha256[:16] of the *full logical* assignment
+        ``(K_tiles, N_padded_full_tiles)`` for that expert/projection.  This
+        invalidates the cache entry whenever bit_sculpt produces a new BSPM
+        for the same expert at the same budget.
+
+    Uniform-BFP4 experts share a single cache entry per projection (same
+    assignment, same hash), so the per-layer disk footprint collapses
+    dramatically when ``bspm_path is None``.
+    """
+    if cache_config is None:
+        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device, mesh_shape=_device_mesh_shape(device))
+
+    tile_w = 32
+    bspm_data = None
+    if bspm_path is not None:
+        bspm_path = Path(bspm_path)
+        if not bspm_path.exists():
+            raise FileNotFoundError(
+                f"BSPM file required for layer {layer_idx} but not found: {bspm_path}. "
+                f"Pass bspm_path=None to use uniform BFP4 fallback."
+            )
+        logger.info("Loading BSPM for layer {}: {}", layer_idx, bspm_path)
+        bspm_data = load_bspm_for_layer(str(bspm_path))
+        logger.info("  BSPM TP8 mixed-precision compression for {} experts", bspm_data["n_experts"])
+
+    # (proj_name, shard_dim, subblock_k, subblock_n) — must match the kernel's
+    # DRAM read pattern in setup_matmul_expert_dram.
+    # - gate/up use K-split (k_parallel_per_bank=2): subblock_k=112 = Kt//k_parallel
+    #   = 224//2 so each K-slice's tiles are contiguous in DRAM.
+    # - down_proj uses gather mode (cores_per_dram_bank=2, no K-split): subblock_k=None
+    #   defaults to K_tiles (no K-slice grouping); subblock_n=7 matches the gather
+    #   kernel's per-iteration block read (per_core_N=28, num_subblocks_n=4 → 7).
+    proj_specs = [
+        ("gate_proj", 1, 112, 1),
+        ("up_proj", 1, 112, 1),
+        ("down_proj", 0, None, 7),
+    ]
+
+    mesh_rows, mesh_cols = mesh_shape
+    tp = mesh_rows * mesh_cols
+
+    results: list[list[CompressedTensor]] = [[], [], []]
+    for proj_idx, (proj_name, shard_dim, proj_subblock_k, proj_subblock_n) in enumerate(proj_specs):
+        keys = [_key(layer_idx, f"mlp.experts.{e}.{proj_name}.weight") for e in range(num_routed_experts)]
+        sample_w = state_dict[keys[0]]
+        K, N = sample_w.shape[1], sample_w.shape[0]
+        if shard_dim == 1:
+            if N % tp != 0:
+                raise ValueError(f"{proj_name} N={N} must be divisible by tp={tp}")
+            K_per_device = K
+            per_device_N = N // tp
+            N_padded_per_device = ((per_device_N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (
+                num_banks * tile_w
+            )
+        else:
+            if K % tp != 0:
+                raise ValueError(f"{proj_name} K={K} must be divisible by tp={tp}")
+            K_per_device = K // tp
+            N_padded_per_device = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+
+        target_name = f"routed_{proj_name}"
+        K_flat = tp * K_per_device  # cache stores TP8 weights as 2D-flattened mesh
+
+        # Build per-expert logical assignments (pre-slice, pre-shuffle).
+        # BSPM assignments are pre-padded to N_padded_full so the helper can pad-then-slice cleanly.
+        N_padded_full = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+        tiles_h_full = K // tile_w
+        tiles_w_full_padded = N_padded_full // tile_w
+
+        if bspm_data is not None:
+            if num_routed_experts > bspm_data["n_experts"]:
+                raise ValueError(f"Requested {num_routed_experts} experts, but BSPM only has {bspm_data['n_experts']}")
+            all_assignments = [
+                np.ascontiguousarray(bspm_data["codes"][e, proj_idx].reshape(tiles_w_full_padded, tiles_h_full).T)
+                for e in range(num_routed_experts)
+            ]
+        else:
+            # Uniform fallback: shape matches what the helper would synthesize from `assignment=None`.
+            uniform_assignment = np.ones((tiles_h_full, N // tile_w), dtype=np.int8)
+            all_assignments = [uniform_assignment] * num_routed_experts
+
+        for e, key in enumerate(keys):
+            assignment_logical = all_assignments[e]
+            assignment_hash = hashlib.sha256(np.ascontiguousarray(assignment_logical).tobytes()).hexdigest()[:16]
+            tgt = CompressedTensorTarget(
+                name=target_name,
+                K=K_flat,
+                N_padded=N_padded_per_device,
+                num_banks=num_banks,
+                bspm_variant=bspm_variant,
+                bspm_budget=bspm_budget,
+                assignment_hash=assignment_hash,
+            )
+            fp = cache_config.context.fingerprint(
+                source=SourceTensorSelection(names=(key,)),
+                target=tgt,
+            )
+            ct = get_or_create_bspm_expert_tp8(
+                cache_config.cache,
+                fp,
+                device,
+                raw_tensors=lambda _k=key: {_k: state_dict[_k]},
+                preprocess=lambda tensors, _k=key, _a=assignment_logical: CompressedTensorBuildInputs(
+                    w=tensors[_k].T.contiguous().float().numpy(),
+                    assignment=_a,
+                ),
+                mesh_shape=mesh_shape,
+                shard_dim=shard_dim,
+                K_per_device=K_per_device,
+                N_padded_per_device=N_padded_per_device,
+                subblock_k=proj_subblock_k,
+                subblock_n=proj_subblock_n,
+                move_to_device=move_to_device,
+            )
+            results[proj_idx].append(ct)
+            if (e + 1) % 32 == 0:
+                mode = "BSPM TP8" if bspm_data is not None else "compressed TP8 (uniform)"
+                logger.info("  {}: uploaded {}/{} experts ({})", proj_name, e + 1, num_routed_experts, mode)
+
+    routed = MoERoutedExpertWeights(
+        routed_gate_proj=results[0],
+        routed_up_proj=results[1],
+        routed_down_proj=results[2],
+    )
+    if move_to_device:
+        routed.validate_contiguous_dram()
+    return routed
+
+
+def prepare_dense_routed_experts_compressed_tp8(
+    device,
+    state_dict: dict[str, torch.Tensor],
+    layer_idx: int,
+    *,
+    num_banks: int,
+    mesh_shape: tuple[int, int],
+    cache_config: CacheConfig,
+    move_to_device: bool,
+) -> DenseRoutedExpertWeights:
+    """TP8 ``CompressedTensor`` list for the dense-layer MLP routed portion (8 chunks / proj).
+
+    Dense layers (``layer_idx < first_k_dense_replace``) split their MLP into a shared
+    portion (first ``MOE_INTERMEDIATE_SIZE`` cols/rows) and a routed portion sized
+    ``INTERMEDIATE_SIZE - MOE_INTERMEDIATE_SIZE = _dn_num_routed * MOE_INTERMEDIATE_SIZE``.
+    Each chunk has the exact shape of one MoE routed expert (gate/up:
+    ``K=HIDDEN_SIZE, N=MOE_INTERMEDIATE_SIZE``; down: ``K=MOE_INTERMEDIATE_SIZE,
+    N=HIDDEN_SIZE``), so we treat each chunk as a uniform-BFP4 routed expert and reuse
+    the same TP8 ``get_or_create_bspm_expert_tp8`` plumbing the MoE path uses.
+
+    Returning 8 chunks per projection — instead of one CT covering the full routed
+    portion — matches MoE TP8's per-device matmul shape exactly: ``per_core_n = 1``
+    tile per chunk (vs. ``8`` for a single full-routed CT), so L1 in1+fmt buffers fit
+    in the same budget MoE uses. ``num_active_experts = len(cts_list) = 8`` when
+    ``enable_routing=False``; the kernel then iterates 8 sequential expert slots.
+    Note that the unified TP8 matmul kernel still reads expert IDs from
+    ``index_l1_addr`` and waits on ``cb_index`` even with ``enable_routing=False`` —
+    callers must populate those (e.g. via a hardcoded indices tensor) for the dense
+    path to actually run end-to-end.
+    """
+    tile_w = 32
+    _dn_shared = D.MOE_INTERMEDIATE_SIZE
+    _dn_num_routed = (D.INTERMEDIATE_SIZE - D.MOE_INTERMEDIATE_SIZE) // D.MOE_INTERMEDIATE_SIZE
+    _dn_expert_n = D.MOE_INTERMEDIATE_SIZE
+
+    # (proj_name, K, N, shard_dim, subblock_n) — same per-chunk shape as a MoE routed
+    # expert and same kernel subblock layout: gate/up subblock_n=1 (per_core_N=1 tile
+    # per device per chunk), down subblock_n=7 (per_core_N=28 tiles, num_subblocks_n=4).
+    proj_specs = [
+        ("gate_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, 1, 1),
+        ("up_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, 1, 1),
+        ("down_proj", _ROUTED_DOWN_K, _ROUTED_DOWN_N, 0, 7),
+    ]
+
+    mesh_rows, mesh_cols = mesh_shape
+    tp = mesh_rows * mesh_cols
+
+    results: list[list[CompressedTensor]] = [[], [], []]
+    for proj_idx, (proj_name, K, N, shard_dim, proj_subblock_n) in enumerate(proj_specs):
+        proj_key = _key(layer_idx, f"mlp.{proj_name}.weight")
+
+        if shard_dim == 1:
+            if N % tp != 0:
+                raise ValueError(f"dense {proj_name} chunk N={N} must be divisible by tp={tp}")
+            K_per_device = K
+            per_device_N = N // tp
+            N_padded_per_device = ((per_device_N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (
+                num_banks * tile_w
+            )
+        else:
+            if K % tp != 0:
+                raise ValueError(f"dense {proj_name} chunk K={K} must be divisible by tp={tp}")
+            K_per_device = K // tp
+            N_padded_per_device = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+
+        K_flat = tp * K_per_device
+
+        # Uniform-BFP4 assignment shared across all chunks of one projection.
+        tiles_h_full = K // tile_w
+        uniform_assignment = np.ones((tiles_h_full, N // tile_w), dtype=np.int8)
+        assignment_hash = hashlib.sha256(np.ascontiguousarray(uniform_assignment).tobytes()).hexdigest()[:16]
+
+        for chunk_idx in range(_dn_num_routed):
+            tgt = CompressedTensorTarget(
+                name=f"dense_routed_{proj_name}_chunk{chunk_idx}",
+                K=K_flat,
+                N_padded=N_padded_per_device,
+                num_banks=num_banks,
+                assignment_hash=assignment_hash,
+            )
+            fp = cache_config.context.fingerprint(
+                source=SourceTensorSelection(names=(proj_key,)),
+                target=tgt,
+            )
+
+            def _preprocess(
+                tensors: dict[str, torch.Tensor],
+                _ci: int = chunk_idx,
+                _pn: str = proj_name,
+                _k: str = proj_key,
+                _a: np.ndarray = uniform_assignment,
+            ) -> CompressedTensorBuildInputs:
+                # HF stores Linear weight as (out_features, in_features); .T gives (K, N).
+                full_kn = tensors[_k].T.contiguous()
+                if _pn == "down_proj":
+                    # down: (K_full=shared+8*expert_n, N=HIDDEN_SIZE). Skip shared, slice chunk along K.
+                    chunk_kn = full_kn[
+                        _dn_shared + _ci * _dn_expert_n : _dn_shared + (_ci + 1) * _dn_expert_n, :
+                    ].contiguous()
+                else:
+                    # gate/up: (K=HIDDEN_SIZE, N_full=shared+8*expert_n). Skip shared, slice chunk along N.
+                    chunk_kn = full_kn[
+                        :, _dn_shared + _ci * _dn_expert_n : _dn_shared + (_ci + 1) * _dn_expert_n
+                    ].contiguous()
+                return CompressedTensorBuildInputs(w=chunk_kn.float().numpy(), assignment=_a)
+
+            ct = get_or_create_bspm_expert_tp8(
+                cache_config.cache,
+                fp,
+                device,
+                raw_tensors=lambda _k=proj_key: {_k: state_dict[_k]},
+                preprocess=_preprocess,
+                mesh_shape=mesh_shape,
+                shard_dim=shard_dim,
+                K_per_device=K_per_device,
+                N_padded_per_device=N_padded_per_device,
+                subblock_n=proj_subblock_n,
+                move_to_device=move_to_device,
+            )
+            results[proj_idx].append(ct)
+
+    return DenseRoutedExpertWeights(
+        routed_gate_proj=results[0],
+        routed_up_proj=results[1],
+        routed_down_proj=results[2],
+    )
+
+
 def prepare_routed_expert_weights(
     device,
     state_dict: dict[str, torch.Tensor],
@@ -1270,6 +1546,7 @@ def prepare_routed_expert_weights(
     bspm_dir: Path | None = None,
     bspm_variant: BspmVariant = BspmVariant.B,
     bspm_budget: float = 3.5,
+    compressed_tp8: bool = False,
 ) -> DenseRoutedExpertWeights | MoERoutedExpertWeights:
     """Prepare routed expert weights for one layer (dense: single MLP; MoE: num_routed_experts experts).
 
@@ -1282,12 +1559,11 @@ def prepare_routed_expert_weights(
     TensorCache (variable-length tiles, no DRAM padding).
     """
     if cache_config is None:
-        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
+        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device, mesh_shape=_device_mesh_shape(device))
     num_banks = device.dram_grid_size().x
     mesh_shape = (device.shape[0], device.shape[1]) if device.get_num_devices() > 1 else (1, 1)
     if is_moe:
-        # --- BSPM path (TensorCache-backed via CompressedTensorTarget) ---
-        bspm_data = None
+        bspm_path = None
         if bspm_dir is not None:
             bspm_path = (
                 Path(bspm_dir)
@@ -1295,14 +1571,34 @@ def prepare_routed_expert_weights(
                 / "precision_eval"
                 / f"precision_map_{bspm_variant}_{bspm_budget:.1f}.bspm"
             )
-            if bspm_path.exists():
-                logger.info("Loading BSPM for layer {}: {}", layer_idx, bspm_path)
-                bspm_data = load_bspm_for_layer(str(bspm_path))
-                logger.info("  BSPM mixed-precision compression for {} experts", bspm_data["n_experts"])
-            else:
-                logger.debug("BSPM not found for layer {}, using uniform bfloat4_b", layer_idx)
+            if not bspm_path.exists():
+                raise FileNotFoundError(
+                    f"BSPM file required for MoE layer {layer_idx} but not found: {bspm_path}. "
+                    f"Pass bspm_dir=None (or omit --bspm-dir) to use uniform BFP4 fallback."
+                )
+            logger.info("Loading BSPM for layer {}: {}", layer_idx, bspm_path)
 
-        if bspm_data is not None:
+        # --- BSPM-or-uniform CompressedTensor TP8 path ---
+        if compressed_tp8:
+            return prepare_moe_routed_experts_bspm_tp8(
+                device=device,
+                state_dict=state_dict,
+                layer_idx=layer_idx,
+                num_routed_experts=num_routed_experts,
+                num_banks=num_banks,
+                mesh_shape=mesh_shape,
+                bspm_path=bspm_path,
+                bspm_variant=bspm_variant,
+                bspm_budget=bspm_budget,
+                cache_config=cache_config,
+                move_to_device=move_to_device,
+            )
+
+        # --- Legacy BSPM path (full expert, non-TP8) ---
+        if bspm_path is not None:
+            logger.info("Loading BSPM for layer {}: {}", layer_idx, bspm_path)
+            bspm_data = load_bspm_for_layer(str(bspm_path))
+            logger.info("  BSPM mixed-precision compression for {} experts", bspm_data["n_experts"])
             return prepare_moe_routed_experts_bspm(
                 device=device,
                 state_dict=state_dict,
@@ -1320,6 +1616,16 @@ def prepare_routed_expert_weights(
         tgt_gate = _moe_routed_expert_tensor_target("routed_gate_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, device)
         tgt_up = _moe_routed_expert_tensor_target("routed_up_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, device)
         tgt_down = _moe_routed_expert_tensor_target("routed_down_proj", _ROUTED_DOWN_K, _ROUTED_DOWN_N, device)
+
+        def _preprocess_gate(t: dict[str, torch.Tensor], k: str) -> torch.Tensor:
+            return moe_routed_expert_torch_for_cache(t[k].T.contiguous(), num_banks)
+
+        def _preprocess_up(t: dict[str, torch.Tensor], k: str) -> torch.Tensor:
+            return moe_routed_expert_torch_for_cache(t[k].T.contiguous(), num_banks)
+
+        def _preprocess_down(t: dict[str, torch.Tensor], k: str) -> torch.Tensor:
+            return moe_routed_expert_torch_for_cache(t[k].T.contiguous(), num_banks)
+
         routed_gate_proj: list[ttnn.Tensor] = []
         routed_up_proj: list[ttnn.Tensor] = []
         routed_down_proj: list[ttnn.Tensor] = []
@@ -1333,9 +1639,7 @@ def prepare_routed_expert_weights(
                 fp_g,
                 device,
                 move_to_device=move_to_device,
-                preprocess=lambda t, _gk=gk: {
-                    "routed_gate_proj": moe_routed_expert_torch_for_cache(t[_gk].T.contiguous(), num_banks)
-                },
+                preprocess=lambda t, _gk=gk: {"routed_gate_proj": _preprocess_gate(t, _gk)},
                 raw_tensors=lambda _gk=gk: {_gk: state_dict[_gk]},
             )
             if not isinstance(gw, ttnn.Tensor):
@@ -1351,9 +1655,7 @@ def prepare_routed_expert_weights(
                 fp_u,
                 device,
                 move_to_device=move_to_device,
-                preprocess=lambda t, _uk=uk: {
-                    "routed_up_proj": moe_routed_expert_torch_for_cache(t[_uk].T.contiguous(), num_banks)
-                },
+                preprocess=lambda t, _uk=uk: {"routed_up_proj": _preprocess_up(t, _uk)},
                 raw_tensors=lambda _uk=uk: {_uk: state_dict[_uk]},
             )
             if not isinstance(uw, ttnn.Tensor):
@@ -1369,9 +1671,7 @@ def prepare_routed_expert_weights(
                 fp_d,
                 device,
                 move_to_device=move_to_device,
-                preprocess=lambda t, _dk=dk: {
-                    "routed_down_proj": moe_routed_expert_torch_for_cache(t[_dk].T.contiguous(), num_banks)
-                },
+                preprocess=lambda t, _dk=dk: {"routed_down_proj": _preprocess_down(t, _dk)},
                 raw_tensors=lambda _dk=dk: {_dk: state_dict[_dk]},
             )
             if not isinstance(dw, ttnn.Tensor):
@@ -1386,78 +1686,14 @@ def prepare_routed_expert_weights(
             routed.validate_contiguous_dram()
         return routed
     else:
-        gate_k = _key(layer_idx, "mlp.gate_proj.weight")
-        up_k = _key(layer_idx, "mlp.up_proj.weight")
-        down_k = _key(layer_idx, "mlp.down_proj.weight")
-        tgt_g = _dense_routed_stacked_tensor_target("routed_gate_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, device)
-        tgt_u = _dense_routed_stacked_tensor_target("routed_up_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, device)
-        tgt_d = _dense_routed_stacked_tensor_target("routed_down_proj", _ROUTED_DOWN_K, _ROUTED_DOWN_N, device)
-
-        fp_g = cache_config.context.fingerprint(
-            source=SourceTensorSelection(names=(gate_k,)),
-            target=tgt_g,
-        )
-
-        _dn_shared = D.MOE_INTERMEDIATE_SIZE
-        _dn_num_routed = (D.INTERMEDIATE_SIZE - D.MOE_INTERMEDIATE_SIZE) // D.MOE_INTERMEDIATE_SIZE
-        _dn_expert_n = D.MOE_INTERMEDIATE_SIZE
-
-        def _pre_routed_gate(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-            mg = t[gate_k].T.contiguous()
-            ge = mg[:, _dn_shared:].reshape(mg.shape[0], _dn_num_routed, _dn_expert_n).permute(1, 0, 2).contiguous()
-            return {"routed_gate_proj": mlp_routed_dense_stacked_torch_for_cache(ge, num_banks, mesh_shape)}
-
-        fp_u = cache_config.context.fingerprint(
-            source=SourceTensorSelection(names=(up_k,)),
-            target=tgt_u,
-        )
-
-        def _pre_routed_up(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-            mu = t[up_k].T.contiguous()
-            ue = mu[:, _dn_shared:].reshape(mu.shape[0], _dn_num_routed, _dn_expert_n).permute(1, 0, 2).contiguous()
-            return {"routed_up_proj": mlp_routed_dense_stacked_torch_for_cache(ue, num_banks, mesh_shape)}
-
-        fp_d = cache_config.context.fingerprint(
-            source=SourceTensorSelection(names=(down_k,)),
-            target=tgt_d,
-        )
-
-        def _pre_routed_down(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-            md = t[down_k].T.contiguous()
-            de = md[_dn_shared:, :].reshape(_dn_num_routed, _dn_expert_n, md.shape[1]).contiguous()
-            return {"routed_down_proj": mlp_routed_dense_stacked_torch_for_cache(de, num_banks, mesh_shape)}
-
-        routed_gate_proj = cache_config.cache.get_or_create(
-            fp_g,
-            device,
+        return prepare_dense_routed_experts_compressed_tp8(
+            device=device,
+            state_dict=state_dict,
+            layer_idx=layer_idx,
+            num_banks=num_banks,
+            mesh_shape=mesh_shape,
+            cache_config=cache_config,
             move_to_device=move_to_device,
-            preprocess=_pre_routed_gate,
-            raw_tensors=lambda: {gate_k: state_dict[gate_k]},
-        )
-        routed_up_proj = cache_config.cache.get_or_create(
-            fp_u,
-            device,
-            move_to_device=move_to_device,
-            preprocess=_pre_routed_up,
-            raw_tensors=lambda: {up_k: state_dict[up_k]},
-        )
-        routed_down_proj = cache_config.cache.get_or_create(
-            fp_d,
-            device,
-            move_to_device=move_to_device,
-            preprocess=_pre_routed_down,
-            raw_tensors=lambda: {down_k: state_dict[down_k]},
-        )
-        if not isinstance(routed_gate_proj, ttnn.Tensor):
-            raise TypeError("expected ttnn.Tensor for dense routed_gate_proj cache entry")
-        if not isinstance(routed_up_proj, ttnn.Tensor):
-            raise TypeError("expected ttnn.Tensor for dense routed_up_proj cache entry")
-        if not isinstance(routed_down_proj, ttnn.Tensor):
-            raise TypeError("expected ttnn.Tensor for dense routed_down_proj cache entry")
-        return DenseRoutedExpertWeights(
-            routed_gate_proj=routed_gate_proj,
-            routed_up_proj=routed_up_proj,
-            routed_down_proj=routed_down_proj,
         )
 
 
@@ -1542,6 +1778,7 @@ def prepare_moe_layer_weights(
     sram_assigner: CompressedTensorAssigner | None = None,
     worker_l1_size: int | None = None,
     combined_attn_sram_cap_bytes: int = _COMBINED_ATTN_SRAM_CAP_BYTES,
+    compressed_tp8: bool = False,
 ) -> DeepSeekV3MoELayerWeights:
     """Prepare fused weights for a single MoE decoder layer.
 
@@ -1595,6 +1832,7 @@ def prepare_moe_layer_weights(
         bspm_dir=bspm_dir,
         bspm_variant=bspm_variant,
         bspm_budget=bspm_budget,
+        compressed_tp8=compressed_tp8,
     )
     assert isinstance(attn.gate_mm, OverlappedTensor)
     assert attn.gate_bias is not None
@@ -1716,7 +1954,7 @@ def prepare_embedding_weights(
 ) -> DeepSeekV3EmbeddingLayerWeights:
     """Prepare embedding weights from state dict (model.embed_tokens.weight)."""
     if cache_config is None:
-        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
+        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device, mesh_shape=_device_mesh_shape(device))
     logger.info("Preparing embedding weights...")
     _src_key = "model.embed_tokens.weight"
 
@@ -1756,7 +1994,7 @@ def prepare_lm_head_weights(
     sampling op: WIDTH_SHARDED in L1 across 101 matmul cores with shard shape (7168, N_per_core).
     """
     if cache_config is None:
-        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
+        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device, mesh_shape=_device_mesh_shape(device))
     logger.info("Preparing LM head weights...")
     _lm_key = "lm_head.weight"
     _norm_key = "model.norm.weight"
@@ -1875,7 +2113,7 @@ def prepare_mtp_weights(
     layer handled through ``prepare_moe_layer_weights``.
     """
     if cache_config is None:
-        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
+        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device, mesh_shape=_device_mesh_shape(device))
     logger.info("Preparing MTP weights (layer {})...", mtp_layer_idx)
     t0 = time.perf_counter()
 

@@ -330,6 +330,7 @@ class CompressedTensor:
         assignment_memory_config=None,
         tile_hw: int = DEFAULT_TILE_HW,
         min_shard_bytes: int = 0,
+        mesh_mapper_config=None,
         keep_packed_data: bool = False,
     ) -> CompressedTensor:
         """Create CompressedTensor from a pre-computed BSPM assignment.
@@ -345,6 +346,7 @@ class CompressedTensor:
             assignment_memory_config=assignment_memory_config,
             tile_hw=tile_hw,
             min_shard_bytes=min_shard_bytes,
+            mesh_mapper_config=mesh_mapper_config,
             keep_packed_data=keep_packed_data,
         )
 
@@ -830,10 +832,11 @@ class CompressedTensor:
         # Single-device path historically rounded up to ``alignment`` even
         # when the global max was smaller; preserve that floor so warm-load
         # tensors land at byte-identical sizes.
-        if self._num_devices == 1:
-            self.max_shard_size = max(_align(global_max, alignment), alignment)
-        else:
-            self.max_shard_size = _align(global_max, alignment)
+        # Defensive floor for multi-device: if every shard is empty (e.g.
+        # all-bfp0 assignment), _align(0, alignment) = 0 which would yield
+        # page_size 0 in the C++ buffer path and SIGFPE. Match _pack_single_device
+        # by ensuring at least `alignment`.
+        self.max_shard_size = max(_align(global_max, alignment), alignment)
 
         logical_shape = ttnn.Shape(list(self.shape))
         self.spec = ttnn.TensorSpec(logical_shape, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, memory_config.buffer_type)
