@@ -13,7 +13,30 @@ Composes existing TT submodules from this experimental folder; no Torch fallback
 
 from __future__ import annotations
 
+import importlib.util
+import sys
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
+
+
+# Load ``fp8_dequantize_compat`` by path so we do not import ``devstral_utils`` package ``__init__``
+# (which pulls ``multimodal_demo_helpers`` and would circular-import this module).
+def _ensure_fp8_scalar_compat() -> None:
+    _mod_name = "_devstarl2_fp8_dequantize_compat_exec"
+    if _mod_name in sys.modules:
+        sys.modules[_mod_name].apply_fp8_dequantize_compat()
+        return
+    _path = Path(__file__).resolve().parent.parent / "devstral_utils" / "fp8_dequantize_compat.py"
+    _spec = importlib.util.spec_from_file_location(_mod_name, _path)
+    if _spec is None or _spec.loader is None:
+        return
+    _mod = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    sys.modules[_mod_name] = _mod
+    _mod.apply_fp8_dequantize_compat()
+
+
+_ensure_fp8_scalar_compat()
 
 import ttnn
 
