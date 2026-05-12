@@ -37,8 +37,9 @@ Run from the repo root:
 python models/demos/time_series_transformer/scripts/save_reference_tensors.py
 ```
 
-Generated files appear in `reference/` and include all encoder/decoder
-intermediate outputs for PCC validation against the TTNN port.
+Generated files appear in `reference/` and include the encoder output,
+per-layer attention/FC1/FC2 tensors, and final `loc`, `scale`, and
+`static_features` for PCC validation against the TTNN port.
 
 Model pinned to revision `2a40ad41f6ffe61e7bef6099b08c6c2fce36ac35`.
 Dataset pinned to revision `81c7ee3cf3317e51beb97327df55926cd5bbfadb`.
