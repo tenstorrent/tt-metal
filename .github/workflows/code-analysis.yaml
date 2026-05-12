@@ -215,7 +215,7 @@ jobs:
       scan-targets: 'tt-train'
 
   clang-tidy-incremental-catchall:
-    name:  🤖 Clang Tidy (catchall)
+    name: 🤖 Clang Tidy (catchall)
     needs: [ build-docker-image, determine-scan-type ]
     if: >-
       ${{ always() && !failure() && !cancelled() &&
