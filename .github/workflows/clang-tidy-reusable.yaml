@@ -30,10 +30,10 @@ on:
 
 jobs:
   clang-tidy:
-    name: "🤖 Clang Tidy ${{ inputs.scan-targets && format('({0})', inputs.scan-targets) || '' }}"
+    name: 🤖 Clang Tidy ${{ inputs.scan-targets && format('({0})', inputs.scan-targets) || '' }}
     timeout-minutes: 240
     runs-on: tt-ubuntu-2204-xlarge-stable
-    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || 'ccache-kernel-redis-test' }}
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.ci-build-docker-image }}
       env:
@@ -76,7 +76,7 @@ jobs:
           )
           CCACHE_REMOTE_STORAGE=$(IFS=''; echo "${CCACHE_PARTS[*]}")
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
-          echo "CCACHE_REMOTE_STORAGE: (set)"
+          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
 
       - name: Configure ctcache
         # Same fork gate as ccache: forks have no secrets so skip silently.
