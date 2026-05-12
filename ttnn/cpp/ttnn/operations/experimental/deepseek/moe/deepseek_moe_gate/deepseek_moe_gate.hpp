@@ -16,8 +16,8 @@ std::tuple<tt::tt_metal::Tensor, tt::tt_metal::Tensor> deepseek_moe_gate(
     const tt::tt_metal::Tensor& input_tensor,
     const tt::tt_metal::Tensor& bias_tensor,
     const tt::tt_metal::Tensor& input_indices_tensor,
-    tt::tt_metal::Tensor& output_tensor,
-    tt::tt_metal::Tensor& output_indices_tensor,
+    const tt::tt_metal::Tensor& output_tensor,
+    const tt::tt_metal::Tensor& output_indices_tensor,
     float eps,
     float scaling_factor,
     bool enable_sigmoid);
