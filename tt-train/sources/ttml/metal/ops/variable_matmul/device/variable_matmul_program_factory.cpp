@@ -248,8 +248,8 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     std::vector<uint32_t> in0_sender_compile_time_args = {
         actual_M_tiles,                      // 0: M_tiles (unused by kernel, kept for arg layout compat)
         actual_padded_M_tiles,               // 1: padded_M_tiles (max)
-        K_tiles,                             // 2: K_tiles
-        padded_K_tiles,                      // 3: padded_K_tiles
+        0U,                                  // 2: K_tiles (unused, kept for layout compat; RT-driven)
+        0U,                                  // 3: padded_K_tiles (unused; RT-derived)
         N_tiles,                             // 4: N_tiles
         padded_N_tiles,                      // 5: padded_N_tiles
         M_block_tiles,                       // 6: M_block_tiles
@@ -292,8 +292,8 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     std::vector<uint32_t> in0_receiver_compile_time_args = {
         actual_M_tiles,
         actual_padded_M_tiles,
-        K_tiles,
-        padded_K_tiles,
+        0U,  // K_tiles (RT-driven)
+        0U,  // padded_K_tiles (RT-derived)
         N_tiles,
         padded_N_tiles,
         M_block_tiles,
@@ -331,8 +331,8 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     std::vector<uint32_t> in1_sender_compile_time_args = {
         actual_M_tiles,
         actual_padded_M_tiles,
-        K_tiles,
-        padded_K_tiles,
+        0U,  // K_tiles (RT-driven)
+        0U,  // padded_K_tiles (RT-derived)
         N_tiles,
         padded_N_tiles,
         M_block_tiles,
@@ -368,8 +368,8 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     std::vector<uint32_t> in1_receiver_compile_time_args = {
         actual_M_tiles,
         actual_padded_M_tiles,
-        K_tiles,
-        padded_K_tiles,
+        0U,  // K_tiles (RT-driven)
+        0U,  // padded_K_tiles (RT-derived)
         N_tiles,
         padded_N_tiles,
         M_block_tiles,
@@ -403,7 +403,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
 
     // ----- Compute kernel -----
     std::vector<uint32_t> compute_compile_time_args = {
-        K_blocks,                            // 0: K_num_blocks
+        0U,                                  // 0: K_num_blocks (RT-driven)
         M_block_tiles,                       // 1: M_block_tiles
         K_block_tiles,                       // 2: K_block_tiles
         N_block_tiles,                       // 3: N_block_tiles
@@ -512,6 +512,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         // 19: in0_k_offset_tiles        (offset into parent input's K axis, in tiles)
         // 20: parent_K_tiles_stride     (parent K tile count; used as M-row stride for non-transpose)
         // 21: out_row_offset_tiles      (write-at-offset on output parent)
+        // 22: K_tiles                   (variable-K: matmul-K extent in tiles)
         std::vector<uint32_t> in0_args = {
             in0_addr,
             0U,  // in2_addr (no bias)
@@ -535,6 +536,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
             operation_attributes.in0_k_offset_tiles,
             parent_K_tiles_in0,
             operation_attributes.out_row_offset_tiles,
+            K_tiles,
         };
 
         if (in1_idx == 0) {
@@ -563,6 +565,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         // 16: in1_k_offset_tiles    (offset into parent weight's K axis, in tiles)
         // 17: parent_K_tiles_in1    (parent K tile count; row stride for transpose_b)
         // 18: out_row_offset_tiles  (write-at-offset on output parent)
+        // 19: K_tiles               (variable-K: matmul-K extent in tiles)
         std::vector<uint32_t> in1_args = {
             in1_addr,
             0U,  // in2_addr (no bias)
@@ -583,6 +586,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
             operation_attributes.in1_k_offset_tiles,
             parent_K_tiles_in1,
             operation_attributes.out_row_offset_tiles,
+            K_tiles,
         };
 
         if (in0_idx == 0) {
@@ -597,12 +601,14 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         //  2: N_start_tile
         //  3: N_end_tile
         //  4: actual_M_blocks_per_core
+        //  5: K_tiles (variable-K)
         std::vector<uint32_t> compute_runtime_args = {
             M_start_tile,
             M_end_tile,
             N_start_tile,
             N_end_tile,
             actual_M_blocks_per_core,
+            K_tiles,
         };
         SetRuntimeArgs(program, compute_kernels_id, core, compute_runtime_args);
     }
@@ -621,6 +627,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
             .in0_parallel_axis_cores = in0_parallel_axis_cores,
             .in1_parallel_axis_cores = in1_parallel_axis_cores,
             .M_block_tiles = M_block_tiles,
+            .K_block_tiles = K_block_tiles,
             .N_tiles_per_core = N_tiles_per_core,
         }};
 }
@@ -672,6 +679,7 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
     constexpr uint32_t IN0_K_OFFSET_TILES_IDX = 19;
     constexpr uint32_t IN0_PARENT_K_TILES_STRIDE_IDX = 20;
     constexpr uint32_t IN0_OUT_ROW_OFFSET_IDX = 21;
+    constexpr uint32_t IN0_K_TILES_IDX = 22;
 
     // in1 runtime arg indices
     constexpr uint32_t IN1_ADDR_IDX = 0;
@@ -684,11 +692,26 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
     constexpr uint32_t IN1_K_OFFSET_TILES_IDX = 16;
     constexpr uint32_t IN1_PARENT_K_TILES_STRIDE_IDX = 17;
     constexpr uint32_t IN1_OUT_ROW_OFFSET_IDX = 18;
+    constexpr uint32_t IN1_K_TILES_IDX = 19;
 
     // Compute runtime arg indices
     constexpr uint32_t COMPUTE_M_START_IDX = 0;
     constexpr uint32_t COMPUTE_M_END_IDX = 1;
     constexpr uint32_t COMPUTE_ACTUAL_M_BLOCKS_IDX = 4;
+    constexpr uint32_t COMPUTE_K_TILES_IDX = 5;
+
+    // Recompute matmul-K. Mirror the create() derivation: in1 is parent when its K extent
+    // exceeds in0's or in1_k_offset > 0; otherwise in0/weight K match (weight provides K_w).
+    const bool in1_parent_k = operation_attributes.in1_k_offset_tiles > 0 || parent_K_tiles_in1 > parent_K_tiles_in0;
+    const uint32_t K_tiles_rt = in1_parent_k ? parent_K_tiles_in0 : parent_K_tiles_in1;
+    const uint32_t padded_K_tiles_rt = tt::round_up(K_tiles_rt, sv.K_block_tiles);
+    const uint32_t K_blocks_rt = padded_K_tiles_rt / sv.K_block_tiles;
+    const uint32_t k_blocks_per_core_rt =
+        tt::div_up(K_blocks_rt, sv.transpose_core_grid ? sv.in1_parallel_axis_cores : sv.in0_parallel_axis_cores);
+
+    // defer_write_k_block is per-core, depends on K_blocks (variable). Updated below per core.
+    constexpr uint32_t IN0_DEFER_WRITE_K_BLOCK_IDX = 12;
+    constexpr uint32_t IN1_DEFER_WRITE_K_BLOCK_IDX = 11;
 
     for (uint32_t i = 0; i < sv.num_cores; ++i) {
         CoreCoord core = sv.cores.at(i);
@@ -697,6 +720,9 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
 
         uint32_t M_start_tile = actual_M_tiles_per_core * in0_idx;
         uint32_t M_end_tile = actual_M_tiles_per_core * (in0_idx + 1);
+
+        uint32_t defer_write_k_block = core.y * k_blocks_per_core_rt;
+        defer_write_k_block = std::min(defer_write_k_block, K_blocks_rt - 1U);
 
         // Update in0 args
         if (in1_idx == 0) {
@@ -713,6 +739,8 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
             args[IN0_K_OFFSET_TILES_IDX] = operation_attributes.in0_k_offset_tiles;
             args[IN0_PARENT_K_TILES_STRIDE_IDX] = parent_K_tiles_in0;
             args[IN0_OUT_ROW_OFFSET_IDX] = operation_attributes.out_row_offset_tiles;
+            args[IN0_K_TILES_IDX] = K_tiles_rt;
+            args[IN0_DEFER_WRITE_K_BLOCK_IDX] = defer_write_k_block;
         } else {
             auto& args = in0_receiver_rt[core.x][core.y];
             args[IN0_M_START_IDX] = M_start_tile;
@@ -726,6 +754,8 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
             args[IN0_K_OFFSET_TILES_IDX] = operation_attributes.in0_k_offset_tiles;
             args[IN0_PARENT_K_TILES_STRIDE_IDX] = parent_K_tiles_in0;
             args[IN0_OUT_ROW_OFFSET_IDX] = operation_attributes.out_row_offset_tiles;
+            args[IN0_K_TILES_IDX] = K_tiles_rt;
+            args[IN0_DEFER_WRITE_K_BLOCK_IDX] = defer_write_k_block;
         }
 
         // Update in1 args
@@ -741,6 +771,8 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
             args[IN1_K_OFFSET_TILES_IDX] = operation_attributes.in1_k_offset_tiles;
             args[IN1_PARENT_K_TILES_STRIDE_IDX] = parent_K_tiles_in1;
             args[IN1_OUT_ROW_OFFSET_IDX] = operation_attributes.out_row_offset_tiles;
+            args[IN1_K_TILES_IDX] = K_tiles_rt;
+            args[IN1_DEFER_WRITE_K_BLOCK_IDX] = defer_write_k_block;
         } else {
             auto& args = in1_receiver_rt[core.x][core.y];
             args[IN1_M_START_IDX] = M_start_tile;
@@ -752,6 +784,8 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
             args[IN1_K_OFFSET_TILES_IDX] = operation_attributes.in1_k_offset_tiles;
             args[IN1_PARENT_K_TILES_STRIDE_IDX] = parent_K_tiles_in1;
             args[IN1_OUT_ROW_OFFSET_IDX] = operation_attributes.out_row_offset_tiles;
+            args[IN1_K_TILES_IDX] = K_tiles_rt;
+            args[IN1_DEFER_WRITE_K_BLOCK_IDX] = defer_write_k_block;
         }
 
         // Update compute args
@@ -759,6 +793,7 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
         cargs[COMPUTE_M_START_IDX] = M_start_tile;
         cargs[COMPUTE_M_END_IDX] = M_end_tile;
         cargs[COMPUTE_ACTUAL_M_BLOCKS_IDX] = actual_M_blocks_per_core;
+        cargs[COMPUTE_K_TILES_IDX] = K_tiles_rt;
     }
 }
 

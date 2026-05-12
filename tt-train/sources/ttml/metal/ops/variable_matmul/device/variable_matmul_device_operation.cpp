@@ -237,6 +237,8 @@ ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(
     uint32_t N = transpose_b ? w.logical_shape()[-2] : w.logical_shape()[-1];
     bool transpose_core_grid = actual_M > N;
 
+    // Variable-K: only N must be in the hash (matmul-K is RT-driven, fully variable).
+    const uint32_t N_dim = transpose_b ? w.logical_shape()[-2] : w.logical_shape()[-1];
     return ttsl::hash::hash_objects_with_default_seed(
         transpose_core_grid,
         operation_attributes.config.M_block_size,
@@ -249,14 +251,11 @@ ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(
         operation_attributes.compute_kernel_config,
         a.dtype(),
         w.dtype(),
-        w.logical_shape(),
+        N_dim,
         transpose_a,
         transpose_b,
         use_offset,
         use_offset_in1,
-        // When in1 is the parent, the matmul-K CTA is derived from in0's K extent —
-        // capture it explicitly so different in0 K shapes get distinct cached programs.
-        in1_parent_k_mode ? K_in_tiles : 0U,
         // Write-at-offset toggles a CTA path. Boolean only (offset value is RT-only).
         tensor_args.output_tensor.has_value());
 }
