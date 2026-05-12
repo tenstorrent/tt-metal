@@ -35,7 +35,6 @@ KV Cache:
 - Drops O(n²) → O(n) for generation.
 """
 
-import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1188,47 +1187,6 @@ def generate_codes_ttnn(
 
     generated_code0_tokens = []
 
-    # PCC check: when TT_QWEN3_PCC_TRACE_PREFILL=1, run BOTH non-traced and
-    # traced prefill on the same input and report PCC of the codec logits
-    # at the sample position. Cache state must be reset between the two runs.
-    import os as _os_pcc
-
-    _do_pcc = _os_pcc.environ.get("TT_QWEN3_PCC_TRACE_PREFILL", "0") == "1"
-    _ref_logits_torch = None
-    if _do_pcc and padded_seq_len in talker_prefill_traces:
-        # Non-traced reference run (writes cache via fill_cache).
-        _ref_h, _ = model.talker.forward_from_hidden(
-            inputs_embeds_tt,
-            prefill_cos_tt,
-            prefill_sin_tt,
-            talker_trans_mat,
-            kv_caches=talker_kv_caches,
-            start_pos=0,
-            mode="prefill",
-        )
-        _ref_logits = model.talker.get_codec_logits(_ref_h)
-        ttnn.synchronize_device(device)
-        _ref_logits_torch = ttnn.to_torch(_ref_logits).squeeze(1).float()
-        # Reset cache so the upcoming traced run starts identically.
-        for (k_zero, v_zero), (k_cache, v_cache) in zip(cp_kv_zero_hosts[:0] + [], talker_kv_caches[:0] + []):
-            pass  # placeholder; we'll reset via fresh zero-host below
-        for layer_kv in talker_kv_caches:
-            k_cache, v_cache = layer_kv
-            _kc_shape = tuple(int(d) for d in k_cache.shape)
-            _vc_shape = tuple(int(d) for d in v_cache.shape)
-            _kz = ttnn.from_torch(
-                torch.zeros(_kc_shape, dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-            )
-            _vz = ttnn.from_torch(
-                torch.zeros(_vc_shape, dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-            )
-            ttnn.copy_host_to_device_tensor(_kz, k_cache)
-            ttnn.copy_host_to_device_tensor(_vz, v_cache)
-
     if padded_seq_len in talker_prefill_traces:
         _pf = talker_prefill_traces[padded_seq_len]
         _embed_host_torch = ttnn.to_torch(inputs_embeds_tt)
@@ -1243,12 +1201,6 @@ def generate_codes_ttnn(
         prefill_hidden_out = _pf["hidden_out"]
         codec_logits_full = ttnn.to_torch(prefill_logits_out).squeeze(1).float()
         codec_logits_torch = codec_logits_full[0, real_seq_len - 1, :]
-        if _do_pcc and _ref_logits_torch is not None:
-            _a = _ref_logits_torch[0, real_seq_len - 1, :]
-            _b = codec_logits_torch
-            _pcc = torch.corrcoef(torch.stack([_a.flatten(), _b.flatten()]))[0, 1].item()
-            _max_abs = (_a - _b).abs().max().item()
-            print(f"  [PCC] traced vs non-traced @ pos={real_seq_len-1}: PCC={_pcc:.6f}  max|Δ|={_max_abs:.4f}")
         token_0 = sample_token(
             codec_logits_torch,
             config.temperature,
@@ -1426,25 +1378,13 @@ def generate_codes_ttnn(
     )
     _wu_codec_logits = model.talker.get_codec_logits(_wu_th)
 
-    # On-device codec0 sampling/argmax — emit token id from the trace so the
+    # On-device codec0 argmax (greedy) — emit token id from the trace so the
     # hot loop only D2H's an int (4B) instead of the full vocab logits.
-    #
-    #   greedy=True               → _argmax_into (existing fast path)
-    #   greedy=False & DS env on  → _DeviceSampler (topk + ttnn.sampling)
-    #   greedy=False & DS env off → no in-trace sampling; loop falls back to
-    #                                full-logits D2H + host sample.
-    _device_sampling = bool(int(os.environ.get("TT_QWEN3_DEVICE_SAMPLING", "0")))
-    talker_codec0_sampler: Optional[_DeviceSampler] = None
-    if _device_sampling and not config.greedy:
-        talker_codec0_sampler = _DeviceSampler(device, top_k=config.top_k, top_p=1.0, temperature=config.temperature)
-        talker_codec0_token_tt = talker_codec0_sampler.alloc_token_buf()
-    else:
-        talker_codec0_token_tt = _alloc_token_buf(device, shape=(1, 1, 1)) if config.greedy else None
+    # Non-greedy path falls back to full-logits D2H + host sample.
+    talker_codec0_token_tt = _alloc_token_buf(device, shape=(1, 1, 1)) if config.greedy else None
     cp_prefill_token_tt = _alloc_token_buf(device, shape=(1, 1, 2))
     if config.greedy:
         _argmax_into(_wu_codec_logits, talker_codec0_token_tt)
-    elif talker_codec0_sampler is not None:
-        talker_codec0_sampler.append_sampling(_wu_codec_logits, talker_codec0_token_tt)
     ttnn.synchronize_device(device)
 
     print("  Capturing Talker decode trace (includes codec_head)...")
@@ -1463,8 +1403,6 @@ def generate_codes_ttnn(
         trace_codec_logits_out = model.talker.get_codec_logits(trace_hidden_out)
         if config.greedy:
             _argmax_into(trace_codec_logits_out, talker_codec0_token_tt)
-        elif talker_codec0_sampler is not None:
-            talker_codec0_sampler.append_sampling(trace_codec_logits_out, talker_codec0_token_tt)
     finally:
         ttnn.end_trace_capture(device, talker_decode_trace_id, cq_id=0)
     ttnn.synchronize_device(device)
@@ -1525,36 +1463,12 @@ def generate_codes_ttnn(
     cp_decode_trace_ids = [[], []]
     cp_decode_logits_tts = [[], []]
     cp_decode_token_tts = [[], []]
-    # On-device chain (opt-in via TT_QWEN3_DEVICE_CP_CHAIN=1): in-trace topk +
-    # sampling + embedding + copy → next trace's input buffer. Currently regresses
-    # ~4.6 ms/frame because the 32-user ttnn.sampling kernel is heavy at batch=1;
-    # the design pays off after Step 5 (mega-trace fusion) cuts inter-trace syncs.
-    import os as _os
-
-    _device_cp_chain = bool(int(_os.environ.get("TT_QWEN3_DEVICE_CP_CHAIN", "0")))
-    _device_cp_sampling = False  # batch=1 regression — see comments above the chain path.
-    _greedy_chain = _device_cp_chain and config.greedy
-    cp_sampler = None
-    if _device_cp_chain and not config.greedy:
-        cp_sampler = _DeviceSampler(device, top_k=config.top_k, top_p=1.0, temperature=config.temperature)
-        print(
-            f"  CP decode on-device chain (sampling): topk(k={_SAMPLING_MAX_TOP_K}) + sampling + embed "
-            f"(top_k={cp_sampler.top_k}, temp={cp_sampler.temperature}) — TT_QWEN3_DEVICE_CP_CHAIN=1"
-        )
-    elif _greedy_chain:
-        print("  CP decode on-device chain (greedy): argmax + embed — TT_QWEN3_DEVICE_CP_CHAIN=1")
     print(f"  Capturing {config.num_code_groups - 2} CP decode traces (one per lm_head)...")
     for _buf_i in range(2):
         for _trace_i, _step_code_idx in enumerate(range(2, config.num_code_groups)):
             _cp_cos_tt = cp_trace_decode_cos_tts[_trace_i]
             _cp_sin_tt = cp_trace_decode_sin_tts[_trace_i]
             _cp_mask_tt = cp_trace_decode_mask_tts[_trace_i]
-            _buf_out = (_buf_i + 1) % 2  # this trace writes its output embed for the NEXT trace
-            # The codec_pred table for this step's sampled token: code_idx-1 maps to
-            # CodePredictor.codec_embeddings_tt[code_idx-1] (table for the token id we
-            # JUST sampled; e.g., when code_idx=2 we sampled code 2, look up its embed
-            # in code_pred table 1 → output is the input embedding for trace[code_idx=3]).
-            _embed_table_tt = model.code_predictor.codec_embeddings_tt[_step_code_idx - 1]
             print(f"    Untraced warmup: CP decode (buf={_buf_i}, generation_step={_step_code_idx})...")
             _wu_cp_dc_logits, cp_kv_caches_persistent = model.code_predictor.forward_single_step(
                 cp_trace_decode_embed_tts[_buf_i],
@@ -1572,39 +1486,6 @@ def generate_codes_ttnn(
             if config.greedy:
                 _tok_buf = _alloc_token_buf(device, shape=(1, 1, 1))
                 _argmax_into(_wu_cp_dc_logits, _tok_buf)
-                if _greedy_chain:
-                    # Warmup the chain ops (load kernels — same TT_FATAL constraint as
-                    # the sampling chain warmup below).
-                    _wu_tok_4d = ttnn.reshape(_tok_buf, [1, 1, 1, 1])
-                    _wu_embed_out = ttnn.embedding(
-                        _wu_tok_4d,
-                        _embed_table_tt,
-                        layout=ttnn.TILE_LAYOUT,
-                        memory_config=ttnn.L1_MEMORY_CONFIG,
-                    )
-                    _wu_embed_out_4d = ttnn.reshape(_wu_embed_out, [1, 1, 1, _wu_embed_out.shape[-1]])
-                    ttnn.copy(_wu_embed_out_4d, cp_trace_decode_embed_tts[_buf_out])
-                    ttnn.deallocate(_wu_embed_out)  # frees the underlying buffer (4d is an alias view)
-            elif _device_cp_chain:
-                _tok_buf = cp_sampler.alloc_token_buf()  # [1,1,1,32] uint32 RM
-                cp_sampler.append_sampling(_wu_cp_dc_logits, _tok_buf)
-                # Warmup the in-trace chain: slice → embedding → reshape → copy → target.
-                # First invocation of each kernel loads its binary; that's a device write,
-                # which TT_FATAL'd if it happened during trace_capture. Run it untraced now.
-                _wu_tok_slice = _slice_user0_token(_tok_buf)
-                _wu_embed_out = ttnn.embedding(
-                    _wu_tok_slice,
-                    _embed_table_tt,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                _wu_embed_out_4d = ttnn.reshape(_wu_embed_out, [1, 1, 1, _wu_embed_out.shape[-1]])
-                ttnn.copy(_wu_embed_out_4d, cp_trace_decode_embed_tts[_buf_out])
-                ttnn.deallocate(_wu_tok_slice)
-                ttnn.deallocate(_wu_embed_out)  # frees the underlying buffer (4d is an alias view)
-            elif _device_cp_sampling:
-                _tok_buf = cp_sampler.alloc_token_buf()  # [1,1,1,32] uint32 RM
-                cp_sampler.append_sampling(_wu_cp_dc_logits, _tok_buf)
             else:
                 _tok_buf = None  # CPU sample path: no device token buffer needed.
             cp_decode_token_tts[_buf_i].append(_tok_buf)
@@ -1627,36 +1508,6 @@ def generate_codes_ttnn(
                 )
                 if config.greedy:
                     _argmax_into(_logits_tt, _tok_buf)
-                    if _greedy_chain:
-                        # On-device chain (greedy): take argmax token, look up its embed,
-                        # copy into the next CP decode trace's input buffer.
-                        _tok_4d = ttnn.reshape(_tok_buf, [1, 1, 1, 1])
-                        _embed_out = ttnn.embedding(
-                            _tok_4d,
-                            _embed_table_tt,
-                            layout=ttnn.TILE_LAYOUT,
-                            memory_config=ttnn.L1_MEMORY_CONFIG,
-                        )
-                        _embed_out_4d = ttnn.reshape(_embed_out, [1, 1, 1, _embed_out.shape[-1]])
-                        ttnn.copy(_embed_out_4d, cp_trace_decode_embed_tts[_buf_out])
-                        ttnn.deallocate(_embed_out_4d)
-                elif _device_cp_chain:
-                    cp_sampler.append_sampling(_logits_tt, _tok_buf)
-                    # On-device chain: take user[0]'s sampled token, look up its embed,
-                    # copy into the next CP decode trace's input buffer. Closes the loop.
-                    _tok_slice = _slice_user0_token(_tok_buf)
-                    _embed_out = ttnn.embedding(
-                        _tok_slice,
-                        _embed_table_tt,
-                        layout=ttnn.TILE_LAYOUT,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    )
-                    _embed_out_4d = ttnn.reshape(_embed_out, [1, 1, 1, _embed_out.shape[-1]])
-                    ttnn.copy(_embed_out_4d, cp_trace_decode_embed_tts[_buf_out])
-                    ttnn.deallocate(_tok_slice)
-                    ttnn.deallocate(_embed_out_4d)
-                elif _device_cp_sampling:
-                    cp_sampler.append_sampling(_logits_tt, _tok_buf)
             finally:
                 ttnn.end_trace_capture(device, _trace_id, cq_id=0)
             ttnn.synchronize_device(device)
@@ -2120,8 +1971,8 @@ class TTSServerContext:
     _talker_num_heads: int
     _cp_num_heads: int
 
-    # Optional device-sampling output buffers (per-bucket) — populated only when
-    # TT_QWEN3_DEVICE_SAMPLING=1; greedy/host-sampling paths leave these empty.
+    # Optional device-sampling output buffers (per-bucket) — left empty for the
+    # greedy/host-sampling paths.
     trace_decode_codec0_token_tt_by_bucket: Dict[int, object] = field(default_factory=dict)
 
 
@@ -2437,17 +2288,6 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
     trace_decode_hidden_out_by_bucket = {}
     trace_decode_codec0_token_tt_by_bucket: Dict[int, object] = {}
 
-    # Optional on-device codec0 sampling (TT_QWEN3_DEVICE_SAMPLING=1): bake
-    # topk + ttnn.sampling into each bucket's Talker decode trace so the
-    # codec0 token comes back as a small int D2H instead of a full vocab D2H
-    # blocking on Talker exec. Eliminates the per-frame codec0_d2h wait.
-    _device_sampling = bool(int(os.environ.get("TT_QWEN3_DEVICE_SAMPLING", "0")))
-    talker_sampler = (
-        _DeviceSampler(device, top_k=config.top_k, top_p=1.0, temperature=config.temperature)
-        if _device_sampling and not config.greedy
-        else None
-    )
-
     for _bucket in TRACE_DECODE_BUCKETS:
         _max_talker_seq_len = (((_bucket + config.max_new_tokens + 16) + _TILE - 1) // _TILE) * _TILE
         # Allocate KV cache for this bucket
@@ -2482,10 +2322,6 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Per-bucket codec0 token output buffer for on-device sampling
-        # (only allocated when the optional device-sampling path is on).
-        _codec0_token_tt = talker_sampler.alloc_token_buf() if talker_sampler is not None else None
-
         # Untraced warmup so program cache is hot before begin_trace_capture
         # (writes are not allowed during trace capture).
         _wu_h, _ = model.talker.forward_from_hidden(
@@ -2498,9 +2334,7 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
             decode_attn_mask=_mask,
             mode="decode",
         )
-        _wu_logits = model.talker.get_codec_logits(_wu_h)
-        if talker_sampler is not None:
-            talker_sampler.append_sampling(_wu_logits, _codec0_token_tt)
+        model.talker.get_codec_logits(_wu_h)
         ttnn.synchronize_device(device)
 
         # Capture trace.
@@ -2517,8 +2351,6 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
                 mode="decode",
             )
             _logits_out = model.talker.get_codec_logits(_hidden)
-            if talker_sampler is not None:
-                talker_sampler.append_sampling(_logits_out, _codec0_token_tt)
         finally:
             ttnn.end_trace_capture(device, _trace_id, cq_id=0)
         ttnn.synchronize_device(device)
@@ -2534,12 +2366,7 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
         trace_decode_mask_tt_by_bucket[_bucket] = _mask
         trace_decode_codec_logits_out_by_bucket[_bucket] = _logits_out
         trace_decode_hidden_out_by_bucket[_bucket] = _hidden
-        if _codec0_token_tt is not None:
-            trace_decode_codec0_token_tt_by_bucket[_bucket] = _codec0_token_tt
-        print(
-            f"    bucket={_bucket}: max_talker_seq={_max_talker_seq_len}, trace captured"
-            f"{' (with on-device codec0 sampling)' if _codec0_token_tt is not None else ''}"
-        )
+        print(f"    bucket={_bucket}: max_talker_seq={_max_talker_seq_len}, trace captured")
 
     # Capture SE-block traces for ECAPA. Without these, on-device
     # ``extract_speaker_embedding`` calls after run_inference's trace exec

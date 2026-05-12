@@ -229,11 +229,8 @@ class Attention(LightweightModule):
                 mesh_mapper=_mesh_mapper,
             )
 
-        import os as _os_fid
-
-        _hi_fi = _os_fid.environ.get("TT_QWEN3_HIFI4", "0") == "1"
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4 if _hi_fi else ttnn.MathFidelity.LoFi,
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -781,12 +778,8 @@ class Attention(LightweightModule):
         # prefill_attn_mask — those need explicit handling.
         _q_seq = int(q.shape[2])
         _k_seq_inner = int(k_for_attn.shape[2])
-        import os as _os_fused
-
-        _fused_disabled = _os_fused.environ.get("TT_QWEN3_DISABLE_FUSED_SDPA", "0") == "1"
         _use_fused_prefill_sdpa = (
-            not _fused_disabled
-            and not is_decode
+            not is_decode
             and decode_attn_mask is None
             and cp_prefill_mask is None
             and prefill_attn_mask is None
@@ -794,10 +787,6 @@ class Attention(LightweightModule):
             and _q_seq > 1
         )
         if _use_fused_prefill_sdpa:
-            import os as _os_dbg
-
-            if _os_dbg.environ.get("TT_QWEN3_DEBUG_FUSED_SDPA", "0") == "1":
-                print(f"[DBG] using fused prefill SDPA: q.shape={tuple(q.shape)}, k.shape={tuple(k_for_attn.shape)}")
             attn_output = ttnn.transformer.scaled_dot_product_attention(
                 q,
                 k_for_attn,

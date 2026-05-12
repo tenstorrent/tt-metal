@@ -18,7 +18,6 @@ fully populated ``DecodeLoopState``.
 
 from __future__ import annotations
 
-import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, List, Optional, Tuple
@@ -123,23 +122,7 @@ def ar_decode_loop(
     trace_cq0_idle = ttnn.record_event(device, 0) if use_2cq else None
     cp_decode_input_ready = [trace_cq0_idle, trace_cq0_idle]
 
-    # Env-gated on-device optimizations (same flags the demo loop honours).
-    _device_cp_chain = bool(int(os.environ.get("TT_QWEN3_DEVICE_CP_CHAIN", "0")))
     _device_cp_sampling = False  # batch=1 regression, kept disabled.
-
-    # Phase timers (TT_QWEN3_PHASE_TIMERS=1 → print rolling means every 20 steps).
-    _phase_dbg = bool(int(os.environ.get("TT_QWEN3_PHASE_TIMERS", "0")))
-    _phase_acc = {
-        "past_h": 0.0,
-        "cp_restore": 0.0,
-        "cp_prefill": 0.0,
-        "cp_decode": 0.0,
-        "build_emb": 0.0,
-        "talker_launch": 0.0,
-        "codec0_d2h": 0.0,
-        "codec0_cpu": 0.0,
-    }
-    _phase_n = 0
 
     frame_breakdown_sums = {
         "cp_input_prep_ms": 0.0,
@@ -239,36 +222,30 @@ def ar_decode_loop(
         for _trace_i, code_idx in enumerate(range(2, config.num_code_groups)):
             _buf_i = (_trace_i % 2) if use_2cq else 0
 
-            # H2D embed for this iteration's input. Chain mode skips H2D for trace_i>=1
-            # (the previous trace's in-trace ttnn.embedding wrote our buffer).
-            _need_h2d = (not _device_cp_chain) or _trace_i == 0
-            if _need_h2d:
-                prev_embed_idx = code_idx - 2
-                token_id_buf[0, 0] = token
-                if prev_embed_idx < len(code_pred_embeds) and code_pred_embeds[prev_embed_idx] is not None:
-                    next_embed = F.embedding(token_id_buf, code_pred_embeds[prev_embed_idx])
-                else:
-                    next_embed = F.embedding(token_id_buf, codec_embed_torch)
-                next_embed = next_embed.unsqueeze(1).bfloat16()
+            # H2D embed for this iteration's input.
+            prev_embed_idx = code_idx - 2
+            token_id_buf[0, 0] = token
+            if prev_embed_idx < len(code_pred_embeds) and code_pred_embeds[prev_embed_idx] is not None:
+                next_embed = F.embedding(token_id_buf, code_pred_embeds[prev_embed_idx])
+            else:
+                next_embed = F.embedding(token_id_buf, codec_embed_torch)
+            next_embed = next_embed.unsqueeze(1).bfloat16()
 
-                cp_decode_embed_cpu.copy_(next_embed)
-                e_h = ttnn.from_torch(cp_decode_embed_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-                if use_2cq:
-                    ttnn.wait_for_event(1, cp_decode_input_ready[_buf_i])
-                ttnn.copy_host_to_device_tensor(e_h, state.cp_trace_decode_embed_tts[_buf_i], cq_id=h2d_cq)
-                if use_2cq:
-                    write_ev = ttnn.record_event(device, 1)
-                    ttnn.wait_for_event(0, write_ev)
+            cp_decode_embed_cpu.copy_(next_embed)
+            e_h = ttnn.from_torch(cp_decode_embed_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            if use_2cq:
+                ttnn.wait_for_event(1, cp_decode_input_ready[_buf_i])
+            ttnn.copy_host_to_device_tensor(e_h, state.cp_trace_decode_embed_tts[_buf_i], cq_id=h2d_cq)
+            if use_2cq:
+                write_ev = ttnn.record_event(device, 1)
+                ttnn.wait_for_event(0, write_ev)
             ttnn.execute_trace(device, state.cp_decode_trace_ids[_buf_i][_trace_i], cq_id=0, blocking=False)
             if use_2cq:
                 cp_decode_input_ready[_buf_i] = ttnn.record_event(device, 0)
                 trace_cq0_idle = cp_decode_input_ready[_buf_i]
 
             _dsp: dict = {}
-            if _device_cp_chain:
-                code_row.append(None)  # resolved after loop with aggregated D2H
-                continue
-            elif (config.greedy or _device_cp_sampling) and state.cp_decode_token_tts is not None:
+            if (config.greedy or _device_cp_sampling) and state.cp_decode_token_tts is not None:
                 _t_dc0 = time.perf_counter()
                 token = _read_device_token(state.cp_decode_token_tts[_buf_i][_trace_i], index=0)
                 _dsp["device_logits"] = time.perf_counter() - _t_dc0
@@ -283,14 +260,6 @@ def ar_decode_loop(
             _decode_sp_agg["device_logits"] += _dsp.get("device_logits", 0.0)
             _decode_sp_agg["cpu_sample"] += _dsp.get("cpu_sample", 0.0)
             code_row.append(token)
-
-        # Aggregated D2H for chain mode: dispatch all 14 traces, then read tokens.
-        if _device_cp_chain and state.cp_decode_token_tts is not None:
-            _t_dc0 = time.perf_counter()
-            for _ti in range(config.num_code_groups - 2):
-                _bi = (_ti % 2) if use_2cq else 0
-                code_row[2 + _ti] = _read_device_token(state.cp_decode_token_tts[_bi][_ti], index=0)
-            _decode_sp_agg["device_logits"] += time.perf_counter() - _t_dc0
 
         all_codes.append(code_row)
         if streaming_decoder is not None:
@@ -348,7 +317,6 @@ def ar_decode_loop(
         else:
             ttnn.synchronize_device(device)
         t_talker_end = time.time()
-        _t_talker_end_pc = time.perf_counter()
         state.talker_times_ms.append((t_talker_end - t_cp_end) * 1000)
         state.cp_times_ms.append((t_cp_end - t_step_start) * 1000)
 
@@ -359,7 +327,6 @@ def ar_decode_loop(
         # need a small int D2H instead of a full vocab D2H blocking on the
         # async Talker exec.
         _c0_sp: dict = {}
-        _t_before_codec0 = time.perf_counter()
         if state.talker_codec0_token_tt is not None:
             _t_c00 = time.perf_counter()
             token_0 = _read_device_token(state.talker_codec0_token_tt, index=0)
@@ -379,18 +346,6 @@ def ar_decode_loop(
             )
             _t_after_codec0_cpu = time.perf_counter()
         generated_code0_tokens.append(token_0)
-
-        # Phase timer (rolling means).
-        if _phase_dbg and step >= 1:
-            _phase_acc["past_h"] += (_t_after_cp_input - _step_pc) * 1000
-            _phase_acc["cp_restore"] += (_t_after_kv - _t_after_cp_input) * 1000
-            _phase_acc["cp_prefill"] += (_t_after_cp_prefill - _t_after_kv) * 1000
-            _phase_acc["cp_decode"] += (_t_after_cp_decode - _t_after_cp_prefill) * 1000
-            _phase_acc["build_emb"] += (_t_after_build_embed - _t_embed0) * 1000
-            _phase_acc["talker_launch"] += (_t_talker_end_pc - _t_after_build_embed) * 1000
-            _phase_acc["codec0_d2h"] += (_t_after_codec0_d2h - _t_before_codec0) * 1000
-            _phase_acc["codec0_cpu"] += (_t_after_codec0_cpu - _t_after_codec0_d2h) * 1000
-            _phase_n += 1
 
         # Frame breakdown (printed at end by caller).
         frame_breakdown_sums["cp_input_prep_ms"] += (_t_after_cp_input - _step_pc) * 1000
@@ -422,9 +377,6 @@ def ar_decode_loop(
 
         if (step + 1) % 20 == 0:
             print(f"  Generated {step + 1} frames...")
-            if _phase_dbg and _phase_n > 0:
-                parts = " ".join(f"{k}={_phase_acc[k] / _phase_n:.2f}" for k in _phase_acc)
-                print(f"  [PHASE_MS, n={_phase_n}, mean per step] {parts}")
 
     # Write back mutated state for callers that want to inspect.
     state.talker_hidden_tt = talker_hidden_tt
