@@ -612,9 +612,8 @@ bool reader_datacopy_writer(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ReaderDatacopyWriterConfig& test_config) {
     if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
         return reader_datacopy_writer_quasar(mesh_device, test_config);
-    } else {
-        return reader_datacopy_writer_legacy(mesh_device, test_config);
     }
+    return reader_datacopy_writer_legacy(mesh_device, test_config);
 }
 }  // namespace unit_tests::dram::direct
 

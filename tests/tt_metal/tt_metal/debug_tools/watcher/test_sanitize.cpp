@@ -116,7 +116,12 @@ void RunTestOnCore(
 
     const std::string kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_to_noc_coord.cpp";
     // On Quasar, DM0/DM1 are reserved for internal use; map brisc/ncrisc onto the first two user DMs.
-    uint32_t dm_id = is_quasar ? (use_ncrisc ? 3 : 2) : (use_ncrisc ? 1 : 0);
+    uint32_t dm_id = 0;
+    if (is_quasar) {
+        dm_id = use_ncrisc ? 3 : 2;
+    } else {
+        dm_id = use_ncrisc ? 1 : 0;
+    }
 
     // Set up program
     distributed::MeshWorkload workload;
