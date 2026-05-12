@@ -165,7 +165,60 @@
   owner_id: U08ARDXARPF # Ilija Anastasijevic
   team: ttnn
 
-# --- stress (continuous gate; heavy / weekly stress lives in blackhole_stress_tests.yaml) ---
+# --- unit (fast) ---
+# Fast multi-card legs that the legacy blackhole-multi-card-unit-tests-impl.yaml
+# also runs in post-commit (fast-only: true). Kept in e2e to match the run-count
+# observed on the pre-reorg reference run.
+- id: bh-fabric-fast-unit
+  name: fabric fast unit tests (1D, 2D, single erisc)
+  cmd: |
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+  skus:
+    bh_deskbox:
+      timeout: 15
+    bh_llmbox:
+      timeout: 15
+    bh_loudbox:
+      timeout: 15
+    bh_p300:
+      timeout: 15
+    bh_quietbox_2:
+      timeout: 15
+  owner_id: U0883RN6CRE # William Ly
+  team: scaleout
+
+- id: bh-ttnn-ops-fast-unit
+  name: ttnn ops fast unit tests (ccl, DRAM prefetcher)
+  cmd: |
+    pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit
+    # Disabled due to issue https://github.com/tenstorrent/tt-metal/issues/41040
+    # pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py
+  skus:
+    bh_deskbox:
+      timeout: 15
+    bh_llmbox:
+      timeout: 15
+    bh_loudbox:
+      timeout: 15
+    bh_p300:
+      timeout: 15
+    bh_quietbox_2:
+      timeout: 15
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+  team: ttnn
+
+- id: bh-host-io-fast-unit-viommu
+  name: Host IO fast unit test (viommu only)
+  cmd: TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
+  skus:
+    bh_p300:
+      timeout: 10
+  owner_id: U08E1JCMAJF # Marko Bezulj
+  team: models
+
+# --- stress (continuous gate) ---
 - id: bh-fabric-stability-stress
   name: fabric stability nightly tests
   cmd: TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ./tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_short_running.yaml
@@ -222,7 +275,7 @@
     pytest models/demos/deepseek_v3_d_p/tests/cache/ -vvv --tb=short
     pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_dispatch_combine_l1_small_semaphores.py -vvv --tb=short
   skus:
-    bh_quietbox_2:
+    bh_llmbox:
       timeout: 40
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models

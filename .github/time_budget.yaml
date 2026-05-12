@@ -79,11 +79,11 @@ ttnn:
     wh_galaxy: 70
     bh_galaxy: 70
     bh_p150b_civ2: 55
-    bh_deskbox: 130
-    bh_llmbox: 175
-    bh_loudbox: 130
-    bh_p300: 130
-    bh_quietbox_2: 130
+    bh_deskbox: 145
+    bh_llmbox: 190
+    bh_loudbox: 145
+    bh_p300: 145
+    bh_quietbox_2: 145
   integration:
     wh_llmbox: 30
     wh_galaxy: 350
@@ -112,11 +112,11 @@ scaleout:
     bh_galaxy: 60
     bh_sp1: 90
     bh_sp4: 150
-    bh_deskbox: 65
-    bh_llmbox: 65
-    bh_loudbox: 65
-    bh_p300: 65
-    bh_quietbox_2: 65
+    bh_deskbox: 80
+    bh_llmbox: 80
+    bh_loudbox: 80
+    bh_p300: 80
+    bh_quietbox_2: 80
 
 runtime:
   sanity:
@@ -167,7 +167,8 @@ models:
     wh_galaxy_perf: 120
     bh_p150b_civ2: 55
     bh_loudbox: 68
-    bh_quietbox_2: 40
+    bh_llmbox: 40
+    bh_p300: 10
   unit:
     wh_llmbox: 175
     wh_llmbox_perf: 230
