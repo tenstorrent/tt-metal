@@ -23,7 +23,7 @@ std::tuple<uint32_t, int32_t> normalize_dim_4d(const uint32_t dim, const uint32_
     }
 
     const auto rank_diff = static_cast<int32_t>(rank) - RANK_4D;
-    const auto normalized_dim = (dim < std::abs(rank_diff)) ? dim : dim - rank_diff;
+    const auto normalized_dim = (dim < static_cast<uint32_t>(std::abs(rank_diff))) ? dim : dim - rank_diff;
 
     return std::make_tuple(normalized_dim, rank_diff);
 }
