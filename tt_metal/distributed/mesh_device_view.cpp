@@ -119,7 +119,7 @@ std::vector<IDevice*> MeshDeviceViewImpl::get_devices_on_row(size_t row) const {
     TT_FATAL(row < shape_2d_->height(), "Row index out of bounds: {}", row);
     std::vector<IDevice*> row_devices;
     row_devices.reserve(shape_2d_->width());
-    for (int col = 0; col < shape_2d_->width(); ++col) {
+    for (size_t col = 0; col < shape_2d_->width(); ++col) {
         const auto& coord = MeshCoordinate(row, col);
         devices_.at(coord).if_local([&row_devices](const auto& device) { row_devices.push_back(device); });
     }
@@ -131,7 +131,7 @@ std::vector<IDevice*> MeshDeviceViewImpl::get_devices_on_column(size_t col) cons
     TT_FATAL(col < shape_2d_->width(), "Column index out of bounds: {}", col);
     std::vector<IDevice*> col_devices;
     col_devices.reserve(shape_2d_->height());
-    for (int row = 0; row < shape_2d_->height(); ++row) {
+    for (size_t row = 0; row < shape_2d_->height(); ++row) {
         const auto& coord = MeshCoordinate(row, col);
         devices_.at(coord).if_local([&col_devices](const auto& device) { col_devices.push_back(device); });
     }
@@ -143,7 +143,7 @@ std::vector<tt::tt_fabric::FabricNodeId> MeshDeviceViewImpl::get_fabric_node_ids
     TT_FATAL(row < shape_2d_->height(), "Row index out of bounds: {}", row);
     std::vector<tt::tt_fabric::FabricNodeId> row_fabric_node_ids;
     row_fabric_node_ids.reserve(shape_2d_->width());
-    for (int col = 0; col < shape_2d_->width(); ++col) {
+    for (size_t col = 0; col < shape_2d_->width(); ++col) {
         row_fabric_node_ids.push_back(get_fabric_node_id(MeshCoordinate(row, col)));
     }
     return row_fabric_node_ids;
@@ -154,7 +154,7 @@ std::vector<tt::tt_fabric::FabricNodeId> MeshDeviceViewImpl::get_fabric_node_ids
     TT_FATAL(col < shape_2d_->width(), "Column index out of bounds: {}", col);
     std::vector<tt::tt_fabric::FabricNodeId> col_fabric_node_ids;
     col_fabric_node_ids.reserve(shape_2d_->height());
-    for (int row = 0; row < shape_2d_->height(); ++row) {
+    for (size_t row = 0; row < shape_2d_->height(); ++row) {
         col_fabric_node_ids.push_back(get_fabric_node_id(MeshCoordinate(row, col)));
     }
     return col_fabric_node_ids;

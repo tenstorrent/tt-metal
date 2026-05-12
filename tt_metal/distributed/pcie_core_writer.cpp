@@ -19,6 +19,7 @@ tt::umd::Cluster* PCIeCoreWriter::get_or_create_cluster(uint32_t device_id) {
         return it->second.get();
     }
     auto cluster = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
+        .sdesc_path = {},
         .target_devices = {static_cast<int>(device_id)},
     });
     auto* ptr = cluster.get();

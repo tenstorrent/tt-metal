@@ -262,7 +262,7 @@ void RiscFirmwareInitializer::clear_dram_state(tt::ChipId device_id) {
     auto num_dram_channels = cluster_.get_soc_desc(device_id).get_num_dram_views();
     constexpr uint32_t start_address = 0;
     std::vector<uint8_t> zero_vec(dram_size_per_channel, 0);
-    for (int channel = 0; channel < num_dram_channels; ++channel) {
+    for (size_t channel = 0; channel < num_dram_channels; ++channel) {
         cluster_.write_dram_vec(zero_vec.data(), zero_vec.size(), device_id, channel, start_address);
         cluster_.dram_barrier(device_id);
     }
@@ -949,7 +949,7 @@ void RiscFirmwareInitializer::initialize_firmware(
             for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                 auto [_, num_build_states] = BuildEnvManager::get_instance().get_build_index_and_state_count(
                     core_type_idx, processor_class, true);
-                for (uint32_t riscv_id = 0; riscv_id < num_build_states; riscv_id++) {
+                for (uint32_t riscv_id = 0; riscv_id < static_cast<uint32_t>(num_build_states); riscv_id++) {
                     auto fw_path = BuildEnvManager::get_instance().get_firmware_binary_path(
                         device_id, core_type_idx, processor_class, riscv_id);
                     const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);

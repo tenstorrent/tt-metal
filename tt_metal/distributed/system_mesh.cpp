@@ -37,7 +37,7 @@ namespace {
 MeshContainer<MappedDevice> initialize_mapped_devices(const tt::tt_fabric::MeshId mesh_id, const MeshShape& shape) {
     std::vector<MappedDevice> system_mesh_devices;
     system_mesh_devices.reserve(shape.mesh_size());
-    for (int linear_index = 0; linear_index < shape.mesh_size(); ++linear_index) {
+    for (size_t linear_index = 0; linear_index < shape.mesh_size(); ++linear_index) {
         system_mesh_devices.push_back(MappedDevice{
             .device_id = MaybeRemote<int>::remote(),
             .fabric_node_id = tt::tt_fabric::FabricNodeId(mesh_id, linear_index)});
@@ -201,7 +201,7 @@ SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
 
     // Attempt to fit the requested mesh into the system mesh, potentially rotating it.
     auto requested_mesh_fits = [&system_offset, &system_shape](const tt::stl::SmallVector<uint32_t>& rotated_shape) {
-        for (int i = 0; i < system_shape.dims(); ++i) {
+        for (size_t i = 0; i < system_shape.dims(); ++i) {
             if (system_offset[i] + rotated_shape[i] > system_shape[i]) {
                 return false;
             }
@@ -225,7 +225,7 @@ SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
     }
 
     tt::stl::SmallVector<uint32_t> end_coord;
-    for (int i = 0; i < system_dimensions; ++i) {
+    for (size_t i = 0; i < system_dimensions; ++i) {
         end_coord.push_back(system_offset[i] + rotated_shape[i] - 1);
     }
 
@@ -237,8 +237,8 @@ SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
         TT_FATAL(rotations == 1 and system_shape.dims() == 2, "Mesh rotation is only supported for 2D meshes");
 
         // Iterate through user-requested shape, transposing the rows and columns
-        for (int i = 0; i < requested_shape[0]; i++) {
-            for (int j = 0; j < requested_shape[1]; j++) {
+        for (uint32_t i = 0; i < requested_shape[0]; i++) {
+            for (uint32_t j = 0; j < requested_shape[1]; j++) {
                 const auto system_coord = MeshCoordinate(j, i);
                 const auto mapped_device = get_system_mapped_device(system_coord);
                 mapped_devices.device_ids.push_back(mapped_device.device_id);

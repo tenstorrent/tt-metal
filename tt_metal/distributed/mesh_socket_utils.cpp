@@ -499,7 +499,7 @@ void validate_subordinate_descriptors(
                 desc.exchange_tag);
             auto subordinate_descriptor_size_bytes = context->snoop_incoming_msg_size(Rank{rank}, desc.exchange_tag);
             TT_FATAL(
-                subordinate_descriptor_size_bytes == expected_subordinate_descriptor_size_bytes,
+                subordinate_descriptor_size_bytes == static_cast<size_t>(expected_subordinate_descriptor_size_bytes),
                 "Expected {} bytes in the subordinate descriptor, but got {} bytes during multi-host handshake.",
                 expected_subordinate_descriptor_size_bytes,
                 subordinate_descriptor_size_bytes);
@@ -608,7 +608,7 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     // Validate that the size in the header matches the descriptor message size
     auto descriptor_size_bytes = context->snoop_incoming_msg_size(Rank{peer_controller_rank}, desc.exchange_tag);
     TT_FATAL(
-        descriptor_size_bytes == expected_descriptor_size_bytes,
+        descriptor_size_bytes == static_cast<size_t>(expected_descriptor_size_bytes),
         "Expected {} bytes in the socket descriptor, but got {} bytes during multi-host handshake.",
         expected_descriptor_size_bytes,
         descriptor_size_bytes);

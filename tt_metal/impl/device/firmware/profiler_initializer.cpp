@@ -53,7 +53,7 @@ void ProfilerInitializer::init(
                     for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
                         uint32_t mmio_controlled_device_id = tunnel[ts];
                         auto it = std::find_if(devices_.begin(), devices_.end(), [&](Device* d) {
-                            return d->id() == mmio_controlled_device_id;
+                            return d->id() == static_cast<int>(mmio_controlled_device_id);
                         });
                         if (it != devices_.end()) {
                             detail::InitDeviceProfiler(*it);

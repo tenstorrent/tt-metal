@@ -148,7 +148,7 @@ void DispatchKernelInitializer::compile_dispatch_kernels() {
             for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
                 uint32_t mmio_controlled_device_id = tunnel[ts];
                 auto it = std::find_if(
-                    devices_.begin(), devices_.end(), [&](IDevice* d) { return d->id() == mmio_controlled_device_id; });
+                    devices_.begin(), devices_.end(), [&](IDevice* d) { return d->id() == static_cast<int>(mmio_controlled_device_id); });
                 if (it != devices_.end()) {
                     dispatch_topology_->populate_cq_static_args(*it);
                 }
@@ -168,7 +168,7 @@ void DispatchKernelInitializer::compile_dispatch_kernels() {
             for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
                 uint32_t mmio_controlled_device_id = tunnel[ts];
                 auto it = std::find_if(
-                    devices_.begin(), devices_.end(), [&](IDevice* d) { return d->id() == mmio_controlled_device_id; });
+                    devices_.begin(), devices_.end(), [&](IDevice* d) { return d->id() == static_cast<int>(mmio_controlled_device_id); });
                 if (it != devices_.end()) {
                     dispatch_topology_->create_cq_program(*it);
                 }
@@ -201,7 +201,7 @@ void DispatchKernelInitializer::init_device_command_queues() {
                 for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
                     uint32_t mmio_controlled_device_id = tunnel[ts];
                     auto it = std::find_if(devices_.begin(), devices_.end(), [&](IDevice* d) {
-                        return d->id() == mmio_controlled_device_id;
+                        return d->id() == static_cast<int>(mmio_controlled_device_id);
                     });
                     if (it != devices_.end()) {
                         (*it)->init_command_queue_device_with_topology(dispatch_topology_.get());

@@ -71,7 +71,7 @@ namespace {
 void check_context_id(ContextId context_id) {
     TT_FATAL(context_id.get() >= 0, "context_id {} is invalid.", context_id);
     TT_FATAL(
-        context_id.get() < MAX_CONTEXT_COUNT,
+        static_cast<size_t>(context_id.get()) < MAX_CONTEXT_COUNT,
         "context_id {} is out of range (max {}).",
         context_id.get(),
         MAX_CONTEXT_COUNT);
@@ -79,7 +79,7 @@ void check_context_id(ContextId context_id) {
 
 ContextId find_free_context_id_locked() {
     // Slot 0 is reserved for the silicon context.
-    for (int index = DEFAULT_CONTEXT_ID.get() + 1; index < MAX_CONTEXT_COUNT; ++index) {
+    for (int index = DEFAULT_CONTEXT_ID.get() + 1; index < static_cast<int>(MAX_CONTEXT_COUNT); ++index) {
         if (g_instances[index] == nullptr) {
             return ContextId{index};
         }
@@ -457,7 +457,7 @@ void MetalContext::destroy_instance(bool check_device_count, ContextId context_i
 }
 
 void MetalContext::destroy_all_instances(bool check_device_count) {
-    for (int index = 0; index < MAX_CONTEXT_COUNT; ++index) {
+    for (int index = 0; index < static_cast<int>(MAX_CONTEXT_COUNT); ++index) {
         destroy_instance(check_device_count, ContextId{index});
     }
 }

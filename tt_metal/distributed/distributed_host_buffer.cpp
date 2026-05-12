@@ -39,7 +39,7 @@ DistributedHostBuffer DistributedHostBuffer::create(
     int shard_index = 0;
     for (const auto& coord : distributed::MeshCoordinateRange(global_shape)) {
         if (translator.is_local(coord)) {
-            shards[shard_index] = distributed::MaybeRemote<Shard>::local(Shard{.is_populated = false});
+            shards[shard_index] = distributed::MaybeRemote<Shard>::local(Shard{.buffer = {}, .is_populated = false});
         }
         ++shard_index;
     }
@@ -60,7 +60,7 @@ DistributedHostBuffer DistributedHostBuffer::create(const distributed::MeshDevic
     int shard_index = 0;
     for (auto maybe_device : mesh_device_view) {
         maybe_device.if_local([&](const auto&) {
-            shards[shard_index] = distributed::MaybeRemote<Shard>::local(Shard{.is_populated = false});
+            shards[shard_index] = distributed::MaybeRemote<Shard>::local(Shard{.buffer = {}, .is_populated = false});
         });
         ++shard_index;
     }
