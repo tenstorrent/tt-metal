@@ -20,7 +20,8 @@ std::vector<CoreCoord> reassign_dram_interface_cores_for_wormhole(
     const std::vector<CoreCoord>& dram_interface_workers,
     uint32_t num_dram_banks,
     uint32_t max_worker_y_physical,
-    uint32_t min_worker_y_physical) {
+    uint32_t min_worker_y_physical,
+    uint32_t full_grid_size_x) {
     // Reassign optimally placed DRAM Interface worker cores based on harvesting for WH
     std::vector<CoreCoord> dram_interface_workers_g1;
     std::vector<CoreCoord> dram_interface_workers_g2;
@@ -98,6 +99,15 @@ std::vector<CoreCoord> reassign_dram_interface_cores_for_wormhole(
                 std::count(group_y.begin(), group_y.end(), y) >= 2) {
                 auto shift_coord_based_on_harvesting = [&](int start, int end, int step) {
                     auto clamp_x_to_valid_col = [&]() {
+                        // x_step shifts above can push coord.x past the right edge of
+                        // the physical grid. non_worker_cols only contains in-grid x
+                        // values, so the walk-left below alone would not bring such an
+                        // out-of-grid coord back in. Clamp to the rightmost in-grid
+                        // index first, then walk left past any reserved dispatch /
+                        // DRAM / harvested columns.
+                        if (full_grid_size_x > 0 && coord.x >= full_grid_size_x) {
+                            coord.x = full_grid_size_x - 1;
+                        }
                         while (std::find(non_worker_cols.begin(), non_worker_cols.end(), coord.x) !=
                                    non_worker_cols.end() &&
                                coord.x > 0) {
@@ -248,7 +258,8 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
             dram_interface_workers,
             num_dram_banks,
             max_worker_y_physical,
-            min_worker_y_physical);
+            min_worker_y_physical,
+            full_grid_size_x);
     }
     if (arch == ARCH::BLACKHOLE) {
         // Reassign worker cores based on harvesting for BH.
