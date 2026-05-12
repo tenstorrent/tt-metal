@@ -27,6 +27,7 @@
 #include "core_coord.hpp"
 #include "device/firmware/risc_firmware_initializer.hpp"
 #include "dispatch/dispatch_settings.hpp"
+#include "jit_build/build_env_manager.hpp"
 #include "hal_types.hpp"
 #include "fabric/fabric_host_utils.hpp"
 #include "debug/dprint_server.hpp"
@@ -372,18 +373,6 @@ bool MetalContext::instance_exists(ContextId context_id) {
     return g_instances[context_id.get()].load(std::memory_order_acquire) != nullptr;
 }
 
-MetalContext* MetalContext::find_any_existing_instance() {
-    if (auto* instance = g_instances[DEFAULT_CONTEXT_ID.get()].load(std::memory_order_acquire)) {
-        return instance;
-    }
-    for (int index = DEFAULT_CONTEXT_ID.get() + 1; index < MAX_CONTEXT_COUNT; ++index) {
-        if (auto* instance = g_instances[index].load(std::memory_order_acquire)) {
-            return instance;
-        }
-    }
-    return nullptr;
-}
-
 MetalContext& MetalContext::instance(ContextId context_id) {
     check_context_id(context_id);
     int index = context_id.get();
@@ -403,12 +392,18 @@ MetalContext& MetalContext::instance(ContextId context_id) {
             context_id == DEFAULT_CONTEXT_ID,
             "No MetalContext instance for context_id {}. Create one via create_instance().",
             context_id);
-        // If a non-default context already exists (e.g. a mock cluster context owned by a MetalEnv),
-        // return it rather than implicitly opening the silicon default. This unblocks mock-only and
-        // coexistence flows for callers that still use the bare MetalContext::instance() API
-        // (program/kernel construction, JIT helpers, debug tools, etc.) without forcing every call
-        // site to be migrated to the explicit ContextId form (#39849). The silicon default is only
-        // auto-created when no other context exists, preserving legacy single-cluster behavior.
+        // Internal-only bridge for legacy bare MetalContext::instance() callers (~hundreds
+        // across tt_metal/, kernel.cpp, program.cpp, dispatch.cpp, etc.) in mock-only or
+        // coexistence flows: if no default context exists yet but a non-default does
+        // (e.g. a mock cluster context owned by a MetalEnv), return that one instead of
+        // implicitly opening the silicon default. The silicon default is only auto-created
+        // when no other context exists at all, preserving legacy single-cluster behaviour.
+        //
+        // This fallback is intentionally not exposed as a public API (#38445 review):
+        // every public-API caller that needs a specific cluster's context must request it
+        // explicitly via MetalContext::instance(ContextId). The fallback exists only as a
+        // bridge until those legacy bare callers migrate to the explicit form, tracked as
+        // the per-context refactor of #38445.
         for (int i = DEFAULT_CONTEXT_ID.get() + 1; i < MAX_CONTEXT_COUNT; ++i) {
             if (auto* existing = g_instances[i].load(std::memory_order_acquire)) {
                 return *existing;
@@ -437,6 +432,10 @@ ContextId MetalContext::create_default_instance_implicit_locked() {
     instance->env_owned_ = true;
 
     g_instances[DEFAULT_CONTEXT_ID.get()].store(instance, std::memory_order_release);
+    // Seed the process-wide BuildEnvManager singleton with this context's HAL on first call,
+    // no-op thereafter. Using the by-HAL form (rather than get_instance(ContextId)) avoids
+    // re-entering MetalContext::instance() while we hold g_instance_mutex.
+    BuildEnvManager::seed_if_unseeded_with_hal(instance->hal());
     return DEFAULT_CONTEXT_ID;
 }
 
@@ -451,12 +450,16 @@ ContextId MetalContext::create_instance(MetalEnv& env_to_use) {
         }
         MetalContext* instance = new MetalContext(DEFAULT_CONTEXT_ID, env_to_use);
         g_instances[DEFAULT_CONTEXT_ID.get()].store(instance, std::memory_order_release);
+        // Seed the process-wide BuildEnvManager with this context's HAL on first call.
+        // By-HAL form avoids re-entering MetalContext::instance() while holding g_instance_mutex.
+        BuildEnvManager::seed_if_unseeded_with_hal(instance->hal());
         return DEFAULT_CONTEXT_ID;
     }
 
     ContextId context_id = find_free_context_id_locked();
     MetalContext* instance = new MetalContext(context_id, env_to_use);
     g_instances[context_id.get()].store(instance, std::memory_order_release);
+    BuildEnvManager::seed_if_unseeded_with_hal(instance->hal());
     return context_id;
 }
 

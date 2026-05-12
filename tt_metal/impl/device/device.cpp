@@ -465,8 +465,13 @@ bool Device::initialize(
         return true;
     }
 
-    // Create shared memory stats provider (enabled by default, disable with TT_METAL_SHM_TRACKING_DISABLED=1)
-    if (!context_->rtoptions().get_shm_tracking_disabled()) {
+    // Create shared memory stats provider (enabled by default, disable with TT_METAL_SHM_TRACKING_DISABLED=1).
+    // Snapshot the SHM rtoptions once here -- they are process-wide debug toggles, so capturing
+    // them at construction time avoids the SHM helpers having to look up a MetalContext on every
+    // allocation (and avoids any "find any context" walk that mock+silicon coexistence forced).
+    const bool shm_tracking_disabled = context_->rtoptions().get_shm_tracking_disabled();
+    const bool shm_verbose = context_->rtoptions().get_shm_verbose();
+    if (!shm_tracking_disabled) {
         // Use UMD's chip_unique_ids for globally unique chip identification.
         // This ID is computed by topology discovery from hardware-reported board_id and asic_location,
         // and is consistent across all board types (P300, N300, UBB Wormhole, UBB Blackhole, etc.).
@@ -507,14 +512,17 @@ bool Device::initialize(
             asic_id = this->id_;
         }
 
-        shm_stats_provider_ = std::make_unique<SharedMemoryStatsProvider>(asic_id, this->id_);
+        shm_stats_provider_ =
+            std::make_unique<SharedMemoryStatsProvider>(asic_id, this->id_, shm_tracking_disabled, shm_verbose);
         log_debug(tt::LogMetal, "Shared memory tracking enabled for device {}, asic_id=0x{:x}", this->id_, asic_id);
 
-        // Register ShmTrackingProcessor globally once (when first device with SHM is created)
+        // Register ShmTrackingProcessor globally once (when first device with SHM is created).
+        // Verbose flag is captured here from this device's MetalContext for the same reason as
+        // SharedMemoryStatsProvider above.
         static bool shm_processor_registered = false;
         if (!shm_processor_registered) {
             tt::tt_metal::GraphTracker::instance().push_processor(
-                std::make_shared<tt::tt_metal::ShmTrackingProcessor>());
+                std::make_shared<tt::tt_metal::ShmTrackingProcessor>(shm_verbose));
             log_debug(tt::LogMetal, "ShmTrackingProcessor registered with GraphTracker");
             shm_processor_registered = true;
         }

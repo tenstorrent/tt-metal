@@ -82,11 +82,9 @@ void PerformDeviceWork(
 
     auto program = CreateProgram();
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    // Use a single worker core. Spanning the full compute_with_storage grid hits worker-dispatch
-    // cores under fast-dispatch + WORKER dispatch (e.g. wh_n150 CI runners), and program-compile
-    // rejects kernels placed on dispatch cores. (0,0) is universally a worker compute core under
-    // every tt-metal dispatch configuration. A no-op kernel only needs to validate the
-    // create / JIT / dispatch pipeline, so one core is sufficient.
+    // A no-op kernel only validates the create / JIT / dispatch pipeline,
+    // so a single worker core is sufficient. (0, 0) is always a logical
+    // compute core regardless of dispatch-core configuration.
     auto core_range = CoreRange({0, 0}, {0, 0});
 
     std::string kernel_src = "void kernel_main() {\n    // " + kernel_identifier + "\n}";
@@ -222,11 +220,13 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
         buffer->deallocate();
         ASSERT_FALSE(buffer->is_allocated());
 
-        // Test command queue operations
+        // Test command queue operations. Source vector is sized to fill the entire buffer so
+        // EnqueueWriteMeshBuffer's precondition (src bytes >= mesh buffer bytes, added in #43429)
+        // is satisfied; the prior 16-element vector was a pre-#43429 leftover.
         auto& cq = mock_device->mesh_command_queue();
-        constexpr size_t num_elements = 16;
+        constexpr size_t num_elements = buffer_size / sizeof(uint32_t);
         std::vector<uint32_t> write_data(num_elements);
-        std::iota(write_data.begin(), write_data.end(), 0xDEADBEEF);
+        std::iota(write_data.begin(), write_data.end(), 0xDEADBEEFu);
 
         distributed::EnqueueWriteMeshBuffer(cq, buffer, write_data, true);
 
@@ -235,7 +235,7 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
 
         auto program = CreateProgram();
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mock_device->shape());
-        // Single worker core; see comment in RunChildWithVisibleDevices above.
+        // Single worker core; see comment in PerformDeviceWork.
         auto core_range = CoreRange({0, 0}, {0, 0});
 
         CreateKernelFromString(program, "void kernel_main() {}", core_range, DataMovementConfig{});
@@ -298,7 +298,7 @@ TEST(MetalContextIntegrationTest, CoexistingSiliconAndMockDevice) {
     auto run_noop_program = [](distributed::MeshDevice& target, const std::string& label) {
         auto program = CreateProgram();
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(target.shape());
-        // Single worker core; see comment in RunChildWithVisibleDevices above.
+        // Single worker core; see comment in PerformDeviceWork.
         auto core_range = CoreRange({0, 0}, {0, 0});
 
         CreateKernelFromString(program, "void kernel_main() {}", core_range, DataMovementConfig{});
@@ -349,7 +349,7 @@ TEST(MetalContextIntegrationTest, CoexistingMockAndSiliconDevice) {
     auto run_noop_program = [](distributed::MeshDevice& target, const std::string& label) {
         auto program = CreateProgram();
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(target.shape());
-        // Single worker core; see comment in RunChildWithVisibleDevices above.
+        // Single worker core; see comment in PerformDeviceWork.
         auto core_range = CoreRange({0, 0}, {0, 0});
 
         CreateKernelFromString(program, "void kernel_main() {}", core_range, DataMovementConfig{});

@@ -23,34 +23,60 @@
 
 namespace tt::tt_metal {
 
-BuildEnvManager& BuildEnvManager::get_instance() {
-    // BuildEnvManager is a process-wide singleton initialized once with a HAL reference. The
-    // constructor sizes kernel_build_state_indices_ / firmware_build_state_indices_ from that
-    // HAL's programmable-core-type, processor-class, and fw-binary counts.
+namespace {
+
+// Process-wide singleton state. Seeded once via seed_if_unseeded_with_hal(), then read-only
+// for the lifetime of the process. Driven by MetalContext::create_* so that the seeding HAL
+// is always the HAL of the first MetalContext that comes into existence -- no implicit
+// silicon initialisation, and no walking of g_instances slots from outside MetalContext.
+std::atomic<BuildEnvManager*> s_instance{nullptr};
+std::mutex s_seed_mutex;
+
+}  // namespace
+
+void BuildEnvManager::seed_if_unseeded_with_hal(const Hal& hal) {
+    // Fast path: already seeded. No lock, no allocation.
+    if (s_instance.load(std::memory_order_acquire) != nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(s_seed_mutex);
+    if (s_instance.load(std::memory_order_acquire) != nullptr) {
+        return;
+    }
+    // Seed the singleton with the supplied HAL. The constructor sizes
+    // kernel_build_state_indices_ / firmware_build_state_indices_ from that HAL's
+    // programmable-core-type, processor-class, and fw-binary counts.
     //
-    // For the common case (silicon + mock of the same arch) those counts are arch-derived and
-    // stable, so seeding from any existing context's HAL is safe. We use
-    // find_any_existing_instance() to avoid implicitly opening the silicon DEFAULT context
-    // when only a mock context exists (forge's mock-only flow); if no context exists yet, the
-    // no-arg instance() is the legacy fallback and will create the default silicon context.
-    //
-    // PRE-EXISTING LIMITATION (not introduced by this PR, but surfaced once contexts can
-    // genuinely coexist in-process): HAL layout can also be modulated by rtoptions -- e.g.
-    // simulator mode, Blackhole DRAM programmable cores, 2-erisc mode -- so two contexts on
-    // the same arch with disagreeing rtoptions can produce different layout counts. Whichever
-    // HAL initializes this singleton first wins; the other context will index build states
-    // through a table sized for the wrong layout, leading to wrong indices or asserts. This is
-    // a property of the singleton design, not of the context selection done here.
+    // PRE-EXISTING LIMITATION (not introduced by the explicit-seeding refactor, but surfaced
+    // once contexts can genuinely coexist in-process): HAL layout can be modulated by
+    // rtoptions -- simulator mode, Blackhole DRAM programmable cores, 2-erisc mode -- so two
+    // contexts on the same arch with disagreeing rtoptions, or two contexts on different
+    // arches, can produce different layout counts. Whichever HAL seeds this singleton first
+    // wins; the other context will index build states through a table sized for the wrong
+    // layout. This is a property of the singleton design.
     // TODO(#TBD): key BuildEnvManager by a stable HAL signature (arch + relevant rtoptions),
-    // or move the index computation into per-device DeviceBuildEnv so each device carries its
-    // own mapping.
-    static BuildEnvManager instance([]() -> const Hal& {
-        if (auto* existing = MetalContext::find_any_existing_instance()) {
-            return existing->hal();
-        }
-        return MetalContext::instance().hal();
-    }());
-    return instance;
+    // or move the index computation into per-device DeviceBuildEnv so each device carries
+    // its own mapping. That refactor closes the cross-arch / cross-rtoptions hazard above.
+    s_instance.store(new BuildEnvManager(hal), std::memory_order_release);
+}
+
+BuildEnvManager& BuildEnvManager::get_instance(ContextId context_id) {
+    // Resolve the ContextId to a HAL via MetalContext::instance(context_id), then seed.
+    // Callers that already hold g_instance_mutex (i.e. MetalContext::create_*) must use
+    // seed_if_unseeded_with_hal() directly with the in-scope HAL to avoid re-entering
+    // MetalContext::instance().
+    seed_if_unseeded_with_hal(MetalContext::instance(context_id).hal());
+    return *s_instance.load(std::memory_order_acquire);
+}
+
+BuildEnvManager& BuildEnvManager::get_instance() {
+    auto* existing = s_instance.load(std::memory_order_acquire);
+    TT_FATAL(
+        existing != nullptr,
+        "BuildEnvManager::get_instance() called before any MetalContext was created. The "
+        "singleton is seeded by MetalContext::create_instance(); ensure at least one "
+        "MetalEnv has been constructed first, or call get_instance(ContextId) explicitly.");
+    return *existing;
 }
 
 BuildEnvManager::BuildEnvManager(const Hal& hal) {
