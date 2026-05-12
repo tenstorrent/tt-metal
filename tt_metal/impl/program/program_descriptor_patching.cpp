@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace tt::tt_metal {
@@ -24,6 +25,25 @@ namespace tt::tt_metal {
 ResolvedBindings resolve_bindings(
     Program& program, const ProgramDescriptor& desc, const std::vector<Buffer*>& tensor_buffers) {
     ResolvedBindings result;
+
+    // If the same Buffer* appears in tensor_buffers more than once (e.g. matmul(X, X),
+    // or an output that aliases an input), every binding for that buffer would map to
+    // the first occurrence via std::find below.  At cache hit, all of those bindings
+    // would be patched with current_buffers[first_slot].address(), so the second
+    // tensor's address would never get written.  The result is silent miscompute when
+    // a future call uses distinct tensors at the same shape/dtype.
+    //
+    // We can't disambiguate which binding corresponds to which slot from Buffer* alone,
+    // so we fall back to the slow path (rebuild the descriptor) when this happens.
+    {
+        std::unordered_set<Buffer*> seen;
+        seen.reserve(tensor_buffers.size());
+        for (Buffer* buf : tensor_buffers) {
+            if (buf && !seen.insert(buf).second) {
+                return ResolvedBindings{};
+            }
+        }
+    }
 
     // Map each Buffer* to its index in tensor_buffers.  Every binding Buffer* must be
     // present; TT_FATAL fires if a factory used a non-tensor buffer in emplace_runtime_args.

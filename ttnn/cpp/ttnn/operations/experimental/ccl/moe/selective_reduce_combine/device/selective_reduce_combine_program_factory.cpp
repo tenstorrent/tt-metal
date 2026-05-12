@@ -77,8 +77,23 @@ auto launch_mux_workers(
             *occupied_l1_tensor_addr);
     }
 
-    const auto needed_mux_core_range_set =
-        select_from_corerangeset(mux_core_range_set, 0, num_links * neighbors.size() - 1);
+    // Calculate required vs available mux cores for fabric communication (one core per link per neighbor)
+    const uint32_t needed_cores = num_links * neighbors.size();
+    const uint32_t available_cores = mux_core_range_set.num_cores();
+
+    // Validate sufficient cores exist before selection to prevent segfault in select_from_corerangeset
+    TT_FATAL(
+        needed_cores <= available_cores,
+        "Not enough mux cores! Needed: {} (num_links={} * neighbors.size()={}), Available: {}. "
+        "mux_core_range_set={}",
+        needed_cores,
+        num_links,
+        neighbors.size(),
+        available_cores,
+        mux_core_range_set.str());
+
+    const auto needed_mux_core_range_set = select_from_corerangeset(mux_core_range_set, 0, needed_cores - 1);
+
     auto mux_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
@@ -251,8 +266,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
 
-    //  assert (axis.has_value()) in validate
-    const auto& axis = operation_attributes.axis;
+    const auto axis = operation_attributes.axis;
 
     const auto fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
     const uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
@@ -493,9 +507,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         {"DEST_MESH_ID", stringify(dest_mesh_id)},
         {"DIRECTIONS", stringify(directions)}};
 
-    if (axis.has_value()) {
-        writer_defines["REPLICATE_GROUP_AXIS"] = std::to_string(axis.value());
-    }
+    writer_defines["REPLICATE_GROUP_AXIS"] = std::to_string(axis);
 
     const DataMovementConfig writer_config{
         .processor = DataMovementProcessor::RISCV_0,

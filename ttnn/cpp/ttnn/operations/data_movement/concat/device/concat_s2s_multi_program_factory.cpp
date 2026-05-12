@@ -28,7 +28,7 @@ uint32_t find_greatest_common_page_size(std::vector<uint32_t>& stick_sizes, uint
 
 }  // namespace
 
-ConcatS2SMultiProgramFactory::cached_program_t ConcatS2SMultiProgramFactory::create(
+tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
     const ConcatParams& operation_attributes, const ConcatInputs& tensor_args, Tensor& tensor_return_value) {
     using namespace tt::constants;
     using namespace tt::tt_metal;
@@ -36,8 +36,7 @@ ConcatS2SMultiProgramFactory::cached_program_t ConcatS2SMultiProgramFactory::cre
     const auto& input_tensors = tensor_args.input_tensors;
     Tensor& output = tensor_return_value;
     const bool is_height_concat = 2 == operation_attributes.dim;
-
-    Program program = CreateProgram();
+    ProgramDescriptor desc;
 
     const uint32_t num_input_tensors = input_tensors.size();
     const uint32_t cb_dst_id = 16;
@@ -69,11 +68,9 @@ ConcatS2SMultiProgramFactory::cached_program_t ConcatS2SMultiProgramFactory::cre
         elements_per_page_height = TILE_HEIGHT;
     }
 
-    std::vector<CBHandle> cb_inputs;
     std::vector<uint32_t> input_num_pages_per_stick;
     std::vector<uint32_t> input_num_sticks;
     std::vector<uint32_t> input_write_offsets;
-    cb_inputs.reserve(num_input_tensors);
     input_num_pages_per_stick.reserve(num_input_tensors);
     input_num_sticks.reserve(num_input_tensors);
     input_write_offsets.reserve(num_input_tensors);
@@ -90,11 +87,16 @@ ConcatS2SMultiProgramFactory::cached_program_t ConcatS2SMultiProgramFactory::cre
         input_write_offsets.push_back(curr_input_write_offset);
 
         const uint32_t input_num_pages = input_num_pages_per_stick[input_id] * input_num_sticks[input_id];
-        const CircularBufferConfig input_cb_config =
-            CircularBufferConfig(page_size * input_num_pages, {{input_id, cb_data_format}})
-                .set_page_size(input_id, page_size)
-                .set_globally_allocated_address(*input_tensors[input_id].buffer());
-        cb_inputs.push_back(CreateCircularBuffer(program, all_cores, input_cb_config));
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = page_size * input_num_pages,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(input_id),
+                .data_format = cb_data_format,
+                .page_size = page_size,
+            }}},
+            .buffer = input_tensors[input_id].buffer(),
+        });
 
         curr_input_write_offset +=
             page_size * (is_height_concat ? input_num_pages : input_num_pages_per_stick[input_id]);
@@ -104,14 +106,20 @@ ConcatS2SMultiProgramFactory::cached_program_t ConcatS2SMultiProgramFactory::cre
     const auto output_shard_spec = output.shard_spec().value();
     const uint32_t output_num_pages_per_stick = tt::div_up(output_shard_spec.shape[1], elements_per_page_width);
     const uint32_t output_num_sticks = tt::div_up(output_shard_spec.shape[0], elements_per_page_height);
-    const CircularBufferConfig output_cb_config =
-        CircularBufferConfig(page_size * output_num_sticks * output_num_pages_per_stick, {{cb_dst_id, cb_data_format}})
-            .set_page_size(cb_dst_id, page_size)
-            .set_globally_allocated_address(*output.buffer());
-    auto cb_output = CreateCircularBuffer(program, all_cores, output_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = page_size * output_num_sticks * output_num_pages_per_stick,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_dst_id),
+            .data_format = cb_data_format,
+            .page_size = page_size,
+        }}},
+        .buffer = output.buffer(),
+    });
 
     const uint32_t output_stride = page_size * output_num_pages_per_stick;
-    const std::vector<uint32_t> compile_time_args = {cb_dst_id, page_size, output_stride, num_input_tensors};
+    const KernelDescriptor::CompileTimeArgs compile_time_args = {
+        cb_dst_id, page_size, output_stride, num_input_tensors};
 
     std::vector<uint32_t> runtime_args_0;
     std::vector<uint32_t> runtime_args_1;
@@ -127,42 +135,45 @@ ConcatS2SMultiProgramFactory::cached_program_t ConcatS2SMultiProgramFactory::cre
         runtime_args_1.push_back(page_size * input_num_pages_per_stick[input_id] * input_num_sticks_per_risc);
     }
 
-    KernelHandle unary_reader_kernel_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_s2s_tensor_concat.cpp",
-        all_cores,
-        ReaderDataMovementConfig(compile_time_args));
+    // Match the legacy CachedProgram path: SetRuntimeArgs(..., all_cores, args).
+    // These values must live in per-core runtime args, not common_runtime_args.
+    // BRISC (writer) and NCRISC (reader) each have their own RTA region; using
+    // common_runtime_args for both kernels made both RISCs observe the same
+    // offsets (precision failures in sharded concat).
+    KernelDescriptor::CoreRuntimeArgs reader_rt_args(runtime_args_0.begin(), runtime_args_0.end());
+    KernelDescriptor::CoreRuntimeArgs writer_rt_args(runtime_args_1.begin(), runtime_args_1.end());
 
-    KernelHandle unary_writer_kernel_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_s2s_tensor_concat.cpp",
-        all_cores,
-        WriterDataMovementConfig(compile_time_args));
-
-    SetRuntimeArgs(program, unary_reader_kernel_id, all_cores, runtime_args_0);
-    SetRuntimeArgs(program, unary_writer_kernel_id, all_cores, runtime_args_1);
-
-    return {
-        std::move(program),
-        {.num_input_tensors = num_input_tensors,
-         .cb_inputs = cb_inputs,
-         .cb_output = cb_output,
-         .all_cores = all_cores}};
-}
-
-void ConcatS2SMultiProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const ConcatParams& /*operation_attributes*/,
-    const ConcatInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    auto& program = cached_program.program;
-    const auto& shared_vars = cached_program.shared_variables;
-
-    for (uint32_t input_id = 0; input_id < shared_vars.num_input_tensors; input_id++) {
-        tt::tt_metal::UpdateDynamicCircularBufferAddress(
-            program, shared_vars.cb_inputs[input_id], *tensor_args.input_tensors[input_id].buffer());
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_s2s_tensor_concat.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = compile_time_args;
+    reader_desc.runtime_args.reserve(all_cores.num_cores());
+    for (const auto& range : all_cores.ranges()) {
+        for (const CoreCoord& core : range) {
+            reader_desc.runtime_args.emplace_back(core, reader_rt_args);
+        }
     }
-    tt::tt_metal::UpdateDynamicCircularBufferAddress(program, shared_vars.cb_output, *tensor_return_value.buffer());
+    reader_desc.config = ReaderConfigDescriptor{};
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_s2s_tensor_concat.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = compile_time_args;
+    writer_desc.runtime_args.reserve(all_cores.num_cores());
+    for (const auto& range : all_cores.ranges()) {
+        for (const CoreCoord& core : range) {
+            writer_desc.runtime_args.emplace_back(core, writer_rt_args);
+        }
+    }
+    writer_desc.config = WriterConfigDescriptor{};
+
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    return desc;
 }
 
 }  // namespace ttnn::prim

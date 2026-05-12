@@ -73,7 +73,27 @@ struct EthCoreCaptureResult {
 };
 
 // ============================================================================
-// Helper: Read capture data from all active ETH cores on a device
+// Helper: Enumerate the ETH cores/channels that participate in the configured
+// fabric topology for a physical chip.
+// ============================================================================
+std::vector<std::pair<CoreCoord, chan_id_t>> get_active_fabric_capture_cores(ChipId physical_chip_id) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
+    const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
+    const auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
+
+    std::vector<std::pair<CoreCoord, chan_id_t>> capture_cores;
+    capture_cores.reserve(active_channels.size());
+    for (const auto& [channel_id, _] : active_channels) {
+        auto logical_eth_core = soc_desc.get_eth_core_for_channel(channel_id, CoordSystem::LOGICAL);
+        capture_cores.emplace_back(CoreCoord(logical_eth_core.x, logical_eth_core.y), channel_id);
+    }
+    return capture_cores;
+}
+
+// ============================================================================
+// Helper: Read capture data from all active fabric ETH channels on a device
 // ============================================================================
 std::vector<EthCoreCaptureResult> read_capture_from_all_eth_cores(
     BaseFabricFixture* fixture, ChipId physical_chip_id) {
@@ -88,22 +108,14 @@ std::vector<EthCoreCaptureResult> read_capture_from_all_eth_cores(
     size_t capture_addr = buffer_map.channel_trimming_capture.l1_address;
     size_t capture_size = buffer_map.channel_trimming_capture.size_bytes;
 
-    const auto logical_cores = control_plane.get_active_ethernet_cores(physical_chip_id);
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& chan_map = cluster.get_soc_desc(physical_chip_id).logical_eth_core_to_chan_map;
+    const auto capture_cores = get_active_fabric_capture_cores(physical_chip_id);
 
     const auto& device = fixture->get_device(physical_chip_id);
 
     std::vector<EthCoreCaptureResult> results;
-    results.reserve(logical_cores.size());
+    results.reserve(capture_cores.size());
 
-    for (const auto& logical_core : logical_cores) {
-        auto chan_it = chan_map.find(logical_core);
-        if (chan_it == chan_map.end()) {
-            continue;
-        }
-        chan_id_t channel_id = static_cast<chan_id_t>(chan_it->second);
-
+    for (const auto& [logical_core, channel_id] : capture_cores) {
         std::vector<uint32_t> raw_data;
         tt_metal::detail::ReadFromDeviceL1(
             device->get_devices()[0], logical_core, capture_addr, capture_size, raw_data, CoreType::ETH);
@@ -118,7 +130,7 @@ std::vector<EthCoreCaptureResult> read_capture_from_all_eth_cores(
 }
 
 // ============================================================================
-// Helper: Clear capture buffers on all active ETH cores for a device.
+// Helper: Clear capture buffers on all active fabric ETH channels for a device.
 // Writes a zeroed CaptureResults struct (with min_packet_size sentinel 0xFFFF)
 // to each core's L1 capture address, matching the device-side reset() behavior.
 // ============================================================================
@@ -140,23 +152,26 @@ void clear_capture_on_device(BaseFabricFixture* fixture, ChipId physical_chip_id
     std::vector<uint32_t> raw(capture_size / sizeof(uint32_t), 0);
     std::memcpy(raw.data(), &reset_data, std::min(capture_size, sizeof(reset_data)));
 
-    const auto logical_cores = control_plane.get_active_ethernet_cores(physical_chip_id);
+    const auto capture_cores = get_active_fabric_capture_cores(physical_chip_id);
     const auto& device = fixture->get_device(physical_chip_id);
-    for (const auto& logical_core : logical_cores) {
+    for (const auto& [logical_core, _] : capture_cores) {
         tt_metal::detail::WriteToDeviceL1(
             device->get_devices()[0], logical_core, capture_addr, raw, CoreType::ETH);
     }
 }
 
 // ============================================================================
-// Helper: Clear capture buffers on ALL devices in the mesh.
+// Helper: Clear capture buffers on all devices in the local fabric meshes.
 // ============================================================================
 void clear_all_capture_buffers(BaseFabricFixture* fixture) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    auto mesh_shape = control_plane.get_physical_mesh_shape(MeshId{0});
-    for (uint32_t i = 0; i < mesh_shape.mesh_size(); i++) {
-        ChipId phys = control_plane.get_physical_chip_id_from_fabric_node_id(FabricNodeId(MeshId{0}, i));
-        clear_capture_on_device(fixture, phys);
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    for (const auto& mesh_id : control_plane.get_local_mesh_id_bindings()) {
+        for (const auto& mesh_coord : control_plane.get_coord_range(mesh_id, MeshScope::LOCAL)) {
+            auto chip_id = mesh_graph.coordinate_to_chip(mesh_id, mesh_coord);
+            ChipId phys = control_plane.get_physical_chip_id_from_fabric_node_id(FabricNodeId(mesh_id, chip_id));
+            clear_capture_on_device(fixture, phys);
+        }
     }
 }
 
