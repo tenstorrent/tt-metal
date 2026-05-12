@@ -1022,13 +1022,15 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
+@pytest.mark.skip(reason="Run only on systems with Y-dimension torus links enabled.")
 @pytest.mark.timeout(1200)
 def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict):
     """
-    Test fused MoE with reduce_to_one on 4x2 mesh.
+    Test fused MoE with reduce_to_all on 4x2 mesh.
 
     Each of 8 devices runs the full fused MoE (routed + shared expert),
-    then results are reduced (summed) across all devices to ROOT1.
+    then results are reduced (summed) across all devices via reduce_to_all.
+    Exit-column devices receive the final reduced output.
 
     Gate is rigged so grouped top-k picks deterministic winners.
     """
@@ -1132,8 +1134,9 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         tile=Tiles.TILE_8x32,
     )
 
-    # ── ReduceToOne tensors and semaphores ──
+    # ── ReduceToAll tensors and semaphores ──
     root_coord = TestConfig.REDUCE_ROOT_COORD
+    reduce_exit_column = root_coord[1]
 
     # Reduce mesh mapper (2D shard across 4x2 mesh)
     reduce_mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)], submesh.shape)
@@ -1189,7 +1192,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
     )
     logger.info(f"Created reduce output tensor on core {reduce_output_core}")
 
-    # 4 global semaphores for reduce synchronization (round1, round2, round3, exit)
+    # 4 global semaphores for reduce synchronization (round1, round2, round3)
     num_cores = compute_grid.x * compute_grid.y
     available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, row_wise=True)
     ttnn.synchronize_device(submesh)
@@ -1199,7 +1202,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
     ttnn.synchronize_device(submesh)
     logger.info("Created 4 global semaphores for reduce synchronization")
 
-    # ── Run fused MoE op with reduce (looping inside kernel) ──
+    # ── Run fused MoE op with reduce_to_all (looping inside kernel) ──
     moe_semaphores = MoeOp.create_semaphores(submesh)
     num_iterations = TestConfig.NUM_ITERATIONS
     ttnn_result_scores, ttnn_result_indices, ttnn_result_reduce = MoeOp.op(
@@ -1225,13 +1228,14 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         sdpa_out_interm_buffer=sdpa_out_interm_buffer,
         num_iterations=num_iterations,
         reconfig_moe_cbs=reconfig_moe_cbs,
-        # ReduceToOne parameters
+        # ReduceToAll parameters
         reduce_intermediate_tensors=intermediate_tensors,
         reduce_output_tensor=reduce_output_tensor,
         reduce_semaphores=reduce_semaphores,
         reduce_root_coord=ttnn.MeshCoordinate(root_coord),
         semaphores=moe_semaphores,
         noc_mode=noc_mode,
+        reduce_exit_column=reduce_exit_column,
     )
     ttnn.synchronize_device(submesh)
     logger.info(f"Fused MoE with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
@@ -1267,7 +1271,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         include_residual=True,
     )
 
-    # Get actual reduce output from ROOT1 device
+    # Get actual reduce output from exit-column device at root_coord row
     reduce_output_torch = ttnn.to_torch(
         ttnn_result_reduce,
         mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0),
@@ -1312,8 +1316,6 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         with torch.no_grad():
             ref_moe_output = reference_moe(normed_input.unsqueeze(0)).squeeze(0)
 
-        # Residual is added once (on ROOT1 only), so reduce output directly
-        # matches: residual + moe_output
         ref_block_output = r.torch_input.float() + ref_moe_output.float()
 
         passing_ref, pcc_ref = comp_pcc(ref_block_output, reduce_output_valid.float(), 0.95)
@@ -1485,7 +1487,7 @@ def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict)
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
     "device_params",
-    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D})],
+    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y})],
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
@@ -1493,15 +1495,17 @@ def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict)
 @pytest.mark.parametrize("reconfig_moe_cbs", [True])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
+@pytest.mark.skip(reason="Run only on systems with Y-dimension torus links enabled.")
 @pytest.mark.timeout(1200)
 def test_mlp_with_reduce(
     bh_2d_mesh_device, use_mlp_weights, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict
 ):
     """
-    Test MoeOp with enable_routing=False and reduce_to_one on 4x2 mesh.
+    Test MoeOp with enable_routing=False and reduce_to_all on 4x2 mesh.
 
     Each of 8 devices runs the full fused MLP (dense MLP + shared expert),
-    then results are reduced (summed) across all devices to ROOT1.
+    then results are reduced (summed) across all devices via reduce_to_all.
+    Exit-column devices receive the final reduced output.
 
     When use_mlp_weights=False uses MoE layer weights (experts.0 + shared_experts).
     When use_mlp_weights=True uses dense MLP weights (gate_proj/up_proj/down_proj)
@@ -1598,8 +1602,9 @@ def test_mlp_with_reduce(
         tile=Tiles.TILE_8x32,
     )
 
-    # ── ReduceToOne tensors and semaphores ──
+    # ── ReduceToAll tensors and semaphores ──
     root_coord = TestConfig.REDUCE_ROOT_COORD
+    reduce_exit_column = root_coord[1]
 
     reduce_mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)], submesh.shape)
     reduce_mesh_mapper = ttnn.create_mesh_mapper(submesh, reduce_mesh_mapper_config)
@@ -1664,7 +1669,7 @@ def test_mlp_with_reduce(
     ttnn.synchronize_device(submesh)
     logger.info("Created 4 global semaphores for reduce synchronization")
 
-    # ── Run MoeOp with enable_routing=False and reduce ──
+    # ── Run MoeOp with enable_routing=False and reduce_to_all ──
     moe_semaphores = MoeOp.create_semaphores(submesh)
     num_iterations = TestConfig.NUM_ITERATIONS
     ttnn_result_reduce = MoeOp.op(
@@ -1691,13 +1696,15 @@ def test_mlp_with_reduce(
         reduce_root_coord=ttnn.MeshCoordinate(root_coord),
         semaphores=moe_semaphores,
         noc_mode=noc_mode,
+        reduce_exit_column=reduce_exit_column,
     )
+    logger.info("kernel dispatched...")
     ttnn.synchronize_device(submesh)
     logger.info(f"MoeOp no-routing with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
 
     # ── Verify results ──
     # Compute per-device golden with per-device TP shards of shared expert weights.
-    # Residual is only added on ROOT1 device; non-root devices skip it.
+    # Residual is only added on device 0 (chip_id==0); other devices skip it.
     K_down = s.K_down
     root_device_idx = root_coord[0] * submesh.shape[1] + root_coord[1]
     expected_final_outputs = []
@@ -1726,14 +1733,14 @@ def test_mlp_with_reduce(
             rmsnorm_gamma=r.torch_rmsnorm_gamma,
             rmsnorm_epsilon=1e-6,
             enable_routing=False,
-            include_residual=(device_idx == root_device_idx),
+            include_residual=(device_idx == 0),
         )
         expected_final_outputs.append(device_expected)
 
     # Expected reduce output = sum of all per-device outputs
     expected_reduce_output = sum(expected_final_outputs)
 
-    # Get actual reduce output from ROOT1 device
+    # Get actual reduce output from exit-column device at root_coord row
     reduce_output_torch = ttnn.to_torch(
         ttnn_result_reduce,
         mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0),
@@ -1764,9 +1771,8 @@ def test_mlp_with_reduce(
         with torch.no_grad():
             shared_output = shared_ref(normed_input.unsqueeze(0)).squeeze(0)
             routed_outputs = [routed_refs[d](normed_input.unsqueeze(0)).squeeze(0) for d in range(8)]
-        # Residual is added once (on ROOT1 only)
+        # Residual is added once (on device 0 only)
         ref_reduce = sum(routed_outputs).float() + shared_output.float() + r.torch_input.float()
-        # Also compare against single full MLP (reference block): reduce_output directly matches
         full_mlp_ref = create_reference_dense_full_mlp(state_dict, layer_idx)
         with torch.no_grad():
             ref_block_output = r.torch_input.float() + full_mlp_ref(normed_input.unsqueeze(0)).squeeze(0).float()
@@ -1778,7 +1784,7 @@ def test_mlp_with_reduce(
         with torch.no_grad():
             expert_0_output = expert_ref(normed_input.unsqueeze(0)).squeeze(0)
             shared_full_output = shared_ref(normed_input.unsqueeze(0)).squeeze(0)
-        # Residual is added once (on ROOT1 only)
+        # Residual is added once (on device 0 only)
         ref_reduce = num_devices * expert_0_output.float() + shared_full_output.float() + r.torch_input.float()
 
     passing_ref, pcc_ref = comp_pcc(ref_reduce, reduce_output_valid, 0.975)
