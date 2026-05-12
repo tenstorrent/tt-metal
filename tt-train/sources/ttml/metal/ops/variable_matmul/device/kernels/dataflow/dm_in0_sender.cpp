@@ -31,6 +31,7 @@ void kernel_main() {
     constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(20);
     constexpr uint32_t in3_tile_size = get_compile_time_arg_val(21);
     constexpr bool transpose_a = static_cast<bool>(get_compile_time_arg_val(22));
+    constexpr bool use_offset = static_cast<bool>(get_compile_time_arg_val(23));
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
@@ -57,7 +58,7 @@ void kernel_main() {
     const uint32_t out_addr_rt_arg_idx = argidx;  // Output addresses start here (after ternary if present)
 
     // Tensor accessor for input tensor
-    constexpr auto in0_args = TensorAccessorArgs<23>();
+    constexpr auto in0_args = TensorAccessorArgs<24>();
     const auto in0_reader = TensorAccessor(in0_args, in0_addr, in0_tile_size);
 
     // Always create tuple of output accessors (size = N_chunks)
@@ -115,12 +116,15 @@ void kernel_main() {
     const uint32_t M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks);
     const uint32_t padded_M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 1);
     const uint32_t M_blocks_per_core = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 2);
-    // Read-at-offset support. in0_row_offset_tiles is added to in0 tile addresses.
-    // parent_M_tiles_stride is the actual M extent of the source tensor in tiles — used as
-    // the stride between K-rows when transpose_a (where the source is [K, M_parent] in DRAM).
-    // For non-transpose, the stride is K_tiles and parent_M_tiles_stride is unused.
-    const uint32_t in0_row_offset_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 3);
-    const uint32_t parent_M_tiles_stride = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 4);
+    // Read-at-offset support — only read the runtime args when the compile-time flag is set
+    // (avoids any potential register pressure / dead-code propagation issues on the no-offset
+    // hot path used by all backward calls).
+    uint32_t in0_row_offset_tiles = 0U;
+    uint32_t parent_M_tiles_stride = 0U;
+    if constexpr (use_offset) {
+        in0_row_offset_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 3);
+        parent_M_tiles_stride = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 4);
+    }
 
     // Storage layout: without transpose_a the input is stored as [M, K]; with it, as [K, M].
     // shape carries the MATMUL-coord effective sizes — used for bounds checks.
@@ -269,7 +273,7 @@ void kernel_main() {
                             fused_op_receiver.compute_actual_k_block_iter(n_block_iter == 0, k_block_iter, k_forward);
                     }
 #endif
-                    read_in0_block_sync<M_block_tiles, K_block_tiles, transpose_a>(
+                    read_in0_block_sync<M_block_tiles, K_block_tiles, transpose_a, use_offset>(
                         in0_reader,
                         in0_shape,
                         in0_start_address,
