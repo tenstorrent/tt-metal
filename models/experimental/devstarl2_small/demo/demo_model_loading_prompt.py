@@ -12,7 +12,9 @@ Demo / smoke test using the **same user prompt** as ``reference/model_loading.py
 ``--vision-max-edge`` (e.g. ``1540`` for square HF-style sizing).
 
 TT ``max_seq_len`` follows ``devstral_utils.default_devstral_demo_max_seq_len``: **Blackhole** defaults to
-at least **256000** tokens; **Wormhole** uses a prompt-sized cap to limit DRAM use.
+at least **256000** tokens for RoPE/warmups; **Wormhole** uses a prompt-sized cap.
+Dense KV uses ``max_kv_cache_seq_len`` via ``devstral_tt_kv_cache_max_seq_len`` (same as
+``demo_devstral2_tt_multimodal.py``)—run-sized DRAM, not full 256K per layer unless needed.
 
 **HF path** (``--backend hf``, default): ``AutoProcessor`` + ``AutoModelForImageTextToText``; same
 ``--vision-max-edge`` / ``--vision-square-pixels`` as TT before ``processor`` (default max-edge 336).
@@ -32,6 +34,10 @@ Usage (repo root)::
 
     python models/experimental/devstarl2_small/demo/demo_model_loading_prompt.py --backend tt \\
         --image path/to.jpg --text-layers 1 --max-new-tokens 16 --lm-head-cpu
+
+    # Cap TT RoPE ``max_seq_len`` / override KV budgeting (same flags as text multimodal demo)
+    python models/experimental/devstarl2_small/demo/demo_model_loading_prompt.py --backend tt \\
+        --max-seq-len 8192
 """
 
 from __future__ import annotations
@@ -53,7 +59,9 @@ import ttnn
 from models.common.sampling import SamplingGenerator, SamplingParams, format_sampling_params
 from models.experimental.devstarl2_small.demo import demo_devstral2_tt_multimodal as _tt_demo
 from models.experimental.devstarl2_small.devstral_utils import (
+    DEVSTRAL_DEMO_BLACKHOLE_DEFAULT_MAX_SEQ_LEN,
     default_devstral_demo_max_seq_len,
+    devstral_tt_kv_cache_max_seq_len,
     devstral_supports_on_device_sampling,
     pad_input_ids_and_positions_for_tt_prefill,
     tt_lm_head_logits_block,
@@ -297,6 +305,7 @@ def run_tt(
     vision_max_edge: int,
     vision_square_pixels: int | None,
     cpu_sampling: bool,
+    max_seq_len_override: int | None,
 ) -> None:
     if not image_path.is_file():
         raise FileNotFoundError(f"TT multimodal path requires an image file; missing {image_path}.")
@@ -344,8 +353,24 @@ def run_tt(
 
     mesh_device = _tt_demo.open_devstral_demo_mesh(max(1, min(mesh_width, ttnn.get_num_devices())))
     try:
-        max_seq = default_devstral_demo_max_seq_len(mesh_device, need)
-        logger.info(f"TT max_seq_len={max_seq} (blackhole={ttnn.device.is_blackhole(mesh_device)}; need={need}).")
+        if max_seq_len_override is None:
+            max_seq = default_devstral_demo_max_seq_len(mesh_device, need)
+            _bh = ttnn.device.is_blackhole(mesh_device)
+            logger.info(
+                f"TT max_seq_len={max_seq} (device default; blackhole={_bh}"
+                + (f", floor={DEVSTRAL_DEMO_BLACKHOLE_DEFAULT_MAX_SEQ_LEN}" if _bh else "")
+                + f"; need={need})."
+            )
+        else:
+            if max_seq_len_override < need:
+                logger.warning(
+                    f"--max-seq-len {max_seq_len_override} is below prompt + max_new_tokens + margin ({need}); "
+                    f"using {need}."
+                )
+                max_seq = need
+            else:
+                max_seq = max_seq_len_override
+            logger.info(f"TT max_seq_len={max_seq} (explicit --max-seq-len; need={need}).")
 
         dtype_tt = ttnn.bfloat16
 
@@ -357,6 +382,11 @@ def run_tt(
             dummy_weights=False,
             use_hf_rope=True,
             cache_hf=True,
+        )
+        model_args.max_kv_cache_seq_len = devstral_tt_kv_cache_max_seq_len(model_args, need)
+        logger.info(
+            f"KV cache tensor seq dim={model_args.max_kv_cache_seq_len} "
+            f"(RoPE TT max_seq_len={max_seq}; run need≈{need})."
         )
         model_args.is_distributed_norm = types.MethodType(lambda self, mode: False, model_args)
         meta_state_dict = model_args.load_state_dict()
@@ -603,6 +633,15 @@ def main() -> None:
         help="Use PyTorch softmax/multinomial/argmax on host logits instead of on-device SamplingGenerator.",
     )
     parser.add_argument(
+        "--max-seq-len",
+        type=int,
+        default=None,
+        metavar="S",
+        help="TT rope/grid max_seq_len cap when set. Default: Blackhole max(256000, need), "
+        "Wormhole max(4096, need), need=prompt_len+max_new_tokens+2048 "
+        "(see devstral_utils.default_devstral_demo_max_seq_len). KV allocation stays run-sized.",
+    )
+    parser.add_argument(
         "--vision-max-edge",
         type=int,
         default=336,
@@ -646,6 +685,7 @@ def main() -> None:
             vision_max_edge=args.vision_max_edge,
             vision_square_pixels=args.vision_square_pixels,
             cpu_sampling=args.cpu_sampling,
+            max_seq_len_override=args.max_seq_len,
         )
 
 
