@@ -21,6 +21,8 @@ namespace tt {
 enum class DataFormat : uint8_t;
 namespace tt_metal {
 class Buffer;
+class MeshTensor;
+enum class DataType;
 }  // namespace tt_metal
 }  // namespace tt
 
@@ -32,6 +34,7 @@ class CircularBufferConfig {
 public:
     // Static circular buffer spec
     CircularBufferConfig(uint32_t total_size, const std::map<uint8_t, tt::DataFormat>& data_format_spec);
+    CircularBufferConfig(uint32_t total_size, const std::map<uint8_t, DataType>& data_type_spec);
 
     // User is expected to use the builder here.
     CircularBufferConfig(uint32_t total_size);
@@ -62,7 +65,11 @@ public:
 
     CircularBufferConfig& set_globally_allocated_address(const Buffer& buffer);
 
+    CircularBufferConfig& set_globally_allocated_address(const MeshTensor& tensor);
+
     CircularBufferConfig& set_globally_allocated_address_and_total_size(const Buffer& buffer, uint32_t total_size);
+
+    CircularBufferConfig& set_globally_allocated_address_and_total_size(const MeshTensor& tensor, uint32_t total_size);
 
     CircularBufferConfig& set_tile_dims(uint8_t buffer_index, const Tile& tile);
 

@@ -372,7 +372,7 @@ class FuserSentinel:
             pack_size = operation.output.tile_size
 
             code = (
-                f"_llk_pack_reconfig_data_format_<{dest_acc}, false>(\n"
+                f"_llk_pack_reconfig_data_format_<{dest_acc}>(\n"
                 f"    {self._fmt(fmt.pack_src)}, {self._fmt(fmt.pack_dst)}, {pack_size}\n"
                 f");\n"
             )
