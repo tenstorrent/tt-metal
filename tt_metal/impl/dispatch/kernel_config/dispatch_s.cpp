@@ -142,7 +142,7 @@ void DispatchSKernel::GenerateStaticConfigs() {
     static_config_.mcast_go_signal_addr =
         descriptor_.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
     static_config_.unicast_go_signal_addr =
-        (descriptor_.hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1)
+        (static_cast<int>(descriptor_.hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)) != -1)
             ? descriptor_.hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG)
             : 0;
     static_config_.distributed_dispatcher = get_dispatch_query_manager_ref().distributed_dispatcher();

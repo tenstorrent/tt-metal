@@ -83,7 +83,7 @@ std::ostream& operator<<(std::ostream& os, const bfloat16& bfp16) {
 
 bool operator==(const std::vector<bfloat16>& lhs, const std::vector<bfloat16>& rhs) {
     bool is_equal = lhs.size() == rhs.size();
-    for (auto i = 0; i < lhs.size(); i++) {
+    for (size_t i = 0; i < lhs.size(); i++) {
         is_equal &= (std::bit_cast<uint16_t>(lhs[i]) == std::bit_cast<uint16_t>(rhs[i]));
     }
     return is_equal;
@@ -182,7 +182,7 @@ bool equal_within_n_sig_figs(float a, float b, int n) {
     std::string str_b = std::to_string(b);
 
     // Iterate until no more zeroes
-    int i = 0;
+    size_t i = 0;
     while (i < std::min(str_a.size(), str_b.size()) and (str_a.at(i) == '0' or str_a.at(i) == '.')) {
         i++;
     }

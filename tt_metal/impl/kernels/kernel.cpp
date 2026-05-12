@@ -726,6 +726,7 @@ detail::KernelMeta Kernel::meta(IDevice* device) const {
                       : std::string_view{this->kernel_src_.source_},
         .processor_class = get_kernel_processor_class(),
         .programmable_core_type = get_kernel_programmable_core_type(),
+        .math_fidelity = std::nullopt,
     };
 
     if (get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
@@ -1014,7 +1015,7 @@ namespace experimental::quasar {
 
 // Returns the DM processor type (DM0-DM7) for the binary at the given index.
 uint32_t QuasarDataMovementKernel::get_kernel_processor_type(int index) const {
-    TT_ASSERT(0 <= index && index < this->dm_processors_.size(), "index out of bounds");
+    TT_ASSERT(0 <= index && static_cast<size_t>(index) < this->dm_processors_.size(), "index out of bounds");
     return enchantum::to_underlying(this->dm_processors_[index]);
 }
 
@@ -1143,7 +1144,7 @@ uint8_t QuasarDataMovementKernel::expected_num_binaries() const {
 }
 
 uint32_t QuasarComputeKernel::get_kernel_processor_type(int index) const {
-    TT_ASSERT(0 <= index && index < this->compute_processors_.size(), "index out of bounds");
+    TT_ASSERT(0 <= index && static_cast<size_t>(index) < this->compute_processors_.size(), "index out of bounds");
     return enchantum::to_underlying(this->compute_processors_[index]);
 }
 

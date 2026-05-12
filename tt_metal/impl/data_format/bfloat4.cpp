@@ -129,12 +129,12 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
 
     std::vector<float> float_vec;
     float_vec.resize(num_tiles * num_float_in_tile);
-    for (int tile_index = 0; tile_index < num_tiles; ++tile_index) {
-        for (int tr = 0; tr < subtiles_in_tile_row; ++tr) {
-            for (int tc = 0; tc < subtiles_in_tile_col; ++tc) {
-                for (int i = 0; i < subtile_rows; ++i) {
+    for (int tile_index = 0; tile_index < static_cast<int>(num_tiles); ++tile_index) {
+        for (int tr = 0; tr < static_cast<int>(subtiles_in_tile_row); ++tr) {
+            for (int tc = 0; tc < static_cast<int>(subtiles_in_tile_col); ++tc) {
+                for (int i = 0; i < static_cast<int>(subtile_rows); ++i) {
                     subtile_r = tr * subtile_rows + i;
-                    for (int j = 0; j < subtile_cols; j += 2 * num_elements_in_dword) {
+                    for (int j = 0; j < static_cast<int>(subtile_cols); j += 2 * num_elements_in_dword) {
                         simde__m256i mask_denormal0 = simde_mm256_setzero_si256();
                         simde__m256i mask_denormal1 = simde_mm256_setzero_si256();
                         subtile_c = tc * subtile_cols + j;

@@ -2069,7 +2069,7 @@ uint32_t detail::ProgramImpl::get_cb_size(IDevice* device, CoreCoord logical_cor
 // TODO: Too low level for program.cpp. Move this to HAL, once we have support.
 bool detail::ProgramImpl::runs_on_noc_unicast_only_cores() {
     return (
-        MetalContext::instance().static_cast<int>(hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)) != -1 and
+        static_cast<int>(MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)) != -1 and
         not this->get_kernel_groups(MetalContext::instance().hal().get_programmable_core_type_index(
                                         HalProgrammableCoreType::ACTIVE_ETH))
                 .empty());
@@ -2078,7 +2078,7 @@ bool detail::ProgramImpl::runs_on_noc_unicast_only_cores() {
 // TODO: Too low level for program.cpp. Move this to HAL, once we have support.
 bool detail::ProgramImpl::runs_on_noc_multicast_only_cores() {
     return (
-        MetalContext::instance().static_cast<int>(hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) != -1 and
+        static_cast<int>(MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) != -1 and
         not this->get_kernel_groups(
                     MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX))
                 .empty());

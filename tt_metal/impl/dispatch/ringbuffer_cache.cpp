@@ -111,7 +111,7 @@ std::optional<typename RingbufferCacheManager::CacheOffset> RingbufferCacheManag
     uint32_t cache_offset;
     CacheOffset query_result;
 
-    const int required_space = (lengthB + cache_block_sizeB_ - 1) / cache_block_sizeB_;
+    const uint32_t required_space = (lengthB + cache_block_sizeB_ - 1) / cache_block_sizeB_;
     if (required_space > cache_size_blocks_) [[unlikely]] {
         return std::nullopt;  // cannot fit in cache
     } else if (manager_.entry.empty()) [[unlikely]] {
