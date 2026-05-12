@@ -164,6 +164,15 @@ class Attention(Module):
             else None
         )
 
+        # Pre-allocated empty joint input for ring SDPA when there is no prompt stream.
+        # Avoids repeated device tensor allocation on every forward call.
+        self.dummy_joint_input = ttnn.zeros(
+            [1, self.n_local_heads, 0, self.head_dim],
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+        )
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         weight, bias = self._reshape_and_merge_qkv(
             pop_substate(state, "to_q"),
@@ -435,8 +444,7 @@ class Attention(Module):
             if self.context_head_factors is not None:
                 add_q = add_q * self.context_head_factors.data
         else:
-            shape = [1, self.n_local_heads, 0, self.head_dim]
-            add_q = add_k = add_v = ttnn.zeros(shape, device=self.mesh_device, layout=q.layout, dtype=q.dtype)
+            add_q = add_k = add_v = self.dummy_joint_input
 
         if self.parallel_config.sequence_parallel.factor > 1:
             spatial, prompt, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
