@@ -22,6 +22,7 @@ import ttnn
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
 from models.experimental.tt_symbiote.core.module import TTNNModule, TTNNLayerStack
+from models.experimental.tt_symbiote.core.run_config import trace_enabled
 from ttnn.operations.transformer import SDPAProgramConfig
 
 # Tracy (perf): vision Matmul/SDPA show HiFi4; use lower fidelity for ViT matmul/SDPA only.
@@ -552,6 +553,7 @@ class TTNNDotsVisionMLP(TTNNModule):
 # ---------------------------------------------------------------------------
 
 
+@trace_enabled
 class TTNNDotsVisionPatchEmbed(TTNNModule):
     """Patch embedding for Dots vision (14x14 patches, no CLS token, no pos embed)."""
 
@@ -645,7 +647,7 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
             self.device, math_fidelity=VISION_NORM_MATH_FIDELITY
         )
 
-    def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor = None) -> ttnn.Tensor:
+    def prepare_input(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor = None) -> ttnn.Tensor:
         mem = ttnn.DRAM_MEMORY_CONFIG
         mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
 
@@ -661,25 +663,7 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
             )
             if len(x_tt.shape) == 3:
                 x_tt = ttnn.reshape(x_tt, (1, 1, x_tt.shape[1], x_tt.shape[2]))
-
-            out = ttnn.linear(
-                x_tt,
-                self.tt_proj_weight,
-                bias=self.tt_proj_bias,
-                transpose_b=True,
-                memory_config=mem,
-                compute_kernel_config=self.vision_matmul_compute_kernel_config,
-            )
-
-            if self.tt_norm_weight is not None:
-                out = ttnn.rms_norm(
-                    out,
-                    weight=self.tt_norm_weight,
-                    epsilon=1e-5,
-                    compute_kernel_config=self.vision_norm_compute_kernel_config,
-                )
-
-            return out
+            return x_tt
 
         B, C, H, W = pixel_values.shape
 
@@ -712,7 +696,16 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
         )
         if len(x_tt.shape) == 3:
             x_tt = ttnn.reshape(x_tt, (1, 1, x_tt.shape[1], x_tt.shape[2]))
+        return x_tt
 
+    def forward(self, pixel_values: torch.Tensor | ttnn.Tensor, grid_thw: torch.Tensor = None) -> ttnn.Tensor:
+        mem = ttnn.DRAM_MEMORY_CONFIG
+        if isinstance(pixel_values, ttnn.Tensor):
+            x_tt = pixel_values
+        else:
+            x_tt = self.prepare_input(pixel_values, grid_thw)
+        if len(x_tt.shape) == 3:
+            x_tt = ttnn.reshape(x_tt, (1, 1, x_tt.shape[1], x_tt.shape[2]))
         out = ttnn.linear(
             x_tt,
             self.tt_proj_weight,
@@ -1551,7 +1544,8 @@ class TTNNDotsOCRVisionTower(TTNNModule):
         if grid_thw is None:
             raise ValueError("grid_thw is required for Dots vision")
 
-        x = self.patch_embed(pixel_values, grid_thw)
+        patch_input = self.patch_embed.prepare_input(pixel_values, grid_thw)
+        x = self.patch_embed(patch_input)
 
         if isinstance(x, torch.Tensor):
             mem = ttnn.DRAM_MEMORY_CONFIG

@@ -206,6 +206,27 @@ class TTNNDotsOCRDecodeGraph(TTNNModule):
             past_key_value.update_seq_length(layer_idx=layer.self_attn.layer_idx, seq_len=seq_len)
 
 
+@trace_enabled
+class TTNNDotsOCRScatterMergeGraph(TTNNModule):
+    def preprocess_weights_impl(self):
+        return self
+
+    def move_weights_to_device_impl(self):
+        return self
+
+    def forward(self, text_embeds, vision_tt, gather_idx, mask, zero_row):
+        n_vision = int(vision_tt.shape[2])
+        hidden_per_device = int(vision_tt.shape[3])
+        vision_rm = ttnn.to_layout(vision_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        vision_2d = ttnn.reshape(vision_rm, (n_vision, hidden_per_device))
+        vision_table = ttnn.concat([zero_row, vision_2d], dim=0)
+        full_vision_col_sharded = ttnn.embedding(gather_idx, vision_table, layout=ttnn.TILE_LAYOUT)
+        fused = ttnn.where(mask, full_vision_col_sharded, text_embeds)
+        ttnn.deallocate(vision_2d)
+        ttnn.deallocate(vision_table)
+        return fused
+
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -285,6 +306,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
         paged_cache: TTNNPagedAttentionKVCache,
         graph_prefill: TTNNDotsOCRPrefillGraph,
         graph_decode: TTNNDotsOCRDecodeGraph,
+        graph_scatter_merge: TTNNDotsOCRScatterMergeGraph,
         device: "ttnn.MeshDevice",
         config: PipelineConfig,
     ):
@@ -298,6 +320,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
         self.lm_head = lm_head
         self.graph_prefill = graph_prefill
         self.graph_decode = graph_decode
+        self.graph_scatter_merge = graph_scatter_merge
         self.paged_cache = paged_cache
         self._device = device
         self.config = config
@@ -393,6 +416,8 @@ class TTNNDotsOCRPipeline(TTNNModule):
         graph_decode_embedding = embedding if batch_size == 1 else None
         graph_decode = TTNNDotsOCRDecodeGraph(decoder_stack, final_norm, lm_head, embedding=graph_decode_embedding)
         graph_decode._unique_name = "dots_ocr_graph_decode"
+        graph_scatter_merge = TTNNDotsOCRScatterMergeGraph()
+        graph_scatter_merge._unique_name = "dots_ocr_graph_scatter_merge"
 
         pipeline = cls(
             embedding=embedding,
@@ -403,6 +428,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
             paged_cache=paged_cache,
             graph_prefill=graph_prefill,
             graph_decode=graph_decode,
+            graph_scatter_merge=graph_scatter_merge,
             device=device,
             config=config,
         )
@@ -475,6 +501,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
             self.lm_head,
             self.graph_prefill,
             self.graph_decode,
+            self.graph_scatter_merge,
         ]:
             _recurse(component)
         return found
@@ -855,23 +882,9 @@ class TTNNDotsOCRPipeline(TTNNModule):
         # =====================================================================
         vision_tt = self.vision_tower.forward(pixel_values, image_grid_thw)
 
-        # =====================================================================
-        # Step B: Build vision table ON DEVICE (no host round-trip).
-        # Convert TILE -> ROW_MAJOR, reshape to 2D, prepend a tiny
-        # zero row, so the embedding table is [N_vision+1, H/num_devices]
-        # per device, col-sharded.
-        # =====================================================================
         N_vision = int(vision_tt.shape[2])
         H_per_device = int(vision_tt.shape[3])
 
-        # B.1: TILE -> ROW_MAJOR on device (needed by ttnn.embedding)
-        vision_rm = ttnn.to_layout(vision_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(vision_tt)
-
-        # B.2: Reshape [1, 1, N_vision, H_per_device] -> [N_vision, H_per_device]
-        vision_2d = ttnn.reshape(vision_rm, (N_vision, H_per_device))
-
-        # B.3: Create zero row (tiny: ~3 KB upload, not a bottleneck)
         if num_devices > 1:
             zero_row_mapper = ttnn.ShardTensor2dMesh(
                 self.device,
@@ -894,12 +907,8 @@ class TTNNDotsOCRPipeline(TTNNModule):
             )
             self._scatter_zero_row_key = zero_row_key
 
-        # B.4: Concat zero row + vision embeddings -> vision table
-        vision_table = ttnn.concat([self._scatter_zero_row, vision_2d], dim=0)
-        ttnn.deallocate(vision_2d)
-
         # =====================================================================
-        # Step C: Build gather index on host (tiny: ~19 KB) and upload
+        # Step B: Build gather index on host (tiny: ~19 KB) and upload
         # gather_idx[0, pos] = 0 for non-image tokens (gathers zero row)
         #                    = 1..N_vision for image tokens
         # =====================================================================
@@ -954,22 +963,10 @@ class TTNNDotsOCRPipeline(TTNNModule):
             self._scatter_cache_idx = tt_idx
             self._scatter_cache_mask = tt_mask
 
-        # =====================================================================
-        # Step D: Device-side gather via ttnn.embedding
-        # With col-sharded table [N_vision+1, H/num_devices] and replicated
-        # index, each device independently gathers its own H/num_devices
-        # columns -> [1, S, H/num_devices] col-sharded output.
-        # No identity matmul needed!
-        # =====================================================================
-        full_vision_col_sharded = ttnn.embedding(tt_idx, vision_table, layout=ttnn.TILE_LAYOUT)
-        # full_vision_col_sharded: [1, S, H/num_devices] col-sharded, TILE_LAYOUT
-        ttnn.deallocate(vision_table)
-
-        # =====================================================================
-        # Step E: Build mask and merge
-        # =====================================================================
-        fused = ttnn.where(tt_mask, full_vision_col_sharded, text_embeds)
-
+        # Device-side gather + merge is trace-enabled. Inputs remain explicit so
+        # repeated runs copy fresh buffers into the trace input storage.
+        fused = self.graph_scatter_merge(text_embeds, vision_tt, tt_idx, tt_mask, self._scatter_zero_row)
+        ttnn.deallocate(vision_tt)
         return fused
 
     # ------------------------------------------------------------------
