@@ -63,29 +63,33 @@ class MoEModelConfig:
     experts_per_device_values: tuple = (2,)
     has_bias_values: tuple = (False,)
     test_modes: tuple = ("correctness",)
+    activation_types: tuple = (MoEActivationFunction.SILU,)
     num_layers: int = 5
     num_iterations: int = 3
     marks: tuple = ()
 
 
 def _expand_model_configs(configs):
-    """Expand each model config into pytest.param entries for every (test_mode, has_bias, experts_per_device) combo."""
+    """Expand each model config into pytest.param entries for every (test_mode, has_bias, experts_per_device, activation) combo."""
     expanded = []
     for cfg in configs:
         for test_mode in cfg.test_modes:
             for has_bias in cfg.has_bias_values:
                 for epd in cfg.experts_per_device_values:
-                    bias_tag = "bias" if has_bias else "no_bias"
-                    expanded.append(
-                        pytest.param(
-                            cfg,
-                            test_mode,
-                            has_bias,
-                            epd,
-                            id=f"{cfg.name}-{test_mode}-{bias_tag}-{epd}experts_per_device",
-                            marks=cfg.marks,
+                    for act in cfg.activation_types:
+                        bias_tag = "bias" if has_bias else "no_bias"
+                        act_tag = act.name.lower()
+                        expanded.append(
+                            pytest.param(
+                                cfg,
+                                test_mode,
+                                has_bias,
+                                epd,
+                                act,
+                                id=f"{cfg.name}-{test_mode}-{bias_tag}-{epd}experts_per_device-{act_tag}",
+                                marks=cfg.marks,
+                            )
                         )
-                    )
     return expanded
 
 
@@ -112,7 +116,7 @@ _MODELS_1x16 = [
 _MODELS_1x8 = [
     MoEModelConfig("deepseek_ocr", N=896,  hidden_size=1280, selected_experts_k=6),
     MoEModelConfig("gemma_4_26b",  N=704,  hidden_size=2816, selected_experts_k=8),
-    MoEModelConfig("gpt_oss",      N=2880, hidden_size=2880, selected_experts_k=4, experts_per_device_values=(4,), has_bias_values=(True,), test_modes=("perf", "correctness")),
+    MoEModelConfig("gpt_oss",      N=2880, hidden_size=2880, selected_experts_k=4, experts_per_device_values=(4,), has_bias_values=(True,), test_modes=("perf", "correctness"), activation_types=(MoEActivationFunction.SWIGLU,)),
 ]
 # fmt: on
 
@@ -120,7 +124,9 @@ MODELS_1x16 = _expand_model_configs(_MODELS_1x16)
 MODELS_1x8 = _expand_model_configs(_MODELS_1x8)
 
 
-def _run_model_test(mesh_device, mesh_shape, enable_trace, model_cfg, test_mode, has_bias, experts_per_device):
+def _run_model_test(
+    mesh_device, mesh_shape, enable_trace, model_cfg, test_mode, has_bias, experts_per_device, activation_type
+):
     if test_mode == "perf":
         selected_experts_k = 1
         num_layers = 1
@@ -145,7 +151,7 @@ def _run_model_test(mesh_device, mesh_shape, enable_trace, model_cfg, test_mode,
         output_width_shard_dim=auto_output_width_shard_dim(model_cfg.hidden_size),
         dtype=ttnn.bfloat16,
         enable_trace=enable_trace,
-        activation_type=MoEActivationFunction.SILU,
+        activation_type=activation_type,
         has_bias=has_bias,
     )
 
@@ -1809,9 +1815,13 @@ def run_moe_compute_test(
 @pytest.mark.parametrize(
     "enable_trace", [pytest.param(False, id="disable_trace"), pytest.param(True, id="enable_trace")]
 )
-@pytest.mark.parametrize("model_cfg, test_mode, has_bias, experts_per_device", MODELS_1x16)
-def test_moe_compute_1x16(mesh_device, mesh_shape, enable_trace, model_cfg, test_mode, has_bias, experts_per_device):
-    _run_model_test(mesh_device, mesh_shape, enable_trace, model_cfg, test_mode, has_bias, experts_per_device)
+@pytest.mark.parametrize("model_cfg, test_mode, has_bias, experts_per_device, activation_type", MODELS_1x16)
+def test_moe_compute_1x16(
+    mesh_device, mesh_shape, enable_trace, model_cfg, test_mode, has_bias, experts_per_device, activation_type
+):
+    _run_model_test(
+        mesh_device, mesh_shape, enable_trace, model_cfg, test_mode, has_bias, experts_per_device, activation_type
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1826,6 +1836,10 @@ def test_moe_compute_1x16(mesh_device, mesh_shape, enable_trace, model_cfg, test
 @pytest.mark.parametrize(
     "enable_trace", [pytest.param(False, id="disable_trace"), pytest.param(True, id="enable_trace")]
 )
-@pytest.mark.parametrize("model_cfg, test_mode, has_bias, experts_per_device", MODELS_1x8)
-def test_moe_compute_1x8(mesh_device, mesh_shape, enable_trace, model_cfg, test_mode, has_bias, experts_per_device):
-    _run_model_test(mesh_device, mesh_shape, enable_trace, model_cfg, test_mode, has_bias, experts_per_device)
+@pytest.mark.parametrize("model_cfg, test_mode, has_bias, experts_per_device, activation_type", MODELS_1x8)
+def test_moe_compute_1x8(
+    mesh_device, mesh_shape, enable_trace, model_cfg, test_mode, has_bias, experts_per_device, activation_type
+):
+    _run_model_test(
+        mesh_device, mesh_shape, enable_trace, model_cfg, test_mode, has_bias, experts_per_device, activation_type
+    )
