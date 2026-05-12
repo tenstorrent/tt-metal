@@ -287,7 +287,7 @@ def main() -> None:
         "--use_adg",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="ADG on host after B=2 TTNN forward (default: on for base, off for turbo).",
+        help="Angular CFG (ADG apply_norm=False) on device after B=2 TTNN forward (default: base on, turbo off).",
     )
     ap.add_argument("--out", type=str, default="ttnn_out.wav")
     ap.add_argument(
@@ -675,7 +675,6 @@ def main() -> None:
     do_cfg = gs > 1.0 + 1e-6
 
     noise = torch.randn((1, frames, 64), dtype=torch.float32)
-    xt = noise
 
     t_schedule = _build_t_schedule(
         shift=float(args.shift),
@@ -688,6 +687,18 @@ def main() -> None:
     # --- TTNN (DiT): device may already be open after TTNN Qwen3 caption embedding (fast or handler path) ---
     _configure_ttnn_runtime(no_ttnn_strict=args.no_ttnn_strict)
     import ttnn
+    from models.demos.ace_step_v1_5.ttnn_impl.dit_sampling_ttnn import (
+        TtnnMomentumBufferApg,
+        adg_guidance_velocity_ttnn,
+        apg_guidance_velocity_ttnn,
+        bf16_row_from_numpy_bc,
+        concat_duplicate_batch,
+        euler_subtract_v_dt,
+        fp32_tile_to_row_bf16,
+        slice_batch_btc,
+        tile_fp32_from_numpy_bc,
+        typecast_bf16_any_to_fp32_tile,
+    )
     from models.demos.ace_step_v1_5.ttnn_impl.full_pipeline import AceStepV15TTNNPipeline
 
     if not args.no_ttnn_strict and hasattr(ttnn, "CONFIG") and hasattr(ttnn.CONFIG, "throw_exception_on_fallback"):
@@ -701,9 +712,6 @@ def main() -> None:
     mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
     if mem is None:
         raise RuntimeError("TTNN build missing DRAM_MEMORY_CONFIG.")
-    act_dtype = getattr(ttnn, "bfloat16", None)
-    if act_dtype is None:
-        raise RuntimeError("TTNN build missing bfloat16 dtype.")
 
     def _as_host_numpy_f32(t: torch.Tensor) -> np.ndarray:
         """TTNN staging: never call ``.numpy()`` on tensors that may still require grad."""
@@ -718,199 +726,148 @@ def main() -> None:
         )
 
         _ensure_acestep_on_path()
-        from acestep.models.common.apg_guidance import MomentumBuffer, adg_forward, apg_forward
 
-        momentum_buffer = MomentumBuffer() if do_cfg and not use_adg else None
         num_steps = len(t_schedule)
         cfg_lo = float(args.cfg_interval_start)
         cfg_hi = float(args.cfg_interval_end)
 
-        def _apply_cfg(
-            t_curr: float, xt_h: torch.Tensor, vt_cond: torch.Tensor, vt_uncond: torch.Tensor
-        ) -> torch.Tensor:
-            apply_cfg = cfg_lo <= t_curr <= cfg_hi
-            if not do_cfg or not apply_cfg:
-                return vt_cond
-            sigma = torch.tensor(float(t_curr), dtype=torch.float32).view(1, 1, 1)
-            if use_adg:
-                return adg_forward(
-                    xt_h.to(torch.float32),
-                    vt_cond.to(torch.float32),
-                    vt_uncond.to(torch.float32),
-                    sigma,
-                    float(gs),
-                ).to(dtype=xt_h.dtype)
-            return apg_forward(
-                vt_cond.to(torch.float32),
-                vt_uncond.to(torch.float32),
-                float(gs),
-                momentum_buffer=momentum_buffer,
-                dims=[1],
-            ).to(dtype=xt_h.dtype)
-
         latent_keep = torch.ones((1, frames), dtype=torch.bool)
+        frames_i = int(frames)
+        c_lat = int(noise.shape[2])
+
+        mask2_torch = torch.cat([enc_mask, enc_mask], dim=0) if do_cfg else enc_mask
+        keep2_torch = torch.cat([latent_keep, latent_keep], dim=0) if do_cfg else latent_keep
+
+        if do_cfg:
+            enc_tt_pipe = bf16_row_from_numpy_bc(
+                np.concatenate(
+                    [_as_host_numpy_f32(enc_hs), _as_host_numpy_f32(null_emb.expand_as(enc_hs))],
+                    axis=0,
+                ),
+                device=dev,
+                dram=mem,
+            )
+            ctx_row_one = bf16_row_from_numpy_bc(_as_host_numpy_f32(ctx_lat), device=dev, dram=mem)
+            ctx_tt_pipe = concat_duplicate_batch(ctx_row_one)
+            try:
+                ttnn.deallocate(ctx_row_one)
+            except Exception:
+                pass
+        else:
+            enc_tt_pipe = bf16_row_from_numpy_bc(_as_host_numpy_f32(enc_hs), device=dev, dram=mem)
+            ctx_tt_pipe = bf16_row_from_numpy_bc(_as_host_numpy_f32(ctx_lat), device=dev, dram=mem)
+
+        xt_tt = tile_fp32_from_numpy_bc(_as_host_numpy_f32(noise), device=dev, dram=mem)
+        momentum_ttnn = TtnnMomentumBufferApg() if do_cfg and not use_adg else None
+
+        def _diffusion_iterate(*, step_idx: int, t_curr_f: float, euler_dt: float, log_line: str) -> None:
+            nonlocal xt_tt
+            xt_row = fp32_tile_to_row_bf16(xt_tt, dram=mem)
+            if do_cfg:
+                xt_pipe_in = concat_duplicate_batch(xt_row)
+                try:
+                    ttnn.deallocate(xt_row)
+                except Exception:
+                    pass
+                enc_attn = mask2_torch
+                attn_1d = keep2_torch
+            else:
+                xt_pipe_in = xt_row
+                enc_attn = enc_mask
+                attn_1d = latent_keep
+
+            acoustic = pipe.forward(
+                xt_bt64=xt_pipe_in,
+                context_latents_bt128=ctx_tt_pipe,
+                timestep_index=int(step_idx),
+                encoder_hidden_states_btd=enc_tt_pipe,
+                attention_mask_1d_bt=attn_1d,
+                encoder_attention_mask_1d_bk=enc_attn,
+            )
+
+            if do_cfg:
+                apply_cfg_now = cfg_lo <= t_curr_f <= cfg_hi
+                vpc_rm = slice_batch_btc(acoustic, 0, 1, frames_i, c_lat)
+                vpu_rm = slice_batch_btc(acoustic, 1, 2, frames_i, c_lat)
+                if apply_cfg_now:
+                    if use_adg:
+                        vt_tt = adg_guidance_velocity_ttnn(
+                            xt_tt,
+                            vpc_rm,
+                            vpu_rm,
+                            float(t_curr_f),
+                            float(gs),
+                            device=dev,
+                            dram=mem,
+                        )
+                    else:
+                        vt_tt = apg_guidance_velocity_ttnn(
+                            vpc_rm,
+                            vpu_rm,
+                            float(gs),
+                            momentum_buffer=momentum_ttnn,
+                            dims=[1],
+                            dram=mem,
+                        )
+                else:
+                    try:
+                        ttnn.deallocate(vpu_rm)
+                    except Exception:
+                        pass
+                    vt_tt = typecast_bf16_any_to_fp32_tile(vpc_rm, dram=mem)
+            else:
+                vt_tt = typecast_bf16_any_to_fp32_tile(acoustic, dram=mem)
+
+            try:
+                ttnn.deallocate(xt_pipe_in)
+            except Exception:
+                pass
+            try:
+                ttnn.deallocate(acoustic)
+            except Exception:
+                pass
+
+            xt_old = xt_tt
+            xt_tt = euler_subtract_v_dt(xt=xt_tt, vt=vt_tt, dt=float(euler_dt), dram=mem)
+            try:
+                ttnn.deallocate(vt_tt)
+            except Exception:
+                pass
+            try:
+                ttnn.deallocate(xt_old)
+            except Exception:
+                pass
+            print(log_line, flush=True)
 
         for step_idx in range(num_steps - 1):
             t_curr_f = float(t_schedule[step_idx])
             t_next_f = float(t_schedule[step_idx + 1])
             dt = t_curr_f - t_next_f
-
-            if do_cfg:
-                enc2 = torch.cat([enc_hs, null_emb.expand_as(enc_hs)], dim=0)
-                mask2 = torch.cat([enc_mask, enc_mask], dim=0)
-                ctx2 = torch.cat([ctx_lat, ctx_lat], dim=0)
-                xt2 = torch.cat([xt, xt], dim=0)
-                xt_tt = ttnn.as_tensor(
-                    _as_host_numpy_f32(xt2),
-                    device=dev,
-                    dtype=act_dtype,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    memory_config=mem,
-                )
-                ctx_tt = ttnn.as_tensor(
-                    _as_host_numpy_f32(ctx2),
-                    device=dev,
-                    dtype=act_dtype,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    memory_config=mem,
-                )
-                enc_tt = ttnn.as_tensor(
-                    _as_host_numpy_f32(enc2),
-                    device=dev,
-                    dtype=act_dtype,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    memory_config=mem,
-                )
-                keep2 = torch.cat([latent_keep, latent_keep], dim=0)
-                acoustic = pipe.forward(
-                    xt_bt64=xt_tt,
-                    context_latents_bt128=ctx_tt,
-                    timestep_index=step_idx,
-                    encoder_hidden_states_btd=enc_tt,
-                    attention_mask_1d_bt=keep2,
-                    encoder_attention_mask_1d_bk=mask2,
-                )
-            else:
-                xt_tt = ttnn.as_tensor(
-                    _as_host_numpy_f32(xt),
-                    device=dev,
-                    dtype=act_dtype,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    memory_config=mem,
-                )
-                ctx_tt = ttnn.as_tensor(
-                    _as_host_numpy_f32(ctx_lat),
-                    device=dev,
-                    dtype=act_dtype,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    memory_config=mem,
-                )
-                enc_tt = ttnn.as_tensor(
-                    _as_host_numpy_f32(enc_hs),
-                    device=dev,
-                    dtype=act_dtype,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    memory_config=mem,
-                )
-                acoustic = pipe.forward(
-                    xt_bt64=xt_tt,
-                    context_latents_bt128=ctx_tt,
-                    timestep_index=step_idx,
-                    encoder_hidden_states_btd=enc_tt,
-                    attention_mask_1d_bt=latent_keep,
-                    encoder_attention_mask_1d_bk=enc_mask,
-                )
-
-            vt2 = ttnn.to_torch(acoustic).to(torch.float32)
-            if do_cfg:
-                vt_cond = vt2[0:1]
-                vt_uncond = vt2[1:2]
-                vt = _apply_cfg(t_curr_f, xt, vt_cond, vt_uncond)
-            else:
-                vt = vt2
-
-            xt = xt - vt * float(dt)
-            print(f"[ttnn] step {step_idx+1}/{num_steps-1} t={t_curr_f:.5f} dt={dt:.5f}", flush=True)
-
-        # Final step toward t=0
-        t_curr_f = float(t_schedule[-1])
-        if do_cfg:
-            enc2 = torch.cat([enc_hs, null_emb.expand_as(enc_hs)], dim=0)
-            mask2 = torch.cat([enc_mask, enc_mask], dim=0)
-            ctx2 = torch.cat([ctx_lat, ctx_lat], dim=0)
-            xt2 = torch.cat([xt, xt], dim=0)
-            xt_tt = ttnn.as_tensor(
-                _as_host_numpy_f32(xt2),
-                device=dev,
-                dtype=act_dtype,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=mem,
-            )
-            ctx_tt = ttnn.as_tensor(
-                _as_host_numpy_f32(ctx2),
-                device=dev,
-                dtype=act_dtype,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=mem,
-            )
-            enc_tt = ttnn.as_tensor(
-                _as_host_numpy_f32(enc2),
-                device=dev,
-                dtype=act_dtype,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=mem,
-            )
-            keep2 = torch.cat([latent_keep, latent_keep], dim=0)
-            acoustic = pipe.forward(
-                xt_bt64=xt_tt,
-                context_latents_bt128=ctx_tt,
-                timestep_index=num_steps - 1,
-                encoder_hidden_states_btd=enc_tt,
-                attention_mask_1d_bt=keep2,
-                encoder_attention_mask_1d_bk=mask2,
-            )
-        else:
-            xt_tt = ttnn.as_tensor(
-                _as_host_numpy_f32(xt),
-                device=dev,
-                dtype=act_dtype,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=mem,
-            )
-            ctx_tt = ttnn.as_tensor(
-                _as_host_numpy_f32(ctx_lat),
-                device=dev,
-                dtype=act_dtype,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=mem,
-            )
-            enc_tt = ttnn.as_tensor(
-                _as_host_numpy_f32(enc_hs),
-                device=dev,
-                dtype=act_dtype,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=mem,
-            )
-            acoustic = pipe.forward(
-                xt_bt64=xt_tt,
-                context_latents_bt128=ctx_tt,
-                timestep_index=num_steps - 1,
-                encoder_hidden_states_btd=enc_tt,
-                attention_mask_1d_bt=latent_keep,
-                encoder_attention_mask_1d_bk=enc_mask,
+            _diffusion_iterate(
+                step_idx=step_idx,
+                t_curr_f=t_curr_f,
+                euler_dt=dt,
+                log_line=f"[ttnn] step {step_idx+1}/{num_steps-1} t={t_curr_f:.5f} dt={dt:.5f}",
             )
 
-        vt2 = ttnn.to_torch(acoustic).to(torch.float32)
-        if do_cfg:
-            vt_cond = vt2[0:1]
-            vt_uncond = vt2[1:2]
-            vt = _apply_cfg(t_curr_f, xt, vt_cond, vt_uncond)
-        else:
-            vt = vt2
+        t_curr_final = float(t_schedule[-1])
+        _diffusion_iterate(
+            step_idx=num_steps - 1,
+            t_curr_f=t_curr_final,
+            euler_dt=t_curr_final,
+            log_line=f"[ttnn] final t={t_curr_final:.5f}",
+        )
 
-        xt = xt - vt * float(t_curr_f)
-        pred_latents = xt
-        print(f"[ttnn] final t={t_curr_f:.5f}", flush=True)
+        pred_latents = ttnn.to_torch(xt_tt).to(torch.float32).contiguous()
+
+        try:
+            ttnn.deallocate(enc_tt_pipe)
+            ttnn.deallocate(ctx_tt_pipe)
+            ttnn.deallocate(xt_tt)
+        except Exception:
+            pass
+        if momentum_ttnn is not None:
+            momentum_ttnn.reset()
     finally:
         ttnn.close_device(dev)
 
