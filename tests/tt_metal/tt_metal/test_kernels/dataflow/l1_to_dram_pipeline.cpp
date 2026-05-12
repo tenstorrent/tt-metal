@@ -11,18 +11,18 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t dram_dst_address = get_vararg(0);
-    const uint32_t l1_src_address = get_vararg(1);
-    const uint32_t num_elements = get_vararg(2);
-    const uint32_t dram_dst_bank_id = get_vararg(3);
+    const uint32_t dram_dst_address = get_arg(args::dram_addr);
+    const uint32_t l1_src_address = get_arg(args::l1_addr);
+    const uint32_t num_elements = get_arg(args::num_elements);
+    const uint32_t dram_dst_bank_id = get_arg(args::dram_bank_id);
 
     Noc noc;
     AllocatorBank<AllocatorBankType::DRAM> dst_dram;
     Semaphore sem(sem::sem);
 #ifdef INCREMENT_REMOTE_SEM
     Semaphore remote_sem(sem::remote_sem);
-    const uint32_t remote_noc_x = get_vararg(4);
-    const uint32_t remote_noc_y = get_vararg(5);
+    const uint32_t remote_noc_x = get_arg(args::remote_noc_x);
+    const uint32_t remote_noc_y = get_arg(args::remote_noc_y);
 #endif
 
     for (uint32_t i = 0; i < num_elements; i++) {

@@ -92,7 +92,7 @@ protected:
                 .compiler_options = {.defines = defines_vec},
                 .runtime_arguments_schema =
                     {
-                        .num_runtime_varargs = runtime_args.size(),
+                        .named_runtime_args = {"l1_counter_addr", "increment_times"},
                     },
                 .config_spec =
                     experimental::metal2_host_api::DataMovementConfiguration{
@@ -116,7 +116,9 @@ protected:
             experimental::metal2_host_api::ProgramRunParams params;
             params.kernel_run_params = {{
                 .kernel_spec_name = DM_KERNEL,
-                .runtime_varargs = {{core, runtime_args}},
+                .named_runtime_args =
+                    {{.node = core,
+                      .args = {{"l1_counter_addr", l1_unreserved_base}, {"increment_times", iterations}}}},
             }};
             experimental::metal2_host_api::SetProgramRunParameters(program, params);
         } else {

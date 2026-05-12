@@ -15,9 +15,9 @@
 #else
 #include "api/compute/common.h"
 #endif
-#include "experimental/kernel_args.h"
 
 #if defined(ARCH_QUASAR)
+#include "experimental/kernel_args.h"
 #include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
 typedef uint64_t atomic_type;
 // TODO: Remove this once cache invalidation functionality for Quasar is added
@@ -92,8 +92,9 @@ void test_compare_and_swap_atomic(atomic_type* l1_counter_ptr, const uint32_t in
 void kernel_main() {
     // Base L1 address shared by all DMs: used as a counter (add/CAS) or value + result slots (load/store)
 #ifdef ARCH_QUASAR
-    atomic_type* l1_counter_ptr = reinterpret_cast<atomic_type*>(static_cast<uintptr_t>(get_vararg(0)));
-    const uint32_t increment_times = get_vararg(1);
+    atomic_type* l1_counter_ptr =
+        reinterpret_cast<atomic_type*>(static_cast<uintptr_t>(get_arg(args::l1_counter_addr)));
+    const uint32_t increment_times = get_arg(args::increment_times);
 #else
     atomic_type* l1_counter_ptr = reinterpret_cast<atomic_type*>(get_arg_val<uint32_t>(0));
     const uint32_t increment_times = get_arg_val<uint32_t>(1);

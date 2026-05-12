@@ -11,10 +11,10 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t dram_src_address = get_vararg(0);
-    const uint32_t l1_dst_address = get_vararg(1);
-    const uint32_t num_elements = get_vararg(2);
-    const uint32_t dram_src_bank_id = get_vararg(3);
+    const uint32_t dram_src_address = get_arg(args::dram_addr);
+    const uint32_t l1_dst_address = get_arg(args::l1_addr);
+    const uint32_t num_elements = get_arg(args::num_elements);
+    const uint32_t dram_src_bank_id = get_arg(args::dram_bank_id);
 
     Noc noc;
     AllocatorBank<AllocatorBankType::DRAM> src_dram;

@@ -9,15 +9,11 @@
 #include "internal/firmware_common.h"
 #include "api/compile_time_args.h"
 #include "internal/hw_thread.h"
+#if defined(ARCH_QUASAR)
 #include "experimental/kernel_args.h"
+#endif
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
 #include "internal/ethernet/tunneling.h"
-#endif
-
-#if defined(ARCH_QUASAR)
-#define SANITIZE_GET_RTA(N) get_vararg(N)
-#else
-#define SANITIZE_GET_RTA(N) get_arg_val<uint32_t>(N)
 #endif
 
 /**
@@ -48,31 +44,56 @@ void kernel_main() {
     }
 #endif
 #endif
-    std::uint32_t local_buffer_addr = SANITIZE_GET_RTA(0);
+#if defined(ARCH_QUASAR)
+    std::uint32_t local_buffer_addr = get_arg(args::local_buffer_addr);
 
-    std::uint32_t buffer_src_addr = SANITIZE_GET_RTA(1);
-    std::uint32_t src_noc_x = SANITIZE_GET_RTA(2);
-    std::uint32_t src_noc_y = SANITIZE_GET_RTA(3);
+    std::uint32_t buffer_src_addr = get_arg(args::buffer_src_addr);
+    std::uint32_t src_noc_x = get_arg(args::src_noc_x);
+    std::uint32_t src_noc_y = get_arg(args::src_noc_y);
 
-    std::uint32_t buffer_dst_addr = SANITIZE_GET_RTA(4);
-    std::uint32_t dst_noc_x = SANITIZE_GET_RTA(5);
-    std::uint32_t dst_noc_y = SANITIZE_GET_RTA(6);
+    std::uint32_t buffer_dst_addr = get_arg(args::buffer_dst_addr);
+    std::uint32_t dst_noc_x = get_arg(args::dst_noc_x);
+    std::uint32_t dst_noc_y = get_arg(args::dst_noc_y);
 
-    std::uint32_t buffer_size = SANITIZE_GET_RTA(7);
+    std::uint32_t buffer_size = get_arg(args::buffer_size);
+#else
+    std::uint32_t local_buffer_addr = get_arg_val<uint32_t>(0);
+
+    std::uint32_t buffer_src_addr = get_arg_val<uint32_t>(1);
+    std::uint32_t src_noc_x = get_arg_val<uint32_t>(2);
+    std::uint32_t src_noc_y = get_arg_val<uint32_t>(3);
+
+    std::uint32_t buffer_dst_addr = get_arg_val<uint32_t>(4);
+    std::uint32_t dst_noc_x = get_arg_val<uint32_t>(5);
+    std::uint32_t dst_noc_y = get_arg_val<uint32_t>(6);
+
+    std::uint32_t buffer_size = get_arg_val<uint32_t>(7);
+#endif
 
 #if defined(COMPILE_FOR_DM) && defined(TEST_MULTI_DM_SANITIZE_RACE)
     buffer_dst_addr = (multi_dm_base_addr | static_cast<uint32_t>(thread_idx));
     buffer_size = (multi_dm_base_size | static_cast<uint32_t>(thread_idx));
 #endif
 
-    bool use_inline_dw_write = static_cast<bool>(SANITIZE_GET_RTA(8));
-    bool bad_linked_transaction = static_cast<bool>(SANITIZE_GET_RTA(9));
-    std::uint32_t l1_overflow_addr = SANITIZE_GET_RTA(10);
-    std::uint32_t eth_src_overflow_addr = SANITIZE_GET_RTA(11);
-    std::uint32_t eth_dest_overflow_addr = SANITIZE_GET_RTA(12);
-    bool use_multicast_semaphore_inc = static_cast<bool>(SANITIZE_GET_RTA(13));
-    std::uint32_t mcast_dst_end_x = SANITIZE_GET_RTA(14);
-    std::uint32_t mcast_dst_end_y = SANITIZE_GET_RTA(15);
+#if defined(ARCH_QUASAR)
+    bool use_inline_dw_write = static_cast<bool>(get_arg(args::use_inline_dw_write));
+    bool bad_linked_transaction = static_cast<bool>(get_arg(args::bad_linked_transaction));
+    std::uint32_t l1_overflow_addr = get_arg(args::l1_overflow_addr);
+    std::uint32_t eth_src_overflow_addr = get_arg(args::eth_src_overflow_addr);
+    std::uint32_t eth_dest_overflow_addr = get_arg(args::eth_dest_overflow_addr);
+    bool use_multicast_semaphore_inc = static_cast<bool>(get_arg(args::use_multicast_semaphore_inc));
+    std::uint32_t mcast_dst_end_x = get_arg(args::mcast_dst_end_x);
+    std::uint32_t mcast_dst_end_y = get_arg(args::mcast_dst_end_y);
+#else
+    bool use_inline_dw_write = static_cast<bool>(get_arg_val<uint32_t>(8));
+    bool bad_linked_transaction = static_cast<bool>(get_arg_val<uint32_t>(9));
+    std::uint32_t l1_overflow_addr = get_arg_val<uint32_t>(10);
+    std::uint32_t eth_src_overflow_addr = get_arg_val<uint32_t>(11);
+    std::uint32_t eth_dest_overflow_addr = get_arg_val<uint32_t>(12);
+    bool use_multicast_semaphore_inc = static_cast<bool>(get_arg_val<uint32_t>(13));
+    std::uint32_t mcast_dst_end_x = get_arg_val<uint32_t>(14);
+    std::uint32_t mcast_dst_end_y = get_arg_val<uint32_t>(15);
+#endif
 
     // We will assert later. This kernel will hang.
     // Need to signal completion to dispatcher before hanging so that

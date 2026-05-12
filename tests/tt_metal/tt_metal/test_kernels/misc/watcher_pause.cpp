@@ -19,7 +19,7 @@
 
 void kernel_main() {
 #ifdef ARCH_QUASAR
-    uint32_t wait_cycles = get_common_vararg(0);
+    uint32_t wait_cycles = get_arg(args::wait_cycles);
 #else
     uint32_t wait_cycles = get_common_arg_val<uint32_t>(0);
 #endif

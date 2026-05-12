@@ -221,7 +221,24 @@ void RunTestOnCore(
                 .num_threads = static_cast<uint8_t>(num_dms),
                 .compiler_options = {.defines = defines},
                 .compile_time_arg_bindings = cta_bindings,
-                .runtime_arguments_schema = {.num_runtime_varargs = 16},
+                .runtime_arguments_schema =
+                    {.named_runtime_args =
+                         {"local_buffer_addr",
+                          "buffer_src_addr",
+                          "src_noc_x",
+                          "src_noc_y",
+                          "buffer_dst_addr",
+                          "dst_noc_x",
+                          "dst_noc_y",
+                          "buffer_size",
+                          "use_inline_dw_write",
+                          "bad_linked_transaction",
+                          "l1_overflow_addr",
+                          "eth_src_overflow_addr",
+                          "eth_dest_overflow_addr",
+                          "use_multicast_semaphore_inc",
+                          "mcast_dst_end_x",
+                          "mcast_dst_end_y"}},
                 .config_spec =
                     experimental::metal2_host_api::DataMovementConfiguration{
                         .gen2_data_movement_config =
@@ -349,7 +366,25 @@ void RunTestOnCore(
         experimental::metal2_host_api::ProgramRunParams params;
         params.kernel_run_params = {{
             .kernel_spec_name = DRAM_COPY_KERNEL_NAME,
-            .runtime_varargs = {{experimental::metal2_host_api::NodeCoord{core}, rta_values}},
+            .named_runtime_args =
+                {{.node = experimental::metal2_host_api::NodeCoord{core},
+                  .args =
+                      {{"local_buffer_addr", buffer_addr},
+                       {"buffer_src_addr", input_buffer_addr},
+                       {"src_noc_x", input_buf_noc_xy.x},
+                       {"src_noc_y", input_buf_noc_xy.y},
+                       {"buffer_dst_addr", output_buffer_addr},
+                       {"dst_noc_x", output_buf_noc_xy.x},
+                       {"dst_noc_y", output_buf_noc_xy.y},
+                       {"buffer_size", buffer_size},
+                       {"use_inline_dw_write", use_inline_dw_write},
+                       {"bad_linked_transaction", bad_linked_transaction},
+                       {"l1_overflow_addr", l1_overflow_addr},
+                       {"eth_src_overflow_addr", eth_src_overflow_addr_words},
+                       {"eth_dest_overflow_addr", eth_dest_overflow_addr_words},
+                       {"use_multicast_semaphore_inc", use_multicast_semaphore_inc},
+                       {"mcast_dst_end_x", mcast_dst_end_x},
+                       {"mcast_dst_end_y", mcast_dst_end_y}}}},
         }};
         experimental::metal2_host_api::SetProgramRunParameters(program, params);
     } else {

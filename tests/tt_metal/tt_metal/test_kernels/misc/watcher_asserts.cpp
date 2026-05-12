@@ -14,18 +14,20 @@
 #if defined(COMPILE_FOR_TRISC)
 #include "api/compute/common.h"
 #endif
-#include "experimental/kernel_args.h"
-
 #if defined(ARCH_QUASAR)
-#define WATCHER_GET_RTA(N) get_vararg(N)
-#else
-#define WATCHER_GET_RTA(N) get_arg_val<uint32_t>(N)
+#include "experimental/kernel_args.h"
 #endif
 
 void kernel_main() {
-    uint32_t a = WATCHER_GET_RTA(0);
-    uint32_t b = WATCHER_GET_RTA(1);
-    uint32_t assert_type = WATCHER_GET_RTA(2);
+#if defined(ARCH_QUASAR)
+    uint32_t a = get_arg(args::a);
+    uint32_t b = get_arg(args::b);
+    uint32_t assert_type = get_arg(args::assert_type);
+#else
+    uint32_t a = get_arg_val<uint32_t>(0);
+    uint32_t b = get_arg_val<uint32_t>(1);
+    uint32_t assert_type = get_arg_val<uint32_t>(2);
+#endif
 
 #if defined(COMPILE_FOR_DM)
     constexpr uint32_t dm_id = get_arg(args::dm_id);
@@ -77,7 +79,11 @@ void kernel_main() {
 #endif
 #endif
     if (assert_type == DebugAssertHwFault && a==b) {
-        uint32_t hw_assert_cause = WATCHER_GET_RTA(3);
+#if defined(ARCH_QUASAR)
+        uint32_t hw_assert_cause = get_arg(args::hw_assert_cause);
+#else
+        uint32_t hw_assert_cause = get_arg_val<uint32_t>(3);
+#endif
         volatile int32_t* p = (int32_t*)0xffffffffff000000;
         uint32_t tmp;
         switch (hw_assert_cause) {

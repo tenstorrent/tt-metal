@@ -88,7 +88,8 @@ static void RunTest(
                             .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel},
                             .num_threads = 6,
                             .compile_time_arg_bindings = {{"dm_id", dm_id}},
-                            .runtime_arguments_schema = {.num_runtime_varargs = 4},
+                            .runtime_arguments_schema =
+                                {.named_runtime_args = {"a", "b", "assert_type", "hw_assert_cause"}},
                             .config_spec =
                                 experimental::metal2_host_api::DataMovementConfiguration{
                                     .gen2_data_movement_config = experimental::metal2_host_api::
@@ -122,7 +123,8 @@ static void RunTest(
                             .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel},
                             .num_threads = 1,
                             .compiler_options = {.defines = {{fmt::format("TRISC{}", processor.processor_type), "1"}}},
-                            .runtime_arguments_schema = {.num_runtime_varargs = 4},
+                            .runtime_arguments_schema =
+                                {.named_runtime_args = {"a", "b", "assert_type", "hw_assert_cause"}},
                             .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
                         };
                         experimental::metal2_host_api::WorkUnitSpec wu{
@@ -189,7 +191,10 @@ static void RunTest(
             experimental::metal2_host_api::ProgramRunParams params;
             params.kernel_run_params = {{
                 .kernel_spec_name = ASSERT_KERNEL_NAME,
-                .runtime_varargs = {{experimental::metal2_host_api::NodeCoord{logical_core}, args}},
+                .named_runtime_args =
+                    {{.node = experimental::metal2_host_api::NodeCoord{logical_core},
+                      .args =
+                          {{"a", args[0]}, {"b", args[1]}, {"assert_type", args[2]}, {"hw_assert_cause", args[3]}}}},
             }};
             experimental::metal2_host_api::SetProgramRunParameters(prog, params);
         } else {

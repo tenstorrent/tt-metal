@@ -81,7 +81,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             .unique_id = DM_KERNEL_NAME,
             .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{path},
             .num_threads = static_cast<uint8_t>(kQuasarUserDmCores),
-            .runtime_arguments_schema = {.num_common_runtime_varargs = 1},
+            .runtime_arguments_schema = {.named_common_runtime_args = {"wait_cycles"}},
             .config_spec =
                 experimental::metal2_host_api::DataMovementConfiguration{
                     .gen2_data_movement_config =
@@ -101,7 +101,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
 
         experimental::metal2_host_api::ProgramRunParams params;
         params.kernel_run_params = {
-            {.kernel_spec_name = DM_KERNEL_NAME, .common_runtime_varargs = args},
+            {.kernel_spec_name = DM_KERNEL_NAME, .named_common_runtime_args = {{"wait_cycles", delay_cycles}}},
         };
         experimental::metal2_host_api::SetProgramRunParameters(program, params);
         workload.add_program(device_range, std::move(program));

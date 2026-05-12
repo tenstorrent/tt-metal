@@ -30,7 +30,7 @@ void kernel_main() {
 #else
     // TENSIX / idle ERISC: block until host signals
 #if defined(ARCH_QUASAR)
-    uint32_t sync_flag_addr = get_common_vararg(0);
+    uint32_t sync_flag_addr = get_arg(args::sync_flag_addr);
 #else
     uint32_t sync_flag_addr = get_common_arg_val<uint32_t>(0);
 #endif
