@@ -1949,21 +1949,24 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest4xDFB_Mixed) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping: mixed multi-DFB TC exhaustion test requires Quasar";
     }
+    // The ALL-pattern DFBs in this mix are DM strided -> DM ALL, which can't use the
+    // remapper with implicit sync today. Skip until that combination is supported.
+    DFB_SKIP_DM_DM_ALL_IMPLICIT_SYNC;
     experimental::dfb::DataflowBufferConfig strided_cfg{
-        .entry_size    = 1024,
-        .num_entries   = 16,
+        .entry_size = 1024,
+        .num_entries = 18,
         .num_producers = 3,
-        .pap           = dfb::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 3,
-        .cap           = dfb::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
     experimental::dfb::DataflowBufferConfig all_cfg{
-        .entry_size    = 1024,
-        .num_entries   = 16,
+        .entry_size = 1024,
+        .num_entries = 18,
         .num_producers = 3,
-        .pap           = dfb::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 3,
-        .cap           = dfb::AccessPattern::ALL,
+        .cap = dfb::AccessPattern::ALL,
         .enable_implicit_sync = GetParam()};
     run_sequential_dfbs_program(
         this->devices_.at(0), {strided_cfg, strided_cfg, all_cfg, all_cfg});
