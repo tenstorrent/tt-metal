@@ -250,7 +250,18 @@ async def run_streaming(inputs: dict[str, Any] | list[dict[str, Any]], args: arg
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Reference Voxtral TTS runner.")
+    parser = argparse.ArgumentParser(
+        description="Reference Voxtral TTS runner.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Example (CPU backend, WAV under --output-dir, default model):\n"
+            "  python -m models.experimental.voxtraltts.reference.demo_reference \\\n"
+            "    --backend cpu --write-audio --text 'Hello world.' --voice casual_male\n"
+            "\n"
+            "Flags like --write-audio are boolean switches; do not append a literal '...' "
+            "(the shell passes it through and argparse reports an unknown argument)."
+        ),
+    )
     parser.add_argument(
         "--backend",
         choices=("cpu", "vllm"),
