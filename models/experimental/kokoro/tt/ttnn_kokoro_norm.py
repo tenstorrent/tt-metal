@@ -82,15 +82,7 @@ def adain_1d_nlc(
     gamma = ttnn.slice(h, (0, 0, 0), (h.shape[0], 1, c), memory_config=memory_config)
     beta = ttnn.slice(h, (0, 0, c), (h.shape[0], 1, c2), memory_config=memory_config)
 
-    one = ttnn.full(
-        gamma.shape,
-        fill_value=1.0,
-        dtype=gamma.dtype,
-        layout=gamma.layout,
-        device=gamma.device(),
-        memory_config=memory_config,
-    )
-    scale = ttnn.add(one, gamma, memory_config=memory_config)
+    scale = ttnn.add(gamma, 1.0, memory_config=memory_config)
     y = ttnn.multiply(y, scale, memory_config=memory_config)
     y = ttnn.add(y, beta, memory_config=memory_config)
     return y

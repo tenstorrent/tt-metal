@@ -181,13 +181,22 @@ class TtKokoroTextEncoder:
             x = ttnn.multiply(x, m)
             ttnn.deallocate(m)
 
-        # BiLSTM over NLC
+        lengths_list = input_lengths.detach().cpu().tolist()
+        # BiLSTM over NLC (packed-length semantics match reference ``pack_padded_sequence``).
         x = bilstm_nlc(
             x_nlc=x,
             fwd=self.params.lstm_fwd,
             rev=self.params.lstm_rev,
             compute_kernel_config=self.compute_kernel_config,
+            sequence_lengths=lengths_list,
         )
+
+        # Re-apply padding mask on LSTM outputs (reference ``masked_fill_`` after pad).
+        m_out = ttnn.from_torch(
+            (~text_mask).to(torch.float32).unsqueeze(-1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev
+        )
+        x = ttnn.multiply(x, m_out)
+        ttnn.deallocate(m_out)
 
         # Output wants [B, C, T]
         x = ttnn.permute(x, (0, 2, 1))  # [B, 2H, T]

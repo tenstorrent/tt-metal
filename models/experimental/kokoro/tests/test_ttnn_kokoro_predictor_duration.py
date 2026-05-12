@@ -58,7 +58,7 @@ def test_ttnn_predictor_duration_matches_torch(device):
     d_tt_torch = ttnn.to_torch(d_tt).to(torch.float32)
     dur_tt_torch = ttnn.to_torch(dur_tt).to(torch.float32)
 
-    ok_d, pcc_d = comp_pcc(d_ref, d_tt_torch, pcc=0.90)
+    ok_d, pcc_d = comp_pcc(d_ref, d_tt_torch, pcc=0.99)
     assert ok_d, f"d PCC low: {pcc_d}"
-    ok_u, pcc_u = comp_pcc(dur_ref, dur_tt_torch, pcc=0.90)
+    ok_u, pcc_u = comp_pcc(dur_ref, dur_tt_torch, pcc=0.99)
     assert ok_u, f"duration PCC low: {pcc_u}"
