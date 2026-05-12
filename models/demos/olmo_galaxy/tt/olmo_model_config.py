@@ -1226,12 +1226,28 @@ class TtOlmoModelArgs(TtModelArgs):
         self.model_config["SDPA_PROGCFG"] = sdpa_progcfg
 
         # ==== Decode SDPA Configs ====
-        # Paged SDPA for decode mode
+        # Paged SDPA for decode mode. 60 cores on a clean contiguous
+        # rectangle cols 1-6 × rows 0-9 — the full worker space inside
+        # OLMo's all-core sub-device, avoiding col 0 (caused batch-1
+        # corruption when included in SDPA compute) and col 7 (dispatch
+        # core under dispatch_core_axis=COL).
+        #
+        # Previous config used 42 cores carved from a non-contiguous 50-core
+        # layout (cols 1-3 ∪ 5-6). Since the col-4 widening the worker
+        # region is contiguous cols 0-6; we use cols 1-6 here for SDPA
+        # compute. 60 cores gives ~1.4x more K-reduction parallelism than
+        # the previous 42-core config — pure throughput gain at batch=1.
+        #
+        # The kernel's known batch=32 slot-N%8∈{6,7} corruption (see
+        # test_paged_sdpa_decode_olmo_progcfg_sweep.py) depends on
+        # grid_cols, not core count, so this widening does not affect the
+        # batch=32 failure shape.
+        paged_sdpa_decode_subcore_grids = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(6, 9))]
+        )
         self.model_config["PAGED_SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(7, 6),  # Use 7 instead of 8 to avoid dispatch core column
-            sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
-                self.start_core, 42, self.sub_core_grids, row_wise=True
-            ),
+            compute_with_storage_grid_size=(6, 10),
+            sub_core_grids=paged_sdpa_decode_subcore_grids,
             exp_approx_mode=False,
             q_chunk_size=0,
             k_chunk_size=0,
