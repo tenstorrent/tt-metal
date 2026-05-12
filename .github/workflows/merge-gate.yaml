@@ -81,8 +81,8 @@ jobs:
     secrets: inherit
     with:
       platform: "Ubuntu 24.04"
-      ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-tag }}
-      dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
+      ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-image }}
+      dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-image }}
 
 
   fail-fast:
@@ -141,12 +141,12 @@ jobs:
       platform: "Ubuntu 22.04"
       enable-lto: false
       skip-tt-train: false
-      ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-build-tag }}
-      ci-test-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-test-tag }}
-      dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-dev-tag }}
-      basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-dev-tag }}
-      basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-ttnn-runtime-tag }}
-      manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
+      ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-build-image }}
+      ci-test-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-test-image }}
+      dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-dev-image }}
+      basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-dev-image }}
+      basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-ttnn-runtime-image }}
+      manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-image }}
       fetch-depth: 1
 
   build-tsan:
@@ -168,12 +168,12 @@ jobs:
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       skip-tt-train: false
       publish-artifact: false
-      ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-tag }}
-      ci-test-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-test-tag }}
-      dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
-      basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-dev-tag }}
-      basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-ttnn-runtime-tag }}
-      manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
+      ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-image }}
+      ci-test-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-test-image }}
+      dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-image }}
+      basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-dev-image }}
+      basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-ttnn-runtime-image }}
+      manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-image }}
       fetch-depth: 1
 
   build-sweeps:
@@ -189,12 +189,12 @@ jobs:
     secrets: inherit
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-      ubuntu-2204-ci-build-tag: ${{ needs.docker-images.outputs.ubuntu-2204-ci-build-tag }}
-      ubuntu-2204-dev-tag: ${{ needs.docker-images.outputs.ubuntu-2204-dev-tag }}
-      ubuntu-2204-manylinux-tag: ${{ needs.docker-images.outputs.manylinux-tag }}
-      ubuntu-2404-ci-build-tag: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-tag }}
-      ubuntu-2404-dev-tag: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
-      ubuntu-2404-manylinux-tag: ${{ needs.docker-images.outputs.manylinux-tag }}
+      ubuntu-2204-ci-build-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-build-image }}
+      ubuntu-2204-dev-image: ${{ needs.docker-images.outputs.ubuntu-2204-dev-image }}
+      ubuntu-2204-manylinux-image: ${{ needs.docker-images.outputs.manylinux-image }}
+      ubuntu-2404-ci-build-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-image }}
+      ubuntu-2404-dev-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-image }}
+      ubuntu-2404-manylinux-image: ${{ needs.docker-images.outputs.manylinux-image }}
       fetch-depth: 1
 
   resolve-docker-pull-refs-tsan:
@@ -268,12 +268,12 @@ jobs:
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       skip-tt-train: false
       publish-artifact: false
-      ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-build-tag }}
-      ci-test-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-test-tag }}
-      dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-dev-tag }}
-      basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-dev-tag }}
-      basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-ttnn-runtime-tag }}
-      manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
+      ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-build-image }}
+      ci-test-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-test-image }}
+      dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-dev-image }}
+      basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-dev-image }}
+      basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-ttnn-runtime-image }}
+      manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-image }}
       fetch-depth: 1
 
   resolve-docker-pull-refs-asan:

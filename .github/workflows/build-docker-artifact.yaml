@@ -7,7 +7,7 @@ name: "Build tt-metal docker artifact"
 #   - tool-tags: JSON with all tool image tags (from build-docker-tools)
 #   - platform-data: JSON with all platform tags, exists flags, version info
 #
-# Outputs use the "-tag" suffix (e.g., ci-build-tag, dev-tag).
+# Outputs use the "-image" suffix (e.g., ci-build-image, dev-image).
 #
 # Bake steps use the checked harbor-prefix input for docker-image:// layer contexts;
 # runtime pull strings for test jobs use check-harbor + resolve-docker-pull-refs
@@ -70,28 +70,28 @@ on:
         default: ""
         description: "Checked Harbor pull-through prefix from check-harbor; empty to pull GHCR directly"
     outputs:
-      ci-build-tag:
-        value: ${{ jobs.metadata.outputs.ci_build_tag }}
-      ci-test-tag:
-        value: ${{ jobs.metadata.outputs.ci_test_tag }}
-      dev-tag:
-        value: ${{ jobs.metadata.outputs.dev_tag }}
-      basic-dev-tag:
-        value: ${{ jobs.metadata.outputs.basic_dev_tag }}
-      basic-ttnn-runtime-tag:
-        value: ${{ jobs.metadata.outputs.basic_ttnn_tag }}
-      manylinux-tag:
-        value: ${{ jobs.metadata.outputs.manylinux_tag }}
+      ci-build-image:
+        value: ${{ jobs.metadata.outputs.ci_build_image }}
+      ci-test-image:
+        value: ${{ jobs.metadata.outputs.ci_test_image }}
+      dev-image:
+        value: ${{ jobs.metadata.outputs.dev_image }}
+      basic-dev-image:
+        value: ${{ jobs.metadata.outputs.basic_dev_image }}
+      basic-ttnn-runtime-image:
+        value: ${{ jobs.metadata.outputs.basic_ttnn_image }}
+      manylinux-image:
+        value: ${{ jobs.metadata.outputs.manylinux_image }}
       tool-tags:
         value: ${{ jobs.metadata.outputs.tool_tags }}
-      python-ci-build-venv-tag:
-        value: ${{ jobs.metadata.outputs.ci_build_venv_tag }}
-      python-ci-test-venv-tag:
-        value: ${{ jobs.metadata.outputs.ci_test_venv_tag }}
-      llk-ci-tag:
+      python-ci-build-venv-image:
+        value: ${{ jobs.metadata.outputs.ci_build_venv_image }}
+      python-ci-test-venv-image:
+        value: ${{ jobs.metadata.outputs.ci_test_venv_image }}
+      llk-ci-image:
         # MIGRATION STAGING: requires tt_llk submodule; simplify when LLK moves in-tree
         description: "Docker tag for the LLK CI Docker image (Ubuntu 22.04); requires tt_llk submodule checkout"
-        value: ${{ jobs.metadata.outputs.llk-ci-tag }}
+        value: ${{ jobs.metadata.outputs.llk-ci-image }}
   workflow_dispatch:
     inputs:
       platform:
@@ -120,18 +120,18 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       platform_data: ${{ steps.metadata.outputs.platform_data }}
-      ci_build_tag: ${{ steps.metadata.outputs.ci_build_tag }}
-      ci_test_tag: ${{ steps.metadata.outputs.ci_test_tag }}
-      dev_tag: ${{ steps.metadata.outputs.dev_tag }}
-      basic_dev_tag: ${{ steps.metadata.outputs.basic_dev_tag }}
-      basic_ttnn_tag: ${{ steps.metadata.outputs.basic_ttnn_tag }}
-      manylinux_tag: ${{ steps.metadata.outputs.manylinux_tag }}
-      ci_build_venv_tag: ${{ steps.metadata.outputs.ci_build_venv_tag }}
-      ci_test_venv_tag: ${{ steps.metadata.outputs.ci_test_venv_tag }}
+      ci_build_image: ${{ steps.metadata.outputs.ci_build_image }}
+      ci_test_image: ${{ steps.metadata.outputs.ci_test_image }}
+      dev_image: ${{ steps.metadata.outputs.dev_image }}
+      basic_dev_image: ${{ steps.metadata.outputs.basic_dev_image }}
+      basic_ttnn_image: ${{ steps.metadata.outputs.basic_ttnn_image }}
+      manylinux_image: ${{ steps.metadata.outputs.manylinux_image }}
+      ci_build_venv_image: ${{ steps.metadata.outputs.ci_build_venv_image }}
+      ci_test_venv_image: ${{ steps.metadata.outputs.ci_test_venv_image }}
       tool_tags: ${{ steps.metadata.outputs.tool_tags }}
       tool_data: ${{ steps.metadata.outputs.tool_data }}
       llk-ci-exists: ${{ steps.llk-images.outputs.llk-ci-exists }}
-      llk-ci-tag: ${{ steps.llk-images.outputs.llk-ci-tag }}
+      llk-ci-image: ${{ steps.llk-images.outputs.llk-ci-image }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -193,14 +193,14 @@ jobs:
           fi
 
           echo "platform_data=$PLATFORM_DATA" >> "$GITHUB_OUTPUT"
-          echo "ci_build_tag=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_tag')" >> "$GITHUB_OUTPUT"
-          echo "ci_test_tag=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_tag')" >> "$GITHUB_OUTPUT"
-          echo "dev_tag=$(echo "$PLATFORM_DATA" | jq -r '.dev_tag')" >> "$GITHUB_OUTPUT"
-          echo "basic_dev_tag=$(echo "$PLATFORM_DATA" | jq -r '.basic_dev_tag')" >> "$GITHUB_OUTPUT"
-          echo "basic_ttnn_tag=$(echo "$PLATFORM_DATA" | jq -r '.basic_ttnn_tag')" >> "$GITHUB_OUTPUT"
-          echo "manylinux_tag=$(echo "$PLATFORM_DATA" | jq -r '.manylinux_tag')" >> "$GITHUB_OUTPUT"
-          echo "ci_build_venv_tag=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_venv_tag')" >> "$GITHUB_OUTPUT"
-          echo "ci_test_venv_tag=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_venv_tag')" >> "$GITHUB_OUTPUT"
+          echo "ci_build_image=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_tag')" >> "$GITHUB_OUTPUT"
+          echo "ci_test_image=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_tag')" >> "$GITHUB_OUTPUT"
+          echo "dev_image=$(echo "$PLATFORM_DATA" | jq -r '.dev_tag')" >> "$GITHUB_OUTPUT"
+          echo "basic_dev_image=$(echo "$PLATFORM_DATA" | jq -r '.basic_dev_tag')" >> "$GITHUB_OUTPUT"
+          echo "basic_ttnn_image=$(echo "$PLATFORM_DATA" | jq -r '.basic_ttnn_tag')" >> "$GITHUB_OUTPUT"
+          echo "manylinux_image=$(echo "$PLATFORM_DATA" | jq -r '.manylinux_tag')" >> "$GITHUB_OUTPUT"
+          echo "ci_build_venv_image=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_venv_tag')" >> "$GITHUB_OUTPUT"
+          echo "ci_test_venv_image=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_venv_tag')" >> "$GITHUB_OUTPUT"
           echo "tool_tags=$TOOL_TAGS" >> "$GITHUB_OUTPUT"
 
       - name: Check LLK CI image
@@ -214,7 +214,7 @@ jobs:
           fi
           DOCKER_TAG=$(./.github/scripts/llk-get-docker-tag.sh)
           TAG="ghcr.io/${{ github.repository }}/tt-llk-ci-ubuntu-22-04:${DOCKER_TAG}"
-          echo "llk-ci-tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "llk-ci-image=$TAG" >> "$GITHUB_OUTPUT"
           if docker manifest inspect "$TAG" > /dev/null 2>&1; then
             echo "LLK CI image exists: $TAG"
             echo "llk-ci-exists=true" >> "$GITHUB_OUTPUT"
@@ -545,5 +545,5 @@ jobs:
           needs.build-llk-images.result == 'success'
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
-          docker-image-tag: ${{ needs.metadata.outputs.llk-ci-tag }}
+          docker-image-tag: ${{ needs.metadata.outputs.llk-ci-image }}
           github-token: ${{ secrets.GITHUB_TOKEN }}

@@ -45,7 +45,7 @@ on:
         required: false
         type: string
         default: ""
-        description: "Canonical ghcr.io/... tag for the LLK CI image (from build-docker-images / build-docker-artifact llk-ci-tag)"
+        description: "Canonical ghcr.io/... tag for the LLK CI image (from build-docker-images / build-docker-artifact llk-ci-image)"
     outputs:
       dev-docker-image:
         description: Pull-ready dev image ref
