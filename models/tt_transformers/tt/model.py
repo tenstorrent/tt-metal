@@ -125,10 +125,6 @@ class Transformer(LightweightModule):
         # Sampling on device is supported only if each device has maximum logits size of 64*1024
         sampling_splits = self.args.num_devices if list(self.mesh_device.shape) != [1, 1] else 2
         self._supports_on_device_sampling = prefetcher is None and self.args.vocab_size // sampling_splits <= 64 * 1024
-        # Phi-1 currently produces degraded text on the device-sampling path.
-        # Keep sampling on host for this model until its TT sampling path is validated.
-        if self.args.base_model_name.lower().startswith("phi-1"):
-            self._supports_on_device_sampling = False
         if self._supports_on_device_sampling:
             self.sampling = SamplingGenerator(
                 args=args,
