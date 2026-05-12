@@ -226,8 +226,13 @@ void kernel_main() {
     noc_async_write_barrier();
 
     // Exit semaphore exchange - uses a dedicated semaphore (exit_semaphore_address) and
-    // the dedicated sem_packet_header. flush=true: EDM holds the atomic-inc on the receiver
-    // until our prior fabric writes (payload + metadata) to that destination have completed.
+    // the dedicated sem_packet_header. flush=true (vs the init handshake which uses the
+    // default flush=false): the EDM on the receiver holds this atomic-inc until our prior
+    // fabric writes (payload + metadata) to that chip have committed there. Without it the
+    // small atomic-inc packet can overtake the larger data writes on B's local NOC and the
+    // peer would observe sem-reached-threshold before the data has landed in DRAM. At init
+    // there are no prior writes to order against, so flush=false saves one EDM round-trip
+    // check.
     {
         const uint64_t exit_noc_semaphore_addr = get_noc_addr(exit_semaphore_address);
         send_init_semaphore_to_configured_targets<
