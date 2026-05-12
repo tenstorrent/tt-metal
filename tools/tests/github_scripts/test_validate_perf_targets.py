@@ -638,7 +638,7 @@ def test_validate_perf_targets_requires_ttft_measurement_when_target_exists(tmp_
                                 "batch_size": 1,
                                 "seq_len": 4096,
                                 "status": "active",
-                                "perf": {"decode_t/s/u": 90.0, "prefill_time_to_first_token": 0.12},
+                                "perf": {"decode_t/s/u": 90.0, "prefill_time_to_first_token": 120.0},
                                 "accuracy": {},
                             }
                         ]
