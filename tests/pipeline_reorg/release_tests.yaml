@@ -313,14 +313,14 @@
 #   team: models
 #   model-name: flux1-dev
 
-# - name: t3k_wan2.2_tests
-#   cmd: run_t3000_wan22_tests
-#   skus:
-#     wh_llmbox_perf_release:
-#       timeout: 30
-#   owner_id: U03FJB5TM5Y # Colman Glagovich
-#   team: models
-#   model-name: wan22
+- name: t3k_wan2.2_tests
+  cmd: run_t3000_wan22_tests
+  skus:
+    wh_llmbox_perf_release:
+      timeout: 30
+  owner_id: U03FJB5TM5Y # Colman Glagovich
+  team: models
+  model-name: wan22
 
 # - name: t3k_mochi_tests
 #   cmd: run_t3000_mochi_tests
@@ -393,16 +393,16 @@
 #   owner_id: U08TED0JM9D # Samuel Adesoye
 #   team: models
 
-# - name: Galaxy Wan2.2 demo tests
-#   cmd: |
-#     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1
-#     pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "wh_4x8sp1tp0 and resolution_720p" --timeout 1500
-#   model-name: wan22
-#   skus:
-#     wh_galaxy_release:
-#       timeout: 24
-#   owner_id: U03FJB5TM5Y # Colman Glagovich
-#   team: models
+- name: Galaxy Wan2.2 demo tests
+  cmd: |
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1
+    pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "wh_4x8sp1tp0 and resolution_720p" --timeout 1500
+  model-name: wan22
+  skus:
+    wh_galaxy_release:
+      timeout: 24
+  owner_id: U03FJB5TM5Y # Colman Glagovich
+  team: models
 
 # - name: Galaxy Mochi demo tests
 #   cmd: |
@@ -454,17 +454,17 @@
 #   owner_id: U053W15B6JF # Djordje Ivanovic
 #   team: models
 
-- name: Galaxy GPT-OSS 120B unit tests (high batch)
-  cmd: |
-    uv pip install -r models/demos/gpt_oss/requirements.txt
-    export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/
-    pytest --timeout 1500 models/demos/gpt_oss/tests/unit -k "4x8 and decode_high_throughput"
-  model-name: gpt-oss-120b-high-batch-galaxy
-  skus:
-    wh_galaxy_release:
-      timeout: 25
-  owner_id: U08TJ70UFRT # Stuti Raizada
-  team: models
+# - name: Galaxy GPT-OSS 120B unit tests (high batch)
+#   cmd: |
+#     uv pip install -r models/demos/gpt_oss/requirements.txt
+#     export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/
+#     pytest --timeout 1500 models/demos/gpt_oss/tests/unit -k "4x8 and decode_high_throughput"
+#   model-name: gpt-oss-120b-high-batch-galaxy
+#   skus:
+#     wh_galaxy_release:
+#       timeout: 25
+#   owner_id: U08TJ70UFRT # Stuti Raizada
+#   team: models
 
 # Galaxy E2E tests (from models_e2e_tests.yaml)
 # - name: Galaxy Llama 3.1-8B data-parallel e2e tests
@@ -501,17 +501,17 @@
 #   owner_id: U053W15B6JF # Djordje Ivanovic
 #   team: models
 
-- name: Galaxy GPT-OSS 120B e2e tests (high batch)
-  cmd: |
-    uv pip install -r models/demos/gpt_oss/requirements.txt
-    export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/
-    pytest models/demos/gpt_oss/demo/text_demo.py -k "mesh_4x8 and batch128" --timeout 1200
-  model-name: gpt-oss-120b-high-batch-galaxy
-  skus:
-    wh_galaxy_release:
-      timeout: 20
-  owner_id: U08TJ70UFRT # Stuti Raizada
-  team: models
+# - name: Galaxy GPT-OSS 120B e2e tests (high batch)
+#   cmd: |
+#     uv pip install -r models/demos/gpt_oss/requirements.txt
+#     export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/
+#     pytest models/demos/gpt_oss/demo/text_demo.py -k "mesh_4x8 and batch128" --timeout 1200
+#   model-name: gpt-oss-120b-high-batch-galaxy
+#   skus:
+#     wh_galaxy_release:
+#       timeout: 20
+#   owner_id: U08TJ70UFRT # Stuti Raizada
+#   team: models
 
 # ============================================================================
 # Blackhole tests
@@ -538,25 +538,25 @@
 #   team: models
 #   model-name: unet-shallow
 
-- name: Llama 3.1-8B P150 performance
-  cmd: |
-    HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci and not stress" --max_seq_len 131072
-  skus:
-    bh_p150_perf:
-      timeout: 84
-  owner_id: U03PUAKE719 # Miguel Tairum
-  team: models
-  model-name: llama3.1-8b
+# - name: Llama 3.1-8B P150 performance
+#   cmd: |
+#     HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci and not stress" --max_seq_len 131072
+#   skus:
+#     bh_p150_perf:
+#       timeout: 84
+#   owner_id: U03PUAKE719 # Miguel Tairum
+#   team: models
+#   model-name: llama3.1-8b
 
-- name: Llama 3.1-8B P150 stress
-  cmd: |
-    HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "stress" --max_seq_len 131072 --timeout=1800
-  skus:
-    bh_p150:
-      timeout: 84
-  owner_id: U03PUAKE719 # Miguel Tairum
-  team: models
-  model-name: llama3.1-8b
+# - name: Llama 3.1-8B P150 stress
+#   cmd: |
+#     HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "stress" --max_seq_len 131072 --timeout=1800
+#   skus:
+#     bh_p150:
+#       timeout: 84
+#   owner_id: U03PUAKE719 # Miguel Tairum
+#   team: models
+#   model-name: llama3.1-8b
 
 # LLMBox Multi-card tests
 # - name: Llama 3.1-8B LLMBox performance batch-32
