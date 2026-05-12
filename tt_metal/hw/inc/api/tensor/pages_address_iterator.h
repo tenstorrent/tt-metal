@@ -26,8 +26,9 @@ public:
     using pointer = const Page*;
 
     // Constructor that initializes the iterator at a starting position
-    PagesAddressIteratorSharded(const Accessor& accessor, uint32_t start_page_id = 0, uint8_t noc = noc_index) :
-        accessor(accessor), current_page_id(start_page_id), noc(noc) {
+    PagesAddressIteratorSharded(
+        const Accessor& accessor, uint32_t start_page_id = 0, uint32_t stride = 1, uint8_t noc = noc_index) :
+        accessor(accessor), current_page_id(start_page_id), stride_(stride), noc(noc) {
         if (current_page_id < accessor.dspec().tensor_volume()) {
             // Initialize coordinates and state from page_id
             initialize_from_page_id(start_page_id);
@@ -47,14 +48,18 @@ public:
             return *this;  // End iterator
         }
 
-        current_page_id++;
+        current_page_id += stride_;
         if (current_page_id >= accessor.dspec().tensor_volume()) {
             current_page_id = accessor.dspec().tensor_volume();
             return *this;
         }
 
-        // Efficiently update coordinates and address without divisions
-        increment_page_coordinate();
+        // Efficiently update coordinates and address without divisions when possible
+        if (can_use_simple_increment()) {
+            apply_simple_increment();
+        } else {
+            initialize_from_page_id(current_page_id);
+        }
         update_current_page();
         return *this;
     }
@@ -71,7 +76,7 @@ public:
             return *this;  // End iterator
         }
 
-        current_page_id += steps;
+        current_page_id += steps * stride_;
         if (current_page_id >= accessor.dspec().tensor_volume()) {
             current_page_id = accessor.dspec().tensor_volume();
             return *this;
@@ -112,6 +117,7 @@ private:
     const Accessor& accessor;
     uint32_t current_page_id = 0;   // current page id
     uint64_t current_noc_addr = 0;  // current NOC address for this page
+    uint32_t stride_ = 1;           // step size per operator++ (1 for contiguous, N for DM thread stride)
     uint8_t noc = noc_index;
     uint32_t current_shard_id = 0;  // Which shard this page belongs to
 
@@ -182,12 +188,12 @@ private:
         recalculate_mapping_from_coordinates();
     }
 
-    // Check if we can just increment the address (consecutive pages in same bank)
+    // Check if we can just add stride_ to the address (stays in same shard, no boundary crossing)
     bool can_use_simple_increment() const {
         const auto& dspec = accessor.dspec();
 
-        // Check if incrementing rightmost coordinate would stay in same row
-        uint32_t next_coord = page_coord[dspec.rank() - 1] + 1;
+        // Check if incrementing rightmost coordinate by stride_ stays within the same row
+        uint32_t next_coord = page_coord[dspec.rank() - 1] + stride_;
         if (next_coord >= dspec.tensor_shape()[dspec.rank() - 1]) {
             return false;  // Would overflow tensor bounds
         }
@@ -204,12 +210,12 @@ private:
         const auto& dspec = accessor.dspec();
 
         // Update coordinate tracking
-        page_coord[dspec.rank() - 1]++;
-        page_offset_within_shard += dspec.shard_strides()[dspec.rank() - 1];
+        page_coord[dspec.rank() - 1] += stride_;
+        page_offset_within_shard += dspec.shard_strides()[dspec.rank() - 1] * stride_;
 
         // Update NOC address and bank offset
-        current_noc_addr += accessor.get_aligned_page_size();
-        current_page_mapping.bank_page_offset++;
+        current_noc_addr += accessor.get_aligned_page_size() * stride_;
+        current_page_mapping.bank_page_offset += stride_;
     }
 
     // Increment coordinates like a multi-dimensional counter
@@ -263,8 +269,12 @@ public:
     using pointer = const Page*;
 
     PagesAddressIteratorInterleaved(
-        const Accessor& accessor, uint32_t start_page_id, uint32_t end_page_id, uint8_t noc) :
-        accessor(accessor), current_page_id(start_page_id), end_page_id_(end_page_id), noc(noc) {
+        const Accessor& accessor,
+        uint32_t start_page_id,
+        uint32_t end_page_id,
+        uint32_t stride,
+        uint8_t noc) :
+        accessor(accessor), current_page_id(start_page_id), end_page_id_(end_page_id), stride_(stride), noc(noc) {
         // If start_page_id is beyond end_page_id, create an end iterator
         if (current_page_id >= end_page_id_) {
             current_page_id = end_page_id_;
@@ -281,7 +291,7 @@ public:
 
     // Arithmetic operators
     PagesAddressIteratorInterleaved& operator++() {
-        current_page_id++;
+        current_page_id += stride_;
         if (current_page_id >= end_page_id_) {
             current_page_id = end_page_id_;
             return *this;
@@ -299,7 +309,7 @@ public:
 
     PagesAddressIteratorInterleaved& operator+=(difference_type steps) {
         ASSERT(steps >= 0);
-        current_page_id += steps;
+        current_page_id += steps * stride_;
         if (current_page_id >= end_page_id_) {
             current_page_id = end_page_id_;
             return *this;
@@ -342,6 +352,7 @@ private:
     const Accessor& accessor;
     uint32_t current_page_id = 0;
     const uint32_t end_page_id_ = 0;
+    const uint32_t stride_ = 1;
     const uint8_t noc = noc_index;
     mutable Page current_page{0, 0};
 
@@ -365,22 +376,34 @@ public:
         PagesAddressIteratorSharded<Accessor>>;
     using const_iterator = iterator;
 
-    Pages(const Accessor& accessor, uint32_t start_page_id, uint32_t end_page_id, uint8_t noc = noc_index) :
-        accessor_(accessor), start_page_id_(start_page_id), end_page_id_(end_page_id), noc_(noc) {}
+    Pages(
+        const Accessor& accessor,
+        uint32_t start_page_id,
+        uint32_t end_page_id,
+        uint32_t stride = 1,
+        uint8_t noc = noc_index) :
+        accessor_(accessor),
+        start_page_id_(start_page_id),
+        end_page_id_(end_page_id),
+        stride_(stride),
+        noc_(noc) {
+        ASSERT(stride > 0);                    // stride=0 would make the iterator never advance
+        ASSERT(start_page_id <= end_page_id);  // inverted range silently produces no iterations
+    }
 
     iterator begin() const {
         if constexpr (Accessor::DSpec::is_interleaved) {
-            return PagesAddressIteratorInterleaved<Accessor>(accessor_, start_page_id_, end_page_id_, noc_);
+            return PagesAddressIteratorInterleaved<Accessor>(accessor_, start_page_id_, end_page_id_, stride_, noc_);
         } else {
-            return PagesAddressIteratorSharded<Accessor>(accessor_, start_page_id_, noc_);
+            return PagesAddressIteratorSharded<Accessor>(accessor_, start_page_id_, stride_, noc_);
         }
     }
 
     iterator end() const {
         if constexpr (Accessor::DSpec::is_interleaved) {
-            return PagesAddressIteratorInterleaved<Accessor>(accessor_, end_page_id_, end_page_id_, noc_);
+            return PagesAddressIteratorInterleaved<Accessor>(accessor_, end_page_id_, end_page_id_, stride_, noc_);
         } else {
-            return PagesAddressIteratorSharded<Accessor>(accessor_, end_page_id_, noc_);
+            return PagesAddressIteratorSharded<Accessor>(accessor_, end_page_id_, stride_, noc_);
         }
     }
 
@@ -391,6 +414,7 @@ private:
     const Accessor& accessor_;
     uint32_t start_page_id_;
     uint32_t end_page_id_;
+    uint32_t stride_;
     uint8_t noc_;
 };
 

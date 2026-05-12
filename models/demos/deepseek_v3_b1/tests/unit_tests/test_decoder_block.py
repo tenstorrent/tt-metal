@@ -17,7 +17,9 @@ import torch
 from loguru import logger
 
 import ttnn
+from conftest import requires_hybrid_allocator
 from models.common.utility_functions import comp_pcc
+from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensorAssigner
 from models.demos.deepseek_v3_b1.demo.decoder_stage import create_decoder_block_tensors
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
@@ -36,8 +38,55 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     prepare_dense_layer_weights,
     prepare_moe_layer_weights,
 )
+from models.demos.deepseek_v3_b1.weights.transforms.sram_experts import (
+    SramExpertCoreGrids,
+    _load_routing_frequencies,
+    build_sram_hot_expert_config,
+)
 
 MTP_LAYER_IDX = 61
+
+# Safety ceiling on SRAM hot experts per layer.  The real cap is the
+# per-core L1 budget measured from the attention footprint inside
+# ``prepare_moe_layer_weights`` (see ``worker_l1_size`` wiring below), this
+# value just bounds how many ranked candidates we hand to the greedy trim
+# so we don't waste CPU time running the assigner on hundreds of experts
+# that will never fit.  Sized for the shared-expert-style layout (64 gate /
+# 64 up / 112 down cores with block-sharded gate/up and K_dev=256 down)
+# where ~26 bfp4 / ~13 bfp8 experts realistically fit per core.
+_SRAM_HOT_EXPERTS_CEILING = 64
+
+
+def _build_sram_hot_expert_kwargs(state_dict, submesh, layer_idx: int):
+    """Build the ``(sram_hot_experts, sram_core_grids, sram_assigner)`` triple.
+
+    Core grids come from :meth:`SramExpertCoreGrids.shared_expert_mirror` (same
+    CRS as shared-expert gate/up/down in ``overlap_configs``).
+
+    Returns up to ``_SRAM_HOT_EXPERTS_CEILING`` candidates ranked by routing
+    frequency for ``layer_idx``.  The actual address-based trim runs inside
+    ``prepare_moe_layer_weights`` against the measured per-core attention
+    footprint (see ``worker_l1_size`` plumbing below) -- no host-side
+    budgeting is applied here.
+    """
+    sram_core_grids = SramExpertCoreGrids.shared_expert_mirror()
+    # Routed experts in DRAM are already BFP4 (see prepare_routed_expert_weights);
+    # force the SRAM copies to match so every tile is the expected 25 KiB/expert
+    # binding-core footprint -- this is the lever that unlocks the 26+ expert
+    # target under the 960 KiB combined attn+SRAM cap.  Dropping BFP8 from the
+    # format list makes the assigner pick BFP4 on every tile regardless of PCC;
+    # add BFP2 back if accuracy drops unacceptably.
+    sram_assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp4"])
+
+    freqs = _load_routing_frequencies()
+    full_config = build_sram_hot_expert_config([layer_idx], freqs)
+    sram_hot_experts = {k: v[:_SRAM_HOT_EXPERTS_CEILING] for k, v in full_config.items()}
+    logger.info(
+        "SRAM hot experts: layer {} -> {} ranked candidates (pre-device trim)",
+        layer_idx,
+        len(sram_hot_experts.get(layer_idx, [])),
+    )
+    return sram_hot_experts, sram_core_grids, sram_assigner
 
 
 def _decode_expert_upload_mode(expert_upload_mode: str) -> tuple[int, int | None]:
@@ -466,6 +515,7 @@ def skip_known_decoder_moe_failure(
 )
 @pytest.mark.parametrize("slot_id, num_slots", [(0, 1)])
 @pytest.mark.requires_grid_size((13, 10))
+@requires_hybrid_allocator
 def test_decoder(
     bh_2d_mesh_device,
     device_params,
@@ -547,13 +597,33 @@ def test_decoder(
             state_dict, ROUTED_EXPERT_LAYER_IDX, rigged_group_count
         )
 
+    # SRAM hot experts are auto-enabled for the full 256-expert case.  Rigged
+    # modes upload a strict subset of experts into the state dict, so the
+    # frequency-based ranker would reference expert indices that aren't
+    # present -- skip SRAM for them.
+    sram_hot_experts = None
+    sram_core_grids = None
+    sram_assigner = None
+    if effective_num_routed_experts == 256:
+        sram_hot_experts, sram_core_grids, sram_assigner = _build_sram_hot_expert_kwargs(
+            state_dict, submesh, ROUTED_EXPERT_LAYER_IDX
+        )
+
     logger.info("Preparing layer weights on device...")
+    # ``sram_hot_experts`` is ``SramHotExpertConfig``: ``layer_idx -> ranked expert indices``.
+    # This test only builds candidates for ``ROUTED_EXPERT_LAYER_IDX`` (see
+    # ``_build_sram_hot_expert_kwargs``), so the dict has a single key; multi-layer
+    # callers use the same shape with more entries.
     layer_weights = prepare_moe_layer_weights(
         submesh,
         state_dict,
         ROUTED_EXPERT_LAYER_IDX,
         num_routed_experts=effective_num_routed_experts,
         move_to_device=True,
+        sram_hot_experts=sram_hot_experts,
+        sram_core_grids=sram_core_grids,
+        sram_assigner=sram_assigner,
+        worker_l1_size=device_params.get("worker_l1_size") if sram_hot_experts is not None else None,
     )
 
     logger.info("Creating decoder block tensors...")
@@ -1030,6 +1100,7 @@ def test_decoder(
 @pytest.mark.parametrize("num_internal_iterations", [1])
 @pytest.mark.parametrize("slot_id, num_slots", [(0, 2), (1, 2)])
 @pytest.mark.requires_grid_size((13, 10))
+@requires_hybrid_allocator
 def test_decoder_mlp(
     bh_2d_mesh_device,
     device_params,

@@ -73,6 +73,7 @@ ttnn:
     bh_p150b_civ2: 545
   unit:
     wh_llmbox: 50
+    wh_galaxy: 35
   e2e:
     wh_llmbox: 90
     wh_galaxy: 70
@@ -89,6 +90,9 @@ shield:
 scaleout:
   unit:
     wh_llmbox: 60
+    wh_galaxy: 25
+  stress:
+    wh_galaxy_perf: 120
   integration:
     wh_llmbox: 40
   health:
@@ -129,10 +133,21 @@ llk:
   unit:
     wh_n150_civ2: 100
     bh_p150b_civ2: 70
+  e2e:
+    wh_n150_civ2: 1800
+    bh_p150b_civ2: 1800
+  perf:
+    wh_n150_civ2: 1200
+    bh_p150b_civ2: 1200
+  smoke:
+    wh_n150_civ2: 160
+    bh_p150b_civ2: 160
 
 models:
   sanity:
     wh_galaxy_perf: 10
+  stress:
+    wh_galaxy_perf: 500
   e2e:
     wh_llmbox: 198
     wh_llmbox_perf: 312
@@ -151,6 +166,8 @@ models:
     wh_llmbox_perf: 685
     wh_galaxy: 280
     wh_galaxy_perf: 150
+    # UF Galaxy perf pool (see sku_config wh_galaxy_perf_uf)
+    wh_galaxy_perf_uf: 75
   device_perf:
     wh_n150: 10
     bh_p150: 10
@@ -161,6 +178,7 @@ models:
     wh_llmbox_perf_release: 1090
     wh_galaxy: 0
     wh_galaxy_perf: 150
+    wh_galaxy_perf_uf: 45
     wh_galaxy_release: 345
     bh_galaxy: 240
     wh_n150: 500
@@ -182,3 +200,7 @@ models:
     wh_n150: 10
     wh_llmbox_perf: 30
     wh_galaxy: 30
+
+umd:
+  unit:
+    wh_galaxy_perf_uf: 35

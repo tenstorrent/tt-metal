@@ -4,6 +4,7 @@
 
 #include "matmul.hpp"
 
+#include <numeric>
 #include <variant>
 
 #include "device/config/matmul_program_config_types.hpp"

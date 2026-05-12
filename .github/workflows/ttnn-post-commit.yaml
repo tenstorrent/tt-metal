@@ -123,6 +123,7 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.sha }}
           filter: blob:none
+          submodules: recursive
           path: docker-job
       - name: ⬇️  Setup Job
         uses: ./docker-job/.github/actions/setup-job

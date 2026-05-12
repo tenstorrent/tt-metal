@@ -73,7 +73,7 @@
       echo "=== Recovery attempt $attempt of $MAX_RECOVERY_ATTEMPTS ==="
 
       echo "--- Resetting cards with tt-smi ---"
-      if ! mpirun --pernode --tag-output tt-smi -glx_reset; then
+      if ! mpirun --pernode --tag-output /usr/local/bin/tt-smi -glx_reset; then
         echo "WARNING: Reset failed on attempt $attempt"
         if [ "$attempt" -eq "$MAX_RECOVERY_ATTEMPTS" ]; then
           echo "ERROR: Reset failed on final attempt"
