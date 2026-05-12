@@ -9,13 +9,11 @@
 # Outputs: JSON object to stdout with keys ccache-tag, mold-tag, etc.
 # Example: {"ccache-tag":"ghcr.io/tenstorrent/tt-metal/tt-metalium/tools/ccache:4.10.2-abc123456789ab",...}
 #
-# Environment variables:
-#   HARBOR_PREFIX - Optional prefix for Harbor pull-through cache (e.g., "harbor.ci.tenstorrent.net/")
+# Output tags are always canonical (ghcr.io/...) without any Harbor prefix.
+# Callers that need Harbor-prefixed tags should apply the prefix afterward
+# via resolve-docker-pull-refs or equivalent.
 
 set -euo pipefail
-
-# Optional Harbor pull-through cache prefix (default: empty string)
-HARBOR_PREFIX="${HARBOR_PREFIX:-}"
 
 REPO="${1:-${GITHUB_REPOSITORY:?GITHUB_REPOSITORY or repository argument required}}"
 
@@ -42,8 +40,8 @@ done
 SFPI_HASH=$(cat dockerfile/scripts/install-sfpi.sh tt_metal/sfpi-version | sha1sum | cut -d' ' -f1 | head -c 12)
 OPENMPI_HASH=$(cat dockerfile/scripts/install-openmpi.sh .github/scripts/install-slurm.sh | sha1sum | cut -d' ' -f1 | head -c 12)
 
-# Generate tags: <harbor-prefix>ghcr.io/<repo>/tt-metalium/tools/<tool>:<version>-<hash>
-BASE="${HARBOR_PREFIX}ghcr.io/${REPO}/tt-metalium/tools"
+# Generate canonical tags: ghcr.io/<repo>/tt-metalium/tools/<tool>:<version>-<hash>
+BASE="ghcr.io/${REPO}/tt-metalium/tools"
 
 jq -n \
   --arg ccache "${BASE}/ccache:${CCACHE_VERSION}-${CCACHE_HASH}" \

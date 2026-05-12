@@ -51,8 +51,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Compute tool tags using existing script
-TOOL_TAGS=$(HARBOR_PREFIX="" .github/scripts/compute-tool-tags.sh "$REPO")
+# Compute tool tags using existing script (always produces canonical ghcr.io tags)
+TOOL_TAGS=$(.github/scripts/compute-tool-tags.sh "$REPO")
 
 # Tool list
 TOOLS="ccache mold doxygen cba gdb cmake yq sfpi openmpi"
