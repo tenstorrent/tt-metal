@@ -156,9 +156,9 @@ jobs:
       prereq-targets: ''
       scan-targets: ''
 
-  # Incremental scan: parallel jobs for different targets (PR branches)
+  # Incremental scan: parallel jobs for different targets
   clang-tidy-incremental-tt-metal:
-    name: "\U0001F916 Clang Tidy (Metalium)"
+    name: 🤖 Clang Tidy (Metalium)
     needs: [ build-docker-image, determine-scan-type ]
     if: >-
       ${{ always() && !failure() && !cancelled() &&
@@ -177,7 +177,7 @@ jobs:
       scan-targets: 'tt_metal'
 
   clang-tidy-incremental-ttnn:
-    name: "\U0001F916 Clang Tidy (TTNN)"
+    name: 🤖 Clang Tidy (TTNN)
     needs: [ build-docker-image, determine-scan-type ]
     if: >-
       ${{ always() && !failure() && !cancelled() &&
@@ -196,7 +196,7 @@ jobs:
       scan-targets: 'ttnn'
 
   clang-tidy-incremental-tt-train:
-    name: "\U0001F916 Clang Tidy (tt-train)"
+    name: 🤖 Clang Tidy (tt-train)
     needs: [ build-docker-image, determine-scan-type ]
     if: >-
       ${{ always() && !failure() && !cancelled() &&
@@ -215,7 +215,7 @@ jobs:
       scan-targets: 'tt-train'
 
   clang-tidy-incremental-catchall:
-    name: "\U0001F916 Clang Tidy (catchall)"
+    name:  🤖 Clang Tidy (catchall)
     needs: [ build-docker-image, determine-scan-type ]
     if: >-
       ${{ always() && !failure() && !cancelled() &&
