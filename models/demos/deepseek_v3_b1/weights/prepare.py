@@ -17,6 +17,7 @@ with :class:`~weights.cache.CacheConfig` and the ``prepare_*`` functions
 from __future__ import annotations
 
 import hashlib
+import os
 import time
 from dataclasses import dataclass
 from dataclasses import replace as _dataclass_replace
@@ -63,6 +64,7 @@ KV_B12_SPEC = KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 GATE_UP_SPEC = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, CompressedTensorAssigner
 from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_layer
+from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import quantize_dequantize_bfp
 from models.demos.deepseek_v3_b1.weights.transforms.attention import preprocess_kv_b12, preprocess_q_ab_kv_a
 from models.demos.deepseek_v3_b1.weights.transforms.tp4_attention import (
     build_gate_mm_tp4_spec,
@@ -1258,6 +1260,55 @@ def prepare_moe_routed_experts_bspm(
     return routed
 
 
+def _apply_bspm_dequant_to_weight(
+    weight: torch.Tensor,
+    codes_flat: np.ndarray,
+    tile_size: int = 32,
+) -> torch.Tensor:
+    """Apply per-tile BFP quantize-dequantize to weight using BSPM codes, returning a
+    float32 torch tensor with the mixed-precision quantization baked in.
+
+    Used by the BSPM_DEQUANT_TO_BFP4 diagnostic mode: the mixed-precision quantization
+    is applied in software, then the result is uploaded through the uniform bfloat4_b
+    storage path. This decouples the mixed-precision math from the compressed-tile
+    dispatch kernel — same numerical result, different kernel code path.
+
+    codes_flat: 1D uint8/int8 array of length tile_rows * tile_cols, tt-metal-encoded
+                (0=bfp8, 1=bfp4, 2=bfp2, 3=bfp0). Shape derived from weight's (K, N).
+    """
+    K, N = weight.shape
+    assert K % tile_size == 0 and N % tile_size == 0, f"weight shape {(K, N)} not tile-aligned to {tile_size}"
+    tile_rows = K // tile_size
+    tile_cols = N // tile_size
+    if codes_flat.size != tile_rows * tile_cols:
+        raise ValueError(
+            f"BSPM codes size {codes_flat.size} != tile grid {tile_rows} x {tile_cols} = "
+            f"{tile_rows * tile_cols} for weight shape {(K, N)}"
+        )
+    codes_2d = np.asarray(codes_flat, dtype=np.uint8).reshape(tile_rows, tile_cols)
+    w_np = weight.contiguous().float().numpy()
+
+    # Build per-precision-tier outputs once; composite via tile-code mask.
+    # tt-metal code map: 0=bfp8 (mant=7), 1=bfp4 (mant=3), 2=bfp2 (mant=1), 3=bfp0 (zero).
+    w_bfp4 = quantize_dequantize_bfp(w_np, mant_bits=3)
+    has_bfp2 = bool((codes_2d == 2).any())
+    has_bfp8 = bool((codes_2d == 0).any())
+    w_bfp2 = quantize_dequantize_bfp(w_np, mant_bits=1) if has_bfp2 else None
+    w_bfp8 = quantize_dequantize_bfp(w_np, mant_bits=7) if has_bfp8 else None
+
+    # Expand tile codes to element-level (K, N) grid for vectorized masking.
+    code_grid = codes_2d.repeat(tile_size, axis=0).repeat(tile_size, axis=1)
+
+    out = w_bfp4.copy()  # default: every tile quantized as bfp4
+    if has_bfp2:
+        out = np.where(code_grid == 2, w_bfp2, out)
+    if has_bfp8:
+        out = np.where(code_grid == 0, w_bfp8, out)
+    # bfp0 tiles → exact zeros.
+    out = np.where(code_grid == 3, 0.0, out)
+    return torch.from_numpy(out.astype(np.float32))
+
+
 def prepare_routed_expert_weights(
     device,
     state_dict: dict[str, torch.Tensor],
@@ -1302,7 +1353,30 @@ def prepare_routed_expert_weights(
             else:
                 logger.debug("BSPM not found for layer {}, using uniform bfloat4_b", layer_idx)
 
-        if bspm_data is not None:
+        # Diagnostic mode: BSPM_DEQUANT_TO_BFP4=1 applies BSPM mixed-precision
+        # quantization in software and stores the result as uniform bfloat4_b. The
+        # math is identical to the compressed-tile dispatch path; only the kernel
+        # code path differs. Useful for isolating whether the demo's mixed-precision
+        # symptom is driven by the mixed-precision dispatch kernel (this mode bypasses
+        # it) or by the math itself (this mode reproduces it via the uniform-bfp4
+        # kernel). See models/demos/deepseek_v3_b1/tests/unit_tests/per_core_allocation/
+        # test_matmul_expert.py::test_matmul_expert_kernel_vs_software_quantized for
+        # the per-matmul HW≡SW evidence.
+        dequant_to_bfp4 = os.environ.get("BSPM_DEQUANT_TO_BFP4", "0") == "1"
+        bspm_codes_for_dequant: np.ndarray | None = None
+
+        if bspm_data is not None and dequant_to_bfp4:
+            logger.info(
+                "BSPM_DEQUANT_TO_BFP4=1 for layer {}: applying BSPM in software, "
+                "routing weights through uniform bfloat4_b storage (mixed-precision "
+                "math, uniform-bfp4 kernel path)",
+                layer_idx,
+            )
+            # codes shape: (n_experts, 3, tiles_per_proj), tt-metal-encoded uint8.
+            # proj index: 0=gate_proj, 1=up_proj, 2=down_proj.
+            bspm_codes_for_dequant = bspm_data["codes"]
+
+        if bspm_data is not None and not dequant_to_bfp4:
             return prepare_moe_routed_experts_bspm(
                 device=device,
                 state_dict=state_dict,
@@ -1317,12 +1391,29 @@ def prepare_routed_expert_weights(
             )
 
         # --- Uniform bfloat4_b path (TensorCache-backed) ---
-        tgt_gate = _moe_routed_expert_tensor_target("routed_gate_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, device)
-        tgt_up = _moe_routed_expert_tensor_target("routed_up_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, device)
-        tgt_down = _moe_routed_expert_tensor_target("routed_down_proj", _ROUTED_DOWN_K, _ROUTED_DOWN_N, device)
+        # In BSPM_DEQUANT_TO_BFP4 mode the weight content depends on the BSPM file, so
+        # the cache key must differ from the plain uniform-bfp4 path (and from other
+        # BSPM variants/budgets) to avoid serving a stale cached entry.
+        cache_suffix = f"_bspm_dequant_{bspm_variant}_{bspm_budget:.1f}" if bspm_codes_for_dequant is not None else ""
+        tgt_gate = _moe_routed_expert_tensor_target(
+            f"routed_gate_proj{cache_suffix}", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, device
+        )
+        tgt_up = _moe_routed_expert_tensor_target(
+            f"routed_up_proj{cache_suffix}", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, device
+        )
+        tgt_down = _moe_routed_expert_tensor_target(
+            f"routed_down_proj{cache_suffix}", _ROUTED_DOWN_K, _ROUTED_DOWN_N, device
+        )
         routed_gate_proj: list[ttnn.Tensor] = []
         routed_up_proj: list[ttnn.Tensor] = []
         routed_down_proj: list[ttnn.Tensor] = []
+
+        def _maybe_dequant(weight: torch.Tensor, expert_idx: int, proj_idx: int) -> torch.Tensor:
+            """Apply BSPM quantize-dequantize if BSPM_DEQUANT_TO_BFP4 mode is active."""
+            if bspm_codes_for_dequant is None:
+                return weight
+            return _apply_bspm_dequant_to_weight(weight, bspm_codes_for_dequant[expert_idx, proj_idx])
+
         for e in range(num_routed_experts):
             gk = _key(layer_idx, f"mlp.experts.{e}.gate_proj.weight")
             fp_g = cache_config.context.fingerprint(
@@ -1333,8 +1424,10 @@ def prepare_routed_expert_weights(
                 fp_g,
                 device,
                 move_to_device=move_to_device,
-                preprocess=lambda t, _gk=gk: {
-                    "routed_gate_proj": moe_routed_expert_torch_for_cache(t[_gk].T.contiguous(), num_banks)
+                preprocess=lambda t, _gk=gk, _e=e: {
+                    "routed_gate_proj": moe_routed_expert_torch_for_cache(
+                        _maybe_dequant(t[_gk].T.contiguous(), _e, 0), num_banks
+                    )
                 },
                 raw_tensors=lambda _gk=gk: {_gk: state_dict[_gk]},
             )
@@ -1351,8 +1444,10 @@ def prepare_routed_expert_weights(
                 fp_u,
                 device,
                 move_to_device=move_to_device,
-                preprocess=lambda t, _uk=uk: {
-                    "routed_up_proj": moe_routed_expert_torch_for_cache(t[_uk].T.contiguous(), num_banks)
+                preprocess=lambda t, _uk=uk, _e=e: {
+                    "routed_up_proj": moe_routed_expert_torch_for_cache(
+                        _maybe_dequant(t[_uk].T.contiguous(), _e, 1), num_banks
+                    )
                 },
                 raw_tensors=lambda _uk=uk: {_uk: state_dict[_uk]},
             )
@@ -1369,8 +1464,10 @@ def prepare_routed_expert_weights(
                 fp_d,
                 device,
                 move_to_device=move_to_device,
-                preprocess=lambda t, _dk=dk: {
-                    "routed_down_proj": moe_routed_expert_torch_for_cache(t[_dk].T.contiguous(), num_banks)
+                preprocess=lambda t, _dk=dk, _e=e: {
+                    "routed_down_proj": moe_routed_expert_torch_for_cache(
+                        _maybe_dequant(t[_dk].T.contiguous(), _e, 2), num_banks
+                    )
                 },
                 raw_tensors=lambda _dk=dk: {_dk: state_dict[_dk]},
             )
