@@ -44,7 +44,7 @@ void CommandQueueInitializer::init(
                     uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
                     log_debug(tt::LogMetal, "Tunnel {} Device {} Tunnel Stop: {}", t, mmio_controlled_device_id, ts);
                     auto it = std::find_if(devices_.begin(), devices_.end(), [&](Device* d) {
-                        return d->id() == mmio_controlled_device_id;
+                        return d->id() == static_cast<int>(mmio_controlled_device_id);
                     });
                     if (it != devices_.end()) {
                         initialize_host(*it);

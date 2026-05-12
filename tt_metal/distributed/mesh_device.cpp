@@ -834,7 +834,7 @@ void MeshDeviceImpl::reshape(const MeshShape& new_shape) {
         // device in the original mesh.
         auto new_mapped_devices = MetalContext::instance().get_system_mesh().get_mapped_devices(
             new_shape, compute_system_mesh_offset(*view_));
-        for (int i = 0; i < new_mapped_devices.device_ids.size(); i++) {
+        for (size_t i = 0; i < new_mapped_devices.device_ids.size(); i++) {
             TT_FATAL(
                 current_fabric_nodes.contains(new_mapped_devices.fabric_node_ids[i]),
                 "User has requested a reshape of the MeshDevice to shape: {}, but it is not possible to form a "

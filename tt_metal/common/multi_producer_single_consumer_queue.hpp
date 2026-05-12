@@ -44,7 +44,7 @@ public:
     MultiProducerSingleConsumerQueue() {
         // Initialize ring buffer for traversal. Each node points to the subsequent node, except for the last one, which
         // points to the head.
-        for (int node_idx = 0; node_idx < ring_buffer_size; node_idx++) {
+        for (uint32_t node_idx = 0; node_idx < ring_buffer_size; node_idx++) {
             (node_idx < ring_buffer_size - 1) ? ring_buffer[node_idx].next = (&ring_buffer[node_idx + 1])
                                               : ring_buffer[node_idx].next = &(ring_buffer[0]);
         }

@@ -81,6 +81,7 @@ void MeshTrace::populate_mesh_buffer(
     DeviceLocalBufferConfig device_local_trace_buf_config = {
         .page_size = page_size,
         .buffer_type = buffer_type,
+        .sharding_args = {},
         .bottom_up = bottom_up,
     };
 
