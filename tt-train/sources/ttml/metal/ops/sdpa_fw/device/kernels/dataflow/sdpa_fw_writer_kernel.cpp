@@ -22,11 +22,13 @@ void kernel_main() {
     constexpr uint32_t vWt = get_compile_time_arg_val(0);      // number of tiles in output/value inner dimension
     constexpr uint32_t Ht = get_compile_time_arg_val(1);       // number of tiles in sequence dimension
     constexpr uint32_t q_heads = get_compile_time_arg_val(2);  // num of heads in query
+    [[maybe_unused]] constexpr uint32_t Sk_chunk_t =
+        get_compile_time_arg_val(3);  // F9 multi-tile K/V chunking factor (controls mask tile layout)
     constexpr uint32_t pairs_per_seq = Ht / 2;
 
     const uint32_t tile_bytes = get_tile_size(cb_output);
 
-    constexpr auto output_args = TensorAccessorArgs<3>();
+    constexpr auto output_args = TensorAccessorArgs<4>();
     const auto output_addr_generator = TensorAccessor(output_args, output_addr);
 
 #ifdef RETURN_INTERMEDIATES
@@ -47,9 +49,17 @@ void kernel_main() {
     generate_matmul_row_reduce_tile(cb_matmul_reduce);            // tile for matmul row reduce
 
 #if defined(CAUSAL_MASK) || defined(BALANCED_PARALLELISM)
-    // Generate causal mask tile ONCE - will be reused for every diagonal
+    // Generate two mask tiles ONCE - both stay permanently fronted in cb_attn_mask:
+    //   tile[0] = causal-diagonal mask (1.0 on/below diagonal, 0.0 above) - applied on the
+    //             diagonal tile of every row.
+    //   tile[1] = all-zeros mask, transformed by the mask pipeline to all -1e9 - applied on
+    //             K tiles that lie strictly past the diagonal inside the diagonal chunk
+    //             when Sk_chunk_t > 1. For Sk_chunk_t == 1 this tile is generated but
+    //             never read (cheap one-time fill, ~2 KB extra L1).
     constexpr uint32_t cb_attn_mask = tt::CBIndex::c_3;
     generate_causal_mask_tile(cb_attn_mask);
+    constexpr uint16_t bf16_zero = 0u;
+    generate_tile_with_bfloat16_value(cb_attn_mask, bf16_zero);
 #endif
 
     const uint32_t tiles_per_head = vWt;
