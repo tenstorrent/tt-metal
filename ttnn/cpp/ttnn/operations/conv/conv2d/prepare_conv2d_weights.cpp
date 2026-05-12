@@ -298,8 +298,8 @@ Tensor to_weight_interleaved_mm_layout(const Tensor& conv_weight_tensor, DataTyp
                 uint32_t co_end,
                 uint32_t ci_start,
                 uint32_t ci_end) {
-                for (auto kh = 0; kh < w_shape[2]; kh++) {
-                    for (auto kw = 0; kw < w_shape[3]; kw++) {
+                for (uint32_t kh = 0; kh < w_shape[2]; kh++) {
+                    for (uint32_t kw = 0; kw < w_shape[3]; kw++) {
                         for (auto ci = ci_start; ci < ci_end; ci++) {
                             for (auto co = co_start; co < co_end; co++) {
                                 // Input index: [Co, Ci, Kh, Kw]
@@ -362,8 +362,8 @@ Tensor to_weight_tile_layout(
                 uint32_t out_end,
                 uint32_t in_start,
                 uint32_t in_end) {
-                for (auto r = 0; r < w_shape[2]; r++) {
-                    for (auto s = 0; s < w_shape[3]; s++) {
+                for (uint32_t r = 0; r < w_shape[2]; r++) {
+                    for (uint32_t s = 0; s < w_shape[3]; s++) {
                         for (auto c = in_start; c < in_end; c++) {
                             for (auto k = out_start; k < out_end; k++) {
                                 auto matrix_idx = k + (c * weight_matrix_cols) + (s * w_shape[1] * weight_matrix_cols) +
@@ -980,8 +980,8 @@ static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::arr
                         uint32_t in_end) {
                         for (auto oc = out_start; oc < out_end; oc++) {
                             for (auto ic = in_start; ic < in_end; ic++) {
-                                for (auto kh = 0; kh < kernel_h; kh++) {
-                                    for (auto kw = 0; kw < kernel_w; kw++) {
+                                for (uint32_t kh = 0; kh < kernel_h; kh++) {
+                                    for (uint32_t kw = 0; kw < kernel_w; kw++) {
                                         uint32_t src_idx =
                                             ((((oc * in_channels + ic) * kernel_h) + kh) * kernel_w) + kw;
 

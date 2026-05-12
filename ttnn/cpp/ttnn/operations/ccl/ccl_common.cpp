@@ -60,12 +60,12 @@ tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
         return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
     }
     TT_FATAL(!device_coords.empty(), "device_coords is empty");
-    for (int i = 0; i < device_coords.front().dims(); i++) {
+    for (size_t i = 0; i < device_coords.front().dims(); i++) {
         if (device_coords.front()[i] != 0) {
             return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
         }
     }
-    for (int i = 0; i < device_coords.back().dims(); i++) {
+    for (size_t i = 0; i < device_coords.back().dims(); i++) {
         if (device_coords.back()[i] != mesh_shape[i] - 1) {
             return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
         }
@@ -298,7 +298,7 @@ SenderReceiverConfig get_device_sender_receiver_config_in_ring(
         return device->id();
     };
 
-    bool is_last_chip_in_clockwise_direction = config.device_index == (ring_size - 1);
+    bool is_last_chip_in_clockwise_direction = config.device_index == static_cast<uint32_t>(ring_size - 1);
     bool is_last_chip_in_counter_clockwise_direction = config.device_index == 0;
     config.receiver_device_id =
         is_last_chip_in_clockwise_direction ? std::nullopt : get_chip_id(config.device_index + 1);
@@ -412,7 +412,7 @@ std::vector<ttnn::Tensor> unpad_output_tensor(
     ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
     ends = unpad_elements;
 
-    for (int i = 0; i < num_devices; ++i) {
+    for (uint32_t i = 0; i < num_devices; ++i) {
         begins[dim] = i * output_tensor.at(0).logical_shape()[dim] / num_devices;
         ends[dim] = begins[dim] + unpad_elements[dim];
 
@@ -662,7 +662,7 @@ RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::RingReduceScatterBaseTensor
     TT_ASSERT(max_slice_size_in_bytes > 0);
     TT_ASSERT(input_tensor.padded_shape().rank() == 4);
     this->row_major = input_tensor.layout() == Layout::ROW_MAJOR;
-    this->slice_dim_is_width = input_tensor.padded_shape().rank() - 1 == slice_dim;
+    this->slice_dim_is_width = static_cast<int>(input_tensor.padded_shape().rank()) - 1 == slice_dim;
     this->is_sharded = input_tensor.is_sharded();
 
     this->input_page_size = input_tensor.buffer()->page_size();

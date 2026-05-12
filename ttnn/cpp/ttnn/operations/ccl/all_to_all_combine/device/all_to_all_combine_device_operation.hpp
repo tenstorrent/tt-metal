@@ -24,7 +24,7 @@ struct AllToAllCombineDeviceOperation {
         const uint32_t num_links;
         const tt::tt_fabric::Topology topology;
         const bool locally_reduced;
-        const CoreRangeSet worker_core_range_set;
+        const CoreRangeSet worker_core_range_set = {};
         const uint32_t output_shard_dim;
         static constexpr auto attribute_names = std::forward_as_tuple(
             "output_mem_config",
