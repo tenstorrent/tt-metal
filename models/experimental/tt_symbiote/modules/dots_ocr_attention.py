@@ -342,13 +342,22 @@ class TTNNDotsOCRAttention(TTNNModule):
             cos, sin = decode_cos_sin
         else:
             cos, sin = self._rotary_setup.get_cos_sin_for_decode(cur_pos_tt)
+        # K can route through L1 for the post-rotary slice (it's reshaped/sharded before
+        # paged_update_on_device, which accepts any input memory layout). Q must stay in
+        # DRAM through paged_sdpa_decode (`Q_memcfg.buffer_type() == DRAM` is asserted in
+        # sdpa_decode_device_operation.cpp:89), so leave its rotary output as default.
         query_states = ttnn.experimental.rotary_embedding(query_states, cos, sin)
-        key_states = ttnn.experimental.rotary_embedding(key_states, cos, sin)
+        key_states = ttnn.experimental.rotary_embedding(key_states, cos, sin, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         if query_states.shape[2] != seq_length:
             query_states = query_states[:, :, :seq_length, :]
         if key_states.shape[2] != seq_length:
-            key_states = key_states[:, :, :seq_length, :]
+            key_states = ttnn.slice(
+                key_states,
+                [0, 0, 0, 0],
+                [int(key_states.shape[0]), int(key_states.shape[1]), int(seq_length), int(key_states.shape[3])],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
 
         # Permute [B, H, S, D] -> [S, B, H, D] for paged attention kernels
         query_states = ttnn.permute(query_states, (2, 0, 1, 3))
