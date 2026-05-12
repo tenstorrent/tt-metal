@@ -280,7 +280,7 @@ TEST(HostTensorTest, IsValuelessAfterMoveReturnsTrueAfterMoveConstruction) {
     auto tensor = create_simple_host_tensor(Shape{4, 32});
     HostTensor moved(std::move(tensor));
 
-    EXPECT_TRUE(tensor.is_valueless_after_move());
+    EXPECT_TRUE(tensor.is_valueless_after_move());  // NOLINT(bugprone-use-after-move)
     EXPECT_FALSE(moved.is_valueless_after_move());
 }
 
@@ -290,7 +290,7 @@ TEST(HostTensorTest, IsValuelessAfterMoveReturnsTrueAfterMoveAssignment) {
 
     target = std::move(source);
 
-    EXPECT_TRUE(source.is_valueless_after_move());
+    EXPECT_TRUE(source.is_valueless_after_move());  // NOLINT(bugprone-use-after-move)
     EXPECT_FALSE(target.is_valueless_after_move());
 }
 
