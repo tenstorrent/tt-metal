@@ -2427,6 +2427,23 @@ void kernel_main() {
                         noc_semaphore_set(next_iter_sem, 0);
                     }
                 }
+                if constexpr (Core::is_input_core && get_named_compile_time_arg_val("bcast_is_root") == 1) {
+                    constexpr uint32_t bcast_data_cb = get_named_compile_time_arg_val("bcast_data_cb_id");
+                    constexpr uint32_t bcast_num_pages_to_read =
+                        get_named_compile_time_arg_val("bcast_num_pages_to_read");
+                    cb_wait_front(bcast_data_cb, bcast_num_pages_to_read);
+                    invalidate_l1_cache();
+                    DPRINT << "token position: " << metadata_ptr->position_id << " attn input: "
+                           << TileSlice(
+                                  bcast_data_cb,
+                                  0,
+                                  SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 8, .ws = 1},
+                                  TSLICE_INPUT_CB,
+                                  TSLICE_RD_PTR,
+                                  true,
+                                  true)
+                           << ENDL();
+                }
 #endif
                 bcast.run(bcast_args);
             }
@@ -2886,6 +2903,28 @@ void kernel_main() {
         // 0. Residual Mcast: Broadcast input as residual to mcast receiver cores (pop_src=false)
         {
             DeviceZoneScopedN("RESIDUAL_MCAST");
+#if defined(COMPILE_FOR_BRISC) && defined(ENABLE_REDUCE_TO_ONE)
+            if constexpr (
+                Core::is_sender_core &&
+                get_named_compile_time_arg_val("reduce_device_role") == deepseek_b1_ops::MESH_ROOT1) {
+                constexpr uint32_t residual_mcast_src_cb =
+                    get_named_compile_time_arg_val("shared_residual_mcast_src_cb");
+                constexpr uint32_t residual_mcast_src_num_pages =
+                    get_named_compile_time_arg_val("shared_residual_mcast_src_num_pages");
+                cb_wait_front(residual_mcast_src_cb, residual_mcast_src_num_pages);
+                invalidate_l1_cache();
+                DPRINT << "token position: " << metadata_ptr->position_id << " moe input: "
+                       << TileSlice(
+                              residual_mcast_src_cb,
+                              0,
+                              SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 8, .ws = 1},
+                              TSLICE_INPUT_CB,
+                              TSLICE_RD_PTR,
+                              true,
+                              true)
+                       << ENDL();
+            }
+#endif
             residual_mcast(moe.routed.residual_mcast_args);
         }
         if constexpr (Core::is_reduce_fabric_core) {
@@ -2962,8 +3001,10 @@ void kernel_main() {
             DeviceZoneScopedN("GATE");
             deepseek_b1_ops::DeepseekMoeGate::Op<Moe::Routed::GateCTArgs, Core::is_sender_core> gate;
             gate();
-#if defined(COMPILE_FOR_BRISC)
-            if constexpr (Core::is_sender_core) {
+#if defined(COMPILE_FOR_BRISC) && defined(ENABLE_REDUCE_TO_ONE)
+            if constexpr (
+                Core::is_sender_core &&
+                get_named_compile_time_arg_val("reduce_device_role") == deepseek_b1_ops::MESH_ROOT1) {
                 constexpr uint32_t gate_output_indices_cb = get_named_compile_time_arg_val("gate_output_indices_cb");
                 cb_wait_front(gate_output_indices_cb, 1);
                 invalidate_l1_cache();

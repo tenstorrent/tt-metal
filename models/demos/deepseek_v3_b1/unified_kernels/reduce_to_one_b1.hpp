@@ -25,6 +25,7 @@
 #if defined(COMPILE_FOR_BRISC)
 #include <type_traits>
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include "api/socket_api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
