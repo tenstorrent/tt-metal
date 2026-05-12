@@ -43,8 +43,6 @@ inline void set_dest_fmt(std::uint32_t fmt)
     {
         cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_fmt_RMW, fmt);
     }
-
-    tensix_sync();
 }
 
 inline void set_dest_fmt(std::uint32_t fmt, ThreadId thread_id)
@@ -62,8 +60,6 @@ inline void set_dest_fmt(std::uint32_t fmt, ThreadId thread_id)
     {
         set_dest_fmt<PackThreadId>(fmt);
     }
-
-    tensix_sync();
 }
 
 template <ThreadId thread_id, bool is_signed>
