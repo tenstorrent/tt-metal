@@ -6,7 +6,6 @@
 
 #include "api/compute/common_globals.h"
 #include "api/compute/reconfig_data_format.h"
-#include "api/compute/pack.h"
 
 // Constants and types needed by both SentinelCore and testing components
 #define RECONFIG_NOTHING_CHANGED 0x00
@@ -19,6 +18,15 @@
 #endif
 
 namespace ckernel {
+
+// Forward declaration of pack.h's `pack_reconfig_data_format` to break the
+// circular dependency: pack.h includes compute_kernel_sentinel.h (which
+// includes this file) so we cannot include pack.h here. The full definition
+// is provided in pack.h and is required to be visible at the point where
+// `inject_single_operand<Operand::PACK>` is instantiated (i.e. in user code,
+// after pack.h has been fully processed).
+template <bool is_tile_dim_reconfig_en>
+ALWI void pack_reconfig_data_format(uint32_t old_cb_id, uint32_t new_cb_id);
 
 enum class Operand : uint8_t {
     SRCA = 0x1,
@@ -207,7 +215,10 @@ ALWI void SentinelCore::inject_single_operand(uint32_t cb) {
             return;
         }
         if (m_enabled) {
-            pack_reconfig_data_format(m_pack_cb, cb);
+            // Use explicit template argument because the default value for
+            // `is_tile_dim_reconfig_en` is declared in pack.h's definition,
+            // not in the forward declaration above.
+            pack_reconfig_data_format<false>(m_pack_cb, cb);
         }
 
         DPRINT << "pack_reconfig_data_format - ";

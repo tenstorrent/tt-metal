@@ -103,7 +103,7 @@ void kernel_main() {
         auto& cb_dst = is_last ? cb_out : cb_partials;
         const uint32_t cb_dst_id = is_last ? out_id : partials_id;
         if (is_last) {
-            PACK((llk_pack_init(out_id)));
+            pack_init(out_id);
         }
         cb_dst.reserve_back(out_block_num_tiles);
         for (uint32_t tile_index = 0; tile_index < out_block_num_tiles; tile_index++) {
@@ -125,7 +125,7 @@ void kernel_main() {
     }
     cb_partials.pop_front(out_block_num_tiles);
 
-    PACK((llk_pack_init(out_id)));
+    pack_init(out_id);
     cb_out.reserve_back(out_block_num_tiles);
     for (uint32_t tile_index = 0; tile_index < out_block_num_tiles; tile_index++) {
         pack_tile(tile_index, out_id);
