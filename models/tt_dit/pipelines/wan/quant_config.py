@@ -250,6 +250,8 @@ def apply_quant_config(model, config: QuantConfig) -> None:
 
         # Ring SDPA config (self-attention only)
         block.attn1.sdpa_compute_kernel_config = _make_sdpa_compute_config(arch, config.ring_sdpa)
+        if config.ring_sdpa.input_dtype is not None:
+            block.attn1._sdpa_input_dtype = config.ring_sdpa.input_dtype
 
     # Log summary
     weight_dtypes = set()
