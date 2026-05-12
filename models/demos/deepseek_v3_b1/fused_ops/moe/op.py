@@ -4355,7 +4355,6 @@ class MoeOp:
         bwd_r2_sem_addr = self.sem_addrs[MoeSem.REDUCE_FC_BWD_R2]
         r3_fwd_sem_addr = self.sem_addrs[MoeSem.REDUCE_FC_R3_FWD]
 
-        slots_per_direction = reduce_params["slots_per_direction"]
         ncrisc_buf_offset = reduce_params["ncrisc_buf_offset"]
         r2_buf_offset = reduce_params["r2_buf_offset"]
         r3_buf_offset = reduce_params["r3_buf_offset"]
@@ -4612,9 +4611,6 @@ class MoeOp:
         mesh_device = ctx.mesh_device
 
         is_entry_col = (self.exit_column is None) or (col == self.exit_column)
-
-        fwd_socket = ctx.forward_sockets[chip_id] if ctx.forward_sockets else None
-        fwd_addr = int(fwd_socket.get_config_buffer_address()) if fwd_socket is not None else 0
 
         sender_core_physical = routed_ctx.device.worker_core_from_logical_core(routed_ctx.sender_core)
 
