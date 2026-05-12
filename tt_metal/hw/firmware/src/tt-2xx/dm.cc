@@ -324,7 +324,7 @@ extern "C" uint32_t _start1() {
                 bool subordinates_run_kernel = start_subordinate_kernel_run_early(enables);
 
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
-                if (subordinates_run_kernel) {
+                if (subordinates_run_kernel || (enables & (1u << index))) {
                     // If subordinates run kernel they could be using DFBs. DM0 needs to setup DFBs to program implicit synchronization.
                     uint32_t num_local_dfbs = launch_msg_address->kernel_config.local_cb_mask;
                     setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
