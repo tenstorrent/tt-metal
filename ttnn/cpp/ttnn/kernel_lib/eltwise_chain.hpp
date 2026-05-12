@@ -180,6 +180,21 @@
  *       PackTile<cb_out, Dst::D0, PackTilePolicy::UpfrontReservePushAtEnd, PackTileIndexMode::BlockIter>{}
  *   );
  *
+ *   // Asymmetric bcast walk — A streams the tile range, B pinned at tile 0
+ *   //   (softmax-style: out[t] = exp(in[t] - max), max pinned at tile 0)
+ *   //   BinaryFpu's 9th template arg is AIndex; 12th (trailing) is BIndex (defaults to AIndex).
+ *   eltwise_chain(num_tiles,
+ *       BinaryFpu<cb_in, cb_max, cb_tmp, BinaryFpuOp::Sub, BroadcastDim::COL,
+ *                 BinaryDataFormatReconfig::None,
+ *                 CopyTilePolicy::WaitUpfrontPopAtEnd,   // A: wait N upfront, pop at end
+ *                 CopyTilePolicy::WaitNoPop,             // B: wait 1, never pop
+ *                 CbIndexMode::BlockIter,                // AIndex — A walks 0..num_tiles-1
+ *                 Dst::D0, false,
+ *                 CbIndexMode::FirstTile>{},             // BIndex — B pinned at tile 0
+ *       Exp<>{},
+ *       PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{}
+ *   );
+ *
  *   // Mixed CARRY + SKIP + fp32 transitions (D6)
  *   //   (BinaryFpu's 11th template arg is EnableFp32DestAcc; passing `true` here)
  *   eltwise_chain(num_tiles,
@@ -580,9 +595,10 @@ template <
     BinaryDataFormatReconfig DfReconfig = BinaryDataFormatReconfig::InputAndOutput,
     CopyTilePolicy APolicy = CopyTilePolicy::WaitAndPop,
     CopyTilePolicy BPolicy = CopyTilePolicy::WaitAndPop,
-    CbIndexMode Index = CbIndexMode::FirstTile,
+    CbIndexMode AIndex = CbIndexMode::FirstTile,
     Dst DstSlot = Dst::D0,
-    bool EnableFp32DestAcc = false>
+    bool EnableFp32DestAcc = false,
+    CbIndexMode BIndex = AIndex>
 struct BinaryFpu;
 
 template <

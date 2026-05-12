@@ -63,6 +63,29 @@
  * `eltwise_chain.hpp` `@section caller_init_contract` for the table. `BlockBinaryFpu::init()`
  * uses the math+unpack short bcast init (mirrors streaming `BinaryFpu`); pack-side
  * configure stays as `compute_kernel_hw_startup` programmed it.
+ *
+ * @section block_asymmetric_bcast Asymmetric A=BlockIter / B=FirstTile bcast walk
+ *
+ * `BlockBinaryFpu` exposes per-side `AIndex` / `BIndex` template parameters. The
+ * canonical broadcast pattern walks the streamed operand while pinning the scaler/vector
+ * operand at tile 0 — `AIndex=BlockIter, BIndex=FirstTile` (the default `BIndex=AIndex`
+ * preserves back-compat with single-Index callers):
+ *
+ *   // softmax phase 2a (stable): out[t] = exp(in[t] - max), max pinned at tile 0
+ *   using SubBcast = BlockBinaryFpu<
+ *       cb_input_tiles, cb_max, BinaryFpuOp::Sub, stripe_tiles,
+ *       Dst::D0, BroadcastDim::COL, BinaryDataFormatReconfig::None,
+ *       CopyTilePolicy::WaitUpfrontPopAtEnd,   // A: wait N upfront, pop at end
+ *       CopyTilePolicy::WaitNoPop,             // B: wait 1, never pop (caller pops)
+ *       CbIndexMode::BlockIter,                // AIndex — A walks 0..stripe_tiles-1
+ *       0,                                     // BWaitTiles (deprecated)
+ *       false,                                 // EnableFp32DestAcc
+ *       CbIndexMode::FirstTile>;               // BIndex — B pinned at tile 0
+ *
+ *   eltwise_chain(num_stripes, SubBcast{}, Exp<>{}, BlockPackTile<cb_exps, stripe_tiles>{});
+ *
+ * Wait counts auto-derive: `a_wait_count = BlockSize` when AIndex=BlockIter,
+ * `b_wait_count = 1` when BIndex=FirstTile.
  */
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
@@ -150,9 +173,10 @@ template <
     BinaryDataFormatReconfig DF = BinaryDataFormatReconfig::None,
     CopyTilePolicy APolicy = CopyTilePolicy::WaitAndPop,
     CopyTilePolicy BPolicy = CopyTilePolicy::WaitAndPop,
-    CbIndexMode Index = CbIndexMode::BlockIter,
-    uint32_t BWaitTiles = 0,  // override for B wait count when Index == FirstTile (e.g. 1 for scalar)
-    bool EnableFp32DestAccV = false>
+    CbIndexMode AIndex = CbIndexMode::BlockIter,
+    uint32_t BWaitTiles = 0,  // deprecated B-wait override; prefer BIndex=FirstTile (kept for back-compat)
+    bool EnableFp32DestAccV = false,
+    CbIndexMode BIndex = AIndex>
 struct BlockBinaryFpu : BinaryFpuTag {
     static_assert(
         to_u32(BaseDst) + BlockSize <= DEST_AUTO_LIMIT, "BlockBinaryFpu: BaseDst + BlockSize exceeds DEST_AUTO_LIMIT");
@@ -160,6 +184,12 @@ struct BlockBinaryFpu : BinaryFpuTag {
         DF != BinaryDataFormatReconfig::Output && DF != BinaryDataFormatReconfig::InputAndOutput,
         "BlockBinaryFpu: pack-side DF reconfig must live on the BlockPackTile element "
         "(PackTileReconfig::Output), not on BlockBinaryFpu. Only None / Input are valid here.");
+    // same_cb dedup safety: when CbA == CbB the B-side wait/pop is skipped, so the
+    // helper would under-wait if A and B walked different ranges of the shared CB.
+    static_assert(
+        (CbA != CbB) || AIndex == BIndex,
+        "BlockBinaryFpu: when CbA == CbB, AIndex and BIndex must match "
+        "(B-side wait/pop is deduped — asymmetric indices would under-wait).");
 
     static constexpr uint32_t cb_a_id() { return CbA; }
     static constexpr uint32_t cb_b_id() { return CbB; }
@@ -215,13 +245,16 @@ struct BlockBinaryFpu : BinaryFpuTag {
         "(DST_ACCUM_MODE must be 1).");
     static constexpr bool EnableFp32DestAcc = EnableFp32DestAccV;
 
-    // Q4 v6 collapse: b_wait_count keys on the single Index template.
+    // Per-side wait counts. BlockIter walks tiles 0..BlockSize-1 → wait BlockSize.
+    // FirstTile pins at tile 0 → wait 1 (or BWaitTiles override for legacy callers
+    // who passed an explicit B-wait count under the collapsed-Index API).
+    static constexpr uint32_t a_wait_count = (AIndex == CbIndexMode::FirstTile) ? 1u : BlockSize;
     static constexpr uint32_t b_wait_count =
-        (Index == CbIndexMode::FirstTile) ? (BWaitTiles == 0 ? 1u : BWaitTiles) : BlockSize;
+        (BIndex == CbIndexMode::FirstTile) ? (BWaitTiles == 0 ? 1u : BWaitTiles) : BlockSize;
 
     ALWI void wait_per_tile(uint32_t /*i*/) const {
         if constexpr (APolicy == CopyTilePolicy::WaitAndPop || APolicy == CopyTilePolicy::WaitNoPop) {
-            cb_wait_front(CbA, BlockSize);
+            cb_wait_front(CbA, a_wait_count);
         }
         if constexpr (!same_cb && (BPolicy == CopyTilePolicy::WaitAndPop || BPolicy == CopyTilePolicy::WaitNoPop)) {
             cb_wait_front(CbB, b_wait_count);
@@ -229,21 +262,21 @@ struct BlockBinaryFpu : BinaryFpuTag {
     }
     ALWI void wait_upfront(uint32_t n) const {
         if constexpr (APolicy == CopyTilePolicy::WaitUpfrontPopAtEnd) {
-            cb_wait_front(CbA, n * BlockSize);
+            cb_wait_front(CbA, n * a_wait_count);
         }
         if constexpr (!same_cb && BPolicy == CopyTilePolicy::WaitUpfrontPopAtEnd) {
-            cb_wait_front(CbB, n * BlockSize);
+            cb_wait_front(CbB, n * b_wait_count);
         }
     }
 
     ALWI void exec(uint32_t /*i*/) const {
         for (uint32_t j = 0; j < BlockSize; ++j) {
             const uint32_t dst = to_u32(BaseDst) + j;
-            // Q4 v6 collapse: single Index drives both sides. (Per-side runtime
-            // tile-index member fields aren't a feature on BlockBinaryFpu — block
-            // walks always start at j=0.)
-            const uint32_t a_idx = (Index == CbIndexMode::BlockIter) ? j : 0u;
-            const uint32_t b_idx = (Index == CbIndexMode::BlockIter) ? j : 0u;
+            // Per-side index: BlockIter walks j, FirstTile pins at 0. Asymmetric
+            // (A=BlockIter + B=FirstTile) is the canonical bcast walk — A streams the
+            // tile range while B is pinned to the scaler/vector tile.
+            const uint32_t a_idx = (AIndex == CbIndexMode::BlockIter) ? j : 0u;
+            const uint32_t b_idx = (BIndex == CbIndexMode::BlockIter) ? j : 0u;
             if constexpr (Bcast == BroadcastDim::None) {
                 if constexpr (Op == BinaryFpuOp::Add) {
                     add_tiles(CbA, CbB, a_idx, b_idx, dst);
@@ -267,7 +300,7 @@ struct BlockBinaryFpu : BinaryFpuTag {
 
     ALWI void pop_per_tile(uint32_t /*i*/) const {
         if constexpr (APolicy == CopyTilePolicy::WaitAndPop || APolicy == CopyTilePolicy::NoWaitPop) {
-            cb_pop_front(CbA, BlockSize);
+            cb_pop_front(CbA, a_wait_count);
         }
         if constexpr (!same_cb && (BPolicy == CopyTilePolicy::WaitAndPop || BPolicy == CopyTilePolicy::NoWaitPop)) {
             cb_pop_front(CbB, b_wait_count);
@@ -275,10 +308,10 @@ struct BlockBinaryFpu : BinaryFpuTag {
     }
     ALWI void pop_upfront_end(uint32_t n) const {
         if constexpr (APolicy == CopyTilePolicy::WaitUpfrontPopAtEnd) {
-            cb_pop_front(CbA, n * BlockSize);
+            cb_pop_front(CbA, n * a_wait_count);
         }
         if constexpr (!same_cb && BPolicy == CopyTilePolicy::WaitUpfrontPopAtEnd) {
-            cb_pop_front(CbB, n * BlockSize);
+            cb_pop_front(CbB, n * b_wait_count);
         }
     }
 };

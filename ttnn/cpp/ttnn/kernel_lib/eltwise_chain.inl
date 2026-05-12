@@ -462,18 +462,24 @@ template <uint32_t CbA,
           BinaryDataFormatReconfig DfReconfig,
           CopyTilePolicy APolicy,
           CopyTilePolicy BPolicy,
-          CbIndexMode Index,
+          CbIndexMode AIndex,
           Dst DstSlot,
-          bool EnableFp32DestAccV>
+          bool EnableFp32DestAccV,
+          CbIndexMode BIndex>
 struct BinaryFpu : BinaryFpuTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "BinaryFpu: DEST slot exceeds DEST_AUTO_LIMIT");
-    // BinaryFpu reads each operand once per tile — index mode constrained like CopyTile.
-    // The OR over per-side policies guards both A and B in the collapsed-Index world
-    // (Q4 v6 collapse).
-    static_assert(!((APolicy == CopyTilePolicy::WaitAndPop || BPolicy == CopyTilePolicy::WaitAndPop)
-                    && Index == CbIndexMode::BlockIter),
-                  "BinaryFpu: BlockIter index requires Upfront / NoWaitNoPop policy on both sides");
+    // Per-side BlockIter requires Upfront / NoWait* on that side (caller pre-pushes the
+    // walked range; per-tile wait + pop would not advance the walked index).
+    static_assert(!(APolicy == CopyTilePolicy::WaitAndPop && AIndex == CbIndexMode::BlockIter),
+                  "BinaryFpu: AIndex=BlockIter requires APolicy in {WaitUpfrontPopAtEnd, WaitNoPop, NoWaitPop, NoWaitNoPop}");
+    static_assert(!(BPolicy == CopyTilePolicy::WaitAndPop && BIndex == CbIndexMode::BlockIter),
+                  "BinaryFpu: BIndex=BlockIter requires BPolicy in {WaitUpfrontPopAtEnd, WaitNoPop, NoWaitPop, NoWaitNoPop}");
+    // same_cb dedup safety: when CbA == CbB the B-side wait/pop is skipped, so the
+    // helper would under-wait if A and B walked different ranges of the shared CB.
+    static_assert((CbA != CbB) || AIndex == BIndex,
+                  "BinaryFpu: when CbA == CbB, AIndex and BIndex must match "
+                  "(B-side wait/pop is deduped — asymmetric indices would under-wait).");
     // D6: EnableFp32DestAcc requires the kernel was built with FP32_DEST_ACC_EN.
     static_assert(!EnableFp32DestAccV || DST_ACCUM_MODE,
                   "BinaryFpu<...EnableFp32DestAcc=true> requires kernel built with FP32_DEST_ACC_EN "
@@ -560,16 +566,19 @@ struct BinaryFpu : BinaryFpuTag {
     }
 
     ALWI void exec(uint32_t i) const {
-        // Q4 v6 collapse: single Index mode drives both A-side and B-side index
-        // computation. Per-side runtime tile index member fields (a_tile_idx,
-        // b_tile_idx) remain independent — only the MODE template collapsed.
-        const auto idx_for = [&](uint32_t pinned_val) -> uint32_t {
-            if constexpr (Index == CbIndexMode::FirstTile) return 0;
-            else if constexpr (Index == CbIndexMode::BlockIter) return i;
-            else return pinned_val;  // Pinned / Absolute
-        };
-        const uint32_t a_idx = idx_for(a_tile_idx);
-        const uint32_t b_idx = idx_for(b_tile_idx);
+        // Per-side index mode. AIndex drives a_idx, BIndex drives b_idx. The
+        // canonical bcast walk is A=BlockIter (walks the tile range) + B=FirstTile
+        // (pins the scaler/vector operand at tile 0).
+        const uint32_t a_idx = [&]() -> uint32_t {
+            if constexpr      (AIndex == CbIndexMode::FirstTile)  return 0;
+            else if constexpr (AIndex == CbIndexMode::BlockIter)  return i;
+            else                                                  return a_tile_idx;  // Pinned / Absolute
+        }();
+        const uint32_t b_idx = [&]() -> uint32_t {
+            if constexpr      (BIndex == CbIndexMode::FirstTile)  return 0;
+            else if constexpr (BIndex == CbIndexMode::BlockIter)  return i;
+            else                                                  return b_tile_idx;  // Pinned / Absolute
+        }();
         if constexpr (Bcast == BroadcastDim::None) {
             if constexpr      (Op == BinaryFpuOp::Add) add_tiles(CbA, CbB, a_idx, b_idx, to_u32(DstSlot));
             else if constexpr (Op == BinaryFpuOp::Sub) sub_tiles(CbA, CbB, a_idx, b_idx, to_u32(DstSlot));
@@ -1111,10 +1120,21 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
         detail::hoisted_init_for_each(IdxSeq{}, elts...);
     }
 
+    // Pack lifecycle ordering: reserve emitted as late as possible (right before
+    // pack_exec) and push emitted as early as possible (right after pack_exec) so
+    // the downstream consumer sees pushed tiles before this iteration releases
+    // DEST. The per-tile reserve/push helpers are policy-guarded internally
+    // (no-op for non-PerTile policies), so emitting them inside the pack window
+    // is safe in both block and per-tile paths.
     if constexpr (block_path) {
         // Upfront block path: wait/reserve `n_tiles` worth of CB tiles upfront,
         // run the per-tile loop, pop/push at end. Element types with block-size
         // multipliers (e.g. BlockCopyTile<Cb, BlockSize>) scale `n_tiles` internally.
+        //
+        // Mixed-policy chains (e.g. CopyTile WaitUpfrontPopAtEnd + PackTile
+        // PerTileReserveAndPush — the softmax phase 2b pattern) need per-tile
+        // reserve/push for the streaming output even though the input drove
+        // block_path=true.
         (detail::elem_wait_upfront(elts, n_tiles), ...);
         (detail::elem_reserve_upfront(elts, n_tiles), ...);
 
@@ -1125,7 +1145,9 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
             detail::compute_phase_for_each<emit_init_per_tile, emit_init_per_tile>(IdxSeq{}, i, elts...);
             tile_regs_commit();
             tile_regs_wait();
+            (detail::elem_reserve_per_tile(elts, i), ...);
             (detail::elem_pack_exec(elts, i), ...);
+            (detail::elem_push_per_tile(elts, i), ...);
             tile_regs_release();
         }
 
@@ -1135,17 +1157,17 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
         // Per-tile path (default — PerTile policies).
         for (uint32_t i = 0; i < n_tiles; ++i) {
             (detail::elem_wait_per_tile(elts, i), ...);
-            (detail::elem_reserve_per_tile(elts, i), ...);
 
             tile_regs_acquire();
             detail::compute_phase_for_each<emit_init_per_tile, emit_init_per_tile>(IdxSeq{}, i, elts...);
             tile_regs_commit();
             tile_regs_wait();
+            (detail::elem_reserve_per_tile(elts, i), ...);
             (detail::elem_pack_exec(elts, i), ...);
+            (detail::elem_push_per_tile(elts, i), ...);
             tile_regs_release();
 
             (detail::elem_pop_per_tile(elts, i), ...);
-            (detail::elem_push_per_tile(elts, i), ...);
         }
     }
 }
