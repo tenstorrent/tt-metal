@@ -337,16 +337,13 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
 
     // Compute CB sizes centrally - used for both CB creation and L1 validation.
-    // When the DRAM config-tensor path is active, the reader indices tensor is already built on
-    // host so we pass its real per-core page size. Auto-shard evaluation in pool_utils.cpp still
-    // falls back to the worst case because the buffers do not exist yet there. The scalar config
-    // tensor (only created for avg pool without one_scalar_per_core) is not yet known at this
-    // point, so its prediction remains the worst case; that matches how the CB is created below.
+    // When the DRAM config-tensor path is active, the reader indices and scalar config CBs are
+    // created as local scratch sized to the worst case (max_out_nhw_per_core * 3 * sizeof(uint16_t) + 2).
+    // We intentionally do NOT pass the actual buffer page sizes here so that
+    // local_cb_total() predicts the same worst-case size the factory allocates below.
+    // The scalar config tensor (only created for avg pool without one_scalar_per_core) is not yet
+    // known at this point, so its prediction also remains the worst case.
     auto output_shard_shape = outputs[0].shard_spec().value().shape;
-    std::optional<uint32_t> reader_indices_actual_page_size;
-    if (config_tensor_in_dram) {
-        reader_indices_actual_page_size = reader_indices_storage.get_buffer()->page_size();
-    }
     PoolCBSizes cb_sizes = calculate_pool_cb_sizes(
         params,
         one_scalar_per_core,
@@ -354,8 +351,7 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
         output_layout,
         outputs[0].dtype(),
         {output_shard_shape[0], output_shard_shape[1]},
-        config_tensor_in_dram,
-        reader_indices_actual_page_size);
+        config_tensor_in_dram);
 
     const auto& input_shape = input.padded_shape();
     const uint32_t shard_width = input.shard_spec()->shape[1];
