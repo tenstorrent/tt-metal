@@ -332,7 +332,12 @@ from ttnn.profiler import (
     tracy_frame,
     get_latest_programs_perf_data,
     get_all_programs_perf_data,
+    profile,
+    perf_trace,
+    OpPerfReport,
 )
+
+import ttnn.op_perf
 
 # TODO: remove this after the distributed module is fully integrated
 from ttnn.distributed import *
