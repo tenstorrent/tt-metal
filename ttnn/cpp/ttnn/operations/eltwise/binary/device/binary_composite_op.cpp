@@ -615,7 +615,7 @@ Tensor polyval(
         return ttnn::full_like(input_a, coeffs[0]);
     }
     Tensor result = ttnn::multiply(input_a, coeffs[0], std::nullopt, output_mem_config);
-    for (int idx = 1; idx < coeffs.size() - 1; idx++) {
+    for (size_t idx = 1; idx < coeffs.size() - 1; idx++) {
         result = ttnn::add(result, coeffs[idx], std::nullopt, output_mem_config);
         result = ttnn::multiply(input_a, result, std::nullopt, output_mem_config);
     }

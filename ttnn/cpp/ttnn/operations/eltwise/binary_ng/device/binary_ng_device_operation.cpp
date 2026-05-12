@@ -395,7 +395,7 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
     if (output_tensor.has_value()) {
         auto shapes_equal = [=](const auto& shape_a, const auto& shape_b) {
             const auto smaller_rank = std::min(shape_a.rank(), shape_b.rank());
-            for (int i = 0; i < smaller_rank; ++i) {
+            for (int i = 0; i < static_cast<int>(smaller_rank); ++i) {
                 auto dim = -1 - i;
                 if (shape_a[dim] != shape_b[dim]) {
                     return false;

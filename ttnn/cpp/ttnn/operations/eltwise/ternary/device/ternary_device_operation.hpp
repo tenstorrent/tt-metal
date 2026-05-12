@@ -26,8 +26,8 @@ struct TernaryDeviceOperation {
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
         std::optional<CoreRangeSet> sub_core_grids;
 
-        std::optional<ScalarVariant> scalar_input_a;
-        std::optional<ScalarVariant> scalar_input_b;
+        std::optional<ScalarVariant> scalar_input_a = std::nullopt;
+        std::optional<ScalarVariant> scalar_input_b = std::nullopt;
 
         ttsl::hash::hash_t to_hash() const;
 

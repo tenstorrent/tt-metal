@@ -139,7 +139,7 @@ void BcastDeviceOperation::validate_on_program_cache_miss(
                 input_shape_a.rank() == input_shape_b.rank(),
                 "Broadcast with batch is currently only supported when input tensor ranks are the same",
                 "Error");
-            for (auto i = 0; i < input_shape_a.rank() - 2; i++) {
+            for (int i = 0; i < static_cast<int>(input_shape_a.rank()) - 2; i++) {
                 TT_FATAL(
                     input_shape_a[i] == input_shape_b[i],
                     "Broadcast with batch is currently only supported when bN*bC=1 or N & C match or equivalent");  // for H multi-batch weight is supported
