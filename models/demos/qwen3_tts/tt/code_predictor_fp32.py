@@ -17,29 +17,12 @@ Validated 2026-05-08: traced production demo with TT_QWEN3_CP_FP32=1 gives
 RTF 0.733× (steady 58.7 ms/frame, vs baseline bf16 47.8 ms/frame). ECAPA
 voice similarity vs reference: Jim 0.9188 → 0.9786, Ashley 0.9722 → 0.9727.
 """
-import os
 from typing import List, Optional, Tuple
 
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-
-
-def _parse_fp32_layer_set(num_layers: int) -> set:
-    env = os.environ.get("TT_QWEN3_CP_FP32_LAYERS", None)
-    if env is None:
-        return set(range(num_layers))
-    if env.strip() == "":
-        return set()
-    try:
-        s = {int(x.strip()) for x in env.split(",") if x.strip()}
-    except ValueError as e:
-        raise ValueError(f"TT_QWEN3_CP_FP32_LAYERS must be a comma-separated list of ints, got {env!r}") from e
-    for li in s:
-        if not (0 <= li < num_layers):
-            raise ValueError(f"TT_QWEN3_CP_FP32_LAYERS index {li} out of range [0, {num_layers})")
-    return s
 
 
 class CodePredictorFp32(LightweightModule):
@@ -79,18 +62,6 @@ class CodePredictorFp32(LightweightModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        # bf16 layer compute config — original CodePredictor settings.
-        self._bf16_kcfg = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
-        # Per-layer / lm_head precision. Default (no env vars): all 5 layers
-        # + lm_head in fp32 + HiFi4 — matches the original fp32 path.
-        self._fp32_layer_set: set = _parse_fp32_layer_set(self.num_layers)
-        self._lmhead_fp32: bool = os.environ.get("TT_QWEN3_CP_LMHEAD_FP32", "1") == "1"
-        print(f"  CodePredictorFp32: fp32_layers={sorted(self._fp32_layer_set)} " f"lmhead_fp32={self._lmhead_fp32}")
 
         # --- weight format helpers ---
         def _perm_rope_rows(w_2d: torch.Tensor, head_dim: int) -> torch.Tensor:
@@ -191,19 +162,6 @@ class CodePredictorFp32(LightweightModule):
             else:
                 self.codec_embeddings_tt.append(None)
 
-    # ─── Per-layer precision selectors. ───────────────────────────────────────
-    def _layer_dtype(self, li: int):
-        return ttnn.float32 if li in self._fp32_layer_set else ttnn.bfloat16
-
-    def _layer_kcfg(self, li: int):
-        return self.kcfg if li in self._fp32_layer_set else self._bf16_kcfg
-
-    def _lmhead_dtype(self):
-        return ttnn.float32 if self._lmhead_fp32 else ttnn.bfloat16
-
-    def _lmhead_kcfg(self):
-        return self.kcfg if self._lmhead_fp32 else self._bf16_kcfg
-
     # ─── Per-layer forward — caller owns input h_tt; we do NOT deallocate it. ───
     def _layer_forward(
         self,
@@ -212,8 +170,6 @@ class CodePredictorFp32(LightweightModule):
         cos: ttnn.Tensor,
         sin: ttnn.Tensor,
         transformation_mat: ttnn.Tensor,
-        *,
-        li: int,
         kv_cache: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]],
         start_pos: int,
         mode: str,
@@ -221,22 +177,11 @@ class CodePredictorFp32(LightweightModule):
         decode_attn_mask: Optional[ttnn.Tensor],
         cp_prefill_mask: Optional[ttnn.Tensor],
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
-        act_dtype = self._layer_dtype(li)
-        kcfg = self._layer_kcfg(li)
+        # residual aliases h_tt (caller-owned). Do NOT deallocate it.
+        residual = h_tt
+        x = ttnn.rms_norm(h_tt, epsilon=self.rms_norm_eps, weight=lw["input_ln_w"], compute_kernel_config=self.kcfg)
 
-        # Cast input to this layer's act_dtype if needed. residual then owns the
-        # casted tensor (we deallocate it before return). If no cast, residual
-        # aliases h_tt (caller-owned, must NOT be deallocated).
-        if h_tt.dtype != act_dtype:
-            residual = ttnn.typecast(h_tt, dtype=act_dtype)
-            own_residual = True
-        else:
-            residual = h_tt
-            own_residual = False
-
-        x = ttnn.rms_norm(residual, epsilon=self.rms_norm_eps, weight=lw["input_ln_w"], compute_kernel_config=kcfg)
-
-        xqkv = ttnn.matmul(x, lw["wqkv"], dtype=act_dtype, compute_kernel_config=kcfg)
+        xqkv = ttnn.matmul(x, lw["wqkv"], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
         ttnn.deallocate(x)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             xqkv,
@@ -251,7 +196,7 @@ class CodePredictorFp32(LightweightModule):
             q,
             epsilon=self.rms_norm_eps,
             weight=lw["q_norm_w"],
-            compute_kernel_config=kcfg,
+            compute_kernel_config=self.kcfg,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(q)
@@ -260,7 +205,7 @@ class CodePredictorFp32(LightweightModule):
             k,
             epsilon=self.rms_norm_eps,
             weight=lw["k_norm_w"],
-            compute_kernel_config=kcfg,
+            compute_kernel_config=self.kcfg,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(k)
@@ -282,7 +227,7 @@ class CodePredictorFp32(LightweightModule):
             transformation_mat,
             is_decode_mode=False,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=kcfg,
+            compute_kernel_config=self.kcfg,
         )
         ttnn.deallocate(q)
         q = q_r
@@ -293,7 +238,7 @@ class CodePredictorFp32(LightweightModule):
             transformation_mat,
             is_decode_mode=False,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=kcfg,
+            compute_kernel_config=self.kcfg,
         )
         ttnn.deallocate(k)
         k = k_r
@@ -317,22 +262,22 @@ class CodePredictorFp32(LightweightModule):
                 ttnn.update_cache(v_cache, v, update_idx=start_pos)
             ttnn.deallocate(k)
             ttnn.deallocate(v)
-            if k_cache.dtype == act_dtype:
+            if k_cache.dtype == self.act_dtype:
                 k_for_attn = k_cache
                 v_for_attn = v_cache
                 k_cache_alias = True
             else:
-                k_for_attn = ttnn.typecast(k_cache, dtype=act_dtype)
-                v_for_attn = ttnn.typecast(v_cache, dtype=act_dtype)
+                k_for_attn = ttnn.typecast(k_cache, dtype=self.act_dtype)
+                v_for_attn = ttnn.typecast(v_cache, dtype=self.act_dtype)
                 k_cache_alias = False
             updated_kv = (k_cache, v_cache)
         else:
-            if k.dtype != act_dtype:
-                k_f = ttnn.typecast(k, dtype=act_dtype)
+            if k.dtype != self.act_dtype:
+                k_f = ttnn.typecast(k, dtype=self.act_dtype)
                 ttnn.deallocate(k)
                 k = k_f
-            if v.dtype != act_dtype:
-                v_f = ttnn.typecast(v, dtype=act_dtype)
+            if v.dtype != self.act_dtype:
+                v_f = ttnn.typecast(v, dtype=self.act_dtype)
                 ttnn.deallocate(v)
                 v = v_f
             k_for_attn = k
@@ -340,8 +285,8 @@ class CodePredictorFp32(LightweightModule):
             k_cache_alias = False
             updated_kv = None
 
-        if q.dtype != act_dtype:
-            q_f = ttnn.typecast(q, dtype=act_dtype)
+        if q.dtype != self.act_dtype:
+            q_f = ttnn.typecast(q, dtype=self.act_dtype)
             ttnn.deallocate(q)
             q = q_f
 
@@ -364,8 +309,8 @@ class CodePredictorFp32(LightweightModule):
             q,
             k_exp,
             transpose_b=True,
-            dtype=act_dtype,
-            compute_kernel_config=kcfg,
+            dtype=self.act_dtype,
+            compute_kernel_config=self.kcfg,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(q)
@@ -414,8 +359,8 @@ class CodePredictorFp32(LightweightModule):
         attn_out = ttnn.matmul(
             attn_weights,
             v_exp,
-            dtype=act_dtype,
-            compute_kernel_config=kcfg,
+            dtype=self.act_dtype,
+            compute_kernel_config=self.kcfg,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(attn_weights)
@@ -425,30 +370,27 @@ class CodePredictorFp32(LightweightModule):
         attn_concat = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
 
-        o = ttnn.matmul(attn_concat, lw["o_proj"], dtype=act_dtype, compute_kernel_config=kcfg)
+        o = ttnn.matmul(attn_concat, lw["o_proj"], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
         ttnn.deallocate(attn_concat)
 
-        # Residual + post-norm. If we own residual (a layer-boundary typecast),
-        # free it now. Otherwise residual aliases caller's h_tt — DO NOT deallocate.
-        h_post = ttnn.add(residual, o, dtype=act_dtype)
+        # Residual + post-norm. residual = caller's h_tt — DO NOT deallocate.
+        h_post = ttnn.add(residual, o, dtype=self.act_dtype)
         ttnn.deallocate(o)
-        if own_residual:
-            ttnn.deallocate(residual)
 
         residual2 = h_post  # we own h_post → free after MLP residual.
-        h2 = ttnn.rms_norm(h_post, epsilon=self.rms_norm_eps, weight=lw["post_ln_w"], compute_kernel_config=kcfg)
+        h2 = ttnn.rms_norm(h_post, epsilon=self.rms_norm_eps, weight=lw["post_ln_w"], compute_kernel_config=self.kcfg)
 
-        gate_o = ttnn.matmul(h2, lw["gate"], dtype=act_dtype, compute_kernel_config=kcfg)
-        up_o = ttnn.matmul(h2, lw["up"], dtype=act_dtype, compute_kernel_config=kcfg)
+        gate_o = ttnn.matmul(h2, lw["gate"], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
+        up_o = ttnn.matmul(h2, lw["up"], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
         ttnn.deallocate(h2)
         gate_silu = ttnn.silu(gate_o)
         ttnn.deallocate(gate_o)
-        gated = ttnn.mul(gate_silu, up_o, dtype=act_dtype)
+        gated = ttnn.mul(gate_silu, up_o, dtype=self.act_dtype)
         ttnn.deallocate(gate_silu)
         ttnn.deallocate(up_o)
-        mlp_o = ttnn.matmul(gated, lw["down"], dtype=act_dtype, compute_kernel_config=kcfg)
+        mlp_o = ttnn.matmul(gated, lw["down"], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
         ttnn.deallocate(gated)
-        out = ttnn.add(residual2, mlp_o, dtype=act_dtype)
+        out = ttnn.add(residual2, mlp_o, dtype=self.act_dtype)
         ttnn.deallocate(residual2)
         ttnn.deallocate(mlp_o)
         return out, updated_kv
@@ -493,7 +435,6 @@ class CodePredictorFp32(LightweightModule):
                 cos,
                 sin,
                 transformation_mat,
-                li=li,
                 kv_cache=layer_kv,
                 start_pos=start_pos,
                 mode=mode,
@@ -517,13 +458,7 @@ class CodePredictorFp32(LightweightModule):
 
         # Apply lm_head over full hidden (caller indexes last position).
         lm_idx = generation_step - 1
-        lm_dtype = self._lmhead_dtype()
-        lm_kcfg = self._lmhead_kcfg()
-        if h_norm.dtype != lm_dtype:
-            h_norm_cast = ttnn.typecast(h_norm, dtype=lm_dtype)
-            ttnn.deallocate(h_norm)
-            h_norm = h_norm_cast
-        logits = ttnn.matmul(h_norm, self.lm_heads[lm_idx], dtype=lm_dtype, compute_kernel_config=lm_kcfg)
+        logits = ttnn.matmul(h_norm, self.lm_heads[lm_idx], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
         ttnn.deallocate(h_norm)
         return logits, updated_kvs
 
