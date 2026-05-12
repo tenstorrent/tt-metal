@@ -358,6 +358,9 @@ jobs:
       VERSION: ${{ needs.parse-platform.outputs.version }}
       TOOLCHAIN: ${{ inputs.toolchain || needs.parse-platform.outputs.toolchain }}
     container:
+      # Guard against double-prefixing: callers fall into two camps — those that pre-resolve
+      # via resolve-docker-pull-refs (already harbor-prefixed) and those that pass a raw GHCR
+      # tag. Once all callers are consistent this sentinel check can be removed.
       image: >-
         ${{
           (inputs.ci-build-docker-image != '' &&
