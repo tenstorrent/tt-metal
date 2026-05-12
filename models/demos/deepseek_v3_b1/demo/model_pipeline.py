@@ -53,6 +53,9 @@ class ModelPipeline:
         temperature: float = 0.6,
         enable_sram_hot_experts: bool = False,
         sram_hot_experts_ceiling: int = 64,
+        bspm_dir: Path | None = None,
+        bspm_variant: str = "B",
+        bspm_budget: float = 3.5,
     ):
         logger.info(
             "Initializing DeepSeek V3 B1 pod pipeline (weights={}, lm_head_fp32={}, lm_head_persistent_mode={})",
@@ -106,15 +109,33 @@ class ModelPipeline:
                     sram_core_grids=SramExpertCoreGrids.shared_expert_mirror(),
                     sram_assigner=CompressedTensorAssigner(formats=["bfp4"]),
                     worker_l1_size=_worker_l1_size_for_rank(num_procs),
+                    bspm_dir=bspm_dir,
+                    bspm_variant=bspm_variant,
+                    bspm_budget=bspm_budget,
                 )
             else:
-                provider = CacheWeightProvider(cache_path, model_path)
+                provider = CacheWeightProvider(
+                    cache_path,
+                    model_path,
+                    bspm_dir=bspm_dir,
+                    bspm_variant=bspm_variant,
+                    bspm_budget=bspm_budget,
+                )
         elif weights_mode == "state_dict":
             if model_path is None:
                 raise ValueError("weights_mode='state_dict' requires model_path")
-            provider = StateDictWeightProvider(model_path)
+            provider = StateDictWeightProvider(
+                model_path,
+                bspm_dir=bspm_dir,
+                bspm_variant=bspm_variant,
+                bspm_budget=bspm_budget,
+            )
         elif weights_mode == "synthetic":
-            provider = SyntheticWeightProvider()
+            provider = SyntheticWeightProvider(
+                bspm_dir=bspm_dir,
+                bspm_variant=bspm_variant,
+                bspm_budget=bspm_budget,
+            )
         else:
             raise ValueError(f"Unknown weights_mode: {weights_mode!r}")
         config = create_pipeline_configuration_from_num_procs(

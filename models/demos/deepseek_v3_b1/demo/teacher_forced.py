@@ -273,6 +273,28 @@ def create_parser() -> argparse.ArgumentParser:
         metavar="ID",
         help="Force all MoE stages to use this layer id (e.g. 3); default: use stage-dependent layer ids",
     )
+    parser.add_argument(
+        "--bspm-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Model-specific BitSculpt BSPM directory, e.g. results/deepseek-r1-0528. "
+            "MoE layers look up layer_<id>/precision_eval/precision_map_<variant>_<budget>.bspm under this path."
+        ),
+    )
+    parser.add_argument(
+        "--bspm-variant",
+        type=str,
+        choices=("B",),
+        default="B",
+        help="BitSculpt allocation variant letter (default: B)",
+    )
+    parser.add_argument(
+        "--bspm-budget",
+        type=float,
+        default=3.5,
+        help="BitSculpt bit budget per expert used in the BSPM filename (default: 3.5)",
+    )
     return parser
 
 
@@ -295,6 +317,9 @@ def run_teacher_forced_demo(
     output_file: Path | None = None,
     no_eos_stop: bool = False,
     chunk_accuracy_token_size: int | None = None,
+    bspm_dir: Path | None = None,
+    bspm_variant: str = "B",
+    bspm_budget: float = 3.5,
 ) -> TeacherForcedResult | None:
     """Run teacher-forced inference on mesh id 0; returns result only on mesh 0."""
     logger.info("Starting DeepSeek V3 B1 teacher-forced demo")
@@ -310,6 +335,9 @@ def run_teacher_forced_demo(
             lm_head_persistent_mode=lm_head_persistent_mode,
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
+            bspm_dir=bspm_dir,
+            bspm_variant=bspm_variant,
+            bspm_budget=bspm_budget,
         )
 
         my_mesh_id = mesh_device.get_system_mesh_id()
@@ -401,6 +429,9 @@ def main(argv: list[str] | None = None) -> int:
         output_file=args.output_file,
         no_eos_stop=args.no_eos_stop,
         chunk_accuracy_token_size=args.chunk_accuracy,
+        bspm_dir=args.bspm_dir,
+        bspm_variant=args.bspm_variant,
+        bspm_budget=args.bspm_budget,
     )
 
     # Mesh 0 only has result; others print nothing extra

@@ -80,16 +80,12 @@ def _deallocate_layer(layer: DeepSeekV3DenseLayerWeights | DeepSeekV3MoELayerWei
     ttnn.deallocate(layer.shared_down_proj, force=True)
     if isinstance(layer, DeepSeekV3MoELayerWeights):
         ttnn.deallocate(layer.gate_bias, force=True)
-        for t in layer.routed_gate_proj:
-            ttnn.deallocate(t, force=True)
-        for t in layer.routed_up_proj:
-            ttnn.deallocate(t, force=True)
-        for t in layer.routed_down_proj:
-            ttnn.deallocate(t, force=True)
-    else:
-        ttnn.deallocate(layer.routed_gate_proj, force=True)
-        ttnn.deallocate(layer.routed_up_proj, force=True)
-        ttnn.deallocate(layer.routed_down_proj, force=True)
+    for t in layer.routed_gate_proj:
+        ttnn.deallocate(t, force=True)
+    for t in layer.routed_up_proj:
+        ttnn.deallocate(t, force=True)
+    for t in layer.routed_down_proj:
+        ttnn.deallocate(t, force=True)
 
 
 def _core_range_set_to_tuples(crs):
@@ -251,23 +247,26 @@ def _assert_layer_on_device_with_topology(
     _assert_on_device(layer.shared_down_proj)
     _assert_topology(layer.shared_down_proj, _PLACEMENTS_SHARD_0_1)
     # Routed experts
+    # Routed experts are now per-projection lists for both dense and MoE. Dense always
+    # uses the TP8 CompressedTensor path (2D-sharded placements); MoE in tests still
+    # goes through the legacy ttnn.Tensor path (replicate per expert) since these
+    # tests don't pass ``compressed_tp8=True``.
     if isinstance(layer, DeepSeekV3DenseLayerWeights):
-        _assert_on_device(layer.routed_gate_proj)
-        _assert_on_device(layer.routed_up_proj)
-        _assert_on_device(layer.routed_down_proj)
-        _assert_topology(layer.routed_gate_proj, _PLACEMENTS_SHARD_0_1)
-        _assert_topology(layer.routed_up_proj, _PLACEMENTS_SHARD_0_1)
-        _assert_topology(layer.routed_down_proj, _PLACEMENTS_SHARD_0_1)
+        expected_placements = _PLACEMENTS_SHARD_0_1
     else:
         assert isinstance(layer, DeepSeekV3MoELayerWeights)
         _assert_topology(layer.gate_bias, _PLACEMENTS_REPLICATE)
-        for e in range(len(layer.routed_gate_proj)):
-            _assert_on_device(layer.routed_gate_proj[e])
-            _assert_on_device(layer.routed_up_proj[e])
-            _assert_on_device(layer.routed_down_proj[e])
-            _assert_topology(layer.routed_gate_proj[e], _PLACEMENTS_REPLICATE)
-            _assert_topology(layer.routed_up_proj[e], _PLACEMENTS_REPLICATE)
-            _assert_topology(layer.routed_down_proj[e], _PLACEMENTS_REPLICATE)
+        expected_placements = _PLACEMENTS_REPLICATE
+
+    def _underlying(t):
+        return t.get_data_tensor() if isinstance(t, CompressedTensor) else t
+
+    for e in range(len(layer.routed_gate_proj)):
+        for t in (layer.routed_gate_proj[e], layer.routed_up_proj[e], layer.routed_down_proj[e]):
+            data = _underlying(t)
+            _assert_on_device(data)
+            _assert_topology(data, expected_placements)
+    if isinstance(layer, DeepSeekV3MoELayerWeights):
         _assert_moe_layer_routed_experts_dram_contiguous(layer)
 
 
@@ -571,9 +570,17 @@ def test_prepare_routed_expert_weights_dense_4x2(bh_2d_mesh_device):
 
     routed = prepare_routed_expert_weights(submesh, state, 0, is_moe=False)
     assert isinstance(routed, DenseRoutedExpertWeights)
-    assert routed.routed_gate_proj.shape is not None
-    assert routed.routed_up_proj.shape is not None
-    assert routed.routed_down_proj.shape is not None
+    # Dense MLP routed portion is sliced into _dn_num_routed=8 TP8-sharded CompressedTensors
+    # per projection — one per chunk, identical per-device shape to a MoE routed expert,
+    # so the kernel iterates num_active_experts=8 the same way it does for MoE.
+    expected_chunks = (
+        LogicalModelDimensions.INTERMEDIATE_SIZE - LogicalModelDimensions.MOE_INTERMEDIATE_SIZE
+    ) // LogicalModelDimensions.MOE_INTERMEDIATE_SIZE
+    assert len(routed.routed_gate_proj) == expected_chunks
+    assert len(routed.routed_up_proj) == expected_chunks
+    assert len(routed.routed_down_proj) == expected_chunks
+    for ct in (*routed.routed_gate_proj, *routed.routed_up_proj, *routed.routed_down_proj):
+        assert isinstance(ct, CompressedTensor)
 
 
 @pytest.mark.parametrize(
@@ -1001,16 +1008,17 @@ def test_prepare_routed_expert_weights_with_cache_dense_4x2(bh_2d_mesh_device, t
     routed = prepare_routed_expert_weights(submesh, state, 0, is_moe=False, cache_config=cache_config)
     assert isinstance(routed, DenseRoutedExpertWeights)
 
-    ttnn.deallocate(routed.routed_gate_proj, force=True)
-    ttnn.deallocate(routed.routed_up_proj, force=True)
-    ttnn.deallocate(routed.routed_down_proj, force=True)
+    for ct in (*routed.routed_gate_proj, *routed.routed_up_proj, *routed.routed_down_proj):
+        for t in ct.get_data_tensors():
+            ttnn.deallocate(t, force=True)
 
     routed_hit = prepare_routed_expert_weights(submesh, state, 0, is_moe=False, cache_config=cache_config)
     assert isinstance(routed_hit, DenseRoutedExpertWeights)
 
     objects_dir = cache_config.cache.local_root / "objects"
     artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
-    assert len(artifact_dirs) >= 3, f"Expected 3 stacked routed artifacts (gate/up/down), found {len(artifact_dirs)}"
+    # Dense MLP TP8 produces 1 CT × 3 projections = 3 cache artifacts.
+    assert len(artifact_dirs) >= 3, f"Expected 3 dense TP8 routed artifacts, found {len(artifact_dirs)}"
 
 
 @pytest.mark.parametrize(
