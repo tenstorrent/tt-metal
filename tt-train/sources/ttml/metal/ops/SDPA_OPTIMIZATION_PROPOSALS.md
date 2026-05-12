@@ -930,6 +930,52 @@ if constexpr (!uniform_dataformat) {
 
 ### F9. Multi-Tile K/V Chunking (PREREQUISITE)
 
+> **Status: DONE** (F9 PR, branch `vmelnykov/sdpa-fw-multi-tile-kv-chunking`) — Inner-loop
+> granularity is now `Sk_chunk_t` K/V tiles instead of 1, with `Sk_chunk_t` chosen at host
+> time by `pick_sk_chunk_t(Ht)` as the largest power-of-2 in `{1, 2, 4}` that divides `Ht`.
+> The cap of 4 comes from the `fp32_dest_acc_en=true` DST budget — the chunked softmax
+> holds `Sk_chunk_t` exp tiles live simultaneously for the sub + exp + dual-pack pass.
+>
+> Implementation summary:
+> - Reader (`sdpa_fw_reader_kernel.cpp`): one `read_tiles_by_row` per chunk for K, V, and
+>   the arbitrary mask path (single DMA + single push per chunk). For causal/balanced the
+>   K-tile count is rounded **up** to the next `Sk_chunk_t` boundary; the program factory
+>   asserts `Ht % Sk_chunk_t == 0` so the round-up never reads OOB.
+> - Writer (`sdpa_fw_writer_kernel.cpp`): generates **two** causal mask tiles once at
+>   kernel start — `tile[0]` is the lower-triangular pattern (applied on the diagonal tile
+>   inside the diagonal chunk), `tile[1]` is all-zeros which the mask pipeline transforms
+>   to all `-1e9` (applied on K tiles **strictly past** the diagonal inside the diagonal
+>   chunk when `Sk_chunk_t > 1`). For `Sk_chunk_t == 1` the second tile is generated but
+>   unused (~2 KB extra L1, one-time fill).
+> - Compute (`sdpa_fw_compute_kernel.cpp`): `process_single_row` now iterates K **chunks**.
+>   Within a chunk the QK matmul still issues `Sk_chunk_t` separate `tile_regs_acquire/commit`
+>   passes (one per score tile) because `apply_mask_on_reg` clobbers the FPU matmul state
+>   via its SFPU inits; `mm_init_short` is re-issued at the top of each `n` iteration.
+> - Softmax helpers (`sdpa_compute_utils.hpp`) parametrized on `Sk_chunk_t`:
+>   `update_cur_row_max_value` accumulates the max over `Sk_chunk_t` tiles in one DST reg;
+>   `apply_exp_inplace_and_find_exp_sum` does the full chunk's sub/exp in a single DST
+>   cycle and packer-L1-accumulates the partial chunk sum into `cb_cur_exp_sum[0]` (this
+>   subsumes the bulk of F4 — see F4 below); `matmul_qk_by_v` does the K-reduction over
+>   `Sk_chunk_t` inside the matmul DST register.
+> - Online correction (`update_exp_max_diff`, `update_cur_exp_sum_inplace`,
+>   `update_cur_mm_out`) now runs **once per chunk** instead of once per K tile —
+>   `Sk_chunk_t`× fewer correction passes, which is the largest source of the win.
+>
+> **Measured perf** (TinyLlama on Shakespeare, batch 64, S=256, 1000 steps, end-to-end
+> training step time including FW + BW + optimizer):
+>
+> | Metric | Baseline (main) | F9 | Δ |
+> |---|---:|---:|---:|
+> | Mean step (last 100) | 1798.4 ms | 1634.5 ms | **−164.0 ms (9.1% faster)** |
+> | Mean step (all 1000) | 1841.5 ms | 1682.0 ms | **−159.5 ms (8.7% faster)** |
+> | Mean loss (last 100) | 2.034 | 2.003 | slightly better |
+> | Total training time | 1870.9 s | 1707.3 s | **−163.6 s (8.7% faster)** |
+>
+> Loss curve tracks identically — no precision regression observed end-to-end.
+>
+> **Test coverage**: 18/18 `*SDPAForwardTest*` pass at `Sk_chunk_t=4` (including
+> `NIGHTLY_SDPAForwardTest_Batch_12Heads_6Group` at B=16, S=1024 with arbitrary mask).
+
 | | |
 |---|---|
 | **Source** | TTNN `compute_common.hpp:1575-1990` + existing TODO at `sdpa_compute_utils.hpp:99-100` |
@@ -977,6 +1023,19 @@ single-tile processing.
 ---
 
 ### F4. Fused sub_exp + L1 Accumulation for Row Sum
+
+> **Status: PARTIALLY DONE** (in F9 PR) — The L1-accumulated partial chunk sum was folded
+> into `apply_exp_inplace_and_find_exp_sum` as part of F9. For `Sk_chunk_t > 1`, the
+> first exp tile of the chunk overwrites `cb_cur_exp_sum[0]` and tiles `1..Sk_chunk_t-1`
+> are packer-L1-accumulated onto the same slot in FP32. The per-K-tile online correction
+> (`update_cur_exp_sum_inplace`) still runs at chunk granularity to combine the chunk's
+> partial sum with the running cross-chunk sum.
+>
+> What is **still TODO** for the "full F4" picture: replacing the cross-chunk
+> `update_cur_exp_sum_inplace` (FPU mul-bcast + SFPU add) with a `matmul_reduce`-style
+> column-identity matmul + L1-acc that collapses partial sums in one shot at the end of
+> the row. This is only worth doing on top of F6 (fused correction) and F10 — the
+> chunk-internal L1-acc was the dominant win.
 
 | | |
 |---|---|
@@ -1230,8 +1289,8 @@ This is the endgame optimization — maximum pipeline utilization.
 | **F8** | K/V sharing for balanced pairs | High | Medium | LOSSLESS | — | Not started |
 | **F13** | Heavy row first (LPT) | Low | Very Low | LOSSLESS | — | **Done** (Phase A PR) |
 | **F14** | Uniform dataformat skip | Low | Very Low | LOSSLESS | — | Not started |
-| **F9** | Multi-tile K/V chunking | Very High | High | NEGLIGIBLE | — | Not started |
-| **F4** | Fused sub_exp + L1 acc sum | High | Medium | NEGLIGIBLE | F9 | Not started |
+| **F9** | Multi-tile K/V chunking | Very High | High | NEGLIGIBLE | — | **Done** (F9 PR) — 8.7–9.1% step-time speedup on TinyLlama (Shakespeare, B=64, S=256) |
+| **F4** | Fused sub_exp + L1 acc sum | High | Medium | NEGLIGIBLE | F9 | **Partially Done** (in F9 PR) — chunk-internal L1-acc landed; cross-chunk matmul_reduce-style sum still TODO |
 | **F6** | Fused correction block | Medium | Medium | BETTER | F9 | Not started |
 | **F10** | Subblock matmul | High | Medium | LOSSLESS | F9 | Not started |
 | **F11** | Software polynomial exp | Medium | Medium | LOW (deg≥2) | — | Not started |
@@ -1245,10 +1304,13 @@ Phase A (quick wins, no architecture change):
   Remaining: F14 (dataformat skip), F2 (approx exp), F7 (conditional rescaling)
 
 Phase B (major architecture change):
-  F9 (multi-tile chunking — unlocks everything below)
+  F9 (multi-tile chunking — unlocks everything below) ✓
+  Done: F9 — 8.7–9.1% step-time speedup (TinyLlama). Win comes mostly from
+  Sk_chunk_t× fewer online-correction passes + reader DMA amortization +
+  chunk-internal L1-acc partial sum (F4 partial).
 
 Phase C (leverage chunking):
-  F10 → F4 → F6 → F8
+  F10 → F4 (cross-chunk reduce) → F6 → F8
 
 Phase D (advanced):
   F11 → F12

@@ -77,15 +77,25 @@ void exp_tile_first_column(uint32_t idst) {
 // This way, after applying softmax, masked positions will effectively become zero,
 // and only the unmasked positions will retain meaningful attention weights
 void apply_mask_on_reg(
-    uint32_t register_idx, uint32_t cb_attn_mask, uint32_t minus_one_bits, uint32_t custom_inf_bits) {
-    /* The DST register buffer must be in acquired state via *acquire_dst* call.*/
+    uint32_t register_idx,
+    uint32_t cb_attn_mask,
+    uint32_t minus_one_bits,
+    uint32_t custom_inf_bits,
+    uint32_t mask_tile_idx = 0U) {
+    /* The DST register buffer must be in acquired state via *acquire_dst* call.
+     * Caller is responsible for ensuring cb_attn_mask has at least mask_tile_idx + 1 tiles fronted.
+     * For F9 (Sk_chunk_t > 1) the caller selects:
+     *   mask_tile_idx == 0 : causal-diagonal pattern  (the diagonal tile of the chunk)
+     *   mask_tile_idx == 1 : all-zeros → all-(-1e9)   (post-diagonal tiles in the diagonal chunk)
+     * For USE_ATTN_MASK the caller passes the per-chunk tile offset n in [0, Sk_chunk_t).
+     */
 
     const uint32_t mask_register = register_idx + 1U;  // mask register should be next to data register
     cb_wait_front(cb_attn_mask, onetile);
     copy_tile_init(cb_attn_mask);
     copy_tile(
         cb_attn_mask,
-        /* tile_idx */ 0,
+        /* tile_idx */ mask_tile_idx,
         /* register idx */ mask_register);
 
     // Apply the attention mask to Q @ K^T scores:
@@ -110,22 +120,32 @@ void apply_mask_on_reg(
 // TODO: replace FPU reduce_tile(MAX) + sub_tiles_bcast_cols with SFPU equivalents once LLK
 // provides SFPU row-reduce-max and sub_bcast_col. This will allow the full softmax (max, sub,
 // exp, sum, reciprocal) to stay in DST at FP32 without pack/unpack round-trips through the CB.
-template <PoolType pool_type, ReduceDim reduce_dim>
+//
+// Sk_chunk_t (F9): reduces over Sk_chunk_t consecutive attention-weight tiles in the same row,
+// accumulating the max into a single DST register. For Sk_chunk_t == 1 this collapses to a
+// single reduce_tile call (identical to the pre-F9 behavior).
+template <PoolType pool_type, ReduceDim reduce_dim, uint32_t Sk_chunk_t = 1U>
 void update_cur_row_max_value(
     uint32_t cb_attention_weights,
     uint32_t cb_identity_scaler,
     uint32_t cb_cur_max,
     uint32_t cb_prev_max,
     bool do_eltwise_max = false) {
-    cb_wait_front(cb_attention_weights, onetile);
+    cb_wait_front(cb_attention_weights, Sk_chunk_t);
 
     constexpr uint32_t reduce_dst_idx = 0;
     constexpr uint32_t prev_max_dst_idx = 1U;
     reconfig_data_format(cb_attention_weights, cb_identity_scaler);
     reduce_init<pool_type, reduce_dim>(cb_attention_weights, cb_identity_scaler, cb_cur_max);
     tile_regs_acquire();
-    reduce_tile<pool_type, reduce_dim>(
-        cb_attention_weights, cb_identity_scaler, /* tile_idx */ 0, /* tile_idx */ 0, /* dst_reg_idx */ reduce_dst_idx);
+    for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
+        reduce_tile<pool_type, reduce_dim>(
+            cb_attention_weights,
+            cb_identity_scaler,
+            /* in0 tile_idx */ n,
+            /* in1 tile_idx */ 0,
+            /* dst_reg_idx */ reduce_dst_idx);
+    }
     reduce_uninit();
 
     if (do_eltwise_max) {
@@ -147,51 +167,75 @@ void update_cur_row_max_value(
     cb_push_back(cb_cur_max, onetile);
 }
 
-/* We process data by one tile, because we read only one row of K
- * Maybe we can read two rows of K and V and then process data by subblocks*/
-template <uint32_t scaler_fp32>
+// Apply exp(scale * (score - max)) in place on Sk_chunk_t attention-weight tiles, and produce
+// the per-row partial chunk sum (sum over the Sk_chunk_t tiles) into cb_cur_exp_sum.
+//
+// For Sk_chunk_t > 1 the chunk sum is built directly in L1 via the packer's L1-accumulate path:
+// the first exp tile overwrites cb_cur_exp_sum[0], subsequent tiles add to it. This avoids an
+// extra DST cycle (and an extra row-reduce CB) just to fold the per-tile partial sums together.
+//
+// DST budget: Sk_chunk_t registers are held live across sub_tiles_bcast_cols + exp_tile +
+// (two) pack passes. With fp32_dest_acc_en=true the DST has 4 tiles, so Sk_chunk_t <= 4.
+template <uint32_t scaler_fp32, uint32_t Sk_chunk_t = 1U>
 void apply_exp_inplace_and_find_exp_sum(uint32_t cb_attention_weights, uint32_t cb_cur_max, uint32_t cb_cur_exp_sum) {
-    cb_wait_front(cb_attention_weights, onetile);
+    cb_wait_front(cb_attention_weights, Sk_chunk_t);
     cb_wait_front(cb_cur_max, onetile);
 
-    const uint32_t exp_dst_idx = 0;
     reconfig_data_format(cb_attention_weights, cb_cur_max);
     sub_bcast_cols_init_short(cb_attention_weights, cb_cur_max);
-    tile_regs_acquire();
-    sub_tiles_bcast_cols(
-        cb_attention_weights, cb_cur_max, /* tile_idx */ 0, /* tile_idx */ 0, /* dst_reg_idx */ exp_dst_idx);
 
     // Fused scale+exp: compute exp(scale * (score - max)) in a single SFPU pass.
     constexpr uint16_t scaler_bf16 = static_cast<uint16_t>(scaler_fp32 >> 16);
     exp_tile_init</* approx */ false, scaler_fp32>();
-    exp_tile</* approx */ false, /* scale_en */ true>(exp_dst_idx, (int)VectorMode::RC, scaler_bf16);
+
+    tile_regs_acquire();
+    for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
+        sub_tiles_bcast_cols(
+            cb_attention_weights, cb_cur_max, /* in0 tile_idx */ n, /* in1 tile_idx */ 0, /* dst_reg_idx */ n);
+        exp_tile</* approx */ false, /* scale_en */ true>(n, (int)VectorMode::RC, scaler_bf16);
+    }
     tile_regs_commit();
 
-    tile_regs_wait();
-    // update current qk matmul result with exp values
-    cb_pop_front(cb_attention_weights, onetile);
-    cb_reserve_back(cb_attention_weights, onetile);
-    pack_reconfig_data_format(cb_attention_weights);
-    pack_tile(exp_dst_idx, cb_attention_weights);
-
-    /* update current exp sum with exp values
-     * at the moment we pack one tile here
-     * but we can use L1 accumlator to pack more tiles
-     * in case we will be able to read more then one row of K and V
-     */
+    // In-place overwrite of cb_attention_weights. The CB is sized exactly Sk_chunk_t (no
+    // double-buffering), so pop+reserve aliases to the same physical L1 slots.
+    cb_pop_front(cb_attention_weights, Sk_chunk_t);
+    cb_reserve_back(cb_attention_weights, Sk_chunk_t);
     cb_reserve_back(cb_cur_exp_sum, onetile);
-    pack_reconfig_data_format(cb_cur_exp_sum);
-    pack_tile(exp_dst_idx, cb_cur_exp_sum);
-    tile_regs_release();
 
-    cb_push_back(cb_attention_weights, onetile);
+    tile_regs_wait();
+    // Write the Sk_chunk_t exp tiles back to cb_attention_weights at offsets 0..Sk_chunk_t-1.
+    pack_reconfig_data_format(cb_attention_weights);
+    pack_reconfig_l1_acc(false);
+    for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
+        pack_tile(n, cb_attention_weights);
+    }
+    cb_push_back(cb_attention_weights, Sk_chunk_t);
+
+    // Build the chunk's partial sum directly in cb_cur_exp_sum[0]:
+    //   - first exp tile: overwrite slot 0 (L1-acc off);
+    //   - subsequent tiles: L1-accumulate onto slot 0.
+    pack_reconfig_data_format(cb_cur_exp_sum);
+    pack_tile</* out_of_order */ true>(/* dst */ 0, cb_cur_exp_sum, /* offset */ 0);
+    if constexpr (Sk_chunk_t > 1U) {
+        pack_reconfig_l1_acc(true);
+        for (uint32_t n = 1U; n < Sk_chunk_t; ++n) {
+            pack_tile</* out_of_order */ true>(/* dst */ n, cb_cur_exp_sum, /* offset */ 0);
+        }
+        pack_reconfig_l1_acc(false);
+    }
     cb_push_back(cb_cur_exp_sum, onetile);
+    tile_regs_release();
 }
 
+// Computes (attention_weights @ V) where attention_weights is a row of Sk_chunk_t score tiles
+// and V is the corresponding Sk_chunk_t × Wt block. The K-dimension reduction (over Sk_chunk_t)
+// is accumulated inside the matmul DST register across an inner loop. For Sk_chunk_t == 1 the
+// inner loop runs once and indexing collapses to the legacy single-tile-row form.
+template <uint32_t Sk_chunk_t = 1U>
 void matmul_qk_by_v(
     uint32_t Wt, uint32_t block_size, uint32_t cb_attention_weights, uint32_t cb_value, uint32_t cb_cur_mm_out) {
-    cb_wait_front(cb_attention_weights, onetile);
-    cb_wait_front(cb_value, Wt);
+    cb_wait_front(cb_attention_weights, Sk_chunk_t);
+    cb_wait_front(cb_value, Sk_chunk_t * Wt);
     cb_reserve_back(cb_cur_mm_out, Wt);
 
     // matmul maps: in0(attention_weights)→SrcB, in1(value)→SrcA
@@ -200,13 +244,17 @@ void matmul_qk_by_v(
     pack_reconfig_data_format(cb_cur_mm_out);
     for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx += block_size) {
         tile_regs_acquire();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            matmul_tiles(
-                cb_attention_weights,
-                cb_value,
-                /* tile_idx */ 0,
-                /* tile_idx */ tile_idx + block_idx,
-                block_idx);
+        // Reduce over the K-chunk: each (k_in_chunk) contributes attn_weights[k] @ V[k, :]
+        // to the same DST registers. For Sk_chunk_t == 1 this is the original 1-tile matmul.
+        for (uint32_t k_in_chunk = 0; k_in_chunk < Sk_chunk_t; ++k_in_chunk) {
+            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+                matmul_tiles(
+                    cb_attention_weights,
+                    cb_value,
+                    /* in0 (A) tile_idx */ k_in_chunk,
+                    /* in1 (B) tile_idx */ k_in_chunk * Wt + tile_idx + block_idx,
+                    /* dst */ block_idx);
+            }
         }
         tile_regs_commit();
         tile_regs_wait();
