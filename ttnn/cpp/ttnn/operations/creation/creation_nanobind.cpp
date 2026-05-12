@@ -502,6 +502,8 @@ Tensor from_buffer_impl(
     MeshDevice* device,
     const std::optional<Layout>& layout,
     const std::optional<MemoryConfig>& memory_config) {
+    // bind_function releases the GIL across the C++ body; nb::cast requires it, so re-acquire GIL.
+    nb::gil_scoped_acquire acquire;
     switch (dtype) {
         case DataType::UINT8: {
             auto cpp_buffer = nb::cast<std::vector<uint8_t>>(buffer);

@@ -16,8 +16,10 @@ from helpers.llk_params import (
     DestSync,
     EltwiseBinaryReuseDestType,
     EnforceFP32Accumulation,
+    L1Accumulation,
     MathFidelity,
     MathOperation,
+    PackerReluType,
     ReduceDimension,
     ReducePool,
     Transpose,
@@ -434,6 +436,9 @@ class OperationSchema(BaseModel):
     packer: PackerEnum = PackerEnum.Packer
     dest_sync: Optional[DestSync] = None
     block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
+    pack_relu: PackerReluType = PackerReluType.NoRelu
+    relu_threshold: float = 0.0
+    pack_l1_accumulation: L1Accumulation = L1Accumulation.No
 
     @field_validator("packer", mode="before")
     @classmethod
@@ -466,11 +471,23 @@ class OperationSchema(BaseModel):
                 f"Block size {self.block_size} exceeds output dimensions {output.dimensions}"
             )
 
+        if (
+            self.pack_l1_accumulation == L1Accumulation.Yes
+            and not output.data_format.supports_l1_accumulation()
+        ):
+            raise ValueError(f"{output.data_format} does not support L1 accumulation")
+
         kwargs = {}
         if self.dest_sync:
             kwargs["dest_sync"] = self.dest_sync
         if self.block_size:
             kwargs["block_size"] = self.block_size
+        if self.pack_relu:
+            kwargs["pack_relu"] = self.pack_relu
+        if self.relu_threshold:
+            kwargs["relu_threshold"] = self.relu_threshold
+        if self.pack_l1_accumulation:
+            kwargs["pack_l1_accumulation"] = self.pack_l1_accumulation
 
         return FusedOperation(
             math=ComputePipeline(math_ops, self.packer.to_runtime()),

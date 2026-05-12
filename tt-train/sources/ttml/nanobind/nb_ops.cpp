@@ -13,10 +13,12 @@
 
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
+#include "metal/ops/moe_group/moe_group.hpp"
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/distributed/comm_ops.hpp"
+#include "ops/distributed/losses.hpp"
 #include "ops/dropout_op.hpp"
 #include "ops/embedding_op.hpp"
 #include "ops/layernorm_op.hpp"
@@ -63,6 +65,7 @@ void py_module_types(nb::module_& m) {
     m.def_submodule("sample");
     m.def_submodule("swiglu");
     m.def_submodule("unary");
+    m.def_submodule("metal");
 }
 
 void py_module(nb::module_& m) {
@@ -144,6 +147,12 @@ void py_module(nb::module_& m) {
             nb::arg("grad_output_type") = ttml::ops::distributed::GradOutputType::SHARDED);
         py_distributed.def(
             "broadcast", &ttml::ops::distributed::broadcast, nb::arg("tensor"), nb::arg("cluster_axis") = nb::none());
+        py_distributed.def(
+            "vocab_parallel_cross_entropy_loss",
+            &ttml::ops::distributed::vocab_parallel_cross_entropy_loss,
+            nb::arg("logits"),
+            nb::arg("targets"),
+            nb::arg("cluster_axis") = nb::none());
     }
 
     {
@@ -463,6 +472,37 @@ void py_module(nb::module_& m) {
         py_unary.def("broadcast_batch", &ttml::ops::broadcast_batch, nb::arg("tensor"), nb::arg("new_batch_dim"));
         py_unary.def("log_softmax", &ttml::ops::log_softmax, nb::arg("tensor"), nb::arg("dim"));
         py_unary.def("log_softmax_moreh", &ttml::ops::log_softmax_moreh, nb::arg("tensor"), nb::arg("dim"));
+    }
+
+    {
+        auto py_metal = m.def_submodule("metal");
+        py_metal.def(
+            "moe_group",
+            [](const ttnn::Tensor& dispatched,
+               const ttnn::Tensor& metadata,
+               const ttnn::Tensor& scores,
+               const ttnn::Tensor& local_expert_ids,
+               uint32_t e_local,
+               uint32_t k) {
+                auto [grouped, grouped_scores, k_slot, counts, offsets, plan] =
+                    ttml::metal::moe_group(dispatched, metadata, scores, local_expert_ids, e_local, k);
+                return nb::make_tuple(grouped, grouped_scores, k_slot, counts, offsets, plan);
+            },
+            nb::arg("dispatched"),
+            nb::arg("metadata"),
+            nb::arg("scores"),
+            nb::arg("local_expert_ids"),
+            nb::arg("e_local"),
+            nb::arg("k"),
+            "Group dispatched tokens by local expert.\n"
+            "Returns (grouped         [1,1,T_cap,H]   TILE bf16,\n"
+            "         grouped_scores  [1,1,1,T_cap]   ROW_MAJOR bf16,\n"
+            "         k_slot          [1,1,1,T_cap]   ROW_MAJOR uint16,\n"
+            "         counts          [1,1,1,E_local] uint32,\n"
+            "         offsets         [1,1,1,E_local+1] uint32,\n"
+            "         plan            [1,1,1,T_cap]   uint32).\n"
+            "grouped_scores[i] = scores[plan[i], k_slot[i]]; both are 0/SENTINEL\n"
+            "in pad slots.");
     }
 }
 

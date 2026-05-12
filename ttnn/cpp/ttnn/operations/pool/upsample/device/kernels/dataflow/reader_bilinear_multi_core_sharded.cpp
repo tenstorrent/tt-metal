@@ -356,7 +356,6 @@ void kernel_main() {
 
         // Process each channel block
         uint32_t block_offset = 0;
-#pragma unroll
         for (uint32_t i = 0; i < blocks; i++) {
             tilize_reduce_cb.reserve_back(4);
 
