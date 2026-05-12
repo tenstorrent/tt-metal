@@ -14,6 +14,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
+from models.demos.deepseek_v3_b1.demo.mesh_device_context import _worker_l1_size_for_rank
 from models.demos.deepseek_v3_b1.demo.pipeline import create_pipeline_configuration_from_num_procs
 from models.demos.deepseek_v3_b1.demo.weight_provider import (
     CacheWeightProvider,
@@ -50,6 +51,8 @@ class ModelPipeline:
         top_k: int = 1,
         top_p: float = 1.0,
         temperature: float = 0.6,
+        enable_sram_hot_experts: bool = False,
+        sram_hot_experts_ceiling: int = 64,
     ):
         logger.info(
             "Initializing DeepSeek V3 B1 pod pipeline (weights={}, lm_head_fp32={}, lm_head_persistent_mode={})",
@@ -77,7 +80,35 @@ class ModelPipeline:
                 raise ValueError("weights_mode='real' requires cache_path")
             if model_path is None:
                 raise ValueError("weights_mode='real' requires model_path")
-            provider: WeightProvider = CacheWeightProvider(cache_path, model_path)
+            if enable_sram_hot_experts:
+                from models.demos.deepseek_v3_b1.compressed_tensor.assigner import CompressedTensorAssigner
+                from models.demos.deepseek_v3_b1.weights.transforms.sram_experts import (
+                    SramExpertCoreGrids,
+                    _load_routing_frequencies,
+                    build_sram_hot_expert_config,
+                )
+
+                # Layers 3..60 are routed-expert MoE layers; layer 61 (MTP) is intentionally
+                # skipped (no calibration data) and runs DRAM-only.
+                moe_layer_indices = list(range(3, 61))
+                freqs = _load_routing_frequencies()
+                ranked = build_sram_hot_expert_config(moe_layer_indices, freqs)
+                sram_hot_experts = {k: v[:sram_hot_experts_ceiling] for k, v in ranked.items()}
+                logger.info(
+                    "SRAM hot experts enabled (ceiling={}) on layers {}",
+                    sram_hot_experts_ceiling,
+                    sorted(sram_hot_experts.keys()),
+                )
+                provider: WeightProvider = CacheWeightProvider(
+                    cache_path,
+                    model_path,
+                    sram_hot_experts=sram_hot_experts,
+                    sram_core_grids=SramExpertCoreGrids.shared_expert_mirror(),
+                    sram_assigner=CompressedTensorAssigner(formats=["bfp4"]),
+                    worker_l1_size=_worker_l1_size_for_rank(num_procs),
+                )
+            else:
+                provider = CacheWeightProvider(cache_path, model_path)
         elif weights_mode == "state_dict":
             if model_path is None:
                 raise ValueError("weights_mode='state_dict' requires model_path")
