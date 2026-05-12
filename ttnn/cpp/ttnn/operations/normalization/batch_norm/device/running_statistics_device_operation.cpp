@@ -116,7 +116,8 @@ ttnn::operations::normalization::RunningStatistics::tensor_return_value_t runnin
         momentum,
         memory_config.value_or(batch_mean.memory_config()),
         ttnn::operations::normalization::batch_norm::utils::resolve_compute_kernel_config(compute_kernel_config, batch_mean),
-        batch_mean.dtype()};
+        batch_mean.dtype(),
+        std::nullopt};
     OperationType::tensor_args_t tensor_args{batch_mean, batch_var, std::move(running_mean), std::move(running_var)};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

@@ -48,11 +48,11 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     new_output_shape.fill(1);
 
     auto input_dim_offset = 5 - input_shape.rank();
-    for (auto index = 0; index < input_shape.rank(); index++) {
+    for (size_t index = 0; index < input_shape.rank(); index++) {
         new_input_shape[index + input_dim_offset] = input_shape[index];
     }
     auto output_dim_offset = 5 - output_shape.rank();
-    for (auto index = 0; index < output_shape.rank(); index++) {
+    for (size_t index = 0; index < output_shape.rank(); index++) {
         new_output_shape[index + output_dim_offset] = output_shape[index];
     }
     ttnn::Shape input_5d_shape(new_input_shape);
@@ -64,7 +64,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     Tensor input_5d = input;
     input_5d = ttnn::experimental::view(input_5d, input_5d_shape);
 
-    IndexInfo index_info[5] = {{false}};
+    IndexInfo index_info[5] = {};
 
     for (uint32_t i = 0; i < index_tensors.size(); i++) {
         auto dim = index_dims[i] + input_dim_offset;
@@ -246,7 +246,7 @@ void MorehGetItemOperation::MorehGetItemRmFactory::override_runtime_arguments(
     auto* src_buffer = tensor_args.input.buffer();
     auto* dst_buffer = tensor_return_value.buffer();
     auto index_tensors = tensor_args.index_tensors;
-    IndexInfo index_info[5] = {{false}};
+    IndexInfo index_info[5] = {};
 
     for (uint32_t i = 0; i < index_dims.size(); i++) {
         auto dim = index_dims[i] + input_dim_offset;

@@ -176,7 +176,8 @@ ttnn::operations::normalization::BatchNormOperation::tensor_return_value_t batch
         eps,
         memory_config.value_or(input.memory_config()),
         ttnn::operations::normalization::batch_norm::utils::resolve_compute_kernel_config(compute_kernel_config, input),
-        input.dtype()};
+        input.dtype(),
+        std::nullopt};
     OperationType::tensor_args_t tensor_args{input, batch_mean, batch_var, std::move(weight), std::move(bias), std::move(output)};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

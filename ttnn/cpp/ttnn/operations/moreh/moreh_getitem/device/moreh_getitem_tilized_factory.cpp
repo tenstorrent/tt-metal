@@ -57,7 +57,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
     new_input_shape.fill(1);
     new_input_padded_shape.fill(1);
     auto input_dim_offset = 5 - input_shape.rank();
-    for (auto index = 0; index < input_shape.rank(); index++) {
+    for (size_t index = 0; index < input_shape.rank(); index++) {
         new_input_shape[index + input_dim_offset] = input_shape_without_padding[index];
         new_input_padded_shape[index + input_dim_offset] = input_shape[index];
     }
@@ -65,7 +65,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
     new_output_shape.fill(1);
     new_output_padded_shape.fill(1);
     auto output_dim_offset = 5 - input_shape.rank();
-    for (auto index = 0; index < output_shape.rank(); index++) {
+    for (size_t index = 0; index < output_shape.rank(); index++) {
         new_output_shape[index + output_dim_offset] = output_shape_without_padding[index];
         new_output_padded_shape[index + output_dim_offset] = output_shape[index];
     }
@@ -88,7 +88,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
 
     if (is_w_index_exist) {
         // compute index info
-        IndexInfo index_info[5] = {{false}};
+        IndexInfo index_info[5] = {};
 
         for (uint32_t i = 0; i < index_tensors.size(); i++) {
             auto dim = index_dims[i] + input_dim_offset;
@@ -320,7 +320,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
 
     }  // compute index info
 
-    IndexInfo index_info[5] = {{false}};
+    IndexInfo index_info[5] = {};
 
     for (uint32_t i = 0; i < index_tensors.size(); i++) {
         auto dim = index_dims[i] + input_dim_offset;
@@ -552,7 +552,7 @@ void MorehGetItemOperation::MorehGetItemTilizedFactory::override_runtime_argumen
     auto* src_buffer = tensor_args.input.buffer();
     auto* dst_buffer = tensor_return_value.buffer();
     auto index_tensors = tensor_args.index_tensors;
-    IndexInfo index_info[5] = {{false}};
+    IndexInfo index_info[5] = {};
     for (uint32_t i = 0; i < index_dims.size(); i++) {
         auto dim = index_dims[i] + input_dim_offset;
         const auto& index_buffer = index_tensors[i];
