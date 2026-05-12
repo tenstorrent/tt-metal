@@ -227,8 +227,34 @@ if [[ "$FAIL_FAST" == true ]]; then
 fi
 PYTEST_CMD+=("$@")
 
-"${PYTEST_CMD[@]}"
+# Signal handling: if this script is killed (e.g. parent process gets SIGTERM
+# and we get reparented to init, or a watchdog kills us), forward SIGKILL to
+# pytest and its descendants. Without this, pytest is orphaned with fd 9 ->
+# /tmp/tt-device.lock and /dev/tenstorrent/* held, blocking all future runs.
+CHILD_PID=
+_signal_cleanup() {
+    local sig=$1
+    echo "" >&2
+    echo "SAFE_PYTEST: Caught SIG${sig} — killing pytest, marking device dirty" >&2
+    [[ "$SIM_MODE" == false ]] && touch "$DIRTY_FLAG" 2>/dev/null
+    if [[ -n "$CHILD_PID" ]]; then
+        pkill -KILL -P "$CHILD_PID" 2>/dev/null || true
+        kill -KILL "$CHILD_PID" 2>/dev/null || true
+    fi
+    pkill -KILL -P $$ 2>/dev/null || true
+    exit 143
+}
+trap '_signal_cleanup TERM' SIGTERM
+trap '_signal_cleanup HUP'  SIGHUP
+trap '_signal_cleanup INT'  SIGINT
+
+# Run pytest in background so `wait` can be interrupted by a signal. Bash
+# blocks signal delivery while a synchronous foreground command is running.
+"${PYTEST_CMD[@]}" &
+CHILD_PID=$!
+wait "$CHILD_PID"
 EXIT_CODE=$?
+CHILD_PID=
 
 echo "========================================" >&2
 

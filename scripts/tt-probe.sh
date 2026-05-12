@@ -226,8 +226,34 @@ fi
 echo "TT_PROBE: python3 ${PROBE_REL}" >&2
 echo "========================================" >&2
 
-python3 "$PROBE_FILE"
+# Signal handling: forward SIGKILL to python3 child + descendants if this
+# script is killed (parent SIGTERM, watchdog, etc.). Without this, python3
+# is orphaned holding fd 9 -> /tmp/tt-device.lock and /dev/tenstorrent/*,
+# blocking all future runs.
+CHILD_PID=
+_signal_cleanup() {
+    local sig=$1
+    echo "" >&2
+    echo "TT_PROBE: Caught SIG${sig} — killing probe, marking device dirty" >&2
+    [[ "$SIM_MODE" == false ]] && touch "$DIRTY_FLAG" 2>/dev/null
+    if [[ -n "$CHILD_PID" ]]; then
+        pkill -KILL -P "$CHILD_PID" 2>/dev/null || true
+        kill -KILL "$CHILD_PID" 2>/dev/null || true
+    fi
+    pkill -KILL -P $$ 2>/dev/null || true
+    exit 143
+}
+trap '_signal_cleanup TERM' SIGTERM
+trap '_signal_cleanup HUP'  SIGHUP
+trap '_signal_cleanup INT'  SIGINT
+
+# Run in background + wait so the trap can fire on signal (bash blocks
+# signal delivery during synchronous foreground commands).
+python3 "$PROBE_FILE" &
+CHILD_PID=$!
+wait "$CHILD_PID"
 EXIT_CODE=$?
+CHILD_PID=
 
 echo "========================================" >&2
 
