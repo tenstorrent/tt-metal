@@ -1,6 +1,6 @@
 version: 1
 description: Centralized perf/accuracy targets for models CI.
-# Default tolerance used by validation is 1.15 (15%)
+# Default tolerance multiplier used by validation is 1.15 (+15% upper bound)
 # Entry status semantics:
 # - active: target is enforced by validation and used for perf/accuracy checks.
 # - TODO: explicit gap placeholder; excluded from normal target resolution and treated as missing/TODO by validator.

@@ -361,10 +361,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sku", default=None, help="Override SKU for this job (recommended in CI matrix jobs)")
     # TODO: Enable strict-missing by default in CI once model targets migration is complete.
     parser.add_argument("--strict-missing", action="store_true", help="Fail when matching target is TODO or missing")
-    parser.add_argument("--high-tol-percentage", type=float, default=1.15)
+    parser.add_argument(
+        "--high-tol-multiplier",
+        type=float,
+        default=1.15,
+        help=(
+            "Upper-bound tolerance multiplier (>1.0). "
+            "Example: 1.15 allows up to +15%% above expected value."
+        ),
+    )
     args = parser.parse_args()
-    if args.high_tol_percentage <= 1.0:
-        parser.error("--high-tol-percentage must be > 1.0")
+    if args.high_tol_multiplier <= 1.0:
+        parser.error("--high-tol-multiplier must be > 1.0 (use 1.15 for +15%)")
+
     return args
 
 
@@ -475,7 +484,7 @@ def main() -> int:
                     f"model={model_name}, sku={sku}"
                 )
                 continue
-            tolerance = _metric_tolerance(metric_name, thresholds, args.high_tol_percentage)
+            tolerance = _metric_tolerance(metric_name, thresholds, args.high_tol_multiplier)
             metric_failure = _check_metric(
                 metric_name=metric_name,
                 expected_value=float(expected),

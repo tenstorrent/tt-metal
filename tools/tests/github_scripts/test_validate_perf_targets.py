@@ -9,6 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 
@@ -739,3 +740,50 @@ def test_extract_metric_value_fails_for_ambiguous_unqualified_metric_name():
         assert False, "Expected ValueError for ambiguous metric lookup"
     except ValueError as exc:
         assert "ambiguous" in str(exc)
+
+
+def test_parse_args_accepts_high_tol_multiplier(monkeypatch):
+    validator = _load_validator_module()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "validate_perf_targets.py",
+            "--high-tol-multiplier",
+            "1.2",
+        ],
+    )
+    args = validator.parse_args()
+    assert args.high_tol_multiplier == 1.2
+
+
+def test_parse_args_rejects_removed_high_tol_percentage_flag(monkeypatch):
+    validator = _load_validator_module()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "validate_perf_targets.py",
+            "--legacy-high-tol",
+            "1.2",
+        ],
+    )
+    with pytest.raises(SystemExit):
+        validator.parse_args()
+
+
+def test_parse_args_rejects_non_multiplier_values(monkeypatch):
+    validator = _load_validator_module()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "validate_perf_targets.py",
+            "--high-tol-multiplier",
+            "1.0",
+        ],
+    )
+    with pytest.raises(SystemExit):
+        validator.parse_args()
+
+
