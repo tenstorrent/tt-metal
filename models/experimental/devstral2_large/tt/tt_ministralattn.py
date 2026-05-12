@@ -25,21 +25,20 @@ Q scaling on device, ``position_ids`` on prefill). This module subclasses that c
 ``devstral2_large`` bring-up and keeps the **runtime class name** ``Attention`` so meta /
 ``layers.{i}.attention.*`` weight keys resolve like production Llama-family attention.
 
-On **Blackhole** with **more than one device** (non-Galaxy), :class:`~models.tt_transformers.tt.attention.Attention`
-uploads ``wqkv`` / ``wo`` via ``configuration.create_dram_sharded_mem_config`` → width-sharded DRAM.
-That ``TilizeDeviceOperation`` path can exceed static L1 circular-buffer limits (~1.5 MiB) for
-12k-class matrices. :class:`TtDevstral2LargeAttention` temporarily forces **interleaved DRAM** for
-those uploads (same mitigation as Devstral-2 large MLP weight tilize).
+On **multi-device** meshes (non-Galaxy) with ~12k hidden, width-sharded DRAM ``TilizeDeviceOperation``
+for ``wqkv`` / ``wo`` can exceed static L1 circular-buffer limits on **Blackhole** and **Wormhole T3K**.
+:class:`TtDevstral2LargeAttention` forces **interleaved DRAM** for those uploads (same mitigation as
+:class:`~models.experimental.devstral2_large.tt.tt_ministralmlp.TtDevstral2LargeMLP` weight tilize).
 
 Prefill ``wo`` (:meth:`~models.tt_transformers.tt.attention.Attention.forward_prefill` ``ttnn.linear``)
 uses ``ModelArgs.get_attn_wo_program_config``. For ``MatmulMultiCoreReuseMultiCastProgramConfig``, the
 TTNN constructor defaults **omitted** ``out_block_h`` / ``out_block_w`` to ``per_core_M`` /
 ``per_core_N`` (see ``matmul_nanobind.cpp``). For wide 12k ``wo`` that makes ``out_block_w`` ≈ 48
-tiles and overflows Blackhole L1 for circular buffers — unrelated to weight **sharding** (DRAM
-width shard is already correct; the issue is per-op **output block** sizing). This class wraps
-``get_attn_wo_program_config`` on Blackhole and supplies minimal ``out_block_*`` and
-``out_subblock_w`` for **prefill** only (conceptually similar to :class:`TtDevstral2LargeRMSNorm`
-using a tight multicore norm config instead of the fused default).
+tiles and overflows L1 for circular buffers on wide multi-device paths — unrelated to weight
+**sharding** (DRAM width shard is already correct; the issue is per-op **output block** sizing). This
+class wraps ``get_attn_wo_program_config`` and supplies minimal ``out_block_*`` and ``out_subblock_w``
+for **prefill** only when :func:`~models.experimental.devstral2_large.tt.device_dram_mitigation.devstral2_large_multi_device_dram_mitigation`
+is active (conceptually similar to :class:`TtDevstral2LargeRMSNorm` using a tight multicore norm config).
 
 Activation row count for ``program_config`` still comes from shared ``Attention.forward_prefill``.
 """
@@ -48,13 +47,15 @@ from __future__ import annotations
 
 import ttnn
 
-from models.common.utility_functions import is_blackhole
+from models.experimental.devstral2_large.tt.device_dram_mitigation import (
+    devstral2_large_multi_device_dram_mitigation,
+)
 from models.experimental.devstarl2_small.tt.tt_ministralattn import TtMinistralAttention as _TtMinistralAttentionBase
 from models.tt_transformers.tt.common import Mode
 
 
-def _bh_tighten_wo_prefill_prog_cfg(cfg):
-    """Blackhole: force minimal output block sizes for WO prefill matmul.
+def _tighten_wo_prefill_prog_cfg(cfg):
+    """Force minimal output block sizes for WO prefill matmul on wide multi-device paths.
 
     If ``out_block_h`` / ``out_block_w`` are not passed to ``MatmulMultiCoreReuseMultiCastProgramConfig``,
     TTNN sets them to ``per_core_M`` / ``per_core_N``. For ~12k-wide WO, ``out_block_w`` then matches
@@ -81,13 +82,8 @@ def _bh_tighten_wo_prefill_prog_cfg(cfg):
     )
 
 
-def _bh_multi_dram_weight_tilize(mesh_device, configuration) -> bool:
-    return (
-        is_blackhole()
-        and mesh_device is not None
-        and mesh_device.get_num_devices() > 1
-        and not getattr(configuration, "is_galaxy", False)
-    )
+def _multi_device_dram_weight_tilize(mesh_device, configuration) -> bool:
+    return configuration is not None and devstral2_large_multi_device_dram_mitigation(mesh_device, configuration)
 
 
 class TtDevstral2LargeAttention(_TtMinistralAttentionBase):
@@ -108,11 +104,7 @@ class TtDevstral2LargeAttention(_TtMinistralAttentionBase):
         mesh_device = args[0] if len(args) > 0 else kwargs.get("mesh_device")
         configuration = kwargs.get("configuration")
         orig_create_dram_sharded = None
-        patch_dram_tilize = (
-            configuration is not None
-            and mesh_device is not None
-            and _bh_multi_dram_weight_tilize(mesh_device, configuration)
-        )
+        patch_dram_tilize = _multi_device_dram_weight_tilize(mesh_device, configuration)
         if patch_dram_tilize:
             orig_create_dram_sharded = configuration.create_dram_sharded_mem_config
 
@@ -132,17 +124,17 @@ class TtDevstral2LargeAttention(_TtMinistralAttentionBase):
                 configuration.create_dram_sharded_mem_config = orig_create_dram_sharded  # type: ignore[method-assign]
 
         # Without this patch, prefill WO keeps TTNN defaults: out_block_h=per_core_M (often 1),
-        # out_block_w=per_core_N (~48) → L1 CB clash on Blackhole.
-        if is_blackhole() and getattr(self, "args", None) is not None and not getattr(self.args, "is_galaxy", False):
+        # out_block_w=per_core_N (~48) → L1 CB clash on wide multi-device (BH or WH T3K).
+        if devstral2_large_multi_device_dram_mitigation(mesh_device, getattr(self, "args", None)):
             _orig_get_attn_wo = self.args.get_attn_wo_program_config
 
-            def _get_attn_wo_bh(mode, seq_len=1, prefetcher=None):
+            def _get_attn_wo_wide_prefill(mode, seq_len=1, prefetcher=None):
                 cfg = _orig_get_attn_wo(mode, seq_len, prefetcher)
                 if mode != Mode.PREFILL:
                     return cfg
-                return _bh_tighten_wo_prefill_prog_cfg(cfg)
+                return _tighten_wo_prefill_prog_cfg(cfg)
 
-            self.args.get_attn_wo_program_config = _get_attn_wo_bh  # type: ignore[method-assign]
+            self.args.get_attn_wo_program_config = _get_attn_wo_wide_prefill  # type: ignore[method-assign]
 
 
 TtDevstral2LargeAttention.__name__ = "Attention"

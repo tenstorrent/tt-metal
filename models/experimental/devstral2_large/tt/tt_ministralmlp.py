@@ -6,10 +6,11 @@
 Tenstorrent SwiGLU FFN for Devstral-2 123B (``Ministral3MLP`` in HF).
 
 Copied from ``models.experimental.devstarl2_small.tt.tt_ministralmlp`` with Devstral-2–large
-Blackhole mitigations: on **Blackhole** with **more than one device** (non-Galaxy), weights
-and wide FFN activations use **interleaved DRAM** wherever the shared path would place them
-in width-sharded / L1 configs that exceed the static circular-buffer budget (~1.5 MiB) for
-~12k hidden FFN with BF16.
+mitigations: on **multi-device** meshes (non-Galaxy) with wide hidden dim (~12k), **Blackhole**
+and **Wormhole T3K** use **interleaved DRAM** for FFN weights and wide FFN activations where the
+shared path would otherwise hit static circular-buffer limits during tilize / wide matmuls.
+Dense 123B Devstral differs from MoE GPT-OSS (~120B): every token uses full FFN width, so the
+same L1 pressure appears on WH multi-chip as on BH multi-chip.
 """
 
 from __future__ import annotations
@@ -18,18 +19,16 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import is_blackhole
+from models.experimental.devstral2_large.tt.device_dram_mitigation import (
+    devstral2_large_multi_device_dram_mitigation,
+)
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import Mode, pad_to_size
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
 
-def _bh_multi_device_dram_path(mesh_device, args) -> bool:
-    return is_blackhole() and not args.is_galaxy and mesh_device.get_num_devices() > 1
-
-
 class TtDevstral2LargeMLP(LightweightModule):
-    """SwiGLU FFN (``w1``/``w3`` gate×up, ``w2`` down); BH multi-device uses DRAM-heavy configs."""
+    """SwiGLU FFN (``w1``/``w3`` gate×up, ``w2`` down); wide + multi-device uses DRAM-heavy configs."""
 
     def __init__(
         self,
@@ -67,7 +66,7 @@ class TtDevstral2LargeMLP(LightweightModule):
 
         w1_w3_mem_config = args.create_dram_sharded_mem_config(args.dim, args.hidden_dim // args.num_devices)
         w2_mem_config = args.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices, args.dim)
-        use_dram_weights = args.is_galaxy or _bh_multi_device_dram_path(mesh_device, args)
+        use_dram_weights = args.is_galaxy or devstral2_large_multi_device_dram_mitigation(mesh_device, args)
 
         def as_sharded_tensor(name, weight_dtype, dims):
             raw_weight = torch_weight(name[:2])
@@ -123,7 +122,7 @@ class TtDevstral2LargeMLP(LightweightModule):
             self.prefetcher.register_callback(register_weights)
 
     def _dram_intermediates(self) -> bool:
-        return _bh_multi_device_dram_path(self.mesh_device, self.args)
+        return devstral2_large_multi_device_dram_mitigation(self.mesh_device, self.args)
 
     def _ff1_3_out_mem(self, mode: Mode):
         if self._dram_intermediates():
@@ -299,11 +298,11 @@ class TtDevstral2LargeMLP(LightweightModule):
         ff2_mem = self._ff2_out_mem(mode)
 
         # ``get_mlp_ff2_prg_config`` uses a wide reuse matmul for prefill when ``seq_len <= 128``; on
-        # Blackhole multi-device that program's **static** L1 circular buffers exceed ~1.5 MiB for
-        # BF16 FFN (failure at ``ttnn.linear`` compile). The ``seq_len > 128`` branch already switches
-        # to ``minimal_matmul`` + ``MinimalMatmulConfig``; use that same path whenever we take the
-        # DRAM mitigations for BH wide FFN. This is not a host deallocation issue—buffers are
-        # fixed at kernel compile time from ``program_config``.
+        # wide FFN + multi-device (BH or WH T3K) that program's **static** L1 circular buffers can
+        # exceed ~1.5 MiB for BF16 FFN (failure at ``ttnn.linear`` compile). The ``seq_len > 128``
+        # branch already switches to ``minimal_matmul`` + ``MinimalMatmulConfig``; use that same path
+        # whenever we take the DRAM mitigations for wide FFN. This is not a host deallocation
+        # issue—buffers are fixed at kernel compile time from ``program_config``.
         use_minimal_matmul_w2 = mode != Mode.DECODE and (seq_len > 128 or self._dram_intermediates())
         if use_minimal_matmul_w2:
             grid = self.args.mlp2_grid(seq_len)
