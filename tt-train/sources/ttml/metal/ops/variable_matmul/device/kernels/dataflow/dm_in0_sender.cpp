@@ -115,8 +115,15 @@ void kernel_main() {
     const uint32_t M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks);
     const uint32_t padded_M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 1);
     const uint32_t M_blocks_per_core = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 2);
+    // Read-at-offset support. in0_row_offset_tiles is added to in0 tile addresses.
+    // parent_M_tiles_stride is the actual M extent of the source tensor in tiles — used as
+    // the stride between K-rows when transpose_a (where the source is [K, M_parent] in DRAM).
+    // For non-transpose, the stride is K_tiles and parent_M_tiles_stride is unused.
+    const uint32_t in0_row_offset_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 3);
+    const uint32_t parent_M_tiles_stride = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 4);
 
     // Storage layout: without transpose_a the input is stored as [M, K]; with it, as [K, M].
+    // shape carries the MATMUL-coord effective sizes — used for bounds checks.
     const TensorShape2D in0_shape = transpose_a ? TensorShape2D(K_tiles, M_tiles, padded_K_tiles, padded_M_tiles)
                                                 : TensorShape2D(M_tiles, K_tiles, padded_M_tiles, padded_K_tiles);
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
@@ -276,7 +283,9 @@ void kernel_main() {
                         m_tile,
                         m_tile_end,
                         k_block * K_block_tiles,
-                        (k_block + 1) * K_block_tiles);
+                        (k_block + 1) * K_block_tiles,
+                        in0_row_offset_tiles,
+                        parent_M_tiles_stride);
                 } else {
                     // Get from previous device
                     noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);

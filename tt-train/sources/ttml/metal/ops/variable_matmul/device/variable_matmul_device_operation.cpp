@@ -52,15 +52,28 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(a_logical.rank() >= 2 && w_logical.rank() >= 2, "variable_matmul expects rank >= 2 tensors");
 
     // With transpose_a, the input is stored as [K, M], so M is at [-1] and K at [-2].
-    const uint32_t M = config.transpose_a ? a_logical[-1] : a_logical[-2];
+    const uint32_t M_parent = config.transpose_a ? a_logical[-1] : a_logical[-2];
     const uint32_t K = config.transpose_a ? a_logical[-2] : a_logical[-1];
     // When transpose_b, the weight is stored as [N, K] and K matches w_logical[-1].
     const uint32_t K_w = config.transpose_b ? w_logical[-1] : w_logical[-2];
+
+    // Effective M for the matmul (after applying offset + length); falls back to the
+    // input tensor's full M when caller didn't specify a sub-range.
+    const uint32_t effective_M_tiles = operation_attributes.effective_M_tiles;
+    const uint32_t offset_tiles = operation_attributes.in0_row_offset_tiles;
+    const uint32_t M_parent_tiles = M_parent / TILE_HEIGHT;
+    const uint32_t M = (effective_M_tiles > 0) ? (effective_M_tiles * TILE_HEIGHT) : M_parent;
 
     TT_FATAL(K == K_w, "variable_matmul inner dimensions must match, got K={} and K_w={}", K, K_w);
     TT_FATAL(M > 0 && K > 0, "variable_matmul dimensions must be positive");
     TT_FATAL(
         M % TILE_HEIGHT == 0, "variable_matmul actual M ({}) must be a multiple of TILE_HEIGHT ({})", M, TILE_HEIGHT);
+    TT_FATAL(
+        offset_tiles + (M / TILE_HEIGHT) <= M_parent_tiles,
+        "variable_matmul offset {} + effective_M tiles {} exceeds input M tiles {}",
+        offset_tiles,
+        M / TILE_HEIGHT,
+        M_parent_tiles);
 
     // Tile alignment checks
     const auto& a_padded = act_tensor.padded_shape();
@@ -107,8 +120,12 @@ VariableMatmulDeviceOperation::spec_return_value_t VariableMatmulDeviceOperation
     const auto& config = operation_attributes.config;
     // With transpose_b, the weight is stored as [N, K] so N is at logical[-2].
     const uint32_t N = config.transpose_b ? in1.logical_shape()[-2] : in1.logical_shape()[-1];
-    // With transpose_a, the input is stored as [K, M] so M is at logical[-1].
-    const uint32_t M = config.transpose_a ? in0.logical_shape()[-1] : in0.logical_shape()[-2];
+    // M dimension: use effective_M_tiles when provided (offset-read mode); otherwise derive
+    // from the input tensor's full M dim ([- 1] if transpose_a, else [-2]).
+    const uint32_t M_from_input = config.transpose_a ? in0.logical_shape()[-1] : in0.logical_shape()[-2];
+    const uint32_t M = (operation_attributes.effective_M_tiles > 0)
+                           ? (operation_attributes.effective_M_tiles * tt::constants::TILE_HEIGHT)
+                           : M_from_input;
 
     const auto& memory_config = in0.memory_config();
     auto dtype = in0.dtype();
@@ -168,7 +185,9 @@ ttnn::Tensor ttml_variable_matmul(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const ttml::metal::ops::variable_matmul::device::VariableMatmulConfig& config,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    uint32_t in0_row_offset_tiles,
+    uint32_t effective_M_tiles) {
     using OperationType = ttml::metal::ops::variable_matmul::device::VariableMatmulDeviceOperation;
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(),
@@ -179,7 +198,12 @@ ttnn::Tensor ttml_variable_matmul(
         true /*packer_acc*/);
 
     return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{.config = config, .compute_kernel_config = kernel_config_val},
+        OperationType::operation_attributes_t{
+            .config = config,
+            .compute_kernel_config = kernel_config_val,
+            .in0_row_offset_tiles = in0_row_offset_tiles,
+            .effective_M_tiles = effective_M_tiles,
+        },
         OperationType::tensor_args_t{.input_tensor = input_tensor, .weight_tensor = weight_tensor});
 }
 

@@ -34,6 +34,18 @@ struct VariableMatmulConfig {
 struct VariableMatmulParams {
     VariableMatmulConfig config;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
+
+    // Read-at-offset support — lets variable_matmul read a sub-range of the input tensor
+    // without materializing a slice. The input tensor is treated as a parent buffer; only
+    // the rows [in0_row_offset_tiles, in0_row_offset_tiles + effective_M_tiles) are processed.
+    // Defaults preserve "use the whole input" behavior.
+    // - in0_row_offset_tiles: tile offset added when computing in0 tile DRAM addresses
+    // - effective_M_tiles: M tile count to actually process (0 = derive from input shape)
+    // For transpose_a, "row" means the M-axis of the matmul (= stored col axis of the input).
+    // These are RUNTIME args (excluded from program hash) so different offset/length values
+    // hit the same cached program.
+    uint32_t in0_row_offset_tiles = 0;
+    uint32_t effective_M_tiles = 0;
 };
 
 struct VariableMatmulInputs {

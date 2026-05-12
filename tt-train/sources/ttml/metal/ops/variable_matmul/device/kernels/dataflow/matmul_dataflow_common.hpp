@@ -71,14 +71,19 @@ struct TensorShape2D {
 };
 
 /**
- * Read a block of in0 from a potentially padded tensor.
- * Since this is for matmul, no need to read when M >= logical_M
- * Otherwise, if K >= logical_K, fill with zeros.
+ * Read a block of in0 from a potentially padded tensor, optionally at an M-row offset
+ * into the source tensor (the source is treated as a parent buffer; we read just the
+ * sub-range starting at `in0_row_offset_tiles`). Bounds check on matmul-M uses
+ * `effective_m_bound` (the logically valid range), independent of the storage stride.
  *
  * Iteration order is always M-outer, K-inner (CB layout = [M, K] tile-major). When
- * TransposeA is true, the physical tensor is stored as [K, M] instead of [M, K]; the
- * address formula and bounds-check map to that storage. `shape` should be constructed
- * matching storage layout: (M, K) without transpose_a, (K, M) with it.
+ * TransposeA is true, the physical tensor is stored as [K, M_parent] instead of
+ * [M_parent, K]; the address formula uses `parent_M_tiles_stride` for the K-row stride
+ * (which equals the parent tensor's M extent in tiles, regardless of effective M).
+ * For non-transpose, the row stride is K_tiles (= shape.logical_d1) — independent of M.
+ *
+ * `shape` carries the matmul-coordinate effective sizes (logical_d0=effective_M for
+ * non-transpose / logical_d0=K for transpose, logical_d1=K_tiles or effective_M).
  */
 template <
     uint32_t M_block_tiles,
@@ -104,12 +109,13 @@ void read_in0_block_sync(
     uint32_t d0_start,
     uint32_t d0_end,
     uint32_t d1_start,
-    uint32_t d1_end) {
+    uint32_t d1_end,
+    uint32_t in0_row_offset_tiles,
+    uint32_t parent_M_tiles_stride) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
     // i sweeps M (matmul-outer), j sweeps K (matmul-inner).
-    // shape carries storage-layout sizes: when TransposeA, logical_d0=K, logical_d1=M.
     const uint32_t m_bound = TransposeA ? shape.logical_d1 : shape.logical_d0;
     const uint32_t k_bound = TransposeA ? shape.logical_d0 : shape.logical_d1;
     for (uint32_t i = d0_start; i < d0_end; i++) {
@@ -121,15 +127,17 @@ void read_in0_block_sync(
 #ifdef READ_FROM_LOCAL_INPUT
                 if (local_k_start <= j && j <= local_k_end) {
                     // read from self_tensor_accessor
-                    uint32_t tile_id = i * input_tensor_Wt + (j - local_k_start);
+                    uint32_t tile_id = (i + in0_row_offset_tiles) * input_tensor_Wt + (j - local_k_start);
                     noc_async_read_tile(tile_id, in3_accessor, write_ptr);
                 } else {
 #endif
                     uint32_t tile_id;
                     if constexpr (TransposeA) {
-                        tile_id = j * shape.logical_d1 + i;  // (K, M) storage: K-row * M_tiles + M-col
+                        // [K, M_parent] storage: K-row * M_parent_tiles + (M-col + offset)
+                        tile_id = j * parent_M_tiles_stride + (i + in0_row_offset_tiles);
                     } else {
-                        tile_id = i * shape.logical_d1 + j;  // (M, K) storage: M-row * K_tiles + K-col
+                        // [M_parent, K] storage: (M-row + offset) * K_tiles + K-col
+                        tile_id = (i + in0_row_offset_tiles) * shape.logical_d1 + j;
                     }
                     noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
 #ifdef READ_FROM_LOCAL_INPUT

@@ -118,13 +118,19 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             continue;
         }
 
-        auto X_e = slice_rows(grouped_value, row_lo, row_hi, hidden_dim);
         const auto& w_gate_e = w_gate[e]->get_value();
         const auto& w_up_e = w_up[e]->get_value();
         const auto& w_down_e = w_down[e]->get_value();
 
-        auto gate_proj_e = ttml::metal::variable_matmul(X_e, w_gate_e, kVarMmConfig);
-        auto up_proj_e = ttml::metal::variable_matmul(X_e, w_up_e, kVarMmConfig);
+        // Offset-read into the grouped tensor — avoids materializing X_e = slice_rows(grouped).
+        // Tile-aligned offsets are guaranteed by the dispatch convention (counts rounded to 32).
+        const uint32_t offset_tiles = row_lo / 32U;
+        const uint32_t len_tiles = (row_hi - row_lo) / 32U;
+
+        auto gate_proj_e =
+            ttml::metal::variable_matmul(grouped_value, w_gate_e, kVarMmConfig, std::nullopt, offset_tiles, len_tiles);
+        auto up_proj_e =
+            ttml::metal::variable_matmul(grouped_value, w_up_e, kVarMmConfig, std::nullopt, offset_tiles, len_tiles);
         auto activated_e = ttnn::multiply(
             gate_proj_e,
             up_proj_e,
@@ -175,8 +181,14 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                 continue;
             }
 
-            auto X_e = slice_rows(grouped_value, row_lo, row_hi, hidden_dim);
+            // dY_e is needed both as in0 (for d_activated_e) and as in1 (for dW_down_e).
+            // variable_matmul's offset-read only covers in0, so dY_e still needs to be sliced.
             auto dY_e = slice_rows(dY, row_lo, row_hi, hidden_dim);
+            // X_e is used as in0 of dW_gate/dW_up *with transpose_a* — in that mode the
+            // sliced (token) axis is matmul-K, not matmul-M, so the offset-on-M feature does
+            // NOT help us avoid this slice. Keep the X_e slice for now; eliminating it would
+            // require adding K-axis offset support to variable_matmul.
+            auto X_e = slice_rows(grouped_value, row_lo, row_hi, hidden_dim);
             const auto& w_gate_e = w_gate[e]->get_value();
             const auto& w_up_e = w_up[e]->get_value();
             const auto& w_down_e = w_down[e]->get_value();
