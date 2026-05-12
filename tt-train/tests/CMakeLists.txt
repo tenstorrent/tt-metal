@@ -186,6 +186,7 @@ if(TARGET benchmark::benchmark)
         benchmark/gram_matmul_benchmark.cpp
         benchmark/mla_q_rope_benchmark.cpp
         benchmark/mla_qkv_assemble_benchmark.cpp
+        benchmark/transpose_matmul_benchmark.cpp
     )
 
     foreach(BENCH_SRC ${BENCHMARK_SOURCES})
