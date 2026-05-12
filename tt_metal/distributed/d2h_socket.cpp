@@ -330,6 +330,37 @@ void D2HSocket::read(void* data, uint32_t num_pages, bool notify_sender) {
     }
 }
 
+uint32_t D2HSocket::discard_pending_pages() {
+    TT_FATAL(page_size_ > 0, "Page size must be set before discarding pages.");
+    tt_driver_atomics::mfence();
+    uint32_t bytes_sent_value = bytes_sent_ptr_[0];
+    bytes_sent_ = bytes_sent_value;
+    uint32_t bytes_recv = bytes_sent_value - bytes_acked_;
+    uint32_t pages = bytes_recv / page_size_;
+    if (pages == 0) {
+        return 0;
+    }
+    // Ack everything currently visible without touching the data region; advance
+    // read_ptr_ as a real read()/pop_bytes() would so subsequent reads stay
+    // consistent (preserving the wrap-skip adjustment when page_size doesn't
+    // evenly divide fifo_size_).
+    for (uint32_t i = 0; i < pages; ++i) {
+        if (read_ptr_ + page_size_ >= fifo_curr_size_) {
+            read_ptr_ = read_ptr_ + page_size_ - fifo_curr_size_;
+            bytes_acked_ += page_size_ + fifo_size_ - fifo_curr_size_;
+        } else {
+            read_ptr_ += page_size_;
+            bytes_acked_ += page_size_;
+        }
+    }
+    if (connector_state_) {
+        connector_state_->bytes_acked = bytes_acked_;
+        connector_state_->read_ptr = read_ptr_;
+    }
+    notify_sender();
+    return pages;
+}
+
 std::vector<MeshCoreCoord> D2HSocket::get_active_cores() const { return {sender_core_}; }
 
 MeshDevice* D2HSocket::get_mesh_device() const { return mesh_device_; }

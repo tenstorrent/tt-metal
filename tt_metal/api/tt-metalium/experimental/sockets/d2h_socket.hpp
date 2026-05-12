@@ -180,6 +180,22 @@ public:
     void read(void* data, uint32_t num_pages, bool notify_sender = true);
 
     /**
+     * @brief Drop all currently-pending pages from the D2H FIFO without copying them.
+     *
+     * Reads the device-written `bytes_sent` to determine how many whole pages are
+     * available, advances `bytes_acked_` and `read_ptr_` past them (mirroring the
+     * pop semantics of read()), and notifies the device that the buffer space is
+     * free. Returns the number of pages discarded. Intended for crash-recovery
+     * scenarios where a new connector wants to start from a clean baseline rather
+     * than consume stale data left by a prior driver process.
+     *
+     * @return Number of pages discarded (0 if no whole pages were pending).
+     *
+     * @throws TT_FATAL if page_size has not been set.
+     */
+    uint32_t discard_pending_pages();
+
+    /**
      * @brief Blocks until all sent data has been acknowledged.
      *
      * Waits until `bytes_acked` equals `bytes_sent`, indicating the host has
