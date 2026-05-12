@@ -172,7 +172,9 @@ class TTSeamlessM4Tv2SpeechEncoder:
         )
         ttnn.deallocate(idx_tt)
         emb = ttnn.reshape(emb, (seq_len, seq_len, self.hidden_size // self.speech_encoder_attention_heads))
-        return ttnn.to_layout(emb, ttnn.TILE_LAYOUT)
+        if emb.get_layout() != ttnn.TILE_LAYOUT:
+            return ttnn.to_layout(emb, ttnn.TILE_LAYOUT)
+        return emb
 
     def _mh_attention(
         self,

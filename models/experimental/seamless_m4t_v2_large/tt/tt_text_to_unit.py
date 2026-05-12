@@ -103,7 +103,10 @@ def _expand_4d_padding_additive_b1(
 
     Returns additive mask ``[1, 1, seq_len, width]`` (tile bf16): 0 keep, ``_BF16_MASK_FLOOR`` masked.
     """
-    m = ttnn.to_layout(mask_2d_tile, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if mask_2d_tile.get_layout() != ttnn.TILE_LAYOUT:
+        m = ttnn.to_layout(mask_2d_tile, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    else:
+        m = mask_2d_tile
     row = ttnn.reshape(m, (1, 1, 1, width))
     expanded = ttnn.repeat_interleave(row, seq_len, dim=2)
     ones = ttnn.full(
@@ -180,10 +183,13 @@ def _discrete_duration_counts(log_dur: ttnn.Tensor, *, batch: int, seq: int) -> 
     x = ttnn.expm1(ld, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     x = ttnn.round(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     x = ttnn.clamp(x, min=1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if x.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+        x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(x)
+    else:
+        x_rm = x
     host_x = ttnn.from_device(x_rm)
     ttnn.deallocate(x_rm)
-    ttnn.deallocate(x)
     x_h = _row_major_host_f32_flat(host_x, num_floats=int(batch) * int(seq))
     return [max(1, int(round(v))) for v in x_h]
 
@@ -211,9 +217,12 @@ def _conv1d_same(
     """
     batch = int(x_tile.shape[0])
     seq = int(sequence_length)
-    x_rm = ttnn.to_layout(x_tile, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    w_dev = ttnn.to_device(weight_rm, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    bias_dev = ttnn.to_device(bias_rm, device, memory_config=ttnn.DRAM_MEMORY_CONFIG) if bias_rm is not None else None
+    if x_tile.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+        x_rm = ttnn.to_layout(x_tile, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(x_tile)
+    else:
+        x_rm = x_tile
+    # Host ROW_MAJOR conv weights: pass through to conv1d so conv2d prepares + uploads (no invalid device weights).
 
     conv_kwargs = dict(
         weights_dtype=ttnn.bfloat16,
@@ -238,11 +247,11 @@ def _conv1d_same(
     conv_config = ttnn.Conv1dConfig(**conv_kwargs)
     out_tt, _out_len = ttnn.conv1d(
         input_tensor=x_rm,
-        weight_tensor=w_dev,
+        weight_tensor=weight_rm,
         in_channels=in_channels,
         out_channels=out_channels,
         device=device,
-        bias_tensor=bias_dev,
+        bias_tensor=bias_rm,
         kernel_size=kernel_size,
         stride=1,
         padding=padding,
@@ -254,8 +263,11 @@ def _conv1d_same(
         dtype=ttnn.bfloat16,
         return_output_dim=True,
     )
-    out_tile = ttnn.to_layout(out_tt, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    return out_tile
+    if out_tt.get_layout() != ttnn.TILE_LAYOUT:
+        out_tile = ttnn.to_layout(out_tt, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(out_tt)
+        return out_tile
+    return out_tt
 
 
 class TTSeamlessM4Tv2TextToUnitEncoder:
