@@ -25,11 +25,11 @@ LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
 
 # manylinux_2_34_x86_64 is AlmaLinux 9.7
 
-# IMPORTANT: Keep this in sync with OMPI_TAG in Dockerfile.tools
-# OpenMPI configuration - must match Dockerfile.tools OMPI_TAG
+# IMPORTANT: Keep this in sync with OMPI_VERSION in Dockerfile.tools
+# OpenMPI configuration - must match Dockerfile.tools OMPI_VERSION
 # The openmpi-layer provides /install/openmpi-<tag>-ulfm/ which we copy to /opt/
-ARG OMPI_TAG=v5.0.7
-ENV OMPI_PREFIX=/opt/openmpi-${OMPI_TAG}-ulfm
+ARG OMPI_VERSION=v5.0.7
+ENV OMPI_PREFIX=/opt/openmpi-${OMPI_VERSION}-ulfm
 
 # Environment setup for OpenMPI and build tools
 ENV PATH=${OMPI_PREFIX}/bin:/usr/local/bin:$PATH

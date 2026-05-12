@@ -4,11 +4,11 @@
 # Output is installed under ${OMPI_PREFIX} (default /opt/openmpi-<tag>-ulfm).
 set -euo pipefail
 
-OMPI_TAG="${OMPI_TAG:-v5.0.7}"
+OMPI_VERSION="${OMPI_VERSION:-v5.0.7}"
 INSTALL_DIR="${INSTALL_DIR:-/opt}"
-OMPI_PREFIX="${INSTALL_DIR}/openmpi-${OMPI_TAG}-ulfm"
+OMPI_PREFIX="${INSTALL_DIR}/openmpi-${OMPI_VERSION}-ulfm"
 
-echo "Building OpenMPI ${OMPI_TAG} (from git) with ULFM to ${OMPI_PREFIX}..."
+echo "Building OpenMPI ${OMPI_VERSION} (from git) with ULFM to ${OMPI_PREFIX}..."
 
 WORKDIR="/tmp/ompi-src"
 rm -rf "${WORKDIR}"
@@ -22,8 +22,8 @@ if [ -n "${OMPI_COMMIT_SHA:-}" ]; then
     git -C "${WORKDIR}" checkout FETCH_HEAD
     git -C "${WORKDIR}" submodule update --init --recursive
 else
-    echo "WARNING: OMPI_COMMIT_SHA not set, cloning by tag ${OMPI_TAG} (less secure)"
-    git clone --branch "${OMPI_TAG}" --depth 1 --recursive https://github.com/open-mpi/ompi.git "${WORKDIR}"
+    echo "WARNING: OMPI_COMMIT_SHA not set, cloning by tag ${OMPI_VERSION} (less secure)"
+    git clone --branch "${OMPI_VERSION}" --depth 1 --recursive https://github.com/open-mpi/ompi.git "${WORKDIR}"
 fi
 
 cd "${WORKDIR}"
@@ -82,7 +82,7 @@ if ldd "${OMPI_PREFIX}/lib/libmpi.so" 2>/dev/null | grep -q munge; then
 fi
 echo "==> Verified: libmpi.so has no munge runtime dependency"
 
-echo "OpenMPI ${OMPI_TAG} installed to ${OMPI_PREFIX}"
+echo "OpenMPI ${OMPI_VERSION} installed to ${OMPI_PREFIX}"
 if [ -x "${OMPI_PREFIX}/bin/mpicc" ]; then
     "${OMPI_PREFIX}/bin/mpicc" --version || true
 fi

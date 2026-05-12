@@ -77,7 +77,7 @@ ARG PYTHON_VERSION
 # Enforce strict error handling: exit on error, unset vars, pipe failures
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
-# IMPORTANT: OMPI_TAG must match the ARG OMPI_TAG in Dockerfile.tools.
+# IMPORTANT: OMPI_VERSION must match the ARG OMPI_VERSION in Dockerfile.tools.
 # The openmpi-layer provides /install/openmpi-<tag>-ulfm/ which we copy to /opt/.
 # A mismatch causes a silent empty copy; validated after COPY below.
 
@@ -86,8 +86,8 @@ SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 # must be reachable from all nodes. See scripts/install-uv.sh post-install message.
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV OMPI_TAG=v5.0.7
-ENV OMPI_PREFIX=/opt/openmpi-${OMPI_TAG}-ulfm
+ENV OMPI_VERSION=v5.0.7
+ENV OMPI_PREFIX=/opt/openmpi-${OMPI_VERSION}-ulfm
 ENV PATH="${OMPI_PREFIX}/bin:/usr/local/bin:$PATH"
 ENV LD_LIBRARY_PATH=${OMPI_PREFIX}/lib
 ENV CPATH=${OMPI_PREFIX}/include
@@ -100,7 +100,7 @@ COPY --from=openmpi-layer /install/ /opt/
 
 RUN test -x /usr/local/bin/cmake || { echo "ERROR: cmake not found in cmake-layer" >&2; exit 1; } && \
     test -d "${OMPI_PREFIX}/bin" || \
-    { echo "ERROR: ${OMPI_PREFIX}/bin not found. OMPI_TAG (${OMPI_TAG}) likely differs from Dockerfile.tools ARG OMPI_TAG." >&2; exit 1; }
+    { echo "ERROR: ${OMPI_PREFIX}/bin not found. OMPI_VERSION (${OMPI_VERSION}) likely differs from Dockerfile.tools ARG OMPI_VERSION." >&2; exit 1; }
 
 # Auto-detect Python version from Ubuntu version if not explicitly provided
 RUN DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
