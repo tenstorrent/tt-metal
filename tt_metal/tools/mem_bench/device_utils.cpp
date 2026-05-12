@@ -95,6 +95,8 @@ std::optional<CoreRange> configure_kernels(
             .noc = tt::tt_metal::NOC_0,
             .compile_args = pcie_bench_compile_args,
             .defines = {},
+            .named_compile_args = {},
+            .compiler_include_paths = {},
         });
 
     return core_range;

@@ -29,7 +29,7 @@ namespace {
 // Returns the last valid coordinate for the provided `shape`.
 MeshCoordinate shape_back(const MeshShape& shape) {
     tt::stl::SmallVector<uint32_t> coords;
-    for (int i = 0; i < shape.dims(); i++) {
+    for (std::size_t i = 0; i < shape.dims(); i++) {
         coords.push_back(shape[i] - 1);
     }
     return MeshCoordinate(coords);
@@ -289,14 +289,14 @@ MeshShape MeshCoordinateRange::shape() const {
 bool MeshCoordinateRange::contains(const MeshCoordinate& coord) const {
     TT_FATAL(coord.dims() == dims(), "Coordinate dimensions do not match: {} != {}", coord.dims(), dims());
     if (!wraparound_shape_.has_value()) {
-        for (int i = 0; i < coord.dims(); ++i) {
+        for (std::size_t i = 0; i < coord.dims(); ++i) {
             if (coord[i] < start_[i] || coord[i] > end_[i]) {
                 return false;
             }
         }
         return true;
     }
-    for (int i = 0; i < coord.dims(); ++i) {
+    for (std::size_t i = 0; i < coord.dims(); ++i) {
         const uint32_t s = start_[i];
         const uint32_t e = end_[i];
         const uint32_t c = coord[i];

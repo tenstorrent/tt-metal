@@ -60,7 +60,7 @@ bool operator==(const HostBuffer& a, const HostBuffer& b) noexcept {
     if (a_view.size() != b_view.size()) {
         return false;
     }
-    for (auto i = 0; i < a_view.size(); i++) {
+    for (std::size_t i = 0; i < a_view.size(); i++) {
         if (a_view[i] != b_view[i]) {
             return false;
         }

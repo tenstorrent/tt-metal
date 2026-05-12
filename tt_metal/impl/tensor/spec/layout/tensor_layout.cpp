@@ -352,7 +352,7 @@ Shape2D TensorLayout::compute_logical_2d_shape(const tt::tt_metal::Shape& shape)
     }
     size_t width = shape[-1];
     size_t height = shape[-2];
-    for (int i = -3; i >= -shape.rank(); --i) {
+    for (int i = -3; i >= -static_cast<int>(shape.rank()); --i) {
         height *= shape[i];
     }
     return Shape2D{height, width};

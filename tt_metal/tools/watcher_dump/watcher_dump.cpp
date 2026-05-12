@@ -106,7 +106,7 @@ int main(int argc, char* argv[]) {
     // Default devices is all of them.
     vector<ChipId> device_ids;
     MetalEnv& env = MetalContext::instance().get_env();
-    auto num_devices = tt::tt_metal::GetNumAvailableDevices();
+    auto num_devices = static_cast<int>(tt::tt_metal::GetNumAvailableDevices());
     device_ids.reserve(num_devices);
     for (ChipId id = 0; id < num_devices; id++) {
         device_ids.push_back(id);

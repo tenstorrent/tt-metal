@@ -29,7 +29,7 @@ using namespace tt::tt_metal;
 ChipId FDKernel::GetUpstreamDeviceId(const ContextDescriptor& descriptor, ChipId device_id) {
     ChipId mmio_device_id = descriptor.cluster().get_associated_mmio_device(device_id);
     for (auto tunnel : descriptor.cluster().get_tunnels_from_mmio_device(mmio_device_id)) {
-        for (int idx = 0; idx < tunnel.size(); idx++) {
+        for (int idx = 0; idx < static_cast<int>(tunnel.size()); idx++) {
             if (tunnel[idx] == device_id) {
                 // MMIO device doesn't have an upstream, just return itself
                 return (idx == 0) ? device_id : tunnel[idx - 1];
@@ -54,10 +54,10 @@ ChipId FDKernel::GetDownstreamDeviceId(const ContextDescriptor& descriptor, Chip
     }
 
     for (auto tunnel : tunnels) {
-        for (int idx = 0; idx < tunnel.size(); idx++) {
+        for (int idx = 0; idx < static_cast<int>(tunnel.size()); idx++) {
             if (tunnel[idx] == device_id) {
                 // End of tunnel doesn't have downstream, just return itself
-                return (idx == tunnel.size() - 1) ? device_id : tunnel[idx + 1];
+                return (idx == static_cast<int>(tunnel.size()) - 1) ? device_id : tunnel[idx + 1];
             }
         }
     }
@@ -307,6 +307,9 @@ KernelHandle FDKernel::configure_kernel_variant(
                                            : tt::tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = noc_selection_.non_dispatch_noc,
                 .compile_args = compile_args,
+            .defines = {},
+            .named_compile_args = {},
+            .compiler_include_paths = {},
                 .defines = defines,
                 .opt_level = opt_level});
     } else {

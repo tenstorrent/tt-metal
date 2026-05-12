@@ -85,9 +85,9 @@ std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator
                 max_stall_history_size > desired_write_ahead,
                 "max_history_size must be greater than desired_write_ahead");
             int region_idx_diff = trace_idx - *region_sync_idx;
-            if (region_idx_diff < desired_write_ahead) {
+            if (region_idx_diff < static_cast<int>(desired_write_ahead)) {
                 // Stall badness is exponential.
-                cost += stall_badness * (1 << (desired_write_ahead - region_idx_diff));
+                cost += stall_badness * (1 << (static_cast<int>(desired_write_ahead) - region_idx_diff));
             }
         }
         if (cost < best_cost) {

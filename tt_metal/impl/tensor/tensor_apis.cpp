@@ -773,7 +773,7 @@ HostTensor pad_impl(
             size_t input_idx = 0;
             size_t output_idx = 0;
 
-            for (int i = 0; i < rank - 1; ++i) {
+            for (int i = 0; i < static_cast<int>(rank) - 1; ++i) {
                 input_idx += coords[i] * input_strides[i];
                 output_idx += (coords[i] + static_cast<size_t>(input_tensor_start[i])) * output_strides[i];
             }
@@ -789,7 +789,7 @@ HostTensor pad_impl(
 
             // Increment coordinates (from right to left), ignore last dimension
             processed_all_coords = true;
-            for (int dim = rank - 2; dim >= 0; --dim) {
+            for (int dim = static_cast<int>(rank) - 2; dim >= 0; --dim) {
                 coords[dim]++;
                 // There are still coordinates to process in dim dimension
                 if (coords[dim] < input_padded_shape[dim]) {
@@ -848,7 +848,7 @@ HostTensor unpad_impl(
 
     // Validate inputs and compute output shape
     ttsl::SmallVector<uint32_t> output_shape;
-    for (auto i = 0; i < input_shape.rank(); i++) {
+    for (size_t i = 0; i < input_shape.rank(); i++) {
         // Check if tensor start and end indices are within input tensor shape
         TT_ASSERT(output_tensor_start[i] <= input_shape[i]);
         TT_ASSERT(output_tensor_end[i] <= input_shape[i]);

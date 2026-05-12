@@ -598,7 +598,7 @@ void DispatchTopology::populate_fd_kernels(const std::vector<DispatchKernelNode>
     std::unordered_set<uint8_t> hw_cq_ids;
     node_id_to_kernel_.reserve(nodes.size());
     for (const auto& node : nodes) {
-        TT_ASSERT(node_id_to_kernel_.size() == node.id);
+        TT_ASSERT(node_id_to_kernel_.size() == static_cast<size_t>(node.id));
         node_id_to_kernel_.emplace_back(FDKernel::Generate(
             node.id,
             node.device_id,
@@ -622,20 +622,20 @@ void DispatchTopology::populate_fd_kernels(const std::vector<DispatchKernelNode>
 
     // Connect the graph with upstream/downstream kernels
     for (const auto& node : nodes) {
-        for (int idx = 0; idx < node.upstream_ids.size(); idx++) {
+        for (size_t idx = 0; idx < node.upstream_ids.size(); idx++) {
             if (node.upstream_ids[idx] >= 0) {
                 TT_ASSERT(
-                    node.upstream_ids[idx] < node_id_to_kernel_.size(),
+                    static_cast<size_t>(node.upstream_ids[idx]) < node_id_to_kernel_.size(),
                     "Upstream kernel id {} out of bounds (max = {})",
                     node.upstream_ids[idx],
                     node_id_to_kernel_.size());
                 node_id_to_kernel_.at(node.id)->AddUpstreamKernel(node_id_to_kernel_.at(node.upstream_ids[idx]));
             }
         }
-        for (int idx = 0; idx < node.downstream_ids.size(); idx++) {
+        for (size_t idx = 0; idx < node.downstream_ids.size(); idx++) {
             if (node.downstream_ids[idx] >= 0) {
                 TT_ASSERT(
-                    node.downstream_ids[idx] < node_id_to_kernel_.size(),
+                    static_cast<size_t>(node.downstream_ids[idx]) < node_id_to_kernel_.size(),
                     "Downstream kernel id {} out of bounds (max = {})",
                     node.downstream_ids[idx],
                     node_id_to_kernel_.size());
@@ -653,7 +653,7 @@ void DispatchTopology::populate_fd_kernels(const std::vector<DispatchKernelNode>
         }
 
         // Get a list of remote devices serviced by this mmio chip
-        for (int idx = 0; idx < num_hw_cqs; idx++) {
+        for (uint32_t idx = 0; idx < num_hw_cqs; idx++) {
             mmio_device_id_to_serviced_devices[mmio_device_id].push_back(mmio_device_id);
         }
         std::vector<ChipId> remote_devices;
@@ -662,7 +662,7 @@ void DispatchTopology::populate_fd_kernels(const std::vector<DispatchKernelNode>
                 ChipId remote_device_id = tunnel[tunnel_stop];
                 device_id_to_tunnel_stop[remote_device_id] = tunnel_stop;
                 if (remote_device_id != mmio_device_id) {
-                    for (int idx = 0; idx < num_hw_cqs; idx++) {
+                    for (uint32_t idx = 0; idx < num_hw_cqs; idx++) {
                         remote_devices.push_back(remote_device_id);
                     }
                 }

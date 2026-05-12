@@ -338,7 +338,7 @@ void DPrintImpl::init_print_buffers_for_core(
     ChipId device_id, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) {
     auto& cluster = env_.get_cluster();
     uint32_t num_processors = env_.get_hal().get_num_risc_processors(core_type);
-    for (int risc_index = 0; risc_index < num_processors; risc_index++) {
+    for (uint32_t risc_index = 0; risc_index < num_processors; risc_index++) {
         WriteInitMagic(cluster, device_id, virtual_core, GetDprintBufAddr(device_id, virtual_core, risc_index), false);
     }
 }
@@ -348,7 +348,7 @@ void DPrintImpl::enable_print_buffers_for_core(
     const auto& rtoptions = env_.get_rtoptions();
     auto& cluster = env_.get_cluster();
     uint32_t num_processors = env_.get_hal().get_num_risc_processors(core_type);
-    for (int risc_index = 0; risc_index < num_processors; risc_index++) {
+    for (uint32_t risc_index = 0; risc_index < num_processors; risc_index++) {
         if (RiscEnabled(rtoptions, core_type, risc_index)) {
             WriteInitMagic(cluster, device_id, virtual_core, GetDprintBufAddr(device_id, virtual_core, risc_index), true);
         }
@@ -360,7 +360,7 @@ bool DPrintImpl::core_has_outstanding_prints(
     const auto& rtoptions = env_.get_rtoptions();
     auto& cluster = env_.get_cluster();
     uint32_t num_processors = env_.get_hal().get_num_risc_processors(core_type);
-    for (int risc_id = 0; risc_id < num_processors; risc_id++) {
+    for (uint32_t risc_id = 0; risc_id < num_processors; risc_id++) {
         if (!RiscEnabled(rtoptions, core_type, risc_id)) {
             continue;
         }
@@ -672,7 +672,7 @@ void DevicePrintImpl::enable_print_buffers_for_core(
     uint64_t risc_flags_address = device_print_buffer_address + 8;  // sizeof(wpos) + sizeof(rpos)
     std::vector<uint8_t> risc_flags(
         (num_processors + 3) / 4 * 4, static_cast<uint8_t>(DevicePrintRiscCoreState::KernelNotPrinted));
-    for (int risc_index = 0; risc_index < num_processors; risc_index++) {
+    for (uint32_t risc_index = 0; risc_index < num_processors; risc_index++) {
         if (!RiscEnabled(env_.get_rtoptions(), core_type, risc_index)) {
             risc_flags[risc_index] = static_cast<uint8_t>(DevicePrintRiscCoreState::PrintingDisabled);
         }
@@ -1047,7 +1047,7 @@ bool DPrintImpl::poll_one_core(ChipId device_id, const umd::CoreDescriptor& logi
     auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
     uint32_t risc_count = env_.get_hal().get_num_risc_processors(programmable_core_type);
     bool new_data = false;
-    for (int risc_index = 0; risc_index < risc_count; risc_index++) {
+    for (uint32_t risc_index = 0; risc_index < risc_count; risc_index++) {
         if (RiscEnabled(env_.get_rtoptions(), programmable_core_type, risc_index)) {
             new_data |= peek_one_risc_non_blocking(device_id, logical_core, risc_index, new_data_this_iter || new_data);
         }

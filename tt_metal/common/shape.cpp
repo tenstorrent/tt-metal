@@ -25,7 +25,7 @@ uint64_t Shape::volume() const { return std::accumulate(cbegin(), cend(), uint64
 std::array<uint32_t, 4> Shape::to_array_4D() const {
     TT_FATAL(rank() == 4, "to_array_4D is only valid for 4D shapes! Called for {}.", *this);
     std::array<uint32_t, 4> ret_array{};
-    for (int i = 0; i < rank(); i++) {
+    for (std::size_t i = 0; i < rank(); i++) {
         ret_array[i] = this->operator[](i);
     }
     return ret_array;
@@ -50,7 +50,7 @@ uint32_t Shape::get_normalized_index(std::int64_t index) const {
     std::int64_t rank = static_cast<std::int64_t>(this->rank());
     std::uint64_t normalized_index = index >= 0 ? index : rank + index;
     TT_FATAL(
-        normalized_index >= 0 and normalized_index < rank,
+        normalized_index < rank,
         "Index is out of bounds for the rank, should be between 0 and {} however is {}",
         rank - 1,
         normalized_index);

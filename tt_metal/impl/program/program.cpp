@@ -1786,7 +1786,7 @@ const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(co
         std::unordered_set<SubDeviceId> used_sub_device_ids;
         auto find_sub_device_ids = [&](HalProgrammableCoreType core_type) {
             auto core_type_index = MetalContext::instance().hal().get_programmable_core_type_index(core_type);
-            if (core_type_index == -1) {
+            if (static_cast<int>(core_type_index) == -1) {
                 return;
             }
             const auto& program_kgs =
@@ -2069,7 +2069,7 @@ uint32_t detail::ProgramImpl::get_cb_size(IDevice* device, CoreCoord logical_cor
 // TODO: Too low level for program.cpp. Move this to HAL, once we have support.
 bool detail::ProgramImpl::runs_on_noc_unicast_only_cores() {
     return (
-        MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1 and
+        MetalContext::instance().static_cast<int>(hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)) != -1 and
         not this->get_kernel_groups(MetalContext::instance().hal().get_programmable_core_type_index(
                                         HalProgrammableCoreType::ACTIVE_ETH))
                 .empty());
@@ -2078,7 +2078,7 @@ bool detail::ProgramImpl::runs_on_noc_unicast_only_cores() {
 // TODO: Too low level for program.cpp. Move this to HAL, once we have support.
 bool detail::ProgramImpl::runs_on_noc_multicast_only_cores() {
     return (
-        MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX) != -1 and
+        MetalContext::instance().static_cast<int>(hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) != -1 and
         not this->get_kernel_groups(
                     MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX))
                 .empty());

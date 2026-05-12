@@ -72,10 +72,10 @@ std::vector<CoreCoord> reassign_dram_interface_cores_for_wormhole(
     // Track the shuffled indices
     std::vector<int> indices_g1_realloc(dram_interface_workers_g1.size());
     std::vector<int> indices_g2_realloc(dram_interface_workers_g2.size());
-    for (int new_index = 0; new_index < indices_g1.size(); ++new_index) {
+    for (std::size_t new_index = 0; new_index < indices_g1.size(); ++new_index) {
         indices_g1_realloc[indices_g1[new_index]] = new_index;
     }
-    for (int new_index = 0; new_index < indices_g2.size(); ++new_index) {
+    for (std::size_t new_index = 0; new_index < indices_g2.size(); ++new_index) {
         indices_g2_realloc[indices_g2[new_index]] = new_index;
     }
     // Extract worker y coordinates per group

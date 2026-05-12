@@ -447,7 +447,7 @@ const NOCDebugState::LockedBufferInfo* NOCDebugState::CoreDebugState::get_noc_wr
     const uint32_t write_start = event.dst_addr;
     const uint32_t write_end = event.dst_addr + event.num_bytes;
     const auto& bufs = this->locked_buffers;
-    for (auto proc_id = 0; proc_id < CoreDebugState::MAX_PROCESSORS; ++proc_id) {
+    for (size_t proc_id = 0; proc_id < CoreDebugState::MAX_PROCESSORS; ++proc_id) {
         for (const auto& buf : bufs[proc_id]) {
             const uint32_t buf_end = buf.address + buf.size;
             if (write_end > buf.address && buf_end > write_start) {

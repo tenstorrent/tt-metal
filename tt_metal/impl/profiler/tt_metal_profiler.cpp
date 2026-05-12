@@ -133,6 +133,7 @@ void syncDeviceHost(distributed::MeshDevice* mesh_device, IDevice* device, CoreC
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = {},
             .defines = kernel_defines});
 
     // Using MeshDevice APIs if the current device is managed by MeshDevice
@@ -175,7 +176,7 @@ void syncDeviceHost(distributed::MeshDevice* mesh_device, IDevice* device, CoreC
 
     log_info(tt::LogMetal, "SYNC PROGRAM FINISH IS DONE ON {}", device_id);
     if ((profiler_state_manager->smallest_host_time.at(device_id) == 0) ||
-        (profiler_state_manager->smallest_host_time.at(device_id) > hostStartTime)) {
+        (profiler_state_manager->smallest_host_time.at(device_id) > static_cast<decltype(profiler_state_manager->smallest_host_time.at(device_id))>(hostStartTime))) {
         profiler_state_manager->smallest_host_time.at(device_id) = hostStartTime;
     }
 
@@ -253,8 +254,8 @@ void syncDeviceHost(distributed::MeshDevice* mesh_device, IDevice* device, CoreC
         log_file.open(log_path, std::ios_base::app);
     }
 
-    int init = profiler_state_manager->device_host_time_pair.at(device_id).size() - sampleCount;
-    for (int i = init; i < profiler_state_manager->device_host_time_pair.at(device_id).size(); i++) {
+    int init = static_cast<int>(profiler_state_manager->device_host_time_pair.at(device_id).size()) - sampleCount;
+    for (int i = init; i < static_cast<int>(profiler_state_manager->device_host_time_pair.at(device_id).size()); i++) {
         log_file << fmt::format(
                         "{:5},{:5},{:5},{:20},{:20},{:20.2f},{:20},{:20},{:20.2f},{:20.15f},{:20.15f},{:20},1.0,0",
                         device_id,
@@ -394,13 +395,13 @@ void syncDeviceDevice(ChipId device_id_sender, ChipId device_id_receiver) {
             program_sender,
             "tt_metal/tools/profiler/sync/sync_device_kernel_sender.cpp",
             eth_sender_core,
-            tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = ct_args});
+            tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = ct_args, .defines = {}});
 
         tt_metal::CreateKernel(
             program_receiver,
             "tt_metal/tools/profiler/sync/sync_device_kernel_receiver.cpp",
             eth_receiver_core,
-            tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = ct_args});
+            tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = ct_args, .defines = {}});
 
         try {
             detail::CompileProgram(device_sender, program_sender);
@@ -515,7 +516,7 @@ void syncAllDevices(ChipId host_connected_device) {
     for (auto& sender : profiler_state_manager->device_device_time_pair) {
         for (auto& receiver : sender.second) {
             std::vector<std::pair<uint64_t, uint64_t>> timePairs;
-            for (int i = 0; i < receiver.second.size(); i += 2) {
+            for (size_t i = 0; i < receiver.second.size(); i += 2) {
                 uint64_t senderTime = (receiver.second[i].first + receiver.second[i + 1].first) / 2;
                 timePairs.push_back({senderTime, receiver.second[i].second});
             }

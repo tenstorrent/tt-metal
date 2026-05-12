@@ -267,7 +267,7 @@ AnalysisResults parse_duration(
         if (i == 0) {
             device_id = marker.chip_id;
         }
-        TT_ASSERT(device_id == marker.chip_id);
+        TT_ASSERT(static_cast<uint64_t>(device_id) == marker.chip_id);
     }
 
     for (auto& [_, result] : results_per_program_execution_uid) {
@@ -326,7 +326,7 @@ getMetaDataForPrograms(const std::vector<std::reference_wrapper<const tracy::TTD
         auto& it =
             program_execution_uid_to_meta_data[{marker.runtime_host_id, marker.trace_id, marker.trace_id_counter}];
 
-        TT_ASSERT(it.device_id == marker.chip_id);
+        TT_ASSERT(static_cast<uint64_t>(it.device_id) == marker.chip_id);
         TT_ASSERT(it.program_name == marker.op_name);
 
         if (marker

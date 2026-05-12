@@ -12,7 +12,7 @@
 
 CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_view(int dram_view, uint8_t noc) const {
     TT_ASSERT(
-        dram_view < this->dram_view_worker_cores.size(),
+        static_cast<size_t>(dram_view) < this->dram_view_worker_cores.size(),
         "dram_view={} must be within range of dram_view_worker_cores.size={}",
         dram_view,
         this->dram_view_worker_cores.size());
@@ -22,7 +22,7 @@ CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_view(int dram_
 
 CoreCoord metal_SocDescriptor::get_preferred_eth_core_for_dram_view(int dram_view, uint8_t noc) const {
     TT_ASSERT(
-        dram_view < this->dram_view_eth_cores.size(),
+        static_cast<size_t>(dram_view) < this->dram_view_eth_cores.size(),
         "dram_view={} must be within range of dram_view_eth_cores.size={}",
         dram_view,
         this->dram_view_eth_cores.size());
@@ -33,7 +33,7 @@ CoreCoord metal_SocDescriptor::get_preferred_eth_core_for_dram_view(int dram_vie
 CoreCoord metal_SocDescriptor::get_logical_core_for_dram_view(int dram_view) const {
     const uint32_t num_dram_views = this->get_num_dram_views();
     TT_FATAL(
-        dram_view < num_dram_views,
+        static_cast<uint32_t>(dram_view) < num_dram_views,
         "dram_view={} must be within range of num_dram_views={}",
         dram_view,
         num_dram_views);
@@ -42,7 +42,7 @@ CoreCoord metal_SocDescriptor::get_logical_core_for_dram_view(int dram_view) con
 
 size_t metal_SocDescriptor::get_address_offset(int dram_view) const {
     TT_ASSERT(
-        dram_view < this->dram_view_address_offsets.size(),
+        static_cast<size_t>(dram_view) < this->dram_view_address_offsets.size(),
         "dram_view={} must be within range of dram_view_address_offsets.size={}",
         dram_view,
         this->dram_view_address_offsets.size());
@@ -51,7 +51,7 @@ size_t metal_SocDescriptor::get_address_offset(int dram_view) const {
 
 size_t metal_SocDescriptor::get_channel_for_dram_view(int dram_view) const {
     TT_ASSERT(
-        dram_view < this->dram_view_channels.size(),
+        static_cast<size_t>(dram_view) < this->dram_view_channels.size(),
         "dram_view={} must be within range of dram_view_channels.size={}",
         dram_view,
         this->dram_view_channels.size());
@@ -138,7 +138,7 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
         std::vector<CoreCoord> eth_dram_cores;
         std::vector<size_t> eth_endpoints;
         for (int eth_endpoint : dram_view["eth_endpoint"].as<std::vector<int>>()) {
-            if (eth_endpoint >= get_grid_size(tt::CoreType::DRAM).y) {
+            if (static_cast<size_t>(eth_endpoint) >= get_grid_size(tt::CoreType::DRAM).y) {
                 TT_THROW(
                     "DRAM subchannel {} does not exist in the device descriptor, but is specified in "
                     "dram_view.eth_endpoint",
@@ -153,7 +153,7 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
         std::vector<CoreCoord> worker_dram_cores;
         std::vector<size_t> worker_endpoints;
         for (int worker_endpoint : dram_view["worker_endpoint"].as<std::vector<int>>()) {
-            if (worker_endpoint >= get_grid_size(tt::CoreType::DRAM).y) {
+            if (static_cast<size_t>(worker_endpoint) >= get_grid_size(tt::CoreType::DRAM).y) {
                 TT_THROW(
                     "DRAM subchannel {} does not exist in the device descriptor, but is specified in "
                     "dram_view.worker_endpoint",

@@ -233,7 +233,7 @@ void WatcherServer::Impl::register_kernel_elf_paths(int id, std::vector<std::str
         create_kernel_elf_file();
     }
     std::string combined_paths = paths[0];
-    for (int i = 1; i < paths.size(); i++) {
+    for (size_t i = 1; i < paths.size(); i++) {
         combined_paths += ":" + paths[i];
     }
     fprintf(kernel_elf_file_, "%d: %s\n", id, combined_paths.c_str());

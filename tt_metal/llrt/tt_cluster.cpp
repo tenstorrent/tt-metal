@@ -754,7 +754,7 @@ void Cluster::write_dram_vec(
     const void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const {
     const metal_SocDescriptor& desc_to_use = get_soc_desc(device_id);
     TT_FATAL(
-        dram_view < desc_to_use.get_num_dram_views(),
+        static_cast<size_t>(dram_view) < desc_to_use.get_num_dram_views(),
         "Bounds-Error -- dram_view={} is outside of num_dram_views={}",
         dram_view,
         desc_to_use.get_num_dram_views());
@@ -768,7 +768,7 @@ void Cluster::write_dram_vec(
 void Cluster::read_dram_vec(void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const {
     const metal_SocDescriptor& desc_to_use = get_soc_desc(device_id);
     TT_FATAL(
-        dram_view < desc_to_use.get_num_dram_views(),
+        static_cast<size_t>(dram_view) < desc_to_use.get_num_dram_views(),
         "Bounds-Error -- dram_view={} is outside of num_dram_views={}",
         dram_view,
         desc_to_use.get_num_dram_views());

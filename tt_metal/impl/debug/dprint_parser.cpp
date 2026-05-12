@@ -1245,7 +1245,7 @@ std::string_view DevicePrintParserImpl<PointerSize>::format_message(
                                 bool first = true;
                                 int_type remaining = int_val;
                                 for (const auto& [eval, ename] : ei->enumerators) {
-                                    if (eval != 0 && (remaining & eval) == eval) {
+                                    if (eval != 0 && (remaining & static_cast<int_type>(eval)) == static_cast<int_type>(eval)) {
                                         if (!first) {
                                             enum_str.append(" | "sv);
                                         }
@@ -1265,7 +1265,7 @@ std::string_view DevicePrintParserImpl<PointerSize>::format_message(
                                 // Non-bitfield: find exact match
                                 const std::string* found_name = nullptr;
                                 for (const auto& [eval, ename] : ei->enumerators) {
-                                    if (eval == int_val) {
+                                    if (static_cast<int_type>(eval) == int_val) {
                                         found_name = &ename;
                                         break;  // Use first match
                                     }

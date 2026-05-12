@@ -862,7 +862,7 @@ void WatcherDeviceReader::Core::DumpRingBuffer(bool to_stdout) const {
         out += "\n\tdebug_ring_buffer=\n\t[";
         int curr_idx = ring_buf_data.current_ptr();
         size_t ring_buffer_elements = ring_buf_data.data().size();
-        for (int count = 1; count <= ring_buffer_elements; count++) {
+        for (size_t count = 1; count <= ring_buffer_elements; count++) {
             out += fmt::format("0x{:08x},", ring_buf_data.data()[curr_idx]);
             if (count % 8 == 0) {
                 out += "\n\t ";

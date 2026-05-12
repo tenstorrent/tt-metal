@@ -159,14 +159,14 @@ std::optional<typename RingbufferCacheManager::CacheOffset> RingbufferCacheManag
     int free_space_to_end = cache_size_blocks_ - next_block_offset;
     bool cache_emptied = false;
     if (next_block_offset > oldest_block_offset) {
-        if (free_space_to_end < required_space) [[unlikely]] {
+        if (free_space_to_end < static_cast<int>(required_space)) [[unlikely]] {
             cache_emptied = invalidate_sufficient_blocks(required_space);  // free up space from beginning
             cache_offset = 0;
         } else {
             cache_offset = next_block_offset;  // cache has space
         }
     } else {
-        if (free_space_to_end >= required_space) {
+        if (free_space_to_end >= static_cast<int>(required_space)) {
             cache_emptied = invalidate_sufficient_blocks(required_space, next_block_offset);
             cache_offset = next_block_offset;
         } else [[unlikely]] {

@@ -53,7 +53,7 @@ void DumpCoreNocData(
     CoreCoord virtual_core = env.get_cluster().get_virtual_coordinate_from_logical_coordinates(
         device_id, logical_core.coord, logical_core.type);
     uint32_t num_processors = env.get_hal().get_num_risc_processors(llrt::get_core_type(device_id, virtual_core));
-    for (int risc_id = 0; risc_id < num_processors; risc_id++) {
+    for (uint32_t risc_id = 0; risc_id < num_processors; risc_id++) {
         // Read out the DPRINT buffer, we stored our data in the "data field"
         uint64_t addr = GetDprintBufAddr(device_id, virtual_core, risc_id);
         auto from_dev = env.get_cluster().read_core(device_id, virtual_core, addr, DPRINT_BUFFER_SIZE);
@@ -61,7 +61,7 @@ void DumpCoreNocData(
         uint32_t* data = reinterpret_cast<uint32_t*>(l->data);
 
         // Append the data for this core to existing data
-        for (int idx = 0; idx < NOC_DATA_SIZE; idx++) {
+        for (size_t idx = 0; idx < NOC_DATA_SIZE; idx++) {
             noc_data[idx] += data[idx];
         }
     }
@@ -128,7 +128,7 @@ void ClearNocData(MetalEnvImpl& env, ChipId device_id) {
         CoreCoord virtual_core =
             cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core.coord, logical_core.type);
         uint32_t num_processors = env.get_hal().get_num_risc_processors(llrt::get_core_type(device_id, virtual_core));
-        for (int risc_id = 0; risc_id < num_processors; risc_id++) {
+        for (uint32_t risc_id = 0; risc_id < num_processors; risc_id++) {
             uint64_t addr = GetDprintBufAddr(device_id, virtual_core, risc_id);
             std::vector<uint32_t> initbuf = std::vector<uint32_t>(DPRINT_BUFFER_SIZE / sizeof(uint32_t), 0);
             cluster.write_core(device_id, virtual_core, initbuf, addr);

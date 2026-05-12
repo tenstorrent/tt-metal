@@ -219,7 +219,7 @@ protected:
         bool force_watcher_no_inline,
         tt::tt_metal::KernelBuildOptLevel opt_level = tt::tt_metal::KernelBuildOptLevel::Os);
     int GetPort(const FDKernel* other, const std::vector<FDKernel*>& kernels) const {
-        for (int idx = 0; idx < kernels.size(); idx++) {
+        for (int idx = 0; idx < static_cast<int>(kernels.size()); idx++) {
             if (kernels[idx] == other) {
                 return idx;
             }
