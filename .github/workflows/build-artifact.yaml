@@ -358,15 +358,13 @@ jobs:
       VERSION: ${{ needs.parse-platform.outputs.version }}
       TOOLCHAIN: ${{ inputs.toolchain || needs.parse-platform.outputs.toolchain }}
     container:
-      # Guard against double-prefixing: callers fall into two camps — those that pre-resolve
-      # via resolve-docker-pull-refs (already harbor-prefixed) and those that pass a raw GHCR
-      # tag. Once all callers are consistent this sentinel check can be removed.
+      # Callers that pre-resolve via resolve-docker-pull-refs pass already-prefixed
+      # tags with harbor-prefix=''; callers with raw GHCR tags pass harbor-prefix
+      # from check-harbor. Either way format(prefix, tag) produces the right ref.
       image: >-
         ${{
           (inputs.ci-build-docker-image != '' &&
-            (startsWith(inputs.ci-build-docker-image, 'harbor.ci.tenstorrent.net/') &&
-              inputs.ci-build-docker-image ||
-              format('{0}{1}', inputs.harbor-prefix, inputs.ci-build-docker-image))) ||
+            format('{0}{1}', inputs.harbor-prefix, inputs.ci-build-docker-image)) ||
           format('{0}{1}', inputs.harbor-prefix, needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!')
         }}
       env:
@@ -634,9 +632,7 @@ jobs:
       docker-image: >-
         ${{
           (inputs.manylinux-docker-image != '' &&
-            (startsWith(inputs.manylinux-docker-image, 'harbor.ci.tenstorrent.net/') &&
-              inputs.manylinux-docker-image ||
-              format('{0}{1}', inputs.harbor-prefix, inputs.manylinux-docker-image))) ||
+            format('{0}{1}', inputs.harbor-prefix, inputs.manylinux-docker-image)) ||
           format('{0}{1}', inputs.harbor-prefix, needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!')
         }}
       ref: ${{ inputs.ref || '' }}
