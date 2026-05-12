@@ -203,6 +203,13 @@ def pytest_addoption(parser):
     )
 
     parser.addoption(
+        "--strict-golden",
+        action="store_true",
+        default=False,
+        help="Use strict tolerances for fused master golden checks instead of relaxed scaled tolerances",
+    )
+
+    parser.addoption(
         "--stimuli-only",
         action="store",
         nargs="?",
@@ -246,6 +253,8 @@ def pytest_configure(config):
         config.getoption("--no-debug-symbols", default=False),
         config.getoption("--speed-of-light", default=False),
     )
+
+    TestConfig.STRICT_GOLDEN = config.getoption("--strict-golden", default=False)
 
     TestConfig.setup_mode(
         # Pass worker id here, so TestConfig can calculate Tensix tile it will run on

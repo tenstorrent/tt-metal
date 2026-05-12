@@ -176,6 +176,7 @@ class TestConfig:
     SPEED_OF_LIGHT: ClassVar[bool] = (
         False  # Should everything be converted to compile-time arguments?
     )
+    STRICT_GOLDEN: ClassVar[bool] = False
 
     WORKER_ID: ClassVar[str] = "master"
     TENSIX_LOCATION: ClassVar[str] = "0,0"

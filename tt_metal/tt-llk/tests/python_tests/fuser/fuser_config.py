@@ -33,6 +33,7 @@ class GlobalConfig:
     perf_run_type: PerfRunType = None
     loop_factor: int = 16
     sentinel: FuserSentinel = field(default_factory=FuserSentinel)
+    strict_golden: bool = False
 
 
 class FuserConfig(TestConfig):
@@ -54,6 +55,8 @@ class FuserConfig(TestConfig):
 
         if self.global_config.architecture is None:
             self.global_config.architecture = self.CHIP_ARCH
+
+        self.global_config.strict_golden = TestConfig.STRICT_GOLDEN
 
         for operation in self.pipeline:
             if is_format_combination_outlier(
