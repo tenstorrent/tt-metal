@@ -668,8 +668,8 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     // (hostname when unique, hostname_rank when not), matching my_host_name() for lookups.
     bool all_hostnames_unique = resolve_hostname_uniqueness(distributed_context);
 
-    static constexpr bool dispatch_local_discovery = 0;
-    static constexpr bool dispatch_live_discovery  = 1;
+    static constexpr bool dispatch_local_discovery = false;
+    static constexpr bool dispatch_live_discovery  = true;
 
     // a bit pedantic but makes the selection logic of running `run_local_discovery_live` explicit
     //
