@@ -437,30 +437,16 @@ class TTNNDotsVisionMLP(TTNNModule):
                 return None
             return preprocess_linear_bias(b, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
 
-        if self._fc1_weight is not None and self._fc3_weight is not None:
-            fused_w = torch.cat([self._fc1_weight, self._fc3_weight], dim=0)
-            self._intermediate_size = self._fc1_weight.shape[0]
-            self.tt_fused_gate_up_weight = preprocess_linear_weight(
-                fused_w, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT
-            )
-            if self._fc1_bias is not None or self._fc3_bias is not None:
-                I = self._intermediate_size
-                g = self._fc1_bias if self._fc1_bias is not None else torch.zeros(I, dtype=fused_w.dtype)
-                u = self._fc3_bias if self._fc3_bias is not None else torch.zeros(I, dtype=fused_w.dtype)
-                fused_b = torch.cat([g, u], dim=0)
-                self.tt_fused_gate_up_bias = preprocess_linear_bias(
-                    fused_b, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
-                )
-            else:
-                self.tt_fused_gate_up_bias = None
-        else:
-            self._intermediate_size = None
-            self.tt_fused_gate_up_weight = None
-            self.tt_fused_gate_up_bias = None
-            self.tt_fc1_weight = pw(self._fc1_weight)
-            self.tt_fc1_bias = pb(self._fc1_bias)
-            self.tt_fc3_weight = pw(self._fc3_weight)
-            self.tt_fc3_bias = pb(self._fc3_bias)
+        # Unfused gate/up projections (two linears). Vision MLP uses DRAM linears without
+        # decoder-style CCL, so fusion only saved one matmul launch while forcing two
+        # SliceDeviceOperation per block on the fused [gate|up] output; unfused removes those slices.
+        self._intermediate_size = None
+        self.tt_fused_gate_up_weight = None
+        self.tt_fused_gate_up_bias = None
+        self.tt_fc1_weight = pw(self._fc1_weight)
+        self.tt_fc1_bias = pb(self._fc1_bias)
+        self.tt_fc3_weight = pw(self._fc3_weight)
+        self.tt_fc3_bias = pb(self._fc3_bias)
 
         self.tt_fc2_weight = pw(self._fc2_weight)
         self.tt_fc2_bias = pb(self._fc2_bias)
@@ -490,51 +476,28 @@ class TTNNDotsVisionMLP(TTNNModule):
 
         mem = ttnn.DRAM_MEMORY_CONFIG
 
-        if self.tt_fused_gate_up_weight is not None:
-            gate_up = ttnn.linear(
-                hidden_states,
-                self.tt_fused_gate_up_weight,
-                bias=self.tt_fused_gate_up_bias,
-                memory_config=mem,
-                compute_kernel_config=self.compute_kernel_config,
-            )
-            in_shape = list(gate_up.shape)
-            I = self._intermediate_size
-            slice_lo_gate = [0] * len(in_shape)
-            slice_hi_gate = list(in_shape)
-            slice_hi_gate[-1] = I
-            slice_lo_up = [0] * len(in_shape)
-            slice_lo_up[-1] = I
-            slice_hi_up = list(in_shape)
-            slice_hi_up[-1] = 2 * I
-            gate = ttnn.slice(gate_up, slice_lo_gate, slice_hi_gate)
-            up = ttnn.slice(gate_up, slice_lo_up, slice_hi_up)
-            ttnn.deallocate(gate_up)
-            gate = ttnn.silu(gate, memory_config=mem)
-            gate_up_mul = ttnn.multiply(gate, up)
-            ttnn.deallocate(gate)
-            ttnn.deallocate(up)
-        else:
-            gate = ttnn.linear(
-                hidden_states,
-                self.tt_fc1_weight,
-                bias=self.tt_fc1_bias,
-                memory_config=mem,
-                compute_kernel_config=self.compute_kernel_config,
-            )
-            gate = ttnn.silu(gate, memory_config=mem)
-
-            up = ttnn.linear(
-                hidden_states,
-                self.tt_fc3_weight,
-                bias=self.tt_fc3_bias,
-                memory_config=mem,
-                compute_kernel_config=self.compute_kernel_config,
-            )
-
-            gate_up_mul = ttnn.multiply(gate, up)
-            ttnn.deallocate(gate)
-            ttnn.deallocate(up)
+        gate = ttnn.linear(
+            hidden_states,
+            self.tt_fc1_weight,
+            bias=self.tt_fc1_bias,
+            memory_config=mem,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        up = ttnn.linear(
+            hidden_states,
+            self.tt_fc3_weight,
+            bias=self.tt_fc3_bias,
+            memory_config=mem,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        gate_up_mul = ttnn.mul(
+            gate,
+            up,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+            memory_config=mem,
+        )
+        ttnn.deallocate(gate)
+        ttnn.deallocate(up)
 
         output = ttnn.linear(
             gate_up_mul,

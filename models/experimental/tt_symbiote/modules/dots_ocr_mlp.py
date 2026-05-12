@@ -225,11 +225,22 @@ class TTNNDotsOCRMLP(TTNNModule):
         # Single matmul + single all-reduce produces concatenated [gate | up].
         gate_up = self.fused_gate_up_proj(hidden_states)
 
+        # Decode tokens (seq_len == 1) hit ttnn.slice every layer; on `dram_interleaved`
+        # input each slice averages ~120 us in trace. The whole gate_up fits comfortably
+        # in L1 for decode (B * 1 * 2I bf16 ~ tens of KB), so route activations through
+        # L1_INTERLEAVED to convert these to the much faster `l1_interleaved` slice path.
+        # Same pattern as qwen_moe.py: `decode_memory_config = L1 if is_decode else DRAM`.
+        is_decode = int(seq_len) == 1
+        activation_mc = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
+
+        if is_decode and gate_up.memory_config().buffer_type != ttnn.BufferType.L1:
+            gate_up = ttnn.to_memory_config(gate_up, activation_mc)
+
         # Slice into gate / up halves along the last dim. ttnn.slice on a TILE
         # tensor is a metadata + small copy op, far cheaper than a second CCL.
         I = int(gate_up.shape[-1]) // 2
-        gate = ttnn.slice(gate_up, [0, 0, 0], [batch_size, seq_len, I], memory_config=intermediate_memory_config)
-        up = ttnn.slice(gate_up, [0, 0, I], [batch_size, seq_len, 2 * I], memory_config=intermediate_memory_config)
+        gate = ttnn.slice(gate_up, [0, 0, 0], [batch_size, seq_len, I], memory_config=activation_mc)
+        up = ttnn.slice(gate_up, [0, 0, I], [batch_size, seq_len, 2 * I], memory_config=activation_mc)
         ttnn.deallocate(gate_up)
 
         gate_up_mul = ttnn.mul(
@@ -237,7 +248,7 @@ class TTNNDotsOCRMLP(TTNNModule):
             up,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             dtype=ttnn.bfloat8_b if _mlp_bfp8_activation_enabled() else None,
-            memory_config=intermediate_memory_config,
+            memory_config=activation_mc,
         )
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
