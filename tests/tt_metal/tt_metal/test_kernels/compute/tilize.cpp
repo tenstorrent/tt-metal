@@ -59,7 +59,7 @@ void kernel_main() {
 #ifndef FAST_TILIZE
     tilize_uninit(tt::CBIndex::c_0, tt::CBIndex::c_16);
 #else
-    fast_tilize_uninit(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    fast_tilize_uninit(tt::CBIndex::c_0, tt::CBIndex::c_16, per_core_block_tile_cnt);
 #endif
 
 #else  // ARCH_QUASAR
