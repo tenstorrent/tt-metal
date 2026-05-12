@@ -369,8 +369,10 @@ void MeshCommandQueueBase::enqueue_read(
     bool blocking) {
     auto lock = lock_api_function_();
     std::vector<distributed::ShardDataTransfer> shard_data_transfers;
-    // Capture a MemoryPin for each shard so the host buffer stays alive until the
-    // async reader thread finishes the memcpy (fixes use-after-free, issue #43638).
+    // For non-blocking reads, capture a MemoryPin for each shard so the host
+    // buffer stays alive until the async reader thread finishes the memcpy
+    // (fixes use-after-free, issue #43638). For blocking reads finish_nolock()
+    // ensures the copy is complete before we return, so no pin is needed.
     std::vector<MemoryPin> memory_pins;
     for (const auto& coord : MeshCoordinateRange(buffer->device()->shape())) {
         if (shards.has_value() && !shards->contains(coord)) {
@@ -379,7 +381,9 @@ void MeshCommandQueueBase::enqueue_read(
 
         auto buf = host_buffer.get_shard(coord);
         if (buf.has_value()) {
-            memory_pins.push_back(buf->pin());
+            if (!blocking) {
+                memory_pins.push_back(buf->pin());
+            }
             auto xfer = distributed::ShardDataTransfer{coord}
                             .host_data(buf->view_bytes().data())
                             .region(BufferRegion(0, buf->view_bytes().size()));

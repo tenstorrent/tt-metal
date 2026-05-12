@@ -68,9 +68,9 @@ def test_cpu_blocking_false_discarded_return_no_uaf(device):
     Use ~16 MB tensors so the async read is still in flight when CPython would
     normally garbage-collect the unreferenced return value.
     """
-    # Large enough that the async D2H is likely still in flight when the
-    # discarded tensor goes out of scope.
-    host = torch.randn(1024, 4096, dtype=torch.bfloat16)
+    # 1024 x 8192 x bfloat16 = ~16 MB; large enough that the async D2H is
+    # likely still in flight when the discarded tensor goes out of scope.
+    host = torch.randn(1024, 8192, dtype=torch.bfloat16)
     dev_tensor = ttnn.from_torch(host, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
 
     for _ in range(20):
