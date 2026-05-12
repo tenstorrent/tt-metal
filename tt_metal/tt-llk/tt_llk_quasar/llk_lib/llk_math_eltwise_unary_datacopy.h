@@ -7,7 +7,6 @@
 #include <cstdint>
 
 #include "llk_math_common.h"
-#include "llk_math_matmul.h"
 using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
@@ -160,38 +159,4 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t num_rows_per_t
 
     // Reset all counters
     _reset_counters_<p_setrwc::SET_ABD_F>();
-}
-
-/**
- * @brief Init for the MxFp4_2x "datacopy via identity-SrcB matmul" path.
- *
- * MOV MXFP4_2x support was removed from Quasar RTL (TEN-3634, 2025-09-19). The FP4-2x
- * sub-datum expansion is now gated on op_mmul, so SrcA(MxFp4_2x_A/B) -> Dest must go
- * through a matmul. SrcB must be pre-loaded with an identity tile in the same 2x family;
- * MVMULDI then computes Dest[i] = SrcB * SrcA[i] = I * SrcA[i] = SrcA[i], dequantized
- * into Dest in Float16/Float32 (A-family) or Float16_b/Float32 (B-family).
- *
- * Configured as a matmul block with ct_dim=num_tiles, rt_dim=1 so SrcB (identity) is
- * loaded once and reused across all SrcA tiles via the reuse_a path; the block clears
- * SrcB at the end of reuse, which the caller must satisfy by pushing one SrcB dvalid
- * (the identity tile) before the block call.
- *
- * @tparam MATH_FIDELITY_TYPE Matmul fidelity. LoFi is sufficient since SrcB is identity.
- * @param num_tiles Number of SrcA tiles to copy into Dest.
- */
-template <ckernel::MathFidelity MATH_FIDELITY_TYPE = ckernel::MathFidelity::LoFi>
-inline void _llk_math_eltwise_unary_datacopy_x2_init_(std::uint8_t num_tiles)
-{
-    _llk_math_matmul_init_<MATH_FIDELITY_TYPE, /*EN_DI=*/true, /*EN_X2=*/true>(num_tiles, 1);
-}
-
-/**
- * @brief Run the MxFp4_2x datacopy block. See init for setup.
- *        Caller must have one SrcB dvalid (identity) and num_tiles SrcA dvalids ready.
- *        Dest tile addressing starts at 0; for arbitrary start use _llk_math_matmul_block_ directly.
- * @param num_tiles Number of SrcA tiles to copy. Must match init.
- */
-inline void _llk_math_eltwise_unary_datacopy_x2_(std::uint8_t num_tiles)
-{
-    _llk_math_matmul_block_(num_tiles, 1);
 }
