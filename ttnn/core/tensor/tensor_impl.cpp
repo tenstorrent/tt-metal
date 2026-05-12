@@ -171,7 +171,7 @@ void to_string_row_major(
     int64_t rank,
     int64_t dim,
     bool use_scientific) {
-    auto stride = dim < strides.size() ? strides[dim] : 0;
+    auto stride = dim >= 0 && static_cast<size_t>(dim) < strides.size() ? strides[dim] : 0;
 
     std::string spaces = std::string(TENSOR_TYPE_STRING_PLUS_OPEN_PARENTHESIS_LENGTH + dim, ' ');
     std::string before;

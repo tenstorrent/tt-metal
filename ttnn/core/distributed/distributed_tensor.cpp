@@ -568,7 +568,7 @@ std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(
                 .mesh_shape_override = MeshShape(mesh_device.num_devices())}));
     }
     TT_FATAL(
-        cluster_axis.value() >= 0 && cluster_axis.value() < mesh_device.shape().dims(),
+        cluster_axis.value() >= 0 && static_cast<size_t>(cluster_axis.value()) < mesh_device.shape().dims(),
         "Cluster axis {} is out of range for mesh device with {} dimensions",
         cluster_axis.value(),
         mesh_device.shape().dims());

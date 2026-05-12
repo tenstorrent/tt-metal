@@ -17,7 +17,7 @@ tt::tt_metal::Shape infer_dims_for_reshape(const tt::tt_metal::Tensor& tensor, t
     int64_t new_volume = 1;
     int64_t index_of_negative_1 = -1;
     bool has_zero = false;
-    for (auto index = 0; index < shape.size(); ++index) {
+    for (size_t index = 0; index < shape.size(); ++index) {
         if (shape[index] == -1) {
             if (index_of_negative_1 != -1) {
                 std::string error_msg = "Shape cannot have more than 1 elements that is set to -1! Shape used: (";

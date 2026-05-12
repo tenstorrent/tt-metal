@@ -22,8 +22,8 @@ void add_stagger_defines_if_needed(
     // See issue #9857.
     const char* stagger_type = std::getenv("TT_MM_STAGGER_TYPE");
     const char* stagger_value = std::getenv("TT_MM_STAGGER_VALUE");
-    if (stagger_type && ((arch == tt::ARCH::WORMHOLE_B0 && num_cores > WH_B0_MM_MAX_CORES_NO_STAGGER) ||
-                         (arch == tt::ARCH::BLACKHOLE && num_cores > BH_MM_MAX_CORES_NO_STAGGER))) {
+    if (stagger_type && ((arch == tt::ARCH::WORMHOLE_B0 && static_cast<uint32_t>(num_cores) > WH_B0_MM_MAX_CORES_NO_STAGGER) ||
+                         (arch == tt::ARCH::BLACKHOLE && static_cast<uint32_t>(num_cores) > BH_MM_MAX_CORES_NO_STAGGER))) {
         // TODO check range for stagger_type
         mm_kernel_defines["MM_STAGGER_TYPE"] = stagger_type;
 
@@ -44,8 +44,8 @@ void throttle_mm_perf(
     constexpr uint32_t WH_B0_MM_MAX_CORES_NO_THROTTLE = 48;
     // TODO: determine min core threshold for throttle to be needed on BH
     constexpr uint32_t BH_MM_MAX_CORES_NO_THROTTLE = 0;
-    const bool mm_throttle_needed = (arch == tt::ARCH::WORMHOLE_B0 && num_cores > WH_B0_MM_MAX_CORES_NO_THROTTLE) ||
-                                    (arch == tt::ARCH::BLACKHOLE && num_cores > BH_MM_MAX_CORES_NO_THROTTLE);
+    const bool mm_throttle_needed = (arch == tt::ARCH::WORMHOLE_B0 && static_cast<uint32_t>(num_cores) > WH_B0_MM_MAX_CORES_NO_THROTTLE) ||
+                                    (arch == tt::ARCH::BLACKHOLE && static_cast<uint32_t>(num_cores) > BH_MM_MAX_CORES_NO_THROTTLE);
 
     if (!mm_throttle_needed) {
         return;

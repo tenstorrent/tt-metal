@@ -32,7 +32,7 @@ ttsl::SmallVector<int> normalize_dims(const ttsl::SmallVector<int>& dims, size_t
         std::all_of(
             normalized_dims.begin(),
             normalized_dims.end(),
-            [tensor_dims](int dim) { return dim >= 0 && dim < tensor_dims; }),
+            [tensor_dims](int dim) { return dim >= 0 && static_cast<size_t>(dim) < tensor_dims; }),
         "Invalid dimension index; got dims: {}, tensor dimension: {}",
         dims,
         tensor_dims);
