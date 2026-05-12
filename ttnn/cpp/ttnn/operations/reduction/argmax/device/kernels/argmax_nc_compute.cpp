@@ -53,6 +53,8 @@ void kernel_main() {
     constexpr uint32_t dst_scratch_b = 3;
 
     init_sfpu(cb_val, cb_out);
+    // SFPU op inits: each sets persistent SFPU state; safe to call once here—none
+    // of these inits overwrite state another op still needs.
     binary_max_tile_init();
     gt_binary_tile_init();
     add_binary_tile_init();

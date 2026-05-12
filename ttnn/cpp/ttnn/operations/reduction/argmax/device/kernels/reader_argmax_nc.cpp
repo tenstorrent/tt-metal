@@ -40,14 +40,19 @@ inline void push_fp32_fill_tile(uint32_t cb_id, float fill_val) {
     cb_push_back(cb_id, 1);
 }
 
-inline void read_reduce_loop(
-    const uint32_t input_addr,
-    const uint32_t num_output_tiles,
-    const uint32_t start_id,
-    const uint32_t num_reduce_tiles,
-    const uint32_t reduce_tile_size,
-    const uint32_t inner_tile_size,
-    const bool dim_is_zero) {
+}  // namespace
+
+void kernel_main() {
+    // Runtime args
+    const uint32_t input_addr = get_arg_val<uint32_t>(0);
+    const uint32_t num_output_tiles = get_arg_val<uint32_t>(1);
+    const uint32_t start_id = get_arg_val<uint32_t>(2);
+    const uint32_t num_reduce_tiles = get_arg_val<uint32_t>(3);
+    const uint32_t reduce_tile_size = get_arg_val<uint32_t>(4);
+    const uint32_t inner_tile_size = get_arg_val<uint32_t>(5);
+    const uint32_t dim_is_zero = get_arg_val<uint32_t>(6);
+    const bool dim_is_zero_b = dim_is_zero != 0;
+
     constexpr uint32_t cb_in0 = 0;
     constexpr uint32_t cb_in1 = 1;
     constexpr uint32_t onetile = 1;
@@ -57,7 +62,7 @@ inline void read_reduce_loop(
 
     for (uint32_t out_i = 0; out_i < num_output_tiles; ++out_i) {
         const uint32_t output_tile_id = start_id + out_i;
-        uint32_t read_tile_id = compute_read_tile_id(output_tile_id, reduce_tile_size, inner_tile_size, dim_is_zero);
+        uint32_t read_tile_id = compute_read_tile_id(output_tile_id, reduce_tile_size, inner_tile_size, dim_is_zero_b);
 
         for (uint32_t k = 0; k < num_reduce_tiles; ++k) {
             cb_reserve_back(cb_in0, onetile);
@@ -71,20 +76,4 @@ inline void read_reduce_loop(
             read_tile_id += inner_tile_size;
         }
     }
-}
-
-}  // namespace
-
-void kernel_main() {
-    // Runtime args
-    const uint32_t input_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_output_tiles = get_arg_val<uint32_t>(1);
-    const uint32_t start_id = get_arg_val<uint32_t>(2);
-    const uint32_t num_reduce_tiles = get_arg_val<uint32_t>(3);
-    const uint32_t reduce_tile_size = get_arg_val<uint32_t>(4);
-    const uint32_t inner_tile_size = get_arg_val<uint32_t>(5);
-    const uint32_t dim_is_zero = get_arg_val<uint32_t>(6);
-
-    read_reduce_loop(
-        input_addr, num_output_tiles, start_id, num_reduce_tiles, reduce_tile_size, inner_tile_size, dim_is_zero != 0);
 }

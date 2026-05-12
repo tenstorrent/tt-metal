@@ -9,7 +9,12 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
-inline void write_output_loop(const uint32_t output_addr, const uint32_t num_output_tiles, const uint32_t start_id) {
+void kernel_main() {
+    // Runtime args
+    const uint32_t output_addr = get_arg_val<uint32_t>(0);
+    const uint32_t num_output_tiles = get_arg_val<uint32_t>(1);
+    const uint32_t start_id = get_arg_val<uint32_t>(2);
+
     constexpr uint32_t cb_out0 = 16;
     constexpr uint32_t onetile = 1;
 
@@ -24,13 +29,4 @@ inline void write_output_loop(const uint32_t output_addr, const uint32_t num_out
         noc_async_write_barrier();
         cb_pop_front(cb_out0, onetile);
     }
-}
-
-void kernel_main() {
-    // Runtime args
-    const uint32_t output_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_output_tiles = get_arg_val<uint32_t>(1);
-    const uint32_t start_id = get_arg_val<uint32_t>(2);
-
-    write_output_loop(output_addr, num_output_tiles, start_id);
 }
