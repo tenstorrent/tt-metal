@@ -679,6 +679,13 @@ targets:
     skus:
       wh_n150:
         entries:
+          - batch_size: 1
+            seq_len: 1024
+            status: active
+            perf: {}
+            accuracy:
+              top1: 89.0
+              top5: 99.0
           - batch_size: 32
             seq_len: 128
             status: active
