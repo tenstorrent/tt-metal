@@ -275,11 +275,19 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
             exp_approx_mode=False,
         )
 
-    def _linear(self, x: ttnn.Tensor, weight: ttnn.Tensor, bias: ttnn.Tensor) -> ttnn.Tensor:
+    def _linear(
+        self,
+        x: ttnn.Tensor,
+        weight: ttnn.Tensor,
+        bias: ttnn.Tensor,
+        *,
+        activation: str | None = None,
+    ) -> ttnn.Tensor:
         return ttnn.linear(
             x,
             weight,
             bias=bias,
+            activation=activation,
             core_grid=_core_grid(self.device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self._linear_ln_compute_cfg,
@@ -404,9 +412,13 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
                 weight=layer.ffn_layer_norm.weight,
                 bias=layer.ffn_layer_norm.bias,
             )
-            ff = self._linear(normed, layer.ffn.fc1.weight, layer.ffn.fc1.bias)
+            ff = self._linear(
+                normed,
+                layer.ffn.fc1.weight,
+                layer.ffn.fc1.bias,
+                activation="relu",
+            )
             ttnn.deallocate(normed)
-            ff = ttnn.relu(ff)
             ff = self._linear(ff, layer.ffn.fc2.weight, layer.ffn.fc2.bias)
             hidden = ttnn.add(hidden, ff, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(ff)
@@ -505,11 +517,19 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             exp_approx_mode=False,
         )
 
-    def _linear(self, x: ttnn.Tensor, weight: ttnn.Tensor, bias: ttnn.Tensor) -> ttnn.Tensor:
+    def _linear(
+        self,
+        x: ttnn.Tensor,
+        weight: ttnn.Tensor,
+        bias: ttnn.Tensor,
+        *,
+        activation: str | None = None,
+    ) -> ttnn.Tensor:
         return ttnn.linear(
             x,
             weight,
             bias=bias,
+            activation=activation,
             core_grid=_core_grid(self.device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self._linear_ln_compute_cfg,
@@ -815,6 +835,13 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             if j < len(char_pad_valid_host) and char_pad_valid_host[j] < 0.5:
                 dur_list[j] = 0
         ttnn.deallocate(char_pad)
+
+        # Drain the device profiler buffer at the natural encoder/decoder boundary.  The
+        # duration readback above already syncs host<->device, so this adds no extra wait
+        # in profiler builds and compiles to a no-op in normal builds.  Without it, the
+        # 12000-marker on-device buffer overflows on a full forward (~1300 ops) and
+        # ``python -m tracy`` fails post-run with "Op N not present in cpp_device_perf_report".
+        ttnn.ReadDeviceProfiler(self.device)
 
         up2 = _hard_upsample_nlc(char_h, dur_list, device=self.device, hidden_size=self.hidden_size)
         ttnn.deallocate(char_h)
