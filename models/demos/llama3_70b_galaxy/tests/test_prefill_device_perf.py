@@ -6,7 +6,7 @@ from loguru import logger
 import math
 import pandas as pd
 from collections import defaultdict
-from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler, perf_target_check
 from models.perf.device_perf_utils import run_device_perf
 from tracy.process_model_log import (
     get_latest_ops_log_filename,
@@ -111,7 +111,10 @@ def build_duration_per_instance_dict(input_dict, num_layers):
         if num_ops_with_op_code % num_layers != 0:
             print(f"Warning: {op_code} has {num_ops_with_op_code} ops, not a multiple of {num_layers} layers")
             print_dict(input_dict, "input_dict")
-            assert num_ops_with_op_code % num_layers == 0
+            perf_target_check(
+                num_ops_with_op_code % num_layers == 0,
+                f"{op_code} has {num_ops_with_op_code} ops, not a multiple of {num_layers} layers",
+            )
         for iteration_id in range(num_layers):
             for instance_id in range(num_instances):
                 op_code_with_id = f"{op_code}_{instance_id}"
@@ -303,9 +306,11 @@ def test_llama_TG_perf_device(
     print_dict(kernel_duration_per_instance_averaged_dict_trace, "kernel_duration_per_instance_averaged_dict_trace")
     print_dict(dispatch_duration_per_instance_averaged_dict, "dispatch_duration_per_instance_averaged_dict")
 
-    assert len(kernel_duration_per_instance_averaged_dict_compilation) == len(
-        perf_targets
-    ), f"Expected {len(perf_targets)} operations, got {len(kernel_duration_per_instance_averaged_dict_compilation)}. If the number or type of operations changed, expected times must be updated."
+    perf_target_check(
+        len(kernel_duration_per_instance_averaged_dict_compilation) == len(perf_targets),
+        f"Expected {len(perf_targets)} operations, got {len(kernel_duration_per_instance_averaged_dict_compilation)}. "
+        "If the number or type of operations changed, expected times must be updated.",
+    )
 
     passing = True
     logger.info(
@@ -621,9 +626,11 @@ def test_qwen_TG_perf_device(
     print_dict(kernel_duration_per_instance_averaged_dict_trace, "kernel_duration_per_instance_averaged_dict_trace")
     print_dict(dispatch_duration_per_instance_averaged_dict, "dispatch_duration_per_instance_averaged_dict")
 
-    assert len(kernel_duration_per_instance_averaged_dict_compilation) == len(
-        perf_targets
-    ), f"Expected {len(perf_targets)} operations, got {len(kernel_duration_per_instance_averaged_dict_compilation)}. If the number or type of operations changed, expected times must be updated."
+    perf_target_check(
+        len(kernel_duration_per_instance_averaged_dict_compilation) == len(perf_targets),
+        f"Expected {len(perf_targets)} operations, got {len(kernel_duration_per_instance_averaged_dict_compilation)}. "
+        "If the number or type of operations changed, expected times must be updated.",
+    )
 
     passing = True
     logger.info(

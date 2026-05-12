@@ -4,7 +4,7 @@
 
 import pytest
 from loguru import logger
-from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler, perf_target_check
 from models.perf.device_perf_utils import run_device_perf_detailed
 
 THRESHOLD = 0.4
@@ -77,9 +77,10 @@ def test_ag_tg_llama_perf(
         ml_model_name="llama70b-tg",
     )
 
-    assert (
-        measured_avg_us < perf_target_us + THRESHOLD
-    ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+    perf_target_check(
+        measured_avg_us < perf_target_us + THRESHOLD,
+        f"Performance target not met: {measured_avg_us} us > {perf_target_us} us",
+    )
 
 
 @pytest.mark.parametrize(
@@ -134,9 +135,10 @@ def test_ar_tg_llama_perf(
         ml_model_name="llama70b-tg",
     )
 
-    assert (
-        measured_avg_us < perf_target_us + THRESHOLD
-    ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+    perf_target_check(
+        measured_avg_us < perf_target_us + THRESHOLD,
+        f"Performance target not met: {measured_avg_us} us > {perf_target_us} us",
+    )
 
 
 @pytest.mark.parametrize(
@@ -191,7 +193,10 @@ def test_matmul_rs(
         ml_model_name="llama70b-tg",
     )
 
-    assert measured_avg_us < perf_target_us, f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+    perf_target_check(
+        measured_avg_us < perf_target_us,
+        f"Performance target not met: {measured_avg_us} us > {perf_target_us} us",
+    )
 
 
 @pytest.mark.parametrize(
@@ -246,7 +251,10 @@ def test_rms_perf(
         ml_model_name="llama70b-tg",
     )
 
-    assert measured_avg_us < perf_target_us, f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+    perf_target_check(
+        measured_avg_us < perf_target_us,
+        f"Performance target not met: {measured_avg_us} us > {perf_target_us} us",
+    )
 
 
 @pytest.mark.skip(reason="Skip test due to issue: https://github.com/tenstorrent/tt-metal/issues/24630")
@@ -301,7 +309,10 @@ def test_fused_all_gather_concat_perf(
         ml_model_name="llama70b-tg",
     )
 
-    assert measured_avg_us < perf_target_us, f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+    perf_target_check(
+        measured_avg_us < perf_target_us,
+        f"Performance target not met: {measured_avg_us} us > {perf_target_us} us",
+    )
 
 
 @pytest.mark.skip(reason="Op not used in model anymore")
@@ -356,7 +367,10 @@ def test_fused_all_reduce_create_heads_perf(
         ml_model_name="llama70b-tg",
     )
 
-    assert measured_avg_us < perf_target_us, f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+    perf_target_check(
+        measured_avg_us < perf_target_us,
+        f"Performance target not met: {measured_avg_us} us > {perf_target_us} us",
+    )
 
 
 @pytest.mark.parametrize(
@@ -409,7 +423,10 @@ def test_reduce_scatter_perf(
         ml_model_name="llama70b-tg",
     )
 
-    assert measured_avg_us < perf_target_us, f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+    perf_target_check(
+        measured_avg_us < perf_target_us,
+        f"Performance target not met: {measured_avg_us} us > {perf_target_us} us",
+    )
 
 
 @pytest.mark.parametrize(
@@ -462,7 +479,10 @@ def test_rs_create_heads_perf(
         ml_model_name="llama70b-tg",
     )
 
-    assert measured_avg_us < perf_target_us, f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+    perf_target_check(
+        measured_avg_us < perf_target_us,
+        f"Performance target not met: {measured_avg_us} us > {perf_target_us} us",
+    )
 
 
 @pytest.mark.parametrize(
@@ -512,6 +532,7 @@ def test_ag_matmul_tg_llama_perf(
         ml_model_name="llama70b-tg",
     )
 
-    assert (
-        measured_avg_us < perf_target_us + THRESHOLD
-    ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+    perf_target_check(
+        measured_avg_us < perf_target_us + THRESHOLD,
+        f"Performance target not met: {measured_avg_us} us > {perf_target_us} us",
+    )

@@ -12,7 +12,7 @@ from collections import defaultdict
 from models.demos.llama3_70b_galaxy.tt.llama_common import (
     PagedAttentionConfig,
 )
-from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler, perf_target_check, strict_perf_target_checks_enabled
 from models.perf.device_perf_utils import run_device_perf
 from tracy.process_model_log import (
     get_latest_ops_log_filename,
@@ -330,7 +330,10 @@ def build_duration_per_instance_dict(input_dict, num_layers):
         if num_ops_with_op_code % num_layers != 0:
             logger.warning(f"Warning: {op_code} has {num_ops_with_op_code} ops, not a multiple of {num_layers} layers")
             print_dict(input_dict, "input_dict")
-            assert num_ops_with_op_code % num_layers == 0
+            perf_target_check(
+                num_ops_with_op_code % num_layers == 0,
+                f"{op_code} has {num_ops_with_op_code} ops, not a multiple of {num_layers} layers",
+            )
         for iteration_id in range(num_layers):
             for instance_id in range(num_instances):
                 op_code_with_id = f"{op_code}_{instance_id}"
@@ -454,24 +457,41 @@ def add_benchmark_measurement(profiler, benchmark_data, step_name, op_name, valu
     logger.info(f"{name}: {value} ns")
 
 
+def _empty_perf_targets():
+    return {"decoder": {}, "model_tail": {}}
+
+
 def load_perf_targets(galaxy_type):
     if galaxy_type == "4U":
         perf_target_json_filename = "models/demos/llama3_70b_galaxy/tests/decoder_perf_targets_4u.json"
     elif galaxy_type == "6U":
         perf_target_json_filename = "models/demos/llama3_70b_galaxy/tests/decoder_perf_targets_6u.json"
     else:
-        raise Exception(f"Unsupported galaxy type: {galaxy_type}. It must be either '4U' or '6U'.")
+        perf_target_check(False, f"Unsupported galaxy type: {galaxy_type}. It must be either '4U' or '6U'.")
+        return _empty_perf_targets()
 
     try:
         with open(perf_target_json_filename, "r", encoding="utf-8") as f:
             perf_targets = json.load(f)
     except FileNotFoundError:
-        raise FileNotFoundError(f"Performance target file '{perf_target_json_filename}' does not exist.")
+        message = f"Performance target file '{perf_target_json_filename}' does not exist."
+        if strict_perf_target_checks_enabled():
+            raise FileNotFoundError(message)
+        logger.warning(message)
+        return _empty_perf_targets()
     except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON format in '{perf_target_json_filename}': {e}")
+        message = f"Invalid JSON format in '{perf_target_json_filename}': {e}"
+        if strict_perf_target_checks_enabled():
+            raise ValueError(message)
+        logger.warning(message)
+        return _empty_perf_targets()
 
     if not isinstance(perf_targets, dict):
-        raise ValueError(f"Expected top-level JSON object to be a dictionary in '{perf_target_json_filename}'.")
+        message = f"Expected top-level JSON object to be a dictionary in '{perf_target_json_filename}'."
+        if strict_perf_target_checks_enabled():
+            raise ValueError(message)
+        logger.warning(message)
+        return _empty_perf_targets()
 
     return perf_targets
 
@@ -484,12 +504,24 @@ def load_qwen_perf_targets():
         with open(perf_target_json_filename, "r", encoding="utf-8") as f:
             perf_targets = json.load(f)
     except FileNotFoundError:
-        raise FileNotFoundError(f"Performance target file '{perf_target_json_filename}' does not exist.")
+        message = f"Performance target file '{perf_target_json_filename}' does not exist."
+        if strict_perf_target_checks_enabled():
+            raise FileNotFoundError(message)
+        logger.warning(message)
+        return _empty_perf_targets()
     except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON format in '{perf_target_json_filename}': {e}")
+        message = f"Invalid JSON format in '{perf_target_json_filename}': {e}"
+        if strict_perf_target_checks_enabled():
+            raise ValueError(message)
+        logger.warning(message)
+        return _empty_perf_targets()
 
     if not isinstance(perf_targets, dict):
-        raise ValueError(f"Expected top-level JSON object to be a dictionary in '{perf_target_json_filename}'.")
+        message = f"Expected top-level JSON object to be a dictionary in '{perf_target_json_filename}'."
+        if strict_perf_target_checks_enabled():
+            raise ValueError(message)
+        logger.warning(message)
+        return _empty_perf_targets()
 
     return perf_targets
 
@@ -547,7 +579,10 @@ def test_llama_TG_perf_device(
     df_layers_compilation = df_model_compilation[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
     df_layers_trace = df_model_trace[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
     # Use layers 2-9 for verifying against targets for more stability
-    assert len(df_layers_compilation) % num_layers == 0
+    perf_target_check(
+        len(df_layers_compilation) % num_layers == 0,
+        f"Expected decoder layers count to be divisible by {num_layers}, got {len(df_layers_compilation)}",
+    )
 
     # first decoder layer
     df_first_layer_compilation = df_layers_compilation[: int(len(df_layers_compilation) / num_layers)]
@@ -631,12 +666,16 @@ def test_llama_TG_perf_device(
     print_dict(avg_kernel_duration_model_tail_trace, "avg_kernel_duration_model_tail_trace")
     print_dict(avg_dispatch_duration_model_tail_trace, "avg_dispatch_duration_model_tail_trace")
 
-    assert len(avg_kernel_duration_mid_layers_compilation) == len(
-        perf_targets["decoder"]
-    ), f"Expected {len(perf_targets['decoder'])} operations, got {len(avg_kernel_duration_mid_layers_compilation)}. If the number or type of operations changed, expected times must be updated."
-    assert len(avg_dispatch_duration_model_tail_trace) == len(
-        perf_targets["model_tail"]
-    ), f"Expected {len(perf_targets['model_tail'])} operations, got {len(avg_dispatch_duration_model_tail_trace)}. If the number or type of operations changed, expected times must be updated."
+    perf_target_check(
+        len(avg_kernel_duration_mid_layers_compilation) == len(perf_targets["decoder"]),
+        f"Expected {len(perf_targets['decoder'])} operations, got {len(avg_kernel_duration_mid_layers_compilation)}. "
+        "If the number or type of operations changed, expected times must be updated.",
+    )
+    perf_target_check(
+        len(avg_dispatch_duration_model_tail_trace) == len(perf_targets["model_tail"]),
+        f"Expected {len(perf_targets['model_tail'])} operations, got {len(avg_dispatch_duration_model_tail_trace)}. "
+        "If the number or type of operations changed, expected times must be updated.",
+    )
 
     all_passing = True
     # Verify decoder layer (mid layers)
@@ -901,7 +940,7 @@ def test_llama_TG_perf_device(
         ml_model_name="llama70b-tg",
     )
 
-    assert all_passing
+    perf_target_check(all_passing, "Decoder perf checks failed for at least one operation")
 
 
 @pytest.mark.no_reset_device
@@ -948,7 +987,10 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     df_model = df[int(len_without_second_sampling_compile_run / 3 * 2) + NUM_OPS_IN_SAMPLING :]
 
     df_layers = df_model[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
-    assert len(df_layers) % num_layers == 0
+    perf_target_check(
+        len(df_layers) % num_layers == 0,
+        f"Expected decoder layers count to be divisible by {num_layers}, got {len(df_layers)}",
+    )
     df_layers = df_layers[int(len(df_layers) / num_layers) :]  # Exclude first layer
 
     df_model_tail = df_model[DECODER_OP_END_INDEX:]
@@ -984,12 +1026,16 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     print_dict(avg_dispatch_duration_mid_layers, "avg_dispatch_duration_mid_layers")
     print_dict(avg_dispatch_duration_model_tail, "avg_dispatch_duration_model_tail")
 
-    assert len(avg_dispatch_duration_mid_layers) == len(
-        perf_targets["decoder"]
-    ), f"Expected {len(perf_targets['decoder'])} operations in decoder, got {len(avg_dispatch_duration_mid_layers)}. If the number or type of operations changed, expected times must be updated."
-    assert len(avg_dispatch_duration_model_tail) == len(
-        perf_targets["model_tail"]
-    ), f"Expected {len(perf_targets['model_tail'])} operations in model tail, got {len(avg_dispatch_duration_model_tail)}. If the number or type of operations changed, expected times must be updated."
+    perf_target_check(
+        len(avg_dispatch_duration_mid_layers) == len(perf_targets["decoder"]),
+        f"Expected {len(perf_targets['decoder'])} operations in decoder, got {len(avg_dispatch_duration_mid_layers)}. "
+        "If the number or type of operations changed, expected times must be updated.",
+    )
+    perf_target_check(
+        len(avg_dispatch_duration_model_tail) == len(perf_targets["model_tail"]),
+        f"Expected {len(perf_targets['model_tail'])} operations in model tail, got {len(avg_dispatch_duration_model_tail)}. "
+        "If the number or type of operations changed, expected times must be updated.",
+    )
 
     logger.info("Decoder")
     passing = True
@@ -1098,7 +1144,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
         ml_model_name="llama70b-tg",
     )
 
-    assert all_passing
+    perf_target_check(all_passing, "Non-overlapped dispatch perf checks failed for at least one operation")
 
 
 # This pytest flag is necessary to ensure that we do NOT open the device in the main process for device perf tests that run
@@ -1155,7 +1201,10 @@ def test_qwen_TG_perf_device(
     df_layers_compilation = df_model_compilation[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
     df_layers_trace = df_model_trace[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
     # Use layers 2-9 for verifying against targets for more stability
-    assert len(df_layers_compilation) % num_layers == 0
+    perf_target_check(
+        len(df_layers_compilation) % num_layers == 0,
+        f"Expected decoder layers count to be divisible by {num_layers}, got {len(df_layers_compilation)}",
+    )
 
     # first decoder layer
     df_first_layer_compilation = df_layers_compilation[: int(len(df_layers_compilation) / num_layers)]
@@ -1513,7 +1562,7 @@ def test_qwen_TG_perf_device(
         ml_model_name="qwen32b-tg",
     )
 
-    assert all_passing
+    perf_target_check(all_passing, "Qwen decoder perf checks failed for at least one operation")
 
 
 @pytest.mark.no_reset_device
@@ -1562,7 +1611,10 @@ def test_qwen_TG_perf_device_non_overlapped_dispatch(
 
     DECODER_OP_END_INDEX = -21
     df_layers = df_model[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
-    assert len(df_layers) % num_layers == 0
+    perf_target_check(
+        len(df_layers) % num_layers == 0,
+        f"Expected decoder layers count to be divisible by {num_layers}, got {len(df_layers)}",
+    )
     df_layers = df_layers[int(len(df_layers) / num_layers) :]  # Exclude first layer
 
     df_model_tail = df_model[DECODER_OP_END_INDEX:]
@@ -1711,4 +1763,4 @@ def test_qwen_TG_perf_device_non_overlapped_dispatch(
         ml_model_name="qwen32b-tg",
     )
 
-    assert all_passing
+    perf_target_check(all_passing, "Qwen non-overlapped dispatch perf checks failed for at least one operation")

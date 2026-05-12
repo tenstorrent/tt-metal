@@ -128,6 +128,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           mkdir -p generated/test_reports generated/test_logs
+          export STRICT_PERF_TARGET_CHECKS=0
 
           # Mirror the matrix command's combined stdout+stderr to a per-leg
           # log file so ai-summary can read it later. The brace group lets

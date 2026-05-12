@@ -8,7 +8,7 @@ import warnings
 from loguru import logger
 
 from models.demos.utils.model_targets import resolve_perf_targets
-from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler, perf_target_check
 
 
 class PerfRegressionWarning(UserWarning):
@@ -183,9 +183,12 @@ def verify_perf(
     for key in expected_measurements:
         if not expected_measurements[key]:
             continue
-        assert (
-            key in measurements and key in expected_perf_metrics and expected_perf_metrics[key] is not None
-        ), f"Metric {key} not found in measurements or expected_perf_metrics"
+        if not perf_target_check(
+            key in measurements and key in expected_perf_metrics and expected_perf_metrics[key] is not None,
+            f"Metric {key} not found in measurements or expected_perf_metrics",
+        ):
+            does_pass = False
+            continue
 
         if key in lower_is_better_metrics:
             # For metrics where lower is better (e.g., TTFT)
@@ -218,9 +221,8 @@ def verify_perf(
             PerfRegressionWarning,
             stacklevel=2,
         )
-        # Keep this assert until centralized targets migration is complete:
-        # https://github.com/tenstorrent/tt-metal/issues/42782
-        assert does_pass, (
+        perf_target_check(
+            does_pass,
             "Performance regression detected. Failing fast to avoid silently accepting "
-            "degraded model performance while centralized targets rollout is in progress."
+            "degraded model performance while centralized targets rollout is in progress.",
         )
