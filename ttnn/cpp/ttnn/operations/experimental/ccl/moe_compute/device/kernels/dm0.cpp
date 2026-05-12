@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -46,7 +46,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("w0_w1_pages_per_ring_core_total");
     constexpr uint32_t w2_pages_per_ring_core_total = get_named_compile_time_arg_val("w2_pages_per_ring_core_total");
 
-    // Ring is templatized on num_cores: 12 on Wormhole, 8/12/16 on Blackhole.
+    // Ring is templatized on num_cores: 12 on WH; 8, 12, or 16 on BH (TT_MOE_BH_N).
     using config_t = moe_ring::ConfigType_t<has_bias, config_type, num_cores>;
 
     // For synchronization with tilize cores
@@ -58,17 +58,21 @@ void kernel_main() {
     constexpr auto w2_args = TensorAccessorArgs<w0_w1_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<w2_args.next_compile_time_args_offset()>();
 
-    // Run-time arguments
+    // Run-time arguments. dm0 and dm1 share one rt-arg layout emitted by the host
+    // (matmul_runtime_args in program_factory.cpp), so dm0 has to consume the layout
+    // positions it doesn't use. Args used here: vchannel, w0_w1_addr, w2_addr, ring_core_id.
+    // The rest are dm1-only (out_addr, ring_semaphore_id, ring_neighbor_physical_*) or
+    // legacy placeholders (dram_bank_id, used by dm1 only after the bank-run refactor).
     uint32_t argidx = 0;
     [[maybe_unused]] const auto dram_bank_id = get_arg_val<uint32_t>(argidx++);
     const auto vchannel = get_arg_val<uint32_t>(argidx++);
     const auto w0_w1_addr = get_arg_val<uint32_t>(argidx++);
     const auto w2_addr = get_arg_val<uint32_t>(argidx++);
-    const auto out_addr = get_arg_val<uint32_t>(argidx++);
-    const auto ring_semaphore_id = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto out_addr = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto ring_semaphore_id = get_arg_val<uint32_t>(argidx++);
     const auto ring_core_id = get_arg_val<uint32_t>(argidx++);
-    const auto ring_neighbor_physical_x = get_arg_val<uint32_t>(argidx++);
-    const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto ring_neighbor_physical_x = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
 
     // shard_to_bank translation table: maps shard index → physical chip DRAM bank id.
     // The host appends `num_banks` entries here. The bank-run loop below reads its
@@ -123,6 +127,17 @@ void kernel_main() {
     constexpr uint32_t w0_w1_bytes_per_txn = w0_w1_tiles_per_txn * w0_w1_tile_size;
     constexpr uint32_t w2_bytes_per_block = w2_tiles_per_block * w2_tile_size;
     constexpr uint32_t w2_bytes_per_txn = w2_tiles_per_txn * w2_tile_size;
+
+    // Bank-run loop invariant: w0_w1 and w2 each track their own cur_shard_idx_* but share
+    // the same physical NoC cmd-buf size register via noc_async_read_one_packet_set_state.
+    // The sentinel init of cur_shard_idx_w2 below forces a fresh set_state only on the FIRST
+    // w2 read; subsequent stream transitions can land on a matching cur_shard_idx_w2 while
+    // the cmd-buf still holds w0_w1's size. As long as both streams use the same bytes_per_txn
+    // the size-state collision is benign. If a future config diverges these sizes, either
+    // invalidate cur_shard_idx_* at every stream boundary or move to per-stream cmd-bufs.
+    static_assert(
+        w0_w1_bytes_per_txn == w2_bytes_per_txn,
+        "Bank-run loop assumes w0_w1 and w2 share identical bytes_per_txn (NoC cmd-buf size).");
 
     // Tile-count math for the bank-run loop. The HEIGHT_SHARDED weight tensor stores the
     // FULL flat tile sequence of the prepare-output tensor, whose leading dim is `num_cores`.
@@ -230,9 +245,10 @@ void kernel_main() {
     // Track the currently set_state'd bank for w0_w1 reads. Initially equal to the bank we
     // just set above. The bank-run loop only re-set_states if shard_idx changes.
     uint32_t cur_shard_idx_w0 = initial_shard_idx_w0;
-    // Same for w2 reads. w2 is read AFTER w0_w1 within each expert iteration, so we
-    // initialize to the sentinel to force a set_state on the first w2 transaction (its
-    // bytes_per_txn may differ from w0_w1_bytes_per_txn).
+    // Same for w2 reads. Per-stream cache backed by ONE physical cmd-buf — see the
+    // static_assert at the top of the kernel that locks the bytes_per_txn invariant.
+    // Init to a sentinel so the first w2 transaction always re-sets the cmd-buf (cheap
+    // insurance; the static_assert makes inheriting w0_w1's state correctness-safe too).
     uint32_t cur_shard_idx_w2 = num_banks;
 
     // This ring core's first global page id for the CURRENT layer.

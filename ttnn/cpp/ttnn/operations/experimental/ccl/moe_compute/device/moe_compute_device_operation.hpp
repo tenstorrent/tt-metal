@@ -55,7 +55,8 @@ std::vector<Tensor> moe_compute(
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore,
     const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type = std::nullopt,
-    bool compute_only = false);
+    bool compute_only = false,
+    const std::optional<uint32_t>& bh_ring_size = std::nullopt);
 
 using ttnn::experimental::prim::get_moe_combine_cores;
 

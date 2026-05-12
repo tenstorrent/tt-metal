@@ -86,11 +86,11 @@ constexpr std::array<uint32_t, N> compute_combine_w_offset_per_core(const uint32
 template <bool HasBias, uint32_t N>
 struct DeepSeekRingConfig;
 
-// DeepSeek config (8 matmul cores) — BH HEIGHT_SHARDED perf-experiment specialization.
-// 8 ring cores match the 8 BH DRAM banks 1:1, so weights can be HEIGHT_SHARDED (M1 pattern,
-// dm0.cpp set_state + with_state fast path) instead of INTERLEAVED. 64 W0/W1 tiles per step
-// / 8 cores = 8 each (perfectly balanced); 224 W2 width tiles / 8 cores = 28 each. 8 /
-// OUTPUT_WIDTH_SHARD_DIM(=4) = 2 ring cores per data-parallel column.
+// DeepSeek config (8 matmul cores) — BH HEIGHT_SHARDED 1:1-with-banks specialization.
+// 8 ring cores match the 8 BH DRAM banks 1:1, so weights are HEIGHT_SHARDED with the M1
+// baseline fast path (one set_state per ring core; no bank crossings). 64 W0/W1 tiles per
+// step / 8 cores = 8 each (perfectly balanced); 224 W2 width tiles / 8 cores = 28 each.
+// 8 / OUTPUT_WIDTH_SHARD_DIM(=4) = 2 ring cores per data-parallel column.
 template <bool HasBias>
 struct DeepSeekRingConfig<HasBias, 8> {
     static constexpr uint32_t NUM_CORES = 8;

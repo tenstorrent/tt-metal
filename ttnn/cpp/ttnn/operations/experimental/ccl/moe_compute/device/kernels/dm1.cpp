@@ -19,7 +19,7 @@ void kernel_main() {
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
 
-    // Ring is templatized on num_cores: 12 on Wormhole, 8 on Blackhole. See moe_ring_common.h.
+    // Ring is templatized on num_cores: 12 on WH; 8, 12, or 16 on BH (TT_MOE_BH_N). See moe_ring_common.h.
     using config_t = moe_ring::ConfigType_t<has_bias, config_type, num_cores>;
 
     // For synchronization with tilize cores
@@ -248,7 +248,7 @@ void kernel_main() {
             // Take the data in cb_s2c_in2 and send it to the next core in the ring
             // Ring synchronization: all cores participate regardless of whether they had CB work
             // We perform num_cores ring steps so the signal propagates around the entire ring
-            // (num_cores = 12 on Wormhole, 8 on Blackhole; templatized via the named CT arg).
+            // (num_cores = 12 on WH; 8, 12, or 16 on BH per TT_MOE_BH_N; templatized via the named CT arg).
             for (uint32_t i = 0; i < num_a2a_iters; ++i) {
                 for (uint32_t step = 0; step < num_a2a_steps_per_iter; ++step) {
                     // Wait for current data to be ready in cb_s2c_in2

@@ -82,17 +82,21 @@ def _get_bh_ring_size():
     """BH ring size, configurable via env var TT_MOE_BH_N. Supported: {8, 12, 16}; default 16.
 
     Must align with C++ get_bh_ring_size() in moe_compute_program_factory.cpp. WH always uses N=12.
-    N=8 selects HEIGHT_SHARDED weights (1:1 with BH's 8 DRAM banks); N=12/16 select INTERLEAVED.
+    All BH N values use HEIGHT_SHARDED weights with leading dim = num_banks (=8); N=8 is 1:1
+    with banks, N=12/16 cross banks via the bank-run loop in dm0.cpp.
+
+    Raises ValueError on an invalid env value; returns 16 only when the env var is unset.
     """
     env = os.environ.get("TT_MOE_BH_N")
-    if env is not None:
-        try:
-            n = int(env)
-            if n in (8, 12, 16):
-                return n
-        except ValueError:
-            pass
-    return 16
+    if env is None:
+        return 16
+    try:
+        n = int(env)
+    except ValueError:
+        raise ValueError(f"TT_MOE_BH_N={env!r} is not an integer (must be 8, 12, or 16)")
+    if n not in (8, 12, 16):
+        raise ValueError(f"TT_MOE_BH_N={env} is not supported (must be 8, 12, or 16)")
+    return n
 
 
 def cluster_distance(d0: int, d1: int, mesh_shape: tuple[int, int], cluster_axis: int) -> int | None:

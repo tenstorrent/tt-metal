@@ -85,15 +85,15 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         max_tokens >= total_tokens, "Too many tokens in input, got: {} but expected max: {}", total_tokens, max_tokens);
 
-    // compute_only mode: combine_params must be nullopt and the optional output tensor (which
+    // ComputeOnly mode: combine_params must be nullopt and the optional output tensor (which
     // would normally be the combine output) must not be provided.
-    if (args.compute_only) {
-        TT_FATAL(!args.combine_params.has_value(), "compute_only=true requires combine_params to be std::nullopt");
+    if (args.path == MoEComputePath::ComputeOnly) {
+        TT_FATAL(!args.combine_params.has_value(), "path=ComputeOnly requires combine_params to be std::nullopt");
         TT_FATAL(
             !tensor_args.optional_output_tensor.has_value(),
-            "compute_only=true requires optional_output_tensor to be std::nullopt (no combine output is produced)");
+            "path=ComputeOnly requires optional_output_tensor to be std::nullopt (no combine output is produced)");
     } else {
-        TT_FATAL(args.combine_params.has_value(), "compute_only=false requires combine_params to be set");
+        TT_FATAL(args.combine_params.has_value(), "path=Full requires combine_params to be set");
     }
 }
 
@@ -221,8 +221,8 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
     //-------------------------------------------------------------------------
     using namespace tt::tt_metal;
 
-    if (args.compute_only) {
-        // No combine output in compute_only mode; matmul_output_spec is the final output (slot 4).
+    if (args.path == MoEComputePath::ComputeOnly) {
+        // No combine output in ComputeOnly mode; matmul_output_spec is the final output (slot 4).
         return {
             tilize_per_expert_total_tokens_spec,
             tilize_expert_activation_spec,
@@ -231,7 +231,7 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
             matmul_output_spec};
     }
 
-    TT_FATAL(args.combine_params.has_value(), "combine_params required when compute_only is false");
+    TT_FATAL(args.combine_params.has_value(), "combine_params required when path is not ComputeOnly");
 
     ttnn::experimental::prim::SelectiveReduceCombineTensors combine_tensor_args{
         .dense_input_tensor = tilize_input_tensor,
@@ -265,7 +265,7 @@ MoEComputeDeviceOperation::tensor_return_value_t MoEComputeDeviceOperation::crea
         matmul_output_tensor.tensor_spec() == output_specs[4],
         "Reinterpreted tensor spec does not match expected output_specs[4]");
 
-    if (args.compute_only) {
+    if (args.path == MoEComputePath::ComputeOnly) {
         // 5-tensor return: matmul_output is the final output (no combine output produced).
         return {
             create_device_tensor(output_specs[0], tensor_args.tilize_input_tensor.device()),
@@ -309,7 +309,8 @@ std::vector<ttnn::Tensor> moe_compute(
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore,
     const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type,
-    const bool compute_only) {
+    const bool compute_only,
+    const std::optional<uint32_t>& bh_ring_size) {
     using OperationType = ttnn::experimental::prim::MoEComputeDeviceOperation;
 
     const auto& input_shape = tilize_input_tensor.tensor_spec().logical_shape();
@@ -322,13 +323,14 @@ std::vector<ttnn::Tensor> moe_compute(
 
     const auto& num_token_parallel_cores = output_height_shard_dim;
 
-    // Determine num_data_parallel_cores based on hidden size. WH uses N=12; BH uses
-    // get_bh_ring_size() (env var TT_MOE_BH_N, supported {8, 12, 16}, default 16). Templatize
-    // machinery in moe_ring_common.h resolves OUTPUT_WIDTH_SHARD_DIM per (config, N). Bias
-    // does not affect OUTPUT_WIDTH_SHARD_DIM. Runtime-to-compile-time switch over supported N.
+    // Determine num_data_parallel_cores based on hidden size. WH uses N=12; BH uses the
+    // op kwarg `bh_ring_size` (or env var TT_MOE_BH_N fallback, supported {8, 12, 16}, default 16).
+    // Templatize machinery in moe_ring_common.h resolves OUTPUT_WIDTH_SHARD_DIM per (config, N).
+    // Bias does not affect OUTPUT_WIDTH_SHARD_DIM. Runtime-to-compile-time switch over supported N.
     auto* mesh_device = tilize_input_tensor.device();
-    const uint32_t ring_n =
-        (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? ttnn::experimental::prim::get_bh_ring_size() : 12u;
+    const uint32_t ring_n = (mesh_device->arch() == tt::ARCH::BLACKHOLE)
+                                ? ttnn::experimental::prim::resolve_bh_ring_size(bh_ring_size)
+                                : 12u;
     auto get_output_width_shard_dim = [](uint32_t hidden, uint32_t n) -> uint32_t {
         if (hidden == 7168) {
             switch (n) {
@@ -393,7 +395,9 @@ std::vector<ttnn::Tensor> moe_compute(
             .has_bias = has_bias,
             .num_token_parallel_cores = num_token_parallel_cores,
             .num_data_parallel_cores = num_data_parallel_cores,
-            .compute_only = compute_only,
+            .path = compute_only ? experimental::prim::MoEComputePath::ComputeOnly
+                                 : experimental::prim::MoEComputePath::Full,
+            .bh_ring_size = ring_n,
             .combine_params = combine_params,
             .activation_type = activation_type.value_or(experimental::prim::detail::MoEActivationFunction::SILU)},
         OperationType::tensor_args_t{

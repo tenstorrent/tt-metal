@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 
 #include "moe_compute_device_operation_types.hpp"
@@ -33,23 +34,23 @@ struct MoEComputeMeshWorkloadFactory {
         // CB handle for matmul output
         tt::tt_metal::CBHandle matmul_writer_cb_handle;
 
-        // Combine kernel handles (empty in compute_only mode)
+        // Combine kernel handles (empty in ComputeOnly mode)
         std::vector<tt::tt_metal::KernelHandle> combine_kernel_handles;
 
-        // CB handle for combine global sharded input tensor (default-constructed in compute_only)
+        // CB handle for combine global sharded input tensor (default-constructed in ComputeOnly)
         tt::tt_metal::CBHandle combine_data_cb_handle;
 
         // CB handle for token counts per expert
         tt::tt_metal::CBHandle expert_tokens_cb_handle;
 
-        // Combine cores (empty in compute_only mode)
+        // Combine cores (empty in ComputeOnly mode)
         std::vector<CoreCoord> combine_cores;
 
-        // Combine global semaphores (empty in compute_only mode)
+        // Combine global semaphores (empty in ComputeOnly mode)
         std::vector<GlobalSemaphore> combine_global_semaphores;
 
-        // True when the fused combine path was bypassed (no combine kernels built).
-        bool compute_only = false;
+        // Path used to build this workload (Full = combine kernels built; ComputeOnly = bypassed).
+        MoEComputePath path = MoEComputePath::Full;
     };
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
@@ -80,11 +81,15 @@ std::vector<ttnn::CoreCoord> get_moe_combine_cores(
     const uint32_t combine_token_parallel_cores,
     const uint32_t combine_data_parallel_cores);
 
-// Runtime BH ring size, configurable via env var TT_MOE_BH_N. Supported values: 8, 12, 16.
-// Default is 16. The chosen N must have a corresponding DeepSeekRingConfig<HasBias, N> /
-// GptRingConfig<HasBias, N> specialization in moe_ring_common.h. WH always uses N=12.
-// N=8 maps 1:1 to BH's 8 DRAM banks; N=12/16 use HEIGHT_SHARDED (8 banks) + bank-run reads.
-// Read once and cached so a session sees a stable N for all op invocations.
+// BH ring size resolver. Resolution order:
+//   1. If `explicit_value` is provided, validate ({8, 12, 16}) and return; fatal on invalid.
+//   2. Else if env var TT_MOE_BH_N is set, validate and return; fatal on invalid.
+//   3. Else return the default (16).
+// Used by the op kwarg path (per-call, with explicit override) and by get_moe_combine_cores
+// (env-only). WH always uses N=12 and ignores this resolver entirely.
+uint32_t resolve_bh_ring_size(std::optional<uint32_t> explicit_value);
+
+// Env-var-only convenience wrapper. Equivalent to `resolve_bh_ring_size(std::nullopt)`.
 uint32_t get_bh_ring_size();
 
 }  // namespace ttnn::experimental::prim
