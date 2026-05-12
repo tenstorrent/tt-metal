@@ -26,7 +26,7 @@ class TwoMeshDeviceFixture : public MeshDispatchFixture {
 protected:
     void SetUp() override {
         const char* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (!slow_dispatch || slow_dispatch[0] != \'1\') {
+        if (!slow_dispatch || slow_dispatch[0] != '1') {
             log_info(tt::LogTest, "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
             GTEST_SKIP();
         }

@@ -56,7 +56,7 @@ protected:
     bool validate_dispatch_mode() {
         this->slow_dispatch_ = true;
         const char* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (!slow_dispatch || slow_dispatch[0] != \'1\') {
+        if (!slow_dispatch || slow_dispatch[0] != '1') {
             log_info(tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
             this->slow_dispatch_ = false;
             return false;
@@ -120,7 +120,7 @@ protected:
     virtual bool validate_dispatch_mode() {
         this->slow_dispatch_ = true;
         const char* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (!slow_dispatch || slow_dispatch[0] != \'1\') {
+        if (!slow_dispatch || slow_dispatch[0] != '1') {
             log_info(tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
             this->slow_dispatch_ = false;
             return false;
