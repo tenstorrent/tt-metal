@@ -51,7 +51,6 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
                 yaml-cpp::yaml-cpp
                 TT::ScaleoutTools
         )
-        target_link_libraries(${TEST_TARGET} PRIVATE yaml-cpp::yaml-cpp)
         list(APPEND FABRIC_TEST_TARGETS ${TEST_TARGET})
     endif()
     if(${TEST_SRC} STREQUAL "routing/test_tt_fabric_mux_bandwidth.cpp")
