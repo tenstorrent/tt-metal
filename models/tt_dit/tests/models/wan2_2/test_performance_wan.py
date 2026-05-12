@@ -407,7 +407,7 @@ def test_pipeline_performance(
         }
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
-            run_type=device_name_map[mesh_shape],
+            run_type=device_name_map[mesh_shape] + ("_quant" if quant_config_name else ""),
             ml_model_name="Wan2.2",
             batch_size=1,
             config_params={
