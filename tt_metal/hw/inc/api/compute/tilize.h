@@ -8,6 +8,9 @@
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
+#ifdef ARCH_BLACKHOLE
+#include "experimental/llk_math_fast_tilize_api.h"
+#endif
 #ifndef ARCH_QUASAR
 #include "llk_math_reduce_api.h"
 #include "llk_math_matmul_api.h"
@@ -15,7 +18,13 @@
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_tilize_api.h"
+#ifdef ARCH_BLACKHOLE
+#include "experimental/llk_unpack_fast_tilize_api.h"
+#endif
 #include "llk_unpack_common_api.h"
+#endif
+#if defined(TRISC_PACK) && defined(ARCH_BLACKHOLE)
+#include "experimental/llk_pack_fast_tilize_api.h"
 #endif
 
 namespace ckernel {
@@ -258,10 +267,21 @@ ALWI void tilize_uninit_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t ocb
 }
 
 ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
 #ifdef ARCH_BLACKHOLE
-    // Blackhole fallback
-    tilize_init(icb, full_dim, ocb, call_line);
+    if (full_dim == 1) {
+        tilize_init(icb, full_dim, ocb, call_line);
+        return;
+    }
+#endif
+
+    state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
+
+#ifdef ARCH_BLACKHOLE
+    // first_chunk = decompose_row(full_dim)[0]: avoids first reinit_xdim in block loop.
+    uint32_t first_chunk = (full_dim > 5) ? 4 : (full_dim == 5) ? 2 : full_dim;
+    UNPACK((llk_unpack_fast_tilize_init(icb, full_dim, first_chunk)));
+    MATH((llk_math_fast_tilize_init(icb)));
+    PACK((llk_pack_fast_tilize_init(icb, ocb, first_chunk)));
 #else
     UNPACK((llk_unpack_fast_tilize_init(icb, full_dim)));
     MATH((llk_math_fast_tilize_init(icb, full_dim == 1 ? 1 : 2)));
@@ -270,28 +290,75 @@ ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32
 }
 
 ALWI void fast_tilize_init_with_dt(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
+    // Reconfig both SrcA and SrcB to match WH: some activation-reuse call sites
+    // leave SrcB in a prior matmul-weights config that's incompatible with the
+    // fast-tilize path, producing garbage output.
     UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(icb, icb)));
     MATH((llk_math_reconfig_data_format<true, true>(icb, icb)));
 
     fast_tilize_init(icb, full_dim, ocb);
 }
 
-ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb) {
+ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb, uint32_t full_dim) {
 #ifdef ARCH_BLACKHOLE
-    // Blackhole fallback
-    tilize_uninit(icb, ocb);
-#else
+    if (full_dim == 1) {
+        tilize_uninit(icb, ocb);
+        return;
+    }
+#endif
+
     UNPACK((llk_unpack_fast_tilize_uninit<DST_ACCUM_MODE>()));
     MATH((llk_math_fast_tilize_uninit<DST_ACCUM_MODE>(icb)));
     PACK((llk_pack_fast_tilize_uninit<DST_ACCUM_MODE>(ocb)));
-#endif
 }
 
 ALWI void fast_tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
 #ifdef ARCH_BLACKHOLE
-    // Blackhole fallback
-    tilize_block(icb, block, ocb, input_tile_index, output_tile_index);
+    if (block == 1) {
+        tilize_block(icb, block, ocb, input_tile_index, output_tile_index);
+        return;
+    }
+    ASSERT(block > 1);
+
+    // BH fast-tilize: each row chunk calls llk_unpack_fast_tilize_block directly.
+    // Pack programs output L1 destination once per call; replay advances per tile.
+    {
+        input_tile_index = input_tile_index % block + (input_tile_index / block) * block * TILE_R_DIM;
+
+        uint32_t tiles_done = 0;
+        // Always program the current unit dim at block entry.
+        uint32_t prev_chunk = 0;
+
+        PACK((llk_pack_fast_tilize_row_begin(ocb, output_tile_index)));
+
+        while (tiles_done < block) {
+            // BH fast-tilize MOP supports unit_dim 2, 3, 4 (not 1).
+            // Avoid chunk=1 by splitting: remaining=5 → 2+3 instead of 4+1.
+            // Matches LLK decompose_row order.
+            uint32_t remaining = block - tiles_done;
+            uint32_t chunk = (remaining > 5) ? 4 : (remaining == 5) ? 2 : remaining;
+
+            MATH((llk_math_wait_for_dest_available()));
+            PACK((llk_packer_wait_for_math_done()));
+
+            if (chunk != prev_chunk) {
+                UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
+                PACK((llk_pack_fast_tilize_reinit_unit_dim(ocb, chunk)));
+                prev_chunk = chunk;
+            }
+            UNPACK((llk_unpack_fast_tilize_block(icb, input_tile_index, chunk, tiles_done)));
+            MATH((llk_math_fast_tilize_block_(0, icb, 4)));
+            PACK((llk_pack_fast_tilize_row_chunk(0, ocb, chunk)));
+
+            MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+            PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+
+            tiles_done += chunk;
+        }
+
+        PACK((llk_pack_fast_tilize_row_end()));
+    }
 #else
     uint32_t full_dim = block;
 
