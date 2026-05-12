@@ -343,14 +343,25 @@ class TransformerBlock(Module):
             0,
         )
 
-        spatial_normed = self.ccl_manager.all_gather_persistent_buffer(
-            spatial_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
-        )
-        spatial_ff = ttnn.squeeze(
-            self.ff(ttnn.unsqueeze(spatial_normed, 0), compute_kernel_config=self.ff_compute_kernel_config), 0
-        )
         spatial_gate_ff = ttnn.typecast(spatial_gate_ff, dtype=ttnn.bfloat16)
-        spatial = ttnn.addcmul(spatial, spatial_ff, spatial_gate_ff)
+        if is_ring:
+            # Ring: ff1 fuses AG+GEMM internally via parallel_config; ff2 fuses RS+addcmul at final write.
+            spatial = self.ff.forward_fused_addcmul(
+                spatial_normed,
+                spatial,
+                spatial_gate_ff,
+                scalar=1.0,
+                compute_kernel_config=self.ff_compute_kernel_config,
+                parallel_config=self.parallel_config,
+            )
+        else:
+            spatial_normed = self.ccl_manager.all_gather_persistent_buffer(
+                spatial_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+            )
+            spatial_ff = ttnn.squeeze(
+                self.ff(ttnn.unsqueeze(spatial_normed, 0), compute_kernel_config=self.ff_compute_kernel_config), 0
+            )
+            spatial = ttnn.addcmul(spatial, spatial_ff, spatial_gate_ff)
 
         if self.context_pre_only:
             return spatial, None
@@ -364,14 +375,26 @@ class TransformerBlock(Module):
             0,
         )
 
-        prompt_normed = self.ccl_manager.all_gather_persistent_buffer(
-            prompt_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
-        )
-        prompt_ff = ttnn.squeeze(
-            self.ff_context(ttnn.unsqueeze(prompt_normed, 0), compute_kernel_config=self.ff_compute_kernel_config), 0
-        )
         prompt_gate_ff = ttnn.typecast(prompt_gate_ff, dtype=ttnn.bfloat16)
-        prompt = ttnn.addcmul(prompt, prompt_ff, prompt_gate_ff)
+        if is_ring:
+            # Ring: ff1 fuses AG+GEMM internally via parallel_config; ff2 fuses RS+addcmul at final write.
+            prompt = self.ff_context.forward_fused_addcmul(
+                prompt_normed,
+                prompt,
+                prompt_gate_ff,
+                scalar=1.0,
+                compute_kernel_config=self.ff_compute_kernel_config,
+                parallel_config=self.parallel_config,
+            )
+        else:
+            prompt_normed = self.ccl_manager.all_gather_persistent_buffer(
+                prompt_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+            )
+            prompt_ff = ttnn.squeeze(
+                self.ff_context(ttnn.unsqueeze(prompt_normed, 0), compute_kernel_config=self.ff_compute_kernel_config),
+                0,
+            )
+            prompt = ttnn.addcmul(prompt, prompt_ff, prompt_gate_ff)
 
         return spatial, prompt
 

@@ -8,6 +8,7 @@ from typing import NamedTuple
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 # Track unique warning signatures to avoid stdout spam
 _warned_matmul_signatures = set()
@@ -270,7 +271,11 @@ class FusedMMRSConfig(NamedTuple):
         }
 
 
-default_fused_mmrs_config = FusedMMRSConfig(ttnn.CoreCoord(8, 7), 2, 8, 8, 1, 1, None, 1)
+if is_blackhole():
+    default_fused_mmrs_config = FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 1, None, 1)
+else:
+    default_fused_mmrs_config = FusedMMRSConfig(ttnn.CoreCoord(8, 7), 2, 8, 8, 1, 1, None, 1)
+
 # core_grid: {MKN: mm_core_grid, M, K, N, sub_h, sub_w, num_w_p_link, num_buffers_per_channel, chunk_width_in_mm_blocks}
 fused_mmrs_configs = {
     ttnn.CoreCoord(8, 9): {
