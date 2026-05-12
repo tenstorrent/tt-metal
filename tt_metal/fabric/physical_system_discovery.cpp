@@ -461,7 +461,7 @@ void exchange_metadata(
         }
     } else {
         sender_ranks.insert(controller_rank);
-        for (std::size_t rank = 0; rank < *(distributed_context->size()); rank++) {
+        for (std::size_t rank = 0; static_cast<int>(rank) < *(distributed_context->size()); rank++) {
             if (rank != controller_rank) {
                 receiver_ranks.insert(rank);
             }
