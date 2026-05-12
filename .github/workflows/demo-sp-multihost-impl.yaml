@@ -253,6 +253,16 @@ jobs:
           echo "ERROR: Recovery failed after $MAX_RECOVERY_ATTEMPTS attempts"
           exit 1
 
+      - name: Verify Python env on workers
+        working-directory: /tmp
+        run: |
+          mpirun --pernode --tag-output bash -lc '
+            echo "host=$(hostname)"
+            echo "python3=$(command -v python3)"
+            python3 -V
+            python3 -c "import transformers; print(\"transformers=\" + transformers.__version__)"
+          '
+
       - name: ${{ matrix.test-group.name }}
         id: run-test
         timeout-minutes: ${{ matrix.test-group.timeout }}
