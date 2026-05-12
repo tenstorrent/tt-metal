@@ -91,6 +91,10 @@ TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 CI_BUILD_VENV_DOCKERFILE="$TMP_DIR/Dockerfile.python.ci-build"
+# Split Dockerfile.python at the ci-test-venv stage boundary to hash only the
+# ci-build-venv portion. The awk pattern is keyed on the exact stage name line
+# "FROM ci-build-venv-builder AS ci-test-venv-builder" in Dockerfile.python.
+# If those stage names are ever renamed, this pattern must be updated to match.
 awk '
     /^FROM ci-build-venv-builder AS ci-test-venv-builder$/ { exit }
     { print }

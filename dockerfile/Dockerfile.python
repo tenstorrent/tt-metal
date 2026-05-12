@@ -105,6 +105,11 @@ COPY --from=ci-build-venv-builder /opt/venv /install/venv
 # Extends ci-build-venv-builder with test dependencies.
 # Packages: torch (CPU) + requirements-dev.txt + docs + triage
 #############################################################
+# WARNING: The stage names below ("ci-build-venv-builder" and "ci-test-venv-builder")
+# are load-bearing. compute-platform-data.sh uses an awk pattern keyed on the exact
+# line "FROM ci-build-venv-builder AS ci-test-venv-builder" to split this file for
+# separate hash computation of ci-build-venv vs ci-test-venv images. Do NOT rename
+# these stages without updating the awk pattern in compute-platform-data.sh.
 
 FROM ci-build-venv-builder AS ci-test-venv-builder
 
