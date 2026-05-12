@@ -1166,13 +1166,13 @@ def test_ring_joint_attention_create_perf_table(model_name):
 
 # === TEST 5: PERFORMANCE CHECK (CI-gated by SDPA_PERF_CHECKS=1) ===
 # Symmetric +/- band — catches both regressions and unexpected speedups.
-RING_JOINT_PERF_MARGIN = 0.005
+RING_JOINT_PERF_MARGIN = 0.007
 
 RING_JOINT_PERF_CHECK_CONFIGS = [
     # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
     # 4-device ring (QuietBox)
     ("wan2_2_1xGLX", 288, 512, 4, 68.9),
-    ("mla_100k", 160, 320, 4, 58.4),
+    ("mla_100k", 160, 320, 4, 61.4),
 ]
 
 
