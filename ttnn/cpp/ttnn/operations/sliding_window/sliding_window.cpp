@@ -766,7 +766,7 @@ static std::pair<GatherConfig, GatherConfig> divide_transfers_between_cores(cons
     std::vector<DestinationTransferPair> all = flatten_gather_config(input);
     std::vector<DestinationTransferPair> first;
     std::vector<DestinationTransferPair> second;
-    for (int transfer_id = 0; transfer_id < all.size(); transfer_id++) {
+    for (size_t transfer_id = 0; transfer_id < all.size(); transfer_id++) {
         (transfer_id % NUM_RISCV_DATA_MOVEMENT_CORES == 0 ? first : second).push_back(all[transfer_id]);
     }
     return std::make_pair(reduce_flattened_transfers(first), reduce_flattened_transfers(second));
@@ -854,7 +854,7 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     }
 
     std::vector<GatherConfig> gather_configs(num_cores_nhw);
-    for (int core_id = 0; core_id < local_config.size(); core_id++) {
+    for (size_t core_id = 0; core_id < local_config.size(); core_id++) {
         const auto& config = local_config[core_id];
         const auto& [src_core_id, dst_core_id, num_copies] = config.first;
         std::vector<GatherTransfer> transfers;
@@ -868,7 +868,7 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
         gather_configs[core_id].routes.push_back(GatherRoute{header, transfers});
     }
 
-    for (int core_id = 0; core_id < remote_config.size(); core_id++) {
+    for (size_t core_id = 0; core_id < remote_config.size(); core_id++) {
         for (const auto& destination : remote_config[core_id]) {
             const auto& [src_core_id, dst_core_id, num_copies] = destination.first;
             std::vector<GatherTransfer> transfers;
@@ -931,7 +931,7 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
 
     std::vector<std::vector<uint32_pair_t>> pad_config0(num_cores_nhw);
     std::vector<std::vector<uint32_pair_t>> pad_config1(num_cores_nhw);
-    for (int core_idx = 0; core_idx < pad_config.size(); core_idx++) {
+    for (size_t core_idx = 0; core_idx < pad_config.size(); core_idx++) {
         const auto& config = pad_config[core_idx];
         auto middle = config.begin() + config.size() / 2;
         pad_config0[core_idx] = std::vector<uint32_pair_t>(config.begin(), middle);
@@ -1189,7 +1189,7 @@ uint32_t get_repeat_factor_for_replicating_nhw_config_across_grid(const Parallel
 
 std::vector<uint16_t> replicate_config(const std::vector<uint16_t>& config_vector, int factor) {
     std::vector<uint16_t> repeat_config;
-    for (uint32_t i = 0; i < factor; ++i) {
+    for (int i = 0; i < factor; ++i) {
         repeat_config.insert(repeat_config.end(), config_vector.begin(), config_vector.end());
     }
     return repeat_config;

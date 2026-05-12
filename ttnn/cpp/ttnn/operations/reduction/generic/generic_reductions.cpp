@@ -49,7 +49,7 @@ std::tuple<ttnn::SmallVector<int>, ttnn::SmallVector<int>, ttnn::SmallVector<int
         "Input shape size {} and output shape size {} need to be equal.",
         input_shape.size(),
         output_shape.size());
-    for (int i = 0; i < input_shape.size(); i++) {
+    for (int i = 0; i < static_cast<int>(input_shape.size()); i++) {
         start.push_back(0);
         end.push_back(std::min(input_shape[i], output_shape[i]));
         step.push_back(1);
@@ -87,7 +87,7 @@ Tensor adjust_shape(
     const ttnn::SmallVector<int>& height_width_dims,
     const ttnn::SmallVector<int>& non_height_width_dims) {
     ttnn::SmallVector<uint32_t> output_shape;
-    for (int axis = 0; axis < input_shape.size(); axis++) {
+    for (int axis = 0; axis < static_cast<int>(input_shape.size()); axis++) {
         bool in_height_width_dims =
             std::find(height_width_dims.begin(), height_width_dims.end(), axis) != height_width_dims.end();
         bool in_non_height_width_dims =
@@ -120,7 +120,7 @@ static Tensor reduce_impl(
     bool chain_active = false,
     bool is_last_in_chain = false) {
     auto input_shape = input_tensor_arg.logical_shape();
-    auto rank = input_shape.rank();
+    int rank = static_cast<int>(input_shape.rank());
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
 
     Tensor output_tensor;

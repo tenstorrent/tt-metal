@@ -24,7 +24,7 @@ ttnn::SmallVector<int> generate_reduce_dim(
     const ttnn::Tensor& input_tensor_arg,
     const std::optional<std::variant<int, int64_t, ttnn::SmallVector<int>>>& dim_arg) {
     const auto& input_shape = input_tensor_arg.logical_shape();
-    auto rank = input_shape.rank();
+    int rank = static_cast<int>(input_shape.rank());
     ttnn::SmallVector<int> dim{};
     if (dim_arg.has_value()) {
         if (std::holds_alternative<int>(dim_arg.value())) {
@@ -51,7 +51,7 @@ ttnn::SmallVector<int> generate_reduce_dim(
         return dim;
     }
 
-    for (int i = 0; i < dim.size(); i++) {
+    for (int i = 0; i < static_cast<int>(dim.size()); i++) {
         int& dim_i = dim[i];
         if (dim_i < 0) {
             dim_i += rank;
