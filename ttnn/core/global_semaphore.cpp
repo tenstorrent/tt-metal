@@ -46,7 +46,7 @@ MultiDeviceGlobalSemaphore create_global_semaphore_with_same_address(
     if (!all_same) {
         log_debug(tt::LogTTNN, "chkpt 1, attempts: {}", attempts);
         tt::tt_metal::DeviceAddr target_addr = get_global_semaphore_address(global_semaphores.front());
-        for (auto i = 1; i < global_semaphores.size(); i++) {
+        for (size_t i = 1; i < global_semaphores.size(); i++) {
             log_debug(
                 tt::LogTTNN,
                 "chkpt 1.1, i: {}, global_semaphores[i]->address(): {}",
@@ -59,7 +59,7 @@ MultiDeviceGlobalSemaphore create_global_semaphore_with_same_address(
             }
         };
         log_debug(tt::LogTTNN, "chkpt 2, target_addr: {}", target_addr);
-        for (auto i = 0; i < global_semaphores.size(); i++) {
+        for (size_t i = 0; i < global_semaphores.size(); i++) {
             auto* device = devices[i];
             auto& global_semaphore = multi_device_global_semaphore.global_semaphores[i];
             size_t attempt = 0;
