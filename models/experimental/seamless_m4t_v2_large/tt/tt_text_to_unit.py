@@ -190,8 +190,15 @@ def _conv1d_same(
     kernel_size: int,
     padding: int,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig,
+    activation: Optional[str] = None,
 ) -> ttnn.Tensor:
-    """Same-padding Conv1d stride 1 via ``ttnn.conv1d`` (activations ``[B,S,C]`` NLC)."""
+    """Same-padding Conv1d stride 1 via ``ttnn.conv1d`` (activations ``[B,S,C]`` NLC).
+
+    When ``activation`` is provided (e.g. ``"relu"``) it is fused into the
+    conv kernel via ``Conv1dConfig.activation``; the SFPU applies it at the
+    writeback stage of each output tile so no separate UnaryDeviceOperation
+    is dispatched.  Numerically equivalent to a post-conv ``ttnn.relu``.
+    """
     batch = int(x_tile.shape[0])
     seq = int(sequence_length)
     x_rm = ttnn.to_layout(x_tile, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -203,6 +210,19 @@ def _conv1d_same(
         shard_layout=None,
         deallocate_activation=True,
     )
+    if activation:
+        # ``Conv1dConfig.activation`` is bound as ``UnaryWithParam`` in Python;
+        # the friendly ``"relu"`` string is mapped here so call sites remain
+        # compact.  Extend the mapping if/when other fused activations are needed.
+        _ACTIVATION_OP_TYPES = {
+            "relu": ttnn.UnaryOpType.RELU,
+            "silu": ttnn.UnaryOpType.SILU,
+            "gelu": ttnn.UnaryOpType.GELU,
+        }
+        op_type = _ACTIVATION_OP_TYPES.get(activation.lower())
+        if op_type is None:
+            raise ValueError(f"_conv1d_same: unsupported activation {activation!r}")
+        conv_kwargs["activation"] = ttnn.UnaryWithParam(op_type)
     if seq > 64 or in_channels >= 512:
         conv_kwargs["act_block_h_override"] = 32
     conv_config = ttnn.Conv1dConfig(**conv_kwargs)
@@ -634,8 +654,8 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             kernel_size=k,
             padding=pad,
             compute_kernel_config=self._conv_compute_cfg,
+            activation="relu",
         )
-        h = ttnn.relu(h)
         h = self._layer_norm(h, weight=p.ln1.weight, bias=p.ln1.bias)
         h = ttnn.multiply(h, mask_bc, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -650,8 +670,8 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             kernel_size=k,
             padding=pad,
             compute_kernel_config=self._conv_compute_cfg,
+            activation="relu",
         )
-        h = ttnn.relu(h)
         h = self._layer_norm(h, weight=p.ln2.weight, bias=p.ln2.bias)
         return self._linear(h, p.proj.weight, p.proj.bias)
 
@@ -704,9 +724,9 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             kernel_size=7,
             padding=3,
             compute_kernel_config=self._conv_compute_cfg,
+            activation="relu",
         )
         hidden = ttnn.multiply(hidden, mask_bc, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        hidden = ttnn.relu(hidden)
         hidden = _conv1d_same(
             self.device,
             hidden,
