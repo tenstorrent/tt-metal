@@ -360,8 +360,8 @@ std::vector<RankBindingConfig> extract_rank_bindings(
     }
 
     // Build flat list of (mesh_id, hostname, chip_ids, mesh_host_rank, psd_rank) for canonical ordering
-    // Order: PSD rank first (so output rank i matches topology mapper's mpi_rank_to_host[i]),
-    // then mesh_id, mesh_host_rank, hostname - ensures alignment with physical discovery
+    // Order after sort: mesh_id ascending (rank 0 is first/lowest mesh), then mesh_host_rank, hostname,
+    // PSD rank tiebreaker — so sequential MPI rank tracks mesh topology; psd_mpi_rank field keeps PSD identity
     using Entry = std::tuple<int, std::string, std::vector<tt::ChipId>, int, int>;
     std::vector<Entry> entries;
     for (const auto& [mesh_id, hostname_map] : mesh_host_asics) {
@@ -385,18 +385,18 @@ std::vector<RankBindingConfig> extract_rank_bindings(
         }
     }
     std::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) {
-        // Primary: PSD rank - output rank must match topology mapper's mpi_rank_to_host expectation
-        if (std::get<4>(a) != std::get<4>(b)) {
-            return std::get<4>(a) < std::get<4>(b);
-        }
-        // Secondary: mesh_id, mesh_host_rank, hostname for deterministic ordering
+        // Primary: mesh_id ascending so binding.rank aligns with mesh order (rank 0 from mesh id 0 first)
         if (std::get<0>(a) != std::get<0>(b)) {
             return std::get<0>(a) < std::get<0>(b);
         }
         if (std::get<3>(a) != std::get<3>(b)) {
             return std::get<3>(a) < std::get<3>(b);
         }
-        return std::get<1>(a) < std::get<1>(b);
+        if (std::get<1>(a) != std::get<1>(b)) {
+            return std::get<1>(a) < std::get<1>(b);
+        }
+        // PSD rank last for deterministic ties only
+        return std::get<4>(a) < std::get<4>(b);
     });
 
     // Assign contiguous ranks 0..N-1 and track slot per host for rankfile
@@ -407,7 +407,8 @@ std::vector<RankBindingConfig> extract_rank_bindings(
         const auto& [mesh_id, hostname, chip_ids, mesh_host_rank, psd_rank] = entries[i];
 
         RankBindingConfig binding;
-        // binding.rank is a sequential MPI rank (0, 1, 2, ...) that must be unique and contiguous.
+        // binding.rank is a sequential MPI rank (0, 1, 2, ...) that must be unique and contiguous,
+        // assigned in mesh_id-major sorted order so low ranks correspond to low mesh ids.
         // It must match: (1) the rank in rank_bindings.yaml, and (2) the rank in rankfile.
         // binding.psd_mpi_rank stores the PSD MPI rank from discovery, used for phase2_mock_mapping.yaml lookup.
         binding.rank = static_cast<int>(i);  // Sequential rank for rankfile and rank_bindings.yaml
