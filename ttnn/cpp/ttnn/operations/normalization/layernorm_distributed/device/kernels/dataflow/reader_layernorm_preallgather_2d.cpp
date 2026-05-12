@@ -54,6 +54,15 @@ void kernel_main() {
     experimental::CircularBuffer cb_x2_merge_buf(cb_x2_merge);
     experimental::Semaphore<> reducer_sem(reducer_semaphore_id);
 
+#if FUSE_PRE_ADD
+    const uint32_t res_addr = get_arg_val<uint32_t>(8);  // Residual source address in dram
+    constexpr uint32_t cb_res = tt::CBIndex::c_5;
+    const uint32_t src1_tile_bytes = get_tile_size(cb_res);
+    constexpr auto res_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
+    const auto src_b = TensorAccessor(res_args, res_addr);
+    experimental::CircularBuffer cb_res_buf(cb_res);
+#endif
+
     // Generate constant tiles for reduce scalar
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         cb_reduce,
@@ -71,6 +80,9 @@ void kernel_main() {
         // read input tiles
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_inp_buf.reserve_back(blk);
+#if FUSE_PRE_ADD
+            cb_res_buf.reserve_back(blk);
+#endif
 
             for (uint32_t r = 0; r < blk; r++) {
                 noc.async_read(
@@ -79,11 +91,22 @@ void kernel_main() {
                     src0_tile_bytes,
                     {.page_id = inp_tile_idx},
                     {.offset_bytes = r * src0_tile_bytes});
+#if FUSE_PRE_ADD
+                noc.async_read(
+                    src_b,
+                    cb_res_buf,
+                    src1_tile_bytes,
+                    {.page_id = inp_tile_idx},
+                    {.offset_bytes = r * src1_tile_bytes});
+#endif
                 inp_tile_idx++;
             }
             noc.async_read_barrier();
 
             cb_inp_buf.push_back(blk);
+#if FUSE_PRE_ADD
+            cb_res_buf.push_back(blk);
+#endif
 
         }  // wt loop
 
