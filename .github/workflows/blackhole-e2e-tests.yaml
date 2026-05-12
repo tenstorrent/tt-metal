@@ -77,18 +77,6 @@ on:
         description: "Enable Link Time Optimization (LTO)"
   schedule:
     - cron: "0 */8 * * *"  # Every 8 hours at 0:00, 8:00, and 16:00 UTC
-  # REVERT ME: auto-fire on every push to the BH reorg branch so we can iterate
-  # without `gh workflow run` and without the file existing on `main`. Drop this
-  # block before merging.
-  push:
-    branches:
-      - tdowdall/30675-reorg-bh-pipeline
-    paths:
-      - '.github/workflows/blackhole-e2e-tests*.yaml'
-      - '.github/workflows/blackhole-sanity-tests*.yaml'
-      - '.github/workflows/build-artifact.yaml'
-      - 'tests/pipeline_reorg/blackhole_e2e_tests.yaml'
-      - '.github/time_budget.yaml'
 
 jobs:
   generate-card-matrix:
