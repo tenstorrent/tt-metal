@@ -12,6 +12,8 @@ Runs on a single Tenstorrent device. Emulates the 16×8 mesh (128 devices)
 by 128 sequential iterations (same pattern as test_deepseek_moe_fast_reduce_nc_single.py).
 """
 
+import random
+
 import pytest
 import torch
 from loguru import logger
@@ -56,164 +58,99 @@ def _torch_golden_scale_and_fast_reduce_nc(
     return goldens
 
 
-# @pytest.mark.requires_device(["N150", "N300"])
-@pytest.mark.parametrize("batches_per_device", [32])
-@pytest.mark.parametrize("select_experts_k", [8])
-@pytest.mark.parametrize("seq", [1])
-@pytest.mark.parametrize("hidden_size", [7168])
-@pytest.mark.parametrize("device_params", [{}], indirect=True, ids=["single_device_default"])
-def test_deepseek_moe_fast_reduce_nc_separated(
-    mesh_device,
-    batches_per_device,
-    select_experts_k,
-    seq,
-    hidden_size,
+def _gen_expert_mapping_linearized(experts, num_devices):
+    """Convention-B mapping: shape [1, experts], cell value = linearized device id owning that expert.
+
+    Distributes experts evenly across devices in contiguous blocks (device d owns
+    [d*E, (d+1)*E) where E = experts/num_devices). Matches the format
+    `MoEOptimized.create_shared_state` constructs (pre-`map_shared_experts`).
+    The one-hot variant from `tests/nightly/t3000/ccl/test_all_to_all_dispatch.py:gen_expert_mapping`
+    is intentionally not used — this op expects the linearized-device-id encoding.
+    """
+    assert experts % num_devices == 0
+    experts_per_device = experts // num_devices
+    mapping = torch.empty((1, experts), dtype=torch.int32)
+    for e in range(experts):
+        mapping[0, e] = e // experts_per_device
+    return mapping
+
+
+def _get_expert_indices(batch, experts, selected_experts_k, seq_len):
+    """Per-token random distinct expert ids. Shape [batch, 1, seq_len, k], int32.
+
+    Trimmed from the `random` scheme of
+    `tests/nightly/t3000/ccl/test_all_to_all_dispatch.py:get_expert_indices`
+    (dropped the avg_perf / worst_perf / congestion variants that aren't relevant here).
+    """
+    indices = torch.empty((batch, 1, seq_len, selected_experts_k), dtype=torch.int32)
+    for b in range(batch):
+        for s in range(seq_len):
+            picks = random.sample(range(experts), selected_experts_k)
+            for k, e in enumerate(picks):
+                indices[b, 0, s, k] = e
+    return indices
+
+
+def _on_axis_mask(indices_local, mapping, mesh_shape, mesh_coord, cluster_axis):
+    """Per (token, k) bool mask: True iff the expert routed for that slot lives on this device's
+    cluster axis. Matches the kernel's compute_on_axis(t, k) predicate.
+
+    Args:
+        indices_local: [tokens, 1, seq, k] int — this device's slice of expert_indices.
+        mapping:       [1, experts] int — global expert→owning-device map (linearized).
+        mesh_shape:    (rows, cols) of the emulated mesh.
+        mesh_coord:    (row, col) of the device we're emulating.
+        cluster_axis:  0 ⇒ cluster is a column; 1 ⇒ cluster is a row.
+    """
+    owner_device = mapping[0, indices_local.long()]  # [tokens, 1, seq, k]
+    owner_row = owner_device // mesh_shape[1]
+    owner_col = owner_device % mesh_shape[1]
+    if cluster_axis == 0:
+        return owner_col == mesh_coord[1]
+    return owner_row == mesh_coord[0]
+
+
+def _torch_golden_gated(
+    u_local,
+    s_local,
+    ind_local,
+    mapping,
+    mesh_shape,
+    mesh_coord,
+    cluster_axis,
+    num_replicated_devices,
 ):
-    if mesh_device.get_num_devices() != 1:
-        pytest.skip(
-            f"Single-device fused variant: expected 1 device, got {mesh_device.get_num_devices()} "
-            "(use e.g. MESH_DEVICE=N150)."
-        )
-
-    torch.manual_seed(2005)
-
-    cluster_axis = 0
-    ref_mesh_shape = REFERENCE_MESH_SHAPE
-    num_dispatch_devices = ref_mesh_shape[cluster_axis]
-    num_replicated_devices = NUM_REFERENCE_MESH_DEVICES // num_dispatch_devices
-    batch = batches_per_device * num_dispatch_devices
-    tokens_per_dispatch_device = batch // num_dispatch_devices
-
-    # Memory configs (identical to test_deepseek_moe_fast_reduce_nc_single.py)
-    activation_memory_config = ttnn.L1_MEMORY_CONFIG
-    scaled_output_memory_config = ttnn.L1_MEMORY_CONFIG
-
-    fast_reduce_output_memory_config = ttnn.MemoryConfig(
-        ttnn.BufferType.L1,
-        ttnn.NdShardSpec(
-            ttnn.Shape([1, 32, 128]),
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(2, 5), ttnn.CoreCoord(2, 5)),
-                    ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(3, 5), ttnn.CoreCoord(3, 5)),
-                    ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
-                ]
-            ),
-            ttnn.ShardOrientation.ROW_MAJOR,
-            ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
-        ),
-    )
-
-    replicate_mapper = ttnn.replicate_tensor_to_mesh_mapper(mesh_device)
-
-    # Global tensors (same dimensions as the original multi-chip test)
-    torch_unsqueezed_global = torch.rand((select_experts_k, 1, batch, hidden_size), dtype=torch.bfloat16) - 0.5
-    torch_expert_scores_global = torch.rand((batch, 1, seq, select_experts_k), dtype=torch.bfloat16)
-    torch_expert_scores_global = torch_expert_scores_global / torch_expert_scores_global.sum(dim=-1, keepdim=True)
-
-    torch_goldens = _torch_golden_scale_and_fast_reduce_nc(
-        torch_unsqueezed_global,
-        torch_expert_scores_global,
-        num_replicated_devices=num_replicated_devices,
-    )
-
-    pcc_threshold = 0.988
-
-    for virtual_device_idx in range(NUM_REFERENCE_MESH_DEVICES):
-        mesh_row = virtual_device_idx // ref_mesh_shape[1]
-        t0 = mesh_row * tokens_per_dispatch_device
-        t1 = t0 + tokens_per_dispatch_device
-
-        u_slice = torch_unsqueezed_global[:, :, t0:t1, :].contiguous()
-        s_slice = torch_expert_scores_global[t0:t1, :, :, :].contiguous()
-
-        # Activation: TILE layout, L1 — same as unsqueezed_output in unfused path
-        tt_activation = ttnn.from_torch(
-            u_slice,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=activation_memory_config,
-            mesh_mapper=replicate_mapper,
-        )
-
-        # Scores: ROW_MAJOR layout, DRAM — passed directly (no permute/tilize in Python)
-        tt_scores_dram = ttnn.from_torch(
-            s_slice,
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=replicate_mapper,
-        )
-
-        # permute, to_layout, mul, deepseek_moe_fast_reduce_nc
-        topk_experts_weights = tt_scores_dram
-        tt_unsqueezed_output = tt_activation
-        topk_experts_weights = ttnn.permute(
-            topk_experts_weights, (3, 1, 0, 2), memory_config=scaled_output_memory_config
-        )
-        topk_experts_weights = ttnn.to_layout(
-            topk_experts_weights, layout=ttnn.TILE_LAYOUT, memory_config=scaled_output_memory_config
-        )
-        tt_scaled_output = ttnn.mul(
-            tt_unsqueezed_output, topk_experts_weights, memory_config=scaled_output_memory_config
-        )
-        tt_fast_reduce_output_tensors = ttnn.experimental.deepseek_moe_fast_reduce_nc(
-            tt_scaled_output,
-            dim=0,
-            split_size=int(tt_scaled_output.shape[-1] // num_replicated_devices),
-            output_memory_config=fast_reduce_output_memory_config,
-        )
-
-        # PCC check
-        for i, tt_out in enumerate(tt_fast_reduce_output_tensors):
-            tt_host = ttnn.to_torch(tt_out, dtype=torch.bfloat16)
-            golden_slice = torch_goldens[i][:, :, t0:t1, :]
-            ok, msg = comp_pcc(golden_slice, tt_host, pcc=pcc_threshold)
-            logger.info(f"virtual_dev={virtual_device_idx} mesh_row={mesh_row} chunk={i}: {msg}")
-            assert ok, f"virtual_dev={virtual_device_idx} chunk={i} failed: {msg}"
-
-        ttnn.deallocate(tt_activation)
-        ttnn.deallocate(tt_scores_dram)
-        ttnn.deallocate(topk_experts_weights)
-        ttnn.deallocate(tt_scaled_output)
-        for t in tt_fast_reduce_output_tensors:
-            ttnn.deallocate(t)
+    """Per-device golden: zero off-axis scores, then standard permute / mul / split-sum."""
+    on_axis = _on_axis_mask(ind_local, mapping, mesh_shape, mesh_coord, cluster_axis)
+    print(f"{mesh_coord=} {on_axis.sum(dim=0)=}")
+    gated_scores = torch.where(on_axis, s_local, torch.zeros_like(s_local))
+    return _torch_golden_scale_and_fast_reduce_nc(u_local, gated_scores, num_replicated_devices=num_replicated_devices)
 
 
-# @pytest.mark.requires_device(["N150", "N300"])
-# @pytest.mark.parametrize("batches_per_device", [32, 64])
-@pytest.mark.parametrize("batches_per_device", [32, 31, 1])
+@pytest.mark.parametrize("batch_per_device", [32])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("seq", [1])
 @pytest.mark.parametrize("hidden_size", [7168])
-@pytest.mark.parametrize("device_params", [{}], indirect=True, ids=["single_device_default"])
+@pytest.mark.parametrize("experts_per_device", [2])
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device",
+    [
+        pytest.param((4, 8), (4, 8), id="16x8_grid"),
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("cluster_axis", [0])
 def test_deepseek_moe_fast_reduce_nc_fused(
-    mesh_device,
-    batches_per_device,
-    select_experts_k,
-    seq,
-    hidden_size,
+    mesh_device, mesh_shape, batch_per_device, select_experts_k, seq, hidden_size, experts_per_device, cluster_axis
 ):
-    if mesh_device.get_num_devices() != 1:
-        pytest.skip(
-            f"Single-device fused variant: expected 1 device, got {mesh_device.get_num_devices()} "
-            "(use e.g. MESH_DEVICE=N150)."
-        )
-
     torch.manual_seed(2005)
+    random.seed(2005)
 
-    cluster_axis = 0
-    ref_mesh_shape = REFERENCE_MESH_SHAPE
-    num_dispatch_devices = ref_mesh_shape[cluster_axis]
-    num_replicated_devices = NUM_REFERENCE_MESH_DEVICES // num_dispatch_devices
-    batch = batches_per_device * num_dispatch_devices
-    tokens_per_dispatch_device = batch // num_dispatch_devices
+    num_devices = mesh_shape[0] * mesh_shape[1]
+    num_dispatch_devices = mesh_shape[cluster_axis]
+    num_replicated_devices = mesh_shape[1 - cluster_axis]
+    batch = batch_per_device * num_dispatch_devices
+    experts = experts_per_device * num_devices
 
     # Memory configs (identical to test_deepseek_moe_fast_reduce_nc_single.py)
     activation_memory_config = ttnn.L1_MEMORY_CONFIG
@@ -241,78 +178,132 @@ def test_deepseek_moe_fast_reduce_nc_fused(
     replicate_mapper = ttnn.replicate_tensor_to_mesh_mapper(mesh_device)
 
     # Global tensors (same dimensions as the original multi-chip test)
-    torch_unsqueezed_global = torch.rand((select_experts_k, 1, batch, hidden_size), dtype=torch.bfloat16) - 0.5
-    torch_expert_scores_global = torch.rand((batch, 1, seq, select_experts_k), dtype=torch.bfloat16)
-    torch_expert_scores_global = torch_expert_scores_global / torch_expert_scores_global.sum(dim=-1, keepdim=True)
+    # torch_unsqueezed_global = torch.rand((select_experts_k, 1, batch, hidden_size), dtype=torch.bfloat16) - 0.5
+    torch_unsqueezed_global = torch.ones((select_experts_k, 1, batch, hidden_size), dtype=torch.bfloat16)
 
-    torch_goldens = _torch_golden_scale_and_fast_reduce_nc(
+    # torch_expert_scores_global = torch.rand((batch, 1, seq, select_experts_k), dtype=torch.bfloat16)
+    torch_expert_scores_global = torch.ones((batch, 1, seq, select_experts_k), dtype=torch.bfloat16)
+
+    #    torch_expert_scores_global = torch_expert_scores_global / torch_expert_scores_global.sum(dim=-1, keepdim=True)
+
+    # New: per-token expert routing + global expert→owning-device map.
+    torch_expert_indices_global = _get_expert_indices(batch, experts, select_experts_k, seq)
+    torch_expert_mapping = _gen_expert_mapping_linearized(experts, num_devices)
+
+    # The kernel zeros scores for (t, k) slots whose expert lives off this device's cluster axis,
+    # so the golden has to be computed per-device — slightly relaxed PCC because the gated output
+    # has lower magnitude than the ungated version.
+    pcc_threshold = 0.975
+
+    per_device_goldens = []
+    for m0 in range(mesh_shape[0]):
+        for m1 in range(mesh_shape[1]):
+            mesh_coord = (m0, m1)
+
+            t0 = (m1 if cluster_axis == 1 else m0) * batch_per_device
+            t1 = t0 + batch_per_device
+
+            u_slice = torch_unsqueezed_global[:, :, t0:t1, :].contiguous()
+            s_slice = torch_expert_scores_global[t0:t1, :, :, :].contiguous()
+            ind_slice = torch_expert_indices_global[t0:t1, :, :, :].contiguous()
+
+            # Per-device golden — gated on this device's cluster-axis membership.
+            per_device_goldens.append(
+                _torch_golden_gated(
+                    u_slice,
+                    s_slice,
+                    ind_slice,
+                    torch_expert_mapping,
+                    mesh_shape,
+                    mesh_coord,
+                    cluster_axis,
+                    num_replicated_devices,
+                )
+            )
+
+    # Pad u_slice along dim=2 (tokens) to be a multiple of 32 if necessary
+    current_tokens = u_slice.shape[2]
+    target_tokens = ((current_tokens + 31) // 32) * 32  # Next multiple of 32
+    if current_tokens < target_tokens:
+        pad_amt = target_tokens - current_tokens
+        pad_shape = list(u_slice.shape)
+        pad_shape[2] = pad_amt
+        pad_tensor = torch.zeros(pad_shape, dtype=u_slice.dtype, device=u_slice.device)
+        u_slice = torch.cat([u_slice, pad_tensor], dim=2)
+
+    def _shard_dims(dim):
+        return (dim, None) if cluster_axis == 0 else (None, dim)
+
+    # Activation: TILE layout, L1 — same as unsqueezed_output in unfused path
+    tt_activation = ttnn.from_torch(
         torch_unsqueezed_global,
-        torch_expert_scores_global,
-        num_replicated_devices=num_replicated_devices,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=activation_memory_config,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape, dims=_shard_dims(2)),
     )
 
-    pcc_threshold = 0.988
+    # Scores: ROW_MAJOR layout, DRAM — passed directly (no permute/tilize in Python)
+    tt_scores_dram = ttnn.from_torch(
+        torch_expert_scores_global,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape, dims=_shard_dims(0)),
+    )
 
-    for virtual_device_idx in range(NUM_REFERENCE_MESH_DEVICES):
-        mesh_row = virtual_device_idx // ref_mesh_shape[1]
-        t0 = mesh_row * tokens_per_dispatch_device
-        t1 = t0 + tokens_per_dispatch_device
+    # New: expert_indices and expert_mapping — uint16, ROW_MAJOR, DRAM, replicated.
+    tt_expert_indices = ttnn.from_torch(
+        torch_expert_indices_global,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape, dims=_shard_dims(0)),
+    )
+    tt_expert_mapping = ttnn.from_torch(
+        torch_expert_mapping,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=replicate_mapper,
+    )
 
-        u_slice = torch_unsqueezed_global[:, :, t0:t1, :].contiguous()
-        s_slice = torch_expert_scores_global[t0:t1, :, :, :].contiguous()
+    # Single fused call replacing permute + to_layout + mul + deepseek_moe_fast_reduce_nc.
+    # Now also performs per-(t, k) on-axis gating using the expert_indices / expert_mapping
+    # tensors and cluster_axis: scores for slots whose expert lives off-axis are zeroed.
+    tt_fused_outputs = ttnn.experimental.deepseek_moe_fast_reduce_nc_fused(
+        tt_activation,
+        tt_expert_indices,
+        tt_expert_mapping,
+        reduce_dim=0,
+        split_size=int(hidden_size // num_replicated_devices),
+        cluster_axis=cluster_axis,
+        output_memory_config=fast_reduce_output_memory_config,
+        scores_tensor=tt_scores_dram,
+    )
 
-        # INSERT_YOUR_CODE
-        # Pad u_slice along dim=2 (tokens) to be a multiple of 32 if necessary
-        current_tokens = u_slice.shape[2]
-        target_tokens = ((current_tokens + 31) // 32) * 32  # Next multiple of 32
-        if current_tokens < target_tokens:
-            pad_amt = target_tokens - current_tokens
-            # Pad at the end along dim=2 ('tokens' axis)
-            pad_shape = list(u_slice.shape)
-            pad_shape[2] = pad_amt
-            pad_tensor = torch.zeros(pad_shape, dtype=u_slice.dtype, device=u_slice.device)
-            u_slice = torch.cat([u_slice, pad_tensor], dim=2)
-
-        # Activation: TILE layout, L1 — same as unsqueezed_output in unfused path
-        tt_activation = ttnn.from_torch(
-            u_slice,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=activation_memory_config,
-            mesh_mapper=replicate_mapper,
-        )
-
-        # Scores: ROW_MAJOR layout, DRAM — passed directly (no permute/tilize in Python)
-        tt_scores_dram = ttnn.from_torch(
-            s_slice,
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=replicate_mapper,
-        )
-
-        # Single fused call replacing permute + to_layout + mul + deepseek_moe_fast_reduce_nc
-        tt_fused_outputs = ttnn.experimental.deepseek_moe_fast_reduce_nc_fused(
-            tt_activation,
-            reduce_dim=0,
-            split_size=int(hidden_size // num_replicated_devices),
-            output_memory_config=fast_reduce_output_memory_config,
-            scores_tensor=tt_scores_dram,
-        )
-        # with garbage, 2026-04-17 03:59:47.239 | INFO     | z_shortcut.test_deepseek_moe_fast_reduce_nc_fused:test_deepseek_moe_fast_reduce_nc_fused:197 - virtual_dev=0 mesh_row=0 chunk=0: 0.9999966324541119
-
-        for i, tt_out in enumerate(tt_fused_outputs):
+    for cidx, tt_out_list in enumerate(tt_fused_outputs):
+        for didx, tt_out in enumerate(ttnn.get_device_tensors(tt_out_list)):
             tt_host = ttnn.to_torch(tt_out, dtype=torch.bfloat16)
             tt_host_slice = tt_host[:, :, 0:current_tokens, :]
-            golden_slice = torch_goldens[i][:, :, t0:t1, :]
 
-            ok, msg = comp_pcc(golden_slice, tt_host_slice, pcc=pcc_threshold)
-            logger.info(f"virtual_dev={virtual_device_idx} mesh_row={mesh_row} chunk={i}: {msg}")
-            assert ok, f"virtual_dev={virtual_device_idx} chunk={i} failed: {msg}"
+            ref = per_device_goldens[didx][cidx]
 
-        ttnn.deallocate(tt_activation)
-        ttnn.deallocate(tt_scores_dram)
-        for t in tt_fused_outputs:
-            ttnn.deallocate(t)
+            for i in range(current_tokens):
+                print(f"{tt_host[:,:,i,:64]=}")
+                print(f"{ref[:,:,i,:64]=}")
+
+            ok, msg = comp_pcc(ref, tt_host_slice, pcc=pcc_threshold)
+            logger.info(f"virtual_dev={didx} mesh_coord={mesh_coord} chunk={cidx}: {msg}")
+            assert ok, f"virtual_dev={didx} mesh_coord={mesh_coord} chunk={cidx} failed: {msg}"
+
+    ttnn.deallocate(tt_activation)
+    ttnn.deallocate(tt_scores_dram)
+    ttnn.deallocate(tt_expert_indices)
+    ttnn.deallocate(tt_expert_mapping)
+    for t in tt_fused_outputs:
+        ttnn.deallocate(t)

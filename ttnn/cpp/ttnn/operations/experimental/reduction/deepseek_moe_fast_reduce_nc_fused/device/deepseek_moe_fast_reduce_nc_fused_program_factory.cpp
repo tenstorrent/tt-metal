@@ -20,7 +20,7 @@ using namespace tt::tt_metal;
 
 namespace {
 
-// Matches compile-time arg order in deepseek_moe_fast_reduce_nc_fused_reader.cpp (get_compile_time_arg_val 0..13).
+// Matches compile-time arg order in deepseek_moe_fast_reduce_nc_fused_reader.cpp (get_compile_time_arg_val 0..24).
 struct DeepseekMoeFastReduceNcFusedReaderCtArgs {
     uint32_t cb_in_act_id{};
     uint32_t cb_scores_id{};
@@ -37,6 +37,16 @@ struct DeepseekMoeFastReduceNcFusedReaderCtArgs {
     uint32_t num_tokens{};
     uint32_t num_tokens_x32{};
     uint32_t scores_cb_rm_page_size{};
+    uint32_t expert_indices_page_size{};
+    uint32_t expert_mapping_page_size{};
+    uint32_t cluster_axis{};
+    uint32_t cb_expert_indices_id{};
+    uint32_t cb_expert_mapping_id{};
+    uint32_t expert_indices_cb_page_size{};
+    uint32_t expert_mapping_cb_page_size{};
+    uint32_t expert_indices_num_pages{};
+    uint32_t expert_mapping_num_pages{};
+    uint32_t mesh_cols{};  // mesh_shape[1]; lets the kernel decode linearized device ids into (row, col)
 };
 
 std::vector<uint32_t> to_reader_ct_arg_vector(const DeepseekMoeFastReduceNcFusedReaderCtArgs& ct) {
@@ -55,7 +65,17 @@ std::vector<uint32_t> to_reader_ct_arg_vector(const DeepseekMoeFastReduceNcFused
         ct.reduction_num_tiles,  // the number of tiles in the reduction dimension: inner_num_tiles * reduction_dim_size
         ct.num_tokens,
         ct.num_tokens_x32,
-        ct.scores_cb_rm_page_size,  // cb_scores_rm_id page size: one page = one token row
+        ct.scores_cb_rm_page_size,    // cb_scores_rm_id page size: one page = one token row
+        ct.expert_indices_page_size,  // DRAM page size for expert_indices_tensor
+        ct.expert_mapping_page_size,  // DRAM page size for expert_mapping_tensor
+        ct.cluster_axis,
+        ct.cb_expert_indices_id,
+        ct.cb_expert_mapping_id,
+        ct.expert_indices_cb_page_size,  // L1-aligned CB stride for expert_indices
+        ct.expert_mapping_cb_page_size,  // L1-aligned CB stride for expert_mapping
+        ct.expert_indices_num_pages,
+        ct.expert_mapping_num_pages,
+        ct.mesh_cols,
     };
 }
 
@@ -63,14 +83,17 @@ std::vector<uint32_t> to_reader_ct_arg_vector(const DeepseekMoeFastReduceNcFused
 
 namespace ttnn::experimental::prim {
 
-DeepseekMoEFastReduceNCFusedProgramFactory::cached_program_t DeepseekMoEFastReduceNCFusedProgramFactory::create(
+ttnn::device_operation::CachedProgram<DeepseekMoEFastReduceNCFusedMeshWorkloadFactory::shared_variables_t>
+DeepseekMoEFastReduceNCFusedMeshWorkloadFactory::create_at(
     const DeepseekMoEFastReduceNCFusedParams& operation_attributes,
+    const ttnn::MeshCoordinate& mesh_coordinate,
     const DeepseekMoEFastReduceNCFusedInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     auto* device = tensor_args.input_tensor.device();
+    const uint32_t mesh_cols = device->get_view().num_cols();
     auto program = Program();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -78,6 +101,8 @@ DeepseekMoEFastReduceNCFusedProgramFactory::cached_program_t DeepseekMoEFastRedu
     ////////////////////////////////////////////////////////////////////////////
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
     const ttnn::Tensor& scores_tensor = tensor_args.scores_tensor;
+    const ttnn::Tensor& expert_indices_tensor = tensor_args.expert_indices_tensor;
+    const ttnn::Tensor& expert_mapping_tensor = tensor_args.expert_mapping_tensor;
     const auto& input_shape = input_tensor.padded_shape();
     const uint32_t input_rank = input_shape.rank();
 
@@ -133,6 +158,17 @@ DeepseekMoEFastReduceNCFusedProgramFactory::cached_program_t DeepseekMoEFastRedu
     const uint32_t scores_page_size = scores_tensor.buffer()->page_size();
     const uint32_t scores_cb_rm_page_size =
         round_up(scores_tensor.buffer()->aligned_page_size(), hal::get_l1_alignment());
+    const uint32_t expert_indices_page_size = expert_indices_tensor.buffer()->page_size();
+    const uint32_t expert_mapping_page_size = expert_mapping_tensor.buffer()->page_size();
+    const uint32_t expert_indices_cb_page_size =
+        round_up(expert_indices_tensor.buffer()->aligned_page_size(), hal::get_l1_alignment());
+    const uint32_t expert_mapping_cb_page_size =
+        round_up(expert_mapping_tensor.buffer()->aligned_page_size(), hal::get_l1_alignment());
+    const uint32_t expert_indices_num_pages = expert_indices_tensor.buffer()->num_pages();
+    const uint32_t expert_mapping_num_pages = expert_mapping_tensor.buffer()->num_pages();
+
+    const auto expert_indices_data_format = datatype_to_dataformat_converter(expert_indices_tensor.dtype());
+    const auto expert_mapping_data_format = datatype_to_dataformat_converter(expert_mapping_tensor.dtype());
 
     const uint32_t scores_rm_cb_num_pages = num_tokens;
     const uint32_t scores_tile_size = tt::tile_size(scores_data_format);
@@ -163,6 +199,25 @@ DeepseekMoEFastReduceNCFusedProgramFactory::cached_program_t DeepseekMoEFastRedu
             .set_page_size(cb_scores_rm_id, scores_cb_rm_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_scores_rm_config);
 
+    // CB c_3: full expert_indices_tensor mirrored in L1. Sized to hold every page once;
+    // the reader loads all pages up front before the score-tilization prologue.
+    uint32_t cb_expert_indices_id = tt::CBIndex::c_3;
+    tt::tt_metal::CircularBufferConfig cb_expert_indices_config =
+        tt::tt_metal::CircularBufferConfig(
+            expert_indices_num_pages * expert_indices_cb_page_size,
+            {{cb_expert_indices_id, expert_indices_data_format}})
+            .set_page_size(cb_expert_indices_id, expert_indices_cb_page_size);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_expert_indices_config);
+
+    // CB c_4: full expert_mapping_tensor mirrored in L1, same loading pattern as c_3.
+    uint32_t cb_expert_mapping_id = tt::CBIndex::c_4;
+    tt::tt_metal::CircularBufferConfig cb_expert_mapping_config =
+        tt::tt_metal::CircularBufferConfig(
+            expert_mapping_num_pages * expert_mapping_cb_page_size,
+            {{cb_expert_mapping_id, expert_mapping_data_format}})
+            .set_page_size(cb_expert_mapping_id, expert_mapping_cb_page_size);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_expert_mapping_config);
+
     // CB c_16: output tiles (double-buffered)
     uint32_t cb_out_id = tt::CBIndex::c_16;
     tt::tt_metal::CircularBufferConfig cb_out_config =
@@ -174,7 +229,8 @@ DeepseekMoEFastReduceNCFusedProgramFactory::cached_program_t DeepseekMoEFastRedu
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    // Reader CT args: fields 0..13 = DeepseekMoeFastReduceNcFusedReaderCtArgs / reader kernel; then TensorAccessorArgs.
+    // Reader CT args: fields 0..17 = DeepseekMoeFastReduceNcFusedReaderCtArgs; then four
+    // TensorAccessorArgs (input, scores, expert_indices, expert_mapping) appended in that order.
     const DeepseekMoeFastReduceNcFusedReaderCtArgs reader_ct_named{
         .cb_in_act_id = cb_in_act_id,
         .cb_scores_id = cb_scores_id,
@@ -191,10 +247,22 @@ DeepseekMoEFastReduceNCFusedProgramFactory::cached_program_t DeepseekMoEFastRedu
         .num_tokens = num_tokens,
         .num_tokens_x32 = num_tokens_x32,
         .scores_cb_rm_page_size = scores_cb_rm_page_size,
+        .expert_indices_page_size = expert_indices_page_size,
+        .expert_mapping_page_size = expert_mapping_page_size,
+        .cluster_axis = operation_attributes.cluster_axis,
+        .cb_expert_indices_id = cb_expert_indices_id,
+        .cb_expert_mapping_id = cb_expert_mapping_id,
+        .expert_indices_cb_page_size = expert_indices_cb_page_size,
+        .expert_mapping_cb_page_size = expert_mapping_cb_page_size,
+        .expert_indices_num_pages = expert_indices_num_pages,
+        .expert_mapping_num_pages = expert_mapping_num_pages,
+        .mesh_cols = mesh_cols,
     };
     std::vector<uint32_t> reader_ct_args = to_reader_ct_arg_vector(reader_ct_named);
     TensorAccessorArgs(input_tensor.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(scores_tensor.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(expert_indices_tensor.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(expert_mapping_tensor.buffer()).append_to(reader_ct_args);
 
     std::vector<uint32_t> writer_ct_args = {
         cb_out_id,
@@ -320,11 +388,30 @@ DeepseekMoEFastReduceNCFusedProgramFactory::cached_program_t DeepseekMoEFastRedu
             uint32_t start_slice_row_offset = (start_tiles_read / input_tensor_Wt) * slice_Wt;
             uint32_t start_pages_read_in_row = start_tiles_read % input_tensor_Wt;
 
+            // Reader RT args layout:
+            //   [0] input addr
+            //   [1] scores addr
+            //   [2] start_tiles_read
+            //   [3] start_tiles_to_read
+            //   [4] mesh_coord_row
+            //   [5] mesh_coord_col
+            //   [6] expert_indices addr
+            //   [7] expert_mapping addr
+            TT_FATAL(
+                mesh_coordinate.dims() == 2,
+                "deepseek_moe_fast_reduce_nc_fused expects a 2D mesh coordinate, got {}D",
+                mesh_coordinate.dims());
+            const uint32_t mesh_coord_row = mesh_coordinate[0];
+            const uint32_t mesh_coord_col = mesh_coordinate[1];
             std::vector<uint32_t> reader_rt_args = {
                 input_tensor.buffer()->address(),
                 scores_tensor.buffer()->address(),
                 start_tiles_read,
-                start_tiles_to_read};
+                start_tiles_to_read,
+                mesh_coord_row,
+                mesh_coord_col,
+                expert_indices_tensor.buffer()->address(),
+                expert_mapping_tensor.buffer()->address()};
             tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
 
             std::vector<uint32_t> writer_rt_args = {
@@ -338,35 +425,46 @@ DeepseekMoEFastReduceNCFusedProgramFactory::cached_program_t DeepseekMoEFastRedu
         }
     }
 
-    return cached_program_t{
+    return ttnn::device_operation::CachedProgram<DeepseekMoEFastReduceNCFusedMeshWorkloadFactory::shared_variables_t>{
         std::move(program), {reader_kernel_id, writer_kernel_id, corerange_to_cores(all_cores), num_cores}};
 }
 
-void DeepseekMoEFastReduceNCFusedProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
+void DeepseekMoEFastReduceNCFusedMeshWorkloadFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
     const DeepseekMoEFastReduceNCFusedParams&,
     const DeepseekMoEFastReduceNCFusedInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value) {
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
     const ttnn::Tensor& scores_tensor = tensor_args.scores_tensor;
+    const ttnn::Tensor& expert_indices_tensor = tensor_args.expert_indices_tensor;
+    const ttnn::Tensor& expert_mapping_tensor = tensor_args.expert_mapping_tensor;
     const std::vector<ttnn::Tensor>& output_tensors = tensor_return_value;
 
-    auto& program = cached_program.program;
-    const tt::tt_metal::KernelHandle& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    const tt::tt_metal::KernelHandle& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    const auto& all_cores = cached_program.shared_variables.all_cores;
-    const uint32_t ncores = cached_program.shared_variables.ncores;
+    // Mesh coords and cluster_axis are tied to the device/launch and don't change between
+    // launches with the same cache key, so we only refresh tensor addresses here.
+    // Reader RT arg layout (set in create_at):
+    //   [0] input addr, [1] scores addr, [2..3] work range,
+    //   [4..5] mesh (row, col), [6] expert_indices addr, [7] expert_mapping addr.
+    for (auto& [range, program] : cached_workload.workload.get_programs()) {
+        const auto& shared_variables = cached_workload.shared_variables.at(range);
+        const tt::tt_metal::KernelHandle& reader_kernel_id = shared_variables.reader_kernel_id;
+        const tt::tt_metal::KernelHandle& writer_kernel_id = shared_variables.writer_kernel_id;
+        const auto& all_cores = shared_variables.all_cores;
+        const uint32_t ncores = shared_variables.ncores;
 
-    for (uint32_t i = 0; i < ncores; ++i) {
-        const auto& core = all_cores[i];
-        auto& reader_rt_args = GetRuntimeArgs(program, reader_kernel_id, core);
-        reader_rt_args[0] = input_tensor.buffer()->address();
-        reader_rt_args[1] = scores_tensor.buffer()->address();
+        for (uint32_t i = 0; i < ncores; ++i) {
+            const auto& core = all_cores[i];
+            auto& reader_rt_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            reader_rt_args[0] = input_tensor.buffer()->address();
+            reader_rt_args[1] = scores_tensor.buffer()->address();
+            reader_rt_args[6] = expert_indices_tensor.buffer()->address();
+            reader_rt_args[7] = expert_mapping_tensor.buffer()->address();
 
-        auto& writer_rt_args = GetRuntimeArgs(program, writer_kernel_id, core);
-        const uint32_t output_tensor_start_idx = 4;
-        for (unsigned j = 0; j < output_tensors.size(); ++j) {
-            writer_rt_args[output_tensor_start_idx + j] = output_tensors.at(j).buffer()->address();
+            auto& writer_rt_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            const uint32_t output_tensor_start_idx = 4;
+            for (unsigned j = 0; j < output_tensors.size(); ++j) {
+                writer_rt_args[output_tensor_start_idx + j] = output_tensors.at(j).buffer()->address();
+            }
         }
     }
 }

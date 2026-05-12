@@ -16,16 +16,21 @@ namespace ttnn::experimental::prim {
 struct DeepseekMoEFastReduceNCFusedParams {
     uint32_t reduce_dim;
     uint64_t split_size;
+    uint32_t cluster_axis;
     tt::tt_metal::MemoryConfig output_memory_config;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
 };
 
-// Two input tensors:
-//   input_tensor  - activations [experts_k, 1, tokens, hidden], TILE layout, L1
-//   scores_tensor - expert scores [tokens, 1, seq, experts_k], ROW_MAJOR layout, DRAM
+// Input tensors:
+//   input_tensor           - activations [experts_k, 1, tokens, hidden], TILE layout, L1
+//   scores_tensor          - expert scores [tokens, 1, seq, experts_k], ROW_MAJOR layout, DRAM
+//   expert_indices_tensor  - per-token expert indices (matches all_to_all_dispatch convention)
+//   expert_mapping_tensor  - expert-to-device mapping (matches all_to_all_dispatch convention)
 struct DeepseekMoEFastReduceNCFusedInputs {
     ttnn::Tensor input_tensor;
     ttnn::Tensor scores_tensor;
+    ttnn::Tensor expert_indices_tensor;
+    ttnn::Tensor expert_mapping_tensor;
 };
 
 }  // namespace ttnn::experimental::prim

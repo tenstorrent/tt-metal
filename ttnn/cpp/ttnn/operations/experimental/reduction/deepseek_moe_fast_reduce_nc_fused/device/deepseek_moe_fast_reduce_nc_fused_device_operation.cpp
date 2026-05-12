@@ -11,8 +11,15 @@
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::experimental::prim {
+
+DeepseekMoEFastReduceNCFusedDeviceOperation::program_factory_t
+DeepseekMoEFastReduceNCFusedDeviceOperation::select_program_factory(
+    const operation_attributes_t&, const tensor_args_t&) {
+    return DeepseekMoEFastReduceNCFusedMeshWorkloadFactory{};
+}
+
 void DeepseekMoEFastReduceNCFusedDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
     TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must have a buffer");
@@ -20,6 +27,19 @@ void DeepseekMoEFastReduceNCFusedDeviceOperation::validate_on_program_cache_hit(
     const ttnn::Tensor& scores_tensor = tensor_args.scores_tensor;
     TT_FATAL(scores_tensor.storage_type() == StorageType::DEVICE, "Scores tensor must be on device");
     TT_FATAL(scores_tensor.buffer() != nullptr, "Scores tensor must have a buffer");
+
+    const ttnn::Tensor& expert_indices_tensor = tensor_args.expert_indices_tensor;
+    TT_FATAL(expert_indices_tensor.storage_type() == StorageType::DEVICE, "Expert indices tensor must be on device");
+    TT_FATAL(expert_indices_tensor.buffer() != nullptr, "Expert indices tensor must have a buffer");
+
+    const ttnn::Tensor& expert_mapping_tensor = tensor_args.expert_mapping_tensor;
+    TT_FATAL(expert_mapping_tensor.storage_type() == StorageType::DEVICE, "Expert mapping tensor must be on device");
+    TT_FATAL(expert_mapping_tensor.buffer() != nullptr, "Expert mapping tensor must have a buffer");
+
+    TT_FATAL(
+        operation_attributes.cluster_axis <= 1,
+        "cluster_axis must be 0 or 1 (got {})",
+        operation_attributes.cluster_axis);
 }
 
 void DeepseekMoEFastReduceNCFusedDeviceOperation::validate_on_program_cache_miss(
@@ -124,15 +144,19 @@ namespace ttnn::prim {
 std::vector<ttnn::Tensor> deepseek_moe_fast_reduce_nc_fused(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& scores_tensor,
+    const ttnn::Tensor& expert_indices_tensor,
+    const ttnn::Tensor& expert_mapping_tensor,
     uint32_t reduce_dim,
     uint64_t split_size,
+    uint32_t cluster_axis,
     const tt::tt_metal::MemoryConfig& output_memory_config,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
     using OperationType = ttnn::experimental::prim::DeepseekMoEFastReduceNCFusedDeviceOperation;
 
     return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{reduce_dim, split_size, output_memory_config, compute_kernel_config},
-        OperationType::tensor_args_t{input_tensor, scores_tensor});
+        OperationType::operation_attributes_t{
+            reduce_dim, split_size, cluster_axis, output_memory_config, compute_kernel_config},
+        OperationType::tensor_args_t{input_tensor, scores_tensor, expert_indices_tensor, expert_mapping_tensor});
 }
 
 }  // namespace ttnn::prim

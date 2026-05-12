@@ -2,27 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Fused compute kernel: per-expert col-broadcast multiply, SFPU-accumulated.
+// Fused compute kernel: multiply-accumulate using hardware MAC.
 //
-// For each output tile we sum over reduction_dim_size experts:
-//   dst_acc = Σ_e act_tile[e] * score_col[e]
+// For each output tile we iterate over reduction_dim_size experts and sum:
+//   dst0 += act_tile[e] * score_col[e]   (hardware MAC with col-broadcast)
 //
-// Each score tile has expert scores in column 0 (broadcast across columns).
-// The reader pre-loads all reduction_dim_size score tiles before signalling
-// compute_scores; they remain resident for the whole kernel.
+// Each score tile has expert scores in column 0 (broadcast to all columns).
+// The reader pre-loads all reduction_dim_size score tiles before signalling compute_scores.
+// Score tiles are kept resident and accessed by index throughout the loop.
 //
-// Accumulation note:
-//   The LLK ELWMUL+COL MOP (tt_llk_*/llk_lib/llk_math_eltwise_binary.h)
-//   hardcodes acc_to_dest=0, so mul_tiles_bcast_cols always overwrites its
-//   destination dst slot — there is no hardware MAC path available here.
-//   We therefore multiply each expert's contribution into a scratch dst slot
-//   and accumulate into dst_acc via the SFPU add_binary_tile op.
+// Initialization:
+//   init_bcast<ELWMUL, COL> handles PACK + UNPACK + hw_configure.
+//   We then override the MATH init with acc_to_dest=1 so that every
+//   mul_tiles_bcast_cols call accumulates into dst rather than replacing it.
 //
-// After tile_regs_acquire(), dst slots are hardware-zero-initialized, so
-// dst_acc starts at 0 and the first add seeds the accumulator correctly.
+// After tile_regs_acquire(), dst0 is zero-initialized by hardware, so the
+// first MAC (expert 0) correctly seeds the accumulator.
 
 #include "api/compute/bcast.h"
-#include "api/compute/eltwise_binary_sfpu.h"
 
 using namespace ckernel;
 
@@ -34,22 +31,23 @@ constexpr uint32_t compute_input_cb_id_1 = get_compile_time_arg_val(4);
 constexpr uint32_t compute_output_cb_id = get_compile_time_arg_val(5);
 
 void kernel_main() {
-    constexpr uint32_t dst_acc = 0;
-    constexpr uint32_t dst_tmp = 1;
+    constexpr uint32_t dst0 = 0;
     constexpr uint32_t one_tile = 1;
     constexpr uint32_t num_input_tiles_iter = reduction_dim_size / input_granularity;
 
-    // FPU MOP init for ELWMUL + COL-broadcast (mul_tiles_bcast_cols).
+    // Full PACK + UNPACK + hw_configure init for ELWMUL + COL-broadcast
     init_bcast<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(
         compute_input_cb_id_0, compute_input_cb_id_1, compute_output_cb_id);
 
-    // SFPU init for dst-to-dst add (used to accumulate per-expert products).
-    add_binary_tile_init();
+    // Override MATH init to enable acc_to_dest=1 (hardware accumulate mode)
+    // This makes each mul_tiles_bcast_cols call do: dst0 += act * score  (MAC)
+    MATH((llk_math_eltwise_binary_init_with_operands<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MATH_FIDELITY>(
+        compute_input_cb_id_0, compute_input_cb_id_1, 1 /*acc_to_dest*/)));
 
     reconfig_data_format(compute_input_cb_id_0, compute_input_cb_id_1);
 
-    // Wait for all score tiles — pre-loaded once by the reader prologue,
-    // resident for the entire kernel invocation.
+    // Wait for all score tiles — they are pre-loaded once by the reader prologue
+    // and remain resident for the entire kernel invocation.
     cb_wait_front(compute_input_cb_id_1, reduction_dim_size);
     for (uint32_t i = 0; i < num_output_tiles; ++i) {
         tile_regs_acquire();
@@ -58,11 +56,10 @@ void kernel_main() {
             cb_wait_front(compute_input_cb_id_0, input_granularity);
 
             for (uint32_t k = 0; k < input_granularity; ++k) {
+                // expert_tile = linear expert index for this tile
                 const uint32_t expert_tile = j * input_granularity + k;
-                // dst_tmp = act_tile[k] * score_col[expert_tile]
-                mul_tiles_bcast_cols(compute_input_cb_id_0, compute_input_cb_id_1, k, expert_tile, dst_tmp);
-                // dst_acc += dst_tmp
-                add_binary_tile(dst_acc, dst_tmp, dst_acc);
+                // dst0 += act_tile[k] * score_col[expert_tile]  (single MAC)
+                mul_tiles_bcast_cols(compute_input_cb_id_0, compute_input_cb_id_1, k, expert_tile, dst0);
             }
             cb_pop_front(compute_input_cb_id_0, input_granularity);
         }
@@ -71,7 +68,7 @@ void kernel_main() {
         cb_reserve_back(compute_output_cb_id, one_tile);
         pack_reconfig_data_format(compute_output_cb_id);
         tile_regs_wait();
-        pack_tile(dst_acc, compute_output_cb_id);
+        pack_tile(dst0, compute_output_cb_id);
         tile_regs_release();
         cb_push_back(compute_output_cb_id, one_tile);
     }

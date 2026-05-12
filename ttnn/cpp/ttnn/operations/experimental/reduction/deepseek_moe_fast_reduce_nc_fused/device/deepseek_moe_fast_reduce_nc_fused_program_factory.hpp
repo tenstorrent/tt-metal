@@ -12,7 +12,7 @@
 
 namespace ttnn::experimental::prim {
 
-struct DeepseekMoEFastReduceNCFusedProgramFactory {
+struct DeepseekMoEFastReduceNCFusedMeshWorkloadFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernel_id;
         tt::tt_metal::KernelHandle writer_kernel_id;
@@ -20,15 +20,18 @@ struct DeepseekMoEFastReduceNCFusedProgramFactory {
         uint32_t ncores;
     };
 
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
-    static cached_program_t create(
+    // Per-device program construction. The framework iterates the mesh's coordinate range set and
+    // assembles the MeshWorkload by calling this for each coordinate.
+    static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
         const DeepseekMoEFastReduceNCFusedParams& operation_attributes,
+        const ttnn::MeshCoordinate& mesh_coordinate,
         const DeepseekMoEFastReduceNCFusedInputs& tensor_args,
         std::vector<ttnn::Tensor>& tensor_return_value);
 
     static void override_runtime_arguments(
-        cached_program_t& cached_program,
+        cached_mesh_workload_t& cached_workload,
         const DeepseekMoEFastReduceNCFusedParams& operation_attributes,
         const DeepseekMoEFastReduceNCFusedInputs& tensor_args,
         std::vector<ttnn::Tensor>& tensor_return_value);

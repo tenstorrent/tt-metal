@@ -19,7 +19,9 @@ struct DeepseekMoEFastReduceNCFusedDeviceOperation {
     using tensor_args_t = DeepseekMoEFastReduceNCFusedInputs;
     using spec_return_value_t = ttnn::TensorSpec;
     using tensor_return_value_t = std::vector<ttnn::Tensor>;
-    using program_factory_t = std::variant<DeepseekMoEFastReduceNCFusedProgramFactory>;
+    using program_factory_t = std::variant<DeepseekMoEFastReduceNCFusedMeshWorkloadFactory>;
+
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
@@ -35,8 +37,11 @@ namespace ttnn::prim {
 std::vector<ttnn::Tensor> deepseek_moe_fast_reduce_nc_fused(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& scores_tensor,
+    const ttnn::Tensor& expert_indices_tensor,
+    const ttnn::Tensor& expert_mapping_tensor,
     uint32_t reduce_dim,
     uint64_t split_size,
+    uint32_t cluster_axis,
     const tt::tt_metal::MemoryConfig& output_memory_config,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config);
 
