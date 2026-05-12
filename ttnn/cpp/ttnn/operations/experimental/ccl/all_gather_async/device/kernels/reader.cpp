@@ -40,10 +40,8 @@ void kernel_main() {
 
     constexpr uint32_t inputs_per_cb_page = cb_page_size / input_page_size;  // TODO duplicate of pages_per_cb_entry?
 
-    constexpr uint32_t pages_per_packet = packet_size / output_page_size;
     constexpr uint32_t pages_per_cb_entry = cb_page_size / output_page_size;
     constexpr uint32_t num_banks = NUM_DRAM_BANKS;  // compile-time constant available in kernels
-    static_assert(cb_page_size % input_page_size == 0);
 
     ///////////////////////////////////////////////////
     // RUNTIME ARGS
@@ -72,8 +70,8 @@ void kernel_main() {
     tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
     open_connections(fabric_connection, num_connections, arg_for_fab);
 
-    FabricScatterWriter<output_page_size, pages_per_packet, load_balance_across_two_routes> writer(
-        noc, fabric_connection, range_hops, range_hops_alt, num_connections);
+    FabricWriter<output_page_size, packet_size, load_balance_across_two_routes> fabric(
+        noc, fabric_connection, num_connections, range_hops, range_hops_alt);
 
     /*auto sem_route_id = PacketHeaderPool::allocate_header_n(num_connections);
     uint64_t barrier_sem_noc_addr_in_pkt = safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
@@ -158,10 +156,10 @@ void kernel_main() {
                 auto page_id = next_output_page_id();
                 auto fabric_tensor_page_addr =
                     tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_tensor_accessor, page_id, 0);
-                writer.send(l1_read_addr, fabric_tensor_page_addr);
+                fabric.send(l1_read_addr, fabric_tensor_page_addr);
                 l1_read_addr += input_page_size;
             }
-            writer.flush();
+            fabric.flush();
             if (l1_read_addr == l1_end_addr) {
                 l1_read_addr = l1_base_addr;
             }
@@ -185,10 +183,10 @@ void kernel_main() {
             auto page_id = next_output_page_id();
             auto fabric_tensor_page_addr =
                 tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_tensor_accessor, page_id, 0);
-            writer.send(l1_read_addr, fabric_tensor_page_addr);
+            fabric.send(l1_read_addr, fabric_tensor_page_addr);
             l1_read_addr += input_page_size;
         }
-        writer.flush();
+        fabric.flush();
         if (l1_read_addr == l1_end_addr) {
             l1_read_addr = l1_base_addr;
         }

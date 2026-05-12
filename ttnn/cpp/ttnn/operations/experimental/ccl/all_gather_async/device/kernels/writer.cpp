@@ -38,14 +38,8 @@ void kernel_main() {
     constexpr bool load_balance_across_two_routes = true;  // TODO hardcoded, = true for ring with even devices
     constexpr auto output_tensor_args = TensorAccessorArgs<6>();
 
-    constexpr uint32_t pages_per_packet = packet_size / output_page_size;
     constexpr uint32_t pages_per_cb_entry = cb_page_size / output_page_size;
     constexpr uint32_t num_banks = NUM_DRAM_BANKS;  // compile-time constant available in kernels
-
-    static_assert(
-        pages_per_cb_entry % pages_per_packet == 0 &&
-        // will be able to cover cb page with scattered writes with one type of header
-        pages_per_packet <= NOC_SCATTER_WRITE_MAX_CHUNKS);
 
     ///////////////////////////////////////////////////
     // RUNTIME ARGS
@@ -87,16 +81,8 @@ void kernel_main() {
     tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
     open_connections(fabric_connection, num_connections, arg_for_fab);
 
-    /*std::array starts = {static_cast<uint8_t>(1), static_cast<uint8_t>(1)};
-    std::array ranges = {static_cast<uint8_t>(range_hops_forward), static_cast<uint8_t>(range_hops_backward)};
-    if (ranges[0] == 0) {
-        ranges[0] = ranges[1];
-    }*/
-
-    // FabricScatterWriter<output_page_size, pages_per_packet, load_balance_across_two_routes> writer(noc,
-    // fabric_connection, starts, ranges, num_connections);
-    FabricScatterWriter<output_page_size, pages_per_packet, load_balance_across_two_routes> writer(
-        noc, fabric_connection, range_hops, range_hops_alt, num_connections);
+    FabricWriter<output_page_size, packet_size, load_balance_across_two_routes> fabric(
+        noc, fabric_connection, num_connections, range_hops, range_hops_alt);
 
     auto sem_route_id = PacketHeaderPool::allocate_header_n(num_connections);
     uint64_t barrier_sem_noc_addr_in_pkt = safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
@@ -148,7 +134,7 @@ void kernel_main() {
             // Fabric write
             auto fabric_tensor_page_addr =
                 tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_tensor_accessor, page_id, 0);
-            writer.send(l1_read_addr, fabric_tensor_page_addr);
+            fabric.send(l1_read_addr, fabric_tensor_page_addr);
 
             // Local write.
             // For local writes use posted writes (to skip waiting for ack) on different virtual channel
@@ -165,7 +151,7 @@ void kernel_main() {
         }
 
         noc.async_writes_flushed<experimental::Noc::ResponseMode::POSTED>();  // wait for local writes
-        writer.flush();                                                       // wait for Fabric writes
+        fabric.flush();                                                       // wait for Fabric writes
         cb.pop_front(1);
     }
 
