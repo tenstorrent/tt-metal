@@ -1,4 +1,8 @@
 {
+  "model_id": "huggingface/time-series-transformer-tourism-monthly",
+  "model_revision": "2a40ad41f6ffe61e7bef6099b08c6c2fce36ac35",
+  "dataset_repo": "hf-internal-testing/tourism-monthly-batch",
+  "dataset_file": "train-batch.pt",
   "context_length": 24,
   "prediction_length": 24,
   "num_time_features": 2,
@@ -37,6 +41,6 @@
   "embedding_dimension": [
     6
   ],
-  "batch_size": 2,
+  "batch_size": 64,
   "past_len": 61
 }

@@ -1,0 +1,43 @@
+# Time Series Transformer (TTNN)
+
+## Platforms
+- Wormhole (`n150`, `n300`)
+
+## Overview
+This demo provides a TTNN implementation of the HuggingFace
+`TimeSeriesTransformerForPrediction` model for monthly tourism forecasting.
+
+- HF checkpoint: `huggingface/time-series-transformer-tourism-monthly`
+- Dataset: Tourism Monthly (via `hf-internal-testing/tourism-monthly-batch`)
+- Distribution output: Student-T
+- Validation: PCC per-layer + 5% tolerance end-to-end (NLL/CRPS/MAE)
+
+## Directory Layout
+```text
+time_series_transformer/
+├── README.md
+├── requirements.txt
+├── scripts/
+│   └── save_reference_tensors.py
+└── reference/
+    └── config.json
+```
+
+## Setup
+```bash
+source python_env/bin/activate
+pip install -r models/demos/time_series_transformer/requirements.txt
+```
+
+## Generate Reference Tensors
+Reference `.pt` tensors are generated locally and not committed to the repo.
+Run from the repo root:
+```bash
+python models/demos/time_series_transformer/scripts/save_reference_tensors.py
+```
+
+Generated files appear in `scripts/reference/` and include all encoder/decoder
+intermediate outputs for PCC validation against the TTNN port.
+
+Model is pinned to revision `2a40ad41f6ffe61e7bef6099b08c6c2fce36ac35`
+for reproducibility.
