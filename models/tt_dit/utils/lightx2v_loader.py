@@ -13,96 +13,110 @@ consumes the *diffusers* layout (``blocks.X.attn1.to_q.weight``,
 ``blocks.X.scale_shift_table``, ``proj_out.weight``,
 ``condition_embedder.time_embedder.linear_1.weight``, ...).
 
-:func:`load_lightx2v_state_dict` applies :func:`wan_lightx2v_to_diffusers_key`
-to every key by default so the returned dict matches what
-``WanTransformer3DModel._prepare_torch_state`` expects.
+:func:`load_lightx2v_state_dict` applies :func:`rename_lightx2v_to_diffusers`
+to the loaded state dict using :func:`rename_substate` from the DiT library,
+so the returned dict matches what ``WanTransformer3DModel._prepare_torch_state``
+expects.
 """
 from __future__ import annotations
 
 import os
-import re
 from pathlib import Path
-from typing import Callable, Mapping
+from typing import Mapping
 
 import torch
 from loguru import logger
 from safetensors.torch import load_file
 
-# Per-block suffix renames: applied to the part after ``blocks.<i>.``.
-# Verified 1:1 (matching shapes) against
-# Wan-AI/Wan2.2-I2V-A14B-Diffusers/transformer for all 40 blocks.
-_BLOCK_SUFFIX_REMAP: dict[str, str] = {
+from .substate import rename_substate
+
+# Per-block prefix renames (lightx2v → diffusers), applied under each
+# ``blocks.<i>.`` subtree. Uses rename_substate for prefix-based renaming.
+_BLOCK_PREFIX_REMAP: list[tuple[str, str]] = [
     # self-attention
-    "self_attn.q.weight": "attn1.to_q.weight",
-    "self_attn.q.bias": "attn1.to_q.bias",
-    "self_attn.k.weight": "attn1.to_k.weight",
-    "self_attn.k.bias": "attn1.to_k.bias",
-    "self_attn.v.weight": "attn1.to_v.weight",
-    "self_attn.v.bias": "attn1.to_v.bias",
-    "self_attn.o.weight": "attn1.to_out.0.weight",
-    "self_attn.o.bias": "attn1.to_out.0.bias",
-    "self_attn.norm_q.weight": "attn1.norm_q.weight",
-    "self_attn.norm_k.weight": "attn1.norm_k.weight",
+    ("self_attn.q", "attn1.to_q"),
+    ("self_attn.k", "attn1.to_k"),
+    ("self_attn.v", "attn1.to_v"),
+    ("self_attn.o", "attn1.to_out.0"),
+    ("self_attn.norm_q", "attn1.norm_q"),
+    ("self_attn.norm_k", "attn1.norm_k"),
     # cross-attention
-    "cross_attn.q.weight": "attn2.to_q.weight",
-    "cross_attn.q.bias": "attn2.to_q.bias",
-    "cross_attn.k.weight": "attn2.to_k.weight",
-    "cross_attn.k.bias": "attn2.to_k.bias",
-    "cross_attn.v.weight": "attn2.to_v.weight",
-    "cross_attn.v.bias": "attn2.to_v.bias",
-    "cross_attn.o.weight": "attn2.to_out.0.weight",
-    "cross_attn.o.bias": "attn2.to_out.0.bias",
-    "cross_attn.norm_q.weight": "attn2.norm_q.weight",
-    "cross_attn.norm_k.weight": "attn2.norm_k.weight",
-    # feedforward (linear-gelu_approx-linear)
-    "ffn.0.weight": "ffn.net.0.proj.weight",
-    "ffn.0.bias": "ffn.net.0.proj.bias",
-    "ffn.2.weight": "ffn.net.2.weight",
-    "ffn.2.bias": "ffn.net.2.bias",
+    ("cross_attn.q", "attn2.to_q"),
+    ("cross_attn.k", "attn2.to_k"),
+    ("cross_attn.v", "attn2.to_v"),
+    ("cross_attn.o", "attn2.to_out.0"),
+    ("cross_attn.norm_q", "attn2.norm_q"),
+    ("cross_attn.norm_k", "attn2.norm_k"),
+    # feedforward
+    ("ffn.0", "ffn.net.0.proj"),
+    ("ffn.2", "ffn.net.2"),
     # cross-attn input norm
-    "norm3.weight": "norm2.weight",
-    "norm3.bias": "norm2.bias",
-    # per-block 6-way modulation table
+    ("norm3", "norm2"),
+]
+
+# Single-key renames that don't fit the prefix pattern (leaf key → leaf key).
+_BLOCK_KEY_REMAP: dict[str, str] = {
     "modulation": "scale_shift_table",
 }
 
-# Top-level renames. ``patch_embedding.{weight,bias}`` matches verbatim and is
-# omitted here so it passes through unchanged.
-_TOP_LEVEL_REMAP: dict[str, str] = {
-    "text_embedding.0.weight": "condition_embedder.text_embedder.linear_1.weight",
-    "text_embedding.0.bias": "condition_embedder.text_embedder.linear_1.bias",
-    "text_embedding.2.weight": "condition_embedder.text_embedder.linear_2.weight",
-    "text_embedding.2.bias": "condition_embedder.text_embedder.linear_2.bias",
-    "time_embedding.0.weight": "condition_embedder.time_embedder.linear_1.weight",
-    "time_embedding.0.bias": "condition_embedder.time_embedder.linear_1.bias",
-    "time_embedding.2.weight": "condition_embedder.time_embedder.linear_2.weight",
-    "time_embedding.2.bias": "condition_embedder.time_embedder.linear_2.bias",
-    "time_projection.1.weight": "condition_embedder.time_proj.weight",
-    "time_projection.1.bias": "condition_embedder.time_proj.bias",
-    "head.head.weight": "proj_out.weight",
-    "head.head.bias": "proj_out.bias",
+# Top-level prefix renames (lightx2v → diffusers).
+_TOP_LEVEL_PREFIX_REMAP: list[tuple[str, str]] = [
+    ("text_embedding.0", "condition_embedder.text_embedder.linear_1"),
+    ("text_embedding.2", "condition_embedder.text_embedder.linear_2"),
+    ("time_embedding.0", "condition_embedder.time_embedder.linear_1"),
+    ("time_embedding.2", "condition_embedder.time_embedder.linear_2"),
+    ("time_projection.1", "condition_embedder.time_proj"),
+    ("head.head", "proj_out"),
+]
+
+_TOP_LEVEL_KEY_REMAP: dict[str, str] = {
     "head.modulation": "scale_shift_table",
 }
 
-_BLOCK_RE = re.compile(r"^blocks\.(\d+)\.(.+)$")
+
+def _detect_num_blocks(state: dict[str, torch.Tensor]) -> int:
+    max_idx = -1
+    for k in state:
+        if k.startswith("blocks."):
+            parts = k.split(".")
+            if len(parts) >= 2 and parts[1].isdigit():
+                max_idx = max(max_idx, int(parts[1]))
+    return max_idx + 1
+
+
+def rename_lightx2v_to_diffusers(state: dict[str, torch.Tensor]) -> None:
+    """Rename all keys in *state* from lightx2v/native-Wan to diffusers layout, in place.
+
+    Uses :func:`rename_substate` from the DiT library for prefix-based renames.
+    """
+    num_blocks = _detect_num_blocks(state)
+
+    for i in range(num_blocks):
+        for src, dst in _BLOCK_PREFIX_REMAP:
+            rename_substate(state, f"blocks.{i}.{src}", f"blocks.{i}.{dst}")
+        for src, dst in _BLOCK_KEY_REMAP.items():
+            old_key = f"blocks.{i}.{src}"
+            if old_key in state:
+                state[f"blocks.{i}.{dst}"] = state.pop(old_key)
+
+    for src, dst in _TOP_LEVEL_PREFIX_REMAP:
+        rename_substate(state, src, dst)
+
+    for src, dst in _TOP_LEVEL_KEY_REMAP.items():
+        if src in state:
+            state[dst] = state.pop(src)
 
 
 def wan_lightx2v_to_diffusers_key(key: str) -> str:
     """Rename one lightx2v key to its diffusers-canonical equivalent.
 
-    Returns the key unchanged when no rename applies (e.g. ``patch_embedding.*``).
+    Convenience wrapper kept for callers that need per-key conversion
+    (e.g. LoRA key targeting). Internally builds a single-key dict and
+    applies :func:`rename_lightx2v_to_diffusers`.
     """
-    if (m := _BLOCK_RE.match(key)) is not None:
-        idx, suffix = m.group(1), m.group(2)
-        new_suffix = _BLOCK_SUFFIX_REMAP.get(suffix, suffix)
-        return f"blocks.{idx}.{new_suffix}"
-    return _TOP_LEVEL_REMAP.get(key, key)
-
-
-# Optional flat-dict overrides applied AFTER wan_lightx2v_to_diffusers_key.
-# Empty by default — populate or pass ``key_remap=`` to handle future variants
-# without modifying the canonical Wan rename above.
-KEY_REMAP: dict[str, str] = {}
+    tmp = {key: torch.empty(0)}
+    rename_lightx2v_to_diffusers(tmp)
+    return next(iter(tmp))
 
 
 class WeightsNotFoundError(FileNotFoundError):
@@ -154,7 +168,6 @@ def load_lightx2v_state_dict(
     allow_download: bool = False,
     local_dir: str | None = None,
     key_remap: Mapping[str, str] | None = None,
-    rename_fn: Callable[[str], str] | None = wan_lightx2v_to_diffusers_key,
 ) -> dict[str, torch.Tensor]:
     """Load a lightx2v safetensors file and return a torch state dict.
 
@@ -166,10 +179,8 @@ def load_lightx2v_state_dict(
             in ``local_dir`` or the HF cache. When ``True``, missing files are
             fetched via ``huggingface_hub.hf_hub_download``.
         local_dir: Optional directory to check before the HF cache.
-        rename_fn: Per-key rename function applied first. Defaults to the
-            Wan2.2 lightx2v→diffusers map. Pass ``None`` to skip.
-        key_remap: Flat-dict overrides applied after ``rename_fn`` (and
-            after ``KEY_REMAP``). Useful for one-off renames in tests.
+        key_remap: Flat-dict overrides applied after the lightx2v→diffusers
+            rename. Useful for one-off renames in tests.
 
     Returns:
         State dict with diffusers-canonical keys ready for
@@ -179,12 +190,10 @@ def load_lightx2v_state_dict(
     logger.info(f"Loading lightx2v state dict from '{path}'")
     state = load_file(str(path))
 
-    if rename_fn is not None:
-        state = {rename_fn(k): v for k, v in state.items()}
+    rename_lightx2v_to_diffusers(state)
 
-    remap = dict(KEY_REMAP)
     if key_remap:
-        remap.update(key_remap)
-    if remap:
-        state = {remap.get(k, k): v for k, v in state.items()}
+        for old_k, new_k in key_remap.items():
+            if old_k in state:
+                state[new_k] = state.pop(old_k)
     return state
