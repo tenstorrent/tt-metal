@@ -1,7 +1,5 @@
 # This file defines the test matrix for the Blackhole e2e pipeline (e2e, integration, perf, unit,
-# DeepSeek prefill, plus the two lightweight stress suites that historically gated post-commit on BH
-# — see the `--- stress ---` section below). Heavy / weekly model stress (Llama3.1-8B N-device,
-# etc.) lives separately in `blackhole_stress_tests.yaml` + blackhole-stress-tests.yaml.
+# DeepSeek prefill).
 
 # Each entry represents a parallel job with the following keys:
 #   id: Stable slug for workflow_dispatch / jq filtering.

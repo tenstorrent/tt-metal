@@ -10,7 +10,6 @@ on:
         type: choice
         options:
           - all
-          - P150 (1xP150)
           - P150 CIv2 (1xP150)
           - Quietbox (4xP150)
           - DeskBox (2xP150)
@@ -89,7 +88,6 @@ jobs:
         id: set-matrix
         run: |
           all_systems='[
-            {"name": "P150 (1xP150)", "sku": "bh_p150"},
             {"name": "P150 CIv2 (1xP150)", "sku": "bh_p150b_civ2"},
             {"name": "Quietbox (4xP150)", "sku": "bh_llmbox"},
             {"name": "DeskBox (2xP150)", "sku": "bh_deskbox"},
