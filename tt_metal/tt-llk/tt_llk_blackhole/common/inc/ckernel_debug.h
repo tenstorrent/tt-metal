@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "ckernel_dest.h"
 
 // Debug bus and register array dump
 // TODO: RT Review this debug file for BH, currently copy from whb0
@@ -152,6 +153,135 @@ inline void dbg_thread_unhalt()
         // Unhalt unpack thread
         mailbox_write(ThreadId::UnpackThreadId, 1);
     }
+}
+
+// Dump a single tile from the DEST register through the RISC-V memory-mapped
+// dest register.
+//
+// SyncHalf note: tile_id is a direct index into DEST starting at offset 0.
+// In SyncHalf mode the math thread uses the upper half of DEST when
+// dest_offset_id == 1; in that case pass (DEST_NUM_TILES_FP16_HALF + logical_tile_id)
+// or precompute the offset via get_dest_buffer_base().
+//
+// Parameters:
+//   fmt:             data format of the values stored in DEST.
+//   tile_id:         index of the tile within DEST to dump.
+//   dst_buffer:      destination buffer pointer to copy the tile into. Must have
+//                    space for TILE_HEIGHT * TILE_WIDTH elements of `fmt`.
+//   enable_swizzle:  when true, read with hardware swizzling enabled (matches
+//                    the FPU's view of DEST); when false, read the raw layout.
+template <ThreadId thread_id = ThreadId::MathThreadId>
+inline void dbg_dump_dest_tile(DataFormat fmt, std::uint32_t tile_id, void *dst_buffer, bool enable_swizzle = true)
+{
+    static_assert(
+        thread_id == ThreadId::MathThreadId || thread_id == ThreadId::PackThreadId || thread_id == ThreadId::UnpackThreadId,
+        "Thread must be UnpackThreadId, MathThreadId, or PackThreadId");
+
+    // Only the formats explicitly handled by fmt_to_dest_type and the byte-width
+    // dispatch below are supported on the RISC-V debug dest pathway.
+    LLK_ASSERT(
+        fmt == DataFormat::Float32 || fmt == DataFormat::Float16 || fmt == DataFormat::Float16_b || fmt == DataFormat::Int32 || fmt == DataFormat::UInt32 ||
+            fmt == DataFormat::UInt16 || fmt == DataFormat::Int8 || fmt == DataFormat::UInt8,
+        "dbg_dump_dest_tile: unsupported DataFormat");
+
+    constexpr std::uint32_t TILE_ELEMENTS = TILE_HEIGHT * TILE_WIDTH;
+
+    const std::uint8_t dest_type = fmt_to_dest_type(fmt);
+    const bool is_signed         = (fmt != DataFormat::UInt8) && (fmt != DataFormat::UInt16) && (fmt != DataFormat::UInt32);
+
+    set_dest_fmt<thread_id>(dest_type);
+    set_dest_enable_swizzling<thread_id>(enable_swizzle);
+    set_dest_int8_int16_signed<thread_id>(is_signed);
+    tensix_sync();
+
+    const std::uint32_t offset = tile_id * TILE_ELEMENTS;
+
+    if (dest_type == RISC_DEST_FMT_FP32 || dest_type == RISC_DEST_FMT_INT32)
+    {
+        volatile std::uint32_t *dest32 = reinterpret_cast<volatile std::uint32_t *>(RISCV_DEST_START_ADDR);
+        volatile std::uint32_t *dst32  = reinterpret_cast<volatile std::uint32_t *>(dst_buffer);
+        for (std::uint32_t i = 0; i < TILE_ELEMENTS; ++i)
+        {
+            dst32[i] = dest32[offset + i];
+        }
+    }
+    else if (dest_type == RISC_DEST_FMT_INT8)
+    {
+        volatile std::uint8_t *dest8 = reinterpret_cast<volatile std::uint8_t *>(RISCV_DEST_START_ADDR);
+        volatile std::uint8_t *dst8  = reinterpret_cast<volatile std::uint8_t *>(dst_buffer);
+        for (std::uint32_t i = 0; i < TILE_ELEMENTS; ++i)
+        {
+            dst8[i] = dest8[offset + i];
+        }
+    }
+    else // FP16A, FP16B, INT16
+    {
+        volatile std::uint16_t *dest16 = reinterpret_cast<volatile std::uint16_t *>(RISCV_DEST_START_ADDR);
+        volatile std::uint16_t *dst16  = reinterpret_cast<volatile std::uint16_t *>(dst_buffer);
+        for (std::uint32_t i = 0; i < TILE_ELEMENTS; ++i)
+        {
+            dst16[i] = dest16[offset + i];
+        }
+    }
+}
+
+template <ThreadId thread_id = ThreadId::MathThreadId>
+inline void dbg_write_dest_tile(DataFormat fmt, std::uint32_t tile_id, const void *src_buffer, bool enable_swizzle = true)
+{
+    static_assert(
+        thread_id == ThreadId::MathThreadId || thread_id == ThreadId::PackThreadId || thread_id == ThreadId::UnpackThreadId,
+        "Thread must be UnpackThreadId, MathThreadId, or PackThreadId");
+
+    // Only the formats explicitly handled by fmt_to_dest_type and the byte-width
+    // dispatch below are supported on the RISC-V debug dest pathway.
+    LLK_ASSERT(
+        fmt == DataFormat::Float32 || fmt == DataFormat::Float16 || fmt == DataFormat::Float16_b || fmt == DataFormat::Int32 || fmt == DataFormat::UInt32 ||
+            fmt == DataFormat::UInt16 || fmt == DataFormat::Int8 || fmt == DataFormat::UInt8,
+        "dbg_write_dest_tile: unsupported DataFormat");
+
+    constexpr std::uint32_t TILE_ELEMENTS = TILE_HEIGHT * TILE_WIDTH;
+
+    const std::uint8_t dest_type = fmt_to_dest_type(fmt);
+    const bool is_signed         = (fmt != DataFormat::UInt8) && (fmt != DataFormat::UInt16) && (fmt != DataFormat::UInt32);
+
+    set_dest_fmt<thread_id>(dest_type);
+    set_dest_enable_swizzling<thread_id>(enable_swizzle);
+    set_dest_int8_int16_signed<thread_id>(is_signed);
+    tensix_sync();
+
+    const std::uint32_t offset = tile_id * TILE_ELEMENTS;
+
+    if (dest_type == RISC_DEST_FMT_FP32 || dest_type == RISC_DEST_FMT_INT32)
+    {
+        volatile std::uint32_t *dest32      = reinterpret_cast<volatile std::uint32_t *>(RISCV_DEST_START_ADDR);
+        const volatile std::uint32_t *src32 = reinterpret_cast<const volatile std::uint32_t *>(src_buffer);
+        for (std::uint32_t i = 0; i < TILE_ELEMENTS; ++i)
+        {
+            dest32[offset + i] = src32[i];
+        }
+    }
+    else if (dest_type == RISC_DEST_FMT_INT8)
+    {
+        volatile std::uint8_t *dest8      = reinterpret_cast<volatile std::uint8_t *>(RISCV_DEST_START_ADDR);
+        const volatile std::uint8_t *src8 = reinterpret_cast<const volatile std::uint8_t *>(src_buffer);
+        for (std::uint32_t i = 0; i < TILE_ELEMENTS; ++i)
+        {
+            dest8[offset + i] = src8[i];
+        }
+    }
+    else // FP16A, FP16B, INT16
+    {
+        volatile std::uint16_t *dest16      = reinterpret_cast<volatile std::uint16_t *>(RISCV_DEST_START_ADDR);
+        const volatile std::uint16_t *src16 = reinterpret_cast<const volatile std::uint16_t *>(src_buffer);
+        for (std::uint32_t i = 0; i < TILE_ELEMENTS; ++i)
+        {
+            dest16[offset + i] = src16[i];
+        }
+    }
+
+    // Ensure stores have drained before the caller resumes math/pack ops that
+    // will observe the freshly-written tile.
+    tensix_sync();
 }
 
 inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t row_addr, std::uint32_t *rd_data)
