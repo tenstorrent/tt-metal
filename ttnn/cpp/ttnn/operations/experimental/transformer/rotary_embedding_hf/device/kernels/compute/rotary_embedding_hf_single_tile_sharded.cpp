@@ -9,9 +9,6 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/matmul.h"
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
-
 void kernel_main() {
     constexpr uint32_t onetile = 1;
 
@@ -49,32 +46,38 @@ void kernel_main() {
             reconfig_data_format(in_cb, trans_mat_cb);
             pack_reconfig_data_format(rotated_in_interm_cb);
             mm_init_short(in_cb, trans_mat_cb);
-            ACQ();
+            tile_regs_acquire();
             matmul_tiles(in_cb, trans_mat_cb, 0, 0, 0);
+            tile_regs_commit();
+            tile_regs_wait();
             pack_tile(0, rotated_in_interm_cb);
-            REL();
+            tile_regs_release();
             cb_push_back(rotated_in_interm_cb, onetile);
 
             cb_wait_front(rotated_in_interm_cb, onetile);
             cb_wait_front(sin_cb, onetile);
             reconfig_data_format(rotated_in_interm_cb, sin_cb);
             pack_reconfig_data_format(sin_interm_cb);
-            ACQ();
+            tile_regs_acquire();
             mul_bcast_rows_init_short(rotated_in_interm_cb, sin_cb);
             mul_tiles_bcast_rows(rotated_in_interm_cb, sin_cb, 0, 0, 0);
+            tile_regs_commit();
+            tile_regs_wait();
             pack_tile(0, sin_interm_cb);
-            REL();
+            tile_regs_release();
             cb_push_back(sin_interm_cb, onetile);
             cb_pop_front(rotated_in_interm_cb, onetile);
 
             cb_wait_front(cos_cb, onetile);
             reconfig_data_format(in_cb, cos_cb);
             pack_reconfig_data_format(cos_interm_cb);
-            ACQ();
+            tile_regs_acquire();
             mul_bcast_rows_init_short(in_cb, cos_cb);
             mul_tiles_bcast_rows(in_cb, cos_cb, 0, 0, 0);
+            tile_regs_commit();
+            tile_regs_wait();
             pack_tile(0, cos_interm_cb);
-            REL();
+            tile_regs_release();
             cb_push_back(cos_interm_cb, onetile);
             cb_pop_front(in_cb, onetile);
 
@@ -83,10 +86,12 @@ void kernel_main() {
             reconfig_data_format(cos_interm_cb, sin_interm_cb);
             pack_reconfig_data_format(out_cb);
             add_tiles_init(cos_interm_cb, sin_interm_cb);
-            ACQ();
+            tile_regs_acquire();
             add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);
+            tile_regs_commit();
+            tile_regs_wait();
             pack_tile(0, out_cb);
-            REL();
+            tile_regs_release();
             cb_push_back(out_cb, onetile);
             cb_pop_front(cos_interm_cb, onetile);
             cb_pop_front(sin_interm_cb, onetile);
