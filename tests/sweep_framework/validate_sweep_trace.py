@@ -294,8 +294,12 @@ def deep_diff(master: Any, sweep: Any, prefix: str = "") -> list[Diff]:
                 # Skip extra keys with None value — the tracer captures function
                 # defaults (dtype=None, memory_config=None) that the master trace
                 # never had. These are not real diffs.
-                if sweep[k] is not None:
-                    diffs.append(Diff(child_path, "<missing>", sweep[k], "extra_key"))
+                # Also skip known sweep-framework output kwargs that the model
+                # trace never captures (e.g. the output memory_config passed by
+                # the sweep module to control placement).
+                if sweep[k] is None or k in ("memory_config", "core_grid", "dtype"):
+                    continue
+                diffs.append(Diff(child_path, "<missing>", sweep[k], "extra_key"))
             elif k not in sweep:
                 if master[k] is not None:
                     diffs.append(Diff(child_path, master[k], "<missing>", "extra_key"))
