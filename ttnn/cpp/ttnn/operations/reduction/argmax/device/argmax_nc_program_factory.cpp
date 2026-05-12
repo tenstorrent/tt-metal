@@ -4,6 +4,7 @@
 
 #include "argmax_nc_device_operation.hpp"
 
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -142,8 +143,9 @@ ArgMaxNCProgramFactory::cached_program_t ArgMaxNCProgramFactory::create(
     // whenever two bf16-rounded values tie but their fp32 originals differ.
     // - `src_cb` is fp32 only when the user input is fp32.
     // - `idx_cb` is always fp32 so (float)k is exactly representable for all k.
-    constexpr uint32_t NUM_CBS = 32;
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CBS, tt::tt_metal::UnpackToDestMode::Default);
+    // Size must match host JIT expectation (NUM_CIRCULAR_BUFFERS = 64 on Blackhole / host; WH device uses 32).
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (input_data_format == DataFormat::Float32) {
         unpack_to_dest_mode[static_cast<uint32_t>(src_cb)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
