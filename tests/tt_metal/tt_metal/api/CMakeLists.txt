@@ -6,9 +6,10 @@ add_library(TT::Metalium::Test::API ALIAS unit_tests_api_lib)
 include(sources.cmake)
 
 # Use target_sources to gather the necessary sources
-target_sources(unit_tests_api_lib PRIVATE 
+target_sources(unit_tests_api_lib PRIVATE
     ${UNIT_TESTS_API_SOURCES}
     test_alignment_writes.cpp
+    test_cb_leak.cpp
     test_cb_pages.cpp
     test_fabric_allocation.cpp
     test_metadata_size.cpp
