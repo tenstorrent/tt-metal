@@ -17,8 +17,3 @@ inline std::uint32_t llk_math_extract_compute_special_value_flags(std::uint32_t 
 }
 
 inline void llk_math_clear_compute_special_value_flags() { _llk_math_clear_compute_special_value_flags_(); }
-
-inline void llk_math_store_compute_special_value_flags_to_l1(std::uint32_t l1_addr) {
-    volatile tt_l1_ptr std::uint32_t* l1_addr_ptr = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(l1_addr);
-    l1_addr_ptr[0] = _llk_math_get_compute_special_value_flags_();
-}
