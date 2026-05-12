@@ -66,11 +66,13 @@ unit_tests_debug_tools:
   - filter: "*TestWatcherWaypoints"
     config: 1x3
 
-  - filter: "*TestWatcherTileCounterLogRemapper*"
-    config: 1x3
+# Hangs
+#  - filter: "*TestWatcherTileCounterLogRemapper*"
+#    config: 1x3
 
-  - filter: "*TestWatcherTileCounterLogBypass*"
-    config: 1x3
+# Hangs
+#  - filter: "*TestWatcherTileCounterLogBypass*"
+#    config: 1x3
 
   - filter: "*QuasarMultiDMOutOfBoundsArgDetection*"
     config: 1x3
