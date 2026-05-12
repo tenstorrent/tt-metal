@@ -424,7 +424,7 @@ def test_validate_perf_targets_local_artifacts_no_regression_then_regression(tmp
                                 "status": "active",
                                 "perf": {
                                     "decode_t/s/u": 100.0,
-                                    "prefill_time_to_first_token": 0.10,
+                                    "prefill_time_to_first_token": 100.0,
                                 },
                                 "accuracy": {
                                     "top1": 90.0,
