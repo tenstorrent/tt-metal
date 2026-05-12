@@ -36,8 +36,8 @@ void setup_runtime(
     uint32_t idc_outer_limit = 1;
     uint32_t idc_inner_limit = num_cores_c;
 
-    for (int id_r_outer = 0; id_r_outer < z; id_r_outer++) {
-        for (int id_r_inner = 0; id_r_inner < num_cores_x; id_r_inner++) {
+    for (uint32_t id_r_outer = 0; id_r_outer < z; id_r_outer++) {
+        for (uint32_t id_r_inner = 0; id_r_inner < num_cores_x; id_r_inner++) {
             uint32_t id_r = (id_r_outer * num_cores_x) + id_r_inner;
 
             uint32_t id_r_reader =
@@ -47,8 +47,8 @@ void setup_runtime(
                 idc_outer_limit = 2;
                 idc_inner_limit = num_cores_c / 2;
             }
-            for (int id_c_outer = 0; id_c_outer < idc_outer_limit; id_c_outer++) {
-                for (int id_c_inner = 0; id_c_inner < idc_inner_limit; id_c_inner++) {
+            for (uint32_t id_c_outer = 0; id_c_outer < idc_outer_limit; id_c_outer++) {
+                for (uint32_t id_c_inner = 0; id_c_inner < idc_inner_limit; id_c_inner++) {
                     uint32_t id_c = (id_c_outer * idc_inner_limit) + id_c_inner;
                     CoreCoord core = {(std::size_t)start_core_x + id_r, (std::size_t)start_core_y + id_c};
 
@@ -234,8 +234,8 @@ void SplitProgramFactory::override_runtime_arguments(
     auto* dst_0_dram_buffer = output_tensors.at(0).buffer();
     auto* dst_1_dram_buffer = output_tensors.at(1).buffer();
 
-    for (int core_idx_y = 0; core_idx_y < num_cores_c; core_idx_y++) {
-        for (int core_idx_x = 0; core_idx_x < num_cores_r; core_idx_x++) {
+    for (uint32_t core_idx_y = 0; core_idx_y < num_cores_c; core_idx_y++) {
+        for (uint32_t core_idx_x = 0; core_idx_x < num_cores_r; core_idx_x++) {
             CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
 
             {

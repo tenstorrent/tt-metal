@@ -105,7 +105,7 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
             input_shape,
             0);
     } else {
-        for (auto i = 0; i < input_shape.rank(); i++) {
+        for (size_t i = 0; i < input_shape.rank(); i++) {
             TT_FATAL(
                 input_shape[i] <= operation_attributes.output_padded_shape[i],
                 "Output tensor shape {} must be greater than or equal to input shape {} in each dimension, but is "

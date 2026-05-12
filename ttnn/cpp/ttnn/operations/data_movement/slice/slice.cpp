@@ -44,7 +44,7 @@ ttnn::Tensor slice(
     bool starts_zero = std::ranges::all_of(begins, [](uint32_t s) { return s == 0; });
     bool ends_max = true;
     for (size_t i = 0; i < ends.size(); ++i) {
-        ends_max &= ends[i] == input_shape[i];
+        ends_max &= ends[i] == static_cast<T>(input_shape[i]);
         if (!ends_max) {
             break;
         }

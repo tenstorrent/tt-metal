@@ -50,7 +50,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     num_padded_sticks_per_dim[0] = 0;
     accumulated_total_per_dim[0] = 1;
 
-    for (int32_t i = 1; i < num_dims; i++) {
+    for (int32_t i = 1; i < static_cast<int32_t>(num_dims); i++) {
         uint32_t num_unpadded_dim = output_shape[-(i + 1)];
         uint32_t num_total_dim = input_shape[-(i + 1)];
         uint32_t num_padded_dim = (num_total_dim - num_unpadded_dim) * accumulated_total_per_dim[i - 1];

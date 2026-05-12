@@ -43,7 +43,7 @@ ttnn::Tensor squeeze(const ttnn::Tensor& input_tensor, const ttnn::SmallVector<i
             TT_FATAL(dim != dims[i - 1], "dim {} appears multiple times in the list of dims", dim);
         }
         TT_FATAL(
-            (dim >= 0) && (dim < input_tensor_rank),
+            (dim >= 0) && (static_cast<size_t>(dim) < input_tensor_rank),
             "Dimension out of range (expected to be in range of [{},{}], but got {})",
             -static_cast<std::ptrdiff_t>(input_tensor_rank),
             input_tensor_rank - 1,

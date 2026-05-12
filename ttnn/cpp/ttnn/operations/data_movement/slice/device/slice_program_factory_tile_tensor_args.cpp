@@ -62,7 +62,7 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tensor_args(
         num_padded_tiles_per_dim[1] = num_padded_Yt;
         accumulated_total_per_dim[0] = num_total_Xt;
         accumulated_total_per_dim[1] = num_total_Yt * num_total_Xt;
-        for (int32_t i = 2; i < num_dims; ++i) {
+        for (int32_t i = 2; i < static_cast<int32_t>(num_dims); ++i) {
             uint32_t num_unpadded_dim = output_shape[-(i + 1)];
             uint32_t num_total_dim = input_shape[-(i + 1)];
             uint32_t num_padded_dim = (num_total_dim - num_unpadded_dim) * accumulated_total_per_dim[i - 1];
@@ -71,7 +71,7 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tensor_args(
             accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
         }
         // Copy input shape to common args
-        for (int32_t i = 0; i < num_dims; ++i) {
+        for (int32_t i = 0; i < static_cast<int32_t>(num_dims); ++i) {
             input_shape_args[i] = input_shape[i];
         }
     };
