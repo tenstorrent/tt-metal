@@ -166,7 +166,7 @@ jobs:
           SHIMEOF
           chmod +x ./clang-tidy-shim
 
-      - name: "\U0001F527 CMake configure"
+      - name: 🔧 CMake configure
         run: |
           CLANG_TIDY_CMD="$(pwd)/clang-tidy-shim;--warnings-as-errors=*"
           cmake --preset clang-tidy \
@@ -206,7 +206,7 @@ jobs:
             echo "::warning::clang-tidy-cache not found — running clang-tidy-20 directly (no result caching)"
           fi
 
-      - name: "\U0001F50D Analyze code with clang-tidy"
+      - name: 🔍 Analyze code with clang-tidy
         timeout-minutes: 120
         run: |
           if [ -n "${{ inputs.scan-targets }}" ]; then
@@ -220,7 +220,7 @@ jobs:
             cmake --build --preset clang-tidy
           fi
 
-      - name: Publish ccache summary
+      - name: Publish Ccache summary
         if: always()
         run: |
           echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
