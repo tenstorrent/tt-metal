@@ -290,7 +290,7 @@ inline __attribute__((always_inline)) void _sfpu_check_and_call_(
  */
 #define SFPU_TEMPLATE_PARAMS_KERNEL_FN(                                                                      \
     FN, APPROXIMATE, IS_FP32_DEST_ACC_EN, SCALE_EN, CLAMP_NEGATIVE, ITERATIONS, DST_IDX, VECTOR_MODE, SCALE) \
-    SFPU_CALL(                                                                                               \;
+    SFPU_CALL(                                                                                               \
         DST_SYNC_MODE,                                                                                       \
         DST_ACCUM_MODE,                                                                                      \
         FN,                                                                                                  \
