@@ -171,7 +171,7 @@ def convert_hf_to_meta(
     return state_dict
 
 
-def convert_hf_to_meta_no_qkv_permute(state_dict, head_dim, n_heads=None, n_kv_heads=None):
+def convert_hf_to_meta_no_qkv_permute(state_dict, head_dim, n_heads=None, n_kv_heads=None, model_type=None):
     """Convert HF to Meta format but skip QKV weight permutation.
 
     This keeps weights in HF format for use with HF-style RoPE.
@@ -179,7 +179,7 @@ def convert_hf_to_meta_no_qkv_permute(state_dict, head_dim, n_heads=None, n_kv_h
     """
     state_dict = split_hf_keys(state_dict, n_heads, n_kv_heads)
     # SKIP convert_hf_qkv_to_meta_format - keep weights in HF format
-    state_dict = map_hf_to_meta_keys(state_dict)
+    state_dict = map_hf_to_meta_keys(state_dict, model_type=model_type)
     return state_dict
 
 
