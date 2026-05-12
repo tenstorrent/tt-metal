@@ -270,7 +270,7 @@ class Attention(LightweightModule):
 
         # RoPE (P3): default kernel was HiFi4; LoFi + explicit L1 matches linears and avoids DRAM spill.
         self.rope_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4 if _hi_fi else ttnn.MathFidelity.LoFi,
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
