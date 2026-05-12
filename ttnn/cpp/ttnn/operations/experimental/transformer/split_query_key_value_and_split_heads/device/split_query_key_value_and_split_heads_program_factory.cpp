@@ -152,8 +152,8 @@ SplitFusedQKVAndSplitHeadsProgramFactory::cached_program_t SplitFusedQKVAndSplit
             .set_page_size(out_cb_index, single_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
 
-    for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
-        for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
+    for (uint32_t core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
+        for (uint32_t core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
 
             std::vector<uint32_t> reader_runtime_args = {
@@ -198,8 +198,8 @@ void SplitFusedQKVAndSplitHeadsProgramFactory::override_runtime_arguments(
     auto start_core_x = shared.start_core_x;
     auto start_core_y = shared.start_core_y;
 
-    for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
-        for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
+    for (uint32_t core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
+        for (uint32_t core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
 
             {

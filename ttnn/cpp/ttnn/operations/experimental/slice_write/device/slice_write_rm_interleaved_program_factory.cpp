@@ -61,7 +61,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
     accumulated_total_per_dim[0] = 1;
     rev_stride[0] = stride[num_dims - 1];
 
-    for (int32_t i = 1; i < num_dims; i++) {
+    for (int32_t i = 1; i < static_cast<int32_t>(num_dims); i++) {
         uint32_t num_unpadded_dim = input_shape[-(i + 1)];
         uint32_t num_total_dim = output_shape[-(i + 1)];
         rev_stride[i] = stride[num_dims - (i + 1)];

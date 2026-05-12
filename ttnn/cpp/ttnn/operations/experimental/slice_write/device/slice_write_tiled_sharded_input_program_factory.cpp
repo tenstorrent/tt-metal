@@ -87,7 +87,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     uint32_t output_channel_tiles = accumulated_total_tiles_per_dim[0];
     accumulated_input_total_tiles_per_dim[0] = num_input_tiles_per_dim[0];
     accumulated_input_total_tiles_per_dim[1] = num_input_tiles_per_dim[1] * accumulated_input_total_tiles_per_dim[0];
-    for (int32_t i = 2; i < num_dims; i++) {
+    for (int32_t i = 2; i < static_cast<int32_t>(num_dims); i++) {
         uint32_t num_unpadded_dim = actual_input_shape[-(i + 1)];
         uint32_t num_total_dim = output_shape[-(i + 1)];
         uint32_t num_padded_dim = (num_total_dim - num_unpadded_dim) * accumulated_total_tiles_per_dim[i - 1];
@@ -217,7 +217,7 @@ SliceWriteTiledShardedInputProgramFactory::cached_program_t SliceWriteTiledShard
     auto input_shape = input.logical_shape();
     auto output_shape = output.logical_shape();
     auto actual_input_shape = input_shape;
-    for (int index = 0; index < input_shape.rank(); index++) {
+    for (size_t index = 0; index < input_shape.rank(); index++) {
         actual_input_shape[index] = output_tensor_end[index] - output_tensor_start[index];
     }
 
