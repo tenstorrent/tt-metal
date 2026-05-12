@@ -397,7 +397,7 @@ std::ostream& operator<<(std::ostream& os, const std::tuple<Ts...>& tuple) {
 template <typename T, std::size_t N>
 std::ostream& operator<<(std::ostream& os, const std::array<T, N>& array) {
     os << "{";
-    for (auto index = 0; index < array.size(); index++) {
+    for (std::size_t index = 0; index < array.size(); index++) {
         const auto& element = array[index];
         os << element;
         if (index != array.size() - 1) {
