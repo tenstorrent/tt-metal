@@ -248,10 +248,11 @@ class Attention(Module):
     def _to_out_fused_addcmul(
         self,
         x: ttnn.Tensor,
-        addcmul_residual: ttnn.Tensor,
-        addcmul_gate: ttnn.Tensor,
+        addcmul_residual: ttnn.Tensor | None,
+        addcmul_gate: ttnn.Tensor | None,
         to_out_module: ColParallelLinear,
         parallel_config,
+        tp_axis: int | None = None,
     ) -> ttnn.Tensor:
         """Fused projection + addcmul: output = residual + proj(x) * gate.
 
@@ -260,8 +261,8 @@ class Attention(Module):
             x must be fractured [B, N, H_local*head_dim] from concatenate_heads.
 
         For Linear topology or tp=1 (parallel_config=None):
-            x must already be all-gathered [B, N, padded_inner_dim].
-            Uses dit_minimal_matmul_addcmul_fused for matmul + addcmul fusion.
+            Gathers x if K-dim mismatch (tp_axis required for Linear), then uses
+            dit_minimal_matmul_addcmul_fused for matmul + addcmul fusion.
         """
         if (
             to_out_module.fsdp_mesh_axis is not None
@@ -312,7 +313,9 @@ class Attention(Module):
                 addcmul_input_tensor2=addcmul_gate,
             )[0]
         else:
-            # tp=1 or Linear (x already gathered): matmul + addcmul
+            # Linear: gather x if K-dim mismatch; tp=1: no gather needed.
+            if tp_axis is not None and x.padded_shape[-1] != weight.padded_shape[-2]:
+                x = self.ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=tp_axis, use_hyperparams=True)
             M = x.padded_shape[-2]
             K = x.padded_shape[-1]
             N = weight.padded_shape[-1]
@@ -338,18 +341,22 @@ class Attention(Module):
         is_ring: bool,
         tp_axis: int,
     ) -> ttnn.Tensor:
-        """Gather (Linear only) then project, optionally fusing addcmul. Returns input unchanged if proj_op is None."""
+        """Project with optional fused addcmul. Returns input unchanged if proj_op is None.
+
+        Always routes through _to_out_fused_addcmul:
+            Ring: parallel_config provided → fused all-gather + matmul (+ addcmul if tensors given).
+            Linear: parallel_config=None, tp_axis provided → pre-gathers inside _to_out_fused_addcmul if needed.
+        """
         if input is None or proj_op is None:
             return input
-        if not is_ring and input.padded_shape[-1] != proj_op.weight.data.padded_shape[-2]:
-            input = self.ccl_manager.all_gather_persistent_buffer(
-                input, dim=-1, mesh_axis=tp_axis, use_hyperparams=True
-            )
-        if addcmul_residual is not None and addcmul_gate is not None:
-            return self._to_out_fused_addcmul(
-                input, addcmul_residual, addcmul_gate, proj_op, self.parallel_config if is_ring else None
-            )
-        return proj_op(input, compute_kernel_config=self.mm_compute_kernel_config)
+        return self._to_out_fused_addcmul(
+            input,
+            addcmul_residual,
+            addcmul_gate,
+            proj_op,
+            self.parallel_config if is_ring else None,
+            None if is_ring else tp_axis,
+        )
 
     def forward(
         self,
