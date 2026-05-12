@@ -17,8 +17,8 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #ifdef LLK_TRISC_UNPACK
 
 #include "ckernel_template.h"
+#include "llk_lib_unpack_wrappers.h"
 #include "llk_unpack_common.h"
-#include "llk_unpack_tilize.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -31,21 +31,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_configure_stoch_rnd_<STOCHASTIC_RND>();
 
     // Initialize tilize unpacker
-    _llk_unpack_tilize_init_(
-        formats.unpack_A_src,
-        formats.unpack_A_dst,
-        params.BLOCK_CT_DIM,
-        FACE_R_DIM,
-        params.NARROW_TILE // narrow_tile disabled for now
-    );
+    _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, params.BLOCK_CT_DIM, FACE_R_DIM, params.NARROW_TILE);
 
     std::uint32_t read_offset = 0;
 
-#ifdef ARCH_BLACKHOLE
-    const std::uint32_t block_ct_dim = 0;
-#else
     const std::uint32_t block_ct_dim = params.BLOCK_CT_DIM;
-#endif
 
 #ifdef ARCH_BLACKHOLE
     const std::uint32_t num_faces = 4;
@@ -59,15 +49,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         std::uint32_t tile_row_addr = L1_ADDRESS(params.buffer_A[read_offset]);
         for (std::uint32_t col = 0; col < params.BLOCK_CT_DIM; ++col)
         {
-            _llk_unpack_tilize_(
-                tile_row_addr,
-                col,
-                formats.unpack_A_src,
-                formats.unpack_A_dst,
-                block_ct_dim,
-                FACE_R_DIM,
-                num_faces,
-                false // narrow_tile disabled for now
+            _llk_unpack_tilize_wrapper_(
+                tile_row_addr, col, formats.unpack_A_src, formats.unpack_A_dst, block_ct_dim, FACE_R_DIM, num_faces, false /* narrow_tile */
             );
         }
         read_offset += params.BLOCK_CT_DIM;
