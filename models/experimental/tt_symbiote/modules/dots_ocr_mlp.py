@@ -216,10 +216,11 @@ class TTNNDotsOCRMLP(TTNNModule):
 
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         if hidden_states.layout != ttnn.TILE_LAYOUT:
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         batch_size = hidden_states.shape[0]
         seq_len = hidden_states.shape[1]
+        intermediate_memory_config = ttnn.L1_MEMORY_CONFIG if int(seq_len) == 1 else ttnn.DRAM_MEMORY_CONFIG
 
         # Single matmul + single all-reduce produces concatenated [gate | up].
         gate_up = self.fused_gate_up_proj(hidden_states)
@@ -227,8 +228,8 @@ class TTNNDotsOCRMLP(TTNNModule):
         # Slice into gate / up halves along the last dim. ttnn.slice on a TILE
         # tensor is a metadata + small copy op, far cheaper than a second CCL.
         I = int(gate_up.shape[-1]) // 2
-        gate = ttnn.slice(gate_up, [0, 0, 0], [batch_size, seq_len, I])
-        up = ttnn.slice(gate_up, [0, 0, I], [batch_size, seq_len, 2 * I])
+        gate = ttnn.slice(gate_up, [0, 0, 0], [batch_size, seq_len, I], memory_config=intermediate_memory_config)
+        up = ttnn.slice(gate_up, [0, 0, I], [batch_size, seq_len, 2 * I], memory_config=intermediate_memory_config)
         ttnn.deallocate(gate_up)
 
         gate_up_mul = ttnn.mul(
@@ -236,7 +237,7 @@ class TTNNDotsOCRMLP(TTNNModule):
             up,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             dtype=ttnn.bfloat8_b if _mlp_bfp8_activation_enabled() else None,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=intermediate_memory_config,
         )
         ttnn.deallocate(gate)
         ttnn.deallocate(up)

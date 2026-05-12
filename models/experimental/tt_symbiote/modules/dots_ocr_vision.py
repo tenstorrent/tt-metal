@@ -314,13 +314,13 @@ class TTNNDotsVisionRMSNorm(TTNNModule):
         if self._use_layer_norm:
             self.tt_weight = ttnn.from_torch(
                 self._weight_torch.unsqueeze(0),
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
             )
             if self._bias_torch is not None:
                 self.tt_bias = ttnn.from_torch(
                     self._bias_torch.unsqueeze(0),
-                    dtype=ttnn.bfloat16,
+                    dtype=ttnn.bfloat8_b,
                     layout=ttnn.TILE_LAYOUT,
                 )
         else:
