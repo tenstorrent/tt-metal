@@ -89,6 +89,7 @@ template <
     uint32_t M_block_tiles,
     uint32_t K_block_tiles,
     bool TransposeA,
+    bool UseOffset,
     typename TensorAccessorType
 #ifdef READ_FROM_LOCAL_INPUT
     ,
@@ -127,17 +128,26 @@ void read_in0_block_sync(
 #ifdef READ_FROM_LOCAL_INPUT
                 if (local_k_start <= j && j <= local_k_end) {
                     // read from self_tensor_accessor
-                    uint32_t tile_id = (i + in0_row_offset_tiles) * input_tensor_Wt + (j - local_k_start);
+                    uint32_t local_i = UseOffset ? (i + in0_row_offset_tiles) : i;
+                    uint32_t tile_id = local_i * input_tensor_Wt + (j - local_k_start);
                     noc_async_read_tile(tile_id, in3_accessor, write_ptr);
                 } else {
 #endif
                     uint32_t tile_id;
                     if constexpr (TransposeA) {
-                        // [K, M_parent] storage: K-row * M_parent_tiles + (M-col + offset)
-                        tile_id = j * parent_M_tiles_stride + (i + in0_row_offset_tiles);
+                        if constexpr (UseOffset) {
+                            // [K, M_parent] storage: K-row * M_parent_tiles + (M-col + offset)
+                            tile_id = j * parent_M_tiles_stride + (i + in0_row_offset_tiles);
+                        } else {
+                            tile_id = j * shape.logical_d1 + i;
+                        }
                     } else {
-                        // [M_parent, K] storage: (M-row + offset) * K_tiles + K-col
-                        tile_id = (i + in0_row_offset_tiles) * shape.logical_d1 + j;
+                        if constexpr (UseOffset) {
+                            // [M_parent, K] storage: (M-row + offset) * K_tiles + K-col
+                            tile_id = (i + in0_row_offset_tiles) * shape.logical_d1 + j;
+                        } else {
+                            tile_id = i * shape.logical_d1 + j;
+                        }
                     }
                     noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
 #ifdef READ_FROM_LOCAL_INPUT
