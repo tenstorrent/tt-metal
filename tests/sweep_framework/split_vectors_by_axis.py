@@ -90,6 +90,8 @@ def vector_axis(vec):
     for k, v in vec.items():
         if "memory_config" in k:
             _scan_mc(v, state)
+        elif k.startswith("arg") and isinstance(v, dict) and "shard_spec" in v:
+            _scan_mc(v, state)
         if k == "program_config":
             _scan_pc(v, state)
     if state["needs_col"]:
