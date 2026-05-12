@@ -660,47 +660,6 @@ std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_all(
     TopologyMappingSolverEngine solver_engine = TopologyMappingSolverEngine::Auto,
     bool unique_shapes = false);
 
-/**
- * @brief Find a valid topology mapping that differs from all previously found ones.
- *
- * For the DFS engine, each call runs one bounded search_n(excluded.size()+1) and picks the first
- * non-excluded model (session reuse does not yet amortize DFS work across calls).
- *
- * For the SAT engine, pass a non-null \p reuse_session across a monotone growing \p excluded_mappings
- * prefix to reuse one CaDiCaL instance: hard constraints are encoded once; only new blocking clauses
- * are appended between solves (incremental AllSAT).
- *
- * Returns a result with success=false when no new mapping exists.
- *
- * @param target_graph The target (sub-)graph pattern to embed
- * @param global_graph The host graph to embed into
- * @param constraints Mapping constraints
- * @param excluded_mappings Previously found mappings to exclude
- * @param connection_validation_mode STRICT or RELAXED channel validation
- * @param quiet_mode Suppress verbose logging
- * @param solver_engine Which backend to use
- * @param unique_shapes If true, excluded_mappings block their global image sets (not just exact assignments); see
- *        solve_topology_mapping_n
- * @param reuse_session If non-null, reuses one SAT/DFS encoder state across calls so each `next` adds only new
- *        blocking clauses (SAT) or a single bounded DFS batch (DFS), instead of re-enumerating from scratch. The same
- *        session must be used for a monotone growing `excluded_mappings` prefix on the same graphs/constraints.
- * @return A new MappingResult not matching any excluded mapping, or success=false if exhausted
- */
-template <typename TargetNode, typename GlobalNode>
-class TopologyMappingEnumerationSession;
-
-template <typename TargetNode, typename GlobalNode>
-MappingResult<TargetNode, GlobalNode> solve_topology_mapping_next(
-    const AdjacencyGraph<TargetNode>& target_graph,
-    const AdjacencyGraph<GlobalNode>& global_graph,
-    const MappingConstraints<TargetNode, GlobalNode>& constraints,
-    const std::vector<std::map<TargetNode, GlobalNode>>& excluded_mappings,
-    ConnectionValidationMode connection_validation_mode = ConnectionValidationMode::RELAXED,
-    bool quiet_mode = false,
-    TopologyMappingSolverEngine solver_engine = TopologyMappingSolverEngine::Auto,
-    bool unique_shapes = false,
-    TopologyMappingEnumerationSession<TargetNode, GlobalNode>* reuse_session = nullptr);
-
 namespace detail {
 inline std::vector<int> topology_mapping_shape_key(const std::vector<int>& mapping) {
     std::vector<int> key;
@@ -1246,7 +1205,7 @@ public:
      * @param quiet_mode If true, suppress verbose info-level log messages
      * @param unique_shapes If true, solutions are unique by image set of global indices (see solve_topology_mapping_n)
      * @param initial_forbidden_shape_keys Sorted shape keys (global index tuples) treated as already used for
-     *        uniqueness (e.g. exclusions from solve_topology_mapping_next)
+     *        uniqueness (e.g. exclusions from TopologyMappingEnumerationSession)
      * @return true if at least one solution was found
      */
     bool search_n(
@@ -1449,10 +1408,19 @@ struct MappingValidator {
 }  // namespace detail
 
 /**
- * @brief Reusable incremental enumeration for repeated solve_topology_mapping_next calls.
+ * @brief Incremental enumeration: each next() finds one mapping not listed in excluded_mappings.
  *
- * SAT reuses one CaDiCaL instance: hard CNF once, then each next() only strengthens with new blocking clauses.
- * DFS runs a single bounded search_n per next() (no persistent DFS iterator yet).
+ * SAT reuses one CaDiCaL instance for a fixed graph/constraints/engine context: hard CNF is encoded once
+ * (see sat_hard_constraint_encode_calls()), then each next() appends blocking clauses and solves again.
+ *
+ * DFS does **not** reuse search state across next() calls today: each call builds a new DFSSearchEngine and runs
+ * search_n(..., excluded.size()+1, ...) from scratch, then returns the first mapping not in excluded_mappings.
+ * That rediscovers earlier solutions internally and is why incremental DFS is often much slower than incremental
+ * SAT on the same instance.
+ *
+ * **Possible future optimization:** a persistent DFS enumerator could resume after emitting each complete mapping
+ * (e.g. iterative DFS with an explicit stack and “yield” at leaves, or a coroutine), while augmenting a growing set
+ * of forbidden full assignments—similar amortization to SAT’s incremental blocking. Not implemented yet.
  */
 template <typename TargetNode, typename GlobalNode>
 class TopologyMappingEnumerationSession {
@@ -1478,6 +1446,9 @@ public:
 
     size_t sat_solve_calls() const noexcept { return sat_solve_calls_; }
 
+    /** SAT only: number of successful hard-constraint CNF encodings in this session (0 if using DFS). */
+    size_t sat_hard_constraint_encode_calls() const noexcept { return sat_hard_constraint_encode_calls_; }
+
 private:
     bool ready_{false};
     bool quiet_{false};
@@ -1485,6 +1456,7 @@ private:
     bool use_sat_{false};
     size_t sat_exclusions_encoded_{0};
     size_t sat_solve_calls_{0};
+    size_t sat_hard_constraint_encode_calls_{0};
     AdjacencyGraph<TargetNode> snap_target_{};
     AdjacencyGraph<GlobalNode> snap_global_{};
     TopologyMappingSolverEngine engine_{TopologyMappingSolverEngine::Auto};

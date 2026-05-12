@@ -12,6 +12,7 @@
 #include <tuple>
 #include <vector>
 #include <gtest/gtest.h>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -5169,6 +5170,149 @@ TEST_F(TopologySolverTest, SatStress_Ring_Preferred_SameRank) {
     topology_test_expect_result_stats_match_mapping(graph_data, constraint_data, dfs_result, N, "DFS preferred+rank");
 }
 
+// Benchmark: 64-node path (1×64 chain) into 4×16 mesh (64 nodes). Enumerates distinct full assignments
+// (unique_shapes=false): blocking forbids each exact embedding so SAT/DFS can collect many Hamiltonian paths.
+// Times first next() vs subsequent incremental next() on one TopologyMappingEnumerationSession.
+TEST_F(TopologySolverTest, Benchmark_Line64_On_Mesh4x16_MultiSolve_SatDfs) {
+    using namespace tt::tt_fabric::detail;
+    constexpr size_t kPathNodes = 64;
+    constexpr size_t kMeshRows = 4;
+    constexpr size_t kMeshCols = 16;
+    constexpr size_t kMaxSolutions = 32;
+
+    static_assert(kMeshRows * kMeshCols == kPathNodes, "mesh node count must match path length");
+
+    auto target_graph = create_1d_chain_graph<TestTargetNode>(kPathNodes);
+    auto global_graph = create_2d_mesh_graph<TestGlobalNode>(kMeshRows, kMeshCols);
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    GraphIndexData graph_data(target_graph, global_graph);
+    ConstraintIndexData constraint_data(constraints, graph_data);
+    ASSERT_EQ(graph_data.n_target, kPathNodes);
+    ASSERT_EQ(graph_data.n_global, kPathNodes);
+
+    setenv("TT_METAL_OPERATION_TIMEOUT_SECONDS", "600", 1);
+
+    auto validate_all = [&](const std::vector<MappingResult<TestTargetNode, TestGlobalNode>>& results,
+                            const char* label) {
+        for (size_t ri = 0; ri < results.size(); ++ri) {
+            ASSERT_TRUE(results[ri].success) << label << " solution " << ri;
+            EXPECT_EQ(results[ri].target_to_global.size(), kPathNodes) << label << " solution " << ri;
+            std::vector<int> mapping(graph_data.n_target, -1);
+            for (size_t ti = 0; ti < graph_data.n_target; ++ti) {
+                const TestTargetNode tn = graph_data.target_nodes[ti];
+                mapping[ti] = static_cast<int>(graph_data.global_to_idx.at(results[ri].target_to_global.at(tn)));
+            }
+            EXPECT_TRUE(topology_test_complete_mapping_preserves_edges(graph_data, mapping))
+                << label << " solution " << ri;
+            topology_test_expect_result_stats_match_mapping(graph_data, constraint_data, results[ri], 0, label);
+        }
+    };
+
+    for (TopologyMappingSolverEngine engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        const char* engine_label = engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS";
+
+        using clock = std::chrono::steady_clock;
+        TopologyMappingEnumerationSession<TestTargetNode, TestGlobalNode> enum_session;
+        std::vector<std::map<TestTargetNode, TestGlobalNode>> excluded;
+        excluded.reserve(kMaxSolutions);
+
+        std::vector<MappingResult<TestTargetNode, TestGlobalNode>> results;
+        results.reserve(kMaxSolutions);
+
+        const auto t_first_begin = clock::now();
+        auto first_result = enum_session.next(
+            target_graph,
+            global_graph,
+            constraints,
+            excluded,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            engine,
+            /*unique_shapes=*/false);
+        const auto first_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_first_begin).count();
+
+        ASSERT_TRUE(first_result.success) << engine_label << " first next()";
+        results.push_back(std::move(first_result));
+        excluded.push_back(results.back().target_to_global);
+
+        const auto t_incremental_begin = clock::now();
+        for (size_t extra = 1; extra < kMaxSolutions; ++extra) {
+            auto next_result = enum_session.next(
+                target_graph,
+                global_graph,
+                constraints,
+                excluded,
+                ConnectionValidationMode::RELAXED,
+                /*quiet_mode=*/true,
+                engine,
+                /*unique_shapes=*/false);
+            ASSERT_TRUE(next_result.success) << engine_label << " incremental next() index " << extra;
+            excluded.push_back(next_result.target_to_global);
+            results.push_back(std::move(next_result));
+        }
+        const auto incremental_total_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_incremental_begin).count();
+
+        const auto total_ms = first_ms + incremental_total_ms;
+        const size_t incremental_calls = kMaxSolutions - 1;
+        const long incremental_avg_ms =
+            incremental_calls > 0
+                ? static_cast<long>((incremental_total_ms + incremental_calls / 2) / incremental_calls)
+                : 0;
+
+        ASSERT_FALSE(results.empty()) << engine_label;
+        EXPECT_GE(results.size(), 2u) << engine_label << ": expect multiple distinct embeddings on 4×16 mesh";
+        EXPECT_EQ(results.size(), kMaxSolutions)
+            << engine_label << ": grid has many Hamiltonian paths; should fill requested cap";
+
+        validate_all(results, "line64 enumerate");
+
+        std::set<std::vector<int>> distinct_raw;
+        for (const auto& r : results) {
+            std::vector<int> raw(graph_data.n_target, -1);
+            for (size_t ti = 0; ti < graph_data.n_target; ++ti) {
+                const TestTargetNode tn = graph_data.target_nodes[ti];
+                raw[ti] = static_cast<int>(graph_data.global_to_idx.at(r.target_to_global.at(tn)));
+            }
+            ASSERT_TRUE(distinct_raw.insert(std::move(raw)).second) << engine_label << ": duplicate assignment";
+        }
+
+        if (engine == TopologyMappingSolverEngine::Sat) {
+            EXPECT_EQ(enum_session.sat_solve_calls(), kMaxSolutions) << "SAT: one solve per next()";
+            EXPECT_EQ(enum_session.sat_hard_constraint_encode_calls(), 1u) << "SAT: single hard encode for session";
+            RecordProperty("benchmark_line64_mesh416_sat_ms_first_solution", static_cast<int>(first_ms));
+            RecordProperty("benchmark_line64_mesh416_sat_ms_incremental_total", static_cast<int>(incremental_total_ms));
+            RecordProperty("benchmark_line64_mesh416_sat_ms_incremental_avg", static_cast<int>(incremental_avg_ms));
+            RecordProperty("benchmark_line64_mesh416_sat_ms_total", static_cast<int>(total_ms));
+            RecordProperty("benchmark_line64_mesh416_sat_num_solutions", static_cast<int>(results.size()));
+        } else {
+            RecordProperty("benchmark_line64_mesh416_dfs_ms_first_solution", static_cast<int>(first_ms));
+            RecordProperty("benchmark_line64_mesh416_dfs_ms_incremental_total", static_cast<int>(incremental_total_ms));
+            RecordProperty("benchmark_line64_mesh416_dfs_ms_incremental_avg", static_cast<int>(incremental_avg_ms));
+            RecordProperty("benchmark_line64_mesh416_dfs_ms_total", static_cast<int>(total_ms));
+            RecordProperty("benchmark_line64_mesh416_dfs_num_solutions", static_cast<int>(results.size()));
+        }
+
+        log_info(
+            tt::LogFabric,
+            "Benchmark_Line64_On_Mesh4x16_MultiSolve: engine={} unique_shapes=false "
+            "first_solution_ms={} incremental_total_ms={} incremental_avg_ms={} total_ms={} "
+            "solutions_found={} max_requested={} path_nodes={} mesh={}x{}",
+            engine_label,
+            first_ms,
+            incremental_total_ms,
+            incremental_avg_ms,
+            total_ms,
+            results.size(),
+            kMaxSolutions,
+            kPathNodes,
+            kMeshRows,
+            kMeshCols);
+    }
+}
+
 // UNSAT stress: 16-node complete graph target on 8×8 mesh (K16 requires degree 15, mesh max is 4).
 TEST_F(TopologySolverTest, SatStress_UnsatCompleteGraph) {
     constexpr size_t N = 16;
@@ -5289,10 +5433,9 @@ TEST_F(TopologySolverTest, SolveN_RespectsMaxLimit) {
     }
 }
 
-// solve_topology_mapping_next (stateless + exhausted) and TopologyMappingEnumerationSession (incremental SAT):
-// results match solve_n, one SAT solve per next(), reuse faster than N fresh sessions.
+// TopologyMappingEnumerationSession: incremental SAT does one hard encode per stable context; exhaustive next().
 TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
-    // (A) Second mapping differs from first; no session.
+    // (A) Second mapping differs from first.
     {
         IntAdj target(IntAdjMap{{0, {}}});
         IntAdj global(IntAdjMap{{50, {}}, {51, {}}, {52, {}}});
@@ -5301,8 +5444,16 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
             target, global, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true);
         ASSERT_TRUE(first.success);
         std::vector<std::map<int, int>> excluded{first.target_to_global};
-        const auto second = solve_topology_mapping_next<int, int>(
-            target, global, constraints, excluded, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true);
+        TopologyMappingEnumerationSession<int, int> enumeration_session;
+        const auto second = enumeration_session.next(
+            target,
+            global,
+            constraints,
+            excluded,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            TopologyMappingSolverEngine::Auto,
+            false);
         EXPECT_TRUE(second.success);
         EXPECT_NE(first.target_to_global, second.target_to_global);
     }
@@ -5315,12 +5466,20 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
             target, global, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true);
         ASSERT_TRUE(first.success);
         std::vector<std::map<int, int>> excluded{first.target_to_global};
-        const auto next = solve_topology_mapping_next<int, int>(
-            target, global, constraints, excluded, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true);
+        TopologyMappingEnumerationSession<int, int> enumeration_session;
+        const auto next = enumeration_session.next(
+            target,
+            global,
+            constraints,
+            excluded,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            TopologyMappingSolverEngine::Auto,
+            false);
         EXPECT_FALSE(next.success);
     }
 
-    // (C) Incremental SAT session vs solve_n + timing vs fresh sessions.
+    // (C) Incremental SAT session vs solve_n; monotone exclusions keep a single hard CNF encode.
     IntAdj target(IntAdjMap{{0, {}}});
     IntAdj global(IntAdjMap{
         {100, {}},
@@ -5364,6 +5523,8 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
     std::vector<std::map<int, int>> ex_acc;
     std::set<std::map<int, int>> session_maps;
     for (size_t i = 0; i < kRounds; ++i) {
+        const size_t excluded_at_call = ex_acc.size();
+        const bool reused_graph_context = (i > 0);
         const auto r = check_calls.next(
             target,
             global,
@@ -5374,11 +5535,23 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
             TopologyMappingSolverEngine::Sat,
             false);
         ASSERT_TRUE(r.success);
+        log_info(
+            tt::LogFabric,
+            "TopologySolver_SolveNextAndIncrementalSatSession: SAT stats reused_graph_context={} solve_out={} "
+            "solve_calls={} hard_constraint_encodes={} excluded_mappings={} blocking_clauses_encoded={}",
+            reused_graph_context,
+            "SAT",
+            check_calls.sat_solve_calls(),
+            check_calls.sat_hard_constraint_encode_calls(),
+            excluded_at_call,
+            excluded_at_call);
+        ASSERT_EQ(check_calls.sat_hard_constraint_encode_calls(), 1u);
         ASSERT_TRUE(session_maps.insert(r.target_to_global).second);
         EXPECT_EQ(r.target_to_global, expected_prefix[i]);
         ex_acc.push_back(r.target_to_global);
     }
     EXPECT_EQ(check_calls.sat_solve_calls(), kRounds);
+    EXPECT_EQ(check_calls.sat_hard_constraint_encode_calls(), 1u);
 
     const auto batch = solve_topology_mapping_n<int, int>(
         target,
@@ -5434,15 +5607,17 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
             false);
         ASSERT_TRUE(r.success);
         EXPECT_EQ(r.target_to_global, expected_prefix[i]);
+        EXPECT_EQ(fresh.sat_hard_constraint_encode_calls(), 1u);
+        EXPECT_EQ(fresh.sat_solve_calls(), 1u);
     }
     const auto fresh_ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_fresh_start).count();
 
     const auto t_reuse_start = clock::now();
+    TopologyMappingEnumerationSession<int, int> reuse_session;
     {
-        TopologyMappingEnumerationSession<int, int> session;
         std::vector<std::map<int, int>> ex;
         for (size_t i = 0; i < kRounds; ++i) {
-            const auto r = session.next(
+            const auto r = reuse_session.next(
                 target,
                 global,
                 constraints,
@@ -5455,6 +5630,8 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
             ex.push_back(r.target_to_global);
         }
     }
+    EXPECT_EQ(reuse_session.sat_hard_constraint_encode_calls(), 1u);
+    EXPECT_EQ(reuse_session.sat_solve_calls(), kRounds);
     const auto reuse_ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_reuse_start).count();
 
     RecordProperty("fresh_session_total_ms", static_cast<int>(fresh_ms));

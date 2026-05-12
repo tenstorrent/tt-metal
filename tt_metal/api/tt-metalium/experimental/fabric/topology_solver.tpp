@@ -1286,6 +1286,7 @@ void TopologyMappingEnumerationSession<TargetNode, GlobalNode>::reset() noexcept
     use_sat_ = false;
     sat_exclusions_encoded_ = 0;
     sat_solve_calls_ = 0;
+    sat_hard_constraint_encode_calls_ = 0;
     snap_target_ = {};
     snap_global_ = {};
     engine_ = TopologyMappingSolverEngine::Auto;
@@ -1354,6 +1355,7 @@ MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNo
                 ready_ = true;
                 return failure;
             }
+            ++sat_hard_constraint_encode_calls_;
             sat_exclusions_encoded_ = 0;
         }
         ready_ = true;
@@ -1410,6 +1412,7 @@ MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNo
                 failure.error_message = "TopologyMappingEnumerationSession: SAT re-encode failed";
                 return failure;
             }
+            ++sat_hard_constraint_encode_calls_;
             sat_exclusions_encoded_ = 0;
         }
         while (sat_exclusions_encoded_ < excluded_idx.size()) {
@@ -1430,7 +1433,7 @@ MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNo
             MappingResult<TargetNode, GlobalNode> failure;
             failure.success = false;
             failure.error_message =
-                "solve_topology_mapping_next: no new mapping found (all solutions exhausted or excluded)";
+                "TopologyMappingEnumerationSession: no new mapping found (all solutions exhausted or excluded)";
             return failure;
         }
         std::vector<int> raw;
@@ -1445,7 +1448,7 @@ MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNo
                 MappingResult<TargetNode, GlobalNode> failure;
                 failure.success = false;
                 failure.error_message =
-                    "solve_topology_mapping_next: SAT returned an excluded model (blocking mismatch)";
+                    "TopologyMappingEnumerationSession: SAT returned an excluded model (blocking mismatch)";
                 return failure;
             }
         }
@@ -1453,7 +1456,7 @@ MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNo
             MappingResult<TargetNode, GlobalNode> failure;
             failure.success = false;
             failure.error_message =
-                "solve_topology_mapping_next: SAT returned excluded shape (blocking mismatch)";
+                "TopologyMappingEnumerationSession: SAT returned excluded shape (blocking mismatch)";
             return failure;
         }
         TopologySearchState dummy_state;
@@ -1513,46 +1516,9 @@ MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNo
 
     MappingResult<TargetNode, GlobalNode> failure;
     failure.success = false;
-    failure.error_message = "solve_topology_mapping_next: no new mapping found (all solutions exhausted or excluded)";
+    failure.error_message =
+        "TopologyMappingEnumerationSession: no new mapping found (all solutions exhausted or excluded)";
     return failure;
-}
-
-// ============================================================================
-// solve_topology_mapping_next implementation
-// ============================================================================
-
-template <typename TargetNode, typename GlobalNode>
-MappingResult<TargetNode, GlobalNode> solve_topology_mapping_next(
-    const AdjacencyGraph<TargetNode>& target_graph,
-    const AdjacencyGraph<GlobalNode>& global_graph,
-    const MappingConstraints<TargetNode, GlobalNode>& constraints,
-    const std::vector<std::map<TargetNode, GlobalNode>>& excluded_mappings,
-    ConnectionValidationMode connection_validation_mode,
-    bool quiet_mode,
-    TopologyMappingSolverEngine solver_engine,
-    bool unique_shapes,
-    TopologyMappingEnumerationSession<TargetNode, GlobalNode>* reuse_session) {
-    if (reuse_session != nullptr) {
-        return reuse_session->next(
-            target_graph,
-            global_graph,
-            constraints,
-            excluded_mappings,
-            connection_validation_mode,
-            quiet_mode,
-            solver_engine,
-            unique_shapes);
-    }
-    TopologyMappingEnumerationSession<TargetNode, GlobalNode> local;
-    return local.next(
-        target_graph,
-        global_graph,
-        constraints,
-        excluded_mappings,
-        connection_validation_mode,
-        quiet_mode,
-        solver_engine,
-        unique_shapes);
 }
 
 template <typename TargetNode, typename GlobalNode>
