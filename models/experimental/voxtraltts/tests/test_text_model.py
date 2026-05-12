@@ -184,7 +184,7 @@ def test_text_model_decode_reference_pcc(device, reset_seeds):
 
 @torch.no_grad()
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize("decode_steps", [4, 10], ids=["4_steps", "10_steps"])
+@pytest.mark.parametrize("decode_steps", [4, 26], ids=["4_steps", "26_steps"])
 def test_text_model_decode_multistep_reference_pcc(device, reset_seeds, decode_steps):
     # TT decodes step-by-step with KV cache, while the reference recomputes the same
     # prefix and compares the last-token logits at each decode position.
