@@ -615,14 +615,11 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
         if (kernel.is_dm_kernel()) {
             if (is_gen2_arch()) {
-                const uint32_t max_dm_threads = spec._unsafe_disable_dm0_dm1_reservation_for_bob
-                                                    ? QUASAR_DM_CORES_PER_NODE
-                                                    : QUASAR_USER_DM_CORES_PER_NODE;
                 TT_FATAL(
-                    kernel.num_threads <= max_dm_threads,
+                    kernel.num_threads <= QUASAR_USER_DM_CORES_PER_NODE,
                     "KernelSpec '{}' has too many data movement threads. The maximum is {}.",
                     kernel.unique_id,
-                    max_dm_threads);
+                    QUASAR_USER_DM_CORES_PER_NODE);
             } else {
                 TT_FATAL(
                     kernel.num_threads == 1,
@@ -973,15 +970,12 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 work_unit.unique_id,
                 compute_engines_needed,
                 QUASAR_TENSIX_ENGINES_PER_NODE);
-            const uint32_t max_dm_cores = spec._unsafe_disable_dm0_dm1_reservation_for_bob
-                                              ? QUASAR_DM_CORES_PER_NODE
-                                              : QUASAR_USER_DM_CORES_PER_NODE;
             TT_FATAL(
-                dm_cores_needed <= max_dm_cores,
+                dm_cores_needed <= QUASAR_USER_DM_CORES_PER_NODE,
                 "WorkUnitSpec '{}' requests {} data movement cores. This exceeds the permitted maximum of {}.",
                 work_unit.unique_id,
                 dm_cores_needed,
-                max_dm_cores);
+                QUASAR_USER_DM_CORES_PER_NODE);
         }
         if (is_gen1_arch()) {
             TT_FATAL(
@@ -1123,12 +1117,9 @@ using KernelNodeSetMap = std::unordered_map<KernelSpecName, NodeRangeSet>;
 // State for tracking per-node processor usage
 class NodeUsageTracker {
 public:
-    NodeUsageTracker() : initial_reserved_mask_(CreateMask<QUASAR_DM_CORES_PER_NODE>(0x03)) {}
-    explicit NodeUsageTracker(DMProcessorMask initial_reserved_mask) : initial_reserved_mask_(initial_reserved_mask) {}
-
     DMProcessorMask& get_used_mask(const NodeCoord& node) {
         if (!node_used_masks_.contains(node)) {
-            node_used_masks_[node] = initial_reserved_mask_;
+            node_used_masks_[node] = CreateMask<QUASAR_DM_CORES_PER_NODE>(0x03);  // Reserve DM0, DM1
         }
         return node_used_masks_[node];
     }
@@ -1165,7 +1156,6 @@ public:
     void reset() { node_used_masks_.clear(); }
 
 private:
-    DMProcessorMask initial_reserved_mask_;
     std::map<NodeCoord, DMProcessorMask> node_used_masks_;
 };
 
@@ -1269,10 +1259,7 @@ KernelRiscMaskMap SolveGen2KernelRiscMasks(const ProgramSpec& spec, const Collec
     }
 
     // Solve DM assignments
-    DMProcessorMask initial_reserved_mask = spec._unsafe_disable_dm0_dm1_reservation_for_bob
-                                                ? CreateMask<QUASAR_DM_CORES_PER_NODE>(0x00)
-                                                : CreateMask<QUASAR_DM_CORES_PER_NODE>(0x03);
-    dm_solver::NodeUsageTracker tracker(initial_reserved_mask);
+    dm_solver::NodeUsageTracker tracker;
     bool success =
         dm_solver::SolveWithOrderingBacktrack(dm_kernels, collected.kernel_node_set, tracker, dm_assignments);
 

@@ -72,12 +72,6 @@ struct ProgramSpec {
     // A valid ProgramSpec has at least one WorkUnitSpec.
     // Each kernel must be referenced by at least one WorkUnitSpec.
     std::vector<WorkUnitSpec> work_units;
-
-    // TEMPORARY HACK
-    // DO NOT USE (unless you are Bob :)
-    // Toggle disables the automatic reservation of DM0 and DM1 (Quasar).
-    // DO NOT CHECK THIS IN!!
-    bool _unsafe_disable_dm0_dm1_reservation_for_bob = false;
 };
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api

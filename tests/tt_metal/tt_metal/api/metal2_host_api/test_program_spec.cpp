@@ -965,53 +965,6 @@ TEST_F(ProgramSpecTestQuasar, WorkUnitExceedsDMCoreBudgetFails) {
             ::testing::HasSubstr("WorkUnitSpec 'work_unit' requests 9 data movement cores")));
 }
 
-// TEMPORARY HACK -- TO BE RIPPED OUT.
-// Verifies ProgramSpec::_unsafe_disable_dm0_dm1_reservation_for_bob lifts the per-kernel and
-// per-WorkUnit DM thread caps from 6 to 8 and disables the solver's pre-allocation of DM0/DM1.
-// Each sub-case is structured to fail without the toggle and pass with it -- so a green test
-// confirms both the cap lift and the solver no longer pre-reserves DM0/DM1 (otherwise the
-// solver would fail to place 7 or 8 threads with only 6 cores available).
-TEST_F(ProgramSpecTestQuasar, UnsafeDisableDMReservationToggleLiftsCapsForBob) {
-    NodeCoord node{0, 0};
-
-    // Per-kernel cap: 7-thread DM kernel (above 6, at-or-below 8).
-    {
-        ProgramSpec spec;
-        spec.program_id = "test_program";
-        spec.kernels = {MakeMinimalDMKernel("dm_kernel", 7)};
-        spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
-
-        // Toggle off: rejected.
-        EXPECT_THAT(
-            [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-            ::testing::ThrowsMessage<std::runtime_error>(
-                ::testing::HasSubstr("KernelSpec 'dm_kernel' has too many data movement threads")));
-
-        // Toggle on: accepted.
-        spec._unsafe_disable_dm0_dm1_reservation_for_bob = true;
-        EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
-    }
-
-    // Per-WorkUnit cap: two 4-thread DM kernels (each below the per-kernel cap; total 8 above the
-    // WorkUnit cap of 6 with toggle off, at the WorkUnit cap with toggle on).
-    {
-        ProgramSpec spec;
-        spec.program_id = "test_program";
-        spec.kernels = {MakeMinimalDMKernel("dm_a", 4), MakeMinimalDMKernel("dm_b", 4)};
-        spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_a", "dm_b"})};
-
-        // Toggle off: rejected.
-        EXPECT_THAT(
-            [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-            ::testing::ThrowsMessage<std::runtime_error>(
-                ::testing::HasSubstr("WorkUnitSpec 'work_unit' requests 8 data movement cores")));
-
-        // Toggle on: accepted.
-        spec._unsafe_disable_dm0_dm1_reservation_for_bob = true;
-        EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
-    }
-}
-
 TEST_F(ProgramSpecTestQuasar, WorkUnitExceedsComputeCoreBudgetFails) {
     NodeCoord node{0, 0};
 
