@@ -13,26 +13,31 @@ from models.experimental.seamless_m4t_v2_large.reference.torch_text_decoder impo
 
 
 def _conv1d_weight(conv: torch.nn.Conv1d, *, device: ttnn.Device) -> ttnn.Tensor:
+    """Host ROW_MAJOR PyTorch-shaped weights (``[out, in/groups, K]``).
+
+    ``ttnn.conv1d`` / conv2d expect either host tensors (prepared + uploaded per call) or
+    device tensors that already pass ``is_valid_device_conv_weights`` (TILE, padded layout).
+    Uploading raw ROW_MAJOR weights to device triggers a host round-trip and warnings in
+    ``conv2d.cpp``; keeping weights on host avoids that.
+    """
+    _ = device  # kept for call-site symmetry with other preprocess helpers
     w = conv.weight.detach().to(torch.bfloat16).contiguous()
     return ttnn.from_torch(
         w,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
 
 def _conv1d_bias(conv: torch.nn.Conv1d, *, device: ttnn.Device) -> Optional[ttnn.Tensor]:
     if conv.bias is None:
         return None
+    _ = device
     b = conv.bias.detach().to(torch.bfloat16).contiguous()
     return ttnn.from_torch(
         b.reshape(1, 1, 1, -1),
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
 
