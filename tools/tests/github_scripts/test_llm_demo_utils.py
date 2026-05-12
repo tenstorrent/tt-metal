@@ -13,7 +13,7 @@ def test_verify_perf_uses_prefill_tolerance_for_ttft_when_decode_tolerance_prese
         "decode_tolerance": 1.05,
     }
     measurements = {
-        "prefill_time_to_first_token": 82.0,
+        "prefill_time_to_first_token": 0.082,
         "decode_t/s/u": 104.0,
     }
 
@@ -24,5 +24,23 @@ def test_verify_perf_uses_prefill_tolerance_for_ttft_when_decode_tolerance_prese
         expected_measurements={
             "prefill_time_to_first_token": True,
             "decode_t/s/u": True,
+        },
+    )
+
+
+def test_verify_perf_keeps_ttft_seconds_targets_back_compatible():
+    expected_perf_metrics = {
+        "prefill_time_to_first_token": 0.12,
+        "prefill_tolerance": 1.25,
+    }
+    measurements = {
+        "prefill_time_to_first_token": 0.11,
+    }
+
+    verify_perf(
+        measurements=measurements,
+        expected_perf_metrics=expected_perf_metrics,
+        expected_measurements={
+            "prefill_time_to_first_token": True,
         },
     )

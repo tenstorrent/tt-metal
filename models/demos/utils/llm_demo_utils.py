@@ -147,6 +147,7 @@ def verify_perf(
         expected_measurements: dict specifying which measurements are required
         lower_is_better_metrics: set of metric names where lower values are better (e.g., TTFT)
     """
+    targets_from_centralized_yaml = expected_perf_metrics is None
     if expected_perf_metrics is None:
         if not model_name or not sku:
             raise ValueError("model_name and sku are required when expected_perf_metrics is not provided")
@@ -172,6 +173,22 @@ def verify_perf(
         "decode_t/s/u": True,
     }
     expected_measurements = expected_measurements_default if expected_measurements is None else expected_measurements
+
+    def normalized_expected_value(metric_name: str, expected_value: float) -> float:
+        """
+        Normalize expected metric units before comparing with raw measurements.
+
+        TTFT measurements are emitted in seconds; centralized YAML stores TTFT in
+        milliseconds. Keep backward compatibility for legacy call sites that
+        already pass TTFT targets in seconds.
+        """
+        if metric_name != "prefill_time_to_first_token":
+            return expected_value
+        expected_ttft = float(expected_value)
+        is_millisecond_scaled_ttft = targets_from_centralized_yaml or expected_ttft > 1.0
+        if is_millisecond_scaled_ttft:
+            return expected_ttft / 1000.0
+        return expected_ttft
 
     def metric_tolerance(metric_name: str) -> float:
         explicit_keys = [
@@ -215,25 +232,27 @@ def verify_perf(
 
         if key in lower_is_better_metrics:
             tolerance = metric_tolerance(key)
+            expected_value = normalized_expected_value(key, expected_perf_metrics[key])
             # For metrics where lower is better (e.g., TTFT)
-            if measurements[key] > expected_perf_metrics[key]:  # Higher than expected is bad
+            if measurements[key] > expected_value:  # Higher than expected is bad
                 does_pass = False
-                logger.warning(f"{key} ({measurements[key]}) is higher than expected {expected_perf_metrics[key]}")
-            elif measurements[key] < expected_perf_metrics[key] * (2 - tolerance):  # Much lower than expected
+                logger.warning(f"{key} ({measurements[key]}) is higher than expected {expected_value}")
+            elif measurements[key] < expected_value * (2 - tolerance):  # Much lower than expected
                 does_pass = False
                 logger.warning(
-                    f"{key} ({measurements[key]}) is much lower than expected {expected_perf_metrics[key]}. Please update the expected perf."
+                    f"{key} ({measurements[key]}) is much lower than expected {expected_value}. Please update the expected perf."
                 )
         else:
             tolerance = metric_tolerance(key)
+            expected_value = normalized_expected_value(key, expected_perf_metrics[key])
             # For metrics where higher is better (e.g., throughput)
-            if measurements[key] < expected_perf_metrics[key]:  # Lower than expected is bad
+            if measurements[key] < expected_value:  # Lower than expected is bad
                 does_pass = False
-                logger.warning(f"{key} ({measurements[key]}) is lower than expected {expected_perf_metrics[key]}")
-            elif measurements[key] > expected_perf_metrics[key] * tolerance:  # Much higher than expected
+                logger.warning(f"{key} ({measurements[key]}) is lower than expected {expected_value}")
+            elif measurements[key] > expected_value * tolerance:  # Much higher than expected
                 does_pass = False
                 logger.warning(
-                    f"{key} ({measurements[key]}) is much higher than expected {expected_perf_metrics[key]}. Please update the expected perf."
+                    f"{key} ({measurements[key]}) is much higher than expected {expected_value}. Please update the expected perf."
                 )
 
     if does_pass:
