@@ -197,7 +197,14 @@ void call_unary_sfpu_operation(
     }
     else if constexpr (OPERATION == SfpuType::elu)
     {
-        SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_elu_, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode, 1u /* alpha */);
+        SFPU_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _calculate_elu_,
+            (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
+            dst_index,
+            vector_mode,
+            0x3f800000 /* alpha = 1.0f */);
     }
     else if constexpr (OPERATION == SfpuType::exp2)
     {
