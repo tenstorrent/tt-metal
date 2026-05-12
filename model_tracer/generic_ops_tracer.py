@@ -1410,6 +1410,14 @@ Examples (Import existing traces):
         action="store_true",
         help="Include traces from failed tests (by default only passed tests are collected)",
     )
+    parser.add_argument(
+        "--allow-test-failures",
+        action="store_true",
+        help=(
+            "Exit 0 even when the underlying pytest run failed. Default is to propagate the pytest exit code "
+            "so CI workflows that gate on this script's exit status surface real test regressions."
+        ),
+    )
 
     # Handle explicit separator
     if "--" in sys.argv:
@@ -1720,6 +1728,18 @@ Examples (Import existing traces):
                 print(f"Test Result: {'✅ PASSED' if result['success'] else '❌ FAILED'}")
 
         print(f"\n✅ Operations extracted successfully!")
+
+        # Propagate the pytest exit code so CI gates on real test failures.
+        # --allow-test-failures restores the prior swallow-failures behavior
+        # for callers that explicitly want trace collection to be best-effort.
+        if not args.load and not args.allow_test_failures:
+            exit_code = result.get("exit_code", 0)
+            if exit_code:
+                print(
+                    f"\n❌ Failing because test process exited with code {exit_code}. "
+                    "Use --allow-test-failures to suppress."
+                )
+                return exit_code
 
         return 0
 

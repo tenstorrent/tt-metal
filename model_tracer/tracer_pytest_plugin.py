@@ -107,6 +107,10 @@ def _per_test_trace_dir(request):
         status = "skipped"
     elif call_report.passed:
         status = "passed"
+    elif call_report.skipped:
+        # In-test pytest.skip / xfail land here with passed=False, skipped=True;
+        # without this branch they would be misclassified as failed.
+        status = "skipped"
     else:
         status = "failed"
 
