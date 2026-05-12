@@ -179,7 +179,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> polynorm3_composite_backwar
         ttnn::multiply(dL_dout, w2, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
         x_inv_rms,
         inv_channels);
-    dL_dx = ttnn::add(dL_dx, dL_dx_term1, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+    dL_dx = ttnn::add(dL_dx, dL_dx_term1, std::nullopt, std::nullopt, std::nullopt, none, none, none);
 
     const auto dL_dx2 = grad_wrt_rmsnorm_input(
         x2,
@@ -196,7 +196,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> polynorm3_composite_backwar
         none,
         none,
         false);
-    dL_dx = ttnn::add(dL_dx, dL_dx_term2, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+    dL_dx = ttnn::add(dL_dx, dL_dx_term2, std::nullopt, std::nullopt, std::nullopt, none, none, none);
 
     const auto dL_dx3 = grad_wrt_rmsnorm_input(
         x3,
@@ -213,7 +213,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> polynorm3_composite_backwar
         none,
         none,
         false);
-    dL_dx = ttnn::add(dL_dx, dL_dx_term3, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+    dL_dx = ttnn::add(dL_dx, dL_dx_term3, std::nullopt, std::nullopt, std::nullopt, none, none, none);
 
     const auto dL_dw0 =
         scalar_sum(ttnn::multiply(dL_dout, x3_norm, std::nullopt, std::nullopt, std::nullopt, none, none, none, false));
