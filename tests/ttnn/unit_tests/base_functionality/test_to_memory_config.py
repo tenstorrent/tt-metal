@@ -15,17 +15,32 @@ pytestmark = pytest.mark.use_module_device
 
 # Test for int types
 @pytest.mark.parametrize("shape", [[1, 1, 32, 256], [64, 64], [9, 32, 768], [128]])
-@pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.int32, ttnn.uint16])
+@pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.int32])
 @pytest.mark.parametrize("layout", [ttnn.Layout.TILE, ttnn.Layout.ROW_MAJOR])
 def test_to_memory_config(shape, layout, dtype, device):
     torch.manual_seed(2005)
-    torch_dtype = torch.int16 if dtype == ttnn.uint16 else torch.int32
+    torch_dtype = torch.int32
 
     input = torch.randint(1, 100, shape, dtype=torch_dtype)
     input = ttnn.from_torch(input, dtype, layout=layout, device=device)
 
     input_b = torch.zeros(shape, dtype=torch_dtype)
     input_b = ttnn.from_torch(input_b, dtype, layout=layout, device=device)
+
+    ttnn.to_memory_config(input, input_b.memory_config(), output_tensor=input_b)
+    assert input_b.shape == input.shape
+    assert_equal(ttnn.to_torch(input), ttnn.to_torch(input_b))
+
+
+@pytest.mark.parametrize("shape", [[1, 1, 32, 256], [64, 64], [9, 32, 768], [128]])
+def test_to_memory_config_uint16(shape, device):
+    torch.manual_seed(2005)
+
+    input = torch.randint(1, 100, shape, dtype=torch.int16)
+    input = ttnn.from_torch(input, ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    input_b = torch.zeros(shape, dtype=torch.int16)
+    input_b = ttnn.from_torch(input_b, ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     ttnn.to_memory_config(input, input_b.memory_config(), output_tensor=input_b)
     assert input_b.shape == input.shape
