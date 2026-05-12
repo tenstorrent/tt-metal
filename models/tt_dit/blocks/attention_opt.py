@@ -13,8 +13,9 @@ from models.common.utility_functions import is_blackhole
 
 from ..layers.linear import ColParallelLinear
 from ..layers.module import Module, Parameter, UnregisteredModule
-from ..layers.normalization import RMSNorm
+from ..layers.normalization import DistributedRMSNorm
 from ..utils.matmul import get_matmul_config
+from ..utils.mochi import get_rot_transformation_mat
 from ..utils.padding import PaddingConfig, pad_weight_tensor
 from ..utils.substate import pop_substate
 
@@ -61,6 +62,7 @@ class Attention(Module):
         super().__init__()
 
         self.head_dim = head_dim
+        self.eps = eps
         self.pre_only = pre_only
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
@@ -125,8 +127,23 @@ class Attention(Module):
             query_dim, 3 * padded_inner_dim, bias=proj_bias, mesh_axis=tp_axis, chunks=3, **common_args
         )
 
-        self.norm_q = RMSNorm(embedding_dim=head_dim, norm_eps=eps, bias=False, mesh_device=mesh_device)
-        self.norm_k = RMSNorm(embedding_dim=head_dim, norm_eps=eps, bias=False, mesh_device=mesh_device)
+        # DistributedRMSNorm normalizes over the full padded_inner_dim (global across TP devices),
+        # fusing head-split and RoPE in a single post-allgather kernel.
+        # The weight is tiled from per-head [head_dim] to [padded_inner_dim] in _prepare_torch_state.
+        self.norm_q = DistributedRMSNorm(
+            embedding_dim=padded_inner_dim,
+            norm_eps=eps,
+            mesh_axis=tp_axis,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+        )
+        self.norm_k = DistributedRMSNorm(
+            embedding_dim=padded_inner_dim,
+            norm_eps=eps,
+            mesh_axis=tp_axis,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+        )
 
         self.to_out = (
             ColParallelLinear(padded_inner_dim, out_dim, bias=proj_bias, mesh_axis=tp_axis, **common_args)
@@ -144,8 +161,20 @@ class Attention(Module):
                 added_kv_proj_dim, 3 * padded_inner_dim, bias=proj_bias, mesh_axis=tp_axis, chunks=3, **common_args
             )
 
-            self.norm_added_q = RMSNorm(embedding_dim=head_dim, norm_eps=eps, bias=False, mesh_device=mesh_device)
-            self.norm_added_k = RMSNorm(embedding_dim=head_dim, norm_eps=eps, bias=False, mesh_device=mesh_device)
+            self.norm_added_q = DistributedRMSNorm(
+                embedding_dim=padded_inner_dim,
+                norm_eps=eps,
+                mesh_axis=tp_axis,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+            )
+            self.norm_added_k = DistributedRMSNorm(
+                embedding_dim=padded_inner_dim,
+                norm_eps=eps,
+                mesh_axis=tp_axis,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+            )
 
             self.to_add_out = (
                 ColParallelLinear(padded_inner_dim, out_dim, bias=proj_bias, mesh_axis=tp_axis, **common_args)
@@ -171,6 +200,14 @@ class Attention(Module):
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
+        )
+
+        # Pre-allocated rotation transformation matrix for fused RoPE inside DistributedRMSNorm.
+        self.trans_mat = ttnn.from_torch(
+            get_rot_transformation_mat(),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -215,6 +252,12 @@ class Attention(Module):
                 pad = (0, self.padding_config.head_padding)
                 factors = torch.nn.functional.pad(factors, pad)
             state["context_head_factors"] = factors.reshape([-1, 1, 1])
+
+        # DistributedRMSNorm expects weight [padded_inner_dim]; HuggingFace stores [head_dim].
+        # Tile the per-head weight padded_heads times so every head group gets the same scale.
+        for key in ["norm_q.weight", "norm_k.weight", "norm_added_q.weight", "norm_added_k.weight"]:
+            if key in state and state[key].shape[0] == self.head_dim:
+                state[key] = state[key].repeat(self.padded_heads)
 
     def _reshape_and_merge_qkv(
         self,
@@ -411,35 +454,55 @@ class Attention(Module):
             )
             return out
 
+        spatial_cos = spatial_rope[0].reshape([1, 1, *spatial_rope[0].shape]) if spatial_rope is not None else None
+        spatial_sin = spatial_rope[1].reshape([1, 1, *spatial_rope[1].shape]) if spatial_rope is not None else None
+        trans_mat = self.trans_mat if spatial_rope is not None else None
+
         # Returns [q, k, v] each [B, N, n_local_heads*head_dim] - fractured on TP.
         q_flat, k_flat, v_flat = self.to_qkv(
             spatial, compute_kernel_config=self.mm_compute_kernel_config, parallel_config=qkv_parallel_config
         )
-        q = _split_heads(q_flat)
-        k = _split_heads(k_flat)
+        # Fused: global RMSNorm (stats allgather across TP) + head-split + RoPE → [B, H_local, N, head_dim].
+        # Kernel requires 4D input: unsqueeze [B, N, D] → [1, B, N, D].
+        q = self.norm_q(
+            ttnn.unsqueeze(q_flat, 0),
+            num_heads_per_device=self.n_local_heads,
+            rope_cos=spatial_cos,
+            rope_sin=spatial_sin,
+            trans_mat=trans_mat,
+        )
+        k = self.norm_k(
+            ttnn.unsqueeze(k_flat, 0),
+            num_heads_per_device=self.n_local_heads,
+            rope_cos=spatial_cos,
+            rope_sin=spatial_sin,
+            trans_mat=trans_mat,
+        )
         v = _split_heads(v_flat)
 
-        q = self.norm_q(q)
-        k = self.norm_k(k)
-
-        if spatial_rope is not None:
-            q = _apply_rope(q, spatial_rope)
-            k = _apply_rope(k, spatial_rope)
-
         if self.add_qkv_proj is not None and prompt is not None:
+            prompt_cos = prompt_rope[0].reshape([1, 1, *prompt_rope[0].shape]) if prompt_rope is not None else None
+            prompt_sin = prompt_rope[1].reshape([1, 1, *prompt_rope[1].shape]) if prompt_rope is not None else None
+            prompt_trans_mat = self.trans_mat if prompt_rope is not None else None
+
             add_q_flat, add_k_flat, add_v_flat = self.add_qkv_proj(
                 prompt, compute_kernel_config=self.mm_compute_kernel_config, parallel_config=qkv_parallel_config
             )
-            add_q = _split_heads(add_q_flat)
-            add_k = _split_heads(add_k_flat)
+            add_q = self.norm_added_q(
+                ttnn.unsqueeze(add_q_flat, 0),
+                num_heads_per_device=self.n_local_heads,
+                rope_cos=prompt_cos,
+                rope_sin=prompt_sin,
+                trans_mat=prompt_trans_mat,
+            )
+            add_k = self.norm_added_k(
+                ttnn.unsqueeze(add_k_flat, 0),
+                num_heads_per_device=self.n_local_heads,
+                rope_cos=prompt_cos,
+                rope_sin=prompt_sin,
+                trans_mat=prompt_trans_mat,
+            )
             add_v = _split_heads(add_v_flat)
-
-            add_q = self.norm_added_q(add_q)
-            add_k = self.norm_added_k(add_k)
-
-            if prompt_rope is not None:
-                add_q = _apply_rope(add_q, prompt_rope)
-                add_k = _apply_rope(add_k, prompt_rope)
 
             if self.context_head_factors is not None:
                 add_q = add_q * self.context_head_factors.data
@@ -519,11 +582,3 @@ class Attention(Module):
             length=x.shape[-2], sp_factor=sp_factor, k_chunk_size=k_chunk_size
         )
         return torch.nn.functional.pad(x, (0, 0, 0, padding_len))
-
-
-def _apply_rope(x: ttnn.Tensor, freqs_cis: tuple[ttnn.Tensor, ttnn.Tensor]) -> ttnn.Tensor:
-    cos, sin = freqs_cis
-    cos = cos.reshape([1, 1, *cos.shape])
-    sin = sin.reshape([1, 1, *sin.shape])
-
-    return x * cos + ttnn.alt_complex_rotate90(x) * sin
