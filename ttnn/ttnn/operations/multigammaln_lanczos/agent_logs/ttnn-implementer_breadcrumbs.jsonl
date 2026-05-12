@@ -1,0 +1,1 @@
+{"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/multigammaln_lanczos/test_multigammaln_lanczos.py::test_multigammaln_lanczos_correctness","params":"single_tile","notes":"first run with dev mode; full implementation passes single_tile correctness","ts":"2026-05-12T08:10:55+00:00"}
