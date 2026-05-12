@@ -3,6 +3,7 @@
 
 import json
 import os
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
@@ -44,6 +45,23 @@ def _assert_no_garbage_tokens(results: dict) -> None:
 
     if failures:
         pytest.fail("Garbage tokens detected during demo:\n" + "\n".join(failures))
+
+
+def _is_primary_artifact_writer() -> bool:
+    for rank_env in ("TT_MESH_HOST_RANK", "OMPI_COMM_WORLD_RANK", "PMI_RANK", "RANK"):
+        rank_value = os.getenv(rank_env)
+        if rank_value is None:
+            continue
+        try:
+            return int(rank_value) == 0
+        except ValueError:
+            return False
+    return True
+
+
+def _timestamped_artifact_stem(artifact_name: str) -> str:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{artifact_name}_{timestamp}"
 
 
 def _demo_case(
@@ -310,16 +328,17 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
     else:
         assert all(length <= case["max_new_tokens"] for length in generated_lengths)
 
-    # Save results to JSON for artifact upload (QUAD tests only)
-    if case["artifact_name"] is not None:
+    # Save artifact from host rank 0 only to avoid multi-host write races.
+    if case["artifact_name"] is not None and _is_primary_artifact_writer():
         artifact_dir = Path("generated/artifacts")
         artifact_dir.mkdir(parents=True, exist_ok=True)
-        output_file = artifact_dir / f"{case['artifact_name']}.json"
+        output_file = artifact_dir / f"{_timestamped_artifact_stem(case['artifact_name'])}.json"
 
         output_data = {
-            "prompts": prompts,
+            "prompts": prompts if prompts else [],
             "generations": [],
             "statistics": results.get("statistics", {}),
+            "model_params": results.get("model_params", {}),
         }
 
         for i, gen_result in enumerate(results["generations"]):

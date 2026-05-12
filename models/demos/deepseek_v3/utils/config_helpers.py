@@ -38,7 +38,7 @@ def is_quad_mesh_env() -> bool:
     return os.getenv("MESH_DEVICE") == "QUAD"
 
 
-# We cann't warmup prefill for all possible prompt lengths, only warmup for the selective prompt lengths.
+# We can't warmup prefill for all possible prompt lengths, only warmup for the selective prompt lengths.
 # LINEAR_ADDITIVE: tile, 2*tile, 3*tile, ... hf_config.max_seq_len
 # LINEAR_MULTIPLES: tile, 2*tile, 4*tile, 8*tile, ... hf_config.max_seq_len
 PREFILL_WARMUP_MODE_LINEAR_ADDITIVE = "LINEAR_ADDITIVE"
@@ -72,7 +72,7 @@ DEFAULT_SAMPLING_TOP_K = 32
 
 def align_up(value: int, align_value: int) -> int:
     """Round value up to the next multiple of align_value, with a minimum of align_value."""
-    return max(align_value, (value + align_value - 1) // align_value * align_value)
+    return int(max(align_value, (value + align_value - 1) // align_value * align_value))
 
 
 def get_min_alignment_value_for_prefill(rows: int) -> int:
@@ -91,7 +91,7 @@ def align_prefill_padded_seq_len(seq_len: int, num_mesh_rows: int) -> int:
     rows = int(num_mesh_rows)
     if rows <= 0:
         raise ValueError(f"num_mesh_rows must be > 0, got {num_mesh_rows!r}")
-    alignment = get_min_alignment_value_for_prefill(num_mesh_rows)
+    alignment = get_min_alignment_value_for_prefill(rows)
     return align_up(seq_len_i, alignment)
 
 
@@ -102,6 +102,7 @@ def make_deepseek_sampling_args(
     max_top_k: int = MAX_TOP_K,
     max_batch_size: int = USERS_PER_ROW,
     sampling_all_gather_axis: int = 1,
+    pad_logits_to_power_of_2: bool = True,
 ) -> DeepseekSamplingArgs:
     cluster_shape = tuple(mesh_device.shape)
     sampling_dp = int(cluster_shape[0])  # one sampling group per row
@@ -117,6 +118,7 @@ def make_deepseek_sampling_args(
         sampling_dp=sampling_dp,
         cluster_shape=cluster_shape,
         sampling_all_gather_axis=sampling_all_gather_axis,
+        pad_logits_to_power_of_2=pad_logits_to_power_of_2,
     )
 
 
