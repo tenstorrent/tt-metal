@@ -505,9 +505,11 @@ struct TernaryOp : DestOnlyTag {
         to_u32(In0) < DEST_AUTO_LIMIT && to_u32(In1) < DEST_AUTO_LIMIT && to_u32(In2) < DEST_AUTO_LIMIT &&
             to_u32(Out) < DEST_AUTO_LIMIT,
         "TernaryOp: DEST slot exceeds compile-time DEST capacity (DEST_AUTO_LIMIT)");
-    static_assert(
-        In0 != In1 && In0 != In2 && In0 != Out && In1 != In2 && In1 != Out && In2 != Out,
-        "TernaryOp input slots must be distinct");
+    // NOTE: slot-distinctness is *not* enforced here (mirrors BinaryOp). SFPU ternary
+    // ops (where / lerp / addcmul / addcdiv) routinely write Out into one of the input
+    // slots in-place — the kernel reads all three inputs before overwriting. If a
+    // future op truly requires distinct DEST slots, enforce it locally rather than at
+    // the CRTP base.
 
     static constexpr Dst in0 = In0;
     static constexpr Dst in1 = In1;
@@ -527,10 +529,9 @@ struct QuaternaryOp : DestOnlyTag {
         to_u32(In0) < DEST_AUTO_LIMIT && to_u32(In1) < DEST_AUTO_LIMIT && to_u32(In2) < DEST_AUTO_LIMIT &&
             to_u32(In3) < DEST_AUTO_LIMIT && to_u32(Out) < DEST_AUTO_LIMIT,
         "QuaternaryOp: DEST slot exceeds compile-time DEST capacity");
-    static_assert(
-        In0 != In1 && In0 != In2 && In0 != In3 && In0 != Out && In1 != In2 && In1 != In3 && In1 != Out && In2 != In3 &&
-            In2 != Out && In3 != Out,
-        "QuaternaryOp input slots must be distinct");
+    // NOTE: slot-distinctness is *not* enforced here (mirrors BinaryOp/TernaryOp).
+    // SFPU ops typically read all inputs before writing Out, so Out may alias an
+    // input slot. Enforce stricter constraints locally if a future op needs them.
 
     static constexpr Dst in0 = In0;
     static constexpr Dst in1 = In1;

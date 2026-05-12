@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/common.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"  // SFPU_OP_CHAIN_0 — where_tile / where_tile_init etc.
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"  // OptionalChainElement
