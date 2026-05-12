@@ -24,10 +24,10 @@ std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(fl
 inline void validate_input_tensor_with_dim(const Tensor& input, int64_t dim) {
     const auto input_rank = input.logical_shape().rank();
     TT_FATAL(
-        (dim >= 0 && dim <= tt::tt_metal::MAX_NUM_DIMENSIONS),
+        (dim >= 0 && dim <= static_cast<int64_t>(tt::tt_metal::MAX_NUM_DIMENSIONS)),
         "dim must be between 0 and {}.",
         tt::tt_metal::MAX_NUM_DIMENSIONS);
-    TT_FATAL((dim < input_rank), "dim must be smaller than input tensor rank {}.", input_rank);
+    TT_FATAL((static_cast<size_t>(dim) < input_rank), "dim must be smaller than input tensor rank {}.", input_rank);
 }
 
 inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tensor& output, int64_t dim, bool keepdim) {
@@ -39,7 +39,7 @@ inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tenso
     const auto& output_shape_wo_padding = output.logical_shape();
     const auto output_rank = output_shape.rank();
 
-    const bool is_tile_dim = (dim == input_rank - 1 || dim == input_rank - 2);
+    const bool is_tile_dim = (dim == static_cast<int64_t>(input_rank) - 1 || dim == static_cast<int64_t>(input_rank) - 2);
 
     if (keepdim) {
         TT_FATAL(input_rank == output_rank, "Input and output ranks must be equal when keepdim is true.");
@@ -59,7 +59,7 @@ inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tenso
         expand_to_max_dim(input_dim_wo_padding, adjusted_input_shape_wo_padding);
         expand_to_max_dim(output_dim_wo_padding, output_shape_wo_padding);
 
-        for (int i = 0; i < input_rank; ++i) {
+        for (int i = 0; i < static_cast<int>(input_rank); ++i) {
             TT_FATAL(input_dim[i] == output_dim[i], "Input and output dimensions do not match at index {}.", i);
             TT_FATAL(
                 input_dim_wo_padding[i] == output_dim_wo_padding[i],
@@ -71,7 +71,7 @@ inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tenso
 
         ttnn::SmallVector<uint32_t> expected_output_shape;
         ttnn::SmallVector<uint32_t> expected_output_shape_wo_padding;
-        for (int i = 0; i < output_rank; ++i) {
+        for (int i = 0; i < static_cast<int>(output_rank); ++i) {
             if (i == dim && !is_tile_dim) {
                 expected_output_shape.push_back(1);
                 expected_output_shape_wo_padding.push_back(1);
@@ -80,7 +80,7 @@ inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tenso
             expected_output_shape_wo_padding.push_back(output_shape_wo_padding[i]);
         }
 
-        for (int i = 0; i < input_rank; ++i) {
+        for (int i = 0; i < static_cast<int>(input_rank); ++i) {
             if (i == dim) {
                 continue;
             }
@@ -113,10 +113,10 @@ MorehNormOperation::program_factory_t MorehNormOperation::select_program_factory
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto dim = operation_attributes.dim;
     const auto input_rank = tensor_args.input.logical_shape().rank();
-    if (dim == input_rank - 1) {
+    if (dim == static_cast<int64_t>(input_rank) - 1) {
         return ProgramFactoryWOther{};
     }
-    if (dim == input_rank - 2) {
+    if (dim == static_cast<int64_t>(input_rank) - 2) {
         return ProgramFactoryHOther{};
     }
     return ProgramFactoryNCOther{};
@@ -136,7 +136,7 @@ MorehNormOperation::spec_return_value_t MorehNormOperation::compute_output_specs
     const auto& input_shape = tensor_args.input.logical_shape();
     const auto input_rank = input_shape.rank();
     const auto dim = operation_attributes.dim;
-    const bool is_tile_dim = (dim == input_rank - 1 || dim == input_rank - 2);
+    const bool is_tile_dim = (dim == static_cast<int64_t>(input_rank) - 1 || dim == static_cast<int64_t>(input_rank) - 2);
 
     if (operation_attributes.keepdim) {
         auto shape = input_shape;
@@ -147,7 +147,7 @@ MorehNormOperation::spec_return_value_t MorehNormOperation::compute_output_specs
     }
 
     ttnn::SmallVector<uint32_t> shape;
-    for (int i = 0; i < input_rank; ++i) {
+    for (int i = 0; i < static_cast<int>(input_rank); ++i) {
         bool is_reduced_dim = (i == dim);
         if (is_reduced_dim && !is_tile_dim) {
             continue;

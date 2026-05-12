@@ -331,7 +331,7 @@ uint32_t compute_outer(const ttnn::Shape& shape, uint32_t dim) {
 
 void expand_to_max_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) {
     const auto rank = shape.rank();
-    for (auto i = 0; i < rank; ++i) {
+    for (size_t i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
         dim[i] = shape[idx];
     }
@@ -342,10 +342,10 @@ void validate_input_with_dim(const Tensor& input, const int64_t& dim) {
     const auto input_rank = input_shape.rank();
     log_debug(LogOp, "{}:{} input_rank {}", __func__, __LINE__, input_rank);
     TT_FATAL(
-        (dim >= 0 && dim <= tt::tt_metal::MAX_NUM_DIMENSIONS),
+        (dim >= 0 && dim <= static_cast<int64_t>(tt::tt_metal::MAX_NUM_DIMENSIONS)),
         "dim must be between 0 and {}.",
         tt::tt_metal::MAX_NUM_DIMENSIONS);
-    TT_FATAL((dim < input_rank), "dim must be smaller than input tensor rank {}.", input_rank);
+    TT_FATAL((static_cast<size_t>(dim) < input_rank), "dim must be smaller than input tensor rank {}.", input_rank);
 }
 
 void validate_output_with_keepdim(const Tensor& input, const Tensor& output, const int64_t& dim, const bool& keepdim) {
@@ -358,7 +358,7 @@ void validate_output_with_keepdim(const Tensor& input, const Tensor& output, con
     const auto& output_shape_wo_padding = output.logical_shape();
     const auto output_rank = output_shape_wo_padding.rank();
 
-    const bool is_tile_dim = (dim == input_rank - 1 || dim == input_rank - 2);
+    const bool is_tile_dim = (dim == static_cast<int64_t>(input_rank) - 1 || dim == static_cast<int64_t>(input_rank) - 2);
 
     log_debug(LogOp, "{}:{} keepdim {} dim {}", __func__, __LINE__, keepdim, dim);
     log_debug(LogOp, "{}:{} input_shape {} wo_padding {}", __func__, __LINE__, input_shape, input_shape_wo_padding);
@@ -388,7 +388,7 @@ void validate_output_with_keepdim(const Tensor& input, const Tensor& output, con
         expand_to_max_dim(input_dim_wo_padding, input_shape_wo_padding);
         expand_to_max_dim(output_dim_wo_padding, output_shape_wo_padding);
 
-        for (int i = 0; i < input_shape.rank(); ++i) {
+        for (int i = 0; i < static_cast<int>(input_shape.rank()); ++i) {
             TT_FATAL(
                 input_dim[i] == output_dim[i],
                 "Input dimension[{}] ({}) must equal output dimension[{}] ({})",
@@ -397,7 +397,7 @@ void validate_output_with_keepdim(const Tensor& input, const Tensor& output, con
                 i,
                 output_dim[i]);
         }
-        for (int i = 0; i < input_shape_wo_padding.rank(); ++i) {
+        for (int i = 0; i < static_cast<int>(input_shape_wo_padding.rank()); ++i) {
             TT_FATAL(
                 input_dim_wo_padding[i] == output_dim_wo_padding[i],
                 "Input dimension without padding[{}] ({}) must equal output dimension without padding[{}] ({})",
@@ -408,14 +408,14 @@ void validate_output_with_keepdim(const Tensor& input, const Tensor& output, con
         }
     } else {
         ttnn::SmallVector<uint32_t> expected_output_shape;
-        for (int i = 0; i < output_shape.rank(); ++i) {
+        for (int i = 0; i < static_cast<int>(output_shape.rank()); ++i) {
             if (i == padded_dim && !is_tile_dim) {
                 expected_output_shape.push_back(1);
             }
             expected_output_shape.push_back(output_shape[i]);
         }
         ttnn::SmallVector<uint32_t> expected_output_shape_wo_padding;
-        for (int i = 0; i < output_shape_wo_padding.rank(); ++i) {
+        for (int i = 0; i < static_cast<int>(output_shape_wo_padding.rank()); ++i) {
             if (i == dim && !is_tile_dim) {
                 expected_output_shape_wo_padding.push_back(1);
             }
@@ -425,7 +425,7 @@ void validate_output_with_keepdim(const Tensor& input, const Tensor& output, con
         log_debug(LogOp, "{}:{} expected_output_shape {}", __func__, __LINE__, expected_output_shape);
         log_debug(
             LogOp, "{}:{} expected_output_shape_wo_padding {}", __func__, __LINE__, expected_output_shape_wo_padding);
-        for (int i = 0; i < expected_output_shape.size(); ++i) {
+        for (int i = 0; i < static_cast<int>(expected_output_shape.size()); ++i) {
             TT_FATAL(
                 i == padded_dim || input_shape[i] == expected_output_shape[i],
                 "Input shape[{}] ({}) must equal expected output shape[{}] ({}) when not padded dimension",
@@ -434,7 +434,7 @@ void validate_output_with_keepdim(const Tensor& input, const Tensor& output, con
                 i,
                 expected_output_shape[i]);
         }
-        for (int i = 0; i < expected_output_shape_wo_padding.size(); ++i) {
+        for (int i = 0; i < static_cast<int>(expected_output_shape_wo_padding.size()); ++i) {
             TT_FATAL(
                 i == dim || input_shape_wo_padding[i] == expected_output_shape_wo_padding[i],
                 "Input shape without padding[{}] ({}) must equal expected output shape without padding[{}] ({}) when "
@@ -477,7 +477,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::Shape&
     uint32_t H = shape[-2];
 
     uint32_t other_dims_product = 1;
-    for (auto i = 0; i < rank - 2; ++i) {
+    for (size_t i = 0; i < rank - 2; ++i) {
         other_dims_product *= shape[i];
     }
 

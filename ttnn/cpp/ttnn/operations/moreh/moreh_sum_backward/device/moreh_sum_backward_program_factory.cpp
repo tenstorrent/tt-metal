@@ -16,7 +16,7 @@ using namespace tt::tt_metal;
 
 void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& padded_shape) {
     const auto rank = padded_shape.rank();
-    for (auto i = 0; i < rank; ++i) {
+    for (size_t i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
 
         // last 2-dim
@@ -28,7 +28,7 @@ void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& padded_
     }
 
     log_debug(tt::LogOp, "rank {}", rank);
-    for (auto i = 0; i < rank; ++i) {
+    for (size_t i = 0; i < rank; ++i) {
         log_debug(tt::LogOp, "dim[{}] = {}", i, dim[i]);
     }
 }
@@ -43,8 +43,8 @@ std::pair<ttnn::Shape, ttnn::Shape> get_output_grad_shape(
     auto padded_shape = input_grad.padded_shape();
     auto rank = logical_shape.rank();
     for (auto dim : dims) {
-        TT_FATAL(dim < rank, "dim {} < rank {}", dim, rank);
-        bool is_tile_dim = (dim == rank - 1 || dim == rank - 2);
+        TT_FATAL(static_cast<size_t>(dim) < rank, "dim {} < rank {}", dim, rank);
+        bool is_tile_dim = (dim == static_cast<int64_t>(rank) - 1 || dim == static_cast<int64_t>(rank) - 2);
         logical_shape[dim] = 1;
         if (is_tile_dim) {
             padded_shape[dim] = tt::constants::TILE_HEIGHT;
@@ -100,7 +100,7 @@ ProgramDescriptor MorehSumBackwardOperation::create_descriptor(
     get_tensor_dim(output_grad_dim, output_grad_shape);
 
     ttnn::SmallVector<uint32_t> need_bcast_dim(input_grad_rank, 0);
-    for (auto i = 0; i < input_grad_rank; ++i) {
+    for (size_t i = 0; i < input_grad_rank; ++i) {
         auto idx = input_grad_rank - 1 - i;
         bool is_tile_dim = (idx == input_grad_rank - 1 || idx == input_grad_rank - 2);
 
@@ -114,7 +114,7 @@ ProgramDescriptor MorehSumBackwardOperation::create_descriptor(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(output_grad.device()->arch(), compute_kernel_config);
 
-    for (auto i = 0; i < input_grad_rank; ++i) {
+    for (size_t i = 0; i < input_grad_rank; ++i) {
         log_debug(tt::LogOp, "need_bcast_dim [{}] = {}", i, need_bcast_dim[i]);
     }
     log_debug(tt::LogOp, "num_input_grad_tiles {}", num_input_grad_tiles);
