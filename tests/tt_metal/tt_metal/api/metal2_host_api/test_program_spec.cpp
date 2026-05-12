@@ -29,6 +29,7 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <filesystem>
 #include <optional>
 #include <type_traits>
 
@@ -2479,6 +2480,47 @@ TEST_F(ProgramSpecTestGen1, IdenticalTensorSpecProducesIdenticalKernelHash) {
     auto hash_a = prog_a.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
     auto hash_b = prog_b.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
     EXPECT_EQ(hash_a, hash_b);
+}
+
+TEST_F(ProgramSpecTestGen1, CompilerIncludePathsForwardedToKernelConfig) {
+    // KernelSpec.compiler_options.include_paths should be picked up as `-I<path>` flags
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    const std::vector<std::filesystem::path> dm_paths = {"/tmp/dm_first", "/tmp/dm_second"};
+    const std::vector<std::filesystem::path> compute_paths = {"/tmp/compute_only"};
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel", DataMovementProcessor::RISCV_0);
+    dm_kernel.compiler_options.include_paths = dm_paths;
+
+    auto compute_kernel = MakeMinimalComputeKernel("compute_kernel");
+    compute_kernel.compiler_options.include_paths = compute_paths;
+
+    auto dfb = MakeMinimalDFB("dfb_0");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    BindDFBToKernel(dm_kernel, "dfb_0", "input_dfb", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(compute_kernel, "dfb_0", "input_dfb", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {dm_kernel, compute_kernel};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units =
+        std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel", "compute_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    const auto& impl = program.impl();
+    auto built_dm = impl.get_kernel_by_spec_name("dm_kernel");
+    auto built_compute = impl.get_kernel_by_spec_name("compute_kernel");
+
+    const auto built_dm_variant = built_dm->config();
+    const auto& built_dm_config = std::get<DataMovementConfig>(built_dm_variant);
+    EXPECT_EQ(built_dm_config.compiler_include_paths, dm_paths);
+
+    const auto built_compute_variant = built_compute->config();
+    const auto& built_compute_config = std::get<ComputeConfig>(built_compute_variant);
+    EXPECT_EQ(built_compute_config.compiler_include_paths, compute_paths);
 }
 
 }  // namespace

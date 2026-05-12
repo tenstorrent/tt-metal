@@ -28,8 +28,8 @@ static constexpr std::uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
 
 #include <algorithm>
 
+#include "llk_lib_unpack_wrappers.h"
 #include "llk_unpack_common.h"
-#include "llk_unpack_tilize.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -58,7 +58,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             FACE_R_DIM,
             4 /* num_faces */,
             4 /* num_faces */);
-        _llk_unpack_tilize_init_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false);
+        _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false /* narrow_tile */);
         PROFILER_SYNC();
     }
 
@@ -76,7 +76,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 const std::uint32_t tile_row_addr = L1_ADDRESS(src + (i % 8) * 0x1000); // TODO SS<-LP use PERF_ADDRESS here
                 for (std::uint32_t j = 0; j < BLOCK_CT_DIM; j++)
                 {
-                    _llk_unpack_tilize_(tile_row_addr, j, formats.unpack_A_src, formats.unpack_A_dst, 0, FACE_R_DIM, 4, false);
+                    _llk_unpack_tilize_wrapper_(
+                        tile_row_addr,
+                        j,
+                        formats.unpack_A_src,
+                        formats.unpack_A_dst,
+                        0 /* block_ct_dim */,
+                        FACE_R_DIM,
+                        4 /* num_faces */,
+                        false /* narrow_tile */);
                 }
             }
         }
