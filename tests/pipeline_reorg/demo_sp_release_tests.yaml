@@ -139,11 +139,12 @@
   cmd: |
     python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py \
       --bucket fabric_2d \
+      --bucket prepare_weights_hybrid_allocator \
       --bucket host_io_risk
   model: deepseek_decode
   skus:
     bh_galaxy:
-      timeout: 55
+      timeout: 65
   owner_id: U088DBNUKGR # Evan Smal
   team: models
 

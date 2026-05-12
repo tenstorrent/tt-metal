@@ -121,6 +121,21 @@ BUCKETS: tuple[Bucket, ...] = (
         ),
     ),
     Bucket(
+        name="prepare_weights_hybrid_allocator",
+        timeout=480,
+        env=(("TT_METAL_ALLOCATOR_MODE_HYBRID", "1"),),
+        targets=(
+            f"{UNIT_TEST_DIR}/test_prepare_weights.py::test_prepare_attention_weights_dense_4x2",
+            f"{UNIT_TEST_DIR}/test_prepare_weights.py::test_prepare_attention_weights_moe_4x2",
+            f"{UNIT_TEST_DIR}/test_prepare_weights.py::test_prepare_dense_layer_single_layer_4x2",
+            f"{UNIT_TEST_DIR}/test_prepare_weights.py::test_prepare_moe_layer_single_layer_4x2",
+            f"{UNIT_TEST_DIR}/test_prepare_weights.py::test_prepare_attention_weights_with_cache_dense_4x2",
+            f"{UNIT_TEST_DIR}/test_prepare_weights.py::test_prepare_attention_weights_with_cache_moe_4x2",
+            f"{UNIT_TEST_DIR}/test_prepare_weights.py::test_prepare_dense_layer_weights_with_cache_4x2",
+            f"{UNIT_TEST_DIR}/test_prepare_weights.py::test_prepare_moe_layer_weights_with_cache_4x2",
+        ),
+    ),
+    Bucket(
         name="fabric_1d",
         timeout=60,
         targets=(f"{UNIT_TEST_DIR}/test_reduce_to_one_b1.py::test_reduce_to_one_1d",),
