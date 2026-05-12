@@ -1721,6 +1721,7 @@ def generate_codes_ttnn(
     compile_timings = {
         "warmup": t_warmup_end - t_warmup_start,
         "trace_capture": t_trace_end - t_trace_start,
+        "prefill_ms": prefill_ms,
         "avg_decode_ms": avg_decode_ms,
         "steady_avg_decode_ms": steady_avg_decode_ms,
         "steady_frames_per_sec": tokens_per_sec,
