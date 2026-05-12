@@ -424,7 +424,7 @@ TEST_F(MeshDeviceFixture, VerifyLogicalToVirtualMap) {
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::NOC_0,
-            .compile_args = {kernel0_l1_address, logical_grid_size.x, logical_grid_size.y}});
+            .compile_args = {kernel0_l1_address, static_cast<uint32_t>(logical_grid_size.x), static_cast<uint32_t>(logical_grid_size.y)}});
 
     auto kernel1_l1_address = l1_unreserved_base + (tt::round_up(logical_grid_size.x, 4) * sizeof(uint32_t)) +
                               (tt::round_up(logical_grid_size.y, 4) * sizeof(uint32_t));
@@ -435,7 +435,7 @@ TEST_F(MeshDeviceFixture, VerifyLogicalToVirtualMap) {
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt_metal::NOC::NOC_1,
-            .compile_args = {kernel1_l1_address, logical_grid_size.x, logical_grid_size.y}});
+            .compile_args = {static_cast<uint32_t>(kernel1_l1_address), static_cast<uint32_t>(logical_grid_size.x), static_cast<uint32_t>(logical_grid_size.y)}});
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
 

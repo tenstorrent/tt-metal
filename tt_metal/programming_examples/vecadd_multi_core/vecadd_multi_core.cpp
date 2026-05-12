@@ -231,8 +231,8 @@ int main(int argc, char** argv) {
     for (const auto& [group, work_per_core] : work_groups) {
         for (const auto& range : group.ranges()) {
             for (const auto& core : range) {
-                SetRuntimeArgs(program, reader, core, {a->address(), b->address(), work_per_core, start_tile_id});
-                SetRuntimeArgs(program, writer, core, {c->address(), work_per_core, start_tile_id});
+                SetRuntimeArgs(program, reader, core, {static_cast<uint32_t>(a->address()), static_cast<uint32_t>(b->address()), work_per_core, start_tile_id});
+                SetRuntimeArgs(program, writer, core, {static_cast<uint32_t>(c->address()), work_per_core, start_tile_id});
                 SetRuntimeArgs(program, compute, core, {work_per_core, start_tile_id});
                 core_tile_idx[core] = start_tile_id;  // Save the mapping so we can print the results later.
 

@@ -1451,6 +1451,15 @@ void hash_combine(std::size_t& seed, const T& value) {
     seed ^= hasher(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
 }
 
+// On some platforms (e.g., macOS), uint64_t is 'unsigned long long' while size_t is 'unsigned long'.
+// These are different C++ types even though same width. Provide an overload for uint64_t seeds.
+template <typename T, std::enable_if_t<!std::is_same_v<std::size_t, uint64_t> && std::is_same_v<uint64_t, unsigned long long>, int> = 0>
+void hash_combine(uint64_t& seed, const T& value) {
+    std::size_t s = static_cast<std::size_t>(seed);
+    hash_combine(s, value);
+    seed = static_cast<uint64_t>(s);
+}
+
 }  // namespace ttsl::hash
 
 template <typename T, size_t PREALLOCATED_SIZE>

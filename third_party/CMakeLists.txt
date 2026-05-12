@@ -11,15 +11,17 @@ add_compile_options(-w)
 ############################################################################################################################
 # NUMA
 ############################################################################################################################
-find_library(NUMA_LIBRARY NAMES numa)
-if(NOT NUMA_LIBRARY)
-    message(FATAL_ERROR "NUMA library not found. Please install it in your system.")
+if(NOT APPLE)
+    find_library(NUMA_LIBRARY NAMES numa)
+    if(NOT NUMA_LIBRARY)
+        message(FATAL_ERROR "NUMA library not found. Please install it in your system.")
+    endif()
 endif()
 
 ############################################################################################################################
 # hwloc
 ############################################################################################################################
-find_library(HWLOC_LIBRARY NAMES hwloc)
+find_library(HWLOC_LIBRARY NAMES hwloc HINTS /opt/homebrew/lib)
 if(NOT HWLOC_LIBRARY)
     message(FATAL_ERROR "hwloc library not found. Please install it in your system.")
 endif()
@@ -217,15 +219,17 @@ CPMAddPackage(
 # nanobind : https://github.com/wjakob/nanobind
 ############################################################################################################################
 
-CPMAddPackage(
-    NAME nanobind
-    GITHUB_REPOSITORY wjakob/nanobind
-    GIT_TAG
-        c5a3a378aa61d104c82ca053cb1e367782cd3618 # v2.10.2
-    OPTIONS
-        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
-        "NB_USE_SUBMODULE_DEPS ON"
-)
+if(WITH_PYTHON_BINDINGS)
+    CPMAddPackage(
+        NAME nanobind
+        GITHUB_REPOSITORY wjakob/nanobind
+        GIT_TAG
+            c5a3a378aa61d104c82ca053cb1e367782cd3618 # v2.10.2
+        OPTIONS
+            "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+            "NB_USE_SUBMODULE_DEPS ON"
+    )
+endif()
 
 ############################################################################################################################
 # nlohmann/json : https://github.com/nlohmann/json

@@ -1843,7 +1843,9 @@ void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetche
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
         // When coordinate virtualization is not enabled, explicitly encode the device
         // id into the device hash, to always assert on programs being reused across devices.
-        ttsl::hash::hash_combine(device_hash, device->id());
+        size_t device_hash_sz = static_cast<size_t>(device_hash);
+        ttsl::hash::hash_combine(device_hash_sz, device->id());
+        device_hash = device_hash_sz;
     }
     if (!is_cached()) {
         set_cached(device_hash);

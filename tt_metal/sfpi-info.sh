@@ -140,12 +140,12 @@ fi
 
 if [[ $1 = CMAKE ]]; then
     # CMake LIKES THINGS SHOUTED AT IT
-    sfpi_HASHTYPE="${sfpi_hashtype^^}"
+    sfpi_HASHTYPE="$(echo "$sfpi_hashtype" | tr '[:lower:]' '[:upper:]')"
 fi
 
 if [[ $1 != BUILD ]]; then
     # now emit definitions
-    for var in $(set -o posix ; set | sed -e '/^sfpi_/{s/=.*//;p}' -e d)
+    for var in $(set -o posix ; set | grep '^sfpi_' | cut -d= -f1)
     do
 	eval val="\$$var"
 	# relies on no inserted quoting for meta-characters

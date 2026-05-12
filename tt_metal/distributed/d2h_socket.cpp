@@ -20,7 +20,14 @@
 #include <cstring>
 #include <sys/mman.h>
 #include <unistd.h>
-#include <immintrin.h>
+#ifdef __x86_64__
+#include <immintrin.h>  // x86/x64 only
+#else
+// Provide no-op stubs for x86 cache management intrinsics on non-x86 platforms.
+// These are only used for PCIe DMA coherency which doesn't apply on macOS.
+static inline void _mm_clflush(const void*) {}
+static inline void _mm_lfence() { __asm__ volatile("" ::: "memory"); }
+#endif
 
 namespace tt::tt_metal::distributed {
 

@@ -104,10 +104,10 @@ int main() {
         tt::tt_metal::WriterDataMovementConfig{writer_compile_time_args});
 
     // Runtime args setup
-    SetRuntimeArgs(program, core0_reader_kernel_id, core0, {src_dram_buffer->address()});
-    SetRuntimeArgs(program, core0_writer_kernel_id, core0, {core1_physical_coord.x, core1_physical_coord.y, sem_id});
-    SetRuntimeArgs(program, core1_reader_kernel_id, core1, {core0_physical_coord.x, core0_physical_coord.y, sem_id});
-    SetRuntimeArgs(program, core1_writer_kernel_id, core1, {dst_dram_buffer->address()});
+    SetRuntimeArgs(program, core0_reader_kernel_id, core0, {static_cast<uint32_t>(src_dram_buffer->address())});
+    SetRuntimeArgs(program, core0_writer_kernel_id, core0, {static_cast<uint32_t>(core1_physical_coord.x), static_cast<uint32_t>(core1_physical_coord.y), sem_id});
+    SetRuntimeArgs(program, core1_reader_kernel_id, core1, {static_cast<uint32_t>(core0_physical_coord.x), static_cast<uint32_t>(core0_physical_coord.y), sem_id});
+    SetRuntimeArgs(program, core1_writer_kernel_id, core1, {static_cast<uint32_t>(dst_dram_buffer->address())});
 
     // Program enqueue (non-blocking). Wait for completion before reading back.
     workload.add_program(device_range, std::move(program));

@@ -1135,7 +1135,11 @@ bool DPrintImpl::peek_one_risc_non_blocking(
 
 void DPrintServer::Impl::poll_print_data() {
     // Give the print server thread a reasonable name.
+#ifdef __APPLE__
+    pthread_setname_np("TT_DPRINT_SERVER");  // macOS: applies to current thread, no pthread_t arg
+#else
     pthread_setname_np(pthread_self(), "TT_DPRINT_SERVER");
+#endif
 
     // Main print loop, go through all chips/cores/riscs on the device and poll for any print data
     // written.

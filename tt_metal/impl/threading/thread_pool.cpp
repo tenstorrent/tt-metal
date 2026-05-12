@@ -10,7 +10,9 @@
 
 #include <sched.h>         // Needed for setting process priorities
 #include <sys/resource.h>  // Needed for setting process priorities
+#ifndef __APPLE__
 #include <numa.h>
+#endif
 #include <tt-metalium/device.hpp>
 #include <tt_stl/tt_pause.hpp>
 #include "impl/context/metal_context.hpp"
@@ -24,16 +26,19 @@ namespace thread_binding {
 
 std::unordered_map<int, std::vector<uint32_t>> get_cpu_cores_per_numa_node() {
     std::unordered_map<int, std::vector<uint32_t>> cpu_cores_per_numa_node = {};
+#ifdef __linux__
     if (numa_available() != -1) {
         for (int cpu = 0; cpu < numa_num_configured_cpus(); ++cpu) {
             int node = numa_node_of_cpu(cpu);
             cpu_cores_per_numa_node[node].push_back(cpu);
         }
     }
+#endif
     return cpu_cores_per_numa_node;
 }
 
 bool balanced_physical_device_numa(ContextId context_id) {
+#ifdef __linux__
     if (numa_available() != -1) {
         int num_nodes = numa_max_node() + 1;
         std::unordered_set<int> numa_nodes_for_cluster = {};
@@ -44,6 +49,7 @@ bool balanced_physical_device_numa(ContextId context_id) {
         }
         return numa_nodes_for_cluster.size() == num_nodes;
     }
+#endif
     return false;
 }
 
@@ -81,6 +87,7 @@ uint32_t get_cpu_core_for_physical_device(ContextId context_id, uint32_t physica
 }
 
 void set_worker_affinity(std::thread& worker, uint32_t cpu_core) {
+#ifdef __linux__
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     CPU_SET(cpu_core, &cpuset);
@@ -91,6 +98,7 @@ void set_worker_affinity(std::thread& worker, uint32_t cpu_core) {
             "Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: {}",
             rc);
     }
+#endif  // macOS doesn't support pthread_setaffinity_np
 }
 
 void set_process_priority(int requested_priority) {

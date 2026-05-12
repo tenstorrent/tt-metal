@@ -24,11 +24,18 @@ function(GENERATE_FBS_HEADER FBS_FILE)
         set(incdirs "$<TARGET_PROPERTY:${FBS_ARGS_TARGET},INCLUDE_DIRECTORIES>")
     endif()
 
+    # Use full path to built flatc binary so it can be found without PATH manipulation
+    if(TARGET flatc)
+        set(FLATC_EXECUTABLE $<TARGET_FILE:flatc>)
+    else()
+        set(FLATC_EXECUTABLE flatc)
+    endif()
+
     add_custom_command(
         OUTPUT
             ${FBS_GENERATED_HEADER_FILE}
         COMMAND
-            flatc --keep-prefix --cpp --scoped-enums "$<$<BOOL:${incdirs}>:-I;$<JOIN:${incdirs},;-I;>>" -o
+            ${FLATC_EXECUTABLE} --keep-prefix --cpp --scoped-enums "$<$<BOOL:${incdirs}>:-I;$<JOIN:${incdirs},;-I;>>" -o
             "${FBS_GENERATED_HEADER_DIR}" ${FBS_FILE}
         DEPENDS
             flatc

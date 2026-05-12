@@ -274,8 +274,10 @@ UncompressedBufferPageMapping compute_page_mapping(
         shard_grid[i] = (tensor_shape[i] + shard_shape[i] - 1) / shard_shape[i];
     }
 
-    tt::stl::SmallVector<uint64_t> tensor_strides = tt::tt_metal::compute_strides(tensor_shape);
-    tt::stl::SmallVector<uint64_t> shard_strides = tt::tt_metal::compute_strides(shard_shape);
+    auto tensor_strides_raw = tt::tt_metal::compute_strides(tensor_shape);
+    auto shard_strides_raw = tt::tt_metal::compute_strides(shard_shape);
+    tt::stl::SmallVector<uint64_t> tensor_strides(tensor_strides_raw.begin(), tensor_strides_raw.end());
+    tt::stl::SmallVector<uint64_t> shard_strides(shard_strides_raw.begin(), shard_strides_raw.end());
     tt::stl::SmallVector<uint32_t> actual_shard_size(tensor_shape.rank());
 
     CMAKE_UNIQUE_NAMESPACE::PageMappingIntermData params{

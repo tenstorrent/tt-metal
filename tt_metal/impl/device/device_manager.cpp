@@ -4,7 +4,9 @@
 
 #include "device_manager.hpp"
 
+#ifndef __APPLE__
 #include <numa.h>
+#endif
 #include <pthread.h>
 #include <tracy/Tracy.hpp>
 #include <unistd.h>  // Warning Linux Only, needed for _SC_NPROCESSORS_ONLN
@@ -41,6 +43,7 @@ namespace tt {
 namespace device_cpu_allocator {
 std::unordered_map<int, std::vector<uint32_t>> get_cpu_cores_per_numa_node(std::unordered_set<uint32_t>& free_cores) {
     std::unordered_map<int, std::vector<uint32_t>> cpu_cores_per_numa_node = {};
+#ifdef __linux__
     if (numa_available() != -1) {
         // Host has NUMA enabled. Group CPU IDs by the NUMA nodes they belong to.
         for (int cpu = 0; cpu < numa_num_configured_cpus(); ++cpu) {
@@ -52,12 +55,15 @@ std::unordered_map<int, std::vector<uint32_t>> get_cpu_cores_per_numa_node(std::
             cpu_cores_per_numa_node.at(node).push_back(cpu);
         }
     } else {
-        // Host does not have NUMA. Place all CPU Ids under a single node (0).
+#endif
+        // Host does not have NUMA (or macOS). Place all CPU Ids under a single node (0).
         log_warning(tt::LogMetal, "Host does not use NUMA. May see reduced performance.");
         for (int cpu = 0; cpu < sysconf(_SC_NPROCESSORS_ONLN); ++cpu) {
             free_cores.insert(cpu);
         }
+#ifdef __linux__
     }
+#endif
     return cpu_cores_per_numa_node;
 }
 
@@ -76,7 +82,11 @@ std::pair<int, int> get_cpu_cores_for_dispatch_threads(
                                    .get_cluster()
                                    .get_numa_node_for_device(mmio_controlled_device_id);
 
+#ifdef __linux__
     if (numa_available() != -1 and cpu_cores_per_numa_node.contains(numa_node_for_device)) {
+#else
+    if (false and cpu_cores_per_numa_node.contains(numa_node_for_device)) {
+#endif
         // NUMA node reported by UMD exists on host. Choose a core on this numa-node using round robin policy
         const auto& cpu_core_for_numa_node = cpu_cores_per_numa_node.at(numa_node_for_device);
         int num_cores_in_numa_node = cpu_core_for_numa_node.size();
@@ -112,6 +122,7 @@ std::pair<int, int> get_cpu_cores_for_dispatch_threads(
 }
 
 void bind_current_thread_to_free_cores(const std::unordered_set<uint32_t>& free_cores) {
+#ifdef __linux__
     cpu_set_t cpuset;
     pthread_t current_thread = pthread_self();
     CPU_ZERO(&cpuset);
@@ -126,6 +137,7 @@ void bind_current_thread_to_free_cores(const std::unordered_set<uint32_t>& free_
             "Unable to bind main thread to free CPU cores. May see performance degradation. Error Code: {}",
             rc);
     }
+#endif  // macOS doesn't support pthread_setaffinity_np
 }
 
 std::unordered_map<uint32_t, uint32_t> get_device_id_to_core_map(

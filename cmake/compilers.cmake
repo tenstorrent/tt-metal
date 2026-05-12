@@ -1,8 +1,8 @@
 function(CHECK_COMPILERS)
     message(STATUS "Checking compilers")
 
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        if(ENABLE_LIBCXX)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        if(ENABLE_LIBCXX AND NOT APPLE)
             find_library(LIBC++ c++)
             find_library(LIBC++ABI c++abi)
             if(NOT LIBC++ OR NOT LIBC++ABI)

@@ -174,15 +174,30 @@ endif()
 #   These interface libs are linked with PUBLIC scope at lowest common target (tt_metal/common) and at tt_metal_libs level
 #   in order to propagate to the rest of tt_metal, tt_eager, etc.
 ############################################################################################################################
+# Find hwloc properly (brew installs to non-standard prefix on macOS)
+find_path(HWLOC_INCLUDE_DIR hwloc.h HINTS /opt/homebrew/include /usr/local/include /usr/include)
+find_library(HWLOC_LIBRARY hwloc HINTS /opt/homebrew/lib /usr/local/lib /usr/lib)
+if(NOT HWLOC_LIBRARY)
+    set(HWLOC_LIBRARY hwloc)
+endif()
+
 add_library(metal_common_libs INTERFACE)
+if(HWLOC_INCLUDE_DIR)
+    target_include_directories(metal_common_libs SYSTEM INTERFACE ${HWLOC_INCLUDE_DIR})
+endif()
 target_link_libraries(
     metal_common_libs
     INTERFACE
         dl
         pthread
-        hwloc
-        numa
+        ${HWLOC_LIBRARY}
+        $<$<NOT:$<PLATFORM_ID:Darwin>>:numa>
 )
+
+# On macOS, provide stub headers for Linux-specific system headers
+if(APPLE)
+    include_directories(SYSTEM ${CMAKE_CURRENT_SOURCE_DIR}/cmake/stubs)
+endif()
 
 add_compile_options(
     "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=x86-64-v3>"

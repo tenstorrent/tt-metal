@@ -77,31 +77,24 @@ elseif(NOT "${SFPI_hash}" STREQUAL "")
     FetchContent_MakeAvailable(sfpi)
 else()
     message(STATUS "No downloadable SFPI tarball for ${SFPI_arch} ${SFPI_dist}")
-    if(IS_READABLE "${SFPI_BASE}/${SFPI_filename}")
-        message(STATUS "Locally-built ${SFPI_filename} present")
-    else()
-        file(REMOVE_RECURSE "${SFPI_BASE}/sfpi")
-        message(
-            STATUS
-            "Building SFPI, this could take some time (~10 CPU-hours)\n"
-            "Logging to ${SFPI_BASE}/sfpi-build.log ..."
-        )
-        execute_process(
-            COMMAND
-                ${CMAKE_CURRENT_SOURCE_DIR}/../sfpi-info.sh BUILD ${SFPI_BASE}/sfpi-src
-            OUTPUT_FILE ${SFPI_BASE}/sfpi-build.log
-            COMMAND_ERROR_IS_FATAL ANY
-        )
-    endif()
     if(EXISTS "${SFPI_BASE}/sfpi")
-        message(STATUS "Locally-built toolchain present")
-    else()
+        message(STATUS "Locally-built SFPI toolchain present at ${SFPI_BASE}/sfpi")
+    elseif(IS_READABLE "${SFPI_BASE}/${SFPI_filename}")
         message(STATUS "Unpacking locally-built ${SFPI_filename}")
         execute_process(
             COMMAND
                 tar xJf ${SFPI_BASE}/${SFPI_filename}
             WORKING_DIRECTORY ${SFPI_BASE}
             COMMAND_ERROR_IS_FATAL ANY
+        )
+    else()
+        message(
+            FATAL_ERROR
+            "No pre-built SFPI toolchain found for ${SFPI_arch}/${SFPI_dist}.\n"
+            "On macOS/Apple Silicon, build SFPI from source first:\n"
+            "  /tmp/build_sfpi.sh\n"
+            "Then re-run cmake.\n"
+            "Expected location: ${SFPI_BASE}/sfpi/compiler/bin/riscv-tt-elf-g++"
         )
     endif()
 endif()
@@ -115,15 +108,17 @@ execute_process(
     COMMAND
         ${GPP_CMD} --version
     COMMAND
-        sed -e "1{s/^[^ ]* //;p}" -e d
+        sed -n "1s/^[^ ]* //p"
     OUTPUT_STRIP_TRAILING_WHITESPACE
     OUTPUT_VARIABLE GPP_VERSION
 )
 
 message(STATUS "Using SFPI compiler: ${GPP_CMD} ${GPP_VERSION}")
 # check this is the version we want (the system version might be wrong)
+# TT_SKIP_SFPI_VERSION_CHECK: skip strict version check (useful on macOS with substitute toolchain)
+option(TT_SKIP_SFPI_VERSION_CHECK "Skip SFPI compiler version check (for macOS/substitute toolchains)" OFF)
 string(REGEX REPLACE "^\\([^:]+:([^[)]+)(\\[[0-9]+\\])?\\) .*$" "\\1" GPP_VERSION ${GPP_VERSION})
-if(NOT ${GPP_VERSION} STREQUAL "${SFPI_version}")
+if(NOT ${GPP_VERSION} STREQUAL "${SFPI_version}" AND NOT TT_SKIP_SFPI_VERSION_CHECK)
     if(TT_USE_SYSTEM_SFPI)
         message(
             FATAL_ERROR
@@ -132,12 +127,15 @@ if(NOT ${GPP_VERSION} STREQUAL "${SFPI_version}")
     else()
         message(FATAL_ERROR "SFPI packaging malfunction, ${SFPI_version} delivers ${GPP_VERSION}")
     endif()
+elseif(TT_SKIP_SFPI_VERSION_CHECK AND NOT ${GPP_VERSION} STREQUAL "${SFPI_version}")
+    message(WARNING "SFPI version check skipped: using ${GPP_VERSION} instead of ${SFPI_version}")
 endif()
 
-if(NOT TT_USE_SYSTEM_SFPI)
+if(NOT TT_USE_SYSTEM_SFPI AND NOT APPLE)
     # Check each executable is loadable, as the user might not have installed the dependencies
     # \tlibcsfml-window.so.2.2 => not found
     # undefined symbol: blob\t(./a.out)
+    # Note: This check uses ldd which is Linux-specific; skip on macOS where otool is used instead
     file(
         GLOB SFPI_BINARIES
         "${SFPI_BASE}/sfpi/compiler/bin/*"
@@ -151,11 +149,11 @@ if(NOT TT_USE_SYSTEM_SFPI)
         COMMAND
             xargs file
         COMMAND
-            sed -e "/ELF ..-bit .SB executable,/{s/:.*//;p}" -e d
+            sed -n "/ELF ..-bit .SB executable,/{s/:.*//p}"
         COMMAND
             xargs ldd -d
         COMMAND
-            sed -e "/=> not found/p" -e "/undefined symbol/{s/\t(.*)$//;p}" -e d
+            sed -n "/=> not found/p;/undefined symbol/{s/\t(.*)$//p}"
         COMMAND
             sort -u
         OUTPUT_STRIP_TRAILING_WHITESPACE

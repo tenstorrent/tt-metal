@@ -47,7 +47,7 @@ QueueId pop_current_command_queue_id_for_thread() { return QueueId(tt::tt_metal:
 
 ScopeGuard with_command_queue_id(QueueId cq_id) {
     push_current_command_queue_id_for_thread(cq_id);
-    return make_guard([cq_id]() { pop_current_command_queue_id_for_thread(); });
+    return make_guard([]() { pop_current_command_queue_id_for_thread(); });
 }
 
 }  // namespace ttnn::core

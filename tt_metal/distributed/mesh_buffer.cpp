@@ -90,10 +90,10 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
 
     const DeviceAddr device_local_size = std::visit(
         tt::stl::overloaded{
-            [](const ReplicatedBufferConfig& c) { return c.size; },
-            [](const ShardedBufferConfig& config) {
+            [](const ReplicatedBufferConfig& c) -> DeviceAddr { return c.size; },
+            [](const ShardedBufferConfig& config) -> DeviceAddr {
                 const auto [shard_height, shard_width] = config.physical_shard_shape();
-                return config.compute_datum_size_bytes() * shard_height * shard_width;
+                return static_cast<DeviceAddr>(config.compute_datum_size_bytes() * shard_height * shard_width);
             }},
         mesh_buffer_config);
 

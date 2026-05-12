@@ -9,7 +9,10 @@ SRC_ROOT="$1"
 OUT_DIR="$2"
 
 PYTHON=python3
-SCRIPT="$(realpath --relative-to "$SRC_ROOT" "${BASH_SOURCE[0]}")"
+# Compute relative path portably (realpath --relative-to is GNU-only)
+_abs_src="$(cd "$SRC_ROOT" && pwd)"
+_abs_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+SCRIPT="${_abs_script#$_abs_src/}"
 SCRIPT_PY="$(dirname ${BASH_SOURCE[0]})/codegen.py"
 YEAR=$(date +%Y)
 

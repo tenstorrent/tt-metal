@@ -45,10 +45,10 @@ std::shared_ptr<distributed::MeshBuffer> create_on_single_device(
     const distributed::MeshCoordinate& coord) {
     const DeviceAddr device_local_size = std::visit(
         tt::stl::overloaded{
-            [](const distributed::ReplicatedBufferConfig& c) { return c.size; },
-            [](const distributed::ShardedBufferConfig& config) {
+            [](const distributed::ReplicatedBufferConfig& c) -> DeviceAddr { return c.size; },
+            [](const distributed::ShardedBufferConfig& config) -> DeviceAddr {
                 const auto [shard_height, shard_width] = config.physical_shard_shape();
-                return config.compute_datum_size_bytes() * shard_height * shard_width;
+                return static_cast<DeviceAddr>(config.compute_datum_size_bytes() * shard_height * shard_width);
             }},
         mesh_buffer_config);
 

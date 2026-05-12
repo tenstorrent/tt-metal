@@ -107,7 +107,10 @@ int main() {
 
         // Set runtime arguments for the kernel.
         const std::vector<uint32_t> runtime_args = {
-            l1_buffer->address(), input_dram_buffer->address(), output_dram_buffer->address(), num_tiles};
+            static_cast<uint32_t>(l1_buffer->address()),
+            static_cast<uint32_t>(input_dram_buffer->address()),
+            static_cast<uint32_t>(output_dram_buffer->address()),
+            num_tiles};
 
         SetRuntimeArgs(program, dram_copy_kernel_id, core, runtime_args);
 

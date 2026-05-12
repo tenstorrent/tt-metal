@@ -141,8 +141,8 @@ int main(int /*argc*/, char** /*argv*/) {
 
         // Set the runtime arguments for the kernels. This also registers
         // the kernels with the program.
-        SetRuntimeArgs(program, reader, core, {src0_dram_buffer->address(), src1_dram_buffer->address(), n_tiles});
-        SetRuntimeArgs(program, writer, core, {dst_dram_buffer->address(), n_tiles});
+        SetRuntimeArgs(program, reader, core, {static_cast<uint32_t>(src0_dram_buffer->address()), static_cast<uint32_t>(src1_dram_buffer->address()), n_tiles});
+        SetRuntimeArgs(program, writer, core, {static_cast<uint32_t>(dst_dram_buffer->address()), n_tiles});
         SetRuntimeArgs(program, compute, core, {n_tiles});
 
         // We have setup the program. Now we queue the kernel for execution. The final argument is set to false. This indicates

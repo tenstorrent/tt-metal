@@ -189,8 +189,8 @@ int main() {
         tt::tt_metal::ComputeConfig{.compile_args = compute_compile_time_args});
 
     // Runtime args setup
-    SetRuntimeArgs(program, reader_kernel_id, core, {src_dram_buffer->address()});
-    SetRuntimeArgs(program, writer_kernel_id, core, {dst_dram_buffer->address()});
+    SetRuntimeArgs(program, reader_kernel_id, core, {static_cast<uint32_t>(src_dram_buffer->address())});
+    SetRuntimeArgs(program, writer_kernel_id, core, {static_cast<uint32_t>(dst_dram_buffer->address())});
 
     // Program enqueue
     workload.add_program(device_range, std::move(program));

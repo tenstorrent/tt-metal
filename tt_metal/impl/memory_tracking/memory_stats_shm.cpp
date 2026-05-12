@@ -13,6 +13,9 @@
 #include <unistd.h>
 #include <cstring>
 #include <chrono>
+#ifdef __APPLE__
+#include <libproc.h>  // proc_name for getting process name on macOS
+#endif
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -562,15 +565,22 @@ uint64_t SharedMemoryStatsProvider::current_timestamp_ns() {
 }
 
 std::string SharedMemoryStatsProvider::get_process_name(pid_t pid) {
+#ifdef __APPLE__
+    char name[PROC_PIDPATHINFO_MAXSIZE];
+    if (proc_name(pid, name, sizeof(name)) > 0) {
+        return std::string(name);
+    }
+    return "unknown";
+#else
     std::string path = "/proc/" + std::to_string(pid) + "/comm";
     std::ifstream file(path);
     if (!file) {
         return "unknown";
     }
-
     std::string name;
     std::getline(file, name);
     return name;
+#endif
 }
 
 DeviceMemoryRegion::ChipStats* SharedMemoryStatsProvider::find_or_create_chip_entry(uint32_t chip_id) {

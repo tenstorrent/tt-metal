@@ -65,7 +65,7 @@ int main() {
     distributed::EnqueueWriteMeshBuffer(cq, dram_buffer, init_data, false);
 
     // Set runtime args, add program to mesh workload, and enqueue (non-blocking)
-    SetRuntimeArgs(program, data_reader_kernel_id, core, {dram_buffer->address()});
+    SetRuntimeArgs(program, data_reader_kernel_id, core, {static_cast<uint32_t>(dram_buffer->address())});
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
 

@@ -413,7 +413,7 @@ Statistics FreeListOpt::get_statistics() const {
             total_allocated_bytes += block_size_[i];
         } else {
             total_free_bytes += block_size_[i];
-            largest_free_block_bytes = std::max(block_size_[i], largest_free_block_bytes);
+            largest_free_block_bytes = static_cast<size_t>(std::max(static_cast<DeviceAddr>(block_size_[i]), static_cast<DeviceAddr>(largest_free_block_bytes)));
         }
     }
 

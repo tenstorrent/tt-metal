@@ -23,6 +23,13 @@
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#ifdef __APPLE__
+#include <crt_externs.h>  // for _NSGetEnviron()
+// macOS doesn't expose environ in the global namespace; access via _NSGetEnviron()
+static inline char** get_environ() { return *_NSGetEnviron(); }
+#else
+static inline char** get_environ() { return environ; }
+#endif
 
 #include <tt-logger/tt-logger.hpp>
 
@@ -101,7 +108,7 @@ bool exec_command(const std::vector<std::string>& args, const std::string& worki
 
     pid_t pid = 0;
     int spawn_ret =
-        posix_spawnp(&pid, argv[0], &file_actions, nullptr, const_cast<char* const*>(argv.data()), ::environ);
+        posix_spawnp(&pid, argv[0], &file_actions, nullptr, const_cast<char* const*>(argv.data()), get_environ());
 
     if (log_fd >= 0) {
         close(log_fd);

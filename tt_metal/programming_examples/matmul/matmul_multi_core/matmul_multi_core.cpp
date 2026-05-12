@@ -226,8 +226,8 @@ void matmul_multi_core(
                     program,
                     reader_id,
                     core,
-                    {src0_dram_buffer->address(),  // Address of matrix A in DRAM
-                     src1_dram_buffer->address(),  // Address of matrix B in DRAM
+                    {static_cast<uint32_t>(src0_dram_buffer->address()),  // Address of matrix A in DRAM
+                     static_cast<uint32_t>(src1_dram_buffer->address()),  // Address of matrix B in DRAM
                      Mt,                           // Number of tiles in M dimension
                      Kt,                           // Number of tiles in K dimension
                      Nt,                           // Number of tiles in N dimension
@@ -236,7 +236,7 @@ void matmul_multi_core(
 
                 // Set arguments for the writer kernel (data output)
                 tt_metal::SetRuntimeArgs(
-                    program, writer_id, core, {dst_dram_buffer->address(), work_per_core, work_offset});
+                    program, writer_id, core, {static_cast<uint32_t>(dst_dram_buffer->address()), work_per_core, work_offset});
 
                 // Set arguments for the compute kernel
                 tt_metal::SetRuntimeArgs(

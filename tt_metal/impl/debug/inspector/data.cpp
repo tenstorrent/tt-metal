@@ -7,6 +7,11 @@
 #include <cstdlib>
 #include <iterator>
 #include <stdexcept>
+#include <unistd.h>
+#ifdef __APPLE__
+#include <crt_externs.h>
+#define environ (*_NSGetEnviron())
+#endif
 #include "rpc_server_controller.hpp"
 #include "logger.hpp"
 #include <tt-metalium/experimental/inspector_config.hpp>
