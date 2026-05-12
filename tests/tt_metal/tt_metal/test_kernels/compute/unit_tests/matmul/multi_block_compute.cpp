@@ -50,10 +50,6 @@ void kernel_main() {
     // out = in0[r x k]*in1[k x c]
     mm_init(in0_id, in1_id, partials_id);
 
-#ifdef PACKER_L1_ACC
-    cb_partials.reserve_back(out_block_num_tiles);
-#endif
-
     for (uint32_t block_id = 0; block_id < num_blocks; block_id++) {
         acquire_dst();
 #ifndef PACKER_L1_ACC
@@ -89,13 +85,19 @@ void kernel_main() {
         cb_in1.pop_front(in1_block_num_tiles);
 
 #ifdef PACKER_L1_ACC
+        cb_partials.reserve_back(out_block_num_tiles);
         for (uint32_t tile_index = 0; tile_index < out_block_num_tiles; tile_index++) {
-            pack_tile<true /* out_of_order_output */>(tile_index, partials_id, tile_index);
+            pack_tile(tile_index, partials_id);
         }
+        cb_partials.push_back(out_block_num_tiles);
         if (block_id == 0) {
             pack_reconfig_l1_acc(1);
         }
         release_dst();
+        if (block_id < last_block_id) {
+            cb_partials.wait_front(out_block_num_tiles);
+            cb_partials.pop_front(out_block_num_tiles);
+        }
 #else
         const bool is_last = (block_id == last_block_id);
         auto& cb_dst = is_last ? cb_out : cb_partials;
@@ -113,7 +115,6 @@ void kernel_main() {
     }
 
 #ifdef PACKER_L1_ACC
-    cb_partials.push_back(out_block_num_tiles);
     pack_reconfig_l1_acc(0);
 
     copy_tile_to_dst_init_short(partials_id);
