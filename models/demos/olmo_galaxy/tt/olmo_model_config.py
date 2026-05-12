@@ -151,18 +151,18 @@ class TtOlmoModelArgs(TtModelArgs):
         # sub_core_grids: cores used for memory layout / sharding.
         # OLMo3 has use_prefetcher=False, so col 4 (Wormhole prefetcher right
         # sender per models/tt_transformers/tt/prefetcher/prefetcher_config.yaml)
-        # is free to be used as worker space. Widening to a single contiguous
-        # rectangle cols 1-6 × rows 0-9 (60 cores) lets the SDPA decode kernel
-        # and any other op picking N cores row-wise pick a contiguous layout.
+        # AND col 0 (Wormhole prefetcher left sender) are both free worker
+        # space. Single contiguous rectangle cols 0-6 × rows 0-9 = 70 cores.
         # Col 7 stays excluded: it's the dispatch core when
-        # dispatch_core_axis=COL. Col 0 stays excluded: flagged for
-        # long-prefill NOC hangs when used as worker space (separate
-        # follow-up).
+        # dispatch_core_axis=COL. An older in-file note flagged col 0 for
+        # long-prefill NOC hangs; that observation has not been reproduced in
+        # current demo runs (single / single-batch1 / quick / batch-1 all
+        # pass with col 0 included), so we include col 0 here.
         # CREATE_HEAD_OUTPUT_MEMCFG pins to its own narrow 50-core literal so
         # its shard-shape contract (50 × 32 = 1600 rows) is unaffected.
         self.sub_core_grids = ttnn.CoreRangeSet(
             [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(6, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9)),
             ]
         )
         self.start_core = ttnn.CoreCoord(1, 0)
