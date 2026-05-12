@@ -4,6 +4,7 @@
 
 #include "nanobind/nb_autograd.hpp"
 
+#include <fmt/core.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/function.h>
@@ -375,6 +376,22 @@ void py_module(nb::module_& m) {
         "Wrapping a module's forward output triggers `fn` just before the module's internal "
         "backward closures run (backward-pre); wrapping its forward input triggers `fn` just "
         "after they have all finished (backward-post).");
+
+    // Close the AutoContext device at Python shutdown so MeshDevice (and its
+    // D2HSocket / NamedShm resources) are torn down before ShmResourceTracker's
+    // atexit handler runs. AutoContext is held in ttsl::Indestructible so its
+    // destructor never runs on its own.
+    nb::module_::import_("atexit").attr("register")(nb::cpp_function([]() {
+        // Best-effort: log and swallow so later atexit handlers still run.
+        try {
+            AutoContext::get_instance().close_device();
+        } catch (const std::exception& e) {
+            fmt::println(stderr, "[tt-train] AutoContext close_device() failed during Python atexit: {}", e.what());
+        } catch (...) {
+            fmt::println(
+                stderr, "[tt-train] AutoContext close_device() failed during Python atexit: unknown exception");
+        }
+    }));
 }
 
 }  // namespace ttml::nanobind::autograd

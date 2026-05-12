@@ -15,8 +15,6 @@
 #include "ttnn-nanobind/export_enum.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "layernorm.hpp"
-#include "device/layernorm_op_multi_core.hpp"
-#include "device/layernorm_op_multi_core_sharded.hpp"
 #include "device/layernorm_device_operation.hpp"
 #include "device/layernorm_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"

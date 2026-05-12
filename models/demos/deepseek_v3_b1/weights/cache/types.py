@@ -94,7 +94,15 @@ class RegionSpec:
 
 @dataclass(frozen=True)
 class FusionGroupSpec:
-    """Complete packing layout for an overlapped (fused) tensor group."""
+    """Complete packing layout for an overlapped (fused) tensor group.
+
+    When :attr:`per_core` is ``True``, the group is allocated with
+    :meth:`ttnn.MemoryConfig.experimental_set_per_core_allocation` so each
+    core picks its own L1 address independently of the global lockstep
+    allocator.  This lets narrow groups (e.g. an 8-core ``gate_mm`` slab)
+    live next to wide groups (e.g. a 115-core merged attention buffer)
+    without forcing the wide group to reserve L1 across all cores.
+    """
 
     kind: Literal["fusion_group"] = "fusion_group"
     name: str = ""
@@ -102,6 +110,7 @@ class FusionGroupSpec:
     sharding_strategy: ttnn.TensorMemoryLayout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
     mesh_mapper_config: MeshMapperConfig = field(default_factory=ReplicateMeshMapper)
     transform_version: int = 0  # bump when shuffle/preprocess logic changes
+    per_core: bool = False
 
 
 @dataclass(frozen=True)
@@ -127,6 +136,43 @@ class CompressedTensorTarget:
     transform_version: int = 4  # bumped: store DRAM-shuffled data on disk (faster load, same footprint)
 
 
+@dataclass(frozen=True)
+class SramCompressedTensorTarget:
+    """Specification for a cached SRAM hot-expert per-core L1 CompressedTensor.
+
+    Each ``(layer, expert, projection)`` slot becomes its own cache entry,
+    addressed by the full L1 layout it lands in (sharding strategy, core
+    grid, per-core shard shape, mesh placement) plus the assigner / BSPM
+    fingerprint that picked the per-tile formats.
+
+    Unlike :class:`CompressedTensorTarget` (routed-DRAM BSPM), the cached
+    artifact is the **post-pack** byte stream for every shard on every
+    device.  This skips the BFP pack pipeline on warm runs and reduces the
+    SRAM build phase from ``pack + upload`` to ``upload only`` — see
+    :func:`~models.demos.deepseek_v3_b1.weights.cache.sram_compressed_cache.get_or_create_sram_compressed_expert`
+    for the warm/cold flow.
+
+    The cache key is intentionally agnostic to runtime variables that do
+    *not* change the packed bytes (e.g. ``boundary_addr`` / candidate-list
+    ordering): same expert + same projection + same layout = one cached
+    artifact regardless of which layer requests it (cross-layer sharing
+    happens for free when ``name`` is identical).
+    """
+
+    kind: Literal["sram_compressed_tensor"] = "sram_compressed_tensor"
+    name: str = ""  # e.g. "sram_layer3_expert42_gate_proj"
+    tensor_shape: tuple[int, ...] = ()  # full pre-mesh logical shape (matches CompressedTensor.shape)
+    tile_hw: int = 32
+    memory_config: ttnn.MemoryConfig = field(default_factory=lambda: ttnn.DRAM_MEMORY_CONFIG)
+    per_core_allocation: bool = True
+    mesh_mapper_config: MeshMapperConfig = field(default_factory=ReplicateMeshMapper)
+    # Assignment provenance — mutually exclusive in practice, but both serialized to keep
+    # the canonical form stable across single-format / mixed-format / pre-computed paths.
+    assigner_fingerprint: str = ""  # opaque digest of the runtime CompressedTensorAssigner (cf. assigner.py)
+    assignment_hash: str = ""  # sha256[:16] of pre-computed BSPM assignment bytes (when no assigner)
+    transform_version: int = 1  # bump on storage format change
+
+
 @dataclass
 class CompressedTensorBuildInputs:
     """Weight matrix and tile-format assignment for a single expert projection.
@@ -144,7 +190,7 @@ class CompressedTensorBuildInputs:
     assignment: np.ndarray  # (tiles_h, tiles_w) int8 tile format codes
 
 
-ArtifactTarget = TensorTarget | FusionGroupSpec | CompressedTensorTarget
+ArtifactTarget = TensorTarget | FusionGroupSpec | CompressedTensorTarget | SramCompressedTensorTarget
 
 
 @dataclass(frozen=True)

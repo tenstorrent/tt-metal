@@ -97,9 +97,9 @@ jobs:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - ${{ (!contains(matrix.test-group.runs_on, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
         # If weights-cache-mode is lfc, we don't need to mount the model cache volume because it will download via LFC (P300s in CIv1-style env on Proxmox with LFC endpoint)
-        # If weights-cache-mode is cloud-mlperf, we need to mount the model cache volume from /mnt/MLPerf/tt_dnn-models because it should be a Cloud machine
+        # If weights-cache-mode is cloud-mlperf, we need to mount the model cache volume from /mnt/MLPerf/huggingface because it should be a Cloud machine (canonical HF cache root, shared with the Wormhole pipelines)
         # If weights-cache-mode is local-disk, we need to mount the model cache volume from /localdev/blackhole_demos/huggingface_data because it's in CIv1 GH VLAN, so not on Cloud
-        - "${{ inputs.weights-cache-mode != 'lfc' && format('{0}:/localdev/blackhole_demos/huggingface_data{1}', inputs.weights-cache-mode == 'cloud-mlperf' && '/mnt/MLPerf/tt_dnn-models' || '/localdev/blackhole_demos/huggingface_data', inputs.regenerate-ttnn-cache == true && ':rw' || ':ro') || '/no_hf_cache' }}"
+        - "${{ inputs.weights-cache-mode != 'lfc' && format('{0}:/localdev/blackhole_demos/huggingface_data{1}', inputs.weights-cache-mode == 'cloud-mlperf' && '/mnt/MLPerf/huggingface' || '/localdev/blackhole_demos/huggingface_data', inputs.regenerate-ttnn-cache == true && ':rw' || ':ro') || '/no_hf_cache' }}"
       options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
       run:
@@ -146,14 +146,14 @@ jobs:
         timeout-minutes: 120
         run: |
           set -e
-          mkdir -p /localdev/blackhole_demos/huggingface_data/genmo
+          mkdir -p /localdev/blackhole_demos/huggingface_data/hub
           python3 - <<'PY'
           import os
           from huggingface_hub import snapshot_download
 
           snapshot_download(
               repo_id="genmo/mochi-1-preview",
-              cache_dir="/localdev/blackhole_demos/huggingface_data/genmo",
+              cache_dir="/localdev/blackhole_demos/huggingface_data/hub",
               token=os.environ.get("HF_TOKEN"),
               resume_download=True,
           )
