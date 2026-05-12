@@ -359,17 +359,28 @@ class TtDPTFusionStage:
 
 
 class TtDPTHead:
-    """Final prediction head: two 3x3 convs with upsample, then 1x1 depth conv."""
+    """Final prediction head matching HF DepthAnythingDepthEstimationHead.
 
-    def __init__(self, parameters, device):
+    HF forward order:
+        conv1(256→128, 3x3)
+        F.interpolate(bilinear, to patch_h*14 × patch_w*14)
+        conv2(128→32, 3x3)
+        activation1 (ReLU)
+        conv3(32→1, 1x1)
+        activation2 (ReLU) * max_depth
+    """
+
+    def __init__(self, parameters, device, patch_size=14, max_depth=80.0):
         self.parameters = parameters
         self.device = device
+        self.patch_size = patch_size
+        self.max_depth = max_depth
 
-    def __call__(self, x):
+    def __call__(self, x, patch_height=37, patch_width=37):
         batch_size, channels, h, w = x.shape
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
-        # Conv 1: 256 -> 128
+        # Conv 1: 256 -> 128 (NO ReLU after this in HF!)
         x, [h, w] = ttnn_conv2d(
             x,
             self.parameters.conv1.weight,
@@ -382,11 +393,23 @@ class TtDPTHead:
             w,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        x = ttnn.relu(x)
 
-        # Upsample x2
-        x = ttnn_upsample(x, scale_factor=2)
-        h, w = h * 2, w * 2
+        # Bilinear interpolate to full input resolution (patch_h * 14, patch_w * 14)
+        # HF uses F.interpolate(mode="bilinear", align_corners=True)
+        # ttnn.upsample only supports nearest-neighbor, so compute the correct
+        # integer scale factor.  37*14 = 518;  h after conv1 = 148 (from 37×4 fusion).
+        # 518 / 148 ≈ 3.5 — not integer, so we do nearest ×4 (→592) then slice.
+        target_h = patch_height * self.patch_size  # 518
+        target_w = patch_width * self.patch_size   # 518
+        # Compute the smallest integer scale that covers the target size
+        scale = max((target_h + h - 1) // h, (target_w + w - 1) // w)  # ceil div
+        x = ttnn_upsample(x, scale_factor=scale)
+        h_up, w_up = h * scale, w * scale
+        # Slice to exact target size if overshot
+        if h_up != target_h or w_up != target_w:
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x = ttnn.slice(x, (0, 0, 0, 0), (batch_size, 128, target_h, target_w))
+        h, w = target_h, target_w
 
         # Conv 2: 128 -> 32
         x, [h, w] = ttnn_conv2d(
@@ -401,7 +424,7 @@ class TtDPTHead:
             w,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        x = ttnn.relu(x)
+        x = ttnn.relu(x)  # activation1
 
         # Conv 3: 32 -> 1  (1x1 depth prediction)
         x, [h, w] = ttnn_conv2d(
@@ -418,6 +441,11 @@ class TtDPTHead:
             padding=(0, 0),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        x = ttnn.relu(x)  # activation2
+
+        # Scale by max_depth (HF: predicted_depth * self.max_depth)
+        x = ttnn.multiply(x, self.max_depth)
+
         return x  # (B, 1, H_out, W_out)
 
 
@@ -756,7 +784,8 @@ class TtDepthAnythingV2:
             for i in range(4)
         ]
         self.fusion = TtDPTFusionStage(self.parameters["neck"]["fusion"], device)
-        self.head = TtDPTHead(self.parameters["head"], device)
+        max_depth = getattr(self.hf_config, "max_depth", 80.0)
+        self.head = TtDPTHead(self.parameters["head"], device, max_depth=max_depth)
 
     # ------------------------------------------------------------------
     def _move_to_device(self, params, device):
@@ -835,7 +864,9 @@ class TtDepthAnythingV2:
         fused = self.fusion(reassembled)
 
         # ---- 5. Head ---------------------------------------------------
-        output = self.head(fused)
+        patch_height = 518 // 14  # 37
+        patch_width = 518 // 14   # 37
+        output = self.head(fused, patch_height=patch_height, patch_width=patch_width)
 
         return ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
 
