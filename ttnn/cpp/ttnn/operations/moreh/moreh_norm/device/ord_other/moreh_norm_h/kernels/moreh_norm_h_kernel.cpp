@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 void kernel_main() {
@@ -10,22 +12,19 @@ void kernel_main() {
     const auto Ht = get_arg_val<uint32_t>(i++);
     const auto origin_h = get_arg_val<uint32_t>(i++);
 
-    std::uint8_t input_id{tt::CB::c_in0};
-    const auto cb_x = input_id++;       // input
-    const auto cb_one = input_id++;     // one
-    const auto cb_mask_h = input_id++;  // mask_h
+    constexpr std::uint32_t cb_x = tt::CB::c_in0 + 0;       // input
+    constexpr std::uint32_t cb_one = tt::CB::c_in0 + 1;     // one
+    constexpr std::uint32_t cb_mask_h = tt::CB::c_in0 + 2;  // mask_h
 
-    std::uint8_t output_id{tt::CB::c_out0};
-    const auto cb_y = output_id++;  // output
+    constexpr std::uint32_t cb_y = tt::CB::c_out0 + 0;  // output
 
-    std::uint8_t intermed_id{tt::CB::c_intermed0};
-    const auto cb_tmp0 = intermed_id++;
-    const auto cb_tmp1 = intermed_id++;
-    const auto cb_tmp2 = intermed_id++;
+    constexpr std::uint32_t cb_tmp0 = tt::CB::c_intermed0 + 0;
+    constexpr std::uint32_t cb_tmp1 = tt::CB::c_intermed0 + 1;
+    constexpr std::uint32_t cb_tmp2 = tt::CB::c_intermed0 + 2;
 
-    const auto cb_val = cb_tmp0;     // f(x)
-    const auto cb_cal = cb_tmp1;     // calculate f(x) over dimension
-    const auto cb_reduce = cb_tmp2;  // reduce f(x)
+    constexpr std::uint32_t cb_val = cb_tmp0;     // f(x)
+    constexpr std::uint32_t cb_cal = cb_tmp1;     // calculate f(x) over dimension
+    constexpr std::uint32_t cb_reduce = cb_tmp2;  // reduce f(x)
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
@@ -86,21 +85,18 @@ void kernel_main() {
 
             // calculate f(x) over dimension
             if (row_idx == 0) {
-                tile_regs_acquire();
-                cb_wait_front(cb_val, onetile);
-                cb_reserve_back(cb_cal, onetile);
-
-                copy_tile_init_with_dt(cb_val);
-                copy_tile(cb_val, 0, dst0);
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, cb_cal);
-                tile_regs_release();
-
-                cb_pop_front(cb_val, onetile);
-                cb_push_back(cb_cal, onetile);
-
+                // PARTIAL migration: copy cb_val -> cb_cal as init seed.
+#if defined FP32_DEST_ACC_EN
+                reconfig_data_format_srca(cb_val);
+                pack_reconfig_data_format(cb_cal);
+#endif
+                {
+                    using namespace compute_kernel_lib;
+                    eltwise_chain(
+                        onetile,
+                        CopyTile<cb_val, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+                        PackTile<cb_cal, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                }
             } else {
                 tile_regs_acquire();
                 cb_wait_front(cb_val, onetile);
@@ -134,25 +130,26 @@ void kernel_main() {
         compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
             cb_cal, cb_one, cb_reduce, compute_kernel_lib::ReduceInputBlockShape::single());
 
-        tile_regs_acquire();
-
-        cb_wait_front(cb_reduce, onetile);
-        cb_reserve_back(cb_y, onetile);
-
-        copy_tile_init_with_dt(cb_reduce);
-        copy_tile(cb_reduce, 0, dst0);
-#ifdef MINUS_INF
-        negative_tile_init();
-        negative_tile(dst0);
+        // PARTIAL migration: post-reduce write-out (cb_reduce -> [Negative if MINUS_INF] -> cb_y).
+#if defined FP32_DEST_ACC_EN
+        reconfig_data_format_srca(cb_reduce);
+        pack_reconfig_data_format(cb_y);
 #endif
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_y);
-        tile_regs_release();
-
-        cb_pop_front(cb_reduce, onetile);
-        cb_push_back(cb_y, onetile);
+        {
+            using namespace compute_kernel_lib;
+#ifdef MINUS_INF
+            eltwise_chain(
+                onetile,
+                CopyTile<cb_reduce, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+                Negative<Dst::D0>{},
+                PackTile<cb_y, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+#else
+            eltwise_chain(
+                onetile,
+                CopyTile<cb_reduce, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+                PackTile<cb_y, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+#endif
+        }
     }
 
     cb_pop_front(cb_one, onetile);

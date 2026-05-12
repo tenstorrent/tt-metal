@@ -12,16 +12,26 @@
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils.hpp"
 #include "experimental/circular_buffer.h"
 
-ALWI void process_tile(
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_block.hpp"
+
+#if BINARY_OP_TYPE == EltwiseBinaryType::ELWADD
+constexpr auto FPU_OP = compute_kernel_lib::BinaryFpuOp::Add;
+#elif BINARY_OP_TYPE == EltwiseBinaryType::ELWSUB
+constexpr auto FPU_OP = compute_kernel_lib::BinaryFpuOp::Sub;
+#elif BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL
+constexpr auto FPU_OP = compute_kernel_lib::BinaryFpuOp::Mul;
+#endif
+
+template <
     tt::CBIndex cb_pre_lhs,
     tt::CBIndex cb_post_lhs,
     tt::CBIndex cb_pre_rhs,
     tt::CBIndex cb_post_rhs,
-    tt::CBIndex cb_out,
-    uint32_t freq,
-    uint32_t tile_start,
-    uint32_t num_tiles_per_cycle) {
+    tt::CBIndex cb_out>
+ALWI void process_tile(uint32_t freq, uint32_t tile_start, uint32_t num_tiles_per_cycle) {
     using namespace ckernel;
+    using namespace compute_kernel_lib;
     experimental::CircularBuffer exp_cb_out(cb_out);
 
 #if BCAST_INPUT  // ROW_A_COL_B
@@ -30,16 +40,16 @@ ALWI void process_tile(
 #define CB_POST_OTHER cb_post_lhs
     constexpr auto cb_raw_other = tt::CBIndex::c_0;
     constexpr auto cb_llk_post = tt::CBIndex::c_5;
-    auto cb_left = cb_post_lhs;
-    auto cb_right = cb_post_rhs;
+    constexpr auto cb_left = cb_post_lhs;
+    constexpr auto cb_right = cb_post_rhs;
 #else  // ROW_B_COL_A
 #define CB_PRE_BCAST cb_pre_lhs
 #define CB_POST_BCAST cb_post_lhs
 #define CB_POST_OTHER cb_post_rhs
     constexpr auto cb_raw_other = tt::CBIndex::c_1;
     constexpr auto cb_llk_post = tt::CBIndex::c_6;
-    auto cb_left = cb_post_lhs;
-    auto cb_right = cb_post_rhs;
+    constexpr auto cb_left = cb_post_lhs;
+    constexpr auto cb_right = cb_post_rhs;
 #endif
 
     experimental::CircularBuffer exp_cb_raw_other(cb_raw_other);
@@ -74,6 +84,23 @@ ALWI void process_tile(
         PREPROCESS(OTHER_OP, cb_llk_post, CB_POST_OTHER, cb_out, num_tiles_per_cycle);
         exp_cb_post_other.wait_front(num_tiles_per_cycle);
 
+#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))
+        // Migrated stage: BlockBinaryFpu + BlockPackTile.
+        exp_cb_out.reserve_back(num_tiles_per_cycle);
+        using BinElt = BlockBinaryFpu<
+            (uint32_t)cb_left,
+            (uint32_t)cb_right,
+            FPU_OP,
+            num_tiles_per_cycle,
+            Dst::D0,
+            BroadcastDim::None,
+            BinaryDataFormatReconfig::None,
+            CopyTilePolicy::NoWaitNoPop,
+            CopyTilePolicy::NoWaitNoPop>;
+        using PackElt = BlockPackTile<(uint32_t)cb_out, num_tiles_per_cycle, Dst::D0, PackTilePolicy::NoReserveNoPush>;
+        eltwise_chain(1u, BinElt{}, PackElt{});
+        exp_cb_out.push_back(num_tiles_per_cycle);
+#else
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_left, cb_right);
         exp_cb_out.reserve_back(num_tiles_per_cycle);
 
@@ -87,6 +114,7 @@ ALWI void process_tile(
         tile_regs_release();
 
         exp_cb_out.push_back(num_tiles_per_cycle);
+#endif
         exp_cb_post_other.pop_front(num_tiles_per_cycle);
     }
     exp_cb_post_bcast.pop_front(num_tiles_per_cycle);
@@ -127,19 +155,12 @@ void kernel_main() {
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        process_tile(
-            cb_pre_lhs, cb_post_lhs, cb_pre_rhs, cb_post_rhs, cb_out, tile_freq, tile_start, num_tiles_per_cycle);
+        process_tile<cb_pre_lhs, cb_post_lhs, cb_pre_rhs, cb_post_rhs, cb_out>(
+            tile_freq, tile_start, num_tiles_per_cycle);
     }
 
     if (remaining_iterations > 0) {
-        process_tile(
-            cb_pre_lhs,
-            cb_post_lhs,
-            cb_pre_rhs,
-            cb_post_rhs,
-            cb_out,
-            remaining_iterations,
-            tile_start,
-            num_tiles_per_cycle);
+        process_tile<cb_pre_lhs, cb_post_lhs, cb_pre_rhs, cb_post_rhs, cb_out>(
+            remaining_iterations, tile_start, num_tiles_per_cycle);
     }
 }

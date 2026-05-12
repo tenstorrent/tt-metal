@@ -3,63 +3,60 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/common.h"
 #include "api/compute/mul_int_sfpu.h"
 #include "api/compute/add_int_sfpu.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp"
+
+namespace {
+
+// DEST-DEST integer multiply where in0/in1/out may alias.
+// Inherits DestOnlyTag directly (BinaryOp's static_assert forbids slot aliasing).
+template <DataFormat DF, compute_kernel_lib::Dst In0, compute_kernel_lib::Dst In1, compute_kernel_lib::Dst Out>
+struct MulIntInPlace : compute_kernel_lib::DestOnlyTag {
+    static ALWI void init() { mul_int_tile_init<DF>(); }
+    static ALWI void exec() {
+        mul_int_tile<DF>(
+            compute_kernel_lib::to_u32(In0), compute_kernel_lib::to_u32(In1), compute_kernel_lib::to_u32(Out));
+    }
+};
+
+template <DataFormat DF, compute_kernel_lib::Dst In0, compute_kernel_lib::Dst In1, compute_kernel_lib::Dst Out>
+struct AddIntInPlace : compute_kernel_lib::DestOnlyTag {
+    static ALWI void init() { add_int_tile_init(); }
+    static ALWI void exec() {
+        add_int_tile<DF>(
+            compute_kernel_lib::to_u32(In0), compute_kernel_lib::to_u32(In1), compute_kernel_lib::to_u32(Out));
+    }
+};
+
+}  // namespace
 
 void kernel_main() {
+    using namespace compute_kernel_lib;
+
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     uint32_t scalar_arg = get_arg_val<uint32_t>(3);
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);  // set to 1
+    (void)num_tiles_per_cycle;
 
     constexpr auto cb_in0 = tt::CBIndex::c_0;  // input_a
     constexpr auto cb_in1 = tt::CBIndex::c_1;  // input_b
     constexpr auto cb_in2 = tt::CBIndex::c_2;  // input_c
     constexpr auto cb_out = tt::CBIndex::c_3;
 
-    unary_op_init_common(cb_in0, cb_out);
-
-    for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        cb_wait_front(cb_in0, num_tiles_per_cycle);
-        cb_wait_front(cb_in1, num_tiles_per_cycle);
-        cb_wait_front(cb_in2, num_tiles_per_cycle);
-
-        cb_reserve_back(cb_out, num_tiles_per_cycle);
-
-        tile_regs_acquire();
-
-        copy_tile_init(cb_in0);
-        copy_tile(cb_in0, 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
-
-        copy_tile_init(cb_in1);
-        copy_tile(cb_in1, 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
-
-        copy_tile_init(cb_in2);
-        copy_tile(cb_in2, 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
-
-        fill_tile_init();
-        fill_tile_int<ADDCMUL_DATA_FORMAT>(3, scalar_arg);
-
-        mul_int_tile_init<ADDCMUL_DATA_FORMAT>();
-        mul_int_tile<ADDCMUL_DATA_FORMAT>(3, 1, 3);
-        mul_int_tile<ADDCMUL_DATA_FORMAT>(3, 2, 2);
-
-        add_int_tile_init();
-        add_int_tile<ADDCMUL_DATA_FORMAT>(0, 2, 0);
-
-        tile_regs_commit();
-        tile_regs_wait();
-
-        pack_tile(0, cb_out);
-
-        tile_regs_release();
-
-        cb_push_back(cb_out, num_tiles_per_cycle);
-        cb_pop_front(cb_in0, num_tiles_per_cycle);
-        cb_pop_front(cb_in1, num_tiles_per_cycle);
-        cb_pop_front(cb_in2, num_tiles_per_cycle);
-    }
+    // D5/D8: caller-side BIG init at the top of MAIN().
+    // out = input_a + scalar * input_b * input_c, integer dtype.
+    // Mirrors the original 4-DST-slot layout (D3 reused as scratch).
+    eltwise_chain_with_init(
+        num_tiles,
+        CopyTile<cb_in0, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+        CopyTile<cb_in1, Dst::D1, CopyTilePolicy::WaitAndPop>{},
+        CopyTile<cb_in2, Dst::D2, CopyTilePolicy::WaitAndPop>{},
+        FillInt<ADDCMUL_DATA_FORMAT, Dst::D3>{scalar_arg},
+        MulIntInPlace<ADDCMUL_DATA_FORMAT, Dst::D3, Dst::D1, Dst::D3>{},
+        MulIntInPlace<ADDCMUL_DATA_FORMAT, Dst::D3, Dst::D2, Dst::D2>{},
+        AddIntInPlace<ADDCMUL_DATA_FORMAT, Dst::D0, Dst::D2, Dst::D0>{},
+        PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 }

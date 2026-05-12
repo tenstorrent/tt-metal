@@ -7,6 +7,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 void kernel_main() {
@@ -21,52 +22,84 @@ void kernel_main() {
     constexpr auto cb_out0 = tt::CBIndex::c_16;
     constexpr auto cb_intermed0 = tt::CBIndex::c_24;
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t dst0 = 0;
 
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
     cb_wait_front(cb_in1, onetile);
-    for (uint32_t i = 0; i < num_output_tiles; i++) {
-        tile_regs_acquire();
-        cb_wait_front(cb_in0, onetile);
-        if (ht_need_bcast && wt_need_bcast) {
-            add_bcast_scalar_init_short_with_dt(cb_in1, cb_in0);
-            add_tiles_bcast_scalar(cb_in1, cb_in0, 0, 0, dst0);
-        } else if (ht_need_bcast) {
-            add_bcast_rows_init_short_with_dt(cb_in1, cb_in0);
-            add_tiles_bcast_rows(cb_in1, cb_in0, 0, 0, dst0);
-        } else if (wt_need_bcast) {
-            add_bcast_cols_init_short_with_dt(cb_in1, cb_in0);
-            add_tiles_bcast_cols(cb_in1, cb_in0, 0, 0, dst0);
-        } else {
-            copy_tile_init_with_dt(cb_in0);
-            copy_tile(cb_in0, 0, dst0);
+
+    // PARTIAL migration: per-iter loop body.
+    //   migrated:
+    //     stage 1: BinaryFpu(Add, Cols/Rows/Scalar) when bcast OR CopyTile when no bcast,
+    //              + PackTile(cb_intermed0).
+    //     stage 2: BinaryFpu(Mul, Scalar) cb_intermed0 * cb_scalar -> cb_out0.
+    //   skipped : nothing — full main loop migrated.
+    {
+        using namespace compute_kernel_lib;
+        for (uint32_t i = 0; i < num_output_tiles; i++) {
+            // Stage 1 — accumulate (or pure copy) into cb_intermed0.
+            if constexpr (ht_need_bcast || wt_need_bcast) {
+                constexpr BroadcastDim BCAST_DIM = (ht_need_bcast && wt_need_bcast) ? BroadcastDim::Scalar
+                                                   : ht_need_bcast                  ? BroadcastDim::Row
+                                                                                    : BroadcastDim::Col;
+                using AddBcast = BinaryFpu<
+                    cb_in1,
+                    cb_in0,
+                    cb_intermed0,
+                    BinaryFpuOp::Add,
+                    BCAST_DIM,
+                    BinaryDataFormatReconfig::Input,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CopyTilePolicy::WaitAndPop,
+                    CbIndexMode::FirstTile,
+                    Dst::D0>;
+                eltwise_chain(
+                    onetile,
+                    AddBcast{},
+                    PackTile<
+                        cb_intermed0,
+                        Dst::D0,
+                        PackTilePolicy::PerTileReserveAndPush,
+                        PackTileIndexMode::FirstTile,
+                        PackTileReconfig::Output>{});
+            } else {
+                eltwise_chain(
+                    onetile,
+                    CopyTile<
+                        cb_in0,
+                        Dst::D0,
+                        CopyTilePolicy::WaitAndPop,
+                        CbIndexMode::FirstTile,
+                        CopyTileReconfig::None>{},
+                    PackTile<
+                        cb_intermed0,
+                        Dst::D0,
+                        PackTilePolicy::PerTileReserveAndPush,
+                        PackTileIndexMode::FirstTile,
+                        PackTileReconfig::Output>{});
+            }
+
+            // Stage 2 — output * (1 / number_of_elements).
+            using MulScalar = BinaryFpu<
+                cb_intermed0,
+                cb_scalar,
+                cb_out0,
+                BinaryFpuOp::Mul,
+                BroadcastDim::Scalar,
+                BinaryDataFormatReconfig::Input,
+                CopyTilePolicy::WaitAndPop,
+                CopyTilePolicy::NoWaitNoPop,
+                CbIndexMode::FirstTile,
+                Dst::D0>;
+            eltwise_chain(
+                onetile,
+                MulScalar{},
+                PackTile<
+                    cb_out0,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
         }
-        tile_regs_commit();
-
-        cb_reserve_back(cb_intermed0, onetile);
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_intermed0);
-        tile_regs_release();
-
-        cb_push_back(cb_intermed0, onetile);
-        cb_pop_front(cb_in0, onetile);
-
-        // output * (1 / number_of_elements)
-        tile_regs_acquire();
-        cb_wait_front(cb_intermed0, onetile);
-        mul_tiles_bcast_scalar_init_short_with_dt(cb_intermed0, cb_scalar);
-        mul_tiles_bcast<BroadcastType::SCALAR>(cb_intermed0, cb_scalar, 0, 0, 0);
-        tile_regs_commit();
-
-        cb_reserve_back(cb_out0, onetile);
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_out0);
-        tile_regs_release();
-
-        cb_push_back(cb_out0, onetile);
-        cb_pop_front(cb_intermed0, onetile);
     }
+
     cb_pop_front(cb_in1, onetile);
 }

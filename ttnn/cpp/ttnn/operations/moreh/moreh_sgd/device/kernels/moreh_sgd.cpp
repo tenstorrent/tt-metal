@@ -2,7 +2,62 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
+
+namespace {
+
+// File-local helper: BinaryFpu(Op) on (CbA[idxA], CbB[idxB]) -> CbOut, single tile,
+// PerTile policies with WaitAndPop / WaitNoPop driven by PopA / PopB. Mirrors the
+// `*_tiles_to_cb` moreh helpers (FP32_DEST_ACC reconfig is folded into the chain via
+// BinaryDataFormatReconfig::InputAndOutput — emits unconditionally, equivalent to the
+// _with_dt wrappers under FP32_DEST_ACC and a no-op otherwise on bf16-only).
+template <
+    compute_kernel_lib::BinaryFpuOp Op,
+    uint32_t CbA,
+    uint32_t CbB,
+    uint32_t CbOut,
+    uint32_t IdxA,
+    uint32_t IdxB,
+    bool PopA,
+    bool PopB>
+ALWI void moreh_bin_chain() {
+    using namespace compute_kernel_lib;
+    using BinElt = BinaryFpu<
+        CbA,
+        CbB,
+        CbOut,
+        Op,
+        BroadcastDim::None,
+        BinaryDataFormatReconfig::InputAndOutput,
+        PopA ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
+        PopB ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
+        CbIndexMode::Pinned,
+        Dst::D0>;
+    eltwise_chain(1, BinElt{IdxA, IdxB}, PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+}
+
+template <uint32_t CbIn, uint32_t CbOut, uint32_t Idx, bool Pop>
+ALWI void moreh_copy_chain() {
+    using namespace compute_kernel_lib;
+    using CopyElt = CopyTile<
+        CbIn,
+        Dst::D0,
+        Pop ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
+        Idx == 0 ? CbIndexMode::FirstTile : CbIndexMode::Pinned,
+        CopyTileReconfig::Input>;
+    eltwise_chain(
+        1,
+        CopyElt{Idx},
+        PackTile<
+            CbOut,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::Output>{});
+}
+
+}  // namespace
 
 void kernel_main() {
     constexpr auto cb_param_in = tt::CBIndex::c_0;
@@ -35,9 +90,25 @@ void kernel_main() {
         uint32_t cb_grad_tmp = cb_grad;
 #if defined(WEIGHT_DECAY)
         // grad += param * weight_decay
-        mul_tiles_to_cb(cb_param_in, cb_scalar_args, cb_tmp1, 0, weight_decay_tile, /*pop0=*/0, /*pop1=*/0);
+        moreh_bin_chain<
+            compute_kernel_lib::BinaryFpuOp::Mul,
+            cb_param_in,
+            cb_scalar_args,
+            cb_tmp1,
+            /*idxA=*/0,
+            /*idxB=*/weight_decay_tile,
+            /*popA=*/false,
+            /*popB=*/false>();
 
-        add_tiles_to_cb(cb_grad, cb_tmp1, cb_tmp2, 0, 0, /*pop0=*/1, /*pop1=*/1);
+        moreh_bin_chain<
+            compute_kernel_lib::BinaryFpuOp::Add,
+            cb_grad,
+            cb_tmp1,
+            cb_tmp2,
+            /*idxA=*/0,
+            /*idxB=*/0,
+            /*popA=*/true,
+            /*popB=*/true>();
 
         cb_grad_tmp = cb_tmp2;
 #endif  // WEIGHT_DECAY
@@ -46,14 +117,38 @@ void kernel_main() {
         uint32_t cb_momentum_tmp = cb_grad_tmp;
 #if defined(MOMENTUM_INITIALIZED)
         // grad * (1 - dampening)
-        sub_tiles_to_cb(cb_scalar_args, cb_scalar_args, cb_tmp1, one_tile, dampening_tile, /*pop0=*/0, /*pop0=*/0);
+        moreh_bin_chain<
+            compute_kernel_lib::BinaryFpuOp::Sub,
+            cb_scalar_args,
+            cb_scalar_args,
+            cb_tmp1,
+            /*idxA=*/one_tile,
+            /*idxB=*/dampening_tile,
+            /*popA=*/false,
+            /*popB=*/false>();
 
         mul_tiles_to_cb(cb_grad_tmp, cb_tmp1, cb_tmp3, 0, 0, /*pop0=*/0, /*pop0=*/1);
 
         // momentum_v * momentum
-        mul_tiles_to_cb(cb_momentum_in, cb_scalar_args, cb_tmp4, 0, momentum_tile, /*pop0=*/1, /*pop0=*/0);
+        moreh_bin_chain<
+            compute_kernel_lib::BinaryFpuOp::Mul,
+            cb_momentum_in,
+            cb_scalar_args,
+            cb_tmp4,
+            /*idxA=*/0,
+            /*idxB=*/momentum_tile,
+            /*popA=*/true,
+            /*popB=*/false>();
 
-        add_tiles_to_cb(cb_tmp3, cb_tmp4, cb_tmp1, 0, 0, /*pop0=*/1, /*pop1=*/1);
+        moreh_bin_chain<
+            compute_kernel_lib::BinaryFpuOp::Add,
+            cb_tmp3,
+            cb_tmp4,
+            cb_tmp1,
+            /*idxA=*/0,
+            /*idxB=*/0,
+            /*popA=*/true,
+            /*popB=*/true>();
 
         cb_momentum_tmp = cb_tmp1;
 #endif
@@ -84,6 +179,14 @@ void kernel_main() {
         // param_out = param_in - lr * grad
         mul_tiles_to_cb(cb_scalar_args, cb_grad_tmp, cb_tmp3, lr_tile, 0, /*pop0=*/0, /*pop1=*/1);
 
-        sub_tiles_to_cb(cb_param_in, cb_tmp3, cb_param_out, 0, 0, /*pop0=*/1, /*pop1=*/1);
+        moreh_bin_chain<
+            compute_kernel_lib::BinaryFpuOp::Sub,
+            cb_param_in,
+            cb_tmp3,
+            cb_param_out,
+            /*idxA=*/0,
+            /*idxB=*/0,
+            /*popA=*/true,
+            /*popB=*/true>();
     }
 }

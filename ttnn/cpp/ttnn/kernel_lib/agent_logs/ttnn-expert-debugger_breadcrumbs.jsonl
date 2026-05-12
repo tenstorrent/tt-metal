@@ -1,0 +1,1 @@
+{"event":"investigation_start","details":"Reg-A short-init patch made moreh_softmax WORSE (24F→76F + hangs). Branch HEAD 647ff976906. Reading briefing artifacts.","ts":"2026-05-11T08:25:46+00:00"}

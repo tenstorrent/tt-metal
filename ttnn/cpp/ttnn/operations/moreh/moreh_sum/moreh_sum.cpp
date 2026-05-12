@@ -16,7 +16,7 @@ Tensor moreh_sum(
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::SmallVector<int64_t> dims = operations::get_dim(dim, input.padded_shape().rank());
+    ttnn::SmallVector<int64_t> dims = operations::get_dim(dim, input.logical_shape().rank());
     std::sort(dims.begin(), dims.end());
 
     auto temp_input = input;

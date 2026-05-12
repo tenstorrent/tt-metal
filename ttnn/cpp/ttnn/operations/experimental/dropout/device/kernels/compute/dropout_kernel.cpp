@@ -4,43 +4,48 @@
 
 #include <cstdint>
 #include "api/compute/common.h"
-#include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/dropout.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+
+namespace {
+
+template <compute_kernel_lib::Dst Slot = compute_kernel_lib::Dst::D0>
+struct Dropout : compute_kernel_lib::UnaryOp<Dropout<Slot>, Slot> {
+    uint32_t int_probability;
+    uint32_t int_scale_factor;
+    constexpr Dropout(uint32_t p, uint32_t s) noexcept : int_probability(p), int_scale_factor(s) {}
+    constexpr Dropout() noexcept : int_probability(0), int_scale_factor(0) {}
+
+    static ALWI void init() { /* dropout_kernel_init handles seed; no separate per-op init */ }
+    static ALWI void call(uint32_t /*idst*/) {}
+    ALWI void exec(uint32_t /*i*/) const {
+        dropout_tile(compute_kernel_lib::to_u32(Slot), int_probability, int_scale_factor);
+    }
+};
+
+}  // namespace
 
 void kernel_main() {
-    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
-    uint32_t per_core_block_dim = get_compile_time_arg_val(1);
-    uint32_t int_probability = get_compile_time_arg_val(2);
-    uint32_t int_scale_factor = get_compile_time_arg_val(3);
+    using namespace compute_kernel_lib;
+
+    constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
+    constexpr uint32_t per_core_block_dim = get_compile_time_arg_val(1);
+    constexpr uint32_t int_probability = get_compile_time_arg_val(2);
+    constexpr uint32_t int_scale_factor = get_compile_time_arg_val(3);
 
     uint32_t seed = get_arg_val<uint32_t>(0);
+    constexpr auto cb_in = tt::CBIndex::c_0;
+    constexpr auto cb_out = tt::CBIndex::c_2;
+    constexpr uint32_t total_tiles = per_core_block_cnt * per_core_block_dim;
 
-    init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_2);
+    // D5/D8: caller-side BIG init at the top of MAIN().
+    compute_kernel_hw_startup(cb_in, cb_in, cb_out);
+    // Dropout requires a one-time seed init beyond the chain element's per-tile init.
     dropout_kernel_init(seed);
-    for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
-        cb_reserve_back(tt::CBIndex::c_2, per_core_block_dim);
-        for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
-            tile_regs_acquire();
 
-            // Pop tile after tile, copy to DST and pack
-            cb_wait_front(tt::CBIndex::c_0, 1);
-
-            copy_tile(tt::CBIndex::c_0, 0, 0);
-
-            dropout_tile(0, int_probability, int_scale_factor);
-
-            tile_regs_commit();
-
-            tile_regs_wait();
-
-            pack_tile(0, tt::CBIndex::c_2);
-
-            cb_pop_front(tt::CBIndex::c_0, 1);
-
-            tile_regs_release();
-        }
-        cb_push_back(tt::CBIndex::c_2, per_core_block_dim);
-    }
+    eltwise_chain(
+        total_tiles,
+        CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+        Dropout<Dst::D0>{int_probability, int_scale_factor},
+        PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 }

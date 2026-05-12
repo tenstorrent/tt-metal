@@ -9,8 +9,26 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/where.h"
 #include "api/compute/eltwise_unary/lerp.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+
+namespace {
+
+// Wraps the host-defined TERNARY_SFPU_OP_FUNC macro (where/lerp/addcmul/addcdiv).
+template <
+    compute_kernel_lib::Dst In0 = compute_kernel_lib::Dst::D0,
+    compute_kernel_lib::Dst In1 = compute_kernel_lib::Dst::D1,
+    compute_kernel_lib::Dst In2 = compute_kernel_lib::Dst::D2,
+    compute_kernel_lib::Dst Out = compute_kernel_lib::Dst::D0>
+struct TernarySfpuOp : compute_kernel_lib::TernaryOp<TernarySfpuOp<In0, In1, In2, Out>, In0, In1, In2, Out> {
+    static ALWI void init() { TERNARY_SFPU_OP_INIT(); }
+    static ALWI void call(uint32_t i0, uint32_t i1, uint32_t i2, uint32_t o) { TERNARY_SFPU_OP_FUNC(i0, i1, i2, o); }
+};
+
+}  // namespace
 
 void kernel_main() {
+    using namespace compute_kernel_lib;
+
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);  // set to 1
@@ -20,39 +38,12 @@ void kernel_main() {
     constexpr auto cb_pre_in3 = tt::CBIndex::c_2;
     constexpr auto cb_out = tt::CBIndex::c_3;
 
-    unary_op_init_common(cb_pre_in1, cb_out);
-
-    for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        cb_wait_front(cb_pre_in1, num_tiles_per_cycle);
-        cb_wait_front(cb_pre_in2, num_tiles_per_cycle);
-        cb_wait_front(cb_pre_in3, num_tiles_per_cycle);
-
-        cb_reserve_back(cb_out, num_tiles_per_cycle);
-
-        tile_regs_acquire();
-
-        copy_tile_to_dst_init_short(cb_pre_in1);
-        copy_tile(cb_pre_in1, 0, 0);  // Copy to dst reg 0
-
-        copy_tile_to_dst_init_short(cb_pre_in2);
-        copy_tile(cb_pre_in2, 0, 1);  // Copy to dst reg 1
-
-        copy_tile_to_dst_init_short(cb_pre_in3);
-        copy_tile(cb_pre_in3, 0, 2);  // Copy to dst reg 2
-
-        TERNARY_SFPU_OP_INIT();
-        TERNARY_SFPU_OP_FUNC(0, 1, 2, 0);
-
-        tile_regs_commit();
-        tile_regs_wait();
-
-        pack_tile(0, cb_out);
-
-        tile_regs_release();
-
-        cb_push_back(cb_out, num_tiles_per_cycle);
-        cb_pop_front(cb_pre_in1, num_tiles_per_cycle);
-        cb_pop_front(cb_pre_in2, num_tiles_per_cycle);
-        cb_pop_front(cb_pre_in3, num_tiles_per_cycle);
-    }
+    // D5/D8: caller-side BIG init at the top of MAIN().
+    eltwise_chain_with_init(
+        num_tiles,
+        CopyTile<cb_pre_in1, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+        CopyTile<cb_pre_in2, Dst::D1, CopyTilePolicy::WaitAndPop>{},
+        CopyTile<cb_pre_in3, Dst::D2, CopyTilePolicy::WaitAndPop>{},
+        TernarySfpuOp<Dst::D0, Dst::D1, Dst::D2, Dst::D0>{},
+        PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 }

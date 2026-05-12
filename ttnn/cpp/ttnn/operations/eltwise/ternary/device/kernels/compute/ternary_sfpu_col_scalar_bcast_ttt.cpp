@@ -10,15 +10,46 @@
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
 
-ALWI void process_tile(
-    tt::CBIndex predicate_cb,
-    tt::CBIndex true_cb,
-    tt::CBIndex false_cb,
-    tt::CBIndex cb_out,
-    uint32_t freq,
-    uint32_t tile_start,
-    uint32_t num_tiles_per_cycle) {
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_block.hpp"
+
+namespace {
+template <uint32_t Cb, compute_kernel_lib::Dst DstSlot>
+struct LocalLoadTile : compute_kernel_lib::CopyTileTag {
+    static constexpr uint32_t cb = Cb;
+    static constexpr uint32_t cb_a_id() { return Cb; }
+    static constexpr uint32_t cb_b_id() { return 0; }
+    static constexpr compute_kernel_lib::Dst dst_slot = DstSlot;
+    static constexpr compute_kernel_lib::CopyTilePolicy a_policy() {
+        return compute_kernel_lib::CopyTilePolicy::NoWaitNoPop;
+    }
+    static constexpr compute_kernel_lib::CopyTilePolicy b_policy() {
+        return compute_kernel_lib::CopyTilePolicy::NoWaitNoPop;
+    }
+    static constexpr bool is_upfront = false;
+    static constexpr bool clashes_with_fpu = true;
+    static constexpr uint32_t block_size = 1;
+    static ALWI void init() { copy_tile_init(Cb); }
+    ALWI void wait_per_tile(uint32_t /*i*/) const {}
+    ALWI void wait_upfront(uint32_t /*n*/) const {}
+    ALWI void exec(uint32_t /*i*/) const { copy_tile(Cb, 0, compute_kernel_lib::to_u32(DstSlot)); }
+    ALWI void pop_per_tile(uint32_t /*i*/) const {}
+    ALWI void pop_upfront_end(uint32_t /*n*/) const {}
+};
+
+struct LocalTernarySfpuStage : compute_kernel_lib::DestOnlyTag {
+    static constexpr bool is_upfront = false;
+    static constexpr bool clashes_with_fpu = false;
+    static constexpr uint32_t block_size = 1;
+    static ALWI void init() { TERNARY_SFPU_OP_INIT(); }
+    static ALWI void exec() { TERNARY_SFPU_OP_FUNC(0, 1, 2, 0); }
+};
+}  // namespace
+
+template <tt::CBIndex predicate_cb, tt::CBIndex true_cb, tt::CBIndex false_cb, tt::CBIndex cb_out>
+ALWI void process_tile(uint32_t freq, uint32_t tile_start, uint32_t num_tiles_per_cycle) {
     using namespace ckernel;
+    using namespace compute_kernel_lib;
 
     // 3-tensor broadcast-aware synchronization - wait for broadcast CBs outside loop
 #if BCAST_A
@@ -45,28 +76,12 @@ ALWI void process_tile(
 
         cb_reserve_back(cb_out, num_tiles_per_cycle);
 
-        tile_regs_acquire();
-
-        // Copy all 3 inputs to destination registers
-        copy_tile_init(predicate_cb);
-        copy_tile(predicate_cb, 0, 0);  // predicate to reg 0, 3, 6, ...
-
-        copy_tile_init(true_cb);
-        copy_tile(true_cb, 0, 1);  // true to reg 1, 4, 7, ...
-
-        copy_tile_init(false_cb);
-        copy_tile(false_cb, 0, 2);  // false to reg 2, 5, 8, ...
-
-        // Perform the ternary operation
-        TERNARY_SFPU_OP_INIT();
-        TERNARY_SFPU_OP_FUNC(0, 1, 2, 0);
-
-        tile_regs_commit();
-
-        tile_regs_wait();
-
-        pack_tile(0, cb_out);  // result is stored in predicate register
-        tile_regs_release();
+        // Migrated stage: load A/B/C → ternary SFPU → pack via eltwise_chain.
+        using LoadA = LocalLoadTile<(uint32_t)predicate_cb, Dst::D0>;
+        using LoadB = LocalLoadTile<(uint32_t)true_cb, Dst::D1>;
+        using LoadC = LocalLoadTile<(uint32_t)false_cb, Dst::D2>;
+        using PackOut = PackTile<(uint32_t)cb_out, Dst::D0, PackTilePolicy::NoReserveNoPush>;
+        eltwise_chain(1u, LoadA{}, LoadB{}, LoadC{}, LocalTernarySfpuStage{}, PackOut{});
 
         cb_push_back(cb_out, num_tiles_per_cycle);
 
@@ -116,10 +131,10 @@ void kernel_main() {
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        process_tile(predicate_cb, true_cb, false_cb, cb_out, tile_freq, tile_start, num_tiles_per_cycle);
+        process_tile<predicate_cb, true_cb, false_cb, cb_out>(tile_freq, tile_start, num_tiles_per_cycle);
     }
 
     if (remaining_iterations > 0) {
-        process_tile(predicate_cb, true_cb, false_cb, cb_out, remaining_iterations, tile_start, num_tiles_per_cycle);
+        process_tile<predicate_cb, true_cb, false_cb, cb_out>(remaining_iterations, tile_start, num_tiles_per_cycle);
     }
 }

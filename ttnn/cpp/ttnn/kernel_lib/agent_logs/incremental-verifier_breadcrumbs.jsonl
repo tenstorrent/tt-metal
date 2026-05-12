@@ -1,0 +1,16 @@
+{"event":"start","details":"Type-1 sweep + Reg A/B/C verification, branch astancov/eltwise_run7_refined HEAD 7060e1245a3","ts":"2026-05-11T12:12:14+00:00"}
+{"event":"read-context","details":"sweep_design.md, verification_report.md (run7 GREEN), capabilities.md read","ts":"2026-05-11T12:12:26+00:00"}
+{"event":"code-review-pass","details":"D8 invariant strict-grep clean (1 wrapper site at chain.inl:1254). Reg A confirmed: BinaryFpu uses init_with_operands short-init, UnaryBcast keeps unary_bcast_init BIG init. Reg C confirmed: hoisted_init_for_each PackTile guard removed. Reg B confirmed: moreh_sum.cpp:19 + moreh_norm.cpp:22+39 use logical_shape().rank(). Q4 deepseek add_bias raw, softmax_backward Pinned","ts":"2026-05-11T12:13:17+00:00"}
+{"event":"helper-pass","details":"test_eltwise.py 453P/7S — helper baseline preserved through Reg A+C fixes","ts":"2026-05-11T12:14:06+00:00"}
+{"event":"moreh_softmax-result","details":"24F/69P/32S — matches documented pre-existing failure class (large_algorithm_for_dim_hw, for_dim_nc, backward variants)","ts":"2026-05-11T12:14:57+00:00"}
+{"event":"moreh_layer_norm-pass","details":"48P/48S — matches baseline (commits 7+8+9 green)","ts":"2026-05-11T12:15:32+00:00"}
+{"event":"moreh_nll_loss-result","details":"13F/57P/60S — all 13 fails are fp32_dest_acc_en=True reduction=mean+sum, matches documented pre-existing class","ts":"2026-05-11T12:15:58+00:00"}
+{"event":"moreh_adam-pass","details":"132P/128S — Reg C PackTile reconfig fix delivered, 0 fails (was 66F)","ts":"2026-05-11T12:16:35+00:00"}
+{"event":"moreh_norm+sum-pass","details":"norm 466P/1806S, sum 227P/155S — Reg B host fix verified","ts":"2026-05-11T12:20:29+00:00"}
+{"event":"bcast_to-pass","details":"24P — UnaryBcast Reg A revert to BIG init verified (bcast_to relies on this as implicit boot)","ts":"2026-05-11T12:21:55+00:00"}
+{"event":"adjacent-suites","details":"deepseek 5F/1P (matches baseline), moreh_adamw 19P/8S, mean 76P/72S, sgd 164P/352S","ts":"2026-05-11T12:23:42+00:00"}
+{"event":"extra-moreh","details":"nll_loss_unreduced 3F/40P/28S, logsoftmax 23F/69P/32S — need baseline comparison","ts":"2026-05-11T12:25:55+00:00"}
+{"event":"REGRESSION-FOUND","details":"Sweep-introduced fp32_dest_acc_en=True regression class — softmax +8F, logsoftmax +18F, logsoftmax_ulp +36F (all -inf overflow), nll_loss +3F, nll_loss_unreduced +3F. Pre-sweep baseline d1d1f9246c5 vs current HEAD.","ts":"2026-05-11T12:42:12+00:00"}
+{"event":"REGRESSION-ROOT-CAUSE","details":"Sweep migration of exp_tile_to_cb/rexp_tile_to_cb/log_tile_to_cb/recip_tile_to_cb (Commit 4, T1.11-T1.16) dropped _with_dt CB-format-aware reconfig. New moreh_unary_chain uses bare CopyTile+Sfpu+PackTile without CopyTileReconfig::Input, PackTileReconfig::Output, or EnableFp32DestAcc=true. fp32_dest_acc_en=True path produces -inf.","ts":"2026-05-11T12:42:59+00:00"}
+{"event":"loc-delta","details":"Pre-sweep d1d1f9246c5..HEAD: +828/-452 = +376 net (vs design v6 projection -482/+311 = -171 net) — sweep added more code than projected","ts":"2026-05-11T12:43:36+00:00"}
+{"event":"deliverables-written","details":"verification_report.md (Section 2 sweep verification appended, YELLOW verdict), changelog.md (Type-1 sweep block appended), capabilities.md (Reg A/C state added). All target paths under ttnn/cpp/ttnn/kernel_lib/agents/.","ts":"2026-05-11T12:46:47+00:00"}

@@ -2,18 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include "api/compute/common.h"
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/eltwise_unary/clamp.h"
-#include "api/compute/eltwise_unary/rsub.h"
-#include "api/compute/compute_kernel_api.h"
-#include "experimental/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"         // Log
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_scalar.hpp"       // RsubUnary, Clamp
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // DivBinary
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"     // OptionalChainElement
+
+// U5: collapse the #ifdef CLAMP branch into a constexpr bool that gates an
+// OptionalChainElement<DO_CLAMP, Clamp<...>> inside the stage-1 chain.
+#ifdef CLAMP
+constexpr bool DO_CLAMP = true;
+#else
+constexpr bool DO_CLAMP = false;
+#endif
 
 void kernel_main() {
+    using namespace compute_kernel_lib;
+
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     const uint32_t packed_scalar1 = get_arg_val<uint32_t>(1);
     const uint32_t packed_scalar2 = get_arg_val<uint32_t>(2);
@@ -22,56 +29,34 @@ void kernel_main() {
     constexpr auto cb_output = tt::CBIndex::c_2;
     constexpr auto cb_tmp0 = tt::CBIndex::c_1;
 
-    experimental::CircularBuffer cb_in(cb_input);
-    experimental::CircularBuffer cb_out(cb_output);
-    experimental::CircularBuffer cb_tmp(cb_tmp0);
+    // D5 row 4: multi-stage kernel. Boot the engine for stage 1's CB triple
+    // at the top of MAIN(); re-boot for stage 2's CB triple immediately
+    // before stage 2's chain call.
+    compute_kernel_hw_startup(cb_input, cb_input, cb_tmp0);
 
-    init_sfpu(cb_input, cb_output);
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        cb_in.wait_front(1);
-        cb_out.reserve_back(1);
-        cb_tmp.reserve_back(1);
+    // Stage 1: copy input → DEST[0] (with optional clamp), pack to cb_tmp0.
+    // The Clamp element is wrapped in OptionalChainElement<DO_CLAMP, ...> —
+    // when DO_CLAMP is false the wrapper inherits the inner's tag (DestOnly via
+    // the SfpuOp CRTP base) but every hook is a no-op (zero runtime cost).
+    eltwise_chain(
+        num_tiles,
+        CopyTile<cb_input, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+        OptionalChainElement<DO_CLAMP, Clamp<Dst::D0>>{packed_scalar1, packed_scalar2},
+        PackTile<cb_tmp0, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 
-        tile_regs_acquire();
+    // D5 row 4: re-boot for stage 2's CB triple (cb_tmp0 → cb_output).
+    compute_kernel_hw_startup(cb_tmp0, cb_tmp0, cb_output);
 
-        copy_tile_init(cb_input);
-        copy_tile(cb_input, 0, 0);
-#ifdef CLAMP
-        clamp_tile_init();
-        clamp_tile(0, packed_scalar1, packed_scalar2);
-#endif
-        tile_regs_commit();
-        tile_regs_wait();
-
-        pack_tile(0, cb_tmp0);
-        tile_regs_release();
-
-        cb_tmp.push_back(1);
-        cb_tmp.wait_front(1);
-
-        tile_regs_acquire();
-
-        copy_tile_init(cb_tmp0);
-        copy_tile(cb_tmp0, 0, 0);
-        copy_tile(cb_tmp0, 0, 1);
-
-        rsub_tile_init();
-        rsub_tile(0, 0x3F800000u);  // 1.0 - x
-
-        div_binary_tile_init();
-        div_binary_tile(1, 0, 0);
-
-        log_tile_init();
-        log_tile(0);
-
-        tile_regs_commit();
-        tile_regs_wait();
-
-        pack_tile(0, cb_output);
-        tile_regs_release();
-
-        cb_tmp.pop_front(1);
-        cb_in.pop_front(1);
-        cb_out.push_back(1);
-    }
+    // Stage 2: load cb_tmp0 → DEST[0] and DEST[1], compute log(x / (1 - x)), pack to cb_output.
+    //   D0 = 1 - x   (RsubUnary with 1.0f)
+    //   D0 = D1 / D0
+    //   D0 = log(D0)
+    eltwise_chain(
+        num_tiles,
+        CopyTile<cb_tmp0, Dst::D1, CopyTilePolicy::WaitNoPop>{},
+        CopyTile<cb_tmp0, Dst::D0, CopyTilePolicy::NoWaitPop>{},
+        RsubUnary<Dst::D0>{0x3F800000u},  // 1.0f - x
+        DivBinary<Dst::D1, Dst::D0, Dst::D0>{},
+        Log<Approx::Exact, Dst::D0>{},
+        PackTile<cb_output, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 }

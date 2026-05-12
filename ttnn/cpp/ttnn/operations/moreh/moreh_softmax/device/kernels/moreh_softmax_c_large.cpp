@@ -4,7 +4,105 @@
 
 #include <cstdint>
 
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // Exp, Log, Recip
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Negative
 #include "ttnn/kernel/compute/moreh_common.hpp"
+
+namespace {
+
+template <
+    compute_kernel_lib::BinaryFpuOp Op,
+    uint32_t CbA,
+    uint32_t CbB,
+    uint32_t CbOut,
+    uint32_t IdxA,
+    uint32_t IdxB,
+    bool PopA,
+    bool PopB>
+ALWI void moreh_bin_chain() {
+    using namespace compute_kernel_lib;
+    using BinElt = BinaryFpu<
+        CbA,
+        CbB,
+        CbOut,
+        Op,
+        BroadcastDim::None,
+        BinaryDataFormatReconfig::InputAndOutput,
+        PopA ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
+        PopB ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
+        CbIndexMode::Pinned,
+        Dst::D0,
+        /*EnableFp32DestAcc=*/DST_ACCUM_MODE>;
+    eltwise_chain(
+        1,
+        BinElt{IdxA, IdxB},
+        PackTile<
+            CbOut,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::Output,
+            /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
+}
+
+template <uint32_t CbIn, uint32_t CbOut, uint32_t Idx, bool Pop>
+ALWI void moreh_copy_chain() {
+    using namespace compute_kernel_lib;
+    using CopyElt = CopyTile<
+        CbIn,
+        Dst::D0,
+        Pop ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
+        Idx == 0 ? CbIndexMode::FirstTile : CbIndexMode::Pinned,
+        CopyTileReconfig::Input>;
+    eltwise_chain(
+        1,
+        CopyElt{Idx},
+        PackTile<
+            CbOut,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::Output,
+            /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
+}
+
+// Unary SFPU chain: CopyTile(in, FirstTile, WaitAndPop) -> Sfpu(D0) -> PackTile(out).
+template <typename Sfpu, uint32_t CbIn, uint32_t CbOut>
+ALWI void moreh_unary_chain() {
+    using namespace compute_kernel_lib;
+    eltwise_chain(
+        1,
+        CopyTile<CbIn, Dst::D0, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::Input>{},
+        Sfpu{},
+        PackTile<
+            CbOut,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::Output,
+            /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
+}
+
+// rexp(x) = exp(-x): CopyTile -> Negative -> Exp -> PackTile.
+template <uint32_t CbIn, uint32_t CbOut>
+ALWI void moreh_rexp_chain() {
+    using namespace compute_kernel_lib;
+    eltwise_chain(
+        1,
+        CopyTile<CbIn, Dst::D0, CopyTilePolicy::WaitAndPop, CbIndexMode::FirstTile, CopyTileReconfig::Input>{},
+        Negative<Dst::D0>{},
+        Exp<>{},
+        PackTile<
+            CbOut,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::Output,
+            /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
+}
+
+}  // namespace
 
 void kernel_main() {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
@@ -28,7 +126,7 @@ void kernel_main() {
         // find max
         for (uint32_t i = 0; i < dim_size; ++i) {
             if (i == 0) {
-                copy_tile_to_cb(cb_in0, cb_max);
+                moreh_copy_chain<cb_in0, cb_max, /*idx=*/0, /*pop=*/true>();
             } else {
                 cb_wait_front(cb_in0, onetile);
                 cb_wait_front(cb_max, onetile);
@@ -60,28 +158,54 @@ void kernel_main() {
         // compute exp(x - max(x))
         for (uint32_t i = 0; i < dim_size; ++i) {
 #ifdef SOFTMAX
-            sub_tiles_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                cb_in0,
+                cb_max,
+                cb_tmp,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/true,
+                /*popB=*/false>();
 
-            exp_tile_to_cb(cb_tmp, cb_exps);
+            // T1.11
+            moreh_unary_chain<compute_kernel_lib::Exp<>, cb_tmp, cb_exps>();
 #else
-            sub_tiles_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                cb_in0,
+                cb_max,
+                cb_tmp,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/true,
+                /*popB=*/false>();
 
-            rexp_tile_to_cb(cb_tmp, cb_exps);
+            // T1.12
+            moreh_rexp_chain<cb_tmp, cb_exps>();
 #endif
 
             if (i == 0) {
-                copy_tile_to_cb(cb_exps, cb_add);
+                moreh_copy_chain<cb_exps, cb_add, /*idx=*/0, /*pop=*/true>();
             } else {
-                add_tiles_to_cb(cb_add, cb_exps, cb_add);
+                moreh_bin_chain<
+                    compute_kernel_lib::BinaryFpuOp::Add,
+                    cb_add,
+                    cb_exps,
+                    cb_add,
+                    /*idxA=*/0,
+                    /*idxB=*/0,
+                    /*popA=*/true,
+                    /*popB=*/true>();
             }
         }
 
 #ifdef LOG
-        // compute log(sum)
-        log_tile_to_cb(cb_add, cb_recipsumexps);
+        // compute log(sum)  (T1.13)
+        moreh_unary_chain<compute_kernel_lib::Log<>, cb_add, cb_recipsumexps>();
 #else
-        // compute 1/sum(exp(x))
-        recip_tile_to_cb(cb_add, cb_recipsumexps);
+        // compute 1/sum(exp(x))  (T1.14)
+        moreh_unary_chain<compute_kernel_lib::Recip<>, cb_add, cb_recipsumexps>();
 #endif
 
         // step 3, compute final result
@@ -90,30 +214,96 @@ void kernel_main() {
 #ifdef LOG
 #ifdef SOFTMAX
             // x - max - log(sum)
-            sub_tiles_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                cb_in0,
+                cb_max,
+                cb_tmp,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/true,
+                /*popB=*/false>();
 
-            sub_tiles_to_cb(cb_tmp, cb_recipsumexps, cb_out0, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                cb_tmp,
+                cb_recipsumexps,
+                cb_out0,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/true,
+                /*popB=*/false>();
 #else
             // -x + max - log(sum)
-            sub_tiles_to_cb(cb_max, cb_in0, cb_tmp, 0, 0, /*pop0=*/0, /*pop1=*/1);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                cb_max,
+                cb_in0,
+                cb_tmp,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/false,
+                /*popB=*/true>();
 
-            sub_tiles_to_cb(cb_tmp, cb_recipsumexps, cb_out0, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                cb_tmp,
+                cb_recipsumexps,
+                cb_out0,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/true,
+                /*popB=*/false>();
 #endif
 #else
 #ifdef SOFTMAX
             // exp(x - max) / sum
-            sub_tiles_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                cb_in0,
+                cb_max,
+                cb_tmp,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/true,
+                /*popB=*/false>();
 
-            exp_tile_to_cb(cb_tmp, cb_exps);
+            // T1.11 (final-result variant)
+            moreh_unary_chain<compute_kernel_lib::Exp<>, cb_tmp, cb_exps>();
 
-            mul_tiles_to_cb(cb_exps, cb_recipsumexps, cb_out0, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                cb_exps,
+                cb_recipsumexps,
+                cb_out0,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/true,
+                /*popB=*/false>();
 #else
             // rexp(x - max) / sum
-            sub_tiles_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                cb_in0,
+                cb_max,
+                cb_tmp,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/true,
+                /*popB=*/false>();
 
-            rexp_tile_to_cb(cb_tmp, cb_exps);
+            // T1.12 (final-result variant)
+            moreh_rexp_chain<cb_tmp, cb_exps>();
 
-            mul_tiles_to_cb(cb_exps, cb_recipsumexps, cb_out0, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                cb_exps,
+                cb_recipsumexps,
+                cb_out0,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/true,
+                /*popB=*/false>();
 #endif
 #endif
         }

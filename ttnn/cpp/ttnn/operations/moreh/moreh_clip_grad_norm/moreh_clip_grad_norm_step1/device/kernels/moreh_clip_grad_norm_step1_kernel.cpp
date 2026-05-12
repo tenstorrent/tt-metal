@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 ALWI bool need_to_do_mask_h(uint32_t tile_idx, uint32_t ht, uint32_t wt) { return (((tile_idx / wt) + 1) % ht) == 0; }
@@ -15,22 +16,19 @@ void kernel_main() {
     const auto origin_h = get_arg_val<uint32_t>(i++);
     const auto origin_w = get_arg_val<uint32_t>(i++);
 
-    std::uint8_t input_id{0};
-    const auto cb_x = input_id++;         // input(==x)
-    const auto cb_one = input_id++;       // one
-    const auto cb_decimal = input_id++;   // decimal
-    const auto cb_mask_h_w = input_id++;  // mask_h_w
+    constexpr std::uint32_t cb_x = 0;         // input(==x)
+    constexpr std::uint32_t cb_one = 1;       // one
+    constexpr std::uint32_t cb_decimal = 2;   // decimal
+    constexpr std::uint32_t cb_mask_h_w = 3;  // mask_h_w
 
-    std::uint8_t output_id{16};
-    const auto cb_y = output_id++;  // output(==y)
+    constexpr std::uint32_t cb_y = 16;  // output(==y)
 
-    std::uint8_t intermed_id{24};
-    const auto cb_xabs = intermed_id++;          // |x|
-    const auto cb_xpow = intermed_id++;          // |x|^p
-    const auto cb_xpowadd = intermed_id++;       // Add[|x|^p * exp(log(|x|) * decimal)]
-    const auto cb_logx = intermed_id++;          // log(|x|)
-    const auto cb_exp_lxmd = intermed_id++;      // exp(log(|x|) * decimal)
-    const auto cb_correct_xpow = intermed_id++;  // |x|^p * exp(log(|x|) * decimal)
+    constexpr std::uint32_t cb_xabs = 24;          // |x|
+    constexpr std::uint32_t cb_xpow = 25;          // |x|^p
+    constexpr std::uint32_t cb_xpowadd = 26;       // Add[|x|^p * exp(log(|x|) * decimal)]
+    constexpr std::uint32_t cb_logx = 27;          // log(|x|)
+    constexpr std::uint32_t cb_exp_lxmd = 28;      // exp(log(|x|) * decimal)
+    constexpr std::uint32_t cb_correct_xpow = 29;  // |x|^p * exp(log(|x|) * decimal)
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
@@ -95,20 +93,12 @@ void kernel_main() {
         power_tile_to_cb(cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_correct_xpow, p, p_is_negative);
 
         if (tile_idx == 0) {
-            tile_regs_acquire();
-            cb_wait_front(cb_correct_xpow, onetile);
-            cb_reserve_back(cb_xpowadd, onetile);
-
-            copy_tile_init(cb_correct_xpow);
-            copy_tile(cb_correct_xpow, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile(dst0, cb_xpowadd);
-
-            cb_pop_front(cb_correct_xpow, onetile);
-            cb_push_back(cb_xpowadd, onetile);
-            tile_regs_release();
+            // PARTIAL migration: seed cb_xpowadd with first cb_correct_xpow tile.
+            using namespace compute_kernel_lib;
+            eltwise_chain(
+                onetile,
+                CopyTile<cb_correct_xpow, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+                PackTile<cb_xpowadd, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
         } else {
             tile_regs_acquire();
             cb_wait_front(cb_correct_xpow, onetile);

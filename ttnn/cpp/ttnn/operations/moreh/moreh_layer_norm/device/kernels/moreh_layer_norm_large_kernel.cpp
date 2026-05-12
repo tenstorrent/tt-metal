@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // Rsqrt
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
@@ -270,18 +272,18 @@ void kernel_main() {
             cb_wait_front(cb_xmm2, block_size);
             for (uint32_t j = 0; j < block_size; j++) {
                 if (inner_idx == 0 && j == 0) {
-                    tile_regs_acquire();
-                    cb_reserve_back(cb_xmm2sum, onetile);
-
-                    copy_tile_init_with_dt(cb_xmm2);
-                    copy_tile(cb_xmm2, first_tile, dst0);
-                    tile_regs_commit();
-
-                    tile_regs_wait();
-                    pack_tile_with_dt(dst0, cb_xmm2sum);
-
-                    cb_push_back(cb_xmm2sum, onetile);
-                    tile_regs_release();
+                    // PARTIAL migration: seed cb_xmm2sum with first cb_xmm2 tile (no pop on cb_xmm2).
+#if defined FP32_DEST_ACC_EN
+                    reconfig_data_format_srca(cb_xmm2);
+                    pack_reconfig_data_format(cb_xmm2sum);
+#endif
+                    {
+                        using namespace compute_kernel_lib;
+                        eltwise_chain(
+                            onetile,
+                            CopyTile<cb_xmm2, Dst::D0, CopyTilePolicy::NoWaitNoPop>{},
+                            PackTile<cb_xmm2sum, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                    }
                 } else {
                     tile_regs_acquire();
                     cb_wait_front(cb_xmm2sum, onetile);
@@ -313,24 +315,35 @@ void kernel_main() {
         /*
          * 1.0/(sqrt(E[(x-E[x])^2] + eps))
          * cb_recip_std
+         *
+         * PARTIAL migration: rsqrt(var + eps) chain.
+         *   migrated: BinaryFpu(Add, cb_var/cb_eps) + Rsqrt + PackTile(cb_recip_std).
+         *   skipped : reduce<>, mid-kernel reconfig outside this stage stay raw.
          */
-        tile_regs_acquire();
-        cb_wait_front(cb_var, onetile);
-        cb_reserve_back(cb_recip_std, onetile);
-
-        add_tiles_init_with_dt(cb_var, cb_eps);
-        add_tiles(cb_var, cb_eps, first_tile, first_tile, dst0);
-
-        rsqrt_tile_init();
-        rsqrt_tile(dst0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_recip_std);
-
-        cb_pop_front(cb_var, onetile);
-        cb_push_back(cb_recip_std, onetile);
-        tile_regs_release();
+        {
+            using namespace compute_kernel_lib;
+            using AddRsqrt = BinaryFpu<
+                cb_var,
+                cb_eps,
+                /*CbOut=*/0,
+                BinaryFpuOp::Add,
+                BroadcastDim::None,
+                BinaryDataFormatReconfig::Input,
+                CopyTilePolicy::WaitAndPop,
+                CopyTilePolicy::NoWaitNoPop,
+                CbIndexMode::FirstTile,
+                Dst::D0>;
+            eltwise_chain(
+                onetile,
+                AddRsqrt{},
+                Rsqrt<Approx::Exact, Legacy::Off, Dst::D0>{},
+                PackTile<
+                    cb_recip_std,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
+        }
 
         cb_wait_front(cb_recip_std, onetile);
         if (rstd_has_value) {
