@@ -904,7 +904,7 @@ class Attention(LightweightModule):
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
 
-        if seq_len > 128:
+        if self.args.use_minimal_qkv_prefill_matmul(seq_len):
             xqkv_fused = ttnn.experimental.minimal_matmul(
                 x_11SH,
                 self.wqkv,

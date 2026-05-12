@@ -656,9 +656,17 @@ class ModelArgs:
             # All Gather Matmul for Dense Out (DO) - computed flag stored as instance attribute
             # NOTE: Fused all gather matmul only supports a core grid of size num_devices x 1
             # TODO: #26657 refactor ACTUAL_DEVICE environment variable usage
+            actual_device_is_tg = os.getenv("ACTUAL_DEVICE", "") == "TG"
+            use_galaxy_dp4_8b_submesh_agmm = (
+                actual_device_is_tg
+                and self.base_model_name == "Llama-3.1-8B"
+                and self.num_devices == 8
+                and tuple(self.cluster_shape) == (1, 8)
+            )
+            self._use_t3k_fused_agmm_config = not actual_device_is_tg or use_galaxy_dp4_8b_submesh_agmm
             self._use_fused_all_gather_matmul = (
                 self.num_devices == 8
-                and os.getenv("ACTUAL_DEVICE", "") != "TG"
+                and self._use_t3k_fused_agmm_config
                 and (self.dim // ttnn.TILE_SIZE // self.num_devices) % self.num_devices == 0
                 and self.num_devices > 1
                 and self.ccl_topology() == ttnn.Topology.Ring
@@ -1087,6 +1095,15 @@ class ModelArgs:
     def use_fused_all_gather_matmul(self):
         """Get whether fused all-gather matmul should be used."""
         return getattr(self, "_use_fused_all_gather_matmul", False)
+
+    @property
+    def is_galaxy_8_device_row_submesh(self):
+        return (
+            self.mesh_device is not None
+            and self.num_devices == 8
+            and tuple(self.mesh_device.shape) == (1, 8)
+            and ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
+        )
 
     def get_warmup_prefill_supported_seq_lens(self):
         assert (
@@ -1588,7 +1605,7 @@ class ModelArgs:
                 )
         elif mode == Mode.PREFILL:
             self.MAX_QKV_MM_SEQ_LEN = 2048
-            if seq_len > 128:
+            if self.use_minimal_qkv_prefill_matmul(seq_len):
                 return ttnn.MinimalMatmulConfig(
                     M_block_size=8,
                     K_block_size=8,
@@ -1620,6 +1637,12 @@ class ModelArgs:
                 )
         else:
             raise ValueError(f"Invalid mode: {mode}")
+
+    def use_minimal_qkv_prefill_matmul(self, seq_len: int) -> bool:
+        if seq_len > 128:
+            return True
+
+        return self.base_model_name == "Llama-3.1-8B" and seq_len == 128 and self.is_galaxy_8_device_row_submesh
 
     @lru_cache(maxsize=None)
     def get_attn_qkv_mm_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
@@ -1908,7 +1931,7 @@ class ModelArgs:
                 else (
                     1024
                     if self.num_devices == 8
-                    and os.getenv("ACTUAL_DEVICE", "") != "TG"
+                    and getattr(self, "_use_t3k_fused_agmm_config", os.getenv("ACTUAL_DEVICE", "") != "TG")
                     and not is_blackhole()
                     and 1024 % (self.dim // self.num_devices) == 0
                     else self.dim
