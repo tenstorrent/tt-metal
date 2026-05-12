@@ -181,7 +181,6 @@ def test_fwd_moe_reduce_pipeline(
     exit_column = entry_column
     entry_column_coords = [ttnn.MeshCoordinate(r, entry_column) for r in range(int(mesh_rows))]
     exit_column_coords = [ttnn.MeshCoordinate(r, reduce_exit_column) for r in range(int(mesh_rows))]
-    pipeline_column_coords = exit_column_coords
 
     logger.info(
         f"entry_column={entry_column}, reduce_exit_column={reduce_exit_column}, "
@@ -571,8 +570,6 @@ def test_fwd_moe_reduce_pipeline(
         logger.info("[rank=1] MoE + reduce-to-all completed")
 
     # -- Stage 0: D2H loopback read + golden validation --
-    d2h_passing = True
-    d2h_pcc_msg = ""
     if is_stage0:
         logger.info("[rank=0] waiting for D2H result from pipeline loopback")
         num_elements = embedding_size_bytes // 2
@@ -664,7 +661,6 @@ def test_fwd_moe_reduce_pipeline(
     logger.info(f"[rank={my_mesh_id}] programs terminated")
 
     # -- Stage 1: validate MoE golden --
-    stage1_reduce_passing = True
     if is_stage1:
         logger.info("[rank=1] validating MoE golden output")
         K_down = s.K_down
@@ -1195,7 +1191,7 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
 
     if is_stage1:
         logger.info(f"[rank=1] launching MoE forward + reduce-to-all (num_iterations=1)")
-        result_scores, result_indices, result_output = MoeOp.op(
+        _, _, _ = MoeOp.op(
             r.ttnn_residual_mcast_src,
             gate_mm_weights_tensor=r.ttnn_gate_mm_weights,
             gate_bias_tensor=r.ttnn_gate_bias,
@@ -1234,8 +1230,6 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
         logger.info("[rank=1] MoE + reduce-to-all completed")
 
     # -- Stage 0: D2H loopback read + golden validation --
-    d2h_passing = True
-    d2h_pcc_msg = ""
     if is_stage0:
         logger.info("[rank=0] waiting for D2H result from pipeline loopback")
         num_elements = embedding_size_bytes // 2
