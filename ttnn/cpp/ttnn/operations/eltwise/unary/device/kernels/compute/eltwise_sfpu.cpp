@@ -4,8 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/common.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
-// SFPU op headers stay included so SFPU_OP_CHAIN_0 (host-injected) compiles.
+#include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/trigonometry.h"
@@ -13,33 +12,38 @@
 #include "api/compute/eltwise_unary/rpow.h"
 #include "api/compute/eltwise_unary/rdiv.h"
 #include "api/compute/eltwise_unary/fill.h"
-
-namespace {
-
-// Wraps the host-injected SFPU_OP_CHAIN_0 macro inside a chain element.
-struct SfpuOpChain : compute_kernel_lib::DestOnlyTag {
-    static ALWI void init() {}
-    ALWI void exec(uint32_t /*i*/) const {
-#ifdef SFPU_OP_CHAIN_0
-        SFPU_OP_CHAIN_0
-#endif
-    }
-};
-
-}  // namespace
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
-    using namespace compute_kernel_lib;
-
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
+
     constexpr auto cb_input = tt::CBIndex::c_0;
     constexpr auto cb_output = tt::CBIndex::c_2;
 
-    // D5/D8: U4 deduced wrapper — emits compute_kernel_hw_startup with CBs
-    // derived from the chain element pack at compile time.
-    eltwise_chain_with_init(
-        num_tiles,
-        CopyTile<cb_input, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-        SfpuOpChain{},
-        PackTile<cb_output, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+    experimental::CircularBuffer cb_in(cb_input);
+    experimental::CircularBuffer cb_out(cb_output);
+
+    init_sfpu(cb_input, cb_output);
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        tile_regs_acquire();
+
+        cb_in.wait_front(1);
+        cb_out.reserve_back(1);
+
+        copy_tile(cb_input, 0, 0);
+
+#ifdef SFPU_OP_CHAIN_0
+        SFPU_OP_CHAIN_0
+#endif
+
+        tile_regs_commit();
+        tile_regs_wait();
+
+        pack_tile(0, cb_output);
+
+        cb_in.pop_front(1);
+        cb_out.push_back(1);
+
+        tile_regs_release();
+    }
 }
