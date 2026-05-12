@@ -785,5 +785,3 @@ def test_parse_args_rejects_non_multiplier_values(monkeypatch):
     )
     with pytest.raises(SystemExit):
         validator.parse_args()
-
-
