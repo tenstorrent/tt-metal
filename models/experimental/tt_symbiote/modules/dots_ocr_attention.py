@@ -44,11 +44,7 @@ class TTNNDotsOCRAttention(TTNNModule):
         self._q_bias_torch = None
         self._k_bias_torch = None
         self._v_bias_torch = None
-        self._q_bias = None
-        self._k_bias = None
-        self._v_bias = None
         self._qkv_bias_torch = None
-        self._qkv_bias = None
         self._q_size = None
         self._kv_size = None
 
@@ -80,32 +76,30 @@ class TTNNDotsOCRAttention(TTNNModule):
             dim=0,
         )
 
-        fused_linear = torch.nn.Linear(new_attn.hidden_size, q_size + 2 * kv_size, bias=False)
+        # Fuse Q/K/V bias into the qkv linear so it can ride the matmul kernel
+        # (1D/2D mcast both fold a passed bias tensor into the post-accumulation
+        # step of the matmul kernel). This eliminates one BinaryNg per layer in
+        # decode mode without changing numerics.
+        q_bias = hf_attn.q_proj.bias.data.clone() if hf_attn.q_proj.bias is not None else None
+        k_bias = hf_attn.k_proj.bias.data.clone() if hf_attn.k_proj.bias is not None else None
+        v_bias = hf_attn.v_proj.bias.data.clone() if hf_attn.v_proj.bias is not None else None
+        new_attn._q_bias_torch = q_bias
+        new_attn._k_bias_torch = k_bias
+        new_attn._v_bias_torch = v_bias
+
+        has_any_bias = q_bias is not None or k_bias is not None or v_bias is not None
+        if has_any_bias:
+            zeros_dtype = fused_weight.dtype
+            qb = q_bias if q_bias is not None else torch.zeros(q_size, dtype=zeros_dtype)
+            kb = k_bias if k_bias is not None else torch.zeros(kv_size, dtype=zeros_dtype)
+            vb = v_bias if v_bias is not None else torch.zeros(kv_size, dtype=zeros_dtype)
+            new_attn._qkv_bias_torch = torch.cat([qb, kb, vb], dim=0)
+
+        fused_linear = torch.nn.Linear(new_attn.hidden_size, q_size + 2 * kv_size, bias=has_any_bias)
         fused_linear.weight.data = fused_weight
+        if has_any_bias:
+            fused_linear.bias.data = new_attn._qkv_bias_torch
         new_attn.qkv_proj = TTNNLinearLLamaIColShardedWAllReduced.from_torch(fused_linear)
-
-        # Store bias tensors for manual application
-        if hf_attn.q_proj.bias is not None:
-            new_attn._q_bias_torch = hf_attn.q_proj.bias.data.clone()
-        if hf_attn.k_proj.bias is not None:
-            new_attn._k_bias_torch = hf_attn.k_proj.bias.data.clone()
-        if hf_attn.v_proj.bias is not None:
-            new_attn._v_bias_torch = hf_attn.v_proj.bias.data.clone()
-
-        # Fused QKV bias for nlp_create_qkv_heads path
-        if (
-            new_attn._q_bias_torch is not None
-            and new_attn._k_bias_torch is not None
-            and new_attn._v_bias_torch is not None
-        ):
-            new_attn._qkv_bias_torch = torch.cat(
-                [
-                    new_attn._q_bias_torch,
-                    new_attn._k_bias_torch,
-                    new_attn._v_bias_torch,
-                ],
-                dim=0,
-            )
 
         # O projection
         new_attn.o_proj = TTNNLinearLLamaIReplicatedWColSharded.from_torch(hf_attn.o_proj)
@@ -122,30 +116,37 @@ class TTNNDotsOCRAttention(TTNNModule):
         self.core_grid = ttnn.CoreGrid(y=grid.y, x=grid.x)
 
         if self.sdpa.program_config is None:
+            # Prefill SDPA: LoFi + approx softmax + BF16 dest accum + k_chunk=512.
+            # The vision tower runs the same LoFi/exp_approx schedule with
+            # k_chunk=512 successfully, and the text-decoder SDPA inputs are
+            # already BFP8 so the LoFi multiplication delta is well inside
+            # the existing quantization noise. Bumping k_chunk from 256 to
+            # 512 halves the outer-K iteration count for the per-chunk
+            # softmax-reduce loop. ``packer_l1_acc=True`` keeps the
+            # chunked partial-output accumulator in L1 instead of DRAM.
             self.sdpa.program_config = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
-                q_chunk_size=128,
-                k_chunk_size=128,
-                exp_approx_mode=False,
+                q_chunk_size=256,
+                k_chunk_size=512,
+                exp_approx_mode=True,
             )
             self.sdpa.decode_program_config = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
                 q_chunk_size=0,
                 k_chunk_size=0,
-                exp_approx_mode=False,
+                exp_approx_mode=True,
             )
-            self.sdpa.compute_kernel_config = ttnn.init_device_compute_kernel_config(
-                self.device.arch(),
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=False,
-                fp32_dest_acc_en=True,
+            self.sdpa.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
                 packer_l1_acc=True,
             )
             self.sdpa.decode_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
-                math_approx_mode=False,
+                math_approx_mode=True,
                 fp32_dest_acc_en=False,
-                packer_l1_acc=False,
+                packer_l1_acc=True,
             )
 
         # Override QKV compute config: HiFi2 for decode
@@ -170,43 +171,9 @@ class TTNNDotsOCRAttention(TTNNModule):
         else:
             self._decode_cur_pos = None
 
-        if self._q_bias_torch is not None:
-            self._q_bias = ttnn.from_torch(
-                self._q_bias_torch.unsqueeze(0).unsqueeze(0),
-                device=self.device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=mesh_mapper,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        if self._k_bias_torch is not None:
-            self._k_bias = ttnn.from_torch(
-                self._k_bias_torch.unsqueeze(0).unsqueeze(0),
-                device=self.device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=mesh_mapper,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        if self._v_bias_torch is not None:
-            self._v_bias = ttnn.from_torch(
-                self._v_bias_torch.unsqueeze(0).unsqueeze(0),
-                device=self.device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=mesh_mapper,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-
-        if self._qkv_bias_torch is not None:
-            self._qkv_bias = ttnn.from_torch(
-                self._qkv_bias_torch.unsqueeze(0).unsqueeze(0),
-                device=self.device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=mesh_mapper,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+        # _q_bias / _k_bias / _v_bias / _qkv_bias are no longer materialized as
+        # separate device tensors — bias is folded into qkv_proj.tt_bias and
+        # fused into the matmul kernel by the linear layer.
 
         config = self._fallback_torch_layer.config
         rope_params = getattr(config, "rope_parameters", {}) or {}
@@ -240,16 +207,22 @@ class TTNNDotsOCRAttention(TTNNModule):
         return cp
 
     def _project_qkv_fused(self, hidden_states, batch_size, seq_length):
-        """Project hidden states to fused QKV tensor, ready for nlp_create_qkv_heads."""
+        """Project hidden states to fused QKV tensor, ready for nlp_create_qkv_heads.
+
+        Bias (if any) is fused into the qkv_proj matmul kernel, so the output
+        of qkv_proj is already (W·x + b). On single-device decode, we only need
+        to make sure the result lives in L1 to keep nlp_create_qkv_heads on
+        L1 inputs.
+        """
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         qkv_states = self.qkv_proj(hidden_states)
 
-        if self._qkv_bias is not None:
-            qkv_states = ttnn.add(qkv_states, self._qkv_bias)
+        is_decode = int(seq_length) == 1
+        if is_decode and qkv_states.memory_config().buffer_type != ttnn.BufferType.L1:
+            qkv_states = ttnn.to_memory_config(qkv_states, ttnn.L1_MEMORY_CONFIG)
 
-        # Reshape to 4D for nlp_create_qkv_heads: [B, 1, S, D]
         qkv_states = ttnn.reshape(qkv_states, (batch_size, 1, seq_length, -1))
 
         return qkv_states
@@ -270,11 +243,10 @@ class TTNNDotsOCRAttention(TTNNModule):
         seq_len = query_states.shape[2]
         cos, sin = self._rotary_setup.get_cos_sin_for_prefill(seq_len)
 
-        if isinstance(query_states, ttnn.Tensor) and query_states.dtype != ttnn.bfloat16:
-            query_states = ttnn.typecast(query_states, ttnn.bfloat16)
-        if isinstance(key_states, ttnn.Tensor) and key_states.dtype != ttnn.bfloat16:
-            key_states = ttnn.typecast(key_states, ttnn.bfloat16)
-
+        # ``ttnn.experimental.rotary_embedding`` preserves input dtype, so
+        # Q/K stay BFP8 through the rotary instead of round-tripping
+        # through BF16 (saves 2 typecasts per layer in text-decoder
+        # prefill, ~0.7 ms/layer at this seq_len).
         query_states = ttnn.experimental.rotary_embedding(query_states, cos, sin)
         key_states = ttnn.experimental.rotary_embedding(key_states, cos, sin)
 
@@ -325,13 +297,8 @@ class TTNNDotsOCRAttention(TTNNModule):
 
         qkv_states = self._project_qkv_fused(hidden_states, batch_size, seq_length)
 
-        # Decode (seq_length=1): qkv_states is tiny (B*1*(q_dim+2*kv_dim) bf16, ~9 KB).
-        # Routing it to L1 lets nlp_create_qkv_heads run on `(in0:l1_interleaved)` instead
-        # of the slower `dram_interleaved` bucket — same pattern as the MLP slice fix.
         is_decode = int(seq_length) == 1
         nlp_heads_mc = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
-        if is_decode and qkv_states.memory_config().buffer_type != ttnn.BufferType.L1:
-            qkv_states = ttnn.to_memory_config(qkv_states, ttnn.L1_MEMORY_CONFIG)
 
         query_states, key_states, value_states = ttnn.experimental.nlp_create_qkv_heads(
             qkv_states,

@@ -18,6 +18,7 @@ from models.experimental.tt_symbiote.modules.linear import (
     _tp_requires_ccl,
     _tp_mesh_mapper,
     _linear_mesh_num_devices,
+    _ccl_num_links,
 )
 
 
@@ -86,7 +87,7 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
         )
 
     @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
-    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, input_tensor: ttnn.Tensor, output_memory_config=None) -> ttnn.Tensor:
         if input_tensor.layout != ttnn.TILE_LAYOUT:
             input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         input_tensor_shape = list(input_tensor.shape)
@@ -96,25 +97,31 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
         if len(input_shape) == 3:
             input_shape.insert(1, 1)
         input_tensor = ttnn.reshape(input_tensor, input_shape)
+        needs_ccl = _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device)
+        matmul_mc = ttnn.DRAM_MEMORY_CONFIG if needs_ccl else (output_memory_config or ttnn.DRAM_MEMORY_CONFIG)
+        # Fuse bias into the matmul kernel on single-device (no CCL would scale
+        # the bias by num_devices). Saves one BinaryNg per layer when bias is set.
+        fused_bias = None if needs_ccl else self.tt_bias
         tt_output = ttnn.linear(
             input_tensor,
             self.tt_weight,
+            bias=fused_bias,
             dtype=ttnn.bfloat8_b if _mlp_bfp8_activation_enabled() else None,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=matmul_mc,
             compute_kernel_config=self.compute_kernel_config,
             program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
-        if _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device):
+        if needs_ccl:
             tt_output = ttnn.reduce_scatter(
                 tt_output,
                 dim=3,
-                num_links=1,
+                num_links=_ccl_num_links(self.device),
                 cluster_axis=1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=output_memory_config or ttnn.DRAM_MEMORY_CONFIG,
                 topology=ttnn.Topology.Linear,
             )
-        if self.tt_bias is not None:
-            tt_output += self.tt_bias
+            if self.tt_bias is not None:
+                tt_output += self.tt_bias
         return ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
 
 
@@ -152,25 +159,28 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
         while len(input_shape) < 4:
             input_shape.insert(1, 1)
         input_tensor = ttnn.reshape(input_tensor, input_shape)
+        needs_ccl = _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device)
+        fused_bias = None if needs_ccl else self.tt_bias
         tt_output = ttnn.linear(
             input_tensor,
             self.tt_weight,
+            bias=fused_bias,
             dtype=ttnn.bfloat8_b if _mlp_down_bfp8_output_enabled() else None,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
             program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
-        if _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device):
+        if needs_ccl:
             tt_output = ttnn.reduce_scatter(
                 tt_output,
                 dim=3,
-                num_links=1,
+                num_links=_ccl_num_links(self.device),
                 cluster_axis=1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=ttnn.Topology.Linear,
             )
-        if self.tt_bias is not None:
-            tt_output += self.tt_bias
+            if self.tt_bias is not None:
+                tt_output += self.tt_bias
         return ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
 
 
@@ -220,17 +230,10 @@ class TTNNDotsOCRMLP(TTNNModule):
 
         batch_size = hidden_states.shape[0]
         seq_len = hidden_states.shape[1]
-
-        # Single matmul + single all-reduce produces concatenated [gate | up].
-        gate_up = self.fused_gate_up_proj(hidden_states)
-
-        # Decode tokens (seq_len == 1) hit ttnn.slice every layer; on `dram_interleaved`
-        # input each slice averages ~120 us in trace. The whole gate_up fits comfortably
-        # in L1 for decode (B * 1 * 2I bf16 ~ tens of KB), so route activations through
-        # L1_INTERLEAVED to convert these to the much faster `l1_interleaved` slice path.
-        # Same pattern as qwen_moe.py: `decode_memory_config = L1 if is_decode else DRAM`.
         is_decode = int(seq_len) == 1
         activation_mc = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
+
+        gate_up = self.fused_gate_up_proj(hidden_states, output_memory_config=activation_mc if is_decode else None)
 
         if is_decode and gate_up.memory_config().buffer_type != ttnn.BufferType.L1:
             gate_up = ttnn.to_memory_config(gate_up, activation_mc)
@@ -242,10 +245,16 @@ class TTNNDotsOCRMLP(TTNNModule):
         up = ttnn.slice(gate_up, [0, 0, I], [batch_size, seq_len, 2 * I], memory_config=activation_mc)
         ttnn.deallocate(gate_up)
 
+        # ``fast_and_approximate_mode=True`` routes the fused SILU through
+        # the polynomial exp/sigmoid path. SILU dominates this op (the
+        # elementwise multiply is cheap; the per-tile exp+sigmoid is the
+        # bottleneck), so the approx path measurably cuts the BinaryNg time
+        # in both decode and prefill MLP per layer.
         gate_up_mul = ttnn.mul(
             gate,
             up,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+            fast_and_approximate_mode=True,
             dtype=ttnn.bfloat8_b if _mlp_bfp8_activation_enabled() else None,
             memory_config=activation_mc,
         )
