@@ -34,6 +34,13 @@ SequentialScheduler::SequentialScheduler(
         throw std::invalid_argument("SequentialScheduler requires at least one scheduler.");
     }
 
+    if (m_milestones.size() != m_schedulers.size()) {
+        throw std::invalid_argument(fmt::format(
+            "SequentialScheduler: milestones.size() ({}) must equal schedulers.size() ({}).",
+            m_milestones.size(),
+            m_schedulers.size()));
+    }
+
     // Validate that each scheduler is non-null
     for (auto &scheduler : m_schedulers) {
         if (!scheduler) {

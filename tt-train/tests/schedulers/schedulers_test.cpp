@@ -508,3 +508,30 @@ TEST(SequentialSchedulerTest, StateDictSavesAllChildSchedulers) {
         EXPECT_FLOAT_EQ(src.get_last_lr(), dst.get_last_lr()) << "step " << i;
     }
 }
+
+TEST(SequentialSchedulerTest, MismatchedMilestonesRejected) {
+    // The constructor must reject any milestones vector whose size differs
+    // from the schedulers vector. Without this check, ``step()`` would read
+    // out-of-bounds from ``m_milestones`` (undefined behavior).
+    auto opt = std::make_unique<ttml::optimizers::MockOptimizer>(0.1F);
+
+    auto make_two_schedulers = [&] {
+        std::vector<std::unique_ptr<ttml::schedulers::LRSchedulerBase>> v;
+        v.push_back(std::make_unique<ttml::schedulers::LinearScheduler>(opt.get(), 0.0F, 1.0F, 5));
+        v.push_back(std::make_unique<ttml::schedulers::LinearScheduler>(opt.get(), 1.0F, 0.1F, 5));
+        return v;
+    };
+
+    // Too few milestones.
+    EXPECT_THROW(
+        ttml::schedulers::SequentialScheduler(opt.get(), make_two_schedulers(), /*milestones=*/{5U}),
+        std::invalid_argument);
+
+    // Too many milestones.
+    EXPECT_THROW(
+        ttml::schedulers::SequentialScheduler(opt.get(), make_two_schedulers(), /*milestones=*/{5U, 5U, 5U}),
+        std::invalid_argument);
+
+    // Matched lengths must NOT throw.
+    EXPECT_NO_THROW(ttml::schedulers::SequentialScheduler(opt.get(), make_two_schedulers(), /*milestones=*/{5U, 5U}));
+}
