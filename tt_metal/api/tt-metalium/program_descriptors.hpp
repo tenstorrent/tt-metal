@@ -56,7 +56,7 @@ struct CBFormatDescriptor {
     uint8_t buffer_index = 0;
     tt::DataFormat data_format = tt::DataFormat::Float32;
     uint32_t page_size = 0;
-    std::optional<TileDescriptor> tile;
+    std::optional<TileDescriptor> tile = std::nullopt;
 };
 
 struct CBDescriptor {
@@ -93,7 +93,7 @@ struct ComputeConfigDescriptor {
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
     bool dst_full_sync_en = false;
-    UnpackToDestModes unpack_to_dest_mode;
+    UnpackToDestModes unpack_to_dest_mode = {};
     bool bfp8_pack_precise = false;
     bool math_approx_mode = false;
 };
