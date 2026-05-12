@@ -368,6 +368,109 @@ TEST_F(VariableMatmulTest, OffsetRead_TransposeA) {
     EXPECT_LT(err, 2.0F) << "offset-read transpose_a max_abs_error: " << err;
 }
 
+// Two consecutive offset-reads with transpose_b — gate_proj then up_proj on same parent.
+TEST_F(VariableMatmulTest, OffsetRead_TransposeB_TwoCalls) {
+    const uint32_t T_cap = 96, K = 64, N = 128;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto parent = create_random_device_tensor(T_cap, K, device);
+    auto w_gate = create_random_device_tensor(N, K, device);
+    auto w_up = create_random_device_tensor(N, K, device);
+
+    const VariableMatmulConfig cfg_moe{
+        .M_block_size = 4,
+        .K_block_size = 8,
+        .N_block_size = 8,
+        .subblock_h = 2,
+        .subblock_w = 2,
+        .compute_with_storage_grid_size = {10, 10},
+        .transpose_a = false,
+        .transpose_b = true,
+    };
+
+    constexpr uint32_t offset_tiles = 0;
+    constexpr uint32_t effective_M_tiles = 2;
+    auto gate = ttml::metal::variable_matmul(parent, w_gate, cfg_moe, std::nullopt, offset_tiles, effective_M_tiles);
+    auto up = ttml::metal::variable_matmul(parent, w_up, cfg_moe, std::nullopt, offset_tiles, effective_M_tiles);
+
+    auto sliced = ttnn::slice(
+        parent,
+        ttsl::SmallVector<uint32_t>{0, 0, 0, 0},
+        ttsl::SmallVector<uint32_t>{1, 1, effective_M_tiles * 32, K},
+        ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+    auto ref_gate = ttnn::matmul(sliced, w_gate, false, true);
+    auto ref_up = ttnn::matmul(sliced, w_up, false, true);
+
+    EXPECT_LT(max_abs_error(gate, ref_gate), 2.0F) << "gate two-call err";
+    EXPECT_LT(max_abs_error(up, ref_up), 2.0F) << "up two-call err";
+}
+
+// Mimics moe-ffn fwd: large M_block relative to per-call M, transpose_b on weight,
+// offset-read on input. Catches small-M-with-large-M_block bugs in this combination.
+TEST_F(VariableMatmulTest, OffsetRead_TransposeB_SmallM_MoeFfnConfig) {
+    const uint32_t T_cap = 96, K = 64, N = 128;  // matches moe_ffn Small_E2_H64_I128
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto parent = create_random_device_tensor(T_cap, K, device);
+    auto weight_nk = create_random_device_tensor(N, K, device);
+
+    constexpr uint32_t row_lo = 64;
+    constexpr uint32_t row_hi = 96;
+    constexpr uint32_t offset_tiles = row_lo / 32;
+    constexpr uint32_t effective_M_tiles = (row_hi - row_lo) / 32;
+
+    const VariableMatmulConfig cfg_moe{
+        .M_block_size = 4,
+        .K_block_size = 8,
+        .N_block_size = 8,
+        .subblock_h = 2,
+        .subblock_w = 2,
+        .compute_with_storage_grid_size = {10, 10},
+        .transpose_a = false,
+        .transpose_b = true,
+    };
+    auto result =
+        ttml::metal::variable_matmul(parent, weight_nk, cfg_moe, std::nullopt, offset_tiles, effective_M_tiles);
+
+    auto sliced = ttnn::slice(
+        parent,
+        ttsl::SmallVector<uint32_t>{0, 0, row_lo, 0},
+        ttsl::SmallVector<uint32_t>{1, 1, row_hi, K},
+        ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+    auto ref = ttnn::matmul(sliced, weight_nk, /*transpose_a=*/false, /*transpose_b=*/true);
+
+    float err = max_abs_error(result, ref);
+    EXPECT_LT(err, 2.0F) << "moe_ffn-config offset-read transpose_b err: " << err;
+}
+
+// Offset-read combined with transpose_b — the moe-ffn fwd pattern with [I, H] weights.
+TEST_F(VariableMatmulTest, OffsetRead_TransposeB) {
+    const uint32_t T_cap = 512, K = 128, N = 256;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto parent = create_random_device_tensor(T_cap, K, device);
+    auto weight_nk = create_random_device_tensor(N, K, device);  // stored [N, K]
+
+    constexpr uint32_t row_lo = 128;
+    constexpr uint32_t row_hi = 256;
+    constexpr uint32_t offset_tiles = row_lo / 32;
+    constexpr uint32_t effective_M_tiles = (row_hi - row_lo) / 32;
+
+    auto cfg = kConfig;
+    cfg.transpose_b = true;
+    auto result = ttml::metal::variable_matmul(parent, weight_nk, cfg, std::nullopt, offset_tiles, effective_M_tiles);
+
+    auto sliced = ttnn::slice(
+        parent,
+        ttsl::SmallVector<uint32_t>{0, 0, row_lo, 0},
+        ttsl::SmallVector<uint32_t>{1, 1, row_hi, K},
+        ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+    auto ref = ttnn::matmul(sliced, weight_nk, /*transpose_a=*/false, /*transpose_b=*/true);
+
+    float err = max_abs_error(result, ref);
+    EXPECT_LT(err, 2.0F) << "offset-read transpose_b max_abs_error: " << err;
+}
+
 // K-axis offset on in0: parent has larger K than weight; we slice [k_offset, k_offset+K_w).
 TEST_F(VariableMatmulTest, KOffsetRead_NoTranspose) {
     const uint32_t M = 128, K_parent = 512, K_w = 128, N = 256;
@@ -617,6 +720,47 @@ TEST_F(VariableMatmulTest, In1KOffsetRead_TransposeA_DWDownPattern) {
 
     float err = max_abs_error(result, ref);
     EXPECT_LT(err, 4.0F) << "in1 k-offset dW_down pattern max_abs_error: " << err;
+}
+
+// Write-at-offset combined with transpose_b — exactly what moe-ffn fwd down_proj does.
+TEST_F(VariableMatmulTest, WriteAtOffset_TransposeB) {
+    const uint32_t M_e = 128, K = 128, N = 256, M_parent = 512;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input = create_random_device_tensor(M_e, K, device);
+    auto weight_nk = create_random_device_tensor(N, K, device);  // stored [N, K]
+    auto parent_out = create_random_device_tensor(M_parent, N, device);
+
+    constexpr uint32_t out_row_lo = 128;
+    constexpr uint32_t out_row_hi = 256;
+    constexpr uint32_t out_offset_tiles = out_row_lo / 32;
+
+    auto cfg = kConfig;
+    cfg.transpose_b = true;
+    ttml::metal::variable_matmul(
+        input,
+        weight_nk,
+        cfg,
+        std::nullopt,
+        /*in0_row_offset_tiles=*/0,
+        /*effective_M_tiles=*/0,
+        /*in0_k_offset_tiles=*/0,
+        /*in1_k_offset_tiles=*/0,
+        /*output_tensor=*/parent_out,
+        /*out_row_offset_tiles=*/out_offset_tiles);
+
+    auto ref_chunk = ttnn::matmul(input, weight_nk, /*transpose_a=*/false, /*transpose_b=*/true);
+    auto ref_chunk_vec = ttml::core::to_vector<float>(ref_chunk);
+    auto written_vec = ttml::core::to_vector<float>(parent_out);
+    float written_err = 0.0F;
+    for (uint32_t m = out_row_lo; m < out_row_hi; ++m) {
+        for (uint32_t n = 0; n < N; ++n) {
+            uint32_t idx_parent = m * N + n;
+            uint32_t idx_chunk = (m - out_row_lo) * N + n;
+            written_err = std::max(written_err, std::abs(written_vec[idx_parent] - ref_chunk_vec[idx_chunk]));
+        }
+    }
+    EXPECT_LT(written_err, 2.0F) << "write-at-offset transpose_b err: " << written_err;
 }
 
 // Write-at-offset: caller provides parent output; matmul writes into a row-range.
