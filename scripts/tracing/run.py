@@ -90,14 +90,13 @@ def parse_options() -> argparse.Namespace:
             "See also https://github.com/tenstorrent/tt-metal/pull/43165"
         ),
         formatter_class=RawTextDefaultsFormatter,
-        usage="python %(prog)s [LLM options] [sampling options] [I/O options]"
+        usage="python %(prog)s [LLM options] [sampling options] [I/O options]",
     )
     parser.add_argument(
         "-m",
         "--model",
         help=(
-            "Huggingface model name, format 'org/name'. \n"
-            "Currently support text-generation models such as Qwen3.\n"
+            "Huggingface model name, format 'org/name'. \n" "Currently support text-generation models such as Qwen3.\n"
         ),
         default="Qwen/Qwen3-4B-Instruct-2507",
     )
@@ -212,10 +211,7 @@ def build_prompts(options: argparse.Namespace) -> list[str]:
     """
     # region Load local system, prefix, and user prompts
     system = DEFAULT_SYSTEM_PROMPT_PATH.read_text(encoding="utf-8").strip()
-    context = (
-        DEFAULT_CONTEXT_PATH.read_text(encoding="utf-8").strip()
-        * options.context_multiply
-    )
+    context = DEFAULT_CONTEXT_PATH.read_text(encoding="utf-8").strip() * options.context_multiply
     shared_prefix = f"{system}\n---\n{context}"
     prompt_tails = DEFAULT_QUESTIONS_PATH.read_text(encoding="utf-8").splitlines()
     # endregion
@@ -233,11 +229,7 @@ def build_prompts(options: argparse.Namespace) -> list[str]:
     num_prompt_tails = len(prompt_tails)
     num_repeat_prompt_tails = options.num_prompts // num_prompt_tails + 1
     return [
-        (
-            f"<assistant>\n{shared_prefix}\n</assistant>\n\n"
-            f"<user>\n{tail}\n</user>\n\n"
-            f"<response/>\n"
-        )
+        (f"<assistant>\n{shared_prefix}\n</assistant>\n\n" f"<user>\n{tail}\n</user>\n\n" f"<response/>\n")
         for tail in (prompt_tails * num_repeat_prompt_tails)[: options.num_prompts]
     ]
 
@@ -252,10 +244,7 @@ def benchmark_everything(
     If ``options`` requests warmup, performs it on the first prompt requested number of
     times. Metrics are returned as name-to-value mapping.
     """
-    return {
-        t: benchmark(sampling_params, prompts, options, t)
-        for t in options.trace_mode
-    }
+    return {t: benchmark(sampling_params, prompts, options, t) for t in options.trace_mode}
 
 
 def benchmark(
@@ -498,10 +487,7 @@ def maybe_print_metrics_table(
         return
 
     metric_names = list(first_summary.keys())
-    minima = {
-        metric_name: min(summary[metric_name] for summary in summaries.values())
-        for metric_name in metric_names
-    }
+    minima = {metric_name: min(summary[metric_name] for summary in summaries.values()) for metric_name in metric_names}
 
     headers = ["trace_mode", *metric_names]
     rows = []
