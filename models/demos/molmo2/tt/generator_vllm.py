@@ -384,30 +384,52 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
 
         batch_size = tokens.shape[0]
         out_logits = [None] * batch_size
+
+        # Collect active (non-padding) users routed to their DP rank.
+        active = []
         for u in range(batch_size):
             position = int(start_pos[u].item()) if hasattr(start_pos[u], "item") else int(start_pos[u])
             if position < 0:
-                continue  # padding slot; fill in below
+                continue  # padding slot
             rank = self._route(u)
             token_id = int(tokens[u, 0].item())
+            active.append((u, rank, token_id, position))
+
+        if active:
             t0 = time.perf_counter()
-            # Route through the captured decode trace (lazy capture on first call).
-            # Eager forward_decode_step hits a system_memory_manager dispatch hang
-            # on Galaxy hardware after ~10-15 steps; the traced path doesn't.
-            # NOTE: capture at the *actual* position (not the default 32768 bucket)
-            # because the captured trace's SDPA reads KV cache up to current_pos —
-            # capturing at 32768 when only ~2700 positions are filled reads garbage
-            # and hangs. Demo's model.generate() does this same lazy-capture at S.
-            m = self.models[rank]
-            if m._decode_trace_id is None:
-                m._decode_trace_tensors = m._allocate_decode_trace_tensors()
-                m._decode_trace_id, m._decode_trace_output = m._capture_decode_trace(m._decode_trace_tensors, position)
-            logits = m._execute_decode_trace(token_id, position).squeeze(0)
+            # Loop 0: lazy decode-trace capture per rank (at first decode position).
+            # The trace's SDPA reads KV cache up to current_pos; capturing at the
+            # actual S rather than PREFILL_BUCKETS[-1]=32768 avoids reading garbage.
+            for u, rank, _, position in active:
+                m = self.models[rank]
+                if m._decode_trace_id is None:
+                    m._decode_trace_tensors = m._allocate_decode_trace_tensors()
+                    m._decode_trace_id, m._decode_trace_output = m._capture_decode_trace(
+                        m._decode_trace_tensors, position
+                    )
+
+            # Loop 1: update inputs on every active rank's stable trace buffers.
+            for u, rank, token_id, position in active:
+                self.models[rank]._update_decode_inputs(token_id, position)
+
+            # Loop 2: dispatch every active rank's decode trace non-blocking — all
+            # submeshes run concurrently (mirrors tt_transformers Generator at
+            # tt/generator.py:1292). Single-rank galaxy_t3k path: 1 dispatch.
+            for u, rank, _, _ in active:
+                self.models[rank]._dispatch_decode_trace(blocking=False)
+
+            # Loop 3: read each rank's logits. ttnn.to_torch is blocking, so this
+            # also synchronizes the non-blocking dispatches above.
+            for u, rank, _, _ in active:
+                out_logits[u] = self.models[rank]._read_decode_output().unsqueeze(0)
+
             step_ms = (time.perf_counter() - t0) * 1000
             self._decode_step_count = getattr(self, "_decode_step_count", 0) + 1
             self._decode_total_ms = getattr(self, "_decode_total_ms", 0.0) + step_ms
-            logger.info(f"Decode rank={rank} user={u} step {self._decode_step_count}: pos={position} {step_ms:.0f}ms")
-            out_logits[u] = logits.unsqueeze(0)
+            logger.info(
+                f"Decode active={len(active)} step {self._decode_step_count}: "
+                f"positions={[p for _,_,_,p in active]} {step_ms:.0f}ms"
+            )
 
         real = next((l for l in out_logits if l is not None), None)
         if real is None:
