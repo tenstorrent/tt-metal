@@ -239,3 +239,11 @@
   team: ttnn
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   merge_gate: false
+
+- name: "async cpu UAF regression (issue #43638)"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/base_functionality/test_device_synchronize.py::test_cpu_blocking_false_discarded_return_no_uaf -xv --count=3'
+  skus:
+    wh_llmbox:
+      timeout: 5
+  team: ttnn
+  merge_gate: false
