@@ -1196,6 +1196,14 @@ TEST(MultiHost, TestBHBlitzPipelineControlPlaneInit) {
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
 
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
+    const int my_rank = static_cast<int>(*distributed_context.rank());
+    const auto local_mesh_ids = control_plane->get_local_mesh_id_bindings();
+    ASSERT_EQ(local_mesh_ids.size(), 1u)
+        << "bh_glx_split_4x2: one mesh_instance per MPI rank (each mesh host_topology dims [1,1])";
+    EXPECT_EQ(static_cast<unsigned int>(my_rank), *local_mesh_ids[0])
+        << "MPI world rank must equal mesh_id (rank_bindings / discovery alignment for Blitz pipeline)";
+
     check_asic_mapping_against_golden("TestBHBlitzPipelineControlPlaneInit");
 }
 
