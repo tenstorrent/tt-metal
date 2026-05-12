@@ -257,8 +257,10 @@ class AdainResBlk1d:
 
 
 def preprocess_encode_parameters(torch_encode: nn.Module, device) -> dict:
-    for name in ("conv1", "conv2", "conv1x1"):
+    for name in ("conv1", "conv2"):
         nn.utils.remove_weight_norm(getattr(torch_encode, name))
+    if getattr(torch_encode, "learned_sc", False):
+        nn.utils.remove_weight_norm(torch_encode.conv1x1)
     if not isinstance(torch_encode.pool, nn.Identity):
         nn.utils.remove_weight_norm(torch_encode.pool)
 
@@ -316,7 +318,17 @@ def preprocess_encode_parameters(torch_encode: nn.Module, device) -> dict:
     p: dict = {}
     p["conv1"] = conv_rm(torch_encode.conv1)
     p["conv2"] = conv_rm(torch_encode.conv2)
-    p["conv1x1"] = conv_rm(torch_encode.conv1x1)
+    if getattr(torch_encode, "learned_sc", False):
+        p["conv1x1"] = conv_rm(torch_encode.conv1x1)
+    else:
+        dim_in = int(torch_encode.conv1.weight.shape[1])
+        dim_out = int(torch_encode.conv1.weight.shape[0])
+        assert dim_in == dim_out, "shortcut without conv1x1 expects dim_in == dim_out"
+        ident = torch.zeros(dim_out, dim_in, 1, dtype=torch.float32)
+        ident[torch.arange(dim_out), torch.arange(dim_in), 0] = 1.0
+        dummy = nn.Conv1d(dim_in, dim_out, 1, bias=False)
+        dummy.weight.data.copy_(ident)
+        p["conv1x1"] = conv_rm(dummy)
     p["norm1"] = {**lin_params(torch_encode.norm1.fc), **inst_params(torch_encode.norm1.norm)}
     p["norm2"] = {**lin_params(torch_encode.norm2.fc), **inst_params(torch_encode.norm2.norm)}
     p["eps"] = float(torch_encode.norm1.norm.eps)

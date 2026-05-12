@@ -6,8 +6,8 @@
 Full Kokoro-82M on TTNN: PL-BERT → predictor → :class:`KokoroIstftNetTt` vocoder.
 
 Neural path stays on device (bf16 activations from PL-BERT/predictor, float32 vocoder
-stack). Discrete duration/alignment indices use small CPU tensors (same as reference
-``KokoroPredictor``). Final waveform is read back once via ``ttnn.to_torch`` for the
+stack). ``pred_dur`` and the one-hot alignment are built on host (numpy + upload) from
+TTNN duration logits; final waveform is read back once via ``ttnn.to_torch`` for the
 ``KokoroFullOutput`` contract.
 """
 
