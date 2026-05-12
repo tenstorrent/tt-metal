@@ -924,36 +924,24 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
         worker_phy_x.reserve(num_cores_x);
         for (int i = 0; i < num_cores_x; ++i) {
             auto core_phy = this->physical_worker_core_from_logical_core(CoreCoord(i, 0));
-            worker_phy_x.at(i) = core_phy.x;
+            worker_phy_x.push_back(core_phy.x);
         }
         // Get optimal placement of worker cores interfacing with DRAM Controllers in physical coordinate space
         auto physical_worker_cores = get_optimal_dram_to_physical_worker_assignment(
             this->arch(), dram_phy_coords, full_grid_size_x, full_grid_size_y, worker_phy_x, worker_phy_y);
 
-        // Convert physical worker coordinates back to logical compute-grid coordinates by
-        // reversing the worker_phy_x / worker_phy_y mapping we built above. We deliberately
-        // avoid soc_desc.translate_coord_to(..., NOC0, LOGICAL) here: the SOC's LOGICAL space
-        // numbers every Tensix core (including the reserved dispatch column on COL dispatch
-        // and the harvested-row aware fold-down), whereas compute_with_storage_grid_size()
-        // exposes only the user-facing worker grid. Reversing through worker_phy_{x,y}
-        // guarantees the returned coord is in that user-facing grid, and TT_FATALs loudly
-        // if the placement algorithm ever produced a physical core outside it.
-        for (const auto& physical_worker_core : physical_worker_cores) {
-            auto x_it = std::find(worker_phy_x.begin(), worker_phy_x.end(), physical_worker_core.x);
-            auto y_it = std::find(worker_phy_y.begin(), worker_phy_y.end(), physical_worker_core.y);
-            TT_FATAL(
-                x_it != worker_phy_x.end() && y_it != worker_phy_y.end(),
-                "Optimal DRAM-worker placement produced physical core ({}, {}) which is not in "
-                "the compute_with_storage_grid_size logical worker grid ({}, {}). This indicates "
-                "a bug in get_optimal_dram_to_physical_worker_assignment landing on a reserved "
-                "dispatch / harvested / out-of-grid core.",
-                physical_worker_core.x,
-                physical_worker_core.y,
-                num_cores_x,
-                num_cores_y);
-            uint32_t logical_x = static_cast<uint32_t>(std::distance(worker_phy_x.begin(), x_it));
-            uint32_t logical_y = static_cast<uint32_t>(std::distance(worker_phy_y.begin(), y_it));
-            this->optimal_dram_bank_to_logical_worker_assignment_.push_back(CoreCoord(logical_x, logical_y));
+        const metal_SocDescriptor& soc_desc = MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(this->id_);
+        // Convert to physical worker coordinates to logical. This gets returned to the user.
+        for (auto physical_worker_core : physical_worker_cores) {
+            tt::umd::CoreCoord logical_coord_translated =
+                soc_desc.translate_coord_to(physical_worker_core, CoordSystem::NOC0, CoordSystem::LOGICAL);
+            this->optimal_dram_bank_to_logical_worker_assignment_.push_back(
+                CoreCoord(logical_coord_translated.x, logical_coord_translated.y));
+            TT_ASSERT(
+                logical_coord_translated.core_type == CoreType::TENSIX,
+                "Worker dram interface core {} should be a Tensix core, algorithm to place DRAM interfacing workers is "
+                "invalid",
+                logical_coord_translated.str());
         }
     }
     return this->optimal_dram_bank_to_logical_worker_assignment_;
