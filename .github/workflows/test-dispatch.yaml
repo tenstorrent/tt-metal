@@ -80,7 +80,7 @@ jobs:
     timeout-minutes: 120
     runs-on: ${{ fromJSON(inputs.runner-label) }}
     container:
-      image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved') }}
+      image: ${{ contains(inputs.runner-label, 'tt-ubuntu-2204') && needs.check-harbor.outputs.harbor-prefix || '' }}${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved' }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO

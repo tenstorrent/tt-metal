@@ -6,6 +6,10 @@ on:
       docker-image:
         required: true
         type: string
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
       package-artifact-name:
         required: true
         type: string
@@ -33,7 +37,7 @@ jobs:
     timeout-minutes: 30
     runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner) }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ (inputs.docker-image && (contains(inputs.runner, 'dedicated-merge-gate') && inputs.docker-image || format('{0}{1}', inputs.harbor-prefix, inputs.docker-image))) || 'docker-image-unresolved!' }}
       env:
         ASAN_OPTIONS: "color=always"
         TSAN_OPTIONS: "color=always"

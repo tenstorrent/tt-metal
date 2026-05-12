@@ -16,6 +16,10 @@ on:
       docker-image:
         required: true
         type: string
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
       wheel-artifact-name:
         required: true
         type: string
@@ -53,7 +57,7 @@ jobs:
         || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ (inputs.runner-label == 'N150' || inputs.runner-label == 'N300') && inputs.harbor-prefix || '' }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
