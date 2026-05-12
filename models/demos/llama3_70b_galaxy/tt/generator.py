@@ -466,9 +466,7 @@ class Generator(WarmupForwardMixin):
             user_id = request_slots if work_use_batched_prefill else request_slots[0]
             user_enable_trace = enable_trace
             work_prompt_lens = (
-                [prompt_lens[idx] for idx in request_indices]
-                if work_use_batched_prefill
-                else prompt_lens[request_idx]
+                [prompt_lens[idx] for idx in request_indices] if work_use_batched_prefill else prompt_lens[request_idx]
             )
             logger.info(
                 f"Prefilling User {user_id}, use_batched_prefill: {work_use_batched_prefill}, "
