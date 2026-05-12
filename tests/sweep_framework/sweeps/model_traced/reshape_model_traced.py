@@ -191,13 +191,13 @@ def run(
     if arg2 is not None and not isinstance(arg2, tuple):
         arg2 = None
 
-    import ast as _ast_r
+    import json as _json_r
 
     in_shape = (
         tuple(input_a_shape)
         if isinstance(input_a_shape, (list, tuple))
         else (
-            tuple(_ast_r.literal_eval(input_a_shape))
+            tuple(_json_r.loads(input_a_shape.replace("(", "[").replace(")", "]")))
             if isinstance(input_a_shape, str) and len(input_a_shape) < 200
             else input_a_shape
         )

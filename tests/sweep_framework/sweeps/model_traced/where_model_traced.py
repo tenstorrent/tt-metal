@@ -225,10 +225,10 @@ def run(
             else shape_a
         )
         if isinstance(shape_b, str):
-            import ast as _ast_wb
+            import json as _json_wb
 
             if len(shape_b) < 200:
-                shape_b = tuple(_ast_wb.literal_eval(shape_b))
+                shape_b = tuple(_json_wb.loads(shape_b.replace("(", "[").replace(")", "]")))
         torch_condition = torch.randint(0, 2, shape_a, dtype=torch.float32)
         torch_input_b = gen_func_with_cast_tt(
             partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
