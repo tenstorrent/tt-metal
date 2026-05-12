@@ -197,8 +197,15 @@ jobs:
       ubuntu-2404-manylinux-tag: ${{ needs.docker-images.outputs.manylinux-tag }}
       fetch-depth: 1
 
+  resolve-docker-pull-refs-tsan:
+    needs: [check-harbor, build-tsan]
+    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      dev-docker-image: ${{ needs.build-tsan.outputs.dev-docker-image }}
+
   metalium-smoke-tests:
-    needs: [find-changes, build-tsan, check-harbor]
+    needs: [find-changes, resolve-docker-pull-refs-tsan, build-tsan, check-harbor]
     if: ${{ github.ref_name == 'main' ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-changed == 'true' ||
@@ -213,14 +220,14 @@ jobs:
             || fromJSON('["N300-viommu","N300-llmbox-viommu","P150b-viommu"]') }}
     uses: ./.github/workflows/smoke.yaml
     with:
-      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-tsan.outputs.dev-docker-image) }}
+      docker-image: ${{ needs.resolve-docker-pull-refs-tsan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       per-test-timeout: 11 # TSan can be slow; relax the timeout somewhat
       product: tt-metalium
 
   ttnn-smoke-tests:
-    needs: [find-changes, build-tsan, check-harbor]
+    needs: [find-changes, resolve-docker-pull-refs-tsan, build-tsan, check-harbor]
     if: ${{ github.ref_name == 'main' ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-changed == 'true' ||
@@ -236,7 +243,7 @@ jobs:
             || fromJSON('["N300-viommu","N300-llmbox-viommu","P150b-viommu"]') }}
     uses: ./.github/workflows/smoke.yaml
     with:
-      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-tsan.outputs.dev-docker-image) }}
+      docker-image: ${{ needs.resolve-docker-pull-refs-tsan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       per-test-timeout: 11 # TSan can be slow; relax the timeout somewhat
@@ -269,6 +276,13 @@ jobs:
       manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
       fetch-depth: 1
 
+  resolve-docker-pull-refs-asan:
+    needs: [check-harbor, build-asan]
+    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      dev-docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
+
   metalium-basic-tests:
     if: ${{
         github.ref_name == 'main' ||
@@ -276,7 +290,7 @@ jobs:
         needs.find-changes.outputs.tt-metalium-changed == 'true' ||
         needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
       }}
-    needs: [build-asan, find-changes, check-harbor]
+    needs: [build-asan, resolve-docker-pull-refs-asan, find-changes, check-harbor]
     strategy:
       fail-fast: false
       matrix:
@@ -285,14 +299,14 @@ jobs:
             || fromJSON('["N150-viommu","P150b-viommu"]') }}
     uses: ./.github/workflows/basic.yaml
     with:
-      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-asan.outputs.dev-docker-image) }}
+      docker-image: ${{ needs.resolve-docker-pull-refs-asan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
       per-test-timeout: 11
       runner: ${{ matrix.platform }}
       product: tt-metalium
 
   ttnn-basic-tests:
-    needs: [build-asan, find-changes, check-harbor]
+    needs: [build-asan, resolve-docker-pull-refs-asan, find-changes, check-harbor]
     if: ${{ github.ref_name == 'main' ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-changed == 'true' ||
@@ -307,14 +321,23 @@ jobs:
             || fromJSON('["N150-viommu","P150b-viommu"]') }}
     uses: ./.github/workflows/basic.yaml
     with:
-      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-asan.outputs.dev-docker-image) }}
+      docker-image: ${{ needs.resolve-docker-pull-refs-asan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
       per-test-timeout: 11
       runner: ${{ matrix.platform }}
       product: tt-nn
 
+  resolve-docker-pull-refs:
+    needs: [check-harbor, build]
+    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      dev-docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      basic-dev-docker-image: ${{ needs.build.outputs.basic-dev-docker-image }}
+      ci-test-docker-image: ${{ needs.build.outputs.ci-test-docker-image }}
+
   ttnn-merge-gate-tests:
-    needs: [build, find-changes, check-harbor]
+    needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
     if: ${{ github.ref_name == 'main' ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-changed == 'true' ||
@@ -325,13 +348,13 @@ jobs:
     secrets: inherit
     with:
       enabled-skus: "wh_n300_civ2"
-      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build.outputs.dev-docker-image) }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
       merge-gate-call: true
 
   # TT-CNN Unit tests
   tt-cnn-unit-tests:
-    needs: [build, find-changes, check-harbor]
+    needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
     if: ${{ github.ref_name == 'main' ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-changed == 'true' ||
@@ -349,11 +372,11 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build.outputs.dev-docker-image) }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
 
   fabric-unit-tests:
-    needs: [build, find-changes, check-harbor]
+    needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
     if: ${{ github.ref_name == 'main' ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-changed == 'true' ||
@@ -371,12 +394,12 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build.outputs.dev-docker-image) }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
 
   fabric-cpu-only-unit-tests:
-    needs: [build, find-changes, check-harbor]
+    needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
     if: ${{ github.ref_name == 'main' ||
             needs.find-changes.outputs.any-code-changed == 'true'
         }}
@@ -388,7 +411,7 @@ jobs:
     uses: ./.github/workflows/fabric-cpu-only-tests-impl.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
-      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build.outputs.dev-docker-image) }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
 
@@ -396,20 +419,20 @@ jobs:
     if: ${{ github.ref_name == 'main' ||
       needs.find-changes.outputs.any-code-changed == 'true'
       }}
-    needs: [build, find-changes, check-harbor]
+    needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
     strategy:
       fail-fast: false
     uses: ./.github/workflows/ttsim.yaml
     with:
-      basic-docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build.outputs.basic-dev-docker-image) }}
-      test-docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build.outputs.ci-test-docker-image) }}
+      basic-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.basic-dev-docker-image }}
+      test-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-test-docker-image }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       run-ttsim-integration-tests: false
       run-metal-cpp-unit-tests: true
 
   triage-tests:
-    needs: [build, find-changes, check-harbor]
+    needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
     strategy:
       fail-fast: false
       matrix:
@@ -419,7 +442,7 @@ jobs:
     uses: ./.github/workflows/triage.yaml
     with:
       runner-label: ${{ matrix.platform }}
-      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build.outputs.dev-docker-image) }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       timeout: 11
@@ -489,7 +512,7 @@ jobs:
   # the full suite under slow dispatch. Merge gate shards FD by arch and runs
   # the SD-only/Quasar slice from tests/pipeline_reorg/llk_unit_tests.yaml.
   llk-unit-tests:
-    needs: [ build, find-changes, load-llk-unit-test-matrix, check-harbor]
+    needs: [ build, resolve-docker-pull-refs, find-changes, load-llk-unit-test-matrix, check-harbor]
     if: ${{
         github.event.action != 'destroyed' &&
         github.event_name != 'pull_request' &&
@@ -513,7 +536,7 @@ jobs:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner_label }}
       runs-on-labels: ${{ toJSON(matrix.test-group.runs_on) }}
-      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build.outputs.dev-docker-image) }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       dispatch-mode: ${{ matrix.test-group.dispatch_mode }}
       enable-llk-asserts: true
