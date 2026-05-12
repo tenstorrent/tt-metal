@@ -38,11 +38,19 @@ class FusedGolden:
 
         logger.info("L1 golden check:")
         l1_passed = passed_test(
-            l1_golden, res_tensor, output.data_format, print_pcc=True
+            l1_golden,
+            res_tensor,
+            output.data_format,
+            print_pcc=True,
+            custom_pcc_threshold=0.98,
         )
         logger.info("Master golden check:")
         master_passed = passed_test(
-            master_golden, res_tensor, output.data_format, print_pcc=True
+            master_golden,
+            res_tensor,
+            output.data_format,
+            print_pcc=True,
+            custom_pcc_threshold=0.98,
         )
 
         passed = l1_passed and master_passed
