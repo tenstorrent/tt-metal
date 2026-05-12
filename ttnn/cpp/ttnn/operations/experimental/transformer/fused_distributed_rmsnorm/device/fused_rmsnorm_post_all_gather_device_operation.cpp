@@ -53,7 +53,7 @@ void FusedRMSNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
     // All other dims must match
     TT_FATAL(
         stats.padded_shape().size() == a.padded_shape().size(), "Stats and input must have same number of dimensions");
-    for (int i = 0; i < a.padded_shape().size() - 1; i++) {
+    for (size_t i = 0; i < a.padded_shape().size() - 1; i++) {
         TT_FATAL(
             stats.padded_shape()[i] == a.padded_shape()[i],
             "Stats and input dim{} must match, got stats: {} vs input: {}",
