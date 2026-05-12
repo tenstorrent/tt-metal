@@ -532,10 +532,10 @@ HostId resolve_path_from_proto(
     if (path.empty()) {
         throw std::runtime_error("Empty path in connection - invalid descriptor");
     }
-    if (index >= path.size()) {
+    if (index >= static_cast<uint32_t>(path.size())) {
         throw std::runtime_error("Path index out of bounds - invalid descriptor");
     }
-    if (index == path.size() - 1) {
+    if (index == static_cast<uint32_t>(path.size()) - 1) {
         // Direct node reference - look up in child_mappings
         const std::string& node_name = path[index];
         if (!graph_instance.child_mappings().contains(node_name)) {
@@ -604,7 +604,7 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance_impl(
 
             // Validate deployment node type if deployment descriptor is provided
             if (deployment_descriptor != nullptr) {
-                if (*host_id < deployment_descriptor->hosts().size()) {
+                if (*host_id < static_cast<uint32_t>(deployment_descriptor->hosts().size())) {
                     const auto& deployment_host = deployment_descriptor->hosts()[*host_id];
                     if (!deployment_host.node_type().empty() && deployment_host.node_type() != node_descriptor_name) {
                         throw std::runtime_error(
@@ -716,7 +716,8 @@ void populate_deployment_hosts_from_hostnames(
             .aisle = "",
             .rack = 0,
             .shelf_u = 0,
-            .motherboard = it->second->motherboard});
+            .motherboard = it->second->motherboard,
+            .node_type = ""});
     }
 }
 

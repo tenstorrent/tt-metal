@@ -292,7 +292,8 @@ void configure_local_kernels(
                 .noc = noc_id,
                 .processor = erisc_id,
                 .compile_args =
-                    fwd ? std::vector<uint32_t>{packet_size_bytes, packet_size_words} : std::vector<uint32_t>{}});
+                    fwd ? std::vector<uint32_t>{packet_size_bytes, packet_size_words} : std::vector<uint32_t>{},
+                .defines = {}});
 
         auto neighbor_kernel = tt::tt_metal::CreateKernel(
             neighbor_program,
@@ -302,7 +303,8 @@ void configure_local_kernels(
                 .noc = noc_id,
                 .processor = erisc_id,
                 .compile_args =
-                    fwd ? std::vector<uint32_t>{} : std::vector<uint32_t>{packet_size_bytes, packet_size_words}});
+                    fwd ? std::vector<uint32_t>{} : std::vector<uint32_t>{packet_size_bytes, packet_size_words},
+                .defines = {}});
         tt::tt_metal::SetRuntimeArgs(
             fwd ? curr_program : neighbor_program,
             fwd ? curr_kernel : neighbor_kernel,
@@ -406,7 +408,7 @@ void configure_cross_host_kernels(
                 sender_kernel_path,
                 my_coord,
                 tt::tt_metal::EthernetConfig{
-                    .noc = noc_id, .processor = erisc_id, .compile_args = {packet_size_bytes, packet_size_words}});
+                    .noc = noc_id, .processor = erisc_id, .compile_args = {packet_size_bytes, packet_size_words}, .defines = {}});
             tt::tt_metal::SetRuntimeArgs(
                 my_program, sender_kernel, my_coord, {src_eth_l1_byte_address, dst_eth_l1_byte_address, data_size});
         } else {
@@ -414,7 +416,7 @@ void configure_cross_host_kernels(
                 my_program,
                 receiver_kernel_path,
                 my_coord,
-                tt::tt_metal::EthernetConfig{.noc = noc_id, .processor = erisc_id});
+                tt::tt_metal::EthernetConfig{.noc = noc_id, .processor = erisc_id, .compile_args = {}, .defines = {}});
             tt::tt_metal::SetRuntimeArgs(my_program, receiver_kernel, my_coord, {data_size});
         }
     }
@@ -1217,7 +1219,7 @@ LinkMetricsResult send_traffic_and_validate_links(
 
     std::unordered_map<EthChannelIdentifier, std::vector<LinkStatus>> statuses_per_link;
     bool fwd = true;
-    for (int i = 0; i < num_iterations; i++) {
+    for (uint32_t i = 0; i < num_iterations; i++) {
         for (const auto& traffic_config : traffic_configs) {
             std::size_t pkt_size_bytes = traffic_config.packet_size_bytes;
             std::size_t pkt_size_words = pkt_size_bytes >> 4;
@@ -1260,7 +1262,7 @@ void forward_link_reset_metadata_from_controller(
 
     if (*distributed_context.rank() == CONTROLLER_RANK) {
         for (const auto& [rank, exit_nodes] : ordered_exit_nodes) {
-            if (rank == *distributed_context.rank()) {
+            if (rank == static_cast<uint32_t>(*distributed_context.rank())) {
                 continue;
             }
             auto serialized_exit_nodes = tt::scaleout::validation::serialize_eth_chan_identifiers_to_bytes(exit_nodes);

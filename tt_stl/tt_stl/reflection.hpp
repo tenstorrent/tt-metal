@@ -411,7 +411,7 @@ std::ostream& operator<<(std::ostream& os, const std::array<T, N>& array) {
 template <typename T>
 std::ostream& operator<<(std::ostream& os, const std::vector<T>& vector) {
     os << "{";
-    for (auto index = 0; index < vector.size(); index++) {
+    for (std::size_t index = 0; index < vector.size(); index++) {
         const T& element = vector[index];
         os << element;
         if (index != vector.size() - 1) {

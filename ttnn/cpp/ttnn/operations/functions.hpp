@@ -46,13 +46,13 @@ static Tensor index_trilu(
     auto penultimate = rank - 2;
     auto ultimate = rank - 1;
     auto offset = padded_shape[penultimate] * padded_shape[ultimate];
-    auto iterations = 1;
-    for (int itr = 0; itr < rank - 2; itr++) {
+    uint32_t iterations = 1;
+    for (std::size_t itr = 0; itr < rank - 2; itr++) {
         iterations *= padded_shape[itr];
     }
     for (uint32_t itr = 0; itr < iterations; itr++) {
-        for (int32_t y = 0; y < padded_shape[penultimate]; y++) {
-            for (int32_t x = 0; x < padded_shape[ultimate]; x++) {
+        for (int32_t y = 0; y < static_cast<int32_t>(padded_shape[penultimate]); y++) {
+            for (int32_t x = 0; x < static_cast<int32_t>(padded_shape[ultimate]); x++) {
                 int32_t value = (IS_UPPER) ? (x >= (y + diag)) : (y >= (x - diag));
                 output_buffer[index + (y * padded_shape[ultimate]) + x] = static_cast<T>(value);
             }  // dim X
@@ -276,7 +276,7 @@ static Tensor prod_result_computation_WH_B0(
     T result = static_cast<T>(1.0f);
 
     // Calculate the product of all elements in the last tile
-    for (int i = 0; i < tt::constants::TILE_HW; ++i) {
+    for (std::size_t i = 0; i < tt::constants::TILE_HW; ++i) {
         result = result * static_cast<T>(input_buffer[i]);
     }
     output_buffer[0] = result;
@@ -453,18 +453,18 @@ static Tensor uniform(T low, T high, const ttnn::Shape& shape, const Layout layo
 
     if constexpr (std::is_same_v<T, uint32_t>) {
         auto rand_value = std::bind(std::uniform_int_distribution<T>(low, high), RANDOM_GENERATOR);
-        for (auto index = 0; index < output_buffer.size(); index++) {
+        for (std::size_t index = 0; index < output_buffer.size(); index++) {
             output_buffer[index] = rand_value();
         }
     } else if constexpr (std::is_same_v<T, float>) {
         auto rand_value = std::bind(std::uniform_real_distribution<T>(low, high), RANDOM_GENERATOR);
-        for (auto index = 0; index < output_buffer.size(); index++) {
+        for (std::size_t index = 0; index < output_buffer.size(); index++) {
             output_buffer[index] = rand_value();
         }
     } else if constexpr (std::is_same_v<T, ::bfloat16>) {
         auto rand_value = std::bind(
             std::uniform_real_distribution<float>(static_cast<float>(low), static_cast<float>(high)), RANDOM_GENERATOR);
-        for (auto index = 0; index < output_buffer.size(); index++) {
+        for (std::size_t index = 0; index < output_buffer.size(); index++) {
             output_buffer[index] = ::bfloat16(rand_value());
         }
     }

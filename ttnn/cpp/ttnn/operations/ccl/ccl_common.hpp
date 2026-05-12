@@ -533,7 +533,7 @@ public:
     InterleavedRingAllGatherTensorSlicer(
         const Tensor& input_tensor, const Tensor& output_tensor, int slice_dim, uint32_t slice_idx) {
         this->row_major = input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR;
-        this->slice_dim_is_width = input_tensor.padded_shape().rank() - 1 == slice_dim;
+        this->slice_dim_is_width = input_tensor.padded_shape().rank() - 1 == static_cast<std::size_t>(slice_dim);
         this->is_sharded = input_tensor.is_sharded();
 
         this->input_page_size = input_tensor.buffer()->page_size();

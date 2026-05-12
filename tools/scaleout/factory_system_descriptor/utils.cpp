@@ -392,7 +392,7 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
             // Find host_id for each connection by matching hostname
             uint32_t host_id_a = 0;
             uint32_t host_id_b = 0;
-            for (uint32_t i = 0; i < hosts.size(); ++i) {
+            for (uint32_t i = 0; i < static_cast<uint32_t>(hosts.size()); ++i) {
                 if (hosts[i].hostname() == conn.first.hostname) {
                     host_id_a = i;
                 }
