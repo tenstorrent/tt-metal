@@ -20,7 +20,7 @@ bool is_tensor_divisible_by_shard(const ttnn::Shape& tensor_shape, const ttnn::S
     // Only compare common (end) dimensions. Any extra front dimensions would be
     // divisible by the implied 1 in the non-existent dimensions in shard_shape.
     // Use negative dimensions to compare the end of both shapes.
-    for (int i = 1; i <= shard_shape.size(); i++) {
+    for (int i = 1; i <= static_cast<int>(shard_shape.size()); i++) {
         if (shard_shape[-i] == 0 || tensor_shape[-i] % shard_shape[-i] != 0) {
             return false;
         }
