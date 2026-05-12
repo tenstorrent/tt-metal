@@ -303,7 +303,6 @@ class SocketInterface:
                 self.downstream_socket_pair = ttnn.create_socket_pair(self.mesh_device, self.mesh_device, socket_config)
                 # Initialize downstream as sender socket
                 self.downstream_socket = self.downstream_socket_pair[0]
-                ds_recv_addr = int(self.downstream_socket_pair[1].get_config_buffer_address())
 
         self.page_size = page_size
         self.send_core_coord = send_core_coord
@@ -895,33 +894,6 @@ class ParallelSocketInterface:
                     receiver_mesh_id=receiver_mesh.get_mesh_id(),
                 )
                 self._internal_sockets[i] = ttnn.MeshSocket(self.mesh_device, cfg)
-
-        def _mesh_wr_summary(w: MeshWrapper) -> str:
-            return f"has_device={w.get_mesh_device() is not None}, " f"mesh_id={w.get_mesh_id()}, rank={w.get_rank()}"
-
-        owner_mesh_id = None
-        if self.mesh_device is not None:
-            owner_mesh_id = self.mesh_device.get_system_mesh_id()
-
-        for i in range(num_channels):
-            sc, rc = self.send_core_coords[i], self.recv_core_coords[i]
-            same_device = str(sc.device_coord) == str(rc.device_coord)
-            same_core = sc.core_coord == rc.core_coord
-            internal_kind = (
-                "create_socket_pair"
-                if self._internal_pairs[i] is not None
-                else ("mesh_socket" if self._internal_sockets[i] is not None else "none")
-            )
-            upstream_kind = (
-                "provided"
-                if self._upstream_sockets[i] is not None
-                else ("local_pair" if self._upstream_socket_pairs[i] is not None else "none")
-            )
-            downstream_kind = (
-                "provided"
-                if self._downstream_sockets[i] is not None
-                else ("local_pair" if self._downstream_socket_pairs[i] is not None else "none")
-            )
 
         all_core_ranges = []
         seen_cores = set()
