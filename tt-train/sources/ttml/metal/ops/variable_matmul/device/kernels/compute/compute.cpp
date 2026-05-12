@@ -227,10 +227,17 @@ void add_bias_and_addcmul_block(
 // num_tiles tiles ready in src_cb (already cb_wait_front'd). This function pops src_cb
 // and pushes dst_cb. One tile per acquire/commit cycle to avoid any dest-register
 // sizing assumptions.
+//
+// IMPORTANT: forces the L1 packer accumulator OFF for the transpose packs, otherwise
+// the outer matmul loop's `llk_pack_reconfig_l1_acc(1)` (enabled after k=0 so matmul
+// accumulates into intermediate_cb) would also affect these packs and the transposed
+// tiles would accumulate in dst_cb across K-iterations, corrupting in0_transposed_cb.
+// Caller is responsible for restoring the accumulator state afterwards.
 inline void transpose_in0_block(uint32_t src_cb, uint32_t dst_cb, uint32_t num_tiles) {
     reconfig_data_format_srca(src_cb);
     transpose_wh_init_short(src_cb);
     pack_reconfig_data_format(dst_cb);
+    PACK((llk_pack_reconfig_l1_acc(0)));
 
     cb_reserve_back(dst_cb, num_tiles);
     for (uint32_t i = 0; i < num_tiles; ++i) {
@@ -390,10 +397,14 @@ void kernel_main() {
             cb_reserve_back(intermediate_cb, out_block_num_tiles);
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
                 if constexpr (transpose_a) {
-                    // Reuse logic: on the first K-iteration of a non-first N-iter the dataflow
-                    // skipped pushing in0 (the slice is the same as last N-iter's), and we kept
-                    // the transposed block too. Skip the transpose pass in that case.
-                    if (!reuse_in0_block) {
+                    // Mirror the dataflow's skip-push pattern: dataflow skips pushing in0 at
+                    // k=0 of any non-first N-iter (the slice is identical to the previous
+                    // N-iter's). Skip the transpose pass in exactly that case so c_0 reads
+                    // and c_7 pushes stay in sync.
+                    // NB: reuse_in0_block is reset at end of every iter, so at the *start* of
+                    // this reuse iter it is already false — we cannot rely on it here.
+                    const bool is_reuse_iter = (k_block == 0) && (n_block_iter > 0);
+                    if (!is_reuse_iter) {
                         cb_wait_front(in0_cb, in0_block_num_tiles);
                         transpose_in0_block(in0_cb, in0_transposed_cb, in0_block_num_tiles);
                         // transpose pass disrupts matmul state — re-init.
@@ -406,6 +417,11 @@ void kernel_main() {
                             K_block_tiles);
                         reconfig_data_format(in1_cb, in0_cb_for_matmul);
                         pack_reconfig_data_format(intermediate_cb);
+                        // transpose_in0_block disabled the L1 packer accumulator so its packs
+                        // would overwrite, not accumulate. Restore it to the right state for
+                        // the matmul pack: enabled after k=0 (so the matmul accumulates into
+                        // intermediate_cb across K-iterations), disabled at k=0 itself.
+                        PACK((llk_pack_reconfig_l1_acc(k_block == 0 ? 0 : 1)));
                     }
                 }
 

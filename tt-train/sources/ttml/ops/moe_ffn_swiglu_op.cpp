@@ -11,13 +11,11 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
-#include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/full/full.hpp"
 #include "ttnn_fixed/matmuls.hpp"
 
 namespace ttml::ops {
@@ -31,6 +29,27 @@ ttnn::Tensor slice_rows(const ttnn::Tensor& tensor, uint32_t row_lo, uint32_t ro
     const ttsl::SmallVector<uint32_t> end = {1U, 1U, row_hi, inner_dim};
     return ttnn::slice(tensor, start, end, step);
 }
+
+const ttml::metal::VariableMatmulConfig kVarMmConfig{
+    .M_block_size = 4,
+    .K_block_size = 8,
+    .N_block_size = 8,
+    .subblock_h = 2,
+    .subblock_w = 2,
+    .compute_with_storage_grid_size = {10, 10},
+};
+
+const ttml::metal::VariableMatmulConfig kVarMmConfigTransposeA = [] {
+    auto c = kVarMmConfig;
+    c.transpose_a = true;
+    return c;
+}();
+
+const ttml::metal::VariableMatmulConfig kVarMmConfigTransposeB = [] {
+    auto c = kVarMmConfig;
+    c.transpose_b = true;
+    return c;
+}();
 
 }  // namespace
 
@@ -54,7 +73,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
     }
 
     const auto wg0_shape = w_gate[0]->get_value().logical_shape();
-    if (wg0_shape[-1] != hidden_dim) {
+    if (wg0_shape[-2] != hidden_dim) {
         throw std::runtime_error("moe_ffn_swiglu_fw: w_gate[0] inner dim must equal grouped's hidden_dim.");
     }
 
@@ -62,6 +81,10 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
     if (offsets_host.size() != num_experts + 1U) {
         throw std::runtime_error("moe_ffn_swiglu_fw: offsets size must be num_experts + 1.");
     }
+    if (offsets_host.back() != token_capacity) {
+        throw std::runtime_error("moe_ffn_swiglu_fw: offsets[-1] must equal token_capacity.");
+    }
+
     // Per-expert forward: slice grouped once per expert, run gate+up matmuls
     // directly against the per-expert weight tensors (no slicing of weights),
     // silu·multiply on the chunk, then down matmul. One concat at the end.
@@ -100,8 +123,8 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         const auto& w_up_e = w_up[e]->get_value();
         const auto& w_down_e = w_down[e]->get_value();
 
-        auto gate_proj_e = ttnn_fixed::matmul(X_e, w_gate_e, false, true);  // [1,1,len,intermediate_dim]
-        auto up_proj_e = ttnn_fixed::matmul(X_e, w_up_e, false, true);      // [1,1,len,intermediate_dim]
+        auto gate_proj_e = ttml::metal::variable_matmul(X_e, w_gate_e, kVarMmConfig);
+        auto up_proj_e = ttml::metal::variable_matmul(X_e, w_up_e, kVarMmConfig);
         auto activated_e = ttnn::multiply(
             gate_proj_e,
             up_proj_e,
@@ -110,7 +133,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             /*output_tensor=*/std::nullopt,
             /*post_op_activations=*/no_acts,
             /*input_a_activations=*/silu_lhs);  // silu(gate_proj_e) * up_proj_e in one op
-        auto down_proj_e = ttnn_fixed::matmul(activated_e, w_down_e, false, true);  // [1,1,len,hidden_dim]
+        auto down_proj_e = ttml::metal::variable_matmul(activated_e, w_down_e, kVarMmConfig);
         activated_e.deallocate();
 
         gate_proj_parts.push_back(std::move(gate_proj_e));
@@ -118,22 +141,10 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         down_proj_parts.push_back(std::move(down_proj_e));
     }
 
-    // moe_group allocates `grouped` for a worst-case T_cap; the actual used range
-    // is [0, offsets[-1]). Append a zero tensor for the trailing slack so the
-    // output shape matches what moe_ungroup expects ([1,1,T_cap,H]).
-    const uint32_t produced_rows = offsets_host.back();
-    if (token_capacity > produced_rows) {
-        const uint32_t pad_rows = token_capacity - produced_rows;
-        down_proj_parts.push_back(ttnn::moreh_full(
-            ttnn::SmallVector<uint32_t>{1U, 1U, pad_rows, hidden_dim},
-            0.0F,
-            &autograd::ctx().get_device(),
-            grouped_value.dtype(),
-            grouped_value.layout(),
-            grouped_value.memory_config()));
+    if (down_proj_parts.empty()) {
+        throw std::runtime_error("moe_ffn_swiglu_fw: all experts empty (token_capacity == 0).");
     }
-
-    const auto y = (down_proj_parts.size() == 1U) ? down_proj_parts.front() : ttnn::concat(down_proj_parts, /*dim=*/2);
+    auto y = (down_proj_parts.size() == 1U) ? down_proj_parts.front() : ttnn::concat(down_proj_parts, /*dim=*/2);
     down_proj_parts.clear();
 
     auto out = autograd::create_tensor(y);
@@ -147,9 +158,8 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                                    gate_proj_parts = std::move(gate_proj_parts),
                                    up_proj_parts = std::move(up_proj_parts),
                                    num_experts,
-                                   hidden_dim,
-                                   token_capacity]() mutable {
-        const auto dY = out->get_grad();
+                                   hidden_dim]() mutable {
+        auto dY = out->get_grad();
         const auto& grouped_value = grouped->get_value();
 
         std::vector<ttnn::Tensor> dX_parts;
@@ -190,10 +200,9 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                 /*post_op_activations=*/no_acts,
                 /*input_a_activations=*/silu_lhs);
 
-            // Down branch (w_down_e is [hidden, intermediate]):
-            //   d_activated_e = dY_e @ w_down_e,  dW_down_e = dY_e^T @ activated_e
-            auto d_activated_e = ttnn_fixed::matmul(dY_e, w_down_e, /*transpose_a=*/false, /*transpose_b=*/false);
-            const auto dW_down_e = ttnn_fixed::matmul(dY_e, activated_e, /*transpose_a=*/true, /*transpose_b=*/false);
+            // Down branch:  d_activated_e = dY_e @ w_down_e^T,  dW_down_e = activated_e^T @ dY_e
+            auto d_activated_e = ttml::metal::variable_matmul(dY_e, w_down_e, kVarMmConfigTransposeB);
+            auto dW_down_e = ttml::metal::variable_matmul(activated_e, dY_e, kVarMmConfigTransposeA);
             w_down[e]->add_grad(dW_down_e);
             activated_e.deallocate();
             dY_e.deallocate();
@@ -203,18 +212,16 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             up_proj_e.deallocate();
             d_activated_e.deallocate();
 
-            // w_gate_e, w_up_e are [intermediate, hidden]:
-            //   dW_gate_e = d_gate_proj_e^T @ X_e,  dW_up_e = d_up_proj_e^T @ X_e
-            const auto dW_gate_e = ttnn_fixed::matmul(d_gate_proj_e, X_e, /*transpose_a=*/true, /*transpose_b=*/false);
+            // dW_gate_e = X_e^T @ d_gate_proj_e,  dW_up_e = X_e^T @ d_up_proj_e — added directly to per-expert grads.
+            auto dW_gate_e = ttml::metal::variable_matmul(X_e, d_gate_proj_e, kVarMmConfigTransposeA);
             w_gate[e]->add_grad(dW_gate_e);
-            const auto dW_up_e = ttnn_fixed::matmul(d_up_proj_e, X_e, /*transpose_a=*/true, /*transpose_b=*/false);
+            auto dW_up_e = ttml::metal::variable_matmul(X_e, d_up_proj_e, kVarMmConfigTransposeA);
             w_up[e]->add_grad(dW_up_e);
             X_e.deallocate();
 
-            // dX_e = d_gate_proj_e @ w_gate_e  +  d_up_proj_e @ w_up_e
-            auto dX_via_gate_e =
-                ttnn_fixed::matmul(d_gate_proj_e, w_gate_e, /*transpose_a=*/false, /*transpose_b=*/false);
-            auto dX_via_up_e = ttnn_fixed::matmul(d_up_proj_e, w_up_e, /*transpose_a=*/false, /*transpose_b=*/false);
+            // dX_e = d_gate_proj_e @ w_gate_e^T  +  d_up_proj_e @ w_up_e^T
+            auto dX_via_gate_e = ttml::metal::variable_matmul(d_gate_proj_e, w_gate_e, kVarMmConfigTransposeB);
+            auto dX_via_up_e = ttml::metal::variable_matmul(d_up_proj_e, w_up_e, kVarMmConfigTransposeB);
             d_gate_proj_e.deallocate();
             d_up_proj_e.deallocate();
 
@@ -227,21 +234,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         gate_proj_parts.clear();
         up_proj_parts.clear();
 
-        // Pad the trailing slack (rows the op never read) with zeros so dX
-        // matches grouped's shape [1, 1, T_cap, H] for add_grad.
-        const uint32_t produced_rows = offsets_host.back();
-        if (token_capacity > produced_rows) {
-            const uint32_t pad_rows = token_capacity - produced_rows;
-            dX_parts.push_back(ttnn::moreh_full(
-                ttnn::SmallVector<uint32_t>{1U, 1U, pad_rows, hidden_dim},
-                0.0F,
-                &autograd::ctx().get_device(),
-                grouped_value.dtype(),
-                grouped_value.layout(),
-                grouped_value.memory_config()));
-        }
-
-        const auto dX = (dX_parts.size() == 1U) ? dX_parts.front() : ttnn::concat(dX_parts, /*dim=*/2);
+        auto dX = (dX_parts.size() == 1U) ? dX_parts.front() : ttnn::concat(dX_parts, /*dim=*/2);
         grouped->add_grad(dX);
     };
 
