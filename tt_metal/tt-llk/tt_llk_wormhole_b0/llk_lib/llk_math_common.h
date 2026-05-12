@@ -15,6 +15,11 @@ using namespace ckernel::math;
 
 inline void _llk_math_dbg_feature_disable_()
 {
+    tensix_sync();
+    while (semaphore_read(semaphore::MATH_PACK) > 0)
+    {
+        asm volatile("nop");
+    };
     reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11); // Set debug feature disable bit 11
                                                              // workaround for bug tenstorrent/budabackend#1372
 }
@@ -22,6 +27,10 @@ inline void _llk_math_dbg_feature_disable_()
 inline void _llk_math_dbg_feature_enable_()
 {
     tensix_sync();
+    while (semaphore_read(semaphore::MATH_PACK) > 0)
+    {
+        asm volatile("nop");
+    };
     reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0); // Clear debug feature disable bit 11
                                                        // workaround for bug tenstorrent/budabackend#1372
 }
@@ -57,6 +66,10 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
     if (int8_math_enabled || uint16_with_fp32_dest)
     {
         _llk_math_dbg_feature_disable_();
+    }
+    else
+    {
+        _llk_math_dbg_feature_enable_();
     }
 }
 
