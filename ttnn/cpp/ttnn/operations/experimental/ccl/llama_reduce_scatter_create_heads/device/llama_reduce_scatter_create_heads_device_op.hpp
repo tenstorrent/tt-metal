@@ -47,11 +47,11 @@ struct LlamaReduceScatterCreateHeadsDeviceOperation {
     struct LlamaReduceScatterCreateHeads {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            tt::tt_metal::KernelHandle quaternary_reduce_reader_kernel_id;
-            tt::tt_metal::KernelHandle quaternary_reduce_writer_kernel_id;
-            tt::tt_metal::KernelHandle compute_kernel_id;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id = {};
+            tt::tt_metal::KernelHandle unary_writer_kernel_id = {};
+            tt::tt_metal::KernelHandle quaternary_reduce_reader_kernel_id = {};
+            tt::tt_metal::KernelHandle quaternary_reduce_writer_kernel_id = {};
+            tt::tt_metal::KernelHandle compute_kernel_id = {};
             std::vector<tt::tt_metal::CBHandle> cb_handles;
             CoreRangeSet core_range;
         };

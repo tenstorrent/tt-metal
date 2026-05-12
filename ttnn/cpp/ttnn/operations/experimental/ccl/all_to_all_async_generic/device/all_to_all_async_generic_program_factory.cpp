@@ -19,7 +19,7 @@ ttnn::Shape get_tiled_shape(const ttnn::Tensor& input_tensor) {
     const auto& shape = input_tensor.padded_shape();
     ttnn::SmallVector<uint32_t> tiled_shape;
     tiled_shape.reserve(shape.rank());
-    for (int i = 0; i < shape.rank(); i++) {
+    for (size_t i = 0; i < shape.rank(); i++) {
         uint32_t dim = 0;
         if (i == shape.rank() - 1) {
             dim = shape[i] / tile_shape[1];
@@ -211,21 +211,21 @@ AllToAllAsyncGenericProgram::create_at(
         }
     }
     uint32_t semaphore_sent = 0;
-    for (int l = 0; l < operation_attributes.num_links; ++l) {
+    for (uint32_t l = 0; l < operation_attributes.num_links; ++l) {
         uint32_t current_start_block = l * blocks_per_core;
         uint32_t current_end_block = (l + 1) * blocks_per_core;
         if (l == operation_attributes.num_links - 1) {
             current_end_block = num_blocks;
         }
-        for (int c = 0; c < num_senders_per_link; ++c) {
-            for (int d = 0; d < device_offsets[c].size(); ++d) {
+        for (size_t c = 0; c < num_senders_per_link; ++c) {
+            for (size_t d = 0; d < device_offsets[c].size(); ++d) {
                 semaphore_sent++;
                 block_starts[c][l].push_back(current_start_block);
                 block_ends[c][l].push_back(current_end_block);
             }
         }
         if (is_ring) {
-            for (int i = 0; i < num_splitted_devices; ++i) {
+            for (uint32_t i = 0; i < num_splitted_devices; ++i) {
                 uint32_t split = (block_ends[0][l][i] + block_starts[0][l][i]) / 2;
                 block_ends[0][l][i] = split;
                 block_starts[1][l][num_splitted_devices - 1 - i] = split;

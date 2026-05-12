@@ -24,7 +24,7 @@ struct AllToAllAsyncGenericParams {
 
 struct AllToAllAsyncGenericInputs {
     Tensor input_tensor;
-    std::optional<Tensor> persistent_output_buffer;
+    std::optional<Tensor> persistent_output_buffer = std::nullopt;
 };
 
 }  // namespace ttnn::experimental::prim

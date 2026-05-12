@@ -31,8 +31,8 @@ struct MatmulParams {
 
 struct MatmulInputs {
     std::vector<Tensor> input_tensors;                                // a,b, weights
-    std::vector<std::optional<const Tensor>> optional_input_tensors;  // bias
-    std::vector<std::optional<Tensor>> optional_output_tensors;       // output
+    std::vector<std::optional<const Tensor>> optional_input_tensors = {};  // bias
+    std::vector<std::optional<Tensor>> optional_output_tensors = {};       // output
 };
 
 }  // namespace ttnn::prim
