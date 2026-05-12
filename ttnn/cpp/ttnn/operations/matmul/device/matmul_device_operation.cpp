@@ -685,14 +685,6 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
 
     validate_matmul_tile_configuration_and_alignment(
         input_tensor_a, input_tensor_b, a_shape_padded, b_shape_padded, in0_tile, in1_tile, chosen_program_config);
-    TT_FATAL(
-        attributes.output_tile.value().get_tile_shape()[0] == in0_tile.get_height() &&
-            attributes.output_tile.value().get_tile_shape()[1] == in1_tile.get_width(),
-        "output_tile face dimensions must match matmul result tile (in0 height {} x in1 width {}), got {} x {}",
-        in0_tile.get_height(),
-        in1_tile.get_width(),
-        attributes.output_tile.value().get_tile_shape()[0],
-        attributes.output_tile.value().get_tile_shape()[1]);
     validate_matmul_block_and_subblock_configuration(attributes, chosen_program_config);
 
     validate_matmul_basic_compute_grid_and_per_core_sanity(input_tensor_a, chosen_program_config);

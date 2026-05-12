@@ -295,7 +295,9 @@ void validate_matmul_multicore_reuse_optimized_split_work_to_cores_parity(
         shard_spec = input_tensor_a.shard_spec().value();
     } else if (input_tensor_b.is_sharded()) {
         shard_spec = input_tensor_b.shard_spec().value();
-    } else if (output_mem_config.is_sharded() && output_mem_config.buffer_type() != tt::tt_metal::BufferType::DRAM) {
+    } else if (
+        output_mem_config.is_sharded() && output_mem_config.buffer_type() != tt::tt_metal::BufferType::DRAM &&
+        output_mem_config.shard_spec().has_value()) {
         shard_spec = output_mem_config.shard_spec().value();
     }
 
