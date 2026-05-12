@@ -239,4 +239,3 @@ jobs:
               echo '```'
             fi
           } >> $GITHUB_STEP_SUMMARY
-
