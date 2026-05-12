@@ -238,25 +238,16 @@ TopologyMappingResult run_topology_mapping(
     config.strict_mode = true;
     config.disable_rank_bindings = false;  // Pass the rank bindings to make sure there isn't host rank boundary issues
 
-    // Provide hostname_to_asics from PSD so same-host constraint is applied (all ASICs on a host map to one rank)
+    // PSD hostname grouping and tray/ASIC-location map (logical mesh 0 anchor + pinnings support).
     for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
         config.hostname_to_asics[desc.host_name].insert(asic_id);
+        config.asic_positions[asic_id] = std::make_pair(desc.tray_id, desc.asic_location);
     }
 
     // Extract pinnings from MGD and add to config (same as control plane)
     const auto& pinnings = mgd.get_pinnings();
     for (const auto& [pos, fabric_node] : pinnings) {
         config.pinnings.emplace_back(pos, fabric_node);
-    }
-
-    // Build ASIC positions map (required if pinnings are used)
-    if (!config.pinnings.empty()) {
-        const auto& asic_descriptors = psd.get_asic_descriptors();
-        for (const auto& [asic_id, _] : asic_descriptors) {
-            auto tray_id = psd.get_tray_id(asic_id);
-            auto asic_location = psd.get_asic_location(asic_id);
-            config.asic_positions[asic_id] = std::make_pair(tray_id, asic_location);
-        }
     }
 
     // Set per-mesh validation modes based on mesh graph policy
@@ -308,8 +299,10 @@ TopologyMappingResult run_topology_mapping(
 /**
  * @brief Extract rank bindings from topology mapping result with topology-aware splitting.
  *
- * Bindings are one row per (mesh_id, PSD hostname, mesh_host_rank), after sorting by PSD MPI rank
- * (physical host order), then mesh_id, mesh_host_rank, hostname.
+ * Bindings are one row per (mesh_id, PSD hostname, mesh_host_rank), sorted by mesh_id ascending,
+ * then mesh_host_rank, hostname, PSD rank tiebreaker — so sequential MPI rank tracks mesh topology; inter-mesh
+ * mapping in topology_mapper_utils biases logical mesh 0 toward this process's hostname and toward the physical
+ * partition that contains tray id 1 / ASIC location 1 when uniquely resolvable from discovery.
  *
  * - **Multi-process Phase 1** (several MPI ranks / PSD hostnames): each distinct hostname usually owns
  *   ASICs for a single mesh_host_rank, so the per-hostname map has one entry — behavior matches the
