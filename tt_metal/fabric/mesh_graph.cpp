@@ -691,7 +691,7 @@ void MeshGraph::print_connectivity() const {
         for (uint32_t chip_id = 0; chip_id < this->intra_mesh_connectivity_[mesh_id_val].size(); chip_id++) {
             ss << "   D" << chip_id << ": ";
             for (auto [connected_chip_id, edge] : this->intra_mesh_connectivity_[mesh_id_val][chip_id]) {
-                for (int i = 0; i < edge.connected_chip_ids.size(); i++) {
+                for (size_t i = 0; i < edge.connected_chip_ids.size(); i++) {
                     ss << edge.connected_chip_ids[i] << "(" << enchantum::to_string(edge.port_direction) << ", "
                        << edge.weight << ") ";
                 }
@@ -707,7 +707,7 @@ void MeshGraph::print_connectivity() const {
         for (uint32_t chip_id = 0; chip_id < this->inter_mesh_connectivity_[mesh_id_val].size(); chip_id++) {
             ss << "   D" << chip_id << ": ";
             for (auto [connected_mesh_id, edge] : this->inter_mesh_connectivity_[mesh_id_val][chip_id]) {
-                for (int i = 0; i < edge.connected_chip_ids.size(); i++) {
+                for (size_t i = 0; i < edge.connected_chip_ids.size(); i++) {
                     ss << "M" << *connected_mesh_id << "D" << edge.connected_chip_ids[i] << "("
                        << enchantum::to_string(edge.port_direction) << ", " << edge.weight << ") ";
                 }
