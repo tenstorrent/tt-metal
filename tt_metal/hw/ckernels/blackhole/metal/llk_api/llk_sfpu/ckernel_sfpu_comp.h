@@ -16,50 +16,59 @@ namespace sfpu {
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp(uint exponent_size_8) {
-    const vFloat zero = 0.0f;
-    const vFloat one = 1.0f;
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
+        vInt bits = reinterpret<vInt>(v);
+        vInt abs_bits = bits & 0x7FFFFFFF;
 
-        // a[i] == 0
+        // eqz / nez: abs_bits==0 matches both +0.0 and -0.0;
+        // NaN has abs_bits!=0 so it naturally falls to the correct branch.
         if constexpr (COMP_MODE == SfpuType::equal_zero) {
-            v_if(_sfpu_is_fp16_zero_(v, exponent_size_8)) { v = one; }
-            v_else { v = zero; }
+            v_if(abs_bits == 0) { v = vConst1; }
+            v_else { v = vConst0; }
             v_endif;
         }
 
-        // a[i] != 0
         if constexpr (COMP_MODE == SfpuType::not_equal_zero) {
-            v_if(_sfpu_is_fp16_zero_(v, exponent_size_8)) { v = zero; }
-            v_else { v = one; }
+            v_if(abs_bits == 0) { v = vConst0; }
+            v_else { v = vConst1; }
             v_endif;
         }
 
-        // a[i] < 0
-        if constexpr (COMP_MODE == SfpuType::less_than_zero) {
-            v_if(v >= 0.0f) { v = zero; }
-            v_else { v = one; }
-            v_endif;
-        }
+        // Ordered comparisons: sign bit + magnitude check, then NaN fix-up.
+        // NaN in float32: exponent==0xFF and mantissa!=0, i.e. abs_bits > 0x7F800000.
+        if constexpr (
+            COMP_MODE == SfpuType::less_than_zero || COMP_MODE == SfpuType::greater_than_equal_zero ||
+            COMP_MODE == SfpuType::greater_than_zero || COMP_MODE == SfpuType::less_than_equal_zero) {
+            vInt sign = bits & 0x80000000;
 
-        // a[i] >= 0
-        if constexpr (COMP_MODE == SfpuType::greater_than_equal_zero) {
-            v_if(v >= 0.0f) { v = one; }
-            v_else { v = zero; }
-            v_endif;
-        }
+            if constexpr (COMP_MODE == SfpuType::less_than_zero) {
+                v_if(sign != 0 && abs_bits != 0) { v = vConst1; }
+                v_else { v = vConst0; }
+                v_endif;
+            }
 
-        // a[i] > 0
-        if constexpr (COMP_MODE == SfpuType::greater_than_zero) {
-            v_if(v > 0.0f) { v = one; }
-            v_else { v = zero; }
-            v_endif;
-        }
+            if constexpr (COMP_MODE == SfpuType::greater_than_equal_zero) {
+                v_if(sign == 0 || abs_bits == 0) { v = vConst1; }
+                v_else { v = vConst0; }
+                v_endif;
+            }
 
-        // a[i] <= 0
-        if constexpr (COMP_MODE == SfpuType::less_than_equal_zero) {
-            v_if(v > 0.0f) { v = zero; }
-            v_else { v = one; }
+            if constexpr (COMP_MODE == SfpuType::greater_than_zero) {
+                v_if(sign == 0 && abs_bits != 0) { v = vConst1; }
+                v_else { v = vConst0; }
+                v_endif;
+            }
+
+            if constexpr (COMP_MODE == SfpuType::less_than_equal_zero) {
+                v_if(sign != 0 || abs_bits == 0) { v = vConst1; }
+                v_else { v = vConst0; }
+                v_endif;
+            }
+
+            // NaN fix-up: abs_bits > 0x7F800000 means NaN; use saved abs_bits (from original v).
+            vInt nan_check = abs_bits - 0x7F800000;
+            v_if(nan_check > 0) { v = vConst0; }
             v_endif;
         }
 
