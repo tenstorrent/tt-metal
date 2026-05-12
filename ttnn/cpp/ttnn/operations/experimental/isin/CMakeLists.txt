@@ -21,7 +21,7 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
+        FILES ${TTNN_OP_EXPERIMENTAL_ISIN_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -30,13 +30,7 @@ target_sources(
         ${TTNN_OP_EXPERIMENTAL_ISIN_SRCS}
 )
 
-target_include_directories(ttnn_op_experimental_isin PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_experimental_isin
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_experimental_isin PRIVATE TT::Metalium PUBLIC TTNN::Core)
 
 install(
     TARGETS
@@ -47,4 +41,4 @@ install(
         COMPONENT ttnn-runtime
 )
 
-install(TARGETS ttnn_op_experimental_isin LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_experimental_isin FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)
