@@ -307,26 +307,37 @@ class TtDPTFusionStage:
 
     # ------------------------------------------------------------------
     def _bilinear_upsample(self, x, target_h=None, target_w=None, scale=2):
-        """Approximate bilinear upsample with nearest-neighbor + matching dims.
+        """Bilinear upsample via CPU round-trip (matching HF F.interpolate).
 
-        ttnn only supports nearest-neighbor, so we use it as an approximation.
-        When target_h/w given, upsample to at least that size then slice.
+        HF fusion uses mode='bilinear', align_corners=True for size-targeted,
+        and align_corners=True with scale_factor=2 for the final layer.
         """
-        batch_size, channels, h, w = x.shape
+        import torch
+        import torch.nn.functional as F
+
+        x_cpu = ttnn.to_torch(x).float()
 
         if target_h is not None and target_w is not None:
-            # Compute integer scale that covers target
-            scale = max((target_h + h - 1) // h, (target_w + w - 1) // w)
+            x_cpu = F.interpolate(
+                x_cpu, size=(target_h, target_w),
+                mode="bilinear", align_corners=True,
+            )
+        else:
+            x_cpu = F.interpolate(
+                x_cpu, scale_factor=scale,
+                mode="bilinear", align_corners=True,
+            )
 
-        x = ttnn_upsample(x, scale_factor=scale)
-        h_up, w_up = h * scale, w * scale
-
-        if target_h is not None and target_w is not None:
-            if h_up != target_h or w_up != target_w:
-                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-                x = ttnn.slice(x, (0, 0, 0, 0), (batch_size, channels, target_h, target_w))
-            return x, target_h, target_w
-        return x, h_up, w_up
+        out_h, out_w = x_cpu.shape[2], x_cpu.shape[3]
+        x = ttnn.from_torch(
+            x_cpu.to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+        )
+        if target_h is not None:
+            return x, out_h, out_w
+        return x, out_h, out_w
 
     # ------------------------------------------------------------------
     def _projection_1x1(self, x, params):
@@ -503,19 +514,25 @@ class TtDPTHead:
 
         # Bilinear interpolate to full input resolution (patch_h * 14, patch_w * 14)
         # HF uses F.interpolate(mode="bilinear", align_corners=True)
-        # ttnn.upsample only supports nearest-neighbor, so compute the correct
-        # integer scale factor.  37*14 = 518;  h after conv1 = 148 (from 37×4 fusion).
-        # 518 / 148 ≈ 3.5 — not integer, so we do nearest ×4 (→592) then slice.
+        # ttnn doesn't support bilinear, so we round-trip through PyTorch CPU.
+        # This is only 1 tensor at (B, 128, H, W) so the cost is acceptable.
+        import torch
+        import torch.nn.functional as F
         target_h = patch_height * self.patch_size  # 518
         target_w = patch_width * self.patch_size   # 518
-        # Compute the smallest integer scale that covers the target size
-        scale = max((target_h + h - 1) // h, (target_w + w - 1) // w)  # ceil div
-        x = ttnn_upsample(x, scale_factor=scale)
-        h_up, w_up = h * scale, w * scale
-        # Slice to exact target size if overshot
-        if h_up != target_h or w_up != target_w:
-            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-            x = ttnn.slice(x, (0, 0, 0, 0), (batch_size, 128, target_h, target_w))
+        x_cpu = ttnn.to_torch(x).float()
+        x_cpu = F.interpolate(
+            x_cpu,
+            size=(target_h, target_w),
+            mode="bilinear",
+            align_corners=True,
+        )
+        x = ttnn.from_torch(
+            x_cpu.to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+        )
         h, w = target_h, target_w
 
         # Conv 2: 128 -> 32
