@@ -6,10 +6,8 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import comp_pcc
 from models.common.utility_functions import torch_random
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
-from functools import reduce
+from tests.ttnn.utils_for_testing import assert_equal
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
@@ -94,11 +92,8 @@ def test_broadcast_to(device, dtype_pt, dtype_tt, shape_and_broadcast_spec, memo
 
     if dtype_pt == torch.int32 or dtype_pt == torch.uint32 or dtype_pt == torch.uint16:
         assert torch.equal(torch_result.to(output.dtype), output), "Integer tensors not equal"
-    elif dtype_pt == torch.float32:
-        assert_with_pcc(torch_result, output, 0.9999)
-        assert_with_ulp(torch_result, output, 0)
     else:
-        assert_with_pcc(torch_result, output, 0.9999)
+        assert_equal(torch_result, output)
 
 
 input_bcast_shape_pairs = [
@@ -149,7 +144,7 @@ def test_broadcast_to_out(device, dtype_pt, dtype_tt, shape_and_broadcast_spec, 
         output.shape == torch_result.shape
     ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
 
-    assert_with_pcc(torch_result, output, 0.9999)
+    assert_equal(torch_result, output)
 
 
 profile_input_bcast_shape_pairs = [
@@ -199,7 +194,7 @@ def test_broadcast_to_profile(device, dtype_pt, dtype_tt, shape_and_broadcast_sp
             output.shape == torch_result.shape
         ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
 
-        assert_with_pcc(torch_result, output, 0.9999)
+        assert_equal(torch_result, output)
         ttnn.synchronize_device(device)
 
 
@@ -284,4 +279,4 @@ def test_broadcast_to_bf8_b(device, shape_and_broadcast_spec):
         output.shape == torch_result.shape
     ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
 
-    assert_with_pcc(torch_result, output, 0.9999)
+    assert_equal(torch_result, output)
