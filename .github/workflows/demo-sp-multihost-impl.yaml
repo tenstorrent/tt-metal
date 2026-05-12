@@ -95,6 +95,7 @@ jobs:
       PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
       PRTE_MCA_prte_fwd_environment: "true"
       PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      VIRTUAL_ENV: /opt/venv
       HOME: /home/user
       PIP_CACHE_DIR: /home/user/.cache/pip
       PYTHONPATH: /home/user/tt-metal
@@ -202,7 +203,16 @@ jobs:
 
           # Unpack artifacts
           mpirun --pernode tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
-          mpirun --pernode pip install $(find /ci/artifacts | grep whl)
+          ttnn_wheels=(/ci/artifacts/**/ttnn-*.whl)
+          echo "Found ${#ttnn_wheels[@]} ttnn wheel candidate(s) under /ci/artifacts"
+          printf ' - %s\n' "${ttnn_wheels[@]}"
+          if [ ${#ttnn_wheels[@]} -eq 0 ]; then
+            echo "ERROR: Could not find ttnn-*.whl under /ci/artifacts"
+            echo "Artifact directory layout:"
+            ls -R /ci/artifacts
+            exit 1
+          fi
+          mpirun --pernode pip install "${ttnn_wheels[@]}"
 
       - name: Reset cards and validate cluster for ${{ matrix.test-group.name }}
         working-directory: /tmp
@@ -261,6 +271,7 @@ jobs:
             echo "host=$(hostname)"
             echo "python3=$(command -v python3)"
             python3 -V
+            python3 -c "import ttnn.device; print(\"ttnn.device import: OK\")"
             python3 -c "import transformers; print(\"transformers=\" + transformers.__version__)"
           '
 
