@@ -452,12 +452,12 @@ struct BlockRep {
         std::vector<BlockRep> first;
         std::vector<BlockRep> second;
 
-        int rep_idx = idx / single_rep();
+        uint32_t rep_idx = idx / single_rep();
         if (rep_idx > 0) {
             first.emplace_back(n_data, n_mixed, n_pads, rep_idx);
         }
 
-        int within_rep_idx = idx % single_rep();
+        uint32_t within_rep_idx = idx % single_rep();
         bool is_within_rep = within_rep_idx > 0;
         if (is_within_rep) {
             if (within_rep_idx <= n_data) {
@@ -473,7 +473,7 @@ struct BlockRep {
             }
         }
 
-        int remaining_times = times - rep_idx - is_within_rep;
+        uint32_t remaining_times = times - rep_idx - is_within_rep;
         if (remaining_times > 0) {
             second.emplace_back(n_data, n_mixed, n_pads, remaining_times);
         }
@@ -515,7 +515,7 @@ struct FullRep {
         std::vector<BlockRep> block_reps;
         block_reps.reserve(2 * times_total);
 
-        for (int i = 0; i < times_total; ++i) {
+        for (uint32_t i = 0; i < times_total; ++i) {
             block_reps.push_back(rep);
             block_reps.push_back(pad);
         }
@@ -553,21 +553,21 @@ inline std::vector<std::vector<BlockRep>> distribute_work(
     std::vector<std::vector<BlockRep>> core_assignments;
     core_assignments.reserve(num_cores);
 
-    for (int i = 0; i < num_cores; i++) {
-        int blocks_to_process = blocks_per_core;
+    for (uint32_t i = 0; i < num_cores; i++) {
+        uint32_t blocks_to_process = blocks_per_core;
         if (i == num_cores - 1 && has_cliff) {
             blocks_to_process = nblocks_per_core_cliff;
         }
 
         // Assign blocks to cores
         std::vector<BlockRep> core_blocks;
-        int core_blocks_count = 0;
+        uint32_t core_blocks_count = 0;
         while (core_blocks_count < blocks_to_process) {
             if (total_work.empty()) {
                 break;
             }
 
-            int remaining_core_blocks = blocks_to_process - core_blocks_count;
+            uint32_t remaining_core_blocks = blocks_to_process - core_blocks_count;
             auto& first = total_work.front();
             if (first.block_count() <= remaining_core_blocks) {
                 core_blocks.push_back(first);

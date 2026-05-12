@@ -30,15 +30,15 @@ ttnn::Tensor unsqueeze(const ttnn::Tensor& input_tensor, const int dim) {
     }
 
     // Insert new dimension
-    for (int i = 0; i < rank; ++i) {
-        if (i == normal_dim) {
+    for (uint32_t i = 0; i < rank; ++i) {
+        if (i == static_cast<uint32_t>(normal_dim)) {
             output_shape_vector.push_back(1);
         }
         output_shape_vector.push_back(tensor_shape[i]);
     }
 
     // If the dimension is at the end, append it
-    if (normal_dim == rank) {
+    if (static_cast<uint32_t>(normal_dim) == rank) {
         output_shape_vector.push_back(1);
     }
 

@@ -193,7 +193,7 @@ std::vector<Tensor> sort(
         return {input_tensor, indices};
     }
 
-    const bool is_dim_last_idx = (dim == -1 || dim == rank - 1);
+    const bool is_dim_last_idx = (dim == -1 || dim == static_cast<int8_t>(rank) - 1);
     const bool is_rank_le_4d = rank <= 4;
 
     const auto memory_config_value = memory_config.has_value() ? memory_config.value() : input_tensor.memory_config();
