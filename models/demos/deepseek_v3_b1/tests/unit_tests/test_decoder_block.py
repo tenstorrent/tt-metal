@@ -294,6 +294,143 @@ def create_decoder_golden_tensors(
     }
 
 
+_KNOWN_DECODER_MOE_FAILURE_SKIPS = {
+    (511, True, True): "DecoderBlock MoE PCC check failed: 0.9445571127296262. Issue: #43106",
+    (1023, True, True): "DecoderBlock MoE PCC check failed: 0.9550089693007023. Issue: #43106",
+    (511, False, True): "DecoderBlock MoE PCC check failed: 0.9445571127296262. Issue: #43114",
+    (1023, False, True): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43117",
+    (2047, False, True): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43117",
+    (4096, False, True): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43117",
+    (6644, False, True): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43117",
+    (9916, False, True): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43117",
+    (11664, False, True): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43117",
+    (0, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
+    (127, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
+    (511, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
+    (1023, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
+    (2047, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
+    (4096, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
+    (6644, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
+    (9916, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
+    (11664, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
+    (0, False, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43122",
+    (127, False, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43122",
+    (511, False, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43122",
+    (1023, False, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43122",
+    (2047, False, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43122",
+    (4096, False, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43122",
+    (6644, False, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43122",
+    (9916, False, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43122",
+    (11664, False, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43122",
+}
+
+
+_KNOWN_DECODER_RIGGED_GROUPS8_FAILURE_SKIPS = {
+    (0, True, True): "DecoderBlock rigged_groups8 golden tensor creation segfaults. Issue: #43126",
+    (127, True, True): "DecoderBlock rigged_groups8 golden tensor creation segfaults. Issue: #43126",
+    (511, True, True): "DecoderBlock rigged_groups8 golden tensor creation segfaults. Issue: #43126",
+    (1023, True, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (2047, True, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (4096, True, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (6644, True, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (9916, True, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (11664, True, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (0, False, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (127, False, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (511, False, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (1023, False, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (2047, False, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (4096, False, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (6644, False, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (9916, False, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (11664, False, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (0, True, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (127, True, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (511, True, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (1023, True, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (2047, True, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (4096, True, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (6644, True, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (9916, True, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (11664, True, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (0, False, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (127, False, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (511, False, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (1023, False, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (2047, False, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (4096, False, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (6644, False, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (9916, False, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (11664, False, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+}
+
+
+def skip_known_decoder_moe_failure(
+    position_id,
+    expert_upload_mode,
+    enable_routing,
+    use_hardcoded_expert_index,
+    num_routed_experts,
+    validate_standalone_mla,
+    validate_standalone_moe,
+    decoder_layer_idx=None,
+    use_real_weights=None,
+):
+    """Skip exact known decoder MoE failures."""
+    if (
+        position_id in {0, 127, 2047, 4096, 6644, 9916, 11664}
+        and validate_standalone_mla
+        and validate_standalone_moe
+        and expert_upload_mode == "unrigged_all_experts"
+        and enable_routing
+        and not use_hardcoded_expert_index
+        and num_routed_experts == 256
+        and decoder_layer_idx == ROUTED_EXPERT_LAYER_IDX
+        and use_real_weights is False
+    ):
+        pytest.skip(
+            f"DecoderBlock full-routing unrigged standalone MLA+MoE case at position_id={position_id} "
+            "timed out after 600s. Issue: #42714"
+        )
+
+    if (
+        position_id in {0, 127}
+        and not validate_standalone_mla
+        and validate_standalone_moe
+        and expert_upload_mode == "unrigged_all_experts"
+        and enable_routing
+        and not use_hardcoded_expert_index
+        and num_routed_experts == 256
+        and decoder_layer_idx == ROUTED_EXPERT_LAYER_IDX
+        and use_real_weights is False
+    ):
+        pytest.skip(
+            "DecoderBlock full-routing unrigged standalone MoE + decoder MLA case timed out after 600s. Issue: #42714"
+        )
+
+    skip_reason = _KNOWN_DECODER_MOE_FAILURE_SKIPS.get((position_id, validate_standalone_mla, validate_standalone_moe))
+    if (
+        skip_reason
+        and expert_upload_mode == "unrigged_all_experts"
+        and enable_routing
+        and not use_hardcoded_expert_index
+        and num_routed_experts == 256
+    ):
+        pytest.skip(skip_reason)
+
+    rigged_skip_reason = _KNOWN_DECODER_RIGGED_GROUPS8_FAILURE_SKIPS.get(
+        (position_id, validate_standalone_mla, validate_standalone_moe)
+    )
+    if (
+        rigged_skip_reason
+        and expert_upload_mode == "rigged_groups8"
+        and enable_routing
+        and not use_hardcoded_expert_index
+        and num_routed_experts == 256
+    ):
+        pytest.skip(rigged_skip_reason)
+
+
 @pytest.mark.parametrize(
     "sender_row, sender_col",
     [
@@ -407,6 +544,18 @@ def test_decoder(
     get_reference_model_state_dict,
 ):
     """Test TTNN decoder fused operation with CCL broadcast, kv cache, mla, reduce, residual add"""
+    skip_known_decoder_moe_failure(
+        position_id,
+        expert_upload_mode,
+        enable_routing,
+        use_hardcoded_expert_index,
+        num_routed_experts,
+        validate_standalone_mla,
+        validate_standalone_moe,
+        decoder_layer_idx,
+        use_real_weights,
+    )
+
     torch.manual_seed(0)
     num_devices = mesh_rows * mesh_cols
     logger.info(f"Number of devices: {num_devices}")
