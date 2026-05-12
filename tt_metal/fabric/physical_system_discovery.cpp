@@ -646,7 +646,7 @@ PhysicalSystemDescriptor run_local_discovery_live(
     // Live discovery and silicon discovery refresh the descriptor from UMD; other modes keep a stable snapshot of
     // the caller-provided descriptor.
     auto& cluster_desc_ref = *cdptr;
-    run_local_discovery(
+    return run_local_discovery(
         cluster_desc_ref,
         distributed_context,
         target_device_type,
