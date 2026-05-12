@@ -11,8 +11,6 @@ import math
 from pathlib import Path
 from typing import Any
 
-import torch
-
 from .vae.decoder import TtOobleckDecoder
 
 
@@ -150,26 +148,15 @@ class TtOobleckVaeDecoder:
             latents_btc = ttnn.typecast(latents_btc, dec.activation_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         batch = int(latents_btc.shape[0])
+        latent_frames = int(latents_btc.shape[1])
+        c_lat = int(latents_btc.shape[2])
         if batch > 1:
-            lat_cpu = ttnn.to_torch(latents_btc).to(dtype=torch.float32).contiguous()
             parts = []
             for b in range(batch):
-                slab_cpu = lat_cpu[b : b + 1, :, :].contiguous()
-                slab_tt = ttnn.from_torch(
-                    slab_cpu,
-                    dtype=ttnn.float32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    device=dec.device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                parts.append(self.decode_tiled(slab_tt, chunk_size=chunk_size, overlap=overlap))
-                try:
-                    ttnn.deallocate(slab_tt)
-                except Exception:
-                    pass
+                slab = ttnn.slice(latents_btc, (b, 0, 0), (b + 1, latent_frames, c_lat))
+                parts.append(self.decode_tiled(slab, chunk_size=chunk_size, overlap=overlap))
             return ttnn.concat(parts, dim=0) if hasattr(ttnn, "concat") else ttnn.concatenate(parts, dim=0)
 
-        latent_frames = int(latents_btc.shape[1])
         chunk_size = int(chunk_size)
         overlap = int(overlap)
         if chunk_size < 8:
@@ -190,11 +177,8 @@ class TtOobleckVaeDecoder:
             raise ValueError(f"chunk_size {chunk_size} must be > 2 * overlap {overlap}")
         num_steps = math.ceil(latent_frames / stride)
 
-        # Host-side latent windows: avoids device ``ttnn.slice`` edge cases; decoder still runs on device.
-        lat_cpu = ttnn.to_torch(latents_btc).to(dtype=torch.float32).contiguous()
-        if lat_cpu.dim() != 3 or int(lat_cpu.shape[0]) != 1:
-            raise ValueError(f"decode_tiled tiling path expects latents [1,T,C] on host, got {tuple(lat_cpu.shape)}")
-
+        # Device ``ttnn.slice`` on ROW_MAJOR latents is safe for arbitrary ``[win_start, win_end)``;
+        # TILE slices require 32-aligned bounds (see comment at top of this method).
         cores = []
         upsample_factor = None
 
@@ -204,19 +188,8 @@ class TtOobleckVaeDecoder:
             win_start = max(0, core_start - overlap)
             win_end = min(latent_frames, core_end + overlap)
 
-            slab_cpu = lat_cpu[:, win_start:win_end, :].contiguous()
-            latent_chunk = ttnn.from_torch(
-                slab_cpu,
-                dtype=ttnn.float32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=dec.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            latent_chunk = ttnn.slice(latents_btc, (0, win_start, 0), (1, win_end, c_lat))
             wav = dec(latent_chunk)
-            try:
-                ttnn.deallocate(latent_chunk)
-            except Exception:
-                pass
             # Decoder ends with conv2 → often TILE; trim uses ttnn.slice which is not safe on TILE
             # for arbitrary [T_start, T_end) (same 32-tile alignment rules as latents).
             wav = ttnn.to_layout(wav, ttnn.ROW_MAJOR_LAYOUT)
