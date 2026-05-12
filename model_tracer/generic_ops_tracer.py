@@ -991,7 +991,21 @@ def run_test_with_tracing(
         if extra_args:
             print(f"📎 Passing additional arguments: {' '.join(extra_args)}")
 
-        cmd = [python_cmd, "-m", "pytest", test_path, "-v", "-s", "--timeout=0", "--trace-params"] + extra_args
+        # Load the tracer-only pytest plugin explicitly so the top-level
+        # conftest does not need to carry --trace-params or the per-test
+        # trace dir fixture. The plugin lives in model_tracer/.
+        cmd = [
+            python_cmd,
+            "-m",
+            "pytest",
+            test_path,
+            "-v",
+            "-s",
+            "--timeout=0",
+            "-p",
+            "model_tracer.tracer_pytest_plugin",
+            "--trace-params",
+        ] + extra_args
     else:
         print(f"✅ No pytest cases detected, running as standalone Python script...")
         cmd = [python_cmd, test_path, "--trace-params"] + extra_args
