@@ -559,7 +559,7 @@ def run_falcon_demo_kv(
         "inference_prefill": time_prefill_inference,
         "inference_decode": time_decode_inference,
         "inference_total": time_prefill_inference + time_decode_inference,
-        "prefill_time_to_token": prefill_time_to_token_per_user,  # time to first output token (1 user)
+        "prefill_time_to_first_token": prefill_time_to_token_per_user,  # time to first output token (1 user)
         "inference_user_throughput_prefill": num_users_generated_prefill / time_prefill_inference,  # users/s
         "prefill_t/s": num_users_generated_prefill / time_prefill_inference * prefill_ids.shape[1],  # tokens/s
         "decode_t/s": num_tokens_generated_decode / time_decode_inference,  # tokens/s
@@ -581,7 +581,7 @@ def run_falcon_demo_kv(
     logger.info(f"prefill inference time: {round(measurements['inference_prefill'], 5)} s")
     logger.info(f"decode inference time: {round(measurements['inference_decode'], 5)} s")
     logger.info(f"total inference time: {round(measurements['inference_total'], 5)} s")
-    logger.info(f"time to first token (prefill, 1st user): {round(measurements['prefill_time_to_token'], 5)} s")
+    logger.info(f"time to first token (prefill, 1st user): {round(measurements['prefill_time_to_first_token'], 5)} s")
     if not prefill_on_host:
         logger.info(
             f"inference throughput prefill: {round(measurements['inference_user_throughput_prefill'], 5)} users/s"

@@ -356,7 +356,7 @@ def run_mamba_demo(
         "inference_prefill": prefill_stats.total_time,
         "inference_decode": decode_stats.total_time,
         "prefill_t/s": prefill_stats.mean_throughput,
-        "prefill_time_to_token": time_to_first_token,
+        "prefill_time_to_first_token": time_to_first_token,
         "decode_t/s": decode_stats.mean_throughput,
         "decode_t/s/u": decode_stats.mean_throughput_per_user,
         "prefill_decode_t/s/u": time_to_first_token,

@@ -595,7 +595,7 @@ def test_multimodal_demo_text(
         "compile_decode": compile_decode_time,
         "inference_prefill": total_inference_prefill_time,
         "inference_decode": total_inference_decode_time,
-        "prefill_time_to_token": avg_ttft,
+        "prefill_time_to_first_token": avg_ttft,
         "prefill_t/s": avg_prefill_t_s,
         "decode_t/s/u": avg_decode_t_s_u,
         "decode_t/s": avg_decode_t_s,
@@ -611,7 +611,7 @@ def test_multimodal_demo_text(
         f"Total Decode inference time ({max_gen_len} iterations): {round(measurements['inference_decode'], 4)}s"
     )
     logger.info("")
-    logger.info(f"Time to first token: {round(measurements['prefill_time_to_token'] * 1000, 2)}ms")
+    logger.info(f"Time to first token: {round(measurements['prefill_time_to_first_token'] * 1000, 2)}ms")
     logger.info(f"Prefill t/s: {round(measurements['prefill_t/s'], 2)} tok/s")
     logger.info(
         f"Average speed: {round(1 / avg_decode_t_s_u * 1000, 2)}ms @ {round(avg_decode_t_s_u, 2)} tok/s/user ({round(avg_decode_t_s, 2)} tok/s throughput)"

@@ -126,7 +126,7 @@ def _print_performance_metrics(results: dict) -> None:
         logger.info(f"Config preparation - Prefill: {statistics.get('preparing_prefill_config', 0)*1000:.2f}ms")
         logger.info(f"Config preparation - Decode: {statistics.get('preparing_decode_config', 0)*1000:.2f}ms")
         logger.info(f"Prefill time: {statistics['inference_prefill']*1000:.2f}ms")
-        logger.info(f"Average time to first token: {statistics['prefill_time_to_token']*1000:.2f}ms")
+        logger.info(f"Average time to first token: {statistics['prefill_time_to_first_token']*1000:.2f}ms")
         logger.info(f"Prefill tokens/sec: {statistics['prefill_t/s']:.2f}")
         logger.info(f"Decode tokens/sec/user: {statistics['decode_t/s/u']:.2f}")
         logger.info(f"Decode tokens/sec (total): {statistics['decode_t/s']:.2f}")

@@ -379,7 +379,7 @@ def test_validate_perf_targets_local_artifacts_no_regression_then_regression(tmp
                                 "status": "active",
                                 "perf": {
                                     "decode_t/s/u": 100.0,
-                                    "prefill_time_to_token": 0.10,
+                                    "prefill_time_to_first_token": 0.10,
                                 },
                                 "accuracy": {
                                     "top1": 90.0,
@@ -452,7 +452,7 @@ def test_validate_perf_targets_local_artifacts_no_regression_then_regression(tmp
 
     # Inject a regression for model-a:
     # - throughput drops below target
-    # - lower-is-better prefill_time_to_token gets worse
+    # - lower-is-better prefill_time_to_first_token gets worse
     # - accuracy drops below target
     (benchmark_dir / "complete_run_1.json").write_text(
         json.dumps(
@@ -474,7 +474,7 @@ def test_validate_perf_targets_local_artifacts_no_regression_then_regression(tmp
     regressed = _run_validator(tmp_path)
     assert regressed.returncode == 1
     assert "decode_t/s/u" in regressed.stdout
-    assert "prefill_time_to_token" in regressed.stdout
+    assert "prefill_time_to_first_token" in regressed.stdout
     assert "top1" in regressed.stdout
 
 
@@ -593,7 +593,7 @@ def test_validate_perf_targets_requires_ttft_measurement_when_target_exists(tmp_
                                 "batch_size": 1,
                                 "seq_len": 4096,
                                 "status": "active",
-                                "perf": {"decode_t/s/u": 90.0, "prefill_time_to_token": 0.12},
+                                "perf": {"decode_t/s/u": 90.0, "prefill_time_to_first_token": 0.12},
                                 "accuracy": {},
                             }
                         ]
@@ -608,7 +608,7 @@ def test_validate_perf_targets_requires_ttft_measurement_when_target_exists(tmp_
 
     result = _run_validator(tmp_path)
     assert result.returncode == 1
-    assert "prefill_time_to_token" in result.stdout
+    assert "prefill_time_to_first_token" in result.stdout
 
 
 def test_validate_perf_targets_uses_decode_tps_target_without_recomputing_from_per_user_rate(tmp_path):

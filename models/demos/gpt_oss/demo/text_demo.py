@@ -881,7 +881,7 @@ def test_gpt_oss_demo(
         "compile_decode": compile_decode_time,
         "inference_prefill": total_inference_prefill_time,
         "inference_decode": total_inference_decode_time,
-        "prefill_time_to_token": avg_time_to_first_token,
+        "prefill_time_to_first_token": avg_time_to_first_token,
         "prefill_t/s": prefill_tok_s,  # tokens/s
         "decode_t/s/u": decode_tok_s_user,  # tokens/s/u
         "decode_t/s": decode_tok_s,  # tokens/s
@@ -1003,7 +1003,7 @@ def test_gpt_oss_demo(
 
                     # Verify prefill performance with prefill-specific tolerance
                     prefill_targets = {
-                        "prefill_time_to_token": current_ttft_target / 1000,  # convert to seconds
+                        "prefill_time_to_first_token": current_ttft_target / 1000,  # convert to seconds
                     }
                     verify_perf(
                         measurements,

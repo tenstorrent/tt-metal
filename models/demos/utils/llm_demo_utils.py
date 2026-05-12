@@ -20,7 +20,7 @@ def create_benchmark_data(profiler: BenchmarkProfiler, measurements: dict, N_war
     Create a benchmark data object and populate the object with the given measurements.
 
     Pre-requisites:
-    - The measurements dictionary should contain the following keys: "prefill_t/s", "prefill_time_to_token", "decode_t/s", "decode_t/s/u"
+    - The measurements dictionary should contain the following keys: "prefill_t/s", "prefill_time_to_first_token", "decode_t/s", "decode_t/s/u"
     - The profiler object should contain the start and end times for the steps "inference_prefill", "inference_decode"
 
     Optional:
@@ -36,7 +36,7 @@ def create_benchmark_data(profiler: BenchmarkProfiler, measurements: dict, N_war
         key in measurements
         for key in [
             "prefill_t/s",
-            "prefill_time_to_token",
+            "prefill_time_to_first_token",
             "decode_t/s",
             "decode_t/s/u",
         ]
@@ -65,7 +65,7 @@ def create_benchmark_data(profiler: BenchmarkProfiler, measurements: dict, N_war
         0,
         "inference_prefill",
         "time_to_token",
-        measurements["prefill_time_to_token"],
+        measurements["prefill_time_to_first_token"],
         step_warm_up_num_iterations=(
             N_warmup_iter["inference_prefill"] if "inference_prefill" in N_warmup_iter else None
         ),
@@ -159,7 +159,7 @@ def verify_perf(
     expected_measurements_default = {
         "compile_prefill": False,
         "compile_decode": False,
-        "prefill_time_to_token": False,
+        "prefill_time_to_first_token": False,
         "prefill_decode_t/s/u": False,
         "prefill_t/s": True,
         "decode_t/s": True,
@@ -169,7 +169,7 @@ def verify_perf(
 
     # Default metrics where lower is better
     lower_is_better_metrics_default = {
-        "prefill_time_to_token",
+        "prefill_time_to_first_token",
         "compile_prefill",
         "compile_decode",
     }

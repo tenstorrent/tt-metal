@@ -1107,7 +1107,7 @@ def test_demo_text(
     measurements = {
         "inference_prefill": total_inference_prefill_time,
         "inference_decode": total_inference_decode_time,
-        "prefill_time_to_token": avg_time_to_first_token,
+        "prefill_time_to_first_token": avg_time_to_first_token,
         "prefill_t/s": prefill_tok_s,  # tokens/s
         "decode_t/s/u": decode_tok_s_user,  # tokens/s/u
         "decode_t/s": decode_tok_s,  # tokens/s
@@ -1317,7 +1317,7 @@ def test_demo_text(
             # Only call verify_perf if the model_device_key exists in the targets
             ci_targets = {}
             if model_device_key in ci_target_ttft:
-                ci_targets["prefill_time_to_token"] = ci_target_ttft[model_device_key] / 1000  # convert to seconds
+                ci_targets["prefill_time_to_first_token"] = ci_target_ttft[model_device_key] / 1000  # convert to seconds
             if model_device_key in ci_target_decode_tok_s_u:
                 ci_targets["decode_t/s/u"] = ci_target_decode_tok_s_u[model_device_key]
                 # calculate from per-user rate

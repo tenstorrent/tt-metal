@@ -2340,7 +2340,7 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
             "preparing_decode_config": decode_config_time,
             "inference_prefill": prefill_time,
             "inference_decode": total_decode_time,
-            "prefill_time_to_token": avg_time_to_first_token,
+            "prefill_time_to_first_token": avg_time_to_first_token,
             "prefill_t/s": prefill_tokens_per_sec,
             "decode_t/s/u": decode_tokens_per_sec_per_user,
             "trace_execution_t/s/u @128th token": trace_execution_tokens_per_sec_per_user_128th_token,
