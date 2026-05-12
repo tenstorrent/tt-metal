@@ -136,6 +136,7 @@ jobs:
         id: get-allocation-data
         with:
           allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          namespace: ttop-ci
 
       - name: Create test environment
         uses: ./.github/actions/ttop-create-environment
