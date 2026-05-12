@@ -1300,16 +1300,16 @@ def prepare_moe_routed_experts_bspm_tp8(
         bspm_data = load_bspm_for_layer(str(bspm_path))
         logger.info("  BSPM TP8 mixed-precision compression for {} experts", bspm_data["n_experts"])
 
-    # Diagnostic: BSPM_DEQUANT_TO_BFP4=1 applies BSPM mixed-precision quantization
+    # Diagnostic: TT_BSPM_DEQUANT_TO_BFP4=1 applies BSPM mixed-precision quantization
     # in software (per-tile quantize-dequantize), then uploads the result through
     # the uniform-bfp4 storage path (the kernel sees uniform-bfp4 tiles). The math
     # is the same as the compressed-tile dispatch kernel would produce; this mode
     # isolates the mixed-precision math from the compressed-tile kernel code path.
-    dequant_to_bfp4 = bspm_data is not None and os.environ.get("BSPM_DEQUANT_TO_BFP4", "0") == "1"
+    dequant_to_bfp4 = bspm_data is not None and os.environ.get("TT_BSPM_DEQUANT_TO_BFP4", "0") == "1"
     bspm_codes_for_dequant: np.ndarray | None = None
     if dequant_to_bfp4:
         logger.info(
-            "BSPM_DEQUANT_TO_BFP4=1 for layer {}: applying BSPM in software, "
+            "TT_BSPM_DEQUANT_TO_BFP4=1 for layer {}: applying BSPM in software, "
             "routing weights through uniform bfloat4_b TP8 storage "
             "(mixed-precision math, uniform-bfp4 kernel path)",
             layer_idx,
@@ -1380,7 +1380,7 @@ def prepare_moe_routed_experts_bspm_tp8(
             uniform_assignment = np.ones((tiles_h_full, N // tile_w), dtype=np.int8)
             all_assignments = [uniform_assignment] * num_routed_experts
 
-        # Per-expert dequant-codes (only used in BSPM_DEQUANT_TO_BFP4 mode). Reshape and
+        # Per-expert dequant-codes (only used in TT_BSPM_DEQUANT_TO_BFP4 mode). Reshape and
         # slice off padding columns so codes match the unpadded weight tile grid.
         dequant_codes_per_expert: list[np.ndarray] | None = None
         if bspm_codes_for_dequant is not None:
