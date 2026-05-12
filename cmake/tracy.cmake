@@ -68,16 +68,51 @@ set_property(
 )
 unset(NO_FILESELECTOR)
 
-# Build Tracy profiler WASM project using Emscripten
+# Build Tracy profiler WASM project using Emscripten.
+#
+# Ninja runs each command in a clean environment (no shell profile). CI also splits
+# `build_metal.sh --configure-only` from `cmake --build`, so `emcmake` is not on PATH
+# at build time even though emsdk was sourced during configure. Resolve an absolute path
+# at configure time (configure inherits PATH when run from build_metal.sh, or we probe
+# the emsdk checkout next to the build directory).
+set(_tt_tracy_emcmake "")
+find_program(_tt_tracy_emcmake emcmake DOC "Emscripten emcmake (Tracy WASM)")
+if(NOT _tt_tracy_emcmake AND CMAKE_HOST_UNIX)
+    set(_tt_emsdk_env_sh "${CMAKE_BINARY_DIR}/emsdk/emsdk_env.sh")
+    if(EXISTS "${_tt_emsdk_env_sh}")
+        execute_process(
+            COMMAND
+                bash -c ". \"${_tt_emsdk_env_sh}\" && command -v emcmake"
+            OUTPUT_VARIABLE _tt_tracy_emcmake
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE _tt_tracy_emcmake_rc
+            ERROR_QUIET
+        )
+        if(NOT _tt_tracy_emcmake_rc EQUAL 0)
+            set(_tt_tracy_emcmake "")
+        endif()
+    endif()
+endif()
+if(NOT _tt_tracy_emcmake)
+    message(
+        FATAL_ERROR
+        "Tracy WASM build requires 'emcmake' (Emscripten). "
+        "Install and activate emsdk, or run ./build_metal.sh which installs it under "
+        "<build-dir>/emsdk and puts emcmake on PATH during configure."
+    )
+endif()
+get_filename_component(_tt_tracy_emcmake "${_tt_tracy_emcmake}" REALPATH)
+
 add_custom_target(
     tracy_profiler_wasm
     ALL
     COMMAND
         ${CMAKE_COMMAND} -E echo "Building Tracy profiler WASM..."
     COMMAND
-        emcmake cmake -DEMSCRIPTEN=ON -B ${CMAKE_BINARY_DIR}/profiler/build_wasm -S ${TRACY_HOME}/profiler
+        "${_tt_tracy_emcmake}" cmake -DEMSCRIPTEN=ON -B ${CMAKE_BINARY_DIR}/profiler/build_wasm -S
+        ${TRACY_HOME}/profiler
     COMMAND
-        cmake --build ${CMAKE_BINARY_DIR}/profiler/build_wasm
+        ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR}/profiler/build_wasm
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     COMMENT "Building Tracy profiler WASM with Emscripten"
 )
