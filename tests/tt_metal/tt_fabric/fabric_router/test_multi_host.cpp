@@ -1196,8 +1196,10 @@ TEST(MultiHost, TestBHBlitzPipelineControlPlaneInit) {
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
 
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
-    const int my_rank = static_cast<int>(*distributed_context.rank());
+    // Use the true MPI_COMM_WORLD rank. full_world_distributed_context() is misleadingly named and
+    // actually returns the sub-context communicator post MPI_Comm_split (see metal_context.hpp TODO).
+    const auto world_ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_world_context();
+    const int my_rank = static_cast<int>(*world_ctx->rank());
     const auto local_mesh_ids = control_plane->get_local_mesh_id_bindings();
     ASSERT_EQ(local_mesh_ids.size(), 1u)
         << "bh_glx_split_4x2: one mesh_instance per MPI rank (each mesh host_topology dims [1,1])";
