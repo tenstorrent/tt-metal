@@ -43,9 +43,6 @@ void kernel_main() {
     uint32_t l1_write_addr_in1;
 
     for (uint32_t i = 0; i < num_blocks; i++) {
-        uint64_t src0_noc_addr = get_noc_addr_from_bank_id<true>(src0_dram_bank_id, src0_addr);
-        uint64_t src1_noc_addr = get_noc_addr_from_bank_id<true>(src1_dram_bank_id, src1_addr);
-
         cb_in0.reserve_back(in0_block_tile_cnt);
         cb_in1.reserve_back(in1_block_tile_cnt);
 
