@@ -11,10 +11,11 @@ numpy>=1.21.0
 pytest>=7.0.0
 loguru>=0.7.0
 
-# HF model + dataset
-transformers>=4.30.0
+# HF model + dataset — pinned to versions used to generate reference tensors
+# (see reference/config.json for exact versions used)
+transformers==5.8.0
 datasets>=2.0.0
-huggingface_hub>=0.20.0
+huggingface_hub==1.14.0
 safetensors>=0.4.0
 
 # Note: ttnn is provided by the tt-metal environment
