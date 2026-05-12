@@ -68,12 +68,12 @@ MassagedConcat build_unsqueeze_concat(int input_rank, const MemoryConfig& output
         },
         .post_transform = [input_rank](const ttnn::Tensor& output) -> ttnn::Tensor {
             ttnn::Tensor res = output;
-            while (res.logical_shape().rank() > input_rank) {
+            while (res.logical_shape().rank() > static_cast<size_t>(input_rank)) {
                 const auto shape = res.logical_shape();
                 const auto full_shape = res.padded_shape();
                 SmallVector<uint32_t> shape_vec{};
                 SmallVector<uint32_t> full_shape_vec{};
-                for (int i = 1; i < shape.rank(); i++) {
+                for (size_t i = 1; i < shape.rank(); i++) {
                     shape_vec.push_back(shape[i]);
                     full_shape_vec.push_back(full_shape[i]);
                 }
@@ -162,9 +162,9 @@ MassagedConcat build_prepost_transpose_concat(const MemoryConfig& output_memory_
             auto norm_dim1 = first_shape.get_normalized_index(dim1);
             auto norm_dim2 = first_shape.get_normalized_index(dim2);
             int swapped_dim;
-            if (dim == norm_dim1) {
-                swapped_dim = norm_dim2;
-            } else if (dim == norm_dim2) {
+            if (dim == static_cast<int>(norm_dim1)) {
+                swapped_dim = static_cast<int>(norm_dim2);
+            } else if (dim == static_cast<int>(norm_dim2)) {
                 swapped_dim = norm_dim1;
             } else {
                 swapped_dim = dim;
@@ -202,7 +202,7 @@ MassagedConcat build_non_aligned_last_dim_concat(
 
     auto predicate = [dim_aligned](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int /*groups*/) -> bool {
         auto last_dim = tensors.front().logical_shape().rank() - 1;
-        if (dim == last_dim) {
+        if (dim == static_cast<int>(last_dim)) {
             bool res = !dim_aligned(tensors, dim);
             concat_db_print(res, "[DEBUG] alignment fixedup required");
             return res;
@@ -302,8 +302,8 @@ ttnn::Tensor concat(
 
             const bool ranks_match = ft_shape.rank() == t_shape.rank();
             bool non_concat_dims_match = true;
-            for (int i = 0; i < ft_shape.rank(); i++) {
-                non_concat_dims_match &= dim == i or t_shape[i] == ft_shape[i];
+            for (size_t i = 0; i < ft_shape.rank(); i++) {
+                non_concat_dims_match &= dim == static_cast<int>(i) or t_shape[i] == ft_shape[i];
             }
             // bool non_concat_padded_dims_match = true;
             // for(int i = 0; i < ft_shape.rank(); i++) {

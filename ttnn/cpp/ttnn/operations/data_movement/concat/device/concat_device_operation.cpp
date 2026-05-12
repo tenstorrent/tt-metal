@@ -77,7 +77,7 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
     bool shard_first = input_tensors[0].is_sharded();
     bool warn_about_alignment = false;
 
-    for (int i = 0; i < input_tensors.size(); i++) {
+    for (size_t i = 0; i < input_tensors.size(); i++) {
         const Tensor& in_ref = input_tensors[i];
         TT_FATAL(in_ref.buffer(), "Operand to concat needs to be allocated in a buffer on device.");
         TT_FATAL(in_ref.device(), "Operand to concat needs to be on device.");
