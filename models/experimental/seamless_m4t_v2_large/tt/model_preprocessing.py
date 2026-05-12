@@ -119,6 +119,28 @@ def _fused_qkv_pair(
     }
 
 
+def _fused_kv_pair(
+    k_proj: torch.nn.Linear,
+    v_proj: torch.nn.Linear,
+    *,
+    device: ttnn.Device,
+    weight_dtype: ttnn.DataType = ttnn.bfloat16,
+) -> dict:
+    """Concatenate K/V projection weights for one matmul over shared activations (cross-attn).
+
+    Output layout is ``[..., 2 * hidden]`` (K | V) on the last dim; the decoder splits before
+    ``_heads`` (Stage 15).
+    """
+    kv_weight = torch.cat([k_proj.weight.detach(), v_proj.weight.detach()], dim=0).contiguous()
+    kv_bias = torch.cat([k_proj.bias.detach(), v_proj.bias.detach()], dim=0).contiguous()
+    w = preprocess_linear_weight(kv_weight, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT)
+    b = preprocess_linear_bias(kv_bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    return {
+        "weight": ttnn.to_device(w, device),
+        "bias": ttnn.to_device(b, device),
+    }
+
+
 def create_text_decoder_parameters(decoder, *, device: ttnn.Device) -> dict:
     """
     Convert [`SeamlessM4Tv2Decoder`] weights to TTNN tensors on ``device``.
@@ -128,11 +150,14 @@ def create_text_decoder_parameters(decoder, *, device: ttnn.Device) -> dict:
     cfg = decoder.config
     scale = embed_scale_for_config(cfg)
 
+    # Stage 10: ROW_MAJOR embedding tables (matches text encoder / T2U decoder).
+    # ``ttnn.embedding`` emits TILE_LAYOUT activations regardless; TILE-stored weights
+    # can force a trailing ``UntilizeWithUnpaddingDeviceOperation`` per table lookup.
     scaled_emb = (decoder.embed_tokens.weight.detach() * scale).contiguous()
     embed_tokens_weight = ttnn.from_torch(
         scaled_emb,
         dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -143,7 +168,7 @@ def create_text_decoder_parameters(decoder, *, device: ttnn.Device) -> dict:
     embed_positions_weight = ttnn.from_torch(
         pos_w,
         dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -155,29 +180,42 @@ def create_text_decoder_parameters(decoder, *, device: ttnn.Device) -> dict:
                 "weight": _ln_to_device(layer.self_attn_layer_norm.weight, device=device),
                 "bias": _ln_to_device(layer.self_attn_layer_norm.bias, device=device),
             },
+            # Stage 12: fused self-attn Q|K|V. Stage 15: cross-attn K|V fused (see ``cross_attention``).
+            # Stage 17: attention linear weights in bfloat8_b (bandwidth; biases stay bf16) — encoder pattern.
             "self_attn": {
-                "q_proj": _linear_pair(layer.self_attn.q_proj, device=device),
-                "k_proj": _linear_pair(layer.self_attn.k_proj, device=device),
-                "v_proj": _linear_pair(layer.self_attn.v_proj, device=device),
-                "out_proj": _linear_pair(layer.self_attn.out_proj, device=device),
+                "qkv": _fused_qkv_pair(
+                    layer.self_attn.q_proj,
+                    layer.self_attn.k_proj,
+                    layer.self_attn.v_proj,
+                    device=device,
+                    weight_dtype=ttnn.bfloat8_b,
+                ),
+                "out_proj": _linear_pair(layer.self_attn.out_proj, device=device, weight_dtype=ttnn.bfloat8_b),
             },
             "cross_attention_layer_norm": {
                 "weight": _ln_to_device(layer.cross_attention_layer_norm.weight, device=device),
                 "bias": _ln_to_device(layer.cross_attention_layer_norm.bias, device=device),
             },
+            # Stage 15: fused K|V over encoder hidden states (one matmul vs two; Q stays separate).
             "cross_attention": {
-                "q_proj": _linear_pair(layer.cross_attention.q_proj, device=device),
-                "k_proj": _linear_pair(layer.cross_attention.k_proj, device=device),
-                "v_proj": _linear_pair(layer.cross_attention.v_proj, device=device),
-                "out_proj": _linear_pair(layer.cross_attention.out_proj, device=device),
+                "q_proj": _linear_pair(layer.cross_attention.q_proj, device=device, weight_dtype=ttnn.bfloat8_b),
+                "kv": _fused_kv_pair(
+                    layer.cross_attention.k_proj,
+                    layer.cross_attention.v_proj,
+                    device=device,
+                    weight_dtype=ttnn.bfloat8_b,
+                ),
+                "out_proj": _linear_pair(layer.cross_attention.out_proj, device=device, weight_dtype=ttnn.bfloat8_b),
             },
             "ffn_layer_norm": {
                 "weight": _ln_to_device(layer.ffn_layer_norm.weight, device=device),
                 "bias": _ln_to_device(layer.ffn_layer_norm.bias, device=device),
             },
             "ffn": {
-                "fc1": _linear_pair(layer.ffn.fc1, device=device),
-                "fc2": _linear_pair(layer.ffn.fc2, device=device),
+                # Stage 16: FFN matmul weights in block-float8 (encoder Stage 1.3 recipe). Biases stay bf16;
+                # activations remain bf16; compute configs unchanged (HiFi2 fc1, LoFi fc2).
+                "fc1": _linear_pair(layer.ffn.fc1, device=device, weight_dtype=ttnn.bfloat8_b),
+                "fc2": _linear_pair(layer.ffn.fc2, device=device, weight_dtype=ttnn.bfloat8_b),
             },
         }
         layers.append(make_parameter_dict(layer_dict))
