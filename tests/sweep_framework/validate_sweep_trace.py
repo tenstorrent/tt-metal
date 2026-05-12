@@ -432,6 +432,12 @@ def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
                 )
                 continue
 
+            # Skip if this master config was already matched by a previous
+            # sweep trace (e.g. same config exercised by both model_traced
+            # and lead_models scopes).
+            if source_hash in matched_hashes:
+                continue
+
             # Direct match by hash — now compare arguments
             matched_hashes.add(source_hash)
             sweep_args = cfg.get("arguments", {})
