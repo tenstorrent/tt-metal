@@ -31,7 +31,7 @@ from urllib.parse import urlparse, urlunparse
 from loguru import logger
 
 SUPPORTED_REPORT_VERSION = 1
-DATABASE_SCHEMA_VERSION = 2.1
+DATABASE_SCHEMA_VERSION = "2.2"
 
 
 def sanitize_git_remote_url(url: str) -> str:
