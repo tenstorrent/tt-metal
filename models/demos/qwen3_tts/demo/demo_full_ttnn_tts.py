@@ -197,7 +197,7 @@ def run_full_ttnn_tts(
             SpeechTokenizerDecoderConfig,
             speech_tokenizer_decoder_forward,
         )
-        from models.demos.qwen3_tts.tt.generator_2cq import StreamingAudioDecoder
+        from models.demos.qwen3_tts.tt.generator import StreamingAudioDecoder
 
         _decoder_cfg = SpeechTokenizerDecoderConfig()
 
