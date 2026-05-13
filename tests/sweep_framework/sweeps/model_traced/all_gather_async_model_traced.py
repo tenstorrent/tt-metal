@@ -637,11 +637,17 @@ def run(
                     device,
                 )
 
-            # Setup SubDevice and semaphores (match test_minimal_all_gather_async.py pattern)
+            # Setup SubDevice and semaphores
             compute_grid_size = device.compute_with_storage_grid_size()
             ccl_sub_device_crs = ttnn.CoreRangeSet(
                 {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
             )
+
+            # Single sub-device with all compute cores (all_gather uses full grid)
+            all_cores = ttnn.SubDevice([ccl_sub_device_crs])
+            _ag_sub_dev_mgr = device.create_sub_device_manager([all_cores], 0)
+            device.load_sub_device_manager(_ag_sub_dev_mgr)
+
             worker_sub_device_id = ttnn.SubDeviceId(0)
             sub_device_stall_group = [worker_sub_device_id]
 
@@ -744,7 +750,22 @@ def run(
                                 apply_tensor_placement_topology(tt_input, input_a_tensor_placement, mesh_shape)
                             except Exception:
                                 pass  # Intentionally ignored: topology application is best-effort, fallback to default
-                        tt_out_tensor = ttnn.experimental.all_gather_async(tt_input, **op_kwargs)
+                        # Pass positional args to match master trace form
+                        _dim = op_kwargs.pop("dim", dim)
+                        _semaphore = op_kwargs.pop("multi_device_global_semaphore", ccl_semaphore_handles[i])
+                        _cluster_axis = op_kwargs.pop("cluster_axis", None)
+                        _topology = op_kwargs.pop("topology", topology)
+                        _mesh_dev = op_kwargs.pop("mesh_device", device)
+                        if not op_kwargs.get("use_optimal_ccl_for_llama", None):
+                            op_kwargs["use_optimal_ccl_for_llama"] = False
+                        if _cluster_axis is not None:
+                            tt_out_tensor = ttnn.experimental.all_gather_async(
+                                tt_input, _dim, _cluster_axis, _mesh_dev, _topology, _semaphore, **op_kwargs
+                            )
+                        else:
+                            tt_out_tensor = ttnn.experimental.all_gather_async(
+                                tt_input, _dim, _semaphore, **op_kwargs
+                            )
                     else:
                         _ag_kwargs = dict(
                             num_links=num_links,

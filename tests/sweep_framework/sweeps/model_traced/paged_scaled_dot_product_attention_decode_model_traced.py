@@ -70,12 +70,7 @@ if model_traced_params:
 
 def mesh_device_fixture():
     mesh_shape = get_model_traced_mesh_shape()
-    # paged_sdpa kernel places writers on column-0 cores which conflict with
-    # COL dispatch. Use default dispatch (no COL, no num_command_queues=1).
-    device = ttnn.open_mesh_device(
-        mesh_shape=ttnn.MeshShape(*mesh_shape),
-        l1_small_size=79104,
-    )
+    device = create_mesh_device(mesh_shape)
     device_name = ttnn.get_arch_name()
     yield (device, device_name)
     ttnn.close_mesh_device(device)
@@ -555,12 +550,29 @@ def run(
             km = re.search(r"k_chunk_size=(\d+)", val)
             em = re.search(r"exp_approx_mode=(\w+)", val)
             if gm and qm and km:
-                op_kwargs["program_config"] = ttnn.SDPAProgramConfig(
+                _sdpa_kwargs = dict(
                     compute_with_storage_grid_size=(int(gm.group(1)), int(gm.group(2))),
                     q_chunk_size=int(qm.group(1)),
                     k_chunk_size=int(km.group(1)),
                     exp_approx_mode=em.group(1).lower() == "true" if em else False,
                 )
+                # Parse max_cores_per_head_batch
+                mcm = re.search(r"max_cores_per_head_batch=(\d+)", val)
+                if mcm:
+                    _sdpa_kwargs["max_cores_per_head_batch"] = int(mcm.group(1))
+                # Parse sub_core_grids
+                scg = re.search(r"sub_core_grids=\{(.+?)\}", val)
+                if scg:
+                    import ttnn as _ttnn_scg
+                    scg_ranges = re.findall(r"\[(\d+)-(\d+)\s*-\s*(\d+)-(\d+)\]", scg.group(1))
+                    if scg_ranges:
+                        _sdpa_kwargs["sub_core_grids"] = _ttnn_scg.CoreRangeSet(set(
+                            _ttnn_scg.CoreRange(
+                                _ttnn_scg.CoreCoord(int(sx), int(sy)),
+                                _ttnn_scg.CoreCoord(int(ex), int(ey)),
+                            ) for sx, sy, ex, ey in scg_ranges
+                        ))
+                op_kwargs["program_config"] = ttnn.SDPAProgramConfig(**_sdpa_kwargs)
         elif traced_pc is not None and traced_pc != "__ABSENT__" and not isinstance(traced_pc, dict):
             op_kwargs["program_config"] = traced_pc
 
