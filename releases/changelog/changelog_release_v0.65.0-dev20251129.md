@@ -94,7 +94,7 @@
    - PR: #32975
 - Migrate op to new infra: paged_cache
    - PR: #32874
-- [skip ci] Adding Regression Handling Workflow To CI
+- [skip ci] Adding Auto Triage Workflow To CI
    - PR: #32981
 - Add Motif + TT-DiT Refactor and H100 Eval Scripts
    - PR: #32301

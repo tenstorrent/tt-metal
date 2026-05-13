@@ -48,7 +48,7 @@
    - PR: #33524
 - #32626: Remove `Moreh` operations from docs
    - PR: #33765
--  Set regression handling to false and revert 8dfb324
+-  Set auto triage to false and revert 8dfb324
    - PR: #33774
 - Add ClosetBox fabric test configuration
    - PR: #33596
