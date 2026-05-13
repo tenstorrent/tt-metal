@@ -17,9 +17,11 @@ import random
 import pytest
 import torch
 from loguru import logger
+from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 # REFERENCE_MESH_SHAPE = (1, 1)
 REFERENCE_MESH_SHAPE = (16, 8)
@@ -358,3 +360,302 @@ def test_deepseek_moe_fast_reduce_nc_fused(
     ttnn.deallocate(tt_expert_mapping)
     for t in tt_fused_outputs:
         ttnn.deallocate(t)
+
+
+def _run_op_with_trace(num_iters, op_func, mesh_device, profiler, label):
+    """Compile + warmup-trace + perf-trace runner.
+
+    Mirrors the pattern in tests/nightly/tg/ccl/moe/test_selective_combine_6U.py:
+    1. one eager compile call so program-cache is populated;
+    2. a warmup trace of ``num_iters // 4`` iterations whose execution time is subtracted from
+       the perf-trace execution time (removes fixed trace-launch overhead);
+    3. the full-length perf trace, measured via ``BenchmarkProfiler``.
+    """
+    logger.info(f"{label}: compile run")
+    op_func(1)
+    ttnn.synchronize_device(mesh_device)
+
+    warmup_iters = max(1, num_iters // 4)
+    logger.info(f"{label}: capturing warmup trace ({warmup_iters} iters)")
+    trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    op_func(warmup_iters)
+    ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+
+    logger.info(f"{label}: capturing perf trace ({num_iters} iters)")
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    tt_out = op_func(num_iters)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+
+    profiler.start(f"{label}-trace-warmup")
+    ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
+    ttnn.release_trace(mesh_device, trace_id_warmup)
+    ttnn.synchronize_device(mesh_device)
+    profiler.end(f"{label}-trace-warmup")
+
+    signpost("start")
+    profiler.start(f"{label}-trace")
+    ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+    ttnn.release_trace(mesh_device, trace_id)
+    ttnn.synchronize_device(mesh_device)
+    profiler.end(f"{label}-trace")
+    signpost("stop")
+
+    elapsed_s = profiler.get_duration(f"{label}-trace") - profiler.get_duration(f"{label}-trace-warmup")
+    per_iter_us = elapsed_s / num_iters * 1e6
+    logger.info(f"{label}: {per_iter_us:.2f} us/iter (over {num_iters} iters)")
+
+    return tt_out
+
+
+def _build_perf_input_set(
+    *,
+    mesh_device,
+    mesh_shape,
+    cluster_axis,
+    batch,
+    seq,
+    hidden_size,
+    experts,
+    select_experts_k,
+    effective_select_experts_k,
+    num_devices,
+    activation_memory_config,
+    replicate_mapper,
+    shard_dims,
+):
+    """Allocate one (activation, scores, indices, mapping) ttnn tuple with fresh random data.
+
+    Returns ``(tt_tensors, torch_sources)`` so the caller can rebuild a golden later for the
+    iteration whose results are still resident after the trace finishes.
+    """
+    torch_act = torch.rand((effective_select_experts_k, 1, batch, hidden_size), dtype=torch.bfloat16) - 0.5
+    torch_scores = torch.rand((batch, 1, seq, select_experts_k), dtype=torch.bfloat16)
+    torch_scores = torch_scores / torch_scores.sum(dim=-1, keepdim=True)
+    torch_indices = _get_expert_indices(batch, experts, select_experts_k, seq)
+    torch_mapping = _gen_expert_mapping_linearized(experts, num_devices)
+
+    tt_activation = ttnn.from_torch(
+        torch_act,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=activation_memory_config,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape, dims=shard_dims(2)),
+    )
+    tt_scores = ttnn.from_torch(
+        torch_scores,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape, dims=shard_dims(0)),
+    )
+    tt_indices = ttnn.from_torch(
+        torch_indices,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape, dims=shard_dims(0)),
+    )
+    tt_mapping = ttnn.from_torch(
+        torch_mapping,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=replicate_mapper,
+    )
+    tt_tensors = (tt_activation, tt_scores, tt_indices, tt_mapping)
+    torch_sources = {
+        "activation": torch_act,
+        "scores": torch_scores,
+        "indices": torch_indices,
+        "mapping": torch_mapping,
+    }
+    return tt_tensors, torch_sources
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [pytest.param({"trace_region_size": 500000}, id="trace_region=500k")],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "num_shared_experts, shared_expert_scale",
+    [
+        pytest.param(0, 1.0, id="no_shared"),
+        pytest.param(2, 0.25, id="2_shared_scale_0p25"),
+    ],
+)
+@pytest.mark.parametrize("batch_per_device", [32])
+@pytest.mark.parametrize("select_experts_k", [8])
+@pytest.mark.parametrize("seq", [1])
+@pytest.mark.parametrize("hidden_size", [7168])
+@pytest.mark.parametrize("experts_per_device", [2])
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device",
+    [
+        pytest.param((4, 8), (4, 8), id="16x8_grid"),
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("cluster_axis", [0])
+@pytest.mark.parametrize("num_test_iters", [40])
+@pytest.mark.parametrize("num_input_sets", [4])
+def test_deepseek_moe_fast_reduce_nc_fused_perf(
+    mesh_device,
+    mesh_shape,
+    batch_per_device,
+    select_experts_k,
+    seq,
+    hidden_size,
+    experts_per_device,
+    cluster_axis,
+    num_shared_experts,
+    shared_expert_scale,
+    num_test_iters,
+    num_input_sets,
+):
+    """Trace-mode perf benchmark for ``deepseek_moe_fast_reduce_nc_fused``.
+
+    Pre-allocates ``num_input_sets`` independent input tuples (activation / scores / expert
+    indices / expert mapping). Each captured trace iteration is bound to a different tuple so
+    the trace records distinct DRAM addresses across launches — this exercises the
+    override_runtime_arguments path and gives a more realistic per-iter latency than reusing
+    a single set. Reports microseconds per iter via ``BenchmarkProfiler`` and ``tracy.signpost``.
+    """
+    torch.manual_seed(2005)
+    random.seed(2005)
+
+    num_devices = mesh_shape[0] * mesh_shape[1]
+    num_dispatch_devices = mesh_shape[cluster_axis]
+    num_replicated_devices = mesh_shape[1 - cluster_axis]
+    batch = batch_per_device * num_dispatch_devices
+    experts = experts_per_device * num_devices
+    effective_select_experts_k = select_experts_k + num_shared_experts
+
+    activation_memory_config = ttnn.L1_MEMORY_CONFIG
+    fast_reduce_output_memory_config = ttnn.MemoryConfig(
+        ttnn.BufferType.L1,
+        ttnn.NdShardSpec(
+            ttnn.Shape([1, 32, 128]),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(2, 5), ttnn.CoreCoord(2, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(3, 5), ttnn.CoreCoord(3, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+                ]
+            ),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
+    replicate_mapper = ttnn.replicate_tensor_to_mesh_mapper(mesh_device)
+
+    def _shard_dims(dim):
+        return (dim, None) if cluster_axis == 0 else (None, dim)
+
+    input_sets = []
+    torch_sources_per_set = []
+    for _ in range(num_input_sets):
+        tt_tuple, torch_sources = _build_perf_input_set(
+            mesh_device=mesh_device,
+            mesh_shape=mesh_shape,
+            cluster_axis=cluster_axis,
+            batch=batch,
+            seq=seq,
+            hidden_size=hidden_size,
+            experts=experts,
+            select_experts_k=select_experts_k,
+            effective_select_experts_k=effective_select_experts_k,
+            num_devices=num_devices,
+            activation_memory_config=activation_memory_config,
+            replicate_mapper=replicate_mapper,
+            shard_dims=_shard_dims,
+        )
+        input_sets.append(tt_tuple)
+        torch_sources_per_set.append(torch_sources)
+
+    split_size = int(hidden_size // num_replicated_devices)
+
+    def _run_op(num_iters):
+        tt_out = None
+        for i in range(num_iters):
+            tt_act, tt_scores, tt_idx, tt_map = input_sets[i % num_input_sets]
+            tt_out = ttnn.experimental.deepseek_moe_fast_reduce_nc_fused(
+                tt_act,
+                tt_idx,
+                tt_map,
+                reduce_dim=0,
+                split_size=split_size,
+                cluster_axis=cluster_axis,
+                output_memory_config=fast_reduce_output_memory_config,
+                scores_tensor=tt_scores,
+                num_shared_experts=num_shared_experts,
+                shared_expert_scale=shared_expert_scale,
+            )
+        return tt_out
+
+    profiler = BenchmarkProfiler()
+    tt_out = _run_op_with_trace(
+        num_test_iters,
+        _run_op,
+        mesh_device,
+        profiler,
+        label="deepseek-moe-fast-reduce-nc-fused",
+    )
+
+    # Validate the final outputs only — earlier iterations' L1 has already been reused.
+    # The final iteration's input set is the one captured at i = num_test_iters - 1.
+    final_set_idx = (num_test_iters - 1) % num_input_sets
+    final_sources = torch_sources_per_set[final_set_idx]
+    shared_expert_scale_bf16 = torch.tensor(shared_expert_scale, dtype=torch.bfloat16)
+
+    per_device_goldens = []
+    for m0 in range(mesh_shape[0]):
+        for m1 in range(mesh_shape[1]):
+            mesh_coord = (m0, m1)
+            t0 = (m1 if cluster_axis == 1 else m0) * batch_per_device
+            t1 = t0 + batch_per_device
+            u_slice = final_sources["activation"][:, :, t0:t1, :].contiguous()
+            s_slice = final_sources["scores"][t0:t1, :, :, :].contiguous()
+            ind_slice = final_sources["indices"][t0:t1, :, :, :].contiguous()
+            per_device_goldens.append(
+                _torch_golden_gated(
+                    u_slice,
+                    s_slice,
+                    ind_slice,
+                    final_sources["mapping"],
+                    mesh_shape,
+                    mesh_coord,
+                    cluster_axis,
+                    num_replicated_devices,
+                    num_shared_experts,
+                    shared_expert_scale_bf16,
+                )
+            )
+
+    assert tt_out is not None, "trace produced no output tensors"
+    for cidx, tt_out_list in enumerate(tt_out):
+        for didx, tt_dev_out in enumerate(ttnn.get_device_tensors(tt_out_list)):
+            tt_host = ttnn.to_torch(tt_dev_out, dtype=torch.bfloat16)
+            tt_host_slice = tt_host[:, :, 0:batch_per_device, :]
+            ref = per_device_goldens[didx][cidx]
+            ok, msg = comp_pcc(ref, tt_host_slice, pcc=PCC_THRESHOLD)
+            logger.info(f"perf-final virtual_dev={didx} chunk={cidx}: {msg}")
+            assert ok, f"perf-final virtual_dev={didx} chunk={cidx} failed: {msg}"
+
+    for t in tt_out:
+        ttnn.deallocate(t)
+    for tt_act, tt_scores, tt_idx, tt_map in input_sets:
+        ttnn.deallocate(tt_act)
+        ttnn.deallocate(tt_scores)
+        ttnn.deallocate(tt_idx)
+        ttnn.deallocate(tt_map)

@@ -697,21 +697,13 @@ def test_optimized_moe_decode_block(
         expert_mapping_dtype,
     )
 
+    shared_expert_score = 1 / 2.5
     if shared_expert_ids_to_devices is not None:
         torch_expert_mapping = map_shared_experts(
             torch_expert_mapping, shared_expert_ids_to_devices, mesh_shape, cluster_axis
         )
         # the inverse of the routed scaling factor
-        torch_shared_expert_scores = torch.full([batch, 1, seq, num_shared_experts], 1 / 2.5)
-        tt_shared_expert_scores = ttnn.from_torch(
-            torch_shared_expert_scores,
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=dispatch_input_expert_scores_dtype,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_shape),
-        )
-    else:
-        tt_shared_expert_scores = None
+        torch_shared_expert_scores = torch.full([batch, 1, seq, num_shared_experts], shared_expert_score)
 
     tt_expert_mapping = ttnn.from_torch(
         torch_expert_mapping,
@@ -1131,6 +1123,8 @@ def test_optimized_moe_decode_block(
         # runtime since it needs to be a zeroed out tensor (for each layer)
         # allocated before dispatch, as dispatch serves as the barrier to ensure the tensor is allocated on all devices
         # [effective_experts_k (includes shared experts), tokens_per_device, hidden_size] per device
+
+        # TODO (AM) REMOVE ME ONCE TESTED ON QUAD
         tt_preallocated_combine_output = ttnn.moreh_full(
             shape=[effective_experts_k, tokens_per_device, hidden_size],
             fill_value=0,
@@ -1214,16 +1208,9 @@ def test_optimized_moe_decode_block(
                 memory_config=post_combine_tilize_output_memory_config,
             )
 
-        # scale with scores
-        # [tokens_per_device, 1, seq, select_experts_k] -> [select_experts_k, 1, tokens_per_device, seq]
-        # TODO (AFM) this is a kludge
-        if shared_expert_ids_to_devices is not None:
-            topk_experts_weights = ttnn.concat(
-                [tt_dispatch_input_expert_scores_tensors[iteration], tt_shared_expert_scores], dim=3
-            )
-        else:
-            topk_experts_weights = tt_dispatch_input_expert_scores_tensors[iteration]
+        topk_experts_weights = tt_dispatch_input_expert_scores_tensors[iteration]
 
+        # scale with scores and accumulate
         tt_fast_reduce_output_tensors = ttnn.experimental.deepseek_moe_fast_reduce_nc_fused(
             tt_unsqueezed_output,
             tt_dispatch_input_expert_indices_tensor,
@@ -1233,6 +1220,8 @@ def test_optimized_moe_decode_block(
             split_size=int(tt_scaled_output.shape[-1] // num_replicated_devices),
             output_memory_config=fast_reduce_output_memory_config,
             scores_tensors=topk_experts_weights,
+            num_shared_experts=num_shared_experts,
+            shared_expert_scale=shared_expert_score,
         )
 
         # [select_experts_k, tokens_per_device, hidden_size // num_replicated_devices] final per device shape
