@@ -180,13 +180,20 @@ The core of this example is the custom SFPI function ``my_add_tiles``. It's impl
 
     // High-level API function
     void my_add_tile(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
-        MATH(_llk_math_eltwise_binary_sfpu_params_(add_tile_face, idx_dst0, idx_dst1, idx_out0));
+        MATH((SFPU_BINARY_CALL_CUSTOM(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            add_tile_face,
+            idx_dst0,
+            idx_dst1,
+            idx_out0,
+            static_cast<int>(VectorMode::RC))));
     }
 
 
 Here's a breakdown of the layers. The ``add_tile_face`` must be inside a ``#ifdef TRISC_MATH`` block, since they use math-thread-specific code that will not compile for other RISC-V cores.
 
-1.  **`my_add_tiles`**: This is the main function called by the compute kernel. It wraps the internal function with the ``MATH()`` macro, which ensures the code only runs on the math thread of the Tensix core.  ``_llk_math_eltwise_binary_sfpu_params_`` is an internal helper that sets up the SFPU, iterates over all faces of a tile, calls ``add_tile_face`` for each face, and then cleans up. This avoids manual setup and state management.
+1.  **`my_add_tiles`**: This is the main function called by the compute kernel. It wraps the internal function with the ``MATH()`` macro, which ensures the code only runs on the math thread of the Tensix core.  ``SFPU_BINARY_CALL_CUSTOM`` sets up the SFPU, iterates over all faces of a tile, calls ``add_tile_face`` for each face, and then cleans up. This avoids manual setup and state management.
 
 2.  **`add_tile_face`**: This is the most basic function, performing the actual addition on a single tile face. A 32x32 tile is divided into four 16x16 faces, and this function is called for each face. It uses the ``dst_reg`` array, which represents the SFPU's destination registers. The number of available ``dst_reg`` registers can be found in the :ref:`Compute Engines and Data Flow within Tensix<compute_engines_and_dataflow_within_tensix>` documentation.
 
@@ -207,12 +214,12 @@ This layered structure keeps high-level logic separate from hardware-specific de
     There are 3 internal APIs to invoke custom SFPI functions, depending on the number of input tiles. Please view the header file for the most up-to-date information.
 
     *  ``_llk_math_eltwise_unary_sfpu_params_``: For functions with one input tile (e.g., ``sin``, ``exp``).
-    *  ``_llk_math_eltwise_binary_sfpu_params_``: For functions with two input tiles (e.g., ``add``, ``sub``, ``mul``, ``div``).
+    *  ``SFPU_BINARY_CALL_CUSTOM``: For custom functions with two input tiles (e.g., ``add``, ``sub``, ``mul``, ``div``).
     *  ``_llk_math_eltwise_ternary_sfpu_params_``: For functions with three input tiles (e.g., ``where``).
 
 .. warning::
 
-    ``_llk_math_eltwise_binary_sfpu_params_`` and similar LLK helpers are internal APIs and may change in future releases. Tenstorrent does not guarantee backward compatibility for these internal functions. Users should keep their use up to date with the latest Metalium releases.
+    The lower-level LLK params helpers used by the SFPU macros are internal APIs and may change in future releases. Tenstorrent does not guarantee backward compatibility for these internal functions. Users should keep their use up to date with the latest Metalium releases.
 
 Runtime Arguments and Execution
 -------------------------------
@@ -269,7 +276,7 @@ This example demonstrated how to create a custom SFPI kernel for vector addition
 
 *   The layered approach to SFPI kernel development (high-level API, LLK wrapper, low-level face function).
 *   The use of destination registers (``dst_reg``) for SFPU computations.
-*   The role of the LLK API (e.g., ``_llk_math_eltwise_binary_sfpu_params_``) in simplifying SFPI programming by handling tile face iteration.
+*   The role of the SFPU call macros (e.g., ``SFPU_BINARY_CALL_CUSTOM``) in simplifying SFPI programming by handling tile face iteration.
 *   The standard pipeline of reader, compute, and writer kernels for processing data on Tensix cores.
 
 By following this pattern, you can implement a wide variety of custom element-wise operations on the SFPU to accelerate your specific workloads while leveraging the distributed programming capabilities of the Mesh API.

@@ -77,7 +77,7 @@ inline void my_add_tile_face(const uint32_t dst_index_in0, const uint32_t dst_in
     }
 
     // Note: This function only processes ONE FACE of a tile.
-    // The _llk_math_eltwise_binary_sfpu_params_ wrapper  will call this function
+    // SFPU_BINARY_CALL_CUSTOM will call this function
     // for each face in the tile (typically 4 times for a 32x32 tile).
 }
 #endif
@@ -105,7 +105,14 @@ inline void my_add_tile_face(const uint32_t dst_index_in0, const uint32_t dst_in
  * and writes the result to tile idx_out0 in the Dst registers.
  */
 inline void my_add_tile(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
-    MATH(_llk_math_eltwise_binary_sfpu_params_(my_add_tile_face, idx_dst0, idx_dst1, idx_out0));
+    MATH((SFPU_BINARY_CALL_CUSTOM(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        my_add_tile_face,
+        idx_dst0,
+        idx_dst1,
+        idx_out0,
+        static_cast<int>(VectorMode::RC))));
 }
 
 void kernel_main() {

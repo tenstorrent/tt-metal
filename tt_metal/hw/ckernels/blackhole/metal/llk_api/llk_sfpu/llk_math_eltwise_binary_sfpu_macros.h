@@ -112,22 +112,14 @@ inline __attribute__((always_inline)) void _sfpu_binary_check_and_call_(
         ::ckernel::sfpu::FN, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ##__VA_ARGS__)
 
 /*
- * Templated functor wrapped in a static_cast for overload disambiguation.
- *   SFPU_BINARY_CALL_CAST(DST_SYNC_MODE, DST_ACCUM_MODE,
- *                         _binary_fn_,
- *                         (APPROXIMATE, ITER),
- *                         (void(*)(uint32_t, uint32_t, uint32_t)),
- *                         in0, in1, out, vmode);
+ * Callable expression that is already fully named by the caller.
+ * Useful for custom SFPI functions outside `ckernel::sfpu`.
+ *   SFPU_BINARY_CALL_CUSTOM(DST_SYNC_MODE, DST_ACCUM_MODE,
+ *                           my_custom_face_fn, in0, in1, out, vmode);
  */
-#define SFPU_BINARY_CALL_CAST(                                                                    \
-    DST_SYNC, DST_ACCUM, FN, TEMPLATES, SIGNATURE, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ...)   \
-    ::ckernel::_sfpu_binary_check_and_call_<DST_SYNC, DST_ACCUM>(                                 \
-        static_cast<_SFPU_BIN_EXPAND SIGNATURE>(::ckernel::sfpu::FN<_SFPU_BIN_EXPAND TEMPLATES>), \
-        DST_IN0,                                                                                  \
-        DST_IN1,                                                                                  \
-        DST_OUT,                                                                                  \
-        VECTOR_MODE,                                                                              \
-        ##__VA_ARGS__)
+#define SFPU_BINARY_CALL_CUSTOM(DST_SYNC, DST_ACCUM, CALLABLE, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ...) \
+    ::ckernel::_sfpu_binary_check_and_call_<DST_SYNC, DST_ACCUM>(                                           \
+        CALLABLE, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ##__VA_ARGS__)
 
 /*
  * Binary SFPU init macros (4 total)
