@@ -160,20 +160,23 @@ template <uint32_t Cb,
           CopyTileReconfig Reconfig>
 struct CopyTile : CopyTileTag {
     // ---- compile-time validation ----
+    // BlockIter / Absolute legal under WaitUpfrontPopAtEnd, CumulativeWaitPopAtEnd, NoWaitNoPop.
+    // Single-tile-window policies (WaitAndPop, WaitNoPop, NoWaitPop) limit index to FirstTile
+    // (or Pinned k where k == 0 — runtime-asserted, not statically expressible).
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "CopyTile: DEST slot exceeds DEST_AUTO_LIMIT");
     static_assert(!(Policy == CopyTilePolicy::WaitAndPop  && IndexMode == CbIndexMode::BlockIter),
-                  "CopyTile: BlockIter index requires WaitUpfrontPopAtEnd or NoWaitNoPop policy");
+                  "CopyTile: BlockIter index requires Upfront / Cumulative / NoWaitNoPop policy");
     static_assert(!(Policy == CopyTilePolicy::WaitAndPop  && IndexMode == CbIndexMode::Absolute),
-                  "CopyTile: Absolute index requires WaitUpfrontPopAtEnd or NoWaitNoPop policy");
+                  "CopyTile: Absolute index requires Upfront / Cumulative / NoWaitNoPop policy");
     static_assert(!(Policy == CopyTilePolicy::WaitNoPop   && IndexMode == CbIndexMode::BlockIter),
-                  "CopyTile: BlockIter index requires WaitUpfrontPopAtEnd or NoWaitNoPop policy");
+                  "CopyTile: BlockIter index requires Upfront / Cumulative / NoWaitNoPop policy");
     static_assert(!(Policy == CopyTilePolicy::WaitNoPop   && IndexMode == CbIndexMode::Absolute),
-                  "CopyTile: Absolute index requires WaitUpfrontPopAtEnd or NoWaitNoPop policy");
+                  "CopyTile: Absolute index requires Upfront / Cumulative / NoWaitNoPop policy");
     static_assert(!(Policy == CopyTilePolicy::NoWaitPop   && IndexMode == CbIndexMode::BlockIter),
-                  "CopyTile: BlockIter index requires WaitUpfrontPopAtEnd or NoWaitNoPop policy");
+                  "CopyTile: BlockIter index requires Upfront / Cumulative / NoWaitNoPop policy");
     static_assert(!(Policy == CopyTilePolicy::NoWaitPop   && IndexMode == CbIndexMode::Absolute),
-                  "CopyTile: Absolute index requires WaitUpfrontPopAtEnd or NoWaitNoPop policy");
+                  "CopyTile: Absolute index requires Upfront / Cumulative / NoWaitNoPop policy");
 
     static constexpr uint32_t       cb              = Cb;
     static constexpr uint32_t       cb_a_id()       { return Cb; }
@@ -181,7 +184,8 @@ struct CopyTile : CopyTileTag {
     static constexpr Dst            dst_slot        = DstSlot;
     static constexpr CopyTilePolicy a_policy()      { return Policy; }
     static constexpr CopyTilePolicy b_policy()      { return CopyTilePolicy::NoWaitNoPop; }
-    static constexpr bool           is_upfront      = (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd);
+    static constexpr bool           is_upfront      = (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) ||
+                                                      (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd);
     static constexpr bool           clashes_with_fpu= true;   // copy_tile uses unpacker MOP
 
     // Prev-CB fold (D2): CopyTile loads CbA only.
@@ -204,11 +208,14 @@ struct CopyTile : CopyTileTag {
         }
     }
 
-    /// Wait phase — called once at chain entry per iteration (PerTile policies) or once before
-    /// the loop (Upfront policies). The chain pipeline calls the right shape based on `is_upfront`.
-    ALWI void wait_per_tile(uint32_t /*i*/) const {
+    /// Per-iter wait. Cumulative shape: `cb_wait_front(cb, i + 1)` — short-circuits once
+    /// producer has caught up to iter i. Streaming shapes (WaitAndPop, WaitNoPop) wait 1.
+    /// Upfront/NoWait/NoWaitNoPop: no per-iter wait fires here.
+    ALWI void wait_per_tile(uint32_t i) const {
         if constexpr (Policy == CopyTilePolicy::WaitAndPop || Policy == CopyTilePolicy::WaitNoPop) {
             cb_wait_front(Cb, 1);
+        } else if constexpr (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
+            cb_wait_front(Cb, i + 1);
         }
         // NoWaitPop / NoWaitNoPop / WaitUpfrontPopAtEnd: no per-tile wait.
     }
@@ -232,11 +239,12 @@ struct CopyTile : CopyTileTag {
         if constexpr (Policy == CopyTilePolicy::WaitAndPop || Policy == CopyTilePolicy::NoWaitPop) {
             cb_pop_front(Cb, 1);
         }
-        // WaitNoPop / NoWaitNoPop / WaitUpfrontPopAtEnd: no per-tile pop.
+        // WaitNoPop / NoWaitNoPop / WaitUpfrontPopAtEnd / CumulativeWaitPopAtEnd: no per-tile pop.
     }
 
     ALWI void pop_upfront_end(uint32_t n) const {
-        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) {
+        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                      Policy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
             cb_pop_front(Cb, n);
         }
     }
@@ -426,7 +434,9 @@ struct BinaryFpu : BinaryFpuTag {
     static constexpr CopyTilePolicy b_policy(){ return BPolicy; }
     static constexpr Dst           dst_slot   = DstSlot;
     static constexpr bool          is_upfront = (APolicy == CopyTilePolicy::WaitUpfrontPopAtEnd) ||
-                                                (BPolicy == CopyTilePolicy::WaitUpfrontPopAtEnd);
+                                                (APolicy == CopyTilePolicy::CumulativeWaitPopAtEnd) ||
+                                                (BPolicy == CopyTilePolicy::WaitUpfrontPopAtEnd) ||
+                                                (BPolicy == CopyTilePolicy::CumulativeWaitPopAtEnd);
     static constexpr bool          clashes_with_fpu = true;
     static constexpr bool          same_cb    = (CbA == CbB);
 
@@ -479,12 +489,18 @@ struct BinaryFpu : BinaryFpuTag {
     }
 
     // ---- CB lifecycle (per-tile) ----
-    ALWI void wait_per_tile(uint32_t /*i*/) const {
+    ALWI void wait_per_tile(uint32_t i) const {
         if constexpr (APolicy == CopyTilePolicy::WaitAndPop || APolicy == CopyTilePolicy::WaitNoPop) {
             cb_wait_front(CbA, 1);
+        } else if constexpr (APolicy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
+            cb_wait_front(CbA, i + 1);
         }
-        if constexpr (!same_cb && (BPolicy == CopyTilePolicy::WaitAndPop || BPolicy == CopyTilePolicy::WaitNoPop)) {
-            cb_wait_front(CbB, 1);
+        if constexpr (!same_cb) {
+            if constexpr (BPolicy == CopyTilePolicy::WaitAndPop || BPolicy == CopyTilePolicy::WaitNoPop) {
+                cb_wait_front(CbB, 1);
+            } else if constexpr (BPolicy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
+                cb_wait_front(CbB, i + 1);
+            }
         }
         // same_cb: skip second wait — dedup.
     }
@@ -532,8 +548,14 @@ struct BinaryFpu : BinaryFpuTag {
     }
 
     ALWI void pop_upfront_end(uint32_t n) const {
-        if constexpr (APolicy == CopyTilePolicy::WaitUpfrontPopAtEnd) cb_pop_front(CbA, n);
-        if constexpr (!same_cb && BPolicy == CopyTilePolicy::WaitUpfrontPopAtEnd) cb_pop_front(CbB, n);
+        if constexpr (APolicy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                      APolicy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
+            cb_pop_front(CbA, n);
+        }
+        if constexpr (!same_cb && (BPolicy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                                   BPolicy == CopyTilePolicy::CumulativeWaitPopAtEnd)) {
+            cb_pop_front(CbB, n);
+        }
     }
 
 private:
@@ -558,14 +580,15 @@ struct DestReuseBinary : DestReuseBinaryTag {
     static_assert(to_u32(DstIn) < DEST_AUTO_LIMIT && to_u32(DstOut) < DEST_AUTO_LIMIT,
                   "DestReuseBinary: DEST slot exceeds DEST_AUTO_LIMIT");
     static_assert(!(Policy == CopyTilePolicy::WaitAndPop && IndexMode == CbIndexMode::BlockIter),
-                  "DestReuseBinary: BlockIter index requires Upfront / NoWaitNoPop policy");
+                  "DestReuseBinary: BlockIter index requires Upfront / Cumulative / NoWaitNoPop policy");
 
     static constexpr uint32_t       cb_a_id()         { return Cb; }
     static constexpr uint32_t       cb_b_id()         { return 0;  }
     static constexpr CopyTilePolicy a_policy()        { return Policy; }
     static constexpr CopyTilePolicy b_policy()        { return CopyTilePolicy::NoWaitNoPop; }
     static constexpr Dst            dst_slot          = DstOut;
-    static constexpr bool           is_upfront        = (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd);
+    static constexpr bool           is_upfront        = (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) ||
+                                                        (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd);
     static constexpr bool           clashes_with_fpu  = true;
 
     // Prev-CB fold (D2): DestReuseBinary loads CB into srca (when DEST → srcb) or srcb
@@ -591,9 +614,11 @@ struct DestReuseBinary : DestReuseBinaryTag {
         binary_dest_reuse_tiles_init<et, reuse>(Cb);
     }
 
-    ALWI void wait_per_tile(uint32_t /*i*/) const {
+    ALWI void wait_per_tile(uint32_t i) const {
         if constexpr (Policy == CopyTilePolicy::WaitAndPop || Policy == CopyTilePolicy::WaitNoPop) {
             cb_wait_front(Cb, 1);
+        } else if constexpr (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
+            cb_wait_front(Cb, i + 1);
         }
     }
     ALWI void wait_upfront(uint32_t n) const {
@@ -619,7 +644,10 @@ struct DestReuseBinary : DestReuseBinaryTag {
         }
     }
     ALWI void pop_upfront_end(uint32_t n) const {
-        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) cb_pop_front(Cb, n);
+        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                      Policy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
+            cb_pop_front(Cb, n);
+        }
     }
 
 private:
@@ -646,7 +674,8 @@ struct UnaryBcast : UnaryBcastTag {
     static constexpr CopyTilePolicy a_policy()        { return Policy; }
     static constexpr CopyTilePolicy b_policy()        { return CopyTilePolicy::NoWaitNoPop; }
     static constexpr Dst            dst_slot          = DstSlot;
-    static constexpr bool           is_upfront        = (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd);
+    static constexpr bool           is_upfront        = (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) ||
+                                                        (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd);
     static constexpr bool           clashes_with_fpu  = true;
 
     // Prev-CB fold (D2): UnaryBcast loads Cb to srca; ocb (CbOut or Cb) on pack-side.
@@ -664,9 +693,11 @@ struct UnaryBcast : UnaryBcastTag {
         unary_bcast_init<bt>(Cb, ocb);
     }
 
-    ALWI void wait_per_tile(uint32_t /*i*/) const {
+    ALWI void wait_per_tile(uint32_t i) const {
         if constexpr (Policy == CopyTilePolicy::WaitAndPop || Policy == CopyTilePolicy::WaitNoPop) {
             cb_wait_front(Cb, 1);
+        } else if constexpr (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
+            cb_wait_front(Cb, i + 1);
         }
     }
     ALWI void wait_upfront(uint32_t n) const {
@@ -682,7 +713,10 @@ struct UnaryBcast : UnaryBcastTag {
         }
     }
     ALWI void pop_upfront_end(uint32_t n) const {
-        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) cb_pop_front(Cb, n);
+        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+                      Policy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
+            cb_pop_front(Cb, n);
+        }
     }
 };
 

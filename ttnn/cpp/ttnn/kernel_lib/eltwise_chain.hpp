@@ -325,11 +325,16 @@ enum class Legacy : bool { Off = false, On = true };
 
 /// CB-input lifecycle (CopyTile, BinaryFpu A/B operands, DestReuseBinary, UnaryBcast).
 enum class CopyTilePolicy : uint8_t {
-    WaitAndPop,           // per-tile wait + per-tile pop  (default — streaming)
-    WaitNoPop,            // per-tile wait + no pop        (fan-out first / persistent)
-    NoWaitPop,            // no wait     + per-tile pop    (fan-out last / pre-waited single)
-    NoWaitNoPop,          // no wait     + no pop          (caller owns lifecycle / sharded)
-    WaitUpfrontPopAtEnd,  // upfront wait + upfront pop    (block access — BlockIter / Absolute legal)
+    WaitAndPop,              // per-tile wait + per-tile pop  (default — streaming)
+    WaitNoPop,               // per-tile wait + no pop        (fan-out first / persistent)
+    NoWaitPop,               // no wait     + per-tile pop    (fan-out last / pre-waited single)
+    NoWaitNoPop,             // no wait     + no pop          (caller owns lifecycle / sharded)
+    WaitUpfrontPopAtEnd,     // upfront wait + upfront pop    (block access — BlockIter / Absolute legal)
+    CumulativeWaitPopAtEnd,  // per-iter cumulative wait (cb_wait_front(cb, i+1)) + bulk pop at end
+                             // (block access with producer streaming: consumer iter i starts as
+                             // soon as producer has pushed i+1 tiles, vs WaitUpfrontPopAtEnd which
+                             // blocks iter 0 on the full N. BlockIter / Absolute / Pinned all
+                             // legal — cumulative wait guarantees tile i present at iter i.)
 };
 
 /// CB-input tile indexing.
