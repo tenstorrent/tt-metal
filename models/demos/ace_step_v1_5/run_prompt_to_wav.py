@@ -7,12 +7,14 @@ time tiles so ``ttnn.conv1d`` stays within L1 limits. Pass ``--torch-vae`` for P
 
 By default this matches ``torch_ref/run_prompt_to_wav.py --use-official-acestep`` for **Phase 1**
 (5 Hz LM / CoT, audio codes, handler ``preprocess_batch``, TTNN Qwen3 caption encoder via
-``infer_text_embeddings``, and HF ``prepare_condition`` with **precomputed LM hints**), emitting the
-same style of **loguru** / model logs as the official CLI. DiT sampling runs on TTNN.
+``infer_text_embeddings``, and TTNN ``prepare_condition`` replacement with **precomputed LM hints**),
+emitting the same style of **loguru** / model logs as the official CLI. DiT sampling runs on TTNN.
 
 Use ``--fast-preprocess`` to skip the LM and use the lightweight path (tokenizer + TTNN ``Qwen3Model``
 embedding encoder + ``precomputed_lm_hints_25Hz=None``), avoiding a PyTorch Qwen forward while still
-using HF ``prepare_condition`` on the host.
+using HF ``prepare_condition`` on the host by default. Pass ``--ttnn-condition-embedding`` to force
+the lightweight TTNN condition path, or ``--no-ttnn-condition-embedding`` to compare against Torch
+``prepare_condition``.
 
 ``--use-official-lm`` runs full ``acestep.inference.generate_music`` (PyTorch DiT on host) with no TTNN.
 """
@@ -324,6 +326,16 @@ def main() -> None:
         ),
     )
     ap.add_argument(
+        "--ttnn-condition-embedding",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Run ACE condition embedding / prepare_condition assembly in TTNN instead of HF prepare_condition. "
+            "Default: on for the official LM/handler TTNN demo path, off for --fast-preprocess. "
+            "Use --no-ttnn-condition-embedding to force the Torch prepare_condition reference path."
+        ),
+    )
+    ap.add_argument(
         "--no-ttnn-strict",
         action="store_true",
         help="Do not set throw_exception_on_fallback (may hide TTNN fallbacks).",
@@ -369,6 +381,8 @@ def main() -> None:
                 flush=True,
             )
             fast_preprocess = True
+    if args.ttnn_condition_embedding is None:
+        args.ttnn_condition_embedding = not fast_preprocess
 
     import torch
     from transformers import AutoModel, AutoTokenizer  # tokenizer always; AceStep ``prepare_condition`` via AutoModel
@@ -498,6 +512,11 @@ def main() -> None:
         print(f"Wrote (official LM, not TTNN): {dst}", flush=True)
         return
 
+    condition_tensors_on_device = False
+    enc_hs_tt_one = None
+    ctx_tt_one = None
+    null_emb_tt = None
+
     if fast_preprocess:
         # --- Lightweight: TTNN Qwen3 embedding encoder + HF prepare_condition (no 5 Hz LM / no precomputed hints) ---
         tok = AutoTokenizer.from_pretrained(str(text_model_dir))
@@ -550,6 +569,9 @@ def main() -> None:
         if hasattr(dev, "enable_program_cache"):
             dev.enable_program_cache()
         dev_opened_for_ttnn_text_encoder = True
+        mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+        if mem is None:
+            raise RuntimeError("TTNN build missing DRAM_MEMORY_CONFIG.")
 
         input_ids_np = tokens["input_ids"].numpy().astype(np.uint32)
         attn_mask_np = tokens["attention_mask"].numpy().astype(np.float32)
@@ -561,45 +583,87 @@ def main() -> None:
         )
         try:
             text_hs_tt = qwen_enc.forward(input_ids_np, attn_mask_np)
-            text_hidden_states = ttnn.to_torch(text_hs_tt).float()
+            if args.ttnn_condition_embedding:
+                from models.demos.ace_step_v1_5.ttnn_impl.condition_encoder import TtAceStepInstrumentalConditionEncoder
+
+                condition_encoder = TtAceStepInstrumentalConditionEncoder(
+                    device=dev,
+                    checkpoint_safetensors_path=str(safetensors_path),
+                    dtype=getattr(ttnn, "bfloat16", None),
+                )
+                enc_hs_tt_one, enc_mask_np, null_emb_tt = condition_encoder.forward(text_hs_tt, attn_mask_np)
+                enc_mask = torch.from_numpy(enc_mask_np).to(dtype=torch.float32)
+                src_latents_tt = ttnn.as_tensor(
+                    src_latents.detach().to(dtype=torch.float32).cpu().contiguous().numpy(),
+                    device=dev,
+                    dtype=getattr(ttnn, "bfloat16", None),
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=mem,
+                )
+                chunk_masks_tt = ttnn.as_tensor(
+                    chunk_masks.detach().to(dtype=torch.float32).cpu().contiguous().numpy(),
+                    device=dev,
+                    dtype=getattr(ttnn, "bfloat16", None),
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=mem,
+                )
+                ctx_tt_one = ttnn.concat([src_latents_tt, chunk_masks_tt], dim=-1)
+                try:
+                    ttnn.deallocate(text_hs_tt)
+                except Exception:
+                    pass
+                try:
+                    ttnn.deallocate(src_latents_tt)
+                    ttnn.deallocate(chunk_masks_tt)
+                except Exception:
+                    pass
+                condition_tensors_on_device = True
+                print("[condition] backend=ttnn instrumental lyric+timbre+text", flush=True)
+            else:
+                text_hidden_states = ttnn.to_torch(text_hs_tt).float()
+                try:
+                    ttnn.deallocate(text_hs_tt)
+                except Exception:
+                    pass
         finally:
             del qwen_enc
 
-        if text_hidden_states.ndim == 4:
-            text_hidden_states = text_hidden_states.squeeze(1).contiguous()
-        text_hidden_states = text_hidden_states.to(torch_dev)
+        if not args.ttnn_condition_embedding:
+            if text_hidden_states.ndim == 4:
+                text_hidden_states = text_hidden_states.squeeze(1).contiguous()
+            text_hidden_states = text_hidden_states.to(torch_dev)
 
-        ace = AutoModel.from_pretrained(str(model_dir), trust_remote_code=True).eval().to(torch_dev)
-        B = 1
-        lyric_dim = int(text_hidden_states.shape[-1])
-        lyric_hidden_states = torch.zeros((B, 1, lyric_dim), dtype=torch.float32, device=torch_dev)
-        lyric_attention_mask = torch.ones((B, 1), dtype=torch.bool, device=torch_dev)
-        refer_audio_acoustic_hidden_states_packed = torch.zeros((B, 1, 64), dtype=torch.float32, device=torch_dev)
-        refer_audio_order_mask = torch.zeros((B,), dtype=torch.long, device=torch_dev)
-        latent_attention_mask = torch.ones((B, frames), dtype=torch.float32, device=torch_dev)
+            ace = AutoModel.from_pretrained(str(model_dir), trust_remote_code=True).eval().to(torch_dev)
+            B = 1
+            lyric_dim = int(text_hidden_states.shape[-1])
+            lyric_hidden_states = torch.zeros((B, 1, lyric_dim), dtype=torch.float32, device=torch_dev)
+            lyric_attention_mask = torch.ones((B, 1), dtype=torch.bool, device=torch_dev)
+            refer_audio_acoustic_hidden_states_packed = torch.zeros((B, 1, 64), dtype=torch.float32, device=torch_dev)
+            refer_audio_order_mask = torch.zeros((B,), dtype=torch.long, device=torch_dev)
+            latent_attention_mask = torch.ones((B, frames), dtype=torch.float32, device=torch_dev)
 
-        with torch.inference_mode():
-            enc_hs, enc_mask, ctx_lat = ace.prepare_condition(
-                text_hidden_states=text_hidden_states.to(dtype=torch.float32),
-                text_attention_mask=attn_mask_bool,
-                lyric_hidden_states=lyric_hidden_states,
-                lyric_attention_mask=lyric_attention_mask,
-                refer_audio_acoustic_hidden_states_packed=refer_audio_acoustic_hidden_states_packed,
-                refer_audio_order_mask=refer_audio_order_mask,
-                hidden_states=src_latents.to(device=torch_dev, dtype=torch.float32),
-                attention_mask=latent_attention_mask,
-                silence_latent=silence.to(device=torch_dev, dtype=torch.float32),
-                src_latents=src_latents.to(device=torch_dev, dtype=torch.float32),
-                chunk_masks=chunk_masks.to(device=torch_dev, dtype=torch.float32),
-                is_covers=torch.zeros((B,), dtype=torch.bool, device=torch_dev),
-                precomputed_lm_hints_25Hz=None,
-            )
+            with torch.inference_mode():
+                enc_hs, enc_mask, ctx_lat = ace.prepare_condition(
+                    text_hidden_states=text_hidden_states.to(dtype=torch.float32),
+                    text_attention_mask=attn_mask_bool,
+                    lyric_hidden_states=lyric_hidden_states,
+                    lyric_attention_mask=lyric_attention_mask,
+                    refer_audio_acoustic_hidden_states_packed=refer_audio_acoustic_hidden_states_packed,
+                    refer_audio_order_mask=refer_audio_order_mask,
+                    hidden_states=src_latents.to(device=torch_dev, dtype=torch.float32),
+                    attention_mask=latent_attention_mask,
+                    silence_latent=silence.to(device=torch_dev, dtype=torch.float32),
+                    src_latents=src_latents.to(device=torch_dev, dtype=torch.float32),
+                    chunk_masks=chunk_masks.to(device=torch_dev, dtype=torch.float32),
+                    is_covers=torch.zeros((B,), dtype=torch.bool, device=torch_dev),
+                    precomputed_lm_hints_25Hz=None,
+                )
 
-        enc_hs = enc_hs.float().cpu()
-        enc_mask = enc_mask.float().cpu()
-        ctx_lat = ctx_lat.float().cpu()
+            enc_hs = enc_hs.float().cpu()
+            enc_mask = enc_mask.float().cpu()
+            ctx_lat = ctx_lat.float().cpu()
 
-        null_emb = _null_condition_emb(ace).float().cpu()
+            null_emb = _null_condition_emb(ace).float().cpu()
     else:
         # --- Official: 5 Hz LM + AceStepHandler batching + prepare_condition (precomputed LM hints) ---
         ref_root = _ensure_acestep_on_path()
@@ -608,6 +672,7 @@ def main() -> None:
             attach_infer_text_embeddings_ttnn,
             build_filtered_dit_kwargs_for_handler,
             configure_acestep_logging,
+            handler_prepare_condition_payload,
             handler_prepare_condition_tensors,
         )
 
@@ -708,7 +773,21 @@ def main() -> None:
             dit_handler, tt_qwen_encoder=qwen_tt_encoder, max_seq_len=256
         )
         try:
-            enc_hs, enc_mask, ctx_lat, frames, null_emb = handler_prepare_condition_tensors(dit_handler, filtered)
+            if args.ttnn_condition_embedding:
+                from models.demos.ace_step_v1_5.ttnn_impl.condition_encoder import TtAceStepInstrumentalConditionEncoder
+
+                payload, frames = handler_prepare_condition_payload(dit_handler, filtered)
+                condition_encoder = TtAceStepInstrumentalConditionEncoder(
+                    device=dev,
+                    checkpoint_safetensors_path=str(safetensors_path),
+                    dtype=getattr(ttnn, "bfloat16", None),
+                )
+                enc_hs_tt_one, enc_mask_np, ctx_tt_one, null_emb_tt = condition_encoder.forward_payload(payload)
+                enc_mask = torch.from_numpy(enc_mask_np).to(dtype=torch.float32)
+                condition_tensors_on_device = True
+                print("[condition] backend=ttnn official lyric+timbre+text+context", flush=True)
+            else:
+                enc_hs, enc_mask, ctx_lat, frames, null_emb = handler_prepare_condition_tensors(dit_handler, filtered)
         finally:
             _restore_infer_txt()
             del qwen_tt_encoder
@@ -822,7 +901,43 @@ def main() -> None:
             else encoder_keep_np_single
         )
 
-        if do_cfg:
+        if condition_tensors_on_device:
+            if enc_hs_tt_one is None or ctx_tt_one is None:
+                raise RuntimeError("Internal error: TTNN condition path did not produce device tensors.")
+            if do_cfg:
+                if null_emb_tt is None:
+                    raise RuntimeError("Internal error: TTNN condition path missing null condition embedding.")
+                s_enc = int(enc_hs_tt_one.shape[1])
+                d_enc = int(enc_hs_tt_one.shape[-1])
+                null_4d = ttnn.reshape(null_emb_tt, (1, 1, 1, d_enc))
+                null_rep_4d = ttnn.repeat(null_4d, (1, 1, s_enc, 1))
+                null_rep = ttnn.reshape(null_rep_4d, (1, s_enc, d_enc))
+                enc_tt_pipe = ttnn.concat([enc_hs_tt_one, null_rep], dim=0)
+                ctx_tt_pipe = concat_duplicate_batch(ctx_tt_one)
+                try:
+                    ttnn.deallocate(enc_hs_tt_one)
+                    ttnn.deallocate(null_4d)
+                    ttnn.deallocate(null_rep_4d)
+                    ttnn.deallocate(null_rep)
+                    ttnn.deallocate(ctx_tt_one)
+                    ttnn.deallocate(null_emb_tt)
+                except Exception:
+                    pass
+                enc_hs_tt_one = None
+                ctx_tt_one = None
+                null_emb_tt = None
+            else:
+                enc_tt_pipe = enc_hs_tt_one
+                ctx_tt_pipe = ctx_tt_one
+                enc_hs_tt_one = None
+                ctx_tt_one = None
+                if null_emb_tt is not None:
+                    try:
+                        ttnn.deallocate(null_emb_tt)
+                    except Exception:
+                        pass
+                    null_emb_tt = None
+        elif do_cfg:
             enc_tt_pipe = bf16_row_from_numpy_bc(
                 np.concatenate(
                     [_as_host_numpy_f32(enc_hs), _as_host_numpy_f32(null_emb.expand_as(enc_hs))],
@@ -959,6 +1074,12 @@ def main() -> None:
         if momentum_ttnn is not None:
             momentum_ttnn.reset()
     finally:
+        for _maybe_tt in (enc_hs_tt_one, ctx_tt_one, null_emb_tt):
+            if _maybe_tt is not None:
+                try:
+                    ttnn.deallocate(_maybe_tt)
+                except Exception:
+                    pass
         ttnn.close_device(dev)
 
     if wav_bct_cpu is not None:
