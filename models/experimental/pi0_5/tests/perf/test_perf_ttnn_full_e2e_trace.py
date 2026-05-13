@@ -112,6 +112,12 @@ def test_pi0_5_ttnn_full_e2e_trace(device):
             ttnn.deallocate(out)
         print(f"   warmup call {i + 1} done")
 
+    # Disable per-call noise resampling for trace: a ttnn.from_torch inside
+    # sample_actions would require a host→device transfer that trace capture
+    # forbids. The captured trace reuses model.x_t_ttnn — refresh it between
+    # trace replays by setting model.x_t_ttnn from host before each replay.
+    model.resample_noise = False
+
     print(f"\n📷 Capturing trace of full sample_actions…")
     capture_start = time.perf_counter()
     tid = ttnn.begin_trace_capture(device, cq_id=0)
