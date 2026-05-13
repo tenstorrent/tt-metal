@@ -438,8 +438,16 @@ struct MatmulExpertCompressedDRAM {
                 // expert. At each boundary we inc (pass token forward) and, if more
                 // batches remain in this expert, wait (receive token back).
                 for (uint32_t iter = 0; iter < num_iterations; iter++) {
-                    uint32_t block_size = static_cast<uint32_t>(block_size_ptr[iter]) * BLOCK_SIZE_UNIT;
+                    // EXPERIMENT: force every iter to read full bfp4 worst-case block
+                    // size, regardless of actual block_size (which can be small for
+                    // bfp2/bfp0-heavy blocks or 0 for all-bfp0 blocks). This keeps
+                    // NCRISC's per-iter pace uniform so it can't race ahead of TRISC
+                    // on fast iters. Tracks actual_block_size separately so DRAM
+                    // offset advancement still matches the compressed layout.
+                    uint32_t actual_block_size = static_cast<uint32_t>(block_size_ptr[iter]) * BLOCK_SIZE_UNIT;
+                    uint32_t block_size = max_subblock_bytes;
                     uint32_t slot_start = l1_write_addr_in1;
+                    uint32_t iter_start_dram_offset = dram_read_offset;
 
                     noc_async_read_set_trid(curr_block_trid);
 
@@ -453,6 +461,12 @@ struct MatmulExpertCompressedDRAM {
                         l1_write_addr_in1 += chunk;
                         remaining -= chunk;
                     }
+
+                    // EXPERIMENT: restore dram_read_offset to advance by the actual
+                    // (compressed) block size so the next iter reads from the correct
+                    // DRAM position; the extra bytes read into the slot above are
+                    // never consumed by the LLK (fmt codes only point at real tile data).
+                    dram_read_offset = iter_start_dram_offset + actual_block_size;
 
                     l1_write_addr_in1 = slot_start + max_subblock_bytes;
 
