@@ -87,6 +87,21 @@ jobs:
   multihost-tests:
     name: ${{ matrix.test-group.name }}
     needs: load-test-matrix
+    env:
+      OMPI_MCA_btl_tcp_if_include: ens5f0np0
+      PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+      PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
+      PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
+      PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
+      PRTE_MCA_prte_fwd_environment: "true"
+      PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      VIRTUAL_ENV: /opt/venv
+      HOME: /home/user
+      PIP_CACHE_DIR: /home/user/.cache/pip
+      PYTHONPATH: /home/user/tt-metal
+      LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
+      TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
+      TT_METAL_CACHE: /home/user/.cache
     strategy:
       max-parallel: 1  # Run tests sequentially to avoid resource contention
       fail-fast: false
@@ -125,56 +140,6 @@ jobs:
           allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
           namespace: ttop-ci
 
-      - name: Create reset environment
-        uses: ./.github/actions/ttop-create-environment
-        timeout-minutes: 5
-        with:
-          environmentName:  ci-${{ github.run_id }}-reset-${{ inputs.sp-config }}-${{ strategy.job-index }}
-          allocationName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
-          allocationNamespace: ttop-ci
-          workerRepository: ${{ steps.parse-image.outputs.repository }}
-          workerTag: ${{ steps.parse-image.outputs.tag }}
-
-      - name: Setup tt-run for reset
-        uses: ./.github/actions/ttop-configure-tt-run
-        timeout-minutes: 5
-        with:
-          directory: /ci/ttrun
-          mgdFile: /tmp/dummy/doesnotexist.textproto
-          copyToWorkers: false
-          ranksData: ${{ steps.get-allocation-data.outputs.ranksData }}
-
-      - name: Print hostnames
-        working-directory: /tmp
-        env:
-          OMPI_MCA_btl_tcp_if_exclude: docker0,lo
-          PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
-          PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
-          PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
-          PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
-        run: |
-          mpirun --tag-output --pernode hostname
-
-      - name: Reset cards for ${{ matrix.test-group.name }}
-        working-directory: /tmp
-        timeout-minutes: 10
-        env:
-          OMPI_MCA_btl_tcp_if_exclude: docker0,lo
-          PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
-          PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
-          PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
-          PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
-        run: |
-          mpirun --tag-output --pernode \
-            bash -c 'sudo ipmitool raw 0x30 0x8B 0xF 0xFF 0x0 0xF && sleep 300'
-
-      - name: Delete reset environment
-        if: always()
-        uses: ./.github/actions/ttop-delete-environment
-        with:
-          environmentName:  ci-${{ github.run_id }}-reset-${{ inputs.sp-config }}-${{ strategy.job-index }}
-          namespace: ttop-ci
-
       - name: Create test environment
         uses: ./.github/actions/ttop-create-environment
         timeout-minutes: 5
@@ -184,6 +149,7 @@ jobs:
           allocationNamespace: ttop-ci
           workerRepository: ${{ steps.parse-image.outputs.repository }}
           workerTag: ${{ steps.parse-image.outputs.tag }}
+          useDevHostMount: 'true'
           sharedVolumeEnabled: 'true'
 
       - name: Setup tt-run for test
@@ -211,33 +177,108 @@ jobs:
         run: |
           # Move the cloned directory to workers. TODO: Clone directly to NFS
           cp -r "$GITHUB_WORKSPACE" /ci/tt-metal
+          if ! command -v zstd >/dev/null 2>&1; then
+            echo "zstd not found on runner, installing..."
+            sudo apt-get update
+            sudo apt-get install -y zstd
+          fi
+          shopt -s globstar nullglob
+          build_archives=(/ci/artifacts/**/*.tar.zst)
+          echo "Found ${#build_archives[@]} .tar.zst candidate(s) under /ci/artifacts"
+          printf ' - %s\n' "${build_archives[@]}"
+          if [ ${#build_archives[@]} -eq 0 ]; then
+            echo "ERROR: Could not find any .tar.zst under /ci/artifacts"
+            echo "Artifact directory layout:"
+            ls -R /ci/artifacts
+            exit 1
+          fi
+          BUILD_ARCHIVE="${build_archives[0]}"
+          echo "Using build archive: ${BUILD_ARCHIVE}"
+
+          # Unpack build artifact locally as well. Pipeline config generation runs on the runner
+          # and expects test binaries under /ci/tt-metal/build/test.
+          tar --zstd -xf "${BUILD_ARCHIVE}" -C /ci/tt-metal
           mpirun --pernode cp -r /ci/tt-metal /home/user
           mpirun --pernode git -C /home/user/tt-metal submodule update --init --recursive
 
           # Unpack artifacts
-          mpirun --pernode tar --zstd -xf /ci/artifacts/ttm_any.tar.zst -C /home/user/tt-metal
-          mpirun --pernode pip install $(find /ci/artifacts | grep whl)
-        env:
-          OMPI_MCA_btl_tcp_if_exclude: docker0,lo
-          PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
-          PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
-          PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
-          PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
+          mpirun --pernode tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
+          ttnn_wheels=(/ci/artifacts/**/ttnn-*.whl)
+          echo "Found ${#ttnn_wheels[@]} ttnn wheel candidate(s) under /ci/artifacts"
+          printf ' - %s\n' "${ttnn_wheels[@]}"
+          if [ ${#ttnn_wheels[@]} -eq 0 ]; then
+            echo "ERROR: Could not find ttnn-*.whl under /ci/artifacts"
+            echo "Artifact directory layout:"
+            ls -R /ci/artifacts
+            exit 1
+          fi
+          mpirun --pernode pip install "${ttnn_wheels[@]}"
+
+      - name: Reset cards and validate cluster for ${{ matrix.test-group.name }}
+        working-directory: /tmp
+        timeout-minutes: 30
+        run: |
+          MAX_RECOVERY_ATTEMPTS=3
+
+          echo "--- Pre-check: tt-smi visibility on all hosts ---"
+          mpirun --pernode --tag-output \
+            bash -lc 'echo "$(hostname): $(tt-smi --snapshot_no_tty --snapshot | jq -r .host_info.Driver)"' || true
+
+          for attempt in $(seq 1 "$MAX_RECOVERY_ATTEMPTS"); do
+            echo "=== Recovery attempt $attempt of $MAX_RECOVERY_ATTEMPTS ==="
+
+            echo "--- Resetting cards with tt-smi ---"
+            if ! mpirun --pernode --tag-output tt-smi -glx_reset; then
+              echo "WARNING: Reset failed on attempt $attempt"
+              if [ "$attempt" -eq "$MAX_RECOVERY_ATTEMPTS" ]; then
+                echo "ERROR: Reset failed after $MAX_RECOVERY_ATTEMPTS attempts"
+                exit 1
+              fi
+              echo "Sleeping 30s before retry..."
+              sleep 30
+              continue
+            fi
+
+            echo "--- Sleeping 5s after reset to allow links/services to settle ---"
+            sleep 5
+
+            echo "--- Running cluster validation ---"
+            if mpirun --pernode --tag-output \
+              /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
+              --send-traffic \
+              --hard-fail \
+              --cabling-descriptor-path /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
+              --deployment-descriptor-path /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto \
+              --num-iterations 10; then
+              echo "SUCCESS: Recovery completed on attempt $attempt"
+              exit 0
+            fi
+
+            echo "WARNING: Validation failed on attempt $attempt"
+            if [ "$attempt" -lt "$MAX_RECOVERY_ATTEMPTS" ]; then
+              echo "Sleeping 30s before retry..."
+              sleep 30
+            fi
+          done
+
+          echo "ERROR: Recovery failed after $MAX_RECOVERY_ATTEMPTS attempts"
+          exit 1
+
+      - name: Verify Python env on workers
+        working-directory: /tmp
+        run: |
+          mpirun --pernode --tag-output bash -lc '
+            echo "host=$(hostname)"
+            echo "python3=$(command -v python3)"
+            python3 -V
+            python3 -c "import ttnn.device; print(\"ttnn.device import: OK\")"
+            python3 -c "import transformers; print(\"transformers=\" + transformers.__version__)"
+          '
 
       - name: ${{ matrix.test-group.name }}
         id: run-test
         timeout-minutes: ${{ matrix.test-group.timeout }}
         working-directory: /ci/tt-metal
-        env:
-          OMPI_MCA_btl_tcp_if_exclude: docker0,lo
-          PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
-          PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
-          PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
-          PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
-          LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
-          TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
-          TT_METAL_CACHE: /home/user/.cache
-          GITHUB_RUN_ID: ${{ github.run_id }}
         run: |
           # Store command safely using heredoc
           CMD=$(cat << 'EOF'

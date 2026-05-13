@@ -4,9 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr uint32_t N = get_named_compile_time_arg_val("rank");
@@ -24,8 +24,8 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
     const auto s = TensorAccessor(src_args, src_addr);
-    experimental::CircularBuffer cb(cb_id_in0);
-    experimental::Noc noc;
+    CircularBuffer cb(cb_id_in0);
+    Noc noc;
 
     // start at runtime arg 3 since address/start_block/end_block make up the first 3 args
     uint32_t output_tiled_shape[N], inv_perm[N], src_strides[N];

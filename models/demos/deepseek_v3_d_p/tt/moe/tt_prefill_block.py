@@ -356,7 +356,7 @@ class TtPrefillBlock(LightweightModule):
             attn_norm_out,
             rope_tensors,
             kvpe_cache,
-            cache_user_idx=cache_layer_idx,
+            cache_layer_idx=cache_layer_idx,
             on_layer_complete=on_layer_complete,
             actual_isl=actual_isl,
         )

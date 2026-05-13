@@ -121,24 +121,19 @@ class TtPrefillTransformer(LightweightModule):
         self.padding_side = padding_side
 
         # Log environment variables that define reference output cache and TTNN weights cache.
-        # This is to prevent accidental cache creation at unusal places and fill disk space.
+        # This is to prevent accidental cache creation at unusual places and fill disk space.
         TT_DS_PREFILL_TTNN_CACHE = os.getenv("TT_DS_PREFILL_TTNN_CACHE", None)
         TT_DS_PREFILL_HOST_REF_CACHE = os.getenv("TT_DS_PREFILL_HOST_REF_CACHE", None)
-
         logger.debug(f"{TT_DS_PREFILL_TTNN_CACHE=}")
         logger.debug(f"{TT_DS_PREFILL_HOST_REF_CACHE=}")
         if TT_DS_PREFILL_TTNN_CACHE is None:
-            logger.error(f"TT_DS_PREFILL_TTNN_CACHE environment variable is not set; export TT_DS_PREFILL_TTNN_CACHE=")
-            import pytest
-
-            pytest.fail(f"{TT_DS_PREFILL_TTNN_CACHE=}")
-        if TT_DS_PREFILL_HOST_REF_CACHE is None:
-            logger.error(
-                f"TT_DS_PREFILL_HOST_REF_CACHE environment variable is not set; export TT_DS_PREFILL_HOST_REF_CACHE="
+            raise RuntimeError(
+                "TT_DS_PREFILL_TTNN_CACHE environment variable is not set; export TT_DS_PREFILL_TTNN_CACHE=<path>"
             )
-            import pytest
-
-            pytest.fail(f"{TT_DS_PREFILL_HOST_REF_CACHE=}")
+        if TT_DS_PREFILL_HOST_REF_CACHE is None:
+            raise RuntimeError(
+                "TT_DS_PREFILL_HOST_REF_CACHE environment variable is not set; export TT_DS_PREFILL_HOST_REF_CACHE=<path>"
+            )
 
         logger.info(f"Building TtPrefillTransformer with {num_layers} layers, seq_len={seq_len}")
 
@@ -248,6 +243,7 @@ class TtPrefillTransformer(LightweightModule):
                 migration in disaggregated prefill/decode. When set, MLA also zeros
                 the padding region of the cache before fill so migration sees valid KV
                 + zero padding. When None, no migration or zeroing.
+
         Returns:
             Tuple of (first_token_id, first_token_prob, intermediates_dict or None)
             - first_token_id: sampled token ID (for first temperature if list provided)

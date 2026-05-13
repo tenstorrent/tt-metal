@@ -9,9 +9,9 @@
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 
 #ifdef ARCH_QUASAR
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #else
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #endif
 
 void kernel_main() {
@@ -21,13 +21,13 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
     constexpr uint32_t dfb_in_id = get_compile_time_arg_val(2);
     constexpr uint32_t dfb_out_id = get_compile_time_arg_val(3);
-    experimental::DataflowBuffer buff_in(dfb_in_id);
-    experimental::DataflowBuffer buff_out(dfb_out_id);
+    DataflowBuffer buff_in(dfb_in_id);
+    DataflowBuffer buff_out(dfb_out_id);
     const uint32_t in_id = buff_in.get_id();
     const uint32_t out_id = buff_out.get_id();
 #else
-    experimental::CircularBuffer buff_in(tt::CBIndex::c_0);
-    experimental::CircularBuffer buff_out(tt::CBIndex::c_16);
+    CircularBuffer buff_in(tt::CBIndex::c_0);
+    CircularBuffer buff_out(tt::CBIndex::c_16);
     const uint32_t in_id = tt::CBIndex::c_0;
     const uint32_t out_id = tt::CBIndex::c_16;
 #endif

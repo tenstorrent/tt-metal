@@ -502,7 +502,7 @@ class ttMLA:
         hidden_states: ttnn.Tensor,
         rope_tensors: dict,
         kvpe_cache: ttnn.Tensor,
-        cache_user_idx: int = 0,
+        cache_layer_idx: int = 0,
         on_layer_complete: Optional[Callable[[int], None]] = None,
         actual_isl: Optional[int] = None,
     ) -> ttnn.Tensor:
@@ -645,26 +645,24 @@ class ttMLA:
         ttnn.deallocate(tt_kv_rope)
         tt_kvpe = ttnn.typecast(tt_kvpe, dtype=ttnn.bfloat8_b)
 
-        # Update KV cache with compressed latent representation.
-        # Padding region is guaranteed clean by zero_init at cache allocation time.
-        # (zero_cache_padding_zigzag was the per-layer alternative; re-enable if
-        # cache is allocated with ttnn.empty / without zero_init.)
-        # if on_layer_complete is not None:
-        #     assert actual_isl is not None, "actual_isl required when on_layer_complete is set"
-        #     sp_factor = self.mesh_device.shape[self.sp_axis]
-        #     tp_factor = self.mesh_device.shape[self.tp_axis]
-        #     seq_len_local = kvpe_cache.shape[2]
-        #     seq_len_total = seq_len_local * sp_factor
-        #     zero_cache_padding_zigzag(
-        #         kvpe_cache=kvpe_cache,
-        #         global_end_token=actual_isl,
-        #         sp_factor=sp_factor,
-        #         seq_len=seq_len_total,
-        #         decode_chunk_align=DECODE_CHUNK_ALIGN,
-        #         tp_factor=tp_factor,
-        #     )
+        # Zero the padding region of THIS layer's slot before fill so migration
+        # streams clean zeros (not residual data from a prior request) for the
+        # decode side. Slice the cache to batch=cache_layer_idx so the page math
+        # in zero_cache_range hits this layer's slot, not layer 0.
+        if on_layer_complete is not None:
+            assert actual_isl is not None, "actual_isl required when on_layer_complete is set"
+            seq_len_local = kvpe_cache.shape[2]
+            seq_len_total = seq_len_local * self.sp_factor
+            zero_cache_padding_zigzag(
+                kvpe_cache=kvpe_cache[cache_layer_idx],
+                global_end_token=actual_isl,
+                sp_factor=self.sp_factor,
+                seq_len=seq_len_total,
+                decode_chunk_align=DECODE_CHUNK_ALIGN,
+                tp_factor=self.tp_factor,
+            )
 
-        ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, cache_user_idx)
+        ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, cache_layer_idx)
 
         if on_layer_complete is not None:
             on_layer_complete(self.layer_idx)

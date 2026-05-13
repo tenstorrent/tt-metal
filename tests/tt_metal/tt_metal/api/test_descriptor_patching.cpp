@@ -366,6 +366,38 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CbOnlyBuffers_Return
     EXPECT_TRUE(resolved.empty());
 }
 
+// Regression: when tensor_buffers contains the same Buffer* more than once
+// (e.g. matmul(X, X) in newton-schulz, or an output that aliases an input),
+// resolve_bindings cannot disambiguate which binding maps to which slot from
+// Buffer* alone.  std::find would silently return the first occurrence for
+// every binding, causing apply_resolved_bindings to write the same address to
+// every slot and producing wrong results on a future cache hit with two
+// distinct tensors.
+//
+// The fix bails out and returns an empty ResolvedBindings, forcing the
+// adapter onto the slow path (rebuild the descriptor) for that cache hit.
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_DuplicateBuffer_ReturnsEmpty) {
+    auto buf_a = MakeDramBuffer(device());
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    // Two bindings for the same Buffer*, simulating an op that takes the same
+    // tensor at two distinct positional slots.
+    kd.emplace_runtime_args({0, 0}, {buf_a.get(), buf_a.get()});
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+
+    Program program{desc};
+    // tensor_buffers reflects "X used twice" — the same Buffer* appears at
+    // both slots.  resolve_bindings must report empty so the adapter takes
+    // the slow path.
+    ResolvedBindings resolved = resolve_bindings(program, desc, {buf_a.get(), buf_a.get()});
+
+    EXPECT_TRUE(resolved.empty());
+    EXPECT_TRUE(resolved.rt_args.empty());
+    EXPECT_TRUE(resolved.cbs.empty());
+}
+
 // resolve_bindings fires TT_FATAL when a binding buffer is not in tensor_buffers.
 TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_BufferNotInTensorList_Throws) {
     auto buf_a = MakeDramBuffer(device());

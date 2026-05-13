@@ -31,7 +31,7 @@
 //   [1] entries_per_neo      - dfb(1) loop count per Neo (= total_entries_dfb1 / num_neos)
 //   [2] words_per_entry      - words per dfb(1) entry for in-place increment
 
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
     const uint32_t num_entries_consumer = get_compile_time_arg_val(0);
@@ -42,7 +42,7 @@ void kernel_main() {
     // UNPACK TRISC: each Neo's unpacker waits for its own TC credit (remapper fans out 1 DM post
     // to N consumer TCs so every blocked UNPACK TRISC sees the full set of entries).
     // PACK / MATH TRISCs: wait_front and pop_front are no-ops; they exit Phase 1 immediately.
-    experimental::DataflowBuffer dfb_consumer(0);
+    DataflowBuffer dfb_consumer(0);
     for (uint32_t i = 0; i < num_entries_consumer; i++) {
         dfb_consumer.wait_front(1);
         dfb_consumer.pop_front(1);
@@ -54,7 +54,7 @@ void kernel_main() {
     // Because PACK races through Phase 1 (no-ops), it can pre-fill the entire TC capacity
     // of dfb(1) before the UNPACK TRISC arrives from Phase 1. PACK then blocks in finish()
     // until UNPACK has consumed all entries and called its own finish().
-    experimental::DataflowBuffer dfb_intra(1);
+    DataflowBuffer dfb_intra(1);
 
 #ifdef UCK_CHLKC_UNPACK
     uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();

@@ -10,6 +10,8 @@
 #include "buffer.hpp"
 #include "hal.hpp"
 #include "impl/context/metal_context.hpp"
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/experimental/tensor/tensor_types.hpp>
 
 namespace tt {
 enum class DataFormat : uint8_t;
@@ -21,6 +23,15 @@ namespace tt::tt_metal {
 CircularBufferConfig::CircularBufferConfig(
     uint32_t total_size, const std::map<uint8_t, tt::DataFormat>& data_format_spec) :
     total_size_(total_size), globally_allocated_address_(std::nullopt) {
+    this->set_config(data_format_spec);
+}
+
+CircularBufferConfig::CircularBufferConfig(uint32_t total_size, const std::map<uint8_t, DataType>& data_type_spec) :
+    total_size_(total_size), globally_allocated_address_(std::nullopt) {
+    std::map<uint8_t, tt::DataFormat> data_format_spec;
+    for (const auto& [idx, dtype] : data_type_spec) {
+        data_format_spec[idx] = datatype_to_dataformat_converter(dtype);
+    }
     this->set_config(data_format_spec);
 }
 
@@ -158,6 +169,15 @@ CircularBufferConfig& CircularBufferConfig::set_total_size(uint32_t total_size) 
 
 CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address(const Buffer& buffer) {
     return this->set_globally_allocated_address_and_total_size(buffer, this->total_size_);
+}
+
+CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address(const MeshTensor& tensor) {
+    return set_globally_allocated_address(*tensor.mesh_buffer().get_reference_buffer());
+}
+
+CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_total_size(
+    const MeshTensor& tensor, uint32_t total_size) {
+    return set_globally_allocated_address_and_total_size(*tensor.mesh_buffer().get_reference_buffer(), total_size);
 }
 
 CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_total_size(

@@ -4,6 +4,8 @@
 
 #include <memory>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/experimental/allocator.hpp>
+#include "allocator_state.hpp"
 #include "allocator_types.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <enchantum/enchantum.hpp>
@@ -635,3 +637,15 @@ void Allocator::override_state(const AllocatorState& state) { impl->override_sta
 size_t Allocator::get_worker_l1_size() const { return impl->get_worker_l1_size(); }
 
 }  // namespace tt::tt_metal
+
+namespace tt::tt_metal::experimental {
+
+void synchronize_allocator_state(Allocator* target, const std::vector<Allocator*>& sources) {
+    AllocatorState merged_state;
+    for (auto* source : sources) {
+        merged_state.merge(source->extract_state());
+    }
+    target->override_state(merged_state);
+}
+
+}  // namespace tt::tt_metal::experimental
