@@ -44,7 +44,6 @@ def test_tilize(mesh_device, shape, dtype, mem_config, layout, enable_trace):
         return ttnn.tilize(tt_input)
 
     def check_op(tt_output):
-        return
         assert_with_pcc(torch_output, tt_output, 0.9999)
 
     run_test(mesh_device, run_op, check_op, enable_trace)
@@ -56,7 +55,6 @@ def test_tilize(mesh_device, shape, dtype, mem_config, layout, enable_trace):
     "in_shape, out_shape, pad_val, dtype, mem_config",
     [
         ([1, 1, 32, 8], [1, 1, 32, 32], 0, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 1, 32, 8], [1, 1, 32, 32], 0, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),  # duplicate
     ],
 )
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
@@ -90,9 +88,12 @@ def test_tilize_with_val_padding(mesh_device, in_shape, out_shape, pad_val, dtyp
 @pytest.mark.parametrize(
     "shape, input_dtype, output_dtype, mem_config",
     [
-        ([1, 1, 32, 256], ttnn.fp8_e4m3, ttnn.bfloat8_b, ttnn.DRAM_MEMORY_CONFIG),
-        ([1, 1, 32, 256], ttnn.fp8_e4m3, ttnn.bfloat8_b, ttnn.L1_MEMORY_CONFIG),
-        ([1, 8, 128, 7168], ttnn.fp8_e4m3, ttnn.bfloat8_b, ttnn.L1_MEMORY_CONFIG),
+        ([1, 1, 800, 7 * 1024], ttnn.fp8_e4m3, ttnn.bfloat8_b, ttnn.DRAM_MEMORY_CONFIG),
+        ([1, 1, 1600, 7 * 1024], ttnn.fp8_e4m3, ttnn.bfloat8_b, ttnn.DRAM_MEMORY_CONFIG),
+        ([1, 1, 2048, 7 * 1024], ttnn.fp8_e4m3, ttnn.bfloat8_b, ttnn.DRAM_MEMORY_CONFIG),
+        ([1, 1, 3200, 7 * 1024], ttnn.fp8_e4m3, ttnn.bfloat8_b, ttnn.DRAM_MEMORY_CONFIG),
+        ([1, 1, 4096, 7 * 1024], ttnn.fp8_e4m3, ttnn.bfloat8_b, ttnn.DRAM_MEMORY_CONFIG),
+        ([1, 1, 25600, 7 * 1024], ttnn.fp8_e4m3, ttnn.bfloat8_b, ttnn.DRAM_MEMORY_CONFIG),
     ],
 )
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
