@@ -9,12 +9,22 @@ import torch
 from safetensors.torch import safe_open
 from transformers import MistralConfig, MistralForCausalLM
 
+import math
+
+from models.experimental.voxtraltts.reference.audio_tokenizer_ops import (
+    audio_tokenizer_decode_reference,
+    audio_tokenizer_encode_tokens_reference,
+)
 from models.experimental.voxtraltts.reference.cpu_flow_matching_acoustic import (
     AudioSpecialTokens,
     FlowMatchingAudioTransformerRef,
     build_audio_model_args_from_voxtral_config,
 )
-from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_MODEL, load_voxtral_config
+from models.experimental.voxtraltts.reference.voxtral_config import (
+    DEFAULT_VOXTRAL_MODEL,
+    load_voxtral_config,
+    parse_csv_ints,
+)
 from models.experimental.voxtraltts.reference.voxtral_request import (
     compose_speech_request,
     get_instruct_tokenizer,
@@ -182,20 +192,14 @@ class VoxtralCPUReference:
             raise RuntimeError(f"Missing text-model weights: {missing[:10]} ... total={len(missing)}")
         self.text_model.to(device=self.device, dtype=self.dtype).eval()
 
-        from vllm_omni.model_executor.models.voxtral_tts.voxtral_tts_audio_tokenizer import (
-            VoxtralTTSAudioTokenizer,
-        )
-
         self.audio_special_tokens = AudioSpecialTokens
-        self.hf_audio_config = _audio_config_namespace(model_name_or_path)
-        fake_config = _fake_vllm_config(self.hf_audio_config)
         audio_model_args = build_audio_model_args_from_voxtral_config(self.config)
         self.acoustic_transformer = FlowMatchingAudioTransformerRef(audio_model_args)
-        self.audio_tokenizer = VoxtralTTSAudioTokenizer(vllm_config=fake_config)
+        self._audio_tokenizer_state_dict: dict[str, torch.Tensor] = {}
+        self._mm_embedding_weight: torch.Tensor | None = None
         self._acoustic_cfg_alpha = _ACOUSTIC_CFG_ALPHA
         self._load_audio_weights()
         self.acoustic_transformer.to(device=self.device, dtype=self.dtype).eval()
-        self.audio_tokenizer.to(device=self.device, dtype=self.dtype).eval()
 
         instruct_tokenizer = get_instruct_tokenizer(self.tokenizer)
         audio_encoder = getattr(instruct_tokenizer, "audio_encoder", None)
@@ -204,17 +208,24 @@ class VoxtralCPUReference:
             self.audio_token_id = self.config.audio_model_args.audio_token_id
         self.end_audio_id = self.audio_special_tokens.id(self.audio_special_tokens.end_audio)
 
+    @property
+    def _downsample_factor(self) -> int:
+        """Samples per audio token frame = ``pretransform_patch_size × prod(decoder_strides)``."""
+        cfg = self.config.audio_tokenizer_args
+        return cfg.pretransform_patch_size * math.prod(parse_csv_ints(cfg.decoder_convs_strides_str))
+
     def _load_audio_weights(self) -> None:
+        audio_sd: dict[str, torch.Tensor] = {}
         with safe_open(self.checkpoint_path, framework="pt", device="cpu") as f:
             for name in f.keys():
                 tensor = f.get_tensor(name)
                 if name.startswith("acoustic_transformer."):
                     self.acoustic_transformer.load_weight((name.removeprefix("acoustic_transformer."), tensor))
                 elif name.startswith("audio_tokenizer."):
-                    self.audio_tokenizer.load_weight((name.removeprefix("audio_tokenizer."), tensor))
-                elif name.startswith("mm_audio_embeddings.audio_codebook_embeddings."):
-                    remapped = name.removeprefix("mm_audio_embeddings.audio_codebook_embeddings.")
-                    self.audio_tokenizer.load_weight((f"audio_token_embedding.{remapped}", tensor))
+                    audio_sd[name.removeprefix("audio_tokenizer.")] = tensor
+                elif name == "mm_audio_embeddings.audio_codebook_embeddings.embeddings.weight":
+                    self._mm_embedding_weight = tensor
+        self._audio_tokenizer_state_dict = audio_sd
 
     def _load_voice_embedding(self, voice: str) -> torch.Tensor:
         path = _resolve_model_file(self.model_name_or_path, f"voice_embedding/{voice}.pt")
@@ -237,18 +248,28 @@ class VoxtralCPUReference:
     def _decode_audio_codes(self, codes: torch.Tensor) -> torch.Tensor:
         eoa = (codes[:, 0] == self.end_audio_id).nonzero(as_tuple=False)
         cutting_point = int(eoa[0].item()) if len(eoa) else codes.shape[0]
-        audio_tokens = codes[:cutting_point] - 2
+        audio_tokens = codes[:cutting_point] - 2  # un-shift special-token offset
         if audio_tokens.numel() == 0:
             return torch.tensor([], dtype=torch.float32)
-        audio_values = self.audio_tokenizer.decode(audio_tokens.T.unsqueeze(0), dtype=self.dtype)
+        codes_b37t = audio_tokens.T.unsqueeze(0)  # [1, 37, T]
+        audio_values = audio_tokenizer_decode_reference(
+            codes_b37t, self._audio_tokenizer_state_dict, self.config.audio_tokenizer_args
+        )
         audio_values = audio_values.detach().cpu().float().squeeze(0).squeeze(0)
-        expected_samples = audio_tokens.shape[0] * self.audio_tokenizer.downsample_factor
+        expected_samples = audio_tokens.shape[0] * self._downsample_factor
         return audio_values[:expected_samples]
 
     def _audio_codes_to_input_embeds(self, audio_codes: torch.Tensor) -> torch.Tensor:
-        # vLLM-Omni feeds generated audio codes back as multimodal embeddings,
-        # not as the plain text embedding of the audio placeholder token.
-        audio_embeddings = self.audio_tokenizer.encode_tokens([audio_codes.unsqueeze(-1)])[0]
+        if self._mm_embedding_weight is None:
+            raise RuntimeError(
+                "MM embedding weight not loaded — 'mm_audio_embeddings.audio_codebook_embeddings.embeddings.weight' missing from checkpoint."
+            )
+        # audio_codes: [1, 37] — unsqueeze to [1, 37, 1] (B, n_codebooks, T)
+        audio_embeddings = audio_tokenizer_encode_tokens_reference(
+            audio_codes.unsqueeze(-1).cpu(),
+            self._mm_embedding_weight,
+            self.config.audio_model_args,
+        )  # [1, mm_dim]
         return audio_embeddings.unsqueeze(0).to(device=self.device, dtype=self.dtype)
 
     @torch.inference_mode()

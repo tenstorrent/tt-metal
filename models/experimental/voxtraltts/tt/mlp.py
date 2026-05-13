@@ -6,7 +6,10 @@ import ttnn
 
 
 class VoxtralTTMLP:
-    """Voxtral SwiGLU MLP adapter reusing tt_transformers MLP op pattern."""
+    """Voxtral SwiGLU MLP: ``ttnn.linear`` + SiLU-gated path (shared by text, acoustic FM, audio tokenizer blocks).
+
+    Instantiate with the checkpoint key prefix for ``w1``/``w2``/``w3``; hidden/intermediate sizes follow weights.
+    """
 
     def __init__(
         self,
