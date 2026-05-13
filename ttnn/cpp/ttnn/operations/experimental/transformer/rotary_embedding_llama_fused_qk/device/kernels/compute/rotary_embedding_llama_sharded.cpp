@@ -9,6 +9,8 @@
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
 
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
 
@@ -91,14 +93,29 @@ void kernel_main() {
         cb_push_back(rotated_in_interm_cb, Wt);
         cb_wait_front(rotated_in_interm_cb, Wt);
 
-        mul_bcast_rows_init_short(rotated_in_interm_cb, sin_cb);
-        ACQ();
-        for (uint32_t j = 0; j < Wt; ++j) {
-            // sin_interim = rotated * sin
-            mul_tiles_bcast<BroadcastType::ROW>(rotated_in_interm_cb, sin_cb, j, j, j);
-            pack_tile(j, sin_interm_cb, j);
-        }
-        REL();
+        // sin_interim = rotated * sin   (ROW-bcast mul over Wt tiles)
+        // Migrated: streaming BinaryFpu + PackTile. All CBs involved are
+        // constexpr; lifecycle is caller-managed (cb_wait_front above,
+        // pop/push below) so the chain runs NoWaitNoPop / NoReserveNoPush.
+        compute_kernel_lib::eltwise_chain(
+            Wt,
+            compute_kernel_lib::BinaryFpu<
+                rotated_in_interm_cb,
+                sin_cb,
+                sin_interm_cb,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::Row,
+                compute_kernel_lib::BinaryDataFormatReconfig::None,
+                compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
+                compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
+                compute_kernel_lib::CbIndexMode::BlockIter,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::CbIndexMode::BlockIter>{},
+            compute_kernel_lib::PackTile<
+                sin_interm_cb,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::PackTilePolicy::NoReserveNoPush,
+                compute_kernel_lib::PackTileIndexMode::BlockIter>{});
         cb_push_back(sin_interm_cb, Wt);
         cb_pop_front(rotated_in_interm_cb, Wt);
 
