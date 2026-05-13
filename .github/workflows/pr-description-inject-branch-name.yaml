@@ -20,6 +20,7 @@ jobs:
       - name: Update PR Description
         uses: actions/github-script@v7
         with:
+          retries: 3
           script: |
             const pr = context.payload.pull_request;
             const branchName = pr.head.ref;
