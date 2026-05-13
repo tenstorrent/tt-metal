@@ -1,0 +1,39 @@
+# This file defines the test matrix for the Galaxy profiler tests pipeline.
+
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run for the test.
+#   skus: A mapping of SKU names to their configuration (each SKU has timeout in minutes).
+#   owner_id: The Slack user ID to notify on failure.
+#   test_author: The Slack user ID of the test author.
+#   team: The team that owns the test.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+# NOTE: The owning team ("ttnn") and pipeline category ("integration") used for
+# these profiler tests are placeholders pending final assignment. See
+# https://github.com/tenstorrent/tt-metal/issues/44285 for the open issue tracking
+# the final team / test-framework decision.
+
+# Per-job timeouts come from the pytest --timeout value (in seconds) plus a small
+# buffer (~4-5 min) for container setup, artifact download, and teardown.
+
+- name: Galaxy profiler device tests
+  # pytest --timeout 360s (6 min) + ~4 min CI overhead
+  cmd: TT_METAL_DEVICE_PROFILER=1 pytest tests/tt_metal/tools/profiler/test_device_profiler.py --noconftest --timeout 360
+  skus:
+    wh_galaxy:
+      timeout: 10
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  test_author: U03BJ1L3LUQ # Mo Memarian
+  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
+
+- name: Galaxy profiler realtime cross-reference tests
+  # pytest --timeout 2400s (40 min) + ~5 min CI overhead
+  cmd: TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/tracy/test_realtime_profiler.py::test_cross_reference_tg --timeout 2400
+  skus:
+    wh_galaxy:
+      timeout: 45
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  test_author: U03BJ1L3LUQ # Mo Memarian
+  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
