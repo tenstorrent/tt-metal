@@ -121,6 +121,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pkg-resources \
     build-essential \
     pkg-config \
+    python3-psutil \
+    ninja-build \
     libhdf5-dev \
     libsndfile1-dev \
     libgl1 \
