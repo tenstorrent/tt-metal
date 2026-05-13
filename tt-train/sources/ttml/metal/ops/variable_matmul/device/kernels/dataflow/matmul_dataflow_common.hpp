@@ -174,16 +174,23 @@ void read_in0_block_sync(
  * sliced [k_offset, k_offset + matmul_K). Bounds checks use the effective (matmul-K)
  * `shape`, independent of the parent K extent.
  *
- * Iteration order is always K-outer, N-inner (so the CB ends up [K, N] tile-major),
- * which is what the matmul compute kernel expects. When TransposeB is true, the
- * physical tensor is stored as [N, K_parent] (rather than [K_parent, N]); the address
- * formula uses `parent_K_tiles_stride` for the N-row stride.
+ * The CB ends up K-outer, N-inner (tile (k, n) at index k * N_block_tiles + n), which
+ * is what the matmul compute kernel expects.
+ *
+ * DRAM access pattern:
+ *  - Non-transpose ([K, N] storage): K-outer / N-inner iteration walks storage in
+ *    row-major order → sequential DRAM reads.
+ *  - Transpose_b ([N, K] storage): K-outer / N-inner iteration jumps K-tiles between
+ *    sibling reads → page-thrashing strided pattern. For the transposed case we walk
+ *    storage in row-major order (N-outer / K-inner) and compute write_ptr per tile so
+ *    the CB layout stays K-outer / N-inner. Sequential DRAM bandwidth recovers ~10x
+ *    on large-K weights (e.g. Mixtral H=4096, I=14336).
  */
 template <uint32_t K_block_tiles, uint32_t N_block_tiles, bool TransposeB, bool UseOffset, typename TensorAccessorType>
 void read_in1_block_sync(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
-    uint32_t write_ptr,
+    uint32_t write_ptr_base,
     uint32_t tile_size_bytes,
     uint32_t d0_start,
     uint32_t d0_end,
@@ -197,37 +204,58 @@ void read_in1_block_sync(
     // shape carries storage-layout sizes: when TransposeB, logical_d0=N, logical_d1=K.
     const uint32_t k_bound = TransposeB ? shape.logical_d1 : shape.logical_d0;
     const uint32_t n_bound = TransposeB ? shape.logical_d0 : shape.logical_d1;
-    for (uint32_t i = d0_start; i < d0_end; i++) {
+    if constexpr (TransposeB) {
+        // Storage-sequential reads: N-outer / K-inner. CB index = (k - d0_start) * N_block + (n - d1_start).
         for (uint32_t j = d1_start; j < d1_end; j++) {
+            const uint32_t n_col = j - d1_start;
             if (j >= n_bound) {
-                write_ptr += tile_size_bytes;
+                // Out-of-N tiles: zero-fill the whole K-column in this N slot.
+                for (uint32_t i = d0_start; i < d0_end; i++) {
+                    uint32_t wp = write_ptr_base + ((i - d0_start) * N_block_tiles + n_col) * tile_size_bytes;
+                    fill_zeros_async(wp, tile_size_bytes);
+                }
                 continue;
             }
-            if (i < k_bound) {
-                uint32_t tile_id;
-                if constexpr (TransposeB) {
+            for (uint32_t i = d0_start; i < d0_end; i++) {
+                uint32_t wp = write_ptr_base + ((i - d0_start) * N_block_tiles + n_col) * tile_size_bytes;
+                if (i < k_bound) {
+                    uint32_t tile_id;
                     if constexpr (UseOffset) {
-                        // [N, K_parent] storage: N-row * K_parent_tiles + (K-col + k_offset)
                         tile_id = j * parent_K_tiles_stride + (i + in1_k_offset_tiles);
                     } else {
                         tile_id = j * shape.logical_d1 + i;
                     }
+                    noc_async_read_tile(tile_id, tensor_accessor, wp);
                 } else {
+                    fill_zeros_async(wp, tile_size_bytes);
+                }
+            }
+        }
+    } else {
+        // Non-transpose: storage [K, N], K-outer / N-inner is already storage-sequential.
+        uint32_t write_ptr = write_ptr_base;
+        for (uint32_t i = d0_start; i < d0_end; i++) {
+            for (uint32_t j = d1_start; j < d1_end; j++) {
+                if (j >= n_bound) {
+                    write_ptr += tile_size_bytes;
+                    continue;
+                }
+                if (i < k_bound) {
+                    uint32_t tile_id;
                     if constexpr (UseOffset) {
-                        // [K_parent, N] storage: (K-row + k_offset) * N_tiles + N-col
                         tile_id = (i + in1_k_offset_tiles) * shape.logical_d1 + j;
                     } else {
                         tile_id = i * shape.logical_d1 + j;
                     }
+                    noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
+                } else {
+                    fill_zeros_async(write_ptr, tile_size_bytes);
                 }
-                noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
-            } else {
-                fill_zeros_async(write_ptr, tile_size_bytes);
+                write_ptr += tile_size_bytes;
             }
-            write_ptr += tile_size_bytes;
+            // finish up incrementing write_ptr if (d1_end - d1_start) < N_block_tiles
+            write_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
         }
-        // finish up incrementing write_ptr if (d1_end - d1_start) < N_block_tiles
-        write_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
     noc_async_read_barrier();
 }
