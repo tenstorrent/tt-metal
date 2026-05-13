@@ -19,6 +19,7 @@ This directory holds the design contract for **TT-RDMA**: a verbs-shaped, NIC-ag
 | `tt-rdma-host-sdk.md` | `TtRdmaEndpoint` API: `register_mr`, `post_send_write`, `post_recv`, etc. |
 | `tt-rdma-pfc-lossless.md` | Mellanox PFC config + WH CMAC pause enable |
 | `tt-rdma-eswitch-bypass.md` | Mellanox switchdev / vfio-pci paths to remove the eSwitch bottleneck |
+| `bf3-gateway-design.md` | BlueField-3 + DOCA gateway design for RoCEv2 ↔ TT-RDMA-v1 translation — lets `libibverbs`/MPI/UCX apps reach WH nodes |
 
 ## Architecture, one diagram
 
