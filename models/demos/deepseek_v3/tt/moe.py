@@ -42,7 +42,10 @@ class MoE(SharedStateAddOn, AbstractModule):
     """
 
     PREFILL_TOKEN_CHUNK_SIZE = 16384
-    PREFILL_BATCH_CHUNK_SIZE = 256
+    # Temporary workaround for https://github.com/tenstorrent/tt-metal/issues/44280:
+    # smaller chunks reduce L1/CB pressure in the expert w2 matmul path and avoid
+    # receiver-side cb_reserve_back stalls observed during QUAD prefill.
+    PREFILL_BATCH_CHUNK_SIZE = 128
 
     @classmethod
     def convert_weights(
