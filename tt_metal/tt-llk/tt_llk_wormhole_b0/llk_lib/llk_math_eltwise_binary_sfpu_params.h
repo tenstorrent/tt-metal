@@ -18,10 +18,10 @@ inline void _llk_math_eltwise_binary_sfpu_params_(
     int vector_mode = static_cast<int>(VectorMode::RC),
     Args&&... args)
 {
-    _llk_math_eltwise_binary_sfpu_start_(0);
+    _llk_math_eltwise_sfpu_start_(0);
 
     auto invoke_sfpu = [&]() { std::forward<Callable>(sfpu_func)(dst_index_in0, dst_index_in1, dst_index_out, std::forward<Args>(args)...); };
     _llk_math_eltwise_sfpu_apply_vector_mode_(invoke_sfpu, vector_mode);
 
-    _llk_math_eltwise_binary_sfpu_done_();
+    _llk_math_eltwise_sfpu_done_();
 }

@@ -56,32 +56,10 @@ inline void eltwise_unary_sfpu_configure_addrmod()
     }
 }
 
-inline void eltwise_unary_sfpu_configure_mop();
-
-inline void _llk_math_eltwise_unary_sfpu_start_(const std::uint32_t dst_index)
-{
-    _llk_math_eltwise_sfpu_start_(dst_index);
-}
-
-inline void _llk_math_eltwise_unary_sfpu_done_()
-{
-    _llk_math_eltwise_sfpu_done_();
-}
-
-inline void _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_()
-{
-    _llk_math_eltwise_sfpu_inc_dst_face_addr_();
-}
-
 template <SfpuType sfpu_op>
 inline void _llk_math_eltwise_unary_sfpu_init_()
 {
     sfpu::_init_sfpu_config_reg();
     eltwise_unary_sfpu_configure_addrmod<sfpu_op>();
     math::reset_counters(p_setrwc::SET_ABD_F);
-}
-
-inline void _llk_math_eltwise_unary_sfpu_uninit_()
-{
-    _llk_math_eltwise_sfpu_uninit_();
 }
