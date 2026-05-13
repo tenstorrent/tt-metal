@@ -15,9 +15,10 @@ training_config:
     beta1: 0.9
     beta2: 0.999
     epsilon: 1.0e-8
-    weight_decay: 0.01
-    amsgrad: false
-    stochastic_rounding: false
+  weight_decay: 0.01
+  amsgrad: false
+  stochastic_rounding: false
+  # lazy_parameter_init: false  # if true: defer Python Parameter alloc (train_nanogpt.py); default eager
 
 device_config:
   enable_ddp: false
