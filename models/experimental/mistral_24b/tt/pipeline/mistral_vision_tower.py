@@ -7,16 +7,27 @@ This file implements the Vision Tower submodule specific for the Mistral-Small-3
 This pipeline constructs the vision tower from vision model architecture.
 """
 
+import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.mistral_24b.tt.vision_conv2d import TtMistralConv2dPatch
 from models.experimental.mistral_24b.tt.rmsnorm import RMSNorm
 
-from models.tt_transformers.tt.common import position_ids_in_meshgrid_tt
 from models.experimental.mistral_24b.tt.vision_rope import VisionRotarySetup as RotarySetup
 
 from models.experimental.mistral_24b.tt.vision_pixtral_transformer import TtPixtralTransformer
-from ttnn import ConcatMeshToTensor
+
+
+def _meshgrid_position_ids_torch(patch_grid, max_width):
+    # Matches position_ids_in_meshgrid_tt but takes (h_p, w_p) ints directly,
+    # so the caller doesn't need to materialize a 4-D ttnn tensor purely so the
+    # helper can read .shape[-2:] off of it.
+    pieces = []
+    for h, w in patch_grid:
+        mesh = torch.meshgrid(torch.arange(h), torch.arange(w), indexing="ij")
+        h_grid, v_grid = torch.stack(mesh, dim=-1).reshape(-1, 2).chunk(2, -1)
+        pieces.append((h_grid * max_width + v_grid)[:, 0])
+    return torch.cat(pieces, dim=0)
 
 
 class MistralVisionTower(LightweightModule):
@@ -121,45 +132,48 @@ class MistralVisionTower(LightweightModule):
         """
         if image_sizes is None or len(image_sizes) == 0:
             raise ValueError("image_sizes must be provided and non-empty")
-        patch_embeds = self.patch_conv(input_tensor)
-        patch_embeds = ttnn.transpose(patch_embeds, 1, 2)
-        height, width = image_sizes[0]
-        patch_embeds = ttnn.reshape(
-            patch_embeds,
-            [patch_embeds.shape[0], self.width, height // self.patch_size, width // self.patch_size],
+        patch_embeds = self.patch_conv(input_tensor)  # [B, H*W, dim], TILE
+
+        patch_grid = [(h // self.patch_size, w // self.patch_size) for h, w in image_sizes]
+
+        # Fast path: a single image filling the full conv input. The original
+        # transpose -> reshape -> slice -> reshape -> transpose chain collapses
+        # to an identity on the data in this case — it only existed so that
+        # position_ids_in_meshgrid_tt could read (H_p, W_p) off the 4-D shape.
+        # Skipping it removes the two ~5ms ReshapeView ops + two transposes from
+        # the prefill trace.
+        single_full_image = (
+            len(image_sizes) == 1
+            and patch_embeds.shape[0] == 1
+            and image_sizes[0][0] == input_tensor.shape[-2]
+            and image_sizes[0][1] == input_tensor.shape[-1]
         )
 
-        patch_embeds_list = [
-            ttnn.slice(
+        if not single_full_image:
+            # Multi-image / sub-region path: the 4-D reshape + per-image slice
+            # is structurally required to gather strided patches per image.
+            patch_embeds = ttnn.transpose(patch_embeds, 1, 2)
+            patch_embeds = ttnn.reshape(
                 patch_embeds,
-                [0, 0, 0, 0],
-                [1, self.width, size[0] // self.patch_size, size[1] // self.patch_size],
+                [patch_embeds.shape[0], self.width, patch_grid[0][0], patch_grid[0][1]],
             )
-            for size in image_sizes
-        ]
-
-        reshaped_patches = []
-        for p in patch_embeds_list:
-            p = ttnn.reshape(p, (1, self.width, -1))
-            p = ttnn.transpose(p, 1, 2)
-            reshaped_patches.append(p)
-
-        patch_embeds = ttnn.concat(reshaped_patches, dim=0)
+            reshaped_patches = []
+            for h_p, w_p in patch_grid:
+                p = ttnn.slice(patch_embeds, [0, 0, 0, 0], [1, self.width, h_p, w_p])
+                p = ttnn.reshape(p, (1, self.width, -1))
+                p = ttnn.transpose(p, 1, 2)
+                reshaped_patches.append(p)
+            patch_embeds = ttnn.concat(reshaped_patches, dim=0)
 
         # ln_pre RMS Norm
-        mode = "prefill"
-        patch_embeds = self.ln_pre(patch_embeds, mode=mode)
+        patch_embeds = self.ln_pre(patch_embeds, mode="prefill")
 
-        # # positional embeddings
-        position_ids = position_ids_in_meshgrid_tt(
-            patch_embeds_list,
+        # Positional embeddings - compute directly from int sizes, avoiding the
+        # ttnn meshgrid op chain + tt->torch round-trip in position_ids_in_meshgrid_tt.
+        torch_position_ids = _meshgrid_position_ids_torch(
+            patch_grid,
             max_width=self.config.vision_image_size // self.config.vision_patch_size,
-            device=self.mesh_device,
         )
-
-        torch_position_ids = ttnn.to_torch(position_ids, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=0))[
-            : position_ids.shape[-1]
-        ]
 
         position_embeddings = self.patch_positional_embedding.get_rot_mats(torch_position_ids)
 
