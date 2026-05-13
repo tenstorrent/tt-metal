@@ -14,8 +14,6 @@
 #include "command_queue_fixture.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
 
-#define BANDWIDTH_THRESHOLD_INTEGRITY_BIDIR (300.0 / 2.5)
-
 namespace tt::tt_metal {
 
 using namespace std;
@@ -187,11 +185,11 @@ static bool run_test_integrity_dram_bidir(
         iter_l1_address,
         dram_end_addr);
 
+    double threshold = 150; /* NOTE: Same on both bh glx and p150 */
+
     bool pass = true;
-    pass &= bandwidth_check(
-        send_device, send_core, send_delta_addr, total_transferred, BANDWIDTH_THRESHOLD_INTEGRITY_BIDIR);
-    pass &= bandwidth_check(
-        recv_device, recv_core, send_delta_addr, total_transferred, BANDWIDTH_THRESHOLD_INTEGRITY_BIDIR);
+    pass &= bandwidth_check(send_device, send_core, send_delta_addr, total_transferred, threshold);
+    pass &= bandwidth_check(recv_device, recv_core, send_delta_addr, total_transferred, threshold);
 
     pass &= tensix_compare_dram_banks(
         fixture, send_mesh_device, dram_start_addr, dram_end_addr, send_bank_id0, recv_bank_id0);

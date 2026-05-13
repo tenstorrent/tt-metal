@@ -13,8 +13,6 @@
 #include "command_queue_fixture.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
 
-#define BANDWIDTH_THRESHOLD 320.0
-
 namespace tt::tt_metal {
 
 using namespace std;
@@ -95,9 +93,11 @@ static bool run_test_bandwidth(
         progress_counter,
         transfer_count);
 
+    double threshold = get_eth_bw() * 0.75;
+
     bool pass = true;
     pass &= data_check(recv_device, recv_core, recv_l1_address, inputs);
-    pass &= bandwidth_check(send_device, send_core, send_delta_addr, total_transferred, BANDWIDTH_THRESHOLD_BIDIR);
+    pass &= bandwidth_check(send_device, send_core, send_delta_addr, total_transferred, threshold);
     return pass;
 }
 

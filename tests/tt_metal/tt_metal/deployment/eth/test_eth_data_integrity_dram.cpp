@@ -14,8 +14,6 @@
 #include "command_queue_fixture.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
 
-#define BANDWIDTH_THRESHOLD_DATA_INTEGRITY 210.0
-
 namespace tt::tt_metal {
 
 using namespace std;
@@ -226,13 +224,13 @@ static bool run_test_integrity_dram(
         progress_counter,
         dram_end_addr);
 
-    bool pass = true;
     auto* const send_device = send_mesh_device->get_devices()[0];
+    double threshold = get_eth_bw() * 0.75;
 
+    bool pass = true;
+    pass &= bandwidth_check(send_device, send_core, send_delta_addr, total_transferred, threshold);
     pass &= tensix_compare_dram_banks(
         fixture, recv_mesh_device, dram_start_addr, dram_end_addr, send_bank_id, recv_bank_id);
-    pass &=
-        bandwidth_check(send_device, send_core, send_delta_addr, total_transferred, BANDWIDTH_THRESHOLD_DATA_INTEGRITY);
 
     return pass;
 }

@@ -605,6 +605,15 @@ void print_summary(std::span<struct LinkError> errors) {
     log_critical(tt::LogTest, "{} failing links in total", errors.size());
 }
 
+/* In Gbps */
+double get_eth_bw() {
+    // TODO More comprehensive hardware support
+    switch (tt::tt_metal::GetClusterType()) {
+        case tt::tt_metal::ClusterType::BLACKHOLE_GALAXY: return 200.0;
+        default: return 400.0;
+    }
+}
+
 }  // namespace tt::tt_metal
 
 #endif /* _ETH_COMMON_HPP */
