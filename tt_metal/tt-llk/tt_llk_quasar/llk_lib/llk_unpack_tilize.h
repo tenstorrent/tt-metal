@@ -10,6 +10,7 @@
 #include "cunpack_common.h"
 #include "llk_unpack_common.h"
 using namespace ckernel;
+using namespace ckernel::unpack;
 
 /**
  * @brief MOP configuration for upk tilize for full 32x32 tiles using the fused HW instruction

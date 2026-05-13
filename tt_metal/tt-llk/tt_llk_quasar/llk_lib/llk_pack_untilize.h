@@ -11,6 +11,7 @@
 #include "llk_pack_common.h"
 
 using namespace ckernel;
+using namespace ckernel::pack;
 
 /**
  * @brief MOP configuration for pack untilize of contiguous tiles
