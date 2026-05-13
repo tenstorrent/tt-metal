@@ -743,12 +743,30 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
     new_configs_added = 0
     next_config_id = max_config_id + 1
 
+    # When in sweep validation mode, the traced C++ op name may differ from
+    # the master's op name (e.g. global_avg_pool2d is now a Python wrapper
+    # around avg_pool2d). Build a hash->op_name map from the master to
+    # remap traced ops back to the expected name.
+    master_op_by_hash = {}
+    for m_op_name, m_op_data in master_data.get("operations", {}).items():
+        for m_cfg in m_op_data.get("configurations", []):
+            m_hash = m_cfg.get("config_hash")
+            if m_hash:
+                master_op_by_hash[m_hash] = m_op_name
+
     print(f"\n💾 Updating master JSON with {len(operations)} operations...")
     for operation in tqdm(operations, desc="Updating master", unit="op"):
         if not operation:
             continue
 
         op_name = operation.get("operation", "unknown")
+
+        # Remap: if sweep_source_hash maps to a different master op, use that
+        sweep_hash = operation.get("sweep_source_hash")
+        if sweep_hash and sweep_hash in master_op_by_hash:
+            expected_op = master_op_by_hash[sweep_hash]
+            if expected_op != op_name:
+                op_name = expected_op
         op_args = operation.get("arguments", [])
 
         # Canonicalize non-finite floats (inf/-inf/nan -> string forms) BEFORE the
