@@ -1,5 +1,5 @@
-name: 'Trigger Auto-Triage for Regressions'
-description: 'Triggers auto-triage workflow for each regressed job'
+name: 'Trigger Regression Handling for Regressions'
+description: 'Triggers regression-handling workflow for each regressed job'
 inputs:
   regressed_workflows_path:
     description: 'Path to a JSON file containing regressed workflows with failing jobs'
@@ -20,11 +20,11 @@ inputs:
     description: 'Slack bot token for sending messages'
     required: false
   send-slack-message:
-    description: 'Whether auto-triage should send a Slack message'
+    description: 'Whether regression-handling should send a Slack message'
     required: false
     default: true
   max_dispatches:
-    description: 'Hard cap on total auto-triage dispatches per invocation (counts successful createWorkflowDispatch calls). Empty = unlimited. Useful for safe testing so a single run cannot flood the auto-triage pipeline.'
+    description: 'Hard cap on total regression-handling dispatches per invocation (counts successful createWorkflowDispatch calls). Empty = unlimited. Useful for safe testing so a single run cannot flood the regression-handling pipeline.'
     required: false
     default: ''
 

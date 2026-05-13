@@ -95,7 +95,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
-          auto-triage: true
+          regression-handling: true
       - name: Run LLK unit tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |

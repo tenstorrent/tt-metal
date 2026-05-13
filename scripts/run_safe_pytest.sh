@@ -16,7 +16,7 @@
 #
 # Options:
 #   --dev       Enables polling watcher (NoC sanitizer, waypoints, CB
-#               sanitization), lightweight ebreak asserts, and auto-triage
+#               sanitization), lightweight ebreak asserts, and regression-handling
 #               on hang with full triage + watcher log dump.
 #   --run-all   Run all tests instead of stopping on first failure (-x).
 #               Useful for eval scoring where you need full pass/fail counts.

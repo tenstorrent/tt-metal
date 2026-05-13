@@ -871,7 +871,7 @@ async function detectJobLevelRegressions(stayedFailingDetails, regressedDetails,
         const newFailingJobsSet = new Set(newJobNames.map(name => name.trim()));
 
         // Create a regression entry for this pipeline with only the new failing jobs
-        // This will be treated as a regression and sent to auto-triage
+        // This will be treated as a regression and sent to regression-handling
         const jobLevelRegression = {
           name: item.name,
           run_id: item.run_id,
@@ -904,7 +904,7 @@ async function detectJobLevelRegressions(stayedFailingDetails, regressedDetails,
           is_job_level_regression: true // Mark this as a job-level regression
         };
 
-        // Add to regressedDetails so it goes through auto-triage
+        // Add to regressedDetails so it goes through regression-handling
         regressedDetails.push(jobLevelRegression);
         core.info(`Added job-level regression for ${item.name} with jobs: ${newJobNames.join(', ')}`);
       } else {

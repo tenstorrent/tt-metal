@@ -54,8 +54,8 @@ jobs:
       matrix:
         default-cpp-tests:
           [[
-            { name: "ttnn tensor accessor", cmd: './build/test/ttnn/unit_tests_ttnn_accessor', nightly: true, auto-triage: true, hang-detection-timeout: 10.0 },
-            { name: "Nightly TTNN university lab examples", cmd: './build/test/ttnn/lab_examples/test_lab_eltwise_binary && ./build/test/ttnn/lab_examples/test_lab_multicast', nightly: true, auto-triage: true },
+            { name: "ttnn tensor accessor", cmd: './build/test/ttnn/unit_tests_ttnn_accessor', nightly: true, regression-handling: true, hang-detection-timeout: 10.0 },
+            { name: "Nightly TTNN university lab examples", cmd: './build/test/ttnn/lab_examples/test_lab_eltwise_binary && ./build/test/ttnn/lab_examples/test_lab_multicast', nightly: true, regression-handling: true },
           ]]
     steps:
       - name: Compute tests
@@ -125,7 +125,7 @@ jobs:
           enable-watcher: ${{ inputs.enable-watcher }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
-          auto-triage: ${{ !inputs.enable-watcher && matrix.test-group.auto-triage }}
+          regression-handling: ${{ !inputs.enable-watcher && matrix.test-group.regression-handling }}
           hang-detection-timeout: ${{ matrix.test-group.hang-detection-timeout || 5.0 }}
 
       - name: ${{ matrix.test-group.name }} tests
