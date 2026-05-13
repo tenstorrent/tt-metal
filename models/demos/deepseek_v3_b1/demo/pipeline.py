@@ -351,6 +351,7 @@ def create_sp4_pipeline_configuration(
     fp32_dest_acc_en: bool = True,
     persistent_mode: bool = True,
     enable_mtp: bool = False,
+    enable_speculative_decode: bool = True,
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
     num_slots: int = 64,
@@ -367,7 +368,9 @@ def create_sp4_pipeline_configuration(
             embedding_weights=weight_provider.load_embedding(device),
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
-            spec_weights=weight_provider.load_spec(device),
+            spec_weights=weight_provider.load_spec(device)
+            if enable_speculative_decode
+            else weight_provider.load_lm_head(device),
         )
 
     def stage_62(device: ttnn.MeshDevice) -> StageKind:
@@ -380,6 +383,9 @@ def create_sp4_pipeline_configuration(
             send_mtp_output_downstream=enable_mtp,
             embedding_weights=weight_provider.load_embedding(device),
         )
+
+    def passthrough_stage(device: ttnn.MeshDevice) -> StageKind:
+        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
 
     def _dense_stage(layer_id: int):
         return lambda d: DenseDecoderStage(
@@ -410,12 +416,18 @@ def create_sp4_pipeline_configuration(
         1: _dense_stage(dense_ids[0]),
         2: _dense_stage(dense_ids[1]),
         3: _dense_stage(dense_ids[2]),
-        **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 62)},
-        62: stage_62,
-        63: _decoder_stage(61),
+        **{
+            i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1)
+            for i in range(4, 62 if enable_speculative_decode else 63)
+        },
     }
     if enable_mtp:
         stage_factories[61] = _decoder_stage(60)
+    if enable_speculative_decode:
+        stage_factories[62] = stage_62
+        stage_factories[63] = _decoder_stage(61)
+    else:
+        stage_factories[63] = passthrough_stage
     return PipelineConfiguration(stage_factories)
 
 
@@ -458,6 +470,7 @@ def create_pipeline_configuration_from_num_procs(
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
             enable_mtp=enable_mtp,
+            enable_speculative_decode=enable_speculative_decode,
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
             num_slots=num_slots,

@@ -74,8 +74,8 @@ class ModelPipeline:
         num_procs = int(ttnn.distributed_context_get_size())
         if num_procs not in (4, 16, 64):
             raise RuntimeError(f"Pod pipeline requires 4, 16, or 64 distributed processes; got {num_procs}")
-        if not enable_speculative_decode and num_procs != 16:
-            raise RuntimeError("Base decode is currently supported only for the 16-process pipeline")
+        if not enable_speculative_decode and num_procs not in (16, 64):
+            raise RuntimeError("Base decode is currently supported only for the 16- and 64-process pipelines")
         ttnn.enable_asynchronous_slow_dispatch(self.mesh_device)
         self.enable_speculative_decode = enable_speculative_decode
 
