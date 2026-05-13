@@ -5,8 +5,8 @@
 
 ``KokoroGenerator`` uses device ``KokoroTtnnSineGen`` by default; set ``use_torch_sinegen=True`` in
 ``preprocess_kokoro_generator_parameters`` to run the reference PyTorch ``SineGen`` on CPU for harmonics
-(see ``test_kokoro_generator_waveform_pcc_sinegen_modes``). The full waveform PCC vs PyTorch is lower with
-pure device SineGen under deterministic zeros; tighter checks live in ``test_ttnn_sinegen_pcc.py`` and
+(see ``test_kokoro_generator_waveform_pcc_sinegen_modes``). With deterministic zeros, device ``KokoroTtnnSineGen``
+waveform PCC is much closer to the PyTorch path after sparse gather upsample; tighter unit checks live in ``test_ttnn_sinegen_pcc.py`` and
 ``test_source_module_hn_nsf_pcc.py``. Upsampling PCC also lives in ``test_kokoro_generator_ups_pcc.py``.
 
 Decoder prefix: TTNN ``F0_conv`` / ``N_conv`` / ``asr_res``, then TTNN ``encode`` + ``decode`` (:class:`KokoroDecoderBody`).
@@ -50,7 +50,7 @@ def kokoro_decoder_cpu_disable_complex():
     return load_decoder_from_huggingface(device="cpu", disable_complex=True)
 
 
-@pytest.mark.parametrize("use_torch_sinegen,min_pcc", [(False, 0.61), (True, 0.85)])
+@pytest.mark.parametrize("use_torch_sinegen,min_pcc", [(False, 0.75), (True, 0.85)])
 def test_kokoro_generator_waveform_pcc_sinegen_modes(
     ttnn_device, kokoro_decoder_cpu_disable_complex, use_torch_sinegen: bool, min_pcc: float
 ):

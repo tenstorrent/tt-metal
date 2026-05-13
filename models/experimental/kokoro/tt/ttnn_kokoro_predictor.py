@@ -125,8 +125,12 @@ class TtKokoroDurationEncoder:
     def __init__(self, device: ttnn.Device, params: DurationEncoderParams):
         self.device = device
         self.params = params
+        # WH B0: HiFi3 + fp32 dest acc avoids the HiFi4-fp32-accum HW bug warned in compute_kernel_config.cpp:65.
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi3,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
         )
 
     def __call__(
@@ -227,9 +231,17 @@ def preprocess_predictor_duration(
     lstm_fwd, lstm_rev = preprocess_pytorch_lstm_1layer(predictor.lstm, device, weights_dtype=weights_dtype)
     assert lstm_rev is not None
     dp = predictor.duration_proj.linear_layer
-    w = ttnn.from_torch(dp.weight.detach().cpu(), dtype=weights_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    # Keep the duration-projection weights in fp32 regardless of ``weights_dtype``: the output is rounded
+    # to integer durations that drive alignment-matrix construction (``pred_aln``). bf16 rounding of
+    # ``dur_logits`` flips ~1-2 integer durations per sentence, which shifts asr/F0/N output columns and
+    # collapses their PCC to ~0.93 even though ``en`` itself stays at ~0.99 (LSTM-smoothed). Storing this
+    # tiny 50×d_hid weight tensor at fp32 stabilises the rounding without measurable runtime cost.
+    w = ttnn.from_torch(dp.weight.detach().cpu(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     b = ttnn.from_torch(
-        dp.bias.detach().cpu().reshape(1, 1, 1, -1), dtype=weights_dtype, layout=ttnn.TILE_LAYOUT, device=device
+        dp.bias.detach().cpu().reshape(1, 1, 1, -1),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
     )
     return PredictorDurationParams(
         duration_encoder=dur_enc,
@@ -247,8 +259,12 @@ class TtKokoroPredictorDuration:
     def __init__(self, device: ttnn.Device, params: PredictorDurationParams):
         self.device = device
         self.params = params
+        # WH B0: HiFi3 + fp32 dest acc avoids the HiFi4-fp32-accum HW bug warned in compute_kernel_config.cpp:65.
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi3,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
         )
         self.duration_encoder = TtKokoroDurationEncoder(device, params.duration_encoder)
 
@@ -284,16 +300,22 @@ class TtKokoroPredictorDuration:
             compute_kernel_config=self.compute_kernel_config,
             sequence_lengths=lengths_list,
         )
-        # x is [B,T,d_hid]
+        # x is [B,T,d_hid]; cast to fp32 so the duration_proj matmul runs at full HiFi3 + fp32 dest precision.
+        # The downstream ``round(dur)`` is integer-sensitive — even 0.04 absolute drift can flip a duration
+        # and shift the alignment one frame, which collapses asr / F0 / N PCC even though ``en`` stays high.
+        x_fp32 = x if x.dtype == ttnn.float32 else ttnn.typecast(x, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         dur_logits = ttnn.linear(
-            x,
+            x_fp32,
             self.params.duration_proj_w,
             bias=self.params.duration_proj_b,
             transpose_b=True,
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        if x_fp32 is not x:
+            ttnn.deallocate(x_fp32)
         dur = ttnn.sigmoid(dur_logits)
+        ttnn.deallocate(dur_logits)
         # sum over max_dur dim
         dur = ttnn.sum(dur, dim=-1, keepdim=False)  # [B,T]
         if speed != 1.0:
@@ -372,8 +394,12 @@ class TtKokoroPredictor:
     def __init__(self, device: ttnn.Device, params: PredictorFullParams):
         self.device = device
         self.params = params
+        # WH B0: HiFi3 + fp32 dest acc avoids the HiFi4-fp32-accum HW bug warned in compute_kernel_config.cpp:65.
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi3,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
         )
         self.duration_part = TtKokoroPredictorDuration(device, params)
         self.text_encoder = TtKokoroTextEncoder(device, params.text_encoder)

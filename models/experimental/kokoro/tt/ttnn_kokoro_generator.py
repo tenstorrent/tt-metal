@@ -17,6 +17,9 @@ from .ttnn_source_module_hn_nsf import SourceModuleHnNSF
 
 
 def _compute_cfg(device):
+    # HiFi4 preferred here despite the WH HiFi4-fp32-accum HW-bug warning: empirically the istftnet conv
+    # stack (noise_conv / ups / conv_post) lines up with PyTorch's CPU conv1d more tightly with HiFi4.
+    # Switching to HiFi3 regressed decoder e2e (torch SineGen) PCC 0.917 → 0.886.
     return ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,

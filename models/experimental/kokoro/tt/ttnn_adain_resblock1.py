@@ -14,6 +14,8 @@ from .ttnn_adain_resblk_encode import _adain_instance_norm
 
 
 def _compute_cfg(device):
+    # HiFi4 here matches PyTorch CPU more closely for these dilated conv1d stacks, despite the WH
+    # HiFi4-fp32-accum HW bug warning — switching to HiFi3 regressed decoder e2e PCC.
     return ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
