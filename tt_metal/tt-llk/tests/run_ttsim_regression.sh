@@ -204,7 +204,13 @@ if [[ ! -d "$TESTS_DIR" ]]; then
 fi
 
 # ttsim does not implement SFPLOADMACRO; default to disabling unless caller set it.
-export DISABLE_SFPLOADMACRO="${DISABLE_SFPLOADMACRO:-1}"
+# The compile-time gate (-DDISABLE_SFPLOADMACRO) is added by
+# python_tests/helpers/test_config.py when the env var TT_METAL_DISABLE_SFPLOADMACRO=1
+# is set — that's the documented name in README.md. The bare DISABLE_SFPLOADMACRO
+# spelling we used before never reached the test_config.py gate, so the gate
+# silently no-op'd and every SFPLOADMACRO opcode reached ttsim at runtime and
+# tripped UnsupportedFunctionality.
+export TT_METAL_DISABLE_SFPLOADMACRO="${TT_METAL_DISABLE_SFPLOADMACRO:-1}"
 
 mkdir -p "$RESULTS_DIR"
 
@@ -261,7 +267,7 @@ echo "============================================================"
 echo " Architecture   : ${ARCHITECTURE}"
 echo " Simulator      : ${TT_METAL_SIMULATOR}"
 echo " SoC descriptor : $(dirname "$TT_METAL_SIMULATOR")/soc_descriptor.yaml"
-echo " SFPLOADMACRO   : disabled=${DISABLE_SFPLOADMACRO}"
+echo " SFPLOADMACRO   : disabled=${TT_METAL_DISABLE_SFPLOADMACRO}"
 echo " Workers (-n)   : ${WORKERS}"
 echo " Per-test fork  : on"
 echo " Timeout        : ${TIMEOUT}s"
