@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end text-to-audio demo for the AudioX bringup, running on TT.
+"""End-to-end text/video/image-to-audio demo for the AudioX bringup, running on TT.
 
 Same generation flow as ``demo.demo`` but the DiT denoiser and Oobleck VAE
 decoder run on a Tenstorrent device through the TTNN ports. The conditioner
@@ -29,7 +29,8 @@ from models.experimental.audiox.demo.demo import (
     _build_conditioners,
     _build_decoder,
     _build_dit,
-    _build_metadata_batch,
+    _build_metadata_batch_with_inputs,
+    _load_visual_prompt,
     _make_cross_attn_cond,
 )
 from models.experimental.audiox.tt.dit import TtDiffusionTransformer
@@ -59,6 +60,8 @@ def run_tt_demo(
     prompt: str,
     output: Path,
     device,
+    video_path: Path | None = None,
+    image_path: Path | None = None,
     steps: int = 100,
     seed: int = 0,
 ) -> Path:
@@ -78,7 +81,8 @@ def run_tt_demo(
         cond_sd = remap_conditioner_state_dict(raw_sd, conditioner_id=cid)
         load_into(multi.conditioners[cid], cond_sd, label=f"cond:{cid}")
 
-    cond_out = multi(_build_metadata_batch(prompt), "cpu")
+    visual_prompt = _load_visual_prompt(video_path, image_path)
+    cond_out = multi(_build_metadata_batch_with_inputs(prompt=prompt, video_prompt=visual_prompt), "cpu")
     cross_attn_cond_torch = _make_cross_attn_cond(cond_out)
 
     # 3. Build TT modules. We seed them from CPU reference state_dicts so the
@@ -132,13 +136,19 @@ def run_tt_demo(
 
 
 def _parse_args(argv: list) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="AudioX text-to-audio demo (TT path)")
+    p = argparse.ArgumentParser(description="AudioX text/video/image-to-audio demo (TT path)")
     p.add_argument("--checkpoint", type=Path, required=True, help="Path to AudioX .safetensors")
-    p.add_argument("--prompt", type=str, required=True, help="Text prompt to condition on")
+    p.add_argument("--prompt", type=str, default="", help="Text prompt to condition on")
     p.add_argument("--output", type=Path, default=Path("audiox_tt_out.wav"))
+    visual = p.add_mutually_exclusive_group()
+    visual.add_argument("--video", type=Path, help="Optional video prompt for video-to-audio or video-to-music")
+    visual.add_argument("--image", type=Path, help="Optional image prompt, repeated across the visual timeline")
     p.add_argument("--steps", type=int, default=100)
     p.add_argument("--seed", type=int, default=0)
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    if not args.prompt and args.video is None and args.image is None:
+        p.error("at least one of --prompt, --video, or --image is required")
+    return args
 
 
 def main(argv: list = None) -> int:
@@ -150,6 +160,8 @@ def main(argv: list = None) -> int:
             prompt=args.prompt,
             output=args.output,
             device=device,
+            video_path=args.video,
+            image_path=args.image,
             steps=args.steps,
             seed=args.seed,
         )

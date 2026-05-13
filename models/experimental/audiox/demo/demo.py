@@ -27,6 +27,7 @@ from pathlib import Path
 import torch
 import torchaudio
 
+from models.experimental.audiox.demo.media import load_image_prompt, load_video_prompt
 from models.experimental.audiox.reference.conditioners import (
     AudioAutoencoderConditioner,
     CLIPConditioner,
@@ -123,13 +124,37 @@ def _empty_audio_for_text_only(batch: int) -> torch.Tensor:
 
 
 def _build_metadata_batch(prompt: str) -> list:
+    return _build_metadata_batch_with_inputs(prompt=prompt)
+
+
+def _build_metadata_batch_with_inputs(
+    prompt: str,
+    *,
+    video_prompt: torch.Tensor | None = None,
+    audio_prompt: torch.Tensor | None = None,
+) -> list:
     return [
         {
             "text_prompt": prompt,
-            "video_prompt": _empty_video_for_text_only(1),
-            "audio_prompt": _empty_audio_for_text_only(1),
+            "video_prompt": video_prompt if video_prompt is not None else _empty_video_for_text_only(1),
+            "audio_prompt": audio_prompt if audio_prompt is not None else _empty_audio_for_text_only(1),
         }
     ]
+
+
+def _load_visual_prompt(
+    video_path: Path | None,
+    image_path: Path | None,
+) -> torch.Tensor | None:
+    if video_path is not None and image_path is not None:
+        raise ValueError("pass at most one of --video or --image")
+    if video_path is None and image_path is None:
+        return None
+
+    target_frames = 5 * _HF_CONFIG["duration_seconds"]
+    if video_path is not None:
+        return load_video_prompt(video_path, target_frames=target_frames)
+    return load_image_prompt(image_path, target_frames=target_frames)
 
 
 def _make_cross_attn_cond(multi_out: dict) -> torch.Tensor:
@@ -145,6 +170,8 @@ def run_demo(
     checkpoint: Path,
     prompt: str,
     output: Path,
+    video_path: Path | None = None,
+    image_path: Path | None = None,
     steps: int = 100,
     seed: int = 0,
     device: str = "cpu",
@@ -177,7 +204,8 @@ def run_demo(
     decoder = decoder.to(device)
 
     # Build cross-attn context once per generation.
-    cond_out = multi(_build_metadata_batch(prompt), device)
+    visual_prompt = _load_visual_prompt(video_path, image_path)
+    cond_out = multi(_build_metadata_batch_with_inputs(prompt=prompt, video_prompt=visual_prompt), device)
     cross_attn_cond = _make_cross_attn_cond(cond_out)
 
     # 10s @ 44.1 kHz / 2048 downsample = 216 latent frames; round up to upstream's 237 to match.
@@ -198,14 +226,20 @@ def run_demo(
 
 
 def _parse_args(argv: list) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="AudioX text-to-audio demo (CPU reference path)")
+    p = argparse.ArgumentParser(description="AudioX text/video/image-to-audio demo (CPU reference path)")
     p.add_argument("--checkpoint", type=Path, required=True, help="Path to AudioX .safetensors")
-    p.add_argument("--prompt", type=str, required=True, help="Text prompt to condition on")
+    p.add_argument("--prompt", type=str, default="", help="Text prompt to condition on")
     p.add_argument("--output", type=Path, default=Path("audiox_out.wav"), help="Output WAV path")
+    visual = p.add_mutually_exclusive_group()
+    visual.add_argument("--video", type=Path, help="Optional video prompt for video-to-audio or video-to-music")
+    visual.add_argument("--image", type=Path, help="Optional image prompt, repeated across the visual timeline")
     p.add_argument("--steps", type=int, default=100, help="Number of diffusion steps")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", type=str, default="cpu", choices=("cpu", "cuda"))
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    if not args.prompt and args.video is None and args.image is None:
+        p.error("at least one of --prompt, --video, or --image is required")
+    return args
 
 
 def main(argv: list = None) -> int:
@@ -214,6 +248,8 @@ def main(argv: list = None) -> int:
         checkpoint=args.checkpoint,
         prompt=args.prompt,
         output=args.output,
+        video_path=args.video,
+        image_path=args.image,
         steps=args.steps,
         seed=args.seed,
         device=args.device,
