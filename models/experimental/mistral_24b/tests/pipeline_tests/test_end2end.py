@@ -448,6 +448,7 @@ def run_generation_exactly_like_test_end2end(
             sampling_params=DECODE_GREEDY_SAMPLING,
         )
         out_tok = next_token_ids_from_decode_output(decode_output)
+        all_outputs[0].append(int(out_tok[0].item()))
         current_pos = current_pos + 1
 
     # Cache eos id once — avoids tokenizer attribute lookup every step.
