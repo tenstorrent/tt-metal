@@ -76,11 +76,16 @@ class _SchedulerBase:
         return self._optimizer.get_lr()
 
     def get_state_dict(self) -> dict:
-        return {"m_last_step": self._last_step, "m_last_lr": self._last_lr}
+        return {
+            "m_last_step": self._last_step,
+            "m_last_lr": self._last_lr,
+            "m_base_lr": self._base_lr,
+        }
 
     def set_state_dict(self, state: dict):
         self._last_step = state["m_last_step"]
         self._last_lr = state["m_last_lr"]
+        self._base_lr = state["m_base_lr"]
 
 
 class CosineAnnealingScheduler(_SchedulerBase):

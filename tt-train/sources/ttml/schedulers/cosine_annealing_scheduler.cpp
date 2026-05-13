@@ -45,6 +45,7 @@ serialization::StateDict CosineAnnealingScheduler::get_state_dict() const {
     serialization::StateDict res;
     res["m_last_step"] = m_last_step;
     res["m_last_lr"] = m_last_lr;
+    res["m_base_lr"] = m_base_lr;
     res["m_T_max"] = m_T_max;
     res["m_eta_min"] = m_eta_min;
     return res;
@@ -53,6 +54,7 @@ serialization::StateDict CosineAnnealingScheduler::get_state_dict() const {
 void CosineAnnealingScheduler::set_state_dict(const serialization::StateDict& dict) {
     m_last_step = serialization::get_value_type<size_t>(dict, "m_last_step");
     m_last_lr = serialization::get_value_type<float>(dict, "m_last_lr");
+    m_base_lr = serialization::get_value_type<float>(dict, "m_base_lr");
     m_T_max = serialization::get_value_type<size_t>(dict, "m_T_max");
     m_eta_min = serialization::get_value_type<float>(dict, "m_eta_min");
 }

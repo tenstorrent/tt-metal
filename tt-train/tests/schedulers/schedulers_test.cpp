@@ -535,3 +535,137 @@ TEST(SequentialSchedulerTest, MismatchedMilestonesRejected) {
     // Matched lengths must NOT throw.
     EXPECT_NO_THROW(ttml::schedulers::SequentialScheduler(opt.get(), make_two_schedulers(), /*milestones=*/{5U, 5U}));
 }
+
+// ----------------------------------
+// Repro tests for the ``m_base_lr`` not-saved bug
+// ----------------------------------
+//
+// Each stateful scheduler captures ``m_base_lr`` from ``optimizer->get_lr()``
+// in its constructor but does NOT persist it in ``get_state_dict``. When a
+// real training run resumes from a checkpoint, the optimizer is loaded with
+// its CURRENT (already-decayed) LR; constructing a new scheduler on top of
+// that optimizer captures the decayed value as the new ``m_base_lr``, and
+// every subsequent ``step()`` is silently mis-scaled.
+//
+// Each test below:
+//   1. Steps the source scheduler so the optimizer's LR has demonstrably decayed.
+//   2. Builds a fresh "destination" optimizer initialized with that decayed LR
+//      (mimicking what ``load_optimizer`` would produce).
+//   3. Constructs a fresh destination scheduler -- its ``m_base_lr`` is now WRONG.
+//   4. Round-trips the state dict.
+//   5. Asserts the destination's ``m_base_lr`` matches the source's, and that
+//      the next step produces the same LR on both.
+//
+// These tests are EXPECTED TO FAIL until ``m_base_lr`` is added to each
+// scheduler's state dict.
+
+namespace {
+constexpr float kBugRepoBaseLr = 0.1F;
+}
+
+TEST(CosineAnnealingSchedulerTest, BaseLrPersistsWhenResumedOptimizerHasDecayedLr) {
+    constexpr size_t kTMax = 20;
+    constexpr float kEtaMin = 1e-4F;
+
+    auto src_opt = std::make_unique<ttml::optimizers::MockOptimizer>(kBugRepoBaseLr);
+    ttml::schedulers::CosineAnnealingScheduler src(src_opt.get(), kTMax, kEtaMin);
+    for (int i = 0; i < 5; ++i) {
+        src.step();
+    }
+    const float decayed_lr = src_opt->get_lr();
+    ASSERT_NE(decayed_lr, kBugRepoBaseLr) << "sanity: optimizer LR must have decayed";
+    auto state = src.get_state_dict();
+
+    // Mimic checkpoint resume: optimizer's LR is the decayed value.
+    auto dst_opt = std::make_unique<ttml::optimizers::MockOptimizer>(decayed_lr);
+    ttml::schedulers::CosineAnnealingScheduler dst(dst_opt.get(), kTMax, kEtaMin);
+    dst.set_state_dict(state);
+
+    // dst must remember its ORIGINAL base lr, not the optimizer's current value.
+    auto dst_state = dst.get_state_dict();
+    ASSERT_TRUE(dst_state.count("m_base_lr")) << "m_base_lr must be in the state dict";
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(dst_state, "m_base_lr"), kBugRepoBaseLr);
+
+    src.step();
+    dst.step();
+    EXPECT_FLOAT_EQ(src.get_last_lr(), dst.get_last_lr());
+}
+
+TEST(StepLRSchedulerTest, BaseLrPersistsWhenResumedOptimizerHasDecayedLr) {
+    constexpr size_t kStepSize = 3;
+    constexpr float kGamma = 0.5F;
+
+    auto src_opt = std::make_unique<ttml::optimizers::MockOptimizer>(kBugRepoBaseLr);
+    ttml::schedulers::StepScheduler src(src_opt.get(), kStepSize, kGamma);
+    // Step past one boundary so the LR has actually been multiplied by gamma.
+    for (size_t i = 0; i < kStepSize + 1; ++i) {
+        src.step();
+    }
+    const float decayed_lr = src_opt->get_lr();
+    ASSERT_NE(decayed_lr, kBugRepoBaseLr);
+    auto state = src.get_state_dict();
+
+    auto dst_opt = std::make_unique<ttml::optimizers::MockOptimizer>(decayed_lr);
+    ttml::schedulers::StepScheduler dst(dst_opt.get(), kStepSize, kGamma);
+    dst.set_state_dict(state);
+
+    auto dst_state = dst.get_state_dict();
+    ASSERT_TRUE(dst_state.count("m_base_lr"));
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(dst_state, "m_base_lr"), kBugRepoBaseLr);
+
+    src.step();
+    dst.step();
+    EXPECT_FLOAT_EQ(src.get_last_lr(), dst.get_last_lr());
+}
+
+TEST(LinearSchedulerTest, BaseLrPersistsWhenResumedOptimizerHasDecayedLr) {
+    constexpr float kStartFactor = 1.0F;
+    constexpr float kEndFactor = 0.0F;
+    constexpr int kTotalSteps = 30;
+
+    auto src_opt = std::make_unique<ttml::optimizers::MockOptimizer>(kBugRepoBaseLr);
+    ttml::schedulers::LinearScheduler src(src_opt.get(), kStartFactor, kEndFactor, kTotalSteps);
+    for (int i = 0; i < 5; ++i) {
+        src.step();
+    }
+    const float decayed_lr = src_opt->get_lr();
+    ASSERT_NE(decayed_lr, kBugRepoBaseLr);
+    auto state = src.get_state_dict();
+
+    auto dst_opt = std::make_unique<ttml::optimizers::MockOptimizer>(decayed_lr);
+    ttml::schedulers::LinearScheduler dst(dst_opt.get(), kStartFactor, kEndFactor, kTotalSteps);
+    dst.set_state_dict(state);
+
+    auto dst_state = dst.get_state_dict();
+    ASSERT_TRUE(dst_state.count("m_base_lr"));
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(dst_state, "m_base_lr"), kBugRepoBaseLr);
+
+    src.step();
+    dst.step();
+    EXPECT_FLOAT_EQ(src.get_last_lr(), dst.get_last_lr());
+}
+
+TEST(LambdaSchedulerTest, BaseLrPersistsWhenResumedOptimizerHasDecayedLr) {
+    auto lr_lambda = [](int epoch) { return 1.0F / static_cast<float>(epoch + 1); };
+
+    auto src_opt = std::make_unique<ttml::optimizers::MockOptimizer>(kBugRepoBaseLr);
+    ttml::schedulers::LambdaScheduler src(src_opt.get(), lr_lambda);
+    for (int i = 0; i < 3; ++i) {
+        src.step();
+    }
+    const float decayed_lr = src_opt->get_lr();
+    ASSERT_NE(decayed_lr, kBugRepoBaseLr);
+    auto state = src.get_state_dict();
+
+    auto dst_opt = std::make_unique<ttml::optimizers::MockOptimizer>(decayed_lr);
+    ttml::schedulers::LambdaScheduler dst(dst_opt.get(), lr_lambda);
+    dst.set_state_dict(state);
+
+    auto dst_state = dst.get_state_dict();
+    ASSERT_TRUE(dst_state.count("m_base_lr"));
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(dst_state, "m_base_lr"), kBugRepoBaseLr);
+
+    src.step();
+    dst.step();
+    EXPECT_FLOAT_EQ(src.get_last_lr(), dst.get_last_lr());
+}
