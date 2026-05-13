@@ -521,6 +521,14 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         num_cached_per_user = (
             [int(n) for n in start_pos] if start_pos is not None else [0] * len(prompt_lens)
         )
+        assert len(num_cached_per_user) == len(prompt_lens), (
+            f"start_pos length {len(num_cached_per_user)} must match prompt_lens length {len(prompt_lens)}"
+        )
+        for i, (seq_len, num_cached) in enumerate(zip(prompt_lens, num_cached_per_user)):
+            assert 0 <= num_cached < int(seq_len), (
+                f"user {i}: num_cached_tokens ({num_cached}) must be in [0, seq_len={int(seq_len)}). "
+                f"Fully-cached prompts should not reach prefill."
+            )
         prefill_seq_lens = [
             get_padded_prefill_len(int(seq_len) - num_cached)
             for seq_len, num_cached in zip(prompt_lens, num_cached_per_user)
