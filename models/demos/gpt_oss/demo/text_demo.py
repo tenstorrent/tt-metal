@@ -27,7 +27,6 @@ import ttnn
 from models.common.sampling import SamplingParams
 from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 from models.demos.gpt_oss.tests.test_factory import TestFactory, parametrize_mesh_with_fabric
-from models.demos.utils.model_targets import resolve_perf_targets
 
 # Import GPT-OSS components using our refactored patterns
 from models.demos.gpt_oss.tt.common import create_tt_model
