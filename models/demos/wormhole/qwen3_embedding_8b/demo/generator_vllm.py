@@ -122,7 +122,7 @@ class Qwen3ForEmbedding:
             max_batch_size: Maximum batch size
             max_seq_len: Maximum sequence length (defaults to 8192 for Qwen3-Embedding)
             model_location_generator: Optional function to generate model weight paths
-            vllm_config: vLLM configuration (required when class is wrapped by vLLM)
+            vllm_config: Optional vLLM configuration for wrapper compatibility
 
         Returns:
             Initialized Qwen3ForEmbedding instance
