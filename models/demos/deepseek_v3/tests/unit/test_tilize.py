@@ -102,7 +102,7 @@ def test_tilize_with_val_padding(mesh_device, in_shape, out_shape, pad_val, dtyp
     "device_params", [{"trace_region_size": 11000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
 )
 def test_tilize_fp8(mesh_device, shape, input_dtype, output_dtype, mem_config, layout, enable_trace):
-    if mesh_device.get_devices()[0].arch() != ttnn.device.Arch.BLACKHOLE:
+    if mesh_device.arch() != ttnn.device.Arch.BLACKHOLE:
         pytest.skip("FP8 tilize is only supported on Blackhole devices")
 
     # Create FP8 input tensor in PyTorch
