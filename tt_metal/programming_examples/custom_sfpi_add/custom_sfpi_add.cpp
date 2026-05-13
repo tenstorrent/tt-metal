@@ -45,8 +45,8 @@ int main() {
         // Configure mesh buffers. Use single-tile page size so transfers operate tile-by-tile.
         distributed::DeviceLocalBufferConfig dram_config{
             .page_size = tile_size_bytes,    // Number of bytes when round-robin between banks
-            .buffer_type = BufferType::DRAM  // Type of buffer (DRAM or L1)
-        };
+            .buffer_type = BufferType::DRAM, // Type of buffer (DRAM or L1)
+            .sharding_args = {}};
         distributed::ReplicatedBufferConfig dram_buffer_config{
             // Size per device (replicated across mesh). Since we are operating on a unit mesh this is the total size.
             .size = dram_buffer_size};

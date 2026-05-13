@@ -92,7 +92,7 @@ static void BM_write(
 
     auto device_buffer = MeshBuffer::create(
         ReplicatedBufferConfig{transfer_size},
-        DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type},
+        DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type, .sharding_args = {}},
         mesh_device.get());
 
     for ([[maybe_unused]] auto _ : state) {
@@ -124,7 +124,7 @@ static void BM_write_pinned_memory(benchmark::State& state, const std::shared_pt
 
     auto device_buffer = MeshBuffer::create(
         ReplicatedBufferConfig{transfer_size},
-        DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type},
+        DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type, .sharding_args = {}},
         mesh_device.get());
 
     // Allocate destination host buffer with 16-byte alignment
@@ -349,7 +349,7 @@ static void BM_read(benchmark::State& state, const std::shared_ptr<MeshDevice>& 
 
     auto device_buffer = MeshBuffer::create(
         ReplicatedBufferConfig{transfer_size},
-        DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type},
+        DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type, .sharding_args = {}},
         mesh_device.get());
     std::vector<ElementType> host_buffer(transfer_size / ElementSize);
 
@@ -377,7 +377,7 @@ static void BM_read_pinned_memory(benchmark::State& state, const std::shared_ptr
 
     auto device_buffer = MeshBuffer::create(
         ReplicatedBufferConfig{transfer_size},
-        DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type},
+        DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type, .sharding_args = {}},
         mesh_device.get());
 
     // Allocate destination host buffer with 16-byte alignment

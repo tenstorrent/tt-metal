@@ -31,7 +31,7 @@ int main() {
     uint32_t distributed_buffer_size_bytes = 64 * 128 * tile_size_bytes;
 
     auto local_buffer_config =
-        DeviceLocalBufferConfig{.page_size = tile_size_bytes, .buffer_type = BufferType::L1, .bottom_up = false};
+        DeviceLocalBufferConfig{.page_size = tile_size_bytes, .buffer_type = BufferType::L1, .sharding_args = {}, .bottom_up = false};
     auto distributed_buffer_config = ShardedBufferConfig{
         .global_size = distributed_buffer_size_bytes,
         .global_buffer_shape = distributed_buffer_shape,
