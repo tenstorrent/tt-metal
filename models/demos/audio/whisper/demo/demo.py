@@ -39,6 +39,9 @@ from models.demos.audio.whisper.tt.ttnn_optimized_functional_whisper import (
 from models.demos.audio.whisper.tt.whisper_generator import GenerationParams, WhisperGenerator
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.utils.llm_demo_utils import verify_perf
+from models.demos.utils.model_targets import resolve_perf_targets
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from models.tt_transformers.tt.model_config import determine_device_name
 
 available_devices = len(ttnn.get_device_ids()) if ttnn.get_device_ids() else 1
 
@@ -864,6 +867,8 @@ def test_demo_for_conditional_generation(
         and not use_per_request_params
     )
 
+    profiler = BenchmarkProfiler()
+    profiler.start("run")
     ttft, decode_throughput = run_demo_whisper_for_conditional_generation_inference(
         input_path,
         mesh_device,
@@ -877,44 +882,79 @@ def test_demo_for_conditional_generation(
         stream=stream,
         run_both_batch_sizes=run_both_batch_sizes and not should_check_perf,
     )
+    profiler.end("run")
 
     if should_check_perf:
-        metrics_dictionary = {
-            2: {"prefill_time_to_first_token": 0.13, "decode_t/s/u": 124.0},
-            8: {"prefill_time_to_first_token": 0.14, "decode_t/s/u": 105.0},
-            32: {"prefill_time_to_first_token": 0.22, "decode_t/s/u": 77.5},
+        total_batch = mesh_device.get_num_devices() * batch_size_per_device
+        sku = determine_device_name(mesh_device)
+        measurements = {
+            "prefill_time_to_first_token": ttft,
+            "decode_t/s": decode_throughput * total_batch,
+            "decode_t/s/u": decode_throughput,
         }
-        expected_perf_metrics = None
-        if is_blackhole():
-            if mesh_device.dram_grid_size().x == 7:  # P100 DRAM grid is 7x1
-                expected_perf_metrics = {"prefill_time_to_first_token": 0.06, "decode_t/s/u": 310.0}
-            else:
-                expected_perf_metrics = {"prefill_time_to_first_token": 0.05, "decode_t/s/u": 530.0}
-        elif mesh_device.get_num_devices() in metrics_dictionary:  # wormhole_b0
-            expected_perf_metrics = metrics_dictionary[mesh_device.get_num_devices()]
-
-        if expected_perf_metrics is not None:
-            total_batch = mesh_device.get_num_devices() * batch_size_per_device
-            expected_perf_metrics["decode_t/s"] = expected_perf_metrics["decode_t/s/u"] * total_batch
-            measurements = {
-                "prefill_time_to_first_token": ttft,
-                "decode_t/s": decode_throughput * total_batch,
-                "decode_t/s/u": decode_throughput,
-            }
+        expected_perf_metrics = resolve_perf_targets(
+            model_name=model_repo,
+            sku=sku,
+            batch_size=total_batch,
+        ) or resolve_perf_targets(
+            model_name=model_repo,
+            sku=sku,
+            batch_size=None,
+        )
+        if expected_perf_metrics:
             expected_measurements = {
-                "prefill_time_to_first_token": True,
-                "decode_t/s": True,
-                "decode_t/s/u": True,
+                metric: True
+                for metric in expected_perf_metrics
+                if not metric.endswith("_tolerance") and metric not in {"tolerance"}
             }
             verify_perf(
                 measurements,
-                expected_perf_metrics,
+                expected_perf_metrics=expected_perf_metrics,
                 high_tol_percentage=1.20,
                 expected_measurements=expected_measurements,
             )
+            profiler.start("inference_prefill", iteration=0)
+            profiler.end("inference_prefill", iteration=0)
+            profiler.start("inference_decode", iteration=0)
+            profiler.end("inference_decode", iteration=0)
+            benchmark_data = BenchmarkData()
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                "inference_prefill",
+                "time_to_token",
+                measurements["prefill_time_to_first_token"],
+                target=expected_perf_metrics.get("prefill_time_to_first_token"),
+            )
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                "inference_decode",
+                "tokens/s/user",
+                measurements["decode_t/s/u"],
+                target=expected_perf_metrics.get("decode_t/s/u"),
+            )
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                "inference_decode",
+                "tokens/s",
+                measurements["decode_t/s"],
+                target=expected_perf_metrics.get("decode_t/s"),
+            )
+            benchmark_data.save_partial_run_json(
+                profiler,
+                run_type="demo",
+                ml_model_name=model_repo,
+                ml_model_type="asr",
+                device_name=sku,
+                batch_size=total_batch,
+                input_sequence_length=None,
+                output_sequence_length=None,
+            )
         else:
             logger.warning(
-                f"Skipping perf check: no expected perf target for {mesh_device.get_num_devices()}-device wormhole_b0 mesh"
+                f"Skipping perf check: no centralized perf target for model={model_repo}, sku={sku}, batch={total_batch}"
             )
 
 

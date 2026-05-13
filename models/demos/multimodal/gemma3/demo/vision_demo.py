@@ -25,6 +25,7 @@ import torch
 
 import ttnn
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from models.demos.utils.model_targets import resolve_perf_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import hf_multimodal_encode
 from models.tt_transformers.tt.generator import Generator
@@ -445,30 +446,25 @@ def test_multimodal_demo_text(
     if is_ci_env and max_batch_size == 1 and enable_trace:  # Only profiling these parametrizations
         tt_device_name = model_args[0].device_name
         base_model_name = model_args[0].base_model_name
-        target_prefill_tok_s = {
-            "N300_Llama-3.2-11B": 23,
-            "T3K_Llama-3.2-11B": 20,
-            "T3K_Llama-3.2-90B": 3,
-            "N150_gemma-3-4b": 285,
-            "N300_gemma-3-4b": 390,
-            "T3K_gemma-3-27b": 265,
-        }[f"{tt_device_name}_{base_model_name}"]
-
-        target_decode_tok_s_u = {
-            "N300_Llama-3.2-11B": 21.5,
-            "T3K_Llama-3.2-11B": 35,
-            "T3K_Llama-3.2-90B": 6,
-            "N150_gemma-3-4b": 24,
-            "N300_gemma-3-4b": 28,
-            "T3K_gemma-3-27b": 13,
-        }[f"{tt_device_name}_{base_model_name}"]
-
-        target_decode_tok_s = target_decode_tok_s_u * max_batch_size
-        targets = {
-            "prefill_t/s": target_prefill_tok_s,
-            "decode_t/s": target_decode_tok_s,
-            "decode_t/s/u": target_decode_tok_s_u,
-        }
+        target_model_name = {
+            "Llama-3.2-11B": "llama3.2-11b-vision",
+            "Llama-3.2-90B": "llama90b-vl",
+            "gemma-3-4b": "gemma-3-4b-vision",
+            "gemma-3-27b": "gemma-3-27b-vision",
+        }.get(base_model_name)
+        targets = {}
+        if target_model_name:
+            targets = resolve_perf_targets(
+                model_name=target_model_name,
+                sku=tt_device_name,
+                batch_size=max_batch_size,
+                seq_len=max(prefill_lens).item(),
+            ) or resolve_perf_targets(
+                model_name=target_model_name,
+                sku=tt_device_name,
+                batch_size=None,
+                seq_len=None,
+            )
 
         # Save benchmark data for CI
         N_warmup_iter = {"inference_prefill": 0, "inference_decode": 0}
@@ -476,7 +472,7 @@ def test_multimodal_demo_text(
         benchmark_data.save_partial_run_json(
             profiler,
             run_type="demo",
-            ml_model_name=f"{base_model_name}-vision",
+            ml_model_name=target_model_name or f"{base_model_name}-vision",
             ml_model_type="vlm",
             device_name=tt_device_name,
             num_layers=model_args[0].n_layers,
@@ -490,5 +486,19 @@ def test_multimodal_demo_text(
             "gemma-3-4b",  # Gemma-3 functional only - perf tests are not reliable yet
             "gemma-3-27b",  # Gemma-3 functional only - perf tests are not reliable yet
         ]
-        if base_model_name not in skip_perf_verification:
-            verify_perf(measurements, targets, high_tol_percentage=1.15)
+        if not targets:
+            logger.warning(
+                f"No centralized perf targets found for model={target_model_name or base_model_name}, sku={tt_device_name}"
+            )
+        elif base_model_name not in skip_perf_verification:
+            expected_measurements = {
+                metric: True
+                for metric in targets
+                if not metric.endswith("_tolerance") and metric not in {"tolerance"}
+            }
+            verify_perf(
+                measurements,
+                expected_perf_metrics=targets,
+                high_tol_percentage=1.15,
+                expected_measurements=expected_measurements,
+            )

@@ -23,6 +23,7 @@ from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from models.common.utility_functions import (
     comp_pcc,
 )
+from models.demos.utils.llm_demo_utils import verify_perf
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -1463,37 +1464,29 @@ def test_demo_text(
         f"Average speed: {round(avg_decode_iteration_time * 1000, 2)}ms @ {round(decode_tok_s_user, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
     )
 
-    PERFORMANCE_TARGETS = {
-        "TG_Llama-3.1-70B": {"ttft": 73.00 if galaxy_type == "6U" else 99.00, "tsu": 71.5},
-        "TG_Llama-3.3-70B": {"ttft": 73.00 if galaxy_type == "6U" else 99.00, "tsu": 71.5},
-    }
-
-    model_key = f"{model_args.device_name}_{model_args.base_model_name}"
-
-    if model_key in PERFORMANCE_TARGETS:
-        test_id = request.node.callspec.id
-        if "repeat2" in test_id:
-            PERF_TOLERANCE_PERCENTAGE = 2.2
-            model_perf_targets = PERFORMANCE_TARGETS[model_key]
-            assert_perf_within_tolerance(
-                "TTFT (ms)",
-                avg_time_to_first_token * 1000,
-                model_perf_targets["ttft"],
-                PERF_TOLERANCE_PERCENTAGE,
-            )
-            assert_perf_within_tolerance(
-                "Decode throughput (tok/s/user)",
-                decode_tok_s_user,
-                model_perf_targets["tsu"],
-                PERF_TOLERANCE_PERCENTAGE,
-            )
-        else:
-            logger.info(
-                f"Test '{test_id}' currently doesn't have performance targets set! Skipping performance checks..."
-            )
-    else:
-        logger.warning(
-            f"Model '{model_args.base_model_name}' currently doesn't have performance targets on {model_args.device_name} device!"
+    target_model_name = {
+        "Llama-3.1-70B": "llama3.3-70b-galaxy",
+        "Llama-3.3-70B": "llama3.3-70b-galaxy",
+        "Qwen3-32B": "qwen3-32b-galaxy",
+    }.get(model_args.base_model_name)
+    test_id = request.node.callspec.id
+    if target_model_name and "repeat2" in test_id:
+        verify_perf(
+            measurements={
+                "prefill_time_to_first_token": avg_time_to_first_token,
+                "decode_t/s/u": decode_tok_s_user,
+                "decode_t/s": decode_tok_s,
+            },
+            model_name=target_model_name,
+            sku=model_args.device_name,
+            batch_size=batch_size,
+            seq_len=max_encoded_prompt_len,
+            high_tol_percentage=1.022,
+            expected_measurements={
+                "prefill_time_to_first_token": True,
+                "decode_t/s/u": True,
+                "decode_t/s": True,
+            },
         )
 
     # Save benchmark data for CI dashboard
@@ -1509,5 +1502,5 @@ def test_demo_text(
         benchmark_data.save_partial_run_json(
             profiler,
             run_type=f"tg_llama_text_demo_prefill",
-            ml_model_name="llama70b-tg",
+            ml_model_name=target_model_name or "llama3.3-70b-galaxy",
         )

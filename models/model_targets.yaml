@@ -259,8 +259,49 @@ targets:
               decode_tolerance: 1.15
             accuracy: {}
 
+  gemma-3-4b-vision:
+    aliases: ["gemma-3-4b-vision", "gemma-3-4b-vision-demo"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: active
+            perf:
+              prefill_t/s: 285.0
+              decode_t/s/u: 24.0
+              decode_t/s: 24.0
+              decode_tolerance: 1.15
+            accuracy: {}
+      wh_n300:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: active
+            perf:
+              prefill_t/s: 390.0
+              decode_t/s/u: 28.0
+              decode_t/s: 28.0
+              decode_tolerance: 1.15
+            accuracy: {}
+
+  gemma-3-27b-vision:
+    aliases: ["gemma-3-27b-vision", "gemma-3-27b-vision-demo"]
+    skus:
+      wh_llmbox_perf:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: active
+            perf:
+              prefill_t/s: 265.0
+              decode_t/s/u: 13.0
+              decode_t/s: 13.0
+              decode_tolerance: 1.15
+            accuracy: {}
+
   gemma-4-e2b:
-    aliases: ["gemma-4-e2b", "google/gemma-4-E2B-it"]
+    aliases: ["gemma-4-e2b", "google/gemma-4-E2B-it", "gemma4"]
     skus:
       wh_n150:
         entries:
@@ -492,14 +533,19 @@ targets:
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
   llama3.3-70b-galaxy:
-    aliases: ["llama3.3-70b-galaxy"]
+    aliases: ["llama3.3-70b-galaxy", "llama70b-tg"]
     skus:
       wh_galaxy_perf:
         entries:
           - batch_size: null
             seq_len: null
-            status: TODO
-            perf: {}
+            status: active
+            perf:
+              prefill_time_to_first_token: 99.0
+              prefill_tolerance: 1.15
+              decode_t/s/u: 71.5
+              decode_t/s: 2288.0
+              decode_tolerance: 1.15
             accuracy: {}
             owner_id: U053W15B6JF # Djordje Ivanovic
             team: models
@@ -618,26 +664,33 @@ targets:
               top1: 98.0
               top5: 100.0
   falcon-7b:
-    aliases: ["falcon-7b"]
+    aliases: ["falcon-7b", "falcon-7b-instruct", "tiiuae/falcon-7b-instruct"]
     skus:
       wh_n150:
         entries:
-          - batch_size: null
+          - batch_size: 32
             seq_len: 1024
-            status: TODO
-            perf: {}
+            status: active
+            perf:
+              prefill_t/s: 2855.0
+              decode_t/s/u: 15.24
+              decode_t/s: 487.0
+              decode_tolerance: 1.15
             accuracy: {}
             owner_id: U07RY6B5FLJ # Gongyu Wang
             team: models
   falcon-40b:
-    aliases: ["falcon-40b"]
+    aliases: ["falcon-40b", "falcon-40b-instruct", "tiiuae/falcon-40b-instruct"]
     skus:
       wh_llmbox_perf:
         entries:
-          - batch_size: null
-            seq_len: 128
-            status: TODO
-            perf: {}
+          - batch_size: 32
+            seq_len: null
+            status: active
+            perf:
+              decode_t/s/u: 36.0
+              decode_t/s: 1152.0
+              decode_tolerance: 1.15
             accuracy: {}
             owner_id: U053W15B6JF # Djordje Ivanovic
             team: models
@@ -648,20 +701,30 @@ targets:
         entries:
           - batch_size: 128
             seq_len: null
-            status: TODO
-            perf: {}
+            status: active
+            perf:
+              prefill_time_to_first_token: 400
+              prefill_tolerance: 1.15
+              decode_t/s/u: 3.0
+              decode_t/s: 380.0
+              decode_tolerance: 1.15
             accuracy: {}
             owner_id: U08TJ70UFRT # Stuti Raizada
             team: models
   whisper:
-    aliases: ["whisper"]
+    aliases: ["whisper", "distil-whisper/distil-large-v3"]
     skus:
       wh_n150:
         entries:
           - batch_size: null
             seq_len: null
-            status: TODO
-            perf: {}
+            status: active
+            perf:
+              prefill_time_to_first_token: 130
+              prefill_tolerance: 1.20
+              decode_t/s/u: 124.0
+              decode_t/s: 124.0
+              decode_tolerance: 1.20
             accuracy: {}
             owner_id: U0491KT8MNY # Mohamed Bahnas
             team: models

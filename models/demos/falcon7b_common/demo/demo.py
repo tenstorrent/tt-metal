@@ -20,7 +20,8 @@ from models.common.utils import top_k_top_p_filtering
 from models.demos.falcon7b_common.tests.test_utils import get_num_devices, initialize_kv_cache, load_hf_model
 from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.falcon7b_common.tt.model_config import get_model_config
-from models.demos.utils.llm_demo_utils import check_tokens_match, create_benchmark_data  # , verify_perf
+from models.demos.utils.llm_demo_utils import check_tokens_match, create_benchmark_data, verify_perf
+from models.demos.utils.model_targets import resolve_perf_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import get_hf_tt_cache_path
 from models.tt_transformers.tt.model_config import determine_device_name
@@ -132,7 +133,8 @@ def run_falcon_demo_kv(
     expected_perf_metrics=None,  # Expected perf (t/s) for prefill and decode in perf mode
     expected_greedy_output_path=None,  # Path for expected outputs for greedy decoding
     save_generated_text_path=None,  # If provided, save generated text to this path (e.g. set to expected_greedy_output_path to update expected output)
-    json_perf_targets={},  # Optional perf targets for CSV output
+    json_perf_targets=None,  # Optional perf targets for CSV output
+    model_name: str = "falcon-7b",  # Canonical model key for centralized targets
     is_ci_env=False,  # Whether is running in CI environment
 ):
     profiler = BenchmarkProfiler()
@@ -155,6 +157,9 @@ def run_falcon_demo_kv(
 
     num_devices = get_num_devices(mesh_device)
     global_batch = batch_size * num_devices
+    sku = determine_device_name(mesh_device)
+    if json_perf_targets is None:
+        json_perf_targets = {}
 
     torch.manual_seed(0)
 
@@ -536,8 +541,26 @@ def run_falcon_demo_kv(
     profiler.end("run")
     logger.info(f"Total demo duration: {(profiler.get_duration('run')):.2f} s")
 
+    if perf_mode and expected_perf_metrics is None:
+        expected_perf_metrics = resolve_perf_targets(
+            model_name=model_name,
+            sku=sku,
+            batch_size=global_batch,
+            seq_len=num_input_tokens,
+        ) or resolve_perf_targets(
+            model_name=model_name,
+            sku=sku,
+            batch_size=None,
+            seq_len=max_seq_len,
+        )
+        if expected_perf_metrics is None:
+            logger.warning(
+                f"No centralized perf targets found for model={model_name}, sku={sku}, batch={global_batch}, seq={num_input_tokens}"
+            )
+
     # Save benchmark data (will only save if running in CI environment)
-    benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, json_perf_targets)
+    benchmark_targets = expected_perf_metrics if perf_mode and expected_perf_metrics else json_perf_targets
+    benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, benchmark_targets)
     run_type = "demo_perf" if perf_mode else "demo_generate"
 
     benchmark_data.save_partial_run_json(
@@ -557,11 +580,17 @@ def run_falcon_demo_kv(
     # Verify output or perf if expected values are provided
     assert expected_perf_metrics is None or expected_greedy_output_path is None
     if expected_perf_metrics is not None:
-        pass  # see issue #31939
-    #     if num_devices == 32:  # set higher margin to 20% for Galaxy due to larger variance on CI
-    #         verify_perf(measurements, expected_perf_metrics, high_tol_percentage=1.20)
-    #     else:
-    #         verify_perf(measurements, expected_perf_metrics)
+        expected_measurements = {
+            metric: True
+            for metric in expected_perf_metrics
+            if not metric.endswith("_tolerance") and metric not in {"tolerance"}
+        }
+        verify_perf(
+            measurements,
+            expected_perf_metrics=expected_perf_metrics,
+            high_tol_percentage=1.20 if num_devices == 32 else 1.15,
+            expected_measurements=expected_measurements,
+        )
     elif expected_greedy_output_path is not None:
         if token_check_does_pass:
             logger.info("Output Check Passed!")

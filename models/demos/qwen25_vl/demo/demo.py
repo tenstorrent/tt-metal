@@ -25,7 +25,8 @@ from models.demos.qwen25_vl.tt.common import (
 from models.demos.qwen25_vl.tt.generator import Generator
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
-from models.demos.utils.llm_demo_utils import create_benchmark_data
+from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from models.demos.utils.model_targets import resolve_perf_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
 
@@ -768,30 +769,28 @@ def test_demo(
         f"Text model average speed: {round(avg_decode_iteration_time * 1000, 2)}ms @ {round(decode_tok_s_user, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
     )
 
-    # Benchmark targets
-    supported_models = []
-    supported_devices = []
-
     tt_device_name = model_args.device_name
-
-    if model_args.base_model_name in supported_models:
-        assert tt_device_name in supported_devices, f"Device {tt_device_name} not supported"
-
-        # Set the target times to first token for every combination of device and model
-        target_prefill_tok_s = {}[f"{tt_device_name}_{model_args.base_model_name}"]
-
-        # Set the target decode timesfor every combination of device and model
-        target_decode_tok_s_u = {}[f"{tt_device_name}_{model_args.base_model_name}"]
-
-        target_decode_tok_s = target_decode_tok_s_u * batch_size
-        targets = {
-            "prefill_t/s": target_prefill_tok_s,
-            "decode_t/s": target_decode_tok_s,
-            "decode_t/s/u": target_decode_tok_s_u,
-        }
-    else:
-        logger.warning(f"Model {model_args.base_model_name} not does not have performance targets set")
-        targets = {}
+    target_model_name = {
+        "Qwen2.5-VL-72B": "qwen2.5-72b-vl",
+        "Qwen2.5-VL-32B": "qwen2.5-vl-32b",
+    }.get(model_args.base_model_name)
+    targets = {}
+    if target_model_name:
+        targets = resolve_perf_targets(
+            model_name=target_model_name,
+            sku=tt_device_name,
+            batch_size=batch_size,
+            seq_len=max(prefill_lens),
+        ) or resolve_perf_targets(
+            model_name=target_model_name,
+            sku=tt_device_name,
+            batch_size=None,
+            seq_len=None,
+        )
+    if not targets:
+        logger.warning(
+            f"No centralized perf targets found for model={target_model_name or model_args.base_model_name}, sku={tt_device_name}"
+        )
 
     # Save benchmark data for CI dashboard
     if is_ci_env:
@@ -828,7 +827,7 @@ def test_demo(
         benchmark_data.save_partial_run_json(
             profiler,
             run_type="demo",
-            ml_model_name=model_args.base_model_name,
+            ml_model_name=target_model_name or model_args.base_model_name,
             ml_model_type="llm",
             device_name=tt_device_name,
             num_layers=model_args.n_layers,
@@ -837,6 +836,18 @@ def test_demo(
             input_sequence_length=max(prefill_lens),
             output_sequence_length=num_tokens_generated_decode[0],
         )
+
+        if targets:
+            expected_measurements = {
+                metric: True
+                for metric in targets
+                if not metric.endswith("_tolerance") and metric not in {"tolerance"}
+            }
+            verify_perf(
+                measurements=measurements,
+                expected_perf_metrics=targets,
+                expected_measurements=expected_measurements,
+            )
 
 
 def load_inputs(input_file, batch_size):
