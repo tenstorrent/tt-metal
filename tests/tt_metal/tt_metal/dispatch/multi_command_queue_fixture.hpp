@@ -134,7 +134,7 @@ protected:
         this->num_cqs_ = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
 
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        init_max_cbs();
+        this->max_cbs_ = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
     }
 
     void CreateDevice(const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {

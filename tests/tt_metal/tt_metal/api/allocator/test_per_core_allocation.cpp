@@ -33,14 +33,14 @@ protected:
         }
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        id_to_device_ = distributed::MeshDevice::create_unit_meshes(
+        auto id_to_device = distributed::MeshDevice::create_unit_meshes(
             ids, l1_small_size_, trace_region_size_, 1, dispatch_core_config, {}, DEFAULT_WORKER_L1_SIZE);
         devices_.clear();
-        for (const auto& [device_id, device] : id_to_device_) {
+        for (const auto& [device_id, device] : id_to_device) {
             devices_.push_back(device);
         }
         this->num_devices_ = this->devices_.size();
-        init_max_cbs();
+        this->max_cbs_ = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
     }
 
     void TearDown() override {

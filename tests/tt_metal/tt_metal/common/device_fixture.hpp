@@ -41,7 +41,7 @@ protected:
             ids.push_back(id);
         }
         this->create_devices(ids);
-        init_max_cbs();
+        this->max_cbs_ = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
     }
 
     void TearDown() override {

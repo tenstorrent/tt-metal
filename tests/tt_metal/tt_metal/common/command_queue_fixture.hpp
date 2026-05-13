@@ -112,7 +112,7 @@ protected:
             GTEST_SKIP();
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        init_max_cbs();
+        this->max_cbs_ = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
     }
 
     void CreateDevices(const size_t trace_region_size) { this->create_devices(trace_region_size); }
@@ -132,7 +132,7 @@ protected:
         if (devices_.empty()) {
             GTEST_SKIP() << "No local devices available for testing (all devices are remote-only)";
         }
-        init_max_cbs();
+        this->max_cbs_ = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
     }
 
     void TearDown() override {
@@ -212,7 +212,7 @@ protected:
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices(90000000);
-        init_max_cbs();
+        this->max_cbs_ = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
     }
 };
 
