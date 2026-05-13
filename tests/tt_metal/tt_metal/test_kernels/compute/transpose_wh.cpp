@@ -7,9 +7,9 @@
 #include "api/compute/transpose_wh.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #ifdef ARCH_QUASAR
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #else
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #endif
 
 void kernel_main() {
@@ -18,8 +18,8 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
     constexpr uint32_t dfb_in_id = get_compile_time_arg_val(1);
     constexpr uint32_t dfb_out_id = get_compile_time_arg_val(2);
-    experimental::DataflowBuffer dfb_in(dfb_in_id);
-    experimental::DataflowBuffer dfb_out(dfb_out_id);
+    DataflowBuffer dfb_in(dfb_in_id);
+    DataflowBuffer dfb_out(dfb_out_id);
 
 #ifndef SHORT_INIT
     transpose_wh_init(dfb_in.get_id(), dfb_out.get_id());
@@ -28,8 +28,8 @@ void kernel_main() {
     transpose_wh_init_short(dfb_in.get_id());
 #endif
 #else
-    experimental::CircularBuffer cb0(tt::CBIndex::c_0);
-    experimental::CircularBuffer cb16(tt::CBIndex::c_16);
+    CircularBuffer cb0(tt::CBIndex::c_0);
+    CircularBuffer cb16(tt::CBIndex::c_16);
 
 #ifndef SHORT_INIT
     transpose_wh_init(tt::CBIndex::c_0, tt::CBIndex::c_16);

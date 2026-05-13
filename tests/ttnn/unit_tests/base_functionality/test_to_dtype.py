@@ -9,7 +9,8 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_with_ulp
+from tests.ttnn.unit_tests.base_functionality.test_narrow import assert_quality
 
 bfloat4_pcc = 0.960
 torch.manual_seed(0)
@@ -56,8 +57,12 @@ def test_to_dtype(height, width, from_dtype, to_dtype):
     else:
         assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
 
+    # integers 0-9 are exactly representable in BFP8 (shared exponent), so exact equality holds for bf8
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch_input_tensor.dtype)
-    assert_with_pcc(torch_input_tensor, output_tensor, bfloat4_pcc if to_dtype == ttnn.bfloat4_b else 0.9999)
+    if to_dtype == ttnn.bfloat4_b:
+        assert_with_pcc(torch_input_tensor, output_tensor, bfloat4_pcc)
+    else:
+        assert_equal(torch_input_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("height", [32])
@@ -80,7 +85,16 @@ def test_to_float_dtype(height, width, from_dtype, to_dtype):
         assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
 
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch_input_tensor.dtype)
-    assert_with_pcc(torch_input_tensor, output_tensor, bfloat4_pcc if to_dtype == ttnn.bfloat4_b else 0.9999)
+    # bf8/bf4/float32 all use torch.float internally
+    if to_dtype == ttnn.bfloat16 and from_dtype != ttnn.bfloat16:
+        assert_with_ulp(
+            torch_input_tensor.to(torch.bfloat16),
+            output_tensor.to(torch.bfloat16),
+            ulp_threshold=1,
+        )
+    else:
+        # bf8 atol=0.008: rand([0,1)) input; bf8 ULP in this range is ~2^-7 ≈ 0.0078
+        assert_quality(torch_input_tensor, output_tensor, to_dtype, bf4_pcc=bfloat4_pcc, bf8_atol=0.008)
 
 
 @pytest.mark.parametrize("height", [36])
@@ -107,8 +121,12 @@ def test_to_dtype_unaligned_shape(height, width, from_dtype, to_dtype):
     assert tuple(output_tensor.shape) == (height, width)
     assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
 
+    # integers 0-9 are exactly representable in BFP8 (shared exponent), so exact equality holds for bf8
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch_input_tensor.dtype)
-    assert_with_pcc(torch_input_tensor, output_tensor, bfloat4_pcc if to_dtype == ttnn.bfloat4_b else 0.9999)
+    if to_dtype == ttnn.bfloat4_b:
+        assert_with_pcc(torch_input_tensor, output_tensor, bfloat4_pcc)
+    else:
+        assert_equal(torch_input_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("height", [32])
@@ -127,5 +145,9 @@ def test_to_dtype_with_tile_layout(height, width, from_dtype, to_dtype):
     assert tuple(output_tensor.shape) == (height, width)
     assert output_tensor.layout == ttnn.TILE_LAYOUT
 
+    # integers 0-9 are exactly representable in BFP8 (shared exponent), so exact equality holds for bf8
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch_input_tensor.dtype)
-    assert_with_pcc(torch_input_tensor, output_tensor, bfloat4_pcc if to_dtype == ttnn.bfloat4_b else 0.9999)
+    if to_dtype == ttnn.bfloat4_b:
+        assert_with_pcc(torch_input_tensor, output_tensor, bfloat4_pcc)
+    else:
+        assert_equal(torch_input_tensor, output_tensor)

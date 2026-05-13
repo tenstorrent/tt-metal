@@ -40,6 +40,8 @@ public:
 
     uint32_t prefetch_q_entries() const;
 
+    uint32_t prefetch_q_entry_size_bytes() const;
+
     uint32_t prefetch_q_size() const;
 
     uint32_t max_prefetch_command_size() const;

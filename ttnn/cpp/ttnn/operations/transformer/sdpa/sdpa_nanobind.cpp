@@ -176,12 +176,15 @@ ttnn::Tensor flash_mla_prefill_wrapper_input_tensor(
 }
 
 // Dispatch: chunk_start_idx_tensor present → flexible (runtime offset); else legacy (chunk_start_idx int).
+// nanobind optional caster converts Python None|int at the wrapper boundary
+// (GIL held); the body runs with the GIL released (call_guard applied by
+// bind_function) and uses only C++ values.
 ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
     const ttnn::Tensor& page_table_tensor,
-    const nb::object& chunk_start_idx_arg,
+    std::optional<int64_t> chunk_start_idx_arg,
     std::optional<ttnn::Tensor> chunk_start_idx_tensor_opt,
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
@@ -199,18 +202,17 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
             program_config,
             compute_kernel_config);
     }
-    if (chunk_start_idx_arg.is_none()) {
+    if (!chunk_start_idx_arg.has_value()) {
         throw std::runtime_error(
             "chunk_start_idx (int) is required for legacy chunked SDPA. For flexible path use "
             "chunk_start_idx_tensor=...");
     }
-    int64_t chunk_start_idx = nb::cast<int64_t>(chunk_start_idx_arg);
     return ttnn::transformer::chunked_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,
         input_tensor_v,
         page_table_tensor,
-        chunk_start_idx,
+        *chunk_start_idx_arg,
         scale,
         memory_config,
         program_config,
