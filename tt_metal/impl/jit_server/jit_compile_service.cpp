@@ -18,21 +18,18 @@ namespace tt::tt_metal::jit_server {
 
 namespace {
 
+// Periodic metrics logging is opt-in via TT_METAL_JIT_SERVER_LOG_INTERVAL_MS.
+// A positive integer enables periodic logging at that millisecond interval.
+// Anything else -- unset, empty, "0", negative, or unparseable -- disables it.
 constexpr char kJitServerLogIntervalEnv[] = "TT_METAL_JIT_SERVER_LOG_INTERVAL_MS";
-constexpr std::int64_t kDefaultPeriodicLogIntervalMs = 5000;
 
 std::chrono::milliseconds parse_log_interval_ms() {
     const char* interval_env = std::getenv(kJitServerLogIntervalEnv);
-    if (interval_env == nullptr) {
-        // Keep periodic logging inert unless explicitly enabled via environment.
+    if (interval_env == nullptr || *interval_env == '\0') {
         return std::chrono::milliseconds(0);
     }
 
     const std::string value(interval_env);
-    if (value.empty()) {
-        return std::chrono::milliseconds(kDefaultPeriodicLogIntervalMs);
-    }
-
     try {
         const auto parsed_value = std::stoll(value);
         if (parsed_value <= 0) {
@@ -42,11 +39,10 @@ std::chrono::milliseconds parse_log_interval_ms() {
     } catch (const std::exception&) {
         log_warning(
             tt::LogMetal,
-            "Invalid value '{}' for {}. Falling back to {}ms.",
+            "Invalid value '{}' for {}. Periodic metrics logging is disabled.",
             value,
-            kJitServerLogIntervalEnv,
-            kDefaultPeriodicLogIntervalMs);
-        return std::chrono::milliseconds(kDefaultPeriodicLogIntervalMs);
+            kJitServerLogIntervalEnv);
+        return std::chrono::milliseconds(0);
     }
 }
 
@@ -64,7 +60,7 @@ JitCompileService::JitCompileService(CompileCallback compile_callback, UploadFir
     upload_fw_callback_(std::move(upload_fw_callback)),
     periodic_log_interval_(get_periodic_log_interval()) {
     if (periodic_log_interval_.count() > 0) {
-        periodic_logger_thread_ = std::thread(&JitCompileService::maybe_log_metrics_periodically, this);
+        periodic_logger_thread_ = std::thread(&JitCompileService::run_periodic_logger_loop, this);
     }
 }
 
@@ -114,6 +110,7 @@ std::string JitCompileService::get_log_address() {
 JitCompileService::MetricsSnapshot JitCompileService::get_metrics_snapshot() const {
     MetricsSnapshot snapshot;
     snapshot.total_compiles = total_compiles_.load(std::memory_order_relaxed);
+    snapshot.dedup_hits = dedup_hits_.load(std::memory_order_relaxed);
     snapshot.total_compile_time_ns = total_compile_time_ns_.load(std::memory_order_relaxed);
     snapshot.queued = queued_.load(std::memory_order_relaxed);
     snapshot.current_inflight = current_inflight_.load(std::memory_order_relaxed);
@@ -123,7 +120,7 @@ JitCompileService::MetricsSnapshot JitCompileService::get_metrics_snapshot() con
     return snapshot;
 }
 
-void JitCompileService::maybe_log_metrics_periodically() {
+void JitCompileService::run_periodic_logger_loop() {
     std::unique_lock<std::mutex> lock(periodic_logger_mutex_);
     while (!should_stop_periodic_logger_) {
         if (periodic_logger_cv_.wait_for(
@@ -141,11 +138,12 @@ void JitCompileService::log_metrics_summary() {
     const auto total_compile_time_ms = snapshot.total_compile_time_ns / 1000000;
     log_info(
         tt::LogMetal,
-        "[jit_server addr={} ts={}] count={} total_compile_time_ms={} queued={} inflight={} peak_inflight={} "
-        "bytes_in={} bytes_out={}",
+        "[jit_server addr={} ts={}] count={} dedup_hits={} total_compile_time_ms={} queued={} inflight={} "
+        "peak_inflight={} bytes_in={} bytes_out={}",
         get_log_address(),
         current_time_ms_since_epoch(),
         snapshot.total_compiles,
+        snapshot.dedup_hits,
         total_compile_time_ms,
         snapshot.queued,
         snapshot.current_inflight,
@@ -209,8 +207,6 @@ std::uint64_t JitCompileService::current_time_ms_since_epoch() {
 std::chrono::milliseconds JitCompileService::get_periodic_log_interval() { return parse_log_interval_ms(); }
 
 kj::Promise<void> JitCompileService::compile(CompileContext context) {
-    queued_.fetch_add(1, std::memory_order_relaxed);
-
     CompileRequest request;
     auto reader = context.getParams().getRequest();
     request.build_key = reader.getBuildKey();
@@ -254,46 +250,58 @@ kj::Promise<void> JitCompileService::compile(CompileContext context) {
     auto paf = kj::newPromiseAndCrossThreadFulfiller<CompileResponse>();
     auto fulfiller = std::make_shared<kj::Own<kj::CrossThreadPromiseFulfiller<CompileResponse>>>(kj::mv(paf.fulfiller));
 
-    thread_pool_.silent_async([this, dedup_key, request = std::move(request), fulfiller]() mutable {
+    queued_.fetch_add(1, std::memory_order_relaxed);
+    try {
+        thread_pool_.silent_async([this, dedup_key, request = std::move(request), fulfiller]() mutable {
+            queued_.fetch_sub(1, std::memory_order_relaxed);
+
+            const auto inflight_now = current_inflight_.fetch_add(1, std::memory_order_relaxed) + 1;
+            update_peak_inflight(peak_inflight_, inflight_now);
+
+            bool was_dedup_owner = false;
+            CompileResponse response;
+            try {
+                response = compile_deduper_.run(dedup_key, [&]() {
+                    was_dedup_owner = true;
+                    if (!compile_callback_) {
+                        throw std::runtime_error("No JIT compile callback configured on server");
+                    }
+
+                    const auto compile_start = std::chrono::steady_clock::now();
+                    auto record_compile_time = [this, compile_start]() {
+                        const auto compile_time_ns =
+                            static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                           std::chrono::steady_clock::now() - compile_start)
+                                                           .count());
+                        total_compile_time_ns_.fetch_add(compile_time_ns, std::memory_order_relaxed);
+                    };
+
+                    try {
+                        auto compile_response = compile_callback_(request);
+                        record_compile_time();
+                        return compile_response;
+                    } catch (...) {
+                        record_compile_time();
+                        throw;
+                    }
+                });
+            } catch (const std::exception& e) {
+                response.success = false;
+                response.error_message = e.what();
+            }
+
+            if (!was_dedup_owner) {
+                dedup_hits_.fetch_add(1, std::memory_order_relaxed);
+            }
+            total_compiles_.fetch_add(1, std::memory_order_relaxed);
+            current_inflight_.fetch_sub(1, std::memory_order_relaxed);
+            total_bytes_out_.fetch_add(calculate_compile_response_bytes_out(response), std::memory_order_relaxed);
+            (*fulfiller)->fulfill(kj::mv(response));
+        });
+    } catch (...) {
         queued_.fetch_sub(1, std::memory_order_relaxed);
-
-        CompileResponse response;
-        try {
-            response = compile_deduper_.run(dedup_key, [&]() {
-                if (!compile_callback_) {
-                    throw std::runtime_error("No JIT compile callback configured on server");
-                }
-
-                const auto inflight_now = current_inflight_.fetch_add(1, std::memory_order_relaxed) + 1;
-                update_peak_inflight(peak_inflight_, inflight_now);
-                const auto compile_start = std::chrono::steady_clock::now();
-
-                auto finalize_compile_metrics = [&](std::chrono::steady_clock::time_point start_time) {
-                    const auto compile_time_ns =
-                        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                                       std::chrono::steady_clock::now() - start_time)
-                                                       .count());
-                    total_compile_time_ns_.fetch_add(compile_time_ns, std::memory_order_relaxed);
-                    total_compiles_.fetch_add(1, std::memory_order_relaxed);
-                    current_inflight_.fetch_sub(1, std::memory_order_relaxed);
-                };
-
-                try {
-                    auto compile_response = compile_callback_(request);
-                    finalize_compile_metrics(compile_start);
-                    return compile_response;
-                } catch (...) {
-                    finalize_compile_metrics(compile_start);
-                    throw;
-                }
-            });
-        } catch (const std::exception& e) {
-            response.success = false;
-            response.error_message = e.what();
-        }
-        total_bytes_out_.fetch_add(calculate_compile_response_bytes_out(response), std::memory_order_relaxed);
-        (*fulfiller)->fulfill(kj::mv(response));
-    });
+        throw;
+    }
 
     return paf.promise.then([context](CompileResponse response) mutable {
         if (!response.success) {

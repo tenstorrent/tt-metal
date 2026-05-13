@@ -38,6 +38,7 @@ public:
 private:
     struct MetricsSnapshot {
         std::uint64_t total_compiles = 0;
+        std::uint64_t dedup_hits = 0;
         std::uint64_t total_compile_time_ns = 0;
         std::uint64_t queued = 0;
         std::uint64_t current_inflight = 0;
@@ -48,7 +49,7 @@ private:
 
     std::string get_log_address();
     MetricsSnapshot get_metrics_snapshot() const;
-    void maybe_log_metrics_periodically();
+    void run_periodic_logger_loop();
     void log_metrics_summary();
 
     std::uint64_t estimate_compile_request_bytes_in(const CompileRequest& request) const;
@@ -64,7 +65,11 @@ private:
     InFlightCompileDeduper<CompileResponse> compile_deduper_;
     tf::Executor thread_pool_{std::max(1u, std::thread::hardware_concurrency())};
 
+    // total_compiles_, queued_, current_inflight_, peak_inflight_, total_bytes_in_, total_bytes_out_, and
+    // dedup_hits_ all count incoming requests (dedup hits included). total_compile_time_ns_ measures only
+    // unique compile work, so it can be ratioed against (total_compiles_ - dedup_hits_) for per-compile time.
     std::atomic<std::uint64_t> total_compiles_{0};
+    std::atomic<std::uint64_t> dedup_hits_{0};
     std::atomic<std::uint64_t> total_compile_time_ns_{0};
     std::atomic<std::uint64_t> queued_{0};
     std::atomic<std::uint64_t> current_inflight_{0};
