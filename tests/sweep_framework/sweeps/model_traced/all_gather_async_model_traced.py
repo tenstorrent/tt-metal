@@ -564,7 +564,14 @@ def run(
     os.environ["TT_METAL_OPERATION_TIMEOUT_SECONDS"] = "30"
 
     try:
-        with device_context(mesh_shape, fabric_config) as (device, device_err):
+        _dev_params = {}
+        if is_model_traced:
+            _dev_params = {
+                "dispatch_core_config": ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER, ttnn.DispatchCoreAxis.COL),
+                "num_command_queues": 1,
+                "l1_small_size": 79104,
+            }
+        with device_context(mesh_shape, fabric_config, device_params=_dev_params) as (device, device_err):
             assert tuple(device.shape) == mesh_shape
 
             if device_err is not None:
@@ -639,17 +646,23 @@ def run(
 
             # Setup SubDevice and semaphores
             compute_grid_size = device.compute_with_storage_grid_size()
-            ccl_sub_device_crs = ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+            # 2-sub-device layout matching Galaxy prefetcher decode mode
+            worker_cores = ttnn.CoreRangeSet({
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+            })
+            prefetcher_cores = ttnn.CoreRangeSet({
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 9)),
+            })
+            _ag_sub_dev_mgr = device.create_sub_device_manager(
+                [ttnn.SubDevice([prefetcher_cores]), ttnn.SubDevice([worker_cores])], 0
             )
-
-            # Single sub-device with all compute cores (all_gather uses full grid)
-            all_cores = ttnn.SubDevice([ccl_sub_device_crs])
-            _ag_sub_dev_mgr = device.create_sub_device_manager([all_cores], 0)
             device.load_sub_device_manager(_ag_sub_dev_mgr)
 
-            worker_sub_device_id = ttnn.SubDeviceId(0)
-            sub_device_stall_group = [worker_sub_device_id]
+            worker_sub_device_id = ttnn.SubDeviceId(1)
+            ccl_sub_device_crs = worker_cores
+            sub_device_stall_group = [ttnn.SubDeviceId(0), worker_sub_device_id]
 
             device.set_sub_device_stall_group(sub_device_stall_group)
 

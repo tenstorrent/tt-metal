@@ -143,17 +143,29 @@ def setup_sub_device_manager(device, master_json_path=None):
                         if hy > max_y:
                             max_y = hy
 
-        # Use the standard Galaxy prefetcher layout:
-        # Sender/prefetcher: columns 0 and 4
-        # Worker: columns 1-3 and 5-6, all rows
-        worker_cores = ttnn.CoreRangeSet({
-            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
-        })
-        prefetcher_cores = ttnn.CoreRangeSet({
-            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 9)),
-            ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 9)),
-        })
+        # Use the model's exact core layout from get_core_ranges()
+        try:
+            from models.demos.llama3_70b_galaxy.tt.model_config import get_core_ranges as _get_core_ranges
+            num_reader_cores = 12
+            num_gcb_receivers = 2
+            (
+                _active_sender_cores, _dram_cores, _all_sender_cores,
+                _active_receiver_cores_list, _all_receiver_cores,
+                _worker_cores_range_set, _mm_optimised_ring_cores, _hop_grid,
+            ) = _get_core_ranges(num_reader_cores, num_gcb_receivers, is_functional_test=False)
+            worker_cores = _worker_cores_range_set
+            prefetcher_cores = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(core_coord, core_coord) for core_coord in _all_sender_cores]
+            )
+        except Exception:
+            worker_cores = ttnn.CoreRangeSet({
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+            })
+            prefetcher_cores = ttnn.CoreRangeSet({
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 9)),
+            })
 
         prefetcher_sub_device = ttnn.SubDevice([prefetcher_cores])
         worker_sub_device = ttnn.SubDevice([worker_cores])
@@ -162,52 +174,15 @@ def setup_sub_device_manager(device, master_json_path=None):
         device.load_sub_device_manager(manager)
         device.set_sub_device_stall_group([ttnn.SubDeviceId(0), ttnn.SubDeviceId(1)])
 
-        # Create global circular buffer for prefetcher pattern
+        # Create global circular buffer using model's core mapping
         global_cb = None
         try:
-            all_sender_cores = [
-                ttnn.CoreCoord(0, 9), ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 4), ttnn.CoreCoord(0, 5),
-                ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 9), ttnn.CoreCoord(4, 1), ttnn.CoreCoord(4, 7),
-                ttnn.CoreCoord(4, 6), ttnn.CoreCoord(4, 2), ttnn.CoreCoord(4, 4), ttnn.CoreCoord(4, 5),
-            ]
-            all_receiver_cores_list = [
-                (1, 9), (2, 9), (1, 0), (2, 0), (1, 4), (2, 4), (1, 5), (2, 5),
-                (5, 0), (6, 0), (5, 9), (6, 9), (5, 1), (6, 1), (5, 7), (6, 7),
-                (5, 6), (6, 6), (5, 2), (6, 2), (5, 4), (6, 4), (5, 5), (6, 5),
-            ]
-            num_reader_cores = 12
-            num_gcb_receivers = 2
-            all_receiver_cores = [
-                ttnn.CoreRangeSet([ttnn.CoreRange(
-                    ttnn.CoreCoord(*all_receiver_cores_list[idx]),
-                    ttnn.CoreCoord(*all_receiver_cores_list[idx + 1]),
-                )])
-                for idx in range(0, num_reader_cores * num_gcb_receivers, 2)
-            ]
-            dummy_sender_cores = [
-                ttnn.CoreCoord(0, 1), ttnn.CoreCoord(0, 2), ttnn.CoreCoord(0, 3),
-                ttnn.CoreCoord(0, 6), ttnn.CoreCoord(0, 7), ttnn.CoreCoord(0, 8),
-                ttnn.CoreCoord(4, 3), ttnn.CoreCoord(4, 8),
-            ]
-            dummy_receiver_cores = [
-                ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0)),
-                                   ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(3, 1))]),
-                ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(3, 2))]),
-                ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 3), ttnn.CoreCoord(3, 3)),
-                                   ttnn.CoreRange(ttnn.CoreCoord(3, 4), ttnn.CoreCoord(3, 4))]),
-                ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(3, 5), ttnn.CoreCoord(3, 5)),
-                                   ttnn.CoreRange(ttnn.CoreCoord(1, 6), ttnn.CoreCoord(3, 6))]),
-                ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 7), ttnn.CoreCoord(3, 7))]),
-                ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 8), ttnn.CoreCoord(3, 8)),
-                                   ttnn.CoreRange(ttnn.CoreCoord(3, 9), ttnn.CoreCoord(3, 9))]),
-                ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(5, 3), ttnn.CoreCoord(6, 3))]),
-                ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(5, 8), ttnn.CoreCoord(6, 8))]),
-            ]
-            sender_cores = list(all_sender_cores) + dummy_sender_cores
-            receiver_cores = list(all_receiver_cores) + dummy_receiver_cores
-            sender_receiver_mapping = list(zip(sender_cores, receiver_cores))
-            global_cb_size = 728 * 1088
-            global_cb = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, global_cb_size)
+            try:
+                sender_receiver_mapping = list(zip(_all_sender_cores, _all_receiver_cores))
+                global_cb_size = 728 * 1088
+                global_cb = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, global_cb_size)
+            except NameError:
+                pass  # get_core_ranges not available, skip global_cb
         except Exception as e:
             print(f"Warning: Failed to create global circular buffer: {e}")
             global_cb = None

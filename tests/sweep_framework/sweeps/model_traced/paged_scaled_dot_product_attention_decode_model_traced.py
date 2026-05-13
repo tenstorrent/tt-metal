@@ -71,8 +71,12 @@ if model_traced_params:
 def mesh_device_fixture():
     mesh_shape = get_model_traced_mesh_shape()
     device = create_mesh_device(mesh_shape)
+    from tests.sweep_framework.sweep_utils.mesh_tensor_utils import setup_sub_device_manager, teardown_sub_device_manager
+    result = setup_sub_device_manager(device)
+    sub_device_mgr = result[0] if isinstance(result, tuple) else result
     device_name = ttnn.get_arch_name()
     yield (device, device_name)
+    teardown_sub_device_manager(device, sub_device_mgr)
     ttnn.close_mesh_device(device)
     del device
 
