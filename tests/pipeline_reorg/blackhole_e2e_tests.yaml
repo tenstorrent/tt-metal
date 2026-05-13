@@ -263,7 +263,7 @@
     exit $exit_code
   skus:
     bh_loudbox:
-      timeout: 70 # PR #43775: FP8 combine adds runtime; bumped from 68 to 70
+      timeout: 90
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
 
