@@ -13,18 +13,24 @@ import torch
 from transformers import AutoModel, AutoTokenizer
 
 import ttnn
-from models.demos.ace_step_v1_5.checkpoint_paths import ACE_STEP_CHECKPOINT_DIR_ENV, resolve_qwen3_embedding_model_dir
 from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_encoder import TtQwen3EmbeddingEncoder
+
+# Same default checkpoint root as ``run_prompt_to_wav`` (HF hub cache layout).
+_DEFAULT_QWEN_DIR = Path.home() / ".cache" / "huggingface" / "hub" / "ACE-Step-1.5-checkpoints" / "Qwen3-Embedding-0.6B"
 
 
 def _ckpt_dir() -> Path | None:
-    return resolve_qwen3_embedding_model_dir()
+    d = _DEFAULT_QWEN_DIR.resolve()
+    if (d / "model.safetensors").is_file():
+        return d
+    if any(d.glob("model-*.safetensors")):
+        return d
+    return None
 
 
 _SKIP_REASON = (
-    "Qwen3-Embedding-0.6B not found. Clone ACE-Step next to tt-metal "
-    "(…/ACE-Step-1.5/checkpoints/Qwen3-Embedding-0.6B/) or set "
-    f"{ACE_STEP_CHECKPOINT_DIR_ENV} to the checkpoints directory."
+    f"Qwen3-Embedding-0.6B not found at {_DEFAULT_QWEN_DIR}. "
+    "Populate that directory (e.g. run the ACE-Step demo once so weights download there)."
 )
 
 
