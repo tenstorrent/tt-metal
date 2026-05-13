@@ -56,8 +56,13 @@ void RunTest(DPrintMeshFixture* fixture, const std::shared_ptr<distributed::Mesh
     uint32_t delay_cycles = clk_mhz * 4000000;  // 4 seconds
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
-            const std::vector<uint32_t> args = {delay_cycles, x, y};
-            SetRuntimeArgs(program_, brisc_print_kernel_id, CoreCoord{x, y}, args);
+            const std::vector<uint32_t> args = { delay_cycles, x, y };
+            SetRuntimeArgs(
+                program_,
+                brisc_print_kernel_id,
+                CoreCoord{x, y},
+                args
+            );
         }
     }
     fixture->RunProgram(mesh_device, workload);

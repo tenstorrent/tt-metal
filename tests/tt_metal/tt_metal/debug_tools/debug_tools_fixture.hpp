@@ -41,9 +41,7 @@ protected:
     void RunTestOnDevice(
         const std::function<void(T*, std::shared_ptr<distributed::MeshDevice>)>& run_function,
         const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-        auto run_function_no_args = [this, run_function, mesh_device]() {
-            run_function(static_cast<T*>(this), mesh_device);
-        };
+        auto run_function_no_args = [this, run_function, mesh_device]() { run_function(static_cast<T*>(this), mesh_device); };
         MeshDispatchFixture::RunTestOnDevice(run_function_no_args, mesh_device);
     }
 };
@@ -75,8 +73,10 @@ protected:
     void SetUp() override {
         // Create a unique memory-backed file for this test to avoid parallel test conflicts
         const testing::TestInfo* test_info = testing::UnitTest::GetInstance()->current_test_info();
-        std::string test_desc =
-            fmt::format("dprint_{}_{}_{}", getpid(), test_info->test_suite_name(), test_info->name());
+        std::string test_desc = fmt::format("dprint_{}_{}_{}",
+            getpid(),
+            test_info->test_suite_name(),
+            test_info->name());
 
         memfd_ = memfd_create(test_desc.c_str(), 0);
         if (memfd_ < 0) {
@@ -89,8 +89,7 @@ protected:
         // The core range (virtual) needs to be set >= the set of all cores
         // used by all tests using this fixture, so set dprint enabled for
         // all cores and all devices
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_enabled(
-            tt::llrt::RunTimeDebugFeatureDprint, true);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint, true);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
             tt::llrt::RunTimeDebugFeatureDprint, false);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_cores(
@@ -99,15 +98,13 @@ protected:
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::ETH, tt::llrt::RunTimeDebugClassWorker);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_cores(
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::DRAM, tt::llrt::RunTimeDebugClassWorker);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_chips(
-            tt::llrt::RunTimeDebugFeatureDprint, true);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint, true);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_mesh_coords(
             tt::llrt::RunTimeDebugFeatureDprint, {});
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_chip_ids(
             tt::llrt::RunTimeDebugFeatureDprint, {});
         // Send output to a file so the test can check after program is run.
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_file_name(
-            tt::llrt::RunTimeDebugFeatureDprint, dprint_file_name);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint, dprint_file_name);
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(true);
         watcher_previous_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled();
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(false);
@@ -131,22 +128,19 @@ protected:
 
         // Reset DPrint settings
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_cores(tt::llrt::RunTimeDebugFeatureDprint, {});
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_enabled(
-            tt::llrt::RunTimeDebugFeatureDprint, false);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint, false);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_cores(
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::WORKER, tt::llrt::RunTimeDebugClassNoneSpecified);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_cores(
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::ETH, tt::llrt::RunTimeDebugClassNoneSpecified);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_cores(
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::DRAM, tt::llrt::RunTimeDebugClassNoneSpecified);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_chips(
-            tt::llrt::RunTimeDebugFeatureDprint, false);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint, false);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_mesh_coords(
             tt::llrt::RunTimeDebugFeatureDprint, {});
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_chip_ids(
             tt::llrt::RunTimeDebugFeatureDprint, {});
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_file_name(
-            tt::llrt::RunTimeDebugFeatureDprint, "");
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint, "");
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
             tt::llrt::RunTimeDebugFeatureDprint, true);
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(false);
@@ -171,14 +165,11 @@ class DPrintDisableMeshDevicesFixture : public DPrintMeshFixture {
 protected:
     void ExtraSetUp() override {
         // For this test, mute each devices using the environment variable
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_chips(
-            tt::llrt::RunTimeDebugFeatureDprint, false);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_chip_ids(
-            tt::llrt::RunTimeDebugFeatureDprint, {});
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint, false);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint, {});
     }
     void ExtraTearDown() override {
-        MetalContext::instance()
-            .teardown();  // Teardown dprint server so we can re-init later with all devices enabled again
+        MetalContext::instance().teardown();  // Teardown dprint server so we can re-init later with all devices enabled again
     }
 };
 
@@ -186,21 +177,18 @@ class DPrintSeparateFilesFixture : public DPrintMeshFixture {
 public:
     static constexpr std::array<std::string_view, 5> suffixes = {"BRISC", "NCRISC", "TRISC0", "TRISC1", "TRISC2"};
     static void check_output(std::span<const std::string> expected) {
-        const auto& enabled_processors = tt::tt_metal::MetalContext::instance().rtoptions().get_feature_processors(
-            tt::llrt::RunTimeDebugFeatureDprint);
+        const auto& enabled_processors = 
+            tt::tt_metal::MetalContext::instance().rtoptions().get_feature_processors(tt::llrt::RunTimeDebugFeatureDprint);
         ASSERT_EQ(expected.size(), suffixes.size());
         for (size_t i = 0; i < suffixes.size(); i++) {
             if (!enabled_processors.contains(HalProgrammableCoreType::TENSIX, i)) {
                 continue;
             }
-            auto filename = fmt::format(
-                "{}generated/dprint/device-0_worker-core-0-0_{}.txt",
-                tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir(),
-                suffixes[i]);
+            auto filename = fmt::format("{}generated/dprint/device-0_worker-core-0-0_{}.txt",
+                tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir(), suffixes[i]);
             EXPECT_TRUE(FilesMatchesString(filename, expected[i]));
         }
     }
-
 protected:
     bool original_one_file_per_risc_{};
     void ExtraSetUp() override {
@@ -235,9 +223,7 @@ public:
         // increase because we'll likely check in the middle of a dump.
         if (wait_for_dump) {
             int curr_count = MetalContext::instance().watcher_server()->dump_count();
-            while (MetalContext::instance().watcher_server()->dump_count() < curr_count + 2) {
-                ;
-            }
+            while (MetalContext::instance().watcher_server()->dump_count() < curr_count + 2) {;}
         }
     }
 
@@ -251,8 +237,7 @@ protected:
     bool test_mode_previous{};
     void SetUp() override {
         // Initialize log file name once during setup
-        log_file_name =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir() + "generated/watcher/watcher.log";
+        log_file_name = tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir() + "generated/watcher/watcher.log";
 
         // Enable watcher for this test, save the previous state so we can restore it later.
         watcher_previous_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled();
@@ -320,25 +305,15 @@ public:
         delayed_cores[CoreType::WORKER] = {{0, 0}, {1, 1}};
 
         // Store the previous state of the watcher features
-        saved_target_selection[tt::llrt::RunTimeDebugFeatureReadDebugDelay] =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_feature_targets(
-                tt::llrt::RunTimeDebugFeatureReadDebugDelay);
-        saved_target_selection[tt::llrt::RunTimeDebugFeatureWriteDebugDelay] =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_feature_targets(
-                tt::llrt::RunTimeDebugFeatureWriteDebugDelay);
-        saved_target_selection[tt::llrt::RunTimeDebugFeatureAtomicDebugDelay] =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_feature_targets(
-                tt::llrt::RunTimeDebugFeatureAtomicDebugDelay);
+        saved_target_selection[tt::llrt::RunTimeDebugFeatureReadDebugDelay] = tt::tt_metal::MetalContext::instance().rtoptions().get_feature_targets(tt::llrt::RunTimeDebugFeatureReadDebugDelay);
+        saved_target_selection[tt::llrt::RunTimeDebugFeatureWriteDebugDelay] = tt::tt_metal::MetalContext::instance().rtoptions().get_feature_targets(tt::llrt::RunTimeDebugFeatureWriteDebugDelay);
+        saved_target_selection[tt::llrt::RunTimeDebugFeatureAtomicDebugDelay] = tt::tt_metal::MetalContext::instance().rtoptions().get_feature_targets(tt::llrt::RunTimeDebugFeatureAtomicDebugDelay);
 
         // Enable read and write debug delay for the test core
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_enabled(
-            tt::llrt::RunTimeDebugFeatureReadDebugDelay, true);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_cores(
-            tt::llrt::RunTimeDebugFeatureReadDebugDelay, delayed_cores);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_enabled(
-            tt::llrt::RunTimeDebugFeatureWriteDebugDelay, true);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_cores(
-            tt::llrt::RunTimeDebugFeatureWriteDebugDelay, delayed_cores);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_enabled(tt::llrt::RunTimeDebugFeatureReadDebugDelay, true);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_cores(tt::llrt::RunTimeDebugFeatureReadDebugDelay, delayed_cores);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_enabled(tt::llrt::RunTimeDebugFeatureWriteDebugDelay, true);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_cores(tt::llrt::RunTimeDebugFeatureWriteDebugDelay, delayed_cores);
 
         // Call parent
         MeshWatcherFixture::SetUp();
@@ -349,15 +324,9 @@ public:
         MeshWatcherFixture::TearDown();
 
         // Restore
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_targets(
-            tt::llrt::RunTimeDebugFeatureReadDebugDelay,
-            saved_target_selection[tt::llrt::RunTimeDebugFeatureReadDebugDelay]);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_targets(
-            tt::llrt::RunTimeDebugFeatureWriteDebugDelay,
-            saved_target_selection[tt::llrt::RunTimeDebugFeatureWriteDebugDelay]);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_targets(
-            tt::llrt::RunTimeDebugFeatureAtomicDebugDelay,
-            saved_target_selection[tt::llrt::RunTimeDebugFeatureAtomicDebugDelay]);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_targets(tt::llrt::RunTimeDebugFeatureReadDebugDelay, saved_target_selection[tt::llrt::RunTimeDebugFeatureReadDebugDelay]);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_targets(tt::llrt::RunTimeDebugFeatureWriteDebugDelay, saved_target_selection[tt::llrt::RunTimeDebugFeatureWriteDebugDelay]);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_targets(tt::llrt::RunTimeDebugFeatureAtomicDebugDelay, saved_target_selection[tt::llrt::RunTimeDebugFeatureAtomicDebugDelay]);
     }
 };
 
@@ -561,4 +530,4 @@ protected:
     }
 };
 
-}  // namespace tt::tt_metal
+} // namespace tt::tt_metal
