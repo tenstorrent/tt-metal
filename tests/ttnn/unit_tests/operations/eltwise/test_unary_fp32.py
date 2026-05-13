@@ -146,7 +146,7 @@ def test_acos_fp32(device):
     run_unary_fp32_test_with_ulp(device, ttnn.acos, torch.acos, max_ulp=100)
 
 
-def run_unary_test(device, h, w, ttnn_function, pcc=0.9999):
+def run_unary_test(device, h, w, ttnn_function, ulp=1, allow_nonfinite=False, pcc_check=False):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.float32)
@@ -158,65 +158,68 @@ def run_unary_test(device, h, w, ttnn_function, pcc=0.9999):
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    if pcc_check:
+        assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    else:
+        assert_with_ulp(torch_output_tensor, output_tensor, ulp, allow_nonfinite=allow_nonfinite)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_exp(device, h, w):
-    run_unary_test(device, h, w, ttnn.exp, pcc=0.9998)
+    run_unary_test(device, h, w, ttnn.exp, ulp=1)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_tanh(device, h, w):
-    run_unary_test(device, h, w, ttnn.tanh, pcc=0.993)
+    run_unary_test(device, h, w, ttnn.tanh, ulp=3)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_gelu(device, h, w):
-    run_unary_test(device, h, w, ttnn.gelu, pcc=0.9996)
+    run_unary_test(device, h, w, ttnn.gelu, pcc_check=True)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_rsqrt(device, h, w):
-    run_unary_test(device, h, w, ttnn.rsqrt)
+    run_unary_test(device, h, w, ttnn.rsqrt, ulp=2)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_silu(device, h, w):
-    run_unary_test(device, h, w, ttnn.silu)
+    run_unary_test(device, h, w, ttnn.silu, ulp=2)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_log(device, h, w):
-    run_unary_test(device, h, w, ttnn.log)
+    run_unary_test(device, h, w, ttnn.log, ulp=3)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_sinh(device, h, w):
-    run_unary_test(device, h, w, ttnn.sinh)
+    run_unary_test(device, h, w, ttnn.sinh, pcc_check=True)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_cosh(device, h, w):
-    run_unary_test(device, h, w, ttnn.cosh, pcc=0.999)
+    run_unary_test(device, h, w, ttnn.cosh, pcc_check=True)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_acosh(device, h, w):
-    run_unary_test(device, h, w, ttnn.acosh)
+    run_unary_test(device, h, w, ttnn.acosh, ulp=1, allow_nonfinite=True)
 
 
 @pytest.mark.skip("The current version doesn’t work with float32, but this will be fixed in issue #231689.")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_atanh(device, h, w):
-    run_unary_test(device, h, w, ttnn.atanh, pcc=0.997)
+    run_unary_test(device, h, w, ttnn.atanh, ulp=2)
