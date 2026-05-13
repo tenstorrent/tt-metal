@@ -56,9 +56,19 @@ on:
 
 run-name: ${{ inputs.description }}
 jobs:
+  # --- BrAIn: pass command='slack-sync' to run Slack channel sync instead of hardware tests.
+  #     Hardware jobs below are skipped when this path is active.
+  slack-sync:
+    if: startsWith(inputs.command, 'slack-sync')
+    uses: ./.github/workflows/brain-slack-sync.yaml
+    with:
+      days_back: "7"
+    secrets: inherit
+
   # NOTE: build-artifact.yaml handles platform parsing internally.
   # Just pass platform and enable-lto inputs directly.
   build-artifact:
+    if: "!startsWith(inputs.command, 'slack-sync')"
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -71,6 +81,7 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   test-dispatch:
+    if: "!startsWith(inputs.command, 'slack-sync')"
     needs: build-artifact
     timeout-minutes: 120
     runs-on: ${{ fromJSON(inputs.runner-label) }}

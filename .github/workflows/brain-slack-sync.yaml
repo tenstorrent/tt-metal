@@ -18,6 +18,26 @@ on:
         required: false
         default: ""
         type: string
+  workflow_call:
+    inputs:
+      days_back:
+        description: "Number of calendar days of history to fetch (ignored if after_ts is set)"
+        required: false
+        default: "7"
+        type: string
+      after_ts:
+        description: "Slack timestamp — only fetch messages AFTER this time (overrides days_back)"
+        required: false
+        default: ""
+        type: string
+      before_ts:
+        description: "Slack timestamp — only fetch messages BEFORE this time"
+        required: false
+        default: ""
+        type: string
+    secrets:
+      SLACK_BOT_TOKEN:
+        required: true
 
 jobs:
   fetch-slack-messages:
