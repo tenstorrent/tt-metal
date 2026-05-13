@@ -260,23 +260,19 @@ namespace compute_kernel_lib {
 // 1. Marker tag hierarchy (data direction → kind)
 // =============================================================================
 
-/// Element reads ≥1 CB. Provides default trait values; concrete elements override.
-struct CbReaderTag {
-    static constexpr uint32_t pack_cb_id() { return 0; }
-};
-/// Element writes to a CB. Provides default trait values; concrete elements override.
-struct CbWriterTag {
-    static constexpr uint32_t cb_a_id() { return 0; }
-    static constexpr uint32_t cb_b_id() { return 0; }
-};
-/// Element neither reads nor writes a CB (DEST-internal). Provides default trait values
-/// so SFPU/Fill/Rand op-structs don't have to declare them per derived type.
+/// Element reads ≥1 CB. Pure marker — concrete elements declare `cb_a_id()` and
+/// (if binary) `cb_b_id()`. No stub defaults (§1.7 footgun avoidance).
+struct CbReaderTag {};
+/// Element writes to a CB. Pure marker — concrete elements declare `pack_cb_id()`.
+/// No stub defaults.
+struct CbWriterTag {};
+/// Element neither reads nor writes a CB (DEST-internal). Carries only the
+/// behavioural trait defaults (`is_upfront`, `clashes_with_fpu`) — no CB-id stubs.
+/// The chain pipeline SFINAE-detects `cb_a_id()` / `cb_b_id()` / `pack_cb_id()` on
+/// the element directly and never reaches a DestOnlyTag default.
 struct DestOnlyTag {
     static constexpr bool is_upfront = false;
     static constexpr bool clashes_with_fpu = false;
-    static constexpr uint32_t cb_a_id() { return 0; }
-    static constexpr uint32_t cb_b_id() { return 0; }
-    static constexpr uint32_t pack_cb_id() { return 0; }
 };
 
 /// Pure CB → DEST move (no compute).

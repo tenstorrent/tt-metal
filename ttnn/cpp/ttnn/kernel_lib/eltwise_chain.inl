@@ -80,6 +80,15 @@ template <class T> struct has_cb_a<T, std::void_t<decltype(T::cb_a_id())>> : std
 template <class T, class = void> struct has_cb_b    : std::false_type {};
 template <class T> struct has_cb_b<T, std::void_t<decltype(T::cb_b_id())>> : std::true_type {};
 
+template <class T, class = void> struct has_pack_cb : std::false_type {};
+template <class T> struct has_pack_cb<T, std::void_t<decltype(T::pack_cb_id())>> : std::true_type {};
+
+// Forward declarations — defined below (used by reader_pair_collide / writer_pair_collide
+// earlier in the file's flow).
+template <class E> constexpr uint32_t cb_a_of();
+template <class E> constexpr uint32_t cb_b_of();
+template <class E> constexpr uint32_t pack_cb_of();
+
 // =============================================================================
 // Per-Side prev-CB SFINAE probe (D2)
 //
@@ -816,8 +825,10 @@ constexpr bool reader_pair_collide() {
     if constexpr (!is_cb_reader_op_v<A> || !is_cb_reader_op_v<B>) return false;
     else if constexpr (!A::is_upfront || !B::is_upfront)          return false;
     else {
-        constexpr uint32_t a0 = A::cb_a_id(), a1 = A::cb_b_id();
-        constexpr uint32_t b0 = B::cb_a_id(), b1 = B::cb_b_id();
+        constexpr uint32_t a0 = cb_a_of<A>();
+        constexpr uint32_t a1 = cb_b_of<A>();
+        constexpr uint32_t b0 = cb_a_of<B>();
+        constexpr uint32_t b1 = cb_b_of<B>();
         return (a0 != 0 && (a0 == b0 || a0 == b1)) ||
                (a1 != 0 && (a1 == b0 || a1 == b1));
     }
@@ -826,7 +837,7 @@ constexpr bool reader_pair_collide() {
 template <class A, class B>
 constexpr bool writer_pair_collide() {
     if constexpr (!is_pack_tile_op_v<A> || !is_pack_tile_op_v<B>) return false;
-    else                                                          return (A::pack_cb_id() == B::pack_cb_id()) &&
+    else                                                          return (pack_cb_of<A>() == pack_cb_of<B>()) &&
                                                                          (A::pack_dst_slot == B::pack_dst_slot);
 }
 
@@ -858,16 +869,13 @@ template <class... Es> struct chain_has_duplicate_upfront_cbs<EltwiseChain<Es...
 template <class... Es> struct chain_pack_writes_collide<EltwiseChain<Es...>>
     : detail::any_writer_dup<Es...> {};
 
-// Hoist-safe = exactly two elements, CopyTile + DestOnlyTag op (single-input pure SFPU).
+// `chain_is_hoist_safe` — default `false_type`. Generic N-element specialisation
+// lands in a later commit (item 7 of eltwise_helper_proposal.md). The size-2 and
+// size-3 fixed specialisations that previously lived here were unreachable —
+// the pipeline used `chain_has_non_copy_tile_fpu_clash_v` directly as the hoist
+// gate and never read this trait. Item 7 reintroduces a generic fold; until then
+// the trait is intentionally a permanent `false`.
 template <class Chain> struct chain_is_hoist_safe : std::false_type {};
-
-template <class A, class B>
-struct chain_is_hoist_safe<EltwiseChain<A, B>>
-    : std::bool_constant<is_copy_tile_op_v<A> && is_dest_only_op_v<B>> {};
-
-template <class A, class B, class C>
-struct chain_is_hoist_safe<EltwiseChain<A, B, C>>
-    : std::bool_constant<is_copy_tile_op_v<A> && is_dest_only_op_v<B> && is_pack_tile_op_v<C>> {};
 
 // =============================================================================
 // 10. Chain pipeline — per-iteration emit
@@ -1195,20 +1203,35 @@ namespace detail {
 
 template <class E>
 constexpr uint32_t cb_a_of() {
-    if constexpr (is_cb_reader_op_v<E>) return E::cb_a_id();
-    else                                return 0u;
+    if constexpr (is_cb_reader_op_v<E>) {
+        static_assert(has_cb_a<E>::value,
+                      "CbReader element must declare 'static constexpr uint32_t cb_a_id()'");
+        return E::cb_a_id();
+    } else {
+        return 0u;
+    }
 }
 
 template <class E>
 constexpr uint32_t cb_b_of() {
-    if constexpr (is_binary_fpu_op_v<E> || is_dest_reuse_binary_op_v<E>) return E::cb_b_id();
-    else                                                                  return 0u;
+    if constexpr (is_binary_fpu_op_v<E> || is_dest_reuse_binary_op_v<E>) {
+        static_assert(has_cb_b<E>::value,
+                      "Binary CbReader element must declare 'static constexpr uint32_t cb_b_id()'");
+        return E::cb_b_id();
+    } else {
+        return 0u;
+    }
 }
 
 template <class E>
 constexpr uint32_t pack_cb_of() {
-    if constexpr (is_pack_tile_op_v<E>) return E::pack_cb_id();
-    else                                return 0u;
+    if constexpr (is_pack_tile_op_v<E>) {
+        static_assert(has_pack_cb<E>::value,
+                      "CbWriter element must declare 'static constexpr uint32_t pack_cb_id()'");
+        return E::pack_cb_id();
+    } else {
+        return 0u;
+    }
 }
 
 // Has-any-* predicates so the caller can static_assert presence without false
