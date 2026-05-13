@@ -387,7 +387,7 @@ void kernel_main() {
 
     const uint32_t indices_base = get_read_ptr(indices_tensor_cb_id);
     const uint32_t scores_base = get_read_ptr(scores_tensor_cb_id);
-    const uint32_t expert_activation_base = get_write_ptr(expert_activation_cb_id);
+    const uint32_t expert_activation_base = get_read_ptr(expert_activation_cb_id);
 
     // Cache source_device_mapping - only changes every tokens_per_device tokens
     // Reduces mapping loads from 512 to 16 (dispatch_devices)
@@ -590,7 +590,7 @@ void kernel_main() {
                 // Pull this core's expert_activation buffer rows
                 if (remote_activated_count > 0) {
                     // Source: remote core's expert_activation buffer, rows start at 0
-                    uint32_t remote_activation_addr = get_write_ptr(expert_activation_cb_id);
+                    uint32_t remote_activation_addr = get_read_ptr(expert_activation_cb_id);
                     uint64_t remote_activation_noc_addr =
                         get_noc_addr(remote_noc_x, remote_noc_y, remote_activation_addr);
 
