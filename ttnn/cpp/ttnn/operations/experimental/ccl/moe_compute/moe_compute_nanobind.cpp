@@ -59,9 +59,10 @@ void bind_moe_compute(nb::module_& mod) {
           cores (``num_data_parallel_cores``). Previously, tile distributions were
           selected by a model-specific enum; this parameter replaces that mechanism.
 
-        - ``output_height_shard_dim``: Number of tile columns per output shard. Use
-          ``auto_output_width_shard_dim(hidden_size)`` from ``moe_compute_utils`` to
-          compute the optimal value for a given hidden size.
+        - ``output_height_shard_dim``: Number of token-parallel (height) cores used
+          for the combine output. The width (data-parallel) core count is auto-derived
+          from ``hidden_size``. Use ``auto_output_width_shard_dim(hidden_size)`` from
+          ``moe_compute_utils`` to compute the recommended value.
 
         **Bias support (optional)**
 
