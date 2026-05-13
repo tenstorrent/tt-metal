@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Voxtral TT shared constants and presets.
 
-Mirrors ``models/demos/deepseek_v3/utils/config_helpers.py``: centralize
-``ttnn.WormholeComputeKernelConfig`` values for matmuls, SDPA, MLP, and norm wrappers.
+
 """
 
 import ttnn
@@ -15,3 +14,6 @@ COMPUTE_KERNEL_CONFIG_VOXTRAL_ACOUSTIC = ttnn.WormholeComputeKernelConfig(
     fp32_dest_acc_en=True,
     packer_l1_acc=True,
 )
+
+# Audio tokenizer (1024-dim conv stacks): same preset until tokenizer-specific tuning is needed.
+COMPUTE_KERNEL_CONFIG_VOXTRAL_AUDIO_TOKENIZER = COMPUTE_KERNEL_CONFIG_VOXTRAL_ACOUSTIC
