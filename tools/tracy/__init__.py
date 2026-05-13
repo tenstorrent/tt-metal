@@ -31,6 +31,7 @@ from .common import (
     TRACY_CSVEXPROT_TOOL,
     LD_LIBRARY_PATH,
     generate_logs_folder,
+    resolve_tracy_tool_path,
 )
 
 import tracy.tracy_state
@@ -88,11 +89,10 @@ def runctx(cmd, globals, locals, partialProfile):
 
 
 def run_report_setup(verbose, outputFolder, binFolder, port):
-    toolsReady = True
-
     logger.info("Verifying tracy profiling tools")
-    toolsReady &= os.path.exists(binFolder / TRACY_CAPTURE_TOOL)
-    toolsReady &= os.path.exists(binFolder / TRACY_CSVEXPROT_TOOL)
+    capture_exe = resolve_tracy_tool_path(binFolder, TRACY_CAPTURE_TOOL)
+    csvexport_exe = resolve_tracy_tool_path(binFolder, TRACY_CSVEXPROT_TOOL)
+    toolsReady = capture_exe is not None and csvexport_exe is not None
 
     logsFolder = generate_logs_folder(outputFolder)
     captureProcess = None
@@ -109,7 +109,7 @@ def run_report_setup(verbose, outputFolder, binFolder, port):
             options += f"-p {port}"
 
         captureCommand = (
-            f"LD_LIBRARY_PATH={LD_LIBRARY_PATH} {binFolder / TRACY_CAPTURE_TOOL} -o {logsFolder / TRACY_FILE_NAME} -f {options}",
+            f"LD_LIBRARY_PATH={LD_LIBRARY_PATH} {capture_exe} -o {logsFolder / TRACY_FILE_NAME} -f {options}",
         )
         if verbose:
             logger.info(f"Capture command: {captureCommand}")
@@ -143,6 +143,10 @@ def generate_report(
             sys.exit(1)
         timeCount += 1
         time.sleep(1)
+    csvexport_exe = resolve_tracy_tool_path(binFolder, TRACY_CSVEXPROT_TOOL)
+    if csvexport_exe is None:
+        logger.error("tracy-csvexport was not found under build/bin or build/csvexport")
+        sys.exit(1)
     with open(logsFolder / TRACY_OPS_TIMES_FILE_NAME, "w") as csvFile:
         childCallStr = ""
         childCallsList = DEFAULT_CHILD_CALLS
@@ -151,7 +155,7 @@ def generate_report(
         if childCallsList:
             childCallStr = f"-x {','.join(childCallsList)}"
         subprocess.run(
-            f"LD_LIBRARY_PATH={LD_LIBRARY_PATH} {binFolder / TRACY_CSVEXPROT_TOOL} -u -t TT_ {childCallStr} {logsFolder / TRACY_FILE_NAME}",
+            f"LD_LIBRARY_PATH={LD_LIBRARY_PATH} {csvexport_exe} -u -t TT_ {childCallStr} {logsFolder / TRACY_FILE_NAME}",
             shell=True,
             check=True,
             stdout=csvFile,
@@ -162,7 +166,7 @@ def generate_report(
 
     with open(logsFolder / TRACY_OPS_DATA_FILE_NAME, "w") as csvFile:
         subprocess.run(
-            f'LD_LIBRARY_PATH={LD_LIBRARY_PATH} {binFolder / TRACY_CSVEXPROT_TOOL} -m -s ";" {logsFolder / TRACY_FILE_NAME}',
+            f'LD_LIBRARY_PATH={LD_LIBRARY_PATH} {csvexport_exe} -m -s ";" {logsFolder / TRACY_FILE_NAME}',
             shell=True,
             check=True,
             stdout=csvFile,
