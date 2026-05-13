@@ -13,9 +13,7 @@
  * LLK ELTWISE UNARY DATACOPY
  *************************************************************************/
 
-namespace {
-
-inline TileShape unary_broadcast_tile_shape_for_operand(const std::uint32_t operand) {
+inline TileShape llk_math_eltwise_unary_broadcast_tile_shape(const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
     return TileShape{
         .num_faces = get_operand_num_faces(operand_id),
@@ -24,8 +22,6 @@ inline TileShape unary_broadcast_tile_shape_for_operand(const std::uint32_t oper
         .narrow_tile = get_operand_narrow_tile(operand_id) != 0,
     };
 }
-
-}  // namespace
 
 /**
  * @brief Initialize eltwise unary datacopy operations
@@ -52,14 +48,10 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand = 0
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
         _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en>(
             num_rows /*num_rows_per_matrix*/, 1 /*num_matrices*/);
-    } else if constexpr (type == DataCopyType::B2D) {
-        static_assert(src_b_bcast_type != BroadcastType::NONE, "Broadcast type must not be NONE");
-        const TileShape tile_shape = unary_broadcast_tile_shape_for_operand(operand);
-        _llk_math_eltwise_unary_broadcast_init_<src_b_bcast_type, false, is_fp32_dest_acc_en>(tile_shape);
     } else {
-        static_assert(type == DataCopyType::A2D);
-        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(
-            num_rows /*num_rows_per_matrix*/, 1 /*num_matrices*/);
+        static_assert(type == DataCopyType::B2D);
+        const TileShape tile_shape = llk_math_eltwise_unary_broadcast_tile_shape(operand);
+        _llk_math_eltwise_unary_broadcast_init_<src_b_bcast_type, false, is_fp32_dest_acc_en>(tile_shape);
     }
 }
 
@@ -86,7 +78,7 @@ inline void llk_math_eltwise_unary_datacopy(const std::uint32_t dst_index, const
 
     if constexpr (src_b_bcast_type != BroadcastType::NONE && !unpack_to_dest) {
         static_assert(type == DataCopyType::B2D, "Unary broadcast math path requires DataCopyType::B2D");
-        const TileShape tile_shape = unary_broadcast_tile_shape_for_operand(operand);
+        const TileShape tile_shape = llk_math_eltwise_unary_broadcast_tile_shape(operand);
         _llk_math_eltwise_unary_broadcast_<src_b_bcast_type, false, is_fp32_dest_acc_en>(dst_index, tile_shape);
     } else {
         _llk_math_eltwise_unary_datacopy_(num_faces * face_r_dim, dst_index);

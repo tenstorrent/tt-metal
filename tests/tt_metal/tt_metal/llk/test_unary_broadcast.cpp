@@ -406,7 +406,9 @@ void run_single_core_unary_broadcast(
             "tests/tt_metal/tt_metal/test_kernels/compute/unary_bcast.cpp",
             core,
             tt_metal::experimental::quasar::QuasarComputeConfig{
-                .num_threads_per_cluster = 1, .compile_args = {num_blocks, block_size}, .defines = defines});
+                .num_threads_per_cluster = 1,
+                .compile_args = {num_blocks, block_size, src_dfb, dst_dfb},
+                .defines = defines});
 
         tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
             program_, src_dfb, reader_kernel, compute_kernel);

@@ -11,7 +11,7 @@
 #endif
 #include "api/compute/bcast.h"
 #ifdef ARCH_QUASAR
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #else
 #include "api/dataflow/circular_buffer.h"
 #endif
@@ -21,13 +21,14 @@ void kernel_main() {
     uint32_t per_core_block_dim = get_compile_time_arg_val(1);
 
 #ifdef ARCH_QUASAR
-    constexpr uint32_t src_dfb_id = 0;
-    constexpr uint32_t dst_dfb_id = 1;
+    constexpr uint32_t dfb_src_id = get_compile_time_arg_val(2);
+    constexpr uint32_t dfb_dst_id = get_compile_time_arg_val(3);
+    DataflowBuffer dfb_src(dfb_src_id);
+    DataflowBuffer dfb_dst(dfb_dst_id);
+    const uint32_t icb = dfb_src.get_id();
+    const uint32_t ocb = dfb_dst.get_id();
 
-    experimental::DataflowBuffer dfb_src(src_dfb_id);
-    experimental::DataflowBuffer dfb_dst(dst_dfb_id);
-
-    unary_bcast_init<BCAST_DIM>(src_dfb_id, dst_dfb_id);
+    unary_bcast_init<BCAST_DIM>(icb, ocb);
 
     // TODO (tt-metal #42792): revert to batched multi-tile broadcast once Quasar unpack<->pack semaphores land.
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
@@ -36,8 +37,8 @@ void kernel_main() {
             dfb_dst.reserve_back(1);
             acquire_dst();
             // One tile visible per iteration: unpack always reads fifo front (index 0); dst slot is tile_index.
-            unary_bcast<BCAST_DIM>(src_dfb_id, 0, tile_index);
-            pack_tile(tile_index, dst_dfb_id);
+            unary_bcast<BCAST_DIM>(icb, 0, tile_index);
+            pack_tile(tile_index, ocb);
             release_dst();
             dfb_src.pop_front(1);
             dfb_dst.push_back(1);

@@ -59,19 +59,9 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
 #else
     UNPACK((llk_unpack_hw_configure(icb)));
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
-    // 32bit formats are implemented using unpack to dest, since SrcB is only 19bits wide
-    const std::uint32_t dst_format = get_operand_dst_format(icb);
-    const bool enable_unpack_to_dest =
-        (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
-    if (enable_unpack_to_dest) {
-        UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, true>(
-            false, false /*transpose within 16x16 face*/, icb)));
-        MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, bcast_type>(icb)));
-    } else {
-        UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(
-            false, false /*transpose within 16x16 face*/, icb)));
-        MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::B2D, DST_ACCUM_MODE, bcast_type>(icb)));
-    }
+    UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(
+        false, false /*transpose within 16x16 face*/, icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::B2D, false, bcast_type>(icb)));
 #endif
     MATH((llk_math_pack_sync_init()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
@@ -103,19 +93,9 @@ ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_in
 #endif
 #else
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
-    // 32bit formats are implemented using unpack to dest, since SrcB is only 19bits wide
-    const std::uint32_t dst_format = get_operand_dst_format(icb);
-    const bool enable_unpack_to_dest =
-        (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
-    if (enable_unpack_to_dest) {
-        UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, true>(icb, in_tile_index)));
-        MATH((
-            llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, bcast_type, true>(dst_tile_index, icb)));
-    } else {
-        UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(icb, in_tile_index)));
-        MATH((llk_math_eltwise_unary_datacopy<DataCopyType::B2D, DST_ACCUM_MODE, bcast_type, false>(
-            dst_tile_index, icb)));
-    }
+    // Broadcast mode and B2D vs A2D are fixed in unary_bcast_init; pass logical operand ids through to LLK.
+    UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(icb, in_tile_index)));
+    MATH((llk_math_eltwise_unary_datacopy<DataCopyType::B2D, false, bcast_type, false>(dst_tile_index, icb)));
 #endif
 #endif
 }
@@ -161,11 +141,7 @@ void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_oc
 
     if (unpacker_src_format_change || unpacker_dst_format_change) {
         // Will configure A & B in similar way
-#ifndef ARCH_QUASAR
         UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(new_icb)));
-#else
-        UNPACK((llk_unpack_hw_configure(new_icb)));
-#endif
     }
 
     if (unpacker_src_format_change || unpacker_dst_format_change || bcast_type_change) {
@@ -182,10 +158,7 @@ void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_oc
     }
 #endif
 
-#ifndef ARCH_QUASAR
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(old_ocb, new_ocb)));
-#else
-    PACK((llk_pack_reconfig_data_format(old_ocb, new_ocb)));
 #endif
 }
 
