@@ -43,3 +43,29 @@ target_link_libraries(
         TT::Metalium::Test::Device::Smoke
         test_metal_common_libs
 )
+
+# SafeDeviceGuard unit tests — no hardware required; exercises /dev/shm mutex + dirty-bit logic.
+add_executable(unit_tests_safe_device_open test_safe_device_open.cpp)
+target_precompile_headers(unit_tests_safe_device_open REUSE_FROM metal_common_pch)
+target_include_directories(
+    unit_tests_safe_device_open
+    PRIVATE
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+set_target_properties(
+    unit_tests_safe_device_open
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal
+)
+target_link_libraries(
+    unit_tests_safe_device_open
+    PRIVATE
+        test_metal_common_libs
+        gmock
+        gtest
+        gtest_main
+)

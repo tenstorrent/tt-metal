@@ -61,8 +61,14 @@ enum class EthRouterMode : uint32_t {
 class Cluster {
 public:
     // TODO: #21245: Remove these workaround APIs and instead refactor UMD component out of Cluster
-    static tt::tt_metal::ClusterType get_cluster_type_from_cluster_desc(
-        const llrt::RunTimeOptions& rtoptions, const umd::ClusterDescriptor* cluster_desc = nullptr);
+    //
+    // Returns the cluster type and, when cluster_desc is nullptr (the caller has no pre-existing
+    // descriptor), the newly-created ClusterDescriptor so the caller can reuse it instead of
+    // running topology discovery a second time. When cluster_desc is non-null the returned
+    // unique_ptr is null (the caller already owns the descriptor).
+    static std::pair<tt::tt_metal::ClusterType, std::unique_ptr<umd::ClusterDescriptor>>
+        get_cluster_type_from_cluster_desc(
+            const llrt::RunTimeOptions& rtoptions, const umd::ClusterDescriptor* cluster_desc = nullptr);
     static bool is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type);
     Cluster& operator=(const Cluster&) = delete;
     Cluster& operator=(Cluster&& other) noexcept = delete;

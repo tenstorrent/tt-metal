@@ -44,7 +44,6 @@ class DPrintServer;
 class WatcherServer;
 class DispatchMemMap;
 class NOCDebugState;
-
 // A class to manage one-time initialization and teardown (FW, dispatch, fabric, cluster) and access to related state.
 // Dispatch-independent state (Cluster) is initialized with the creation of MetalContext and accessible right after.
 // Dispatch-dependent state (FW, dispatch, fabric) is initialized explicitly with a MetalContext::initialize() call, and

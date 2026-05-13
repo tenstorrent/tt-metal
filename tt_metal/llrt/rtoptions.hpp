@@ -760,6 +760,7 @@ public:
     TargetDevice get_target_device() const { return runtime_target_device_; }
 
     std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
+    void set_timeout_duration_for_operations(std::chrono::duration<float> d) { timeout_duration_for_operations = d; }
     std::string get_dispatch_timeout_command_to_execute() const { return dispatch_timeout_command_to_execute; }
     uint32_t get_dispatch_progress_update_ms() const { return dispatch_progress_update_ms; }
     // Mesh graph descriptor version accessor

@@ -753,6 +753,10 @@ void MetalContext::on_dispatch_timeout_detected() {
                     tt::LogMetal, "Timeout command '{}' returned non-zero exit code: {}", command, WEXITSTATUS(result));
             }
         }
+
+        // Under TT_METAL_SAFE_DEVICE_OPEN, the guard owns the recovery: run tt-smi -r so the
+        // device is clean by the time this process exits and the next runner picks it up.
+        MetalEnvAccessor(*env_).impl().on_dispatch_hang();
     }
 }
 

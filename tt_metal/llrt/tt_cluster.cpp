@@ -84,22 +84,23 @@ std::unique_ptr<tt::umd::ClusterDescriptor> get_mock_cluster_desc(const tt::llrt
 }  // namespace
 namespace tt {
 
-tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
+std::pair<tt::tt_metal::ClusterType, std::unique_ptr<tt::umd::ClusterDescriptor>>
+Cluster::get_cluster_type_from_cluster_desc(
     const llrt::RunTimeOptions& rtoptions, const umd::ClusterDescriptor* cluster_desc) {
     if (rtoptions.get_simulator_enabled() && !rtoptions.get_mock_enabled()) {
         auto soc_desc =
             tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
         auto arch = tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
         if (arch == tt::ARCH::WORMHOLE_B0) {
-            return tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0;
+            return {tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0, nullptr};
         }
         if (arch == tt::ARCH::BLACKHOLE) {
-            return tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE;
+            return {tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE, nullptr};
         }
         if (arch == tt::ARCH::QUASAR) {
-            return tt::tt_metal::ClusterType::SIMULATOR_QUASAR;
+            return {tt::tt_metal::ClusterType::SIMULATOR_QUASAR, nullptr};
         }
-        return tt::tt_metal::ClusterType::INVALID;
+        return {tt::tt_metal::ClusterType::INVALID, nullptr};
     }
 
     std::unique_ptr<umd::ClusterDescriptor> temp_cluster_desc = nullptr;
@@ -205,7 +206,7 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
             cluster_type = tt::tt_metal::ClusterType::BLACKHOLE_GALAXY;
         }
     }
-    return cluster_type;
+    return {cluster_type, std::move(temp_cluster_desc)};
 }
 
 bool Cluster::is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type) {
@@ -270,7 +271,7 @@ bool Cluster::is_base_routing_fw_enabled() const { return Cluster::is_base_routi
 
 void Cluster::generate_cluster_descriptor() {
     this->cluster_desc_ = this->driver_->get_cluster_description();
-    this->cluster_type_ = Cluster::get_cluster_type_from_cluster_desc(this->rtoptions_, this->cluster_desc_);
+    this->cluster_type_ = Cluster::get_cluster_type_from_cluster_desc(this->rtoptions_, this->cluster_desc_).first;
     if (this->cluster_type_ == tt::tt_metal::ClusterType::CUSTOM) {
         TT_FATAL(
             this->rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified(),
