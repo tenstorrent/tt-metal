@@ -12,6 +12,11 @@ class MistralGenerator(Generator):
     """
     Mistral-specific trace prefill override that keeps multimodal kwargs
     (`processed_inputs`, `vision_model`) on capture and replay.
+
+    _capture_trace_prefill caches the computed host_inputs (merged vision+text
+    embedding) so _prefill_forward_trace can reuse them without re-running the
+    vision model, eliminating the redundant second EmbeddingsDeviceOperation and
+    vision forward pass that otherwise follow trace capture.
     """
 
     def _capture_trace_prefill(
@@ -25,6 +30,9 @@ class MistralGenerator(Generator):
         user_id=0,
         **kwargs,
     ):
+        _pi = kwargs.get("processed_inputs", None)
+        _is_multimodal = _pi is not None and _pi.get("pixel_values") is not None
+
         if batch_size > 1:
             prefill_kwargs = {"page_table": page_table, "batch_size": batch_size, "user_id": user_id}
             if global_user_id is not None:
@@ -34,6 +42,8 @@ class MistralGenerator(Generator):
             tt_rot_mats_prefill_global = host_inputs[1]
             tt_rot_mats_prefill_local = host_inputs[2]
             host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
+            if _is_multimodal:
+                self._prefill_replay_cache = host_inputs
 
             device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
             transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
@@ -74,6 +84,8 @@ class MistralGenerator(Generator):
         tt_rot_mats_prefill_global = host_inputs[1]
         tt_rot_mats_prefill_local = host_inputs[2]
         host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
+        if _is_multimodal:
+            self._prefill_replay_cache = host_inputs
 
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
         transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
@@ -180,12 +192,20 @@ class MistralGenerator(Generator):
         batch_size=1,
         **kwargs,
     ):
-        prefill_kwargs = {"page_table": page_table, "batch_size": batch_size, "user_id": user_id}
-        if global_user_id is not None:
-            prefill_kwargs["global_user_id"] = global_user_id
-        prefill_kwargs.update(kwargs)
-        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
-        host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
+        cached = getattr(self, "_prefill_replay_cache", None)
+        if cached is not None:
+            # Reuse the host_inputs computed during _capture_trace_prefill:
+            # skips re-running the vision model, two to_torch downloads,
+            # masked_scatter, from_torch, and re-upload.
+            host_inputs = cached
+            self._prefill_replay_cache = None
+        else:
+            prefill_kwargs = {"page_table": page_table, "batch_size": batch_size, "user_id": user_id}
+            if global_user_id is not None:
+                prefill_kwargs["global_user_id"] = global_user_id
+            prefill_kwargs.update(kwargs)
+            host_inputs_full = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
+            host_inputs = (host_inputs_full[0], host_inputs_full[3], host_inputs_full[4])
 
         copy_host_to_device(
             host_inputs, device_tensors=device_inputs, mesh_device=self.model_args[model_id].mesh_device
