@@ -92,17 +92,35 @@ def bfp4b_to_float16b(operand: torch.Tensor, dimensions=None) -> torch.Tensor:
     signs = (u32 >> 31) & 1
     exps = (u32 >> 23) & 0xFF
     # bfp4_b has 3 mantissa bits: 1 implicit leading bit + 2 explicit bits.
-    # Hardware takes bits 23:21 of the 24-bit mantissa (with implicit leading 1).
-    mants = ((u32 & 0x7FFFFF) >> 21) | 0x4
+    # Use the FULL 24-bit mantissa (implicit 1 prepended) so we can round-to-
+    # nearest when we shift it down — matching the hw packer (ttsim PACR at
+    # src/tensix.cpp:3032: `m = (m + (1 << shift)) >> (shift + 1)`). The
+    # previous truncation drove 1-ULP divergences for any element whose top
+    # discarded mantissa bit was 1.
+    mants_full = (u32 & 0x7FFFFF) | (1 << 23)  # 24-bit, includes implicit leading 1
 
     exps_blocks = exps.view(-1, BFP4_BLOCK)
-    mants_blocks = mants.view(-1, BFP4_BLOCK)
+    mants_blocks_full = mants_full.view(-1, BFP4_BLOCK)
     signs_blocks = signs.view(-1, BFP4_BLOCK)
 
     shared_exps = exps_blocks.max(dim=1, keepdim=True).values
 
     deltas = shared_exps - exps_blocks
-    shifted = mants_blocks >> deltas
+    # Total right-shift to reach the 3-bit BFP4 mantissa is 21 + delta:
+    # 21 bits to strip from the fp32 explicit mantissa, plus delta bits to align
+    # to the block's shared exponent.
+    total_shift = 21 + deltas
+    # Round-to-nearest: add 1 << (total_shift - 1) before shifting right by
+    # total_shift. Guard total_shift == 0 (no discarded bits → no rounding).
+    rounding = torch.where(
+        total_shift > 0,
+        1 << torch.clamp(total_shift - 1, min=0),
+        torch.zeros_like(total_shift),
+    )
+    shifted = (mants_blocks_full + rounding) >> total_shift
+    # Saturate at max_m = 8 (1<<(bfp4_mantissa_bits)) per hw rule
+    # (ttsim src/tensix.cpp:3035 `if (m == max_m) m = max_m - 1`).
+    shifted = torch.clamp(shifted, max=7)
 
     # Scale: 2^(shared_exp - 127 - 2) = 2^(shared_exp - 129)
     values = shifted.float() * torch.exp2((shared_exps - 129).float())
