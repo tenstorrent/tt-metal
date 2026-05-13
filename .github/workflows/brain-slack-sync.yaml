@@ -54,6 +54,7 @@ jobs:
           import json
           import os
           import time
+          import datetime
           import urllib.request
           import urllib.parse
           import urllib.error
@@ -64,6 +65,9 @@ jobs:
           BEFORE_TS = os.environ.get("INPUT_BEFORE_TS", "")
 
           CHANNELS = ["C05GRJC4J4A", "C08SJ7MGESY"]
+
+          print(f"[DEBUG] Token length: {len(SLACK_TOKEN)} chars, prefix: {SLACK_TOKEN[:12]}...")
+          print(f"[DEBUG] DAYS_BACK={DAYS_BACK!r}  AFTER_TS={AFTER_TS!r}  BEFORE_TS={BEFORE_TS!r}")
 
           def slack_get(endpoint, params):
               url = f"https://slack.com/api/{endpoint}?" + urllib.parse.urlencode(params)
@@ -78,21 +82,23 @@ jobs:
                   print(f"  HTTP {e.code}: {body}")
                   raise
 
-          def check_channel(channel_id):
-              """Print channel info for diagnostics."""
-              data = slack_get("conversations.info", {"channel": channel_id})
-              if not data.get("ok"):
-                  print(f"  conversations.info error: {data.get('error')} (warning: continuing)")
-                  return
-              ch = data.get("channel", {})
-              print(f"  Channel info: name={ch.get('name')!r} is_private={ch.get('is_private')} "
-                    f"is_member={ch.get('is_member')} is_archived={ch.get('is_archived')}")
+          # --- auth.test: verify which bot/team this token belongs to ---
+          print("\n[DEBUG] Calling auth.test ...")
+          auth = slack_get("auth.test", {})
+          print(f"  auth.test ok={auth.get('ok')} error={auth.get('error')!r}")
+          print(f"  team={auth.get('team')!r} team_id={auth.get('team_id')!r}")
+          print(f"  user={auth.get('user')!r} user_id={auth.get('user_id')!r}")
+          print(f"  bot_id={auth.get('bot_id')!r}")
+          print(f"  is_enterprise_install={auth.get('is_enterprise_install')}")
 
           def compute_oldest():
               if AFTER_TS:
                   return AFTER_TS
               days = int(DAYS_BACK) if DAYS_BACK else 7
-              return str(time.time() - days * 86400)
+              ts = time.time() - days * 86400
+              dt = datetime.datetime.utcfromtimestamp(ts).isoformat()
+              print(f"[DEBUG] computed oldest={ts} ({dt} UTC)")
+              return str(ts)
 
           def fetch_replies(channel_id, thread_ts, oldest):
               """Fetch all replies in a thread newer than oldest."""
@@ -138,6 +144,20 @@ jobs:
 
                   messages = data.get("messages", [])
                   print(f"  history page: {len(messages)} messages (has_more={data.get('has_more')})")
+
+                  # --- debug: dump full response when 0 messages returned ---
+                  if len(messages) == 0 and not cursor:
+                      print(f"  [DEBUG] Zero messages. Full response: {json.dumps(data)}")
+                      # Probe with oldest=0 to see if bot can read ANY messages at all
+                      print(f"  [DEBUG] Probing with oldest=0 ...")
+                      probe_params = {"channel": channel_id, "limit": "1", "oldest": "0"}
+                      probe = slack_get("conversations.history", probe_params)
+                      print(f"  [DEBUG] oldest=0 probe: ok={probe.get('ok')} error={probe.get('error')!r} "
+                            f"msg_count={len(probe.get('messages', []))}")
+                      if probe.get("messages"):
+                          m = probe["messages"][0]
+                          print(f"  [DEBUG] Most recent message ts={m.get('ts')} type={m.get('type')!r} subtype={m.get('subtype')!r}")
+
                   all_messages.extend(messages)
 
                   meta = data.get("response_metadata", {})
@@ -162,7 +182,6 @@ jobs:
 
           for ch in CHANNELS:
               print(f"\nFetching channel {ch} ...")
-              check_channel(ch)
               msgs = fetch_channel(ch)
               out_path = f"slack_output/slack_{ch}.json"
               with open(out_path, "w") as f:
