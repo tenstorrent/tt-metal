@@ -9,7 +9,7 @@ training_config:
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
   model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/tinyllama_bpe.yaml"
-  data_path: "/home/bklockiewicz/tt-metal/data/tokenized_shakespeare_tinyllama.yaml"
+  data_path: "/home/training-team/bazyli/tt-metal/data/tokenized_shakespeare_tinyllama.yaml"
   optimizer:
     type: AdamW
     lr: 0.0003
