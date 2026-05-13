@@ -76,7 +76,6 @@ def test_moreh_cumsum_dim(input_shape, dim, device):
 
     torch_output = torch.cumsum(torch_input, dim)
 
-    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
     tt_output_cpu = ttnn.to_torch(ttnn.operations.moreh.cumsum(tt_input, dim, output=tt_output))
 
     # test for equivalance
