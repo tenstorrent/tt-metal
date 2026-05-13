@@ -98,7 +98,6 @@ jobs:
       VIRTUAL_ENV: /opt/venv
       HOME: /home/user
       PIP_CACHE_DIR: /home/user/.cache/pip
-      PYTHONPATH: /home/user/tt-metal
       LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
       TT_METAL_HOME: /home/user/tt-metal
       TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
@@ -213,7 +212,7 @@ jobs:
             ls -R /ci/artifacts
             exit 1
           fi
-          mpirun --pernode pip install "${ttnn_wheels[@]}"
+          mpirun --pernode uv pip install "${ttnn_wheels[@]}"
 
       - name: Reset cards and validate cluster for ${{ matrix.test-group.name }}
         working-directory: /tmp
@@ -281,12 +280,12 @@ jobs:
             echo "which pip=$(command -v pip || true)"
             echo "which pip3=$(command -v pip3 || true)"
             python3 -V
-            python3 -m pip -V
+            uv pip --version
             python3 -c "import sys; print(\"sys.executable=\" + sys.executable)"
             python3 -c "import sys; print(\"sys.path=\"); [print(\"  \" + p) for p in sys.path]"
-            python3 -m pip show ttnn || true
-            python3 -m pip show transformers || true
-            python3 -c "import ttnn; print(\"ttnn module=\" + ttnn.__file__)"
+            uv pip show ttnn || true
+            uv pip show transformers || true
+            python3 -c "import ttnn; print(\"ttnn module=\" + str(getattr(ttnn, \"__file__\", None)))"
             python3 -c "import ttnn.device; print(\"ttnn.device import: OK\")"
             python3 -c "import transformers; print(\"transformers=\" + transformers.__version__)"
             echo "========== END PYTHON DIAGNOSTICS: $(hostname) =========="
