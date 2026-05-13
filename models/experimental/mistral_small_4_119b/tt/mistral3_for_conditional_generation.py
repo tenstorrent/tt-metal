@@ -35,7 +35,7 @@ again, then accumulates the host-side image embeddings in your own list.
 from __future__ import annotations
 
 import gc
-from typing import List, Tuple
+from typing import List
 
 import torch
 
@@ -163,6 +163,16 @@ class TtMistral3ForConditionalGeneration:
             max_seq_len=self.max_seq_len,
         )
 
+    def cache_rope_tables(self, cos_full: torch.Tensor, sin_full: torch.Tensor) -> None:
+        """
+        Upload precomputed RoPE ``(cos, sin)`` tables to device DRAM once.
+
+        Must be called after ``load_text``; per-step decode then looks up cos/sin
+        with an on-device ``ttnn.slice`` instead of a per-step PCIe upload.
+        """
+        assert self.text_model is not None, "load_text() must be called first"
+        self.text_model.cache_rope_tables(cos_full, sin_full)
+
     # ── Phase 3: text inference ──────────────────────────────────────────
 
     def _upload_image_embeds(self, img_embeds_host: torch.Tensor) -> ttnn.Tensor:
@@ -215,26 +225,25 @@ class TtMistral3ForConditionalGeneration:
         self,
         img_embeds_host: torch.Tensor,
         input_ids: torch.Tensor,
-        position_embeddings: Tuple[torch.Tensor, torch.Tensor],
     ) -> int:
         """
         Run prefill for a multimodal prompt and return the greedy next-token id.
 
         Args:
-            img_embeds_host:     host tensor from ``encode_image``,
-                                 shape [num_image_tokens, HIDDEN_SIZE].
-            input_ids:           torch [1, seq_len] long, with image-token slots.
-            position_embeddings: (cos, sin) covering [0, seq_len).
+            img_embeds_host: host tensor from ``encode_image``,
+                             shape [num_image_tokens, HIDDEN_SIZE].
+            input_ids:       torch [1, seq_len] long, with image-token slots.
+
+        Requires ``cache_rope_tables`` to have been called.
         """
         assert self.text_model is not None, "load_text() must be called first"
         inputs_embeds = self._build_inputs_embeds(input_ids, img_embeds_host)
-        return self.text_model.prefill_from_embeds_next_token(inputs_embeds, position_embeddings)
+        return self.text_model.prefill_from_embeds_next_token(inputs_embeds)
 
     def prefill_multimodal_full_logits(
         self,
         img_embeds_host: torch.Tensor,
         input_ids: torch.Tensor,
-        position_embeddings: Tuple[torch.Tensor, torch.Tensor],
     ) -> torch.Tensor:
         """
         Same as ``prefill_multimodal`` but returns full ``[1, seq_len, vocab_size]``
@@ -242,14 +251,9 @@ class TtMistral3ForConditionalGeneration:
         """
         assert self.text_model is not None, "load_text() must be called first"
         inputs_embeds = self._build_inputs_embeds(input_ids, img_embeds_host)
-        return self.text_model.prefill_from_embeds(inputs_embeds, position_embeddings)
+        return self.text_model.prefill_from_embeds(inputs_embeds)
 
-    def decode_next_token(
-        self,
-        input_id: torch.Tensor,
-        position_embeddings: Tuple[torch.Tensor, torch.Tensor],
-        current_pos: int,
-    ) -> int:
+    def decode_next_token(self, input_id: torch.Tensor, current_pos: int) -> int:
         """Pass-through to the text model's decode (one token, greedy, on-device argmax)."""
         assert self.text_model is not None, "load_text() must be called first"
-        return self.text_model.decode_next_token(input_id, position_embeddings, current_pos)
+        return self.text_model.decode_next_token(input_id, current_pos)
