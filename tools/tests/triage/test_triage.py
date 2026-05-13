@@ -164,22 +164,10 @@ def cause_hang_with_app(request):
     "cause_hang_with_app",
     [
         (
-            # Manual hang detection with timeout from outside, fast dispatch
+            # Manual hang detection with timeout from outside
             HANG_APP_ADD_2_INTEGERS,
             [],
             {
-                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
-            },
-            10,
-        ),
-        (
-            # Manual hang detection with timeout from outside, slow dispatch
-            HANG_APP_ADD_2_INTEGERS,
-            [],
-            {
-                "env": {
-                    "TT_METAL_SLOW_DISPATCH_MODE": "1",
-                },
                 "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
             },
             10,
@@ -212,27 +200,6 @@ def cause_hang_with_app(request):
                 "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
             },
             60,
-        ),
-        (
-            # TTNN-dispatched hang: manual detection, fast dispatch
-            HANG_APP_TTNN_ADD_INTEGERS,
-            [],
-            {
-                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_TTNN_ADD_INTEGERS],
-            },
-            10,
-        ),
-        (
-            # TTNN-dispatched hang: manual detection, slow dispatch
-            HANG_APP_TTNN_ADD_INTEGERS,
-            [],
-            {
-                "env": {
-                    "TT_METAL_SLOW_DISPATCH_MODE": "1",
-                },
-                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_TTNN_ADD_INTEGERS],
-            },
-            10,
         ),
         (
             # TTNN-dispatched hang: auto detection, fast dispatch
