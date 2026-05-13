@@ -58,3 +58,27 @@ NORM_EPS = 1e-6
 
 # RoPE
 ROPE_THETA = 1_000_000.0
+
+
+# ── Vision tower (Pixtral) constants ───────────────────────────────────────
+
+VISION_HIDDEN_SIZE = 1024
+VISION_INTERMEDIATE_SIZE = 4096
+VISION_NUM_LAYERS = 24
+VISION_NUM_HEADS = 16
+VISION_HEAD_DIM = 64  # hidden_size // num_heads
+VISION_IMAGE_SIZE = 1540  # max image side, in pixels
+VISION_PATCH_SIZE = 14
+VISION_NUM_CHANNELS = 3
+VISION_ROPE_THETA = 10_000.0
+VISION_NORM_EPS = 1e-5
+VISION_MAX_PATCHES_PER_SIDE = VISION_IMAGE_SIZE // VISION_PATCH_SIZE  # 110
+
+# Multimodal projector
+MMP_SPATIAL_MERGE_SIZE = 2
+MMP_PROJECTOR_HIDDEN_ACT = "gelu"
+
+
+def vision_layer_state_dict_prefix(layer_idx: int) -> str:
+    """Return the state-dict key prefix for the i-th Pixtral vision layer."""
+    return f"vision_tower.transformer.layers.{layer_idx}."
