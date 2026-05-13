@@ -11,6 +11,7 @@
 #include "api/compute/untilize.h"
 #include "ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -140,21 +141,25 @@ void kernel_main() {
             MUL_TILES(in_cb, updated_cos_cb, cos_interm_cb, onetile, in1_idx);
 
             // Add applied sin/cos tensors
-            cb_wait_front(cos_interm_cb, onetile);
-            cb_wait_front(sin_interm_cb, onetile);
-            cb_reserve_back(out_cb, onetile);
-
-            reconfig_data_format_srca(rotated_in_cb, cos_interm_cb);
-            pack_reconfig_data_format(cos_interm_cb, out_cb);
-            ACQ();
-            add_tiles_init(cos_interm_cb, sin_interm_cb);
-            add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);
-            pack_tile(0, out_cb);
-            REL();
-
-            cb_push_back(out_cb, onetile);
-            cb_pop_front(cos_interm_cb, onetile);
-            cb_pop_front(sin_interm_cb, onetile);
+            // Migrated: per-tile BinaryFpu (Add) + PerTile pack. Chain emits the
+            // entry-time input/pack reconfig via InputAndOutput, replacing the inline
+            // reconfig_data_format_srca + pack_reconfig_data_format calls. cb_wait
+            // and cb_pop are owned by the chain (WaitAndPop).
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::BinaryFpu<
+                    cos_interm_cb,
+                    sin_interm_cb,
+                    out_cb,
+                    compute_kernel_lib::BinaryFpuOp::Add,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::BinaryDataFormatReconfig::InputAndOutput,
+                    compute_kernel_lib::CopyTilePolicy::WaitAndPop,
+                    compute_kernel_lib::CopyTilePolicy::WaitAndPop>{},
+                compute_kernel_lib::PackTile<
+                    out_cb,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
         }
     }
 }
