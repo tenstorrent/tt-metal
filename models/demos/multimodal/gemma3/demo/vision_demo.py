@@ -492,9 +492,7 @@ def test_multimodal_demo_text(
             )
         elif base_model_name not in skip_perf_verification:
             expected_measurements = {
-                metric: True
-                for metric in targets
-                if not metric.endswith("_tolerance") and metric not in {"tolerance"}
+                metric: True for metric in targets if not metric.endswith("_tolerance") and metric not in {"tolerance"}
             }
             verify_perf(
                 measurements,
