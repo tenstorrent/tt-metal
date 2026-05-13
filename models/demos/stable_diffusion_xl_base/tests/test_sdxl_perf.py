@@ -109,7 +109,7 @@ def test_refiner_unet(
 DEVICE_PERF_EXPECTATIONS = {
     "unet_1024x1024": {
         "wormhole": 191_201_442 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
-        "blackhole": 78_106_452 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        "blackhole": 76_894_779 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
     },
     "unet_512x512": {
         "wormhole": 81_200_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
@@ -140,7 +140,7 @@ DEVICE_PERF_EXPECTATIONS = {
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "clip_encoder_1": {
-        "wormhole": 40_995_000,  # Note: this is an average value of 30 test runs due to high variability
+        "wormhole": 40_479_595,  # Average of last 5 main CI runs (May 12-13, 2026); previous 40_995_000 was above observed range causing failures
         "blackhole": 19_377_824,
     },
     "clip_encoder_2": {

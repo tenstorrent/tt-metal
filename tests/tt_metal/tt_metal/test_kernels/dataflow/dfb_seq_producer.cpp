@@ -22,9 +22,9 @@
 //   [1]: num_dfbs                  � number of DFBs to loop through
 //   [2 .. 2+num_dfbs-1]: src_addr[i] � DRAM base address of in_buffer_i
 
-#include "experimental/dataflow_buffer.h"
-#include "experimental/noc.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const uint32_t num_entries_per_producer = get_compile_time_arg_val(0);
@@ -44,13 +44,13 @@ void kernel_main() {
 #endif
     const uint32_t num_producers = static_cast<uint32_t>(__builtin_popcount(producer_mask));
 
-    experimental::Noc noc;
+    Noc noc;
 
     for (uint32_t dfb_id = 0; dfb_id < num_dfbs; dfb_id++) {
         // Each DFB has its own source buffer; address comes from runtime args.
         const uint32_t src_addr = get_arg_val<uint32_t>(2 + dfb_id);
 
-        experimental::DataflowBuffer dfb(dfb_id);
+        DataflowBuffer dfb(dfb_id);
         const uint32_t entry_size    = dfb.get_entry_size();
         const auto tensor_accessor   = TensorAccessor(src_args, src_addr, entry_size);
 
@@ -59,7 +59,7 @@ void kernel_main() {
             const uint32_t page_id = tile_id * num_producers + producer_idx;
             if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR
-                noc.async_read<experimental::Noc::TxnIdMode::ENABLED>(
+                noc.async_read<Noc::TxnIdMode::ENABLED>(
                     tensor_accessor, dfb, {.page_id = page_id}, {});
 #endif
             } else {

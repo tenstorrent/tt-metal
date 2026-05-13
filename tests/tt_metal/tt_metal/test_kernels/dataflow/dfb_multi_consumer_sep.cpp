@@ -15,9 +15,9 @@
 //   [3]: dfb_id                    – logical DFB ID this instance handles
 //   [4..]: TensorAccessorArgs      – shared DRAM layout descriptor
 
-#include "experimental/dataflow_buffer.h"
-#include "experimental/noc.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const uint32_t num_entries_per_consumer = get_compile_time_arg_val(0);
@@ -26,8 +26,8 @@ void kernel_main() {
     const uint32_t dfb_id                   = get_compile_time_arg_val(3);
     constexpr auto dst_args                 = TensorAccessorArgs<4>();
 
-    experimental::DataflowBuffer dfb(dfb_id);
-    experimental::Noc noc;
+    DataflowBuffer dfb(dfb_id);
+    Noc noc;
     const uint32_t entry_size  = dfb.get_entry_size();
     const auto tensor_accessor = TensorAccessor(dst_args, dst_addr_base, entry_size);
 
@@ -35,7 +35,7 @@ void kernel_main() {
     for (uint32_t tile_id = 0; tile_id < num_entries_per_consumer; tile_id++) {
         if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR
-            noc.async_write<experimental::Noc::TxnIdMode::ENABLED>(
+            noc.async_write<Noc::TxnIdMode::ENABLED>(
                 dfb, tensor_accessor, {}, {.page_id = tile_id});
 #endif
         } else {
