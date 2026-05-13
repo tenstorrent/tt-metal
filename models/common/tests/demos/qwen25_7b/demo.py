@@ -318,7 +318,7 @@ def create_model(
     # Differentiate modes similarly to ``DecodersPrecision`` on Llama: tighter weights in "accuracy".
     if optimizations == "accuracy":
         wqkv_dtype = ttnn.bfloat16
-        mlp_w_dtype = ttnn.bfloat16
+        mlp_w_dtype = ttnn.bfloat8_b
         kv_cache_dtype = ttnn.bfloat16
         lm_head_dtype = ttnn.bfloat16
     else:
