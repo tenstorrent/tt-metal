@@ -137,7 +137,7 @@ class TTMistral3MultiModalProjector(LightweightModule):
             self.linear_2_bias = None
 
     def forward(self, image_features: ttnn.Tensor, image_sizes):
-        image_features = self.norm(image_features, mode="decode")
+        image_features = self.norm(image_features, mode="prefill")
         image_features = self.patch_merger(image_features, image_sizes)
 
         hidden_states = ttnn.linear(
