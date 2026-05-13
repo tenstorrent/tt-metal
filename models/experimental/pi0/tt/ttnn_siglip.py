@@ -1013,13 +1013,23 @@ class MultiModalProjectorTTNN:
     def forward(self, vision_features: ttnn.Tensor) -> ttnn.Tensor:
         """
         Project vision features using TTNN linear.
-
-        Args:
-            vision_features: TTNN tensor (batch_size, num_patches, vision_hidden_size)
-
-        Returns:
-            TTNN tensor (batch_size, num_patches, language_hidden_size)
         """
+        ndim = len(vision_features.shape)
+        m_eff = 1
+        for i in range(ndim - 1):
+            m_eff *= int(vision_features.shape[i])
+        m_t = (m_eff + 31) // 32
+        k_t = (int(vision_features.shape[-1]) + 31) // 32
+        n_t = (int(self.weight.shape[-1]) + 31) // 32
+        pcfg = build_matmul_pcfg(m_t, k_t, n_t, self.grid_size[0], self.grid_size[1])
+        if pcfg is not None:
+            return ttnn.linear(
+                vision_features,
+                self.weight,
+                bias=self.bias,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                program_config=pcfg,
+            )
         return ttnn.linear(
             vision_features,
             self.weight,
