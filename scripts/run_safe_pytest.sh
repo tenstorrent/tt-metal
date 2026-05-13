@@ -104,8 +104,8 @@ done
 
 # --- Argument validation ---
 if [[ $# -eq 0 ]]; then
-    echo "SAFE_PYTEST_ERROR: No test path provided" >&2
-    echo "Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] <test_path> [extra_pytest_args...]" >&2
+    echo "SAFE_PYTEST_ERROR: No test path provided"
+    echo "Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] <test_path> [extra_pytest_args...]"
     exit 3
 fi
 
@@ -117,20 +117,20 @@ shift
 if [[ "$SIM_MODE" == false ]]; then
     exec 9>"$LOCK_FILE"
 
-    echo "SAFE_PYTEST: Waiting for device lock..." >&2
+    echo "SAFE_PYTEST: Waiting for device lock..."
     flock 9
     TT_TIMING_LOCK_ACQUIRED_MS=$(date +%s%3N)
-    echo "SAFE_PYTEST: Device lock acquired" >&2
+    echo "SAFE_PYTEST: Device lock acquired"
 
     # --- Check if device needs reset from previous hang ---
     if [[ -f "$DIRTY_FLAG" ]]; then
-        echo "SAFE_PYTEST: Device marked dirty from previous hang, resetting..." >&2
+        echo "SAFE_PYTEST: Device marked dirty from previous hang, resetting..."
         if ! tt-smi -r; then
-            echo "SAFE_PYTEST_ERROR: Device reset (tt-smi -r) failed" >&2
+            echo "SAFE_PYTEST_ERROR: Device reset (tt-smi -r) failed"
             exit 3
         fi
         rm -f "$DIRTY_FLAG"
-        echo "SAFE_PYTEST: Device reset complete" >&2
+        echo "SAFE_PYTEST: Device reset complete"
     fi
 fi
 
@@ -138,10 +138,10 @@ fi
 cd "$REPO_DIR"
 if [[ -f python_env/bin/activate ]]; then
     if ! source python_env/bin/activate; then
-        echo "SAFE_PYTEST: WARNING: Failed to activate python_env virtual environment" >&2
+        echo "SAFE_PYTEST: WARNING: Failed to activate python_env virtual environment"
     fi
 else
-    echo "SAFE_PYTEST: WARNING: python_env not found; using system Python" >&2
+    echo "SAFE_PYTEST: WARNING: python_env not found; using system Python"
 fi
 
 # --- Hang detection setup (hardware only) ---
@@ -164,9 +164,9 @@ fi
 
 emit_missing_ttexalens_warning() {
     if [[ "$MISSING_TTEXALENS" == true ]]; then
-        echo "" >&2
-        echo "SAFE_PYTEST: WARNING: tt-exalens not installed — triage on hang is unavailable." >&2
-        echo "SAFE_PYTEST: Install with: uv pip install -r tools/triage/requirements.txt" >&2
+        echo ""
+        echo "SAFE_PYTEST: WARNING: tt-exalens not installed — triage on hang is unavailable."
+        echo "SAFE_PYTEST: Install with: uv pip install -r tools/triage/requirements.txt"
     fi
 }
 trap emit_missing_ttexalens_warning EXIT
@@ -198,17 +198,17 @@ if [[ "$DEV_MODE" == true ]]; then
     export TT_METAL_WATCHER_DISABLE_DISPATCH=1
 
     if [[ "$SIM_MODE" == true ]]; then
-        echo "SAFE_PYTEST: [sim+dev] asserts=ebreak llk_asserts=ON watcher=polling (no hang detection on sim)" >&2
+        echo "SAFE_PYTEST: [sim+dev] asserts=ebreak llk_asserts=ON watcher=polling (no hang detection on sim)"
     else
-        echo "SAFE_PYTEST: [dev] asserts=ebreak llk_asserts=ON watcher=polling triage=ON timeout=${DISPATCH_TIMEOUT}s" >&2
+        echo "SAFE_PYTEST: [dev] asserts=ebreak llk_asserts=ON watcher=polling triage=ON timeout=${DISPATCH_TIMEOUT}s"
     fi
 elif [[ "$SIM_MODE" == true ]]; then
-    echo "SAFE_PYTEST: [sim] no hang detection" >&2
+    echo "SAFE_PYTEST: [sim] no hang detection"
 else
-    echo "SAFE_PYTEST: dispatch_timeout=${DISPATCH_TIMEOUT}s" >&2
+    echo "SAFE_PYTEST: dispatch_timeout=${DISPATCH_TIMEOUT}s"
 fi
-echo "SAFE_PYTEST: pytest ${TEST_PATH} $*" >&2
-echo "========================================" >&2
+echo "SAFE_PYTEST: pytest ${TEST_PATH} $*"
+echo "========================================"
 
 # --- Mark device dirty before running tests (hardware only) ---
 # Pessimistic: assume the device will get corrupted. If the script is killed at any
@@ -234,8 +234,8 @@ PYTEST_CMD+=("$@")
 CHILD_PID=
 _signal_cleanup() {
     local sig=$1
-    echo "" >&2
-    echo "SAFE_PYTEST: Caught SIG${sig} — killing pytest, marking device dirty" >&2
+    echo ""
+    echo "SAFE_PYTEST: Caught SIG${sig} — killing pytest, marking device dirty"
     [[ "$SIM_MODE" == false ]] && touch "$DIRTY_FLAG" 2>/dev/null
     if [[ -n "$CHILD_PID" ]]; then
         pkill -KILL -P "$CHILD_PID" 2>/dev/null || true
@@ -256,13 +256,13 @@ wait "$CHILD_PID"
 EXIT_CODE=$?
 CHILD_PID=
 
-echo "========================================" >&2
+echo "========================================"
 
 # --- Handle result ---
 if [[ $EXIT_CODE -eq 0 ]]; then
     rm -f "$DIRTY_FLAG"
     rm -f "$TRIAGE_LOG"
-    echo "SAFE_PYTEST_RESULT: PASS" >&2
+    echo "SAFE_PYTEST_RESULT: PASS"
     exit 0
 fi
 
@@ -273,9 +273,9 @@ if [[ $EXIT_CODE -eq 4 || $EXIT_CODE -eq 5 ]]; then
     rm -f "$DIRTY_FLAG"
     rm -f "$TRIAGE_LOG"
     if [[ $EXIT_CODE -eq 4 ]]; then
-        echo "SAFE_PYTEST_ERROR: Pytest usage error (invalid path or arguments)" >&2
+        echo "SAFE_PYTEST_ERROR: Pytest usage error (invalid path or arguments)"
     else
-        echo "SAFE_PYTEST_ERROR: No tests collected" >&2
+        echo "SAFE_PYTEST_ERROR: No tests collected"
     fi
     exit 3
 fi
@@ -295,35 +295,35 @@ fi
 # Hangs and crashes corrupt device state. Normal test failures (PCC mismatch,
 # assertion errors) and collection errors don't touch the device.
 if [[ "$IS_HANG" == true ]]; then
-    echo "SAFE_PYTEST: Resetting device..." >&2
+    echo "SAFE_PYTEST: Resetting device..."
     if tt-smi -r; then
         sleep 2
         rm -f "$DIRTY_FLAG"
-        echo "SAFE_PYTEST: Device reset complete" >&2
+        echo "SAFE_PYTEST: Device reset complete"
     else
-        echo "SAFE_PYTEST: Device reset FAILED; leaving device marked dirty" >&2
+        echo "SAFE_PYTEST: Device reset FAILED; leaving device marked dirty"
     fi
 
-    echo "SAFE_PYTEST_RESULT: HANG (exit code: $EXIT_CODE)" >&2
-    echo "" >&2
+    echo "SAFE_PYTEST_RESULT: HANG (exit code: $EXIT_CODE)"
+    echo ""
 
     # Dump full triage log
-    echo "=== TRIAGE LOG ===" >&2
-    cat "$TRIAGE_LOG" >&2
-    echo "=== END TRIAGE LOG ===" >&2
-    echo "" >&2
+    echo "=== TRIAGE LOG ==="
+    cat "$TRIAGE_LOG"
+    echo "=== END TRIAGE LOG ==="
+    echo ""
 
     # In dev mode, also dump watcher log
     if [[ "$DEV_MODE" == true && -f "$WATCHER_LOG" ]]; then
-        echo "=== WATCHER LOG (last 50 lines) ===" >&2
-        tail -50 "$WATCHER_LOG" >&2
-        echo "=== END WATCHER LOG ===" >&2
-        echo "" >&2
+        echo "=== WATCHER LOG (last 50 lines) ==="
+        tail -50 "$WATCHER_LOG"
+        echo "=== END WATCHER LOG ==="
+        echo ""
     fi
 
     # Print the JSON triage path as the last line so machine-readers can find it.
     if [[ -f "$TRIAGE_JSON" ]]; then
-        echo "SAFE_PYTEST: JSON triage: ${TRIAGE_JSON}" >&2
+        echo "SAFE_PYTEST: JSON triage: ${TRIAGE_JSON}"
     fi
 
     rm -f "$TRIAGE_LOG"
@@ -332,5 +332,5 @@ fi
 
 rm -f "$DIRTY_FLAG"
 rm -f "$TRIAGE_LOG"
-echo "SAFE_PYTEST_RESULT: FAIL (exit code: $EXIT_CODE)" >&2
+echo "SAFE_PYTEST_RESULT: FAIL (exit code: $EXIT_CODE)"
 exit 1
