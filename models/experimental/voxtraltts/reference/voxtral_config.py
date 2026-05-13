@@ -155,6 +155,15 @@ def _resolve_params_path(model_name_or_path: str) -> Path:
     )
 
 
+def parse_csv_ints(s: str) -> tuple[int, ...]:
+    return tuple(int(x.strip()) for x in s.split(",") if x.strip())
+
+
+def audio_tokenizer_latent_dim(cfg: VoxtralAudioTokenizerConfig) -> int:
+    """Continuous latent width before tokenizer decoder (``semantic_dim + acoustic_dim``)."""
+    return int(cfg.semantic_dim + cfg.acoustic_dim)
+
+
 def load_voxtral_config(model_name_or_path: str = DEFAULT_VOXTRAL_MODEL) -> VoxtralConfig:
     """Load Voxtral's Mistral-format params.json into a typed reference config."""
 
