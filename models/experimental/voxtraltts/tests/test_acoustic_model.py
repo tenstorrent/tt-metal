@@ -1,22 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Checkpoint-backed tests for ``VoxtralTTAcousticModel`` / ``FlowMatchingAudioTransformerRef``.
+"""Checkpoint-backed tests for ``VoxtralTTAcousticModel`` vs ``FlowMatchingAudioTransformerRef``.
 
-**Velocity trunk**
-    ``predict_velocity`` vs ``_predict_velocity`` (projections → blocks → ``acoustic_codebook_output``).
-    On failure, the assertion includes a **per-op PCC table** (forward order). Set
-    ``VOXTRAL_ACOUSTIC_DEBUG_PCC=1`` to print that table when the test passes.
-
-**Semantic head**
-    ``semantic_codebook_output`` vs ``ttnn.linear(..., w_semantic)``.
-
-**End-to-end ``forward()``**
-    Same RNG seed before reference vs TT decode; **semantic token** must match exactly; **acoustic**
-    discrete codes use a **minimum agreement rate** (residual rounding vs CPU; TT acoustic stack uses
-    HiFi4 + FP32 dest acc for matmuls / norms to tighten agreement).
-**Layer components**
-    Single-layer attention and SwiGLU MLP PCC vs CPU (layer index parametrized).
+Tests: velocity trunk PCC (``predict_velocity``; per-op table on failure, set
+``VOXTRAL_ACOUSTIC_DEBUG_PCC=1`` to always print), semantic head linear PCC, end-to-end
+``forward()`` (semantic token exact match + acoustic minimum agreement rate), and single-layer
+attention/MLP PCC. ``test_acoustic_all_layers_attention_mlp_pcc`` repeats those checks for every
+FM block; ``test_acoustic_predict_velocity_pcc`` is the full-stack velocity gate.
 """
 
 from __future__ import annotations
@@ -395,3 +386,74 @@ def test_acoustic_layer_mlp_pcc(mesh_device, reset_seeds, layer_idx):
 
     passing, pcc_val = comp_pcc(ref_out.float(), tt_torch, pcc=0.99)
     assert passing, f"Layer {layer_idx} MLP PCC failed: PCC={float(pcc_val):.6f} (required >= 0.99)."
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+@torch.no_grad()
+def test_acoustic_all_layers_attention_mlp_pcc(mesh_device, reset_seeds):
+    """Attention + MLP PCC (>= 0.99) for **each** ``AcousticTransformerBlock`` index in ``ref.layers_ids``.
+
+    Same tensor shapes and PCC bar as ``test_acoustic_layer_attention_pcc`` /
+    ``test_acoustic_layer_mlp_pcc``, but loops all layers from config (e.g. 0,1,2). Full velocity
+    stack remains ``test_acoustic_predict_velocity_pcc``.
+    """
+    model_name_or_path = resolve_voxtral_model_name_or_skip()
+    try:
+        ref, cfg = _load_reference_model(model_name_or_path)
+        tt_model = _load_tt(mesh_device, model_name_or_path)
+    except Exception as exc:
+        pytest.skip(f"Acoustic load failed: {exc}")
+
+    n_ref = len(ref.layers_ids)
+    n_tt = len(tt_model.attn_norms)
+    assert n_ref == n_tt, f"layer count mismatch: ref n_layers={n_ref} tt attn_norms={n_tt}"
+
+    dim = cfg.audio_model_args.acoustic_transformer_args.dim
+    bsz, seq = 1, 3
+
+    for layer_idx in ref.layers_ids:
+        torch.manual_seed(1)
+        x_attn = torch.randn(bsz, seq, dim, dtype=torch.bfloat16)
+        layer = ref.layers[str(layer_idx)]
+        n = layer.attention_norm(x_attn)
+        ref_attn = layer.attention(n)
+
+        x_tt = ttnn.from_torch(
+            x_attn.unsqueeze(1),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        attn_norm = tt_model.attn_norms[layer_idx](x_tt, mode=Mode.DECODE)
+        cos = tt_model._cos_identity
+        sin = tt_model._sin_identity
+        out_tt = tt_model.attentions[layer_idx](attn_norm, cos, sin, attention_mask=None)
+        ttnn.deallocate(attn_norm)
+        tt_attn = ttnn.to_torch(out_tt).float().reshape(bsz, seq, dim)
+        ttnn.deallocate(out_tt)
+
+        passing_a, pcc_a = comp_pcc(ref_attn.float(), tt_attn, pcc=0.99)
+        assert passing_a, f"Layer {layer_idx} attention PCC failed: PCC={float(pcc_a):.6f} (required >= 0.99)."
+
+        torch.manual_seed(2)
+        x_mlp = torch.randn(bsz, seq, dim, dtype=torch.bfloat16)
+        n2 = layer.ffn_norm(x_mlp)
+        ref_mlp = layer.feed_forward(n2)
+
+        x_mlp_tt = ttnn.from_torch(
+            x_mlp.unsqueeze(1),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        normed_tt = tt_model.ffn_norms[layer_idx](x_mlp_tt, mode=Mode.DECODE)
+        mlp_tt = tt_model.mlps[layer_idx](normed_tt)
+        ttnn.deallocate(normed_tt)
+        tt_mlp = ttnn.to_torch(mlp_tt).float().reshape(bsz, seq, dim)
+        ttnn.deallocate(mlp_tt)
+
+        passing_m, pcc_m = comp_pcc(ref_mlp.float(), tt_mlp, pcc=0.99)
+        assert passing_m, f"Layer {layer_idx} MLP PCC failed: PCC={float(pcc_m):.6f} (required >= 0.99)."
