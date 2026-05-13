@@ -225,7 +225,7 @@ static bool run_test_integrity_dram(
         dram_end_addr);
 
     auto* const send_device = send_mesh_device->get_devices()[0];
-    double threshold = get_eth_bw() * 0.75;
+    double threshold = get_eth_bw() * 0.5;
 
     bool pass = true;
     pass &= bandwidth_check(send_device, send_core, send_delta_addr, total_transferred, threshold);

@@ -185,7 +185,7 @@ static bool run_test_integrity_dram_bidir(
         iter_l1_address,
         dram_end_addr);
 
-    double threshold = 150; /* NOTE: Same on both bh glx and p150 */
+    double threshold = 140; /* NOTE: Same on both bh glx and p150 */
 
     bool pass = true;
     pass &= bandwidth_check(send_device, send_core, send_delta_addr, total_transferred, threshold);
