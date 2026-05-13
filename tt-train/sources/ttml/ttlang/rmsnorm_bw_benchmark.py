@@ -94,13 +94,21 @@ def _import_ttl_rmsnorm_bw_all_in_l1():
     return ttl_rmsnorm_bw_all_in_l1
 
 
+def _import_ttl_rmsnorm_bw_2pass():
+    """Import ``ttl_rmsnorm_bw_2pass`` (2-pass tile-streaming TTL backward; needs ``ttl``)."""
+    _ensure_ttl_package_path()
+    import ttl_rmsnorm_bw_2pass  # noqa: PLC0415
+
+    return ttl_rmsnorm_bw_2pass
+
+
 import ttml
 from ttml.autograd import AutoContext, Tensor, create_tensor
 
 
 def _open_mesh_for_kernel_bw(ctx: AutoContext, bw_kernel: str) -> None:
     """Open a single-device mesh ``(1, 1)``; TTL reserves worker L1 for large kernel configs."""
-    if bw_kernel not in ("ttl", "ttl_all_in_l1"):
+    if bw_kernel not in ("ttl", "ttl_all_in_l1", "ttl_2pass"):
         ctx.open_device((1, 1))
         return
     max_l1 = ttnn.device.get_max_worker_l1_unreserved_size()
@@ -178,6 +186,10 @@ def _ttl_rmsnorm_bw_tensors_to_padded_device(
     return x_p, g_p, rms_p, dL_p, out_da, out_dg
 
 
+def _tile_padded_shape(rows: int, cols: int) -> tuple[int, int]:
+    return -(-rows // TILE) * TILE, -(-cols // TILE) * TILE
+
+
 def _metal_rmsnorm_bw_tensors_from_numpy(
     x_np: np.ndarray,
     g_np: np.ndarray,
@@ -199,8 +211,9 @@ def _metal_rmsnorm_bw_tensors_from_numpy(
 def _run_kernel_bw_only(bw_kernel: str = "metal") -> None:
     """Benchmark RMSNorm backward kernel"""
 
-    ttl_mod = _import_ttl_rmsnorm_bw() if bw_kernel in ("ttl", "ttl_all_in_l1") else None
+    ttl_mod = _import_ttl_rmsnorm_bw() if bw_kernel in ("ttl", "ttl_all_in_l1", "ttl_2pass") else None
     all_in_l1_mod = _import_ttl_rmsnorm_bw_all_in_l1() if bw_kernel == "ttl_all_in_l1" else None
+    twopass_mod = _import_ttl_rmsnorm_bw_2pass() if bw_kernel == "ttl_2pass" else None
 
     ctx = AutoContext.get_instance()
     _open_mesh_for_kernel_bw(ctx, bw_kernel)
@@ -212,10 +225,11 @@ def _run_kernel_bw_only(bw_kernel: str = "metal") -> None:
             tag = "Metal"
         elif bw_kernel == "ttl_all_in_l1":
             tag = "TTL (all-in-L1)"
+        elif bw_kernel == "ttl_2pass":
+            tag = "TTL (2-pass)"
         else:
             tag = "TTL (col-split)"
         print(f"Mode: KernelBw / {tag} (backward-only, RMS from torch forward on host)\n")
-
 
         for shape, name in SHAPES:
             seed = _seed_for_name(name)
@@ -272,6 +286,22 @@ def _run_kernel_bw_only(bw_kernel: str = "metal") -> None:
                     k_l1(x_p, g_p, rms_p, dL_p, out_da, out_dg)
                     ttnn.synchronize_device(mesh)
 
+            elif bw_kernel == "ttl_2pass":
+                assert ttl_mod is not None
+                assert twopass_mod is not None
+                rows = b * s_len
+                columns = c
+                x2, dL2, g2, r2 = _ttl_rmsnorm_bw_numpy_to_2d(x_np, d_np, g_np, rms_np, rows, columns)
+                rows_p, cols_p = _tile_padded_shape(rows, columns)
+                x_p, g_p, rms_p, dL_p, out_da, out_dg = _ttl_rmsnorm_bw_tensors_to_padded_device(
+                    ttl_mod, mesh, x2, g2, r2, dL2, rows_p, cols_p
+                )
+                k_2pass = twopass_mod.make_kernel()
+
+                def run_step() -> None:
+                    k_2pass(x_p, g_p, rms_p, dL_p, out_da, out_dg)
+                    ttnn.synchronize_device(mesh)
+
             else:
                 raise ValueError(f"unknown bw_kernel: {bw_kernel}")
 
@@ -288,6 +318,8 @@ def _run_kernel_bw_only(bw_kernel: str = "metal") -> None:
                 suffix = "KernelBw_Metal"
             elif bw_kernel == "ttl_all_in_l1":
                 suffix = "KernelBw_TTL_AllInL1"
+            elif bw_kernel == "ttl_2pass":
+                suffix = "KernelBw_TTL_2Pass"
             else:
                 suffix = "KernelBw_TTL"
             row = f"{name}_{suffix}"
@@ -301,11 +333,12 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument(
         "--bw-kernel",
-        choices=("metal", "ttl", "ttl_all_in_l1"),
+        choices=("metal", "ttl", "ttl_all_in_l1", "ttl_2pass"),
         default="metal",
         help=(
             "metal: ttml rmsnorm_bw; ttl: column-split ``ttl_rmsnorm_bw.py``; "
-            "ttl_all_in_l1: DFB all-in-L1 ``ttl_rmsnorm_bw_all_in_l1.py``. "
+            "ttl_all_in_l1: DFB all-in-L1 ``ttl_rmsnorm_bw_all_in_l1.py``; "
+            "ttl_2pass: tile-streaming ``ttl_rmsnorm_bw_2pass.py``. "
             "TTL modes need ``ttl`` (+ ``tt-lang`` on path)."
         ),
     )
