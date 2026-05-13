@@ -840,31 +840,6 @@ def main():
     sf.write(args.output, audio_np, 24000)
     print(f"\nSaved to: {args.output}")
 
-    # Auto-trim bleed if requested
-    if args.auto_trim_bleed:
-        from models.demos.qwen3_tts.demo.bleed_detector import detect_bleed, print_bleed_report, trim_audio
-
-        # Extract first word from target text if not provided
-        target_word = args.target_word
-        if target_word is None:
-            first_word = args.text.split()[0].rstrip(",.!?;:") if args.text.split() else "Hello"
-            target_word = first_word
-
-        print(f"\n  Running bleed detection (target word: '{target_word}')...")
-        bleed_results = detect_bleed(args.output, target_word)
-        print_bleed_report(bleed_results)
-
-        if bleed_results["bleed_duration"] > 0.1:
-            trim_time = max(0, bleed_results["bleed_duration"] - 0.1)
-            trimmed_path = args.output.replace(".wav", "_trimmed.wav")
-            trim_audio(args.output, trimmed_path, trim_time)
-            print(f"  Bleed-trimmed audio saved to: {trimmed_path}")
-
-            # Update main output with trimmed version
-            trim_audio(args.output, args.output, trim_time)
-            audio_np = audio_np[int(trim_time * 24000) :]
-            print(f"  Main output updated with trimmed audio")
-
     # Summary
     print("\n" + "=" * 80)
     print("Summary - All Reference Components Used")

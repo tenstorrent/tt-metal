@@ -77,8 +77,6 @@ def run_full_ttnn_tts(
     ref_cache: str = None,
     trim_frames: int = 4,
     load_cpu_inputs: str = None,
-    auto_trim_bleed: bool = False,
-    target_word: str = None,
 ):
     """Run full TTNN TTS pipeline (CLI orchestrator)."""
     demo_start = time.time()
@@ -255,26 +253,6 @@ def run_full_ttnn_tts(
 
         sf.write(output_path, audio_np, 24000)
 
-        if auto_trim_bleed:
-            from models.demos.qwen3_tts.demo.bleed_detector import detect_bleed, print_bleed_report, trim_audio
-
-            if target_word is None:
-                first_word = text.split()[0].rstrip(",.!?;:") if text.split() else "Hello"
-                target_word = first_word
-
-            print(f"\n  Running bleed detection (target word: '{target_word}')...")
-            bleed_results = detect_bleed(output_path, target_word)
-            print_bleed_report(bleed_results)
-
-            if bleed_results["bleed_duration"] > 0.1:
-                trim_time = max(0, bleed_results["bleed_duration"] - 0.1)
-                trimmed_path = output_path.replace(".wav", "_trimmed.wav")
-                trim_audio(output_path, trimmed_path, trim_time)
-                print(f"  Bleed-trimmed audio saved to: {trimmed_path}")
-                trim_audio(output_path, output_path, trim_time)
-                audio_np = audio_np[int(trim_time * 24000) :]
-                print("  Main output updated with trimmed audio")
-
         # Summary
         print("\n" + "=" * 80)
         print("PERFORMANCE SUMMARY")
@@ -402,17 +380,6 @@ def main():
         default=None,
         help="Load CPU-computed ICL embeddings from .pt file (skips speaker encoder & ICL construction)",
     )
-    parser.add_argument(
-        "--auto-trim-bleed",
-        action="store_true",
-        help="Automatically detect and trim reference audio bleed using Whisper",
-    )
-    parser.add_argument(
-        "--target-word",
-        type=str,
-        default=None,
-        help="Expected first word of target text for bleed detection (auto-extracted if not set)",
-    )
     args = parser.parse_args()
 
     ref_audio = args.ref_audio if args.ref_audio else get_default_reference_path()
@@ -434,8 +401,6 @@ def main():
         ref_cache=args.ref_cache,
         trim_frames=args.trim_frames,
         load_cpu_inputs=args.load_cpu_inputs,
-        auto_trim_bleed=args.auto_trim_bleed,
-        target_word=args.target_word,
     )
 
 
