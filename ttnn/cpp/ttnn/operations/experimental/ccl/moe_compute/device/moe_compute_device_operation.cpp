@@ -102,6 +102,13 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
         intermediate_size,
         intermediate_tiles,
         matmul_num_cores);
+
+    TT_FATAL(
+        matmul_num_cores % combine_data_parallel_cores == 0,
+        "matmul_num_cores ({}) must be divisible by num_data_parallel_cores ({}) "
+        "so RING_CORES_PER_COMBINE_COL is integral",
+        matmul_num_cores,
+        combine_data_parallel_cores);
 }
 
 MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::compute_output_specs(
