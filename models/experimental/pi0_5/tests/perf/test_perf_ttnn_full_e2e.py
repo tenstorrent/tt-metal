@@ -30,7 +30,7 @@ import ttnn
 
 CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_base"
 
-NUM_WARMUP = 1
+NUM_WARMUP = 2
 NUM_ITERS = 10
 LANG_SEQ_LEN = 16
 SEED = 0

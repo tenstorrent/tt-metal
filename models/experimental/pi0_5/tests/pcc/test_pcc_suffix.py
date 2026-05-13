@@ -15,7 +15,7 @@ import math
 import pytest
 import torch
 
-from models.experimental.pi0.common.configs import SuffixConfig
+from models.experimental.pi0_5.common.configs import SuffixConfig
 from models.experimental.pi0_5.reference.torch_suffix import Pi0_5SuffixEmbedding
 
 

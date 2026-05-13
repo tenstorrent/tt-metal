@@ -19,15 +19,15 @@ from typing import List, Optional, Tuple
 
 import torch
 
-from models.experimental.pi0.common.configs import (
+from models.experimental.pi0_5.common.configs import (
     DenoiseConfig,
     PaliGemmaConfig,
     PrefixConfig,
     SuffixConfig,
 )
 from models.experimental.pi0_5.common.weight_loader import Pi0_5WeightLoader as PI0WeightLoader
-from models.experimental.pi0.reference.torch_prefix import PrefixEmbedding
-from models.experimental.pi0.reference.torch_denoise import DenoisingModule, KVCacheManager
+from models.experimental.pi0_5.reference.torch_prefix import PrefixEmbedding
+from models.experimental.pi0_5.reference.torch_denoise import DenoisingModule, KVCacheManager
 
 from models.experimental.pi0_5.common.configs import Pi0_5ModelConfig
 from models.experimental.pi0_5.reference.torch_suffix import Pi0_5SuffixEmbedding

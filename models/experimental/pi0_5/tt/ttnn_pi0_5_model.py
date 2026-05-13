@@ -16,14 +16,14 @@ from typing import List, Optional, Union
 import torch
 import ttnn
 
-from models.experimental.pi0.common.configs import (
+from models.experimental.pi0_5.common.configs import (
     DenoiseConfig,
     PaliGemmaConfig,
     PrefixConfig,
     SuffixConfig,
 )
 from models.experimental.pi0_5.common.weight_loader import Pi0_5WeightLoader as PI0WeightLoader
-from models.experimental.pi0.tt.ttnn_prefix import PrefixEmbeddingTTNN
+from models.experimental.pi0_5.tt.ttnn_prefix import PrefixEmbeddingTTNN
 
 from models.experimental.pi0_5.common.configs import Pi0_5ModelConfig
 from models.experimental.pi0_5.tt.ttnn_suffix import (

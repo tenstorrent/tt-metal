@@ -11,8 +11,8 @@ modulation, outputs differ.
 
 import torch
 
-from models.experimental.pi0.common.configs import GemmaConfig
-from models.experimental.pi0.reference.torch_gemma import precompute_freqs_cis
+from models.experimental.pi0_5.common.configs import GemmaConfig
+from models.experimental.pi0_5.reference.torch_gemma import precompute_freqs_cis
 from models.experimental.pi0_5.reference.torch_gemma import AdaRMSGemmaBlock
 
 

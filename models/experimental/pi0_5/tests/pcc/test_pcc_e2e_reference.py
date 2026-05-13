@@ -20,7 +20,7 @@ Validates wiring + shapes + that outputs are finite and time-dependent.
 
 import torch
 
-from models.experimental.pi0.common.configs import (
+from models.experimental.pi0_5.common.configs import (
     GemmaConfig,
     PaliGemmaConfig,
     SigLIPConfig,
@@ -28,8 +28,8 @@ from models.experimental.pi0.common.configs import (
     PrefixConfig,
     DenoiseConfig,
 )
-from models.experimental.pi0.reference.torch_prefix import PrefixEmbedding
-from models.experimental.pi0.reference.torch_denoise import DenoisingModule
+from models.experimental.pi0_5.reference.torch_prefix import PrefixEmbedding
+from models.experimental.pi0_5.reference.torch_denoise import DenoisingModule
 
 from models.experimental.pi0_5.reference.torch_suffix import Pi0_5SuffixEmbedding
 from models.experimental.pi0_5.reference.torch_paligemma import Pi0_5PaliGemmaBackbone
