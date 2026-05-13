@@ -21,8 +21,27 @@ namespace tt::tt_metal {
 
 class UnitMeshMultiCQSingleDeviceFixture : public MeshDispatchFixture {
 protected:
-    static void SetUpTestSuite() {}
-    static void TearDownTestSuite() {}
+    static UnitMeshDeviceConfig get_unit_mesh_config() {
+        auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
+        const auto default_config = get_default_unit_mesh_config();
+        const ChipId device_id = (enable_remote_chip or tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster())
+                ? default_config.chip_ids.at(0)
+                : *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
+        return UnitMeshDeviceConfig{
+            .chip_ids = {device_id},
+            .num_hw_cqs = 2,
+        };
+    }
+
+    static void SetUpTestSuite() {
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (slow_dispatch || tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs() != 2) {
+            return;
+        }
+        MeshDispatchFixture::create_shared_devices(get_shared_devices(), get_unit_mesh_config());
+    }
+
+    static void TearDownTestSuite() { MeshDispatchFixture::destroy_shared_devices(get_shared_devices()); }
 
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
@@ -35,19 +54,24 @@ protected:
             GTEST_SKIP();
         }
 
+        auto& shared_devices = get_shared_devices();
+        if (shared_devices.needs_recovery) {
+            MeshDispatchFixture::destroy_shared_devices(shared_devices);
+        }
+        if(!shared_devices.initialized) {
+            MeshDispatchFixture::create_shared_devices(shared_devices, get_unit_mesh_config());
+        }
+        this->device_ = shared_devices.devices.at(0);
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        init_max_cbs();
-        auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
-
-        // Check to deal with TG systems
-        const ChipId device_id =
-            (enable_remote_chip or tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster())
-                ? *tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids().begin()
-                : *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
-        this->create_device(device_id, DEFAULT_TRACE_REGION_SIZE);
+        this->max_cbs_ = shared_devices.max_cbs;
     }
 
-    void TearDown() override { device_.reset(); }
+    void TearDown() override {
+        device_.reset();
+        if (HasFailure()) {
+            get_shared_devices().needs_recovery = true;
+        }
+    }
 
     bool validate_dispatch_mode() {
         this->slow_dispatch_ = false;
@@ -73,13 +97,15 @@ protected:
     }
 
     void create_device(const ChipId device_id, const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        std::vector<ChipId> chip_id = {device_id};
-
-        auto reserved_devices = distributed::MeshDevice::create_unit_meshes(
-            chip_id, DEFAULT_L1_SMALL_SIZE, trace_region_size, 2, dispatch_core_config);
-        this->device_ = reserved_devices[device_id];
+        SharedMeshDeviceState devices;
+        MeshDispatchFixture::create_shared_devices(
+            devices,
+            UnitMeshDeviceConfig{
+                .chip_ids = {device_id},
+                .trace_region_size = trace_region_size,
+                .num_hw_cqs = 2,
+            });
+        this->device_ = devices.id_to_device.at(device_id);
     }
 
     std::shared_ptr<distributed::MeshDevice> device_;
@@ -97,6 +123,9 @@ class UnitMeshMultiCQSingleDeviceEventFixture : public UnitMeshMultiCQSingleDevi
 
 class UnitMeshMultiCQSingleDeviceTraceFixture : public UnitMeshMultiCQSingleDeviceFixture {
 protected:
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
             GTEST_SKIP();
@@ -114,8 +143,28 @@ protected:
 };
 class UnitMeshMultiCQMultiDeviceFixture : public MeshDispatchFixture {
 protected:
-    static void SetUpTestSuite() {}
-    static void TearDownTestSuite() {}
+    static UnitMeshDeviceConfig get_unit_mesh_config() {
+        const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
+        auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
+        UnitMeshDeviceConfig config = enable_remote_chip ||
+                tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == BoardType::UBB ||
+                tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()
+            ? get_default_unit_mesh_config()
+            : UnitMeshDeviceConfig{.chip_ids = {mmio_device_id}};
+        config.num_hw_cqs = 2;
+
+        return config;
+    }
+
+    static void SetUpTestSuite() {
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (slow_dispatch || tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs() != 2) {
+            return;
+        }
+        MeshDispatchFixture::create_shared_devices(get_shared_devices(), get_unit_mesh_config());
+    }
+
+    static void TearDownTestSuite() { MeshDispatchFixture::destroy_shared_devices(get_shared_devices()); }
 
     void SetUp() override {
         this->slow_dispatch_ = false;
@@ -132,33 +181,21 @@ protected:
             GTEST_SKIP();
         }
 
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
-        std::vector<ChipId> chip_ids;
-        auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
-
-        // Check to deal with TG systems
-        if (enable_remote_chip or
-            tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == BoardType::UBB or
-            tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
-            for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
-                chip_ids.push_back(id);
-            }
-        } else {
-            chip_ids.push_back(mmio_device_id);
+        auto& shared_devices = get_shared_devices();
+        if (shared_devices.needs_recovery) {
+            MeshDispatchFixture::destroy_shared_devices(shared_devices);
         }
-        auto reserved_devices = distributed::MeshDevice::create_unit_meshes(
-            chip_ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 2, dispatch_core_config);
-        for (const auto& [id, device] : reserved_devices) {
-            this->devices_.push_back(device);
+        if(!shared_devices.initialized) {
+            MeshDispatchFixture::create_shared_devices(shared_devices, get_unit_mesh_config());
         }
-        init_max_cbs();
+        this->devices_ = shared_devices.devices;
+        this->max_cbs_ = shared_devices.max_cbs;
     }
 
     void TearDown() override {
-        for (auto& device : devices_) {
-            device.reset();
+        devices_.clear();
+        if (HasFailure()) {
+            get_shared_devices().needs_recovery = true;
         }
     }
 

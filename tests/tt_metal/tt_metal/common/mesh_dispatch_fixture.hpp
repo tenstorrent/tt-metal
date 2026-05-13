@@ -23,6 +23,7 @@
 
 namespace tt::tt_metal {
 
+// TODO: move inside MeshDispatchFixture
 struct SharedMeshDeviceState {
     std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device;
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices;
@@ -33,6 +34,8 @@ struct SharedMeshDeviceState {
 
 struct UnitMeshDeviceConfig {
     std::vector<ChipId> chip_ids;
+    // TODO: This is currently named after the const var. We need to rename it.
+    // TODO: aw dang, these values can be passed in to the fixture via ctor, need to pivot!
     size_t l1_small_size {DEFAULT_L1_SMALL_SIZE};
     size_t trace_region_size {DEFAULT_TRACE_REGION_SIZE};
     uint8_t num_hw_cqs {1};
@@ -41,7 +44,8 @@ struct UnitMeshDeviceConfig {
 
 // A dispatch-agnostic test fixture
 class MeshDispatchFixture : public ::testing::Test {
-private:
+// TODO: consolidate to a single protected section if possible
+protected:
     static SharedMeshDeviceState& get_shared_devices() {
         static SharedMeshDeviceState devices;
         return devices;
@@ -79,10 +83,6 @@ private:
         shared.needs_recovery = false;
     }
 
-    static void create_shared_devices() {
-        create_shared_devices(get_shared_devices(), get_default_unit_mesh_config());
-    }
-
     static void destroy_shared_devices(SharedMeshDeviceState& shared) {
         if (!shared.initialized) {
             shared.needs_recovery = false;
@@ -98,6 +98,10 @@ private:
         shared.max_cbs = 0;
         shared.initialized = false;
         shared.needs_recovery = false;
+    }
+
+    static void create_shared_devices() {
+        create_shared_devices(get_shared_devices(), get_default_unit_mesh_config());
     }
 
     static void destroy_shared_devices() {
@@ -159,18 +163,18 @@ protected:
     }
 
     void SetUp() override {
-        auto& shared = get_shared_devices();
-        if (shared.needs_recovery) {
+        auto& shared_devices = get_shared_devices();
+        if (shared_devices.needs_recovery) {
             destroy_shared_devices();
         }
-        if (!shared.initialized) {
-            SetUpTestSuite();
+        if (!shared_devices.initialized) {
+            create_shared_devices();
         }
-        this->devices_ = shared.devices;
+        this->devices_ = shared_devices.devices;
 
         this->DetectDispatchMode();
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        this->max_cbs_ = shared.max_cbs;
+        this->max_cbs_ = shared_devices.max_cbs;
     }
 
     void TearDown() override {

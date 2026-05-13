@@ -26,6 +26,9 @@ class KernelSizeTestDefaultBuffer : public UnitMeshCQFixture {
     static constexpr uint32_t DEFAULT_KERNEL_CONFIG_BUFFER_SIZE = 69 * 1024;
 
 protected:
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
     uint32_t actual_kernel_config_size_{};
     uint32_t unreserved_base_{};
     uint32_t unreserved_size_{};

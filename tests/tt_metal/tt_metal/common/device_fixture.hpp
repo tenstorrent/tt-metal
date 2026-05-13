@@ -97,27 +97,50 @@ public:
 
 class MeshDeviceSingleCardFixture : public MeshDispatchFixture {
 protected:
-    static void SetUpTestSuite() {}
-    static void TearDownTestSuite() {}
+    static UnitMeshDeviceConfig get_unit_mesh_config() {
+        UnitMeshDeviceConfig config;
+        for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
+            config.chip_ids.push_back(id);
+        }
+        return config;
+    }
+
+    static void SetUpTestSuite() {
+        if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+            return;
+        }
+        MeshDispatchFixture::create_shared_devices(get_shared_devices(), get_unit_mesh_config());
+    }
+
+    static void TearDownTestSuite() { MeshDispatchFixture::destroy_shared_devices(get_shared_devices()); }
 
     void SetUp() override {
-        if (!this->validate_dispatch_mode()) {
+        if (!validate_dispatch_mode()) {
             GTEST_SKIP();
         }
+
+        auto& shared_devices = get_shared_devices();
+        if (shared_devices.needs_recovery){
+            MeshDispatchFixture::destroy_shared_devices(shared_devices);
+        }
+        if(!shared_devices.initialized) {
+            MeshDispatchFixture::create_shared_devices(shared_devices, get_unit_mesh_config());
+        }
+        this->devices_ = shared_devices.devices;
+
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        this->create_devices();
-        init_max_cbs();
+        this->max_cbs_ = shared_devices.max_cbs;
+        this->num_devices_ = devices_.size();
     }
 
     void TearDown() override {
-        if (!id_to_device_.empty()) {
-            for (auto [device_id, device] : id_to_device_) {
-                device.reset();
-            }
+        devices_.clear();
+        if (HasFailure()) {
+            get_shared_devices().needs_recovery = true;
         }
     }
 
-    virtual bool validate_dispatch_mode() {
+    bool validate_dispatch_mode() {
         this->slow_dispatch_ = true;
         auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (!slow_dispatch) {
@@ -128,24 +151,7 @@ protected:
         return true;
     }
 
-    void create_devices() {
-        std::vector<ChipId> ids;
-        for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
-            ids.push_back(id);
-        }
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        id_to_device_ = distributed::MeshDevice::create_unit_meshes(
-            ids, l1_small_size_, trace_region_size_, 1, dispatch_core_config);
-        devices_.clear();
-        for (const auto& [device_id, device] : id_to_device_) {
-            devices_.push_back(device);
-        }
-        this->num_devices_ = this->devices_.size();
-    }
-
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
-    std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
     size_t num_devices_{};
 };
 
@@ -153,31 +159,47 @@ class MeshDeviceSingleCardBufferFixture : public MeshDeviceSingleCardFixture {};
 
 class BlackholeSingleCardFixture : public MeshDeviceSingleCardFixture {
 protected:
+    static void SetUpTestSuite() {
+        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) {
+            return;
+        }
+        MeshDeviceSingleCardFixture::SetUpTestSuite();
+    }
+
+    static void TearDownTestSuite() { MeshDeviceSingleCardFixture::TearDownTestSuite(); }
+
     void SetUp() override {
-        if (!this->validate_dispatch_mode()) {
+        if (!validate_dispatch_mode()) {
             GTEST_SKIP();
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         if (this->arch_ != tt::ARCH::BLACKHOLE) {
             GTEST_SKIP();
         }
-        this->create_devices();
-        init_max_cbs();
+        MeshDeviceSingleCardFixture::SetUp();
     }
 };
 
 class QuasarMeshDeviceSingleCardFixture : public MeshDeviceSingleCardFixture {
 protected:
+    static void SetUpTestSuite() {
+        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::QUASAR) {
+            return;
+        }
+        MeshDeviceSingleCardFixture::SetUpTestSuite();
+    }
+
+    static void TearDownTestSuite() { MeshDeviceSingleCardFixture::TearDownTestSuite(); }
+
     void SetUp() override {
-        if (!this->validate_dispatch_mode()) {
+        if (!validate_dispatch_mode()) {
             GTEST_SKIP();
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         if (this->arch_ != tt::ARCH::QUASAR) {
             GTEST_SKIP() << "Not a Quasar device";
         }
-        this->create_devices();
-        init_max_cbs();
+        MeshDeviceSingleCardFixture::SetUp();
     }
 };
 
