@@ -43,6 +43,7 @@ TODO (later tasks)
 
 import json
 import math
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -50,6 +51,31 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+
+# ---------------------------------------------------------------------------
+# Paged attention configuration
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PagedAttentionConfig:
+    """Configuration for paged KV cache.
+
+    Parameters
+    ----------
+    block_size : int
+        Number of tokens per physical page block (must be a multiple of 32 for
+        tile-alignment in TILE_LAYOUT).  Typical values: 32, 64, 128.
+    max_num_blocks : int
+        Total number of physical page blocks allocated in the paged KV cache.
+        Per-device allocation: each chip in a column holds
+            max_num_blocks × n_kv_per_col × block_size × head_dim tokens.
+        Size for unit tests: max_seq_len × max_batch_size / block_size (rounded up).
+    """
+
+    block_size: int = 64
+    max_num_blocks: int = 8  # Default: enough for 512-token sequence at block_size=64
+
 
 # ---------------------------------------------------------------------------
 # Padding constants (mirroring qwen_model_config.py / olmo_model_config.py)
@@ -107,6 +133,9 @@ class TtQwen36ModelArgs:
         max_batch_size: int = 1,
         max_seq_len: int = 128 * 1024,
         attn_output_gate: Optional[bool] = None,
+        use_paged_kv_cache: bool = False,
+        block_size: int = 64,
+        max_num_blocks: Optional[int] = None,
     ):
         # ---------------------------------------------------------------
         # 1. Device bookkeeping
@@ -221,6 +250,26 @@ class TtQwen36ModelArgs:
         # ---------------------------------------------------------------
         self.is_qwen = True
         self.is_galaxy = self.num_devices == 32
+
+        # ---------------------------------------------------------------
+        # 8. Paged KV cache configuration
+        # ---------------------------------------------------------------
+        self.use_paged_kv_cache: bool = use_paged_kv_cache
+        if use_paged_kv_cache:
+            # Compute max_num_blocks if not provided:
+            # enough for max_seq_len × max_batch_size tokens at the given block_size.
+            if max_num_blocks is None:
+                import math as _math
+
+                _max_num_blocks = _math.ceil(max_seq_len / block_size) * max_batch_size
+            else:
+                _max_num_blocks = max_num_blocks
+            self.paged_attention_config = PagedAttentionConfig(
+                block_size=block_size,
+                max_num_blocks=_max_num_blocks,
+            )
+        else:
+            self.paged_attention_config = None
 
         # ---------------------------------------------------------------
         # 8. Hardware-derived attributes (skipped when mesh_device is None)

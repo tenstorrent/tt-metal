@@ -326,12 +326,15 @@ class TtQwen36Transformer(LightweightModule):
         self,
         input_ids: torch.Tensor,
         return_caches: bool = False,
+        page_table=None,
     ):
         """Run prefill forward pass.
 
         Args:
             input_ids: CPU torch tensor [B, T] int64.  T must be a multiple of 32.
             return_caches: If True, return caches alongside logits.
+            page_table: Optional TTNN int32 tensor [B, max_blocks_per_seq] for
+                paged KV cache. Required when args.use_paged_kv_cache=True.
 
         Returns:
             If return_caches=False:
@@ -359,7 +362,7 @@ class TtQwen36Transformer(LightweightModule):
                 current_pos=0,
                 rot_mats=rot_mats,
                 kv_cache=kv_caches[i],
-                page_table=None,
+                page_table=page_table,
                 deltanet_state=dn_states[i],
                 deltanet_conv_state=conv_states[i],
                 mode="prefill",
@@ -433,7 +436,7 @@ class TtQwen36Transformer(LightweightModule):
                 current_pos=0,
                 rot_mats=rot_mats,
                 kv_cache=kv_caches[i],
-                page_table=None,
+                page_table=None,  # forward_prefill_hidden is non-paged (diagnostic only)
                 deltanet_state=dn_states[i],
                 deltanet_conv_state=conv_states[i],
                 mode="prefill",

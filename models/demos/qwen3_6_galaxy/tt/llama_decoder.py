@@ -147,6 +147,14 @@ class TtQwen36DecoderLayer(LightweightModule):
 
             # Extract self_attn.* keys as a flat dict for the attention constructor
             attn_sd = _extract_prefix(state_dict, "self_attn.")
+            # Derive paged cache params from args or explicit constructor params
+            _use_paged = (
+                use_paged_kv_cache or (paged_attention_config is not None) or getattr(args, "use_paged_kv_cache", False)
+            )
+            _pac = paged_attention_config or getattr(args, "paged_attention_config", None)
+            _block_size = _pac.block_size if _pac is not None else 64
+            _max_blocks = _pac.max_num_blocks if _pac is not None else None
+
             self.attention = TtQwen36GatedAttention(
                 mesh_device=mesh_device,
                 args=args,
@@ -154,6 +162,9 @@ class TtQwen36DecoderLayer(LightweightModule):
                 layer_num=layer_idx,
                 rope_setup=rope_setup,
                 dtype=dtype,
+                use_paged_kv_cache=_use_paged,
+                block_size=_block_size,
+                max_num_blocks=_max_blocks,
             )
 
         # ------------------------------------------------------------------

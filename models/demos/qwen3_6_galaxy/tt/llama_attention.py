@@ -329,6 +329,9 @@ class TtQwen36GatedAttention(LightweightModule):
         rope_setup=None,
         dtype=ttnn.bfloat16,
         kv_cache_max_seq_len: int = 512,
+        use_paged_kv_cache: bool = False,
+        block_size: int = 64,
+        max_num_blocks: int = None,
     ):
         super().__init__()
 
@@ -356,6 +359,16 @@ class TtQwen36GatedAttention(LightweightModule):
         # KV cache params
         self.kv_cache_max_seq_len = kv_cache_max_seq_len
         self.max_batch_size = args.max_batch_size
+
+        # Paged KV cache params
+        self.use_paged_kv_cache = use_paged_kv_cache
+        self.block_size = block_size
+        if max_num_blocks is None:
+            import math as _math
+
+            self.max_num_blocks = _math.ceil(kv_cache_max_seq_len / block_size) * args.max_batch_size
+        else:
+            self.max_num_blocks = max_num_blocks
 
         # Compute kernels
         self.compute_kernel_hifi2 = ttnn.WormholeComputeKernelConfig(
@@ -497,26 +510,50 @@ class TtQwen36GatedAttention(LightweightModule):
     def _build_kv_cache(self):
         """Allocate on-device KV cache, sharded across cols.
 
-        Shape (logical): [max_batch_size, n_kv=4, max_seq_len, head_dim]
-        Sharded on dim=1 (n_kv) across 4 mesh cols → per chip:
-            [max_batch_size, n_kv_per_col=1, max_seq_len, head_dim]
-        Replicated across rows (same content on all 8 rows of a given col).
+        Non-paged (use_paged_kv_cache=False):
+            Shape: [max_batch_size, n_kv=4, max_seq_len, head_dim]
+            Sharded on dim=1 (n_kv) across 4 mesh cols → per chip:
+                [max_batch_size, n_kv_per_col=1, max_seq_len, head_dim]
+
+        Paged (use_paged_kv_cache=True):
+            Shape: [max_num_blocks, n_kv=4, block_size, head_dim]
+            Sharded on dim=1 (n_kv) across 4 mesh cols → per chip:
+                [max_num_blocks, n_kv_per_col=1, block_size, head_dim]
+            Physical blocks are indexed via page_table at runtime.
         """
-        cache_k = torch.zeros(
-            self.max_batch_size,
-            self.n_kv,
-            self.kv_cache_max_seq_len,
-            self.head_dim,
-        )
-        cache_v = torch.zeros(
-            self.max_batch_size,
-            self.n_kv,
-            self.kv_cache_max_seq_len,
-            self.head_dim,
-        )
         col_shard_kv = ttnn.ShardTensor2dMesh(
             self.mesh_device, dims=(None, 1), mesh_shape=self.cluster_shape
         )  # split tensor dim=1 (n_kv) across mesh cols
+
+        if self.use_paged_kv_cache:
+            # Paged cache: [max_num_blocks, n_kv, block_size, head_dim]
+            cache_k = torch.zeros(
+                self.max_num_blocks,
+                self.n_kv,
+                self.block_size,
+                self.head_dim,
+            )
+            cache_v = torch.zeros(
+                self.max_num_blocks,
+                self.n_kv,
+                self.block_size,
+                self.head_dim,
+            )
+        else:
+            # Non-paged cache: [max_batch_size, n_kv, max_seq_len, head_dim]
+            cache_k = torch.zeros(
+                self.max_batch_size,
+                self.n_kv,
+                self.kv_cache_max_seq_len,
+                self.head_dim,
+            )
+            cache_v = torch.zeros(
+                self.max_batch_size,
+                self.n_kv,
+                self.kv_cache_max_seq_len,
+                self.head_dim,
+            )
+
         self.layer_past = [
             ttnn.from_torch(
                 kv,
@@ -723,8 +760,15 @@ class TtQwen36GatedAttention(LightweightModule):
 
         # KV-cache fill: each col stores its OWN single KV head (per-chip [B, 1, max_seq, hd])
         # k_rot, v_t are per-col [B, n_kv_pc=1, T, hd] — matches the sharded cache layout.
-        ttnn.fill_cache(keys_cache, k_rot, user_id % max(self.max_batch_size, 1))
-        ttnn.fill_cache(values_cache, v_t, user_id % max(self.max_batch_size, 1))
+        if page_table is not None and self.use_paged_kv_cache:
+            # Paged fill: paged_fill_cache(cache [max_num_blocks, n_kv_pc, block_size, hd],
+            #                              input  [1, n_kv_pc, T, hd],  page_table, batch_idx=user_id)
+            # k_rot/v_t are [B=1, n_kv_pc, T, hd] — matches the required input shape.
+            ttnn.experimental.paged_fill_cache(keys_cache, k_rot, page_table, batch_idx=user_id)
+            ttnn.experimental.paged_fill_cache(values_cache, v_t, page_table, batch_idx=user_id)
+        else:
+            ttnn.fill_cache(keys_cache, k_rot, user_id % max(self.max_batch_size, 1))
+            ttnn.fill_cache(values_cache, v_t, user_id % max(self.max_batch_size, 1))
 
         # ------------------------------------------------------------------
         # 7. GQA expand K, V (per col): n_kv_pc=1 → n_q_pc=6 heads
@@ -939,65 +983,177 @@ class TtQwen36GatedAttention(LightweightModule):
             cur_pos_int = int(cur_pos_cpu[0].item())
 
         # Update KV cache at position cur_pos_int for batch 0.  Each col stores
-        # its own 1 KV head (cache per-chip shape: [1, n_kv_pc=1, max_seq, hd]).
-        ttnn.update_cache(keys_cache, k_rot, cur_pos_int, batch_offset=0)
-        ttnn.update_cache(values_cache, v_t, cur_pos_int, batch_offset=0)
+        # its own 1 KV head (cache per-chip shape varies by paged/non-paged).
+        if page_table is not None and self.use_paged_kv_cache:
+            # Paged update via paged_update_cache (single-tensor version).
+            # The op requires:
+            #   - input_tensor to be HEIGHT_SHARDED (not WIDTH_SHARDED)
+            #   - cache_tensor to be INTERLEAVED
+            #   - page_table int32, ROW_MAJOR
+            #   - update_idxs_tensor int32, DRAM INTERLEAVED, shape [batch_size]
+            #   - input_tensor.padded_shape()[0] == 1
+            #   - input_tensor.padded_shape()[1] == batch_size
+            #
+            # Our k_rot/v_t are [B=1, n_kv_pc=1, T=1, hd=256] in DRAM (interleaved).
+            # Tile-padded: [1, 1, 32, 256]. Physical volume = 1*1*32*256 = 8192.
+            # Required shard: HEIGHT_SHARDED, 1 core, shard_shape = [32, 256].
+            #
+            # We reshape to [1, 1, 32, 256] and shard on 1 core HEIGHT_SHARDED.
+            # cur_pos tensor: [B=1] int32, DRAM INTERLEAVED.
+
+            # Build update_idxs_tensor [B=1] int32 DRAM INTERLEAVED
+            if isinstance(cur_pos_int, int):
+                upd_idxs = ttnn.from_torch(
+                    torch.tensor([cur_pos_int], dtype=torch.int32),
+                    device=self.mesh_device,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+            else:
+                # current_pos is already a TTNN tensor [max_batch_size]
+                # Slice to get [B=1] element
+                upd_idxs = current_pos
+
+            # Convert k_rot [B=1, n_kv_pc=1, T=1, hd=256] →
+            # physically [1, 1, 32, 256] → height-shard on 1 core → shard_shape [32, 256].
+            # paged_update_cache requires padded_shape[0]=1 (dim 0 is 1 ✓).
+            # It also requires padded_shape[1] == num_indices == 1 ✓ (n_kv_pc=1 padded=1).
+            tile_rows = ((T + TILE - 1) // TILE) * TILE  # 32
+
+            shard_grid = ttnn.CoreGrid(y=1, x=1)
+            height_shard_cfg = ttnn.create_sharded_memory_config(
+                shape=[tile_rows, hd],
+                core_grid=shard_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            k_rot_sharded = ttnn.to_memory_config(k_rot, memory_config=height_shard_cfg)
+            v_t_sharded = ttnn.to_memory_config(v_t, memory_config=height_shard_cfg)
+
+            ttnn.experimental.paged_update_cache(
+                keys_cache, k_rot_sharded, update_idxs_tensor=upd_idxs, page_table=page_table
+            )
+            ttnn.experimental.paged_update_cache(
+                values_cache, v_t_sharded, update_idxs_tensor=upd_idxs, page_table=page_table
+            )
+            k_rot_sharded.deallocate(True)
+            v_t_sharded.deallocate(True)
+        else:
+            ttnn.update_cache(keys_cache, k_rot, cur_pos_int, batch_offset=0)
+            ttnn.update_cache(values_cache, v_t, cur_pos_int, batch_offset=0)
         k_rot.deallocate(True)
         v_t.deallocate(True)
 
-        # Slice KV cache up to cur_pos_int (per-col, n_kv_pc=1 dim).
-        # T_kv is the number of VALID tokens; T_kv_pad is tile-aligned (≥ T_kv).
-        # Important: the tile-padded region beyond T_kv contains zeros — we must
-        # mask those positions with -inf in SDPA so they don't corrupt attention.
-        T_kv = cur_pos_int + 1
-        T_kv_pad = ((T_kv + TILE - 1) // TILE) * TILE
-        k_cached = ttnn.slice(
-            keys_cache, [0, 0, 0, 0], [B, n_kv_pc, T_kv_pad, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        v_cached = ttnn.slice(
-            values_cache, [0, 0, 0, 0], [B, n_kv_pc, T_kv_pad, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        if page_table is not None and self.use_paged_kv_cache:
+            # Paged SDPA decode: uses page_table to gather scattered KV blocks.
+            # Input shapes:
+            #   q: [1, B, n_q_pc, hd]  (needs to be [1, B, n_q_pc, hd])
+            #   k: [max_num_blocks, n_kv_pc, block_size, hd]
+            #   v: [max_num_blocks, n_kv_pc, block_size, hd]
+            #   page_table_tensor: [B, max_blocks_per_seq]
+            #   cur_pos_tensor: [B] int32
+            #
+            # Our q_rot is [B, n_q_pc, T, hd] = [1, 6, 1, 256].
+            # paged_scaled_dot_product_attention_decode expects q: [1, B, n_q_pc, hd].
+            # Transpose: [B, n_q_pc, 1, hd] → [1, B, n_q_pc, hd]
+            q_1bnd = ttnn.permute(q_rot, (2, 0, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            q_rot.deallocate(True)
 
-        # GQA expand (per col): n_kv_pc=1 → n_q_pc=6
-        gqa_pc = n_q_pc // n_kv_pc  # 6
-        k_exp = ttnn.repeat_interleave(k_cached, gqa_pc, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        v_exp = ttnn.repeat_interleave(v_cached, gqa_pc, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        k_cached.deallocate(True)
-        v_cached.deallocate(True)
+            if isinstance(current_pos, int):
+                cur_pos_tensor_sdpa = ttnn.from_torch(
+                    torch.tensor([current_pos] * B, dtype=torch.int32),
+                    device=self.mesh_device,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+            else:
+                cur_pos_tensor_sdpa = current_pos
 
-        # Build attention mask: mask positions T_kv..T_kv_pad with -inf so the
-        # zero-padded KV slots don't corrupt the attention distribution.
-        # TTNN SDPA requires mask_shape[2] == q_shape[2] (T_q=1).
-        if T_kv_pad > T_kv:
-            decode_mask_cpu = torch.zeros(B, 1, T_logical, T_kv_pad, dtype=torch.bfloat16)
-            decode_mask_cpu[:, :, :, T_kv:] = float("-inf")  # mask pad slots for q row 0
-            decode_mask_tt = ttnn.from_torch(
-                decode_mask_cpu,
-                device=self.mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            # Program config for paged SDPA decode.
+            # Tree reduction constraint: num_cores_per_head ≤ 2^6 = 64.
+            # With batch=1 and n_q_pc=6, use a small grid so (cores / n_q_pc_heads) ≤ 64.
+            # (1,1) is the safest: 1 core total → 1 core per batch-head group.
+            paged_sdpa_prog_cfg = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(1, 1),
+                exp_approx_mode=False,
+                q_chunk_size=0,
+                k_chunk_size=0,
             )
+            attn_out_1bnd = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+                q_1bnd,
+                keys_cache,
+                values_cache,
+                page_table,
+                cur_pos_tensor=cur_pos_tensor_sdpa,
+                scale=self.scale,
+                program_config=paged_sdpa_prog_cfg,
+                compute_kernel_config=self.compute_kernel_hifi4,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            q_1bnd.deallocate(True)
+            # attn_out_1bnd: [1, B, n_q_pc, hd] → back to [B, n_q_pc, T=1, hd]
+            attn_out = ttnn.permute(attn_out_1bnd, (1, 2, 0, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            attn_out_1bnd.deallocate(True)
         else:
-            decode_mask_tt = None
+            # Slice KV cache up to cur_pos_int (per-col, n_kv_pc=1 dim).
+            # T_kv is the number of VALID tokens; T_kv_pad is tile-aligned (≥ T_kv).
+            # Important: the tile-padded region beyond T_kv contains zeros — we must
+            # mask those positions with -inf in SDPA so they don't corrupt attention.
+            T_kv = cur_pos_int + 1
+            T_kv_pad = ((T_kv + TILE - 1) // TILE) * TILE
+            k_cached = ttnn.slice(
+                keys_cache, [0, 0, 0, 0], [B, n_kv_pc, T_kv_pad, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            v_cached = ttnn.slice(
+                values_cache, [0, 0, 0, 0], [B, n_kv_pc, T_kv_pad, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
 
-        # Decode SDPA per col: q [B, 6, 1, hd] attends to k/v [B, 6, T_kv_pad, hd]
-        attn_out = ttnn.transformer.scaled_dot_product_attention(
-            q_rot,
-            k_exp,
-            v_exp,
-            is_causal=False,
-            scale=self.scale,
-            compute_kernel_config=self.compute_kernel_hifi4,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            attn_mask=decode_mask_tt,
-        )
-        if decode_mask_tt is not None:
-            decode_mask_tt.deallocate(True)
-        k_exp.deallocate(True)
-        v_exp.deallocate(True)
-        q_rot.deallocate(True)
+            # GQA expand (per col): n_kv_pc=1 → n_q_pc=6
+            gqa_pc = n_q_pc // n_kv_pc  # 6
+            k_exp = ttnn.repeat_interleave(k_cached, gqa_pc, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            v_exp = ttnn.repeat_interleave(v_cached, gqa_pc, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            k_cached.deallocate(True)
+            v_cached.deallocate(True)
+
+            # Build attention mask: mask positions T_kv..T_kv_pad with -inf so the
+            # zero-padded KV slots don't corrupt the attention distribution.
+            # TTNN SDPA requires mask_shape[2] == q_shape[2] (T_q=1).
+            if T_kv_pad > T_kv:
+                decode_mask_cpu = torch.zeros(B, 1, T_logical, T_kv_pad, dtype=torch.bfloat16)
+                decode_mask_cpu[:, :, :, T_kv:] = float("-inf")  # mask pad slots for q row 0
+                decode_mask_tt = ttnn.from_torch(
+                    decode_mask_cpu,
+                    device=self.mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+            else:
+                decode_mask_tt = None
+
+            # Decode SDPA per col: q [B, 6, 1, hd] attends to k/v [B, 6, T_kv_pad, hd]
+            attn_out = ttnn.transformer.scaled_dot_product_attention(
+                q_rot,
+                k_exp,
+                v_exp,
+                is_causal=False,
+                scale=self.scale,
+                compute_kernel_config=self.compute_kernel_hifi4,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                attn_mask=decode_mask_tt,
+            )
+            if decode_mask_tt is not None:
+                decode_mask_tt.deallocate(True)
+            k_exp.deallocate(True)
+            v_exp.deallocate(True)
+            q_rot.deallocate(True)
 
         # Output gate (per col)
         # attn_out: [B, n_q_pc, T, hd] (heads-first) → [B, T, q_dim_pc] (time-first)
