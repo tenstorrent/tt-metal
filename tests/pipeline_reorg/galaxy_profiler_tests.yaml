@@ -5,7 +5,6 @@
 #   cmd: The exact command to run for the test.
 #   skus: A mapping of SKU names to their configuration (each SKU has timeout in minutes).
 #   owner_id: The Slack user ID to notify on failure.
-#   test_author: The Slack user ID of the test author.
 #   team: The team that owns the test.
 
 # For max allowed timeout refer to .github/time_budget.yaml
@@ -27,7 +26,6 @@
     wh_galaxy:
       timeout: 30
   owner_id: U03BJ1L3LUQ # Mo Memarian
-  test_author: U03BJ1L3LUQ # Mo Memarian
   team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
 
 - name: Galaxy profiler realtime cross-reference tests
@@ -38,5 +36,4 @@
     wh_galaxy:
       timeout: 15
   owner_id: U03BJ1L3LUQ # Mo Memarian
-  test_author: U03BJ1L3LUQ # Mo Memarian
   team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
