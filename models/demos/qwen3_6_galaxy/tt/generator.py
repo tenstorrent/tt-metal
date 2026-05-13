@@ -43,7 +43,11 @@ Concrete call sites that must become trace-safe before
   - ``models/demos/qwen3_6_galaxy/tt/llama_model.py:_embed`` — uploads
     input_ids per call.
   - ``models/demos/qwen3_6_galaxy/tt/llama_model.py:_norm_and_lm_head`` —
-    final ``ttnn.to_torch`` for logits gather.
+    final ``ttnn.to_torch`` for logits gather.  **Moved outside the trace
+    boundary in T14b.1**: pass ``output_as_ttnn=True`` to
+    ``forward_prefill`` / ``forward_decode`` and the generator's execute
+    path will gather to CPU AFTER ``ttnn.execute_trace`` returns.  The
+    capture path now uses this kwarg.
   - ``models/demos/qwen3_6_galaxy/tt/llama_attention.py`` — causal mask,
     ``current_pos`` SDPA tensor, update-index tensor (all via ``from_torch``).
   - ``models/demos/qwen3_6_galaxy/tt/qwen36_deltanet.py:_causal_conv1d_fir_mesh``
@@ -132,6 +136,31 @@ class Qwen36Generator:
         self._decode_traces: dict = {}
 
     # ------------------------------------------------------------------
+    # Private: gather a captured on-device logits tensor to CPU.  Used by
+    # the trace execute path AFTER ``ttnn.execute_trace`` returns, so this
+    # ``ttnn.to_torch`` call is OUTSIDE the trace boundary.  Mirrors the
+    # eager gather in ``TtQwen36Transformer._norm_and_lm_head``.
+    # ------------------------------------------------------------------
+
+    def _gather_logits_to_cpu(self, logits_tt) -> torch.Tensor:
+        """Gather an on-device logits tensor (per-chip [B, T, V/cols]) to a
+        CPU [B, T, padded_vocab] float32 torch tensor.  Caller-side companion
+        to ``output_as_ttnn=True`` on the model forward.
+        """
+        cluster_shape = list(self.args.cluster_shape)
+        logits_cpu_concat = ttnn.to_torch(
+            logits_tt,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                self.mesh_device,
+                dims=(0, -1),
+                mesh_shape=cluster_shape,
+            ),
+        )  # [n_rows*B, T, padded_vocab]
+        n_rows = cluster_shape[0]
+        B = logits_cpu_concat.shape[0] // n_rows
+        return logits_cpu_concat[:B].float()
+
+    # ------------------------------------------------------------------
     # Public: prefill
     # ------------------------------------------------------------------
 
@@ -180,7 +209,13 @@ class Qwen36Generator:
         if cache != _NO_TRACE_FALLBACK and isinstance(cache, dict):
             try:
                 ttnn.execute_trace(self.mesh_device, cache["trace_id"], cq_id=0, blocking=True)
-                return cache["captured"]
+                # captured = (logits_tt, kv_caches, dn_states, conv_states).
+                # logits_tt is an on-device tensor (output_as_ttnn=True at
+                # capture time); gather it to CPU AFTER execute_trace so the
+                # host-write is outside the trace boundary.
+                logits_tt, kv_c, dn_c, cv_c = cache["captured"]
+                logits_cpu = self._gather_logits_to_cpu(logits_tt)
+                return logits_cpu, kv_c, dn_c, cv_c
             except Exception as exc:
                 logger.warning(f"[Qwen36Generator] execute_trace (prefill) failed: {exc}")
         return result
@@ -258,7 +293,12 @@ class Qwen36Generator:
         if cache != _NO_TRACE_FALLBACK and isinstance(cache, dict):
             try:
                 ttnn.execute_trace(self.mesh_device, cache["trace_id"], cq_id=0, blocking=True)
-                return cache["captured"]
+                # captured = (logits_tt, kv_caches, dn_states, conv_states).
+                # Gather logits AFTER execute_trace so the host-write is
+                # outside the trace boundary.
+                logits_tt, kv_c, dn_c, cv_c = cache["captured"]
+                logits_cpu = self._gather_logits_to_cpu(logits_tt)
+                return logits_cpu, kv_c, dn_c, cv_c
             except Exception as exc:
                 logger.warning(f"[Qwen36Generator] execute_trace (decode) failed: {exc}")
         return result
@@ -312,13 +352,19 @@ class Qwen36Generator:
         because of host-writes inside ``forward_prefill`` (see module docstring).
         Kept as the future entry point — will succeed once the forward path
         is refactored to be host-write-free.
+
+        ``forward_prefill`` is called with ``output_as_ttnn=True`` so the LM-head
+        ``ttnn.to_torch`` gather is OUTSIDE the captured trace.  The on-device
+        logits tensor is returned in ``captured`` and the execute path gathers
+        it to CPU AFTER ``ttnn.execute_trace`` returns.
         """
-        # Compile run.
-        _ = self.model.forward_prefill(input_ids, return_caches=True, page_table=page_table)
+        # Compile run.  Run as output_as_ttnn=True so the compile run matches
+        # the captured op sequence (no LM-head host gather).
+        _ = self.model.forward_prefill(input_ids, return_caches=True, page_table=page_table, output_as_ttnn=True)
         ttnn.synchronize_device(self.mesh_device)
         # Capture run.
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        captured = self.model.forward_prefill(input_ids, return_caches=True, page_table=page_table)
+        captured = self.model.forward_prefill(input_ids, return_caches=True, page_table=page_table, output_as_ttnn=True)
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(self.mesh_device)
         return {"trace_id": trace_id, "captured": captured}
@@ -332,13 +378,19 @@ class Qwen36Generator:
         dn_states,
         conv_states,
     ):
-        """Compile + capture trace for one decode step."""
+        """Compile + capture trace for one decode step.
+
+        ``forward_decode`` is called with ``output_as_ttnn=True`` so the LM-head
+        ``ttnn.to_torch`` gather happens OUTSIDE the captured trace, in the
+        execute path after ``ttnn.execute_trace`` returns.
+        """
         _ = self.model.forward_decode(
             input_ids,
             current_pos=current_pos,
             kv_caches=kv_caches,
             dn_states=dn_states,
             conv_states=conv_states,
+            output_as_ttnn=True,
         )
         ttnn.synchronize_device(self.mesh_device)
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
@@ -348,6 +400,7 @@ class Qwen36Generator:
             kv_caches=kv_caches,
             dn_states=dn_states,
             conv_states=conv_states,
+            output_as_ttnn=True,
         )
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(self.mesh_device)

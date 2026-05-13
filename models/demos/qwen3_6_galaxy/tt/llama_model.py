@@ -248,8 +248,8 @@ class TtQwen36Transformer(LightweightModule):
     # Private: final_norm + lm_head helper
     # ------------------------------------------------------------------
 
-    def _norm_and_lm_head(self, x: ttnn.Tensor) -> torch.Tensor:
-        """Apply final norm and LM head ENTIRELY on device, then gather logits.
+    def _norm_and_lm_head(self, x: ttnn.Tensor, output_as_ttnn: bool = False):
+        """Apply final norm and LM head ENTIRELY on device, then optionally gather logits.
 
         Plan
         ----
@@ -259,16 +259,30 @@ class TtQwen36Transformer(LightweightModule):
              - x [B,T,H] replicated × W [H, V/4] per col → [B,T, V/4] per col
              - Across rows the result is identical (rows replicate the same weight shard).
              - Across cols each col holds a different V/4 slice.
-        3. Gather to host via ``ConcatMesh2dToTensor(dims=(0, -1))`` which concatenates
-           dim=0 over the 8 rows (giving us redundant row copies to slice out) and
-           dim=-1 over the 4 cols (giving us the full vocab).  Take the first row's
-           copy → [B, T, padded_vocab].
+        3. If ``output_as_ttnn=False`` (eager default), gather to host via
+           ``ConcatMesh2dToTensor(dims=(0, -1))`` which concatenates dim=0 over the
+           8 rows (giving us redundant row copies to slice out) and dim=-1 over the
+           4 cols (giving us the full vocab).  Take the first row's copy →
+           [B, T, padded_vocab] CPU float32.
+
+           If ``output_as_ttnn=True`` (trace path), return the on-device TTNN
+           logits tensor.  The caller is responsible for the same
+           ``ttnn.to_torch(...)`` gather AFTER ``ttnn.execute_trace`` returns so
+           the gather is not part of the captured trace.
 
         Args:
             x: TTNN tensor [B, T, H] replicated.
+            output_as_ttnn: If True, return the on-device TTNN logits tensor
+                instead of gathering to a CPU torch tensor.  Default False
+                preserves the eager API.
 
         Returns:
-            CPU torch float32 tensor [B, T, padded_vocab_size].
+            If ``output_as_ttnn=False``: CPU torch float32 tensor
+            [B, T, padded_vocab_size].
+            If ``output_as_ttnn=True``: ttnn.Tensor with per-chip shape
+            [B, T, padded_vocab/cluster_cols].  Caller does the
+            ConcatMesh2dToTensor gather + row-slice to produce the final
+            [B, T, padded_vocab] CPU tensor.
         """
         mem = ttnn.DRAM_MEMORY_CONFIG
 
@@ -289,8 +303,12 @@ class TtQwen36Transformer(LightweightModule):
         )
         x_normed.deallocate(True)
 
-        # 3. Gather to host: concat row-replicates on dim=0 (giving 8×B rows) and
-        #    cols' vocab shards on dim=-1 (giving full padded_vocab).
+        if output_as_ttnn:
+            # Trace path: caller will gather to host AFTER ttnn.execute_trace.
+            return logits_tt
+
+        # 3. Eager path: gather to host — concat row-replicates on dim=0 (giving
+        #    8×B rows) and cols' vocab shards on dim=-1 (giving full padded_vocab).
         logits_cpu_concat = ttnn.to_torch(
             logits_tt,
             mesh_composer=ttnn.ConcatMesh2dToTensor(
@@ -327,6 +345,7 @@ class TtQwen36Transformer(LightweightModule):
         input_ids: torch.Tensor,
         return_caches: bool = False,
         page_table=None,
+        output_as_ttnn: bool = False,
     ):
         """Run prefill forward pass.
 
@@ -335,10 +354,16 @@ class TtQwen36Transformer(LightweightModule):
             return_caches: If True, return caches alongside logits.
             page_table: Optional TTNN int32 tensor [B, max_blocks_per_seq] for
                 paged KV cache. Required when args.use_paged_kv_cache=True.
+            output_as_ttnn: If True, return the on-device TTNN logits tensor
+                from the LM head (per-chip shape [B, T, padded_vocab/cluster_cols])
+                instead of gathering to a CPU torch tensor.  Used by the trace
+                capture path so the final ``ttnn.to_torch`` gather happens AFTER
+                ``ttnn.execute_trace``.  Default False preserves the eager API.
 
         Returns:
             If return_caches=False:
-                logits: CPU torch tensor [B, T, padded_vocab_size] float32
+                logits: CPU torch tensor [B, T, padded_vocab_size] float32,
+                or ttnn.Tensor when output_as_ttnn=True.
             If return_caches=True:
                 (logits, kv_caches, dn_states, conv_states)
         """
@@ -375,7 +400,7 @@ class TtQwen36Transformer(LightweightModule):
             x = ttnn.slice(x, [0, 0, 0], [B, T, self.hidden_size], memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # Final norm + LM head
-        logits = self._norm_and_lm_head(x)  # [B, T, padded_vocab]
+        logits = self._norm_and_lm_head(x, output_as_ttnn=output_as_ttnn)  # [B, T, padded_vocab]
 
         if return_caches:
             return logits, kv_caches, dn_states, conv_states
@@ -468,6 +493,7 @@ class TtQwen36Transformer(LightweightModule):
         kv_caches: Optional[List] = None,
         dn_states: Optional[List] = None,
         conv_states: Optional[List] = None,
+        output_as_ttnn: bool = False,
     ):
         """Run a single decode step.
 
@@ -477,9 +503,15 @@ class TtQwen36Transformer(LightweightModule):
             kv_caches: List[None|...] of length num_layers.
             dn_states: List[None|ttnn.Tensor] of length num_layers.
             conv_states: List[None|ttnn.Tensor] of length num_layers.
+            output_as_ttnn: If True, return the on-device TTNN logits tensor
+                from the LM head instead of a CPU torch tensor.  Used by the
+                trace capture path so the final ``ttnn.to_torch`` gather happens
+                AFTER ``ttnn.execute_trace``.  Default False preserves the
+                eager API.
 
         Returns:
-            (logits [B, 1, padded_vocab_size], kv_caches, dn_states, conv_states)
+            (logits [B, 1, padded_vocab_size] CPU torch — or ttnn.Tensor when
+            output_as_ttnn=True, kv_caches, dn_states, conv_states)
         """
         B, T = input_ids.shape
         assert T == 1, f"forward_decode expects T=1, got T={T}"
@@ -520,6 +552,6 @@ class TtQwen36Transformer(LightweightModule):
             x = ttnn.slice(x, [0, 0, 0], [B, 1, self.hidden_size], memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # Final norm + LM head
-        logits = self._norm_and_lm_head(x)  # [B, 1, padded_vocab]
+        logits = self._norm_and_lm_head(x, output_as_ttnn=output_as_ttnn)  # [B, 1, padded_vocab]
 
         return logits, kv_caches, new_dn_states, new_conv_states

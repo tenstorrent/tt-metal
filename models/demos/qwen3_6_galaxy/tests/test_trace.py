@@ -690,3 +690,88 @@ def test_full_64layer_trace_paris(mesh_8x4):
     # Strict: trace must actually be captured.
     _assert_trace_actually_captured(gen, "decode", (1, False))
     print(f"[T14-paris] PASSED")
+
+
+# ---------------------------------------------------------------------------
+# Test 5 (T14b.1): output_as_ttnn kwarg equivalence on 4-layer model.
+# Eager forward (default) MUST match output_as_ttnn=True followed by the
+# caller-side ConcatMesh2dToTensor gather.  Same math, two return modes.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.hardware
+def test_output_as_ttnn_equivalence_4layer(mesh_8x4):
+    """T14b.1: ``forward_prefill(output_as_ttnn=False)`` and
+    ``forward_prefill(output_as_ttnn=True)`` followed by the same
+    ``ConcatMesh2dToTensor`` host gather must produce identical logits
+    (PCC >= 0.99999, same math).
+
+    This test guards the boundary change: the trace-friendly return mode
+    must be byte-identical to the eager mode after the caller-side gather.
+    """
+    from transformers import AutoTokenizer
+
+    import ttnn as _ttnn
+    from models.demos.qwen3_6_galaxy.tt.qwen36_model_config import TtQwen36ModelArgs
+
+    N_LAYERS = 4
+    args = TtQwen36ModelArgs(mesh_8x4)
+    print(f"\n[T14b1-parity] Loading weights for {N_LAYERS} layers...")
+    global_weights = _load_global_weights()
+    layers_weights = [_load_layer_weights(i) for i in range(N_LAYERS)]
+
+    tokenizer = AutoTokenizer.from_pretrained(str(_SNAPSHOT_DIR), trust_remote_code=True)
+    prompt = "The capital of France is"
+    input_ids = tokenizer(prompt, return_tensors="pt").input_ids
+    T_prompt = input_ids.shape[-1]
+    T_padded = ((T_prompt + 31) // 32) * 32
+    if T_padded > T_prompt:
+        pad = torch.zeros(1, T_padded - T_prompt, dtype=input_ids.dtype)
+        input_ids = torch.cat([input_ids, pad], dim=1)
+    print(f"[T14b1-parity] T_prompt={T_prompt}, T_padded={T_padded}")
+
+    print("[T14b1-parity] Building TTNN model...")
+    tt_model = _build_tt_model(mesh_8x4, args, N_LAYERS, global_weights, layers_weights)
+
+    # 1. Eager path (default): forward_prefill returns CPU torch [B, T, V].
+    print("[T14b1-parity] Running forward_prefill (eager, output_as_ttnn=False)...")
+    logits_eager = tt_model.forward_prefill(input_ids, page_table=None)
+    assert isinstance(
+        logits_eager, torch.Tensor
+    ), f"[T14b1-parity] eager return must be torch.Tensor, got {type(logits_eager)}"
+    print(f"[T14b1-parity] eager shape={tuple(logits_eager.shape)}, dtype={logits_eager.dtype}")
+
+    # 2. TTNN path: forward_prefill returns on-device ttnn.Tensor.  Caller
+    #    does ConcatMesh2dToTensor → CPU torch [B, T, V] gather.
+    print("[T14b1-parity] Running forward_prefill (output_as_ttnn=True)...")
+    logits_tt = tt_model.forward_prefill(input_ids, page_table=None, output_as_ttnn=True)
+    assert isinstance(
+        logits_tt, _ttnn.Tensor
+    ), f"[T14b1-parity] output_as_ttnn=True must return ttnn.Tensor, got {type(logits_tt)}"
+
+    cluster_shape = list(args.cluster_shape)
+    logits_cpu_concat = _ttnn.to_torch(
+        logits_tt,
+        mesh_composer=_ttnn.ConcatMesh2dToTensor(
+            mesh_8x4,
+            dims=(0, -1),
+            mesh_shape=cluster_shape,
+        ),
+    )
+    n_rows = cluster_shape[0]
+    B = logits_cpu_concat.shape[0] // n_rows
+    logits_ttnn_gathered = logits_cpu_concat[:B].float()
+    print(f"[T14b1-parity] ttnn-gathered shape={tuple(logits_ttnn_gathered.shape)}")
+
+    # 3. Compare — same math, must be identical (or near-identical).
+    assert (
+        logits_eager.shape == logits_ttnn_gathered.shape
+    ), f"[T14b1-parity] shape mismatch: eager={logits_eager.shape}, ttnn={logits_ttnn_gathered.shape}"
+    pcc = _pcc(logits_eager, logits_ttnn_gathered)
+    max_abs = (logits_eager - logits_ttnn_gathered).abs().max().item()
+    print(f"[T14b1-parity] PCC(eager, ttnn-gather)={pcc:.8f}, max_abs_diff={max_abs:.6e}")
+    assert pcc >= 0.99999, (
+        f"[T14b1-parity] FAILED — eager vs output_as_ttnn=True diverged. "
+        f"PCC={pcc:.8f} < 0.99999.  Same math, different return mode; "
+        f"any divergence indicates a logic bug in the boundary change."
+    )
