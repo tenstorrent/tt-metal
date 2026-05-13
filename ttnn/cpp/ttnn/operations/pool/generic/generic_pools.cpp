@@ -1051,8 +1051,8 @@ static std::vector<Tensor> pool2d(
     bool is_global_pool =
         (kernel_size[0] == input_h && kernel_size[1] == input_w) &&
         (padding_check[0] == 0 && padding_check[1] == 0 && padding_check[2] == 0 && padding_check[3] == 0) &&
-        (dilation_h == 1 && dilation_w == 1) && !input_tensor_4d.memory_config().is_sharded() &&
-        !applied_shard_scheme.has_value() && !input_is_block_float_tile;
+        (dilation_h == 1 && dilation_w == 1) && !applied_shard_scheme.has_value();
+    (void)input_is_block_float_tile;
 
     if (is_global_pool && pool_type == Pool2DType::AVG_POOL2D) {
         // Reduction needs interleaved input/output. The output is a tiny (1×1 spatial) tensor;
@@ -1072,13 +1072,23 @@ static std::vector<Tensor> pool2d(
         // direction, so every element of the kernel window corresponds to a real input value.
         float scalar = divisor_override.has_value() ? 1.0f / float(divisor_override.value()) : 1.0f / float(hw);
 
-        // Convert to ROW_MAJOR INTERLEAVED for the reduction. ROW_MAJOR strips tile padding
-        // garbage that would otherwise corrupt the sum; pool_sum requires interleaved input.
+        // Convert to INTERLEAVED for the reduction (pool_sum's output cannot fit the input's
+        // shard spec when the output is 1x1 spatial). Skip the TILE → ROW_MAJOR conversion:
+        // the deleted dedicated global_avg_pool2d device op ran pool_sum directly on TILE
+        // (including BFLOAT8_B/BFLOAT4_B), and pool_sum sums tile-padding rows as 0 when the
+        // spatial dim is tile-aligned. For non-tile-aligned spatial (H*W % 32 != 0), the
+        // tile-padding rows may hold garbage, so we still convert to ROW_MAJOR — except for
+        // block-float TILE, where to_layout would force untilize+typecast-to-bfloat16
+        // (~127us, exceeding the algorithmic win); accept that PCC risk to match the legacy
+        // device op's behavior for these callers (e.g. EfficientNet B0 conv-head 1×3136 case).
         Tensor input = input_tensor_4d;
         if (input.memory_config() != reduce_mem) {
             input = ttnn::to_memory_config(input, reduce_mem);
         }
-        if (input.layout() != Layout::ROW_MAJOR) {
+        uint32_t hw_value = input_h * input_w;
+        bool spatial_is_tile_aligned = (hw_value % tt::constants::TILE_HEIGHT == 0);
+        bool dtype_is_block_float = (input.dtype() == DataType::BFLOAT8_B || input.dtype() == DataType::BFLOAT4_B);
+        if (input.layout() != Layout::ROW_MAJOR && !spatial_is_tile_aligned && !dtype_is_block_float) {
             input = ttnn::to_layout(input, Layout::ROW_MAJOR);
         }
 
