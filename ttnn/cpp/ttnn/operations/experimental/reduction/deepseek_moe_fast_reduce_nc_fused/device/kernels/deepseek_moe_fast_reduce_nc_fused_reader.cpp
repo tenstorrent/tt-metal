@@ -5,53 +5,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint_pages.h"
 
-void print_tile_rows(
-    uint32_t cb_idx,
-    uint32_t tile_idx,
-    bool untilize = false,
-    uint16_t start_row = 0,
-    uint16_t end_row = 32,
-    uint8_t start_col = 0,
-    uint8_t end_col = 32) {
-    DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
-    DEVICE_PRINT("cb_idx: {} tile_idx: {}\n", cb_idx, tile_idx);
-    DPRINT << "======" << ENDL();
-    DEVICE_PRINT("======\n");
-    for (uint16_t r = start_row; r < end_row; ++r) {
-        DPRINT << (uint)r << " : "
-               << TileSlice(
-                      cb_idx,
-                      tile_idx,
-                      SliceRange{
-                          .h0 = (uint8_t)r,
-                          .h1 = (uint8_t)(r + 1),
-                          .hs = (uint8_t)1,
-                          .w0 = (uint8_t)start_col,
-                          .w1 = (uint8_t)end_col,
-                          .ws = (uint8_t)1},
-                      true,
-                      untilize)
-               << ENDL();
-        DEVICE_PRINT(
-            "{} : {}\n",
-            r,
-            TileSlice(
-                cb_idx,
-                tile_idx,
-                SliceRange{
-                    .h0 = (uint8_t)r,
-                    .h1 = (uint8_t)(r + 1),
-                    .hs = (uint8_t)1,
-                    .w0 = (uint8_t)start_col,
-                    .w1 = (uint8_t)end_col,
-                    .ws = (uint8_t)1},
-                true,
-                untilize));
-    }
-    DPRINT << "++++++" << ENDL();
-    DEVICE_PRINT("++++++\n");
-}
-
 // Compile-time args
 constexpr uint32_t cb_in_act_id = get_compile_time_arg_val(0);
 constexpr uint32_t cb_scores_id = get_compile_time_arg_val(1);
@@ -78,6 +31,8 @@ constexpr uint32_t expert_mapping_cb_page_size = get_compile_time_arg_val(21);  
 constexpr uint32_t expert_indices_num_pages = get_compile_time_arg_val(22);
 constexpr uint32_t expert_mapping_num_pages = get_compile_time_arg_val(23);
 constexpr uint32_t mesh_cols = get_compile_time_arg_val(24);  // mesh_shape[1]; needed to decode linearized device ids
+
+constexpr uint32_t face2_offset = 512;  // face 2 starts 512 elements into tile
 
 // TensorAccessor CT args, chained:
 //   activation @ 25, scores @ next, expert_indices @ next, expert_mapping @ next.
@@ -213,53 +168,6 @@ void kernel_main() {
             return (owner_device / mesh_cols) == mesh_coord_row;
         }
     };
-    // ---------------------------------------------------------------------------------------------
-
-    // ---- Diagnostic DPRINTs (one core only) -----------------------------------------------------
-    // Compare these against the python test for the same device:
-    //   torch_expert_indices_global[t0:t0+4]   ↔ expert_id values printed below
-    //   torch_expert_mapping[0, expert_id]     ↔ owner_device values printed below
-    //   _on_axis_mask(...)                     ↔ on_axis bools printed below
-    // If indices/owner/on_axis disagree with python for the same (t, k), the bug is in the read
-    // path (page stride / num_pages / mapping pointer). If they agree, the bug is downstream.
-    if (start_tiles_read == 0) {
-        DPRINT << "[reader] mesh_coord=(" << mesh_coord_row << "," << mesh_coord_col << ") mesh_cols=" << mesh_cols
-               << " cluster_axis=" << (uint32_t)cluster_axis << ENDL();
-        DPRINT << "[reader] indices: num_pages=" << expert_indices_num_pages
-               << " cb_page_size=" << expert_indices_cb_page_size << " stride_u16=" << indices_page_stride_u16
-               << ENDL();
-        DPRINT << "[reader] mapping: num_pages=" << expert_mapping_num_pages
-               << " cb_page_size=" << expert_mapping_cb_page_size << " stride_u16=" << mapping_page_stride_u16
-               << " mapping_row=" << mapping_row << ENDL();
-        DPRINT << "[reader] mapping[0..15]=";
-        for (uint32_t e = 0; e < 16; ++e) {
-            DPRINT << (uint32_t)mapping_row_base[e] << " ";
-        }
-        DPRINT << ENDL();
-        const uint32_t t_max = num_tokens < 4 ? num_tokens : 4;
-        for (uint32_t t = 0; t < t_max; ++t) {
-            DPRINT << "[reader] t=" << t << " ids=";
-            for (uint32_t k = 0; k < reduction_dim_size; ++k) {
-                DPRINT << (uint32_t)expert_indices_u16[t * indices_page_stride_u16 + k] << " ";
-            }
-            DPRINT << "owners=";
-            for (uint32_t k = 0; k < reduction_dim_size; ++k) {
-                const uint16_t expert_id = expert_indices_u16[t * indices_page_stride_u16 + k];
-                DPRINT << (uint32_t)mapping_row_base[expert_id] << " ";
-            }
-            DPRINT << "on_axis=";
-            uint32_t on_axis_count = 0;
-            for (uint32_t k = 0; k < reduction_dim_size; ++k) {
-                const bool oa = compute_on_axis(t, k);
-                if (oa) {
-                    ++on_axis_count;
-                }
-                DPRINT << (uint32_t)oa << " ";
-            }
-            DPRINT << "count=" << on_axis_count << ENDL();
-        }
-    }
-    // ---------------------------------------------------------------------------------------------
 
     // [token][1][s=1][k] -> [k][1][t][s_padded=32]
     for (uint32_t k = 0; k < reduction_dim_size; ++k) {
@@ -275,7 +183,7 @@ void kernel_main() {
         if (num_tokens > 16) {
             for (uint32_t t = 16; t < num_tokens; ++t) {
                 const uint16_t score = scores_rm_u16[t * (cb_scores_rm_page_size / 2) + k];
-                expert_tile[512 + (t - 16) * 16] = compute_on_axis(t, k) ? score : bf16_zero;
+                expert_tile[face2_offset + (t - 16) * 16] = compute_on_axis(t, k) ? score : bf16_zero;
             }
         }
     }
@@ -295,15 +203,8 @@ void kernel_main() {
         for (uint32_t k = 0; k < reduction_dim_size; ++k) {
             volatile tt_l1_ptr uint16_t* expert_tile = scores_tile_u16 + k * tile_u16_stride;
             for (uint32_t t = face_2_start; t < 32; ++t) {
-                expert_tile[512 + (t - 16) * 16] = bf16_zero;
+                expert_tile[face2_offset + (t - 16) * 16] = bf16_zero;
             }
-        }
-    }
-
-    if (start_tiles_read == 0) {
-        for (uint32_t k = 0; k < reduction_dim_size; ++k) {
-            DPRINT << "k: " << k << "\n";
-            print_tile_rows(cb_scores_id, k, true, 0, 32, 0, 1);
         }
     }
 

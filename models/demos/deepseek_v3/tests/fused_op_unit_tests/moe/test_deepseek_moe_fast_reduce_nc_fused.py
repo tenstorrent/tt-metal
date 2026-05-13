@@ -122,12 +122,14 @@ def _torch_golden_gated(
 ):
     """Per-device golden: zero off-axis scores, then standard permute / mul / split-sum."""
     on_axis = _on_axis_mask(ind_local, mapping, mesh_shape, mesh_coord, cluster_axis)
-    print(f"{mesh_coord=} {on_axis.sum(dim=0)=}")
     gated_scores = torch.where(on_axis, s_local, torch.zeros_like(s_local))
     return _torch_golden_scale_and_fast_reduce_nc(u_local, gated_scores, num_replicated_devices=num_replicated_devices)
 
 
-@pytest.mark.parametrize("batch_per_device", [32])
+PCC_THRESHOLD = 0.999
+
+
+@pytest.mark.parametrize("batch_per_device", [32, 8, 3, 1])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("seq", [1])
 @pytest.mark.parametrize("hidden_size", [7168])
@@ -178,22 +180,17 @@ def test_deepseek_moe_fast_reduce_nc_fused(
     replicate_mapper = ttnn.replicate_tensor_to_mesh_mapper(mesh_device)
 
     # Global tensors (same dimensions as the original multi-chip test)
-    # torch_unsqueezed_global = torch.rand((select_experts_k, 1, batch, hidden_size), dtype=torch.bfloat16) - 0.5
-    torch_unsqueezed_global = torch.ones((select_experts_k, 1, batch, hidden_size), dtype=torch.bfloat16)
+    torch_unsqueezed_global = torch.rand((select_experts_k, 1, batch, hidden_size), dtype=torch.bfloat16) - 0.5
+    # torch_unsqueezed_global = torch.ones((select_experts_k, 1, batch, hidden_size), dtype=torch.bfloat16)
 
-    # torch_expert_scores_global = torch.rand((batch, 1, seq, select_experts_k), dtype=torch.bfloat16)
-    torch_expert_scores_global = torch.ones((batch, 1, seq, select_experts_k), dtype=torch.bfloat16)
+    torch_expert_scores_global = torch.rand((batch, 1, seq, select_experts_k), dtype=torch.bfloat16)
+    # torch_expert_scores_global = torch.ones((batch, 1, seq, select_experts_k), dtype=torch.bfloat16)
 
-    #    torch_expert_scores_global = torch_expert_scores_global / torch_expert_scores_global.sum(dim=-1, keepdim=True)
+    torch_expert_scores_global = torch_expert_scores_global / torch_expert_scores_global.sum(dim=-1, keepdim=True)
 
     # New: per-token expert routing + global expert→owning-device map.
     torch_expert_indices_global = _get_expert_indices(batch, experts, select_experts_k, seq)
     torch_expert_mapping = _gen_expert_mapping_linearized(experts, num_devices)
-
-    # The kernel zeros scores for (t, k) slots whose expert lives off this device's cluster axis,
-    # so the golden has to be computed per-device — slightly relaxed PCC because the gated output
-    # has lower magnitude than the ungated version.
-    pcc_threshold = 0.975
 
     per_device_goldens = []
     for m0 in range(mesh_shape[0]):
@@ -293,11 +290,7 @@ def test_deepseek_moe_fast_reduce_nc_fused(
 
             ref = per_device_goldens[didx][cidx]
 
-            for i in range(current_tokens):
-                print(f"{tt_host[:,:,i,:64]=}")
-                print(f"{ref[:,:,i,:64]=}")
-
-            ok, msg = comp_pcc(ref, tt_host_slice, pcc=pcc_threshold)
+            ok, msg = comp_pcc(ref, tt_host_slice, pcc=PCC_THRESHOLD)
             logger.info(f"virtual_dev={didx} mesh_coord={mesh_coord} chunk={cidx}: {msg}")
             assert ok, f"virtual_dev={didx} mesh_coord={mesh_coord} chunk={cidx} failed: {msg}"
 
