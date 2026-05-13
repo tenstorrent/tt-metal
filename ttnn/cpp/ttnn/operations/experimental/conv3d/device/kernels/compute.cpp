@@ -106,47 +106,65 @@ void add_bias_inplace(uint32_t inout_cb, uint32_t bias_cb) {
 
 template <uint32_t rows, uint32_t cols, bool consume_add_cb>
 void add_inplace_l1_acc(uint32_t inout_cb, uint32_t add_cb) {
-    // Pack-side L1 accumulation (`pack_reconfig_l1_acc(1)` + indexed pack): cheaper
-    // than the math add in `add_bias_inplace` because the add fuses into the pack,
-    // but requires inout_cb to be physically full — pop+reserve must return the
-    // same L1 slots so the indexed pack lands on top of the existing tiles.
-    // consume_add_cb=false: add_cb is a single bias row reused for every output row.
-    // consume_add_cb=true:  add_cb is a full block consumed tile-for-tile (reduction).
+    // For bias (consume_add_cb=false) we use math-side broadcast add tile-at-a-time.
+    // The pack-side L1-acc path that previously lived here regressed PCC on bf16
+    // conv3d (~99.97% vs >=99.998% required) — see #43541. Single-tile pop/push
+    // matches the pre-#43541 add_bias_inplace semantics.
+    //
+    // For reduction (consume_add_cb=true) we keep the pack-side L1 accumulation —
+    // it is the only path that works correctly when both operands are fp32 partial
+    // sums (DST_ACCUM_MODE forbids two fp32 srcA/srcB inputs to a math-side add).
     constexpr uint32_t num_tiles = rows * cols;
     constexpr uint32_t add_tiles = consume_add_cb ? num_tiles : cols;
     constexpr uint32_t max_dst_tiles = compute_kernel_lib::DEST_AUTO_LIMIT;
     static_assert(rows > 0 && cols > 0);
 
-    cb_wait_front(inout_cb, num_tiles);
-    cb_wait_front(add_cb, add_tiles);
+    if constexpr (consume_add_cb) {
+        cb_wait_front(inout_cb, num_tiles);
+        cb_wait_front(add_cb, add_tiles);
 
-    copy_tile_to_dst_init_short_with_dt(inout_cb, add_cb);
-    pack_reconfig_data_format(inout_cb);
-    pack_reconfig_l1_acc(1);
-    for (uint32_t i = 0; i < rows; ++i) {
-        for (uint32_t col_start = 0; col_start < cols; col_start += max_dst_tiles) {
-            const uint32_t cols_cur = (cols - col_start) < max_dst_tiles ? (cols - col_start) : max_dst_tiles;
-            const uint32_t add_offset = consume_add_cb ? 0 : col_start;
-
-            tile_regs_acquire();
-            for (uint32_t j = 0; j < cols_cur; ++j) {
-                copy_tile(add_cb, add_offset + j, j);
-            }
-            tile_regs_commit();
-            cb_pop_front(inout_cb, cols_cur);
-            if constexpr (consume_add_cb) {
+        copy_tile_to_dst_init_short_with_dt(inout_cb, add_cb);
+        pack_reconfig_data_format(inout_cb);
+        pack_reconfig_l1_acc(1);
+        for (uint32_t i = 0; i < rows; ++i) {
+            for (uint32_t col_start = 0; col_start < cols; col_start += max_dst_tiles) {
+                const uint32_t cols_cur = (cols - col_start) < max_dst_tiles ? (cols - col_start) : max_dst_tiles;
+                tile_regs_acquire();
+                for (uint32_t j = 0; j < cols_cur; ++j) {
+                    copy_tile(add_cb, j, j);
+                }
+                tile_regs_commit();
+                cb_pop_front(inout_cb, cols_cur);
                 cb_pop_front(add_cb, cols_cur);
+                cb_reserve_back(inout_cb, cols_cur);
+                tile_regs_wait();
+                for (uint32_t j = 0; j < cols_cur; ++j) {
+                    pack_tile<true>(j, inout_cb, j);
+                }
+                cb_push_back(inout_cb, cols_cur);
+                tile_regs_release();
             }
-            cb_reserve_back(inout_cb, cols_cur);
-            tile_regs_wait();
-            for (uint32_t j = 0; j < cols_cur; ++j) {
-                pack_tile<true>(j, inout_cb, j);
+        }
+        pack_reconfig_l1_acc(0);
+    } else {
+        add_bcast_rows_init_short(inout_cb, add_cb);
+        cb_wait_front(inout_cb, num_tiles);
+        cb_wait_front(add_cb, add_tiles);
+
+        for (uint32_t i = 0; i < rows; ++i) {
+            for (uint32_t j = 0; j < cols; ++j) {
+                tile_regs_acquire();
+                add_tiles_bcast_rows(inout_cb, add_cb, 0, j, 0);
+                tile_regs_commit();
+                cb_pop_front(inout_cb, 1);
+                cb_reserve_back(inout_cb, 1);
+                tile_regs_wait();
+                pack_tile(0, inout_cb);
+                cb_push_back(inout_cb, 1);
+                tile_regs_release();
             }
-            cb_push_back(inout_cb, cols_cur);
-            tile_regs_release();
         }
     }
-    pack_reconfig_l1_acc(0);
 }
 
 template <uint32_t rows, uint32_t cols, bool use_fp32_partials, bool use_bias, uint32_t inout_cb, uint32_t bias_cb>
