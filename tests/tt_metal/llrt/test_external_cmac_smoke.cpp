@@ -49,6 +49,8 @@
 #include "llrt/external_iface_sender.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_cluster.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device.hpp>
 
 // -------------------------------------------------------------------------
 // Minimal Ethernet frame helpers
@@ -72,11 +74,16 @@ static bool parse_mac_env(const char* env_name, std::array<uint8_t, 6>& out) {
     return true;
 }
 
-// Build a 60-byte minimal Ethernet frame (no FCS) with EtherType 0x1AF4.
-// Layout: [dst 6B][src 6B][EtherType 2B][payload 46B of 0x00]
+// Build a 256-byte Ethernet frame (no FCS) with EtherType 0x1AF4.
+// Bumped from the 60-byte minimum because the CMAC TX path silently drops
+// sub-frame-size raw transmits on this rig — burst-mode 1500-byte frames
+// reach the wire but sub-100-byte ones don't show up in NIC PHY counters.
+// 256 B is comfortably above any plausible min-size guard while still being
+// short enough to round-trip in one DPDK burst.
+// Layout: [dst 6B][src 6B][EtherType 2B][payload 242B counting pattern]
 static std::vector<uint8_t> build_tt_link_frame(
     const std::array<uint8_t, 6>& dst_mac, const std::array<uint8_t, 6>& src_mac) {
-    std::vector<uint8_t> frame(60, 0x00u);
+    std::vector<uint8_t> frame(256, 0x00u);
     // Destination MAC
     std::memcpy(frame.data(), dst_mac.data(), 6);
     // Source MAC
@@ -84,7 +91,11 @@ static std::vector<uint8_t> build_tt_link_frame(
     // EtherType 0x1AF4 (big-endian)
     frame[12] = 0x1Au;
     frame[13] = 0xF4u;
-    // Payload bytes [14..59] remain 0x00 (minimum padding to 60 bytes).
+    // Payload bytes [14..255] = counting pattern so a wire capture is
+    // distinguishable from burst-mode TTWH frames.
+    for (size_t i = 14; i < frame.size(); ++i) {
+        frame[i] = static_cast<uint8_t>(i & 0xFF);
+    }
     return frame;
 }
 
@@ -152,15 +163,20 @@ int main() {
 
     log_info(tt::LogTest, "External CMAC smoke test: chip_id={}, eth_chan={}", chip_id, eth_chan);
 
+    // Trigger MetalContext init so RiscFirmwareInitializer::initialize_cmac_firmware
+    // actually runs and loads erisc_cmac_simple onto the eth core. Without this the
+    // test would just observe whatever the WH boot ROM left in the eth core's L1.
+    tt::tt_metal::IDevice* device = tt::tt_metal::CreateDevice(chip_id);
+
     // ------------------------------------------------------------------
     // Step 2 — Resolve eth_chan → virtual core coordinate.
     // ------------------------------------------------------------------
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& soc_desc = cluster.get_soc_desc(chip_id);
 
-    CoreCoord logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
+    CoreCoord logical_core = soc_desc.get_eth_core_for_channel(eth_chan, tt::CoordSystem::LOGICAL);
     CoreCoord virtual_core =
-        cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, logical_core, CoreType::ETH);
+        cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, logical_core, tt::CoreType::ETH);
 
     log_info(
         tt::LogTest,
@@ -188,6 +204,26 @@ int main() {
         eth_chan);
     log_info(tt::LogTest, "PCS link up. Firmware mode-switch magic word written.");
 
+    // CreateDevice's RISC reset transition kills the CMAC PCS marker stream
+    // briefly. On Mellanox-attached external CMAC, the peer's eswitch FDB
+    // enters a transient state for ~hundreds of ms after link recovery and
+    // silently drops frames that arrive in that window — they reach
+    // rx_packets_phy and rx_prio0_packets but never the PF vport. Wait for
+    // the eswitch to re-stabilize before firing the gw frame. Override with
+    // TT_METAL_CMAC_POST_LINK_SETTLE_MS=N (default 2500 ms; 0 disables).
+    // The structural fix is to stop bouncing the link via the warm-reload
+    // guard in RiscFirmwareInitializer, but that requires KMD-level changes
+    // to skip the soft-reset of eth cores on chip close — until then this
+    // sleep is the smallest path to a passing end-to-end smoke test.
+    uint32_t settle_ms = 2500;
+    if (const char* env = std::getenv("TT_METAL_CMAC_POST_LINK_SETTLE_MS")) {
+        settle_ms = static_cast<uint32_t>(std::strtoul(env, nullptr, 0));
+    }
+    if (settle_ms > 0) {
+        log_info(tt::LogTest, "Settling for {} ms (Mellanox eswitch FDB recovery window)...", settle_ms);
+        std::this_thread::sleep_for(std::chrono::milliseconds(settle_ms));
+    }
+
     // ------------------------------------------------------------------
     // Step 5 — Build a minimal 60-byte TT-link Ethernet frame.
     // ------------------------------------------------------------------
@@ -197,7 +233,7 @@ int main() {
     parse_mac_env("TT_PEER_MAC", dst_mac);  // override dst from env if set
 
     std::vector<uint8_t> frame = build_tt_link_frame(dst_mac, src_mac);
-    TT_FATAL(frame.size() == 60, "Internal error: frame size {} != 60", frame.size());
+    TT_FATAL(frame.size() == 256, "Internal error: frame size {} != 256", frame.size());
 
     // ------------------------------------------------------------------
     // Step 6 — Open the FPGA BAR and read the baseline stat_cls_passed.
@@ -217,11 +253,24 @@ int main() {
     // ------------------------------------------------------------------
     bool sent = sender.send(std::span<const uint8_t>(frame));
     TT_FATAL(sent, "send() returned false — TX ring busy or frame too large");
-    log_info(tt::LogTest, "Frame sent successfully ({} bytes, EtherType=0x1AF4).", frame.size());
+    log_info(tt::LogTest, "Frame submitted to TX doorbell ({} B, EtherType=0x1AF4).", frame.size());
 
     // ------------------------------------------------------------------
-    // Step 8 — Wait 1 ms for the FPGA classifier to process the frame.
+    // Step 8 — Wait for firmware to consume the doorbell and arm CMAC TX.
     // ------------------------------------------------------------------
+    // The doorbell-clear is also the gw-mode-entry ack: erisc_cmac_simple only
+    // clears kTxSizeAddr from inside run_gateway_loop, which it enters at most
+    // ~33 ms after kModeMagic is written.  Without this wait, CloseDevice would
+    // reset the erisc before firmware ever sees the magic word.
+    bool consumed = sender.wait_tx_consumed(5000);
+    TT_FATAL(
+        consumed,
+        "wait_tx_consumed() timed out after 5000 ms — firmware did not enter gw mode "
+        "or did not arm CMAC TX. Check kModeMagic write at L1:0x1F50 and erisc heartbeat.");
+    log_info(tt::LogTest, "Firmware consumed TX doorbell — CMAC TX armed.");
+
+    // Wait 1 ms for the FPGA classifier to ingest the frame off the wire
+    // (separate latency from the firmware-side consume above).
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
 
     // ------------------------------------------------------------------
@@ -243,5 +292,6 @@ int main() {
     // Step 10 — Report success.
     // ------------------------------------------------------------------
     log_info(tt::LogTest, "PASS: external CMAC smoke test");
+    tt::tt_metal::CloseDevice(device);
     return 0;
 }

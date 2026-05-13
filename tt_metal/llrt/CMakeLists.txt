@@ -38,3 +38,12 @@ set(TT_METAL_DEFAULT_INSTALL_ROOT "/usr/${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium"
 target_compile_definitions(llrt PRIVATE TT_METAL_INSTALL_ROOT="${TT_METAL_DEFAULT_INSTALL_ROOT}")
 
 message(STATUS "TT_METAL_INSTALL_ROOT == ${TT_METAL_DEFAULT_INSTALL_ROOT}")
+
+# Per-op timing in ExternalIfaceSender::post_send hot path. Off by default;
+# enable with -DTT_METAL_CMAC_PROFILE=ON at configure time. Used by the
+# external CMAC throughput campaign to measure per-PCIe-op cost.
+option(TT_METAL_CMAC_PROFILE "Instrument WQE-ring post_send PCIe-op timing" OFF)
+if(TT_METAL_CMAC_PROFILE)
+    target_compile_definitions(llrt PRIVATE TT_METAL_CMAC_PROFILE)
+    message(STATUS "TT_METAL_CMAC_PROFILE: ENABLED — post_send timing on")
+endif()

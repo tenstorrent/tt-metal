@@ -5,8 +5,11 @@
 #include "risc_firmware_initializer.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <fstream>
 #include <future>
 #include <set>
+#include <thread>
 
 #include <enchantum/enchantum.hpp>
 #include <tracy/Tracy.hpp>
@@ -1013,22 +1016,132 @@ void RiscFirmwareInitializer::initialize_firmware(
     }
 }
 
-void RiscFirmwareInitializer::initialize_cmac_firmware(tt::ChipId device_id, CoreCoord virtual_core) {
-    // Put entire eth core into reset before writing firmware.
-    // Must use ALL (not just ERISC0) to clear any stale soft-reset bits
-    // left by assert_inactive_ethernet_cores (which asserts ALL_TENSIX).
-    // On Wormhole, the TRISC0-2/NCRISC bits in the soft-reset register
-    // gate shared hardware on eth cores; leaving them asserted causes
-    // ERISC0 to hang during MAC register access.
-    cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
+// Warm-reload constants. Avoids re-asserting erisc reset (which kills CMAC's
+// PCS marker stream and momentarily knocks down the peer link) when the
+// firmware that's already running is byte-for-byte the one we'd reload.
+namespace {
 
-    // Load erisc_cmac_simple ELF — pre-built binary from budabackend
+// L1:0x1FF0 — between the gw-mode ABI region (kRxBufSelAddr=0x1F54+4=0x1F58)
+// and PACKET_BUF (0x4000). Neither erisc_cmac_simple's code nor its data
+// references this address, so the host can stash a 64-bit sentinel that
+// survives across processes until tt-smi -r or a different ELF is loaded.
+constexpr uint32_t kCmacFwSentinelAddr = 0x1FF0;
+
+// erisc_cmac_simple writes test_results->heartbeat = 0xABCD0000 | (counter>>16)
+// at every housekeeping interval (~130 ms in burst-free build). Pattern
+// 0xABCDxxxx confirms it's our firmware family; the lower 16 bits advance
+// for as long as the spin loop runs.
+constexpr uint32_t kCmacFwHeartbeatAddr = 0x1E00;
+constexpr uint32_t kCmacFwHeartbeatMagic = 0xABCD0000;
+constexpr uint32_t kCmacFwHeartbeatMask = 0xFFFF0000;
+
+// Stable 64-bit FNV-1a over (ELF size + first 64 bytes + 256-byte boot_params).
+// Captures both the ELF version (size + head) and the boot config (rs_fec,
+// aiclk_ps, tx_rate). Caller does NOT need to read the whole ELF.
+uint64_t compute_cmac_fw_fingerprint(
+    const std::string& elf_path, const uint32_t* boot_params, size_t boot_params_bytes) {
+    constexpr uint64_t kFnvOffset = 0xcbf29ce484222325ULL;
+    constexpr uint64_t kFnvPrime = 0x100000001b3ULL;
+    uint64_t h = kFnvOffset;
+    auto mix = [&](uint8_t b) {
+        h ^= b;
+        h *= kFnvPrime;
+    };
+
+    std::ifstream f(elf_path, std::ios::binary | std::ios::ate);
+    if (!f) {
+        return 0;  // unreadable — caller will fall through to TT_FATAL on the existence check
+    }
+    const uint64_t size = static_cast<uint64_t>(f.tellg());
+    f.seekg(0);
+    std::array<uint8_t, 64> head{};
+    f.read(reinterpret_cast<char*>(head.data()), head.size());
+
+    for (int i = 0; i < 8; ++i) {
+        mix(static_cast<uint8_t>((size >> (i * 8)) & 0xFF));
+    }
+    for (uint8_t b : head) {
+        mix(b);
+    }
+    const auto* bp_bytes = reinterpret_cast<const uint8_t*>(boot_params);
+    for (size_t i = 0; i < boot_params_bytes; ++i) {
+        mix(bp_bytes[i]);
+    }
+    return h;
+}
+
+}  // namespace
+
+void RiscFirmwareInitializer::initialize_cmac_firmware(tt::ChipId device_id, CoreCoord virtual_core) {
+    // Compute the fingerprint up-front so we can decide whether the running
+    // firmware is already the one we'd reload. Asserting erisc reset kills
+    // CMAC's PCS marker stream, which on Mellanox-attached links bounces
+    // the peer's PCS/FEC and pushes its eswitch FDB into a transient state
+    // that silently drops the next ~hundreds of ms of frames. Avoiding
+    // unnecessary resets resolves the WH→Mellanox first-frame drop and is
+    // a general win for any latency-sensitive peer.
     std::string cmac_elf_path = rtoptions_.get_root_dir() + "tt_metal/hw/firmware/bin/erisc_cmac_simple.elf";
     TT_FATAL(
         std::filesystem::exists(cmac_elf_path),
         "erisc_cmac_simple.elf not found at {}. Build from budabackend and copy to this path.",
         cmac_elf_path);
 
+    uint32_t aiclk_mhz = cluster_.get_device_aiclk(device_id);
+    uint32_t aiclk_ps = (aiclk_mhz > 0) ? (1'000'000 / aiclk_mhz) : 833;
+    auto params =
+        llrt::CmacBootParams::build(aiclk_ps, rtoptions_.get_cmac_rs_fec(), rtoptions_.get_cmac_tx_rate_cycles());
+    const uint64_t fingerprint =
+        compute_cmac_fw_fingerprint(cmac_elf_path, params.data(), llrt::CmacBootParams::kSizeBytes);
+
+    // Detect "already running with this fingerprint" inline (helper would
+    // need to take a Cluster& and pull tt_cluster.hpp into this TU; less
+    // invasive to use the existing cluster_ member directly).
+    auto read_word = [&](uint32_t addr) {
+        uint32_t v = 0;
+        cluster_.read_core(&v, sizeof(v), tt_cxy_pair(device_id, virtual_core), addr);
+        return v;
+    };
+    bool already_running = false;
+    {
+        const uint32_t hb1 = read_word(kCmacFwHeartbeatAddr);
+        if ((hb1 & kCmacFwHeartbeatMask) == kCmacFwHeartbeatMagic) {
+            // Heartbeat must advance for firmware to be alive. update_counters
+            // bumps the lower 16 bits every ~130 ms, so allow ~200 ms before
+            // declaring it wedged.
+            uint32_t hb2 = hb1;
+            for (int i = 0; i < 100; ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                hb2 = read_word(kCmacFwHeartbeatAddr);
+                if (hb2 != hb1) {
+                    break;
+                }
+            }
+            if (hb2 != hb1) {
+                uint64_t sentinel = 0;
+                cluster_.read_core(
+                    &sentinel, sizeof(sentinel), tt_cxy_pair(device_id, virtual_core), kCmacFwSentinelAddr);
+                already_running = (sentinel == fingerprint);
+            }
+        }
+    }
+    if (already_running) {
+        log_info(
+            tt::LogMetal,
+            "erisc_cmac_simple already running on device {} core {} with matching fingerprint (0x{:016x}); "
+            "skipping reset+reload to avoid CMAC link bounce.",
+            device_id,
+            virtual_core.str(),
+            fingerprint);
+        return;
+    }
+
+    // Use ALL (not just ERISC0): on entry, bits 12,13,14,18 of
+    // RISCV_DEBUG_REG_SOFT_RESET_0 are typically asserted (post-init
+    // residue), and they gate shared hardware on eth cores — leaving
+    // them set causes ERISC0 to hang on MAC register access.
+    cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
+
+    // Load erisc_cmac_simple ELF — pre-built binary from budabackend
     const ll_api::memory& binary_mem = llrt::get_risc_binary(cmac_elf_path);
 
     // Write ELF segments directly to L1 — no HAL relocation needed.
@@ -1038,29 +1151,34 @@ void RiscFirmwareInitializer::initialize_cmac_firmware(tt::ChipId device_id, Cor
     });
 
     // Write 256-byte boot_params to L1 at 0x1000
-    uint32_t aiclk_mhz = cluster_.get_device_aiclk(device_id);
-    uint32_t aiclk_ps = (aiclk_mhz > 0) ? (1'000'000 / aiclk_mhz) : 833;
-    auto params =
-        llrt::CmacBootParams::build(aiclk_ps, rtoptions_.get_cmac_rs_fec(), rtoptions_.get_cmac_tx_rate_cycles());
     cluster_.write_core(
         params.data(),
         llrt::CmacBootParams::kSizeBytes,
         tt_cxy_pair(device_id, virtual_core),
         llrt::CmacBootParams::kL1Address);
 
-    // Release entire eth core from reset — firmware begins executing.
-    // Must deassert ALL to match the assert above, ensuring no stale
-    // TRISC/NCRISC soft-reset bits remain that would gate ERISC0 hardware.
-    cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
+    // Stash the fingerprint at L1:0x1FF0 BEFORE deassert. Firmware doesn't
+    // touch this region, so the value persists across processes until the
+    // next tt-smi -r or until a different ELF/boot_params change rewrites it.
+    cluster_.write_core(&fingerprint, sizeof(fingerprint), tt_cxy_pair(device_id, virtual_core), kCmacFwSentinelAddr);
+
+    // Release eth core from reset — firmware begins executing at L1:0x0.
+    // staggered_start=false: avoid setting SOFT_RESET_STAGGERED_START
+    // (bit 31), which is a tensix-specific wakeup-sequence bit. exalens
+    // never sets it when it loads this same firmware successfully, and
+    // setting it on an eth core appears to keep ERISC0 from running.
+    cluster_.deassert_risc_reset_at_core(
+        tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL, /*staggered_start=*/false);
 
     log_info(
         tt::LogMetal,
-        "Loaded erisc_cmac_simple on device {} core {} (aiclk_ps={}, rs_fec={}, tx_rate={})",
+        "Loaded erisc_cmac_simple on device {} core {} (aiclk_ps={}, rs_fec={}, tx_rate={}, fingerprint=0x{:016x})",
         device_id,
         virtual_core.str(),
         aiclk_ps,
         rtoptions_.get_cmac_rs_fec() ? 1 : 0,
-        rtoptions_.get_cmac_tx_rate_cycles());
+        rtoptions_.get_cmac_tx_rate_cycles(),
+        fingerprint);
 }
 
 void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_id) {

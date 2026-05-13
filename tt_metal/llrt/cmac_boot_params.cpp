@@ -10,7 +10,7 @@
 
 #include "llrt/cmac_boot_params.hpp"
 
-namespace llrt {
+namespace tt::llrt {
 
 std::array<uint32_t, CmacBootParams::kSizeWords> CmacBootParams::build(
     uint32_t aiclk_ps, bool rs_fec_enabled, uint32_t tx_rate_cycles) {
@@ -31,4 +31,4 @@ std::array<uint32_t, CmacBootParams::kSizeWords> CmacBootParams::build(
     return words;
 }
 
-}  // namespace llrt
+}  // namespace tt::llrt

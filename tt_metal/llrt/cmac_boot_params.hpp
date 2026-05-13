@@ -18,7 +18,7 @@
 #include <cstdint>
 #include <cstddef>
 
-namespace llrt {
+namespace tt::llrt {
 
 struct CmacBootParams {
     // L1 address where the firmware reads the boot-parameter block.
@@ -38,4 +38,4 @@ struct CmacBootParams {
     static std::array<uint32_t, kSizeWords> build(uint32_t aiclk_ps, bool rs_fec_enabled, uint32_t tx_rate_cycles);
 };
 
-}  // namespace llrt
+}  // namespace tt::llrt
