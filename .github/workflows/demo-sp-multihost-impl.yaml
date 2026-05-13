@@ -177,6 +177,11 @@ jobs:
         run: |
           # Move the cloned directory to workers. TODO: Clone directly to NFS
           cp -r "$GITHUB_WORKSPACE" /ci/tt-metal
+          if ! command -v zstd >/dev/null 2>&1; then
+            echo "zstd not found in runner context, installing fallback..."
+            sudo apt-get update
+            sudo apt-get install -y zstd
+          fi
           shopt -s globstar nullglob
           build_archives=(/ci/artifacts/**/*.tar.zst)
           echo "Found ${#build_archives[@]} .tar.zst candidate(s) under /ci/artifacts"
