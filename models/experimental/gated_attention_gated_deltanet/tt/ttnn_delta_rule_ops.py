@@ -346,7 +346,9 @@ def l2_norm_ttnn(x, dim=-1, eps=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG):
     assert dim in (-1, len(x.shape) - 1), "l2_norm_ttnn now requires dim=-1 (rms_norm reduces last dim)"
     K = x.shape[-1]
     x_normed = ttnn.rms_norm(x, epsilon=eps / K, memory_config=memory_config)
-    return ttnn.multiply(x_normed, K**-0.5, memory_config=memory_config)
+    out = ttnn.multiply(x_normed, K**-0.5, memory_config=memory_config)
+    x_normed.deallocate(True)
+    return out
 
 
 def fused_decay_and_write_ttnn(
@@ -418,19 +420,26 @@ def fused_decay_and_write_ttnn(
         compute_kernel_config=matmul_compute_cfg,
         program_config=outer_product_prog_cfg,
     )
+    k_col.deallocate(True)
+    d_row.deallocate(True)
 
     # apply beta
-    outer = ttnn.multiply(
+    outer_beta = ttnn.multiply(
         outer,
         beta_expanded,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
+    outer.deallocate(True)
+    beta_expanded.deallocate(True)
 
     # fused-style update: decay * h + outer
-    h = ttnn.multiply(h, decay, memory_config=ttnn.L1_MEMORY_CONFIG)
-    h = ttnn.add(h, outer, memory_config=ttnn.L1_MEMORY_CONFIG)
+    h_decayed = ttnn.multiply(h, decay, memory_config=ttnn.L1_MEMORY_CONFIG)
+    decay.deallocate(True)
+    h_new = ttnn.add(h_decayed, outer_beta, memory_config=ttnn.L1_MEMORY_CONFIG)
+    h_decayed.deallocate(True)
+    outer_beta.deallocate(True)
 
-    return h
+    return h_new
 
 
 def recurrent_delta_rule_step_ttnn(
@@ -488,17 +497,21 @@ def recurrent_delta_rule_step_ttnn(
         ttnn.TILE_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    v_read = ttnn.matmul(
+    v_read_4d = ttnn.matmul(
         k_row,
         h,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         program_config=read_query_prog_cfg,
         compute_kernel_config=read_query_compute_cfg,
     )
-    v_read = ttnn.reshape(v_read, [B, H, V], memory_config=ttnn.L1_MEMORY_CONFIG)
+    k_row.deallocate(True)
+    v_read = ttnn.reshape(v_read_4d, [B, H, V], memory_config=ttnn.L1_MEMORY_CONFIG)
+    # v_read aliases v_read_4d (reshape view); do NOT deallocate v_read_4d here.
 
     # 2. Compute delta (pre-beta): delta = v_t - v_read
     delta = ttnn.subtract(v_t, v_read, memory_config=ttnn.L1_MEMORY_CONFIG)
+    # Free the underlying buffer of v_read/v_read_4d (they alias).
+    v_read_4d.deallocate(True)
 
     # 3. Fused-style decay + write to state (decay_t already = exp(g_t))
     h = fused_decay_and_write_ttnn(
@@ -510,6 +523,7 @@ def recurrent_delta_rule_step_ttnn(
         device=device,
         outer_product_prog_cfg=outer_product_prog_cfg,
     )
+    delta.deallocate(True)
 
     # Optimize: combine reshape, layout, and memory config in fewer operations
     q_row = ttnn.to_layout(
@@ -524,6 +538,7 @@ def recurrent_delta_rule_step_ttnn(
         program_config=read_query_prog_cfg,
         compute_kernel_config=read_query_compute_cfg,
     )
+    q_row.deallocate(True)
     use_l1 = seq_len is not None and seq_len <= 64
     o_t = ttnn.reshape(o_t, [B, H, V], memory_config=ttnn.L1_MEMORY_CONFIG if use_l1 else None)
 
@@ -565,6 +580,8 @@ def recurrent_gated_delta_rule_ttnn(
         output: [B, T, H, V]
         final_state: [B, H, K, V]
     """
+    # l2_norm_ttnn rebinds q/k locally; the caller's q/k tensors stay alive at
+    # the caller's site and must not be touched here.
     q = l2_norm_ttnn(q, dim=-1)
     k = l2_norm_ttnn(k, dim=-1)
 
@@ -577,25 +594,48 @@ def recurrent_gated_delta_rule_ttnn(
     if scale is None:
         scale = K**-0.5
 
-    q = ttnn.multiply(q, scale, memory_config=ttnn.L1_MEMORY_CONFIG)
+    q_prev = q
+    q = ttnn.multiply(q_prev, scale, memory_config=ttnn.L1_MEMORY_CONFIG)
+    q_prev.deallocate(True)  # l2_norm output, locally owned
 
     # Transpose to [B, H, T, D] for head-first processing
     # Optimize: combine transpose with memory config specification
-    q = ttnn.transpose(q, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
-    k = ttnn.transpose(k, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
+    q_prev = q
+    q = ttnn.transpose(q_prev, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
+    q_prev.deallocate(True)
+    k_prev = k
+    k = ttnn.transpose(k_prev, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
+    k_prev.deallocate(True)
+    # v, beta, g are still caller-owned at this point.
     v = ttnn.transpose(v, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     beta = ttnn.transpose(beta, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, T]
     g = ttnn.transpose(g, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, T]
 
     # Optimize: combine typecast with memory config
-    q = ttnn.typecast(q, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
-    k = ttnn.typecast(k, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
-    v = ttnn.typecast(v, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
-    beta = ttnn.typecast(beta, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
-    g = ttnn.typecast(g, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+    q_prev = q
+    q = ttnn.typecast(q_prev, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+    if q is not q_prev:
+        q_prev.deallocate(True)
+    k_prev = k
+    k = ttnn.typecast(k_prev, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+    if k is not k_prev:
+        k_prev.deallocate(True)
+    v_prev = v
+    v = ttnn.typecast(v_prev, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+    if v is not v_prev:
+        v_prev.deallocate(True)
+    beta_prev = beta
+    beta = ttnn.typecast(beta_prev, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+    if beta is not beta_prev:
+        beta_prev.deallocate(True)
+    g_prev = g
+    g = ttnn.typecast(g_prev, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+    if g is not g_prev:
+        g_prev.deallocate(True)
 
     # Precompute exp(g) once and slice per timestep in the loop.
     g_exp = ttnn.exp(g, memory_config=ttnn.L1_MEMORY_CONFIG)
+    g.deallocate(True)
 
     if initial_state is not None:
         h = ttnn.typecast(initial_state, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -656,8 +696,21 @@ def recurrent_gated_delta_rule_ttnn(
 
     # Optimize: single concat operation instead of creating list then concat
     o = ttnn.concat(outputs_4d_list, dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
-    o = ttnn.transpose(o, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
-    o = ttnn.typecast(o, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+    # NOTE: outputs_4d_list[i] are reshape VIEWS of o_t buffers from each
+    # iteration. For T==1, ttnn.concat short-circuits via to_memory_config
+    # which returns the view unchanged when the memcfg already matches — so
+    # `o` shares the buffer with outputs_4d_list[0]. Deallocating that view
+    # would free the buffer underneath `o`, crashing the next op with
+    # "Buffer is not allocated". Same pattern fixed in chunk_gated_delta_rule_ttnn:
+    # let Python finalizers reclaim the views when the function returns.
+    outputs_4d_list.clear()
+    o_prev = o
+    o = ttnn.transpose(o_prev, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
+    o_prev.deallocate(True)
+    o_prev = o
+    o = ttnn.typecast(o_prev, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+    if o is not o_prev:
+        o_prev.deallocate(True)
 
     return o, h
 
@@ -873,23 +926,46 @@ def chunk_gated_delta_rule_ttnn(
 
     mem_cfg_in = mem_cfg_large_t if mem_cfg_large_t is not None else ttnn.L1_MEMORY_CONFIG
 
+    # l2_norm rebinds q/k locally; caller's q/k tensors stay alive at caller's
+    # site and must not be touched here.
     q = l2_norm_ttnn(q, dim=-1, memory_config=mem_cfg_in)
     k = l2_norm_ttnn(k, dim=-1, memory_config=mem_cfg_in)
 
     if scale is None:
         scale = K**-0.5
 
-    q = ttnn.typecast(ttnn.transpose(q, 1, 2, memory_config=mem_cfg_in), ttnn.float32, memory_config=mem_cfg_in)
-    k = ttnn.typecast(ttnn.transpose(k, 1, 2, memory_config=mem_cfg_in), ttnn.float32, memory_config=mem_cfg_in)
-    v = ttnn.typecast(ttnn.transpose(v, 1, 2, memory_config=mem_cfg_in), ttnn.float32, memory_config=mem_cfg_in)
-    beta = ttnn.typecast(
-        ttnn.transpose(beta, 1, 2, memory_config=mem_cfg_in),
-        ttnn.float32,
-        memory_config=mem_cfg_in,
-    )
-    g = ttnn.typecast(ttnn.transpose(g, 1, 2, memory_config=mem_cfg_in), ttnn.float32, memory_config=mem_cfg_in)
+    # Unroll transpose+typecast pairs so we can free the transpose intermediate
+    # (the only consumer is the typecast right after).
+    q_tr = ttnn.transpose(q, 1, 2, memory_config=mem_cfg_in)
+    q.deallocate(True)  # l2_norm output, locally owned
+    q = ttnn.typecast(q_tr, ttnn.float32, memory_config=mem_cfg_in)
+    if q is not q_tr:
+        q_tr.deallocate(True)
 
-    q = ttnn.multiply(q, scale, memory_config=mem_cfg_in)
+    k_tr = ttnn.transpose(k, 1, 2, memory_config=mem_cfg_in)
+    k.deallocate(True)
+    k = ttnn.typecast(k_tr, ttnn.float32, memory_config=mem_cfg_in)
+    if k is not k_tr:
+        k_tr.deallocate(True)
+
+    # v, beta, g are still caller-owned at this point — do NOT deallocate the
+    # transpose source.
+    v_tr = ttnn.transpose(v, 1, 2, memory_config=mem_cfg_in)
+    v = ttnn.typecast(v_tr, ttnn.float32, memory_config=mem_cfg_in)
+    if v is not v_tr:
+        v_tr.deallocate(True)
+    beta_tr = ttnn.transpose(beta, 1, 2, memory_config=mem_cfg_in)
+    beta = ttnn.typecast(beta_tr, ttnn.float32, memory_config=mem_cfg_in)
+    if beta is not beta_tr:
+        beta_tr.deallocate(True)
+    g_tr = ttnn.transpose(g, 1, 2, memory_config=mem_cfg_in)
+    g = ttnn.typecast(g_tr, ttnn.float32, memory_config=mem_cfg_in)
+    if g is not g_tr:
+        g_tr.deallocate(True)
+
+    q_prev = q
+    q = ttnn.multiply(q_prev, scale, memory_config=mem_cfg_in)
+    q_prev.deallocate(True)
 
     pad_len = (chunk_size - (T % chunk_size)) % chunk_size
     L = T + pad_len
@@ -1017,7 +1093,12 @@ def chunk_gated_delta_rule_ttnn(
     tril_mask = ttnn.reshape(tril_mask, [1, chunk_size, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
 
     L_diff_masked = ttnn.multiply(L_diff, tril_mask, memory_config=mem_cfg_batch)
-    L_mask = ttnn.multiply(ttnn.exp(L_diff_masked, memory_config=mem_cfg_batch), tril_mask, memory_config=mem_cfg_batch)
+    L_diff.deallocate(True)
+    L_diff_exp = ttnn.exp(L_diff_masked, memory_config=mem_cfg_batch)
+    L_diff_masked.deallocate(True)
+    L_mask = ttnn.multiply(L_diff_exp, tril_mask, memory_config=mem_cfg_batch)
+    L_diff_exp.deallocate(True)
+    tril_mask.deallocate(True)
 
     k_c_t = ttnn.transpose(k_c, 1, 2, memory_config=mem_cfg_in)
     prog_config_kk = _get_matmul_program_config(chunk_size, K, chunk_size, grid_size=None) if use_l1_for_batch else None
@@ -1025,34 +1106,52 @@ def chunk_gated_delta_rule_ttnn(
         kk = ttnn.matmul(k_beta_c, k_c_t, program_config=prog_config_kk, memory_config=mem_cfg_batch)
     else:
         kk = ttnn.matmul(k_beta_c, k_c_t, memory_config=mem_cfg_batch)
+    k_c_t.deallocate(True)
 
-    M = ttnn.neg(ttnn.multiply(kk, L_mask, memory_config=mem_cfg_batch), memory_config=mem_cfg_batch)
+    M_pre_neg = ttnn.multiply(kk, L_mask, memory_config=mem_cfg_batch)
+    kk.deallocate(True)
+    M = ttnn.neg(M_pre_neg, memory_config=mem_cfg_batch)
+    M_pre_neg.deallocate(True)
     strict_lower = _create_strict_lower_tril_ttnn(
         chunk_size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG
     )
     strict_lower = ttnn.reshape(strict_lower, [1, chunk_size, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
-    M = ttnn.multiply(M, strict_lower, memory_config=mem_cfg_batch)
+    M_masked = ttnn.multiply(M, strict_lower, memory_config=mem_cfg_batch)
+    M.deallocate(True)
+    strict_lower.deallocate(True)
+    M = M_masked
 
     eye = _create_eye_matrix_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
     eye = ttnn.reshape(eye, [1, chunk_size, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
 
     R = ttnn.add(M, eye, memory_config=mem_cfg_batch)
+    eye.deallocate(True)
     P = ttnn.matmul(M, M, memory_config=mem_cfg_batch)
+    M.deallocate(True)
     num_steps = max(int(math.ceil(math.log2(max(chunk_size, 2)))) - 1, 0)
     prog_config_woodbury = (
         _get_matmul_program_config(chunk_size, chunk_size, chunk_size, grid_size=None) if use_l1_for_batch else None
     )
     for _ in range(num_steps):
         if prog_config_woodbury:
-            R = ttnn.add(
-                R,
-                ttnn.matmul(R, P, program_config=prog_config_woodbury, memory_config=mem_cfg_batch),
-                memory_config=mem_cfg_batch,
-            )
-            P = ttnn.matmul(P, P, program_config=prog_config_woodbury, memory_config=mem_cfg_batch)
+            rp = ttnn.matmul(R, P, program_config=prog_config_woodbury, memory_config=mem_cfg_batch)
+            R_new = ttnn.add(R, rp, memory_config=mem_cfg_batch)
+            R.deallocate(True)
+            rp.deallocate(True)
+            R = R_new
+            P_new = ttnn.matmul(P, P, program_config=prog_config_woodbury, memory_config=mem_cfg_batch)
+            P.deallocate(True)
+            P = P_new
         else:
-            R = ttnn.add(R, ttnn.matmul(R, P, memory_config=mem_cfg_batch), memory_config=mem_cfg_batch)
-            P = ttnn.matmul(P, P, memory_config=mem_cfg_batch)
+            rp = ttnn.matmul(R, P, memory_config=mem_cfg_batch)
+            R_new = ttnn.add(R, rp, memory_config=mem_cfg_batch)
+            R.deallocate(True)
+            rp.deallocate(True)
+            R = R_new
+            P_new = ttnn.matmul(P, P, memory_config=mem_cfg_batch)
+            P.deallocate(True)
+            P = P_new
+    P.deallocate(True)
 
     attn = R
 
@@ -1069,6 +1168,9 @@ def chunk_gated_delta_rule_ttnn(
         k_cumdecay = ttnn.matmul(attn, k_beta_decay, program_config=prog_config_vcorr, memory_config=mem_cfg_batch)
     else:
         k_cumdecay = ttnn.matmul(attn, k_beta_decay, memory_config=mem_cfg_batch)
+    k_beta_decay.deallocate(True)
+    # attn is R; it was the only consumer of these two matmuls.  Free it now.
+    attn.deallocate(True)
 
     q_c_4d = ttnn.reshape(q_c, [BH, num_chunks, chunk_size, K], memory_config=mem_cfg_batch)
     q_c_4d = ttnn.to_layout(q_c_4d, ttnn.TILE_LAYOUT, memory_config=mem_cfg_batch)
@@ -1115,19 +1217,27 @@ def chunk_gated_delta_rule_ttnn(
         L_mask_i = L_mask_4d[:, i]
         decay_i = decay_3d[:, i]
 
+        # q_i, k_i, v_i, k_cum_i, L_mask_i, decay_i are slice VIEWS of the
+        # parent _4d/_3d tensors — do NOT deallocate them.
+        # Deallocate only matmul/op outputs that are clearly distinct buffers
+        # AND have no aliasing reshape views still in use.
         k_i_t = ttnn.transpose(k_i, 1, 2, memory_config=mem_cfg_batch)
         if prog_config_qk:
             qk = ttnn.matmul(q_i, k_i_t, program_config=prog_config_qk, memory_config=mem_cfg_batch)
         else:
             qk = ttnn.matmul(q_i, k_i_t, memory_config=mem_cfg_batch)
+        k_i_t.deallocate(True)
         combined_mask = ttnn.multiply(L_mask_i, lower_causal, memory_config=mem_cfg_batch)
         intra_attn = ttnn.multiply(qk, combined_mask, memory_config=mem_cfg_batch)
+        qk.deallocate(True)
+        combined_mask.deallocate(True)
 
         if prog_config_vprime:
             v_prime = ttnn.matmul(k_cum_i, S, program_config=prog_config_vprime, memory_config=mem_cfg_batch)
         else:
             v_prime = ttnn.matmul(k_cum_i, S, memory_config=mem_cfg_batch)
         v_new = ttnn.subtract(v_i, v_prime, memory_config=mem_cfg_batch)
+        v_prime.deallocate(True)
 
         decay_i_exp = ttnn.reshape(
             ttnn.exp(decay_i, memory_config=mem_cfg_batch),
@@ -1139,13 +1249,19 @@ def chunk_gated_delta_rule_ttnn(
             o_inter = ttnn.matmul(q_decay, S, program_config=prog_config_o_inter, memory_config=mem_cfg_batch)
         else:
             o_inter = ttnn.matmul(q_decay, S, memory_config=mem_cfg_batch)
+        q_decay.deallocate(True)
 
         if prog_config_intra:
             intra_v = ttnn.matmul(intra_attn, v_new, program_config=prog_config_intra, memory_config=mem_cfg_batch)
         else:
             intra_v = ttnn.matmul(intra_attn, v_new, memory_config=mem_cfg_batch)
+        intra_attn.deallocate(True)
 
         o_i = ttnn.add(o_inter, intra_v, memory_config=mem_cfg_batch)
+        o_inter.deallocate(True)
+        intra_v.deallocate(True)
+        # o_i is the source of a reshape view appended to outputs — do NOT
+        # deallocate o_i.
         outputs.append(ttnn.reshape(o_i, [BH, 1, chunk_size, V], memory_config=mem_cfg_batch))
 
         dl_i = decay_last[:, i]
@@ -1162,19 +1278,28 @@ def chunk_gated_delta_rule_ttnn(
             memory_config=mem_cfg_batch,
         )
         decay_diff_exp = ttnn.exp(decay_diff, memory_config=mem_cfg_batch)
+        decay_diff.deallocate(True)
         k_decay = ttnn.multiply(
             k_i,
             ttnn.reshape(decay_diff_exp, [BH, chunk_size, 1], memory_config=mem_cfg_batch),
             memory_config=mem_cfg_batch,
         )
         k_decay_t = ttnn.transpose(k_decay, 1, 2, memory_config=mem_cfg_batch)
+        k_decay.deallocate(True)
         if prog_config_state:
             state_update = ttnn.matmul(k_decay_t, v_new, program_config=prog_config_state, memory_config=mem_cfg_batch)
         else:
             state_update = ttnn.matmul(k_decay_t, v_new, memory_config=mem_cfg_batch)
+        k_decay_t.deallocate(True)
+        v_new.deallocate(True)
         S = ttnn.add(S, state_update, memory_config=mem_cfg_batch)
+        state_update.deallocate(True)
 
     o = ttnn.concat(outputs, dim=1, memory_config=mem_cfg_in)
+    # Per-chunk output buffers in `outputs` are reshape views aliasing the
+    # add() outputs from the chunk loop.  Python finalizers reclaim them when
+    # the function returns; we don't deallocate them here because earlier
+    # experiments showed a segfault on the subsequent transpose.
 
     o = ttnn.reshape(o, [BH, L, V], memory_config=mem_cfg_in)
     if pad_len > 0:
