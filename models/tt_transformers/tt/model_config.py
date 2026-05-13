@@ -657,6 +657,8 @@ class ModelArgs:
             # NOTE: Fused all gather matmul only supports a core grid of size num_devices x 1
             # TODO: #26657 refactor ACTUAL_DEVICE environment variable usage
             actual_device_is_tg = os.getenv("ACTUAL_DEVICE", "") == "TG"
+            # Galaxy DP4 gives Llama 8B a routeable 1x8 row submesh, so it can
+            # use the same fused AGMM path as T3K even though ACTUAL_DEVICE is TG.
             use_galaxy_dp4_8b_submesh_agmm = (
                 actual_device_is_tg
                 and self.base_model_name == "Llama-3.1-8B"
@@ -1098,6 +1100,7 @@ class ModelArgs:
 
     @property
     def is_galaxy_8_device_row_submesh(self):
+        """True for the Galaxy DP4 submesh shape that behaves like a T3K row."""
         return (
             self.mesh_device is not None
             and self.num_devices == 8
@@ -1642,6 +1645,8 @@ class ModelArgs:
         if seq_len > 128:
             return True
 
+        # The regular 128-token QKV prefill matmul over-allocates L1 on Llama 8B
+        # Galaxy DP4; use minimal matmul only for that row-submesh case.
         return self.base_model_name == "Llama-3.1-8B" and seq_len == 128 and self.is_galaxy_8_device_row_submesh
 
     @lru_cache(maxsize=None)

@@ -88,6 +88,8 @@ class TT_CCL:
         """
         return get_num_links(self.mesh_device, cluster_axis)
 
+    # Index 2 stores the no-axis semaphore pool; cluster_axis=0 is a valid axis
+    # and must not be folded into that bucket.
     def get_and_cycle_barrier_semaphore_handle(self, cluster_axis=None):
         semaphore_index = 2 if cluster_axis is None else cluster_axis
         current_idx = self.barrier_semaphore_idx[semaphore_index]

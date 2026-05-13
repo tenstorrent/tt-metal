@@ -158,6 +158,8 @@ class TTSampling(LightweightModule):
 
         # Force argmax sampling
         if hasattr(args, "model_config") and "SAMPLING_AG_CONFIG" in args.model_config:
+            # The model config may describe the fastest full-size Galaxy path, but
+            # the actual CCL shape is resolved from the runtime mesh below.
             sampling_ag_config = args.model_config["SAMPLING_AG_CONFIG"]
             self._allow_force_argmax_sampling = sampling_ag_config["allow_force_argmax"]
             self.num_argmax_gather_links = sampling_ag_config["num_links"]
@@ -335,6 +337,8 @@ class TTSampling(LightweightModule):
     def _get_sampling_cluster_axis(self):
         if self.mesh_device.get_num_devices() <= 1:
             return None
+        # 1D submeshes should use the default CCL axis; forcing axis 1 can make
+        # smaller Galaxy DP groups request routes outside the submesh.
         if 1 in self.cluster_shape:
             return None
         return self.sampling_all_gather_axis
@@ -342,9 +346,12 @@ class TTSampling(LightweightModule):
     def _get_force_argmax_all_gather_config(self, cluster_axis):
         num_links = self.num_argmax_gather_links
         if hasattr(self.tt_ccl, "get_num_links"):
+            # Clamp the tuned config to the links available on the actual submesh.
             num_links = min(num_links, self.tt_ccl.get_num_links(cluster_axis))
 
         topology = self.ag_topology
+        # Ring is available for T3K-like 8-device groups; smaller DP groups need
+        # linear routing to avoid wraparound routes such as D0 -> D12.
         if self.mesh_device.get_num_devices() < 8:
             topology = ttnn.Topology.Linear
 

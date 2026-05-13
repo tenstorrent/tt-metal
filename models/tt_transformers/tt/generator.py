@@ -2512,6 +2512,8 @@ def _galaxy_data_parallel_submesh_shape(devices_per_group):
     # the runtime, so DP=4 maps to four routeable 1x8 T3K-like submeshes.
     if devices_per_group >= 8 and devices_per_group % 8 == 0:
         return ttnn.MeshShape(devices_per_group // 8, 8)
+    # Smaller DP groups still use contiguous 1D row submeshes; callers select
+    # linear CCL when these groups are too small for ring topology.
     return ttnn.MeshShape(1, devices_per_group)
 
 

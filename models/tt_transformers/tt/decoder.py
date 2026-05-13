@@ -100,6 +100,8 @@ class TransformerBlock(LightweightModule):
 
         # TODO: remove after https://github.com/tenstorrent/tt-metal/issues/35650 is fixed
         extra_rmsnorm_kwargs = {}
+        # Llama 8B on a Galaxy DP4 row submesh runs out of L1 with fp32 RMSNorm
+        # accumulation, matching the existing Qwen workaround below.
         use_galaxy_row_submesh_rmsnorm_l1_workaround = (
             args.base_model_name == "Llama-3.1-8B"
             and args.num_devices == 8
