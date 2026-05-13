@@ -176,16 +176,18 @@ USE_CASE_CONFIGS = {
 # Block sweep range
 MAX_BLOCK = 64
 
-# Base block sizes to always include (union with divisors).
-# Covers powers of 2 plus common non-power-of-2 values found in known-best configs.
-BASE_BLOCK_SIZES = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20]
-
-# AGMM-specific restricted candidate sets to reduce profiler overhead.
-# K: divisors only (all known-best K_blocks divide K_tiles on 12x9 grid).
-# N: superset of common "1 block per core" choices across known shapes. Includes
-# 5 (N=1280/8), 15 (N=3840/8), 20 (N=5120/8) — natural fits for 8-N-axis grids
-# that the original tight list (max=16) missed.
-AGMM_N_BLOCK_CANDIDATES = [1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 16, 20, 24, 32]
+# Block-size candidate methodology:
+# - M/N block:  even sizes in [MN_BLOCK_MIN, MN_BLOCK_MAX]  union  divisors of
+#               per-core tile count in that same range. Extreme sizes (<4 or >16)
+#               are excluded because they're either dispatch-overhead-dominated
+#               (tiny) or low-pipelining (huge); divisors are added to give a
+#               "1 block per core" option even when it's odd (e.g. 5, 15).
+# - K block:    even sizes in [K_BLOCK_MIN, K_BLOCK_MAX]  union  divisors of
+#               K_per_device (AGMM) / K_tiles (non-AGMM). Divisors are included
+#               at any size since dividing K cleanly never adds padding and may
+#               help amortize fabric/dispatch overhead.
+MN_BLOCK_MIN, MN_BLOCK_MAX = 4, 16
+K_BLOCK_MIN, K_BLOCK_MAX = 4, 16
 
 # L1 budget for pre-filtering block combos (KB).
 # BH L1 usable ~1464 KB; conservative threshold accounts for kernel/firmware overhead.
@@ -225,19 +227,42 @@ CSV_COLUMNS = [
 # ============================================================================
 
 
-def get_divisors(n, max_val=MAX_BLOCK):
-    """Return sorted list of divisors of n, each <= max_val."""
-    if n <= 0:
-        return [1]
-    return sorted(i for i in range(1, min(n, max_val) + 1) if n % i == 0)
+def get_mn_block_candidates(per_core_tiles):
+    """Even sizes in [MN_BLOCK_MIN, MN_BLOCK_MAX] union divisors of per-core tiles in that range.
+
+    Sized to a single core's M or N work, so that "1 block per core" appears as a
+    candidate even when it's odd (e.g. 5, 15). Caps at MN_BLOCK_MAX because larger
+    blocks reduce pipelining; floors at MN_BLOCK_MIN because tiny blocks are
+    dispatch-bound.
+    """
+    evens = set(range(MN_BLOCK_MIN, MN_BLOCK_MAX + 1, 2))
+    divisors = set(d for d in range(MN_BLOCK_MIN, MN_BLOCK_MAX + 1) if per_core_tiles % d == 0)
+    return sorted(evens | divisors)
 
 
-def get_block_candidates(n_tiles, max_val=MAX_BLOCK):
-    """Return sorted candidate block sizes: divisors of n_tiles union BASE_BLOCK_SIZES, each <= min(n_tiles, max_val)."""
-    cap = min(n_tiles, max_val)
-    divisors = set(i for i in range(1, cap + 1) if n_tiles % i == 0)
-    base = set(b for b in BASE_BLOCK_SIZES if b <= cap)
-    return sorted(divisors | base)
+def get_k_block_candidates(K_per_device):
+    """Even sizes in [K_BLOCK_MIN, K_BLOCK_MAX] union all divisors of K_per_device (>= K_BLOCK_MIN).
+
+    Divisors are added at any size: dividing K cleanly never implies padding, and
+    larger K_blocks may amortize fabric/dispatch overhead.
+    """
+    evens = set(range(K_BLOCK_MIN, K_BLOCK_MAX + 1, 2))
+    divisors = set(d for d in range(K_BLOCK_MIN, K_per_device + 1) if K_per_device % d == 0)
+    return sorted(evens | divisors)
+
+
+def get_per_core_dims(shape, cluster_size):
+    """Compute (M_per_core, K_per_device, N_per_core) for a shape.
+
+    Assumes force_transpose=True (the only mode the sweep currently runs):
+    in0 parallelizes M across grid_x cores, in1 parallelizes N across grid_y cores.
+    """
+    M, K, N, cgx, cgy, is_agmm, _ = shape
+    M_tiles, K_tiles, N_tiles = compute_tile_counts(M, K, N)
+    M_per_core = -(-M_tiles // cgx)  # ceiling
+    N_per_core = -(-N_tiles // cgy)
+    K_per_device = K_tiles // cluster_size if is_agmm else K_tiles
+    return M_per_core, K_per_device, N_per_core
 
 
 def estimate_l1_kb(m_blk, k_blk, n_blk, use_case="plain"):
@@ -309,20 +334,10 @@ def generate_subblock_combos(m_block, n_block, max_dest_volume=4):
     return combos
 
 
-def generate_kn_combos(K_tiles, N_tiles, m_block=1, use_case="plain", is_agmm=False):
-    """Generate (K_block, N_block) combos filtered by L1 budget.
-
-    For non-AGMM: divisors union BASE_BLOCK_SIZES for both K and N.
-    For AGMM: K divisors only (no BASE union), N from AGMM_N_BLOCK_CANDIDATES.
-    This reduces AGMM combos to avoid profiler DRAM buffer overflow.
-    """
-    if is_agmm:
-        k_candidates = get_divisors(K_tiles)
-        cap = min(N_tiles, MAX_BLOCK)
-        n_candidates = sorted(b for b in AGMM_N_BLOCK_CANDIDATES if b <= cap)
-    else:
-        k_candidates = get_block_candidates(K_tiles)
-        n_candidates = get_block_candidates(N_tiles)
+def generate_kn_combos(K_per_device, N_per_core, m_block=1, use_case="plain"):
+    """Generate (K_block, N_block) combos filtered by L1 budget."""
+    k_candidates = get_k_block_candidates(K_per_device)
+    n_candidates = get_mn_block_candidates(N_per_core)
     combos = []
     for k in k_candidates:
         for n in n_candidates:
@@ -705,7 +720,8 @@ def test_mm_sweep_worker(device_config, shape, m_block):
     M, K, N, cgx, cgy, is_agmm, use_case = shape
     uc_cfg = USE_CASE_CONFIGS[use_case]
 
-    M_tiles, K_tiles, N_tiles = compute_tile_counts(M, K, N)
+    cluster_size = cfg["mesh_shape"][cfg["cluster_axis"]]
+    M_per_core, K_per_device, N_per_core = get_per_core_dims(shape, cluster_size)
 
     # Explicit combos override: JSON list of [k_blk, n_blk, sb_h, sb_w] tuples
     # When set, m_block must match the expected value and we skip normal generation.
@@ -719,11 +735,11 @@ def test_mm_sweep_worker(device_config, shape, m_block):
         _explicit_subblocks = {(c[0], c[1]): (c[2], c[3]) for c in explicit_combos}
     else:
         _explicit_subblocks = None
-        m_candidates = get_block_candidates(M_tiles)
+        m_candidates = get_mn_block_candidates(M_per_core)
         if m_block not in m_candidates:
-            pytest.skip(f"m_block={m_block} not a candidate for M_tiles={M_tiles}")
+            pytest.skip(f"m_block={m_block} not a candidate for M_per_core={M_per_core}")
 
-        kn_combos = generate_kn_combos(K_tiles, N_tiles, m_block=m_block, use_case=use_case, is_agmm=is_agmm)
+        kn_combos = generate_kn_combos(K_per_device, N_per_core, m_block=m_block, use_case=use_case)
         if not kn_combos:
             pytest.skip("No valid (K_block, N_block) combos after L1 filter")
 
@@ -854,9 +870,10 @@ def test_mm_sweep(device_config, shape):
     """
     from tracy.process_model_log import run_device_profiler
 
-    resolve_config(device_config)
+    cfg = resolve_config(device_config)
     M, K, N, cgx, cgy, is_agmm, use_case = shape
-    M_tiles, K_tiles, N_tiles = compute_tile_counts(M, K, N)
+    cluster_size = cfg["mesh_shape"][cfg["cluster_axis"]]
+    M_per_core, K_per_device, N_per_core = get_per_core_dims(shape, cluster_size)
     op_type = "agmm" if is_agmm else "mm"
     shape_id = f"{M}_{K}_{N}_{cgx}x{cgy}_{op_type}_{use_case}"
     core_grid_str = f"{cgx}x{cgy}"
@@ -876,19 +893,19 @@ def test_mm_sweep(device_config, shape):
         logger.info(f"EXPLICIT COMBOS MODE: {len(explicit_list)} combos across {len(m_blocks)} M_blocks for {shape_id}")
     else:
         explicit_list = None
-        m_blocks = get_block_candidates(M_tiles)
+        m_blocks = get_mn_block_candidates(M_per_core)
 
         # Log total combo counts (K/N combos vary per m_block due to L1 filter)
-        sample_kn = generate_kn_combos(K_tiles, N_tiles, m_block=m_blocks[0], use_case=use_case, is_agmm=is_agmm)
+        sample_kn = generate_kn_combos(K_per_device, N_per_core, m_block=m_blocks[0], use_case=use_case)
         if not sample_kn and not any(
-            generate_kn_combos(K_tiles, N_tiles, m_block=m, use_case=use_case, is_agmm=is_agmm) for m in m_blocks
+            generate_kn_combos(K_per_device, N_per_core, m_block=m, use_case=use_case) for m in m_blocks
         ):
-            pytest.skip(f"No valid (K_block, N_block) combos for K_tiles={K_tiles}, N_tiles={N_tiles}")
+            pytest.skip(f"No valid (K_block, N_block) combos for K_per_device={K_per_device}, N_per_core={N_per_core}")
 
         logger.info(
             f"Sweep [{device_config}] {op_type} ({use_case}) {shape_id}: "
-            f"M_tiles={M_tiles}, K_tiles={K_tiles}, N_tiles={N_tiles}, "
-            f"{len(m_blocks)} M_blocks (divisors+base), L1-filtered K/N combos"
+            f"M_per_core={M_per_core}, K_per_device={K_per_device}, N_per_core={N_per_core}, "
+            f"{len(m_blocks)} M_blocks, L1-filtered K/N combos"
         )
 
     write_csv_header(CSV_FILE)
@@ -911,7 +928,7 @@ def test_mm_sweep(device_config, shape):
         else:
             explicit_sb = None
             os.environ.pop("MM_SWEEP_EXPLICIT_COMBOS", None)
-            kn_combos = generate_kn_combos(K_tiles, N_tiles, m_block=m_block, use_case=use_case, is_agmm=is_agmm)
+            kn_combos = generate_kn_combos(K_per_device, N_per_core, m_block=m_block, use_case=use_case)
             if not kn_combos:
                 logger.info(f"  M_block={m_block}: all K/N combos exceed L1 budget, skipping")
                 continue
@@ -1201,18 +1218,19 @@ def main():
         f"sp_axis={cfg['sp_axis']}, links={cfg['num_links']})"
     )
 
-    for M, K, N, cgx, cgy, is_agmm, use_case in shapes:
-        M_tiles, K_tiles, N_tiles = compute_tile_counts(M, K, N)
+    cluster_size = cfg["mesh_shape"][cfg["cluster_axis"]]
+
+    for shape in shapes:
+        M, K, N, cgx, cgy, is_agmm, use_case = shape
+        M_per_core, K_per_device, N_per_core = get_per_core_dims(shape, cluster_size)
         op_type = "agmm" if is_agmm else "mm"
         shape_id = f"{M}_{K}_{N}_{cgx}x{cgy}_{op_type}_{use_case}"
         core_grid_str = f"{cgx}x{cgy}"
 
-        m_blocks = get_block_candidates(M_tiles, args.max_block)
+        m_blocks = get_mn_block_candidates(M_per_core)
 
         # Check if any M_block has valid K/N combos
-        has_combos = any(
-            generate_kn_combos(K_tiles, N_tiles, m_block=m, use_case=use_case, is_agmm=is_agmm) for m in m_blocks
-        )
+        has_combos = any(generate_kn_combos(K_per_device, N_per_core, m_block=m, use_case=use_case) for m in m_blocks)
         if not has_combos:
             print(f"Skipping {shape_id}: no valid K/N combos after L1 filter")
             continue
@@ -1220,9 +1238,9 @@ def main():
         print(f"\n{'='*80}")
         print(
             f"[{device_config}] {op_type} ({use_case}) Shape {M}_{K}_{N} grid={core_grid_str}: "
-            f"M_tiles={M_tiles} K_tiles={K_tiles} N_tiles={N_tiles}"
+            f"M_per_core={M_per_core} K_per_device={K_per_device} N_per_core={N_per_core}"
         )
-        print(f"  {len(m_blocks)} M_blocks (divisors+base), L1-filtered K/N combos")
+        print(f"  {len(m_blocks)} M_blocks, L1-filtered K/N combos")
         print(f"{'='*80}")
 
         shape_results = []
@@ -1230,7 +1248,7 @@ def main():
         batch_size = PROFILER_BATCH_SIZE_AGMM if is_agmm else PROFILER_BATCH_SIZE_MM
 
         for m_block in m_blocks:
-            kn_combos = generate_kn_combos(K_tiles, N_tiles, m_block=m_block, use_case=use_case, is_agmm=is_agmm)
+            kn_combos = generate_kn_combos(K_per_device, N_per_core, m_block=m_block, use_case=use_case)
             if not kn_combos:
                 print(f"  M_block={m_block}: all K/N combos exceed L1 budget, skipping")
                 continue
