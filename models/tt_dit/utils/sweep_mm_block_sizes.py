@@ -56,6 +56,30 @@ DEVICE_CONFIGS = {
         "tp_axis": 0,
         "cluster_axis": 0,
     },
+    # WH Galaxy 4x8, 4-device cluster along axis 0 (rows). Matches wh4x8links4_*
+    # configs in tests/.../test_all_gather_minimal_matmul_async.py.
+    "wh_4x8_ring": {
+        "mesh_shape": (4, 8),
+        "fabric_config": "FABRIC_1D_RING",
+        "fabric_router_config_payload": 4096,
+        "topology": "Ring",
+        "num_links": 4,
+        "num_workers_per_link": 2,
+        "sp_axis": 1,
+        "tp_axis": 0,
+        "cluster_axis": 0,
+    },
+    "wh_4x8_linear": {
+        "mesh_shape": (4, 8),
+        "fabric_config": "FABRIC_1D",
+        "fabric_router_config_payload": 4096,
+        "topology": "Linear",
+        "num_links": 4,
+        "num_workers_per_link": 2,
+        "sp_axis": 1,
+        "tp_axis": 0,
+        "cluster_axis": 0,
+    },
 }
 
 DEFAULT_DEVICE_CONFIG = "bh_4x8"
@@ -109,6 +133,11 @@ SHAPES = [
     (9472, 5120, 3456, 12, 9, True, "ff1_gelu"),
     # cross_attn_kv: cross-attention KV via minimal_matmul_split, chunks=2 (11x10 grid)
     (128, 5120, 2560, 11, 10, False, "cross_attn_kv"),
+    # WH AGMM Wan2.2 shapes (8x8 grid), K-fractured across 4 devices.
+    (3072, 5120, 3840, 8, 8, True, "plain"),
+    (3072, 5120, 1280, 8, 8, True, "plain"),
+    (3072, 5120, 3456, 8, 8, True, "plain"),
+    (3072, 3456, 5120, 8, 8, True, "plain"),
 ]
 
 SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{'agmm' if agmm else 'mm'}_{uc}" for M, K, N, cgx, cgy, agmm, uc in SHAPES]
