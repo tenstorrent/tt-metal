@@ -99,6 +99,7 @@ static bool get_post_process_bias(
     const std::optional<const ttnn::Tensor>& bias,
     const MatmulProgramConfig& chosen_program_config,
     const ttnn::Tensor& input_tensor_a_adjusted,
+    const ttnn::Tensor& input_tensor_b_adjusted,
     const bool transpose_a) {
     // Determine if we should post-process bias based on the program config
     // MatmulMultiCoreProgramConfig doesn't support bias fusion, so we need to apply it as a post-process
@@ -210,8 +211,8 @@ static ttnn::Tensor bound_matmul(
         parameters.transpose_b = false;
     }
 
-    bool post_process_bias =
-        get_post_process_bias(bias, chosen_program_config, input_tensor_a_adjusted, parameters.transpose_a);
+    bool post_process_bias = get_post_process_bias(
+        bias, chosen_program_config, input_tensor_a_adjusted, input_tensor_b_adjusted, parameters.transpose_a);
 
     auto attributes = ttnn::prim::create_matmul_attributes(
         input_tensor_a_adjusted, input_tensor_b_adjusted, parameters, {optional_output_tensor});

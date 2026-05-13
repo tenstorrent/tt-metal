@@ -293,12 +293,15 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                 "Got sub-device worker cores: {} (bounding box: {})",
                 sub_device_cores,
                 bbox);
+            auto grid_size = program_config_1d.allowed_worker_cores.has_value()
+                                 ? program_config_1d.allowed_worker_cores.value().bounding_box().grid_size()
+                                 : device->compute_with_storage_grid_size();
             TT_FATAL(
-                bbox.start_coord.x + program_config_1d.compute_with_storage_grid_size.x - 1 <= bbox.end_coord.x &&
-                    bbox.start_coord.y + program_config_1d.compute_with_storage_grid_size.y - 1 <= bbox.end_coord.y,
+                bbox.start_coord.x + grid_size.x - 1 <= bbox.end_coord.x &&
+                    bbox.start_coord.y + grid_size.y - 1 <= bbox.end_coord.y,
                 "matmul_multicore_reuse_mcast_1d compute_with_storage_grid_size {} anchored at sub-device start {} "
                 "extends past the sub-device's worker bounding box {}",
-                program_config_1d.compute_with_storage_grid_size,
+                grid_size,
                 bbox.start_coord,
                 bbox);
         }
