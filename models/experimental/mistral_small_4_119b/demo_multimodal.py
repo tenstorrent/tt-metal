@@ -85,7 +85,20 @@ def _parse_args() -> argparse.Namespace:
         "--img-patches",
         type=int,
         default=10,
-        help="Patches per side (must be even). Image is resized to img_patches × 14 pixels.",
+        help="(Only used in random-image fallback) patches per side. Image is sized to img_patches × 14 pixels.",
+    )
+    p.add_argument(
+        "--image-max-side",
+        type=int,
+        default=224,
+        help="Max H/W of the input image, in pixels, before the HF processor sees it. "
+        "Used only with --image. Larger = better understanding, slower vision forward.",
+    )
+    p.add_argument(
+        "--no-chat-template",
+        action="store_true",
+        help="Skip HF chat template / processor (use raw [image]+[prompt] layout). "
+        "Output will likely be EOS-only — useful only for plumbing tests.",
     )
     return p.parse_args()
 
@@ -127,26 +140,75 @@ def _open_mesh_device() -> ttnn.MeshDevice:
     return device
 
 
-# ── Image preprocessing (CLIP-style normalization) ─────────────────────────────
+# ── Input building: HF chat template + image processor ────────────────────────
 
 
-def _load_pixel_values(image_path: str | None, img_patches: int) -> torch.Tensor:
-    """Return ``[1, 3, H, W]`` bf16 pixel values normalized for Pixtral."""
-    side = img_patches * VISION_PATCH_SIZE  # e.g. 10 * 14 = 140
-    if image_path is None:
-        logger.warning(f"No --image provided; using random {side}×{side} pixel_values")
-        return torch.rand(1, 3, side, side, dtype=torch.bfloat16) * 2 - 1
+def _build_chat_inputs(
+    image_path: str,
+    prompt: str,
+    image_max_side: int,
+):
+    """
+    Build pixel_values + input_ids using HF ``AutoProcessor.apply_chat_template``.
 
+    The processor handles everything the model was trained to expect:
+      - chat-template framing: ``<s>[INST][IMG]…[IMG_BREAK]…[IMG_END] prompt [/INST]``
+      - CLIP-style image normalization, resize, and patch-aligned dimensions
+      - inserting the correct number of ``image_token_id`` slots into ``input_ids``
+        (with ``[IMG_BREAK]`` between patch rows — the orchestrator's
+        ``contiguous_runs`` helper handles those gaps)
+      - ``add_generation_prompt=True`` so the model knows it's the assistant's turn
+
+    Returns ``(pixel_values [1,3,H,W] bf16, input_ids [1, seq_len] long, processor)``.
+    """
     from PIL import Image
-    import numpy as np
+    from transformers import AutoProcessor
 
-    img = Image.open(image_path).convert("RGB").resize((side, side))
-    arr = np.array(img).astype(np.float32) / 255.0  # [H, W, 3]
-    # CLIP-style mean/std (Pixtral inherits the same normalization in HF's PixtralImageProcessor).
-    mean = np.array([0.48145466, 0.4578275, 0.40821073])
-    std = np.array([0.26862954, 0.26130258, 0.27577711])
-    arr = (arr - mean) / std
-    return torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).to(torch.bfloat16)
+    img = Image.open(image_path).convert("RGB")
+    if max(img.size) > image_max_side:
+        scale = image_max_side / max(img.size)
+        new_w = max(VISION_PATCH_SIZE, int(round(img.size[0] * scale)))
+        new_h = max(VISION_PATCH_SIZE, int(round(img.size[1] * scale)))
+        img = img.resize((new_w, new_h))
+        logger.info(f"Resized input image to {img.size} (max side ≤ {image_max_side})")
+
+    processor = AutoProcessor.from_pretrained(HF_MODEL_ID)
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": img},
+                {"type": "text", "text": prompt},
+            ],
+        }
+    ]
+    inputs = processor.apply_chat_template(
+        messages,
+        tokenize=True,
+        return_dict=True,
+        return_tensors="pt",
+        add_generation_prompt=True,
+    )
+    pixel_values = inputs["pixel_values"].to(torch.bfloat16)
+    input_ids = inputs["input_ids"]
+    return pixel_values, input_ids, processor
+
+
+def _build_random_inputs(img_patches: int, prompt: str, tokenizer, image_token_id: int):
+    """
+    Random-image fallback for plumbing tests (no chat template).
+
+    ``input_ids`` = ``[image_token_id × N] + [prompt tokens]`` — the model will
+    almost certainly emit EOS right away since this isn't the trained format.
+    """
+    side = img_patches * VISION_PATCH_SIZE
+    logger.warning(f"No --image provided; using random {side}×{side} pixel_values + raw [IMG]+text layout")
+    pixel_values = torch.rand(1, 3, side, side, dtype=torch.bfloat16) * 2 - 1
+    num_image_tokens = (img_patches // MMP_SPATIAL_MERGE_SIZE) ** 2
+    text_ids = tokenizer(prompt, return_tensors="pt").input_ids[0]
+    img_ids = torch.full((num_image_tokens,), image_token_id, dtype=torch.long)
+    input_ids = torch.cat([img_ids, text_ids]).unsqueeze(0)
+    return pixel_values, input_ids
 
 
 # ── RoPE precompute (same trick as the text demo) ──────────────────────────────
@@ -165,28 +227,6 @@ def _slice_rope(cos_full, sin_full, start, end):
     return cos_full[:, :, start:end, :].contiguous(), sin_full[:, :, start:end, :].contiguous()
 
 
-# ── Input id construction ──────────────────────────────────────────────────────
-
-
-def _build_input_ids(
-    prompt: str,
-    tokenizer,
-    num_image_tokens: int,
-    image_token_id: int,
-) -> torch.Tensor:
-    """
-    Construct input_ids = [BOS?] + [image tokens × N] + [prompt tokens].
-
-    This is a deliberately minimal layout — sufficient to exercise the splice
-    path and the prefill+decode pipeline. For real visual-Q&A use HF's chat
-    template via ``AutoProcessor.apply_chat_template`` to get the model's
-    expected ``[INST] [IMG] ... [/INST]`` format.
-    """
-    text_ids = tokenizer(prompt, return_tensors="pt").input_ids[0]  # may include BOS
-    img_ids = torch.full((num_image_tokens,), image_token_id, dtype=torch.long)
-    return torch.cat([img_ids, text_ids]).unsqueeze(0)
-
-
 # ── Generation loop ────────────────────────────────────────────────────────────
 
 
@@ -196,17 +236,16 @@ def generate(
     rotary_cls,
     text_config,
     pixel_values: torch.Tensor,
+    input_ids: torch.Tensor,
     prompt: str,
     image_token_id: int,
-    num_image_tokens: int,
     max_new_tokens: int,
 ) -> str:
-    # Build prompt token ids with image placeholders.
-    input_ids = _build_input_ids(prompt, tokenizer, num_image_tokens, image_token_id)
     seq_len = input_ids.shape[-1]
+    num_image_tokens = int((input_ids[0] == image_token_id).sum().item())
     logger.info(
         f"Prompt: {prompt!r} → {seq_len} tokens total "
-        f"({num_image_tokens} image + {seq_len - num_image_tokens} text)"
+        f"({num_image_tokens} image-token slots + {seq_len - num_image_tokens} text/template tokens)"
     )
 
     # Precompute RoPE for prefill + decode steps once on host.
@@ -220,6 +259,11 @@ def generate(
     logger.info(
         f"Phase 1 done in {time.perf_counter() - t0:.1f}s "
         f"→ image embeddings {tuple(img_embeds_host.shape)} bf16 on host"
+    )
+    assert img_embeds_host.shape[0] == num_image_tokens, (
+        f"projector produced {img_embeds_host.shape[0]} image tokens but input_ids has "
+        f"{num_image_tokens} image_token_id={image_token_id} slots — check that the HF "
+        f"processor agrees with the image dimensions you fed encode_image."
     )
 
     # Phase 2: load text model on device.
@@ -236,7 +280,7 @@ def generate(
 
     generated_ids = [next_id]
     print(f"\n[{prompt}]\n→ ", end="", flush=True)
-    print(tokenizer.decode([next_id], skip_special_tokens=False), end="", flush=True)
+    print(tokenizer.decode([next_id], skip_special_tokens=True), end="", flush=True)
 
     decode_times = []
     cur = torch.tensor([[next_id]], dtype=torch.long)
@@ -249,7 +293,7 @@ def generate(
         decode_times.append((time.perf_counter() - t_dec) * 1000)
 
         generated_ids.append(tok_id)
-        print(tokenizer.decode([tok_id], skip_special_tokens=False), end="", flush=True)
+        print(tokenizer.decode([tok_id], skip_special_tokens=True), end="", flush=True)
         if tokenizer.eos_token_id is not None and tok_id == tokenizer.eos_token_id:
             break
         cur = torch.tensor([[tok_id]], dtype=torch.long)
@@ -257,7 +301,7 @@ def generate(
 
     if decode_times:
         avg = sum(decode_times) / len(decode_times)
-        logger.info(f"Generated {len(generated_ids)} tokens | " f"decode avg {avg:.0f} ms/tok ({1000/avg:.1f} tok/s)")
+        logger.info(f"Generated {len(generated_ids)} tokens | decode avg {avg:.0f} ms/tok ({1000/avg:.1f} tok/s)")
 
     return tokenizer.decode(generated_ids, skip_special_tokens=True)
 
@@ -286,8 +330,6 @@ def main() -> None:
     text_cfg = cfg.text_config
     image_token_id = int(getattr(cfg, "image_token_index", 10))
 
-    num_image_tokens = (args.img_patches // MMP_SPATIAL_MERGE_SIZE) ** 2
-
     # State dict (filtered to what we actually need)
     logger.info(f"Loading state dict (text_layers={args.n_text_layers}, vision_layers={args.n_vision_layers})…")
     try:
@@ -303,16 +345,24 @@ def main() -> None:
     except Exception as e:
         sys.exit(f"Tokenizer load failed: {e}")
 
-    # Image
-    pixel_values = _load_pixel_values(args.image, args.img_patches)
-    logger.info(f"pixel_values: {tuple(pixel_values.shape)} bf16")
+    # Build pixel_values + input_ids.
+    #  - With --image: HF chat template + image processor (the format the model was trained on).
+    #  - Without --image, or with --no-chat-template: random/raw fallback (plumbing only).
+    if args.image and not args.no_chat_template:
+        logger.info(f"Building chat-template inputs via HF AutoProcessor for {args.image!r}…")
+        pixel_values, input_ids, _ = _build_chat_inputs(args.image, args.prompt, args.image_max_side)
+    else:
+        if args.image and args.no_chat_template:
+            logger.warning("--no-chat-template set: skipping HF chat template, expect EOS-only output.")
+        pixel_values, input_ids = _build_random_inputs(args.img_patches, args.prompt, tokenizer, image_token_id)
+    logger.info(f"pixel_values: {tuple(pixel_values.shape)} bf16, input_ids: {tuple(input_ids.shape)} long")
+    num_image_tokens = int((input_ids[0] == image_token_id).sum().item())
 
     # Mesh device + orchestrator
     mesh_device = _open_mesh_device()
     try:
-        # max_seq_len: prefill + decode budget, with a small safety margin.
-        # prompt_tokens isn't known exactly yet (we tokenize in generate), so be generous.
-        max_seq_len = num_image_tokens + 64 + args.max_new_tokens + 16
+        # KV cache must cover the prefill prompt + every decode token.
+        max_seq_len = input_ids.shape[-1] + args.max_new_tokens + 16
 
         logger.info(
             f"Building orchestrator (text_layers={args.n_text_layers}, "
@@ -335,9 +385,9 @@ def main() -> None:
                 rotary_cls=Mistral4RotaryEmbedding,
                 text_config=text_cfg,
                 pixel_values=pixel_values,
+                input_ids=input_ids,
                 prompt=args.prompt,
                 image_token_id=image_token_id,
-                num_image_tokens=num_image_tokens,
                 max_new_tokens=args.max_new_tokens,
             )
     finally:
