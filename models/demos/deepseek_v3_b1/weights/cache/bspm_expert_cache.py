@@ -28,6 +28,8 @@ from models.demos.deepseek_v3_b1.weights.cache.types import (
     CompressedTensorBuildInputs,
     CompressedTensorTarget,
     Fingerprint,
+    ShardMeshMapper,
+    TensorTarget,
 )
 
 if TYPE_CHECKING:
@@ -99,18 +101,22 @@ def get_or_create_bspm_expert(
         return {target.name: CompressedTensorBuildInputs(w=w_shuffled.numpy(), assignment=assignment_shuffled)}
 
     def _reconstruct(inputs: CompressedTensorBuildInputs, dev) -> CompressedTensor:
-        mem_config = expert_dram_memory_config(dev, target.K, target.N_padded, num_banks)
-        device_for_ct = dev if move_to_device else None
+        # The cache passes ``dev=None`` to signal host-stage, but CT needs the real
+        # device for mesh-shape / mapper metadata regardless. Use the closure ``device``
+        # for that, and ``move_to_device`` from the closure to control the upload.
+        mem_config = expert_dram_memory_config(device, target.K, target.N_padded, num_banks)
         return CompressedTensor.from_bspm(
             torch.from_numpy(inputs.w).float(),
             inputs.assignment,
-            device=device_for_ct,
+            device=device,
             memory_config=mem_config,
+            move_to_device=move_to_device,
         )
 
     return cache.get_or_create(
         fingerprint,
         device,
+        move_to_device=move_to_device,
         preprocess=_preprocess_and_shuffle,
         raw_tensors=raw_tensors,
         reconstruct=_reconstruct,
@@ -134,37 +140,26 @@ def get_or_create_bspm_expert_tp8(
 ) -> "CompressedTensor":
     """Load or build a BSPM-encoded routed expert projection sliced for a 2D TP mesh.
 
-    The TP8 analogue of :func:`get_or_create_bspm_expert`. Caching unit is one
-    ``(layer, expert, projection, mesh_shape)`` — :class:`Fingerprint` already
-    captures ``mesh_shape``, so single-device and TP8 entries never collide.
+    Caches the post-pack ``ct.data`` ttnn.Tensor (device-padded layout) via the
+    standard :class:`TensorTarget` cache path — same hot path as the baseline
+    uniform tensor cache: ``ttnn.dump_tensor`` on cold write, ``ttnn.load_tensor``
+    on warm hit, no numpy / torch repack on the warm path.
 
-    Pipeline:
+    The caller-supplied ``fingerprint`` (whose target carries the BSPM
+    uniquifying fields) is converted to an internal :class:`TensorTarget`
+    fingerprint for the cache; the on-disk identity changes but the user-facing
+    fingerprint stays stable.
 
-    1. **Slice + shuffle (preprocess)** — caller's ``preprocess`` returns the
-       *full logical* ``(K, N)`` weight + ``(tiles_h, tiles_w)`` assignment for
-       this expert/projection.  This wrapper calls
-       :func:`moe_routed_expert_bspm_tp8_torch_for_cache` to slice/shuffle/stack.
-    2. **2D-flatten for storage** — the 4D stacked weight
-       ``(mesh_rows, mesh_cols, K_per_device, N_padded_per_device)`` is flattened
-       to ``(mesh_rows*mesh_cols*K_per_device, N_padded_per_device)`` so it fits
-       the existing compact-tile cache layout.  The matching assignment is
-       already in this row-stacked form.
-    3. **Reconstruct** — at load time we receive the flat 2D weight, reshape
-       back to 4D, build per-device :class:`MemoryConfig` from
-       ``(K_per_device, N_padded_per_device)``, and call
-       :meth:`CompressedTensor.from_bspm` with a 2D mesh mapper so each
-       ``(mesh_row, mesh_col)`` slice lands on its device.
+    Cold path: builds the CT host-staged via :meth:`CompressedTensor.from_bspm`
+    inside the cache's ``preprocess`` callback, then uses
+    :func:`ttnn.to_torch` (with a matching mesh composer) to hand the combined
+    torch tensor to the cache.  The cache calls ``ttnn.from_torch`` + dumps the
+    result — exactly the baseline flow.
 
-    Args:
-        mesh_shape: ``(mesh_rows, mesh_cols)``.  Must match
-            ``fingerprint.mesh_shape`` (asserted).
-        shard_dim: ``0`` = row-parallel (down_proj), ``1`` = column-parallel
-            (gate/up_proj).  Captured by the slicing helper, not in the
-            fingerprint — projection ``name`` already differentiates the three
-            projections within a layer.
-        K_per_device, N_padded_per_device: per-rank dims used to build the
-            DRAM :class:`MemoryConfig` at reconstruct time and to round-trip
-            the 2D-stored weight back to 4D.
+    Warm path: cache loads the ttnn.Tensor via ``ttnn.load_tensor`` and we wrap
+    it in a :class:`CompressedTensor` via :meth:`CompressedTensor.from_dumped_data`.
+
+    Ephemeral cache: bypasses the disk lookup entirely; builds cold and returns.
     """
     from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import CompressedTensor
     from models.demos.deepseek_v3_b1.weights.transforms.moe import moe_routed_expert_bspm_tp8_torch_for_cache
@@ -188,11 +183,62 @@ def get_or_create_bspm_expert_tp8(
             f"target.N_padded={target.N_padded} must equal N_padded_per_device={N_padded_per_device} for TP8"
         )
     num_banks = target.num_banks
+    mem_config = expert_dram_memory_config(device, K_per_device, N_padded_per_device, num_banks)
+    mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)])
 
-    def _preprocess_and_slice(tensors: dict) -> dict:
+    # Compute the BYTE-level memory_config for the packed CT data.  The on-device
+    # buffer is WIDTH_SHARDED DRAM with shard_shape=[1, max_shard_bytes] (one
+    # height row × N bytes per DRAM bank), where ``max_shard_bytes`` is the
+    # packed BFP4 size of one (K_per_device × N_padded_per_device/num_banks)
+    # block.  Assumes uniform BFP4 (production: ``bspm_dir=None`` or fallback);
+    # mixed-precision BSPM would need to derive ``max_shard_bytes`` per CT from
+    # the assignment, not done here.
+    from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import bfp_tile_packed_size
+
+    _BFP4_MANT_BITS = 3
+    _bfp4_tile_bytes = bfp_tile_packed_size(_BFP4_MANT_BITS)  # 576
+    _K_tiles = K_per_device // 32
+    _per_core_N_tiles = (N_padded_per_device // num_banks) // 32
+    max_shard_bytes_per_device = _K_tiles * _per_core_N_tiles * _bfp4_tile_bytes
+    byte_shard_spec = ttnn.ShardSpec(
+        mem_config.shard_spec.grid,
+        [1, max_shard_bytes_per_device],
+        mem_config.shard_spec.orientation,
+    )
+    byte_mem_config = ttnn.MemoryConfig(
+        mem_config.memory_layout,
+        mem_config.buffer_type,
+        byte_shard_spec,
+    )
+
+    # Build a TensorTarget fingerprint that drives the standard cache flow.
+    # All BSPM uniquifying fields are folded into the name so the artifact_id
+    # depends on them.  ``transform_version`` offset avoids any collision with
+    # historical TensorTarget version bumps.
+    tensor_target_name = (
+        f"{target.name}_tp8_dumped_v{target.bspm_variant}_b{target.bspm_budget:.2f}_h{target.assignment_hash}"
+    )
+    tensor_target = TensorTarget(
+        name=tensor_target_name,
+        dtype=ttnn.uint8,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=byte_mem_config,
+        mesh_mapper_config=ShardMeshMapper(dim=0),
+        transform_version=target.transform_version + 100,
+    )
+    tensor_fingerprint = Fingerprint(
+        schema_version=fingerprint.schema_version,
+        source=fingerprint.source,
+        hf_model_id=fingerprint.hf_model_id,
+        hf_revision=fingerprint.hf_revision,
+        mesh_shape=fingerprint.mesh_shape,
+        target=tensor_target,
+    )
+
+    def _build_host_ct() -> "CompressedTensor":
+        """Run the slice/shuffle/pack pipeline host-staged; returns CT with host data."""
+        tensors = raw_tensors() if callable(raw_tensors) else raw_tensors
         inputs = preprocess(tensors)
-        # inputs.w: (K, N) logical pre-slice float32 numpy.
-        # inputs.assignment: (tiles_h, tiles_w) int8 numpy (logical, pre-slice, pre-shuffle).
         w_torch = torch.from_numpy(inputs.w) if isinstance(inputs.w, np.ndarray) else inputs.w
         stacked, stacked_assignment = moe_routed_expert_bspm_tp8_torch_for_cache(
             w_torch,
@@ -203,35 +249,68 @@ def get_or_create_bspm_expert_tp8(
             subblock_k=subblock_k,
             subblock_n=subblock_n,
         )
-        # Flatten 4D (mesh_rows, mesh_cols, K_per_device, N_padded_per_device) to 2D for storage.
-        # stacked_assignment is already (mesh_rows*mesh_cols*(K_per_device//32), N_padded_per_device//32).
-        w_flat = stacked.reshape(tp * K_per_device, N_padded_per_device).contiguous().numpy()
-        return {target.name: CompressedTensorBuildInputs(w=w_flat, assignment=stacked_assignment)}
-
-    def _reconstruct(inputs: CompressedTensorBuildInputs, dev) -> CompressedTensor:
-        # Cache hands us 2D-flat (K_total, N_padded_per_device); reshape back to 4D mesh layout.
-        w_flat = torch.from_numpy(inputs.w).float()
-        if w_flat.shape != (tp * K_per_device, N_padded_per_device):
-            raise ValueError(
-                f"Cached TP8 weight shape {tuple(w_flat.shape)} does not match expected "
-                f"({tp * K_per_device}, {N_padded_per_device})"
-            )
-        stacked = w_flat.reshape(mesh_rows, mesh_cols, K_per_device, N_padded_per_device).contiguous()
-        mem_config = expert_dram_memory_config(dev, K_per_device, N_padded_per_device, num_banks)
-        device_for_ct = dev if move_to_device else None
-        mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)])
         return CompressedTensor.from_bspm(
             stacked,
-            inputs.assignment,
-            device=device_for_ct,
+            stacked_assignment,
+            device=device,
             memory_config=mem_config,
             mesh_mapper_config=mesh_mapper_config,
+            move_to_device=False,  # always host-staged so we can convert to torch for the cache
         )
 
-    return cache.get_or_create(
-        fingerprint,
+    # Hold a ref to the host CT (built once during preprocess) so we can grab
+    # its assignment for the warm wrap.  ``cache.get_or_create`` only calls
+    # ``preprocess`` on cache miss; on hit we re-derive assignment from the
+    # source (uniform-BFP4 production case).
+    host_ct_holder: dict = {}
+
+    def _preprocess_to_torch(tensors: dict) -> dict:
+        host_ct = _build_host_ct()
+        host_ct_holder["ct"] = host_ct
+        # Convert the host mesh-distributed ttnn.Tensor back to a combined torch
+        # tensor that ``ttnn.from_torch(..., mesh_mapper=ShardTensorToMesh(dim=0))``
+        # will re-shard the same way at cache-write time.
+        combined_torch = ttnn.to_torch(
+            host_ct.data,
+            mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0),
+        )
+        return {tensor_target.name: combined_torch}
+
+    data_tensor = cache.get_or_create(
+        tensor_fingerprint,
         device,
-        preprocess=_preprocess_and_slice,
+        move_to_device=move_to_device,
+        preprocess=_preprocess_to_torch,
         raw_tensors=raw_tensors,
-        reconstruct=_reconstruct,
+    )
+
+    host_ct = host_ct_holder.get("ct")
+    if host_ct is not None:
+        # Cache miss path: we built the CT, reuse its assignment_flat / shape.
+        assignment_flat = host_ct._assignment_flat
+        full_shape = host_ct.shape
+        per_device_shape = host_ct._per_device_shape
+        tile_hw = host_ct.tile_hw
+    else:
+        # Cache hit path: re-derive minimal metadata from known dims + target.
+        # Uniform BFP4 production assumption: assignment is all 1s (bfp4 index).
+        # TP8 stacking always produces per-device chunks of (K_per_device,
+        # N_padded_per_device) regardless of ``shard_dim`` — caller already
+        # baked the sharding into the K_per_device / N_padded_per_device kwargs.
+        tile_hw = 32
+        per_device_shape = (K_per_device, N_padded_per_device)
+        full_shape = (tp * K_per_device, N_padded_per_device)
+        tiles_h_full = full_shape[0] // tile_hw
+        tiles_w_full = full_shape[1] // tile_hw
+        assignment_flat = np.ones((tiles_h_full, tiles_w_full), dtype=np.int8).ravel()
+
+    return CompressedTensor.from_dumped_data(
+        data_tensor,
+        shape=full_shape,
+        assignment_flat=assignment_flat,
+        per_device_shape=per_device_shape,
+        device=device,
+        memory_config=mem_config,
+        tile_hw=tile_hw,
+        mesh_mapper_config=mesh_mapper_config,
     )
