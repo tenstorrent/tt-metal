@@ -120,6 +120,12 @@ struct AppArgs {
     int ack_every_frames = 64;        // matches sender's ring N
     int ack_every_us = 1000;          // 1 ms idle-flush bound
     uint16_t ack_ethertype = 0x1AF4;  // Phase R: same as data; FW uses opcode 0x40, not ethertype
+
+    // R-validation: drop K% of incoming data frames before they reach the
+    // ack-tracking logic. From the WH sender's POV those seq#s never ack,
+    // so its retx timer fires and it re-sends the unacked window. Exercises
+    // the reliability path end-to-end. 0 (default) = no drops.
+    int ack_drop_pct = 0;
 };
 
 bool parse_app_args(int argc, char** argv, AppArgs& out) {
@@ -174,6 +180,8 @@ bool parse_app_args(int argc, char** argv, AppArgs& out) {
             out.ack_every_us = std::atoi(argv[++i]);
         } else if (!std::strcmp(a, "--ack-ethertype") && i + 1 < argc) {
             out.ack_ethertype = static_cast<uint16_t>(std::strtoul(argv[++i], nullptr, 0));
+        } else if (!std::strcmp(a, "--ack-drop-pct") && i + 1 < argc) {
+            out.ack_drop_pct = std::atoi(argv[++i]);
         } else if (!std::strcmp(a, "-h") || !std::strcmp(a, "--help")) {
             std::printf(
                 "Usage: %s <EAL args> -- [--port-id N] [--ethertype 0xNNNN] [--count N]\n"
@@ -1023,10 +1031,23 @@ int main(int argc, char** argv) {
                 // CMAC raw-TX prepends its own 14-byte L2 header before the
                 // host's buffer, so the seq# the host wrote at frame[14] sits
                 // at wire byte 28.
-                if (args.ack_enable && m->pkt_len >= 32) {
+                if (args.ack_enable && m->pkt_len >= sizeof(rte_ether_hdr) + 32) {
                     const uint8_t* p = rte_pktmbuf_mtod(m, const uint8_t*);
+                    // TT-RDMA v1 seq lives at RDMA header offset +8, which
+                    // is wire offset 14 + 8 = 22 (after the 14 B L2 the
+                    // wire carries from WH CMAC's prepend).
                     uint32_t seq;
-                    std::memcpy(&seq, p + 28, 4);
+                    std::memcpy(&seq, p + sizeof(rte_ether_hdr) + 8, 4);
+
+                    // R-validation: probabilistic drop. From the WH sender's
+                    // POV this seq# never gets acked; the cumulative-ack
+                    // window stalls at the drop point until host's tick_retx
+                    // re-fires the slot and we receive it again.
+                    if (args.ack_drop_pct > 0 && (std::rand() % 100) < args.ack_drop_pct) {
+                        rte_pktmbuf_free(m);
+                        continue;  // skip seq tracking, ack tx, echo — fully drop
+                    }
+
                     if (last_acked == kAckSeed) {
                         // First frame: bootstrap last_acked. If the first frame
                         // is seq>0, treat seq-1 as implicitly "received before

@@ -62,16 +62,26 @@ uint32_t env_uint(const char* name, uint32_t default_value) {
 }
 
 std::vector<uint8_t> build_frame(
-    const std::array<uint8_t, 6>& dst_mac, const std::array<uint8_t, 6>& src_mac, uint32_t seq, uint32_t size) {
+    const std::array<uint8_t, 6>& /*dst_mac*/, const std::array<uint8_t, 6>& /*src_mac*/, uint32_t seq, uint32_t size) {
+    // TT-RDMA v1 SEND frame. WH CMAC strips the wire L2 header on RX, so the
+    // 32 B RDMA header lives at frame[0]. Layout per [[project-tt-rdma-v1-spec]]:
+    //   +0  opcode = 0x01 (SEND)
+    //   +1  version_flags = 0x01
+    //   +2  tag = low-16 of seq
+    //   +4  length = payload bytes after the 32 B header
+    //   +8  seq
+    //   +12 rkey = 0
+    //   +16 remote_offset = 0
+    //   +24 imm = 0
+    //   +28 hdr_crc = 0
     std::vector<uint8_t> frame(size, 0);
-    std::memcpy(frame.data() + 0, dst_mac.data(), 6);
-    std::memcpy(frame.data() + 6, src_mac.data(), 6);
-    frame[12] = 0x1A;
-    frame[13] = 0xF4;
-    frame[14] = static_cast<uint8_t>(seq & 0xFF);
-    frame[15] = static_cast<uint8_t>((seq >> 8) & 0xFF);
-    frame[16] = static_cast<uint8_t>((seq >> 16) & 0xFF);
-    frame[17] = static_cast<uint8_t>((seq >> 24) & 0xFF);
+    frame[0] = 0x01;
+    frame[1] = 0x01;
+    uint16_t tag = static_cast<uint16_t>(seq & 0xFFFFu);
+    std::memcpy(frame.data() + 2, &tag, 2);
+    uint32_t length = (size >= 32u) ? (size - 32u) : 0u;
+    std::memcpy(frame.data() + 4, &length, 4);
+    std::memcpy(frame.data() + 8, &seq, 4);
     return frame;
 }
 
