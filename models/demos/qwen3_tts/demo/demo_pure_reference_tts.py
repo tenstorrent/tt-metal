@@ -691,6 +691,25 @@ def get_default_reference_path():
     return os.path.join(os.path.dirname(__file__), "jim_reference.wav")
 
 
+def _load_ref_text_for(ref_audio_path: str) -> str:
+    """Return the transcript stored next to a reference audio file, if present.
+
+    Looks for a sibling ``<name>.txt`` of the ref audio. Raises if neither
+    --ref-text was given nor a sibling .txt exists.
+    """
+    import os
+
+    base, _ = os.path.splitext(ref_audio_path)
+    txt_path = base + ".txt"
+    if os.path.exists(txt_path):
+        with open(txt_path) as f:
+            return f.read().strip()
+    raise SystemExit(
+        f"No --ref-text provided and no sibling transcript at {txt_path}. "
+        "Pass --ref-text explicitly when using an ad-hoc reference audio."
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description="Pure Reference TTS Demo with ICL")
     parser.add_argument("--text", type=str, required=True, help="Text to synthesize")
@@ -703,8 +722,11 @@ def main():
     parser.add_argument(
         "--ref-text",
         type=str,
-        default="So basically you put up the high level overview slides.",
-        help="Reference audio transcript (default: transcript for jim_reference.wav)",
+        default=None,
+        help=(
+            "Reference audio transcript. If unset and --ref-audio is the bundled "
+            "jim_reference.wav, falls back to jim_reference.txt next to it."
+        ),
     )
     parser.add_argument("--output", type=str, default="/tmp/pure_reference_tts.wav", help="Output audio path")
     parser.add_argument("--max-tokens", type=int, default=256, help="Maximum tokens to generate")
@@ -744,13 +766,14 @@ def main():
 
     # Use default Jim reference if not specified
     ref_audio = args.ref_audio if args.ref_audio else get_default_reference_path()
+    ref_text = args.ref_text if args.ref_text else _load_ref_text_for(ref_audio)
 
     print("=" * 80)
     print("Pure Reference TTS Demo (ICL Mode)")
     print("=" * 80)
     print(f"Target text: {args.text}")
     print(f"Reference audio: {ref_audio}")
-    print(f"Reference text: {args.ref_text}")
+    print(f"Reference text: {ref_text}")
     print()
 
     # Verify reference audio exists
@@ -779,15 +802,13 @@ def main():
     # after decode, matching what demo_full_ttnn_tts.py does at line 2941.
     ref_codes, audio_data = encode_reference_audio(ref_audio, main_weights)
     ref_codes_original = ref_codes.clone()
-    ref_codes, audio_data = trim_reference_for_icl_conditioning(
-        ref_codes, audio_data, tokenizer, args.ref_text, args.text
-    )
+    ref_codes, audio_data = trim_reference_for_icl_conditioning(ref_codes, audio_data, tokenizer, ref_text, args.text)
     speaker_embedding = extract_speaker_embedding_reference(audio_data, main_weights)
 
     # Create ICL embeddings
     inputs_embeds, trailing_text_hidden, tts_pad_embed = create_icl_embedding(
         target_text=args.text,
-        ref_text=args.ref_text,
+        ref_text=ref_text,
         ref_codes=ref_codes,
         tokenizer=tokenizer,
         weights=main_weights,
