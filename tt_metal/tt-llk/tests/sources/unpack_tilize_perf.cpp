@@ -98,8 +98,7 @@ const bool TILIZE = true;
 
 #ifdef LLK_TRISC_MATH
 
-#include "llk_math_common.h"
-#include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_lib_math_wrappers.h"
 
 using namespace ckernel;
 
@@ -118,12 +117,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
         // copy srca to dest
-#ifdef ARCH_BLACKHOLE
-        // set tilize flag to true
-        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, TILIZE, is_int_fpu_en>(4, formats.math);
-#else
-        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en>(4, formats.math);
-#endif
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, TILIZE, is_int_fpu_en>(
+            4 /* num_faces */, formats.math);
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         PROFILER_SYNC();
@@ -139,13 +134,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-#ifdef ARCH_BLACKHOLE
-            // Due to the blackhole tilize bug mitigation
-            // DVALID is set for each tile, instead of each face.
-            const std::uint32_t NUM_DVALIDS = TILE_CNT;
-#else
-            const std::uint32_t NUM_DVALIDS = TILE_CNT * TILE_NUM_FACES;
-#endif
+            const std::uint32_t NUM_DVALIDS = _llk_unpack_tilize_num_dvalids_wrapper_(TILE_CNT, TILE_NUM_FACES);
             if constexpr (!unpack_to_dest)
             {
                 _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * NUM_DVALIDS);
@@ -200,7 +189,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include <algorithm>
 
-#include "llk_pack.h"
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -218,15 +207,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
 
-#ifdef ARCH_BLACKHOLE
-        _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE, TILIZE>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
-        _llk_pack_init_<UNTILIZE, false, TILIZE>();
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, UNTILIZE, TILIZE>(formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);
+        _llk_pack_init_wrapper_<UNTILIZE, false /* zero_output */, TILIZE>(formats.pack_dst);
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-#else
-        _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
-        _llk_pack_init_<UNTILIZE, false>(formats.pack_dst);
-        _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, UNTILIZE>();
-#endif
         PROFILER_SYNC();
     }
     {

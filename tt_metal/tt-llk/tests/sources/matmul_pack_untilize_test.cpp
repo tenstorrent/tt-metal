@@ -40,7 +40,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_MATH
 
-#include "llk_math_common.h"
+#include "llk_lib_math_wrappers.h"
 #include "llk_math_matmul.h"
 #include "params.h"
 
@@ -52,9 +52,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_matmul_init_<MATH_FIDELITY>();
     _llk_math_pack_sync_init_<sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-#ifdef ARCH_BLACKHOLE
-    _llk_math_reconfig_remap_(true);
-#endif
+    _llk_math_reconfig_remap_wrapper_(true);
     _llk_math_wait_for_dest_available_<sync>();
     _llk_math_matmul_<MATH_FIDELITY>(0);
     _llk_math_dest_section_done_<sync, is_fp32_dest_acc_en>();
@@ -65,7 +63,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 
 #include "llk_lib_pack_wrappers.h"
-#include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
 
@@ -74,17 +71,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-#ifdef ARCH_BLACKHOLE
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE, false>(formats.pack_src, formats.pack_dst, tile_size);
-    _llk_pack_dest_init_<sync, is_fp32_dest_acc_en>();
-    _llk_pack_untilize_init_<ct_dim>(formats.pack_src, formats.pack_dst, FACE_R_DIM, 4);
-#else
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE>(formats.pack_src, formats.pack_dst, tile_size);
-    _llk_pack_dest_init_<sync, is_fp32_dest_acc_en, UNTILIZE>();
-    _llk_pack_untilize_init_<ct_dim>(formats.pack_dst, FACE_R_DIM, 4);
-#endif
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, UNTILIZE, false /* tilize */>(formats.pack_src, formats.pack_dst, tile_size);
+    _llk_pack_dest_init_wrapper_<sync, is_fp32_dest_acc_en, UNTILIZE>();
+    _llk_pack_untilize_init_wrapper_<ct_dim>(formats.pack_src, formats.pack_dst, FACE_R_DIM, 4 /* num_faces */);
     _llk_packer_wait_for_math_done_();
-    _llk_pack_untilize_wrapper_<ct_dim>(L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst, FACE_R_DIM, 4, 0);
+    _llk_pack_untilize_wrapper_<ct_dim>(L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst, FACE_R_DIM, 4 /* num_faces */, 0 /* tile_dst_rt_offset */);
     _llk_pack_dest_section_done_<sync, is_fp32_dest_acc_en>();
 }
 
