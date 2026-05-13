@@ -162,20 +162,24 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         # SharedExpert now always expects collective ops to be handled by caller
         shared_expert_out = SharedExpert.forward_prefill(x_gathered, cfg["shared_expert"])
 
-        mlp_out = ttnn.sum(mlp_out, dim=0, keepdim=True, memory_config=cfg["moe"]["sum_experts_output_memory_config"])
-        combined_out = ttnn.add(mlp_out, shared_expert_out)
-        ttnn.deallocate(mlp_out)
-        ttnn.deallocate(shared_expert_out)
-
         # Handle reduce_scatter if input was TP-sharded
         if x_dim == hidden_size // tp_size:
             # Single reduce_scatter on combined output using MoE's config for consistency
+            if mlp_out.shape[0] != 1:
+                mlp_out = ttnn.sum(
+                    mlp_out, dim=0, keepdim=True, memory_config=cfg["moe"]["sum_experts_output_memory_config"]
+                )
+            combined_out = ttnn.add(mlp_out, shared_expert_out)
+            ttnn.deallocate(mlp_out)
+            ttnn.deallocate(shared_expert_out)
+
             ccl_moe = cfg["moe"]["ccl"]
             output = ttnn.experimental.reduce_scatter_minimal_async(
                 combined_out,
                 **ccl_moe.populate_reduce_scatter_runtime_args(cfg["moe"]["final_output_reduce_scatter"]),
             )
             ttnn.deallocate(combined_out)
+
             if batch_size > 1:
                 output = ttnn.reshape(output, (output.shape[0], batch_size, seq_len, output.shape[3]))
             # Cleanup gathered tensor

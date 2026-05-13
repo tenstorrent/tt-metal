@@ -100,7 +100,7 @@ void kernel_main() {
     size_t rt_arg_count = 0;
     const auto output_base_addr = get_arg_val<uint32_t>(rt_arg_count++);
     const auto global_semaphore_addr = get_arg_val<uint32_t>(rt_arg_count++);
-    const auto init_semaphore_addr = get_arg_val<uint32_t>(rt_arg_count++);
+    rt_arg_count++;  // init semaphore address is unused; combine does not need a pre-data barrier.
     const uint32_t token_start_idx = get_arg_val<uint32_t>(rt_arg_count++);
     const uint32_t token_end_idx = get_arg_val<uint32_t>(rt_arg_count++);
 
@@ -116,23 +116,13 @@ void kernel_main() {
         packet_headers[i] = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
         cb_push_back(packet_header_cb_id,1);
     }
-    const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_addr);
-
     open_direction_connections_barrier(directions, fabric_connections);
-    send_init_semaphore_to_configured_targets<
-        linearized_mesh_coord,
-        topology,
-        src_chip_id,
-        mesh_rows,
-        mesh_cols,
-        replicate_axis,
-        num_devices>(fabric_connections, packet_headers[1], dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
 
     cb_wait_front(local_experts_cb_id,1);
     auto local_experts_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(local_experts_cb_id));
     bool needs_barrier = false;
-    noc_semaphore_wait((uint32_t*)init_semaphore_addr, replicate_group_devices - 1);
-    noc_semaphore_set((uint32_t*)init_semaphore_addr, 0);
+    // Avoid a pre-data cross-device barrier here. The combine writer only performs remote writes into already
+    // allocated output buffers, and completion is still synchronized by the final semaphore below.
 
     for (uint32_t t = token_start_idx; t < token_end_idx; ++t) {
         cb_wait_front(metadata_cb_id, 1);

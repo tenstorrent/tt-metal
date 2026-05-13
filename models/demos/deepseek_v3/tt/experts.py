@@ -18,7 +18,13 @@ from ttnn.experimental.moe_compute_utils import (
 
 import ttnn
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, LinearConfig, MeshDeviceStub, MulConfig
+from models.demos.deepseek_v3.utils.config_dataclass import (
+    ConcatConfig,
+    FromWeightConfig,
+    LinearConfig,
+    MeshDeviceStub,
+    MulConfig,
+)
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI2,
     COMPUTE_KERNEL_CONFIG_LOFI,
@@ -46,6 +52,7 @@ class Experts(AbstractModule):
     _warned_missing_quad_ring_prepared_checkpoint = False
     _QUAD_RING_PREPARED_W0_W1_KEY = "experts_quad_ring.w0_w1.weight"
     _QUAD_RING_PREPARED_W2_KEY = "experts_quad_ring.w2.weight"
+    _LEGACY_QUAD_W2_PREFILL_N_CHUNK = 512
 
     @classmethod
     def _get_num_experts_per_device(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> int:
@@ -318,6 +325,17 @@ class Experts(AbstractModule):
         """
         return mesh_device.shape[1] == 8
 
+    @staticmethod
+    def _legacy_quad_w2_prefill_program_config() -> ttnn.MatmulMultiCoreReuseProgramConfig:
+        return ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(7, 8),
+            in0_block_w=2,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=1,
+            per_core_N=Experts._LEGACY_QUAD_W2_PREFILL_N_CHUNK // ttnn.TILE_SIZE,
+        )
+
     @classmethod
     def _create_model_config(
         cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, mode: str
@@ -337,6 +355,7 @@ class Experts(AbstractModule):
             output_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
         # Construct the config
+        split_legacy_quad_w2_prefill = mode == "prefill" and is_quad_mesh(mesh_device)
         config = {
             "mesh_device": MeshDeviceStub(mesh_device.shape),
             "input_memory_config": input_memory_config,
@@ -364,6 +383,13 @@ class Experts(AbstractModule):
                 memory_config=output_memory_config,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
             )
+            if split_legacy_quad_w2_prefill:
+                # Work around https://github.com/tenstorrent/tt-metal/issues/44280 by avoiding the
+                # multicast w2 matmul path that can deadlock in legacy QUAD prefill.
+                config["split_legacy_quad_w2_prefill"] = True
+                config["w2_experts_split_n"] = cls._LEGACY_QUAD_W2_PREFILL_N_CHUNK
+                config["w2_experts_split_program_config"] = cls._legacy_quad_w2_prefill_program_config()
+                config["w2_experts_split_concat"] = ConcatConfig(dim=-1, memory_config=output_memory_config)
             config["w3_experts"] = LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 transpose_b=True,
@@ -452,7 +478,7 @@ class Experts(AbstractModule):
         _log_expert_stats("activated", activated)
 
         # Down projection
-        output = ttnn.linear(activated, **cfg["w2_experts"])
+        output = cls._fwd_w2(activated, cfg)
         ttnn.deallocate(activated)
         _log_expert_stats("w2_out", output)
 
@@ -461,6 +487,45 @@ class Experts(AbstractModule):
         output = ttnn.reshape(output, shape=(1, cfg["num_experts_per_device"], num_tokens, hidden_size))
 
         assert output.memory_config() == cfg["output_memory_config"]
+        return output
+
+    @classmethod
+    def _fwd_w2(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
+        if not cfg.get("split_legacy_quad_w2_prefill", False):
+            return ttnn.linear(x, **cfg["w2_experts"])
+
+        w2_cfg = dict(cfg["w2_experts"].items())
+        weight = w2_cfg.pop("input_tensor_b")
+        split_n = cfg["w2_experts_split_n"]
+        output_width = weight.shape[-2]
+        if output_width % split_n != 0:
+            raise ValueError(f"w2 output width {output_width} must be divisible by split size {split_n}")
+
+        output_chunks: list[ttnn.Tensor] = []
+        weight_chunks: list[ttnn.Tensor] = []
+        for start in range(0, output_width, split_n):
+            end = start + split_n
+            weight_chunk = ttnn.slice(
+                weight,
+                [0, 0, start, 0],
+                [weight.shape[0], weight.shape[1], end, weight.shape[3]],
+                memory_config=weight.memory_config(),
+            )
+            weight_chunks.append(weight_chunk)
+            output_chunks.append(
+                ttnn.linear(
+                    x,
+                    **w2_cfg,
+                    input_tensor_b=weight_chunk,
+                    program_config=cfg["w2_experts_split_program_config"],
+                )
+            )
+
+        output = ttnn.concat(output_chunks, **cfg["w2_experts_split_concat"])
+        for chunk in output_chunks:
+            ttnn.deallocate(chunk)
+        for chunk in weight_chunks:
+            ttnn.deallocate(chunk)
         return output
 
     @classmethod
