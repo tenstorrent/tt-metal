@@ -14,11 +14,20 @@ from typing import Literal
 from loguru import logger
 from transformers import AutoTokenizer
 
-import ttnn
-from models.demos.deepseek_v3_b1.demo.mesh_device_context import open_mesh_device
-from models.demos.deepseek_v3_b1.demo.model_pipeline import ModelPipeline
-
 DEFAULT_TOKENIZER = "deepseek-ai/DeepSeek-R1-0528"
+SLOW_DISPATCH_ENV = "TT_METAL_SLOW_DISPATCH_MODE"
+HYBRID_ALLOCATOR_ENV = "TT_METAL_ALLOCATOR_MODE_HYBRID"
+
+
+def configure_runtime_env(*, enable_sram_hot_experts: bool) -> None:
+    """Set demo-required TT-Metal environment before TTNN/device initialization."""
+    if os.environ.get(SLOW_DISPATCH_ENV) != "1":
+        os.environ[SLOW_DISPATCH_ENV] = "1"
+        logger.info("Enabled {}=1 for the DeepSeek demo", SLOW_DISPATCH_ENV)
+
+    if enable_sram_hot_experts and os.environ.get(HYBRID_ALLOCATOR_ENV) != "1":
+        os.environ[HYBRID_ALLOCATOR_ENV] = "1"
+        logger.info("Enabled {}=1 for --enable-sram-hot-experts", HYBRID_ALLOCATOR_ENV)
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -171,6 +180,11 @@ def run_demo(
     sram_hot_experts_ceiling: int = 64,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
+    configure_runtime_env(enable_sram_hot_experts=enable_sram_hot_experts)
+
+    from models.demos.deepseek_v3_b1.demo.mesh_device_context import open_mesh_device
+    from models.demos.deepseek_v3_b1.demo.model_pipeline import ModelPipeline
+
     iterations = max_new_tokens
     logger.info(f"Starting DeepSeek V3 B1 demo (iterations={iterations})")
 
@@ -258,9 +272,9 @@ def main(argv: list[str] | None = None) -> int:
         if not index_path.is_file():
             parser.error(f"--model-path must contain model.safetensors.index.json (missing {index_path})")
 
-    if args.enable_sram_hot_experts and os.environ.get("TT_METAL_ALLOCATOR_MODE_HYBRID") != "1":
-        os.environ["TT_METAL_ALLOCATOR_MODE_HYBRID"] = "1"
-        logger.info("Enabled TT_METAL_ALLOCATOR_MODE_HYBRID=1 for --enable-sram-hot-experts")
+    configure_runtime_env(enable_sram_hot_experts=args.enable_sram_hot_experts)
+
+    import ttnn
 
     ttnn.init_distributed_context()
 
