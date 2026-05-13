@@ -227,6 +227,10 @@ class TtQwen36DecoderLayer(LightweightModule):
         x_sharded.deallocate(True)
         x_normed = _gather_from_cols(x_normed_sharded, self.mesh_device)
         x_normed_sharded.deallocate(True)
+        # Tile-padding fix: _gather_from_cols may pad T to 32 when B*T < 32 (decode).
+        # Slice back to the original sequence length so downstream ops see T_in.
+        if list(x_normed.shape)[-2] != T_in:
+            x_normed = ttnn.slice(x_normed, [0, 0, 0], [B_in, T_in, H_in], memory_config=mem)
 
         # ---  Attention block dispatch  ---
         if self.layer_type == "linear_attention":
@@ -281,10 +285,23 @@ class TtQwen36DecoderLayer(LightweightModule):
         x_sharded2.deallocate(True)
         x_normed2 = _gather_from_cols(x_normed2_sharded, self.mesh_device)
         x_normed2_sharded.deallocate(True)
+        # Tile-padding fix: same as input_LN — slice back to T_in for decode.
+        if list(x_normed2.shape)[-2] != T_in:
+            x_normed2 = ttnn.slice(x_normed2, [0, 0, 0], [B_in, T_in, H_in], memory_config=mem)
 
         # ---  MLP  ---
         mlp_out = self.mlp.forward(x_normed2)
         x_normed2.deallocate(True)
+        # Tile-padding fix: fast_reduce_nc inside TtQwen36MLP computes its output
+        # shape from padded_shape (a TTNN quirk): input padded [8, 32, H] → output
+        # logical [1, 32, H] for dim=0 reduction, even though the TRUE sequence
+        # length is T_in=1.  Slice back to T_in before the residual add so that
+        # subsequent layers receive the correct logical sequence length.
+        mlp_T = list(mlp_out.shape)[-2]
+        if mlp_T != T_in:
+            mlp_out_sliced = ttnn.slice(mlp_out, [0, 0, 0], [B_in, T_in, H_in], memory_config=mem)
+            mlp_out.deallocate(True)
+            mlp_out = mlp_out_sliced
 
         # ---  Second residual add  ---
         x_out = ttnn.add(residual2, mlp_out, memory_config=mem)

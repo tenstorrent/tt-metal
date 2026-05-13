@@ -1,5 +1,36 @@
 # Qwen3.6-27B Galaxy (BH 8×4) Bring-Up Log
 
+## Current Status (2026-05-13, T10 complete — decode loop fixed)
+
+### T10: Fix T=1 decode bug — decode-after-prefill now works
+
+**Root cause**: `ttnn.experimental.fast_reduce_nc` in `TtQwen36MLP.forward()` computes
+its output shape from `input.padded_shape()` (not logical shape), so for T=1 decode:
+- Input: `partial [8, 1, H]` logical with padded `[8, 32, H]`
+- `fast_reduce_nc(dims=[0])` output: logical `[1, 32, H]` (from padded `[8, 32, H]` with dim 0 → 1)
+- The T=32 logical output then fails the residual add against `residual2 [1, 1, H]`
+
+**Fix**: In `llama_decoder.py`, after `mlp_out = self.mlp.forward(x_normed2)`, slice
+`mlp_out` back to `T_in` when `mlp_T != T_in`. Analogous to existing fixes for
+DeltaNet output and GatedAttention output.
+
+**New tests** (both GREEN):
+- `tests/test_decode_loop.py::test_decode_one_token_after_prefill` — 4-layer,
+  one decode step, 0.60s per step, logits shape [1, 1, 248832], no NaN/Inf.
+- `tests/test_decode_loop.py::test_greedy_decode_5_tokens_after_prefill` — 64-layer,
+  5 decode steps ~1.1s/step. Generated: **' Paris.\n\n<think>\n\n'**
+
+**No regression** on all existing tests:
+- `test_full_model_4layer_prefill_pcc_on_8x4`: hidden PCC = 0.998835 (thresh=0.99) PASS
+- `test_full_model_64layer_paris_generation_on_8x4`: " Paris" in 8.58s PASS
+- `test_full_model_greedy_decode_5_tokens` (test_full_model.py): PASS (was previously failing)
+
+**Open items resolved**: The DeltaNet decode path assertion was a symptom of the wrong
+T=32 flowing into DeltaNet; with the MLP fix, T remains 1 throughout the decode path.
+The "DeltaNet kernel assertion T==1" open item from the BRINGUP_LOG is now CLOSED.
+
+---
+
 ## Current Status (2026-05-13, T12 complete)
 
 ### T12: 64-layer hidden PCC mandate check
@@ -94,10 +125,10 @@ kernels (MLP, attention, DeltaNet).  Result: 4-layer hidden PCC 0.985 → 0.993,
 16-layer top-1 match 84% → 87.5%.
 
 ## Open items
-- [ ] **DeltaNet decode path** assertion (`qwen36_deltanet.py:778`): "Decode
-      expects T=1, got T=32".  Pre-existing limitation when prefill state is
-      carried into a single-step decode.  Out of scope for sharding work;
-      blocks the `test_full_model_greedy_decode_5_tokens` test only.
+- [x] **DeltaNet decode path** assertion — FIXED in T10. Root cause was
+      `fast_reduce_nc` using padded_shape for MLP output → T=32 logical on decode.
+      Fix: slice `mlp_out` back to `T_in` in `llama_decoder.py` after MLP call.
+      `test_full_model_greedy_decode_5_tokens` now PASSES.
 - [ ] **On-device LM head matmul**.  Currently the LM head matmul runs on CPU
       in float32 to preserve logit PCC at 0.965.  On-device BF16 matmul
       should be added (the weight is already sharded); expect logit PCC to
