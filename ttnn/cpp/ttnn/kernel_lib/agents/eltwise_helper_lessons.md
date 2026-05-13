@@ -226,26 +226,57 @@ chain_is_hoist_safe_v<Chain> = has_load && !has_non_load_fpu_clash && loads_shar
 
 The pipeline picks fast / slow / illegal paths from these traits. The chain author writes simple constructors; the optimization decisions are deduced.
 
-### 3.4 Init hoisting is opt-in, narrowly scoped, never the default
+### 3.4 Init hoisting — gate on what each element's init reprograms, not on chain length
 
 Per-tile init is the default. Hoisting `init()` out of the loop is a perf optimization with a tight precondition set — get any condition wrong and the chain silently produces wrong output. The default path runs every element's `init()` + `exec()` every tile; readers can answer "what runs per tile" by reading the chain.
 
-Hoisting is only allowed when **all** of the following hold:
+#### Empirical baseline — what production kernels actually hoist
 
-1. Chain shape is exactly `CopyTile + 1 SFPU op` (one CB load + one SFPU compute). Longer chains, multiple CopyTiles, or any FPU-clobbering element disqualify.
-2. No element between iterations reprograms hardware state the hoisted `init()` set up — for the `CopyTile + 1 SFPU` shape this reduces to "the SFPU op doesn't touch unpack MOP / srca format," which is the common case but still must be validated by the SFPU op's traits.
+Investigation of `pack_patterns.tsv` (667 entries, full L1→L1 traces around `pack_tile` sites) confirms that production kernels hoist substantially more aggressively than the "exactly `CopyTile + 1 SFPU op`" rule a prior draft proposed. Concrete patterns observed:
 
-Each chain element's `init()` programs specific hardware state — unpack MOP, math MOP, ADDR_MOD, srca/srcb format reconfig, packer reconfig, etc. Encode "what hardware state I touch in init/exec" as static-constexpr traits (`clashes_with_fpu`, plus finer-grained traits if needed: `clobbers_unpack_mop`, `reconfigs_srca`, etc.). The chain combinator computes a conservative `chain_is_hoist_safe_v<Chain>` that requires all three conditions above; if any fails, init runs per tile.
+- **Multi-SFPU after a single CopyTile**: `softmax.cpp` softmax `exp_cb` hoists `copy_tile_init(cb_in)` AND `exp_tile_init<EXP_APPROX>()` outside the per-tile loop; the loop body runs only `copy_tile` + `exp_tile` + `pack_tile`. No per-tile reinit, even though the chain has two `*_init`s.
+- **Multi-SFPU after a single FPU bcast**: `softmax_large_tensor.cpp` `exp_cb` (NUMERIC_STABLE path) hoists `sub_bcast_cols_init_short(cb_in, cb_max)` + `exp_tile_init` together; loop runs `sub_tiles_bcast_cols` + `exp_tile`. Both inits hoisted.
+- **CopyTile + SFPU pipeline blocks of `ndst` tiles**: `softmax.cpp` non-stable path hoists `copy_tile_to_dst_init_short(cb_in0)` + `exp_tile_init`; the inner DEST-batch loop runs `copy_tile(...)` then `exp_tile(...)` per slot, with no reinit between them.
+- **Same-CB CopyTile fan-out**: kernel_lib `fanout.cpp` and `multi_chain.cpp` tests use two `CopyTile<cb_in, …>{}` chain elements sharing the same CB; production code (`pack_tiles_to_output` in `compute_utils.hpp`) hoists `copy_tile_init` once and runs N copies per loop.
 
-Examples:
+#### Patterns that DO require per-iter reinit (and why)
 
-- `CopyTile + Exp` (single input) — hoist-safe. Both inits hoisted out, loop runs `exec` only.
-- `CopyTile + Exp + Sqrt` — chain length > 2, **not** hoist-safe even though all SFPU, **is** hoist safe for copy tile.
-- `CopyTile + DestReuseOp` — FPU dest-reuse clobbers unpack MOP each iteration, **not** hoist-safe.
+- **Different-CB CopyTile alternation inside one acquire** — `running_statistics_sfpu_kernel.cpp` switches srca between `cb_tmp3` and `cb_tmp2` mid-window and emits `copy_tile_to_dst_init_short_with_dt(last_srca_cb, new_cb)` between every copy. `copy_tile_init` reprograms srca format; if the second CB's tile is read with srca configured for the first CB, the unpacker gets the wrong format.
+- **CopyTile mixed with an FPU-class compute element** (`BinaryFpu`, `DestReuseBinary`, `UnaryBcast` in the helper's vocabulary) — FPU op's `*_init_short` reprograms the unpack MOP that `copy_tile` then reads. Layernorm's `mul_bcast → SFPU activation` keeps SFPU init per-iter only because the legacy macro-injection pattern forces it; the FPU/bcast init itself is still hoisted, and SFPU init *would* be safe to hoist if it weren't macro-injected.
 
-Wrong output from an over-eager hoist is not a perf optimization. When in doubt, init per tile.
+#### What the helper's hoist gate actually needs
 
-Hoist-safety generalizes. The preconditions are uniform — single CB load, no FPU clash, one compute element, no in-loop pack — but a predicate hand-specialized at fixed chain sizes leaves longer chains stuck on per-tile init even when the same preconditions hold. Express hoist-safety as a recursive walk over the element list, not a fixed-size lookup.
+The real precondition is **"no element's init reprograms hardware state another element's body or hoisted init relies on."** For the chain helper's element vocabulary that resolves to two conjunctions:
+
+1. **No element with `clashes_with_fpu == true` outside the `CopyTile` family** — i.e. no `BinaryFpu`, `DestReuseBinary`, `UnaryBcast`. Those reprogram unpack MOP each iter.
+2. **All `CopyTile` (and `BlockCopyTile`) elements share a single srca CB** — or the chain has at most one CB-reader. Multi-CB CopyTile chains require per-iter reinit because each element's hoisted `copy_tile_init` is overwritten by the next one's, leaving srca configured only for the last element seen at boot.
+
+SFPU op inits (`Exp`, `Sqrt`, `Relu`, `Tanh`, …) program SFPU / SFPI state, not unpack MOP, and do not clobber each other or the upstream FPU/CopyTile init. They are always hoist-safe **as a group**; the chain-shape gate covers the elements that *do* touch unpack.
+
+Pack reconfig is fold-driven and emits at most one `pack_reconfig_data_format` per pack-CB transition; it does not participate in the input-side hoist gate.
+
+#### Concrete gate
+
+```
+chain_is_hoist_safe_v<Chain> :=
+    !chain_has_non_copy_tile_fpu_clash_v<Chain>   // no BinaryFpu / DestReuse / UnaryBcast
+ && chain_copy_tiles_share_cb_v<Chain>            // all CopyTiles share one CB (or ≤1 CopyTile)
+```
+
+If the gate passes, the chain combinator emits every element's `init()` once at chain entry; the per-tile loop runs only the lifecycle and `exec()`s. If the gate fails, every element's `init()` runs per tile.
+
+Examples under this gate:
+
+- `CopyTile + Exp` — hoist-safe.
+- `CopyTile + Exp + Sqrt` — hoist-safe (multi-SFPU is fine; production already does this).
+- `CopyTile<cbA> + CopyTile<cbA> + BinarySfpu`  — hoist-safe (single CB).
+- `CopyTile<cbA> + CopyTile<cbB> + BinarySfpu` — **not** hoist-safe (different CBs), per-iter.
+- `CopyTile + DestReuseBinary` — **not** hoist-safe (FPU clash), per-iter.
+- `BinaryFpu + Exp` — **not** hoist-safe (FPU clash), per-iter.
+
+Wrong output from an over-eager hoist is not a perf optimization. When the gate is unclear (new clobber-capable element added) — default to per-iter init.
+
+Hoist-safety generalizes. Both gate conditions are uniform — predicate on the full element pack — so they hold for any chain length. Express both as recursive walks over the element list, not fixed-size specialisations.
 
 ### 3.5 Fan-out is N CopyTiles, one per DEST slot
 
