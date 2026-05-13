@@ -362,11 +362,36 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
     }
 
+<<<<<<< HEAD
     const uint32_t num_compute_cores = all_cores_in_rect_grid.num_cores();
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
         device->arch(), num_compute_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device->arch(), num_compute_cores, mm_kernel_defines, throttle_level);
+=======
+    // TILE_PACK_ROW_MAJOR: compute packs tiles at absolute CB offsets row-first. Factory
+    // enforces per_core_M = 1 → out_subblock_h = 1, so the pack LLK takes the
+    // pack_tile_block fast path and produces the same layout as the legacy subblock-major
+    // path. The output width may be padded above the in1 shard width (per_core_N_compute
+    // vs per_core_N_in1_sender) after the subblock-growth adjustment at lines ~153-170;
+    // the compute kernel threads out_block_w (padded) to the helper as out_row_width to
+    // keep row-major reserve/push aligned with the actual pack stride.
+    //
+    // Deadlock gate: matmul_block helper deadlocks in the RowMajor + FUSE_BIAS +
+    // !packer_l1_acc + num_blocks > 1 combination. The prior K-block's subblock-major
+    // spill fills interm_cb to capacity; the last K-block's per-row-group reserve_back on
+    // pack_target_buf == interm_buf blocks before the in1_subblock loop's reload pops can
+    // free space. Mirrors the auto-config gate in
+    // matmul_program_config.cpp::row_major_output_kblock_reload_safe — falls back to
+    // subblock-major (per-pair reserve+pack+push at out_num_tiles granularity) which
+    // avoids the upfront row-group reserve hazard.
+    const bool fuse_bias = bias_buffer != nullptr;
+    const bool row_major_output_safe = !(fuse_bias && !packer_l1_acc_en && num_blocks > 1);
+    if (row_major_output_safe) {
+        mm_kernel_defines["TILE_PACK_ROW_MAJOR"] = "1";
+        mm_kernel_in1_sender_writer_defines["TILE_PACK_ROW_MAJOR"] = "1";
+    }
+>>>>>>> 91426956a0c (matmul helpers: helper implementation)
 
     // Helper to convert std::map defines to KernelDescriptor::Defines (vector of pairs)
     auto map_to_defines = [](const std::map<std::string, std::string>& m) -> KernelDescriptor::Defines {
@@ -536,8 +561,12 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         desc.cbs.push_back(std::move(cb_desc));
     }
 
-    // CB 4 and CB 5: output and intermediate
-    if ((interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1))) {
+    // CB 4 and CB 5: output and intermediate.
+    // When row_major_output_safe (TILE_PACK_ROW_MAJOR enabled above), force separate regions:
+    // the helper reserves/pushes out_cb per M-row-group, and a shared L1 region would let
+    // out_cb writes overlap with interm0 partials that haven't yet been reloaded.
+    if ((interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1)) ||
+        row_major_output_safe) {
         // Separate output and intermediate CBs
         {
             CBDescriptor cb_desc;
