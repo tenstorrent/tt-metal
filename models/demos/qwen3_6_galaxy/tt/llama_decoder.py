@@ -344,74 +344,57 @@ def _extract_prefix(d: dict, prefix: str) -> dict:
 
 
 def _shard_across_cols(x: ttnn.Tensor, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
-    """Shard a replicated [B, T, H] tensor across 4 mesh columns.
+    """Shard a replicated [B, T, H] tensor across 4 mesh columns — fully on-device.
 
-    Steps:
-      1. Convert to host (first device).
-      2. Reshape to [B, 1, T, H].
-      3. Upload with ShardTensor2dMesh(dims=(None, -1)) → each col gets [B, 1, T, H/4].
-
-    Returns a 4-D TTNN tensor sharded across cluster_axis=1.
+    Uses ttnn.mesh_partition (the no-reduce inverse of all_gather) on cluster_axis=1.
+    Trace-safe: no host roundtrip. The input must already be replicated across the
+    mesh; we reshape [B, T, H] → [B, 1, T, H] as a view, then partition dim=-1
+    across the 4 cols so each col owns [B, 1, T, H/4]. mesh_partition allocates
+    a fresh buffer, so the intermediate reshape view can safely go out of scope.
     """
-    # Bring to host (take first of 32 replicated copies)
-
-    cluster_shape = list(mesh_device.shape)  # [8, 4]
-    x_cpu = ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-    x_cpu = x_cpu[0:1]  # [B, T, H] (first device)
-
-    # Reshape to 4-D
-    B, T, H = x_cpu.shape
-    x_4d = x_cpu.unsqueeze(1)  # [B, 1, T, H]
-
-    return ttnn.from_torch(
+    B, T, H = x.shape[0], x.shape[1], x.shape[2]
+    x_4d = ttnn.reshape(x, ttnn.Shape([B, 1, T, H]))
+    return ttnn.mesh_partition(
         x_4d,
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
+        dim=-1,
+        cluster_axis=1,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=cluster_shape),
     )
 
 
 def _gather_from_cols(x_sharded: ttnn.Tensor, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
-    """Gather a column-sharded [B, 1, T, H/4] tensor back to replicated [B, T, H].
+    """Gather a column-sharded [B, 1, T, H/4] tensor back to replicated [B, T, H]
+    — fully on-device.
 
-    Inverse of _shard_across_cols. After gathering, reshapes from [B, 1, T, H] to [B, T, H]
-    and replicates across all mesh devices.
+    Inverse of _shard_across_cols. Uses ttnn.all_gather on cluster_axis=1 (cols)
+    at dim=-1, then reshapes the 4-D result to 3-D. Rows already replicate the
+    same content (DistributedNorm replicates across rows), so the result is
+    fully replicated across the 8×4 mesh after the col gather.
+
+    Trace-safe: no host writes. The downstream `ttnn.slice(...)` in
+    `TtQwen36DecoderLayer.forward` corrects any tile-padding T discrepancy
+    (e.g., T=1 decode where the tile dim is internally padded to 32).
     """
-    cluster_shape = list(mesh_device.shape)  # [8, 4]
-
-    # ConcatMesh2dToTensor: concat dim=0 (rows) and dim=-1 (cols)
-    # Result: [8*B, 1, T, H] — take rows belonging to first row of mesh
-    # then take cols 0..H (all), picking first replicated batch
-    x_cpu = ttnn.to_torch(
+    # All-gather along the col axis: [B, 1, T, H/4] per col → [B, 1, T, H]
+    # replicated within row. Since rows started identical, output is globally replicated.
+    x_gathered = ttnn.all_gather(
         x_sharded,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 3), mesh_shape=cluster_shape),
-    )
-    # x_cpu: [8*B, 1, T, H] → take first B items (from first mesh row)
-    B = x_cpu.shape[0] // cluster_shape[0]
-    x_cpu = x_cpu[:B, 0, :, :]  # [B, T, H]
-
-    # For decode (B*T < 32), TILE_LAYOUT pads the row dim, corrupting the logical
-    # T downstream.  Upload row-major then convert to tile, matching the embed
-    # decode path.
-    T = x_cpu.shape[1]
-    if B * T < 32:
-        x_tt = ttnn.from_torch(
-            x_cpu,
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        return ttnn.to_layout(x_tt, ttnn.TILE_LAYOUT)
-
-    return ttnn.from_torch(
-        x_cpu,
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
+        dim=-1,
+        num_links=1,
+        cluster_axis=1,
+        topology=ttnn.Topology.Linear,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
+    # ttnn.reshape returns a VIEW that aliases x_gathered's buffer. If we just
+    # return the view, x_gathered goes out of scope and its destructor frees
+    # the device buffer underneath the still-live view — exactly the
+    # use-after-free pattern fixed in commit f634f292720 (qknorm reshape).
+    # ttnn.clone copies the data into a fresh, independent buffer, so the
+    # source can be safely released. Cost: one extra [B, T, H] copy per gather.
+    B = x_gathered.shape[0]
+    T = x_gathered.shape[2]
+    H = x_gathered.shape[3]
+    x_view = ttnn.reshape(x_gathered, ttnn.Shape([B, T, H]))
+    x_out = ttnn.clone(x_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    x_gathered.deallocate(True)
+    return x_out
