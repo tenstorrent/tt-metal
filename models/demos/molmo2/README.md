@@ -86,31 +86,103 @@ MESH_DEVICE=T3K pytest models/demos/molmo2/demo/demo.py \
 
 Exposes an OpenAI-compatible HTTP API on port 8000.
 
+### Local server (T3K or Galaxy 1×8 slice via `galaxy_t3k`)
+
 ```bash
 cd tt-inference-server
 export TT_METAL_HOME=/path/to/tt-metal
+export JWT_SECRET=dummy
+# For galaxy_t3k path, the t3k mesh descriptor must be set BEFORE the worker boots
+# (the spec env_vars are applied after the metal env is initialised):
+export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto
+export TT_FABRIC_CONFIG_OVERRIDE=FABRIC_1D
 
 # Start server (loads model, warms up, then serves requests)
-python run.py --model Molmo2-8B --workflow server --local-server --tt-device t3k \
+python run.py --model Molmo2-8B --workflow server --local-server \
+    --tt-device galaxy_t3k --device-id 0,1,2,3,4,5,6,7 \
     --skip-system-sw-validation
+# (use --tt-device t3k on a standalone T3K mesh; --device-id not required there)
+```
 
-# Run 105-video test suite against a running server
-python /path/to/verification/run_video_tests.py \
-    --server-url http://localhost:8000 \
-    --output results.jsonl
+### Docker server (validated on Galaxy 1×8 slice)
 
-# OpenAI-compatible video request example
+```bash
+cd tt-inference-server
+export TT_METAL_HOME=/path/to/tt-metal
+export JWT_SECRET=dummy
+export HF_TOKEN=...   # required by docker server
+
+python run.py --model Molmo2-8B --workflow server --docker-server \
+    --tt-device galaxy_t3k --device-id 0,1,2,3,4,5,6,7 \
+    --skip-system-sw-validation --dev-mode \
+    --override-docker-image \
+      ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dev-ubuntu-22.04-amd64:0.12.0-454c9bf7002-7a07a97
+```
+
+The image is built once via:
+```bash
+python scripts/build_docker_images.py --build-metal-commit 454c9bf7002 \
+    --ubuntu-version 22.04 --single-threaded
+```
+(~50 min wall-clock for the tt-metalium base + dev image overlay).
+
+### 4× parallel galaxy_t3k servers on a single 32-chip Galaxy
+
+Launch 4 local-server instances on devices 0–7, 8–15, 16–23, 24–31 with ports
+8000–8003, staggered by ~30s so their tt-metal init phases don't collide:
+
+```bash
+for idx in 0 1 2 3; do
+    start=$((idx * 8)); end=$((start + 7))
+    TT_VISIBLE_DEVICES=$(seq -s, $start $end) \
+    nohup python tt-inference-server/vllm-tt-metal/src/run_vllm_api_server.py \
+        --model allenai/Molmo2-8B --tt-device galaxy_t3k \
+        --port $((8000 + idx)) > /tmp/molmo2_inst${idx}.log 2>&1 &
+    [ $idx -lt 3 ] && sleep 30
+done
+```
+
+### Sending a request
+
+The server requires a JWT bearer token (signed with `JWT_SECRET`):
+
+```bash
+TOKEN=$(python3 -c "import jwt,os; print(jwt.encode({'team_id':'tenstorrent','token_id':'debug-test'}, os.environ['JWT_SECRET'], algorithm='HS256'))")
+
+# Video request
 curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{
     "model": "allenai/Molmo2-8B",
     "messages": [{"role":"user","content":[
-        {"type":"video_url","video_url":{"url":"https://...mp4"}},
-        {"type":"text","text":"Describe the video."}
+        {"type":"video_url","video_url":{"url":"file:///abs/path/to/video.mp4"}},
+        {"type":"text","text":"Describe what is happening in this video."}
     ]}],
     "max_tokens": 64,
     "temperature": 0
   }'
+
+# Image request
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "model": "allenai/Molmo2-8B",
+    "messages": [{"role":"user","content":[
+        {"type":"image_url","image_url":{"url":"https://example.com/img.jpg"}},
+        {"type":"text","text":"What do you see?"}
+    ]}],
+    "max_tokens": 64,
+    "temperature": 0
+  }'
+
+# Run 105-video benchmark suite against a running server
+python models/demos/molmo2/verification/run_dp4_concurrent.py \
+    --server http://localhost:8000 \
+    --tests models/demos/molmo2/verification/test.jsonl \
+    --baseline models/demos/molmo2/verification/test_results.jsonl \
+    --output /tmp/results.jsonl --concurrency 4
 ```
 
 **Key server configuration** (`tt-inference-server/workflows/model_spec.py`):
