@@ -289,11 +289,7 @@ def test_topk_sfpu(
     stable_sort: bool,
 ):
 
-    if (
-        input_dimensions
-        == [32, 1024]
-        # and get_chip_architecture() == ChipArchitecture.BLACKHOLE
-    ):
+    if input_dimensions == [32, 1024]:
         # For 32x1024 input on blackhole arch, we have observed some discrepancies in the topk values between hardware and golden.
         # TODO: Fix issue #1344 on tt-llk.
         pytest.skip(
