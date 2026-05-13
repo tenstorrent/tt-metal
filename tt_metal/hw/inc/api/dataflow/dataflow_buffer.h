@@ -17,16 +17,13 @@
 #endif
 
 #ifndef COMPILE_FOR_TRISC
-#include "experimental/noc.h"
-#include "tools/profiler/noc_debugging_metadata.hpp"
+#include "api/dataflow/noc.h"
 #include "tools/profiler/noc_debugging_profiler.hpp"
 #endif
 
 #include "api/debug/assert.h"
 #include "api/debug/waypoint.h"
-#include "experimental/lock.h"
-
-namespace experimental {
+#include "api/lock.h"
 
 // Opaque handle for a DataflowBuffer binding (declared in kernel_bindings_generated.h).
 // The user will never directly interact with this type.
@@ -196,8 +193,6 @@ struct noc_traits_t<DataflowBuffer> {
 };
 
 #endif
-
-}  // namespace experimental
 
 // Arch-specific _impl bodies for DataflowBuffer member functions
 #ifdef ARCH_QUASAR

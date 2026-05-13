@@ -13,14 +13,12 @@
 #include "llk_io_unpack.h"
 #endif
 #else  // !COMPILE_FOR_TRISC
-#include "experimental/noc.h"
+#include "api/dataflow/noc.h"
 #include "tools/profiler/noc_debugging_metadata.hpp"
 #include "tools/profiler/noc_debugging_profiler.hpp"
 #endif
 
-#include "experimental/lock.h"
-
-namespace experimental {
+#include "api/lock.h"
 
 class CircularBuffer {
 public:
@@ -154,6 +152,21 @@ private:
 };
 
 #ifndef COMPILE_FOR_TRISC
+
+template <CircularBuffer::AddrSelector AddrSel>
+struct CircularBufferView {
+    const CircularBuffer& cb;
+    explicit constexpr CircularBufferView(const CircularBuffer& c) : cb(c) {}
+};
+
+// Convenience helper: use<CircularBuffer::AddrSelector::READ_PTR>(cb)
+// This allows user to indicate whether the read or write pointer should be used as the source or destination address
+// depending on whether the CircularBuffer is src or dst in the Noc apis
+template <CircularBuffer::AddrSelector AddrSel>
+constexpr auto use(const CircularBuffer& cb) {
+    return CircularBufferView<AddrSel>(cb);
+}
+
 template <>
 struct noc_traits_t<CircularBuffer> {
     struct src_args_type {
@@ -192,20 +205,6 @@ struct noc_traits_t<CircularBuffer> {
             args.noc_x_start, args.noc_y_start, args.noc_x_end, args.noc_y_end, local_addr, noc.get_noc_id());
     }
 };
-
-template <CircularBuffer::AddrSelector AddrSel>
-struct CircularBufferView {
-    const CircularBuffer& cb;
-    explicit constexpr CircularBufferView(const CircularBuffer& c) : cb(c) {}
-};
-
-// Convenience helper: use<CircularBuffer::AddrSelector::READ_PTR>(cb)
-// This allows user to indicate whether the read or write pointer should be used as the source or destination address
-// depending on whether the CircularBuffer is src or dst in the Noc apis
-template <CircularBuffer::AddrSelector AddrSel>
-constexpr auto use(const CircularBuffer& cb) {
-    return CircularBufferView<AddrSel>(cb);
-}
 
 template <CircularBuffer::AddrSelector AddrSel>
 class noc_traits_t<CircularBufferView<AddrSel>> {
@@ -256,6 +255,5 @@ private:
         }
     }
 };
-#endif
 
-}  // namespace experimental
+#endif  // !COMPILE_FOR_TRISC

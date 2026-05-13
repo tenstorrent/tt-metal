@@ -12,7 +12,7 @@
  */
 
 #include "ttnn/cpp/ttnn/kernel_lib/cb_helpers_compute.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 namespace compute_kernel_lib {
 
@@ -150,9 +150,9 @@ ALWI void untilize(uint32_t num_blocks) {
     // UPFRONT WAITING (if requested)
     // =================================================================
 
-    // Construct experimental::CircularBuffer objects for sync operations
-    experimental::CircularBuffer in_cb(input_cb);
-    experimental::CircularBuffer out_cb(output_cb);
+    // Construct CircularBuffer objects for sync operations
+    CircularBuffer in_cb(input_cb);
+    CircularBuffer out_cb(output_cb);
 
     if constexpr (wait_mode == untilize_config::WaitMode::WaitUpfront) {
         uint32_t total_tiles = block_width_tiles * num_blocks;
