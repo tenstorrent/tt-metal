@@ -160,8 +160,6 @@ protected:
             this->slow_dispatch_ = false;
         }
     }
-
-    void init_max_cbs() { max_cbs_ = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers(); }
 };
 
 }  // namespace tt::tt_metal
