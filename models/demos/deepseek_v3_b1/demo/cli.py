@@ -98,7 +98,7 @@ def create_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Pin the highest-frequency routed experts to per-core L1 via "
-            "prepare_compressed_sram_slots. Requires TT_METAL_ALLOCATOR_MODE_HYBRID=1."
+            "prepare_compressed_sram_slots. Automatically enables TT_METAL_ALLOCATOR_MODE_HYBRID=1."
         ),
     )
     parser.add_argument(
@@ -243,7 +243,6 @@ def run_demo(
 
 
 def main(argv: list[str] | None = None) -> int:
-    ttnn.init_distributed_context()
     parser = create_parser()
     args = parser.parse_args(argv)
 
@@ -260,7 +259,10 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"--model-path must contain model.safetensors.index.json (missing {index_path})")
 
     if args.enable_sram_hot_experts and os.environ.get("TT_METAL_ALLOCATOR_MODE_HYBRID") != "1":
-        parser.error("--enable-sram-hot-experts requires TT_METAL_ALLOCATOR_MODE_HYBRID=1; export it before launching.")
+        os.environ["TT_METAL_ALLOCATOR_MODE_HYBRID"] = "1"
+        logger.info("Enabled TT_METAL_ALLOCATOR_MODE_HYBRID=1 for --enable-sram-hot-experts")
+
+    ttnn.init_distributed_context()
 
     io_socket_descriptor_prefix = args.io_socket_descriptor_prefix
     if args.launch_only and io_socket_descriptor_prefix is None:
