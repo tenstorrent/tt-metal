@@ -513,22 +513,16 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         if not isinstance(prompt_lens, list):
             prompt_lens = prompt_lens.tolist()
 
-        # Pad to the *uncached* suffix length, not the full prompt length.
-        # With prefix caching, only (seq_len - num_cached) new tokens are fed to the
-        # kernel (see prefill_ids construction below), so padding by full seq_len makes
-        # the kernel run far more compute than necessary for high-hit-rate workloads.
-        # int() cast handles numpy.int64 from vLLM (bit_length() needs a Python int).
+        # Pad by uncached suffix length: only (seq_len - num_cached) tokens reach the kernel.
+        # int() normalizes numpy.int64 from vLLM callers (bit_length() requires a Python int).
         num_cached_per_user = [int(n) for n in start_pos] if start_pos is not None else [0] * len(prompt_lens)
         assert len(num_cached_per_user) == len(
             prompt_lens
-        ), f"start_pos length {len(num_cached_per_user)} must match prompt_lens length {len(prompt_lens)}"
+        ), f"start_pos length {len(num_cached_per_user)} != prompt_lens length {len(prompt_lens)}"
         for i, (seq_len, num_cached) in enumerate(zip(prompt_lens, num_cached_per_user)):
-            assert 0 <= num_cached < int(seq_len), (
-                f"user {i}: num_cached_tokens ({num_cached}) must be in [0, seq_len={int(seq_len)}). "
-                f"Fully-cached prompts should not reach prefill."
-            )
+            assert 0 <= num_cached < seq_len, f"user {i}: num_cached={num_cached} must be < seq_len={seq_len}"
         prefill_seq_lens = [
-            get_padded_prefill_len(int(seq_len) - num_cached)
+            get_padded_prefill_len(seq_len - num_cached)
             for seq_len, num_cached in zip(prompt_lens, num_cached_per_user)
         ]
         # Row-sharded batched prefill: process 1 user per row per iteration.
@@ -563,10 +557,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             and len(set(prefill_seq_lens)) == 1
             and self.data_parallel == 1
             and not getattr(self.model_args[0], "disable_batched_prefill", False)
-            # Batched prefill feeds full tokens with num_cached_tokens=0 forced downstream
-            # (see prefill_forward_single_user_text call below); incompatible with prefix-cache
-            # reuse where prefill_ids is already sliced to the uncached suffix.
-            and all(n == 0 for n in num_cached_per_user)
+            and all(
+                n == 0 for n in num_cached_per_user
+            )  # batched path feeds full tokens; incompatible with cached prefixes
         )
 
         if use_batched_prefill and sampling_on_device_requested:
