@@ -4,8 +4,8 @@
 
 #pragma once
 
-#if !defined(ENV_LLK_INFRA)
 #include "hostdevcommon/dprint_common.h"
+#if !defined(ENV_LLK_INFRA)
 #include "hostdev/dev_msgs.h"
 #include "internal/hw_thread.h"
 

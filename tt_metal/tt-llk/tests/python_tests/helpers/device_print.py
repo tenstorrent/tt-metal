@@ -6,7 +6,7 @@
 Protocol (must match tt_metal/hw/inc/api/debug/device_print.h
 and tt_metal/hw/inc/hostdev/device_print_common.h):
 
-    DEVICE_PRINT_BUFFER_BASE = 0x16D800 (subject to change I suppose), with layout as follows:
+    DEVICE_PRINT_BUFFER_BASE = TestConfig.DEVICE_PRINT_BUFFER_BASE (layout:
     - struct Aux { uint32 wpos; uint32 rpos; uint8 risc_state[5]; uint32 lock; }
     - uint8 data[DPRINT_BUFFER_SIZE * PROCESSOR_COUNT - sizeof(struct Aux)]
 
@@ -16,7 +16,7 @@ and tt_metal/hw/inc/hostdev/device_print_common.h):
       where header = is_kernel:1 | risc_id:5 | message_payload:10 | info_id:16
 
     info_id indexes into the .device_print_strings_info ELF section, which is
-    an array of DevicePrintStringInfo32: { format_ptr, file_ptr, line, pad }.
+    an array of DevicePrintStringInfo: { format_ptr, file_ptr, line, pad }.
     Format strings live in .device_print_strings; CTSTR args are also
     pointers into that section.
 """
@@ -29,14 +29,19 @@ from pathlib import Path
 from helpers.logger import logger
 from ttexalens.tt_exalens_lib import parse_elf, read_from_device, write_words_to_device
 
-DPRINT_BUFFER_SIZE = 204
-PROCESSOR_COUNT_TENSIX = 5
-AUX_SIZE = 20
-TOTAL_BUFFER_SIZE = (
-    DPRINT_BUFFER_SIZE * PROCESSOR_COUNT_TENSIX
-)  # enforced at compile time
-DATA_SIZE = TOTAL_BUFFER_SIZE - AUX_SIZE
-STRING_INFO_RECORD_SIZE = 16
+# hostdev/device_print_structures.h: DevicePrintStringInfo is four uint32_t
+# on 32-bit ELFs, and four uint64_t on 64-bit ELFs (Rocket cores on Quasar).
+_STRING_INFO_LAYOUT: dict[int, tuple[int, str]] = {
+    32: (16, "<IIII"),
+    64: (32, "<QQQQ"),
+}
+
+
+# Aux struct (device_print_common.h): wpos:4 | rpos:4 | risc_state[N]:N padded
+# up to 4-byte boundary | lock:4. N = PROCESSOR_COUNT, which varies per arch.
+def _aux_size_for(processor_count: int) -> int:
+    return 4 + 4 + (processor_count + 3) // 4 * 4 + 4
+
 
 # Sentinels (dprint_common.h/device_print.h).
 DEVICE_PRINT_RESET_BUFFER_MAGIC = 0xF0E1D2C3
@@ -45,7 +50,7 @@ WRAP_INFO_ID = 0xFFFF
 NEW_KERNEL_PAYLOAD_SENTINEL = 1023  # max_message_payload_size, used as "no payload" tag
 
 # Map DevicePrintHeader.risc_id into human-readable names.
-# Indexed by PROCESSOR_INDEX in dprint.h.
+# Indexed by PROCESSOR_INDEX in dprint.h, it's the opposite of that mapping.
 RISC_NAMES_TENSIX = {
     2: "UNPACK",
     3: "MATH",
@@ -53,8 +58,9 @@ RISC_NAMES_TENSIX = {
     5: "SFPU",  # Quasar
 }
 
-# Map type character -> (struct format, byte size, optional formatter override)
-TYPE_TABLE: dict[str, tuple[str, int, object]] = {
+# Map type character -> (struct format, byte size, optional formatter override).
+# Pointer types ('s', 'p') are filled in per-ELF — see _type_table_for().
+_BASE_TYPE_TABLE: dict[str, tuple[str, int, object]] = {
     "b": ("b", 1, str),
     "B": ("B", 1, str),
     "h": ("h", 2, str),
@@ -69,9 +75,32 @@ TYPE_TABLE: dict[str, tuple[str, int, object]] = {
     "e": ("H", 2, lambda v: f"bf4(0x{v:04x})"),
     "E": ("H", 2, lambda v: f"bf8(0x{v:04x})"),
     "w": ("H", 2, lambda v: f"bf16(0x{v:04x})"),
-    "p": ("I", 4, lambda v: f"0x{v:x}"),
-    "s": ("I", 4, None),  # pointer into .device_print_strings
 }
+
+
+def _type_table_for(pointer_size: int) -> dict[str, tuple[str, int, object]]:
+    """Return _BASE_TYPE_TABLE extended with the two pointer-sized entries.
+
+    Only 's' (CTSTR pointer into the strings section) and 'p' (raw pointer,
+    formatted as hex) need to match the ELF's pointer size. 32-bit ELFs
+    use 'I'/4 bytes, and 64-bit ELFs use 'Q'/8 bytes.
+
+    Each value is (struct_unpack_fmt, byte_size, formatter), where formatter is:
+      - `str` for plain numerics; spec is applied directly to format()
+      - a callable producing a string (bool, bfloat, pointer); spec is then
+        applied to that string (alignment/padding only)
+      - `None` for 's'; _render handles it specially by dereferencing the
+        pointer through ElfStrings.string_at()
+
+    The keys mirror the C++ type-char namespace produced by device_print_type<>
+    in tt_metal/hw/inc/api/debug/device_print.h."""
+    ptr_fmt = "I" if pointer_size == 4 else "Q"
+    return {
+        **_BASE_TYPE_TABLE,
+        "p": (ptr_fmt, pointer_size, lambda v: f"0x{v:x}"),
+        "s": (ptr_fmt, pointer_size, None),  # pointer into .device_print_strings
+    }
+
 
 # Matches the {N,T[:spec]} tokens that device print writes into ELF format strings
 # at compile time with update_format_string. Original source {} placeholders are
@@ -80,10 +109,10 @@ TYPE_TABLE: dict[str, tuple[str, int, object]] = {
 #   T: type char from device_print_type<T>::value.type_char, OR the extended
 #      form "/e_X_EnumName" / "/E_X_EnumName" for enum args (base char in group "base")
 #   spec: optional fmtlib format specifier (width, precision, fill, type letter, ...)
-# See Metal's parse_format_string and parse_placeholder.
+# See parse_format_string and parse_placeholder in tt_metal/impl/debug/dprint_parser.cpp.
 PLACEHOLDER_RE = re.compile(
     r"\{(\d+),"
-    r"(/[eE]_(?P<base>.)_[A-Za-z_:][A-Za-z_:0-9]*|.)"
+    r"(/(?P<flag>[eE])_(?P<base>.)_(?P<enum_name>[A-Za-z_][A-Za-z_0-9]*(?:::[A-Za-z_][A-Za-z_0-9]*)*)|.)"
     r"(?::(?P<spec>[^{}]*))?\}"
 )
 
@@ -104,8 +133,21 @@ class ElfStrings:
         self._strings_data: bytes = b""
         self._info_addr: int | None = None
         self._info_data: bytes = b""
+        self._info_record_size: int = 16
+        self._info_unpack_fmt: str = "<IIII"
+        self.pointer_size: int = 4
+        self.type_table: dict[str, tuple[str, int, object]] = _type_table_for(4)
+        self._parsed_elf = None  # kept around for DWARF enum lookups
+        self._enum_cache: dict[str, list[tuple[int, str]] | None] = {}
+
         try:
             elf = parse_elf(elf_path, require_debug_symbols=False)
+            self._parsed_elf = elf
+            self.pointer_size = elf.elf.elfclass // 8
+            self.type_table = _type_table_for(self.pointer_size)
+            self._info_record_size, self._info_unpack_fmt = _STRING_INFO_LAYOUT[
+                elf.elf.elfclass
+            ]
             for s in elf.sections:
                 if s.name == ".device_print_strings":
                     self._strings_addr = s.address
@@ -114,24 +156,92 @@ class ElfStrings:
                     self._info_addr = s.address
                     self._info_data = bytes(s.data)
         except Exception:
-            pass  # can't parse ELF; has_device_print will be False
+            pass  # Can't parse ELF; has_device_print will be False
+
+    def _enumerators(self, enum_name: str) -> list[tuple[int, str]] | None:
+        """List of (value, name) for `enum_name` in DWARF declaration order.
+        Return None if the enum isn't in the ELF's debug info."""
+
+        if enum_name in self._enum_cache:
+            return self._enum_cache[enum_name]
+        result: list[tuple[int, str]] | None = None
+        if self._parsed_elf is not None:
+            try:
+                die = self._parsed_elf.find_die_by_name(enum_name)
+                if die is not None:
+                    result = [(int(c.value), c.name) for c in die.iter_children()]
+            except Exception:
+                result = None
+        self._enum_cache[enum_name] = result
+        return result
+
+    def format_enum(
+        self, enum_name: str, value: int, is_flag: bool, use_full_name: bool = False
+    ) -> str:
+        """Resolve an enum value to its named form.
+        Flag enums OR-combine matching bits with ' | '; regular enums return the
+        single matching name. Unknown values (and missing DWARF) render as
+        '(typename)value'. With use_full_name, each name is prefixed with 'typename::'.
+        """
+        prefix = f"{enum_name}::" if use_full_name else ""
+        members = self._enumerators(enum_name)
+        if not members:
+            return f"({enum_name}){value}"
+
+        # Regular enum, or flag enum with value 0: find first match.
+        if not is_flag or value == 0:
+            for eval_, name in members:
+                if eval_ == value:
+                    return f"{prefix}{name}"
+            return f"({enum_name}){value}"
+
+        # Flag enum: OR-combine matching bits.
+        # Any leftover bits render as (typename)value.
+        bits_left = value
+        parts: list[str] = []
+        for eval_, name in members:
+            if eval_ != 0 and (bits_left & eval_) == eval_:
+                parts.append(f"{prefix}{name}")
+                bits_left &= ~eval_
+        if bits_left != 0:
+            parts.append(f"({enum_name}){bits_left}")
+        return " | ".join(parts)
 
     @property
     def has_device_print(self) -> bool:
         return self._info_addr is not None and self._strings_addr is not None
 
     def info_at(self, info_id: int) -> StringInfo | None:
+        """Look up the DevicePrintStringInfo record at index `info_id`.
+
+        `info_id` is the 16-bit field from DevicePrintHeader; it indexes into
+        the .device_print_strings_info ELF section as an array of fixed-size
+        records (4 uint32s on 32-bit ELFs, 4 uint64s on 64-bit; see
+        _STRING_INFO_LAYOUT).
+
+        Return None if device print sections weren't loaded or the index points
+        past the end of the array."""
+
         if not self.has_device_print:
             return None
-        offset = info_id * STRING_INFO_RECORD_SIZE
-        if offset + STRING_INFO_RECORD_SIZE > len(self._info_data):
+        offset = info_id * self._info_record_size
+        if offset + self._info_record_size > len(self._info_data):
             return None
-        fmt_ptr, file_ptr, line, _pad = struct.unpack_from(
-            "<IIII", self._info_data, offset
+        fmt_ptr, file_ptr, line, _ = struct.unpack_from(
+            self._info_unpack_fmt, self._info_data, offset
         )
         return StringInfo(fmt_ptr, file_ptr, line)
 
     def string_at(self, va: int) -> str:
+        """Read a string from .device_print_strings at virtual address `va`.
+
+        The address is stored in the ELF (format string pointers in
+        DevicePrintStringInfo, and CTSTR arguments in the payload;
+        see sections.ld). Resolved by subtracting the section base address.
+
+        Return a '<...>' placeholder if the section is missing or the VA falls outside it.
+        We don't raise so a single bad pointer can't break an entire drain."""
+
         if self._strings_addr is None:
             return f"<no .device_print_strings (va=0x{va:x})>"
         offset = va - self._strings_addr
@@ -140,6 +250,7 @@ class ElfStrings:
         end = self._strings_data.find(b"\x00", offset)
         if end == -1:
             end = len(self._strings_data)
+
         return self._strings_data[offset:end].decode("utf-8", errors="replace")
 
 
@@ -155,25 +266,31 @@ def _strip_stall(wpos: int) -> int:
 class DevicePrintParser:
     """Reads the on-device DEVICE_PRINT ring buffer and renders records as text.
 
-    Construct with a {risc_id: elf_path} mapping (risc_id matches the value
-    written into DevicePrintHeader.risc_id by the kernel, i.e. PROCESSOR_INDEX).
-    Call drain(location) after a kernel run to pull and decode all pending
-    records.
+    Construct with a {risc_id: elf_path} mapping (risc_id matches the value written
+    into DevicePrintHeader.risc_id by the kernel, and PROCESSOR_INDEX in dprint.h).
+    Call drain(location) after a kernel run to pull and decode all pending records.
     """
 
     def __init__(
         self,
         elf_paths: dict[int, str | Path],
         buffer_base: int,
+        total_buffer_size: int,
+        processor_count: int,
     ):
         self.buffer_base = buffer_base
+        self.total_buffer_size = total_buffer_size
+        self.aux_size = _aux_size_for(processor_count)
+        self.data_size = total_buffer_size - self.aux_size
         self.elfs: dict[int, ElfStrings] = {}
         for risc_id, p in elf_paths.items():
             self.elfs[risc_id] = ElfStrings(str(p))
         self._poll_rpos: int = 0
 
     def _walk_records(self, data_slice: bytes) -> list[str]:
-        """Parse all complete records in data_slice, stopping at a wrap marker or truncation."""
+        """Parse all complete records in data_slice,
+        stopping at a wrap marker or truncation."""
+
         out: list[str] = []
         pos = 0
         while pos + 4 <= len(data_slice):
@@ -189,7 +306,7 @@ class DevicePrintParser:
                 and info_id == WRAP_INFO_ID
                 and message_payload == 0
             ):
-                break  # wrap-around marker; caller handles crossing to offset 0
+                break  # Wrap-around marker; caller handles crossing to offset 0
 
             risc_name = RISC_NAMES_TENSIX.get(risc_id, f"risc{risc_id}")
             elf = self.elfs.get(risc_id)
@@ -200,7 +317,7 @@ class DevicePrintParser:
                 continue
 
             if pos + 4 + message_payload > len(data_slice):
-                break  # truncated record; we'll re-read next poll
+                break  # Truncated record; re-read next poll
 
             if elf is None or not elf.has_device_print:
                 out.append(
@@ -221,6 +338,7 @@ class DevicePrintParser:
             file_str = elf.string_at(info.file_ptr) if info.file_ptr else "?"
             args_blob = data_slice[pos + 4 : pos + 4 + message_payload]
             rendered = self._render(fmt, args_blob, elf)
+
             kind = "kernel" if is_kernel else "fw"
             out.append(f"[{risc_name}|{kind}|{file_str}:{info.line}] {rendered}")
             pos += 4 + message_payload
@@ -229,26 +347,27 @@ class DevicePrintParser:
 
     def drain(self, location: str = "0,0") -> list[str]:
         """One-shot read of the full buffer after kernel completion. Does not update device rpos."""
-        raw = read_from_device(location, self.buffer_base, num_bytes=TOTAL_BUFFER_SIZE)
+        raw = read_from_device(
+            location, self.buffer_base, num_bytes=self.total_buffer_size
+        )
         wpos, rpos = _decode_aux(raw)
         wpos = _strip_stall(wpos)
 
-        data = bytes(raw[AUX_SIZE:])
-        if rpos > wpos:  # wrapped around
+        data = bytes(raw[self.aux_size :])
+        if rpos > wpos:  # Wrapped around
             return self._walk_records(data[rpos:]) + self._walk_records(data[:wpos])
         return self._walk_records(data[rpos:wpos])
 
     def poll(self, location: str = "0,0") -> list[str]:
         """Incremental drain: read new data since last poll, advance device rpos.
-
-        Mirrors DevicePrintImpl::poll_one_core in dprint_server.cpp. Handles
-        buffer wrap-around and kernel-stall (DEVICE_PRINT_WRITE_STALL_FLAG).
-        Safe to call from the mailbox-wait loop — returns immediately if nothing new.
+        Return immediately if there is no new data.
         """
         out: list[str] = []
 
         while True:
-            aux_raw = read_from_device(location, self.buffer_base, num_bytes=AUX_SIZE)
+            aux_raw = read_from_device(
+                location, self.buffer_base, num_bytes=self.aux_size
+            )
             wpos_raw, _ = _decode_aux(aux_raw)
 
             stall = bool(wpos_raw & DEVICE_PRINT_WRITE_STALL_FLAG)
@@ -256,12 +375,12 @@ class DevicePrintParser:
 
             if self._poll_rpos > wpos:
                 # Kernel wrapped wpos back to 0; drain the tail then fall through to head.
-                tail_size = DATA_SIZE - self._poll_rpos
+                tail_size = self.data_size - self._poll_rpos
                 if tail_size > 0:
                     tail = bytes(
                         read_from_device(
                             location,
-                            self.buffer_base + AUX_SIZE + self._poll_rpos,
+                            self.buffer_base + self.aux_size + self._poll_rpos,
                             num_bytes=tail_size,
                         )
                     )
@@ -272,7 +391,7 @@ class DevicePrintParser:
                 chunk = bytes(
                     read_from_device(
                         location,
-                        self.buffer_base + AUX_SIZE + self._poll_rpos,
+                        self.buffer_base + self.aux_size + self._poll_rpos,
                         num_bytes=wpos - self._poll_rpos,
                     )
                 )
@@ -285,7 +404,7 @@ class DevicePrintParser:
                     location, self.buffer_base + 4, [DEVICE_PRINT_RESET_BUFFER_MAGIC]
                 )
                 self._poll_rpos = 0
-                continue  # re-read wpos to catch data kernel wrote after reset
+                continue  # Re-read wpos to catch data kernel wrote after reset
 
             break
 
@@ -315,7 +434,7 @@ class DevicePrintParser:
         for ridx in sorted(type_for_ridx):
             type_token = type_for_ridx[ridx]
             base_char = type_token[3] if type_token.startswith("/") else type_token
-            entry = TYPE_TABLE.get(base_char)
+            entry = elf.type_table.get(base_char)
             offsets[ridx] = cur
             cur += entry[1] if entry else 4
 
@@ -326,7 +445,7 @@ class DevicePrintParser:
             ridx = int(m.group(1))
             type_token = m.group(2)
             base_char = type_token[3] if type_token.startswith("/") else type_token
-            entry = TYPE_TABLE.get(base_char)
+            entry = elf.type_table.get(base_char)
             if entry is None:
                 parts.append(f"<unknown type '{type_token}'>")
             else:
@@ -337,20 +456,44 @@ class DevicePrintParser:
                 else:
                     val = struct.unpack_from("<" + struct_fmt, args_blob, offset)[0]
                     spec = m.group("spec") or ""
-                    if base_char == "s":
+                    if type_token.startswith("/"):
+                        # Enum: '#' in the spec means we should render with
+                        # the typename:: prefix. We consume the '#' here
+                        # and tell format_enum to use the full name.
+                        use_full_name = "#" in spec
+                        cleaned_spec = spec.replace("#", "")
+                        rendered = elf.format_enum(
+                            m.group("enum_name"),
+                            val,
+                            is_flag=(m.group("flag") == "E"),
+                            use_full_name=use_full_name,
+                        )
+                        parts.append(
+                            format(rendered, cleaned_spec) if cleaned_spec else rendered
+                        )
+
+                    elif base_char == "s":
                         rendered = elf.string_at(val)
                         parts.append(format(rendered, spec) if spec else rendered)
+
                     elif formatter is str:
-                        # Plain numeric/float type: apply spec directly to the raw value.
+                        # Plain int/float: apply spec directly.
                         try:
                             parts.append(format(val, spec) if spec else str(val))
                         except (ValueError, TypeError):
+                            # DEVICE_PRINT enforces spec correctness at compile time,
+                            # but fmtlib isn't 1:1 with Python's format(),
+                            # so better be conservative here.
                             parts.append(str(val))
                     else:
                         # Custom formatter (bool, bfloat, pointer): format first, then
                         # apply spec as string padding/alignment if present.
                         rendered = formatter(val)
-                        parts.append(format(rendered, spec) if spec else rendered)
+                        try:
+                            parts.append(format(rendered, spec) if spec else rendered)
+                        except (ValueError, TypeError):
+                            parts.append(str(rendered))
+
             last_end = m.end()
         parts.append(fmt[last_end:])
         return "".join(parts).replace("{{", "{").replace("}}", "}")
@@ -362,10 +505,10 @@ def make_device_print_parser(configuration) -> DevicePrintParser:
 
     configuration.generate_variant_hash() must have been called before this.
     """
-    from helpers.test_config import TestConfig  # local to avoid circular import
+    from helpers.test_config import TestConfig  # Local to avoid circular import
 
     # Maps KERNEL_COMPONENTS names to the TensixProcessorTypes index written into
-    # DevicePrintHeader.risc_id (also the PROCESSOR_INDEX macro in dprint.h).
+    # DevicePrintHeader.risc_id (and the PROCESSOR_INDEX macro in dprint.h).
     COMPONENT_TO_RISC_ID: dict[str, int] = {
         "unpack": 2,
         "math": 3,
@@ -383,7 +526,12 @@ def make_device_print_parser(configuration) -> DevicePrintParser:
         COMPONENT_TO_RISC_ID[name]: variant_elf_dir / f"{name}.elf"
         for name in TestConfig.KERNEL_COMPONENTS
     }
-    return DevicePrintParser(elf_paths, TestConfig.DEVICE_PRINT_BUFFER_BASE)
+    return DevicePrintParser(
+        elf_paths,
+        TestConfig.DEVICE_PRINT_BUFFER_BASE,
+        TestConfig.DEVICE_PRINT_BUFFER_SIZE,
+        TestConfig.PROCESSOR_COUNT,
+    )
 
 
 def run_with_device_print(configuration):

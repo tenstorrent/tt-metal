@@ -1358,19 +1358,18 @@ void acquire_lock() {
     // After acquiring the lock, invalidate our L1 cache to ensure we see the most up-to-date data in the buffer
     invalidate_l1_cache();
 
-    // Check if we should print kernel id
+#if !defined(ENV_LLK_INFRA)
+    // Check if we should print kernel id. Skipped entirely under LLK:
+    // we don't track kernel_id and the test runner zeroes out
+    // wpos/rpos/lock, so risc_state is irrelevant on this path.
     volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer = get_device_print_buffer();
     if (device_print_buffer->aux.wpos != DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
         auto risc_state = device_print_buffer->aux.risc_state[PROCESSOR_INDEX];
         if (risc_state != DevicePrintRiscCoreState::PrintingDisabled) {
             if (risc_state == DevicePrintRiscCoreState::KernelNotPrinted) {
-#ifndef ENV_LLK_INFRA  // LLK test infra has no metal mailbox; kernel id is not tracked.
                 uint32_t launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
                 tt_l1_ptr launch_msg_t* const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_idx]);
                 auto kernel_id = launch_msg->kernel_config.watcher_kernel_ids[PROCESSOR_INDEX];
-#else
-                uint16_t kernel_id = 0;
-#endif
                 structures::DevicePrintHeader new_kernel_message = {};
                 new_kernel_message.is_kernel = 1;
                 new_kernel_message.risc_id = PROCESSOR_INDEX;
@@ -1387,6 +1386,7 @@ void acquire_lock() {
             }
         }
     }
+#endif
 }
 
 void update_kernel_finished() {

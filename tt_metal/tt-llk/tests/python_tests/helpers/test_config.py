@@ -92,6 +92,11 @@ class CoverageBuild(Enum):
     No = "false"
 
 
+class DevicePrintBuild(Enum):
+    Yes = "true"
+    No = "false"
+
+
 class BuildMode(Enum):
     DEFAULT = 0  # compile + execute
     PRODUCE = 1  # compile only
@@ -221,13 +226,18 @@ class TestConfig:
         _PERF_COUNTERS_BUFFER_SIZE + 4
     )  # +4 for sync control word
 
-    # Device print buffer base address (must match dprint.h).
-    # Sits right after perf data and before TRISC start addresses (0x16DFF0).
-    # Not entirely sure about this address; we could alias the perf memory I think?
-    # I imagine dprint and profiling won't be used at the same time.
-    DEVICE_PRINT_BUFFER_BASE: ClassVar[int] = 0x16D400
-    # DPRINT_BUFFER_SIZE * PROCESSOR_COUNT
-    DEVICE_PRINT_BUFFER_SIZE: ClassVar[int] = 204 * 5
+    # Device print buffer; must match dprint.h. Sits above loaders, under RUNTIME_ARGS_START.
+    # PROCESSOR_COUNT and DEVICE_PRINT_BUFFER_SIZE are set per-arch in setup_arch():
+    # device-side DevicePrintMemoryLayout (hostdev/device_print_common.h) sizes itself from
+    # TensixProcessorTypes::COUNT (5 on WH/BH, 24 on Quasar).
+    # Subject to change once debug print is removed; it can be turned into a flat buffer
+    # sized independently of thread count.
+    DEVICE_PRINT_BUFFER_BASE: ClassVar[int] = 0x13000
+    DEVICE_PRINT_PER_THREAD_SIZE: ClassVar[int] = (
+        1024  # matches DPRINT_BUFFER_SIZE in dprint.h
+    )
+    PROCESSOR_COUNT: ClassVar[int] = 0
+    DEVICE_PRINT_BUFFER_SIZE: ClassVar[int] = 0
 
     @staticmethod
     def setup_arch():
@@ -240,6 +250,7 @@ class TestConfig:
                 TestConfig.ARCH_LLK_ROOT = "tt_llk_wormhole_b0"
                 TestConfig.ARCH = ChipArchitecture.WORMHOLE
                 TestConfig.DATA_FORMAT_ENUM = WORMHOLE_DATA_FORMAT_ENUM_VALUES
+                TestConfig.PROCESSOR_COUNT = 5
             case ChipArchitecture.BLACKHOLE:
                 TestConfig.ARCH_NON_COMPUTE = "-mcpu=tt-bh"
                 TestConfig.ARCH_COMPUTE = "-mcpu=tt-bh-tensix"
@@ -247,6 +258,7 @@ class TestConfig:
                 TestConfig.ARCH_LLK_ROOT = "tt_llk_blackhole"
                 TestConfig.ARCH = ChipArchitecture.BLACKHOLE
                 TestConfig.DATA_FORMAT_ENUM = BLACKHOLE_DATA_FORMAT_ENUM_VALUES
+                TestConfig.PROCESSOR_COUNT = 5
             case ChipArchitecture.QUASAR:
                 TestConfig.ARCH_NON_COMPUTE = "-mcpu=tt-qsr32"
                 TestConfig.ARCH_COMPUTE = "-mcpu=tt-qsr32-tensix"
@@ -256,6 +268,7 @@ class TestConfig:
                 TestConfig.ARCH = ChipArchitecture.QUASAR
                 TestConfig.DATA_FORMAT_ENUM = QUASAR_DATA_FORMAT_ENUM_VALUES
                 TestConfig.KERNEL_COMPONENTS = ["unpack", "math", "pack", "sfpu"]
+                TestConfig.PROCESSOR_COUNT = 24
                 TestConfig.TRISC_START_ADDRS = [
                     0x16DFF0,
                     0x16DFF4,
@@ -275,6 +288,12 @@ class TestConfig:
                 raise ValueError(
                     "Must provide CHIP_ARCH environment variable (wormhole / blackhole / quasar)"
                 )
+
+        TestConfig.DEVICE_PRINT_BUFFER_SIZE = (
+            # Change after debug print is removed.
+            TestConfig.DEVICE_PRINT_PER_THREAD_SIZE
+            * TestConfig.PROCESSOR_COUNT
+        )
 
     @staticmethod
     def setup_paths(sources_path: Path):
@@ -495,6 +514,7 @@ class TestConfig:
         variant_stimuli: StimuliConfig = None,
         boot_mode: BootMode = BootMode.DEFAULT,
         profiler_build: ProfilerBuild = ProfilerBuild.No,
+        device_print_build: DevicePrintBuild = DevicePrintBuild.No,
         L1_to_L1_iterations: int = 1,
         unpack_to_dest: bool = False,
         unpack_to_srcs: bool = False,
@@ -524,6 +544,7 @@ class TestConfig:
         self.variant_stimuli = variant_stimuli
         self.boot_mode = boot_mode
         self.profiler_build = profiler_build
+        self.device_print_build = device_print_build
         self.L1_to_L1_iterations = L1_to_L1_iterations
         self.unpack_to_dest = unpack_to_dest
         self.unpack_to_srcs = unpack_to_srcs
@@ -805,6 +826,9 @@ class TestConfig:
 
         if self.profiler_build == ProfilerBuild.Yes:
             OPTIONS_COMPILE += "-DLLK_PROFILER "
+
+        if self.device_print_build == DevicePrintBuild.Yes:
+            OPTIONS_COMPILE += "-DDEBUG_PRINT_ENABLED "
 
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
@@ -1399,6 +1423,17 @@ class TestConfig:
                 self.variant_stimuli.load_from_cache()
 
             self.variant_stimuli.write(TestConfig.TENSIX_LOCATION)
+
+        if self.device_print_build == DevicePrintBuild.Yes:
+            # Zero wpos/rpos/lock so acquire_lock() starts on a free lock and
+            # the parser reads from offset 0.
+            # See device_print_common.h for layout.
+            risc_state_padded = (TestConfig.PROCESSOR_COUNT + 3) // 4 * 4
+            write_to_device(
+                TestConfig.TENSIX_LOCATION,
+                TestConfig.DEVICE_PRINT_BUFFER_BASE,
+                b"\x00" * 8 + b"\x00" * risc_state_padded + b"\x00" * 4,
+            )
 
         self.run_elf_files()
         self.wait_for_tensix_operations_finished(poll_callback=poll_callback)
