@@ -146,7 +146,6 @@ class TtQwen36Transformer(LightweightModule):
         # output.weight in HF: [vocab_size, hidden] → we need [hidden, vocab]
         # ------------------------------------------------------------------
         lm_head_w = global_weights["output.weight"]  # [vocab_size, hidden]
-        # Pad vocab to padded_vocab_size
         padded_vocab = args.padded_vocab_size  # 248832
         if lm_head_w.shape[0] < padded_vocab:
             pad = torch.zeros(padded_vocab - lm_head_w.shape[0], lm_head_w.shape[1], dtype=lm_head_w.dtype)
@@ -154,29 +153,37 @@ class TtQwen36Transformer(LightweightModule):
         else:
             lm_head_w_padded = lm_head_w[:padded_vocab]
 
-        # Transpose for matmul: [hidden, padded_vocab]
+        # On-device LM head weight, vocab-sharded across 4 mesh cols (cluster_axis=1).
+        # Stored as [hidden, padded_vocab] so ttnn.linear(x [B,T,H], w [H, V/4]) → [B,T, V/4]
+        # partial per col, then ConcatMeshToTensor(dim=-1) on the OUTPUT gathers
+        # all 4 cols into full [B, T, padded_vocab].  Per-chip: 5120 × 62208 × 2 B = 637 MB
+        # (vs 2548 MB replicated).
         lm_head_w_t = lm_head_w_padded.T.contiguous()  # [hidden, padded_vocab]
-
+        vocab_col_shard = ttnn.ShardTensor2dMesh(
+            mesh_device,
+            dims=(None, 1),
+            mesh_shape=list(mesh_device.shape),
+        )
         self.lm_head_weight = ttnn.from_torch(
             lm_head_w_t,
             device=mesh_device,
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
+            mesh_mapper=vocab_col_shard,
+        )  # per-chip: [hidden, padded_vocab/4]
         self.padded_vocab_size = padded_vocab
 
-        # Compute kernel config (unused in CPU-path LM head; kept for future on-device path)
         self._compute_kernel = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
 
-        # CPU-side lm_head weight for float32 matmul (bring-up path).
-        # [padded_vocab, hidden] for torch.matmul: x [B,T,H] @ w.T [H, vocab] → [B,T,vocab]
+        # CPU-side LM head weight kept for the current CPU-path matmul that produces
+        # float32 logits (preserves the 0.965 logit PCC).  When optimizing later, this
+        # can be removed and forward switched to on-device sharded matmul + col gather.
         self._lm_head_weight_cpu = lm_head_w_padded.float()  # [padded_vocab, hidden]
 
     # ------------------------------------------------------------------

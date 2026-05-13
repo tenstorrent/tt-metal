@@ -131,11 +131,15 @@ class DistributedNorm(LightweightModule):
         # BH uses WormholeComputeKernelConfig (BlackholeComputeKernelConfig
         # does not exist in this build).
         # ------------------------------------------------------------------
+        # HiFi4 + fp32 dest accumulation: the pre-all-gather stats step computes
+        # sum-of-squares which compounds rounding for small-magnitude activations
+        # (e.g., embedding output std≈0.013 → rsqrt of small variance is precision-
+        # critical).  Float32 accumulation preserves PCC on real activations.
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:

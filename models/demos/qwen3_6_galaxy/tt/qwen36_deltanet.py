@@ -212,10 +212,11 @@ class TtQwen36DeltaNet(LightweightModule):
         self.v_per_row = self.n_v_per_row * self.head_dim  # 768
         self.conv_per_row = self.q_per_row + self.q_per_row + self.v_per_row  # 1280
 
-        # Compute kernel config (reuse from llama_attention)
+        # HiFi4 + fp32 dest accumulation for clean BF16-on-real-input precision
+        # across many decoder layers (matches MLP/attention/norm choice).
         self.compute_kernel = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=True,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )

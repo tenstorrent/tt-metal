@@ -39,14 +39,20 @@ _T_PREFILL = 32
 _H = 5120
 _PCC_THRESH = 0.99
 
-# T8 full-model PCC threshold.  T7 proved per-unit-layer PCC=0.999949 with synthetic
-# BF16 random inputs.  The full-model test uses real embedding activations which have
-# a different numerical profile: certain hidden dimensions (e.g. dim 3994) carry large
-# residual values (~20-41) that accumulate BF16 rounding error across 4 decoder layers,
-# degrading the overall per-token hidden-state PCC to ~0.985.  This is NOT a model
-# assembly bug — top-1 generation matches exactly.  The 0.98 threshold reflects the
-# realistic full-model BF16 quality floor on real activations.
-_PCC_THRESH_FULL_MODEL = 0.98
+# 4-layer hidden-state PCC threshold on real embedding activations: 0.99 (strict).
+# Achieved 0.9934 after promoting DistributedNorm + MLP + attention + DeltaNet
+# compute kernels to HiFi4 + fp32_dest_acc_en.  (The previous HiFi2/bf16-acc
+# DistributedNorm was the precision bottleneck: rsqrt of low variance on small-
+# magnitude embedding activations needs fp32 accumulation.)
+_PCC_THRESH_4LAYER = 0.99
+
+# 16-layer hidden-state PCC threshold: 0.98.  Accumulated BF16 multiply-accumulate
+# noise across 16 layers of real activations lands at 0.980 vs the 0.999 PCC
+# achieved on synthetic random input.  Functional correctness verified by top-1
+# match rate (currently 87.5% at 16 layers; > 75% threshold).  Compare to T7's
+# 4-layer hybrid PCC=0.999 on random input — same model, same precision, the
+# delta is purely input-statistics + layer-count compounding.
+_PCC_THRESH_16LAYER = 0.98
 
 
 # ---------------------------------------------------------------------------
@@ -352,7 +358,7 @@ def test_full_model_4layer_prefill_pcc_on_8x4(mesh_8x4):
     ref_hidden = _ref_forward_hidden(ref_model, tt_emb, cos, sin, attention_mask=causal_mask)
 
     hidden_pcc = _pcc(tt_hidden, ref_hidden)
-    print(f"[Test1] Hidden-state PCC = {hidden_pcc:.6f}  (thresh={_PCC_THRESH_FULL_MODEL})")
+    print(f"[Test1] Hidden-state PCC = {hidden_pcc:.6f}  (thresh={_PCC_THRESH_4LAYER})")
 
     # Top-1 generation correctness — use the LM head path
     print("[Test1] Running TT forward_prefill for top-1 check...")
@@ -368,9 +374,7 @@ def test_full_model_4layer_prefill_pcc_on_8x4(mesh_8x4):
     print(f"[Test1] Logits PCC = {logits_pcc:.6f}  (informational; BF16 LM head artefact ~0.965)")
     print(f"[Test1] Top-1: TT={tt_top1}, ref={ref_top1}, match={tt_top1 == ref_top1}")
 
-    assert (
-        hidden_pcc > _PCC_THRESH_FULL_MODEL
-    ), f"4-layer prefill hidden-state PCC {hidden_pcc:.4f} < {_PCC_THRESH_FULL_MODEL}"
+    assert hidden_pcc > _PCC_THRESH_4LAYER, f"4-layer prefill hidden-state PCC {hidden_pcc:.4f} < {_PCC_THRESH_4LAYER}"
     assert tt_top1 == ref_top1, f"4-layer top-1 mismatch: TT={tt_top1} vs ref={ref_top1}"
     print("[Test1] PASSED")
 
@@ -433,7 +437,7 @@ def test_full_model_16layer_prefill_pcc_on_8x4(mesh_8x4):
     ref_hidden = _ref_forward_hidden(ref_model, tt_emb, cos, sin, attention_mask=causal_mask)
 
     hidden_pcc = _pcc(tt_hidden, ref_hidden)
-    print(f"[Test2] Hidden-state PCC = {hidden_pcc:.6f}  (thresh={_PCC_THRESH_FULL_MODEL})")
+    print(f"[Test2] Hidden-state PCC = {hidden_pcc:.6f}  (thresh={_PCC_THRESH_16LAYER})")
 
     # Top-1 generation correctness
     print("[Test2] Running TT forward_prefill for top-1 check...")
@@ -452,11 +456,10 @@ def test_full_model_16layer_prefill_pcc_on_8x4(mesh_8x4):
     print(f"[Test2] Top-1 match rate: {top1_match_rate:.4f} (require >= 0.75)")
 
     assert (
-        hidden_pcc > _PCC_THRESH_FULL_MODEL
-    ), f"16-layer prefill hidden-state PCC {hidden_pcc:.4f} < {_PCC_THRESH_FULL_MODEL}"
-    # 16-layer BF16 bring-up floor: ~84% (27/32).  T7 proved 4-layer 0.9999; 16 layers
-    # with real activations produce more BF16 rounding noise.  0.75 (24/32) is a safe
-    # floor that proves the model assembly is correct without being over-tight.
+        hidden_pcc > _PCC_THRESH_16LAYER
+    ), f"16-layer prefill hidden-state PCC {hidden_pcc:.4f} < {_PCC_THRESH_16LAYER}"
+    # 16-layer BF16 bring-up floor: top-1 match rate around 87% post-norm-fix.
+    # 75% (24/32) is a safe floor that proves the model assembly is correct.
     assert top1_match_rate >= 0.75, f"Top-1 match rate {top1_match_rate:.4f} < 0.75"
     print("[Test2] PASSED")
 
