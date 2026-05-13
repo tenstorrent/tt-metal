@@ -4,10 +4,8 @@
 
 #pragma once
 
-#include "experimental/noc.h"
+#include "api/dataflow/noc.h"
 #include "api/tensor/tensor_accessor.h"
-
-namespace experimental {
 
 // TODO(#29597): The traits classes for TensorAccessor and related classes could be moved to tensor_accessor.h
 // (need to break the include dependency dataflow_api.h -> tensor_accessor.h.).
@@ -138,5 +136,3 @@ struct noc_traits_t<tensor_accessor::Page> {
         }
     }
 };
-
-}  // namespace experimental

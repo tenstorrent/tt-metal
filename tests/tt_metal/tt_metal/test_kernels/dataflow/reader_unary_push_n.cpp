@@ -4,12 +4,12 @@
 
 #include "api/dataflow/dataflow_api.h"
 #ifdef ARCH_QUASAR
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #else
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #endif
-#include "experimental/endpoints.h"
-#include "experimental/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
 
 void kernel_main() {
     uint32_t src_addr  = get_arg_val<uint32_t>(0);
@@ -19,14 +19,14 @@ void kernel_main() {
     uint32_t ublock_size_tiles = get_arg_val<uint32_t>(4);
     bool reader_only = get_arg_val<uint32_t>(5);
 
-    experimental::Noc noc;
-    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_src;
+    Noc noc;
+    AllocatorBank<AllocatorBankType::DRAM> dram_src;
 
 #ifdef ARCH_QUASAR
-    experimental::DataflowBuffer dfb(cb_id_in0);
+    DataflowBuffer dfb(cb_id_in0);
     uint32_t ublock_size_bytes = dfb.get_entry_size() * ublock_size_tiles;
 #else
-    experimental::CircularBuffer cb(cb_id_in0);
+    CircularBuffer cb(cb_id_in0);
     uint32_t ublock_size_bytes = cb.get_tile_size() * ublock_size_tiles;
 #endif
 

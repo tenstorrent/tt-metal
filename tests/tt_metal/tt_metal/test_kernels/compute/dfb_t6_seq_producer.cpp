@@ -19,14 +19,14 @@
 //   [0]: num_dfbs                  � number of DFBs to loop through
 //   [1]: num_entries_per_producer  � entries to signal per DFB (same for all)
 
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t num_dfbs               = get_compile_time_arg_val(0);
     const uint32_t     num_entries_per_producer = get_compile_time_arg_val(1);
 
     for (uint32_t dfb_id = 0; dfb_id < num_dfbs; dfb_id++) {
-        experimental::DataflowBuffer dfb(dfb_id);
+        DataflowBuffer dfb(dfb_id);
         for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) {
             dfb.reserve_back(1);
             dfb.push_back(1);

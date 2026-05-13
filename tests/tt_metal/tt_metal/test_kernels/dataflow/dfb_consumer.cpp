@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "experimental/dataflow_buffer.h"
-#include "experimental/noc.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 #include "api/debug/dprint.h"
 
 void kernel_main() {
@@ -24,8 +24,8 @@ void kernel_main() {
     const uint32_t entries_per_core = get_arg_val<uint32_t>(3);
     const uint32_t num_consumers = static_cast<uint32_t>(__builtin_popcount(consumer_mask));
 
-    experimental::DataflowBuffer dfb(logical_dfb_id);
-    experimental::Noc noc;
+    DataflowBuffer dfb(logical_dfb_id);
+    Noc noc;
 
     // TODO: Replace with get_thread_idx() kernel API when available
 #ifdef ARCH_QUASAR
@@ -58,7 +58,7 @@ void kernel_main() {
         // DEVICE_PRINT("consumer tile id {} page id {}\n", tile_id, page_id);
         if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR
-            noc.async_write<experimental::Noc::TxnIdMode::ENABLED>(dfb, tensor_accessor, {}, {.page_id = page_id});
+            noc.async_write<Noc::TxnIdMode::ENABLED>(dfb, tensor_accessor, {}, {.page_id = page_id});
 #endif
         } else {
             dfb.wait_front(1);

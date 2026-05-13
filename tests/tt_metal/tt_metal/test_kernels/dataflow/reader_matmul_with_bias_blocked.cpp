@@ -5,9 +5,9 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #ifdef ARCH_QUASAR
-#include "experimental/dataflow_buffer.h"
-#include "experimental/endpoints.h"
-#include "experimental/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
 #endif
 
 void kernel_main() {
@@ -42,10 +42,10 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
     constexpr uint32_t dfb_in0_id = get_compile_time_arg_val(0);
     constexpr uint32_t dfb_in1_id = get_compile_time_arg_val(1);
-    experimental::DataflowBuffer dfb_in0(dfb_in0_id);
-    experimental::DataflowBuffer dfb_in1(dfb_in1_id);
-    experimental::Noc noc;
-    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram;
+    DataflowBuffer dfb_in0(dfb_in0_id);
+    DataflowBuffer dfb_in1(dfb_in1_id);
+    Noc noc;
+    AllocatorBank<AllocatorBankType::DRAM> dram;
 #else
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;

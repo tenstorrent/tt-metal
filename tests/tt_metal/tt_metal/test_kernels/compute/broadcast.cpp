@@ -6,9 +6,9 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #ifdef ARCH_QUASAR
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #else
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #endif
 
 #ifndef BCAST_ROW_IDX
@@ -22,9 +22,9 @@ void kernel_main() {
     constexpr uint32_t dfb_in0_id = get_compile_time_arg_val(0);
     constexpr uint32_t dfb_in1_id = get_compile_time_arg_val(1);
     constexpr uint32_t dfb_out_id = get_compile_time_arg_val(2);
-    experimental::DataflowBuffer dfb0(dfb_in0_id);
-    experimental::DataflowBuffer dfb1(dfb_in1_id);
-    experimental::DataflowBuffer dfb_out(dfb_out_id);
+    DataflowBuffer dfb0(dfb_in0_id);
+    DataflowBuffer dfb1(dfb_in1_id);
+    DataflowBuffer dfb_out(dfb_out_id);
     const uint32_t icb0 = dfb0.get_id();
     const uint32_t icb1 = dfb1.get_id();
     const uint32_t ocb = dfb_out.get_id();
@@ -32,9 +32,9 @@ void kernel_main() {
     constexpr uint32_t icb0 = tt::CBIndex::c_0;
     constexpr uint32_t icb1 = tt::CBIndex::c_1;
     constexpr uint32_t ocb = tt::CBIndex::c_16;
-    experimental::CircularBuffer cb1(icb1);
-    experimental::CircularBuffer cb16(ocb);
-    experimental::CircularBuffer cb0(icb0);
+    CircularBuffer cb1(icb1);
+    CircularBuffer cb16(ocb);
+    CircularBuffer cb0(icb0);
 #endif
 
 #ifndef BCAST_OP_INIT

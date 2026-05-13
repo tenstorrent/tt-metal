@@ -2,20 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Convenience header that includes all experimental device 2.0 APIs
+// Convenience header that includes all device 2.0 APIs
 // and provides short type aliases for kernel code in conv/pool operations.
 // Safe to include from both dataflow and compute (TRISC) kernels.
 
 #pragma once
 
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 #ifndef COMPILE_FOR_TRISC
-#include "experimental/noc.h"
-#include "experimental/endpoints.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/noc_semaphore.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/tensor/noc_traits.h"
 #endif
 
 namespace experimental {
