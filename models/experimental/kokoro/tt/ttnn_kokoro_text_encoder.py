@@ -110,8 +110,12 @@ class TtKokoroTextEncoder:
     def __init__(self, device: ttnn.Device, params: TextEncoderParams):
         self.device = device
         self.params = params
+        # WH B0: HiFi3 + fp32 dest acc avoids the HiFi4-fp32-accum HW bug warned in compute_kernel_config.cpp:65.
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi3,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
         )
 
     def __call__(

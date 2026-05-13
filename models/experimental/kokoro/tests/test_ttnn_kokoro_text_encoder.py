@@ -42,5 +42,6 @@ def test_ttnn_text_encoder_matches_torch(device):
     ttnn.deallocate(tt_out)
 
     assert ref_out.shape == tt_out_torch.shape
-    ok, pcc = comp_pcc(ref_out, tt_out_torch, pcc=0.93)
-    assert ok, f"text_encoder PCC too low: {pcc}"
+    _, pcc = comp_pcc(ref_out, tt_out_torch, pcc=0.0)
+    print(f"text_encoder PCC: {pcc:.6f}")
+    assert pcc >= 0.93, f"text_encoder PCC too low: {pcc}"

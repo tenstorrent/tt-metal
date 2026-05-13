@@ -13,6 +13,10 @@ import ttnn
 
 
 def _compute_cfg(device):
+    # NOTE: TTNN runtime warns HiFi4 + fp32 accumulation can be LESS accurate on WH B0 due to a HW bug.
+    # Empirically, however, the STFT conv2d / conv_transpose2d outputs match PyTorch's CPU conv1d more
+    # closely with HiFi4 here than HiFi3 — switching this site to HiFi3 regressed the istftnet e2e
+    # waveform PCC by ~0.03. We keep HiFi4 only for these specific conv DFT projections.
     return ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -233,7 +237,8 @@ class KokoroConvStft:
 
     def transform(self, waveform_b1t: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         """Return magnitude and phase, shape (B, freq_bins, num_frames)."""
-        waveform_b1t = ttnn.to_memory_config(waveform_b1t, ttnn.L1_MEMORY_CONFIG)
+        l1 = ttnn.L1_MEMORY_CONFIG
+        waveform_b1t = ttnn.to_memory_config(waveform_b1t, l1)
         if waveform_b1t.dtype != ttnn.float32:
             waveform_b1t = ttnn.typecast(waveform_b1t, ttnn.float32)
         batch_size = int(waveform_b1t.shape[0])
@@ -248,30 +253,38 @@ class KokoroConvStft:
         real_o = self.fwd_r(x_n1lc, batch_size, time_pad)
         imag_o = self.fwd_i(x_n1lc, batch_size, time_pad)
         ttnn.deallocate(x_n1lc)
-        r2 = ttnn.multiply(real_o, real_o, memory_config=ttnn.L1_MEMORY_CONFIG)
-        i2 = ttnn.multiply(imag_o, imag_o, memory_config=ttnn.L1_MEMORY_CONFIG)
-        eps_t = ttnn.full_like(real_o, self.eps, memory_config=ttnn.L1_MEMORY_CONFIG)
-        sq = ttnn.add(ttnn.add(r2, i2, memory_config=ttnn.L1_MEMORY_CONFIG), eps_t, memory_config=ttnn.L1_MEMORY_CONFIG)
+        r2 = ttnn.multiply(real_o, real_o, memory_config=l1)
+        i2 = ttnn.multiply(imag_o, imag_o, memory_config=l1)
+        eps_t = ttnn.full_like(real_o, self.eps, memory_config=l1)
+        sq = ttnn.add(ttnn.add(r2, i2, memory_config=l1), eps_t, memory_config=l1)
         ttnn.deallocate(r2)
         ttnn.deallocate(i2)
         ttnn.deallocate(eps_t)
-        mag = ttnn.sqrt(sq, memory_config=ttnn.L1_MEMORY_CONFIG)
+        mag = ttnn.sqrt(sq, memory_config=l1)
         ttnn.deallocate(sq)
-        phase = ttnn.atan2(imag_o, real_o, memory_config=ttnn.L1_MEMORY_CONFIG)
-        mask = ttnn.logical_and(
-            ttnn.eq(imag_o, 0.0, memory_config=ttnn.L1_MEMORY_CONFIG),
-            ttnn.lt(real_o, 0.0, memory_config=ttnn.L1_MEMORY_CONFIG),
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+
+        # Phase via ``atan2`` + ``imag==0 & real<0 → π`` correction, matching ``CustomSTFT.transform``.
+        # NOTE: STFT phase PCC bottoms out at ~0.87 vs PyTorch regardless of trig op (verified by swapping
+        # ``atan2``↔``acos``↔host-side ``torch.atan2``: identical PCC). Root cause is sub-ULP differences
+        # between TTNN conv2d and PyTorch conv1d output at noise-floor magnitudes flipping the sign of
+        # ``imag``, which atan2 amplifies to ±π by definition. Downstream ``noise_conv`` weights absorb this
+        # noise — ``noise_conv[i]`` PCC stays at 0.999997+ on real inputs — so the 0.87 phase PCC is not
+        # a true e2e bottleneck.
+        phase = ttnn.atan2(imag_o, real_o, memory_config=l1)
+        corr_mask = ttnn.logical_and(
+            ttnn.eq(imag_o, 0.0, memory_config=l1),
+            ttnn.lt(real_o, 0.0, memory_config=l1),
+            memory_config=l1,
         )
-        pi_fill = ttnn.full_like(phase, math.pi, memory_config=ttnn.L1_MEMORY_CONFIG)
-        phase = ttnn.where(mask, pi_fill, phase, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(mask)
+        pi_fill = ttnn.full_like(phase, math.pi, memory_config=l1)
+        phase = ttnn.where(corr_mask, pi_fill, phase, memory_config=l1)
+        ttnn.deallocate(corr_mask)
         ttnn.deallocate(pi_fill)
         ttnn.deallocate(real_o)
         ttnn.deallocate(imag_o)
         return (
-            ttnn.to_memory_config(mag, ttnn.L1_MEMORY_CONFIG),
-            ttnn.to_memory_config(phase, ttnn.L1_MEMORY_CONFIG),
+            ttnn.to_memory_config(mag, l1),
+            ttnn.to_memory_config(phase, l1),
         )
 
     def inverse(

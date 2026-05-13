@@ -82,7 +82,7 @@ def test_ttnn_sinegen_deterministic_pcc(ttnn_device, kokoro_decoder_cpu):
     uv_hat = ttnn.to_torch(uv_tt).reshape(uv_ref.shape)
     noise_hat = ttnn.to_torch(noise_tt).reshape(noise_ref.shape)
 
-    min_pcc = {"sine_waves": 0.97, "uv": 0.99, "noise": 0.99}
+    min_pcc = {"sine_waves": 0.998, "uv": 0.99, "noise": 0.99}
     for name, ref, hat in (
         ("sine_waves", sw_ref, sw_hat),
         ("uv", uv_ref, uv_hat),
