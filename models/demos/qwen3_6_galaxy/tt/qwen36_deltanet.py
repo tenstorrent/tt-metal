@@ -50,6 +50,7 @@ def _causal_conv1d_fir_mesh(
     mesh_device,
     memory_config=ttnn.DRAM_MEMORY_CONFIG,
     conv_state=None,
+    conv_state_zero_pad=None,
 ):
     """Mesh-compatible depthwise causal conv1d + SiLU via FIR decomposition.
 
@@ -67,6 +68,11 @@ def _causal_conv1d_fir_mesh(
         memory_config: memory config for outputs
         conv_state:  [B, K-1, D] TILE_LAYOUT or None. The last K-1 tokens from the
                      previous forward pass (for decode continuity). If None, uses zeros.
+        conv_state_zero_pad: Optional pre-allocated persistent [max_B, K-1, D] ROW_MAJOR
+                     replicated zero buffer to use when conv_state is None — avoids
+                     a per-call ttnn.from_torch host write so this path is trace-safe.
+                     When None and conv_state is None, falls back to from_torch
+                     (non-trace-safe legacy path).
 
     Returns:
         (output [B, T, D] bfloat16 TILE_LAYOUT, new_conv_state [B, K-1, D] bfloat16 TILE_LAYOUT)
@@ -80,6 +86,7 @@ def _causal_conv1d_fir_mesh(
 
     # Build padded input in ROW_MAJOR: [B, T + K-1, D]
     # Use conv_state (last K-1 tokens) if provided, else zeros.
+    pad_is_persistent = False
     if conv_state is not None:
         # conv_state: [B, K-1, D] ROW_MAJOR (exact shape, no tile padding).
         # Always make a new tensor so we can safely call pad.deallocate(True) below.
@@ -92,6 +99,21 @@ def _causal_conv1d_fir_mesh(
             cs_rm.deallocate(True)
         # Note: cs_rm == conv_state in the ROW_MAJOR case, so don't deallocate cs_rm
         # (the caller still holds a reference to conv_state).
+    elif conv_state_zero_pad is not None:
+        # T14b.5: Use the persistent zero buffer allocated once at module init,
+        # so this call site is trace-capture-safe (no host writes inside trace).
+        zp_shape = list(conv_state_zero_pad.shape)
+        if zp_shape == [B, kernel_size - 1, D]:
+            pad = conv_state_zero_pad
+            pad_is_persistent = True
+        else:
+            # Persistent buffer is sized for max_batch_size; slice to runtime B.
+            pad = ttnn.slice(
+                conv_state_zero_pad,
+                [0, 0, 0],
+                [B, kernel_size - 1, D],
+                memory_config=memory_config,
+            )
     else:
         pad_torch = torch.zeros(B, kernel_size - 1, D, dtype=torch.bfloat16)
         pad = ttnn.from_torch(
@@ -103,7 +125,8 @@ def _causal_conv1d_fir_mesh(
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
     x_padded = ttnn.concat([pad, x_rm], dim=1, memory_config=memory_config)
-    pad.deallocate(True)
+    if not pad_is_persistent:
+        pad.deallocate(True)
 
     # Compute new conv state: last K-1 tokens of x
     if T >= kernel_size - 1:
@@ -226,6 +249,11 @@ class TtQwen36DeltaNet(LightweightModule):
 
         # Store raw conv weights for diagnostic test (host-side)
         self._conv_w_host = self._build_conv_host_blocks(state_dict)
+
+        # T14b.5: persistent zero pad for _causal_conv1d_fir_mesh when
+        # conv_state is None. Allocated once at __init__ so the conv path
+        # has no per-call ttnn.from_torch host write — trace-capture-safe.
+        self._conv_zero_pad = self._build_conv_zero_pad()
 
     # ------------------------------------------------------------------
     # Weight construction helpers
@@ -428,6 +456,30 @@ class TtQwen36DeltaNet(LightweightModule):
         """Return host-side conv weight block for row_i [1280, 4]."""
         return self._conv_w_host[row_i]
 
+    def _build_conv_zero_pad(self) -> ttnn.Tensor:
+        """Allocate the persistent zero pad used by _causal_conv1d_fir_mesh
+        when conv_state is None (first call before any history exists).
+
+        Shape: ``[max_batch_size, kernel_size-1, conv_per_row]`` ROW_MAJOR,
+        replicated across the full mesh. ROW_MAJOR matches the layout the
+        downstream ``ttnn.concat([pad, x_rm], dim=1)`` expects (x_rm is
+        converted to ROW_MAJOR in the same function).
+        """
+        pad_torch = torch.zeros(
+            self.args.max_batch_size,
+            self.conv_kernel - 1,
+            self.conv_per_row,
+            dtype=torch.bfloat16,
+        )
+        return ttnn.from_torch(
+            pad_torch,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
     # ------------------------------------------------------------------
     # Forward passes
     # ------------------------------------------------------------------
@@ -539,6 +591,7 @@ class TtQwen36DeltaNet(LightweightModule):
             self.mesh_device,
             memory_config=mem,
             conv_state=conv_state,
+            conv_state_zero_pad=self._conv_zero_pad,
         )  # [B, T, 1280]
         mixed.deallocate(True)
 
