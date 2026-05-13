@@ -52,9 +52,7 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
     ) -> WeightConfig:
         moe_cls = _moe_cls(mesh_device=mesh_device)
         weights = {
-            "moe": moe_cls.convert_weights(
-                hf_config, (state_dict,), output_path / "moe", output_path / "shared_experts", mesh_device
-            ),
+            "moe": moe_cls.convert_weights(hf_config, (state_dict,), output_path / "moe", mesh_device),
         }
 
         # Only convert SharedExpert weights if not using MoEOptimized

@@ -73,7 +73,10 @@ class Experts(AbstractModule):
         weight_name = f"{hf_name}.weight"
         expert_weights: list[torch.Tensor] = []
         for expert_id in range(n_experts):
-            full_weight_name = f"{root_name}.{expert_id}.{weight_name}"
+            if n_experts == 1:
+                full_weight_name = f"{root_name}.{weight_name}"
+            else:
+                full_weight_name = f"{root_name}.{expert_id}.{weight_name}"
             expert_weights.append(get_dequantized_tensor(state_dict, full_weight_name, dtype=cls.WEIGHT_TORCH_DTYPE))
         return torch.stack(expert_weights)
 
@@ -148,9 +151,9 @@ class Experts(AbstractModule):
         shared_expert_ids_to_device = cls.quad_ring_shared_expert_to_device_map(
             num_routed_experts, num_shared_experts, num_devices
         )
-        num_total_experts = num_routed_experts + num_shared_experts
         num_shared_experts_per_device = get_shared_experts_per_device(shared_expert_ids_to_device, num_devices)[0]
         num_total_experts_per_device = num_shared_experts_per_device + num_routed_experts_per_device
+        num_total_experts_on_devices = num_total_experts_per_device * num_devices
 
         if loaded_prepared_weights is not None:
             # The prepacked quad-ring checkpoint format covers routed experts only. Refuse to
@@ -220,7 +223,7 @@ class Experts(AbstractModule):
 
             prepared_w0_w1 = []
             prepared_w2 = []
-            for i in range(0, num_total_experts, num_total_experts_per_device):
+            for i in range(0, num_total_experts_on_devices, num_total_experts_per_device):
                 prepared_w0_w1_tensor = prepare_w0_w1_tensor_for_moe_compute(
                     w0[:, i : i + num_total_experts_per_device, :, :],
                     w1[:, i : i + num_total_experts_per_device, :, :],

@@ -477,9 +477,9 @@ class AllToAllDispatchMetadataConfig(OpConfigBase):
             ),
         )
 
-    shared_expert_ids: list[int] | None = None
     worker_mode: ttnn.WorkerMode
     dispatch_algorithm: ttnn.DispatchAlgorithm
+    shared_expert_ids: list[int] | None = None
     drain_sync_tilizer_core: tuple[int, int] | None = None
     cluster_axis: int | None = None
     num_links: int | None = 4
