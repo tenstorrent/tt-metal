@@ -101,44 +101,37 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat in, const uint log_base
 }
 
 template <bool HAS_BASE_SCALING>
-sfpi_inline sfpi::vFloat calculate_log_f32_body(sfpi::vFloat val, const uint log_base_scale_factor) {
+sfpi_inline sfpi::vFloat calculate_log_f32_body(sfpi::vFloat a, const uint log_base_scale_factor) {
     sfpi::vFloat result = std::numeric_limits<float>::quiet_NaN();
     sfpi::vFloat infinity = std::numeric_limits<float>::infinity();
 
-    v_if(val > 0.0f && val < infinity) {
-        sfpi::vFloat a = val;
+    sfpi::vFloat two_thirds = 0.666666667f;
+    sfpi::vInt u = sfpi::reinterpret<sfpi::vInt>(a) - sfpi::reinterpret<sfpi::vInt>(two_thirds);
+    sfpi::vInt e = sfpi::exexp_nodebias(sfpi::reinterpret<sfpi::vFloat>(u));
+    sfpi::vFloat m = sfpi::reinterpret<sfpi::vFloat>(sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(u)));
 
-        sfpi::vFloat two_thirds = 0.666666667f;
-        sfpi::vInt u = sfpi::reinterpret<sfpi::vInt>(a) - sfpi::reinterpret<sfpi::vInt>(two_thirds);
-        sfpi::vInt e = sfpi::exexp_nodebias(sfpi::reinterpret<sfpi::vFloat>(u));
-        sfpi::vFloat m = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(u));
+    sfpi::vFloat e_float = sfpi::int32_to_float(e, sfpi::RoundMode::NearestEven);
+    e_float = sfpi::copysgn(e_float, sfpi::reinterpret<sfpi::vFloat>(u));
 
-        sfpi::vFloat e_float = sfpi::int32_to_float(e, sfpi::RoundMode::NearestEven);
-        e_float = sfpi::setsgn(e_float, sfpi::reinterpret<sfpi::vFloat>(u));
+    // m in [2/3, 4/3]. Compute log1p(m - 1) for m - 1 in [-1/3, 1/3].
+    m -= sfpi::vConst1;
+    sfpi::vFloat s = m * m;
+    sfpi::vFloat r = -0.130310059f;
+    sfpi::vFloat t = 0.140869141f;
+    r = r * s + -0.121486895f;
+    t = t * s + 0.139815226f;
+    r = r * s + -0.166845486f;
+    t = t * s + 0.200120315f;
+    r = r * s + -0.249996230f;
+    r = t * m + r;
+    r = r * m + 0.333331972f;
+    r = r * m + -0.500000000f;
+    r = r * s + m;
+    result = e_float * sfpi::vConstFloatPrgm0 + r;
 
-        // m in [2/3, 4/3]. Compute log1p(m - 1) for m - 1 in [-1/3, 1/3].
-        m -= sfpi::vConst1;
-        sfpi::vFloat s = m * m;
-        sfpi::vFloat r = -0.130310059f;
-        sfpi::vFloat t = 0.140869141f;
-        r = r * s + -0.121486895f;
-        t = t * s + 0.139815226f;
-        r = r * s + -0.166845486f;
-        t = t * s + 0.200120315f;
-        r = r * s + -0.249996230f;
-        r = t * m + r;
-        r = r * m + 0.333331972f;
-        r = r * m + -0.500000000f;
-        r = r * s + m;
-        result = e_float * sfpi::vConstFloatPrgm0 + r;
-
-        if constexpr (HAS_BASE_SCALING) {
-            result *= sfpi::reinterpret<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
-        }
+    if constexpr (HAS_BASE_SCALING) {
+        result *= sfpi::reinterpret<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
     }
-    v_elseif(val == 0.0f) { result = -std::numeric_limits<float>::infinity(); }
-    v_elseif(val == infinity) { result = std::numeric_limits<float>::infinity(); }
-    v_endif;
 
     return result;
 }
