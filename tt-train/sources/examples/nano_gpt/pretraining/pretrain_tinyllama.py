@@ -64,6 +64,11 @@ from ttml.common.utils import round_up_to_tile, get_tt_metal_runtime_root, creat
 from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig, DeviceConfig
 from ttml.common.data import CharTokenizer, build_causal_mask
 from ttml.common.profiler_utils import profiler_marker
+from ttml.common.schedulers import (
+    CosineAnnealingScheduler,
+    LinearScheduler,
+    SequentialScheduler,
+)
 
 # Union type for models that share the same forward(input, mask) interface
 Model = Union[NanoGPT, Llama, DeepSeek]
@@ -120,6 +125,16 @@ class TrainingConfig(BaseTrainingConfig):
         self.scheduler_type = tc.get("scheduler_type", "identity")
         self.use_clip_grad_norm = tc.get("use_clip_grad_norm", False)
         self.clip_grad_norm_max_norm = float(tc.get("clip_grad_norm_max_norm", 1.0))
+
+        # Cosine-with-warmup scheduler hyperparameters (TinyLlama paper-style).
+        # Only consumed when ``scheduler_type == "cosine_with_warmup"``. Defaults
+        # mirror the TinyLlama paper (warmup=2000 steps, min_lr=4e-5 with
+        # peak_lr=4e-4). ``lr_decay_steps`` <= 0 means "fill the rest of training":
+        # decay_steps = max_steps - lr_warmup_steps so cosine lands exactly at
+        # ``lr_min`` at ``max_steps``.
+        self.lr_warmup_steps = int(tc.get("lr_warmup_steps", 2000))
+        self.lr_min = float(tc.get("lr_min", 0.0))
+        self.lr_decay_steps = int(tc.get("lr_decay_steps", 0))
 
         # Pre-tokenized dataset fields (TinyLlama / lit_gpt PackedDataset semantics).
         # Empty tokenized_data_dir keeps the legacy CharTokenizer + text-file path active.
@@ -267,27 +282,87 @@ def read_file_to_str(file_path: str) -> str:
         return f.read()
 
 
-def create_warmup_linear_scheduler(optimizer, total_steps: int, base_lr: float):
-    """Create warmup + linear decay scheduler.
+def build_lr_scheduler(optimizer, training_config: "TrainingConfig", yaml_config: dict):
+    """Create the LR scheduler for the configured ``scheduler_type``.
 
-    base_lr must be the peak LR from config — not optimizer.get_lr() — so resume
-    works: on resume the optimizer's LR is temporarily set to the decayed
-    checkpoint LR, and reading it here would re-decay on top of that.
+    Returns ``(lr_scheduler, info_dict)`` where ``info_dict`` carries the
+    resolved hyperparameters for logging. Returns ``(None, {"type": ...})`` for
+    ``scheduler_type == "identity"`` so the optimizer keeps its constant LR.
+
+    Both supported schedule types are built as
+    ``SequentialScheduler([linear_warmup, decay], milestones=[warmup, decay])``
+    and produce objects with the same interface
+    (``.step()`` / ``.get_state_dict()`` / ``.set_state_dict()``):
+
+    - ``cosine_with_warmup``: linear warmup ``0 -> peak_lr`` over
+      ``lr_warmup_steps``, then ``CosineAnnealingScheduler`` from ``peak_lr``
+      down to ``lr_min`` over ``lr_decay_steps`` (defaults to
+      ``max_steps - lr_warmup_steps`` so cosine lands exactly on ``lr_min`` at
+      ``max_steps``).
+    - ``warmup_linear``: linear warmup ``0 -> peak_lr`` over the first 10% of
+      ``max_steps``, then a linear decay from ``peak_lr`` down to
+      ``0.01 * peak_lr`` over the remaining steps. Hyperparameters are
+      hard-coded to preserve exact backward compatibility with the original
+      ``create_warmup_linear_scheduler`` closure (``warmup_factor=0.1``,
+      end-of-decay factor ``0.01``).
+
+    Both paths read ``optimizer.get_lr()`` as the schedulers' ``_base_lr`` at
+    construction time. On a fresh start the optimizer is at the configured
+    peak LR (from ``create_optimizer``) so the snapshot is correct. On
+    resume the optimizer state is restored *before* this call, which means
+    ``optimizer.get_lr()`` is the decayed checkpoint LR — the snapshot here
+    is wrong, and the caller relies on ``lr_scheduler.set_state_dict(...)``
+    to subsequently overwrite ``_base_lr`` from the saved peak LR. The
+    upstream ``ttml.common.schedulers._SchedulerBase`` persists ``_base_lr``
+    for exactly this reason.
     """
-    warmup_factor = 0.1
-    warmup_steps = int(total_steps * warmup_factor)
-    linear_decay_steps = total_steps - warmup_steps
+    scheduler_type = training_config.scheduler_type
+    peak_lr = float(yaml_config["training_config"]["optimizer"]["lr"])
 
-    def compute_lr(step: int) -> float:
-        adjusted = step + 1
-        if adjusted <= warmup_steps:
-            factor = float(adjusted) / float(warmup_steps)
-        else:
-            decay_step = adjusted - warmup_steps
-            factor = max(0.0, 1.0 - (0.99 * float(decay_step) / float(linear_decay_steps)))
-        return base_lr * factor
+    if scheduler_type == "cosine_with_warmup":
+        warmup_steps = max(1, int(training_config.lr_warmup_steps))
+        decay_steps = int(training_config.lr_decay_steps)
+        if decay_steps <= 0:
+            decay_steps = max(1, int(training_config.max_steps) - warmup_steps)
+        eta_min = float(training_config.lr_min)
 
-    return compute_lr, warmup_steps, linear_decay_steps
+        warmup = LinearScheduler(optimizer, start_factor=0.0, end_factor=1.0, total_steps=warmup_steps)
+        decay = CosineAnnealingScheduler(optimizer, T_max=decay_steps, eta_min=eta_min)
+        scheduler = SequentialScheduler(optimizer, [warmup, decay], milestones=[warmup_steps, decay_steps])
+        info = {
+            "type": "cosine_with_warmup",
+            "peak_lr": peak_lr,
+            "eta_min": eta_min,
+            "warmup_steps": warmup_steps,
+            "decay_steps": decay_steps,
+        }
+        return scheduler, info
+
+    if scheduler_type == "warmup_linear":
+        # Legacy schedule: 10% warmup then linear decay from peak_lr to
+        # 0.01 * peak_lr. Mirrors the original ``create_warmup_linear_scheduler``
+        # closure exactly (``LinearScheduler(start, end, T).step()`` produces
+        # ``factor = start + (end - start) * k/T`` after the k-th call, which
+        # for ``(1.0, 0.01, T)`` is ``1 - 0.99 * k/T`` — matching the
+        # hand-rolled formula).
+        total_steps = max(1, int(training_config.max_steps))
+        warmup_steps = max(1, int(total_steps * 0.1))
+        decay_steps = max(1, total_steps - warmup_steps)
+        end_factor = 0.01
+
+        warmup = LinearScheduler(optimizer, start_factor=0.0, end_factor=1.0, total_steps=warmup_steps)
+        decay = LinearScheduler(optimizer, start_factor=1.0, end_factor=end_factor, total_steps=decay_steps)
+        scheduler = SequentialScheduler(optimizer, [warmup, decay], milestones=[warmup_steps, decay_steps])
+        info = {
+            "type": "warmup_linear",
+            "peak_lr": peak_lr,
+            "end_lr": peak_lr * end_factor,
+            "warmup_steps": warmup_steps,
+            "decay_steps": decay_steps,
+        }
+        return scheduler, info
+
+    return None, {"type": scheduler_type}
 
 
 class InMemoryTokenDataset:
@@ -739,8 +814,7 @@ def _run_eval(
 def train_step(
     model: Model,
     optimizer: ttml.optimizers.OptimizerBase,
-    compute_lr: Optional[callable],
-    scheduler_step: int,
+    lr_scheduler: Optional[object],
     input_tokens: ttml.autograd.Tensor,
     target_tokens: ttml.autograd.Tensor,
     mask: Optional[ttml.autograd.Tensor],
@@ -753,6 +827,14 @@ def train_step(
     """Single training step with proper gradient accumulation.
 
     Args:
+        lr_scheduler: Optional stateful LR scheduler with a ``.step()`` method
+            (e.g. ``ttml.common.schedulers.SequentialScheduler``). Stepped once
+            per real optimizer update. The scheduler is the source of truth for
+            the LR: ``step()`` advances its internal step counter, computes the
+            new LR from its own state (``_base_lr`` snapshotted at construction
+            plus child hyperparameters), and pushes that value into the
+            optimizer via ``optimizer.set_lr``. The caller never has to read
+            from or write to ``optimizer.lr`` here.
         mask: Optional attention mask. Pass None to let the SDPA kernel use its
               native causal mask path.
         batch_size: Optional cached batch size (if None, will extract from input_tokens)
@@ -826,9 +908,9 @@ def train_step(
 
         profiler_marker(None, "optimizer_step_done")
 
-        # Apply learning rate scheduler if provided)
-        if compute_lr is not None:
-            optimizer.set_lr(compute_lr(scheduler_step))
+        # Step the LR scheduler (it calls optimizer.set_lr internally).
+        if lr_scheduler is not None:
+            lr_scheduler.step()
 
     step_time = (time.time() - start_time) * 1000  # Convert to ms
     return loss_float, step_time, should_step
@@ -1349,6 +1431,7 @@ def save_checkpoint(
     model_config: ModelConfig,
     training_config: TrainingConfig,
     optimizer: Optional["ttml.optimizers.OptimizerBase"] = None,
+    lr_scheduler: Optional[object] = None,
     train_iter_state: Optional[dict] = None,
 ) -> str:
     """Save model checkpoint to pickle file.
@@ -1363,6 +1446,10 @@ def save_checkpoint(
         optimizer: Optional optimizer whose state (Adam moments, step counter,
             etc.) should be persisted. If omitted, only the model is saved and
             resume will start optimizer state from scratch.
+        lr_scheduler: Optional LR scheduler (any object with
+            ``get_state_dict()``). Persisting this lets resume reproduce the
+            exact LR trajectory of an interrupted run; without it the schedule
+            is fast-forwarded by ``step`` calls (close but not bit-exact).
         train_iter_state: Optional packed-token iterator cursor (from
             ``PackedTokenDataset.state_dict()``) so resume continues from the
             same data position.
@@ -1380,10 +1467,17 @@ def save_checkpoint(
         model_state[name] = _tensor_to_numpy_entry(param.tensor)
 
     optimizer_state = None
-    optimizer_lr = None
     if optimizer is not None:
         optimizer_state = _serialize_optimizer_state(optimizer.get_state_dict())
-        # optimizer_lr = optimizer.get_lr()
+
+    lr_scheduler_state = None
+    if lr_scheduler is not None:
+        try:
+            lr_scheduler_state = lr_scheduler.get_state_dict()
+        except Exception as e:
+            print(f"  WARNING: failed to serialize LR scheduler state ({e}); skipping")
+
+    saved_scheduler_type = training_config.scheduler_type if training_config is not None else None
 
     checkpoint = {
         "step": step,
@@ -1392,7 +1486,8 @@ def save_checkpoint(
         "model_config": model_config,
         "training_config": training_config,
         "optimizer_state": optimizer_state,
-        # "optimizer_lr": optimizer_lr,  ### In the future, we will be storing the LR scheduler's state_dict too, and the lr_scheduler state is used to calculate the lr
+        "lr_scheduler_state": lr_scheduler_state,
+        "scheduler_type": saved_scheduler_type,
         "train_iter_state": train_iter_state,
     }
 
@@ -1443,7 +1538,7 @@ def find_latest_checkpoint(base_path: str) -> Optional[str]:
 
 def load_model_from_checkpoint(
     checkpoint_path: str,
-) -> Tuple[Model, CharTokenizer, ModelConfig, TrainingConfig, int, Optional[dict], Optional[float], Optional[dict]]:
+) -> Tuple[Model, CharTokenizer, ModelConfig, TrainingConfig, int, Optional[dict], Optional[dict], Optional[dict],]:
     """Load model from checkpoint file.
 
     Args:
@@ -1451,8 +1546,9 @@ def load_model_from_checkpoint(
 
     Returns:
         Tuple of (model, tokenizer, model_config, training_config, step,
-        optimizer_state, optimizer_lr, train_iter_state). optimizer_state and
-        optimizer_lr are ``None`` when the checkpoint predates their persistence.
+        optimizer_state, lr_scheduler_state, train_iter_state). The
+        ``optimizer_state`` and ``lr_scheduler_state`` slots are ``None`` when
+        the checkpoint predates their persistence (legacy format).
     """
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
@@ -1469,7 +1565,7 @@ def load_model_from_checkpoint(
     training_config = checkpoint.get("training_config", None)
     step = checkpoint.get("step", 0)
     optimizer_state = checkpoint.get("optimizer_state", None)
-    # optimizer_lr = checkpoint.get("optimizer_lr", None)
+    lr_scheduler_state = checkpoint.get("lr_scheduler_state", None)
     train_iter_state = checkpoint.get("train_iter_state", None)
 
     # Create model from config
@@ -1489,7 +1585,16 @@ def load_model_from_checkpoint(
         model_params[name].assign(restored_tensor)
     print(f"  Checkpoint loaded from step {step}")
 
-    return model, tokenizer, model_config, training_config, step, optimizer_state, train_iter_state
+    return (
+        model,
+        tokenizer,
+        model_config,
+        training_config,
+        step,
+        optimizer_state,
+        lr_scheduler_state,
+        train_iter_state,
+    )
 
 
 def main():
@@ -1795,7 +1900,7 @@ def main():
                 training_config,
                 loaded_step,
                 _opt_state,
-                # _opt_lr,
+                _lr_scheduler_state,
                 _train_iter_state,
             ) = load_model_from_checkpoint(
                 args.model_path,
@@ -1941,7 +2046,7 @@ def main():
         start_step = 0
         resume_path = None
         resume_optimizer_state: Optional[dict] = None
-        # resume_optimizer_lr: Optional[float] = None
+        resume_lr_scheduler_state: Optional[dict] = None
         resume_train_iter_state: Optional[dict] = None
 
         if not args.fresh:
@@ -1965,7 +2070,7 @@ def main():
                     _,  # training_config from checkpoint (we use CLI config instead)
                     start_step,
                     resume_optimizer_state,
-                    # resume_optimizer_lr,
+                    resume_lr_scheduler_state,
                     resume_train_iter_state,
                 ) = load_model_from_checkpoint(resume_path)
                 # Use tokenizer from checkpoint to ensure vocab consistency
@@ -1976,6 +2081,13 @@ def main():
                     print("   - Optimizer state available (will restore after optimizer creation)")
                 else:
                     print("   - WARNING: checkpoint has no optimizer state; AdamW moments " "will restart from zero")
+                if resume_lr_scheduler_state is not None:
+                    print("   - LR scheduler state available (will restore after scheduler creation)")
+                else:
+                    print(
+                        "   - INFO: checkpoint has no LR scheduler state; scheduler will be "
+                        "fast-forwarded by start_step calls instead"
+                    )
                 if resume_train_iter_state is not None:
                     print(
                         f"   - Train iterator cursor: file_idx={resume_train_iter_state.get('file_idx')}, "
@@ -2037,7 +2149,7 @@ def main():
     if args.prompt:
         # Inference mode: skip optimizer setup
         optimizer = None
-        compute_lr = None
+        lr_scheduler = None
         print("\n3. Inference mode - skipping optimizer setup")
     else:
         print("\n3. Setting up optimizer...")
@@ -2045,39 +2157,85 @@ def main():
         print(f"   - Optimizer: {optimizer.get_name()}")
         print(f"   - Learning rate: {optimizer.get_lr()}")
 
-        # Restore optimizer state (Adam moments, step counter) from checkpoint
-        # so resume continues with bias-correct gradient statistics.
+        # Restore optimizer state (Adam moments, step counter, LR, betas, ...)
+        # from checkpoint so resume continues with bias-correct gradient
+        # statistics and at the right LR. ``AdamW::set_state_dict`` restores
+        # ALL hyperparameters including ``lr`` (see
+        # tt-train/sources/ttml/optimizers/adamw.cpp), so after this call
+        # ``optimizer.get_lr()`` is the decayed checkpoint LR, not peak LR.
         if resume_optimizer_state is not None:
             try:
                 optimizer.set_state_dict(_deserialize_optimizer_state(resume_optimizer_state))
-                print("   - Restored optimizer state from checkpoint")
+                print(f"   - Restored optimizer state from checkpoint (LR={optimizer.get_lr():.6e})")
             except Exception as e:
                 print(f"   - WARNING: failed to restore optimizer state ({e}); continuing with fresh moments")
-
-        # # Restore the LR saved at checkpoint time so the first optimizer.step()
-        # # on resume uses the same LR as the interrupted run would have.
-        # if (
-        #     resume_optimizer_lr is not None
-        # ):  ### In the future, we will be storing the LR scheduler's state_dict too, and the lr_scheduler state is used to calculate the lr
-        #     optimizer.set_lr(resume_optimizer_lr)
-        #     print(f"   - Restored LR to {resume_optimizer_lr:.6e} from checkpoint")
 
         # Memory snapshot after optimizer creation
         if args.track_memory:
             MemoryUsageTracker.snapshot("OPTIMIZER_CREATION")
 
+        # Build the LR scheduler. ``LinearScheduler`` / ``CosineAnnealingScheduler``
+        # snapshot ``optimizer.get_lr()`` as ``_base_lr`` at construction time,
+        # so on resume after the optimizer-state restore above this snapshot is
+        # the decayed checkpoint LR (not peak LR). That's fine for new-format
+        # checkpoints because ``lr_scheduler.set_state_dict`` (below) restores
+        # the saved ``_base_lr`` (= peak LR) and overwrites the wrong snapshot.
+        # Old-format checkpoints (no ``lr_scheduler_state``, fast-forward path)
+        # would capture the wrong ``_base_lr`` here; if that becomes a real
+        # concern, add a one-time ``optimizer.set_lr(peak_lr)`` around this
+        # call before falling back to the fast-forward branch.
         print("\n4. Setting up learning rate scheduler...")
-        compute_lr = None
-        if training_config.scheduler_type == "warmup_linear":
-            peak_lr = float(yaml_config["training_config"]["optimizer"]["lr"])
-            compute_lr, warmup_steps, decay_steps = create_warmup_linear_scheduler(
-                optimizer, training_config.max_steps, peak_lr
-            )
+        lr_scheduler, sched_info = build_lr_scheduler(optimizer, training_config, yaml_config)
+        if sched_info.get("type") == "cosine_with_warmup":
+            print(f"   - Scheduler: cosine_with_warmup")
+            print(f"   - Peak LR: {sched_info['peak_lr']}")
+            print(f"   - Min LR (eta_min): {sched_info['eta_min']}")
+            print(f"   - Warmup steps (linear 0 -> peak_lr): {sched_info['warmup_steps']}")
+            print(f"   - Cosine decay steps (peak_lr -> eta_min): {sched_info['decay_steps']}")
+        elif sched_info.get("type") == "warmup_linear":
             print(f"   - Scheduler: warmup_linear")
-            print(f"   - Warmup steps: {warmup_steps}")
-            print(f"   - Decay steps: {decay_steps}")
+            print(f"   - Peak LR: {sched_info['peak_lr']}")
+            print(f"   - End LR (1% of peak): {sched_info['end_lr']}")
+            print(f"   - Warmup steps (linear 0 -> peak_lr): {sched_info['warmup_steps']}")
+            print(f"   - Linear decay steps (peak_lr -> end_lr): {sched_info['decay_steps']}")
         else:
-            print(f"   - Scheduler: identity (constant LR)")
+            print(f"   - Scheduler: {sched_info.get('type', training_config.scheduler_type)} (constant LR)")
+
+        # Restore LR scheduler state from checkpoint so resume picks up exactly
+        # where the interrupted run left off. The upstream scheduler base
+        # class persists ``_base_lr`` in its state dict, so this overwrites
+        # the (possibly-wrong) construction-time snapshot. If no scheduler
+        # state is in the checkpoint (legacy format) but we are resuming
+        # mid-training, fast-forward by ``start_step`` calls to land on the
+        # same LR.
+        #
+        # Defensive optimizer-LR sync: ``_SchedulerBase.set_state_dict`` only
+        # restores the scheduler's own bookkeeping; it does not push the saved
+        # ``last_lr`` back into the optimizer. Normally that's fine because
+        # ``optimizer.set_state_dict`` (above) already restored the same LR,
+        # but we sync explicitly so a partial restore (e.g. fresh moments due
+        # to deserialization failure) cannot leave optimizer.lr and
+        # scheduler.last_lr disagreeing on the LR for the very next step.
+        if lr_scheduler is not None:
+            if resume_lr_scheduler_state is not None:
+                try:
+                    lr_scheduler.set_state_dict(resume_lr_scheduler_state)
+                    # optimizer.set_lr(float(lr_scheduler.get_last_lr()))
+                    print(f"   - Restored LR scheduler state from checkpoint " f"(LR={lr_scheduler.get_last_lr():.6e})")
+                except Exception as e:
+                    print(
+                        f"   - WARNING: failed to restore LR scheduler state ({e}); "
+                        f"fast-forwarding by {start_step} steps instead"
+                    )
+                    for _ in range(start_step):
+                        lr_scheduler.step()
+            elif start_step > 0:
+                print(
+                    f"   - No saved LR scheduler state; fast-forwarding scheduler by "
+                    f"{start_step} steps to match resumed training position"
+                )
+                for _ in range(start_step):
+                    lr_scheduler.step()
 
     # Create attention mask (needed for both training and inference)
     if inference_only:
@@ -2207,8 +2365,7 @@ def main():
             loss_float, step_time, should_step = train_step(
                 model,
                 optimizer,
-                compute_lr,
-                global_step,
+                lr_scheduler,
                 input_tokens,
                 target_tokens,
                 attn_mask,
@@ -2274,6 +2431,7 @@ def main():
                     model_config,
                     training_config,
                     optimizer=optimizer,
+                    lr_scheduler=lr_scheduler,
                     train_iter_state=iter_state,
                 )
 
@@ -2382,6 +2540,7 @@ def main():
                 model_config,
                 training_config,
                 optimizer=optimizer,
+                lr_scheduler=lr_scheduler,
                 train_iter_state=iter_state,
             )
 
