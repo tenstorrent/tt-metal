@@ -226,7 +226,7 @@ def _demo_case(
             max_prompts=512,
             max_users_per_row=8,
             repeat_batches=1,
-            max_new_tokens=129,
+            max_new_tokens=65536,
             override_num_layers=None,
             enable_trace=True,
             sample_on_device=True,

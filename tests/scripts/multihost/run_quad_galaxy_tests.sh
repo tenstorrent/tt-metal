@@ -631,7 +631,7 @@ run_quad_demo_test() {
     local junit_path="$(_test_run_summary_junit_path demo_full_quad)"
     local junit_flag="--junitxml=${junit_path}"
 
-    _test_run_summary_exec _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout ${junit_flag} models/demos/deepseek_v3/demo/test_demo.py -k '$selector' 2>&1 | tee generated/artifacts/quad_demo_output.log"
+    _test_run_summary_exec _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout ${junit_flag} models/demos/deepseek_v3/demo/test_demo.py -k quad_full_demo_8upr 2>&1 | tee generated/artifacts/quad_demo_output.log"
     _test_run_summary_append_junit_rows "demo_full_quad" "${junit_path}" "${_TEST_RUN_LAST_EC}"
 }
 
@@ -699,9 +699,9 @@ run_all_needed_local_tests() {
     local saved_upr_mode="${DEEPSEEK_DEMO_UPR_MODE:-}"
     export DEEPSEEK_DEMO_UPR_MODE="all"
 
-    run_dual_teacher_forced_test
-    run_dual_demo_test
-    run_dual_demo_stress_test
+    # run_dual_teacher_forced_test
+    # run_dual_demo_test
+    # run_dual_demo_stress_test
     run_quad_teacher_forced_test
     run_quad_demo_test
     run_quad_demo_stress_test

@@ -384,6 +384,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
 
         x = Embedding2D.forward_prefill(x, cfg["embedding"])
 
+        cur_index = 0
         for (block_cfg, BlockClass), page_table in zip(
             itertools.chain(
                 zip(cfg["mlp_decoder_block"], itertools.repeat(DecoderBlock2D)),
@@ -393,6 +394,8 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             strict=True,
         ):
             x = BlockClass.forward_prefill(x, user_id, block_cfg, rope_tensors, page_table)
+            cur_index += 1
+            logger.info(f"BlockClass.forward_prefill done for {BlockClass.__name__} at index {cur_index}")
 
         # Capture pre-norm hidden states for MTP; MTP applies its own hnorm.
         hidden_for_mtp = x if return_hidden else None

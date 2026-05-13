@@ -3060,17 +3060,19 @@ class DeepseekGenerator(WarmupForwardMixin):
             return
 
         user_id = 0
+        logger.info("Now in warmup_model_prefill")
         original_sample_on_device = getattr(self, "sample_on_device", False)
         if sample_on_device is None or self.vllm_context:
             sample_on_device_list = [False, True] if can_sample_on_device else [False]
         else:
             sample_on_device_list = [sample_on_device]
-
+        logger.info(f"sample_on_device_list: {sample_on_device_list}")
         for sample_on_device in sample_on_device_list:
             for token_len in self._get_prefill_warmup_token_lens(min_token_len, max_token_len):
                 vocab = int(getattr(self.hf_config, "vocab_size", 129280))
                 warmup_token_ids = [torch.randint(vocab, (token_len,), dtype=torch.int32).tolist()]
                 tokens, _ = self._pad_batch(warmup_token_ids, 1)
+                logger.info(f"Before prefill")
                 # TODO: MTP path warmup needed?
                 prefill_logits = self._prefill(
                     tokens=tokens,
@@ -3078,17 +3080,19 @@ class DeepseekGenerator(WarmupForwardMixin):
                     sample_on_device=sample_on_device,
                     return_last_hidden=False,
                 )
+                logger.info("_prefill done")
                 if sample_on_device:
                     self._validate_and_initialize_sampling(
                         None,
                         sample_on_device,
                         enable_trace=enable_trace,
                     )
-
+                    logger.info("After validate and initialize sampling")
                     sliced_prefill_logits = self._slice_last_token_logits(
                         prefill_logits, token_len, expand_to_batch=True
                     )
                     sampled_tokens = self._sample_tokens_device(sliced_prefill_logits, user_slots=[user_id])
+                    logger.info("After sample tokens device")
                     try:
                         if sampled_tokens is not None:
                             ttnn.deallocate(sampled_tokens)
@@ -3105,6 +3109,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                     except Exception as e:
                         logger.warning(f"Failed to deallocate prefill logits: {e}")
 
+        logger.info("After warmup_model_prefill")
         if getattr(self, "sample_on_device", False) != original_sample_on_device:
             # Warmup may initialize sampling internals; restore the caller's expected mode.
             self._validate_and_initialize_sampling(
@@ -3112,6 +3117,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                 original_sample_on_device,
                 enable_trace=enable_trace,
             )
+        logger.info("After validate and initialize sampling")
         # Warmup creates temporary page tables; clean them up to free memory.
         try:
             if self.page_tables_tt is not None:
