@@ -515,12 +515,12 @@ def test_moreh_sum_integer(input_shape, dim, data_type, device):
 
     torch_output = torch.sum(torch_input, normalized_dim, True)
 
-    tt_output = ttnn.to_torch(
+    tt_output_cpu = ttnn.to_torch(
         ttnn.operations.moreh.sum(
             tt_input, dim=normalized_dim, keepdim=True, output=tt_output, compute_kernel_config=compute_kernel_config
         )
     )
 
-    logger.debug(f"{torch.equal(torch_output, tt_output)}")
+    logger.debug(f"{torch.equal(torch_output, tt_output_cpu)}")
 
-    assert torch.equal(torch_output, tt_output)
+    assert torch.equal(torch_output, tt_output_cpu)
