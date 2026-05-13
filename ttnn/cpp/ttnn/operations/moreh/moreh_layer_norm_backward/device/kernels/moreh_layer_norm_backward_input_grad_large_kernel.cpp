@@ -92,6 +92,7 @@ void kernel_main() {
             // Compute cb_xmm
             // x - mean
             constexpr auto cb_xmm = cb_tmp3;
+            CircularBuffer cb_xmm_obj(cb_xmm);
             tile_regs_acquire();
             cb_x_obj.wait_front(onetile);  // comes from the reader
             cb_xmm_obj.reserve_back(onetile);

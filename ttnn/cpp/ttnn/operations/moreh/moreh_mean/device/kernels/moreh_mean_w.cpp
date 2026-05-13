@@ -19,7 +19,6 @@ void kernel_main() {
     constexpr uint32_t origin_W = get_compile_time_arg_val(3);
 
     auto cb_input = tt::CBIndex::c_0;
-    CircularBuffer cb_input_obj(cb_input);
     constexpr auto cb_scaler = tt::CBIndex::c_2;
     CircularBuffer cb_scaler_obj(cb_scaler);
     constexpr auto cb_mask_w = tt::CBIndex::c_3;
@@ -55,13 +54,13 @@ void kernel_main() {
                 tile_regs_acquire();
 
                 for (uint32_t wt = 0; wt < Wt - 1; ++wt) {
-                    cb_input_obj.wait_front(onetile);
+                    CircularBuffer(cb_input).wait_front(onetile);
 #if defined FP32_DEST_ACC_EN
                     reconfig_data_format(cb_input, cb_scaler);
 #endif
                     mm_init_short(cb_input, cb_scaler, false);
                     matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
-                    cb_input_obj.pop_front(onetile);
+                    CircularBuffer(cb_input).pop_front(onetile);
                 }
                 tile_regs_commit();
 
@@ -74,7 +73,7 @@ void kernel_main() {
 
             if (do_mask_w) {
                 tile_regs_acquire();
-                cb_input_obj.wait_front(onetile);
+                CircularBuffer(cb_input).wait_front(onetile);
 
                 copy_tile_init_with_dt(cb_input);
                 copy_tile(cb_input, 0, reduce_dst_idx);
@@ -92,12 +91,12 @@ void kernel_main() {
                 tile_regs_release();
                 cb_masked_input_obj.push_back(onetile);
 
-                cb_input_obj.pop_front(onetile);
+                CircularBuffer(cb_input).pop_front(onetile);
                 cb_input = cb_masked_input;
             }
 
             tile_regs_acquire();
-            cb_input_obj.wait_front(onetile);
+            CircularBuffer(cb_input).wait_front(onetile);
             if (!is_w_single_tile) {
                 cb_accum_dst_obj.wait_front(onetile);
 
@@ -118,7 +117,7 @@ void kernel_main() {
             tile_regs_release();
             cb_out_obj.push_back(onetile);
 
-            cb_input_obj.pop_front(onetile);
+            CircularBuffer(cb_input).pop_front(onetile);
             if (!is_w_single_tile) {
                 cb_accum_dst_obj.pop_front(onetile);
             }
