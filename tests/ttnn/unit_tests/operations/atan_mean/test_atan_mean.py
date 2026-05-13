@@ -216,11 +216,15 @@ def _make_tensor(device, shape, *, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT):
     )
 
 
-def test_atan_mean_rejects_bf16_dtype(device):
-    """Phase 0: float32 only. bfloat16 inputs must be rejected."""
+def test_atan_mean_accepts_bf16_dtype(device):
+    """
+    Refinement 2: bfloat16 is an accepted input dtype. The validator must
+    pass it through and the op must produce a numerically-reasonable result.
+    """
     bf16_input = _make_tensor(device, (1, 1, 32, 32), dtype=ttnn.bfloat16)
-    with pytest.raises((ValueError, RuntimeError)):
-        atan_mean(bf16_input)
+    out = atan_mean(bf16_input)
+    assert out.dtype == ttnn.bfloat16
+    assert tuple(out.shape) == (1, 1, 32)
 
 
 def test_atan_mean_rejects_row_major_layout(device):

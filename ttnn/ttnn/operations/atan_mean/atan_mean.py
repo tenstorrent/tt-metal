@@ -22,11 +22,13 @@ def atan_mean(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
     Fused ``atan`` then row-mean along ``dim=-1``.
 
     Args:
-        input_tensor: float32 TILE_LAYOUT tensor of rank exactly 4 with H and W
-            tile-aligned (divisible by 32), located on the device.
+        input_tensor: ``float32`` / ``bfloat16`` / ``bfloat8_b`` TILE_LAYOUT
+            tensor of rank exactly 4 with H and W tile-aligned (divisible by
+            32), located on the device.
 
     Returns:
-        Rank-3 ``(N, C, H)`` float32 tensor holding ``atan(x).mean(dim=-1)``.
+        Rank-3 ``(N, C, H)`` tensor (same dtype as ``input_tensor``) holding
+        ``atan(x).mean(dim=-1)``.
     """
     _validate_input(input_tensor)
 
@@ -60,15 +62,18 @@ def atan_mean(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.squeeze(out, dim=-1)
 
 
+_SUPPORTED_DTYPES = (ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b)
+
+
 def _validate_input(input_tensor: ttnn.Tensor) -> None:
-    """Phase-0 validation. See op_design.md → 'Validation'."""
+    """Input validation. See op_design.md → 'Validation'."""
     if input_tensor.storage_type() != ttnn.StorageType.DEVICE:
         raise ValueError(
             "atan_mean: input tensor must be allocated on device " f"(got storage_type={input_tensor.storage_type()})."
         )
 
-    if input_tensor.dtype != ttnn.float32:
-        raise ValueError(f"atan_mean: only float32 is supported in Phase 0 (got dtype={input_tensor.dtype}).")
+    if input_tensor.dtype not in _SUPPORTED_DTYPES:
+        raise ValueError(f"atan_mean: only {_SUPPORTED_DTYPES} are supported (got dtype={input_tensor.dtype}).")
 
     if input_tensor.layout != ttnn.TILE_LAYOUT:
         raise ValueError(f"atan_mean: input must be TILE_LAYOUT (got layout={input_tensor.layout}).")
