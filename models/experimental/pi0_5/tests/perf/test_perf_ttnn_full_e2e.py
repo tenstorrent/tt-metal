@@ -90,26 +90,34 @@ def test_pi0_5_ttnn_full_e2e_fps(device):
 
     image_ttnn, img_mask, lang_tokens_ttnn, lang_masks_ttnn = _build_inputs(cfg, device)
 
-    print(f"\n🔥 Warmup ({NUM_WARMUP} call) — full sample_actions (JIT compile)")
-    cold_start = time.perf_counter()
-    with torch.no_grad():
-        out = model.sample_actions(
-            images=[image_ttnn],
-            img_masks=[img_mask],
-            lang_tokens=lang_tokens_ttnn,
-            lang_masks=lang_masks_ttnn,
-            state=None,
-        )
-    ttnn.synchronize_device(device)
-    cold_ms = (time.perf_counter() - cold_start) * 1000.0
-    print(f"   cold-start full sample_actions: {cold_ms:.2f} ms")
+    # Set NUM_WARMUP=0 to skip the cold-start call entirely (useful when
+    # profiling — the per-op CSV will then contain exactly NUM_ITERS
+    # inferences, no extra warmup pass).
+    cold_ms = float("nan")
+    if NUM_WARMUP > 0:
+        print(f"\n🔥 Warmup ({NUM_WARMUP} call) — full sample_actions (JIT compile)")
+        cold_start = time.perf_counter()
+        for _ in range(NUM_WARMUP):
+            with torch.no_grad():
+                out = model.sample_actions(
+                    images=[image_ttnn],
+                    img_masks=[img_mask],
+                    lang_tokens=lang_tokens_ttnn,
+                    lang_masks=lang_masks_ttnn,
+                    state=None,
+                )
+            ttnn.synchronize_device(device)
+        cold_ms = (time.perf_counter() - cold_start) * 1000.0
+        print(f"   cold-start full sample_actions: {cold_ms:.2f} ms")
 
-    # Validate the output before continuing.
-    actions = ttnn.to_torch(out)
-    actions = actions[:, : cfg.action_horizon, : cfg.action_dim]
-    assert actions.shape == (1, cfg.action_horizon, cfg.action_dim)
-    assert torch.isfinite(actions).all(), "actions contain NaN/Inf"
-    print(f"   ✅ output shape {tuple(actions.shape)}, all finite")
+        # Validate the output before continuing.
+        actions = ttnn.to_torch(out)
+        actions = actions[:, : cfg.action_horizon, : cfg.action_dim]
+        assert actions.shape == (1, cfg.action_horizon, cfg.action_dim)
+        assert torch.isfinite(actions).all(), "actions contain NaN/Inf"
+        print(f"   ✅ output shape {tuple(actions.shape)}, all finite")
+    else:
+        print(f"\n⚠️  NUM_WARMUP=0 — skipping cold-start (first timed iter will include JIT compile)")
 
     print(f"\n⏱️  Measuring steady-state ({NUM_ITERS} sample_actions calls)")
     times_ms: List[float] = []
