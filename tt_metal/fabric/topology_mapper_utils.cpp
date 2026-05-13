@@ -1080,13 +1080,18 @@ void add_pinning_constraints(
             asic_ids.insert(it->second.begin(), it->second.end());
         }
 
-        if (!asic_ids.empty()) {
-            if (!intra_mesh_constraints.add_required_constraint(fabric_node, asic_ids)) {
-                TT_THROW(
-                    "Failed to add required constraint for fabric node (mesh={}, chip={})",
-                    fabric_node.mesh_id.get(),
-                    fabric_node.chip_id);
-            }
+        if (asic_ids.empty()) {
+            TT_THROW(
+                "All requested ASIC positions for pinned fabric node (mesh={}, chip={}) were absent from the "
+                "physical topology; cannot satisfy pinning constraint",
+                fabric_node.mesh_id.get(),
+                fabric_node.chip_id);
+        }
+        if (!intra_mesh_constraints.add_required_constraint(fabric_node, asic_ids)) {
+            TT_THROW(
+                "Failed to add required constraint for fabric node (mesh={}, chip={})",
+                fabric_node.mesh_id.get(),
+                fabric_node.chip_id);
         }
     }
     if (!success) {
