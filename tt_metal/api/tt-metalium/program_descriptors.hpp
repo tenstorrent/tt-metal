@@ -130,7 +130,6 @@ struct KernelDescriptor {
     using RuntimeArgs = std::vector<std::pair<CoreCoord, CoreRuntimeArgs>>;
     using CommonRuntimeArgs = CoreRuntimeArgs;
     using BufferBindings = ttsl::SmallVector<BufferBinding, 4>;
-    using RuntimeArgItem = std::variant<uint32_t, Buffer*, std::reference_wrapper<const MeshTensor>>;
     using CommonBufferBindings = ttsl::SmallVector<CommonBufferBinding, 2>;
     using ConfigDescriptor = std::
         variant<ReaderConfigDescriptor, WriterConfigDescriptor, DataMovementConfigDescriptor, ComputeConfigDescriptor>;
@@ -177,22 +176,32 @@ struct KernelDescriptor {
         }
 
     private:
-        std::vector<RuntimeArgItem> items_;
+        std::vector<std::variant<uint32_t, Buffer*, std::reference_wrapper<const MeshTensor>>> items_;
         friend struct KernelDescriptor;
     };
 
     // Push a core's runtime args, automatically registering any Buffer* entries
     // as buffer bindings at their position.  Use this instead of
     // runtime_args.emplace_back() when some args are buffer base addresses.
-    void emplace_runtime_args(const CoreCoord& core, std::initializer_list<RuntimeArgItem> args);
+    void emplace_runtime_args(const CoreCoord& core, std::initializer_list<uint32_t> args);
+    void emplace_runtime_args(const CoreCoord& core, std::initializer_list<std::variant<uint32_t, Buffer*>> args);
+    void emplace_runtime_args(
+        const CoreCoord& core,
+        std::initializer_list<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> args);
     void emplace_runtime_args(const CoreCoord& core, const RTArgList& args);
     // Vector overload for dynamically-built arg lists.
-    void emplace_runtime_args(const CoreCoord& core, const std::vector<RuntimeArgItem>& args);
+    void emplace_runtime_args(
+        const CoreCoord& core,
+        const std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>>& args);
+    void emplace_runtime_args(const CoreCoord& core, const std::vector<std::variant<uint32_t, Buffer*>>& args);
 
     // Push common runtime args, automatically registering any Buffer* or MeshTensor& entries
     // as common buffer bindings.  Use this instead of assigning common_runtime_args
     // directly when some args are buffer base addresses.
-    void emplace_common_runtime_args(std::initializer_list<RuntimeArgItem> args);
+    void emplace_common_runtime_args(std::initializer_list<uint32_t> args);
+    void emplace_common_runtime_args(
+        std::initializer_list<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> args);
+    void emplace_common_runtime_args(std::initializer_list<std::variant<uint32_t, Buffer*>> args);
     void emplace_common_runtime_args(const RTArgList& args);
 };
 

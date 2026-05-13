@@ -203,22 +203,27 @@ static void emplace_runtime_args_impl(KernelDescriptor& kd, const CoreCoord& cor
     KernelDescriptor::CoreRuntimeArgs values;
     values.reserve(args.size());
     for (const auto& arg : args) {
-        if (const auto* buf = std::get_if<tt::tt_metal::Buffer*>(&arg)) {
-            // nullptr Buffer* represents an absent optional tensor. Emit 0u with no
-            // binding so the fast cache-hit path is not invalidated by optional inputs.
-            if (*buf == nullptr) {
-                values.push_back(0u);
-            } else {
-                kd.buffer_bindings.push_back({core, static_cast<uint32_t>(values.size()), *buf});
-                values.push_back((*buf)->address());
-            }
-        } else if (const auto* ref = std::get_if<std::reference_wrapper<const tt::tt_metal::MeshTensor>>(&arg)) {
-            Buffer* buf = ref->get().mesh_buffer().get_reference_buffer();
-            kd.buffer_bindings.push_back({core, static_cast<uint32_t>(values.size()), buf});
-            values.push_back(buf->address());
-        } else {
-            values.push_back(std::get<uint32_t>(arg));
-        }
+        std::visit(
+            ttsl::overloaded{
+                [&](uint32_t v) { values.push_back(v); },
+                [&](tt::tt_metal::Buffer* buf) {
+                    // nullptr Buffer* represents an absent optional tensor. Emit
+                    // 0u with no binding so the fast cache-hit path is not
+                    // invalidated by optional inputs.
+                    if (buf == nullptr) {
+                        values.push_back(0u);
+                    } else {
+                        kd.buffer_bindings.push_back({core, static_cast<uint32_t>(values.size()), buf});
+                        values.push_back(buf->address());
+                    }
+                },
+                [&](std::reference_wrapper<const tt::tt_metal::MeshTensor> ref) {
+                    Buffer* buf = ref.get().mesh_buffer().get_reference_buffer();
+                    kd.buffer_bindings.push_back({core, static_cast<uint32_t>(values.size()), buf});
+                    values.push_back(buf->address());
+                },
+            },
+            arg);
     }
     kd.runtime_args.emplace_back(core, std::move(values));
 }
@@ -227,26 +232,40 @@ template <typename Range>
 static void emplace_common_runtime_args_impl(KernelDescriptor& kd, const Range& args) {
     kd.common_runtime_args.reserve(args.size());
     for (const auto& arg : args) {
-        if (const auto* buf = std::get_if<tt::tt_metal::Buffer*>(&arg)) {
-            if (*buf == nullptr) {
-                kd.common_runtime_args.push_back(0u);
-            } else {
-                kd.common_buffer_bindings.push_back({static_cast<uint32_t>(kd.common_runtime_args.size()), *buf});
-                kd.common_runtime_args.push_back((*buf)->address());
-            }
-        } else if (const auto* ref = std::get_if<std::reference_wrapper<const tt::tt_metal::MeshTensor>>(&arg)) {
-            Buffer* buf = ref->get().mesh_buffer().get_reference_buffer();
-            kd.common_buffer_bindings.push_back({static_cast<uint32_t>(kd.common_runtime_args.size()), buf});
-            kd.common_runtime_args.push_back(buf->address());
-        } else {
-            kd.common_runtime_args.push_back(std::get<uint32_t>(arg));
-        }
+        std::visit(
+            ttsl::overloaded{
+                [&](uint32_t v) { kd.common_runtime_args.push_back(v); },
+                [&](tt::tt_metal::Buffer* buf) {
+                    if (buf == nullptr) {
+                        kd.common_runtime_args.push_back(0u);
+                    } else {
+                        kd.common_buffer_bindings.push_back(
+                            {static_cast<uint32_t>(kd.common_runtime_args.size()), buf});
+                        kd.common_runtime_args.push_back(buf->address());
+                    }
+                },
+                [&](std::reference_wrapper<const tt::tt_metal::MeshTensor> ref) {
+                    Buffer* buf = ref.get().mesh_buffer().get_reference_buffer();
+                    kd.common_buffer_bindings.push_back({static_cast<uint32_t>(kd.common_runtime_args.size()), buf});
+                    kd.common_runtime_args.push_back(buf->address());
+                },
+            },
+            arg);
     }
+}
+
+void KernelDescriptor::emplace_runtime_args(const CoreCoord& core, std::initializer_list<uint32_t> args) {
+    runtime_args.emplace_back(core, CoreRuntimeArgs(args));
+}
+
+void KernelDescriptor::emplace_runtime_args(
+    const CoreCoord& core, std::initializer_list<std::variant<uint32_t, Buffer*>> args) {
+    emplace_runtime_args_impl(*this, core, args);
 }
 
 void KernelDescriptor::emplace_runtime_args(
     const CoreCoord& core,
-    std::initializer_list<std::variant<uint32_t, Buffer*, std::reference_wrapper<const MeshTensor>>> args) {
+    std::initializer_list<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> args) {
     emplace_runtime_args_impl(*this, core, args);
 }
 
@@ -255,13 +274,25 @@ void KernelDescriptor::emplace_runtime_args(const CoreCoord& core, const RTArgLi
 }
 
 void KernelDescriptor::emplace_runtime_args(
-    const CoreCoord& core,
-    const std::vector<std::variant<uint32_t, Buffer*, std::reference_wrapper<const MeshTensor>>>& args) {
+    const CoreCoord& core, const std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>>& args) {
     emplace_runtime_args_impl(*this, core, args);
 }
 
+void KernelDescriptor::emplace_runtime_args(
+    const CoreCoord& core, const std::vector<std::variant<uint32_t, Buffer*>>& args) {
+    emplace_runtime_args_impl(*this, core, args);
+}
+
+void KernelDescriptor::emplace_common_runtime_args(std::initializer_list<uint32_t> args) {
+    common_runtime_args.insert(common_runtime_args.end(), args.begin(), args.end());
+}
+
 void KernelDescriptor::emplace_common_runtime_args(
-    std::initializer_list<std::variant<uint32_t, Buffer*, std::reference_wrapper<const MeshTensor>>> args) {
+    std::initializer_list<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> args) {
+    emplace_common_runtime_args_impl(*this, args);
+}
+
+void KernelDescriptor::emplace_common_runtime_args(std::initializer_list<std::variant<uint32_t, Buffer*>> args) {
     emplace_common_runtime_args_impl(*this, args);
 }
 
