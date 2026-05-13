@@ -49,17 +49,19 @@ void kernel_main() {
     //   7: read_batch_size                       - number of rows per untilize batch (e.g. 32)
     //   8: cb_signal_id                          - CB for reader->compute signalling (one page per batch)
     //   9: aligned_dispatched_buffer_page_size   - aligned page size of dispatched_buffer tensor
-    //  10: cb_factor                             - CB size reduction factor (1 for Blackhole, 4 for Wormhole)
-    //  11: tile_height                            - tile height in rows (e.g. 32)
-    //  12: tile_width                             - tile width in columns (e.g. 32)
-    //  13: max_dispatch_buffer_token_size        - total per-chip dispatch buffer capacity (overflow guard)
-    //  14: core_id                               - local index within the owning sender's idle group (0-based)
-    //  15: num_idle_cores                        - size of the owning sender's idle group (k_s)
-    //  16: aligned_output_page_size              - aligned page size of output tensor (bytes per untilized row)
-    //  17: aligned_experts_tok_counter_page_size - aligned page size of expert_token_counts tensor
-    //  18: cb_metadata_batch_id                  - CB this kernel pushes per-batch metadata pages into
+    //  10: tile_height                           - tile height in rows (e.g. 32)
+    //  11: tile_width                            - tile width in columns (e.g. 32)
+    //  12: max_dispatch_buffer_token_size        - total per-chip dispatch buffer capacity (overflow guard)
+    //  13: core_id                               - local index within the owning sender's idle group (0-based)
+    //  14: num_idle_cores                        - size of the owning sender's idle group (k_s)
+    //  15: aligned_output_page_size              - aligned page size of output tensor (bytes per untilized row)
+    //  16: aligned_experts_tok_counter_page_size - aligned page size of expert_token_counts tensor
+    //  17: cb_metadata_batch_id                  - CB this kernel pushes per-batch metadata pages into
     //                                              (consumed by zero_init_writer on the same core)
-    //  19: aligned_dispatched_metadata_page_size - aligned page size of dispatched_metadata tensor
+    //  18: aligned_dispatched_metadata_page_size - aligned page size of dispatched_metadata tensor
+    //  19: block_ct_dim                          - tiles per chunk pushed to cb_dispatched_buffer_id;
+    //                                              matches the compute kernel's per-block consumption
+    //                                              size so producer/consumer line up 1:1
     //  20+: TensorAccessorArgs for dispatched_buffer, then TensorAccessorArgs for dispatched_metadata
     constexpr uint32_t cb_experts_tok_counter_id = get_compile_time_arg_val(0);
     constexpr uint32_t experts_tok_counter_pages = get_compile_time_arg_val(1);
@@ -71,16 +73,16 @@ void kernel_main() {
     constexpr uint32_t read_batch_size = get_compile_time_arg_val(7);
     constexpr uint32_t cb_signal_id = get_compile_time_arg_val(8);
     constexpr uint32_t aligned_dispatched_buffer_page_size = get_compile_time_arg_val(9);
-    constexpr uint32_t cb_factor = get_compile_time_arg_val(10);
-    constexpr uint32_t tile_height = get_compile_time_arg_val(11);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(12);
-    constexpr uint32_t max_dispatch_buffer_token_size = get_compile_time_arg_val(13);
-    constexpr uint32_t core_id = get_compile_time_arg_val(14);
-    constexpr uint32_t num_idle_cores = get_compile_time_arg_val(15);
-    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(16);
-    constexpr uint32_t aligned_experts_tok_counter_page_size = get_compile_time_arg_val(17);
-    constexpr uint32_t cb_metadata_batch_id = get_compile_time_arg_val(18);
-    constexpr uint32_t aligned_dispatched_metadata_page_size = get_compile_time_arg_val(19);
+    constexpr uint32_t tile_height = get_compile_time_arg_val(10);
+    constexpr uint32_t tile_width = get_compile_time_arg_val(11);
+    constexpr uint32_t max_dispatch_buffer_token_size = get_compile_time_arg_val(12);
+    constexpr uint32_t core_id = get_compile_time_arg_val(13);
+    constexpr uint32_t num_idle_cores = get_compile_time_arg_val(14);
+    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(15);
+    constexpr uint32_t aligned_experts_tok_counter_page_size = get_compile_time_arg_val(16);
+    constexpr uint32_t cb_metadata_batch_id = get_compile_time_arg_val(17);
+    constexpr uint32_t aligned_dispatched_metadata_page_size = get_compile_time_arg_val(18);
+    constexpr uint32_t block_ct_dim = get_compile_time_arg_val(19);
     constexpr auto dispatched_buffer_args = TensorAccessorArgs<20>();
     constexpr auto dispatched_metadata_args =
         TensorAccessorArgs<dispatched_buffer_args.next_compile_time_args_offset()>();
@@ -204,19 +206,20 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(cb_metadata_batch_id, batch_count);
 
-            // 3. Reading tiles for this batch
-            constexpr uint32_t tiles_per_batch_per_cb = tiles_per_batch / cb_factor;
-            for (uint32_t cnt = 0; cnt < cb_factor; cnt++) {
-                uint32_t batch_tile = batch_tile_start + cnt * tiles_per_batch_per_cb;
-                cb_reserve_back(cb_dispatched_buffer_id, tiles_per_batch_per_cb);
-                for (uint32_t t = 0; t < tiles_per_batch_per_cb; t++) {
+            // 3. Read tiles for this batch in block_ct_dim-sized chunks so each push matches one
+            //    compute-side pack_untilize_block consumption of block_ct_dim tiles.
+            constexpr uint32_t num_blocks = tiles_per_batch / block_ct_dim;
+            for (uint32_t cnt = 0; cnt < num_blocks; cnt++) {
+                uint32_t batch_tile = batch_tile_start + cnt * block_ct_dim;
+                cb_reserve_back(cb_dispatched_buffer_id, block_ct_dim);
+                for (uint32_t t = 0; t < block_ct_dim; t++) {
                     noc_async_read_page(
                         batch_tile + t,
                         dispatched_buffer_addr_gen,
                         buffer_base + t * aligned_dispatched_buffer_page_size);
                 }
                 noc_async_read_barrier();
-                cb_push_back(cb_dispatched_buffer_id, tiles_per_batch_per_cb);
+                cb_push_back(cb_dispatched_buffer_id, block_ct_dim);
             }
             // Steps 3-7 (wait for untilize, wait for sender's send signal, NOC-write to
             // sender, signal sender, pop untilize CB) now run on zero_init_writer.
