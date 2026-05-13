@@ -28,7 +28,7 @@ using namespace ckernel::unpacker;
 
 inline void _llk_unpack_AB_compressed_custom_mm_mop_config_() {
     constexpr std::uint8_t set_dvadlid = 1;
-    load_replay_buf(0, 26, [] {
+    load_replay_buf(0, 25, [] {
         // Bfp8
         TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
         TTI_WRCFG(p_gpr_unpack::PERF_UNPACK_NUM_TILES_3, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32);
@@ -56,7 +56,6 @@ inline void _llk_unpack_AB_compressed_custom_mm_mop_config_() {
         TTI_NOP;
         TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
         TTI_UNPACR_COMMON(SrcB, 0b00110100, set_dvadlid);
-        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
         TTI_UNPACR_NOP(SrcA, 0, 0, set_dvadlid, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
     });
 }
@@ -102,9 +101,9 @@ constexpr std::uint32_t get_replay_insn_for_combo(const std::uint8_t combo) {
 
     if (curr == 0) {
         if (use_b) {
-            return lltt::replay_insn(22, 4);
+            return lltt::replay_insn(22, 2);
         } else {
-            return lltt::replay_insn(24, 2);
+            return TT_OP_NOP;
         }
     }
 
