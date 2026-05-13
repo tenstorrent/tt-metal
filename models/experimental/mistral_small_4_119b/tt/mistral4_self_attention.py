@@ -353,7 +353,9 @@ class TtMistral4Attention(LightweightModule):
         q_rope = ttnn.slice(q, [0, 0, 0, self.qk_nope_head_dim], [1, self.n_heads, seq_len, self.head_dim])
         ttnn.deallocate(q)
 
-        q_rope_rotated = _apply_rope_ttnn(q_rope, cos, sin, seq_len, self.n_heads, self.qk_rope_head_dim)
+        q_rope_rotated = ttnn.experimental.rotary_embedding_hf(
+            q_rope, cos, sin, is_decode_mode=False, compute_kernel_config=self.compute_kernel_config
+        )
         ttnn.deallocate(q_rope)
 
         q_full = ttnn.concat([q_nope, q_rope_rotated], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -400,7 +402,9 @@ class TtMistral4Attention(LightweightModule):
         v = ttnn.slice(kv, [0, 0, 0, self.qk_nope_head_dim], [1, self.n_heads, seq_len, self.kv_b_per_head])
         ttnn.deallocate(kv)
 
-        k_rope_rotated = _apply_rope_ttnn(k_rope_raw, cos, sin, seq_len, 1, self.qk_rope_head_dim)
+        k_rope_rotated = ttnn.experimental.rotary_embedding_hf(
+            k_rope_raw, cos, sin, is_decode_mode=False, compute_kernel_config=self.compute_kernel_config
+        )
         # [1, 1, seq, QK_ROPE_HEAD_DIM]
         ttnn.deallocate(k_rope_raw)
 
