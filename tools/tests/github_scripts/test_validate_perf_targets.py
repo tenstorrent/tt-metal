@@ -786,6 +786,31 @@ def test_extract_metric_value_fails_for_ambiguous_unqualified_metric_name():
         assert "ambiguous" in str(exc)
 
 
+def test_validate_targets_schema_skips_duplicate_check_when_dims_are_missing():
+    validator = _load_validator_module()
+    targets_yaml = {
+        "version": 1,
+        "targets": {
+            "demo-model": {
+                "aliases": [],
+                "skus": {
+                    "wh_n150": {
+                        "entries": [
+                            {"status": "active", "perf": {"decode_t/s/u": 100.0}, "accuracy": {}},
+                            {"status": "active", "perf": {"decode_t/s/u": 120.0}, "accuracy": {}},
+                        ]
+                    }
+                },
+            }
+        },
+    }
+
+    errors = validator._validate_targets_schema(targets_yaml)
+    assert len(errors) == 2
+    assert all("must define both 'batch_size' and 'seq_len' keys" in error for error in errors)
+    assert all("duplicate entry for batch_size=None, seq_len=None" not in error for error in errors)
+
+
 def test_parse_args_accepts_high_tol_multiplier(monkeypatch):
     validator = _load_validator_module()
     monkeypatch.setattr(

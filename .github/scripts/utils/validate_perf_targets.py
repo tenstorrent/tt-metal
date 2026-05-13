@@ -216,6 +216,7 @@ def _validate_targets_schema(targets_yaml: dict[str, Any]) -> list[str]:
                         f"Model '{model_name}' sku '{sku_name}' entry #{idx} must define both "
                         "'batch_size' and 'seq_len' keys"
                     )
+                    continue
                 status = str(entry.get("status", "active")).lower()
                 if status not in {"active", "todo"}:
                     errors.append(
