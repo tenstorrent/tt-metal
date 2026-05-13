@@ -8,7 +8,7 @@ Architecture::
 
     image (B, 3, H, W)
       │
-      ▼  patch_conv (3 → 1024, 14×14 stride 14)              [boundary: torch.unfold]
+      ▼  patch_conv (3 → 1024, 14×14 stride 14)              [ttnn.conv2d on device]
     patches (B, num_patches, 1024)
       │
       ▼  ln_pre (RMSNorm)
@@ -20,10 +20,10 @@ Architecture::
     features (B, num_patches, 1024)            ← consumed by multi-modal projector
 
 Boundary note:
-    ``patch_conv`` uses ``torch.nn.Unfold`` on the host to extract patches from
-    the raw image tensor — this is image preprocessing, analogous to tokenization
-    for text. The remaining model layers (ln_pre, all 24 attention/MLP blocks,
-    RoPE rotation, SDPA) execute entirely in TTNN with no host fallback.
+    ``patch_conv`` is a real ``ttnn.conv2d`` (stride = kernel = 14, no padding,
+    no bias). The image is permuted NCHW → flat-NHWC ``[1, 1, H*W, 3]`` on host
+    and uploaded; the convolution itself runs on device. The rest of the tower
+    (ln_pre, 24 attention/MLP blocks, RoPE, SDPA) is also fully on-device.
 """
 
 from __future__ import annotations
@@ -64,15 +64,17 @@ def _vision_rms_norm(x: ttnn.Tensor, weight: ttnn.Tensor, compute_kernel_config)
     )
 
 
-# ── Patch embedding (Conv2d via unfold + linear) ───────────────────────────
+# ── Patch embedding (native ttnn.conv2d) ───────────────────────────────────
 
 
 class TtPixtralPatchConv:
     """
     Pixtral patch embedding: Conv2d(3, 1024, kernel=14, stride=14, bias=False).
 
-    Implemented as host-side unfold + on-device linear. The unfold is image
-    preprocessing — the matmul (the actual compute) runs on device.
+    Runs as a real ``ttnn.conv2d`` on device. The only host work is permuting
+    the input from NCHW [1, 3, H, W] to flat NHWC [1, 1, H*W, 3] before upload.
+    The reformatted weight returned by the first ``ttnn.conv2d`` call is cached
+    so subsequent calls (multi-image runs) skip the preprocessing step.
     """
 
     def __init__(
@@ -85,28 +87,29 @@ class TtPixtralPatchConv:
         self.mesh_device = mesh_device
         self.compute_kernel_config = compute_kernel_config
         self.patch_size = VISION_PATCH_SIZE
+        self.dtype = dtype
 
         # HF Conv2d weight: [out_channels, in_channels, kH, kW] = [1024, 3, 14, 14].
         w_4d = state_dict["vision_tower.patch_conv.weight"].to(torch.bfloat16)
-        # Reshape to [out, in*kH*kW] then transpose for matmul: [in*kH*kW, out]
-        w = w_4d.reshape(VISION_HIDDEN_SIZE, -1).T.contiguous()
-        self.weight = ttnn.as_tensor(
-            w,
+        assert w_4d.shape == (VISION_HIDDEN_SIZE, VISION_NUM_CHANNELS, self.patch_size, self.patch_size)
+        self.weight = ttnn.from_torch(
+            w_4d,
             dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
-        self._unfold = torch.nn.Unfold(kernel_size=self.patch_size, stride=self.patch_size)
+        self.conv_config = ttnn.Conv2dConfig(
+            weights_dtype=dtype,
+            activation=None,
+            deallocate_activation=True,
+        )
 
     def forward(self, image: torch.Tensor) -> Tuple[ttnn.Tensor, int, int]:
         """
         Args:
             image: torch [1, 3, H, W] bf16 (H,W must be multiples of patch_size)
         Returns:
-            patches: ttnn [1, 1, num_patches, 1024]
+            patches: ttnn [1, 1, num_patches, 1024] in TILE_LAYOUT, DRAM
             h_patches, w_patches: int
         """
         assert image.ndim == 4 and image.shape[1] == VISION_NUM_CHANNELS
@@ -115,25 +118,48 @@ class TtPixtralPatchConv:
         h_patches = H // self.patch_size
         w_patches = W // self.patch_size
 
-        # [1, 3, H, W] → [1, 3*kH*kW, num_patches] → [1, num_patches, 3*kH*kW]
-        unfolded = self._unfold(image.to(torch.bfloat16)).permute(0, 2, 1).contiguous()
-        # Upload [1, num_patches, 588]
-        x = ttnn.as_tensor(
-            unfolded,
+        # NCHW [1, 3, H, W] → flat NHWC [1, 1, H*W, 3] (the layout ttnn.conv2d expects).
+        x_host = image.to(torch.bfloat16).permute(0, 2, 3, 1).contiguous().reshape(1, 1, H * W, VISION_NUM_CHANNELS)
+        x = ttnn.from_torch(
+            x_host,
             dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        out = ttnn.linear(
-            x,
-            self.weight,
-            compute_kernel_config=self.compute_kernel_config,
+
+        [out, [_out_h, _out_w], [self.weight, _]] = ttnn.conv2d(
+            input_tensor=x,
+            weight_tensor=self.weight,
+            bias_tensor=None,
+            in_channels=VISION_NUM_CHANNELS,
+            out_channels=VISION_HIDDEN_SIZE,
+            device=self.mesh_device,
+            kernel_size=(self.patch_size, self.patch_size),
+            stride=(self.patch_size, self.patch_size),
+            padding=(0, 0),
+            dilation=(1, 1),
+            batch_size=1,
+            input_height=H,
+            input_width=W,
+            groups=1,
+            conv_config=self.conv_config,
+            compute_config=self.compute_kernel_config,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
+            return_output_dim=True,
+            return_weights_and_bias=True,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )  # [1, num_patches, 1024]
-        ttnn.deallocate(x)
+        )
+
+        # ttnn.conv2d output is [1, 1, num_patches, out_channels] but may be in
+        # ROW_MAJOR / sharded layout — normalise to interleaved TILE in DRAM
+        # for the downstream rms_norm.
+        if ttnn.is_sharded(out):
+            out = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
+        if out.layout != ttnn.TILE_LAYOUT:
+            out = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
         num_patches = h_patches * w_patches
         out = ttnn.reshape(out, [1, 1, num_patches, VISION_HIDDEN_SIZE])
         return out, h_patches, w_patches

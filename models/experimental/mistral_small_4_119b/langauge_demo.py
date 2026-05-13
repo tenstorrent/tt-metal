@@ -111,18 +111,6 @@ def _precompute_rope_table(
     return cos, sin
 
 
-def _slice_rope(
-    cos_full: torch.Tensor,
-    sin_full: torch.Tensor,
-    start: int,
-    end: int,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Slice the [start, end) range from precomputed (cos, sin) tables."""
-    if cos_full.dim() == 3:
-        return cos_full[:, start:end, :].contiguous(), sin_full[:, start:end, :].contiguous()
-    return cos_full[:, :, start:end, :].contiguous(), sin_full[:, :, start:end, :].contiguous()
-
-
 def generate(
     model: TtMistral4TextModel,
     tokenizer,
@@ -136,16 +124,17 @@ def generate(
     seq_len = input_ids.shape[1]
     logger.info(f"Prompt: {prompt!r}  →  {seq_len} tokens")
 
-    # Precompute (cos, sin) for every position we'll touch — one HF rotary call.
+    # Precompute (cos, sin) for every position we'll touch and upload once.
+    # Per-step lookups are then on-device slices keyed on ``current_pos``.
     total_positions = seq_len + max_new_tokens
     logger.info(f"Precomputing RoPE table for {total_positions} positions…")
     cos_full, sin_full = _precompute_rope_table(rotary_cls, text_config, total_positions)
+    model.cache_rope_tables(cos_full, sin_full)
 
     # Prefill — on-device argmax returns the token id directly.
     logger.info(f"Running prefill (seq_len={seq_len})…")
-    pos_emb_prefill = _slice_rope(cos_full, sin_full, 0, seq_len)
     t0 = time.perf_counter()
-    next_id_int = model.prefill_next_token(input_ids, pos_emb_prefill)
+    next_id_int = model.prefill_next_token(input_ids)
     prefill_ms = (time.perf_counter() - t0) * 1000
     logger.info(f"Prefill done in {prefill_ms:.0f} ms")
 
@@ -158,10 +147,9 @@ def generate(
     decode_times = []
     for step in range(1, max_new_tokens):
         current_pos = seq_len + step - 1
-        pos_emb_dec = _slice_rope(cos_full, sin_full, current_pos, current_pos + 1)
 
         t_dec = time.perf_counter()
-        tok_id = model.decode_next_token(next_id, pos_emb_dec, current_pos)
+        tok_id = model.decode_next_token(next_id, current_pos)
         decode_times.append((time.perf_counter() - t_dec) * 1000)
 
         generated_ids.append(tok_id)

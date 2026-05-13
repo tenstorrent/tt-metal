@@ -4,29 +4,25 @@
 """
 Mistral-Small-4-119B text model — prefill and decode modes.
 
-``TtMistral4TextModel`` wraps the decoder-layer stack with per-layer KV caches,
-exposing two entry points:
+``TtMistral4TextModel`` wraps the decoder-layer stack with per-layer KV caches.
+RoPE ``(cos, sin)`` tables are uploaded once via ``cache_rope_tables`` and live
+in device DRAM; per-step lookups are on-device ``ttnn.slice`` calls keyed on
+``current_pos``, so no host→device cos/sin upload happens during the decode loop.
 
-    logits = model.prefill(input_ids, position_embeddings)
-        - Runs the full prefill forward and fills all KV caches.
-        - Returns [1, seq_len, vocab_size].
+Usage::
 
-    logits = model.decode(input_id, position_embeddings, current_pos)
-        - Decodes one token, updating each layer's KV cache at current_pos.
-        - Returns [1, 1, vocab_size].
+    model = TtMistral4TextModel(...)
+    cos_full, sin_full = rotary(...)              # once, on host
+    model.cache_rope_tables(cos_full, sin_full)   # one-shot upload
 
-Call prefill once for the prompt, then decode in a loop for generation:
-
-    logits = model.prefill(input_ids, pos_emb_prefill)
+    logits = model.prefill(input_ids)             # positions [0, seq_len)
     next_tok = logits[0, -1].argmax()
     for pos in range(prefill_len, prefill_len + n_tokens):
-        logits = model.decode(next_tok.unsqueeze(0).unsqueeze(0), pos_emb_decode, pos)
+        logits = model.decode(next_tok.unsqueeze(0).unsqueeze(0), pos)
         next_tok = logits[0, 0].argmax()
 """
 
 from __future__ import annotations
-
-from typing import Tuple
 
 import torch
 
@@ -115,22 +111,31 @@ class TtMistral4TextModel:
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
         )
 
-    # ── Internals ──────────────────────────────────────────────────────────
+        # RoPE tables — uploaded once via ``cache_rope_tables``. Per-step lookup
+        # is a ``ttnn.slice`` keyed on ``current_pos``; no host crossing.
+        self.cos_table_tt: ttnn.Tensor | None = None
+        self.sin_table_tt: ttnn.Tensor | None = None
+        self._rope_table_positions: int = 0
 
-    def _prepare_rope(
-        self,
-        position_embeddings: Tuple[torch.Tensor, torch.Tensor],
-        seq_len: int,
-    ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-        cos_t, sin_t = position_embeddings
+    # ── RoPE table caching ─────────────────────────────────────────────────
 
-        def _prep(t: torch.Tensor) -> ttnn.Tensor:
+    def cache_rope_tables(self, cos_full: torch.Tensor, sin_full: torch.Tensor) -> None:
+        """
+        Upload the full RoPE ``(cos, sin)`` table to device DRAM once.
+
+        Accepts HF ``Mistral4RotaryEmbedding`` output (shape ``[1, S, D]`` or
+        ``[1, 1, S, D]``); the last dim is trimmed to ``QK_ROPE_HEAD_DIM`` if
+        wider. Replicated on every mesh device; TILE layout so subsequent
+        ``ttnn.slice`` calls produce TILE tensors ready for the RoPE math.
+        """
+
+        def _upload(t: torch.Tensor) -> ttnn.Tensor:
             t = t.to(torch.bfloat16)
             while t.dim() < 4:
                 t = t.unsqueeze(0)
             if t.shape[-1] > QK_ROPE_HEAD_DIM:
-                t = t[..., :QK_ROPE_HEAD_DIM].contiguous()
-            t = t[:, :, :seq_len, :].contiguous()
+                t = t[..., :QK_ROPE_HEAD_DIM]
+            t = t.contiguous()
             return ttnn.as_tensor(
                 t,
                 dtype=ttnn.bfloat16,
@@ -140,7 +145,28 @@ class TtMistral4TextModel:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
 
-        return _prep(cos_t), _prep(sin_t)
+        if self.cos_table_tt is not None:
+            ttnn.deallocate(self.cos_table_tt)
+        if self.sin_table_tt is not None:
+            ttnn.deallocate(self.sin_table_tt)
+
+        self.cos_table_tt = _upload(cos_full)
+        self.sin_table_tt = _upload(sin_full)
+        self._rope_table_positions = self.cos_table_tt.shape[-2]
+
+    # ── Internals ──────────────────────────────────────────────────────────
+
+    def _rope_slice(self, start: int, end: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """On-device slice of the cached cos/sin tables for positions ``[start, end)``."""
+        assert (
+            self.cos_table_tt is not None and self.sin_table_tt is not None
+        ), "cache_rope_tables() must be called before prefill/decode"
+        assert (
+            0 <= start < end <= self._rope_table_positions
+        ), f"position range [{start}, {end}) outside cached RoPE table of size {self._rope_table_positions}"
+        cos = ttnn.slice(self.cos_table_tt, [0, 0, start, 0], [1, 1, end, QK_ROPE_HEAD_DIM])
+        sin = ttnn.slice(self.sin_table_tt, [0, 0, start, 0], [1, 1, end, QK_ROPE_HEAD_DIM])
+        return cos, sin
 
     def _embed(self, input_ids: torch.Tensor) -> ttnn.Tensor:
         ids_tt = ttnn.as_tensor(
@@ -236,23 +262,17 @@ class TtMistral4TextModel:
 
     # ── Public API ─────────────────────────────────────────────────────────
 
-    def prefill(
-        self,
-        input_ids: torch.Tensor,
-        position_embeddings: Tuple[torch.Tensor, torch.Tensor],
-    ) -> torch.Tensor:
+    def prefill(self, input_ids: torch.Tensor) -> torch.Tensor:
         """
-        Run prefill and populate all KV caches.
+        Run prefill and populate all KV caches for positions ``[0, seq_len)``.
 
         Args:
-            input_ids:           [1, seq_len] long tensor on CPU
-            position_embeddings: (cos, sin) from HF Mistral4RotaryEmbedding,
-                                 each [1, seq_len, D] or [1, 1, seq_len, D]
+            input_ids: [1, seq_len] long tensor on CPU
         Returns:
             logits: [1, seq_len, vocab_size] bfloat16 CPU tensor
         """
         seq_len = input_ids.shape[1]
-        cos_tt, sin_tt = self._prepare_rope(position_embeddings, seq_len)
+        cos_tt, sin_tt = self._rope_slice(0, seq_len)
 
         x = self._embed(input_ids)
         x = ttnn.reshape(x, [1, 1, seq_len, HIDDEN_SIZE])
@@ -266,25 +286,18 @@ class TtMistral4TextModel:
 
         return self._to_logits(x)
 
-    def decode(
-        self,
-        input_id: torch.Tensor,
-        position_embeddings: Tuple[torch.Tensor, torch.Tensor],
-        current_pos: int,
-    ) -> torch.Tensor:
+    def decode(self, input_id: torch.Tensor, current_pos: int) -> torch.Tensor:
         """
-        Decode one token.
+        Decode one token at position ``current_pos``.
 
         Args:
-            input_id:            [1, 1] long tensor on CPU (single next token)
-            position_embeddings: (cos, sin) for position current_pos,
-                                 each [1, 1, D] or [1, 1, 1, D]
-            current_pos:         cache slot to write the new K/V into.
-                                 Typically prefill_len + decode_step.
+            input_id:    [1, 1] long tensor on CPU (single next token)
+            current_pos: cache slot to write the new K/V into. Typically
+                         prefill_len + decode_step.
         Returns:
             logits: [1, 1, vocab_size] bfloat16 CPU tensor
         """
-        cos_tt, sin_tt = self._prepare_rope(position_embeddings, 1)
+        cos_tt, sin_tt = self._rope_slice(current_pos, current_pos + 1)
 
         x = self._embed(input_id)
         x = ttnn.reshape(x, [1, 1, 1, HIDDEN_SIZE])
@@ -300,11 +313,7 @@ class TtMistral4TextModel:
 
     # ── Greedy generation entry points (on-device argmax) ──────────────────
 
-    def prefill_next_token(
-        self,
-        input_ids: torch.Tensor,
-        position_embeddings: Tuple[torch.Tensor, torch.Tensor],
-    ) -> int:
+    def prefill_next_token(self, input_ids: torch.Tensor) -> int:
         """
         Run prefill (filling all KV caches) and return the greedy next token id.
 
@@ -312,7 +321,7 @@ class TtMistral4TextModel:
         on device — only a single uint32 crosses the PCIe boundary.
         """
         seq_len = input_ids.shape[1]
-        cos_tt, sin_tt = self._prepare_rope(position_embeddings, seq_len)
+        cos_tt, sin_tt = self._rope_slice(0, seq_len)
 
         x = self._embed(input_ids)
         x = ttnn.reshape(x, [1, 1, seq_len, HIDDEN_SIZE])
@@ -331,14 +340,9 @@ class TtMistral4TextModel:
         ttnn.deallocate(x_last)
         return token_id
 
-    def decode_next_token(
-        self,
-        input_id: torch.Tensor,
-        position_embeddings: Tuple[torch.Tensor, torch.Tensor],
-        current_pos: int,
-    ) -> int:
+    def decode_next_token(self, input_id: torch.Tensor, current_pos: int) -> int:
         """Decode one token and return the greedy next token id (on-device argmax)."""
-        cos_tt, sin_tt = self._prepare_rope(position_embeddings, 1)
+        cos_tt, sin_tt = self._rope_slice(current_pos, current_pos + 1)
 
         x = self._embed(input_id)
         x = ttnn.reshape(x, [1, 1, 1, HIDDEN_SIZE])
@@ -356,25 +360,20 @@ class TtMistral4TextModel:
 
     # ── Embedding-input entry points (multimodal) ──────────────────────────
 
-    def prefill_from_embeds(
-        self,
-        inputs_embeds: ttnn.Tensor,
-        position_embeddings: Tuple[torch.Tensor, torch.Tensor],
-    ) -> torch.Tensor:
+    def prefill_from_embeds(self, inputs_embeds: ttnn.Tensor) -> torch.Tensor:
         """
         Prefill from a caller-built embedding sequence (skip ``embed_tokens``).
 
         Args:
-            inputs_embeds:       ttnn [1, 1, seq_len, HIDDEN_SIZE], replicated on mesh.
-                                 Typically built by ``embed_tokens`` for text positions
-                                 and the multi-modal projector for image positions,
-                                 spliced together via slice/concat on device.
-            position_embeddings: (cos, sin) covering positions [0, seq_len).
+            inputs_embeds: ttnn [1, 1, seq_len, HIDDEN_SIZE], replicated on mesh.
+                           Typically built by ``embed_tokens`` for text positions
+                           and the multi-modal projector for image positions,
+                           spliced together via slice/concat on device.
         Returns:
             logits: [1, seq_len, vocab_size] bf16 CPU tensor.
         """
         seq_len = inputs_embeds.shape[-2]
-        cos_tt, sin_tt = self._prepare_rope(position_embeddings, seq_len)
+        cos_tt, sin_tt = self._rope_slice(0, seq_len)
 
         x = inputs_embeds
         for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
@@ -384,17 +383,13 @@ class TtMistral4TextModel:
         ttnn.deallocate(sin_tt)
         return self._to_logits(x)
 
-    def prefill_from_embeds_next_token(
-        self,
-        inputs_embeds: ttnn.Tensor,
-        position_embeddings: Tuple[torch.Tensor, torch.Tensor],
-    ) -> int:
+    def prefill_from_embeds_next_token(self, inputs_embeds: ttnn.Tensor) -> int:
         """
         Same as ``prefill_from_embeds`` but returns the greedy next-token id with
         on-device argmax — only a single uint32 crosses the PCIe boundary.
         """
         seq_len = inputs_embeds.shape[-2]
-        cos_tt, sin_tt = self._prepare_rope(position_embeddings, seq_len)
+        cos_tt, sin_tt = self._rope_slice(0, seq_len)
 
         x = inputs_embeds
         for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
