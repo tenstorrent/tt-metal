@@ -108,27 +108,27 @@ sfpi_inline sfpi::vFloat calculate_log_f32_body(sfpi::vFloat val, const uint log
     v_if(val > 0.0f && val < infinity) {
         sfpi::vFloat a = val;
 
-        sfpi::vFloat two_thirds = 0.666666667f;
-        sfpi::vInt u = sfpi::reinterpret<sfpi::vInt>(a) - sfpi::reinterpret<sfpi::vInt>(two_thirds);
-        sfpi::vInt e = sfpi::exexp_nodebias(sfpi::reinterpret<sfpi::vFloat>(u));
-        sfpi::vFloat m = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(u));
+        sfpi::vFloat three_quarters = 0.75f;
+        sfpi::vInt e = sfpi::reinterpret<sfpi::vInt>(a) - sfpi::reinterpret<sfpi::vInt>(three_quarters);
+        e = e & 0xff800000;
+        sfpi::vFloat m = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(a) - e);
 
-        sfpi::vFloat e_float = sfpi::int32_to_float(e, sfpi::RoundMode::NearestEven);
-        e_float = sfpi::setsgn(e_float, sfpi::reinterpret<sfpi::vFloat>(u));
+        sfpi::vInt abs_e = sfpi::abs(e);
+        sfpi::vFloat e_float = sfpi::int32_to_float(abs_e, sfpi::RoundMode::NearestEven);
+        e_float = sfpi::setsgn(e_float, sfpi::reinterpret<sfpi::vFloat>(e));
 
-        // m in [2/3, 4/3]. Compute log1p(m - 1) for m - 1 in [-1/3, 1/3].
+        // m in [0.75, 1.5). Compute log1p(m - 1) for m - 1 in [-0.25, 0.5).
         m -= sfpi::vConst1;
         sfpi::vFloat s = m * m;
-        sfpi::vFloat r = -0.130310059f;
-        sfpi::vFloat t = 0.140869141f;
-        r = r * s + -0.121486895f;
-        t = t * s + 0.139815226f;
-        r = r * s + -0.166845486f;
-        t = t * s + 0.200120315f;
-        r = r * s + -0.249996230f;
-        r = t * m + r;
-        r = r * m + 0.333331972f;
-        r = r * m + -0.500000000f;
+        sfpi::vFloat r = -0x1.92cp-5f;
+        r = r * m + 0x1.b84p-4f;
+        r = r * m + -0x1.0c4p-3f;
+        r = r * m + 0x1.274p-3f;
+        r = r * m + -0x1.55p-3f;
+        r = r * m + 0x1.998p-3f;
+        r = r * m + sfpi::vConstFloatPrgm1;
+        r = r * m + sfpi::vConstFloatPrgm2;
+        r = r * m + -0.5f;
         r = r * s + m;
         result = e_float * sfpi::vConstFloatPrgm0 + r;
 
@@ -175,6 +175,8 @@ inline void log_init() {
         constexpr float TWO_TO_M23 = 1.19209290e-7f;  // 0x1.0p-23
         // e represents k << 23, so pre-fold 2^(-23) into the exponent contribution.
         sfpi::vConstFloatPrgm0 = LOG_TWO * TWO_TO_M23;
+        sfpi::vConstFloatPrgm1 = -0x1.00001ap-2f;
+        sfpi::vConstFloatPrgm2 = 0x1.555572p-2f;
     }
 }
 
