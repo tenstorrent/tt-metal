@@ -319,13 +319,12 @@ void kernel_main() {
             uint32_t batch_start = start_page + B * read_batch_size;
             uint32_t batch_end = (batch_start + read_batch_size < end_page) ? batch_start + read_batch_size : end_page;
             uint32_t batch_count = batch_end - batch_start;
-            bool batch_did_local_write = false;
 
 #if IS_TILE_LAYOUT
             uint32_t current_idle_core = B % num_idle_cores_group;
 
-            // Read metadata FIRST (we need to inspect it to decide if idle can handle the whole
-            // batch locally or whether we need untilized data back to do non-local routing).
+            // Read this batch's metadata; we only use it to drive the per-row routing decisions
+            // below (idle reads the same metadata independently from DRAM for its own writes).
             for (uint32_t t = 0; t < batch_count; t++) {
                 noc_async_read_page(
                     batch_start + t,
@@ -334,121 +333,123 @@ void kernel_main() {
             }
             noc_async_read_barrier();
 
-            // Scan metadata for any non-local writes (dst_chip != our linearized_mesh_coord).
-            bool has_non_local = false;
+            // Per-row handshake for non-local rows only.  Idle writes local rows on its own
+            // without any signal from us; for every non-local row we send GO (start_sem),
+            // wait for idle to land that single row in receive_buf (data_ready), then read
+            // it from the next compact slot and forward over fabric.  Local rows do not
+            // touch the semaphores or receive_buf.
+            uint32_t nonlocal_idx = 0;
             for (uint32_t t = 0; t < batch_count; t++) {
-                volatile tt_l1_ptr uint32_t* m = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                volatile tt_l1_ptr uint32_t* metadata = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                     metadata_base + t * aligned_dispatched_metadata_page_size);
-                if (m[0] != linearized_mesh_coord) {
-                    has_non_local = true;
-                    break;
-                }
-            }
-
-            // Idle reads its own metadata from DRAM (via reader_untilize on the same core) and
-            // decides the path locally, so we just tell it "go" — no c_9 write from us.
-            noc_semaphore_inc(idle_start_noc_addrs[current_idle_core], 1);
-            noc_async_atomic_barrier();
-
-            // Always wait on data_ready — even if has_non_local is false — to keep start_sem
-            // strictly 1:1 with idle's consume/reset.  Idle's `wait(>=1); set(0)` collapses
-            // multiple pending increments into a single consume, so if we advance without
-            // syncing, a later start_sem inc to the same idle core gets silently dropped and
-            // the idle deadlocks waiting for a signal that never re-arrives.
-
-            noc_semaphore_wait(data_ready_sem_ptrs[current_idle_core], 1);
-            noc_semaphore_set(data_ready_sem_ptrs[current_idle_core], 0);
-#endif
-
-            // In TILE_LAYOUT the sender only routes when has_non_local is true — idle already
-            // handled all-local batches directly. In ROW_MAJOR there is no idle offload.
-#if IS_TILE_LAYOUT
-            if (has_non_local)
-#endif
-            {
-                for (uint32_t t = 0; t < batch_count; t++) {
-#if IS_TILE_LAYOUT
-                    uint32_t buffer_scratch_addr = untilize_base + t * aligned_output_page_size;
-#else
-                    uint32_t buffer_scratch_addr = buffer_base + t * aligned_dispatched_buffer_page_size;
-#endif
-                    uint32_t metadata_scratch_addr = metadata_base + t * aligned_dispatched_metadata_page_size;
-                    volatile tt_l1_ptr uint32_t* metadata =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_scratch_addr);
-
-                    auto dst_chip = metadata[0];
-                    auto dst_token_idx = metadata[1];
-                    auto dst_topk_indice = metadata[2];
-                    uint32_t output_page_idx = dst_token_idx * num_experts_per_tok + dst_topk_indice;
-
-                    if (dst_chip == linearized_mesh_coord) {
-                        noc_async_write_page(output_page_idx, output_addr_gen, buffer_scratch_addr);
-                        noc_async_writes_flushed();
-                        batch_did_local_write = true;
-                    } else {
-                        if constexpr (is_1d_topology<topology>()) {
-                            uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
-                            uint32_t distance =
-                                manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
-
-                            // Push route info to writer
-                            cb_reserve_back(cb_route_info_id, 1);
-                            volatile tt_l1_ptr uint32_t* route_info =
-                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_route_info_id));
-                            route_info[0] = route;
-                            route_info[1] = distance;
-                            route_info[2] = output_page_idx;
-                            route_info[3] = 0;
-                            cb_push_back(cb_route_info_id, 1);
-
-                            // Push output payload to writer
-                            cb_reserve_back(cb_output_for_writer_id, 1);
-                            uint32_t output_dst = get_write_ptr(cb_output_for_writer_id);
-#if IS_TILE_LAYOUT
-                            noc_async_read(get_noc_addr(buffer_scratch_addr), output_dst, aligned_output_page_size);
-#else
-                            noc_async_read(
-                                get_noc_addr(buffer_scratch_addr), output_dst, aligned_dispatched_buffer_page_size);
-#endif
-                            noc_async_read_barrier();
-                            cb_push_back(cb_output_for_writer_id, 1);
-                        }
-                    }
+                auto dst_chip = metadata[0];
+                if (dst_chip == linearized_mesh_coord) {
+                    continue;
                 }
 
-#if IS_TILE_LAYOUT
-#else
-                // Issue next batch reads BEFORE write barrier to overlap DMA reads with NOC writes
-                uint32_t next_batch_start = batch_start + read_batch_size;
-                bool has_next_batch = (next_batch_start < end_page);
-                if (has_next_batch) {
-                    uint32_t next_batch_end =
-                        (next_batch_start + read_batch_size < end_page) ? next_batch_start + read_batch_size : end_page;
-                    uint32_t next_batch_count = next_batch_end - next_batch_start;
-                    for (uint32_t t = 0; t < next_batch_count; t++) {
-                        noc_async_read_page(
-                            next_batch_start + t,
-                            dispatched_buffer_addr_gen,
-                            buffer_base + t * aligned_dispatched_buffer_page_size);
-                        noc_async_read_page(
-                            next_batch_start + t,
-                            dispatched_metadata_addr_gen,
-                            metadata_base + t * aligned_dispatched_metadata_page_size);
-                    }
-                }
-#endif
+                noc_semaphore_inc(idle_start_noc_addrs[current_idle_core], 1);
+                noc_async_atomic_barrier();
+                noc_semaphore_wait(data_ready_sem_ptrs[current_idle_core], 1);
+                noc_semaphore_set(data_ready_sem_ptrs[current_idle_core], 0);
 
-                if (batch_did_local_write) {
-                    noc_async_write_barrier();
-                }
+                auto dst_token_idx = metadata[1];
+                auto dst_topk_indice = metadata[2];
+                uint32_t output_page_idx = dst_token_idx * num_experts_per_tok + dst_topk_indice;
+                uint32_t buffer_scratch_addr = untilize_base + nonlocal_idx * aligned_output_page_size;
+                nonlocal_idx++;
 
-#if IS_TILE_LAYOUT
-#else
-                if (has_next_batch) {
+                if constexpr (is_1d_topology<topology>()) {
+                    uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
+                    uint32_t distance =
+                        manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
+
+                    cb_reserve_back(cb_route_info_id, 1);
+                    volatile tt_l1_ptr uint32_t* route_info =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_route_info_id));
+                    route_info[0] = route;
+                    route_info[1] = distance;
+                    route_info[2] = output_page_idx;
+                    route_info[3] = 0;
+                    cb_push_back(cb_route_info_id, 1);
+
+                    cb_reserve_back(cb_output_for_writer_id, 1);
+                    uint32_t output_dst = get_write_ptr(cb_output_for_writer_id);
+                    noc_async_read(get_noc_addr(buffer_scratch_addr), output_dst, aligned_output_page_size);
                     noc_async_read_barrier();
+                    cb_push_back(cb_output_for_writer_id, 1);
                 }
-#endif
             }
+#else
+            // ROW_MAJOR: no idle offload — this core does both the local writes and the
+            // non-local routing inline.
+            bool batch_did_local_write = false;
+            for (uint32_t t = 0; t < batch_count; t++) {
+                uint32_t buffer_scratch_addr = buffer_base + t * aligned_dispatched_buffer_page_size;
+                uint32_t metadata_scratch_addr = metadata_base + t * aligned_dispatched_metadata_page_size;
+                volatile tt_l1_ptr uint32_t* metadata =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_scratch_addr);
+
+                auto dst_chip = metadata[0];
+                auto dst_token_idx = metadata[1];
+                auto dst_topk_indice = metadata[2];
+                uint32_t output_page_idx = dst_token_idx * num_experts_per_tok + dst_topk_indice;
+
+                if (dst_chip == linearized_mesh_coord) {
+                    noc_async_write_page(output_page_idx, output_addr_gen, buffer_scratch_addr);
+                    noc_async_writes_flushed();
+                    batch_did_local_write = true;
+                } else {
+                    if constexpr (is_1d_topology<topology>()) {
+                        uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
+                        uint32_t distance =
+                            manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
+
+                        cb_reserve_back(cb_route_info_id, 1);
+                        volatile tt_l1_ptr uint32_t* route_info =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_route_info_id));
+                        route_info[0] = route;
+                        route_info[1] = distance;
+                        route_info[2] = output_page_idx;
+                        route_info[3] = 0;
+                        cb_push_back(cb_route_info_id, 1);
+
+                        cb_reserve_back(cb_output_for_writer_id, 1);
+                        uint32_t output_dst = get_write_ptr(cb_output_for_writer_id);
+                        noc_async_read(
+                            get_noc_addr(buffer_scratch_addr), output_dst, aligned_dispatched_buffer_page_size);
+                        noc_async_read_barrier();
+                        cb_push_back(cb_output_for_writer_id, 1);
+                    }
+                }
+            }
+
+            // Issue next batch reads BEFORE write barrier to overlap DMA reads with NOC writes
+            uint32_t next_batch_start = batch_start + read_batch_size;
+            bool has_next_batch = (next_batch_start < end_page);
+            if (has_next_batch) {
+                uint32_t next_batch_end =
+                    (next_batch_start + read_batch_size < end_page) ? next_batch_start + read_batch_size : end_page;
+                uint32_t next_batch_count = next_batch_end - next_batch_start;
+                for (uint32_t t = 0; t < next_batch_count; t++) {
+                    noc_async_read_page(
+                        next_batch_start + t,
+                        dispatched_buffer_addr_gen,
+                        buffer_base + t * aligned_dispatched_buffer_page_size);
+                    noc_async_read_page(
+                        next_batch_start + t,
+                        dispatched_metadata_addr_gen,
+                        metadata_base + t * aligned_dispatched_metadata_page_size);
+                }
+            }
+
+            if (batch_did_local_write) {
+                noc_async_write_barrier();
+            }
+
+            if (has_next_batch) {
+                noc_async_read_barrier();
+            }
+#endif
         }
     }
 
