@@ -189,10 +189,17 @@ def build_matmul_pcfg(
 
     # in0_block_w must divide K_tiles. SigLIP MLP has K=4304 padded to 4320
     # (135 tiles) which doesn't divide cleanly into 4 or 2 — return None so
-    # caller falls back to the default core_grid path. We could also handle
-    # odd K with in0_block_w=1 but that's slow; default path is fine.
+    # caller falls back to the default core_grid path.
     if in0_block_w is None:
-        in0_block_w = 4
+        # Adaptive choice: per_core_N drives CB size. block_w=8 is fastest
+        # but overflows L1 when per_core_N is large (CB ≈ block_w * per_core_N
+        # tiles, doubled for double-buffer). With pi0's trace KV pinning
+        # ~1.3 MB of L1, we have ~150 KB CB headroom per core.
+        # block_w=8 cap: per_core_N * 8 * 1024 * 2 ≤ 150 KB → per_core_N ≤ 9
+        if per_core_N <= 12:
+            in0_block_w = 8
+        else:
+            in0_block_w = 4
     while k_tiles % in0_block_w != 0 and in0_block_w > 1:
         in0_block_w //= 2
     if in0_block_w == 1 and k_tiles > 32:
@@ -633,15 +640,15 @@ class GemmaMLPTTNN:
             n_intermediate = self.intermediate_size // 32
             n_hidden = self.hidden_size // 32
 
-            # MLP gate/up/down — keep in0_block_w=4 (block_w=8 overflows L1 because
-            # N_tiles for VLM gate/up = 512 is large; CBs scale with per_core_N).
+            # MLP gate/up/down — let the helper auto-pick in0_block_w based on
+            # per_core_N. Large-N (gate/up, per_core_N=43) keeps block_w=4;
+            # small-N (down, per_core_N=6-22 depending on width) gets block_w=8.
             gate_pcfg = build_matmul_pcfg(
                 m_tiles,
                 k_to_intermediate,
                 n_intermediate,
                 self._pcfg_grid[0],
                 self._pcfg_grid[1],
-                in0_block_w=4,
                 activation=(ttnn.UnaryOpType.GELU, True),
             )
             up_pcfg = build_matmul_pcfg(
@@ -650,7 +657,6 @@ class GemmaMLPTTNN:
                 n_intermediate,
                 self._pcfg_grid[0],
                 self._pcfg_grid[1],
-                in0_block_w=4,
             )
             down_pcfg = build_matmul_pcfg(
                 m_tiles,
@@ -658,7 +664,6 @@ class GemmaMLPTTNN:
                 n_hidden,
                 self._pcfg_grid[0],
                 self._pcfg_grid[1],
-                in0_block_w=4,
             )
 
             common_kwargs = dict(
