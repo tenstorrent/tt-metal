@@ -271,39 +271,11 @@ jobs:
             python3 -c "import ttnn.device; print(\"ttnn.device import: OK\")"
           '
 
-      - name: Inspect model mount on workers
+      - name: Check /mnt/models access on workers
         working-directory: /tmp
         run: |
           mpirun --pernode --tag-output bash -lc '
-            echo "===== model mount diagnostics on $(hostname) ====="
-            if [ -d /mnt/models ]; then
-              echo "/mnt/models exists"
-            else
-              echo "ERROR: /mnt/models does not exist"
-            fi
-            if [ -r /mnt/models ]; then
-              echo "/mnt/models is readable"
-            else
-              echo "ERROR: /mnt/models is not readable"
-            fi
-            ls -lah /mnt/models || true
-            echo "--- deepseek directory ---"
-            if [ -d /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized ]; then
-              echo "DeepSeek directory exists"
-            else
-              echo "ERROR: DeepSeek directory missing"
-            fi
-            if [ -r /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized ]; then
-              echo "DeepSeek directory is readable"
-            else
-              echo "ERROR: DeepSeek directory is not readable"
-            fi
-            ls -lah /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized || true
-            if [ -f /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/model.safetensors.index.json ]; then
-              echo "model.safetensors.index.json found"
-            else
-              echo "ERROR: model.safetensors.index.json missing"
-            fi
+            test -r /mnt/models
           '
 
       - name: ${{ matrix.test-group.name }}
