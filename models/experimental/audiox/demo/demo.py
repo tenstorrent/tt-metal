@@ -27,7 +27,12 @@ from pathlib import Path
 import torch
 import torchaudio
 
-from models.experimental.audiox.demo.media import load_image_prompt, load_video_prompt
+from models.experimental.audiox.demo.media import (
+    load_audio_prompt,
+    load_image_prompt,
+    load_video_prompt,
+    resample_output_audio,
+)
 from models.experimental.audiox.reference.conditioners import (
     AudioAutoencoderConditioner,
     CLIPConditioner,
@@ -35,13 +40,14 @@ from models.experimental.audiox.reference.conditioners import (
     T5Conditioner,
 )
 from models.experimental.audiox.reference.dit import DiffusionTransformer
-from models.experimental.audiox.reference.oobleck import OobleckDecoder
+from models.experimental.audiox.reference.oobleck import OobleckDecoder, OobleckEncoder
 from models.experimental.audiox.reference.sampler import sample_rf
 from models.experimental.audiox.utils.loader import (
     load_audiox_checkpoint,
     load_into,
     remap_conditioner_state_dict,
     remap_dit_state_dict,
+    remap_oobleck_encoder_state_dict,
     remap_oobleck_decoder_state_dict,
 )
 
@@ -51,6 +57,7 @@ from models.experimental.audiox.utils.loader import (
 # future release we'll re-derive them from the config rather than guessing.
 _HF_CONFIG = {
     "sample_rate": 44100,
+    "output_sample_rate": 16000,
     "downsample": 2048,  # prod(decoder strides)
     "duration_seconds": 10,
     "io_channels": 64,
@@ -80,11 +87,21 @@ class _ZeroPretransform(torch.nn.Module):
         raise RuntimeError("text-to-audio demo never calls the audio encoder")
 
 
-def _build_conditioners() -> MultiConditioner:
+def _build_audio_pretransform() -> OobleckEncoder:
+    return OobleckEncoder(
+        in_channels=_HF_CONFIG["decoder_out_channels"],
+        channels=_HF_CONFIG["decoder_channels"],
+        latent_dim=_HF_CONFIG["decoder_latent_dim"],
+        c_mults=_HF_CONFIG["decoder_c_mults"],
+        strides=_HF_CONFIG["decoder_strides"],
+    )
+
+
+def _build_conditioners(audio_pretransform: torch.nn.Module | None = None) -> MultiConditioner:
     text = T5Conditioner(output_dim=_HF_CONFIG["cond_token_dim"])
     video = CLIPConditioner(output_dim=_HF_CONFIG["cond_token_dim"])
     audio = AudioAutoencoderConditioner(
-        pretransform=_ZeroPretransform(channels=_HF_CONFIG["decoder_latent_dim"]),
+        pretransform=audio_pretransform or _ZeroPretransform(channels=_HF_CONFIG["decoder_latent_dim"]),
         output_dim=_HF_CONFIG["cond_token_dim"],
     )
     return MultiConditioner({"text_prompt": text, "video_prompt": video, "audio_prompt": audio})
@@ -157,6 +174,18 @@ def _load_visual_prompt(
     return load_image_prompt(image_path, target_frames=target_frames)
 
 
+def _load_audio_prompt(audio_path: Path | None) -> torch.Tensor | None:
+    if audio_path is None:
+        return None
+    target_samples = _HF_CONFIG["sample_rate"] * _HF_CONFIG["duration_seconds"]
+    return load_audio_prompt(
+        audio_path,
+        target_sample_rate=_HF_CONFIG["sample_rate"],
+        target_samples=target_samples,
+        target_channels=_HF_CONFIG["decoder_out_channels"],
+    )
+
+
 def _make_cross_attn_cond(multi_out: dict) -> torch.Tensor:
     """Concatenate per-conditioner embeds along the sequence dim, in the
     order AudioX uses: ``video_prompt``, ``text_prompt``, ``audio_prompt``."""
@@ -172,6 +201,7 @@ def run_demo(
     output: Path,
     video_path: Path | None = None,
     image_path: Path | None = None,
+    audio_path: Path | None = None,
     steps: int = 100,
     seed: int = 0,
     device: str = "cpu",
@@ -183,12 +213,18 @@ def run_demo(
     # Load checkpoint and split into per-module state dicts.
     raw_sd = load_audiox_checkpoint(checkpoint)
     dit_sd = remap_dit_state_dict(raw_sd)
+    encoder_sd = remap_oobleck_encoder_state_dict(raw_sd, n_blocks=len(_HF_CONFIG["decoder_c_mults"]))
     decoder_sd = remap_oobleck_decoder_state_dict(raw_sd, n_blocks=len(_HF_CONFIG["decoder_c_mults"]))
 
     # Build modules and load weights. Conditioners get only the matching id;
     # T5/CLIP HF visual encoder weights live outside state_dict, so missing
     # keys for them are expected.
-    multi = _build_conditioners()
+    audio_prompt = _load_audio_prompt(audio_path)
+    audio_pretransform = _build_audio_pretransform() if audio_prompt is not None else None
+    if audio_pretransform is not None:
+        load_into(audio_pretransform, encoder_sd, label="encoder")
+
+    multi = _build_conditioners(audio_pretransform=audio_pretransform)
     for cid in ("text_prompt", "video_prompt", "audio_prompt"):
         cond_sd = remap_conditioner_state_dict(raw_sd, conditioner_id=cid)
         load_into(multi.conditioners[cid], cond_sd, label=f"cond:{cid}")
@@ -205,7 +241,10 @@ def run_demo(
 
     # Build cross-attn context once per generation.
     visual_prompt = _load_visual_prompt(video_path, image_path)
-    cond_out = multi(_build_metadata_batch_with_inputs(prompt=prompt, video_prompt=visual_prompt), device)
+    cond_out = multi(
+        _build_metadata_batch_with_inputs(prompt=prompt, video_prompt=visual_prompt, audio_prompt=audio_prompt),
+        device,
+    )
     cross_attn_cond = _make_cross_attn_cond(cond_out)
 
     # 10s @ 44.1 kHz / 2048 downsample = 216 latent frames; round up to upstream's 237 to match.
@@ -220,8 +259,13 @@ def run_demo(
 
     # Decode latent -> stereo audio. Decoder upsamples by `downsample`.
     audio = decoder(latent).clamp(-1.0, 1.0).cpu()
+    audio = resample_output_audio(
+        audio,
+        input_sample_rate=_HF_CONFIG["sample_rate"],
+        output_sample_rate=_HF_CONFIG["output_sample_rate"],
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
-    torchaudio.save(str(output), audio[0], _HF_CONFIG["sample_rate"])
+    torchaudio.save(str(output), audio[0], _HF_CONFIG["output_sample_rate"])
     return output
 
 
@@ -233,12 +277,13 @@ def _parse_args(argv: list) -> argparse.Namespace:
     visual = p.add_mutually_exclusive_group()
     visual.add_argument("--video", type=Path, help="Optional video prompt for video-to-audio or video-to-music")
     visual.add_argument("--image", type=Path, help="Optional image prompt, repeated across the visual timeline")
+    p.add_argument("--audio", type=Path, help="Optional audio prompt for audio-conditioned generation")
     p.add_argument("--steps", type=int, default=100, help="Number of diffusion steps")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", type=str, default="cpu", choices=("cpu", "cuda"))
     args = p.parse_args(argv)
-    if not args.prompt and args.video is None and args.image is None:
-        p.error("at least one of --prompt, --video, or --image is required")
+    if not args.prompt and args.video is None and args.image is None and args.audio is None:
+        p.error("at least one of --prompt, --video, --image, or --audio is required")
     return args
 
 
@@ -250,6 +295,7 @@ def main(argv: list = None) -> int:
         output=args.output,
         video_path=args.video,
         image_path=args.image,
+        audio_path=args.audio,
         steps=args.steps,
         seed=args.seed,
         device=args.device,

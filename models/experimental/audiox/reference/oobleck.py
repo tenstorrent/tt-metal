@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""AudioX Oobleck VAE decoder (reference).
+"""AudioX Oobleck VAE blocks (reference).
 
 Mirrors ``audiox/models/autoencoders.py`` for the inference path AudioX
-exercises: VAE-bottleneck post-sample, decoder-only. The decoder upsamples
-the latent ``[B, 64, T]`` produced by the DiT into the audio waveform
-``[B, 2, T*2048]``.
+exercises. The encoder downsamples raw stereo audio into latent features,
+and the decoder upsamples the latent ``[B, 64, T]`` produced by the DiT
+back into the audio waveform ``[B, 2, T*2048]``.
 
 Upstream uses ``WNConv1d``/``WNConvTranspose1d`` from the ``dac`` library;
 both are simply ``torch.nn.utils.weight_norm`` wrappers around standard
@@ -93,6 +93,68 @@ class DecoderBlock(nn.Module):
         x = self.res2(x)
         x = self.res3(x)
         return x
+
+
+class EncoderBlock(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, stride: int):
+        super().__init__()
+        self.res1 = ResidualUnit(in_channels, dilation=1)
+        self.res2 = ResidualUnit(in_channels, dilation=3)
+        self.res3 = ResidualUnit(in_channels, dilation=9)
+        self.act = SnakeBeta(in_channels)
+        self.downsample = weight_norm(
+            nn.Conv1d(
+                in_channels,
+                out_channels,
+                kernel_size=2 * stride,
+                stride=stride,
+                padding=math.ceil(stride / 2),
+            )
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.res1(x)
+        x = self.res2(x)
+        x = self.res3(x)
+        return self.downsample(self.act(x))
+
+
+class OobleckEncoder(nn.Module):
+    def __init__(
+        self,
+        in_channels: int = 2,
+        channels: int = 128,
+        latent_dim: int = 64,
+        c_mults=(1, 2, 4, 8, 16),
+        strides=(2, 4, 4, 8, 8),
+    ):
+        super().__init__()
+        c_mults = (1,) + tuple(c_mults)
+        depth = len(c_mults)
+
+        self.encoded_channels = latent_dim
+        self.in_conv = weight_norm(nn.Conv1d(in_channels, c_mults[0] * channels, kernel_size=7, padding=3))
+        self.blocks = nn.ModuleList(
+            [
+                EncoderBlock(
+                    in_channels=c_mults[i] * channels,
+                    out_channels=c_mults[i + 1] * channels,
+                    stride=strides[i],
+                )
+                for i in range(depth - 1)
+            ]
+        )
+        self.out_act = SnakeBeta(c_mults[-1] * channels)
+        self.out_conv = weight_norm(nn.Conv1d(c_mults[-1] * channels, latent_dim, kernel_size=3, padding=1))
+
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        return self.forward(x)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.in_conv(x)
+        for block in self.blocks:
+            x = block(x)
+        return self.out_conv(self.out_act(x))
 
 
 class OobleckDecoder(nn.Module):

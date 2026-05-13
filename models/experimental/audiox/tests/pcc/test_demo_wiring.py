@@ -36,6 +36,13 @@ def test_metadata_batch_preserves_provided_visual_prompt():
     assert batch[0]["text_prompt"] == "hello"
 
 
+def test_metadata_batch_preserves_provided_audio_prompt():
+    audio = torch.randn(1, 2, 32)
+    batch = demo_mod._build_metadata_batch_with_inputs("hello", audio_prompt=audio)
+    assert batch[0]["audio_prompt"] is audio
+    assert batch[0]["text_prompt"] == "hello"
+
+
 def test_make_cross_attn_cond_concats_in_audiox_order():
     """Order matters for cross-attn cond: video, text, audio (AudioX uses this)."""
     multi_out = {
@@ -64,6 +71,7 @@ def test_hf_config_invariants():
     assert cfg["downsample"] == prod_strides
     assert cfg["embed_dim"] % cfg["num_heads"] == 0
     assert cfg["sample_rate"] * cfg["duration_seconds"] > 0
+    assert cfg["output_sample_rate"] == 16000
 
 
 def test_parse_args_requires_at_least_one_conditioner_input():
@@ -73,3 +81,8 @@ def test_parse_args_requires_at_least_one_conditioner_input():
         assert exc.code == 2
     else:  # pragma: no cover
         raise AssertionError("expected argparse failure when no prompt/video/image is supplied")
+
+
+def test_parse_args_accepts_audio_only():
+    args = demo_mod._parse_args(["--checkpoint", "/tmp/fake.safetensors", "--audio", "/tmp/fake.wav"])
+    assert str(args.audio) == "/tmp/fake.wav"

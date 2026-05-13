@@ -99,6 +99,50 @@ def _resolve_oobleck_decoder_block_key(upstream_key: str, n_blocks: int) -> tp.O
     return f"blocks.{block_idx}.res{res_idx}.{inner}.{res_rest}"
 
 
+def _resolve_oobleck_encoder_block_key(upstream_key: str, n_blocks: int) -> tp.Optional[str]:
+    if not upstream_key.startswith("layers."):
+        return None
+
+    parts = upstream_key.split(".")
+    idx = int(parts[1])
+    rest = ".".join(parts[2:])
+
+    if idx == 0:
+        return f"in_conv.{rest}"
+    if idx == n_blocks + 1:
+        return f"out_act.{rest}"
+    if idx == n_blocks + 2:
+        return f"out_conv.{rest}"
+    if not (1 <= idx <= n_blocks):
+        return None
+
+    block_idx = idx - 1
+    if not rest.startswith("layers."):
+        return None
+    block_parts = rest.split(".")
+    j = int(block_parts[1])
+    block_rest = ".".join(block_parts[2:])
+
+    if 0 <= j <= 2:
+        res_idx = j + 1
+        if not block_rest.startswith("layers."):
+            return None
+        res_parts = block_rest.split(".")
+        k = int(res_parts[1])
+        res_rest = ".".join(res_parts[2:])
+        inner_names = {0: "act1", 1: "conv1", 2: "act2", 3: "conv2"}
+        inner = inner_names.get(k)
+        if inner is None:
+            return None
+        return f"blocks.{block_idx}.res{res_idx}.{inner}.{res_rest}"
+
+    if j == 3:
+        return f"blocks.{block_idx}.act.{block_rest}"
+    if j == 4:
+        return f"blocks.{block_idx}.downsample.{block_rest}"
+    return None
+
+
 def remap_oobleck_decoder_state_dict(
     state_dict: tp.Mapping[str, torch.Tensor],
     prefix: str = "pretransform.model.decoder.",
@@ -114,6 +158,20 @@ def remap_oobleck_decoder_state_dict(
     out: tp.Dict[str, torch.Tensor] = {}
     for k, v in sub.items():
         new_key = _resolve_oobleck_decoder_block_key(k, n_blocks)
+        if new_key is not None:
+            out[new_key] = v
+    return out
+
+
+def remap_oobleck_encoder_state_dict(
+    state_dict: tp.Mapping[str, torch.Tensor],
+    prefix: str = "pretransform.model.encoder.",
+    n_blocks: int = 5,
+) -> tp.Dict[str, torch.Tensor]:
+    sub = _strip_prefix(state_dict, prefix)
+    out: tp.Dict[str, torch.Tensor] = {}
+    for k, v in sub.items():
+        new_key = _resolve_oobleck_encoder_block_key(k, n_blocks)
         if new_key is not None:
             out[new_key] = v
     return out

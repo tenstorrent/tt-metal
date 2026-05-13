@@ -26,13 +26,16 @@ import ttnn
 
 from models.experimental.audiox.demo.demo import (
     _HF_CONFIG,
+    _build_audio_pretransform,
     _build_conditioners,
     _build_decoder,
     _build_dit,
     _build_metadata_batch_with_inputs,
+    _load_audio_prompt,
     _load_visual_prompt,
     _make_cross_attn_cond,
 )
+from models.experimental.audiox.demo.media import resample_output_audio
 from models.experimental.audiox.tt.dit import TtDiffusionTransformer
 from models.experimental.audiox.tt.oobleck import TtOobleckDecoder
 from models.experimental.audiox.tt.sampler import sample_rf as tt_sample_rf
@@ -41,6 +44,7 @@ from models.experimental.audiox.utils.loader import (
     load_into,
     remap_conditioner_state_dict,
     remap_dit_state_dict,
+    remap_oobleck_encoder_state_dict,
     remap_oobleck_decoder_state_dict,
 )
 
@@ -62,6 +66,7 @@ def run_tt_demo(
     device,
     video_path: Path | None = None,
     image_path: Path | None = None,
+    audio_path: Path | None = None,
     steps: int = 100,
     seed: int = 0,
 ) -> Path:
@@ -73,16 +78,25 @@ def run_tt_demo(
     # 1. Load checkpoint and split per module.
     raw_sd = load_audiox_checkpoint(checkpoint)
     dit_sd = remap_dit_state_dict(raw_sd)
+    encoder_sd = remap_oobleck_encoder_state_dict(raw_sd, n_blocks=len(_HF_CONFIG["decoder_c_mults"]))
     decoder_sd = remap_oobleck_decoder_state_dict(raw_sd, n_blocks=len(_HF_CONFIG["decoder_c_mults"]))
 
     # 2. Conditioners on CPU. Build CPU reference modules and load weights.
-    multi = _build_conditioners()
+    audio_prompt = _load_audio_prompt(audio_path)
+    audio_pretransform = _build_audio_pretransform() if audio_prompt is not None else None
+    if audio_pretransform is not None:
+        load_into(audio_pretransform, encoder_sd, label="encoder")
+
+    multi = _build_conditioners(audio_pretransform=audio_pretransform)
     for cid in ("text_prompt", "video_prompt", "audio_prompt"):
         cond_sd = remap_conditioner_state_dict(raw_sd, conditioner_id=cid)
         load_into(multi.conditioners[cid], cond_sd, label=f"cond:{cid}")
 
     visual_prompt = _load_visual_prompt(video_path, image_path)
-    cond_out = multi(_build_metadata_batch_with_inputs(prompt=prompt, video_prompt=visual_prompt), "cpu")
+    cond_out = multi(
+        _build_metadata_batch_with_inputs(prompt=prompt, video_prompt=visual_prompt, audio_prompt=audio_prompt),
+        "cpu",
+    )
     cross_attn_cond_torch = _make_cross_attn_cond(cond_out)
 
     # 3. Build TT modules. We seed them from CPU reference state_dicts so the
@@ -130,8 +144,13 @@ def run_tt_demo(
 
     # 7. Pull audio back to CPU, drop the H=1 dim, transpose [B, T, 1, C] -> [B, C, T].
     audio = ttnn.to_torch(tt_audio_nhwc).squeeze(2).transpose(1, 2).clamp(-1.0, 1.0).cpu()
+    audio = resample_output_audio(
+        audio,
+        input_sample_rate=_HF_CONFIG["sample_rate"],
+        output_sample_rate=_HF_CONFIG["output_sample_rate"],
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
-    torchaudio.save(str(output), audio[0], _HF_CONFIG["sample_rate"])
+    torchaudio.save(str(output), audio[0], _HF_CONFIG["output_sample_rate"])
     return output
 
 
@@ -143,11 +162,12 @@ def _parse_args(argv: list) -> argparse.Namespace:
     visual = p.add_mutually_exclusive_group()
     visual.add_argument("--video", type=Path, help="Optional video prompt for video-to-audio or video-to-music")
     visual.add_argument("--image", type=Path, help="Optional image prompt, repeated across the visual timeline")
+    p.add_argument("--audio", type=Path, help="Optional audio prompt for audio-conditioned generation")
     p.add_argument("--steps", type=int, default=100)
     p.add_argument("--seed", type=int, default=0)
     args = p.parse_args(argv)
-    if not args.prompt and args.video is None and args.image is None:
-        p.error("at least one of --prompt, --video, or --image is required")
+    if not args.prompt and args.video is None and args.image is None and args.audio is None:
+        p.error("at least one of --prompt, --video, --image, or --audio is required")
     return args
 
 
@@ -162,6 +182,7 @@ def main(argv: list = None) -> int:
             device=device,
             video_path=args.video,
             image_path=args.image,
+            audio_path=args.audio,
             steps=args.steps,
             seed=args.seed,
         )
