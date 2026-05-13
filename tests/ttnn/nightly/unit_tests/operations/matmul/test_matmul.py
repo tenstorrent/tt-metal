@@ -470,8 +470,7 @@ def test_matmul_m_direction_padding(device):
     )
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        # compute_with_storage_grid_size=(13, 10),
-        compute_with_storage_grid_size=(8, 8),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(tttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         in0_block_w=1,
         out_subblock_h=1,
         out_subblock_w=1,

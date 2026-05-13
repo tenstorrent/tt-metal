@@ -3311,7 +3311,7 @@ def test_matmul_height_sharded_input_with_padding(device):
     ttnn_input_b = ttnn.fill_implicit_tile_padding(ttnn_input_b, -42)
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(4, 1),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
         in0_block_w=1,
         out_subblock_h=1,
         out_subblock_w=1,
@@ -3498,7 +3498,9 @@ def test_matmul_on_subdevice_1d_mcast_full_grid(device, sd_start, sd_end, mcast_
         k_size = 1024
 
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=sub_grid,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(sub_grid.x - 1, sub_grid.y - 1))}
+            ),
             in0_block_w=1,
             out_subblock_h=1,
             out_subblock_w=1,
