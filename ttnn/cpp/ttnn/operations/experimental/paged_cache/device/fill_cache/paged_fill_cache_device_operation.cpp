@@ -52,15 +52,32 @@ void PagedFillCacheDeviceOperation::validate_on_program_cache_miss(
         args.batch_idx_fallback < page_table_shape[0],
         "Batch idx must be within the page_table batch size");
 
+    // The program factory derives ``num_heads`` from
+    // ``input_tensor.padded_shape()[1]`` (CUDA-style: per-token write
+    // geometry comes from the input) and uses it as a compile-time arg
+    // for the kernel's per-block stride. If input and cache disagree
+    // on ``num_heads`` the kernel addresses would be wrong on either
+    // side: too-large strides walk off the end of the cache page,
+    // too-small ones skip tiles. The byte-count check below only
+    // guards against mismatched ``(block_size, head_dim)`` views;
+    // assert ``num_heads`` separately so the failure mode is explicit.
+    const uint32_t cache_num_heads = cache_shape[1];
+    const uint32_t input_num_heads = input_shape[1];
+    TT_FATAL(
+        input_num_heads == cache_num_heads,
+        "paged_fill_cache num_heads mismatch: input has {} heads but cache has {}. "
+        "The kernel uses input's num_heads as the per-block stride; they must agree.",
+        input_num_heads,
+        cache_num_heads);
+
     // Per-block byte-count consistency check. ``paged_fill_cache``'s
     // kernel addresses cache pages at a stride of
-    // ``cache_block_size * cache_num_kv_heads * cache_head_dim`` elements
+    // ``cache_block_size * num_heads * cache_head_dim`` elements
     // (1 per cache page). When the caller reinterprets the same buffer
     // with a different ``(block_size, head_dim)`` view — see
     // ``PagedFillCacheParams::block_size_override`` — that product must
     // be preserved. Trivially holds when no override is set and head
     // dims match.
-    const uint32_t cache_num_heads = cache_shape[1];
     const uint32_t cache_block_size = cache_shape[2];
     const uint32_t cache_head_dim = cache_shape[3];
     const uint32_t input_head_dim = input_shape[3];

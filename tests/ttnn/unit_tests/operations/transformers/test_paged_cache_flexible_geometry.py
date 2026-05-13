@@ -178,7 +178,8 @@ def test_paged_update_cache_legacy_no_override(block_size, head_dim, device):
     assert eq, f"legacy path diverged from reference: {msg}"
 
 
-def test_paged_update_cache_override_view_full_into_sliding_buffer(device):
+@pytest.mark.parametrize("num_kv_heads", [1, 8])
+def test_paged_update_cache_override_view_full_into_sliding_buffer(num_kv_heads, device):
     """Buffer allocated for sliding (block=128, head=256); call writes
     with the full-attention view (block=64, head=512) via the override.
 
@@ -190,18 +191,22 @@ def test_paged_update_cache_override_view_full_into_sliding_buffer(device):
     vLLM doubles sliding's block_size from 64 to 128 to match full's
     65,536-byte page; the shared DRAM buffer then needs to support both
     views.
+
+    Parametrized on ``num_kv_heads`` so the multi-head per-block stride
+    (``num_kv_heads * block_size * head_dim`` elements) gets exercised:
+    single-head values can't catch a regression where the wrong
+    dimension is used in the stride math.
     """
     torch.manual_seed(1)
 
     num_users = 4
-    num_kv_heads = 1
     # Allocation view: sliding shape.
     alloc_block_size = 128
     alloc_head_dim = 256
     # Call view: full shape.
     view_block_size = 64
     view_head_dim = 512
-    # Both views have 32768 elements/block, same per-block bytes.
+    # Both views have ``num_kv_heads * 32768`` elements/block, same per-block bytes.
     assert num_kv_heads * alloc_block_size * alloc_head_dim == num_kv_heads * view_block_size * view_head_dim
 
     # Max logical sequence length under the *view*; the page table indexes
@@ -253,9 +258,12 @@ def test_paged_update_cache_override_view_full_into_sliding_buffer(device):
     for u in range(num_users):
         pos = cache_idxs[u]
         physical_block = page_table[u, pos // view_block_size].item()
+        # ``x[0, u]`` is ``[KV, head_dim]``; target slot is ``[KV, 1, head_dim]``.
+        # ``unsqueeze(1)`` makes the kv-head dim broadcast-compatible with the
+        # 1-token slot — both single-head and multi-head land at the right slot.
         cache_ref_view[physical_block, 0:num_kv_heads, pos % view_block_size : pos % view_block_size + 1, :] = x[
-            :, u, :, :
-        ]
+            0, u
+        ].unsqueeze(1)
 
     eq, msg = comp_equal(cache_ref_view, got_view)
     assert eq, f"override view mismatch: {msg}"
@@ -551,13 +559,22 @@ def test_paged_fill_cache_legacy_no_override(device):
     )
 
 
-def test_paged_fill_cache_override_view_full_into_sliding_buffer(device):
+@pytest.mark.parametrize("num_kv_heads", [1, 8])
+def test_paged_fill_cache_override_view_full_into_sliding_buffer(num_kv_heads, device):
     """Cache allocated as sliding ``(128, 256)``, filled via override
-    with full ``(64, 512)``."""
+    with full ``(64, 512)``.
+
+    Parametrized on ``num_kv_heads`` so the kernel's per-block stride
+    (``num_kv_heads * block_size * head_dim``) is exercised on a
+    realistic multi-head case as well. ``paged_fill_cache``'s program
+    factory derives ``num_heads`` from ``input.padded_shape()[1]``, so
+    the multi-head case also catches regressions in the
+    ``input_num_heads == cache_num_heads`` validator.
+    """
     torch.manual_seed(11)
     _run_fill_cache_round_trip(
         device,
-        num_kv_heads=1,
+        num_kv_heads=num_kv_heads,
         alloc_block_size=128,
         alloc_head_dim=256,
         view_block_size=64,
