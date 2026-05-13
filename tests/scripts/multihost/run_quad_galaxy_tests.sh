@@ -294,36 +294,6 @@ resolve_deepseekv3_model() {
     echo "Using DeepSeek V3 model: ${DEEPSEEK_V3_HF_MODEL}"
 }
 
-setup_dual_galaxy_env() {
-    export RANK_BINDING_YAML="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
-    export MESH_GRAPH_DESCRIPTOR="tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto"
-    export HOSTS="$(extract_hosts_from_hostfile 2)"
-    export RANKFILE=/etc/mpirun/rankfile
-    export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
-    export_tcp_interface_for_multihost
-    mkdir -p logs
-    mkdir -p generated/artifacts
-
-    echo "Using dual Galaxy hosts: ${HOSTS}"
-    echo "Using MPI TCP interface (tt-run / Open MPI): ${TCP_INTERFACE}"
-    echo "Using dual Galaxy rankfile: ${RANKFILE}"
-
-    if ! test -f "$RANKFILE"; then
-        echo "File '$RANKFILE' does not exist."
-        exit 1
-    fi
-    if ! test -f "$RANK_BINDING_YAML"; then
-        echo "File '$RANK_BINDING_YAML' does not exist."
-        exit 1
-    fi
-
-    resolve_deepseekv3_model
-    resolve_deepseekv3_cache
-    export MESH_DEVICE="DUAL"
-    export USE_TORUS_MODE=0
-    echo "Dual Galaxy: USE_TORUS_MODE=0 (torus/ring mode disabled)."
-}
-
 setup_quad_galaxy_env() {
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
     export MESH_GRAPH_DESCRIPTOR="tt_metal/fabric/mesh_graph_descriptors/quad_galaxy_torus_xy_graph_descriptor.textproto"
@@ -477,21 +447,6 @@ _run_deepseekv3_tt() {
 # DeepSeek V3 unit tests (models/demos/deepseek_v3/tests/unit)
 ###############################################################################
 
-run_dual_deepseekv3_unit_tests() {
-    fail=0
-    setup_dual_galaxy_env
-
-    local junit_path="$(_test_run_summary_junit_path deepseekv3_unit_dual)"
-    _test_run_summary_exec _run_deepseekv3_tt pytest -svvv --junitxml="${junit_path}" models/demos/deepseek_v3/tests/unit
-    local ec="${_TEST_RUN_LAST_EC}"
-    fail+=$((fail + ec))
-    _test_run_summary_append_junit_rows "deepseekv3_unit_dual" "${junit_path}" "${ec}"
-
-    if [[ $fail -ne 0 ]]; then
-        exit 1
-    fi
-}
-
 run_quad_deepseekv3_unit_tests() {
     fail=0
     setup_quad_galaxy_env
@@ -511,21 +466,6 @@ run_quad_deepseekv3_unit_tests() {
 # DeepSeek V3 module tests (models/demos/deepseek_v3/tests)
 ###############################################################################
 
-run_dual_deepseekv3_module_tests() {
-    fail=0
-    setup_dual_galaxy_env
-
-    local junit_path="$(_test_run_summary_junit_path deepseekv3_module_dual)"
-    _test_run_summary_exec _run_deepseekv3_tt pytest -svvv --junitxml="${junit_path}" models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests
-    local ec="${_TEST_RUN_LAST_EC}"
-    fail+=$((fail + ec))
-    _test_run_summary_append_junit_rows "deepseekv3_module_dual" "${junit_path}" "${ec}"
-
-    if [[ $fail -ne 0 ]]; then
-        exit 1
-    fi
-}
-
 run_quad_deepseekv3_module_tests() {
     fail=0
     setup_quad_galaxy_env
@@ -544,32 +484,6 @@ run_quad_deepseekv3_module_tests() {
 ###############################################################################
 # Teacher forced accuracy tests
 ###############################################################################
-
-run_dual_teacher_forced_test() {
-    fail=0
-    setup_dual_galaxy_env
-    local timeout=$(_demo_timeout 3600)
-    local tf_args
-    tf_args="$(teacher_forced_pytest_args | paste -sd' ')"
-    local junit_path="$(_test_run_summary_junit_path teacher_forced_dual)"
-    local junit_flag="--junitxml=${junit_path}"
-
-    _test_run_summary_exec _run_deepseekv3_tt bash -c "set -f -o pipefail; pytest -svvv --timeout=$timeout ${junit_flag} ${tf_args} 2>&1 | tee generated/artifacts/dual_teacher_forced_output.log"
-    local ec="${_TEST_RUN_LAST_EC}"
-    fail+=$((fail + ec))
-    _test_run_summary_append_junit_rows "teacher_forced_dual" "${junit_path}" "${ec}"
-
-    # Extract accuracy metrics from logs and save to artifact file
-    if [[ -f generated/artifacts/dual_teacher_forced_output.log ]]; then
-        echo "Extracting accuracy metrics from test output..."
-        grep -E "Top-1 accuracy:|Top-5 accuracy:" generated/artifacts/dual_teacher_forced_output.log > generated/artifacts/dual_teacher_forced_accuracy.txt || true
-        echo "Accuracy metrics saved to generated/artifacts/dual_teacher_forced_accuracy.txt"
-    fi
-
-    if [[ $fail -ne 0 ]]; then
-        exit 1
-    fi
-}
 
 run_quad_teacher_forced_test() {
     fail=0
@@ -601,28 +515,6 @@ run_quad_teacher_forced_test() {
 # Demo tests (full)
 ###############################################################################
 
-run_dual_demo_test() {
-    setup_dual_galaxy_env
-    local timeout=$(_demo_timeout 2400)
-    local selector
-    selector="$(demo_case_selector "dual" "full")"
-    local junit_path="$(_test_run_summary_junit_path demo_full_dual)"
-    local junit_flag="--junitxml=${junit_path}"
-
-    _test_run_summary_exec _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout ${junit_flag} models/demos/deepseek_v3/demo/test_demo.py -k '$selector' 2>&1 | tee generated/artifacts/dual_demo_output.log"
-    _test_run_summary_append_junit_rows "demo_full_dual" "${junit_path}" "${_TEST_RUN_LAST_EC}"
-}
-
-run_dual_demo_mtp_test() {
-    setup_dual_galaxy_env
-    local timeout=$(_demo_timeout 2400)
-    local junit_path="$(_test_run_summary_junit_path demo_mtp_dual)"
-    local junit_flag="--junitxml=${junit_path}"
-
-    _test_run_summary_exec _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout ${junit_flag} models/demos/deepseek_v3/demo/test_mtp_demo.py 2>&1 | tee generated/artifacts/dual_demo_mtp_output.log"
-    _test_run_summary_append_junit_rows "demo_mtp_dual" "${junit_path}" "${_TEST_RUN_LAST_EC}"
-}
-
 run_quad_demo_test() {
     setup_quad_galaxy_env
     local timeout=$(_demo_timeout 3600)
@@ -649,18 +541,6 @@ run_quad_demo_mtp_test() {
 # Demo stress tests
 ###############################################################################
 
-run_dual_demo_stress_test() {
-    setup_dual_galaxy_env
-    local timeout=$(_demo_timeout 5400)
-    local selector
-    selector="$(demo_case_selector "dual" "stress")"
-    local junit_path="$(_test_run_summary_junit_path demo_stress_dual)"
-    local junit_flag="--junitxml=${junit_path}"
-
-    _test_run_summary_exec _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout ${junit_flag} models/demos/deepseek_v3/demo/test_demo.py -k '$selector' 2>&1 | tee generated/artifacts/dual_demo_stress_output.log"
-    _test_run_summary_append_junit_rows "demo_stress_dual" "${junit_path}" "${_TEST_RUN_LAST_EC}"
-}
-
 run_quad_demo_stress_test() {
     setup_quad_galaxy_env
     local timeout=$(_demo_timeout 5400)
@@ -677,15 +557,6 @@ run_quad_demo_stress_test() {
 # Composite runners
 ###############################################################################
 
-# All dual galaxy deepseek v3 integration tests
-run_dual_deepseekv3_integration_tests() {
-    run_dual_deepseekv3_module_tests
-    run_dual_teacher_forced_test
-    run_dual_demo_test
-    run_dual_demo_mtp_test
-    run_dual_demo_stress_test
-}
-
 # All quad galaxy deepseek v3 integration tests
 run_quad_deepseekv3_integration_tests() {
     run_quad_deepseekv3_module_tests
@@ -699,9 +570,6 @@ run_all_needed_local_tests() {
     local saved_upr_mode="${DEEPSEEK_DEMO_UPR_MODE:-}"
     export DEEPSEEK_DEMO_UPR_MODE="all"
 
-    run_dual_teacher_forced_test
-    run_dual_demo_test
-    run_dual_demo_stress_test
     run_quad_teacher_forced_test
     run_quad_demo_test
     run_quad_demo_stress_test
@@ -716,9 +584,7 @@ run_all_needed_local_tests() {
 # Run everything
 run_quad_galaxy_tests() {
     run_quad_galaxy_unit_tests
-    run_dual_deepseekv3_unit_tests
     run_quad_deepseekv3_unit_tests
-    run_dual_deepseekv3_integration_tests
     run_quad_deepseekv3_integration_tests
 }
 
@@ -865,29 +731,14 @@ main() {
         "unit_tests")
             run_quad_galaxy_unit_tests
             ;;
-        "dual_deepseekv3_unit_tests")
-            run_dual_deepseekv3_unit_tests
-            ;;
         "quad_deepseekv3_unit_tests")
             run_quad_deepseekv3_unit_tests
-            ;;
-        "dual_deepseekv3_module_tests")
-            run_dual_deepseekv3_module_tests
             ;;
         "quad_deepseekv3_module_tests")
             run_quad_deepseekv3_module_tests
             ;;
-        "dual_teacher_forced")
-            run_dual_teacher_forced_test
-            ;;
         "quad_teacher_forced")
             run_quad_teacher_forced_test
-            ;;
-        "dual_demo")
-            run_dual_demo_test
-            ;;
-        "dual_demo_mtp")
-            run_dual_demo_mtp_test
             ;;
         "quad_demo")
             run_quad_demo_test
@@ -895,14 +746,8 @@ main() {
         "quad_demo_mtp")
             run_quad_demo_mtp_test
             ;;
-        "dual_demo_stress")
-            run_dual_demo_stress_test
-            ;;
         "quad_demo_stress")
             run_quad_demo_stress_test
-            ;;
-        "dual_deepseekv3_integration_tests")
-            run_dual_deepseekv3_integration_tests
             ;;
         "quad_deepseekv3_integration_tests")
             run_quad_deepseekv3_integration_tests
@@ -915,7 +760,7 @@ main() {
             ;;
         *)
             echo "Unknown test function: $test_function" 1>&2
-            echo "Available options: unit_tests, dual_deepseekv3_unit_tests, quad_deepseekv3_unit_tests, dual_deepseekv3_module_tests, quad_deepseekv3_module_tests, dual_teacher_forced, quad_teacher_forced, dual_demo, dual_demo_mtp, quad_demo, quad_demo_mtp, dual_demo_stress, quad_demo_stress, dual_deepseekv3_integration_tests, quad_deepseekv3_integration_tests, all_needed_local_tests, all" 1>&2
+            echo "Available options: unit_tests, quad_deepseekv3_unit_tests, quad_deepseekv3_module_tests, quad_teacher_forced, quad_demo, quad_demo_mtp, quad_demo_stress, quad_deepseekv3_integration_tests, all_needed_local_tests, all" 1>&2
             echo "Optional second argument: UPR mode (all|32|8)" 1>&2
             echo "Optional flags: --no-torus  --model-path <path>  --cache-path <path>" 1>&2
             echo "Example: $0 quad_demo 32 --no-torus --model-path /data/deepseek/DeepSeek-R1-0528-dequantized-stacked --cache-path /data/deepseek/DeepSeek-R1-0528-Cache/CI" 1>&2
