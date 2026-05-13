@@ -1048,10 +1048,15 @@ static std::vector<Tensor> pool2d(
     bool input_is_block_float_tile =
         (input_tensor_4d.dtype() == DataType::BFLOAT8_B || input_tensor_4d.dtype() == DataType::BFLOAT4_B) &&
         input_tensor_4d.layout() == Layout::TILE;
+    // Gated to batch_size == 1. The fast path canonicalizes the input to (batch_size, 1, H*W, C)
+    // via a logical+padded reshape, which requires the padded spatial extent to split evenly
+    // across batches. Multi-batch callers (e.g. MobileNetV2 batch=10) typically pass flat
+    // (1, 1, N*H*W, C) tensors from conv2d whose tile-padded W dim doesn't divide cleanly by
+    // batch — they fall through to the sliding-window kernel, matching pre-#43820 behavior.
     bool is_global_pool =
         (kernel_size[0] == input_h && kernel_size[1] == input_w) &&
         (padding_check[0] == 0 && padding_check[1] == 0 && padding_check[2] == 0 && padding_check[3] == 0) &&
-        (dilation_h == 1 && dilation_w == 1) && !applied_shard_scheme.has_value();
+        (dilation_h == 1 && dilation_w == 1) && !applied_shard_scheme.has_value() && batch_size == 1;
     (void)input_is_block_float_tile;
 
     if (is_global_pool && pool_type == Pool2DType::AVG_POOL2D) {
