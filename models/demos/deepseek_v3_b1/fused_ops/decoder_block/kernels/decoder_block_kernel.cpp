@@ -2120,8 +2120,9 @@ void kernel_main() {
                 0,  // expert_dst_stride (unused for num_experts=1)
             };
 
-            // Gated Reduce (writer — no-op for BRISC)
-            using GatedReduceCTArgs = deepseek_b1_ops::GatedReduce::WriterCTArgs;
+            // Gated Reduce (writer — no-op for BRISC).
+            // WriterCTArgs is a template with all-default params; `<>` invokes defaults.
+            using GatedReduceCTArgs = deepseek_b1_ops::GatedReduce::WriterCTArgs<>;
             deepseek_b1_ops::GatedReduce::WriterArgs gated_reduce_args{};
 
             // Down Mcast — sender (reuse Routed::McastCTArgs: same grid, same persistent sender)
@@ -2472,6 +2473,14 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sram_down_proj_compact_in0"),
                 get_named_compile_time_arg_val("enable_routing")>;
 
+            // SRAM gather (A/B) compute — no-op for TRISC, but the lambda body
+            // references moe.routed.sram_{a,b}g_args so the member must exist.
+            deepseek_b1_ops::MoeGather::ComputeArgs sram_ag_args{};
+            deepseek_b1_ops::MoeGather::ComputeArgs sram_bg_args{};
+
+            // SRAM down Mcast (compute — no-op).
+            deepseek_b1_ops::Mcast::ComputeArgs sram_down_mcast_args{};
+
             // SRAM extended GatedReduce (compute, sender_core only). enable_scalar
             // tracks enable_routing: routing → multiply by per-K scalar; dense → 0.
             using SramGatedReduceCTArgs = deepseek_b1_ops::GatedReduce::ComputeCTArgs<
@@ -2647,6 +2656,22 @@ void kernel_main() {
                 get_named_compile_time_arg_val("mul_cb_in1"), get_named_compile_time_arg_val("mul_num_tiles"));
             unified_kernels::setup_sharded_buffer(
                 get_named_compile_time_arg_val("add_cb_in0"), get_named_compile_time_arg_val("add_cb_in0_wait_tiles"));
+        }
+        // SRAM weight CBs (L1-resident, pop_in1=false → push once, persists across iters).
+        // Skipped when SRAM disabled — cb_in1 has no host-side descriptor in that case.
+        if constexpr (
+            Core::Shared::is_gate_compute_core &&
+            get_named_compile_time_arg_val("sram_gate_proj_num_active_experts") > 0) {
+            unified_kernels::setup_sharded_buffer(get_named_compile_time_arg_val("sram_gate_proj_cb_in1"), 1);
+        }
+        if constexpr (
+            Core::Shared::is_up_compute_core && get_named_compile_time_arg_val("sram_up_proj_num_active_experts") > 0) {
+            unified_kernels::setup_sharded_buffer(get_named_compile_time_arg_val("sram_up_proj_cb_in1"), 1);
+        }
+        if constexpr (
+            Core::Shared::is_mcast_receiver_core &&
+            get_named_compile_time_arg_val("sram_down_proj_num_active_experts") > 0) {
+            unified_kernels::setup_sharded_buffer(get_named_compile_time_arg_val("sram_down_proj_cb_in1"), 1);
         }
 #endif
     };
