@@ -110,8 +110,6 @@ void kernel_main() {
 #if IS_TILE_LAYOUT
     constexpr uint32_t num_idle_cores_group = get_compile_time_arg_val(tile_layout_args_base);
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(tile_layout_args_base + 1);
-    constexpr uint32_t cb_metadata_batch_id = get_compile_time_arg_val(tile_layout_args_base + 2);
-    constexpr uint32_t cb_idle_c9_addr_scratch_id = get_compile_time_arg_val(tile_layout_args_base + 3);
 #endif
 
     // ===== Runtime Args =====
@@ -167,16 +165,18 @@ void kernel_main() {
     uint64_t mcast_counter_sem_noc_addr =
         get_noc_multicast_addr(mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, counter_ready_sem_l1_offset);
 
-    uint32_t data_ready_semaphore_id = get_arg_val<uint32_t>(rt_args++);
-    volatile tt_l1_ptr uint32_t* data_ready_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(data_ready_semaphore_id));
-
     uint32_t start_semaphore_id = get_arg_val<uint32_t>(rt_args++);
     uint32_t start_sem_l1_offset = get_semaphore(start_semaphore_id);
+    // Per-idle data_ready semaphores: each idle core in this sender's group has its own
+    // dedicated sem on the sender so the sender can wait on each individually instead of
+    // waiting on a shared counter.
+    volatile tt_l1_ptr uint32_t* data_ready_sem_ptrs[num_idle_cores_group];
     uint64_t idle_start_noc_addrs[num_idle_cores_group];
     uint32_t idle_noc_x[num_idle_cores_group];
     uint32_t idle_noc_y[num_idle_cores_group];
     for (uint32_t c = 0; c < num_idle_cores_group; c++) {
+        uint32_t data_ready_semaphore_id = get_arg_val<uint32_t>(rt_args++);
+        data_ready_sem_ptrs[c] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(data_ready_semaphore_id));
         idle_noc_x[c] = get_arg_val<uint32_t>(rt_args++);
         idle_noc_y[c] = get_arg_val<uint32_t>(rt_args++);
         idle_start_noc_addrs[c] = get_noc_addr(idle_noc_x[c], idle_noc_y[c], start_sem_l1_offset);
@@ -217,19 +217,17 @@ void kernel_main() {
     constexpr uint32_t offset = dispatch_group_idx * experts_per_dispatch_group + mesh_row * experts_per_chip;
     // Multicast expert token counts + receive_buf_addr to all idle cores
 #if IS_TILE_LAYOUT
-    // Each sender multicasts token counts + its own receive_buf_addr + its c_10 scratch L1
-    // address to its dedicated idle group. The mcast destination covers only this sender's
-    // k_s idle cores (per-sender bounding box), so all senders can multicast in parallel.
+    // Each sender multicasts token counts + its own receive_buf_addr to its dedicated idle
+    // group. The mcast destination covers only this sender's k_s idle cores (per-sender
+    // bounding box), so all senders can multicast in parallel.
     // Trailer layout (one l1_alignment region after counter_total_size bytes):
     //   [0]: receive_buf_addr  — sender's c_18 L1 offset (where idle NOC-writes untilized data)
-    //   [1]: idle_c9_scratch_addr — sender's c_10 L1 offset (where idle NOC-writes its c_9 addr)
     {
         constexpr uint32_t counter_total_size = experts_tok_counter_pages * aligned_experts_tok_counter_page_size;
 
         volatile tt_l1_ptr uint32_t* trailer_slot =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counter_base_addr + counter_total_size);
         trailer_slot[0] = get_write_ptr(cb_untilize_id);
-        trailer_slot[1] = get_write_ptr(cb_idle_c9_addr_scratch_id);
 
         constexpr uint32_t mcast_total_size = counter_total_size + l1_alignment;
         uint32_t off = 0;
@@ -257,24 +255,8 @@ void kernel_main() {
 
 #if IS_TILE_LAYOUT
     uint32_t untilize_base = get_write_ptr(cb_untilize_id);
-
-    // ===== Idle c_9 address handshake =====
-    // After the counter multicast above, each idle core knows where our c_10 scratch lives and
-    // will write its get_write_ptr(c_9) L1 offset to slot core_id * sizeof(uint32_t).  They then
-    // increment data_ready_sem (same sem reused for its normal per-batch role below).  Once we
-    // see data_ready_sem == num_idle_cores_group, all idle c_9 addresses are in our c_10 scratch.
-    noc_semaphore_wait(data_ready_sem_ptr, num_idle_cores_group);
-    noc_semaphore_set(data_ready_sem_ptr, 0);
-
-    // Copy the received L1 offsets out of c_10 into a plain uint32_t[] array, then build the
-    // per-idle-core NOC addresses used by the batch loop below for the metadata unicast.
-    uint32_t idle_c9_scratch_base = get_write_ptr(cb_idle_c9_addr_scratch_id);
-    uint32_t idle_c9_addrs[num_idle_cores_group];
-    uint64_t idle_metadata_noc_addrs[num_idle_cores_group];
-    for (uint32_t c = 0; c < num_idle_cores_group; c++) {
-        idle_c9_addrs[c] = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idle_c9_scratch_base + c * sizeof(uint32_t));
-        idle_metadata_noc_addrs[c] = get_noc_addr(idle_noc_x[c], idle_noc_y[c], idle_c9_addrs[c]);
-    }
+    // Idle cores now read their metadata from DRAM via reader_untilize, so the sender no
+    // longer unicasts metadata to them and does not need their c_9 L1 offsets.
 #else
     cb_reserve_back(cb_dispatched_buffer_id, read_batch_size);
     uint32_t buffer_base = get_write_ptr(cb_dispatched_buffer_id);
@@ -361,21 +343,8 @@ void kernel_main() {
                 }
             }
 
-            if (has_non_local) {
-                // Idle core only checks c_9[0] on the non-local path — skip the full metadata
-                // unicast and just write the sentinel directly.
-                noc_inline_dw_write(idle_metadata_noc_addrs[current_idle_core], ROUTE_INFO_SENTINEL);
-            } else {
-                // Unicast the full metadata batch to the idle core's c_9 so it can write each
-                // row directly to output DRAM, then set c_9[0] = batch_count as the signal.
-                uint32_t metadata_unicast_bytes = batch_count * aligned_dispatched_metadata_page_size;
-                noc_async_write(metadata_base, idle_metadata_noc_addrs[current_idle_core], metadata_unicast_bytes);
-                noc_async_write_barrier();
-                noc_inline_dw_write(idle_metadata_noc_addrs[current_idle_core], batch_count);
-            }
-            noc_async_write_barrier();
-
-            // Signal the idle core that the metadata batch is ready in its c_9.
+            // Idle reads its own metadata from DRAM (via reader_untilize on the same core) and
+            // decides the path locally, so we just tell it "go" — no c_9 write from us.
             noc_semaphore_inc(idle_start_noc_addrs[current_idle_core], 1);
             noc_async_atomic_barrier();
 
@@ -384,8 +353,9 @@ void kernel_main() {
             // multiple pending increments into a single consume, so if we advance without
             // syncing, a later start_sem inc to the same idle core gets silently dropped and
             // the idle deadlocks waiting for a signal that never re-arrives.
-            noc_semaphore_wait(data_ready_sem_ptr, 1);
-            noc_semaphore_set(data_ready_sem_ptr, 0);
+
+            noc_semaphore_wait(data_ready_sem_ptrs[current_idle_core], 1);
+            noc_semaphore_set(data_ready_sem_ptrs[current_idle_core], 0);
 #endif
 
             // In TILE_LAYOUT the sender only routes when has_non_local is true — idle already
