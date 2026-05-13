@@ -33,10 +33,12 @@ import argparse
 import csv
 import json
 import os
+import sys
 
 import pytest
 import torch
 from loguru import logger
+from tqdm import tqdm
 from tracy import signpost
 
 import ttnn
@@ -679,69 +681,72 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
 PROFILER_DUMP_EVERY = 10  # call ReadDeviceProfiler every N combos to avoid buffer overflow
 
 
-def _execute_sweep(mesh_device, run_op, combos, log_skip_label):
+def _execute_sweep(mesh_device, run_op, combos):
     """Warmup (compile + filter OOMs) + trace-based measurement, single mesh open.
 
     combos: list of (m_blk, k_blk, n_blk, sb_h, sb_w) tuples.
-    log_skip_label: callable combo -> string for warmup skip messages.
 
     Capture/execute/release one trace at a time so peak trace memory is bounded.
     Periodically calls ttnn.ReadDeviceProfiler to flush the device profiler
     buffer (requires TT_METAL_PROFILER_MID_RUN_DUMP=1 in the subprocess env);
     without it the buffer overflows around ~50 AGMM ops and timing data is lost.
 
-    Returns the list of combos that survived warmup.
+    Returns (valid_combos, skipped_count).
     """
-    # Warmup: compile programs, skip OOM. Periodic dumps prevent buffer overflow
-    # even on the warmup pass since each compile dispatches the op once.
+    # Warmup: compile programs, skip OOM silently (count and report at end).
     valid_combos = []
-    for i, c in enumerate(combos):
-        try:
-            run_op(*c, sync=False)
-            valid_combos.append(c)
-        except Exception as e:
-            logger.warning(f"Skipping {log_skip_label(c)}: {e}")
-        if (i + 1) % PROFILER_DUMP_EVERY == 0:
-            ttnn.synchronize_device(mesh_device)
-            ttnn.ReadDeviceProfiler(mesh_device)
+    skipped = 0
+    with tqdm(total=len(combos), desc="Warmup", unit="combo", file=sys.stdout, leave=False) as pbar:
+        for i, c in enumerate(combos):
+            try:
+                run_op(*c, sync=False)
+                valid_combos.append(c)
+            except Exception:
+                skipped += 1
+            pbar.update(1)
+            if (i + 1) % PROFILER_DUMP_EVERY == 0:
+                ttnn.synchronize_device(mesh_device)
+                ttnn.ReadDeviceProfiler(mesh_device)
     ttnn.synchronize_device(mesh_device)
     ttnn.ReadDeviceProfiler(mesh_device)  # flush remaining warmup data
 
     if not valid_combos:
-        return valid_combos
-
-    skipped = len(combos) - len(valid_combos)
-    if skipped:
-        logger.info(f"Warmup done: {len(valid_combos)} valid, {skipped} skipped (L1 OOM)")
-    else:
-        logger.info(f"Warmup done: all {len(valid_combos)} combos valid")
+        return valid_combos, skipped
 
     # Measured run: trace-capture + execute + release per combo. Trace execution
     # synchronizes devices before dispatch, eliminating host dispatch skew that
     # can stall fabric transfers. Single-trace-at-a-time keeps trace memory
     # bounded regardless of combo count.
     signpost("start")
-    for i, c in enumerate(valid_combos):
-        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        run_op(*c, sync=False)
-        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    with tqdm(total=len(valid_combos), desc="Measure", unit="combo", file=sys.stdout, leave=False) as pbar:
+        for i, c in enumerate(valid_combos):
+            trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            run_op(*c, sync=False)
+            ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
 
-        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-        ttnn.synchronize_device(mesh_device)
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
 
-        ttnn.release_trace(mesh_device, trace_id)
+            ttnn.release_trace(mesh_device, trace_id)
 
-        if (i + 1) % PROFILER_DUMP_EVERY == 0:
-            ttnn.ReadDeviceProfiler(mesh_device)
+            pbar.update(1)
+            if (i + 1) % PROFILER_DUMP_EVERY == 0:
+                ttnn.ReadDeviceProfiler(mesh_device)
     signpost("stop")
     ttnn.ReadDeviceProfiler(mesh_device)  # final flush of measured data
 
-    return valid_combos
+    return valid_combos, skipped
 
 
 # ============================================================================
 # WORKER TEST — profiled in subprocess by device profiler
 # ============================================================================
+
+
+def _quiet_loguru():
+    """Drop loguru's default INFO/WARNING sink — keep only ERROR+ on stderr."""
+    logger.remove()
+    logger.add(sys.stderr, level="ERROR")
 
 
 @pytest.mark.timeout(7200)  # 2h — one worker now covers the full (M, K, N) grid
@@ -759,6 +764,8 @@ def test_mm_sweep_worker(device_config, shape):
     Writes the list of combos that survived warmup to MM_SWEEP_VALID_COMBOS_FILE
     if set, so the orchestrator can line CSV rows up with combos.
     """
+    _quiet_loguru()
+
     cfg = resolve_config(device_config)
     M, K, N, cgx, cgy, is_agmm, use_case = shape
     uc_cfg = USE_CASE_CONFIGS[use_case]
@@ -770,34 +777,40 @@ def test_mm_sweep_worker(device_config, shape):
     if explicit_combos_str:
         # Each entry: [m_blk, k_blk, n_blk, sb_h, sb_w]
         combos = [tuple(c) for c in json.loads(explicit_combos_str)]
+        m_cands = sorted({c[0] for c in combos})
+        k_cands = sorted({c[1] for c in combos})
+        n_cands = sorted({c[2] for c in combos})
     else:
+        m_cands = get_mn_block_candidates(M_per_core)
+        k_cands = get_k_block_candidates(K_per_device)
+        n_cands = get_mn_block_candidates(N_per_core)
         combos = []
-        for m_block in get_mn_block_candidates(M_per_core):
+        for m_block in m_cands:
             kn_combos = generate_kn_combos(K_per_device, N_per_core, m_block=m_block, use_case=use_case)
             for k_blk, n_blk in kn_combos:
                 sb_h, sb_w = pick_subblock(m_block, n_blk)
                 combos.append((m_block, k_blk, n_blk, sb_h, sb_w))
 
+    op_type = "agmm" if is_agmm else "mm"
+    shape_id = f"{M}_{K}_{N}_{cgx}x{cgy}_{op_type}_{use_case}"
+
+    # Header: clean, one-time print of candidate lists + post-L1 combo total
+    print(f"\n=== {shape_id} on {device_config} ===", flush=True)
+    print(f"  per_core: M={M_per_core}  K_per_device={K_per_device}  N={N_per_core}", flush=True)
+    print(f"  M_blocks ({len(m_cands)}): {m_cands}", flush=True)
+    print(f"  K_blocks ({len(k_cands)}): {k_cands}", flush=True)
+    print(f"  N_blocks ({len(n_cands)}): {n_cands}", flush=True)
+    src = " (explicit)" if explicit_combos_str else " (post-L1 filter)"
+    print(f"  combos to measure: {len(combos)}{src}", flush=True)
+
     if not combos:
         pytest.skip("No valid (M, K, N) combos after L1 filter")
-
-    op_type = "agmm" if is_agmm else "mm"
-    src = "EXPLICIT" if explicit_combos_str else "auto-generated"
-    logger.info(
-        f"Worker [{device_config}] {op_type} ({use_case}): M={M} K={K} N={N} grid={cgx}x{cgy} "
-        f"per_core=(M={M_per_core},K={K_per_device},N={N_per_core}), {len(combos)} {src} combos"
-    )
 
     parent_mesh, mesh_device = open_mesh(cfg, trace_region_size=4194304)  # 4MB trace region (one trace at a time)
     try:
         run_op = _build_op_runner(cfg, mesh_device, M, K, N, ttnn.bfloat16, is_agmm, uc_cfg, ttnn.CoreCoord(cgx, cgy))
 
-        valid_combos = _execute_sweep(
-            mesh_device,
-            run_op,
-            combos,
-            log_skip_label=lambda c: f"M={c[0]} K={c[1]} N={c[2]}",
-        )
+        valid_combos, skipped = _execute_sweep(mesh_device, run_op, combos)
 
         if not valid_combos:
             pytest.skip("All combos failed during warmup")
@@ -808,7 +821,7 @@ def test_mm_sweep_worker(device_config, shape):
             with open(combos_file, "w") as f:
                 json.dump([list(c) for c in valid_combos], f)
 
-        logger.info(f"Worker done: {len(valid_combos)} combos measured")
+        print(f"  measured: {len(valid_combos)}  skipped (L1 OOM): {skipped}", flush=True)
 
     finally:
         close_mesh(parent_mesh)
@@ -850,9 +863,15 @@ def test_mm_sweep(device_config, shape):
     # Mid-run profiler dumps: required so the worker can flush the device
     # profiler buffer between combos without losing data.
     os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
+    # Quiet tt-metal C++ warnings during the sweep — only show errors. Worker
+    # also reconfigures loguru to ERROR-only.
+    saved_logger_level = os.environ.get("TT_LOGGER_LEVEL")
+    os.environ["TT_LOGGER_LEVEL"] = "Error"
 
+    # `-s` so the worker's print/tqdm output flows through to the user's terminal.
     command = (
-        f"pytest models/tt_dit/utils/sweep_mm_block_sizes.py" f"::test_mm_sweep_worker[{shape_id}-{device_config}] -x"
+        f"pytest models/tt_dit/utils/sweep_mm_block_sizes.py"
+        f"::test_mm_sweep_worker[{shape_id}-{device_config}] -x -s"
     )
 
     write_csv_header(CSV_FILE)
@@ -863,9 +882,13 @@ def test_mm_sweep(device_config, shape):
         os.environ.pop("MM_SWEEP_VALID_COMBOS_FILE", None)
         os.environ.pop("TT_METAL_PROFILER_MID_RUN_DUMP", None)
         os.environ.pop("MM_SWEEP_EXPLICIT_COMBOS", None)
+        if saved_logger_level is None:
+            os.environ.pop("TT_LOGGER_LEVEL", None)
+        else:
+            os.environ["TT_LOGGER_LEVEL"] = saved_logger_level
 
     if not os.path.exists(combos_file):
-        logger.warning(f"No valid_combos file at {combos_file}; worker may have skipped")
+        print(f"  WARN: no valid_combos file at {combos_file}", flush=True)
         return
     with open(combos_file) as f:
         valid_combos = [tuple(c) for c in json.load(f)]
@@ -873,7 +896,10 @@ def test_mm_sweep(device_config, shape):
 
     durations = parse_ops_log(subdir, expected_ops=len(valid_combos))
     if len(durations) != len(valid_combos):
-        logger.warning(f"[{shape_id}] expected {len(valid_combos)} ops in profiler log, got {len(durations)}")
+        print(
+            f"  WARN: expected {len(valid_combos)} ops in profiler log, got {len(durations)}",
+            flush=True,
+        )
 
     all_results = []
     for i, (m_blk, k_blk, n_blk, sb_h, sb_w) in enumerate(valid_combos):
@@ -915,21 +941,22 @@ def test_mm_sweep(device_config, shape):
         )
 
     if not all_results:
-        logger.warning(f"No valid results for [{device_config}] {shape_id}")
+        print(f"  WARN: no valid results", flush=True)
         return
 
     all_results.sort(key=lambda r: r["duration_ns"])
     best = all_results[0]
-    logger.info(
-        f"BEST for [{device_config}] {shape_id}: "
-        f"M={best['M_block']} K={best['K_block']} N={best['N_block']} "
-        f"sb=({best['subblock_h']},{best['subblock_w']}) -> {best['duration_ns']:.0f} ns"
+    print(
+        f"  BEST: M={best['M_block']} K={best['K_block']} N={best['N_block']} "
+        f"sb=({best['subblock_h']},{best['subblock_w']}) -> {best['duration_ns']:.0f} ns",
+        flush=True,
     )
-    logger.info("Top 5:")
+    print("  Top 5:", flush=True)
     for rank, r in enumerate(all_results[:5], 1):
-        logger.info(
-            f"  #{rank}: M={r['M_block']} K={r['K_block']} N={r['N_block']} "
-            f"sb=({r['subblock_h']},{r['subblock_w']}) -> {r['duration_ns']:.0f} ns"
+        print(
+            f"    #{rank}: M={r['M_block']} K={r['K_block']} N={r['N_block']} "
+            f"sb=({r['subblock_h']},{r['subblock_w']}) -> {r['duration_ns']:.0f} ns",
+            flush=True,
         )
 
 
