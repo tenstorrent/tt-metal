@@ -20,19 +20,20 @@ Description:
     triage run (per args/context) and reused by other scripts.
 
 Owner:
-    miacim
+    onenezicTT
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from triage import ScriptConfig, triage_singleton, run_script, log_check
+from triage import ScriptConfig, ScriptPriority, triage_singleton, run_script, log_check
 from inspector_data import run as get_inspector_data, InspectorData
 
 script_config = ScriptConfig(
     data_provider=True,
     depends=["inspector_data"],
+    priority=ScriptPriority.HIGH,
 )
 
 
@@ -59,6 +60,9 @@ class OperationRuntimeMap:
 
     def __len__(self) -> int:
         return len(self._map)
+
+    def items(self):
+        return self._map.items()
 
     def lookup(self, host_assigned_id: int) -> OperationInfo | None:
         """Resolve host_assigned_id to its Inspector entry, or None if not found."""
