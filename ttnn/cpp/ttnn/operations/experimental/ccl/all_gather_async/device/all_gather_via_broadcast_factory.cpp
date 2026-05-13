@@ -34,12 +34,10 @@ AllGatherViaBroadcastFactory::cached_mesh_workload_t AllGatherViaBroadcastFactor
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
     log_debug(tt::LogOp, "All devices are ready, starting program execution");
 
-    uint32_t chip_id = 0;
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(
             operation_attributes,
             coord,
-            chip_id++,
             tensor_args.input_tensor,
             output_tensor,
             final_barrier_semaphore,
@@ -72,7 +70,6 @@ CoreRangeSet get_cores_close_to_erisc(uint32_t num_workers, bool row_wise) {
 /*AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::create_at(
     const AllGatherAsyncParams& operation_attributes,
     const ttnn::MeshCoordinate& sender_device_coord,
-    const uint32_t chip_id,
     const Tensor& input,
     const Tensor& output_tensor,
     const tt::tt_metal::GlobalSemaphore& semaphore,
@@ -280,7 +277,6 @@ writer_rt_args);
 AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::create_at(
     const AllGatherAsyncParams& operation_attributes,
     const ttnn::MeshCoordinate& sender_device_coord,
-    const uint32_t chip_id,
     const Tensor& input,
     const Tensor& output_tensor,
     const tt::tt_metal::GlobalSemaphore& semaphore,
@@ -288,12 +284,12 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
     const auto& input_tensor = input;
     tt::tt_metal::Program program{};
 
-    uint32_t ring_size = operation_attributes.ring_size;
-    uint32_t ring_index = ::ttnn::ccl::get_linearized_index_from_physical_coord(
+    uint32_t num_devices = operation_attributes.ring_size;
+    uint32_t device_idx = ::ttnn::ccl::get_linearized_index_from_physical_coord(
         input_tensor, sender_device_coord, operation_attributes.cluster_axis);
 
-    [[maybe_unused]] bool is_first_chip = ring_index == 0;
-    [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
+    [[maybe_unused]] bool is_first_chip = device_idx == 0;
+    [[maybe_unused]] bool is_last_chip = device_idx == num_devices - 1;
     log_trace(
         tt::LogOp,
         "DEBUG: device coord: {}, is_first_chip: {}, is_last_chip: {}",
@@ -309,7 +305,7 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
 
     // Get OP Config, topology config
     auto [num_targets_forward, num_targets_backward] = ::ttnn::ccl::get_forward_backward_line_mcast_distance(
-        ring_size, ring_index, operation_attributes.topology, true);
+        num_devices, device_idx, operation_attributes.topology, true);
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
 
@@ -338,8 +334,32 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
         num_input_pages * input_page_size,
         output_page_size);
     const uint32_t num_output_pages = (num_input_pages * input_page_size) / output_page_size;
-    // offset into the gathered tensor
-    uint32_t write_page_offset = num_output_pages * ring_index;
+
+    // Compute output_pages_per_stride: consecutive output pages before skipping to next stride.
+    // Equal to num_input_pages / (product of dims before gather_dim).
+    // For tile layout, dims rank-2 and rank-1 are divided by TILE_SIZE to get page extents.
+    auto input_shape = input_tensor.padded_shape();
+    uint32_t rank = input_shape.rank();
+    int32_t gather_dim = operation_attributes.dim;
+    if (gather_dim < 0) {
+        gather_dim += rank;
+    }
+    uint32_t outer_pages = 1;
+    for (int32_t i = 0; i < gather_dim; i++) {
+        uint32_t extent = input_shape[i];
+        if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
+            if (i == rank - 2) {
+                extent /= tt::constants::TILE_HEIGHT;
+            } else if (i == rank - 1) {
+                extent /= tt::constants::TILE_WIDTH;
+            }
+        }
+        outer_pages *= extent;
+    }
+    uint32_t output_pages_per_stride = num_input_pages / outer_pages;
+    uint32_t output_page_stride = (num_devices - 1) * output_pages_per_stride + 1;
+    TT_FATAL(output_pages_per_stride > 0, "output_pages_per_stride must be > 0");
+    // TODO gather_dim=rank-1 with RM is unsupported -> each page gets wider
 
     // L1 Scratch CB Creation
     uint32_t cb0_id = tt::CB::c_in0;
@@ -355,24 +375,28 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
         cb0_id,                                                 // cb0_id
         input_page_size,                                        // input tensor page size
         output_page_size,                                       // output tensor page size
+        output_pages_per_stride,                                // consecutive pages before a stride jump
+        output_page_stride,                                     // jump amount at stride boundary
         cb_page_size,                                           // cb entry size
         MAX_PACKET_SIZE_BYTES,                                  // packet_size
         forward_coord.has_value() ? num_targets_forward : 0,    // range_hops
         backward_coord.has_value() ? num_targets_backward : 0,  // range_hops alternate (opposite dir)
     };
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);   // [9...]
+    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);  // [next...]
 
     // Writer kernel
     std::vector<uint32_t> writer_compile_args = {
-        cb0_id,  // cb0_id
-        output_page_size,
-        cb_page_size,
+        cb0_id,                                                 // cb0_id
+        output_page_size,                                       //
+        output_pages_per_stride,                                // consecutive pages before a stride jump
+        output_page_stride,                                     // jump amount at stride boundary
+        cb_page_size,                                           //
         MAX_PACKET_SIZE_BYTES,                                  // packet_size
         backward_coord.has_value() ? num_targets_backward : 0,  // range_hops
         forward_coord.has_value() ? num_targets_forward : 0,    // range_hops alternate (opposite dir)
     };
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);  // [8...]
 
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -406,27 +430,34 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
         uint32_t remainder = num_input_pages % operation_attributes.num_links;
         uint32_t input_tile_id_start = (link * input_pages_per_link) + std::min(link, remainder);
         uint32_t input_tile_id_end = ((link + 1) * input_pages_per_link) + std::min(link + 1, remainder);
-        uint32_t output_tile_id_start = (input_tile_id_start * num_output_pages) / num_input_pages;
-        uint32_t output_tile_id_end = (input_tile_id_end * num_output_pages) / num_input_pages;
-        // page id in gathered tensor with the write page offset
-        output_tile_id_start += write_page_offset;
-        output_tile_id_end += write_page_offset;
+
+        // Output page range assuming the output tensor only contains our slice
+        uint32_t local_output_start = (input_tile_id_start * num_output_pages) / num_input_pages;
+        uint32_t local_output_end = (input_tile_id_end * num_output_pages) / num_input_pages;
+        uint32_t num_output_pages = local_output_end - local_output_start;
+        // Now derive output page range in the actual output tensor containing all device slices:
+        //   output_page_id = (local / G * N + device_idx) * G + local % G
+        uint32_t output_page_id_start =
+            (local_output_start / output_pages_per_stride * num_devices + device_idx) * output_pages_per_stride +
+            local_output_start % output_pages_per_stride;
+        uint32_t output_page_in_stride_start = local_output_start % output_pages_per_stride;
 
         bool wait_output_semaphore = (link == 0);
         bool reset_global_semaphore = (link == 0);
-        uint32_t out_ready_sem_wait_value = ring_size * operation_attributes.num_links;
+        uint32_t out_ready_sem_wait_value = num_devices * operation_attributes.num_links;
 
         // auto num_connections = (int)forward_coord.has_value() + (int)backward_coord.has_value();
 
         std::vector<uint32_t> reader_rt_args = {
             input_tensor.buffer()->address(),   // input tensor address
             output_tensor.buffer()->address(),  // output tensor address
-            input_tile_id_start,                // tile_id_start
-            input_tile_id_end,                  // tile_id_end
-            output_tile_id_start,
-            output_tile_id_end,
-            chip_id,
-            1,  // num_connections, // TODO hardcoded
+            input_tile_id_start,                // input_page_id_start
+            input_tile_id_end,                  // input_page_id_end
+            output_page_id_start,               // output page start
+            output_page_in_stride_start,        // initial position within stride
+            num_output_pages,                   // number of output pages for this worker
+            device_idx,                         // this device's index
+            1,                                  // num_connections // TODO hardcoded
         };
         // TODO handle the `if connection` correctly, i.e. if doesnt exist we shouldnt init fabric
         const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
@@ -443,20 +474,21 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
         }
 
         std::vector<uint32_t> writer_rt_args = {
-            output_tensor.buffer()->address(),  // tensor_address0  //HERE
+            output_tensor.buffer()->address(),  // output tensor address
             semaphore.address(),                // out_ready_sem_bank_addr (absolute address)
             barrier_semaphore.address(),        // barrier_sem
-            output_tile_id_start,
-            output_tile_id_end,
-            chip_id,
-            wait_output_semaphore,     // wait_output_semaphore
-            reset_global_semaphore,    // reset_global_semaphore
-            drain_sync_core.x,         // out_ready_sem_noc0_x
-            drain_sync_core.y,         // out_ready_sem_noc0_y
-            out_ready_sem_wait_value,  // out_ready_sem_wait_value
-            barrier_core.x,            // barrier_sem_noc0_x
-            barrier_core.y,            // barrier_sem_noc0_y
-            1,                         // num_connections, // TODO hardcoded
+            output_page_id_start,               // output page start
+            output_page_in_stride_start,        // initial position within stride
+            num_output_pages,                   // number of output pages for this worker
+            device_idx,                         // this device's index
+            wait_output_semaphore,              // wait_output_semaphore
+            reset_global_semaphore,             // reset_global_semaphore
+            drain_sync_core.x,                  // out_ready_sem_noc0_x
+            drain_sync_core.y,                  // out_ready_sem_noc0_y
+            out_ready_sem_wait_value,           // out_ready_sem_wait_value
+            barrier_core.x,                     // barrier_sem_noc0_x
+            barrier_core.y,                     // barrier_sem_noc0_y
+            1,                                  // num_connections, // TODO hardcoded
         };
 
         /*const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
@@ -493,7 +525,7 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
         .worker_sender_writer_kernel_id = worker_sender_writer_kernel_id,
         .semaphore = semaphore,
         .barrier_semaphore = barrier_semaphore,
-        .ring_index = ring_index,
+        .ring_index = device_idx,
     };
 
     return {std::move(program), std::move(shared_variables)};

@@ -42,7 +42,6 @@ private:
     static cached_program_t create_at(
         const AllGatherAsyncParams& operation_attributes,
         const ttnn::MeshCoordinate& sender_device_coord,
-        const uint32_t chip_id,  // TODO maybe not needed ...
         const Tensor& input,
         const Tensor& output_tensor,
         const tt::tt_metal::GlobalSemaphore& semaphore,

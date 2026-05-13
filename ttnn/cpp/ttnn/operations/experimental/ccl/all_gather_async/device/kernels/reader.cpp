@@ -30,12 +30,14 @@ void kernel_main() {
     constexpr uint32_t cb0_id = get_compile_time_arg_val(0);
     constexpr uint32_t input_page_size = get_compile_time_arg_val(1);
     constexpr uint32_t output_page_size = get_compile_time_arg_val(2);
-    constexpr uint32_t cb_page_size = get_compile_time_arg_val(3);
-    constexpr uint32_t packet_size = get_compile_time_arg_val(4);
-    constexpr uint8_t range_hops = get_compile_time_arg_val(5);
-    constexpr uint8_t range_hops_alt = get_compile_time_arg_val(6);
+    constexpr uint32_t output_pages_per_stride = get_compile_time_arg_val(3);
+    constexpr uint32_t output_page_stride = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_page_size = get_compile_time_arg_val(5);
+    constexpr uint32_t packet_size = get_compile_time_arg_val(6);
+    constexpr uint8_t range_hops = get_compile_time_arg_val(7);
+    constexpr uint8_t range_hops_alt = get_compile_time_arg_val(8);
     constexpr bool load_balance_across_two_routes = true;  // TODO hardcoded, = true for ring with even devices
-    constexpr auto input_tensor_args = TensorAccessorArgs<7>();
+    constexpr auto input_tensor_args = TensorAccessorArgs<9>();
     constexpr auto output_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t inputs_per_cb_page = cb_page_size / input_page_size;  // TODO duplicate of pages_per_cb_entry?
@@ -52,8 +54,9 @@ void kernel_main() {
     const uint32_t input_page_id_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t input_page_id_end = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t output_page_id_start = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t output_page_id_end = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t chip_id = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t output_page_in_stride_start = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_output_pages = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t device_idx = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_connections = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
 
@@ -107,12 +110,28 @@ void kernel_main() {
     // "iterator" for input_tensor
     // TODO for per-bank iteration, start from (input_page_id_start + bank) and incr by += num_banks
     auto input_page_id = input_page_id_start;
+    auto valid_input_page_id = [&]() __attribute__((always_inline)) { return input_page_id < input_page_id_end; };
     auto next_input_page_id = [&]() __attribute__((always_inline)) { return input_page_id++; };
 
     // "iterator" for output_tensor
+    // Walks output_pages_per_stride consecutive pages, then jumps by output_page_stride
+    // to skip over other devices' slices. Supports any gather dim for any N-D shape.
     // TODO for per-bank iteration, start from (input_page_id_start + bank) and incr by += num_banks
-    auto output_page_id = output_page_id_start;
-    auto next_output_page_id = [&]() __attribute__((always_inline)) { return output_page_id++; };
+    uint32_t output_page_id = output_page_id_start;
+    uint32_t output_pages_sent = 0;
+    uint32_t output_page_in_stride = output_page_in_stride_start;
+    auto valid_output_page_id = [&]() __attribute__((always_inline)) { return output_pages_sent < num_output_pages; };
+    auto next_output_page_id = [&]() __attribute__((always_inline)) {
+        auto page_id = output_page_id;
+        output_pages_sent++;
+        if (++output_page_in_stride == output_pages_per_stride) {
+            output_page_in_stride = 0;
+            output_page_id += output_page_stride;
+        } else {
+            output_page_id++;
+        }
+        return page_id;
+    };
 
     // We reserve one to kick start the pipeline, and then it is steady state
     cb.reserve_back(2);
@@ -122,9 +141,9 @@ void kernel_main() {
     // uint32_t first_page = input_page_id_start + bank;
     // bank = (bank == num_banks - 1) ? 0 : bank + 1;
 
-    while (input_page_id < input_page_id_end) {
+    while (valid_input_page_id()) {
         // fill CB page
-        for (uint32_t i = 0; i < inputs_per_cb_page && input_page_id < input_page_id_end; ++i) {
+        for (uint32_t i = 0; i < inputs_per_cb_page && valid_input_page_id(); ++i) {
             auto page_id = next_input_page_id();
             noc.async_read<Noc::TxnIdMode::ENABLED>(
                 input_tensor_accessor,
@@ -152,7 +171,7 @@ void kernel_main() {
             wait_trid = (wait_trid == max_trid) ? 1 : (wait_trid + 1);
 
             // Send Fabric data in our dir
-            for (uint32_t i = 0; i < pages_per_cb_entry && output_page_id < output_page_id_end; ++i) {
+            for (uint32_t i = 0; i < pages_per_cb_entry && valid_output_page_id(); ++i) {
                 auto page_id = next_output_page_id();
                 auto fabric_tensor_page_addr =
                     tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_tensor_accessor, page_id, 0);
@@ -179,7 +198,7 @@ void kernel_main() {
         wait_trid = (wait_trid == max_trid) ? 1 : (wait_trid + 1);
 
         // Send Fabric data in our dir
-        for (uint32_t i = 0; i < pages_per_cb_entry && output_page_id < output_page_id_end; ++i) {
+        for (uint32_t i = 0; i < pages_per_cb_entry && valid_output_page_id(); ++i) {
             auto page_id = next_output_page_id();
             auto fabric_tensor_page_addr =
                 tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_tensor_accessor, page_id, 0);

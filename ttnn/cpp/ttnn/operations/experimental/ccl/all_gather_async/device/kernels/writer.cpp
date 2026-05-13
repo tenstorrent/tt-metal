@@ -31,12 +31,14 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     constexpr uint32_t cb0_id = get_compile_time_arg_val(0);
     constexpr uint32_t output_page_size = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_page_size = get_compile_time_arg_val(2);
-    constexpr uint32_t packet_size = get_compile_time_arg_val(3);
-    constexpr uint8_t range_hops = get_compile_time_arg_val(4);
-    constexpr uint8_t range_hops_alt = get_compile_time_arg_val(5);
+    constexpr uint32_t output_pages_per_stride = get_compile_time_arg_val(2);
+    constexpr uint32_t output_page_stride = get_compile_time_arg_val(3);
+    constexpr uint32_t cb_page_size = get_compile_time_arg_val(4);
+    constexpr uint32_t packet_size = get_compile_time_arg_val(5);
+    constexpr uint8_t range_hops = get_compile_time_arg_val(6);
+    constexpr uint8_t range_hops_alt = get_compile_time_arg_val(7);
     constexpr bool load_balance_across_two_routes = true;  // TODO hardcoded, = true for ring with even devices
-    constexpr auto output_tensor_args = TensorAccessorArgs<6>();
+    constexpr auto output_tensor_args = TensorAccessorArgs<8>();
 
     constexpr uint32_t pages_per_cb_entry = cb_page_size / output_page_size;
     constexpr uint32_t num_banks = NUM_DRAM_BANKS;  // compile-time constant available in kernels
@@ -49,8 +51,9 @@ void kernel_main() {
     const address_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
     const size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t output_page_id_start = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t output_page_id_end = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t chip_id = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t output_page_in_stride_start = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_output_pages = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t device_idx = get_arg_val<uint32_t>(arg_idx++);
     const bool wait_output_semaphore = get_arg_val<uint32_t>(arg_idx++);
     const bool reset_global_semaphore = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
@@ -116,20 +119,30 @@ void kernel_main() {
     ///////////////////////////////////////////////////
 
     // "iterator" for output_tensor
+    // Walks output_pages_per_stride consecutive pages, then jumps by output_page_stride
+    // to skip over other devices' slices. Supports any gather dim for any N-D shape.
     // TODO for per-bank iteration, start from (input_page_id_start + bank) and incr by += num_banks
-    auto output_page_id = output_page_id_start;
-    auto next_output_page_id = [&]() __attribute__((always_inline)) { return output_page_id++; };
+    uint32_t output_page_id = output_page_id_start;
+    uint32_t output_pages_sent = 0;
+    uint32_t output_page_in_stride = output_page_in_stride_start;
+    auto valid_output_page_id = [&]() __attribute__((always_inline)) { return output_pages_sent < num_output_pages; };
+    auto next_output_page_id = [&]() __attribute__((always_inline)) {
+        auto page_id = output_page_id;
+        output_pages_sent++;
+        if (++output_page_in_stride == output_pages_per_stride) {
+            output_page_in_stride = 0;
+            output_page_id += output_page_stride;
+        } else {
+            output_page_id++;
+        }
+        return page_id;
+    };
 
-    // uint32_t bank = chip_id; // starting
-    // for (uint32_t b = 0; b < num_banks; ++b) {
-    // uint32_t first_page = output_page_id_start + bank;
-    // bank = (bank == num_banks - 1) ? 0 : bank + 1;
-
-    while (output_page_id < output_page_id_end) {
+    while (valid_output_page_id()) {
         cb.wait_front(1);
         auto l1_read_addr = cb.get_read_ptr();
 
-        for (uint32_t i = 0; i < pages_per_cb_entry && output_page_id < output_page_id_end; ++i) {
+        for (uint32_t i = 0; i < pages_per_cb_entry && valid_output_page_id(); ++i) {
             auto page_id = next_output_page_id();
             // Fabric write
             auto fabric_tensor_page_addr =
