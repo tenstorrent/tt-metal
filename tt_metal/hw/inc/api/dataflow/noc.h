@@ -6,8 +6,6 @@
 
 #include "api/dataflow/dataflow_api.h"
 
-namespace experimental {
-
 struct MulticastEndpoint;
 class DataflowBuffer;
 
@@ -612,5 +610,3 @@ public:
 private:
     uint8_t noc_id_;
 };
-
-}  // namespace experimental

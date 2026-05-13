@@ -6,9 +6,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);               // batch_var
@@ -52,13 +52,13 @@ void kernel_main() {
     const uint32_t old_running_var_tile_bytes = get_tile_size(cb_id_old_running_var);
     const auto old_running_var = TensorAccessor(old_running_var_args, old_running_var_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_id_src_obj(cb_id_src);
-    experimental::CircularBuffer cb_id_dst_obj(cb_id_dst);
-    experimental::CircularBuffer cb_id_old_running_mean_obj(cb_id_old_running_mean);
-    experimental::CircularBuffer cb_id_old_running_var_obj(cb_id_old_running_var);
-    experimental::CircularBuffer cb_id_updated_running_mean_obj(cb_id_updated_running_mean);
-    experimental::CircularBuffer cb_id_updated_running_var_obj(cb_id_updated_running_var);
+    Noc noc;
+    CircularBuffer cb_id_src_obj(cb_id_src);
+    CircularBuffer cb_id_dst_obj(cb_id_dst);
+    CircularBuffer cb_id_old_running_mean_obj(cb_id_old_running_mean);
+    CircularBuffer cb_id_old_running_var_obj(cb_id_old_running_var);
+    CircularBuffer cb_id_updated_running_mean_obj(cb_id_updated_running_mean);
+    CircularBuffer cb_id_updated_running_var_obj(cb_id_updated_running_var);
 
     uint32_t tiles_per_batch = HtWt * C;
     uint32_t start_n = start_tile_id / tiles_per_batch;

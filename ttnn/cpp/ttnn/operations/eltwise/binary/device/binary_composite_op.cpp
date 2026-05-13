@@ -20,6 +20,7 @@
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/device.hpp"
 #include <variant>
+#include <tt-metalium/sub_device_types.hpp>
 
 namespace ttnn {
 
@@ -175,7 +176,8 @@ Tensor div(
     ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     const bool is_int32 = input.dtype() == DataType::INT32;
 
     if (is_int32) {
@@ -197,7 +199,8 @@ Tensor div(
                 lhs_activations,
                 rhs_activations,
                 /*fast_and_approximate_mode=*/std::nullopt,
-                sub_core_grids);
+                sub_core_grids,
+                sub_device_id);
         }
         if (rounding_mode == "trunc") {
             return ttnn::detail::invoke_binary_ng(
@@ -211,7 +214,8 @@ Tensor div(
                 lhs_activations,
                 rhs_activations,
                 /*fast_and_approximate_mode=*/std::nullopt,
-                sub_core_grids);
+                sub_core_grids,
+                sub_device_id);
         }
         // rounding_mode = None
         TT_FATAL(
@@ -229,7 +233,8 @@ Tensor div(
             lhs_activations,
             rhs_activations,
             std::nullopt,  // fast_and_approximate_mode
-            sub_core_grids);
+            sub_core_grids,
+            sub_device_id);
     }
 
     // Non-int32 inputs: with rounding_mode=None, use DIV directly; with "trunc"/"floor",
@@ -246,7 +251,8 @@ Tensor div(
             lhs_activations,
             rhs_activations,
             fast_and_approximate_mode,
-            sub_core_grids);
+            sub_core_grids,
+            sub_device_id);
     }
 
     TT_FATAL(
@@ -273,7 +279,8 @@ Tensor div(
         lhs_activations,
         rhs_activations,
         effective_fap,
-        sub_core_grids);
+        sub_core_grids,
+        sub_device_id);
 
     if (rounding_mode == "trunc") {
         return ttnn::trunc(divided.value(), output_mem_config, output_tensor, sub_core_grids);
@@ -292,7 +299,8 @@ Tensor div(
     ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     DataType input_dtype = input_a.dtype();
     const bool is_int32 = input_dtype == DataType::INT32 && input_b.dtype() == DataType::INT32;
 
@@ -315,7 +323,8 @@ Tensor div(
                 lhs_activations,
                 rhs_activations,
                 /*fast_and_approximate_mode=*/std::nullopt,
-                sub_core_grids);
+                sub_core_grids,
+                sub_device_id);
         }
         if (rounding_mode == "trunc") {
             return ttnn::detail::invoke_binary_ng(
@@ -329,7 +338,8 @@ Tensor div(
                 lhs_activations,
                 rhs_activations,
                 /*fast_and_approximate_mode=*/std::nullopt,
-                sub_core_grids);
+                sub_core_grids,
+                sub_device_id);
         }
         // rounding_mode = None
         TT_FATAL(
@@ -347,7 +357,8 @@ Tensor div(
             lhs_activations,
             rhs_activations,
             std::nullopt,  // fast_and_approximate_mode
-            sub_core_grids);
+            sub_core_grids,
+            sub_device_id);
     }
 
     // Non-int32 inputs: with rounding_mode=None, use DIV directly; with "trunc"/"floor",
@@ -364,7 +375,8 @@ Tensor div(
             lhs_activations,
             rhs_activations,
             fast_and_approximate_mode,
-            sub_core_grids);
+            sub_core_grids,
+            sub_device_id);
     }
 
     TT_FATAL(
@@ -391,7 +403,8 @@ Tensor div(
         lhs_activations,
         rhs_activations,
         effective_fap,
-        sub_core_grids);
+        sub_core_grids,
+        sub_device_id);
 
     if (rounding_mode == "trunc") {
         return ttnn::trunc(divided.value(), output_mem_config, output_tensor, sub_core_grids);
@@ -455,7 +468,8 @@ Tensor remainder(
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     return ttnn::detail::invoke_binary_ng(
         input_a,
         input_b,
@@ -467,7 +481,8 @@ Tensor remainder(
         lhs_activations,
         rhs_activations,
         std::nullopt,
-        sub_core_grids);
+        sub_core_grids,
+        sub_device_id);
 }
 
 Tensor remainder(
@@ -479,7 +494,8 @@ Tensor remainder(
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& /*sub_device_id*/) {
     return ttnn::unary_remainder(input, scalar, output_mem_config, output_tensor, sub_core_grids);
 }
 
@@ -488,7 +504,8 @@ Tensor fmod(
     const Tensor& input_a,
     const Tensor& input_b,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     return ttnn::detail::invoke_binary_ng(
         input_a,
         input_b,
@@ -499,14 +516,17 @@ Tensor fmod(
         {},
         {},
         {},
-        std::nullopt);
+        std::nullopt,
+        sub_core_grids,
+        sub_device_id);
 }
 
 Tensor fmod(
     const Tensor& input,
     float scalar,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
+    const std::optional<CoreRangeSet>& /*sub_core_grids*/,
+    const std::optional<tt::tt_metal::SubDeviceId>& /*sub_device_id*/) {
     return ttnn::unary_fmod(input, scalar, output_mem_config);
 }
 
@@ -771,7 +791,8 @@ Tensor bias_gelu(
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     return ttnn::detail::invoke_binary_ng(
         input_tensor_a_arg,
         input_tensor_b_arg,
@@ -783,7 +804,8 @@ Tensor bias_gelu(
         lhs_activations,
         rhs_activations,
         /*fast_and_approximate_mode=*/std::nullopt,
-        sub_core_grids);
+        sub_core_grids,
+        sub_device_id);
 }
 
 Tensor bias_gelu(
@@ -795,34 +817,31 @@ Tensor bias_gelu(
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
-    const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    // Resolve sub_device_id to sub_core_grids so both add and gelu use the same core restriction
+    auto resolved_sub_core_grids = sub_core_grids;
+    if (sub_device_id.has_value()) {
+        TT_FATAL(!sub_core_grids.has_value(), "Cannot specify both sub_core_grids and sub_device_id");
+        auto* device = input_tensor_a.device();
+        resolved_sub_core_grids =
+            device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
+    }
     return ttnn::gelu(
-        ttnn::add(input_tensor_a, bias, std::nullopt, memory_config, optional_output_tensor),
+        ttnn::add(
+            input_tensor_a,
+            bias,
+            std::nullopt,
+            memory_config,
+            optional_output_tensor,
+            {},
+            {},
+            {},
+            resolved_sub_core_grids),
         true,
         memory_config,
-        optional_output_tensor);
-}
-
-Tensor bias_gelu(
-    const Tensor& input_tensor_a,
-    float scalar,
-    const std::optional<const DataType>& output_dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations) {
-    return ttnn::detail::invoke_binary_ng(
-        input_tensor_a,
-        scalar,
-        binary::BinaryOpType::BIAS_GELU,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        std::nullopt);
+        optional_output_tensor,
+        resolved_sub_core_grids);
 }
 
 }  // namespace ttnn

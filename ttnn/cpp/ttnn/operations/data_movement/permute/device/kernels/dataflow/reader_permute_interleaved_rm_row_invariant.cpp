@@ -4,9 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr uint32_t N = get_named_compile_time_arg_val("N");
@@ -19,8 +19,8 @@ void kernel_main() {
     const uint32_t end_row = get_arg_val<uint32_t>(2);
 
     const auto s0 = TensorAccessor(src_args, src_addr);
-    experimental::CircularBuffer cb(tt::CBIndex::c_0);
-    experimental::Noc noc;
+    CircularBuffer cb(tt::CBIndex::c_0);
+    Noc noc;
 
     uint32_t curr_addr = src_addr;
     for (uint32_t row = start_row; row < end_row; ++row) {

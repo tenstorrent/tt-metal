@@ -62,8 +62,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 // ---------------------------------------------------------------------------
 #ifdef LLK_TRISC_MATH
 
-#include "llk_math_common.h"
-#include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_lib_math_wrappers.h"
 #include "params.h"
 
 using namespace ckernel;
@@ -74,11 +73,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 
-#ifdef ARCH_BLACKHOLE
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, false>(params.num_faces, formats.math);
-#else
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false>(params.num_faces, formats.math);
-#endif
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* tilize */, false /* is_int_fpu_en */>(
+        params.num_faces, formats.math);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
@@ -93,13 +89,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             // Standard datacopy: sparse Tile32x32 DEST slots.
             // The block-contiguous pack handles the sparse->dense conversion.
-#ifdef ARCH_BLACKHOLE
-            _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, false>(
-                tile, formats.math, formats.math, params.num_faces);
-#else
-            _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, false>(
-                tile, formats.math, formats.math);
-#endif
+            _llk_math_eltwise_unary_datacopy_wrapper_<
+                DataCopyType::A2D,
+                DstSync::SyncHalf,
+                is_fp32_dest_acc_en,
+                BroadcastType::NONE,
+                false /* unpack_to_dest */>(tile, formats.math, formats.math, params.num_faces);
         }
 
         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
@@ -113,6 +108,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 // ---------------------------------------------------------------------------
 #ifdef LLK_TRISC_PACK
 
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #ifdef ARCH_BLACKHOLE
@@ -130,11 +126,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef ARCH_BLACKHOLE
     // --- Phase 1: Init for standard 32x32 tiles ---
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4, FACE_R_DIM, TILE_C_DIM, 4);
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4, FACE_R_DIM, TILE_C_DIM, 4);
 
-    _llk_pack_init_<false, false, false>(formats.pack_src, FACE_R_DIM, TILE_C_DIM, 4, 1);
+    _llk_pack_init_with_src_wrapper_<false, false, false>(formats.pack_src, formats.pack_dst, FACE_R_DIM, TILE_C_DIM, 4, false, false, 1);
 
-    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     reconfigure_packer_l1_acc(params.L1_ACC);
 
     // --- Phase 2: Full re-init for the actual tiny tile dims ---
@@ -148,9 +144,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Replace MOP with the block-contiguous version (REPLAY + W-per-tile).
     _llk_pack_block_contiguous_mop_config_<>(params.TEST_FACE_R_DIM, params.num_faces);
 #else
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4, params.TEST_FACE_R_DIM, params.num_faces);
-    _llk_pack_init_<false, false>(formats.pack_dst, params.TEST_FACE_R_DIM, params.num_faces);
-    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>();
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false>(
+        formats.pack_src, formats.pack_dst, 16 * 16 * 4, params.TEST_FACE_R_DIM, TILE_C_DIM, params.num_faces);
+    _llk_pack_init_wrapper_<false, false>(formats.pack_dst, params.TEST_FACE_R_DIM, TILE_C_DIM, params.num_faces);
+    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>();
 #endif
 
     for (int block = 0; block < num_blocks; block++)

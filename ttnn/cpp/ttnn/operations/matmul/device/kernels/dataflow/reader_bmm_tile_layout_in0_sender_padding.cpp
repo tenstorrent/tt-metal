@@ -10,12 +10,12 @@
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/noc_semaphore.h"
-#include "experimental/tensor.h"
-#include "experimental/endpoints.h"
-#include "experimental/core_local_mem.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/tensor/noc_traits.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 void kernel_main() {
     uint32_t rt_args_idx = 0;
@@ -101,10 +101,10 @@ void kernel_main() {
     constexpr uint32_t in0_block_size_bytes = in0_block_num_tiles * in0_single_tile_size_bytes;
     constexpr uint32_t one_tile = 1;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in0(cb_id_in0);
-    experimental::Semaphore<> sender_sem(get_compile_time_arg_val(15));
-    experimental::Semaphore<> receiver_sem(get_compile_time_arg_val(16));
+    Noc noc;
+    CircularBuffer cb_in0(cb_id_in0);
+    Semaphore<> sender_sem(get_compile_time_arg_val(15));
+    Semaphore<> receiver_sem(get_compile_time_arg_val(16));
 
 #ifdef IN0_SHARDED
     // In case we need to send multiple blocks per shard, in0 sharded cb is cb2 and we extract the sub-blocks to cb0
@@ -118,7 +118,7 @@ void kernel_main() {
     if constexpr (extract_shard_sub_blocks) {
         constexpr uint32_t cb_id_in2 =
             get_named_compile_time_arg_val("cb_in0_sharded");  // in0 sharded cb if extract_shard_sub_blocks
-        experimental::CircularBuffer cb_in2(cb_id_in2);
+        CircularBuffer cb_in2(cb_id_in2);
         noc_shard_read_start_addr = cb_in2.get_read_ptr();
     }
 
@@ -127,14 +127,14 @@ void kernel_main() {
 #ifndef IN0_SHARDED
 #ifdef INTERMEDIATE_CB_READ
     constexpr uint32_t in0_intermediate_cb_index = get_named_compile_time_arg_val("cb_in0_intermediate");
-    experimental::CircularBuffer cb_helper(in0_intermediate_cb_index);
+    CircularBuffer cb_helper(in0_intermediate_cb_index);
 #endif  // INTERMEDIATE_CB_READ
 #endif
 #endif  // IN0_SHARDED
 
     // sparsity accessor
     constexpr uint32_t cb_id_sparsity = get_named_compile_time_arg_val("cb_sparsity");
-    experimental::CircularBuffer cb_sparsity(cb_id_sparsity);
+    CircularBuffer cb_sparsity(cb_id_sparsity);
     const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr);
 
 #ifndef SKIP_MCAST
@@ -293,13 +293,13 @@ void kernel_main() {
                                 l1_write_addr_in0;  // copy start address of block, to be used for mcasting
 #endif  // SKIP_MCAST
 
-                            experimental::UnicastEndpoint self_ep;
+                            UnicastEndpoint self_ep;
                             uint32_t noc_shard_read_l1_addr = in0_tensor_current_inner_dim_block_start_addr;
 
                             for (uint32_t i = 0; i < in0_block_h; i++) {
                                 noc.async_read(
                                     self_ep,
-                                    experimental::CoreLocalMem<uint32_t>(l1_write_addr_in0),
+                                    CoreLocalMem<uint32_t>(l1_write_addr_in0),
                                     shard_read_width,
                                     {.noc_x = my_x[0], .noc_y = my_y[0], .addr = noc_shard_read_l1_addr},
                                     {});
@@ -344,10 +344,10 @@ void kernel_main() {
                         sender_sem.set(0);
 
                         // Now we have the block in the CB address, we can mcast to dests!
-                        experimental::MulticastEndpoint mcast_dst;
+                        MulticastEndpoint mcast_dst;
                         // num_dests must not include source, since we are NOT really doing a local copy!
                         noc.async_write_multicast(
-                            experimental::CoreLocalMem<uint32_t>(in0_start_address),
+                            CoreLocalMem<uint32_t>(in0_start_address),
                             mcast_dst,
                             in0_block_size_bytes,
                             in0_mcast_num_cores,
