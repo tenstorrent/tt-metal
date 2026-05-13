@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """CPU-only unit tests for formula-based shard distribution. No hardware required."""
-import pytest
 from ttnn.experimental.moe_compute_utils import shard_tiles, w2_shard_tiles, auto_output_width_shard_dim
 
 
