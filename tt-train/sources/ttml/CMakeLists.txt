@@ -214,6 +214,10 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/frobenius_normalize/frobenius_normalize.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/frobenius_normalize/device/frobenius_normalize_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/frobenius_normalize/device/frobenius_normalize_program_factory.cpp
+    # Variable MatMul (variable-M for MoE)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/variable_matmul/variable_matmul.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/variable_matmul/device/variable_matmul_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/variable_matmul/device/variable_matmul_program_factory.cpp
 )
 
 list(APPEND SOURCES ${METAL_OPS_FILES})

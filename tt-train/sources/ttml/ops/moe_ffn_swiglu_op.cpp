@@ -13,24 +13,33 @@
 #include "autograd/graph_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
-#include "ttnn/operations/data_movement/concat/concat.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/full/full.hpp"
-#include "ttnn_fixed/matmuls.hpp"
 
 namespace ttml::ops {
 
 namespace {
 
-// Slice rows [row_lo, row_hi) of a [1, 1, T_cap, inner_dim] tensor.
-ttnn::Tensor slice_rows(const ttnn::Tensor& tensor, uint32_t row_lo, uint32_t row_hi, uint32_t inner_dim) {
-    static const ttsl::SmallVector<uint32_t> step = {1U, 1U, 1U, 1U};
-    const ttsl::SmallVector<uint32_t> start = {0U, 0U, row_lo, 0U};
-    const ttsl::SmallVector<uint32_t> end = {1U, 1U, row_hi, inner_dim};
-    return ttnn::slice(tensor, start, end, step);
-}
+const ttml::metal::VariableMatmulConfig kVarMmConfig{
+    .M_block_size = 4,
+    .K_block_size = 8,
+    .N_block_size = 8,
+    .subblock_h = 2,
+    .subblock_w = 2,
+    .compute_with_storage_grid_size = {10, 10},
+};
+
+const ttml::metal::VariableMatmulConfig kVarMmConfigTransposeA = [] {
+    auto c = kVarMmConfig;
+    c.transpose_a = true;
+    return c;
+}();
+
+const ttml::metal::VariableMatmulConfig kVarMmConfigTransposeB = [] {
+    auto c = kVarMmConfig;
+    c.transpose_b = true;
+    return c;
+}();
 
 }  // namespace
 
@@ -41,7 +50,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
     const std::vector<autograd::TensorPtr>& w_up,
     const std::vector<autograd::TensorPtr>& w_down) {
     const auto& grouped_value = grouped->get_value();
-    const auto grouped_shape = grouped_value.logical_shape();
+    const auto& grouped_shape = grouped_value.logical_shape();
     const uint32_t token_capacity = grouped_shape[-2];
     const uint32_t hidden_dim = grouped_shape[-1];
     const uint32_t num_experts = static_cast<uint32_t>(w_gate.size());
@@ -53,7 +62,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         throw std::runtime_error("moe_ffn_swiglu_fw: w_gate/w_up/w_down must have the same length.");
     }
 
-    const auto wg0_shape = w_gate[0]->get_value().logical_shape();
+    const auto& wg0_shape = w_gate[0]->get_value().logical_shape();
     if (wg0_shape[-1] != hidden_dim) {
         throw std::runtime_error("moe_ffn_swiglu_fw: w_gate[0] inner dim must equal grouped's hidden_dim.");
     }
@@ -62,11 +71,16 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
     if (offsets_host.size() != num_experts + 1U) {
         throw std::runtime_error("moe_ffn_swiglu_fw: offsets size must be num_experts + 1.");
     }
-    // Per-expert forward: slice grouped once per expert, run gate+up matmuls
-    // directly against the per-expert weight tensors (no slicing of weights),
-    // silu·multiply on the chunk, then down matmul. One concat at the end.
-    // gate_proj_e and up_proj_e are saved per-expert for backward; activated_e
-    // is recomputed in backward.
+    if (offsets_host.back() > token_capacity) {
+        throw std::runtime_error("moe_ffn_swiglu_fw: offsets[-1] exceeds token_capacity.");
+    }
+
+    // Per-expert forward: variable_matmul reads each expert's rows directly from
+    // grouped via row-offset, runs gate+up matmuls against the per-expert weights,
+    // applies silu·multiply, then down_proj writes directly into the corresponding
+    // row range of the pre-allocated output. No per-expert slicing or output concat.
+    // gate_proj_e and up_proj_e are saved per-expert for backward; activated_e is
+    // recomputed in backward.
     //
     // Fused activation for the silu·multiply step: ttnn::multiply with a unary
     // activation on lhs computes silu(lhs) * rhs in one ttnn op (one read of
@@ -77,13 +91,25 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
     const ttsl::Span<const EltwiseUnary> no_acts;
     const ttsl::Span<const EltwiseUnary> silu_lhs(&silu_act, 1);
 
-    std::vector<ttnn::Tensor> down_proj_parts;
     std::vector<ttnn::Tensor> gate_proj_parts;
     std::vector<ttnn::Tensor> up_proj_parts;
-    down_proj_parts.reserve(num_experts);
     gate_proj_parts.reserve(num_experts);
     up_proj_parts.reserve(num_experts);
 
+    // Pre-allocate output at full T_cap (empty, no zero-init). Per-expert pad rows
+    // between offsets[e]+counts[e] and offsets[e+1] get zeroed implicitly by the matmul
+    // (grouped's pad rows are zero, so the matmul output for those rows is zero).
+    // Trailing slack rows [offsets[-1], T_cap) need an explicit zero-fill (handled
+    // post-loop via a write-at-offset matmul with zero inputs — avoids a ttnn::concat
+    // and the full-tensor ttml::core::zeros cost).
+    const uint32_t used_rows = offsets_host.back();
+    const bool has_trailing_slack = (used_rows < token_capacity);
+    auto y = ttml::core::empty(
+        ttnn::Shape({1U, 1U, token_capacity, hidden_dim}),
+        &ttml::autograd::ctx().get_device(),
+        grouped_value.memory_config());
+
+    bool any_nonempty = false;
     for (uint32_t e = 0; e < num_experts; ++e) {
         const uint32_t row_lo = offsets_host[e];
         const uint32_t row_hi = offsets_host[e + 1U];
@@ -94,14 +120,22 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             // empty expert
             continue;
         }
+        any_nonempty = true;
 
-        auto X_e = slice_rows(grouped_value, row_lo, row_hi, hidden_dim);
         const auto& w_gate_e = w_gate[e]->get_value();
         const auto& w_up_e = w_up[e]->get_value();
         const auto& w_down_e = w_down[e]->get_value();
 
-        auto gate_proj_e = ttnn_fixed::matmul(X_e, w_gate_e, false, true);  // [1,1,len,intermediate_dim]
-        auto up_proj_e = ttnn_fixed::matmul(X_e, w_up_e, false, true);      // [1,1,len,intermediate_dim]
+        // Offset-read into grouped — avoids materializing a per-expert slice.
+        // Tile-aligned offsets are guaranteed by the dispatch convention (counts rounded to 32).
+        const uint32_t offset_tiles = row_lo / 32U;
+        const uint32_t len_tiles = (row_hi - row_lo) / 32U;
+
+        // w_gate / w_up are stored as [I, H], so matmul uses transpose_b: X_e @ w^T.
+        auto gate_proj_e = ttml::metal::variable_matmul(
+            grouped_value, w_gate_e, kVarMmConfigTransposeB, std::nullopt, offset_tiles, len_tiles);
+        auto up_proj_e = ttml::metal::variable_matmul(
+            grouped_value, w_up_e, kVarMmConfigTransposeB, std::nullopt, offset_tiles, len_tiles);
         auto activated_e = ttnn::multiply(
             gate_proj_e,
             up_proj_e,
@@ -110,31 +144,54 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             /*output_tensor=*/std::nullopt,
             /*post_op_activations=*/no_acts,
             /*input_a_activations=*/silu_lhs);  // silu(gate_proj_e) * up_proj_e in one op
-        auto down_proj_e = ttnn_fixed::matmul(activated_e, w_down_e, false, true);  // [1,1,len,hidden_dim]
+        // w_down is [H, I]; down_proj = activated_e @ w_down^T. Write directly into
+        // y[row_lo:row_hi] — no per-expert allocation, no concat.
+        ttml::metal::variable_matmul(
+            activated_e,
+            w_down_e,
+            kVarMmConfigTransposeB,
+            std::nullopt,
+            /*in0_row_offset_tiles=*/0U,
+            /*effective_M_tiles=*/0U,
+            /*in0_k_offset_tiles=*/0U,
+            /*in1_k_offset_tiles=*/0U,
+            /*output_tensor=*/y,
+            /*out_row_offset_tiles=*/offset_tiles);
         activated_e.deallocate();
 
         gate_proj_parts.push_back(std::move(gate_proj_e));
         up_proj_parts.push_back(std::move(up_proj_e));
-        down_proj_parts.push_back(std::move(down_proj_e));
     }
 
-    // moe_group allocates `grouped` for a worst-case T_cap; the actual used range
-    // is [0, offsets[-1]). Append a zero tensor for the trailing slack so the
-    // output shape matches what moe_ungroup expects ([1,1,T_cap,H]).
-    const uint32_t produced_rows = offsets_host.back();
-    if (token_capacity > produced_rows) {
-        const uint32_t pad_rows = token_capacity - produced_rows;
-        down_proj_parts.push_back(ttnn::moreh_full(
-            ttnn::SmallVector<uint32_t>{1U, 1U, pad_rows, hidden_dim},
-            0.0F,
-            &autograd::ctx().get_device(),
-            grouped_value.dtype(),
-            grouped_value.layout(),
-            grouped_value.memory_config()));
+    if (!any_nonempty) {
+        throw std::runtime_error("moe_ffn_swiglu_fw: all experts empty (token_capacity == 0).");
     }
 
-    const auto y = (down_proj_parts.size() == 1U) ? down_proj_parts.front() : ttnn::concat(down_proj_parts, /*dim=*/2);
-    down_proj_parts.clear();
+    // Zero-fill the trailing slack rows (used_rows..T_cap) of y. Implemented as a
+    // variable_matmul with zero in0 / zero weight (K = 1 tile) and write-at-offset
+    // pointing at y[used_rows:T_cap]. The matmul computes 0×0 = 0 and writes those
+    // zeros directly into y's slack rows — no separate concat, no full-tensor clear.
+    // The two zero tensors are tiny (slack_rows × 32 + 32 × H), and the matmul work
+    // is just N-output-tile writes since K is a single block of zeros.
+    if (has_trailing_slack) {
+        const uint32_t slack_rows = token_capacity - used_rows;
+        constexpr uint32_t kZeroK = 32U;  // one tile on the K axis
+        auto zero_in0 = ttml::core::zeros(
+            ttnn::Shape({1U, 1U, slack_rows, kZeroK}), &ttml::autograd::ctx().get_device(), grouped_value.dtype());
+        auto zero_w = ttml::core::zeros(
+            ttnn::Shape({1U, 1U, kZeroK, hidden_dim}), &ttml::autograd::ctx().get_device(), grouped_value.dtype());
+        ttml::metal::variable_matmul(
+            zero_in0,
+            zero_w,
+            kVarMmConfig,
+            std::nullopt,
+            /*in0_row_offset_tiles=*/0U,
+            /*effective_M_tiles=*/0U,
+            /*in0_k_offset_tiles=*/0U,
+            /*in1_k_offset_tiles=*/0U,
+            /*output_tensor=*/y,
+            /*out_row_offset_tiles=*/used_rows / 32U);
+    }
 
     auto out = autograd::create_tensor(y);
 
@@ -146,14 +203,24 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                                    offsets_host = std::move(offsets_host),
                                    gate_proj_parts = std::move(gate_proj_parts),
                                    up_proj_parts = std::move(up_proj_parts),
-                                   num_experts,
-                                   hidden_dim,
-                                   token_capacity]() mutable {
+                                   num_experts]() mutable {
         const auto dY = out->get_grad();
         const auto& grouped_value = grouped->get_value();
+        const auto& grouped_shape = grouped_value.logical_shape();
 
-        std::vector<ttnn::Tensor> dX_parts;
-        dX_parts.reserve(num_experts);
+        // Pre-allocate full dX_via_gate and dX_via_up tensors [T_cap, H]; per-expert matmuls
+        // write directly into row ranges. After the loop, one ttnn::add yields dX (single
+        // pass over the full tensor instead of E small adds + concat).
+        auto dX_via_gate =
+            ttml::core::empty(grouped_shape, &ttml::autograd::ctx().get_device(), grouped_value.memory_config());
+        auto dX_via_up =
+            ttml::core::empty(grouped_shape, &ttml::autograd::ctx().get_device(), grouped_value.memory_config());
+
+        // Fused silu·multiply spans for the bw recomputation of activated_e (same pattern as fwd).
+        using EltwiseUnary = ttnn::operations::unary::EltwiseUnaryWithParam;
+        const EltwiseUnary silu_act{ttnn::operations::unary::UnaryOpType::SILU};
+        const ttsl::Span<const EltwiseUnary> no_acts;
+        const ttsl::Span<const EltwiseUnary> silu_lhs(&silu_act, 1);
 
         std::size_t nonempty_idx = 0U;
         for (uint32_t e = 0; e < num_experts; ++e) {
@@ -165,19 +232,15 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                 continue;
             }
 
-            auto X_e = slice_rows(grouped_value, row_lo, row_hi, hidden_dim);
-            auto dY_e = slice_rows(dY, row_lo, row_hi, hidden_dim);
+            // X_e and dY_e slices elided: dW_gate/dW_up use K-axis offset on grouped_value;
+            // d_activated_e uses M-offset on dY; dW_down_e uses K-axis offset on dY (in1 side).
+            const uint32_t row_lo_tiles = row_lo / 32U;
+            const uint32_t M_e_tiles = (row_hi - row_lo) / 32U;
             const auto& w_gate_e = w_gate[e]->get_value();
             const auto& w_up_e = w_up[e]->get_value();
             const auto& w_down_e = w_down[e]->get_value();
 
-            // Recompute activated_e from saved gate_proj_e, up_proj_e using
-            // the same fused silu·multiply pattern as the forward.
-            using EltwiseUnary = ttnn::operations::unary::EltwiseUnaryWithParam;
-            const EltwiseUnary silu_act{ttnn::operations::unary::UnaryOpType::SILU};
-            const ttsl::Span<const EltwiseUnary> no_acts;
-            const ttsl::Span<const EltwiseUnary> silu_lhs(&silu_act, 1);
-
+            // Recompute activated_e from saved gate_proj_e, up_proj_e (fused silu·multiply).
             auto& gate_proj_e = gate_proj_parts[nonempty_idx];
             auto& up_proj_e = up_proj_parts[nonempty_idx];
             ++nonempty_idx;
@@ -190,58 +253,92 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                 /*post_op_activations=*/no_acts,
                 /*input_a_activations=*/silu_lhs);
 
-            // Down branch (w_down_e is [hidden, intermediate]):
-            //   d_activated_e = dY_e @ w_down_e,  dW_down_e = dY_e^T @ activated_e
-            auto d_activated_e = ttnn_fixed::matmul(dY_e, w_down_e, /*transpose_a=*/false, /*transpose_b=*/false);
-            const auto dW_down_e = ttnn_fixed::matmul(dY_e, activated_e, /*transpose_a=*/true, /*transpose_b=*/false);
+            // Down branch (w_down_e is [H, I]):
+            //   d_activated_e = dY_e @ w_down_e   (no transpose)
+            //   dW_down_e     = dY_e^T @ activated_e
+            // dY rows [row_lo, row_hi) are read by offset: M-axis for d_activated_e,
+            // K-axis (= stored rows under transpose_a) for dW_down_e.
+            auto d_activated_e = ttml::metal::variable_matmul(
+                dY,
+                w_down_e,
+                kVarMmConfig,
+                std::nullopt,
+                /*in0_row_offset_tiles=*/row_lo_tiles,
+                /*effective_M_tiles=*/M_e_tiles);
+            auto dW_down_e = ttml::metal::variable_matmul(
+                dY,
+                activated_e,
+                kVarMmConfigTransposeA,
+                std::nullopt,
+                /*in0_row_offset_tiles=*/0U,
+                /*effective_M_tiles=*/0U,
+                /*in0_k_offset_tiles=*/row_lo_tiles);
             w_down[e]->add_grad(dW_down_e);
             activated_e.deallocate();
-            dY_e.deallocate();
 
             auto [d_gate_proj_e, d_up_proj_e] =
                 ttml::metal::swiglu_elemwise_bw(gate_proj_e, up_proj_e, d_activated_e, gate_proj_e);
             up_proj_e.deallocate();
             d_activated_e.deallocate();
 
-            // w_gate_e, w_up_e are [intermediate, hidden]:
+            // w_gate_e, w_up_e are [I, H]:
             //   dW_gate_e = d_gate_proj_e^T @ X_e,  dW_up_e = d_up_proj_e^T @ X_e
-            const auto dW_gate_e = ttnn_fixed::matmul(d_gate_proj_e, X_e, /*transpose_a=*/true, /*transpose_b=*/false);
+            // Read grouped_value's [row_lo, row_hi) rows directly via in1 K-axis offset.
+            auto dW_gate_e = ttml::metal::variable_matmul(
+                d_gate_proj_e,
+                grouped_value,
+                kVarMmConfigTransposeA,
+                std::nullopt,
+                /*in0_row_offset_tiles=*/0U,
+                /*effective_M_tiles=*/0U,
+                /*in0_k_offset_tiles=*/0U,
+                /*in1_k_offset_tiles=*/row_lo_tiles);
             w_gate[e]->add_grad(dW_gate_e);
-            const auto dW_up_e = ttnn_fixed::matmul(d_up_proj_e, X_e, /*transpose_a=*/true, /*transpose_b=*/false);
+            auto dW_up_e = ttml::metal::variable_matmul(
+                d_up_proj_e,
+                grouped_value,
+                kVarMmConfigTransposeA,
+                std::nullopt,
+                /*in0_row_offset_tiles=*/0U,
+                /*effective_M_tiles=*/0U,
+                /*in0_k_offset_tiles=*/0U,
+                /*in1_k_offset_tiles=*/row_lo_tiles);
             w_up[e]->add_grad(dW_up_e);
-            X_e.deallocate();
 
-            // dX_e = d_gate_proj_e @ w_gate_e  +  d_up_proj_e @ w_up_e
-            auto dX_via_gate_e =
-                ttnn_fixed::matmul(d_gate_proj_e, w_gate_e, /*transpose_a=*/false, /*transpose_b=*/false);
-            auto dX_via_up_e = ttnn_fixed::matmul(d_up_proj_e, w_up_e, /*transpose_a=*/false, /*transpose_b=*/false);
+            // dX = d_gate_proj_e @ w_gate_e  +  d_up_proj_e @ w_up_e   (w_gate/up are [I, H])
+            // Write each per-expert matmul into row range of the full-shape dX_via_* tensors.
+            ttml::metal::variable_matmul(
+                d_gate_proj_e,
+                w_gate_e,
+                kVarMmConfig,
+                std::nullopt,
+                /*in0_row_offset_tiles=*/0U,
+                /*effective_M_tiles=*/0U,
+                /*in0_k_offset_tiles=*/0U,
+                /*in1_k_offset_tiles=*/0U,
+                /*output_tensor=*/dX_via_gate,
+                /*out_row_offset_tiles=*/row_lo_tiles);
+            ttml::metal::variable_matmul(
+                d_up_proj_e,
+                w_up_e,
+                kVarMmConfig,
+                std::nullopt,
+                /*in0_row_offset_tiles=*/0U,
+                /*effective_M_tiles=*/0U,
+                /*in0_k_offset_tiles=*/0U,
+                /*in1_k_offset_tiles=*/0U,
+                /*output_tensor=*/dX_via_up,
+                /*out_row_offset_tiles=*/row_lo_tiles);
             d_gate_proj_e.deallocate();
             d_up_proj_e.deallocate();
-
-            auto dX_e = ttnn::add(dX_via_gate_e, dX_via_up_e);
-            dX_via_gate_e.deallocate();
-            dX_via_up_e.deallocate();
-            dX_parts.push_back(std::move(dX_e));
         }
 
         gate_proj_parts.clear();
         up_proj_parts.clear();
 
-        // Pad the trailing slack (rows the op never read) with zeros so dX
-        // matches grouped's shape [1, 1, T_cap, H] for add_grad.
-        const uint32_t produced_rows = offsets_host.back();
-        if (token_capacity > produced_rows) {
-            const uint32_t pad_rows = token_capacity - produced_rows;
-            dX_parts.push_back(ttnn::moreh_full(
-                ttnn::SmallVector<uint32_t>{1U, 1U, pad_rows, hidden_dim},
-                0.0F,
-                &autograd::ctx().get_device(),
-                grouped_value.dtype(),
-                grouped_value.layout(),
-                grouped_value.memory_config()));
-        }
-
-        const auto dX = (dX_parts.size() == 1U) ? dX_parts.front() : ttnn::concat(dX_parts, /*dim=*/2);
+        auto dX = ttnn::add(dX_via_gate, dX_via_up);
+        dX_via_gate.deallocate();
+        dX_via_up.deallocate();
         grouped->add_grad(dX);
     };
 
