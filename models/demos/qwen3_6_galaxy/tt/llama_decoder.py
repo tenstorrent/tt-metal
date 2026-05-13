@@ -9,7 +9,7 @@ Dispatches between:
 Architecture
 ------------
   residual = x
-  x = input_layernorm(x)              # DistributedNorm, zero_centered=True
+  x = input_layernorm(x)              # DistributedNorm (shard → norm → gather), zero_centered=True
   if linear_attention:
     attn_out, new_dn_state, new_conv_state = deltanet(x, mode, state, conv)
   else:
@@ -17,7 +17,7 @@ Architecture
     new_dn_state = new_conv_state = None
   x = residual + attn_out
   residual = x
-  x = post_attention_layernorm(x)    # DistributedNorm, zero_centered=True
+  x = post_attention_layernorm(x)    # DistributedNorm (shard → norm → gather), zero_centered=True
   x = residual + mlp(x)
   return x, new_dn_state, new_conv_state
 
@@ -53,6 +53,8 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_6_galaxy.tt.distributed_norm import DistributedNorm
 from models.demos.qwen3_6_galaxy.tt.llama_mlp import TtQwen36MLP
+
+_TILE = 32
 
 
 class TtQwen36DecoderLayer(LightweightModule):
@@ -109,7 +111,8 @@ class TtQwen36DecoderLayer(LightweightModule):
         self.layer_type = args.linear_attention_pattern[layer_idx]
 
         # ------------------------------------------------------------------
-        # Norms: both use zero_centered=True (Qwen3NextRMSNorm convention)
+        # Norms: DistributedNorm with HiFi4+fp32_dest_acc on H/4=1280 per col.
+        # Using zero_centered=True (Qwen3NextRMSNorm: output = (1+w)*norm(x)).
         # ------------------------------------------------------------------
         self.input_layernorm = DistributedNorm(
             mesh_device=mesh_device,
@@ -213,12 +216,6 @@ class TtQwen36DecoderLayer(LightweightModule):
         mem = ttnn.DRAM_MEMORY_CONFIG
 
         # ---  Pre-norm  ---
-        # DistributedNorm requires a 4-D tensor sharded across cluster_axis=1
-        # (4 mesh columns). The input x is [B, T, H] replicated. We:
-        #   1. Reshape to [B, 1, T, H] and shard dim=-1 across cols → [B, 1, T, H/4] per col
-        #   2. Apply DistributedNorm (pre_all_gather → all_gather → post_all_gather)
-        #   3. Gather back along cols → [B, 1, T, H] per row → reshape to [B, T, H]
-        # Track the actual T dimension (before any tile-padding that TTNN ops may introduce)
         orig_shape = list(x.shape)
         B_in = orig_shape[0]
         T_in = orig_shape[1] if len(orig_shape) == 3 else orig_shape[-2]
@@ -366,6 +363,21 @@ def _gather_from_cols(x_sharded: ttnn.Tensor, mesh_device: ttnn.MeshDevice) -> t
     # x_cpu: [8*B, 1, T, H] → take first B items (from first mesh row)
     B = x_cpu.shape[0] // cluster_shape[0]
     x_cpu = x_cpu[:B, 0, :, :]  # [B, T, H]
+
+    # For decode (B*T < 32), TILE_LAYOUT pads the row dim, corrupting the logical
+    # T downstream.  Upload row-major then convert to tile, matching the embed
+    # decode path.
+    T = x_cpu.shape[1]
+    if B * T < 32:
+        x_tt = ttnn.from_torch(
+            x_cpu,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        return ttnn.to_layout(x_tt, ttnn.TILE_LAYOUT)
 
     return ttnn.from_torch(
         x_cpu,

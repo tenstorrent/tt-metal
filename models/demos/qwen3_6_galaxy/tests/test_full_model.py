@@ -46,12 +46,14 @@ _PCC_THRESH = 0.99
 # magnitude embedding activations needs fp32 accumulation.)
 _PCC_THRESH_4LAYER = 0.99
 
-# 16-layer hidden-state PCC threshold: 0.98.  Accumulated BF16 multiply-accumulate
-# noise across 16 layers of real activations lands at 0.980 vs the 0.999 PCC
-# achieved on synthetic random input.  Functional correctness verified by top-1
-# match rate (currently 87.5% at 16 layers; > 75% threshold).  Compare to T7's
-# 4-layer hybrid PCC=0.999 on random input — same model, same precision, the
-# delta is purely input-statistics + layer-count compounding.
+# 16-layer hidden-state PCC threshold: 0.98.  T11 investigation found:
+# - The chunk_gated_delta_rule_ttnn kernel already uses FP32 internally.
+# - All MLP, attention, DistributedNorm ops already use HiFi4+fp32_dest_acc.
+# - Added HiFi4+fp32_dest_acc to QK-norm (head_dim=256) and DeltaNet GroupRMSNormGated
+#   (head_dim=128) — these fit in L1 CBs unlike H=5120.
+# - 16-layer PCC ceiling is ~0.98 due to BF16 activation round-trips at each of the 12
+#   DeltaNet layer boundaries (typecast fp32→bf16 per layer).
+# - 0.995 is not achievable without fp32 activations (not feasible for performance).
 _PCC_THRESH_16LAYER = 0.98
 
 
@@ -386,12 +388,12 @@ def test_full_model_4layer_prefill_pcc_on_8x4(mesh_8x4):
 
 @pytest.mark.hardware
 def test_full_model_16layer_prefill_pcc_on_8x4(mesh_8x4):
-    """TtQwen36Transformer 16-layer prefill: hidden-state PCC > 0.99 + >= 93.75% top-1 match.
+    """TtQwen36Transformer 16-layer prefill: hidden-state PCC > 0.98 + >= 75% top-1 match.
 
     Builds a 16-layer model, runs prefill on random input_ids [B=1, T=32],
     asserts:
-    - Hidden-state PCC > 0.99 (block-level correctness; logits PCC ~0.965 is BF16 artefact)
-    - >= 93.75% position-wise top-1 token match (generation correctness)
+    - Hidden-state PCC > 0.98 (T11: HiFi4+fp32_dest_acc for QK-norm and DeltaNet GroupRMSNormGated)
+    - >= 75% position-wise top-1 token match (generation correctness floor)
     """
     from models.demos.qwen3_6_galaxy.tt.qwen36_model_config import TtQwen36ModelArgs
 

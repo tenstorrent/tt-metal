@@ -510,9 +510,22 @@ class TtQwen36GatedAttention(LightweightModule):
 
         # ------------------------------------------------------------------
         # 3. QK-norm (per head_dim, zero-centered weight = 1+w baked in)
+        # HiFi4+fp32_dest_acc on head_dim=256: small enough to fit in L1 CBs.
         # ------------------------------------------------------------------
-        q_normed = ttnn.rms_norm(q_h, weight=self.q_norm_w, epsilon=self.eps, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        k_normed = ttnn.rms_norm(k_h, weight=self.k_norm_w, epsilon=self.eps, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        q_normed = ttnn.rms_norm(
+            q_h,
+            weight=self.q_norm_w,
+            epsilon=self.eps,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_hifi4,
+        )
+        k_normed = ttnn.rms_norm(
+            k_h,
+            weight=self.k_norm_w,
+            epsilon=self.eps,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_hifi4,
+        )
         q_h.deallocate(True)
         k_h.deallocate(True)
 
@@ -717,9 +730,21 @@ class TtQwen36GatedAttention(LightweightModule):
         k_flat.deallocate(True)
         v_flat.deallocate(True)
 
-        # QK-norm
-        q_normed = ttnn.rms_norm(q_h, weight=self.q_norm_w, epsilon=self.eps, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        k_normed = ttnn.rms_norm(k_h, weight=self.k_norm_w, epsilon=self.eps, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # QK-norm (HiFi4+fp32_dest_acc on head_dim=256, fits in L1 CBs)
+        q_normed = ttnn.rms_norm(
+            q_h,
+            weight=self.q_norm_w,
+            epsilon=self.eps,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_hifi4,
+        )
+        k_normed = ttnn.rms_norm(
+            k_h,
+            weight=self.k_norm_w,
+            epsilon=self.eps,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_hifi4,
+        )
         q_h.deallocate(True)
         k_h.deallocate(True)
 

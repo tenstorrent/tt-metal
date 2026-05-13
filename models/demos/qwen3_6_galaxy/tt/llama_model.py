@@ -43,6 +43,8 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_6_galaxy.tt.distributed_norm import DistributedNorm
 from models.demos.qwen3_6_galaxy.tt.llama_decoder import TtQwen36DecoderLayer, _gather_from_cols, _shard_across_cols
 
+TILE_HEIGHT = 32
+
 
 class TtQwen36Transformer(LightweightModule):
     """Full Qwen3.6-27B text-only transformer on BH GLX 8×4 mesh.
@@ -82,6 +84,7 @@ class TtQwen36Transformer(LightweightModule):
         self.args = args
         self.dtype = dtype or ttnn.bfloat16
         self.num_layers = num_layers if num_layers is not None else args.num_hidden_layers
+        self.cluster_shape = list(args.cluster_shape)  # [8, 4]
 
         assert (
             len(layers_weights) == self.num_layers
@@ -132,6 +135,7 @@ class TtQwen36Transformer(LightweightModule):
 
         # ------------------------------------------------------------------
         # Final norm (zero_centered=True, same as each layer's input_layernorm)
+        # Uses DistributedNorm with HiFi4+fp32_dest_acc on H/4=1280 per col.
         # ------------------------------------------------------------------
         norm_w = global_weights["norm.weight"].float()
         self.final_norm = DistributedNorm(
@@ -155,9 +159,9 @@ class TtQwen36Transformer(LightweightModule):
 
         # On-device LM head weight, vocab-sharded across 4 mesh cols (cluster_axis=1).
         # Stored as [hidden, padded_vocab] so ttnn.linear(x [B,T,H], w [H, V/4]) → [B,T, V/4]
-        # partial per col, then ConcatMeshToTensor(dim=-1) on the OUTPUT gathers
-        # all 4 cols into full [B, T, padded_vocab].  Per-chip: 5120 × 62208 × 2 B = 637 MB
-        # (vs 2548 MB replicated).
+        # partial per col, then ConcatMesh2dToTensor (dims=(None, -1)) gathers
+        # the per-col slices into full [B, T, padded_vocab].
+        # Per-chip: 5120 × 62208 × 2 B = 637 MB (vs 2548 MB replicated).
         lm_head_w_t = lm_head_w_padded.T.contiguous()  # [hidden, padded_vocab]
         vocab_col_shard = ttnn.ShardTensor2dMesh(
             mesh_device,
@@ -171,20 +175,19 @@ class TtQwen36Transformer(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=vocab_col_shard,
-        )  # per-chip: [hidden, padded_vocab/4]
+        )  # per-chip: [hidden, padded_vocab/4 = 62208]
         self.padded_vocab_size = padded_vocab
+        self.vocab_per_col = padded_vocab // self.cluster_shape[1]  # 62208
 
+        # LM head compute kernel: HiFi4 + fp32 dest accumulation.  The 5120-dim
+        # accumulation into a 62208-wide per-col output benefits from fp32 accumulation
+        # the same way attention/MLP wide-output linears do.
         self._compute_kernel = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-
-        # CPU-side LM head weight kept for the current CPU-path matmul that produces
-        # float32 logits (preserves the 0.965 logit PCC).  When optimizing later, this
-        # can be removed and forward switched to on-device sharded matmul + col gather.
-        self._lm_head_weight_cpu = lm_head_w_padded.float()  # [padded_vocab, hidden]
 
     # ------------------------------------------------------------------
     # Private: embedding helper
@@ -211,18 +214,34 @@ class TtQwen36Transformer(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-        # Embedding lookup: output [1, 1, B*T, H]
-        x_tt = ttnn.embedding(
-            ids_tt,
-            self.emb_weight,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=ttnn.bfloat16,
-        )
-        ids_tt.deallocate(True)
-
-        # Reshape: [1, 1, B*T, H] → [B, T, H]
-        x_tt = ttnn.reshape(x_tt, ttnn.Shape([B, T, self.hidden_size]))
+        # Embedding lookup.  TILE_LAYOUT tile-pads the row dim to a multiple of 32,
+        # which is fine for prefill (T is already a multiple of 32) but corrupts
+        # the logical shape for decode (T=1 stored in a 32-row tile).
+        # For decode (B*T < 32), do the lookup in ROW_MAJOR_LAYOUT — exact rows,
+        # no padding — then convert to TILE_LAYOUT after reshaping to [B, T, H].
+        full_BT = B * T
+        if full_BT < TILE_HEIGHT:
+            x_tt = ttnn.embedding(
+                ids_tt,
+                self.emb_weight,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+            )
+            ids_tt.deallocate(True)
+            # [1, 1, B*T, H] (no padding) → [B, T, H]
+            x_tt = ttnn.reshape(x_tt, ttnn.Shape([B, T, self.hidden_size]))
+            x_tt = ttnn.to_layout(x_tt, ttnn.TILE_LAYOUT)
+        else:
+            x_tt = ttnn.embedding(
+                ids_tt,
+                self.emb_weight,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+            )
+            ids_tt.deallocate(True)
+            x_tt = ttnn.reshape(x_tt, ttnn.Shape([B, T, self.hidden_size]))
         return x_tt
 
     # ------------------------------------------------------------------
@@ -230,41 +249,62 @@ class TtQwen36Transformer(LightweightModule):
     # ------------------------------------------------------------------
 
     def _norm_and_lm_head(self, x: ttnn.Tensor) -> torch.Tensor:
-        """Apply final norm on device, then LM head on CPU in float32.
+        """Apply final norm and LM head ENTIRELY on device, then gather logits.
 
-        The final norm is computed distributed on device (correct). The LM head
-        matmul is done on CPU in float32 to avoid bfloat16 accumulation error
-        over the large vocab dimension (248320), which would degrade PCC from
-        the decoder's ~0.9999 to ~0.965.
+        Plan
+        ----
+        1. DistributedNorm on the replicated [B,T,H] → normed [B,T,H] replicated.
+        2. LM head matmul against the vocab-col-sharded weight
+           ``self.lm_head_weight [H, padded_vocab/4]``:
+             - x [B,T,H] replicated × W [H, V/4] per col → [B,T, V/4] per col
+             - Across rows the result is identical (rows replicate the same weight shard).
+             - Across cols each col holds a different V/4 slice.
+        3. Gather to host via ``ConcatMesh2dToTensor(dims=(0, -1))`` which concatenates
+           dim=0 over the 8 rows (giving us redundant row copies to slice out) and
+           dim=-1 over the 4 cols (giving us the full vocab).  Take the first row's
+           copy → [B, T, padded_vocab].
 
         Args:
             x: TTNN tensor [B, T, H] replicated.
 
         Returns:
-            CPU torch tensor [B, T, padded_vocab_size] float32.
+            CPU torch float32 tensor [B, T, padded_vocab_size].
         """
-        # Shard across cols for DistributedNorm
+        mem = ttnn.DRAM_MEMORY_CONFIG
+
+        # 1. DistributedNorm — shard across cols → norm → gather back to replicated.
         x_sharded = _shard_across_cols(x, self.mesh_device)
         x_normed_sharded = self.final_norm(x_sharded)
         x_sharded.deallocate(True)
-        # Gather back to CPU
         x_normed = _gather_from_cols(x_normed_sharded, self.mesh_device)
         x_normed_sharded.deallocate(True)
 
-        # Gather normed hidden states to CPU (replicated — take first device)
-        x_normed_cpu = ttnn.to_torch(
+        # 2. On-device LM head matmul.  Per-chip output: [B, T, V_per_col=62208].
+        logits_tt = ttnn.linear(
             x_normed,
-            mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0),
+            self.lm_head_weight,
+            dtype=self.dtype,
+            memory_config=mem,
+            compute_kernel_config=self._compute_kernel,
         )
         x_normed.deallocate(True)
 
-        # Take first device's copy
-        B = x_normed_cpu.shape[0] // 32  # 32 devices  (ConcatMeshToTensor concatenates along dim=0)
-        x_normed_cpu = x_normed_cpu[:B].float()  # [B, T, H]
+        # 3. Gather to host: concat row-replicates on dim=0 (giving 8×B rows) and
+        #    cols' vocab shards on dim=-1 (giving full padded_vocab).
+        logits_cpu_concat = ttnn.to_torch(
+            logits_tt,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                self.mesh_device,
+                dims=(0, -1),
+                mesh_shape=self.cluster_shape,
+            ),
+        )  # [8*B, T, padded_vocab]
+        logits_tt.deallocate(True)
 
-        # LM head on CPU: [B, T, H] @ [H, padded_vocab] → [B, T, padded_vocab]
-        # _lm_head_weight_cpu: [padded_vocab, H] → transpose for matmul
-        logits_cpu = torch.matmul(x_normed_cpu, self._lm_head_weight_cpu.T)  # [B, T, padded_vocab]
+        # Take the first row's copy (rows are replicated)
+        n_rows = self.cluster_shape[0]
+        B = logits_cpu_concat.shape[0] // n_rows
+        logits_cpu = logits_cpu_concat[:B].float()  # [B, T, padded_vocab]
         return logits_cpu
 
     # ------------------------------------------------------------------

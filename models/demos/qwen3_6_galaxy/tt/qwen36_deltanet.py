@@ -619,11 +619,13 @@ class TtQwen36DeltaNet(LightweightModule):
         # Flatten to [..., head_v_dim] for per-head norm
         # core_out: [B, T, n_v, hd] → reshape to [B*T*n_v, hd] implicitly via rms_norm
         # ttnn.rms_norm operates on the last dim; input needs to be [..., hd]
+        # HiFi4+fp32_dest_acc: hd=128 is small enough to fit in L1 CBs.
         out = ttnn.rms_norm(
             core_out,
             weight=self.norm_weight,
             epsilon=self.eps,
             memory_config=mem,
+            compute_kernel_config=self.compute_kernel,
         )  # [B, T, n_v, hd]
 
         # Apply SiLU gate: z [B, T, n_v, hd]
