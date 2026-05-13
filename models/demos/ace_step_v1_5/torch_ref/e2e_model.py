@@ -42,6 +42,9 @@ class E2EConfig:
     use_adg: bool = True
     seed: int = 0
     sample_rate: int = 48000
+    qwen_safetensors_path: Optional[str] = None
+    vae_chunk_latents: int = 32
+    vae_overlap_latents: int = 4
 
 
 def _build_t_schedule(
