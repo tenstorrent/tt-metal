@@ -38,6 +38,7 @@
 #include "tt_align.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/tt_device/tt_device.hpp>
 
 namespace tt::tt_metal {
 
@@ -312,7 +313,11 @@ void RiscFirmwareInitializer::assert_active_ethernet_cores_to_reset(tt::ChipId d
             llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(device_id, virtual_core);
         }
         tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::ERISC0;
-        cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), reset_val);
+        if (cluster_.arch() == ARCH::BLACKHOLE) {
+            cluster_.assert_risc_reset_at_core_immediate(tt_cxy_pair(device_id, virtual_core), reset_val);
+        } else {
+            cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), reset_val);
+        }
     }
 }
 
@@ -323,7 +328,12 @@ void RiscFirmwareInitializer::assert_tensix_workers_impl(tt::ChipId device_id) {
             CoreCoord logical_core(x, y);
             CoreCoord worker_core =
                 cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::WORKER);
-            cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL);
+            if (cluster_.arch() == ARCH::BLACKHOLE) {
+                cluster_.assert_risc_reset_at_core_immediate(
+                    tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL);
+            } else {
+                cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL);
+            }
         }
     }
 }
@@ -332,7 +342,11 @@ void RiscFirmwareInitializer::assert_inactive_ethernet_cores(tt::ChipId device_i
     for (const auto& logical_core : this->get_control_plane_().get_inactive_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
-        cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
+        if (cluster_.arch() == ARCH::BLACKHOLE) {
+            cluster_.assert_risc_reset_at_core_immediate(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
+        } else {
+            cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
+        }
     }
 }
 
@@ -342,7 +356,12 @@ void RiscFirmwareInitializer::assert_dram_cores(tt::ChipId device_id) {
         const auto& soc_d = cluster_.get_soc_desc(device_id);
         for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
             CoreCoord virtual_core{dram_core.x, dram_core.y};
-            cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
+            if (cluster_.arch() == ARCH::BLACKHOLE) {
+                cluster_.assert_risc_reset_at_core_immediate(
+                    tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
+            } else {
+                cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
+            }
         }
     }
 }
@@ -372,7 +391,7 @@ void RiscFirmwareInitializer::terminate_active_ethernet_cores_on_all_chips() {
             cluster_.read_core(
                 launch_msg_buf.data(), launch_msg_buf.size(), tt_cxy_pair(chip_id, virtual_core), launch_slot_addr);
             launch_msg_buf.view().kernel_config().exit_erisc_kernel() = 1;
-            cluster_.write_core(
+            cluster_.write_core_immediate(
                 launch_msg_buf.data(), launch_msg_buf.size(), tt_cxy_pair(chip_id, virtual_core), launch_slot_addr);
         }
         cluster_.l1_barrier(chip_id);
@@ -918,16 +937,17 @@ void RiscFirmwareInitializer::initialize_firmware(
             hal_.get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
         uint32_t go_message_index_addr = hal_.get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG_INDEX);
         if (core_type != HalProgrammableCoreType::TENSIX) {
-            cluster_.write_core(
+            cluster_.write_core_immediate(
                 init_launch_msg_data.data(),
                 init_launch_msg_data.size(),
                 tt_cxy_pair(device_id, virtual_core),
                 launch_addr);
-            cluster_.write_core(go_msg.data(), go_msg.size(), tt_cxy_pair(device_id, virtual_core), go_addr);
+            cluster_.write_core_immediate(go_msg.data(), go_msg.size(), tt_cxy_pair(device_id, virtual_core), go_addr);
             uint32_t zero = 0;
-            cluster_.write_core(
+            cluster_.write_core_immediate(
                 &zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), launch_msg_buffer_read_ptr_addr);
-            cluster_.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
+            cluster_.write_core_immediate(
+                &zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
         } else {
             cluster_.noc_multicast_write(
                 init_launch_msg_data.data(),
@@ -1016,7 +1036,11 @@ void RiscFirmwareInitializer::initialize_firmware(
                 reset_val &= ~tt::umd::RiscType::ERISC0;
             }
             if (is_idle_eth or !hal_.get_eth_fw_is_cooperative()) {
-                cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), reset_val);
+                if (cluster_.arch() == ARCH::BLACKHOLE) {
+                    cluster_.assert_risc_reset_at_core_immediate(tt_cxy_pair(device_id, virtual_core), reset_val);
+                } else {
+                    cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), reset_val);
+                }
             }
             if (not rtoptions_.get_skip_loading_fw()) {
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
@@ -1046,7 +1070,7 @@ void RiscFirmwareInitializer::initialize_firmware(
 
             if (hal_.get_eth_fw_is_cooperative() || core_type != HalProgrammableCoreType::ACTIVE_ETH ||
                 !rtoptions_.get_enable_2_erisc_mode()) {
-                cluster_.write_core(
+                cluster_.write_core_immediate(
                     &jit_build_config.fw_launch_addr_value,
                     sizeof(uint32_t),
                     tt_cxy_pair(device_id, virtual_core),
@@ -1065,7 +1089,12 @@ void RiscFirmwareInitializer::initialize_firmware(
             break;
         }
         case HalProgrammableCoreType::DRAM: {
-            cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
+            if (cluster_.arch() == ARCH::BLACKHOLE) {
+                cluster_.assert_risc_reset_at_core_immediate(
+                    tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
+            } else {
+                cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
+            }
             if (not rtoptions_.get_skip_loading_fw()) {
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto num_build_states = hal_.get_processor_types_count(core_type_idx, processor_class);
@@ -1098,7 +1127,7 @@ void RiscFirmwareInitializer::initialize_firmware(
             cluster_.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
 
             // Write reset PC (register address, no L1 NOC offset needed)
-            cluster_.write_core(
+            cluster_.write_core_immediate(
                 &jit_build_config.fw_launch_addr_value,
                 sizeof(uint32_t),
                 tt_cxy_pair(device_id, virtual_core),
@@ -1282,8 +1311,40 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     try {
         llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_INIT, not_done_cores, timeout_ms);
     } catch (std::runtime_error&) {
+        const auto& soc_desc = cluster_.get_soc_desc(device_id);
         for (const auto& core : not_done_cores) {
-            log_error(LogDevice, "Device {} core {}-{}: FW init did not complete.", device_id, core.x, core.y);
+            // Read back go_msg signal to see if FW ever started
+            auto programmable_core_type = llrt::get_core_type(device_id, core);
+            auto factory = hal_.get_dev_msgs_factory(programmable_core_type);
+            auto go_msg_buf = factory.create<dev_msgs::go_msg_t>();
+            uint64_t go_msg_addr = hal_.get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG);
+            cluster_.read_core(go_msg_buf.data(), go_msg_buf.size(), tt_cxy_pair(device_id, core), go_msg_addr);
+            uint8_t go_signal = go_msg_buf.view().signal();
+
+            // Read back SR0 (soft reset register) to check which RISCs are still in reset
+            tt_cxy_pair cxy(device_id, core);
+            tt::umd::CoreCoord translated_coord = soc_desc.get_coord_at(cxy, CoordSystem::TRANSLATED);
+            uint32_t sr0_val = cluster_.get_driver()->get_tt_device(device_id)->get_risc_reset_state(translated_coord);
+
+            // Read back reset PC register to verify correct entry point was loaded
+            uint32_t core_type_idx = hal_.get_programmable_core_type_index(programmable_core_type);
+            auto jit_cfg = hal_.get_jit_build_config(core_type_idx, 0, 0);
+            uint32_t reset_pc_val = 0;
+            cluster_.read_core(
+                &reset_pc_val, sizeof(reset_pc_val), tt_cxy_pair(device_id, core), jit_cfg.fw_launch_addr);
+
+            log_error(
+                LogDevice,
+                "Device {} core {}-{}: FW init timed out. go_signal=0x{:x} (expected DONE=0x{:x}), "
+                "SR0=0x{:08x}, reset_PC=0x{:08x} (expected 0x{:08x})",
+                device_id,
+                core.x,
+                core.y,
+                go_signal,
+                dev_msgs::RUN_MSG_DONE,
+                sr0_val,
+                reset_pc_val,
+                jit_cfg.fw_launch_addr_value);
         }
         TT_THROW("Device {} init: failed to initialize FW! Try resetting the board.", device_id);
     }
@@ -1294,6 +1355,39 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         try {
             llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_INIT, dram_not_done_cores, timeout_ms);
         } catch (std::runtime_error&) {
+            const auto& soc_desc_d = cluster_.get_soc_desc(device_id);
+            for (const auto& core : dram_not_done_cores) {
+                auto programmable_core_type = llrt::get_core_type(device_id, core);
+                auto factory = hal_.get_dev_msgs_factory(programmable_core_type);
+                auto go_msg_buf = factory.create<dev_msgs::go_msg_t>();
+                uint64_t go_msg_addr = hal_.get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG);
+                cluster_.read_core(go_msg_buf.data(), go_msg_buf.size(), tt_cxy_pair(device_id, core), go_msg_addr);
+                uint8_t go_signal = go_msg_buf.view().signal();
+
+                tt_cxy_pair cxy(device_id, core);
+                tt::umd::CoreCoord translated_coord = soc_desc_d.get_coord_at(cxy, CoordSystem::TRANSLATED);
+                uint32_t sr0_val =
+                    cluster_.get_driver()->get_tt_device(device_id)->get_risc_reset_state(translated_coord);
+
+                uint32_t core_type_idx = hal_.get_programmable_core_type_index(programmable_core_type);
+                auto jit_cfg = hal_.get_jit_build_config(core_type_idx, 0, 0);
+                uint32_t reset_pc_val = 0;
+                cluster_.read_core(
+                    &reset_pc_val, sizeof(reset_pc_val), tt_cxy_pair(device_id, core), jit_cfg.fw_launch_addr);
+
+                log_error(
+                    LogDevice,
+                    "Device {} DRAM core {}-{}: FW init timed out. go_signal=0x{:x} (expected DONE=0x{:x}), "
+                    "SR0=0x{:08x}, reset_PC=0x{:08x} (expected 0x{:08x})",
+                    device_id,
+                    core.x,
+                    core.y,
+                    go_signal,
+                    dev_msgs::RUN_MSG_DONE,
+                    sr0_val,
+                    reset_pc_val,
+                    jit_cfg.fw_launch_addr_value);
+            }
             TT_THROW("Device {} init: failed to initialize DRAM FW!", device_id);
         }
         log_debug(LogDevice, "DRAM firmware init complete");
