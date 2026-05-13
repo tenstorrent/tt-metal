@@ -43,7 +43,7 @@ int main() {
         ttnn::Tensor result = triage_hang_apps::add_integers_hang(a, b);
         // Force the dispatch to actually complete (which it won't — the kernel hangs).
         // Reading back will block until the op finishes or times out.
-        auto _ = result.to_vector<bfloat16>();
+        std::cout << "Number of elements: " << result.to_vector<bfloat16>().size() << std::endl;
     } catch (const std::runtime_error& e) {
         std::string error_msg = e.what();
         if (error_msg.find("device timeout") != std::string::npos || error_msg.find("Timeout (") != std::string::npos) {
