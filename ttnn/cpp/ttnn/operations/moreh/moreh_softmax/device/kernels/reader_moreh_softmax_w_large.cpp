@@ -4,9 +4,9 @@
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 #include <cstdint>
 
@@ -46,8 +46,8 @@ void kernel_main() {
         generate_mask_w<uint16_t>(cb_mask, mask_w);
     }
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in_obj(cb_in);
+    Noc noc;
+    CircularBuffer cb_in_obj(cb_in);
     const auto in_tile_bytes = get_tile_size(cb_in);
 
     uint32_t curr_tile = tile_offset;

@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     int i{0};
@@ -95,12 +95,12 @@ void kernel_main() {
     const auto rstd_dtype_bytes = mean_tile_bytes / (TILE_H * TILE_W);
     const auto start_mean_rstd_idx = tile_offset / num_inner_tiles;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_output_grad(cb_id_output_grad);
-    experimental::CircularBuffer cb_input(cb_id_input);
-    experimental::CircularBuffer cb_mean(cb_id_mean);
-    experimental::CircularBuffer cb_rstd(cb_id_rstd);
-    experimental::CircularBuffer cb_gamma(cb_id_gamma);
+    Noc noc;
+    CircularBuffer cb_output_grad(cb_id_output_grad);
+    CircularBuffer cb_input(cb_id_input);
+    CircularBuffer cb_mean(cb_id_mean);
+    CircularBuffer cb_rstd(cb_id_rstd);
+    CircularBuffer cb_gamma(cb_id_gamma);
 
     const auto output_grad_tile_bytes = get_tile_size(cb_id_output_grad);
     const auto input_tile_bytes = get_tile_size(cb_id_input);
@@ -143,7 +143,7 @@ void kernel_main() {
         noc.async_read(mean_addrg, cb_mean, mean_tile_bytes, {.page_id = mean_rstd_tile_idx}, {.offset_bytes = 0});
         noc.async_read_barrier();
         if (tilized_mean_rstd_idx_in_tile != 0) {
-            experimental::CoreLocalMem<uint16_t> mean_ptr(mean_l1_write_ptr);
+            CoreLocalMem<uint16_t> mean_ptr(mean_l1_write_ptr);
             mean_ptr[0] = mean_ptr[tilized_mean_rstd_idx_in_tile];
         }
         cb_mean.push_back(onetile);
@@ -153,7 +153,7 @@ void kernel_main() {
         noc.async_read(rstd_addrg, cb_rstd, rstd_tile_bytes, {.page_id = mean_rstd_tile_idx}, {.offset_bytes = 0});
         noc.async_read_barrier();
         if (tilized_mean_rstd_idx_in_tile != 0) {
-            experimental::CoreLocalMem<uint16_t> rstd_ptr(rstd_l1_write_ptr);
+            CoreLocalMem<uint16_t> rstd_ptr(rstd_l1_write_ptr);
             rstd_ptr[0] = rstd_ptr[tilized_mean_rstd_idx_in_tile];
         }
         cb_rstd.push_back(onetile);
@@ -191,7 +191,7 @@ void kernel_main() {
                     gamma_addrg, cb_gamma, gamma_tile_bytes, {.page_id = gamma_tile_idx}, {.offset_bytes = 0});
                 noc.async_read_barrier();
                 if (tilized_gamma_idx_in_tile != 0) {
-                    experimental::CoreLocalMem<uint16_t> gamma_ptr(gamma_l1_write_ptr);
+                    CoreLocalMem<uint16_t> gamma_ptr(gamma_l1_write_ptr);
                     gamma_ptr[0] = gamma_ptr[tilized_gamma_idx_in_tile];
                 }
                 cb_gamma.push_back(onetile);

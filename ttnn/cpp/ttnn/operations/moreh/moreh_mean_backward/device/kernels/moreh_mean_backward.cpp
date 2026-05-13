@@ -8,7 +8,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     // compile-time args
@@ -17,14 +17,14 @@ void kernel_main() {
     constexpr bool ht_need_bcast = (get_compile_time_arg_val(2) == 1);
 
     constexpr auto cb_in0 = tt::CBIndex::c_0;
-    experimental::CircularBuffer cb_in0_obj(cb_in0);  // input
+    CircularBuffer cb_in0_obj(cb_in0);  // input
     constexpr auto cb_in1 = tt::CBIndex::c_1;
-    experimental::CircularBuffer cb_in1_obj(cb_in1);  // zero tile
+    CircularBuffer cb_in1_obj(cb_in1);  // zero tile
     constexpr auto cb_scalar = tt::CBIndex::c_2;
     constexpr auto cb_out0 = tt::CBIndex::c_16;
-    experimental::CircularBuffer cb_out0_obj(cb_out0);
+    CircularBuffer cb_out0_obj(cb_out0);
     constexpr auto cb_intermed0 = tt::CBIndex::c_24;
-    experimental::CircularBuffer cb_intermed0_obj(cb_intermed0);
+    CircularBuffer cb_intermed0_obj(cb_intermed0);
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
 

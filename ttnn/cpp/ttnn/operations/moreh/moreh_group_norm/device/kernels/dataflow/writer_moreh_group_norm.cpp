@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     int i{0};
@@ -51,10 +51,10 @@ void kernel_main() {
 
     const auto start_mean_rstd_idx = tile_offset / num_inner_tiles;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_output(cb_id_output);
-    experimental::CircularBuffer cb_mean(cb_id_mean);
-    experimental::CircularBuffer cb_rstd(cb_id_rstd);
+    Noc noc;
+    CircularBuffer cb_output(cb_id_output);
+    CircularBuffer cb_mean(cb_id_mean);
+    CircularBuffer cb_rstd(cb_id_rstd);
 
     const auto output_l1_read_ptr = cb_output.get_read_ptr();
     uint32_t output_tile_idx;
@@ -84,7 +84,7 @@ void kernel_main() {
             const auto mean_l1_read_ptr = cb_mean.get_read_ptr();
             cb_mean.wait_front(onetile);
             if (tilized_mean_rstd_idx_in_tile != 0) {
-                experimental::CoreLocalMem<uint16_t> mean_ptr(mean_l1_read_ptr);
+                CoreLocalMem<uint16_t> mean_ptr(mean_l1_read_ptr);
                 mean_ptr[tilized_mean_rstd_idx_in_tile] = mean_ptr[0];
             }
             noc.async_write(
@@ -103,7 +103,7 @@ void kernel_main() {
             const auto rstd_l1_read_ptr = cb_rstd.get_read_ptr();
             cb_rstd.wait_front(onetile);
             if (tilized_mean_rstd_idx_in_tile != 0) {
-                experimental::CoreLocalMem<uint16_t> rstd_ptr(rstd_l1_read_ptr);
+                CoreLocalMem<uint16_t> rstd_ptr(rstd_l1_read_ptr);
                 rstd_ptr[tilized_mean_rstd_idx_in_tile] = rstd_ptr[0];
             }
             noc.async_write(

@@ -5,10 +5,10 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     int i{0};
@@ -47,10 +47,10 @@ void kernel_main() {
     // program cache hits.
     const auto s0 = TensorAccessor(input_args, input_addr, input_cb_page_size);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer input_cb(input_cb_id);
-    experimental::CircularBuffer output_cb(output_cb_id);
-    experimental::CircularBuffer scratch_cb(scratch_cb_id);
+    Noc noc;
+    CircularBuffer input_cb(input_cb_id);
+    CircularBuffer output_cb(output_cb_id);
+    CircularBuffer scratch_cb(scratch_cb_id);
 
     for (uint32_t row_id = start_id; row_id < start_id + num_units_per_core; row_id++) {
         output_cb.reserve_back(onetile);
@@ -115,7 +115,7 @@ void kernel_main() {
 
                     input_cb.wait_front(onetile);
 #ifdef DTYPE_BFLOAT16
-                    experimental::CoreLocalMem<uint16_t> input_cb_ptr_uint16(input_cb.get_read_ptr());
+                    CoreLocalMem<uint16_t> input_cb_ptr_uint16(input_cb.get_read_ptr());
                     uint16_t bfloat16_value = input_cb_ptr_uint16[lh * LW + lw];
                     uint32_t float_value_as_int = static_cast<uint32_t>(bfloat16_value) << 16;
                     auto tmp = reinterpret_cast<float*>(&float_value_as_int);
@@ -123,19 +123,19 @@ void kernel_main() {
                     sum += value_as_float;
 #endif
 #ifdef DTYPE_FLOAT32
-                    experimental::CoreLocalMem<float> input_cb_ptr_float(input_cb.get_read_ptr());
+                    CoreLocalMem<float> input_cb_ptr_float(input_cb.get_read_ptr());
                     sum += input_cb_ptr_float[lh * LW + lw];
 #endif
                     input_cb.pop_front(onetile);
                 }
             }
 #ifdef DTYPE_BFLOAT16
-            experimental::CoreLocalMem<uint16_t> output_cb_write_ptr(output_cb.get_write_ptr());
+            CoreLocalMem<uint16_t> output_cb_write_ptr(output_cb.get_write_ptr());
             auto sum_ptr = reinterpret_cast<uint16_t*>(&sum) + 1;
             output_cb_write_ptr[w] = *sum_ptr;
 #endif
 #ifdef DTYPE_FLOAT32
-            experimental::CoreLocalMem<float> output_cb_write_ptr(output_cb.get_write_ptr());
+            CoreLocalMem<float> output_cb_write_ptr(output_cb.get_write_ptr());
             output_cb_write_ptr[w] = sum;
 #endif
         }

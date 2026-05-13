@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     int i{0};
@@ -28,8 +28,8 @@ void kernel_main() {
     one.f = 1.0f;
     fill_cb_with_value(cb_id_one, one.u);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_input(cb_id_input);
+    Noc noc;
+    CircularBuffer cb_input(cb_id_input);
     const auto input_tile_bytes = get_tile_size(cb_id_input);
 
     auto start_output_tile_idx = tile_offset;

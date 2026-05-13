@@ -4,9 +4,9 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 void kernel_main() {
     ArgFetcher arg_fetcher;
     const uint32_t src0_addr = arg_fetcher.get_next_arg_val<uint32_t>();
@@ -33,8 +33,8 @@ void kernel_main() {
 
     const auto s0 = TensorAccessor(src0_args, src0_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in0(cb_id_in0);
+    Noc noc;
+    CircularBuffer cb_in0(cb_id_in0);
     const auto in0_tile_bytes = get_tile_size(cb_id_in0);
 
     constexpr uint32_t onetile = 1;

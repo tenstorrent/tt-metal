@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const auto gamma_grad_addr = get_arg_val<uint32_t>(0);
@@ -29,9 +29,9 @@ void kernel_main() {
 
     const auto start_tile_idx = tile_offset;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_gamma_grad(cb_id_gamma_grad);
-    experimental::CircularBuffer cb_beta_grad(cb_id_beta_grad);
+    Noc noc;
+    CircularBuffer cb_gamma_grad(cb_id_gamma_grad);
+    CircularBuffer cb_beta_grad(cb_id_beta_grad);
     const auto gamma_grad_tile_bytes = get_tile_size(cb_id_gamma_grad);
     const auto beta_grad_tile_bytes = get_tile_size(cb_id_beta_grad);
 

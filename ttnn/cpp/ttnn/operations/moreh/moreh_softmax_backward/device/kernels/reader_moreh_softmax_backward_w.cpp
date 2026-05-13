@@ -4,9 +4,9 @@
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t y_addr = get_arg_val<uint32_t>(0);
@@ -37,9 +37,9 @@ void kernel_main() {
         calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
     generate_mask_w(cb_mask, mask_w);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_y_obj(cb_y);
-    experimental::CircularBuffer cb_dy_obj(cb_dy);
+    Noc noc;
+    CircularBuffer cb_y_obj(cb_y);
+    CircularBuffer cb_dy_obj(cb_dy);
     const auto y_tile_bytes = get_tile_size(cb_y);
     const auto dy_tile_bytes = get_tile_size(cb_dy);
 

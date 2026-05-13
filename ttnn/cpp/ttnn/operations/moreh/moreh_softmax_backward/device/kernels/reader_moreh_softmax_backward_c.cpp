@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t y_addr = get_arg_val<uint32_t>(0);
@@ -27,9 +27,9 @@ void kernel_main() {
     const auto y_in = TensorAccessor(y_args, y_addr);
     const auto dy_in = TensorAccessor(dy_args, dy_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_y_obj(cb_y);
-    experimental::CircularBuffer cb_dy_obj(cb_dy);
+    Noc noc;
+    CircularBuffer cb_y_obj(cb_y);
+    CircularBuffer cb_dy_obj(cb_dy);
     const auto y_tile_bytes = get_tile_size(cb_y);
     const auto dy_tile_bytes = get_tile_size(cb_dy);
 

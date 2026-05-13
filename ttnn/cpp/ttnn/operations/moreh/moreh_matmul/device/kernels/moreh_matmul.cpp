@@ -6,7 +6,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/transpose_wh.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 ////////////////////
 // global variables
@@ -41,7 +41,7 @@ FORCE_INLINE void unravel_output_tidx(uint32_t output_tidx, uint32_t* output_idx
 
 // TODO: move it to moreh_common.hpp if more use cases.
 FORCE_INLINE void transpose_wh_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32_t idst = 0) {
-    experimental::CircularBuffer ocb_obj(ocb);
+    CircularBuffer ocb_obj(ocb);
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format_srca(icb);
 #endif
@@ -65,7 +65,7 @@ FORCE_INLINE void transpose_tile(uint32_t& mm_src, bool transpose, bool need_mas
     }
 
     if (need_mask) {
-        experimental::CircularBuffer mm_src_obj(mm_src);
+        CircularBuffer mm_src_obj(mm_src);
         mm_src_obj.wait_front(onetile);
         transpose_wh_tile_to_cb(mm_src, mm_src);
         mm_src_obj.pop_front(onetile);
@@ -77,7 +77,7 @@ FORCE_INLINE void transpose_tile(uint32_t& mm_src, bool transpose, bool need_mas
 }
 
 FORCE_INLINE void pack_onetile_to_cb(uint32_t ocb = 16, uint32_t idst = 0) {
-    experimental::CircularBuffer ocb_obj(ocb);
+    CircularBuffer ocb_obj(ocb);
     ocb_obj.reserve_back(onetile);
     tile_regs_wait();
 #if defined FP32_DEST_ACC_EN
@@ -152,8 +152,8 @@ FORCE_INLINE void mask_tile_to_cb(
 #ifdef FUSE_BIAS
 template <bool is_scalar_bias>
 FORCE_INLINE void bias_add() {
-    experimental::CircularBuffer cb_intermed3_obj(cb_intermed3);
-    experimental::CircularBuffer bias_cb_id_obj(bias_cb_id);
+    CircularBuffer cb_intermed3_obj(cb_intermed3);
+    CircularBuffer bias_cb_id_obj(bias_cb_id);
     pack_onetile_to_cb(cb_intermed3);
     cb_intermed3_obj.wait_front(onetile);
     bias_cb_id_obj.wait_front(onetile);
@@ -194,11 +194,11 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
     uint32_t Nt,
     bool need_other_mask_h,
     bool need_other_mask_w) {
-    experimental::CircularBuffer cb_in0_obj(cb_in0);
-    experimental::CircularBuffer cb_in1_obj(cb_in1);
-    experimental::CircularBuffer cb_in2_obj(cb_in2);
-    experimental::CircularBuffer cb_in3_obj(cb_in3);
-    experimental::CircularBuffer cb_intermed0_obj(cb_intermed0);
+    CircularBuffer cb_in0_obj(cb_in0);
+    CircularBuffer cb_in1_obj(cb_in1);
+    CircularBuffer cb_in2_obj(cb_in2);
+    CircularBuffer cb_in3_obj(cb_in3);
+    CircularBuffer cb_intermed0_obj(cb_intermed0);
     // TODO: checking required when the input cb format and intermediate cb format are different.
     mm_init(cb_in0, cb_in1, cb_out0);
     if (transpose_input || transpose_other) {
@@ -279,8 +279,8 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
                 cb_intermed0_obj.pop_front(onetile);
             }
 
-            experimental::CircularBuffer mm_src0_obj(mm_src0);
-            experimental::CircularBuffer mm_src1_obj(mm_src1);
+            CircularBuffer mm_src0_obj(mm_src0);
+            CircularBuffer mm_src1_obj(mm_src1);
             if (transpose_input || need_input_mask) {
                 mm_src0_obj.wait_front(onetile);
             }
@@ -327,8 +327,8 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
 }
 
 FORCE_INLINE void matmul(uint32_t num_output_tiles, uint32_t Kt) {
-    experimental::CircularBuffer cb_in0_obj(cb_in0);
-    experimental::CircularBuffer cb_in1_obj(cb_in1);
+    CircularBuffer cb_in0_obj(cb_in0);
+    CircularBuffer cb_in1_obj(cb_in1);
     mm_init(cb_in0, cb_in1, cb_out0);
     for (uint32_t i = 0; i < num_output_tiles; ++i) {
         tile_regs_acquire();

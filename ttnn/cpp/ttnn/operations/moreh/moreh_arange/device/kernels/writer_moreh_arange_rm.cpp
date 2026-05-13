@@ -5,10 +5,10 @@
 #include <cstdlib>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 #define TILE_WIDTH 32
 
@@ -36,8 +36,8 @@ void kernel_main() {
     start_u.u = start;
     step_u.u = step;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_out_obj(cb_out);
+    Noc noc;
+    CircularBuffer cb_out_obj(cb_out);
 
     for (uint32_t t = 0; t < num_tiles; t++) {
         cb_out_obj.reserve_back(1);
@@ -47,7 +47,7 @@ void kernel_main() {
         uint32_t w_addr = cb_out_obj.get_write_ptr();
 
 #ifdef OUTPUT_DTYPE_BFLOAT16
-        experimental::CoreLocalMem<uint16_t> ptr(w_addr);
+        CoreLocalMem<uint16_t> ptr(w_addr);
 
         for (uint32_t w = 0; w < TILE_WIDTH; w++) {
             int32_t idx = w + tile_idx * TILE_WIDTH;
@@ -57,7 +57,7 @@ void kernel_main() {
         }
 #endif
 #ifdef OUTPUT_DTYPE_INT32
-        experimental::CoreLocalMem<uint32_t> ptr(w_addr);
+        CoreLocalMem<uint32_t> ptr(w_addr);
 
         for (uint32_t w = 0; w < TILE_WIDTH; w++) {
             int32_t idx = w + tile_idx * TILE_WIDTH;
@@ -67,7 +67,7 @@ void kernel_main() {
         }
 #endif
 #ifdef OUTPUT_DTYPE_FLOAT32
-        experimental::CoreLocalMem<uint32_t> ptr(w_addr);
+        CoreLocalMem<uint32_t> ptr(w_addr);
 
         for (uint32_t w = 0; w < TILE_WIDTH; w++) {
             int32_t idx = w + tile_idx * TILE_WIDTH;
@@ -79,7 +79,7 @@ void kernel_main() {
 
         uint32_t noc_offfset = tile_idx * TILE_WIDTH * element_size;
         noc.async_write(
-            experimental::use<experimental::CircularBuffer::AddrSelector::WRITE_PTR>(cb_out_obj),
+            use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_out_obj),
             s0,
             num_bytes_per_tile,
             {.offset_bytes = 0},

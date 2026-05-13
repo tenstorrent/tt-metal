@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     int i{0};
@@ -27,9 +27,9 @@ void kernel_main() {
     constexpr auto coef_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     const auto coef_addrg = TensorAccessor(coef_args, clip_coef_clamped_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_input(cb_id_input);
-    experimental::CircularBuffer cb_clip_coef(cb_id_clip_coef_clamped);
+    Noc noc;
+    CircularBuffer cb_input(cb_id_input);
+    CircularBuffer cb_clip_coef(cb_id_clip_coef_clamped);
     const auto input_tile_bytes = get_tile_size(cb_id_input);
     const auto clip_coef_tile_bytes = get_tile_size(cb_id_clip_coef_clamped);
 

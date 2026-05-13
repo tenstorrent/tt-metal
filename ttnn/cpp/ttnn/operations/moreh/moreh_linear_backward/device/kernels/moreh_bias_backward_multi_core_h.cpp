@@ -4,7 +4,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr int onetile = 1;
@@ -16,13 +16,13 @@ void kernel_main() {
     const bool do_mask_w = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
 
     constexpr auto cb_in0 = tt::CBIndex::c_0;
-    experimental::CircularBuffer cb_in0_obj(cb_in0);
+    CircularBuffer cb_in0_obj(cb_in0);
     constexpr auto cb_scaler = tt::CBIndex::c_1;
-    experimental::CircularBuffer cb_scaler_obj(cb_scaler);
+    CircularBuffer cb_scaler_obj(cb_scaler);
     constexpr auto cb_mask_h_w = tt::CBIndex::c_2;
-    experimental::CircularBuffer cb_mask_h_w_obj(cb_mask_h_w);
+    CircularBuffer cb_mask_h_w_obj(cb_mask_h_w);
     constexpr auto cb_intermed0 = tt::CBIndex::c_24;
-    experimental::CircularBuffer cb_intermed0_obj(cb_intermed0);
+    CircularBuffer cb_intermed0_obj(cb_intermed0);
     constexpr auto cb_intermed1 = tt::CBIndex::c_25;
     constexpr auto cb_out0 = tt::CBIndex::c_16;
     constexpr uint32_t dst0 = 0;

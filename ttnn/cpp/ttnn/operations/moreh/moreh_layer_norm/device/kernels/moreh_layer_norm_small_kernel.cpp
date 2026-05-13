@@ -4,7 +4,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 ALWI bool need_to_do_mask_h(uint32_t w_idx, uint32_t origin_num_h_tiles, uint32_t origin_num_w_tiles) {
     return ((w_idx / origin_num_w_tiles) + 1) % origin_num_h_tiles == 0;
@@ -26,43 +26,43 @@ void kernel_main() {
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
 
     constexpr auto cb_x = tt::CBIndex::c_0;
-    experimental::CircularBuffer cb_x_obj(cb_x);  // input
+    CircularBuffer cb_x_obj(cb_x);  // input
     constexpr auto cb_scaler = tt::CBIndex::c_1;
-    experimental::CircularBuffer cb_scaler_obj(cb_scaler);  // scaler
+    CircularBuffer cb_scaler_obj(cb_scaler);  // scaler
     constexpr auto cb_eps = tt::CBIndex::c_2;
-    experimental::CircularBuffer cb_eps_obj(cb_eps);  // epsilon
+    CircularBuffer cb_eps_obj(cb_eps);  // epsilon
     constexpr auto cb_gamma = tt::CBIndex::c_3;
-    experimental::CircularBuffer cb_gamma_obj(cb_gamma);  // gamma
+    CircularBuffer cb_gamma_obj(cb_gamma);  // gamma
     constexpr auto cb_beta = tt::CBIndex::c_4;
-    experimental::CircularBuffer cb_beta_obj(cb_beta);  // beta
+    CircularBuffer cb_beta_obj(cb_beta);  // beta
     constexpr auto cb_mask_h = tt::CBIndex::c_5;
-    experimental::CircularBuffer cb_mask_h_obj(cb_mask_h);  // mask_h
+    CircularBuffer cb_mask_h_obj(cb_mask_h);  // mask_h
     constexpr auto cb_mask_w = tt::CBIndex::c_6;
-    experimental::CircularBuffer cb_mask_w_obj(cb_mask_w);  // mask_w
+    CircularBuffer cb_mask_w_obj(cb_mask_w);  // mask_w
 
     constexpr auto cb_out = tt::CBIndex::c_16;
-    experimental::CircularBuffer cb_out_obj(cb_out);  // output
+    CircularBuffer cb_out_obj(cb_out);  // output
     constexpr auto cb_mean = tt::CBIndex::c_17;
-    experimental::CircularBuffer cb_mean_obj(cb_mean);  // mean
+    CircularBuffer cb_mean_obj(cb_mean);  // mean
     constexpr auto cb_rstd = tt::CBIndex::c_18;
-    experimental::CircularBuffer cb_rstd_obj(cb_rstd);  // rstd
+    CircularBuffer cb_rstd_obj(cb_rstd);  // rstd
 
     constexpr auto cb_ex = tt::CBIndex::c_24;
-    experimental::CircularBuffer cb_ex_obj(cb_ex);  // E[x]
+    CircularBuffer cb_ex_obj(cb_ex);  // E[x]
     constexpr auto cb_xmm = tt::CBIndex::c_25;
-    experimental::CircularBuffer cb_xmm_obj(cb_xmm);  // x - E[x]
+    CircularBuffer cb_xmm_obj(cb_xmm);  // x - E[x]
     constexpr auto cb_xmm2 = tt::CBIndex::c_26;
-    experimental::CircularBuffer cb_xmm2_obj(cb_xmm2);  // (x - E[x])^2
+    CircularBuffer cb_xmm2_obj(cb_xmm2);  // (x - E[x])^2
     constexpr auto cb_xmm2sum = tt::CBIndex::c_27;
-    experimental::CircularBuffer cb_xmm2sum_obj(cb_xmm2sum);  // Sum[(x - E[x])^2]
+    CircularBuffer cb_xmm2sum_obj(cb_xmm2sum);  // Sum[(x - E[x])^2]
     constexpr auto cb_var = tt::CBIndex::c_28;
-    experimental::CircularBuffer cb_var_obj(cb_var);  // E[(x - E[x])^2] = Var[x]
+    CircularBuffer cb_var_obj(cb_var);  // E[(x - E[x])^2] = Var[x]
     constexpr auto cb_recip_std = tt::CBIndex::c_29;
-    experimental::CircularBuffer cb_recip_std_obj(cb_recip_std);  // 1.0/(sqrt(Var[x] + eps))
+    CircularBuffer cb_recip_std_obj(cb_recip_std);  // 1.0/(sqrt(Var[x] + eps))
     constexpr auto cb_gamma_beta = tt::CBIndex::c_30;
-    experimental::CircularBuffer cb_gamma_beta_obj(cb_gamma_beta);  // p * gamm + beta
+    CircularBuffer cb_gamma_beta_obj(cb_gamma_beta);  // p * gamm + beta
     constexpr auto cb_xsum = tt::CBIndex::c_31;
-    experimental::CircularBuffer cb_xsum_obj(cb_xsum);  // Sum[x]
+    CircularBuffer cb_xsum_obj(cb_xsum);  // Sum[x]
 
     constexpr uint32_t onetile = 1;
 
@@ -130,7 +130,7 @@ void kernel_main() {
                     tile_regs_acquire();
                     // I use cb_ex temporarily.
                     constexpr auto cb_tmp = cb_ex;
-                    experimental::CircularBuffer cb_tmp_obj(cb_tmp);
+                    CircularBuffer cb_tmp_obj(cb_tmp);
                     cb_tmp_obj.reserve_back(onetile);
 
                     copy_tile_init_with_dt(cb_x);
@@ -357,7 +357,7 @@ void kernel_main() {
          * cb_out
          */
         constexpr auto cb_gamma_beta_or_out = (gamma_has_value || beta_has_value) ? cb_gamma_beta : cb_out;
-        experimental::CircularBuffer cb_gamma_beta_or_out_obj(cb_gamma_beta_or_out);
+        CircularBuffer cb_gamma_beta_or_out_obj(cb_gamma_beta_or_out);
         for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx += block_size) {
             cb_gamma_beta_or_out_obj.reserve_back(block_size);
             for (uint32_t j = 0; j < block_size; j++) {
@@ -380,7 +380,7 @@ void kernel_main() {
             // * gamma
             if (gamma_has_value) {
                 constexpr auto cb_outg = beta_has_value ? cb_gamma_beta : cb_out;
-                experimental::CircularBuffer cb_outg_obj(cb_outg);
+                CircularBuffer cb_outg_obj(cb_outg);
                 cb_gamma_beta_or_out_obj.wait_front(block_size);
                 cb_gamma_obj.wait_front(block_size);
                 cb_outg_obj.reserve_back(block_size);

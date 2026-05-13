@@ -4,7 +4,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 ALWI bool need_to_do_mask_h(uint32_t w_idx, uint32_t origin_num_h_tiles, uint32_t origin_num_w_tiles) {
     return ((w_idx / origin_num_w_tiles) + 1) % origin_num_h_tiles == 0;
@@ -22,35 +22,35 @@ void kernel_main() {
     binary_op_init_common(tt::CBIndex::c_1, tt::CBIndex::c_2, tt::CBIndex::c_16);
 
     constexpr auto cb_dy = tt::CBIndex::c_0;
-    experimental::CircularBuffer cb_dy_obj(cb_dy);  // output_grad(==dy)
+    CircularBuffer cb_dy_obj(cb_dy);  // output_grad(==dy)
     constexpr auto cb_x = tt::CBIndex::c_1;
-    experimental::CircularBuffer cb_x_obj(cb_x);  // input(==x)
+    CircularBuffer cb_x_obj(cb_x);  // input(==x)
     constexpr auto cb_mean = tt::CBIndex::c_2;
-    experimental::CircularBuffer cb_mean_obj(cb_mean);  // mean
+    CircularBuffer cb_mean_obj(cb_mean);  // mean
     constexpr auto cb_rstd = tt::CBIndex::c_3;
-    experimental::CircularBuffer cb_rstd_obj(cb_rstd);  // rstd
+    CircularBuffer cb_rstd_obj(cb_rstd);  // rstd
     constexpr auto cb_scaler = tt::CBIndex::c_4;
-    experimental::CircularBuffer cb_scaler_obj(cb_scaler);  // scaler
+    CircularBuffer cb_scaler_obj(cb_scaler);  // scaler
     constexpr auto cb_n_recip_n = tt::CBIndex::c_5;
-    experimental::CircularBuffer cb_n_recip_n_obj(cb_n_recip_n);  // n_recip_n
+    CircularBuffer cb_n_recip_n_obj(cb_n_recip_n);  // n_recip_n
     constexpr auto cb_gamma = tt::CBIndex::c_6;
-    experimental::CircularBuffer cb_gamma_obj(cb_gamma);  // gamma
+    CircularBuffer cb_gamma_obj(cb_gamma);  // gamma
     constexpr auto cb_mask_h_w = tt::CBIndex::c_7;
-    experimental::CircularBuffer cb_mask_h_w_obj(cb_mask_h_w);  // mask_h_w
+    CircularBuffer cb_mask_h_w_obj(cb_mask_h_w);  // mask_h_w
 
     // ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * (rstd / n)
     constexpr auto cb_dx = tt::CBIndex::c_16;
-    experimental::CircularBuffer cb_dx_obj(cb_dx);  // input_grad(==dx)
+    CircularBuffer cb_dx_obj(cb_dx);  // input_grad(==dx)
 
     // y = (x - mean) * rstd
     constexpr auto cb_dycopy = tt::CBIndex::c_24;
-    experimental::CircularBuffer cb_dycopy_obj(cb_dycopy);  // copy output_grad(==dycopy)
+    CircularBuffer cb_dycopy_obj(cb_dycopy);  // copy output_grad(==dycopy)
     constexpr auto cb_y = tt::CBIndex::c_25;
-    experimental::CircularBuffer cb_y_obj(cb_y);  // output(==y)
+    CircularBuffer cb_y_obj(cb_y);  // output(==y)
     constexpr auto cb_dysum = tt::CBIndex::c_26;
-    experimental::CircularBuffer cb_dysum_obj(cb_dysum);  // Sum[dy]
+    CircularBuffer cb_dysum_obj(cb_dysum);  // Sum[dy]
     constexpr auto cb_ydysum = tt::CBIndex::c_27;
-    experimental::CircularBuffer cb_ydysum_obj(cb_ydysum);  // Sum[y * dy]
+    CircularBuffer cb_ydysum_obj(cb_ydysum);  // Sum[y * dy]
 
     constexpr auto cb_tmp1 = tt::CBIndex::c_28;  // tmp1
     constexpr auto cb_tmp2 = tt::CBIndex::c_29;  // tmp2
@@ -85,9 +85,9 @@ void kernel_main() {
         // Compute cb_y
         // y = (x - mean) * rstd
         constexpr auto cb_dyadd = cb_tmp1;
-        experimental::CircularBuffer cb_dyadd_obj(cb_dyadd);
+        CircularBuffer cb_dyadd_obj(cb_dyadd);
         constexpr auto cb_ydyadd = cb_tmp2;
-        experimental::CircularBuffer cb_ydyadd_obj(cb_ydyadd);
+        CircularBuffer cb_ydyadd_obj(cb_ydyadd);
         for (uint32_t wt = 0; wt < Wt; wt++) {
             // Compute cb_xmm
             // x - mean
@@ -265,7 +265,7 @@ void kernel_main() {
 
             // Compute cb_ydy and cb_ydyadd
             constexpr auto cb_ydy = cb_tmp3;
-            experimental::CircularBuffer cb_ydy_obj(cb_ydy);
+            CircularBuffer cb_ydy_obj(cb_ydy);
             // Compute cb_ydy
             tile_regs_acquire();
             cb_y_obj.wait_front(onetile);
@@ -332,7 +332,7 @@ void kernel_main() {
         // Compute cb_recip_nrstd
         // rstd / n -> cb_tmp3
         constexpr auto cb_recip_nrstd = cb_tmp3;
-        experimental::CircularBuffer cb_recip_nrstd_obj(cb_recip_nrstd);
+        CircularBuffer cb_recip_nrstd_obj(cb_recip_nrstd);
         tile_regs_acquire();
         cb_recip_nrstd_obj.reserve_back(onetile);
 
@@ -440,7 +440,7 @@ void kernel_main() {
             // Compute cb_ndy
             // n * dy
             constexpr auto cb_ndy = cb_tmp1;
-            experimental::CircularBuffer cb_ndy_obj(cb_ndy);
+            CircularBuffer cb_ndy_obj(cb_ndy);
             tile_regs_acquire();
             cb_dycopy_obj.wait_front(onetile);
             cb_ndy_obj.reserve_back(onetile);
@@ -459,7 +459,7 @@ void kernel_main() {
             // Compute cb_ndymdysum
             // n * dy - Sum[dy]
             constexpr auto cb_ndymdysum = cb_tmp2;
-            experimental::CircularBuffer cb_ndymdysum_obj(cb_ndymdysum);
+            CircularBuffer cb_ndymdysum_obj(cb_ndymdysum);
             tile_regs_acquire();
             cb_ndy_obj.wait_front(onetile);
             cb_ndymdysum_obj.reserve_back(onetile);
@@ -483,7 +483,7 @@ void kernel_main() {
             // Compute cb_xmm
             // x - mean and mask(optional)
             constexpr auto cb_xmm = cb_tmp1;
-            experimental::CircularBuffer cb_xmm_obj(cb_xmm);
+            CircularBuffer cb_xmm_obj(cb_xmm);
             tile_regs_acquire();
             cb_x_obj.wait_front(onetile);  // comes from the reader
             cb_xmm_obj.reserve_back(onetile);
@@ -545,7 +545,7 @@ void kernel_main() {
             // Compute cb_yydysum
             // y * Sum[y * dy]
             constexpr auto cb_yydysum = cb_tmp1;
-            experimental::CircularBuffer cb_yydysum_obj(cb_yydysum);
+            CircularBuffer cb_yydysum_obj(cb_yydysum);
             tile_regs_acquire();
             cb_y_obj.wait_front(onetile);
             cb_yydysum_obj.reserve_back(onetile);
@@ -569,7 +569,7 @@ void kernel_main() {
             // Compute cb_tmp4
             // (n * dy - Sum[dy]) - (y * Sum[y * dy])
             constexpr auto cb_tmp4 = cb_y;
-            experimental::CircularBuffer cb_tmp4_obj(cb_tmp4);
+            CircularBuffer cb_tmp4_obj(cb_tmp4);
             tile_regs_acquire();
             cb_ndymdysum_obj.wait_front(onetile);
             cb_yydysum_obj.wait_front(onetile);

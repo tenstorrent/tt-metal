@@ -5,10 +5,10 @@
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/common.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -42,9 +42,9 @@ void kernel_main() {
 
 #define NOC_MINIMUM_READ_SIZE 32
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_out0_obj(cb_id_out0);
-    experimental::CircularBuffer cb_out1_obj(cb_id_out1);
+    Noc noc;
+    CircularBuffer cb_out0_obj(cb_id_out0);
+    CircularBuffer cb_out1_obj(cb_id_out1);
 
     uint32_t l1_read_addr0 = cb_out0_obj.get_read_ptr();
     uint32_t l1_read_addr1 = cb_out1_obj.get_read_ptr();

@@ -4,9 +4,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -34,11 +34,11 @@ void kernel_main() {
     auto momentum_out = TensorAccessor(momentum_out_args, momentum_out_addr);
 #endif
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_param_out_obj(cb_param_out);
+    Noc noc;
+    CircularBuffer cb_param_out_obj(cb_param_out);
     const auto param_out_tile_bytes = get_tile_size(cb_param_out);
 #if defined(MOMENTUM)
-    experimental::CircularBuffer cb_momentum_out_obj(cb_momentum_out);
+    CircularBuffer cb_momentum_out_obj(cb_momentum_out);
     const auto momentum_out_tile_bytes = get_tile_size(cb_momentum_out);
 #endif
 

@@ -4,9 +4,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/common.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -132,12 +132,12 @@ void kernel_main() {
 #define NOC_MINIMUM_READ_SIZE (32)
 #define INDEX_SIZE (4)
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in0_obj(cb_in0);
-    experimental::CircularBuffer cb_in1_obj(cb_in1);
-    experimental::CircularBuffer cb_in2_obj(cb_in2);
-    experimental::CircularBuffer cb_in3_obj(cb_in3);
-    experimental::CircularBuffer cb_in4_obj(cb_in4);
+    Noc noc;
+    CircularBuffer cb_in0_obj(cb_in0);
+    CircularBuffer cb_in1_obj(cb_in1);
+    CircularBuffer cb_in2_obj(cb_in2);
+    CircularBuffer cb_in3_obj(cb_in3);
+    CircularBuffer cb_in4_obj(cb_in4);
 
     uint32_t end_id = start_id + num_sticks;
 

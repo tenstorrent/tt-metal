@@ -6,7 +6,7 @@
 
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
@@ -14,17 +14,17 @@ void kernel_main() {
     const uint32_t tile_offset = get_arg_val<uint32_t>(1);
 
     constexpr uint32_t cb_divisor = tt::CBIndex::c_3;
-    experimental::CircularBuffer cb_divisor_obj(cb_divisor);
+    CircularBuffer cb_divisor_obj(cb_divisor);
     constexpr uint32_t cb_output_grad = tt::CBIndex::c_0;
-    experimental::CircularBuffer cb_output_grad_obj(cb_output_grad);
+    CircularBuffer cb_output_grad_obj(cb_output_grad);
     constexpr uint32_t cb_tmp_weight = tt::CBIndex::c_24;
-    experimental::CircularBuffer cb_tmp_weight_obj(cb_tmp_weight);
+    CircularBuffer cb_tmp_weight_obj(cb_tmp_weight);
     constexpr uint32_t cb_tmp1 = tt::CBIndex::c_25;
-    experimental::CircularBuffer cb_tmp1_obj(cb_tmp1);
+    CircularBuffer cb_tmp1_obj(cb_tmp1);
     constexpr uint32_t cb_tmp2 = tt::CBIndex::c_26;
-    experimental::CircularBuffer cb_tmp2_obj(cb_tmp2);
+    CircularBuffer cb_tmp2_obj(cb_tmp2);
     constexpr uint32_t cb_input_grad = tt::CBIndex::c_16;
-    experimental::CircularBuffer cb_input_grad_obj(cb_input_grad);
+    CircularBuffer cb_input_grad_obj(cb_input_grad);
 
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t onetile = 1;

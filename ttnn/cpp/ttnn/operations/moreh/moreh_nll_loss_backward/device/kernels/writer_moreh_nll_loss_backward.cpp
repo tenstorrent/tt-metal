@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -21,8 +21,8 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_input_grad_obj(cb_input_grad);
+    Noc noc;
+    CircularBuffer cb_input_grad_obj(cb_input_grad);
     const auto input_grad_tile_bytes = get_tile_size(cb_input_grad);
 
     uint32_t end_id = start_id + num_tiles_per_core;

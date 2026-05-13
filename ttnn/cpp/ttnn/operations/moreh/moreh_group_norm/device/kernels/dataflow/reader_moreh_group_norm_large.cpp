@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     int i{0};
@@ -81,10 +81,10 @@ void kernel_main() {
     const uint32_t beta_tile_bytes = get_tile_size(cb_id_beta);
     const auto beta_addrg = TensorAccessor(beta_args, beta_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_input(cb_id_input);
-    experimental::CircularBuffer cb_gamma(cb_id_gamma);
-    experimental::CircularBuffer cb_beta(cb_id_beta);
+    Noc noc;
+    CircularBuffer cb_input(cb_id_input);
+    CircularBuffer cb_gamma(cb_id_gamma);
+    CircularBuffer cb_beta(cb_id_beta);
 
     uint32_t input_tile_idx;
     for (uint32_t outer_idx = 0; outer_idx < num_rows_per_core; ++outer_idx) {
@@ -162,7 +162,7 @@ void kernel_main() {
                     tilized_gamma_idx_in_tile =
                         get_tilized_gamma_beta_idx_in_tile(input_tile_idx, HtWt, C, TILE_H, TILE_W);
                     if (tilized_gamma_idx_in_tile != 0) {
-                        experimental::CoreLocalMem<uint16_t> gamma_ptr(gamma_l1_write_ptr + q * gamma_tile_bytes);
+                        CoreLocalMem<uint16_t> gamma_ptr(gamma_l1_write_ptr + q * gamma_tile_bytes);
                         gamma_ptr[0] = gamma_ptr[tilized_gamma_idx_in_tile];
                     }
                 }
@@ -192,7 +192,7 @@ void kernel_main() {
                     tilized_beta_idx_in_tile =
                         get_tilized_gamma_beta_idx_in_tile(input_tile_idx, HtWt, C, TILE_H, TILE_W);
                     if (tilized_beta_idx_in_tile != 0) {
-                        experimental::CoreLocalMem<uint16_t> beta_ptr(beta_l1_write_ptr + q * beta_tile_bytes);
+                        CoreLocalMem<uint16_t> beta_ptr(beta_l1_write_ptr + q * beta_tile_bytes);
                         beta_ptr[0] = beta_ptr[tilized_beta_idx_in_tile];
                     }
                 }

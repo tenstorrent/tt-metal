@@ -4,9 +4,9 @@
 
 #include <algorithm>
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
-#include "experimental/circular_buffer.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     using namespace tt::constants;
@@ -63,12 +63,12 @@ void kernel_main() {
     uint32_t Wt = (W + TILE_WIDTH - 1) / TILE_WIDTH;
     uint32_t Ct = (C + TILE_HEIGHT - 1) / TILE_HEIGHT;
 
-    experimental::CircularBuffer cb_input_obj(cb_input);
-    experimental::CircularBuffer cb_target_obj(cb_target);
-    experimental::CircularBuffer cb_tmp_input_obj(cb_tmp_input);
+    CircularBuffer cb_input_obj(cb_input);
+    CircularBuffer cb_target_obj(cb_target);
+    CircularBuffer cb_tmp_input_obj(cb_tmp_input);
 #if defined(WEIGHT)
-    experimental::CircularBuffer cb_weight_obj(cb_weight);
-    experimental::CircularBuffer cb_tmp_weight_obj(cb_tmp_weight);
+    CircularBuffer cb_weight_obj(cb_weight);
+    CircularBuffer cb_tmp_weight_obj(cb_tmp_weight);
 #endif
 
     uint32_t end_id = start_id + num_tiles_per_core;
@@ -90,14 +90,14 @@ void kernel_main() {
 
 #if defined(WEIGHT)
         cb_tmp_weight_obj.reserve_back(onetile);
-        experimental::CoreLocalMem<volatile FP32_DEST_ACC_FTYPE> tmp_weight_l1_ptr(cb_tmp_weight_obj.get_write_ptr());
+        CoreLocalMem<volatile FP32_DEST_ACC_FTYPE> tmp_weight_l1_ptr(cb_tmp_weight_obj.get_write_ptr());
 #endif
 
         cb_tmp_input_obj.reserve_back(onetile);
         cb_target_obj.wait_front(onetile);
 
-        experimental::CoreLocalMem<volatile FP32_DEST_ACC_FTYPE> tmp_input_l1_ptr(cb_tmp_input_obj.get_write_ptr());
-        experimental::CoreLocalMem<volatile int32_t> target_l1_ptr(cb_target_obj.get_read_ptr());
+        CoreLocalMem<volatile FP32_DEST_ACC_FTYPE> tmp_input_l1_ptr(cb_tmp_input_obj.get_write_ptr());
+        CoreLocalMem<volatile int32_t> target_l1_ptr(cb_target_obj.get_read_ptr());
 
         uint32_t idx_max = std::min(w + FACE_WIDTH, W);
         for (uint32_t idx = 0; idx < idx_max; idx++) {
@@ -109,7 +109,7 @@ void kernel_main() {
                 read_value(cb_input, addrg_input, noc_id, tilized_idx);
 
                 cb_input_obj.wait_front(onetile);
-                experimental::CoreLocalMem<volatile uint16_t> input_l1_ptr(cb_input_obj.get_read_ptr());
+                CoreLocalMem<volatile uint16_t> input_l1_ptr(cb_input_obj.get_read_ptr());
 
                 tmp_input_l1_ptr[idx] = fp32_dest_acc_cast(input_l1_ptr[tilized_idx]);
 
@@ -121,7 +121,7 @@ void kernel_main() {
                     read_value(cb_weight, addrg_weight, noc_id, tilized_idx);
 
                     cb_weight_obj.wait_front(onetile);
-                    experimental::CoreLocalMem<volatile uint16_t> weight_l1_ptr(cb_weight_obj.get_read_ptr());
+                    CoreLocalMem<volatile uint16_t> weight_l1_ptr(cb_weight_obj.get_read_ptr());
 
                     tmp_weight_l1_ptr[idx] = fp32_dest_acc_cast(weight_l1_ptr[tilized_idx]);
                     cb_weight_obj.pop_front(onetile);

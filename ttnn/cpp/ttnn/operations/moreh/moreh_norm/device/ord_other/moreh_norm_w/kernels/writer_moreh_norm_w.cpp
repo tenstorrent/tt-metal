@@ -5,9 +5,9 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     int i{0};
@@ -25,8 +25,8 @@ void kernel_main() {
 
     const auto start_tile_idx = tile_offset / Wt;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_output(cb_id_output);
+    Noc noc;
+    CircularBuffer cb_output(cb_id_output);
     const auto output_tile_bytes = get_tile_size(cb_id_output);
 
     for (uint32_t row_idx = 0; row_idx < num_rows_per_core; ++row_idx) {

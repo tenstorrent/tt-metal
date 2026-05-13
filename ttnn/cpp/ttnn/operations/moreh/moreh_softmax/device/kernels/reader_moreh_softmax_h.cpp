@@ -4,9 +4,9 @@
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // Runtime arguments
@@ -46,8 +46,8 @@ void kernel_main() {
         generate_mask_h<uint16_t>(cb_mask, mask_h);
     }
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in_obj(cb_in);
+    Noc noc;
+    CircularBuffer cb_in_obj(cb_in);
 
     uint32_t curr_tile = tile_offset;
     for (uint32_t i = 0; i < N; i += onetile) {

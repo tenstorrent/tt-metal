@@ -6,23 +6,23 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
-    experimental::CircularBuffer cb_in0_obj(cb_in0);
+    CircularBuffer cb_in0_obj(cb_in0);
     constexpr auto cb_mask = tt::CBIndex::c_1;
     constexpr auto cb_max_scaler = tt::CBIndex::c_2;
     constexpr auto cb_sum_scaler = tt::CBIndex::c_3;
     constexpr auto cb_out0 = tt::CBIndex::c_16;
     constexpr auto cb_exps = tt::CBIndex::c_24;
     constexpr auto cb_recipsumexps = tt::CBIndex::c_25;
-    experimental::CircularBuffer cb_recipsumexps_obj(cb_recipsumexps);
+    CircularBuffer cb_recipsumexps_obj(cb_recipsumexps);
     constexpr auto cb_add = tt::CBIndex::c_26;
     constexpr auto cb_max = tt::CBIndex::c_27;
-    experimental::CircularBuffer cb_max_obj(cb_max);
+    CircularBuffer cb_max_obj(cb_max);
     constexpr auto cb_tmp = tt::CBIndex::c_28;
-    experimental::CircularBuffer cb_tmp_obj(cb_tmp);
+    CircularBuffer cb_tmp_obj(cb_tmp);
 
     binary_op_init_common(cb_in0, cb_max_scaler, cb_out0);
 

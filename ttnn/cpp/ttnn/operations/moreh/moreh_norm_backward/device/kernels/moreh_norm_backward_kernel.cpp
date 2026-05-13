@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     // compile-time args
@@ -21,13 +21,13 @@ void kernel_main() {
 
     std::uint8_t input_id{tt::CBIndex::c_0};
     const auto cb_x = input_id++;
-    experimental::CircularBuffer cb_x_obj(cb_x);  // input(==x)
+    CircularBuffer cb_x_obj(cb_x);  // input(==x)
     const auto cb_y = input_id++;
-    experimental::CircularBuffer cb_y_obj(cb_y);  // output(==y)
+    CircularBuffer cb_y_obj(cb_y);  // output(==y)
     const auto cb_dy = input_id++;
-    experimental::CircularBuffer cb_dy_obj(cb_dy);  // output_grad(==dy)
+    CircularBuffer cb_dy_obj(cb_dy);  // output_grad(==dy)
     const auto cb_decimal = input_id++;
-    experimental::CircularBuffer cb_decimal_obj(cb_decimal);  // decimal
+    CircularBuffer cb_decimal_obj(cb_decimal);  // decimal
 
     std::uint8_t output_id{tt::CBIndex::c_16};
     const auto cb_dx = output_id++;  // input_grad(==dx)
@@ -38,9 +38,9 @@ void kernel_main() {
     const auto cb_tmp2 = intermed_id++;
     const auto cb_tmp3 = intermed_id++;
     const auto cb_tmp4 = intermed_id++;
-    experimental::CircularBuffer cb_tmp4_obj(cb_tmp4);
+    CircularBuffer cb_tmp4_obj(cb_tmp4);
     const auto cb_tmp5 = intermed_id++;
-    experimental::CircularBuffer cb_tmp5_obj(cb_tmp5);
+    CircularBuffer cb_tmp5_obj(cb_tmp5);
     const auto cb_tmp6 = intermed_id++;
     const auto cb_tmp7 = intermed_id++;
 
@@ -48,9 +48,9 @@ void kernel_main() {
     const auto cb_logx = cb_tmp1;
     const auto cb_exp_lxmd = cb_tmp2;
     const auto cb_correct_xpow = cb_tmp3;
-    experimental::CircularBuffer cb_correct_xpow_obj(cb_correct_xpow);
+    CircularBuffer cb_correct_xpow_obj(cb_correct_xpow);
     const auto cb_recip_ypow = cb_tmp6;
-    experimental::CircularBuffer cb_recip_ypow_obj(cb_recip_ypow);
+    CircularBuffer cb_recip_ypow_obj(cb_recip_ypow);
     const auto cb_sign = cb_tmp7;
 
     constexpr uint32_t onetile = 1;

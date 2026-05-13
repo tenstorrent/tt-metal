@@ -6,9 +6,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -73,13 +73,13 @@ void kernel_main() {
     scaler.f = 1.0f;
     fill_cb_with_value(cb_id_one, scaler.u);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_param(cb_id_param);
-    experimental::CircularBuffer cb_grad(cb_id_grad);
-    experimental::CircularBuffer cb_exp_avg(cb_id_exp_avg);
-    experimental::CircularBuffer cb_exp_avg_sq(cb_id_exp_avg_sq);
+    Noc noc;
+    CircularBuffer cb_param(cb_id_param);
+    CircularBuffer cb_grad(cb_id_grad);
+    CircularBuffer cb_exp_avg(cb_id_exp_avg);
+    CircularBuffer cb_exp_avg_sq(cb_id_exp_avg_sq);
 #ifdef AMSGRAD
-    experimental::CircularBuffer cb_max_exp_avg_sq(cb_id_max_exp_avg_sq);
+    CircularBuffer cb_max_exp_avg_sq(cb_id_max_exp_avg_sq);
 #endif
 
     const auto param_tile_bytes = get_tile_size(cb_id_param);

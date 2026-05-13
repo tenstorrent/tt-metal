@@ -4,14 +4,14 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 template <typename T>
 void write_mean_rstd(
-    const experimental::Noc& noc,
+    const Noc& noc,
     uint32_t cb_id,
     uint32_t tile_offset,
     uint32_t num_inner,
@@ -25,14 +25,14 @@ void write_mean_rstd(
     using namespace tt::constants;
     constexpr uint32_t onetile = 1;
 
-    experimental::CircularBuffer cb(cb_id);
+    CircularBuffer cb(cb_id);
     const uint32_t cb_tile_bytes = get_tile_size(cb_id);
     const auto cb_dtype_bytes = cb_tile_bytes / (TILE_HEIGHT * TILE_WIDTH);
 
     cb.wait_front(onetile);
 
     uint32_t output_l1_write_addr = cb.get_read_ptr();
-    experimental::CoreLocalMem<volatile uint16_t> l1_ptr(output_l1_write_addr);
+    CoreLocalMem<volatile uint16_t> l1_ptr(output_l1_write_addr);
 
     uint32_t output_tile_offset = tile_offset / num_inner;
 
@@ -132,8 +132,8 @@ void kernel_main() {
     uint32_t Wt = (mean_rstd_width + TILE_WIDTH - 1) / TILE_WIDTH;
     uint32_t Ht = (mean_rstd_height + TILE_HEIGHT - 1) / TILE_HEIGHT;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_output(cb_id_output);
+    Noc noc;
+    CircularBuffer cb_output(cb_id_output);
 
     for (uint32_t outer_idx = 0; outer_idx < num_rows_per_core; outer_idx++) {
         if (mean_has_value) {

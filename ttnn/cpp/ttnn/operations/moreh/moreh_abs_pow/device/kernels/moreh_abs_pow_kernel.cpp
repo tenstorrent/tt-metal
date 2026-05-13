@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "api/debug/dprint.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     int i{0};
@@ -39,11 +39,11 @@ void kernel_main() {
 
     binary_op_init_common(tt::CB::c_in0, tt::CB::c_in0, tt::CB::c_out0);
 
-    experimental::CircularBuffer cb_x_obj(cb_x);
-    experimental::CircularBuffer cb_one_obj(cb_one);
-    experimental::CircularBuffer cb_decimal_obj(cb_decimal);
-    experimental::CircularBuffer cb_mask_w_obj(cb_mask_w);
-    experimental::CircularBuffer cb_xabs_obj(cb_xabs);
+    CircularBuffer cb_x_obj(cb_x);
+    CircularBuffer cb_one_obj(cb_one);
+    CircularBuffer cb_decimal_obj(cb_decimal);
+    CircularBuffer cb_mask_w_obj(cb_mask_w);
+    CircularBuffer cb_xabs_obj(cb_xabs);
 
     cb_one_obj.wait_front(onetile);
     cb_decimal_obj.wait_front(onetile);

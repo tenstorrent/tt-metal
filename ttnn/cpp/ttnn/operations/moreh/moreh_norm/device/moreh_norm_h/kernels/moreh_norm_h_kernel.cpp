@@ -4,7 +4,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     int i{0};
@@ -18,15 +18,15 @@ void kernel_main() {
 
     std::uint8_t input_id{tt::CBIndex::c_0};
     const auto cb_x = input_id++;
-    experimental::CircularBuffer cb_x_obj(cb_x);  // input
+    CircularBuffer cb_x_obj(cb_x);  // input
     const auto cb_one = input_id++;
-    experimental::CircularBuffer cb_one_obj(cb_one);  // one
+    CircularBuffer cb_one_obj(cb_one);  // one
     const auto cb_decimal = input_id++;
-    experimental::CircularBuffer cb_decimal_obj(cb_decimal);  // decimal
+    CircularBuffer cb_decimal_obj(cb_decimal);  // decimal
     const auto cb_recip_p_decimal = input_id++;
-    experimental::CircularBuffer cb_recip_p_decimal_obj(cb_recip_p_decimal);  // recip_p_decimal
+    CircularBuffer cb_recip_p_decimal_obj(cb_recip_p_decimal);  // recip_p_decimal
     const auto cb_mask_h = input_id++;
-    experimental::CircularBuffer cb_mask_h_obj(cb_mask_h);  // mask_h
+    CircularBuffer cb_mask_h_obj(cb_mask_h);  // mask_h
 
     std::uint8_t output_id{tt::CBIndex::c_16};
     const auto cb_y = output_id++;  // output
@@ -41,15 +41,14 @@ void kernel_main() {
     const auto cb_tmp6 = intermed_id++;
 
     const auto cb_xabs = cb_tmp0;
-    experimental::CircularBuffer cb_xabs_obj(cb_xabs);  // |x|
+    CircularBuffer cb_xabs_obj(cb_xabs);   // |x|
     const auto cb_xpow = cb_tmp1;          // |x|^p
     const auto cb_logx = cb_tmp2;          // log(|x|)
     const auto cb_exp_lxmd = cb_tmp3;      // exp(log(|x|) * decimal)
     const auto cb_correct_xpow = cb_tmp4;
-    experimental::CircularBuffer cb_correct_xpow_obj(
-        cb_correct_xpow);  // |x|^p * exp(log(|x|) * decimal)(==|x + decimal|^p)
+    CircularBuffer cb_correct_xpow_obj(cb_correct_xpow);  // |x|^p * exp(log(|x|) * decimal)(==|x + decimal|^p)
     const auto cb_xpowadd = cb_tmp5;
-    experimental::CircularBuffer cb_xpowadd_obj(cb_xpowadd);  // Add(|x + decimal|^p)
+    CircularBuffer cb_xpowadd_obj(cb_xpowadd);  // Add(|x + decimal|^p)
     const auto cb_xpowsum = cb_tmp6;       // Sum(|x + decimal|^p)
 
     constexpr uint32_t onetile = 1;

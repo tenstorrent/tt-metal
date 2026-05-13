@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
-#include "experimental/circular_buffer.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     using namespace tt::constants;
@@ -42,17 +42,17 @@ void kernel_main() {
     const auto addrg_target = TensorAccessor(target_args, target_addr);
     constexpr uint32_t onetile = 1;
 
-    experimental::CircularBuffer cb_target_obj(cb_target);
-    experimental::CircularBuffer cb_output_grad_obj(cb_output_grad);
-    experimental::CircularBuffer cb_input_grad_obj(cb_input_grad);
+    CircularBuffer cb_target_obj(cb_target);
+    CircularBuffer cb_output_grad_obj(cb_output_grad);
+    CircularBuffer cb_input_grad_obj(cb_input_grad);
 #if defined(WEIGHT)
-    experimental::CircularBuffer cb_weight_obj(cb_weight);
+    CircularBuffer cb_weight_obj(cb_weight);
     const auto addrg_weight = TensorAccessor(weight_args, weight_addr);
 
     read_line(cb_weight, cb_weight_scratch, addrg_weight, Ct);
 
     cb_weight_obj.wait_front(Ct);
-    experimental::CoreLocalMem<volatile uint16_t> weight_l1_ptr(cb_weight_obj.get_read_ptr());
+    CoreLocalMem<volatile uint16_t> weight_l1_ptr(cb_weight_obj.get_read_ptr());
 #endif
 
     const auto addrg_output_grad = TensorAccessor(output_grad_args, output_grad_addr);
@@ -74,9 +74,9 @@ void kernel_main() {
         cb_input_grad_obj.reserve_back(onetile);
         cb_target_obj.wait_front(onetile);
 
-        experimental::CoreLocalMem<volatile uint16_t> input_grad_l1_ptr(cb_input_grad_obj.get_write_ptr());
-        experimental::CoreLocalMem<volatile int32_t> target_l1_ptr(cb_target_obj.get_read_ptr());
-        experimental::CoreLocalMem<volatile uint16_t> output_grad_l1_ptr(cb_output_grad_obj.get_read_ptr());
+        CoreLocalMem<volatile uint16_t> input_grad_l1_ptr(cb_input_grad_obj.get_write_ptr());
+        CoreLocalMem<volatile int32_t> target_l1_ptr(cb_target_obj.get_read_ptr());
+        CoreLocalMem<volatile uint16_t> output_grad_l1_ptr(cb_output_grad_obj.get_read_ptr());
 
         for (uint32_t h = 0; h < TILE_HEIGHT; h++) {
             for (uint32_t w = 0; w < TILE_WIDTH; w++) {

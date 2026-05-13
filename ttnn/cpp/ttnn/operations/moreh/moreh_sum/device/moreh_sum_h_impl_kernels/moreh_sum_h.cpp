@@ -4,7 +4,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t Ht = get_compile_time_arg_val(0);
@@ -13,14 +13,14 @@ void kernel_main() {
     constexpr uint32_t origin_H = get_compile_time_arg_val(3);
 
     constexpr auto cb_input = tt::CBIndex::c_0;
-    experimental::CircularBuffer cb_input_obj(cb_input);
+    CircularBuffer cb_input_obj(cb_input);
     constexpr auto cb_scaler = tt::CBIndex::c_2;
-    experimental::CircularBuffer cb_scaler_obj(cb_scaler);
+    CircularBuffer cb_scaler_obj(cb_scaler);
     constexpr auto cb_mask_h = tt::CBIndex::c_3;
-    experimental::CircularBuffer cb_mask_h_obj(cb_mask_h);
+    CircularBuffer cb_mask_h_obj(cb_mask_h);
     constexpr auto cb_accum_dst = tt::CBIndex::c_24;
     constexpr auto cb_masked_input = tt::CBIndex::c_25;
-    experimental::CircularBuffer cb_masked_input_obj(cb_masked_input);
+    CircularBuffer cb_masked_input_obj(cb_masked_input);
     constexpr auto cb_out = tt::CBIndex::c_16;
     constexpr uint32_t TILE_H = 32;
     constexpr bool do_mask_h = (origin_H % TILE_H) != 0;

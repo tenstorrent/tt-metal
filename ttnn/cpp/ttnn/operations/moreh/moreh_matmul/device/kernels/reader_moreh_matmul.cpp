@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 static constexpr int32_t MAX_NUM_DIMENSIONS = 8;
 
@@ -112,13 +112,13 @@ void kernel_main() {
     uint32_t input_step_count = (transpose_input) ? (input_stride[1]) : (input_stride[0]);
     uint32_t other_step_count = (transpose_other) ? (other_stride[0]) : (other_stride[1]);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in0(cb_id_in0);
-    experimental::CircularBuffer cb_in1(cb_id_in1);
+    Noc noc;
+    CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_in1(cb_id_in1);
     const auto in0_tile_bytes = get_tile_size(cb_id_in0);
     const auto in1_tile_bytes = get_tile_size(cb_id_in1);
 #ifdef FUSE_BIAS
-    experimental::CircularBuffer cb_in4(cb_id_in4);
+    CircularBuffer cb_in4(cb_id_in4);
     const auto in4_tile_bytes = get_tile_size(cb_id_in4);
 #endif
 

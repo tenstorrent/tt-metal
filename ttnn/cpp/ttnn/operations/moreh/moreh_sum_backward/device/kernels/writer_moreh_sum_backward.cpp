@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // compile-time args
@@ -22,8 +22,8 @@ void kernel_main() {
 
     const auto input_grad_addrg = TensorAccessor(input_grad_args, input_grad_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_out_obj(cb_id_out);
+    Noc noc;
+    CircularBuffer cb_out_obj(cb_id_out);
     const auto out_tile_bytes = get_tile_size(cb_id_out);
 
     for (uint32_t i = start_id; i < start_id + num_tiles; i++) {

@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
-    experimental::CircularBuffer cb_grad_tmp_obj(cb_grad_tmp);
+    CircularBuffer cb_grad_tmp_obj(cb_grad_tmp);
     constexpr auto cb_param_in = tt::CBIndex::c_0;
     constexpr auto cb_grad = tt::CBIndex::c_1;
     constexpr auto cb_momentum_in = tt::CBIndex::c_2;
@@ -15,7 +15,7 @@ void kernel_main() {
     constexpr auto cb_momentum_out = tt::CBIndex::c_17;
 
     constexpr auto cb_scalar_args = tt::CBIndex::c_24;
-    experimental::CircularBuffer cb_scalar_args_obj(cb_scalar_args);
+    CircularBuffer cb_scalar_args_obj(cb_scalar_args);
     constexpr auto cb_tmp1 = tt::CBIndex::c_25;
     constexpr auto cb_tmp2 = tt::CBIndex::c_26;
     constexpr auto cb_tmp3 = tt::CBIndex::c_27;

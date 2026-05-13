@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     int i{0};
@@ -13,15 +13,15 @@ void kernel_main() {
 
     std::uint8_t input_id{tt::CB::c_in0};
     const auto cb_x = input_id++;
-    experimental::CircularBuffer cb_x_obj(cb_x);  // input
+    CircularBuffer cb_x_obj(cb_x);  // input
     const auto cb_one = input_id++;
-    experimental::CircularBuffer cb_one_obj(cb_one);  // one
+    CircularBuffer cb_one_obj(cb_one);  // one
     const auto cb_mask_h = input_id++;
-    experimental::CircularBuffer cb_mask_h_obj(cb_mask_h);  // mask_h
+    CircularBuffer cb_mask_h_obj(cb_mask_h);  // mask_h
 
     std::uint8_t output_id{tt::CB::c_out0};
     const auto cb_y = output_id++;
-    experimental::CircularBuffer cb_y_obj(cb_y);  // output
+    CircularBuffer cb_y_obj(cb_y);  // output
 
     std::uint8_t intermed_id{tt::CB::c_intermed0};
     const auto cb_tmp0 = intermed_id++;
@@ -29,11 +29,11 @@ void kernel_main() {
     const auto cb_tmp2 = intermed_id++;
 
     const auto cb_val = cb_tmp0;
-    experimental::CircularBuffer cb_val_obj(cb_val);  // f(x)
+    CircularBuffer cb_val_obj(cb_val);  // f(x)
     const auto cb_cal = cb_tmp1;
-    experimental::CircularBuffer cb_cal_obj(cb_cal);  // calculate f(x) over dimension
+    CircularBuffer cb_cal_obj(cb_cal);  // calculate f(x) over dimension
     const auto cb_reduce = cb_tmp2;
-    experimental::CircularBuffer cb_reduce_obj(cb_reduce);  // reduce f(x)
+    CircularBuffer cb_reduce_obj(cb_reduce);  // reduce f(x)
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;

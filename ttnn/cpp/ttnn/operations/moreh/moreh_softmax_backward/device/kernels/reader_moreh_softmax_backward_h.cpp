@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t y_addr = get_arg_val<uint32_t>(0);
@@ -37,9 +37,9 @@ void kernel_main() {
     generate_bcast_scaler(cb_scaler, scaler);
     generate_mask_h(cb_mask, mask_h);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_y_obj(cb_y);
-    experimental::CircularBuffer cb_dy_obj(cb_dy);
+    Noc noc;
+    CircularBuffer cb_y_obj(cb_y);
+    CircularBuffer cb_dy_obj(cb_dy);
     const auto y_tile_bytes = get_tile_size(cb_y);
     const auto dy_tile_bytes = get_tile_size(cb_dy);
 

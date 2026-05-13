@@ -5,9 +5,9 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // compile time args
@@ -24,8 +24,8 @@ void kernel_main() {
     // input_grad
     const auto input_grad_addrg = TensorAccessor(input_grad_args, input_grad_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_input_grad(cb_id_input_grad);
+    Noc noc;
+    CircularBuffer cb_input_grad(cb_id_input_grad);
     const auto input_grad_tile_bytes = get_tile_size(cb_id_input_grad);
 
     auto input_grad_tile_idx = tile_offset;

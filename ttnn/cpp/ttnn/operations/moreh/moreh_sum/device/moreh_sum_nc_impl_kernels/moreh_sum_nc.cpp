@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     // compile-time args
@@ -11,11 +11,11 @@ void kernel_main() {
     constexpr uint32_t num_input_tiles = get_compile_time_arg_val(1);
 
     constexpr auto cb_in0 = tt::CBIndex::c_0;
-    experimental::CircularBuffer cb_in0_obj(cb_in0);
+    CircularBuffer cb_in0_obj(cb_in0);
     constexpr auto cb_in1 = tt::CBIndex::c_1;
-    experimental::CircularBuffer cb_in1_obj(cb_in1);
+    CircularBuffer cb_in1_obj(cb_in1);
     constexpr auto cb_out0 = tt::CBIndex::c_16;
-    experimental::CircularBuffer cb_out0_obj(cb_out0);
+    CircularBuffer cb_out0_obj(cb_out0);
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;

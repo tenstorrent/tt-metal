@@ -5,10 +5,10 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void mask_tile_in_reader(uint32_t l1_addr, uint32_t mask_w = 32, uint32_t mask_h = 32) {
@@ -17,7 +17,7 @@ void mask_tile_in_reader(uint32_t l1_addr, uint32_t mask_w = 32, uint32_t mask_h
         uint32_t u;
     } zero;
     zero.f = 0.0f;
-    experimental::CoreLocalMem<uint16_t> ptr(l1_addr);
+    CoreLocalMem<uint16_t> ptr(l1_addr);
     for (uint32_t h = 0; h < 16; h++) {
         // sub tile 0
         {
@@ -81,9 +81,9 @@ void kernel_main() {
     uint32_t l1_write_addr_in1;
     const auto s1 = TensorAccessor(src1_args, src1_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in0(cb_id_in0);
-    experimental::CircularBuffer cb_in1(cb_id_in1);
+    Noc noc;
+    CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_in1(cb_id_in1);
     const auto in0_tile_bytes = get_tile_size(cb_id_in0);
     const auto in1_tile_bytes = get_tile_size(cb_id_in1);
 

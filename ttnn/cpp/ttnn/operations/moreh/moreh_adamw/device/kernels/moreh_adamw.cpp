@@ -11,29 +11,29 @@
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t step = get_arg_val<uint32_t>(0);
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
 
     constexpr auto cb_param_in = tt::CBIndex::c_0;
-    experimental::CircularBuffer cb_param_in_obj(cb_param_in);
+    CircularBuffer cb_param_in_obj(cb_param_in);
     constexpr auto cb_grad_in = tt::CBIndex::c_1;
-    experimental::CircularBuffer cb_grad_in_obj(cb_grad_in);
+    CircularBuffer cb_grad_in_obj(cb_grad_in);
     constexpr auto cb_exp_avg_in = tt::CBIndex::c_2;
-    experimental::CircularBuffer cb_exp_avg_in_obj(cb_exp_avg_in);
+    CircularBuffer cb_exp_avg_in_obj(cb_exp_avg_in);
     constexpr auto cb_exp_avg_sq_in = tt::CBIndex::c_3;
-    experimental::CircularBuffer cb_exp_avg_sq_in_obj(cb_exp_avg_sq_in);
+    CircularBuffer cb_exp_avg_sq_in_obj(cb_exp_avg_sq_in);
 #ifdef AMSGRAD
     constexpr auto cb_max_exp_avg_sq_in = tt::CBIndex::c_4;
-    experimental::CircularBuffer cb_max_exp_avg_sq_in_obj(cb_max_exp_avg_sq_in);
+    CircularBuffer cb_max_exp_avg_sq_in_obj(cb_max_exp_avg_sq_in);
 #endif
     // lr, beta1, beta2, eps, weight_decay
     constexpr auto cb_scalar_args = tt::CBIndex::c_5;
-    experimental::CircularBuffer cb_scalar_args_obj(cb_scalar_args);
+    CircularBuffer cb_scalar_args_obj(cb_scalar_args);
     constexpr auto cb_one = tt::CBIndex::c_6;
-    experimental::CircularBuffer cb_one_obj(cb_one);
+    CircularBuffer cb_one_obj(cb_one);
     constexpr auto cb_param_out = tt::CBIndex::c_16;
     constexpr auto cb_exp_avg_out = tt::CBIndex::c_17;
     constexpr auto cb_exp_avg_sq_out = tt::CBIndex::c_18;
@@ -44,19 +44,19 @@ void kernel_main() {
     constexpr auto tmp_cb_param = tt::CBIndex::c_24;
     constexpr auto tmp_cb_exp_avg = tt::CBIndex::c_25;
     constexpr auto tmp_cb_exp_avg_sq = tt::CBIndex::c_26;
-    experimental::CircularBuffer tmp_cb_exp_avg_sq_obj(tmp_cb_exp_avg_sq);
+    CircularBuffer tmp_cb_exp_avg_sq_obj(tmp_cb_exp_avg_sq);
 #ifdef AMSGRAD
     constexpr auto tmp_cb_max_exp_avg_sq = tt::CBIndex::c_27;
-    experimental::CircularBuffer tmp_cb_max_exp_avg_sq_obj(tmp_cb_max_exp_avg_sq);
+    CircularBuffer tmp_cb_max_exp_avg_sq_obj(tmp_cb_max_exp_avg_sq);
 #endif
     constexpr auto cb_beta1_exponent = tt::CBIndex::c_28;
-    experimental::CircularBuffer cb_beta1_exponent_obj(cb_beta1_exponent);
+    CircularBuffer cb_beta1_exponent_obj(cb_beta1_exponent);
     constexpr auto cb_beta2_exponent = tt::CBIndex::c_29;
-    experimental::CircularBuffer cb_beta2_exponent_obj(cb_beta2_exponent);
+    CircularBuffer cb_beta2_exponent_obj(cb_beta2_exponent);
     constexpr auto cb_tmp1 = tt::CBIndex::c_30;
-    experimental::CircularBuffer cb_tmp1_obj(cb_tmp1);
+    CircularBuffer cb_tmp1_obj(cb_tmp1);
     constexpr auto cb_tmp2 = tt::CBIndex::c_31;
-    experimental::CircularBuffer cb_tmp2_obj(cb_tmp2);
+    CircularBuffer cb_tmp2_obj(cb_tmp2);
 
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;

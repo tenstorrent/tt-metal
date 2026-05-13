@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     int i{0};
@@ -13,9 +13,9 @@ void kernel_main() {
 
     std::uint8_t input_id{0};
     const auto cb_input = input_id++;
-    experimental::CircularBuffer cb_input_obj(cb_input);  // input(==tmp_pow_sum)
+    CircularBuffer cb_input_obj(cb_input);  // input(==tmp_pow_sum)
     const auto cb_decimal = input_id++;
-    experimental::CircularBuffer cb_decimal_obj(cb_decimal);  // decimal
+    CircularBuffer cb_decimal_obj(cb_decimal);  // decimal
 
     std::uint8_t output_id{16};
     // x^p * exp(log(x) * decimal)
@@ -23,7 +23,7 @@ void kernel_main() {
 
     std::uint8_t intermed_id{24};
     const auto cb_x = intermed_id++;
-    experimental::CircularBuffer cb_x_obj(cb_x);  // Sum[tmp_pow_sum](==x)
+    CircularBuffer cb_x_obj(cb_x);           // Sum[tmp_pow_sum](==x)
     const auto cb_xpow = intermed_id++;      // x^p
     const auto cb_logx = intermed_id++;      // log(x)
     const auto cb_exp_lxmd = intermed_id++;  // exp(log(x) * decimal)

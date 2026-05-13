@@ -3,14 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 template <typename T>
 void read_mean_rstd(
-    const experimental::Noc& noc,
+    const Noc& noc,
     uint32_t cb_id,
     uint32_t tile_offset,
     uint32_t normalized_dims,
@@ -23,14 +23,14 @@ void read_mean_rstd(
     using namespace tt::constants;
     constexpr uint32_t onetile = 1;
 
-    experimental::CircularBuffer cb(cb_id);
+    CircularBuffer cb(cb_id);
     const uint32_t cb_tile_bytes = get_tile_size(cb_id);
     const auto cb_dtype_bytes = cb_tile_bytes / (TILE_HEIGHT * TILE_WIDTH);
 
     cb.reserve_back(onetile);
 
     uint32_t l1_write_addr = cb.get_write_ptr();
-    experimental::CoreLocalMem<volatile uint16_t> l1_ptr(l1_write_addr);
+    CoreLocalMem<volatile uint16_t> l1_ptr(l1_write_addr);
     if (normalized_dims == 1) {
         for (uint32_t src_h = 0; src_h < 2; src_h++) {
             auto tile_idx = tile_offset + outer_idx;
@@ -150,9 +150,9 @@ void kernel_main() {
 
     const uint32_t start_tile_idx = tile_offset;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_output_grad(cb_id_output_grad);
-    experimental::CircularBuffer cb_input(cb_id_input);
+    Noc noc;
+    CircularBuffer cb_output_grad(cb_id_output_grad);
+    CircularBuffer cb_input(cb_id_input);
     const auto output_grad_tile_bytes = get_tile_size(cb_id_output_grad);
     const auto input_tile_bytes = get_tile_size(cb_id_input);
 

@@ -4,7 +4,7 @@
 
 #include "api/compute/matmul.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t Ht = get_compile_time_arg_val(0);
@@ -13,17 +13,17 @@ void kernel_main() {
     constexpr uint32_t origin_W = get_compile_time_arg_val(3);
 
     auto cb_input = tt::CBIndex::c_0;
-    experimental::CircularBuffer cb_input_obj(cb_input);
+    CircularBuffer cb_input_obj(cb_input);
     constexpr auto cb_scaler = tt::CBIndex::c_2;
-    experimental::CircularBuffer cb_scaler_obj(cb_scaler);
+    CircularBuffer cb_scaler_obj(cb_scaler);
     constexpr auto cb_mask_w = tt::CBIndex::c_3;
-    experimental::CircularBuffer cb_mask_w_obj(cb_mask_w);
+    CircularBuffer cb_mask_w_obj(cb_mask_w);
     constexpr auto cb_accum_dst = tt::CBIndex::c_24;
-    experimental::CircularBuffer cb_accum_dst_obj(cb_accum_dst);
+    CircularBuffer cb_accum_dst_obj(cb_accum_dst);
     constexpr auto cb_masked_input = tt::CBIndex::c_25;
-    experimental::CircularBuffer cb_masked_input_obj(cb_masked_input);
+    CircularBuffer cb_masked_input_obj(cb_masked_input);
     constexpr auto cb_out = tt::CBIndex::c_16;
-    experimental::CircularBuffer cb_out_obj(cb_out);
+    CircularBuffer cb_out_obj(cb_out);
     constexpr uint32_t TILE_W = 32;
     constexpr bool do_mask_w = (origin_W % TILE_W) != 0;
 

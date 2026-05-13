@@ -4,7 +4,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 ALWI bool need_to_do_mask_h(uint32_t tile_idx, uint32_t ht, uint32_t wt) { return (((tile_idx / wt) + 1) % ht) == 0; }
 
@@ -18,27 +18,27 @@ void kernel_main() {
 
     std::uint8_t input_id{0};
     const auto cb_x = input_id++;
-    experimental::CircularBuffer cb_x_obj(cb_x);  // input(==x)
+    CircularBuffer cb_x_obj(cb_x);  // input(==x)
     const auto cb_one = input_id++;
-    experimental::CircularBuffer cb_one_obj(cb_one);  // one
+    CircularBuffer cb_one_obj(cb_one);  // one
     const auto cb_decimal = input_id++;
-    experimental::CircularBuffer cb_decimal_obj(cb_decimal);  // decimal
+    CircularBuffer cb_decimal_obj(cb_decimal);  // decimal
     const auto cb_mask_h_w = input_id++;
-    experimental::CircularBuffer cb_mask_h_w_obj(cb_mask_h_w);  // mask_h_w
+    CircularBuffer cb_mask_h_w_obj(cb_mask_h_w);  // mask_h_w
 
     std::uint8_t output_id{16};
     const auto cb_y = output_id++;  // output(==y)
 
     std::uint8_t intermed_id{24};
     const auto cb_xabs = intermed_id++;
-    experimental::CircularBuffer cb_xabs_obj(cb_xabs);  // |x|
+    CircularBuffer cb_xabs_obj(cb_xabs);         // |x|
     const auto cb_xpow = intermed_id++;          // |x|^p
     const auto cb_xpowadd = intermed_id++;
-    experimental::CircularBuffer cb_xpowadd_obj(cb_xpowadd);  // Add[|x|^p * exp(log(|x|) * decimal)]
+    CircularBuffer cb_xpowadd_obj(cb_xpowadd);   // Add[|x|^p * exp(log(|x|) * decimal)]
     const auto cb_logx = intermed_id++;          // log(|x|)
     const auto cb_exp_lxmd = intermed_id++;      // exp(log(|x|) * decimal)
     const auto cb_correct_xpow = intermed_id++;
-    experimental::CircularBuffer cb_correct_xpow_obj(cb_correct_xpow);  // |x|^p * exp(log(|x|) * decimal)
+    CircularBuffer cb_correct_xpow_obj(cb_correct_xpow);  // |x|^p * exp(log(|x|) * decimal)
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;

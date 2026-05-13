@@ -6,7 +6,7 @@
 
 #include "api/compute/eltwise_binary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -16,9 +16,9 @@ void kernel_main() {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
 
-    experimental::CircularBuffer cb_c0(tt::CBIndex::c_0);
-    experimental::CircularBuffer cb_c1(tt::CBIndex::c_1);
-    experimental::CircularBuffer cb_c24(tt::CBIndex::c_24);
+    CircularBuffer cb_c0(tt::CBIndex::c_0);
+    CircularBuffer cb_c1(tt::CBIndex::c_1);
+    CircularBuffer cb_c24(tt::CBIndex::c_24);
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
         bool last_out = block == (per_core_block_cnt - 1);

@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t onetile = 1;
@@ -16,7 +16,7 @@ void kernel_main() {
 
     constexpr auto cb_ydy = tt::CBIndex::c_24;  // y * dy
     constexpr auto cb_sum = tt::CBIndex::c_25;
-    experimental::CircularBuffer cb_sum_obj(cb_sum);
+    CircularBuffer cb_sum_obj(cb_sum);
     constexpr auto cb_dy_m_sum = tt::CBIndex::c_26;  // dy - sum
 
     uint32_t N = get_compile_time_arg_val(0);

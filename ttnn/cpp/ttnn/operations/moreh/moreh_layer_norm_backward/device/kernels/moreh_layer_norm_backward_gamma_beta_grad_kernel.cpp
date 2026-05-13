@@ -4,7 +4,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t num_cols_per_core = get_compile_time_arg_val(0);
@@ -18,40 +18,40 @@ void kernel_main() {
     constexpr bool is_groupnorm = get_compile_time_arg_val(8) == 1;
 
     constexpr auto cb_dy = tt::CBIndex::c_0;
-    experimental::CircularBuffer cb_dy_obj(cb_dy);  // output_grad(==dy)
+    CircularBuffer cb_dy_obj(cb_dy);  // output_grad(==dy)
     constexpr auto cb_x = tt::CBIndex::c_1;
-    experimental::CircularBuffer cb_x_obj(cb_x);  // input(==x)
+    CircularBuffer cb_x_obj(cb_x);  // input(==x)
     constexpr auto cb_mean = tt::CBIndex::c_2;
-    experimental::CircularBuffer cb_mean_obj(cb_mean);  // mean
+    CircularBuffer cb_mean_obj(cb_mean);  // mean
     constexpr auto cb_rstd = tt::CBIndex::c_3;
-    experimental::CircularBuffer cb_rstd_obj(cb_rstd);  // rstd
+    CircularBuffer cb_rstd_obj(cb_rstd);  // rstd
     constexpr auto cb_scaler = tt::CBIndex::c_4;
-    experimental::CircularBuffer cb_scaler_obj(cb_scaler);  // scaler
+    CircularBuffer cb_scaler_obj(cb_scaler);  // scaler
     constexpr auto cb_mask_h = tt::CBIndex::c_5;
-    experimental::CircularBuffer cb_mask_h_obj(cb_mask_h);  // mask_h
+    CircularBuffer cb_mask_h_obj(cb_mask_h);  // mask_h
     constexpr auto cb_mask_w = tt::CBIndex::c_6;
-    experimental::CircularBuffer cb_mask_w_obj(cb_mask_w);  // mask_w
+    CircularBuffer cb_mask_w_obj(cb_mask_w);  // mask_w
 
     // Sum[y * dy]
     constexpr auto cb_dgamma = tt::CBIndex::c_16;
-    experimental::CircularBuffer cb_dgamma_obj(cb_dgamma);  // gamma_grad(==dgamma)
+    CircularBuffer cb_dgamma_obj(cb_dgamma);  // gamma_grad(==dgamma)
     // Sum[dy]
     constexpr auto cb_dbeta = tt::CBIndex::c_17;
-    experimental::CircularBuffer cb_dbeta_obj(cb_dbeta);  // beta_grad(==dbeta)
+    CircularBuffer cb_dbeta_obj(cb_dbeta);  // beta_grad(==dbeta)
 
     // y = (x - mean) * rstd
     constexpr auto cb_y = tt::CBIndex::c_24;
-    experimental::CircularBuffer cb_y_obj(cb_y);  // output(==y)
+    CircularBuffer cb_y_obj(cb_y);  // output(==y)
     constexpr auto cb_ydy = tt::CBIndex::c_25;
-    experimental::CircularBuffer cb_ydy_obj(cb_ydy);  // y * dy
+    CircularBuffer cb_ydy_obj(cb_ydy);  // y * dy
     constexpr auto cb_dyadd = tt::CBIndex::c_26;
-    experimental::CircularBuffer cb_dyadd_obj(cb_dyadd);  // Add[dy]
+    CircularBuffer cb_dyadd_obj(cb_dyadd);  // Add[dy]
     constexpr auto cb_ydyadd = tt::CBIndex::c_27;
-    experimental::CircularBuffer cb_ydyadd_obj(cb_ydyadd);  // Add[y * dy]
+    CircularBuffer cb_ydyadd_obj(cb_ydyadd);  // Add[y * dy]
     constexpr auto cb_xmm = tt::CBIndex::c_28;
-    experimental::CircularBuffer cb_xmm_obj(cb_xmm);  // x - mean
+    CircularBuffer cb_xmm_obj(cb_xmm);  // x - mean
     constexpr auto cb_dycopy = tt::CBIndex::c_29;
-    experimental::CircularBuffer cb_dycopy_obj(cb_dycopy);  // dycopy
+    CircularBuffer cb_dycopy_obj(cb_dycopy);  // dycopy
 
     constexpr uint32_t onetile = 1;
 

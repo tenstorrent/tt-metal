@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     int i{0};
@@ -42,9 +42,9 @@ void kernel_main() {
     constexpr uint32_t TILE_H = 32;
     constexpr uint32_t TILE_W = 32;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_gamma_grad(cb_id_gamma_grad);
-    experimental::CircularBuffer cb_beta_grad(cb_id_beta_grad);
+    Noc noc;
+    CircularBuffer cb_gamma_grad(cb_id_gamma_grad);
+    CircularBuffer cb_beta_grad(cb_id_beta_grad);
 
     const auto gamma_grad_l1_read_ptr = cb_gamma_grad.get_read_ptr();
     const auto beta_grad_l1_read_ptr = cb_beta_grad.get_read_ptr();
@@ -63,7 +63,7 @@ void kernel_main() {
             const auto gamma_grad_dtype_bytes = gamma_grad_tile_bytes / (TILE_H * TILE_W);
             cb_gamma_grad.wait_front(onetile);
             if (tilized_gamma_beta_idx_in_tile != 0) {
-                experimental::CoreLocalMem<uint16_t> gamma_grad_ptr(gamma_grad_l1_read_ptr);
+                CoreLocalMem<uint16_t> gamma_grad_ptr(gamma_grad_l1_read_ptr);
                 gamma_grad_ptr[tilized_gamma_beta_idx_in_tile] = gamma_grad_ptr[0];
             }
             noc.async_write(
@@ -82,7 +82,7 @@ void kernel_main() {
             const auto beta_grad_dtype_bytes = beta_grad_tile_bytes / (TILE_H * TILE_W);
             cb_beta_grad.wait_front(onetile);
             if (tilized_gamma_beta_idx_in_tile != 0) {
-                experimental::CoreLocalMem<uint16_t> beta_grad_ptr(beta_grad_l1_read_ptr);
+                CoreLocalMem<uint16_t> beta_grad_ptr(beta_grad_l1_read_ptr);
                 beta_grad_ptr[tilized_gamma_beta_idx_in_tile] = beta_grad_ptr[0];
             }
             noc.async_write(

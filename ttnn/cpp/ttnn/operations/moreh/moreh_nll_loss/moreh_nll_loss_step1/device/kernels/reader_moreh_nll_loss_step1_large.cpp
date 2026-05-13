@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
-#include "experimental/circular_buffer.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     using namespace tt::constants;
@@ -48,10 +48,10 @@ void kernel_main() {
     const auto u16_one = uint16_t(one.u >> 16);
     const auto u16_zero = uint16_t(zero.u >> 16);
 
-    experimental::CircularBuffer cb_target_obj(cb_target);
-    experimental::CircularBuffer cb_output_obj(cb_output);
+    CircularBuffer cb_target_obj(cb_target);
+    CircularBuffer cb_output_obj(cb_output);
 #if defined(WEIGHT)
-    experimental::CircularBuffer cb_weight_obj(cb_weight);
+    CircularBuffer cb_weight_obj(cb_weight);
 #endif
 
     uint32_t end_id = start_id + num_units_per_core;
@@ -62,8 +62,8 @@ void kernel_main() {
         cb_output_obj.reserve_back(onetile);
         cb_target_obj.wait_front(onetile);
 
-        experimental::CoreLocalMem<volatile uint16_t> output_l1_ptr(cb_output_obj.get_write_ptr());
-        experimental::CoreLocalMem<volatile int32_t> target_l1_ptr(cb_target_obj.get_read_ptr());
+        CoreLocalMem<volatile uint16_t> output_l1_ptr(cb_output_obj.get_write_ptr());
+        CoreLocalMem<volatile int32_t> target_l1_ptr(cb_target_obj.get_read_ptr());
 
         for (uint32_t h = 0; h < TILE_HEIGHT; h++) {
             for (uint32_t w = 0; w < TILE_WIDTH; w++) {
@@ -79,7 +79,7 @@ void kernel_main() {
                         read_value(cb_weight, addrg_weight, noc_id, weight_tilized_idx);
 
                         cb_weight_obj.wait_front(onetile);
-                        experimental::CoreLocalMem<volatile uint16_t> weight_l1_ptr(cb_weight_obj.get_read_ptr());
+                        CoreLocalMem<volatile uint16_t> weight_l1_ptr(cb_weight_obj.get_read_ptr());
 
                         output_l1_ptr[inout_idx] = weight_l1_ptr[weight_tilized_idx];
 

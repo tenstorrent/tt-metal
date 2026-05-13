@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     int i{0};
@@ -11,22 +11,22 @@ void kernel_main() {
 
     std::uint8_t input_id{tt::CB::c_in0};
     const auto cb_x = input_id++;
-    experimental::CircularBuffer cb_x_obj(cb_x);  // input
+    CircularBuffer cb_x_obj(cb_x);  // input
     const auto cb_one = input_id++;
-    experimental::CircularBuffer cb_one_obj(cb_one);  // one
+    CircularBuffer cb_one_obj(cb_one);  // one
 
     std::uint8_t output_id{tt::CB::c_out0};
     const auto cb_y = output_id++;
-    experimental::CircularBuffer cb_y_obj(cb_y);  // output
+    CircularBuffer cb_y_obj(cb_y);  // output
 
     std::uint8_t intermed_id{tt::CB::c_intermed0};
     const auto cb_tmp0 = intermed_id++;
     const auto cb_tmp1 = intermed_id++;
 
     const auto cb_val = cb_tmp0;
-    experimental::CircularBuffer cb_val_obj(cb_val);  // f(x)
+    CircularBuffer cb_val_obj(cb_val);  // f(x)
     const auto cb_cal = cb_tmp1;
-    experimental::CircularBuffer cb_cal_obj(cb_cal);  // calculate f(x) over dimensions
+    CircularBuffer cb_cal_obj(cb_cal);  // calculate f(x) over dimensions
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;

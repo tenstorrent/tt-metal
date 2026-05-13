@@ -8,22 +8,22 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     const auto num_input_tiles = get_arg_val<uint32_t>(0);
     const auto num_output_tiles = get_arg_val<uint32_t>(1);
 
     constexpr auto cb_in0 = tt::CBIndex::c_0;
-    experimental::CircularBuffer cb_in0_obj(cb_in0);
+    CircularBuffer cb_in0_obj(cb_in0);
     constexpr auto cb_in1 = tt::CBIndex::c_1;
-    experimental::CircularBuffer cb_in1_obj(cb_in1);
+    CircularBuffer cb_in1_obj(cb_in1);
     constexpr auto cb_scalar = tt::CBIndex::c_2;
-    experimental::CircularBuffer cb_scalar_obj(cb_scalar);
+    CircularBuffer cb_scalar_obj(cb_scalar);
     constexpr auto cb_out0 = tt::CBIndex::c_16;
-    experimental::CircularBuffer cb_out0_obj(cb_out0);
+    CircularBuffer cb_out0_obj(cb_out0);
     constexpr auto cb_intermed0 = tt::CBIndex::c_24;
-    experimental::CircularBuffer cb_intermed0_obj(cb_intermed0);
+    CircularBuffer cb_intermed0_obj(cb_intermed0);
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;

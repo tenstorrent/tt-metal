@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -55,13 +55,13 @@ void kernel_main() {
     fill_cb_with_value(cb_scalar_args, weight_decay);
     fill_cb_with_value(cb_scalar_args, one);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_param_in_obj(cb_param_in);
-    experimental::CircularBuffer cb_grad_obj(cb_grad);
+    Noc noc;
+    CircularBuffer cb_param_in_obj(cb_param_in);
+    CircularBuffer cb_grad_obj(cb_grad);
     const auto param_in_tile_bytes = get_tile_size(cb_param_in);
     const auto grad_tile_bytes = get_tile_size(cb_grad);
 #if defined(MOMENTUM) && defined(MOMENTUM_INITIALIZED)
-    experimental::CircularBuffer cb_momentum_in_obj(cb_momentum_in);
+    CircularBuffer cb_momentum_in_obj(cb_momentum_in);
     const auto momentum_in_tile_bytes = get_tile_size(cb_momentum_in);
 #endif
 

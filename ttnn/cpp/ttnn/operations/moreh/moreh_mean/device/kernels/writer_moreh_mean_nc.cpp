@@ -5,9 +5,9 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const auto output_addr = get_arg_val<uint32_t>(0);
@@ -20,8 +20,8 @@ void kernel_main() {
     constexpr auto output_args = TensorAccessorArgs<0>();
     const auto s = TensorAccessor(output_args, output_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_out(cb_id_out);
+    Noc noc;
+    CircularBuffer cb_out(cb_id_out);
     const auto out_tile_bytes = get_tile_size(cb_id_out);
 
     for (uint32_t i = start_id; i < start_id + num_tiles; i++) {

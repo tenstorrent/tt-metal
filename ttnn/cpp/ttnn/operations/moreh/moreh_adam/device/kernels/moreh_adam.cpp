@@ -11,7 +11,7 @@
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 #ifdef FP32_DEST_ACC_EN
 #define WITH_FP32_DEST_ACC(x) x
@@ -60,20 +60,20 @@ void kernel_main() {
     constexpr uint32_t weight_decay_tile = 4;
     constexpr uint32_t onetile = 1;
 
-    experimental::CircularBuffer cb_param_in_obj(cb_param_in);
-    experimental::CircularBuffer cb_grad_in_obj(cb_grad_in);
-    experimental::CircularBuffer cb_exp_avg_in_obj(cb_exp_avg_in);
-    experimental::CircularBuffer cb_exp_avg_sq_in_obj(cb_exp_avg_sq_in);
+    CircularBuffer cb_param_in_obj(cb_param_in);
+    CircularBuffer cb_grad_in_obj(cb_grad_in);
+    CircularBuffer cb_exp_avg_in_obj(cb_exp_avg_in);
+    CircularBuffer cb_exp_avg_sq_in_obj(cb_exp_avg_sq_in);
 #ifdef AMSGRAD
-    experimental::CircularBuffer cb_max_exp_avg_sq_in_obj(cb_max_exp_avg_sq_in);
-    experimental::CircularBuffer tmp_cb_max_exp_avg_sq_obj(tmp_cb_max_exp_avg_sq);
-    experimental::CircularBuffer cb_max_exp_avg_sq_out_obj(cb_max_exp_avg_sq_out);
+    CircularBuffer cb_max_exp_avg_sq_in_obj(cb_max_exp_avg_sq_in);
+    CircularBuffer tmp_cb_max_exp_avg_sq_obj(tmp_cb_max_exp_avg_sq);
+    CircularBuffer cb_max_exp_avg_sq_out_obj(cb_max_exp_avg_sq_out);
 #endif
-    experimental::CircularBuffer cb_scalar_args_obj(cb_scalar_args);
-    experimental::CircularBuffer cb_one_obj(cb_one);
-    experimental::CircularBuffer cb_tmp1_obj(cb_tmp1);
-    experimental::CircularBuffer cb_tmp2_obj(cb_tmp2);
-    experimental::CircularBuffer tmp_cb_exp_avg_sq_obj(tmp_cb_exp_avg_sq);
+    CircularBuffer cb_scalar_args_obj(cb_scalar_args);
+    CircularBuffer cb_one_obj(cb_one);
+    CircularBuffer cb_tmp1_obj(cb_tmp1);
+    CircularBuffer cb_tmp2_obj(cb_tmp2);
+    CircularBuffer tmp_cb_exp_avg_sq_obj(tmp_cb_exp_avg_sq);
 
     cb_scalar_args_obj.wait_front(5);
     cb_one_obj.wait_front(onetile);

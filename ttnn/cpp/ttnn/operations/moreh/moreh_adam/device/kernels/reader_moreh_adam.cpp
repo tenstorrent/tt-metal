@@ -5,22 +5,22 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void fill_cb_with_value(uint32_t cb_id, uint32_t value) {
-    experimental::CircularBuffer cb(cb_id);
+    CircularBuffer cb(cb_id);
     cb.reserve_back(1);
 
 #if defined FP32_DEST_ACC_EN
-    experimental::CoreLocalMem<uint32_t> ptr(cb.get_write_ptr());
+    CoreLocalMem<uint32_t> ptr(cb.get_write_ptr());
     for (int j = 0; j < 1024; j++) {
         ptr[j] = value;
     }
 #else
-    experimental::CoreLocalMem<uint16_t> ptr(cb.get_write_ptr());
+    CoreLocalMem<uint16_t> ptr(cb.get_write_ptr());
     for (int j = 0; j < 1024; j++) {
         ptr[j] = uint16_t(value >> 16);
     }
@@ -84,13 +84,13 @@ void kernel_main() {
     scaler.f = 1.0f;
     fill_cb_with_value(cb_id_one, scaler.u);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_param(cb_id_param);
-    experimental::CircularBuffer cb_grad(cb_id_grad);
-    experimental::CircularBuffer cb_exp_avg(cb_id_exp_avg);
-    experimental::CircularBuffer cb_exp_avg_sq(cb_id_exp_avg_sq);
+    Noc noc;
+    CircularBuffer cb_param(cb_id_param);
+    CircularBuffer cb_grad(cb_id_grad);
+    CircularBuffer cb_exp_avg(cb_id_exp_avg);
+    CircularBuffer cb_exp_avg_sq(cb_id_exp_avg_sq);
 #ifdef AMSGRAD
-    experimental::CircularBuffer cb_max_exp_avg_sq(cb_id_max_exp_avg_sq);
+    CircularBuffer cb_max_exp_avg_sq(cb_id_max_exp_avg_sq);
 #endif
 
     const auto param_tile_bytes = get_tile_size(cb_id_param);

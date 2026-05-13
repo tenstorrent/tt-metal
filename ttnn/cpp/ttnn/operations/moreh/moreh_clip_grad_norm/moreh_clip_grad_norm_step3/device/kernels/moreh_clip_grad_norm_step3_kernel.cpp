@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     int i{0};
@@ -11,13 +11,13 @@ void kernel_main() {
 
     std::uint8_t input_id{0};
     const auto cb_x = input_id++;
-    experimental::CircularBuffer cb_x_obj(cb_x);  // input
+    CircularBuffer cb_x_obj(cb_x);  // input
     const auto cb_clip_coef_clamped = input_id++;
-    experimental::CircularBuffer cb_clip_coef_clamped_obj(cb_clip_coef_clamped);  // clip_coef_clamped
+    CircularBuffer cb_clip_coef_clamped_obj(cb_clip_coef_clamped);  // clip_coef_clamped
 
     std::uint8_t output_id{16};
     const auto cb_y = output_id++;
-    experimental::CircularBuffer cb_y_obj(cb_y);  // output
+    CircularBuffer cb_y_obj(cb_y);  // output
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
