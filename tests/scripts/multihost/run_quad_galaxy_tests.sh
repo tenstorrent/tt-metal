@@ -622,6 +622,25 @@ run_quad_teacher_forced_test() {
     fi
 }
 
+run_quad_teacher_forced_long_seq_prefill_single_galaxy_test() {
+    fail=0
+    setup_quad_galaxy_env
+    local timeout=$(_demo_timeout 7200)
+    local test_node="models/demos/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy[8-8192-reference_file0]"
+    local junit_path="$(_test_run_summary_junit_path teacher_forced_long_prefill_single_galaxy_quad)"
+    local junit_flag="--junitxml=${junit_path}"
+
+    # Force CI=false so this long-sequence case is executed in CI instead of skipped.
+    _test_run_summary_exec _run_deepseekv3_tt bash -c "set -f -o pipefail; CI=false pytest -svvv --timeout=$timeout ${junit_flag} ${test_node} 2>&1 | tee generated/artifacts/quad_teacher_forced_long_prefill_single_galaxy_output.log"
+    local ec="${_TEST_RUN_LAST_EC}"
+    fail+=$((fail + ec))
+    _test_run_summary_append_junit_rows "teacher_forced_long_prefill_single_galaxy_quad" "${junit_path}" "${ec}"
+
+    if [[ $fail -ne 0 ]]; then
+        exit 1
+    fi
+}
+
 ###############################################################################
 # Demo tests (full)
 ###############################################################################
@@ -728,6 +747,7 @@ run_all_needed_local_tests() {
     run_dual_demo_test
     run_dual_demo_stress_test
     run_quad_teacher_forced_test
+    run_quad_teacher_forced_long_seq_prefill_single_galaxy_test
     run_quad_demo_test
     run_quad_demo_stress_test
 
