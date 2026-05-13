@@ -11,7 +11,7 @@ from torch import nn
 import ttnn
 from models.common.utility_functions import is_wormhole_b0, nearest_32
 from models.demos.falcon7b_common.tests.test_utils import tt_from_torch
-from models.demos.falcon7b_common.tt.model_utils import get_falcon_default_core_grid, get_weights_cached
+from models.demos.falcon7b_common.tt.model_utils import get_weights_cached
 from ttnn import ReplicateTensorToMesh
 
 
@@ -211,7 +211,6 @@ class TtFalconAttentionPrefill(nn.Module):
             self.query_key_value_weights,
             memory_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
             dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
-            core_grid=get_falcon_default_core_grid(hidden_states.device()),
             compute_kernel_config=self.model_config["DEFAULT_LoFi_KERNEL_CONFIG"],
         )
 
@@ -310,7 +309,6 @@ class TtFalconAttentionPrefill(nn.Module):
             self.dense_weights,
             memory_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
             dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
-            core_grid=get_falcon_default_core_grid(attn_output.device()),
             compute_kernel_config=self.model_config["DEFAULT_LoFi_KERNEL_CONFIG"],
         )
 
@@ -345,7 +343,6 @@ class TtFalconAttentionPrefill(nn.Module):
                 memory_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
                 dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
                 compute_kernel_config=self.model_config["FUSED_QKV_MM_OPTIMIZED_KERNEL_CONFIG"],
-                core_grid=ttnn.CoreGrid(y=7, x=8),
             )
 
         ###########
@@ -469,7 +466,6 @@ class TtFalconAttentionPrefill(nn.Module):
             memory_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
             dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
             compute_kernel_config=self.model_config["SELFOUT_MM_OPTIMIZED_KERNEL_CONFIG"],
-            core_grid=ttnn.CoreGrid(y=7, x=8),
         )
 
         return attn_outputs, layer_present
@@ -587,7 +583,6 @@ class TtFalconAttentionDecode(nn.Module):
             self.query_key_value_weights,
             memory_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
             dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
-            core_grid=get_falcon_default_core_grid(hidden_states.device()),
             compute_kernel_config=self.model_config["DEFAULT_LoFi_KERNEL_CONFIG"],
         )
 
@@ -688,7 +683,6 @@ class TtFalconAttentionDecode(nn.Module):
             attn_weights = ttnn.experimental.attn_matmul(
                 query_layer,
                 key_layer_transposed,
-                compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
                 memory_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
                 dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
             )
@@ -698,7 +692,6 @@ class TtFalconAttentionDecode(nn.Module):
             attn_weights = ttnn.experimental.group_attn_matmul(
                 query_layer,
                 key_layer_transposed,
-                compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
                 memory_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
                 dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
             )
@@ -728,7 +721,9 @@ class TtFalconAttentionDecode(nn.Module):
                 scale=self.scalar,
                 mask=attention_mask,
                 program_config=ttnn.SoftmaxShardedMultiCoreProgramConfig(
-                    compute_with_storage_grid_size=(8, 4),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}
+                    ),
                     subblock_w=1,
                     block_h=self.padded_local_heads // 32,
                     block_w=padded_layer_past_len // 32,
@@ -797,7 +792,6 @@ class TtFalconAttentionDecode(nn.Module):
                 attn_output = ttnn.experimental.attn_matmul(
                     attn_weights,
                     value_layer,
-                    compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
                     memory_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
                     dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                 )
@@ -805,7 +799,6 @@ class TtFalconAttentionDecode(nn.Module):
                 attn_output = ttnn.experimental.group_attn_matmul(
                     attn_weights,
                     value_layer,
-                    compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
                     memory_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
                     dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                 )
@@ -825,7 +818,6 @@ class TtFalconAttentionDecode(nn.Module):
             self.dense_weights,
             memory_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
             dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
-            core_grid=get_falcon_default_core_grid(attn_output.device()),
             compute_kernel_config=self.model_config["DEFAULT_LoFi_KERNEL_CONFIG"],
         )
 

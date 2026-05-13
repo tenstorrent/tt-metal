@@ -3080,7 +3080,14 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
 
     auto fuse_batch = program_config.fuse_batch;
     auto in0_block_w = program_config.in0_block_w;
-    auto compute_with_storage_grid_size = program_config.compute_with_storage_grid_size;
+    CoreCoord compute_with_storage_grid_size;
+    if (program_config.allowed_worker_cores.has_value()) {
+        compute_with_storage_grid_size = program_config.allowed_worker_cores.value().bounding_box().grid_size();
+    } else if (a.is_sharded()) {
+        compute_with_storage_grid_size = a.shard_spec().value().grid.bounding_box().grid_size();
+    } else {
+        compute_with_storage_grid_size = a.device()->compute_with_storage_grid_size();
+    }
     auto out_subblock_h = program_config.out_subblock_h;
     auto out_subblock_w = program_config.out_subblock_w;
     auto out_block_h = program_config.out_block_h;

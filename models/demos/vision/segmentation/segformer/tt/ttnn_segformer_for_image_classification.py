@@ -53,7 +53,6 @@ class TtSegformerForImageClassification:
             parameters.classifier.weight,
             bias=parameters.classifier.bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            core_grid=ttnn.CoreGrid(y=8, x=12),
             dtype=ttnn.bfloat8_b,
         )
         loss = None

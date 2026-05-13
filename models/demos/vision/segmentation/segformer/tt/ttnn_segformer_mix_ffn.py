@@ -56,7 +56,6 @@ class TtSegformerMixFFN:
             parameters.dense1.weight,
             bias=parameters.dense1.bias,
             memory_config=mm_f_x_memory_config,
-            core_grid=ttnn.CoreGrid(y=mm_f_y, x=mm_f_x),
             dtype=ttnn.bfloat8_b,
         )
 
@@ -76,7 +75,6 @@ class TtSegformerMixFFN:
             parameters.dense2.weight,
             bias=parameters.dense2.bias,
             memory_config=mm_f_x_memory_config,
-            core_grid=ttnn.CoreGrid(y=mm_f_y, x=mm_f_x),
             dtype=ttnn.bfloat8_b,
         )
 

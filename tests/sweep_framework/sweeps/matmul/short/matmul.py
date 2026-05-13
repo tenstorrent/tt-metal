@@ -81,7 +81,7 @@ def run_matmul(
 
     start_time = start_measuring_time()
     op_output_tensor = ttnn.matmul(
-        input_tensor_a, input_tensor_b, dtype=output_dtype, memory_config=output_memory_config, core_grid=core_grid
+        input_tensor_a, input_tensor_b, dtype=output_dtype, memory_config=output_memory_config
     )
     output_tensor = ttnn.to_torch(op_output_tensor)
     e2e_perf = stop_measuring_time(start_time)

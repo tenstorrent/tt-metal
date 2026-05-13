@@ -30,7 +30,7 @@ parameters = {
         "batch_matrix_multiply": [False],
         "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 4),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
                 in0_block_w=1,
                 out_subblock_h=1,
                 out_subblock_w=1,
@@ -51,7 +51,7 @@ parameters = {
         "batch_matrix_multiply": [False],
         "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 4),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
                 in0_block_w=1,
                 out_subblock_h=1,
                 out_subblock_w=1,
@@ -72,7 +72,7 @@ parameters = {
         "batch_matrix_multiply": [True],
         "program_config": [
             ttnn.MatmulMultiCoreReuseProgramConfig(
-                compute_with_storage_grid_size=(8, 4),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
                 in0_block_w=2,  # K // 32
                 out_subblock_h=1,
                 out_subblock_w=4,
@@ -110,7 +110,7 @@ parameters = {
         "batch_matrix_multiply": [True],
         "program_config": [
             ttnn.MatmulMultiCoreReuseProgramConfig(
-                compute_with_storage_grid_size=(8, 4),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
                 in0_block_w=2,  # K // 32
                 out_subblock_h=1,
                 out_subblock_w=4,
@@ -128,7 +128,7 @@ parameters = {
         "batch_matrix_multiply": [True],
         "program_config": [
             ttnn.MatmulMultiCoreReuseProgramConfig(
-                compute_with_storage_grid_size=(8, 4),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
                 in0_block_w=2,  # K // 32
                 out_subblock_h=1,
                 out_subblock_w=4,
@@ -156,7 +156,7 @@ parameters = {
         "batch_matrix_multiply": [True],
         "program_config": [
             ttnn.MatmulMultiCoreReuseProgramConfig(
-                compute_with_storage_grid_size=(8, 4),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
                 in0_block_w=2,  # K // 32
                 out_subblock_h=1,
                 out_subblock_w=4,
@@ -174,7 +174,7 @@ parameters = {
         "batch_matrix_multiply": [False],
         "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 4),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
                 in0_block_w=1,  # K // 32
                 out_subblock_h=1,
                 out_subblock_w=1,
@@ -205,7 +205,7 @@ parameters = {
         "batch_matrix_multiply": [False],
         "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 4),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
                 in0_block_w=1,  # K // 32
                 out_subblock_h=1,
                 out_subblock_w=1,
@@ -226,7 +226,7 @@ parameters = {
         "batch_matrix_multiply": [False],
         "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 5),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 4))}),
                 in0_block_w=2,  # K // 32
                 out_subblock_h=4,  # 8 // (N // 32)
                 out_subblock_w=2,  # N // 32
@@ -262,7 +262,7 @@ parameters = {
         "batch_matrix_multiply": [False],
         "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 5),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 4))}),
                 in0_block_w=2,  # K // 32
                 out_subblock_h=4,  # 8 // (N // 32)
                 out_subblock_w=2,  # N // 32
@@ -283,7 +283,7 @@ parameters = {
         "batch_matrix_multiply": [False],
         "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 4),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
                 in0_block_w=2,  # K // 32
                 out_subblock_h=1,
                 out_subblock_w=1,
@@ -314,7 +314,7 @@ parameters = {
         "batch_matrix_multiply": [False],
         "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 4),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
                 in0_block_w=2,  # K // 32
                 out_subblock_h=1,
                 out_subblock_w=1,
@@ -335,7 +335,7 @@ parameters = {
         "batch_matrix_multiply": [False],
         "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 5),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 4))}),
                 in0_block_w=1,
                 out_subblock_h=1,
                 out_subblock_w=4,
@@ -365,7 +365,7 @@ parameters = {
         "batch_matrix_multiply": [False],
         "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 5),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 4))}),
                 in0_block_w=1,
                 out_subblock_h=1,
                 out_subblock_w=4,
@@ -385,7 +385,7 @@ parameters = {
         "batch_matrix_multiply": [False],
         "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(5, 4),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 3))}),
                 in0_block_w=1,
                 out_subblock_h=1,
                 out_subblock_w=4,
@@ -415,7 +415,7 @@ parameters = {
         "batch_matrix_multiply": [False],
         "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(5, 4),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 3))}),
                 in0_block_w=1,
                 out_subblock_h=1,
                 out_subblock_w=4,
@@ -435,7 +435,7 @@ parameters = {
         "batch_matrix_multiply": [False],
         "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(6, 6),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 5))}),
                 in0_block_w=2,  # K // 32
                 out_subblock_h=1,
                 out_subblock_w=2,
@@ -475,7 +475,7 @@ parameters = {
         "batch_matrix_multiply": [False],
         "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(6, 6),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 5))}),
                 in0_block_w=2,  # K // 32
                 out_subblock_h=1,
                 out_subblock_w=2,

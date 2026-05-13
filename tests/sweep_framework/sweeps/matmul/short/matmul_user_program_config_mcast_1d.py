@@ -36,7 +36,7 @@ parameters = {
         "input_shapes": [(64, 32 * IN0_INNER_DIM_PER_CORE, 32 * 96)],
         "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 4),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
                 in0_block_w=1,
                 out_subblock_h=1,
                 out_subblock_w=1,
@@ -63,7 +63,7 @@ parameters = {
         "input_shapes": [(64, 28 * IN0_INNER_DIM_PER_CORE, 35 * 96)],
         "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 5),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 4))}),
                 in0_block_w=1,
                 out_subblock_h=1,
                 out_subblock_w=3,
@@ -90,7 +90,7 @@ parameters = {
         "input_shapes": [(64, 35 * IN0_INNER_DIM_PER_CORE, 28 * 96)],
         "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 5),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 4))}),
                 in0_block_w=1,
                 out_subblock_h=1,
                 out_subblock_w=3,
@@ -118,7 +118,7 @@ parameters = {
         "input_shapes": [(64, 28 * IN0_INNER_DIM_PER_CORE, 30 * 96)],
         "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 4),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
                 in0_block_w=1,
                 out_subblock_h=1,
                 out_subblock_w=1,
@@ -146,7 +146,7 @@ parameters = {
         "input_shapes": [(64, 30 * IN0_INNER_DIM_PER_CORE, 28 * 96)],
         "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 4),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
                 in0_block_w=1,
                 out_subblock_h=1,
                 out_subblock_w=1,
@@ -177,7 +177,7 @@ parameters = {
         "input_shapes": [(64, IN0_INNER_DIM_PER_CORE, 128)],
         "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(1, 1),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
                 in0_block_w=1,
                 out_subblock_h=1,
                 out_subblock_w=1,
@@ -205,7 +205,7 @@ parameters = {
         "input_shapes": [(64, 5 * IN0_INNER_DIM_PER_CORE, 128)],
         "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(5, 1),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 0))}),
                 in0_block_w=1,
                 out_subblock_h=1,
                 out_subblock_w=1,
@@ -233,7 +233,7 @@ parameters = {
         "input_shapes": [(64, IN0_INNER_DIM_PER_CORE, 128)],
         "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(1, 1),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
                 in0_block_w=1,
                 out_subblock_h=1,
                 out_subblock_w=1,

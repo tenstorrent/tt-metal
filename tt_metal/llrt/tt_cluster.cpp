@@ -388,8 +388,20 @@ const std::unordered_map<CoreCoord, int32_t>& Cluster::get_virtual_routing_to_pr
 void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
     std::unique_ptr<tt::umd::Cluster> device_driver;
     if (this->target_type_ == TargetDevice::Silicon) {
+        // This is the target/desired number of mem channels per arch/device.
+        // Silicon driver will attempt to open this many hugepages as channels per mmio chip,
+        // and assert if workload uses more than available.
+        auto discovered_cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
+        auto grouped_chips = discovered_cluster_desc->get_chips_grouped_by_closest_mmio();
+        uint32_t max_chips_per_mmio = 0;
+        for (const auto& [mmio_device_id, chips] : grouped_chips) {
+            max_chips_per_mmio = std::max(max_chips_per_mmio, static_cast<uint32_t>(chips.size()));
+        }
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
-            .num_host_mem_ch_per_mmio_device = std::nullopt,  // Automatically determine number of host mem channels.
+            .num_host_mem_ch_per_mmio_device = std::min(HOST_MEM_CHANNELS, max_chips_per_mmio),
+            .sdesc_path = {},
+            .target_devices = discovered_cluster_desc->get_all_chips(),
+            .cluster_descriptor = discovered_cluster_desc.get(),
         });
     } else if (this->target_type_ == TargetDevice::Simulator) {
         const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
@@ -472,9 +484,7 @@ void Cluster::start_driver(umd::DeviceParams& device_params) const {
     // May block waiting for other processes to release the device.
     this->driver_->start_device(device_params);
 
-    if ((this->target_type_ == TargetDevice::Silicon ||
-         (this->target_type_ == TargetDevice::Simulator && this->arch_ == tt::ARCH::QUASAR)) &&
-        device_params.init_device) {
+    if (this->target_type_ == TargetDevice::Silicon && device_params.init_device) {
         // Configure TLBs on all MMIO devices in parallel
         std::vector<std::shared_future<void>> futures;
         const auto& mmio_device_ids = driver_->get_target_mmio_device_ids();

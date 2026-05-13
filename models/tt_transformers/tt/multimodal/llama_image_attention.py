@@ -240,7 +240,7 @@ class TtLlamaImageAttention(LightweightModule):
         ttnn.deallocate(xqkv_fused)
         # TODO: get this from model_config
         sdpa_cfg = self.sdpa_cfg or ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
             q_chunk_size=32 * num_chunks,
             k_chunk_size=32 * num_chunks,
             exp_approx_mode=False,

@@ -106,7 +106,9 @@ class TtFalconLayernorm:
                     ),
                 ),
                 program_config=ttnn.LayerNormShardedMultiCoreProgramConfig(
-                    compute_with_storage_grid_size=[8, 4],
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}
+                    ),
                     subblock_w=8,
                     block_h=1,
                     block_w=32,

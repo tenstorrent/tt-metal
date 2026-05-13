@@ -776,7 +776,6 @@ TEST_P(MatmulOpIfTest, Matmul) {
             matmul_program_config,
             std::nullopt,   // activation
             std::nullopt,   // compute_kernel_config
-            std::nullopt,   // core_grid
             std::nullopt,   // output_tile
             std::nullopt,   // optional_output_tensor
             std::nullopt,   // global_cb
@@ -809,7 +808,6 @@ INSTANTIATE_TEST_SUITE_P(
             g_interleaved_1_1_2048_64_tiled,
             g_width_shard_1_1_64_2048_tiled_to_32_cores,
             ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig{
-                .compute_with_storage_grid_size = CoreCoord(8, 4),
                 .in0_block_w = 2,
                 .out_subblock_h = 1,
                 .out_subblock_w = 1,
@@ -819,12 +817,13 @@ INSTANTIATE_TEST_SUITE_P(
                 .per_core_N = 2,
                 .fuse_batch = true,
                 .fused_activation = std::nullopt,
-                .mcast_in0 = true}),
+                .mcast_in0 = true,
+                .allowed_worker_cores = CoreRangeSet(std::set<CoreRange>{
+                    CoreRange(CoreCoord(0, 0), CoreCoord(7, 3))})}),
         std::make_tuple(  // REUSE_MCAST_2D_BLOCK_SHARDED
             g_block_shard_1_1_1600_256_tiled_to_32_cores,
             g_interleaved_1_1_245_1024_tiled,
             ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
-                .compute_with_storage_grid_size = CoreCoord(8, 8),
                 .in0_block_w = 1,
                 .out_subblock_h = 1,
                 .out_subblock_w = 4,
@@ -833,7 +832,9 @@ INSTANTIATE_TEST_SUITE_P(
                 .per_core_M = 10,
                 .per_core_N = 4,
                 .transpose_mcast = false,
-                .fused_activation = std::nullopt})));
+                .fused_activation = std::nullopt,
+                .allowed_worker_cores = CoreRangeSet(std::set<CoreRange>{
+                    CoreRange(CoreCoord(0, 0), CoreCoord(7, 7))})})));
 
 class Conv2dOpIfTest : public ttnn::TTNNFixtureWithSuiteDevice<Conv2dOpIfTest>,
                        public ::testing::WithParamInterface<std::optional<ttnn::prim::Conv2dConfig>> {};

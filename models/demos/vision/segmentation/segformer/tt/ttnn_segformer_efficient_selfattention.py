@@ -88,7 +88,6 @@ class TtSegformerEfficientSelfAttention:
             parameters.query.weight,
             bias=parameters.query.bias,
             memory_config=mm_a_x_memory_config,
-            core_grid=ttnn.CoreGrid(y=mm_a_y, x=mm_a_x),
             dtype=ttnn.bfloat16,
         )
 
@@ -138,7 +137,6 @@ class TtSegformerEfficientSelfAttention:
             parameters.key.weight,
             bias=parameters.key.bias,
             memory_config=mm_a_x_memory_config,
-            core_grid=ttnn.CoreGrid(y=mm_a_y, x=mm_b_x),
             dtype=ttnn.bfloat8_b,
         )
         if seq_len == 16384:
@@ -154,7 +152,6 @@ class TtSegformerEfficientSelfAttention:
             parameters.value.weight,
             bias=parameters.value.bias,
             memory_config=mm_a_x_memory_config,
-            core_grid=ttnn.CoreGrid(y=mm_a_y, x=mm_b_x),
             dtype=ttnn.bfloat8_b,
         )
         ttnn.deallocate(hidden_states)

@@ -402,7 +402,9 @@ class SigLIPAttentionTTNN:
         grid_y = min(8, device_grid.y)
 
         sdpa_cfg = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(grid_x, grid_y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))}
+            ),
             q_chunk_size=min(256, seq_len),
             k_chunk_size=min(256, seq_len),
             exp_approx_mode=False,

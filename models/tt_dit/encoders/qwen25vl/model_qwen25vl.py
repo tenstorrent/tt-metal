@@ -389,7 +389,9 @@ class Qwen25VlAttention(Module):
         chunk_size = min(seq_len, MAX_CHUNK_SIZE)
 
         return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+            ),
             q_chunk_size=chunk_size,
             k_chunk_size=chunk_size,
             exp_approx_mode=False,

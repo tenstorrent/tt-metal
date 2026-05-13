@@ -86,13 +86,7 @@ def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_s
     torch.manual_seed(0)
     if device.core_grid.y == 7:
         pytest.skip("Issue #6984: Compute Grid size too small")
-    core_grid = ttnn.CoreGrid(x=8, y=8)
     TILE_HEIGHT = 32
-
-    if batch_size == 2:
-        if (m_size == 1024 and k_size == 96 and n_size == 1024) or (m_size == 4096 and k_size == 64 and n_size == 4096):
-            # NOTE: matmul errors out with OOM otherwise
-            core_grid = None
 
     torch_input_tensor_a = torch.randn((batch_size, channel_a, m_size, k_size), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.randn((batch_size, channel_b, k_size, n_size), dtype=torch.bfloat16)
@@ -114,13 +108,11 @@ def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_s
             input_tensor_a,
             input_tensor_b,
             bias=input_tensor_c,
-            core_grid=core_grid,
         )
     else:
         output_tensor = ttnn.matmul(
             input_tensor_a,
             input_tensor_b,
-            core_grid=core_grid,
         )
 
     output_tensor = ttnn.to_torch(output_tensor)
@@ -184,7 +176,9 @@ def test_sdxl_matmul(
     )
     tt_act_block_sharded = ttnn.to_memory_config(tt_act, sharded_mem_config)
     prog_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
+        ),
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
@@ -359,7 +353,7 @@ def test_matmul_transpose_a_with_low_precision_rhs(device, rhs_dtype):
             128,
             128,
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 4),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
                 in0_block_w=1,
                 out_subblock_h=2,
                 out_subblock_w=2,
@@ -377,7 +371,7 @@ def test_matmul_transpose_a_with_low_precision_rhs(device, rhs_dtype):
             128,
             128,
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(2, 1),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
                 in0_block_w=1,
                 out_subblock_h=2,
                 out_subblock_w=2,
@@ -395,7 +389,7 @@ def test_matmul_transpose_a_with_low_precision_rhs(device, rhs_dtype):
             128,
             128,
             ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(2, 8),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 7))}),
                 in0_block_w=1,
                 out_subblock_h=2,
                 out_subblock_w=2,
@@ -476,8 +470,7 @@ def test_matmul_m_direction_padding(device):
     )
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        # compute_with_storage_grid_size=(13, 10),
-        compute_with_storage_grid_size=(8, 8),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(tttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         in0_block_w=1,
         out_subblock_h=1,
         out_subblock_w=1,

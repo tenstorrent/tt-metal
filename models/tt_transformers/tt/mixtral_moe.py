@@ -106,7 +106,6 @@ class TtMoeLayer(LightweightModule):
             self.gates_H8,
             memory_config=self.model_config["GATE_MM_OUTPUT_MEMCFG"],
             compute_kernel_config=self.model_config["MIXTRAL_GATE_MM_OUTPUT_KERNEL_CONFIG"],
-            core_grid=ttnn.CoreGrid(y=8, x=8),
             dtype=ttnn.bfloat16,
         )
         # get weights for top-2 experts -- masking out everything except the 8 experts (needed because top-k works with a min input of size 64)

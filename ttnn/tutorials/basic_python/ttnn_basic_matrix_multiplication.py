@@ -18,8 +18,6 @@ def main():
 
     output = a @ b
 
-    output = a @ b
-
     print(output.layout)
 
     output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
@@ -35,9 +33,7 @@ def main():
         (k, n), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
     )
 
-    output = ttnn.matmul(a, b, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=8, x=8))
-
-    output = ttnn.matmul(a, b, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=8, x=8))
+    output = ttnn.matmul(a, b, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     ttnn.close_device(device)
 

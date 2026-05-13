@@ -5248,6 +5248,9 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
     // multicast targets a single bounding-box rectangle and the per-core index math assumes a
     // contiguous row-major rectangle of width `compute_with_storage_grid_size.x`.
     CoreCoord sub_device_start_core = {0, 0};
+    auto grid_size = program_config.allowed_worker_cores.has_value()
+                         ? program_config.allowed_worker_cores.value().bounding_box().grid_size()
+                         : device->compute_with_storage_grid_size();
     if (operation_attributes.sub_device_id.has_value()) {
         auto sd_worker_cores = device->worker_cores(
             tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id.value());
@@ -5259,11 +5262,11 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
             sd_worker_cores,
             bbox);
         TT_FATAL(
-            bbox.start_coord.x + program_config.compute_with_storage_grid_size.x - 1 <= bbox.end_coord.x &&
-                bbox.start_coord.y + program_config.compute_with_storage_grid_size.y - 1 <= bbox.end_coord.y,
+            bbox.start_coord.x + grid_size.x - 1 <= bbox.end_coord.x &&
+                bbox.start_coord.y + grid_size.y - 1 <= bbox.end_coord.y,
             "matmul_multicore_reuse_mcast_1d compute_with_storage_grid_size {} anchored at sub-device start {} "
             "extends past the sub-device's worker bounding box {}",
-            program_config.compute_with_storage_grid_size,
+            grid_size,
             bbox.start_coord,
             bbox);
         sub_device_start_core = bbox.start_coord;
@@ -5279,7 +5282,7 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
             fp32_dest_acc_en,
             math_approx_mode,
             packer_l1_acc,
-            program_config.compute_with_storage_grid_size,
+            grid_size,
             ttnn::get_throttle_level(compute_kernel_config),
             in0_B,
             in1_B,
@@ -5325,7 +5328,7 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
         fp32_dest_acc_en,
         math_approx_mode,
         packer_l1_acc,
-        program_config.compute_with_storage_grid_size,
+        grid_size,
         ttnn::get_throttle_level(compute_kernel_config),
         in0_B,
         in1_B,
@@ -5380,6 +5383,14 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig config =
         std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config);
 
+    CoreCoord resolved_grid;
+    if (config.allowed_worker_cores.has_value()) {
+        resolved_grid = config.allowed_worker_cores.value().bounding_box().grid_size();
+    } else if (a.is_sharded()) {
+        resolved_grid = a.shard_spec().value().grid.bounding_box().grid_size();
+    } else {
+        resolved_grid = a.device()->compute_with_storage_grid_size();
+    }
     return matmul_multi_core_reuse_mcast_1d_optimized_(
         program,
         a,
@@ -5389,7 +5400,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         broadcast_batch,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
-        config.compute_with_storage_grid_size,
+        resolved_grid,
         compute_kernel_config,
         ttnn::get_throttle_level(compute_kernel_config),
         config.in0_block_w,
@@ -5426,6 +5437,9 @@ MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory::create_mesh_workload(
             const ttnn::MeshCoordinateRange mesh_coord_range{mesh_coord, mesh_coord};
             auto pc = std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
                 attributes.program_config.value());
+            auto grid_size = pc.allowed_worker_cores.has_value()
+                                 ? pc.allowed_worker_cores.value().bounding_box().grid_size()
+                                 : tensor_args.input_tensors.at(0).device()->compute_with_storage_grid_size();
             DeviceComputeKernelConfig ckc = attributes.compute_kernel_config.value();
             tt_metal::Program program{};
             std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_signaler = std::nullopt;
@@ -5440,7 +5454,7 @@ MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory::create_mesh_workload(
                 attributes.bcast_batch.value_or(false),
                 attributes.transpose_a,
                 attributes.transpose_b,
-                pc.compute_with_storage_grid_size,
+                grid_size,
                 ckc,
                 ttnn::get_throttle_level(ckc),
                 pc.in0_block_w,

@@ -59,8 +59,13 @@ INSTANTIATE_TEST_SUITE_P(
 );
 
 TEST(TEST_JSON_CONVERSION, TEST_MATMUL_CONFIG) {
-    auto matmul_multi_core_reuse_program_config =
-        ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig{CoreCoord{2, 3}, 32, 64, 48, 128, 96};
+    auto matmul_multi_core_reuse_program_config = ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig{
+        .in0_block_w = 32,
+        .out_subblock_h = 64,
+        .out_subblock_w = 48,
+        .per_core_M = 128,
+        .per_core_N = 96,
+        .allowed_worker_cores = CoreRangeSet(std::set<CoreRange>{CoreRange(CoreCoord(0, 0), CoreCoord(1, 2))})};
     auto matmul_program_config = ttnn::operations::matmul::MatmulProgramConfig{matmul_multi_core_reuse_program_config};
 
     auto json_object = ttsl::json::to_json(matmul_program_config);
@@ -68,10 +73,6 @@ TEST(TEST_JSON_CONVERSION, TEST_MATMUL_CONFIG) {
     auto deserialized_matmul_program_config =
         ttsl::json::from_json<ttnn::operations::matmul::MatmulProgramConfig>(json_object);
 
-    ASSERT_EQ(
-        matmul_multi_core_reuse_program_config.compute_with_storage_grid_size,
-        std::get<ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig>(deserialized_matmul_program_config)
-            .compute_with_storage_grid_size);
     ASSERT_EQ(
         matmul_multi_core_reuse_program_config.in0_block_w,
         std::get<ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig>(deserialized_matmul_program_config)
@@ -92,4 +93,8 @@ TEST(TEST_JSON_CONVERSION, TEST_MATMUL_CONFIG) {
         matmul_multi_core_reuse_program_config.per_core_N,
         std::get<ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig>(deserialized_matmul_program_config)
             .per_core_N);
+    ASSERT_EQ(
+        matmul_multi_core_reuse_program_config.allowed_worker_cores,
+        std::get<ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig>(deserialized_matmul_program_config)
+            .allowed_worker_cores);
 }

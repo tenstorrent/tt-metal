@@ -80,7 +80,9 @@ def test_sparse_matmul_with_nnz(device, mkn, num_experts, num_batches, tile_h, t
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         output_tile=output_tile,
         program_config=ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_x - 1, core_y - 1))}
+            ),
             in0_block_w=1,
             out_subblock_h=1,
             out_subblock_w=1,
@@ -178,7 +180,9 @@ def test_sparse_matmul_without_nnz(device, mkn, num_experts, num_batches, tile_h
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         output_tile=output_tile,
         program_config=ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_x - 1, core_y - 1))}
+            ),
             in0_block_w=1,
             out_subblock_h=1,
             out_subblock_w=1,
@@ -290,7 +294,9 @@ def test_batched_sparse_matmul_with_nnz(device, mkn, num_experts, tile_h, tile_w
         is_input_a_sparse=True,
         is_input_b_sparse=True,
         program_config=ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_x - 1, core_y - 1))}
+            ),
             in0_block_w=2,
             out_subblock_h=1,
             out_subblock_w=1,
@@ -387,7 +393,9 @@ def test_batched_sparse_matmul_without_nnz(device, mkn, num_experts, tile_h, til
         is_input_a_sparse=True,
         is_input_b_sparse=True,
         program_config=ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_x - 1, core_y - 1))}
+            ),
             in0_block_w=2,
             out_subblock_h=1,
             out_subblock_w=1,
@@ -489,7 +497,9 @@ def test_sparse_matmul_inputA_with_nnz(device, mkn, num_experts, num_batches, ti
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         output_tile=output_tile,
         program_config=ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_x - 1, core_y - 1))}
+            ),
             in0_block_w=1,
             out_subblock_h=1,
             out_subblock_w=1,
@@ -588,7 +598,9 @@ def test_sparse_matmul_inputA_without_nnz(device, mkn, num_experts, num_batches,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         output_tile=output_tile,
         program_config=ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_x - 1, core_y - 1))}
+            ),
             in0_block_w=1,
             out_subblock_h=1,
             out_subblock_w=1,

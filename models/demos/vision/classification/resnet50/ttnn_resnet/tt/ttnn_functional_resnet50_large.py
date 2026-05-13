@@ -23,7 +23,7 @@ def ResnetLinear(
     """
 
     matmul_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         in0_block_w=2,
         out_subblock_h=1,
         out_subblock_w=1,

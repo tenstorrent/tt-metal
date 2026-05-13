@@ -32,7 +32,9 @@ class DistributedNorm(LightweightModule):
                 strategy=ttnn.ShardStrategy.WIDTH,
             )
             self.ln_prg_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=(core_grid_ln[1], core_grid_ln[0]),
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_ln[1] - 1, core_grid_ln[0] - 1))}
+                ),
                 subblock_w=(hidden_size_per_device_distributed_ln // num_cores_ln) // 32,
                 block_h=1,
                 block_w=(hidden_size_per_device_distributed_ln // num_cores_ln) // 32,

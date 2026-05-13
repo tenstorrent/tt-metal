@@ -131,7 +131,6 @@ def run_matmul(
         input_tensor_b,
         memory_config=output_memory_config,
         dtype=output_dtype,
-        core_grid=core_grid or device.core_grid,
         compute_kernel_config=compute_kernel_config,
     )
     output_tensor = ttnn.to_torch(op_output_tensor)

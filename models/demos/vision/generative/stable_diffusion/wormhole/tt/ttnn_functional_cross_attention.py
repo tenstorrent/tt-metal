@@ -226,7 +226,9 @@ class cross_attention:
                 M, K, N, grid_size
             )
             self.program_configs["qkv"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=grid_size,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+                ),
                 in0_block_w=in0_block_w,
                 out_subblock_h=out_subblock_h,
                 out_subblock_w=out_subblock_w,
@@ -243,7 +245,9 @@ class cross_attention:
                 M, K, N, grid_size
             )
             self.program_configs["q"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=grid_size,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+                ),
                 in0_block_w=in0_block_w,
                 out_subblock_h=out_subblock_h,
                 out_subblock_w=out_subblock_w,
@@ -264,7 +268,9 @@ class cross_attention:
                 M, K, N, grid_size
             )
             self.program_configs["kv"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=grid_size,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+                ),
                 in0_block_w=in0_block_w,
                 out_subblock_h=out_subblock_h,
                 out_subblock_w=out_subblock_w,
@@ -288,7 +294,13 @@ class cross_attention:
             out_subblock_h = 1
             out_subblock_w = 8
             self.program_configs["tsa_qkt"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=self.tsa_grid_size,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.tsa_grid_size.x - 1, self.tsa_grid_size.y - 1)
+                        )
+                    }
+                ),
                 in0_block_w=self.key_len // 32,
                 per_core_M=tiles_per_shard,
                 per_core_N=seq_len // 32,
@@ -300,7 +312,13 @@ class cross_attention:
             )
 
             self.program_configs["tsa_softmax"] = ttnn.SoftmaxShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=self.tsa_grid_size,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.tsa_grid_size.x - 1, self.tsa_grid_size.y - 1)
+                        )
+                    }
+                ),
                 subblock_w=1,
                 block_h=mm_output_height_shard_spec[0] // 32,
                 block_w=mm_output_height_shard_spec[1] // 32,
@@ -308,7 +326,13 @@ class cross_attention:
             out_subblock_h = tiles_per_shard
             out_subblock_w = self.key_len // 32
             self.program_configs["tsa_v"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=self.tsa_grid_size,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.tsa_grid_size.x - 1, self.tsa_grid_size.y - 1)
+                        )
+                    }
+                ),
                 in0_block_w=seq_len // 32,
                 per_core_M=tiles_per_shard,
                 per_core_N=self.key_len // 32,
@@ -450,7 +474,9 @@ class cross_attention:
         else:
             q_sharded = query
         program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+            ),
             in0_block_w=inner // 32,
             out_subblock_h=1,
             out_subblock_w=1,
@@ -499,7 +525,14 @@ class cross_attention:
         )
         # attention_scores = ttnn.experimental.tensor.move_sharded(attention_scores)
         softmax_program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=compute_with_storage_grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1),
+                    )
+                }
+            ),
             subblock_w=1,
             block_h=height_per_core // 32,
             block_w=key_len // 32,
@@ -540,7 +573,9 @@ class cross_attention:
             v_sharded = value
 
         program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+            ),
             in0_block_w=key_len // 32,
             out_subblock_h=1,
             out_subblock_w=1,
@@ -582,7 +617,9 @@ class cross_attention:
             out_subblock_w = 2 if hs else 1
 
             program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=grid_size,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+                ),
                 in0_block_w=K // 32 if hs else 1,
                 per_core_M=B * M // num_cores // 32 if hs else B * M // 32,
                 per_core_N=N // 32 if hs else N // num_cores // 32,
@@ -599,7 +636,9 @@ class cross_attention:
                 M, K, N, grid_size
             )
             program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=grid_size,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+                ),
                 in0_block_w=in0_block_w,
                 out_subblock_h=out_subblock_h,
                 out_subblock_w=out_subblock_w,

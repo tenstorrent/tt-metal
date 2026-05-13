@@ -56,7 +56,9 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
             v_heads,
         ) = ttnn.experimental.split_query_key_value_and_split_heads(
             qkv,
-            compute_with_storage_grid_size=grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+            ),
             memory_config=model_config["OP2_SPLIT_QKV_HEADS_OUTPUT_MEMCFG"],
         )
         return q_heads, kt_heads, v_heads
