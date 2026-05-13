@@ -930,9 +930,31 @@ class TTNNDotsOCRDRAMShardedLMHead(TTNNModule):
         num_devices = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
         tile = ttnn.TILE_SIZE
 
-        # Pad vocab to multiple of (tile * num_devices) so the per-device
-        # split is tile-aligned (otherwise concat would have padding holes).
-        padded_vocab = math.ceil(self.out_features / (tile * num_devices)) * (tile * num_devices)
+        # Alignment constraints for the DRAM-sharded matmul kernel:
+        #   * weight is WIDTH_SHARDED across ``dram_cores`` DRAM banks per
+        #     device → ``chunk_n`` must be a multiple of
+        #     ``tile * dram_cores`` (=384 on Wormhole).
+        #   * output is WIDTH_SHARDED across ``num_compute_cores`` compute
+        #     cores → ``chunk_n`` must also be a multiple of
+        #     ``tile * num_compute_cores`` (=256 on the 1×8 compute grid).
+        # If only the dram-side alignment is satisfied, the kernel
+        # auto-rounds ``per_core_N = ceil(N_tiles / num_compute_cores)`` and
+        # writes padding tiles in the last compute core's output. After
+        # ``sharded_to_interleaved → concat`` those padding tiles slot
+        # between vocab segments and silently shift every logit past the
+        # first chunk, which corrupts ``argmax``. So align to the LCM.
+        dram_cores = int(device.dram_grid_size().x) if hasattr(device, "dram_grid_size") else 12
+        num_compute_cores = 8  # matches _dram_matmul_program_config_for(num_cores=8)
+        chunk_align = (tile * dram_cores * tile * num_compute_cores) // math.gcd(
+            tile * dram_cores, tile * num_compute_cores
+        )  # lcm
+
+        # Pad vocab so size_per_device is itself ``chunk_align``-aligned.
+        # That guarantees the residual last chunk is also a multiple of
+        # ``chunk_align`` (since (size_per_device - k*base_chunk) stays
+        # in the lattice if both terms do).
+        per_dev_align = chunk_align * num_devices
+        padded_vocab = math.ceil(self.out_features / per_dev_align) * per_dev_align
         self._padded_vocab = padded_vocab
         size_per_device = padded_vocab // num_devices
         self._size_per_device = size_per_device
@@ -953,10 +975,6 @@ class TTNNDotsOCRDRAMShardedLMHead(TTNNModule):
         # Decide how many chunks per device. Chunks let the per-core L1
         # output buffer stay small in the DRAM-sharded matmul kernel.
         num_chunks = max(1, math.ceil(size_per_device / self.MAX_COLUMNS_PER_CHUNK))
-        # Make every chunk except possibly the last be a multiple of
-        # (tile * dram_cores) so the DRAM-shard math stays tile-aligned.
-        dram_cores = int(device.dram_grid_size().x) if hasattr(device, "dram_grid_size") else 12
-        chunk_align = tile * dram_cores
         base_chunk = math.ceil(size_per_device / num_chunks)
         base_chunk = math.ceil(base_chunk / chunk_align) * chunk_align
         chunk_sizes = []
@@ -966,6 +984,12 @@ class TTNNDotsOCRDRAMShardedLMHead(TTNNModule):
             chunk_sizes.append(take)
             remaining -= take
         chunk_sizes.append(remaining)
+        # Final assertion: every chunk must divide cleanly across both
+        # 12 DRAM banks (weight side) and 8 compute cores (output side).
+        for cn in chunk_sizes:
+            assert (
+                cn % chunk_align == 0
+            ), f"chunk_n={cn} not aligned to lcm(tile*dram_cores, tile*compute_cores)={chunk_align}"
         self._chunk_n_cols_per_device = chunk_sizes
 
         self.tt_weight_chunks = []
