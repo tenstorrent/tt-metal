@@ -427,6 +427,8 @@ class GemmaMLPTTNN:
         self.gate_proj = to_ttnn(weights["mlp.gate_proj.weight"])
         self.up_proj = to_ttnn(weights["mlp.up_proj.weight"])
         self.down_proj = to_ttnn(weights["mlp.down_proj.weight"])
+        self.hidden_size = config.width
+        self.intermediate_size = config.mlp_dim
 
         # Query device grid to size chunks for available cores
         device_grid = device.compute_with_storage_grid_size()
@@ -442,6 +444,67 @@ class GemmaMLPTTNN:
             self.chunk_size = 544
         else:
             self.chunk_size = 256
+
+        # Pre-build 2D BLOCK_SHARDED matmul program configs for the per-chunk
+        # MLP. Pattern is taken from models/demos/bge_large_en/ttnn/ttnn_bge_intermediate.py
+        # and tuned for pi0's shapes. Cache by (M_tiles, K_tiles, N_tiles).
+        self._matmul_pcfg_cache: Dict[Tuple[int, int, int, str], object] = {}
+        # BH Galaxy compute grid is 12x10 = 120 cores. Try full 12x10 first
+        # (uses all compute cores, smallest per_core_N = best L1 fit).
+        # Falls back to 12x8 / 8x8 on smaller devices.
+        if self.grid_size[0] >= 12 and self.grid_size[1] >= 10:
+            self._pcfg_grid = (12, 10)
+        elif self.grid_size[0] >= 12:
+            self._pcfg_grid = (12, 8)
+        else:
+            self._pcfg_grid = (8, 8)
+
+    def _matmul_pcfg(self, m_tiles: int, k_tiles: int, n_tiles: int, activation=None):
+        """Build a MatmulMultiCoreReuseMultiCastProgramConfig (2D BLOCK_SHARDED-style)
+        for the given shape tile counts.
+
+        Returns None if shapes don't fit cleanly — caller falls back to default.
+        """
+        gx, gy = self._pcfg_grid
+        # M must be evenly divisible by grid rows (gy). N must be evenly divisible by grid cols (gx).
+        # Round up to satisfy divisibility; the matmul kernel handles the per-core padding.
+        # For our awkward M=17 case, ceil(17/8)=3 per row, total 24 (wastes ~30% M work).
+        per_core_M = (m_tiles + gy - 1) // gy
+        per_core_N = (n_tiles + gx - 1) // gx
+        if per_core_M == 0 or per_core_N == 0:
+            return None
+        key = (m_tiles, k_tiles, n_tiles, str(activation))
+        if key in self._matmul_pcfg_cache:
+            return self._matmul_pcfg_cache[key]
+
+        # Sweet spot from empirical sweep: in0_block_w=4 with 12x8 grid.
+        # Block 8 overflows L1 CBs (1.36 MB used vs 1.32 MB L1 buffer offset);
+        # block 2 leaves perf on the table (~5 ms slower per inference).
+        in0_block_w = 4
+        while k_tiles % in0_block_w != 0 and in0_block_w > 1:
+            in0_block_w //= 2
+
+        # out_subblock_w * out_subblock_h <= 8 (DST register tile budget)
+        out_subblock_w = min(per_core_N, 8)
+        while out_subblock_w > 1 and per_core_N % out_subblock_w != 0:
+            out_subblock_w -= 1
+        out_subblock_h_budget = max(1, 8 // out_subblock_w)
+        out_subblock_h = min(per_core_M, out_subblock_h_budget)
+        while out_subblock_h > 1 and per_core_M % out_subblock_h != 0:
+            out_subblock_h -= 1
+
+        cfg = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(gx, gy),
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            transpose_mcast=False,
+            fused_activation=activation,
+        )
+        self._matmul_pcfg_cache[key] = cfg
+        return cfg
 
     def forward(self, x) -> ttnn.Tensor:
         """
@@ -508,22 +571,37 @@ class GemmaMLPTTNN:
                 x_chunk = ttnn.to_memory_config(x_chunk, ttnn.DRAM_MEMORY_CONFIG)
                 x_chunk = ttnn.pad(x_chunk, padding=((0, 0), (0, 0), (0, pad_amount), (0, 0)), value=0.0)
 
-            # Gate projection with fused GELU activation (single kernel launch)
-            gate_activated = ttnn.linear(
-                x_chunk,
-                self.gate_proj,
+            # OPTIMIZATION: precomputed program_config for 2D BLOCK_SHARDED matmul.
+            # Cached by (M_tiles, K_tiles, N_tiles) so the same config is reused
+            # across all 18 layers per MLP shape. The pcfg helper returns None for
+            # awkward shapes; we fall back to the default `core_grid` path then.
+            m_tiles = padded_chunk_size // 32
+            k_to_intermediate = self.hidden_size // 32
+            k_to_hidden = self.intermediate_size // 32
+            n_intermediate = self.intermediate_size // 32
+            n_hidden = self.hidden_size // 32
+
+            gate_pcfg = self._matmul_pcfg(
+                m_tiles, k_to_intermediate, n_intermediate, activation=(ttnn.UnaryOpType.GELU, True)
+            )
+            up_pcfg = self._matmul_pcfg(m_tiles, k_to_intermediate, n_intermediate)
+            down_pcfg = self._matmul_pcfg(m_tiles, k_to_hidden, n_hidden)
+
+            common_kwargs = dict(
                 dtype=ttnn.bfloat8_b,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
-                core_grid=self.core_grid,
-                activation="gelu",
             )
-            up = ttnn.linear(
-                x_chunk,
-                self.up_proj,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                core_grid=self.core_grid,
-            )
+
+            if gate_pcfg is not None:
+                gate_activated = ttnn.linear(x_chunk, self.gate_proj, program_config=gate_pcfg, **common_kwargs)
+            else:
+                gate_activated = ttnn.linear(
+                    x_chunk, self.gate_proj, core_grid=self.core_grid, activation="gelu", **common_kwargs
+                )
+            if up_pcfg is not None:
+                up = ttnn.linear(x_chunk, self.up_proj, program_config=up_pcfg, **common_kwargs)
+            else:
+                up = ttnn.linear(x_chunk, self.up_proj, core_grid=self.core_grid, **common_kwargs)
             ttnn.deallocate(x_chunk)
 
             # Element-wise multiply
@@ -532,13 +610,10 @@ class GemmaMLPTTNN:
             ttnn.deallocate(up)
 
             # Down projection
-            output_chunk = ttnn.linear(
-                hidden_out,
-                self.down_proj,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                core_grid=self.core_grid,
-            )
+            if down_pcfg is not None:
+                output_chunk = ttnn.linear(hidden_out, self.down_proj, program_config=down_pcfg, **common_kwargs)
+            else:
+                output_chunk = ttnn.linear(hidden_out, self.down_proj, core_grid=self.core_grid, **common_kwargs)
             ttnn.deallocate(hidden_out)
 
             # Slice back to actual size if padded
