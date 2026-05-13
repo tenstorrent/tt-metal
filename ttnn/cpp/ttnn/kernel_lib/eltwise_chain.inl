@@ -1047,9 +1047,14 @@ ALWI void elem_pack_init() {
 
 template <bool EmitInit, std::size_t I, class ElemT, class... Es>
 ALWI void elem_apply_compute(
-    const ElemT& elem, uint32_t i_outer, uint32_t block_size, uint32_t chain_lane_width, uint32_t n_tiles) {
+    const ElemT& elem,
+    uint32_t i_outer,
+    uint32_t base_tile,
+    uint32_t inner_count,
+    uint32_t chain_lane_width,
+    uint32_t n_tiles) {
     if constexpr (is_pack_tile_op_v<ElemT>) {
-        (void)elem; (void)i_outer; (void)block_size; (void)chain_lane_width; (void)n_tiles;
+        (void)elem; (void)i_outer; (void)base_tile; (void)inner_count; (void)chain_lane_width; (void)n_tiles;
     } else if constexpr (is_cb_reader_op_v<ElemT>) {
         elem.wait_per_tile(i_outer);
         elem.wait_upfront(n_tiles);
@@ -1057,8 +1062,10 @@ ALWI void elem_apply_compute(
             emit_pre_element_transitions<ElemT, I, Es...>();
             ElemT::init();
         }
-        for (uint32_t j = 0; j < block_size; ++j) {
-            elem.exec(i_outer * block_size + j, j * chain_lane_width);
+        // Lane j writes DEST[dst_slot + j * chain_lane_width]; tile index =
+        // base_tile + j (absolute, tail-safe — i_outer * BlockSize, not * inner_count).
+        for (uint32_t j = 0; j < inner_count; ++j) {
+            elem.exec(base_tile + j, j * chain_lane_width);
         }
         elem.pop_per_tile(i_outer);
     } else if constexpr (is_dest_only_op_v<ElemT>) {
@@ -1066,24 +1073,29 @@ ALWI void elem_apply_compute(
             emit_pre_element_transitions<ElemT, I, Es...>();
             ElemT::init();
         }
-        for (uint32_t j = 0; j < block_size; ++j) {
-            elem.exec(i_outer * block_size + j, j * chain_lane_width);
+        for (uint32_t j = 0; j < inner_count; ++j) {
+            elem.exec(base_tile + j, j * chain_lane_width);
         }
     }
 }
 
 template <std::size_t I, class ElemT, class... Es>
 ALWI void elem_apply_pack(
-    const ElemT& elem, uint32_t i_outer, uint32_t block_size, uint32_t chain_lane_width, uint32_t n_tiles) {
+    const ElemT& elem,
+    uint32_t i_outer,
+    uint32_t base_tile,
+    uint32_t inner_count,
+    uint32_t chain_lane_width,
+    uint32_t n_tiles) {
     if constexpr (is_pack_tile_op_v<ElemT>) {
         elem.reserve_per_tile(i_outer);
         elem.reserve_upfront(n_tiles);
-        for (uint32_t j = 0; j < block_size; ++j) {
-            elem.exec(i_outer * block_size + j, j * chain_lane_width);
+        for (uint32_t j = 0; j < inner_count; ++j) {
+            elem.exec(base_tile + j, j * chain_lane_width);
         }
         elem.push_per_tile(i_outer);
     } else {
-        (void)elem; (void)i_outer; (void)block_size; (void)chain_lane_width; (void)n_tiles;
+        (void)elem; (void)i_outer; (void)base_tile; (void)inner_count; (void)chain_lane_width; (void)n_tiles;
     }
 }
 
@@ -1091,14 +1103,16 @@ template <bool EmitInit, std::size_t... Is, class... Es>
 ALWI void apply_compute_phase(
     std::index_sequence<Is...>,
     uint32_t i_outer,
-    uint32_t block_size,
+    uint32_t base_tile,
+    uint32_t inner_count,
     uint32_t chain_lane_width,
     uint32_t n_tiles,
     Es&... elts) {
     auto run_one = [&](auto idx_const, auto& elem) {
         constexpr std::size_t II = decltype(idx_const)::value;
         using ElemT = std::remove_reference_t<decltype(elem)>;
-        elem_apply_compute<EmitInit, II, ElemT, Es...>(elem, i_outer, block_size, chain_lane_width, n_tiles);
+        elem_apply_compute<EmitInit, II, ElemT, Es...>(
+            elem, i_outer, base_tile, inner_count, chain_lane_width, n_tiles);
     };
     (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
 }
@@ -1107,14 +1121,15 @@ template <std::size_t... Is, class... Es>
 ALWI void apply_pack_phase(
     std::index_sequence<Is...>,
     uint32_t i_outer,
-    uint32_t block_size,
+    uint32_t base_tile,
+    uint32_t inner_count,
     uint32_t chain_lane_width,
     uint32_t n_tiles,
     Es&... elts) {
     auto run_one = [&](auto idx_const, auto& elem) {
         constexpr std::size_t II = decltype(idx_const)::value;
         using ElemT = std::remove_reference_t<decltype(elem)>;
-        elem_apply_pack<II, ElemT, Es...>(elem, i_outer, block_size, chain_lane_width, n_tiles);
+        elem_apply_pack<II, ElemT, Es...>(elem, i_outer, base_tile, inner_count, chain_lane_width, n_tiles);
     };
     (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
 }
@@ -1202,14 +1217,14 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
     // `n_tiles - i_outer * block_size`.
     for (uint32_t i_outer = 0; i_outer * block_size < n_tiles; ++i_outer) {
         const uint32_t base_tile = i_outer * block_size;
-        const uint32_t this_iter_size =
+        const uint32_t inner_count =
             (base_tile + block_size <= n_tiles) ? block_size : (n_tiles - base_tile);
         tile_regs_acquire();
         detail::apply_compute_phase<emit_init_per_tile>(
-            IdxSeq{}, i_outer, this_iter_size, chain_lane_w, n_tiles, elts...);
+            IdxSeq{}, i_outer, base_tile, inner_count, chain_lane_w, n_tiles, elts...);
         tile_regs_commit();
         tile_regs_wait();
-        detail::apply_pack_phase(IdxSeq{}, i_outer, this_iter_size, chain_lane_w, n_tiles, elts...);
+        detail::apply_pack_phase(IdxSeq{}, i_outer, base_tile, inner_count, chain_lane_w, n_tiles, elts...);
         tile_regs_release();
     }
 

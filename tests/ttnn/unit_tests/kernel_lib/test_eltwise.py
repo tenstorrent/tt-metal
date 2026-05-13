@@ -870,6 +870,27 @@ def test_1_copy_upfront_block_iter(device, upfront_n, fp32_dest_acc):
 
 
 # =============================================================================
+# AutoBlock::On — chain processes BlockSize tiles per outer iter via DEST lanes
+# =============================================================================
+
+
+@pytest.mark.parametrize("num_tiles", [1, 8, 16, 17, 64, 65])
+@pytest.mark.parametrize("fp32_dest_acc", [False, True])
+def test_auto_block_on(device, num_tiles, fp32_dest_acc):
+    out, golden = _run_unary_chain(
+        device,
+        num_tiles,
+        kernel_path="ttnn/cpp/ttnn/kernel_lib/tests/eltwise/kernels/auto_block_on.cpp",
+        torch_op=torch.exp,
+        input_range=(-2.0, 2.0),
+        fp32_dest_acc=fp32_dest_acc,
+        cb_pages=num_tiles * 2,
+        single_core=True,
+    )
+    _check_pcc(out, golden, 0.9999, f"auto_block_on n={num_tiles} fp32_acc={fp32_dest_acc}")
+
+
+# =============================================================================
 # Block-mode binary FPU (multi-tile DEST scratch)
 # =============================================================================
 
