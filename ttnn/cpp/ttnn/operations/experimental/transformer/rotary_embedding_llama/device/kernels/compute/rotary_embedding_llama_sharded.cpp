@@ -9,6 +9,8 @@
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
 
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
 
@@ -66,37 +68,78 @@ void kernel_main() {
         cb_push_back(rotated_in_interm_cb, Wt);
         cb_wait_front(rotated_in_interm_cb, Wt);
 
-        mul_bcast_rows_init_short(rotated_in_interm_cb, sin_cb);
-        ACQ();
-        for (uint32_t j = 0; j < Wt; ++j) {
-            // sin_interim = rotated * sin
-            mul_tiles_bcast<BroadcastType::ROW>(rotated_in_interm_cb, sin_cb, j, j, j);
-            pack_tile(j, sin_interm_cb, j);
-        }
-        REL();
+        // sin_interim = rotated * sin   (ROW-bcast mul over Wt tiles)
+        // Migrated: streaming BinaryFpu + PackTile. All input/output CBs are
+        // caller-managed (reserved at top of ht-loop, popped/pushed below) so the
+        // chain runs NoWaitNoPop on inputs and NoReserveNoPush on the pack side.
+        compute_kernel_lib::eltwise_chain(
+            Wt,
+            compute_kernel_lib::BinaryFpu<
+                rotated_in_interm_cb,
+                sin_cb,
+                sin_interm_cb,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::Row,
+                compute_kernel_lib::BinaryDataFormatReconfig::None,
+                compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
+                compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
+                compute_kernel_lib::CbIndexMode::BlockIter,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::CbIndexMode::BlockIter>{},
+            compute_kernel_lib::PackTile<
+                sin_interm_cb,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::PackTilePolicy::NoReserveNoPush,
+                compute_kernel_lib::PackTileIndexMode::BlockIter>{});
         cb_push_back(sin_interm_cb, Wt);
         cb_pop_front(rotated_in_interm_cb, Wt);
 
-        ACQ();
-        for (uint32_t j = 0; j < Wt; ++j) {
-            // cos_interim = x * cos
-            mul_tiles_bcast<BroadcastType::ROW>(in_cb, cos_cb, j, j, j);
-            pack_tile(j, cos_interm_cb, j);
-        }
-        REL();
+        // cos_interim = x * cos   (ROW-bcast mul over Wt tiles)
+        compute_kernel_lib::eltwise_chain(
+            Wt,
+            compute_kernel_lib::BinaryFpu<
+                in_cb,
+                cos_cb,
+                cos_interm_cb,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::Row,
+                compute_kernel_lib::BinaryDataFormatReconfig::None,
+                compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
+                compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
+                compute_kernel_lib::CbIndexMode::BlockIter,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::CbIndexMode::BlockIter>{},
+            compute_kernel_lib::PackTile<
+                cos_interm_cb,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::PackTilePolicy::NoReserveNoPush,
+                compute_kernel_lib::PackTileIndexMode::BlockIter>{});
         cb_push_back(cos_interm_cb, Wt);
         cb_pop_front(in_cb, Wt);  // Done with input
 
         cb_wait_front(sin_interm_cb, Wt);
         cb_wait_front(cos_interm_cb, Wt);
-        add_tiles_init(cos_interm_cb, sin_interm_cb);
-        ACQ();
-        for (uint32_t j = 0; j < Wt; ++j) {
-            // out = cos_interim + sin_interim
-            add_tiles(cos_interm_cb, sin_interm_cb, j, j, j);
-            pack_tile(j, out_cb, j);
-        }
-        REL();
+
+        // out = cos_interim + sin_interim   (eltwise add over Wt tiles)
+        compute_kernel_lib::eltwise_chain(
+            Wt,
+            compute_kernel_lib::BinaryFpu<
+                cos_interm_cb,
+                sin_interm_cb,
+                out_cb,
+                compute_kernel_lib::BinaryFpuOp::Add,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::None,
+                compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
+                compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
+                compute_kernel_lib::CbIndexMode::BlockIter,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::CbIndexMode::BlockIter>{},
+            compute_kernel_lib::PackTile<
+                out_cb,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::PackTilePolicy::NoReserveNoPush,
+                compute_kernel_lib::PackTileIndexMode::BlockIter>{});
         cb_push_back(out_cb, Wt);
         cb_pop_front(sin_interm_cb, Wt);
         cb_pop_front(cos_interm_cb, Wt);
