@@ -368,13 +368,14 @@ def build_filtered_dit_kwargs_for_handler(
     return filtered
 
 
-def handler_prepare_condition_tensors(
+def handler_prepare_condition_payload(
     dit_handler: Any,
     filtered_generate_kwargs: dict[str, Any],
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, torch.Tensor]:
+) -> tuple[dict[str, Any], int]:
     """
     Run the same early path as ``AceStepHandler.generate_music`` through
-    ``preprocess_batch`` and ``model.prepare_condition`` (no diffusion).
+    ``preprocess_batch`` and return the unpacked payload before
+    ``model.prepare_condition`` (no diffusion).
     """
     progress = dit_handler._resolve_generate_music_progress(filtered_generate_kwargs.get("progress"))
     readiness = dit_handler._validate_generate_music_readiness()
@@ -504,6 +505,20 @@ def handler_prepare_condition_tensors(
     processed = dit_handler.preprocess_batch(batch)
     payload = dit_handler._unpack_service_processed_data(processed)
 
+    frames = int(payload["src_latents"].shape[1])
+    return payload, frames
+
+
+def handler_prepare_condition_tensors(
+    dit_handler: Any,
+    filtered_generate_kwargs: dict[str, Any],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, torch.Tensor]:
+    """
+    Run the same early path as ``AceStepHandler.generate_music`` through
+    ``preprocess_batch`` and ``model.prepare_condition`` (no diffusion).
+    """
+    payload, frames = handler_prepare_condition_payload(dit_handler, filtered_generate_kwargs)
+
     dit_backend = (
         "MLX (native)"
         if (getattr(dit_handler, "use_mlx_dit", False) and getattr(dit_handler, "mlx_decoder", None) is not None)
@@ -532,7 +547,6 @@ def handler_prepare_condition_tensors(
             precomputed_lm_hints_25Hz=payload["precomputed_lm_hints_25Hz"],
         )
 
-    frames = int(payload["src_latents"].shape[1])
     null_emb = getattr(dit_handler.model, "null_condition_emb", None)
     if null_emb is None:
         raise RuntimeError("null_condition_emb missing on handler.model")
