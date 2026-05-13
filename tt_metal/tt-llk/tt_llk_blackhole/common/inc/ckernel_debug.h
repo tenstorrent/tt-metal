@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "ckernel_defs.h"
 #include "ckernel_dest.h"
 
 // Debug bus and register array dump
@@ -103,9 +104,7 @@ typedef union
 template <ThreadId thread_id>
 inline void dbg_thread_halt()
 {
-    static_assert(
-        (thread_id == ThreadId::MathThreadId) || (thread_id == ThreadId::UnpackThreadId) || (thread_id == ThreadId::PackThreadId),
-        "Invalid thread id set in dbg_wait_for_thread_idle(...)");
+    static_assert(IS_TRISC_THREAD<thread_id>, "Invalid thread id set in dbg_wait_for_thread_idle(...)");
 
     if constexpr (thread_id == ThreadId::UnpackThreadId)
     {
@@ -132,9 +131,7 @@ inline void dbg_thread_halt()
 template <ThreadId thread_id>
 inline void dbg_thread_unhalt()
 {
-    static_assert(
-        (thread_id == ThreadId::MathThreadId) || (thread_id == ThreadId::UnpackThreadId) || (thread_id == ThreadId::PackThreadId),
-        "Invalid thread id set in dbg_wait_for_thread_idle(...)");
+    static_assert(IS_TRISC_THREAD<thread_id>, "Invalid thread id set in dbg_wait_for_thread_idle(...)");
 
     if constexpr (thread_id == ThreadId::MathThreadId)
     {
@@ -174,9 +171,7 @@ constexpr bool dbg_dest_fmt_supported(DataFormat fmt)
 template <ThreadId thread_id = ThreadId::MathThreadId>
 inline void dbg_dump_dest_tile(DataFormat fmt, std::uint32_t tile_id, void *dst_buffer, bool enable_swizzle = true)
 {
-    static_assert(
-        thread_id == ThreadId::MathThreadId || thread_id == ThreadId::PackThreadId || thread_id == ThreadId::UnpackThreadId,
-        "Thread must be UnpackThreadId, MathThreadId, or PackThreadId");
+    static_assert(IS_TRISC_THREAD<thread_id>, "dbg_dump_dest_tile: invalid thread id");
 
     LLK_ASSERT(dbg_dest_fmt_supported(fmt), "dbg_dump_dest_tile: unsupported DataFormat");
 
@@ -234,9 +229,7 @@ inline void dbg_dump_dest_tile(DataFormat fmt, std::uint32_t tile_id, void *dst_
 template <ThreadId thread_id = ThreadId::MathThreadId>
 inline void dbg_write_dest_tile(DataFormat fmt, std::uint32_t tile_id, const void *src_buffer, bool enable_swizzle = true)
 {
-    static_assert(
-        thread_id == ThreadId::MathThreadId || thread_id == ThreadId::PackThreadId || thread_id == ThreadId::UnpackThreadId,
-        "Thread must be UnpackThreadId, MathThreadId, or PackThreadId");
+    static_assert(IS_TRISC_THREAD<thread_id>, "dbg_write_dest_tile: invalid thread id");
 
     LLK_ASSERT(dbg_dest_fmt_supported(fmt), "dbg_write_dest_tile: unsupported DataFormat");
 
