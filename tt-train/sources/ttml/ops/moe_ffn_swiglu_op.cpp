@@ -13,8 +13,10 @@
 #include "autograd/graph_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/full/full.hpp"
 
 namespace ttml::ops {
 
@@ -96,20 +98,18 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
     gate_proj_parts.reserve(num_experts);
     up_proj_parts.reserve(num_experts);
 
-    // Pre-allocate the full output tensor [T_cap, H]. Per-expert pad rows
-    // (between offsets[e]+counts[e] and offsets[e+1]) are zeroed implicitly by the
-    // matmul: those input rows are zero in `grouped`, so the matmul output rows are
-    // zero. We only have to zero-init when there's TRAILING SLACK (offsets[-1] < T_cap),
-    // since no matmul writes those rows.
-    const bool has_trailing_slack = (offsets_host.back() < token_capacity);
-    auto y = has_trailing_slack ? ttml::core::zeros(
-                                      ttnn::Shape({1U, 1U, token_capacity, hidden_dim}),
-                                      &ttml::autograd::ctx().get_device(),
-                                      grouped_value.dtype())
-                                : ttml::core::empty(
-                                      ttnn::Shape({1U, 1U, token_capacity, hidden_dim}),
-                                      &ttml::autograd::ctx().get_device(),
-                                      grouped_value.memory_config());
+    // Pre-allocate output for just the used rows [0, offsets[-1]); per-expert pad rows
+    // between offsets[e]+counts[e] and offsets[e+1] get zeroed implicitly because
+    // grouped's pad rows are zero and the matmul of a zero input row is a zero output.
+    // If offsets[-1] < T_cap (trailing slack from worst-case allocation), we append a
+    // single moreh_full zero tensor at the end and concat once. This avoids the
+    // 256-MB-scale ttml::core::zeros that an output-shaped [T_cap, H] tensor would need.
+    const uint32_t used_rows = offsets_host.back();
+    const bool has_trailing_slack = (used_rows < token_capacity);
+    auto y = ttml::core::empty(
+        ttnn::Shape({1U, 1U, used_rows, hidden_dim}),
+        &ttml::autograd::ctx().get_device(),
+        grouped_value.memory_config());
 
     bool any_nonempty = false;
     for (uint32_t e = 0; e < num_experts; ++e) {
@@ -167,6 +167,20 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
 
     if (!any_nonempty) {
         throw std::runtime_error("moe_ffn_swiglu_fw: all experts empty (token_capacity == 0).");
+    }
+
+    // Pad the trailing slack rows (used_rows..T_cap) with zeros. moreh_full allocates only
+    // the slack-sized tensor (cheap); a single 2-part concat assembles the final [T_cap, H].
+    if (has_trailing_slack) {
+        const uint32_t slack_rows = token_capacity - used_rows;
+        auto slack_zeros = ttnn::moreh_full(
+            ttnn::SmallVector<uint32_t>{1U, 1U, slack_rows, hidden_dim},
+            0.0F,
+            &ttml::autograd::ctx().get_device(),
+            grouped_value.dtype(),
+            grouped_value.layout(),
+            grouped_value.memory_config());
+        y = ttnn::concat(std::vector<ttnn::Tensor>{y, slack_zeros}, /*dim=*/2);
     }
 
     auto out = autograd::create_tensor(y);
