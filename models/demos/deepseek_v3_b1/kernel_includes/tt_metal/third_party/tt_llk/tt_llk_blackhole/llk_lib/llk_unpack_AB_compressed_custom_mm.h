@@ -28,9 +28,9 @@ using namespace ckernel::unpacker;
 
 inline void _llk_unpack_AB_compressed_custom_mm_mop_config_() {
     constexpr std::uint8_t set_dvadlid = 1;
-    load_replay_buf(0, 25, [] {
-        // Bfp8
-        TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
+    load_replay_buf(0, 27, [] {
+        // Bfp8 (0)
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
         TTI_WRCFG(p_gpr_unpack::PERF_UNPACK_NUM_TILES_3, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32);
         TTI_NOP;
         TTI_UNPACR_COMMON(SrcA, 0b00000000, set_dvadlid);
@@ -38,8 +38,8 @@ inline void _llk_unpack_AB_compressed_custom_mm_mop_config_() {
         TTI_NOP;
         TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
         TTI_UNPACR_COMMON(SrcB, 0b00110100, set_dvadlid);
-        // Bfp4
-        TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
+        // Bfp4 (8)
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
         TTI_WRCFG(p_gpr_unpack::PERF_UNPACK_NUM_TILES_2, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32);
         TTI_NOP;
         TTI_UNPACR_COMMON(SrcA, 0b00000000, set_dvadlid);
@@ -47,8 +47,8 @@ inline void _llk_unpack_AB_compressed_custom_mm_mop_config_() {
         TTI_NOP;
         TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
         TTI_UNPACR_COMMON(SrcB, 0b00110100, set_dvadlid);
-        // Bfp2
-        TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
+        // Bfp2 (16)
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
         TTI_WRCFG(p_gpr_unpack::PERF_UNPACK_NUM_TILES_1, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32);
         TTI_NOP;
         TTI_UNPACR_COMMON(SrcA, 0b00000000, set_dvadlid);
@@ -56,7 +56,10 @@ inline void _llk_unpack_AB_compressed_custom_mm_mop_config_() {
         TTI_NOP;
         TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
         TTI_UNPACR_COMMON(SrcB, 0b00110100, set_dvadlid);
-        TTI_UNPACR_NOP(SrcA, 0, 0, set_dvadlid, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
+        // Bfp0 (24)
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
+        TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
+        TTI_UNPACR_COMMON(SrcB, 0b00110100, set_dvadlid);
     });
 }
 
@@ -80,8 +83,8 @@ constexpr std::uint32_t get_replay_insn_for_combo(const std::uint8_t combo) {
     std::uint8_t curr = (combo >> 3) & 0b11;
 
     bool use_b = (combo >> 2) & 0b1;
-    bool need_reconfig = prev != curr;
-    bool need_stall = need_reconfig && (prev == 1 || curr == 1);
+    bool need_reconfig = /*prev != curr*/ true;
+    bool need_stall = /*need_reconfig && (prev == 1 || curr == 1)*/ true;
 
     std::uint32_t start_idx = curr == 3 ? 0 : curr == 2 ? 8 : 16;
     std::uint32_t start_offset = 3;
@@ -101,9 +104,9 @@ constexpr std::uint32_t get_replay_insn_for_combo(const std::uint8_t combo) {
 
     if (curr == 0) {
         if (use_b) {
-            return lltt::replay_insn(22, 2);
+            return lltt::replay_insn(24, 3);
         } else {
-            return TT_OP_NOP;
+            return lltt::replay_insn(24, 1);
         }
     }
 
@@ -158,6 +161,8 @@ inline void _llk_unpack_AB_compressed_custom_mm_(
         get_replay_insn_for_combo(0b111'10),  // 0b111'10 bfp4 to bfp8 with b
         get_replay_insn_for_combo(0b111'11),  // 0b111'11 bfp8 to bfp8 with b
     };
+
+    asm("fence" ::: "memory");
 
     volatile uint* cfg = get_cfg_pointer();
 
