@@ -120,6 +120,10 @@ public:
 
     // Returns true if the CQ is in use (has had commands enqueued).
     virtual bool in_use() { return false; }
+
+    virtual void wait_for_completion(bool) {}
+    // May only be called after wait_for_completion has been called on both command queues on the device.
+    virtual void finish_and_reset_in_use() {}
 };
 
 }  // namespace tt::tt_metal::distributed
