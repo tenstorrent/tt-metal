@@ -418,7 +418,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
         final_norm = TTNNDistributedRMSNorm.from_torch(hf_model.model.norm)
         final_norm._unique_name = "model.norm"
 
-        # AllReduced gives full vocab on each device for argmax
+        # AllReduced gives full vocab on each device for argmax.
         lm_head = TTNNLinearLLamaIColShardedWAllReduced.from_torch(hf_model.lm_head)
         lm_head._unique_name = "lm_head"
 

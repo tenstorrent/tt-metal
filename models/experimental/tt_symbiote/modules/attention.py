@@ -96,6 +96,7 @@ class TTNNPagedAttentionKVCache(Cache):
         config: PagedAttentionConfig,
         device=None,
         dtype: torch.dtype = torch.bfloat16,
+        tt_cache_dtype=None,
     ):
         try:
             # HF's Cache class has a non-trivial __init__, so we need to call super().__init__() with the expected arguments
@@ -108,6 +109,14 @@ class TTNNPagedAttentionKVCache(Cache):
         self.head_dim = head_dim
         self.config = config
         self.dtype = dtype
+        # On-device cache dtype: BF16 by default for backward compat. Models
+        # that can tolerate the BFP8 quantization noise on K/V cache (e.g.
+        # dots.ocr in TP=2) override this to ``ttnn.bfloat8_b`` to halve the
+        # K/V DRAM read bandwidth in ``paged_sdpa_decode``. The kernel still
+        # accepts BF16 *input* tensors (paged_update_cache_device_operation
+        # only allows BF16/FP32 input) and converts internally to the cache
+        # dtype on write.
+        self._tt_cache_dtype = tt_cache_dtype if tt_cache_dtype is not None else ttnn.bfloat16
         self._device = device
         self._seq_lengths: list[int] = [0] * num_layers
         self._seen_tokens = 0
@@ -141,14 +150,14 @@ class TTNNPagedAttentionKVCache(Cache):
         for layer_idx in range(self.num_layers):
             self._tt_key_cache[layer_idx] = ttnn.zeros(
                 cache_shape,
-                dtype=ttnn.bfloat16,
+                dtype=self._tt_cache_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             self._tt_value_cache[layer_idx] = ttnn.zeros(
                 cache_shape,
-                dtype=ttnn.bfloat16,
+                dtype=self._tt_cache_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,

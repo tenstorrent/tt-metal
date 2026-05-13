@@ -142,6 +142,9 @@ class TTNNDotsOCRAttention(TTNNModule):
                 fp32_dest_acc_en=False,
                 packer_l1_acc=True,
             )
+            # Decode SDPA feeds token logits directly; LoFi is fast but can
+            # perturb generation into invalid text. Keep HiFi2 for decode
+            # quality while retaining the faster approximate softmax path.
             self.sdpa.decode_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
                 math_approx_mode=True,
@@ -346,11 +349,9 @@ class TTNNDotsOCRAttention(TTNNModule):
 
         tile_size = 32
         shard_h = ((self.num_key_value_heads + tile_size - 1) // tile_size) * tile_size
-
-        core_grid = ttnn.CoreGrid(y=1, x=batch_size)
         shard_cfg = ttnn.create_sharded_memory_config(
             shape=(shard_h, self.head_dim),
-            core_grid=core_grid,
+            core_grid=ttnn.CoreGrid(y=1, x=batch_size),
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         )
