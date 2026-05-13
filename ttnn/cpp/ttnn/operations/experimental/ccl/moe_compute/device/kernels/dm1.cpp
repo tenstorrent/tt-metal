@@ -86,13 +86,7 @@ void kernel_main() {
     const uint32_t num_w0_w1_tiles_w = shard_tiles_lut[ring_core_id];
     const uint32_t num_w2_tiles_w = w2_shard_tiles_lut[ring_core_id];
 
-    // Derived ring constants
-    constexpr uint32_t in2_tiles_per_step_raw = (Nt + num_cores - 1) / num_cores;
-    constexpr uint32_t in2_tiles_per_step = (in2_tiles_per_step_raw + 1) & ~1u;
-    constexpr uint32_t max_w2_tiles_per_core = (Ht + num_cores - 1) / num_cores;
-    constexpr uint32_t num_a2a_iters =
-        (max_w2_tiles_per_core + moe_ring::W2_TILES_PER_A2A_ITER_W - 1) / moe_ring::W2_TILES_PER_A2A_ITER_W;
-    constexpr uint32_t w2_tiles_per_expert_w = num_a2a_iters * moe_ring::W2_TILES_PER_A2A_ITER_W;
+    using Cfg = moe_ring::MoeRingConfig<Ht, Nt, num_cores, has_bias>;
 
     // constants needed for writing to combine sharded output
     constexpr uint32_t shard_offset_per_expert_bytes =
@@ -100,7 +94,7 @@ void kernel_main() {
     cb_reserve_back(cb_s2c_in, 1);
     const uint32_t output_base_l1_addr = get_write_ptr(cb_s2c_in);
     cb_push_back(cb_s2c_in, 1);
-    constexpr uint32_t source_width_tiles = w2_tiles_per_expert_w;
+    constexpr uint32_t source_width_tiles = Cfg::w2_tiles_per_expert_w;
     const uint32_t output_width_tiles_core = w2_shard_tiles_lut[ring_core_id];
     const uint32_t width_tile_base = w2_offset_lut[ring_core_id];
     constexpr uint32_t RING_CORES_PER_COMBINE_COL = num_cores / width_shard_dim;
@@ -112,7 +106,7 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     constexpr uint32_t num_a2a_steps_per_iter = num_cores;
 
-    constexpr uint32_t tiles_per_step = in2_tiles_per_step;
+    constexpr uint32_t tiles_per_step = Cfg::in2_tiles_per_step;
 
     //-------------------------------------------------------------------------
     // Ring NoC setup
@@ -229,7 +223,7 @@ void kernel_main() {
 
             // Take the data in cb_s2c_in2 and send it to the next core in the ring
             // Ring synchronization: all cores participate regardless of whether they had CB work
-            for (uint32_t i = 0; i < num_a2a_iters; ++i) {
+            for (uint32_t i = 0; i < Cfg::num_a2a_iters; ++i) {
                 for (uint32_t step = 0; step < num_a2a_steps_per_iter; ++step) {
                     // Wait for current data to be ready in cb_s2c_in2
                     while ((*my_semaphore_ptr) < semaphore_value) {

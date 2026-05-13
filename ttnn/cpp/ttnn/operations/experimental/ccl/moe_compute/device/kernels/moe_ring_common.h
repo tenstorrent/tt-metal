@@ -100,4 +100,28 @@ constexpr ShardLUT<n_cores> make_w2_offset_lut() {
     return lut;
 }
 
+//-----------------------------------------------------------------------------
+// Derived ring constants — single source of truth for compute, dm0, dm1.
+//-----------------------------------------------------------------------------
+template <uint32_t Ht, uint32_t Nt, uint32_t num_cores, bool has_bias>
+struct MoeRingConfig {
+    // W0/W1
+    static constexpr uint32_t w0_w1_dram_tiles_h = has_bias ? Ht + 1 : Ht;
+    static constexpr uint32_t w0_w1_blocks_per_col =
+        (w0_w1_dram_tiles_h + W0_W1_BLOCK_TILES_H - 1) / W0_W1_BLOCK_TILES_H;
+    static constexpr uint32_t in2_tiles_per_step = (((Nt + num_cores - 1) / num_cores) + 1) & ~1u;
+    static constexpr uint32_t w0_w1_blocks_per_expert = w0_w1_blocks_per_col * in2_tiles_per_step / 2;
+
+    // W2
+    static constexpr uint32_t max_w2_tiles_per_core = (Ht + num_cores - 1) / num_cores;
+    static constexpr uint32_t num_a2a_iters =
+        (max_w2_tiles_per_core + W2_TILES_PER_A2A_ITER_W - 1) / W2_TILES_PER_A2A_ITER_W;
+    static constexpr uint32_t w2_tiles_per_expert_w = num_a2a_iters * W2_TILES_PER_A2A_ITER_W;
+    static constexpr uint32_t w2_dram_tiles_h = has_bias ? Nt + 1 : Nt;
+    static constexpr uint32_t w2_tiles_per_expert_h =
+        ((w2_dram_tiles_h + W2_TILES_PER_A2A_ITER_H - 1) / W2_TILES_PER_A2A_ITER_H) * W2_TILES_PER_A2A_ITER_H;
+    static constexpr uint32_t w2_blocks_per_expert =
+        w2_tiles_per_expert_w * w2_tiles_per_expert_h / (W2_TXNS_PER_BLOCK * W2_TILES_PER_TXN);
+};
+
 }  // namespace moe_ring

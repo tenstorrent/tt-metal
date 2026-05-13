@@ -126,39 +126,23 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     constexpr uint32_t w0_w1_txns_per_block = moe_ring::W0_W1_TXNS_PER_BLOCK;
     constexpr uint32_t w0_w1_tiles_per_txn = moe_ring::W0_W1_TILES_PER_TXN;
-    constexpr uint32_t w0_w1_block_tiles_h = moe_ring::W0_W1_BLOCK_TILES_H;
     constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28
 
-    constexpr uint32_t w0_w1_dram_tiles_h = has_bias ? Ht + 1 : Ht;
-    constexpr uint32_t w0_w1_blocks_per_two_elt_tile =
-        (w0_w1_dram_tiles_h + w0_w1_block_tiles_h - 1) / w0_w1_block_tiles_h;
-    constexpr uint32_t in2_tiles_per_step_raw = (Nt + num_cores - 1) / num_cores;
-    constexpr uint32_t in2_tiles_per_step = (in2_tiles_per_step_raw + 1) & ~1u;
-    constexpr uint32_t w0_w1_blocks_per_expert = w0_w1_blocks_per_two_elt_tile * in2_tiles_per_step / 2;
+    using Cfg = moe_ring::MoeRingConfig<Ht, Nt, num_cores, has_bias>;
 
-    // W2 reading constants
+    // W2 reading constants (base-constant aliases only; derived values come from Cfg)
     constexpr auto w2_tiles_per_iter_w = moe_ring::W2_TILES_PER_A2A_ITER_W;
-    constexpr uint32_t max_w2_tiles_per_core = (Ht + num_cores - 1) / num_cores;
-    constexpr uint32_t num_a2a_iters = (max_w2_tiles_per_core + w2_tiles_per_iter_w - 1) / w2_tiles_per_iter_w;
-    constexpr auto w2_tiles_per_expert_w = num_a2a_iters * w2_tiles_per_iter_w;
-    constexpr uint32_t w2_txns_per_block = moe_ring::W2_TXNS_PER_BLOCK;
-    constexpr uint32_t w2_tiles_per_txn = moe_ring::W2_TILES_PER_TXN;
-    constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 14 * 2 = 28
-    constexpr uint32_t w2_dram_tiles_h = has_bias ? Nt + 1 : Nt;
+    constexpr uint32_t w2_tiles_per_block = moe_ring::W2_TILES_PER_TXN * moe_ring::W2_TXNS_PER_BLOCK;  // 14 * 2 = 28
     constexpr uint32_t w2_tiles_per_iter_h = moe_ring::W2_TILES_PER_A2A_ITER_H;
-    constexpr uint32_t w2_tiles_per_expert_h =
-        ((w2_dram_tiles_h + w2_tiles_per_iter_h - 1) / w2_tiles_per_iter_h) * w2_tiles_per_iter_h;
-    constexpr uint32_t w2_blocks_per_expert =
-        w2_tiles_per_expert_w * w2_tiles_per_expert_h / (moe_ring::W2_TXNS_PER_BLOCK * moe_ring::W2_TILES_PER_TXN);
 
     //-------------------------------------------------------------------------
     // Ring setup
     //-------------------------------------------------------------------------
-    constexpr uint32_t w2_blocks_per_a2a_iter = w2_blocks_per_expert / num_a2a_iters;
+    constexpr uint32_t w2_blocks_per_a2a_iter = Cfg::w2_blocks_per_expert / Cfg::num_a2a_iters;
 
     constexpr uint32_t num_a2a_steps_per_iter = num_cores;
 
-    constexpr uint32_t tiles_per_step = in2_tiles_per_step;
+    constexpr uint32_t tiles_per_step = Cfg::in2_tiles_per_step;
 
     //-------------------------------------------------------------------------
     // Compute
@@ -252,7 +236,7 @@ void kernel_main() {
 
                 tile_regs_acquire();
                 [[maybe_unused]] uint32_t k_tracker = 0;
-                for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
+                for (uint32_t block_id = 0; block_id < Cfg::w0_w1_blocks_per_col; ++block_id) {
                     cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
 
                     for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
@@ -326,7 +310,7 @@ void kernel_main() {
             //---------------------------------------------------------------------
 
             cb_reserve_back(cb_c2s_out, num_w0_w1_tiles_h);
-            for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
+            for (uint32_t iter = 0; iter < Cfg::num_a2a_iters; ++iter) {
                 uint32_t src_core = ring_core_id;
                 uint32_t dm1_tiles_remaining = shard_tiles_lut[ring_core_id];
                 cb_wait_front(cb_w2c_rdy, 1);
@@ -388,10 +372,11 @@ void kernel_main() {
                 tile_regs_commit();
 
                 tile_regs_wait();
-                pack_untilize_dest_init</*block_ct_dim=*/w2_tiles_per_iter_w, /*full_ct_dim=*/w2_tiles_per_expert_w>(
-                    cb_c2s_out);
+                pack_untilize_dest_init<
+                    /*block_ct_dim=*/w2_tiles_per_iter_w,
+                    /*full_ct_dim=*/Cfg::w2_tiles_per_expert_w>(cb_c2s_out);
 
-                pack_untilize_dest</*block_ct_dim=*/w2_tiles_per_iter_w, /*full_ct_dim=*/w2_tiles_per_expert_w>(
+                pack_untilize_dest</*block_ct_dim=*/w2_tiles_per_iter_w, /*full_ct_dim=*/Cfg::w2_tiles_per_expert_w>(
                     cb_c2s_out, /*block_rt_dim=*/1, /*block_c_index=*/iter);
                 pack_untilize_uninit(cb_c2s_out);
 

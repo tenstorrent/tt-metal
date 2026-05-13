@@ -29,25 +29,7 @@ void kernel_main() {
     constexpr uint32_t Nt = get_named_compile_time_arg_val("intermediate_tiles");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
 
-    // Derived ring constants
-    constexpr uint32_t w0_w1_dram_tiles_h = has_bias ? Ht + 1 : Ht;
-    constexpr uint32_t w2_dram_tiles_h = has_bias ? Nt + 1 : Nt;
-
-    constexpr uint32_t in2_tiles_per_step_raw = (Nt + num_cores - 1) / num_cores;
-    constexpr uint32_t in2_tiles_per_step = (in2_tiles_per_step_raw + 1) & ~1u;
-    constexpr uint32_t w0_w1_block_tiles_h_c = moe_ring::W0_W1_BLOCK_TILES_H;  // = 7
-    constexpr uint32_t w0_w1_blocks_per_col = (w0_w1_dram_tiles_h + w0_w1_block_tiles_h_c - 1) / w0_w1_block_tiles_h_c;
-    constexpr uint32_t w0_w1_blocks_per_expert_c = w0_w1_blocks_per_col * in2_tiles_per_step / 2;
-
-    constexpr uint32_t max_w2_tiles_per_core = (Ht + num_cores - 1) / num_cores;
-    constexpr uint32_t num_a2a_iters =
-        (max_w2_tiles_per_core + moe_ring::W2_TILES_PER_A2A_ITER_W - 1) / moe_ring::W2_TILES_PER_A2A_ITER_W;
-    constexpr uint32_t w2_tiles_per_expert_w = num_a2a_iters * moe_ring::W2_TILES_PER_A2A_ITER_W;
-    constexpr uint32_t w2_tiles_per_iter_h = moe_ring::W2_TILES_PER_A2A_ITER_H;  // = 7
-    constexpr uint32_t w2_tiles_per_expert_h =
-        ((w2_dram_tiles_h + w2_tiles_per_iter_h - 1) / w2_tiles_per_iter_h) * w2_tiles_per_iter_h;
-    constexpr uint32_t w2_blocks_per_expert_c =
-        w2_tiles_per_expert_w * w2_tiles_per_expert_h / (moe_ring::W2_TXNS_PER_BLOCK * moe_ring::W2_TILES_PER_TXN);
+    using Cfg = moe_ring::MoeRingConfig<Ht, Nt, num_cores, has_bias>;
 
     // Compile time arguments
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
@@ -97,8 +79,6 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     constexpr uint32_t w0_w1_txns_per_block = moe_ring::W0_W1_TXNS_PER_BLOCK;
     constexpr uint32_t w0_w1_tiles_per_txn = moe_ring::W0_W1_TILES_PER_TXN;
-    // constexpr uint32_t w0_w1_tiles_w = moe_ring::W0_W1_BLOCK_TILES_W;
-    constexpr uint32_t w0_w1_block_tiles_h = moe_ring::W0_W1_BLOCK_TILES_H;
     constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28
 
     // W2 reading constants
@@ -116,12 +96,12 @@ void kernel_main() {
 
     // Offsets for layer_id
 
-    constexpr uint32_t w0_w1_total_size_per_expert = w0_w1_blocks_per_expert_c * 2 * w0_w1_bytes_per_txn;
+    constexpr uint32_t w0_w1_total_size_per_expert = Cfg::w0_w1_blocks_per_expert * 2 * w0_w1_bytes_per_txn;
     constexpr uint32_t w0_w1_total_size_per_layer = num_experts * w0_w1_total_size_per_expert;
     constexpr uint32_t w0_w1_layer_offset = layer_id * w0_w1_total_size_per_layer;
 
     // W2: same approach
-    constexpr uint32_t w2_total_size_per_expert = w2_blocks_per_expert_c * 2 * w2_bytes_per_txn;
+    constexpr uint32_t w2_total_size_per_expert = Cfg::w2_blocks_per_expert * 2 * w2_bytes_per_txn;
     constexpr uint32_t w2_total_size_per_layer = num_experts * w2_total_size_per_expert;
     constexpr uint32_t w2_layer_offset = layer_id * w2_total_size_per_layer;
 
@@ -188,7 +168,7 @@ void kernel_main() {
             //-------------------------------------------------------------------------
             uint32_t w0_w1_dram_read_offset = w0_w1_expert_offset;
 
-            for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_expert_c; ++block_id) {
+            for (uint32_t block_id = 0; block_id < Cfg::w0_w1_blocks_per_expert; ++block_id) {
                 // Issue reads with current trid
                 noc_async_read_set_trid(trid_to_issue);
                 noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
@@ -225,7 +205,7 @@ void kernel_main() {
             //-------------------------------------------------------------------------
             uint32_t w2_dram_read_offset = w2_expert_offset;
 
-            for (uint32_t block_id = 0; block_id < w2_blocks_per_expert_c; ++block_id) {
+            for (uint32_t block_id = 0; block_id < Cfg::w2_blocks_per_expert; ++block_id) {
                 // Issue reads with current trid
                 noc_async_read_set_trid(trid_to_issue);
                 noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
