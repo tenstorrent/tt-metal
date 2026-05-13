@@ -622,6 +622,24 @@ run_quad_teacher_forced_test() {
     fi
 }
 
+run_quad_test_model_long_prefill_single_galaxy_test() {
+    fail=0
+    setup_quad_galaxy_env
+    local timeout=$(_demo_timeout 1250)
+    local selector="mode_prefill"
+    local junit_path="$(_test_run_summary_junit_path test_model_long_prefill_single_galaxy_quad)"
+    local junit_flag="--junitxml=${junit_path}"
+
+    _test_run_summary_exec _run_deepseekv3_tt bash -c "set -o pipefail; DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=32768 pytest -svvv --timeout=$timeout ${junit_flag} models/demos/deepseek_v3/tests/test_model.py -k '$selector' 2>&1 | tee generated/artifacts/quad_test_model_long_prefill_single_galaxy_output.log"
+    local ec="${_TEST_RUN_LAST_EC}"
+    fail+=$((fail + ec))
+    _test_run_summary_append_junit_rows "test_model_long_prefill_single_galaxy_quad" "${junit_path}" "${ec}"
+
+    if [[ $fail -ne 0 ]]; then
+        exit 1
+    fi
+}
+
 ###############################################################################
 # Demo tests (full)
 ###############################################################################
@@ -728,6 +746,7 @@ run_all_needed_local_tests() {
     run_dual_demo_test
     run_dual_demo_stress_test
     run_quad_teacher_forced_test
+    run_quad_test_model_long_prefill_single_galaxy_test
     run_quad_demo_test
     run_quad_demo_stress_test
 
@@ -926,6 +945,9 @@ main() {
         "quad_demo_stress")
             run_quad_demo_stress_test
             ;;
+        "quad_test_model_long_prefill")
+            run_quad_test_model_long_prefill_single_galaxy_test
+            ;;
         "dual_deepseekv3_integration_tests")
             run_dual_deepseekv3_integration_tests
             ;;
@@ -940,7 +962,7 @@ main() {
             ;;
         *)
             echo "Unknown test function: $test_function" 1>&2
-            echo "Available options: unit_tests, dual_deepseekv3_unit_tests, quad_deepseekv3_unit_tests, dual_deepseekv3_module_tests, quad_deepseekv3_module_tests, dual_teacher_forced, quad_teacher_forced, dual_demo, dual_demo_mtp, quad_demo, quad_demo_mtp, dual_demo_stress, quad_demo_stress, dual_deepseekv3_integration_tests, quad_deepseekv3_integration_tests, all_needed_local_tests, all" 1>&2
+            echo "Available options: unit_tests, dual_deepseekv3_unit_tests, quad_deepseekv3_unit_tests, dual_deepseekv3_module_tests, quad_deepseekv3_module_tests, dual_teacher_forced, quad_teacher_forced, dual_demo, dual_demo_mtp, quad_demo, quad_demo_mtp, dual_demo_stress, quad_demo_stress, quad_test_model_long_prefill, dual_deepseekv3_integration_tests, quad_deepseekv3_integration_tests, all_needed_local_tests, all" 1>&2
             echo "Optional second argument: UPR mode (all|32|8)" 1>&2
             echo "Optional flags: --no-torus  --model-path <path>  --cache-path <path>" 1>&2
             echo "Example: $0 quad_demo 32 --no-torus --model-path /data/deepseek/DeepSeek-R1-0528-dequantized-stacked --cache-path /data/deepseek/DeepSeek-R1-0528-Cache/CI" 1>&2
