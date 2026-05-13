@@ -82,8 +82,8 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -*)
-            echo "TT_PROBE_ERROR: Unknown flag: $1" >&2
-            echo "Usage: scripts/tt-probe.sh [--dev] <op_name> << 'PYEOF'" >&2
+            echo "TT_PROBE_ERROR: Unknown flag: $1"
+            echo "Usage: scripts/tt-probe.sh [--dev] <op_name> << 'PYEOF'"
             exit 3
             ;;
         *)
@@ -94,10 +94,10 @@ done
 
 # --- Parse positional args ---
 if [[ $# -eq 0 ]]; then
-    echo "TT_PROBE_ERROR: No op name provided" >&2
-    echo "Usage: scripts/tt-probe.sh [--dev] <op_name> << 'PYEOF'" >&2
-    echo "       ... python code ..." >&2
-    echo "       PYEOF" >&2
+    echo "TT_PROBE_ERROR: No op name provided"
+    echo "Usage: scripts/tt-probe.sh [--dev] <op_name> << 'PYEOF'"
+    echo "       ... python code ..."
+    echo "       PYEOF"
     exit 3
 fi
 OP_NAME="$1"
@@ -106,7 +106,7 @@ TT_TIMING_TEST_PATH="$OP_NAME"
 # --- Read stdin ---
 SCRIPT=$(cat)
 if [[ -z "$SCRIPT" ]]; then
-    echo "TT_PROBE_ERROR: No script provided on stdin" >&2
+    echo "TT_PROBE_ERROR: No script provided on stdin"
     exit 3
 fi
 
@@ -122,7 +122,7 @@ PROBE_FILE="${PROBE_DIR}/probe_$(printf '%03d' $NEXT_NUM).py"
 
 printf '%s\n' "$SCRIPT" > "$PROBE_FILE"
 PROBE_REL="${PROBE_FILE#$REPO_DIR/}"
-echo "TT_PROBE: Saved → ${PROBE_REL}" >&2
+echo "TT_PROBE: Saved → ${PROBE_REL}"
 
 # --- Detect simulator mode ---
 SIM_MODE=false
@@ -160,9 +160,9 @@ fi
 
 emit_missing_ttexalens_warning() {
     if [[ "$MISSING_TTEXALENS" == true ]]; then
-        echo "" >&2
-        echo "TT_PROBE: WARNING: tt-exalens not installed — triage on hang is unavailable." >&2
-        echo "TT_PROBE: Install with: uv pip install -r tools/triage/requirements.txt" >&2
+        echo ""
+        echo "TT_PROBE: WARNING: tt-exalens not installed — triage on hang is unavailable."
+        echo "TT_PROBE: Install with: uv pip install -r tools/triage/requirements.txt"
     fi
 }
 trap emit_missing_ttexalens_warning EXIT
@@ -178,7 +178,7 @@ if [[ "$DEV_MODE" == true ]]; then
 
     if [[ "$SIM_MODE" == true ]]; then
         export TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1
-        echo "TT_PROBE: [sim+dev] watcher=polling(+assert,noc_sanitize=OFF) triage=OFF" >&2
+        echo "TT_PROBE: [sim+dev] watcher=polling(+assert,noc_sanitize=OFF) triage=OFF"
     else
         # Lightweight asserts: compile ASSERT() as ebreak so the core halts at
         # the exact instruction. The dispatch timeout then fires triage, which
@@ -189,26 +189,26 @@ if [[ "$DEV_MODE" == true ]]; then
         # Let ebreak asserts halt the core for triage to capture — bypass watcher's
         # own assert handling so all cores' callstacks get collected together.
         export TT_METAL_WATCHER_DISABLE_ASSERT=1
-        echo "TT_PROBE: [dev] asserts=ebreak llk_asserts=ON watcher=polling triage=ON timeout=${DISPATCH_TIMEOUT}s" >&2
+        echo "TT_PROBE: [dev] asserts=ebreak llk_asserts=ON watcher=polling triage=ON timeout=${DISPATCH_TIMEOUT}s"
     fi
 fi
 
 # --- Acquire flock (hardware only) ---
 if [[ "$SIM_MODE" == false ]]; then
     exec 9>"$LOCK_FILE"
-    echo "TT_PROBE: Waiting for device lock..." >&2
+    echo "TT_PROBE: Waiting for device lock..."
     flock 9
     TT_TIMING_LOCK_ACQUIRED_MS=$(date +%s%3N)
-    echo "TT_PROBE: Device lock acquired" >&2
+    echo "TT_PROBE: Device lock acquired"
 
     if [[ -f "$DIRTY_FLAG" ]]; then
-        echo "TT_PROBE: Device dirty from previous run, resetting..." >&2
+        echo "TT_PROBE: Device dirty from previous run, resetting..."
         if ! tt-smi -r; then
-            echo "TT_PROBE_ERROR: Device reset failed" >&2
+            echo "TT_PROBE_ERROR: Device reset failed"
             exit 3
         fi
         rm -f "$DIRTY_FLAG"
-        echo "TT_PROBE: Device reset complete" >&2
+        echo "TT_PROBE: Device reset complete"
     fi
 fi
 
@@ -223,8 +223,8 @@ if [[ "$SIM_MODE" == false ]]; then
     touch "$DIRTY_FLAG"
 fi
 
-echo "TT_PROBE: python3 ${PROBE_REL}" >&2
-echo "========================================" >&2
+echo "TT_PROBE: python3 ${PROBE_REL}"
+echo "========================================"
 
 # Signal handling: forward SIGKILL to python3 child + descendants if this
 # script is killed (parent SIGTERM, watchdog, etc.). Without this, python3
@@ -233,8 +233,8 @@ echo "========================================" >&2
 CHILD_PID=
 _signal_cleanup() {
     local sig=$1
-    echo "" >&2
-    echo "TT_PROBE: Caught SIG${sig} — killing probe, marking device dirty" >&2
+    echo ""
+    echo "TT_PROBE: Caught SIG${sig} — killing probe, marking device dirty"
     [[ "$SIM_MODE" == false ]] && touch "$DIRTY_FLAG" 2>/dev/null
     if [[ -n "$CHILD_PID" ]]; then
         pkill -KILL -P "$CHILD_PID" 2>/dev/null || true
@@ -255,7 +255,7 @@ wait "$CHILD_PID"
 EXIT_CODE=$?
 CHILD_PID=
 
-echo "========================================" >&2
+echo "========================================"
 
 # --- Cleanup: kill orphans ---
 if [[ $EXIT_CODE -ne 0 ]]; then
@@ -267,35 +267,35 @@ fi
 
 # --- Reset device (hardware only) ---
 if [[ "$SIM_MODE" == false ]]; then
-    echo "TT_PROBE: Resetting device..." >&2
+    echo "TT_PROBE: Resetting device..."
     if tt-smi -r; then
         sleep 2
         rm -f "$DIRTY_FLAG"
-        echo "TT_PROBE: Device reset complete" >&2
+        echo "TT_PROBE: Device reset complete"
     else
-        echo "TT_PROBE: Device reset FAILED; leaving dirty" >&2
+        echo "TT_PROBE: Device reset FAILED; leaving dirty"
     fi
 fi
 
 # --- Detect hang ---
 if [[ -s "$TRIAGE_LOG" ]]; then
-    echo "TT_PROBE: HANG DETECTED" >&2
+    echo "TT_PROBE: HANG DETECTED"
     if [[ "$SIM_MODE" == false ]]; then
-        cat "$TRIAGE_LOG" >&2
+        cat "$TRIAGE_LOG"
         if [[ -s "$TRIAGE_JSON" ]]; then
-            echo "TT_PROBE: JSON triage: ${TRIAGE_JSON}" >&2
+            echo "TT_PROBE: JSON triage: ${TRIAGE_JSON}"
         fi
     fi
     rm -f "$TRIAGE_LOG"
-    echo "TT_PROBE_RESULT: HANG (probe: ${PROBE_REL})" >&2
+    echo "TT_PROBE_RESULT: HANG (probe: ${PROBE_REL})"
     exit 2
 fi
 rm -f "$TRIAGE_LOG"
 
 # --- Result ---
 if [[ $EXIT_CODE -eq 0 ]]; then
-    echo "TT_PROBE_RESULT: PASS" >&2
+    echo "TT_PROBE_RESULT: PASS"
 else
-    echo "TT_PROBE_RESULT: FAIL (exit $EXIT_CODE, probe: ${PROBE_REL})" >&2
+    echo "TT_PROBE_RESULT: FAIL (exit $EXIT_CODE, probe: ${PROBE_REL})"
 fi
 exit $EXIT_CODE
