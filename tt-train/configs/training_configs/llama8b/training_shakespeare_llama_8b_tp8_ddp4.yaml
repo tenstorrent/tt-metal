@@ -2,7 +2,7 @@ training_config:
   project_name: tt_train_llama8b
   seed: 5489
   model_save_interval: 10000
-  batch_size: 16
+  batch_size: 12
   num_epochs: 1
   max_steps: 1200
   optimizer:
@@ -22,7 +22,7 @@ training_config:
 device_config:
   enable_ddp: true
   enable_tp: true
-  mesh_shape: [8, 4]
+  mesh_shape: [4, 8]
 eval_config:
   repetition_penalty: 1.0
   temperature: 0.7
