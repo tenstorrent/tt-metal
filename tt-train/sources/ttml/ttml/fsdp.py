@@ -597,7 +597,14 @@ def fully_shard(
                 chosen = param_tensor.get_rank() + chosen
 
         shape = list(param_tensor.shape())
-        if chosen is None or shape[chosen] % axis_size != 0:
+        if chosen is None:
+            warnings.warn(
+                f"Skipping FSDP sharding for parameter {rel_name!r} "
+                f"(shape {shape}): no suitable shard dim could be auto-selected.",
+                stacklevel=2,
+            )
+            continue
+        if shape[chosen] % axis_size != 0:
             warnings.warn(
                 f"Skipping FSDP sharding for parameter {rel_name!r} "
                 f"(shape {shape}): chosen dim {chosen} has size {shape[chosen]} "
