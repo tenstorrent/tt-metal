@@ -10,14 +10,14 @@
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include <tt_stl/small_vector.hpp>
 
 #include <functional>
 
 // UMD: re-exports CoreType (used in SemaphoreDescriptor::core_type member).
 #include <umd/device/types/core_coordinates.hpp>
+
+#include <tt-metalium/experimental/tensor/tensor_types.hpp>
 
 #include <bitset>
 #include <filesystem>
@@ -37,6 +37,8 @@ namespace tt::tt_metal {
 struct Tile;
 class Buffer;
 class Program;
+class MeshTensor;
+
 namespace experimental {
 class GlobalCircularBuffer;
 }  // namespace experimental
