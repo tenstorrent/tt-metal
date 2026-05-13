@@ -985,7 +985,7 @@ struct transform_object_of_type_t<std::array<T, N>> {
     template <typename object_t>
     std::array<T, N> operator()(auto&& callback, const std::array<T, N>& value) const {
         std::array<T, N> return_value;
-        for (auto index = 0; index < value.size(); index++) {
+        for (size_t index = 0; index < value.size(); index++) {
             return_value[index] = transform_object_of_type<object_t>(callback, value[index]);
         }
         return return_value;

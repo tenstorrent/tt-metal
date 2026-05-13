@@ -80,7 +80,7 @@ void log_external_operation(const operation::ExternalOperation& operation, const
     }
 
     log_debug(tt::LogOp, "Input std::vector<Tensor>:");
-    for (auto index = 0; index < input_tensors.size(); index++) {
+    for (size_t index = 0; index < input_tensors.size(); index++) {
         [[maybe_unused]] const auto& tensor = input_tensors[index];
         log_debug(tt::LogOp, "\t{}: {}", index, tensor);
     }
