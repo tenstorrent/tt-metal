@@ -970,18 +970,29 @@ ALWI void elem_apply_pop(const ElemT& elem, uint32_t i_outer) {
 }
 
 template <std::size_t I, class ElemT, class... Es>
-ALWI void elem_apply_pack(const ElemT& elem, uint32_t i_outer, uint32_t block_size, uint32_t n_tiles) {
+ALWI void elem_apply_pack_body(const ElemT& elem, uint32_t i_outer, uint32_t block_size, uint32_t n_tiles) {
     if constexpr (is_pack_tile_op_v<ElemT>) {
-        // reserve late — inside outer iter, policy-guarded
+        // reserve late — inside outer iter, policy-guarded (no-op for non-reserve policies)
         elem.reserve_per_tile(i_outer);
         elem.reserve_upfront(n_tiles);
         for (uint32_t j = 0; j < block_size; ++j) {
             elem.exec(i_outer * block_size + j);
         }
-        // push early — policy-guarded; upfront push fires at end-of-chain
-        elem.push_per_tile(i_outer);
     } else {
         (void)elem; (void)i_outer; (void)block_size; (void)n_tiles;
+    }
+}
+
+template <class ElemT>
+ALWI void elem_apply_push(const ElemT& elem, uint32_t i_outer) {
+    // push_per_tile runs AFTER tile_regs_release() — earliest position where the
+    // pack is fully visible AND DEST is freed for the next iter's acquire. Signals
+    // the downstream consumer ASAP (§11 "push early"). Policy-guarded — no-op for
+    // upfront / no-push policies (which fire elem_push_at_end after outer loop).
+    if constexpr (is_cb_writer_op_v<ElemT>) {
+        elem.push_per_tile(i_outer);
+    } else {
+        (void)elem; (void)i_outer;
     }
 }
 
@@ -1001,13 +1012,18 @@ ALWI void apply_pop_phase(uint32_t i_outer, Es&... elts) {
 }
 
 template <std::size_t... Is, class... Es>
-ALWI void apply_pack_phase(std::index_sequence<Is...>, uint32_t i_outer, uint32_t block_size, uint32_t n_tiles, Es&... elts) {
+ALWI void apply_pack_body_phase(std::index_sequence<Is...>, uint32_t i_outer, uint32_t block_size, uint32_t n_tiles, Es&... elts) {
     auto run_one = [&](auto idx_const, auto& elem) {
         constexpr std::size_t II = decltype(idx_const)::value;
         using ElemT = std::remove_reference_t<decltype(elem)>;
-        elem_apply_pack<II, ElemT, Es...>(elem, i_outer, block_size, n_tiles);
+        elem_apply_pack_body<II, ElemT, Es...>(elem, i_outer, block_size, n_tiles);
     };
     (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
+}
+
+template <class... Es>
+ALWI void apply_push_phase(uint32_t i_outer, Es&... elts) {
+    (elem_apply_push(elts, i_outer), ...);
 }
 
 // Hoisted init+transitions for non-clash chains (F-PERF-1).
@@ -1090,7 +1106,7 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
     }
 
     // Single outer loop — block_path and per-tile path collapse to one shape because
-    // every element owns its full wait/init/exec slice in apply_compute_body_phase
+    // every element owns its full slice in the apply_*_phase entry points
     // (policy-guarded internally). Upfront wait/reserve fire inside the loop body
     // (cumulative-count idempotent — wait-late per §11); upfront pop/push fire after
     // the loop ends.
@@ -1098,14 +1114,21 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
     // Per-tile pop runs between tile_regs_commit() and tile_regs_wait() — earliest
     // valid pop position (math done, unpacker has consumed input CB tiles). Frees CB
     // slots for the upstream producer as early as possible (§11 "pop early").
+    //
+    // Per-tile push runs AFTER tile_regs_release() — earliest position where pack is
+    // fully visible AND DEST is freed (§11 "push early"). Signals downstream consumer
+    // before the next outer iter's acquire blocks. Both pop and push are policy-
+    // guarded (no-op for upfront / no-pop / no-push policies, which fire at end-of-
+    // chain via elem_pop_upfront_end / elem_push_at_end).
     for (uint32_t i_outer = 0; i_outer < n_tiles; ++i_outer) {
         tile_regs_acquire();
         detail::apply_compute_body_phase<emit_init_per_tile>(IdxSeq{}, i_outer, block_size, n_tiles, elts...);
         tile_regs_commit();
         detail::apply_pop_phase(i_outer, elts...);
         tile_regs_wait();
-        detail::apply_pack_phase(IdxSeq{}, i_outer, block_size, n_tiles, elts...);
+        detail::apply_pack_body_phase(IdxSeq{}, i_outer, block_size, n_tiles, elts...);
         tile_regs_release();
+        detail::apply_push_phase(i_outer, elts...);
     }
 
     // End-of-chain upfront-policy lifecycle (policy-gated no-op for non-upfront elts).
