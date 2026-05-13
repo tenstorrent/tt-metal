@@ -286,6 +286,10 @@ std::vector<ttnn::Tensor> moe_compute(
     const auto& num_token_parallel_cores = output_height_shard_dim;
 
     // Auto-compute num_data_parallel_cores: largest divisor of hidden_tiles <= 4
+    TT_FATAL(
+        hidden_size > 0 && hidden_size % 32 == 0,
+        "hidden_size ({}) must be a positive multiple of 32 (TILE_SIZE)",
+        hidden_size);
     const uint32_t hidden_tiles = hidden_size / 32;
     uint32_t num_data_parallel_cores = 1;
     for (uint32_t d = 4; d >= 1; --d) {
