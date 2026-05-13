@@ -420,10 +420,13 @@
     wh_llmbox_perf:
       timeout: 15
       tier: 2
-    bh_p150_perf:
+    bh_p150:
       timeout: 15
       tier: 2
     bh_llmbox:
+      timeout: 15
+      tier: 2
+    bh_quietbox_2:
       timeout: 15
       tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
@@ -437,10 +440,13 @@
   model: gpt-oss-120b
   skus:
     wh_galaxy_perf:
-      timeout: 20
+      timeout: 30
       tier: 1
     bh_quietbox_2:
       timeout: 25
+      tier: 1
+    bh_galaxy_perf:
+      timeout: 30
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
