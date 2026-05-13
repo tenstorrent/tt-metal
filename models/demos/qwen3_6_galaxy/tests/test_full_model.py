@@ -54,6 +54,12 @@ _PCC_THRESH_4LAYER = 0.99
 # then apply a targeted fix so this test passes at 0.995.
 _PCC_THRESH_16LAYER = 0.995
 
+# 64-layer hidden-state PCC threshold: 0.99 (CLAUDE.md mandate — non-negotiable).
+# T12: measure 64-layer hidden PCC vs CPU reference.  Extrapolating linearly from
+# 16-layer drop (~0.00024/layer) suggests ~0.984 baseline; targeted precision fixes
+# (DeltaNet kernel, MLP accumulators, Norm CCL transit dtype) must lift it above 0.99.
+_PCC_THRESH_64LAYER = 0.99
+
 
 # ---------------------------------------------------------------------------
 # Fabric mesh fixture
@@ -530,7 +536,105 @@ def test_full_model_64layer_paris_generation_on_8x4(mesh_8x4):
 
 
 # ---------------------------------------------------------------------------
-# Test 4: test_full_model_greedy_decode_5_tokens (optional)
+# Test 4: test_full_model_64layer_hidden_pcc_on_8x4
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.hardware
+def test_full_model_64layer_hidden_pcc_on_8x4(mesh_8x4):
+    """TtQwen36Transformer 64-layer (FULL MODEL): hidden-state PCC > 0.99.
+
+    T12 mandate: measures the true numerical correctness of the full 64-layer
+    transformer stack against a CPU float32 reference.  This is the FINAL PCC
+    mandate check per CLAUDE.md.
+
+    Strategy: use a short sequence B=1, T=4 (padded to T=32 for tile alignment)
+    so the CPU reference forward pass completes in reasonable time.  PCC is
+    computed over the [1, 4, 5120] non-padding positions.
+
+    The test asserts PCC > 0.99 (CLAUDE.md mandate — non-negotiable).
+    """
+    from models.demos.qwen3_6_galaxy.tt.qwen36_model_config import TtQwen36ModelArgs
+
+    N_LAYERS = 64
+    _T_SHORT = 4  # real tokens; padded to 32 for tile alignment
+    _T_PADDED = 32  # 4 → next multiple of 32
+
+    config = _load_config()
+    args = TtQwen36ModelArgs(mesh_8x4)
+
+    print(f"\n[Test4-64L] Loading weights for {N_LAYERS} layers (FULL MODEL) ...")
+    global_weights = _load_embedding_and_norm_and_head_weights()
+    layers_weights = [_load_layer_weights(i) for i in range(N_LAYERS)]
+
+    # Short input — 4 real tokens, padded to 32
+    torch.manual_seed(44)
+    input_ids_short = torch.randint(0, config.vocab_size, (1, _T_SHORT))
+    pad = torch.zeros(1, _T_PADDED - _T_SHORT, dtype=input_ids_short.dtype)
+    input_ids = torch.cat([input_ids_short, pad], dim=1)  # [1, 32]
+
+    # --- CPU reference ---
+    print("[Test4-64L] Building CPU reference model (64 layers — may take several minutes) ...")
+    t0 = time.time()
+    ref_model = _build_ref_model(config, N_LAYERS, global_weights, layers_weights)
+    cos, sin = _build_rope_cos_sin(_T_PADDED)
+    causal_mask = torch.zeros(1, 1, _T_PADDED, _T_PADDED)
+    causal_mask = causal_mask.masked_fill(
+        torch.triu(torch.ones(_T_PADDED, _T_PADDED), diagonal=1).bool(), float("-inf")
+    )
+    t1 = time.time()
+    print(f"[Test4-64L] CPU ref model built in {t1-t0:.1f}s")
+
+    # --- TTNN model ---
+    print("[Test4-64L] Building TTNN model (full 64 layers)...")
+    tt_model = _build_tt_model(mesh_8x4, args, N_LAYERS, global_weights, layers_weights)
+
+    # Run TTNN forward_prefill_hidden — returns (emb_cpu, hidden_cpu)
+    print("[Test4-64L] Running TT forward_prefill_hidden (FULL MODEL)...")
+    t0 = time.time()
+    tt_emb, tt_hidden = tt_model.forward_prefill_hidden(input_ids)
+    t1 = time.time()
+    print(f"[Test4-64L] TT hidden done in {t1-t0:.2f}s. Hidden shape: {tt_hidden.shape}")
+
+    # Reference hidden: start from the SAME BF16 embedding values (T7-style fair comparison)
+    # This isolates decoder-layer precision from embedding precision.
+    print("[Test4-64L] Running CPU reference decoder layers ...")
+    t0 = time.time()
+    ref_hidden = _ref_forward_hidden(ref_model, tt_emb, cos, sin, attention_mask=causal_mask)
+    t1 = time.time()
+    print(f"[Test4-64L] CPU ref hidden done in {t1-t0:.2f}s. Ref shape: {ref_hidden.shape}")
+
+    # PCC over full padded output first (informational)
+    hidden_pcc_full = _pcc(tt_hidden, ref_hidden)
+    print(f"[Test4-64L] Hidden-state PCC (all {_T_PADDED} positions) = {hidden_pcc_full:.6f}")
+
+    # PCC over real-token positions only (the 4 non-padding positions)
+    hidden_pcc_real = _pcc(tt_hidden[:, :_T_SHORT, :], ref_hidden[:, :_T_SHORT, :])
+    print(
+        f"[Test4-64L] Hidden-state PCC (real {_T_SHORT} positions) = {hidden_pcc_real:.6f}  (thresh={_PCC_THRESH_64LAYER})"
+    )
+
+    # Use the real-token PCC as the primary metric (padding positions corrupt signal)
+    hidden_pcc = hidden_pcc_real
+
+    # Report element-wise statistics for diagnostics
+    diff = (tt_hidden[:, :_T_SHORT, :] - ref_hidden[:, :_T_SHORT, :]).abs()
+    print(f"[Test4-64L] Max abs diff = {diff.max().item():.4f}, mean abs diff = {diff.mean().item():.6f}")
+    print(
+        f"[Test4-64L] TT  hidden stats: mean={tt_hidden[:, :_T_SHORT, :].mean():.4f}, std={tt_hidden[:, :_T_SHORT, :].std():.4f}"
+    )
+    print(
+        f"[Test4-64L] Ref hidden stats: mean={ref_hidden[:, :_T_SHORT, :].mean():.4f}, std={ref_hidden[:, :_T_SHORT, :].std():.4f}"
+    )
+
+    assert (
+        hidden_pcc > _PCC_THRESH_64LAYER
+    ), f"64-layer full model hidden-state PCC {hidden_pcc:.4f} < {_PCC_THRESH_64LAYER} (CLAUDE.md mandate)"
+    print("[Test4-64L] PASSED — 64-layer hidden PCC above 0.99 mandate")
+
+
+# ---------------------------------------------------------------------------
+# Test 5: test_full_model_greedy_decode_5_tokens (optional)
 # ---------------------------------------------------------------------------
 
 

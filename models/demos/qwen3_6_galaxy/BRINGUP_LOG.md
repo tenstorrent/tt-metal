@@ -1,5 +1,22 @@
 # Qwen3.6-27B Galaxy (BH 8×4) Bring-Up Log
 
+## Current Status (2026-05-13, T12 complete)
+
+### T12: 64-layer hidden PCC mandate check
+- **64-layer hidden PCC: 0.995312** on 4 real-token positions (PASSED — above 0.99 mandate)
+- No precision fixes required: existing HiFi4+fp32_dest_acc kernels already sufficient.
+- Key finding: PCC over padded positions (0.9616) is lower due to padding-token amplification;
+  real-token PCC (0.9953) is the correct signal and well above mandate.
+- New test: `test_full_model_64layer_hidden_pcc_on_8x4` — B=1, T=4 real tokens, padded to T=32.
+
+**All 4 full-model tests GREEN in verification suite (941s total):**
+- `test_full_model_4layer_prefill_pcc_on_8x4`: hidden PCC = 0.998835 (thresh=0.99)
+- `test_full_model_16layer_prefill_pcc_on_8x4`: hidden PCC = 0.996097 (thresh=0.995)
+- `test_full_model_64layer_paris_generation_on_8x4`: " Paris" in 8.58s
+- `test_full_model_64layer_hidden_pcc_on_8x4`: hidden PCC = 0.995312 (thresh=0.99) — NEW
+
+---
+
 ## Current Status (2026-05-13, end-of-day)
 - **Model fits in DRAM** on 32-chip BH GLX 8×4 mesh.  All 64 decoder layers
   load; ~10 GB/chip weights, ~20 GB headroom for activations/KV cache.
@@ -52,9 +69,10 @@
 | `test_decoder_layer_0_linear_attention_pcc_on_8x4` | PCC=0.999991 | >0.99 | PASS |
 | `test_decoder_layer_3_full_attention_pcc_on_8x4` | PCC=0.999961 | >0.99 | PASS |
 | `test_4layer_hybrid_slice_prefill_pcc_on_8x4` | PCC=0.999981 | >0.99 | PASS |
-| `test_full_model_4layer_prefill_pcc_on_8x4` | hidden=0.9934, top-1=match | >0.99 | PASS |
-| `test_full_model_16layer_prefill_pcc_on_8x4` | hidden=0.9800, top-1=87.5% | >0.98 | PASS |
-| `test_full_model_64layer_paris_generation_on_8x4` | " Paris" in 4.71 s | — | PASS |
+| `test_full_model_4layer_prefill_pcc_on_8x4` | hidden=0.9988, top-1=match | >0.99 | PASS |
+| `test_full_model_16layer_prefill_pcc_on_8x4` | hidden=0.9961, top-1=84.4% | >0.995 | PASS |
+| `test_full_model_64layer_paris_generation_on_8x4` | " Paris" in 8.58 s | — | PASS |
+| `test_full_model_64layer_hidden_pcc_on_8x4` | hidden=0.9953 (4-pos) | >0.99 | PASS |
 
 ## Precision investigation (key finding)
 
