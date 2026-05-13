@@ -759,7 +759,6 @@ def _quantize_fp4_storage_model(scaled_blocks: np.ndarray) -> np.ndarray:
 
     return out
 
-
 def _mxint_block_scale_and_quantize(
     tensor, num_faces, face_r_dim, *, elem_scale: int, elem_max: int, fmt_name: str
 ):
@@ -980,4 +979,3 @@ def pack_mxint2(
     return _pad_to_l1_alignment(scales_e8m0) + _pad_to_l1_alignment(
         packed_bytes.tolist()
     )
-    return out
