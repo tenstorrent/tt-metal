@@ -14,7 +14,8 @@
 //     input_tile_id = r * Wt + wt
 // where ``r`` is the global row-tile index (over ``(N, C, Ht)``).
 //
-// CT args: [CB_INPUT_TILES, CB_SCALER, W, Wt, TensorAccessorArgs...]
+// CT args: [CB_INPUT_TILES, CB_SCALER, W, TensorAccessorArgs...]
+//   Wt is derived from W (Wt = W / 32) — passing both would be redundant.
 // RT args: [src_addr, num_row_tiles, start_row_tile]
 
 #include <cstdint>
@@ -30,8 +31,8 @@ void kernel_main() {
     constexpr uint32_t cb_input_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t cb_scaler = get_compile_time_arg_val(1);
     constexpr uint32_t W = get_compile_time_arg_val(2);
-    constexpr uint32_t Wt = get_compile_time_arg_val(3);
-    constexpr auto src_args = TensorAccessorArgs<4>();
+    constexpr uint32_t Wt = W / 32;  // tile-aligned in Phase 0 (validated in entry point)
+    constexpr auto src_args = TensorAccessorArgs<3>();
 
     // Emit the 1/W scaler tile in matmul col-0 layout. AVG + REDUCE_ROW uses
     // the matmul-based reduce path internally (see reduce_helpers_common.hpp);

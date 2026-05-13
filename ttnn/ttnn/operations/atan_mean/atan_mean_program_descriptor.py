@@ -151,10 +151,11 @@ def create_program_descriptor(
                     current_row_tile += row_tiles_per_core
 
     # ========== 5. Kernels ==========
-    # Reader CT args: [CB_INPUT_TILES, CB_SCALER, W, Wt, TensorAccessorArgs...]
-    # ``W`` and ``Wt`` are compile-time so the scaler-prep helper can templatise
-    # the reduce_factor and the read loop can unroll the inner Wt iteration.
-    reader_ct_args = [CB_INPUT_TILES, CB_SCALER, W, Wt]
+    # Reader CT args: [CB_INPUT_TILES, CB_SCALER, W, TensorAccessorArgs...]
+    # ``W`` is compile-time so the scaler-prep helper can templatise the
+    # reduce_factor. The reader derives ``Wt = W / 32`` internally — passing
+    # both would be redundant.
+    reader_ct_args = [CB_INPUT_TILES, CB_SCALER, W]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
     reader_kernel = ttnn.KernelDescriptor(
