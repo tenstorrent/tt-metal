@@ -28,10 +28,7 @@ from models.experimental.mistral_small_4_119b.constants import (
     VISION_HIDDEN_SIZE,
     VISION_NUM_HEADS,
 )
-from models.experimental.mistral_small_4_119b.tt.mistral4_self_attention import (
-    _apply_rope_ttnn,
-    _load_weight,
-)
+from models.experimental.mistral_small_4_119b.tt.mistral4_self_attention import _load_weight
 
 
 class TtPixtralAttention:
@@ -104,9 +101,13 @@ class TtPixtralAttention:
         v = ttnn.reshape(v, [1, seq_len, self.n_heads, self.head_dim])
         v = ttnn.transpose(v, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # ── apply 2D RoPE to q and k ────────────────────────────────────
-        q_rot = _apply_rope_ttnn(q, cos, sin, seq_len, self.n_heads, self.head_dim)
-        k_rot = _apply_rope_ttnn(k, cos, sin, seq_len, self.n_heads, self.head_dim)
+        # ── apply 2D RoPE to q and k (fused half-split kernel) ──────────
+        q_rot = ttnn.experimental.rotary_embedding_hf(
+            q, cos, sin, is_decode_mode=False, compute_kernel_config=self.compute_kernel_config
+        )
+        k_rot = ttnn.experimental.rotary_embedding_hf(
+            k, cos, sin, is_decode_mode=False, compute_kernel_config=self.compute_kernel_config
+        )
         ttnn.deallocate(q)
         ttnn.deallocate(k)
 
