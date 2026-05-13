@@ -481,12 +481,6 @@ struct UnaryOp : DestOnlyTag {
     /// is added by the chain to shift DEST writes into lane `j` when auto-block is
     /// on; AutoBlock::Off passes 0 (today's shape).
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { Derived::exec_impl(slot_offset); }
-
-    /// init() + exec_impl() at lane 0.
-    static ALWI void apply() {
-        Derived::init();
-        Derived::exec_impl(0);
-    }
 };
 
 template <class Derived, Dst In0, Dst In1, Dst Out>
@@ -511,10 +505,6 @@ struct BinaryOp : DestOnlyTag {
     static constexpr uint32_t lane_width = max_dst() + 1;
 
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { Derived::exec_impl(slot_offset); }
-    static ALWI void apply() {
-        Derived::init();
-        Derived::exec_impl(0);
-    }
 };
 
 template <class Derived, Dst In0, Dst In1, Dst In2, Dst Out>
@@ -548,10 +538,6 @@ struct TernaryOp : DestOnlyTag {
     }();
 
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { Derived::exec_impl(slot_offset); }
-    static ALWI void apply() {
-        Derived::init();
-        Derived::exec_impl(0);
-    }
 };
 
 template <class Derived, Dst In0, Dst In1, Dst In2, Dst In3, Dst Out>
@@ -587,10 +573,6 @@ struct QuaternaryOp : DestOnlyTag {
     }();
 
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { Derived::exec_impl(slot_offset); }
-    static ALWI void apply() {
-        Derived::init();
-        Derived::exec_impl(0);
-    }
 };
 
 // =============================================================================

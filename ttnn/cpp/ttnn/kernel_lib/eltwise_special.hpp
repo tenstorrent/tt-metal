@@ -72,10 +72,6 @@ struct Where : DestOnlyTag {
             to_u32(Cond) + slot_offset, to_u32(A) + slot_offset, to_u32(B) + slot_offset, to_u32(Out) + slot_offset);
     }
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { exec_impl(slot_offset); }
-    static ALWI void apply() {
-        init();
-        exec_impl(0);
-    }
 };
 
 }  // namespace compute_kernel_lib
