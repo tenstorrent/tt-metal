@@ -3,22 +3,33 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Tenstorrent variant of ``demo_agent.py``: same interactive agent tools and chat loop, but **text
-generation** runs on **TT** (``TtMinistral3Model`` + LM head + ``SamplingGenerator`` / CPU logits),
-mirroring ``demo_devstral2_tt_multimodal.py``.
+Tenstorrent variant of ``demo_agent.py``: same interactive agent tools and chat loop, but generation
+runs on **TT** via ``TtDevstral2SmallModel`` (Pixtral vision + projector + ``TtMinistral3`` LM),
+then LM head and ``SamplingGenerator`` / CPU logits (``demo_devstral2_tt_multimodal`` / ``demo_model_loading_prompt``).
 
-**Scope:** plain-string chat messages (no multimodal images). Tool I/O and workspace rules are
-identical to the PyTorch ``demo_agent.py``.
+**Text default:** token-id prefill only (vision stack still loads in ``TtDevstral2SmallModel``).
 
-**Context budget:** TT KV is allocated for ``--max-context-tokens + max_new_tokens + 2048`` (padded to
-TT rules). If the running chat exceeds ``max_context-tokens`` prompt tokens, the demo errors and
-asks you to ``/clear`` or raise the limit.
+**Image in-session (no ``--image`` required):** at the ``You:`` prompt use::
+
+    /image /path/to/file.jpg
+    What do you see?
+
+Or one line (path + question; quote paths with spaces)::
+
+    /image ./screenshot.png Describe the UI.
+
+**Commands:** ``/image <path> [optional prompt…]``, ``/noimage`` (drop sticky image), ``/clear`` (reset
+chat + tools; image stays until ``/noimage``). Optional startup ``--image PATH`` pre-attaches like ``/image``.
+
+``--vision-square-pixels`` / ``--vision-max-edge`` apply to ``/image`` and ``--image`` alike.
+
+**Context budget:** TT KV is allocated for ``--max-context-tokens + max_new_tokens + 2048`` (padded).
 
 Usage (repo root)::
 
-    python models/experimental/devstarl2_small/demo/tt_demo_agent.py --mesh-width 1
+    python models/experimental/devstarl2_small/demo/tt_demo_agent.py --mesh-width 1 \\
+        --vision-square-pixels 1540
 
-    # Wormhole-style cap (default max context 8192 prompt tokens unless overridden):
     python models/experimental/devstarl2_small/demo/tt_demo_agent.py --max-context-tokens 4096 \\
         --lm-head-cpu --text-layers 2
 """
@@ -28,6 +39,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import types
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,11 +47,13 @@ from typing import Any, Dict, List, Optional
 
 import torch
 import ttnn
-from transformers import MistralCommonBackend
+from PIL import Image
+from transformers import AutoProcessor, MistralCommonBackend
 from transformers.models.ministral3.configuration_ministral3 import Ministral3Config
 from transformers.models.mistral3.modeling_mistral3 import Mistral3Model
 
 from models.common.sampling import SamplingGenerator, SamplingParams, format_sampling_params
+from models.experimental.devstarl2_small.demo import demo_model_loading_prompt as _mlp
 from models.experimental.devstarl2_small.demo.demo_agent import (
     DEFAULT_AGENT_RULES,
     DEFAULT_SYSTEM_PROMPT,
@@ -68,12 +82,20 @@ from models.experimental.devstarl2_small.devstral_utils import (
     tt_replicated_ids_to_torch_long,
     tt_sampling_output_token_id,
 )
+from models.experimental.devstarl2_small.tt.tt_devstral2_small_model import TtDevstral2SmallModel
 from models.experimental.devstarl2_small.tt.tt_ministral3_model import TtMinistral3Model
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import ModelArgs
 
 apply_fp8_dequantize_compat()
+
+# Tell the instruct model that Pixtral inputs are real in this demo; otherwise it mimics a text-only agent.
+TT_AGENT_MULTIMODAL_SYSTEM_APPEND = """
+**Vision (Tenstorrent demo):** Images can be attached with the host `/image` command. When a user message
+includes an image (multimodal input), you **do** see the image through the model—answer visual questions
+directly. Do not claim you cannot view images or that vision is unavailable in this environment.
+""".strip()
 
 
 @dataclass
@@ -88,6 +110,9 @@ class TTAgentConfig(ChatConfig):
     max_seq_len: Optional[int] = None
     max_context_tokens: int = 8192
     seed: Optional[int] = None
+    vision_image: Optional[Path] = None
+    vision_max_edge: int = 0
+    vision_square_pixels: Optional[int] = None
 
 
 @dataclass
@@ -95,7 +120,8 @@ class TtAgentRuntime:
     mesh_device: ttnn.MeshDevice
     tokenizer: MistralCommonBackend
     model_args: ModelArgs
-    tt_model: TtMinistral3Model
+    tt_devstral: TtDevstral2SmallModel
+    tt_language_model: TtMinistral3Model
     hf_full: torch.nn.Module
     hf_inner: Mistral3Model
     tt_lm_head: Optional[LMHead]
@@ -104,7 +130,12 @@ class TtAgentRuntime:
     sampling_empty_slots: Optional[List[int]]
     shared_tt_ccl: TT_CCL
     pad_token_id: int
+    pad_row_1d: torch.Tensor
     cfg: TTAgentConfig
+    sticky_pil: Optional[Image.Image] = None
+    auto_processor: Optional[Any] = None
+    image_token_id: Optional[int] = None
+    _img_rows_cache: Optional[torch.Tensor] = None
 
 
 def _tokenizer_apply_messages(
@@ -120,17 +151,124 @@ def _tokenizer_apply_messages(
     return tokenized["input_ids"]
 
 
+def _inject_image_into_first_human_user(messages: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+    """First non-tool ``user`` message becomes Pixtral-style image + text; ``<tool_result>`` rows stay plain."""
+    out: List[Dict[str, Any]] = []
+    image_done = False
+    for m in messages:
+        if m["role"] == "user" and not image_done:
+            c = m.get("content", "")
+            if isinstance(c, str) and c.lstrip().startswith("<tool_result>"):
+                out.append(dict(m))
+                continue
+            image_done = True
+            out.append({"role": "user", "content": [{"type": "image"}, {"type": "text", "text": c}]})
+        else:
+            out.append(dict(m))
+    return out
+
+
+def _ensure_multimodal_img_rows(
+    rt: TtAgentRuntime,
+    pixel_values: torch.Tensor,
+    image_sizes_list: list[tuple[int, int]],
+) -> torch.Tensor:
+    if rt._img_rows_cache is not None:
+        return rt._img_rows_cache
+    pos_vision = _mlp._vision_position_ids_tt(rt.hf_inner, pixel_values, image_sizes_list, rt.mesh_device)
+    img_tt = rt.tt_devstral.get_projected_image_features(pixel_values, image_sizes_list, pos_vision)
+    ttnn.deallocate(pos_vision)
+    img_torch = ttnn.to_torch(img_tt, mesh_composer=ttnn.ConcatMeshToTensor(rt.mesh_device, dim=-1))
+    ttnn.deallocate(img_tt)
+    while img_torch.dim() > 2:
+        img_torch = img_torch.squeeze(0)
+    img_rows = img_torch.reshape(-1, img_torch.shape[-1]).contiguous()
+    rt._img_rows_cache = img_rows
+    return img_rows
+
+
+def _load_auto_processor(model_id: str) -> Any:
+    _extra: dict[str, Any] = {}
+    if os.getenv("CI") == "true":
+        _extra["local_files_only"] = True
+    try:
+        return AutoProcessor.from_pretrained(model_id, trust_remote_code=True, fix_mistral_regex=True, **_extra)
+    except (TypeError, ValueError):
+        try:
+            return AutoProcessor.from_pretrained(model_id, trust_remote_code=True, **_extra)
+        except (TypeError, ValueError):
+            return AutoProcessor.from_pretrained(model_id, **_extra)
+
+
+def _load_sticky_image_bundle(
+    config: TTAgentConfig,
+    hf_full: torch.nn.Module,
+    img_path: Path,
+) -> tuple[Image.Image, Any, int]:
+    img_path = img_path.expanduser()
+    if not img_path.is_file():
+        raise FileNotFoundError(f"Image not found: {img_path}")
+    pil = _mlp._prepare_vision_image(
+        Image.open(img_path).convert("RGB"),
+        int(config.vision_max_edge),
+        config.vision_square_pixels,
+    )
+    proc = _load_auto_processor(config.model_id)
+    tid = int(hf_full.config.image_token_id)
+    return pil, proc, tid
+
+
+def runtime_attach_image(rt: TtAgentRuntime, config: TTAgentConfig, img_path: Path) -> None:
+    pil, proc, tid = _load_sticky_image_bundle(config, rt.hf_full, img_path)
+    rt.sticky_pil = pil
+    rt.auto_processor = proc
+    rt.image_token_id = tid
+    rt._img_rows_cache = None
+
+
+def runtime_clear_image(rt: TtAgentRuntime) -> None:
+    rt.sticky_pil = None
+    rt.auto_processor = None
+    rt.image_token_id = None
+    rt._img_rows_cache = None
+
+
+def _parse_tt_image_command(line: str) -> tuple[Path, str | None] | None:
+    """Parse ``/image <path> [optional rest…]`` (prefix is case-insensitive)."""
+    if len(line) < 6 or line[:6].lower() != "/image":
+        return None
+    rest = line[6:].strip()
+    if not rest:
+        return None
+    try:
+        parts = shlex.split(rest)
+    except ValueError:
+        return None
+    if not parts:
+        return None
+    path = Path(parts[0]).expanduser()
+    tail = " ".join(parts[1:]).strip()
+    return path, tail if tail else None
+
+
 def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
-    """Open mesh, load weights, build ``TtMinistral3Model`` + LM head + optional ``SamplingGenerator``."""
+    """Open mesh, load weights, build ``TtDevstral2SmallModel`` + LM head + optional ``SamplingGenerator``."""
     os.environ["HF_MODEL"] = config.model_id
     apply_devstral_hf_trust_patches()
 
     print(f"Loading tokenizer: {config.model_id}")
-    tokenizer = MistralCommonBackend.from_pretrained(
-        config.model_id,
-        trust_remote_code=True,
-        local_files_only=os.getenv("CI") == "true",
-    )
+    _tok_kw: dict[str, Any] = {}
+    if os.getenv("CI") == "true":
+        _tok_kw["local_files_only"] = True
+    try:
+        tokenizer = MistralCommonBackend.from_pretrained(
+            config.model_id, trust_remote_code=True, fix_mistral_regex=True, **_tok_kw
+        )
+    except (TypeError, ValueError):
+        try:
+            tokenizer = MistralCommonBackend.from_pretrained(config.model_id, trust_remote_code=True, **_tok_kw)
+        except (TypeError, ValueError):
+            tokenizer = MistralCommonBackend.from_pretrained(config.model_id, **_tok_kw)
     pad_token_id = getattr(tokenizer, "pad_token_id", None)
     if pad_token_id is None:
         pad_token_id = 0
@@ -193,12 +331,10 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
         text_cfg = model_args.hf_config.text_config
         if not isinstance(text_cfg, Ministral3Config):
             raise TypeError(f"Expected Ministral3Config as text_config, got {type(text_cfg)!r}")
-        rope_params = getattr(text_cfg, "rope_parameters", None) or {}
-        if not isinstance(rope_params, dict):
-            rope_params = dict(rope_params)
 
+        vision_cfg = hf_full.config.vision_config
         shared_tt_ccl = TT_CCL(mesh_device)
-        tt_model = TtMinistral3Model(
+        tt_devstral = TtDevstral2SmallModel(
             mesh_device=mesh_device,
             tt_ccl=shared_tt_ccl,
             model_args=model_args,
@@ -207,10 +343,22 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
             dtype=dtype_tt,
             transformation_mats={"decode": None, "prefill": None},
             configuration=model_args,
-            llama_4_scaling_beta=rope_params.get("llama_4_scaling_beta"),
-            original_max_position_embeddings=rope_params.get("original_max_position_embeddings"),
-            ministral_text_config=text_cfg,
+            vision_config=vision_cfg,
+            vision_n_layers=None,
         )
+        tt_language_model = tt_devstral.language_model
+
+        emb_layer = hf_inner.get_input_embeddings()
+        _pad_dev = emb_layer.weight.device
+        pad_row_1d = emb_layer(torch.tensor([[pad_token_id]], device=_pad_dev, dtype=torch.long))[0, 0].detach()
+
+        sticky_pil: Optional[Image.Image] = None
+        auto_processor: Optional[Any] = None
+        image_token_id: Optional[int] = None
+        if config.vision_image is not None:
+            img_path = Path(config.vision_image)
+            sticky_pil, auto_processor, image_token_id = _load_sticky_image_bundle(config, hf_full, img_path)
+            print(f"Multimodal: sticky image {img_path.resolve()} (token id {image_token_id}).")
 
         sd_prefix = model_args.get_state_dict_prefix("", None)
         out_key = f"{sd_prefix}output.weight"
@@ -277,7 +425,8 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
             mesh_device=mesh_device,
             tokenizer=tokenizer,
             model_args=model_args,
-            tt_model=tt_model,
+            tt_devstral=tt_devstral,
+            tt_language_model=tt_language_model,
             hf_full=hf_full,
             hf_inner=hf_inner,
             tt_lm_head=tt_lm_head,
@@ -286,7 +435,12 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
             sampling_empty_slots=sampling_empty_slots,
             shared_tt_ccl=shared_tt_ccl,
             pad_token_id=pad_token_id,
+            pad_row_1d=pad_row_1d,
             cfg=config,
+            sticky_pil=sticky_pil,
+            auto_processor=auto_processor,
+            image_token_id=image_token_id,
+            _img_rows_cache=None,
         )
     except Exception:
         ttnn.close_mesh_device(mesh_device)
@@ -294,8 +448,29 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
 
 
 def generate_assistant_text_tt(rt: TtAgentRuntime, messages: List[Dict[str, str]], config: TTAgentConfig) -> str:
-    """Autoregressive decode on TT (full prefill each new token), same pattern as ``demo_devstral2_tt_multimodal``."""
-    input_ids = _tokenizer_apply_messages(rt.tokenizer, messages)
+    """Autoregressive decode on TT: token-id prefill or sticky-image merged embeddings (``demo_model_loading_prompt``)."""
+    pixel_values: Optional[torch.Tensor] = None
+    image_sizes: Optional[torch.Tensor] = None
+    image_sizes_list: Optional[list[tuple[int, int]]] = None
+
+    if rt.sticky_pil is not None:
+        assert rt.auto_processor is not None and rt.image_token_id is not None
+        proc_messages = _inject_image_into_first_human_user(messages)
+        prompt = rt.auto_processor.apply_chat_template(
+            proc_messages,
+            add_generation_prompt=True,
+            tokenize=False,
+        )
+        proc_out = rt.auto_processor(text=prompt, images=rt.sticky_pil, return_tensors="pt")
+        input_ids = proc_out["input_ids"]
+        pixel_values = proc_out["pixel_values"]
+        image_sizes = proc_out["image_sizes"]
+        if not isinstance(image_sizes, torch.Tensor):
+            raise TypeError(f"Expected image_sizes tensor from processor, got {type(image_sizes)}")
+        image_sizes_list = _mlp._image_sizes_list_from_batch(image_sizes)
+    else:
+        input_ids = _tokenizer_apply_messages(rt.tokenizer, messages)
+
     prompt_len = int(input_ids.shape[1])
     if prompt_len > config.max_context_tokens:
         raise RuntimeError(
@@ -315,81 +490,155 @@ def generate_assistant_text_tt(rt: TtAgentRuntime, messages: List[Dict[str, str]
 
     eos_ids = eos_token_ids(rt.hf_full.config, rt.tokenizer)
     do_sample = bool(config.do_sample)
-    gen_sl = prompt_len
-    ids_tt_gen = host_input_ids_to_tt_replicated(rt.mesh_device, input_ids)
 
     if config.seed is not None:
         torch.manual_seed(config.seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(config.seed)
 
-    try:
-        for _step in range(config.max_new_tokens):
-            tok_slot = (gen_sl - 1) % 32
-            if rt.sampling is not None:
-                rt.sampling.seed_manager.get_new_values()
-            tt_out = tt_forward_prefill_from_device_ids(
-                ids_tt_gen,
-                gen_sl,
-                rt.pad_token_id,
-                rt.mesh_device,
-                rt.tt_model,
-                rt.model_args,
-            )
-            if rt.sampling is not None:
-                assert rt.tt_lm_head is not None
-                logits_tt = tt_lm_head_logits_block(tt_out, gen_sl - 1, rt.model_args, rt.tt_lm_head)
-                sample_result = rt.sampling.sample(logits_tt, enable_trace=False)
-                tt_next = sample_result[0] if isinstance(sample_result, tuple) else sample_result
-                next_scalar = tt_sampling_output_token_id(tt_next, tok_slot)
-                ttnn.deallocate(logits_tt)
-                ttnn.deallocate(tt_out)
-            else:
-                if config.lm_head_cpu:
-                    assert rt.lm_head_weight_cpu is not None
-                    logits_row = cpu_lm_head_logits_last_token(
-                        tt_out,
-                        gen_sl - 1,
-                        rt.mesh_device,
-                        rt.lm_head_weight_cpu,
-                        int(rt.model_args.vocab_size),
-                    )
-                else:
+    if rt.sticky_pil is None:
+        gen_sl = prompt_len
+        ids_tt_gen = host_input_ids_to_tt_replicated(rt.mesh_device, input_ids)
+        try:
+            for _step in range(config.max_new_tokens):
+                tok_slot = (gen_sl - 1) % 32
+                if rt.sampling is not None:
+                    rt.sampling.seed_manager.get_new_values()
+                tt_out = tt_forward_prefill_from_device_ids(
+                    ids_tt_gen,
+                    gen_sl,
+                    rt.pad_token_id,
+                    rt.mesh_device,
+                    rt.tt_language_model,
+                    rt.model_args,
+                )
+                if rt.sampling is not None:
                     assert rt.tt_lm_head is not None
-                    logits_row = tt_lm_head_logits_last_token(
-                        tt_out,
-                        gen_sl - 1,
-                        rt.mesh_device,
-                        rt.model_args,
-                        rt.tt_lm_head,
-                    )
-                ttnn.deallocate(tt_out)
-                if do_sample:
-                    logits_f = logits_row.float().squeeze(0) / max(float(config.temperature), 1e-6)
-                    probs = torch.softmax(logits_f, dim=-1)
-                    next_scalar = int(torch.multinomial(probs, num_samples=1).item())
+                    logits_tt = tt_lm_head_logits_block(tt_out, gen_sl - 1, rt.model_args, rt.tt_lm_head)
+                    sample_result = rt.sampling.sample(logits_tt, enable_trace=False)
+                    tt_next = sample_result[0] if isinstance(sample_result, tuple) else sample_result
+                    next_scalar = tt_sampling_output_token_id(tt_next, tok_slot)
+                    ttnn.deallocate(logits_tt)
+                    ttnn.deallocate(tt_out)
                 else:
-                    next_scalar = int(logits_row.argmax(dim=-1).item())
+                    if config.lm_head_cpu:
+                        assert rt.lm_head_weight_cpu is not None
+                        logits_row = cpu_lm_head_logits_last_token(
+                            tt_out,
+                            gen_sl - 1,
+                            rt.mesh_device,
+                            rt.lm_head_weight_cpu,
+                            int(rt.model_args.vocab_size),
+                        )
+                    else:
+                        assert rt.tt_lm_head is not None
+                        logits_row = tt_lm_head_logits_last_token(
+                            tt_out,
+                            gen_sl - 1,
+                            rt.mesh_device,
+                            rt.model_args,
+                            rt.tt_lm_head,
+                        )
+                    ttnn.deallocate(tt_out)
+                    if do_sample:
+                        logits_f = logits_row.float().squeeze(0) / max(float(config.temperature), 1e-6)
+                        probs = torch.softmax(logits_f, dim=-1)
+                        next_scalar = int(torch.multinomial(probs, num_samples=1).item())
+                    else:
+                        next_scalar = int(logits_row.argmax(dim=-1).item())
 
-            if next_scalar in eos_ids:
-                break
-            ids_tt_gen = tt_append_uint32_token(ids_tt_gen, next_scalar, rt.mesh_device)
-            gen_sl += 1
+                if next_scalar in eos_ids:
+                    break
+                ids_tt_gen = tt_append_uint32_token(ids_tt_gen, next_scalar, rt.mesh_device)
+                gen_sl += 1
 
-        ids_host = tt_replicated_ids_to_torch_long(rt.mesh_device, ids_tt_gen, gen_sl)
-        answer_ids = ids_host[prompt_len:]
-        return rt.tokenizer.decode(answer_ids.tolist(), skip_special_tokens=True).strip()
-    finally:
-        ttnn.deallocate(ids_tt_gen)
+            ids_host = tt_replicated_ids_to_torch_long(rt.mesh_device, ids_tt_gen, gen_sl)
+            answer_ids = ids_host[prompt_len:]
+            return rt.tokenizer.decode(answer_ids.tolist(), skip_special_tokens=True).strip()
+        finally:
+            ttnn.deallocate(ids_tt_gen)
+
+    assert pixel_values is not None and image_sizes is not None and image_sizes_list is not None
+    pixel_values = pixel_values.to(torch.bfloat16).to(dev)
+    image_sizes = image_sizes.to(dev)
+    img_rows = _ensure_multimodal_img_rows(rt, pixel_values, image_sizes_list)
+    assert rt.image_token_id is not None
+    id_device = input_ids.device
+    current_ids = input_ids.clone()
+    for _step in range(config.max_new_tokens):
+        sl = int(current_ids.shape[1])
+        tok_slot = (sl - 1) % 32
+        merged = _mlp._merge_image_into_text_embeds(rt.hf_inner, current_ids, img_rows, rt.image_token_id)
+        merged_bf = merged.to(torch.bfloat16)
+        tt_out = _mlp._tt_prefill_from_merged_embeds(
+            current_ids,
+            merged_bf,
+            rt.pad_row_1d,
+            rt.pad_token_id,
+            rt.mesh_device,
+            rt.tt_language_model,
+            rt.model_args,
+            sl,
+        )
+        if rt.sampling is not None:
+            assert rt.tt_lm_head is not None
+            rt.sampling.seed_manager.get_new_values()
+            logits_tt = tt_lm_head_logits_block(tt_out, sl - 1, rt.model_args, rt.tt_lm_head)
+            sample_result = rt.sampling.sample(logits_tt, enable_trace=False)
+            tt_next = sample_result[0] if isinstance(sample_result, tuple) else sample_result
+            next_scalar = tt_sampling_output_token_id(tt_next, tok_slot)
+            ttnn.deallocate(logits_tt)
+            ttnn.deallocate(tt_out)
+            next_id = torch.tensor([[next_scalar]], device=id_device, dtype=torch.long)
+        else:
+            if config.lm_head_cpu:
+                assert rt.lm_head_weight_cpu is not None
+                logits_row = cpu_lm_head_logits_last_token(
+                    tt_out,
+                    sl - 1,
+                    rt.mesh_device,
+                    rt.lm_head_weight_cpu,
+                    int(rt.model_args.vocab_size),
+                )
+            else:
+                assert rt.tt_lm_head is not None
+                logits_row = tt_lm_head_logits_last_token(
+                    tt_out,
+                    sl - 1,
+                    rt.mesh_device,
+                    rt.model_args,
+                    rt.tt_lm_head,
+                )
+            ttnn.deallocate(tt_out)
+            if do_sample:
+                probs = torch.softmax(logits_row.float().squeeze(0) / max(float(config.temperature), 1e-6), dim=-1)
+                next_id = torch.multinomial(probs, num_samples=1).view(1, 1)
+            else:
+                next_id = logits_row.argmax(dim=-1, keepdim=True)
+            next_id = next_id.to(id_device)
+
+        if eos_ids and int(next_id.item()) in eos_ids:
+            break
+        current_ids = torch.cat([current_ids, next_id], dim=1)
+
+    answer_ids = current_ids[0, prompt_len:]
+    return rt.tokenizer.decode(answer_ids.tolist(), skip_special_tokens=True).strip()
 
 
 def chat_loop_tt(rt: TtAgentRuntime, config: TTAgentConfig) -> None:
-    system_content = f"{config.system_prompt}\n\n{DEFAULT_AGENT_RULES}".strip()
+    system_content = (f"{config.system_prompt}\n\n{DEFAULT_AGENT_RULES}\n\n{TT_AGENT_MULTIMODAL_SYSTEM_APPEND}").strip()
     messages: List[Dict[str, str]] = [{"role": "system", "content": system_content}]
     state = AgentState()
 
-    print("\n--- Devstral2 Small Agent Demo (Tenstorrent) ---")
-    print("Type 'quit' or 'exit' to stop. Use '/clear' to reset conversation history.\n")
+    print(
+        "\n--- Devstral2 Small Agent Demo (Tenstorrent)"
+        + ("; image attached (multimodal)" if rt.sticky_pil is not None else "")
+        + " ---"
+    )
+    print(
+        "Type 'quit' or 'exit' to stop. '/clear' resets chat + tools (image stays; use '/noimage' to drop). "
+        "'/image PATH [prompt…]' attaches an image; optional words after the path are your question this turn.\n"
+    )
 
     while True:
         try:
@@ -408,6 +657,25 @@ def chat_loop_tt(rt: TtAgentRuntime, config: TTAgentConfig) -> None:
             state = AgentState()
             print("Conversation history and todo state cleared.\n")
             continue
+        if user_input.lower() == "/noimage":
+            runtime_clear_image(rt)
+            print("Cleared sticky image; text-only TT path until you /image again.\n")
+            continue
+        if len(user_input) >= 6 and user_input[:6].lower() == "/image":
+            parsed = _parse_tt_image_command(user_input)
+            if parsed is None:
+                print("Usage: /image /path/to/image.jpg [optional question…]\n")
+                continue
+            img_path, same_turn_prompt = parsed
+            try:
+                runtime_attach_image(rt, config, img_path)
+            except FileNotFoundError as exc:
+                print(f"{exc}\n")
+                continue
+            print(f"Attached image: {img_path.resolve()} (--vision-square-pixels / --vision-max-edge apply).\n")
+            if same_turn_prompt is None:
+                continue
+            user_input = same_turn_prompt
 
         messages.append({"role": "user", "content": user_input})
         final_response: Optional[str] = None
@@ -496,7 +764,10 @@ def chat_loop_tt(rt: TtAgentRuntime, config: TTAgentConfig) -> None:
 
 
 def parse_tt_args() -> TTAgentConfig:
-    p = argparse.ArgumentParser(description="Interactive Devstral agent on Tenstorrent (text TT LM).")
+    p = argparse.ArgumentParser(
+        description="Interactive Devstral agent on Tenstorrent: text + in-session /image multimodal "
+        "(optional --image to pre-attach)."
+    )
     p.add_argument("--model", default=DEFAULT_MODEL_ID, help=f"HF model id (default {DEFAULT_MODEL_ID})")
 
     # Agent (same names as demo_agent.py where possible)
@@ -530,6 +801,25 @@ def parse_tt_args() -> TTAgentConfig:
         help="Upper bound on **prompt** token length (budget is N + max_new_tokens + 2048, padded).",
     )
     p.add_argument("--seed", type=int, default=None)
+    p.add_argument(
+        "--image",
+        type=Path,
+        default=None,
+        help="Optional: pre-attach image at startup (same as /image in the chat loop).",
+    )
+    p.add_argument(
+        "--vision-max-edge",
+        type=int,
+        default=0,
+        help="Max longest image side (px) before processor (0 = no PIL thumbnail). "
+        "Use --vision-square-pixels (e.g. 1540) for fixed square sizing; ignored when square-pixels is set.",
+    )
+    p.add_argument(
+        "--vision-square-pixels",
+        type=int,
+        default=None,
+        help="If set (>0), resize image to S×S with LANCZOS (overrides --vision-max-edge).",
+    )
 
     a = p.parse_args()
 
@@ -552,6 +842,9 @@ def parse_tt_args() -> TTAgentConfig:
         max_seq_len=a.max_seq_len,
         max_context_tokens=a.max_context_tokens,
         seed=a.seed,
+        vision_image=a.image,
+        vision_max_edge=a.vision_max_edge,
+        vision_square_pixels=a.vision_square_pixels,
     )
 
 
