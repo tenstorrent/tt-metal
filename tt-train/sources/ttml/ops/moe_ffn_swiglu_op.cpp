@@ -13,10 +13,8 @@
 #include "autograd/graph_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
-#include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/full/full.hpp"
 
 namespace ttml::ops {
 
@@ -98,16 +96,16 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
     gate_proj_parts.reserve(num_experts);
     up_proj_parts.reserve(num_experts);
 
-    // Pre-allocate output for just the used rows [0, offsets[-1]); per-expert pad rows
-    // between offsets[e]+counts[e] and offsets[e+1] get zeroed implicitly because
-    // grouped's pad rows are zero and the matmul of a zero input row is a zero output.
-    // If offsets[-1] < T_cap (trailing slack from worst-case allocation), we append a
-    // single moreh_full zero tensor at the end and concat once. This avoids the
-    // 256-MB-scale ttml::core::zeros that an output-shaped [T_cap, H] tensor would need.
+    // Pre-allocate output at full T_cap (empty, no zero-init). Per-expert pad rows
+    // between offsets[e]+counts[e] and offsets[e+1] get zeroed implicitly by the matmul
+    // (grouped's pad rows are zero, so the matmul output for those rows is zero).
+    // Trailing slack rows [offsets[-1], T_cap) need an explicit zero-fill (handled
+    // post-loop via a write-at-offset matmul with zero inputs — avoids a ttnn::concat
+    // and the full-tensor ttml::core::zeros cost).
     const uint32_t used_rows = offsets_host.back();
     const bool has_trailing_slack = (used_rows < token_capacity);
     auto y = ttml::core::empty(
-        ttnn::Shape({1U, 1U, used_rows, hidden_dim}),
+        ttnn::Shape({1U, 1U, token_capacity, hidden_dim}),
         &ttml::autograd::ctx().get_device(),
         grouped_value.memory_config());
 
@@ -169,18 +167,30 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         throw std::runtime_error("moe_ffn_swiglu_fw: all experts empty (token_capacity == 0).");
     }
 
-    // Pad the trailing slack rows (used_rows..T_cap) with zeros. moreh_full allocates only
-    // the slack-sized tensor (cheap); a single 2-part concat assembles the final [T_cap, H].
+    // Zero-fill the trailing slack rows (used_rows..T_cap) of y. Implemented as a
+    // variable_matmul with zero in0 / zero weight (K = 1 tile) and write-at-offset
+    // pointing at y[used_rows:T_cap]. The matmul computes 0×0 = 0 and writes those
+    // zeros directly into y's slack rows — no separate concat, no full-tensor clear.
+    // The two zero tensors are tiny (slack_rows × 32 + 32 × H), and the matmul work
+    // is just N-output-tile writes since K is a single block of zeros.
     if (has_trailing_slack) {
         const uint32_t slack_rows = token_capacity - used_rows;
-        auto slack_zeros = ttnn::moreh_full(
-            ttnn::SmallVector<uint32_t>{1U, 1U, slack_rows, hidden_dim},
-            0.0F,
-            &ttml::autograd::ctx().get_device(),
-            grouped_value.dtype(),
-            grouped_value.layout(),
-            grouped_value.memory_config());
-        y = ttnn::concat(std::vector<ttnn::Tensor>{y, slack_zeros}, /*dim=*/2);
+        constexpr uint32_t kZeroK = 32U;  // one tile on the K axis
+        auto zero_in0 = ttml::core::zeros(
+            ttnn::Shape({1U, 1U, slack_rows, kZeroK}), &ttml::autograd::ctx().get_device(), grouped_value.dtype());
+        auto zero_w = ttml::core::zeros(
+            ttnn::Shape({1U, 1U, kZeroK, hidden_dim}), &ttml::autograd::ctx().get_device(), grouped_value.dtype());
+        ttml::metal::variable_matmul(
+            zero_in0,
+            zero_w,
+            kVarMmConfig,
+            std::nullopt,
+            /*in0_row_offset_tiles=*/0U,
+            /*effective_M_tiles=*/0U,
+            /*in0_k_offset_tiles=*/0U,
+            /*in1_k_offset_tiles=*/0U,
+            /*output_tensor=*/y,
+            /*out_row_offset_tiles=*/used_rows / 32U);
     }
 
     auto out = autograd::create_tensor(y);
