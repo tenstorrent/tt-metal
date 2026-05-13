@@ -327,7 +327,7 @@ void kernel_main() {
 
             cb_reserve_back(cb_c2s_out, num_w0_w1_tiles_h);
             for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
-                uint32_t dm1_step = 0;
+                uint32_t src_core = ring_core_id;
                 uint32_t dm1_tiles_remaining = shard_tiles_lut[ring_core_id];
                 cb_wait_front(cb_w2c_rdy, 1);
 
@@ -362,8 +362,8 @@ void kernel_main() {
                         if (dm1_tiles_remaining == 0) {
                             cb_pop_front(cb_w2c_rdy, 1);
                             cb_wait_front(cb_w2c_rdy, 1);
-                            dm1_tiles_remaining =
-                                shard_tiles_lut[(ring_core_id + num_cores - (++dm1_step)) % num_cores];
+                            src_core = (src_core == 0) ? num_cores - 1 : src_core - 1;
+                            dm1_tiles_remaining = shard_tiles_lut[src_core];
                             in2_offset += tiles_per_step;
                             in2_index = in2_offset;
                         }
