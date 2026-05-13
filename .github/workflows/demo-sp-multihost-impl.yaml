@@ -99,7 +99,6 @@ jobs:
       HOME: /home/user
       PIP_CACHE_DIR: /home/user/.cache/pip
       LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
-      TT_METAL_HOME: /home/user/tt-metal
       TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
       TT_METAL_CACHE: /home/user/.cache
     strategy:
