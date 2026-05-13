@@ -43,6 +43,32 @@ Usage:
     python models/demos/qwen3_tts/tests/audio_diff.py \\
         /tmp/audio_hf_ashley.wav /tmp/audio_ttnn_ashley_v3.wav \\
         --ref /local/ttuser/ssinghal/tts2/tts-models/tts-2/prompts/Ashley_en.wav
+
+Using a different speaker encoder (other TTS models):
+    The CLI defaults to the qwen3-tts ECAPA encoder, but
+    ``speaker_similarity_via_reference()`` is importable and accepts a
+    pluggable ``encoder_fn`` plus ``sample_rate`` so it can be reused for
+    any TTS model. Example wiring for a different model::
+
+        from models.demos.qwen3_tts.tests.audio_diff import (
+            speaker_similarity_via_reference,
+        )
+
+        def my_encoder(waveform):  # waveform: float32 1-D torch.Tensor
+            return my_model.extract_speaker_embedding(waveform)  # → 1-D emb
+
+        sims = speaker_similarity_via_reference(
+            "ref.wav", "gen_a.wav", "gen_b.wav",
+            encoder_fn=my_encoder,
+            sample_rate=16000,  # whatever rate your encoder expects
+        )
+
+    Contract for ``encoder_fn``:
+      - input  — ``torch.FloatTensor`` of shape ``[num_samples]`` at
+                 ``sample_rate`` Hz (resampling is handled by this module).
+      - output — any tensor; it is flattened and L2-normalized internally,
+                 then cosine-compared. A speaker embedding (e.g. ECAPA-TDNN
+                 [1, D]) is the typical shape.
 """
 from __future__ import annotations
 
