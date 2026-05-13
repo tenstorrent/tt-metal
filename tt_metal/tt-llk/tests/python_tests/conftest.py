@@ -637,6 +637,29 @@ def pytest_sessionstart(session):
     except OSError:
         pass
 
+    # AOT-compile the shared brisc.elf + coverage.o before xdist forks
+    # workers. Otherwise every worker's first test hits build_shared_artefacts
+    # and races on /tmp/tt-llk-build-shared.lock; (N-1)/N of them spend tens
+    # of seconds blocked waiting for the FileLock. Doing it here, on the
+    # controller, in advance means workers find the .shared_complete marker
+    # already present and skip via the fast path (test_config.py:837). Wrap
+    # in try/except so a transient build failure doesn't kill the suite —
+    # workers will retry on first test if needed.
+    if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+        try:
+            # build_shared_artefacts doesn't use any instance-specific fields
+            # (test_name, templates, etc.), only TestConfig class state
+            # already populated by pytest_configure → setup_paths. A throwaway
+            # instance with a sentinel test_name is the minimum-friction way
+            # to call it without refactoring to classmethod.
+            TestConfig(test_name="_aot_shared_bootstrap_").build_shared_artefacts()
+        except Exception as exc:  # noqa: BLE001 — best-effort optimization
+            logger.warning(
+                "AOT shared-artefacts build failed at sessionstart "
+                "(will retry per-worker): {}",
+                exc,
+            )
+
     test_target = TestTargetConfig()
     if not test_target.run_simulator and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         _send_arc_message("GO_BUSY", test_target.device_id)
