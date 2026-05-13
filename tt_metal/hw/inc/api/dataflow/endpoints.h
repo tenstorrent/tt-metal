@@ -4,15 +4,11 @@
 
 #pragma once
 
-#include "experimental/noc.h"
-
-namespace experimental {
+#include "api/dataflow/noc.h"
 
 /**
- * @brief Experimental wrapper around calculating unicast noc address given x, y, and address. This allows direct
+ * @brief Wrapper around calculating unicast noc address given x, y, and address. This allows direct
  * address to be supplied to NoC apis
- *
- * @note This API is experimental and subject to change.
  */
 struct UnicastEndpoint {
     uint64_t get_noc_unicast_addr(uint32_t noc_x, uint32_t noc_y, uint32_t addr, uint8_t noc) const {
@@ -21,10 +17,8 @@ struct UnicastEndpoint {
 };
 
 /**
- * @brief Experimental wrapper around calculating multicast noc address given 2D multicast rectangle and address. This
+ * @brief Wrapper around calculating multicast noc address given 2D multicast rectangle and address. This
  * allows direct address to be supplied to NoC apis
- *
- * @note This API is experimental and subject to change.
  */
 struct MulticastEndpoint {
     uint64_t get_noc_multicast_addr(
@@ -35,12 +29,10 @@ struct MulticastEndpoint {
 };
 
 /**
- * @brief Experimental wrapper around calculating noc address targeting a bank managed by the allocator (either DRAM or
+ * @brief Wrapper around calculating noc address targeting a bank managed by the allocator (either DRAM or
  * L1) given bank id and address. This allows direct address to be supplied to NoC apis
- *
- * @note This API is experimental and subject to change.
  */
-enum AllocatorBankType { L1, DRAM };
+enum class AllocatorBankType { L1, DRAM };
 
 template <AllocatorBankType bank_type>
 struct AllocatorBank {
@@ -122,5 +114,3 @@ struct noc_traits_t<AllocatorBank<bank_type>> {
         return noc_addr;
     }
 };
-
-}  // namespace experimental

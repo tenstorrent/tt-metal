@@ -20,9 +20,9 @@
 //   [2+M .. 2+2M-1]:  entries_per_consumer[i] � loop count per thread for DFB_i
 //   [2+2M .. 2+3M-1]: is_blocked[i]           � 1 for BLOCKED, 0 for STRIDED
 
-#include "experimental/dataflow_buffer.h"
-#include "experimental/noc.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr uint32_t implicit_sync = get_compile_time_arg_val(0);
@@ -41,14 +41,14 @@ void kernel_main() {
 #endif
     const uint32_t num_consumers = static_cast<uint32_t>(__builtin_popcount(consumer_mask));
 
-    experimental::Noc noc;
+    Noc noc;
 
     for (uint32_t dfb_id = 0; dfb_id < num_dfbs; dfb_id++) {
         const uint32_t dst_addr            = get_arg_val<uint32_t>(2 + dfb_id);
         const uint32_t entries_per_consumer = get_arg_val<uint32_t>(2 + num_dfbs + dfb_id);
         const uint32_t is_blocked          = get_arg_val<uint32_t>(2 + 2 * num_dfbs + dfb_id);
 
-        experimental::DataflowBuffer dfb(dfb_id);
+        DataflowBuffer dfb(dfb_id);
         const uint32_t entry_size  = dfb.get_entry_size();
         const auto tensor_accessor = TensorAccessor(dst_args, dst_addr, entry_size);
 
@@ -61,7 +61,7 @@ void kernel_main() {
 
             if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR
-                noc.async_write<experimental::Noc::TxnIdMode::ENABLED>(
+                noc.async_write<Noc::TxnIdMode::ENABLED>(
                     dfb, tensor_accessor, {}, {.page_id = page_id});
 #endif
             } else {

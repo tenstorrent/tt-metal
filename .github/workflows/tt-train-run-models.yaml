@@ -66,8 +66,7 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         TEST_DATA_DIR: /work/data
         ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
-        CI_RUNNER_LABEL: ${{ inputs.runner-label }}
-        CI_ARCH_NAME: ${{ inputs.arch }}
+        PYTHONPATH: /work
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -112,8 +111,8 @@ jobs:
       - name: Install Python dependencies
         run: |
           # Install minimal dependencies for processing metrics
-          pip list
-          pip install "gitpython==3.1.41" "pydantic==2.9.2" "numpy>=1.24.4,<2" "pyyaml>=5.4"
+          uv pip list
+          uv pip install "gitpython==3.1.41" "pydantic==2.9.2" "numpy>=1.24.4,<2" "pyyaml>=5.4"
 
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
