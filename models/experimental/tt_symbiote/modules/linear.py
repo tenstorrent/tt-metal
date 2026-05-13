@@ -56,6 +56,14 @@ def _largest_divisor_at_most(value: int, limit: int) -> int:
 
 
 def _out_subblock_w(per_core_n: int, out_subblock_h: int = 1) -> int:
+    """Pick out_subblock_w that divides per_core_n and fits DST budget.
+
+    Capped at 4 because some callers wrap the matmul with
+    ``fp32_dest_acc_en=True`` compute configs (DST budget = 4 tiles).
+    Pushing to 8 trips the
+    ``out_subblock_w * out_subblock_h <= available_reg_count`` assertion
+    in matmul_device_operation.cpp:1010 for those callers.
+    """
     for candidate in range(4 // out_subblock_h, 0, -1):
         if per_core_n % candidate == 0:
             return candidate
@@ -139,7 +147,11 @@ def _dp_decode_matmul_program_config(device, input_shape, weight_shape):
     # For very large N (e.g. lm_head N=151936 → per_core_n≈75) the per-core
     # L1 footprint of 1D-mcast becomes tight (output tiles + weight cache +
     # circular buffers) and the default ttnn config is typically as fast or
-    # faster. Bail out and let the auto-config handle it.
+    # faster. Bail out and let the auto-config handle it. Tracy dispatch
+    # ablation: lifting this to per_core_n>96 to cover lm_head regressed
+    # decode wall-clock by +22% in dispatch mode (9.82 s -> 12.06 s for
+    # 180 tokens) -- the per-core 75-tile output buffer thrashes L1 enough
+    # to lose vs the auto-config.
     if per_core_n > 32:
         return None
 
@@ -794,3 +806,347 @@ class TTNNViTIntermediate(TTNNLinearGelu):
         new_intermediate._fallback_torch_layer = torch_vit_intermediate
         new_intermediate.dense = TTNNLinear.from_torch(torch_vit_intermediate.dense)
         return new_intermediate
+
+
+# =============================================================================
+# DRAM-width-sharded LM head with N-chunk splitting.
+# =============================================================================
+#
+# Mirrors the pattern from ``models/tt_transformers/tt/lm_head.py``: weights
+# are stored with ``TensorMemoryLayout.WIDTH_SHARDED`` over the 12 DRAM banks
+# (vs DRAM-interleaved which reads serially from one bank), and the matmul
+# uses ``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`` so the
+# kernel can stream weight tiles from all 12 banks in parallel.
+#
+# Why N-parallel + chunking and not just K-parallel:
+#  - dots.ocr currently runs lm_head as ``TTNNLinearLLamaIColShardedWAllReduced``
+#    (K-parallel + all_reduce). With K=hidden=1536 split 2-way → K_per_dev=768
+#    (24 tiles), the GCD with N=151936/2=75968 (2374 tiles) is 2 → at most
+#    2 compute cores can divide both dims cleanly, far too few for the
+#    DRAM-sharded matmul to be efficient.
+#  - Switching to N-parallel makes K=1536 (48 tiles) replicated on every
+#    device. With N split into chunks of ~12K cols each (≈384 tiles), the
+#    8 compute cores divide both 48 K-tiles and 384 N-tiles cleanly
+#    (in0_block_w=6, per_core_N=48). Output buffer per core stays small
+#    (≈48 KB at bf8) so trace L1 plan fits. There is one extra all_gather
+#    on the K-replicate (input went from K-sharded to replicated), but the
+#    matmul-side win dominates.
+#
+# Failure modes to watch for during validation:
+#  - L1 OOM in trace if the per-chunk output buffer plus the existing
+#    decode-stage buffers exceed per-core L1. Lower MAX_COLUMNS_PER_CHUNK
+#    to halve per-core output if hit.
+#  - ``dram_grid`` on the device must have x=12 (Wormhole). On Blackhole
+#    (8 banks) the chunk math will need a different MAX_COLUMNS_PER_CHUNK.
+#  - The all_gather on the input from K-sharded → replicated must succeed
+#    on the same fabric topology used elsewhere (FABRIC_1D_RING, num_links=1).
+# =============================================================================
+
+
+def _dram_sharded_mem_config_2d(device, k: int, n: int):
+    """Per-device DRAM-WIDTH-SHARDED memory config for a [k, n] weight slice.
+
+    Splits the n columns over the device's DRAM-bank cores (12 on
+    Wormhole) and pads up to ``tile_size * dram_cores``. Mirrors
+    ``tt_transformers/tt/model_config.create_dram_sharded_mem_config``.
+    """
+    tile = ttnn.TILE_SIZE
+    dram_grid = device.dram_grid_size()
+    dram_cores = int(dram_grid.x)
+    padded_n = math.ceil(n / (tile * dram_cores)) * (tile * dram_cores)
+    shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_cores - 1, 0))])
+    shard_spec = ttnn.ShardSpec(shard_grid, (k, padded_n // dram_cores), ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+
+def _dram_matmul_program_config_for(k: int, n: int, num_cores: int = 8):
+    """Build a DRAM-sharded matmul program config for an [M=32, K, N] decode matmul."""
+    tile = ttnn.TILE_SIZE
+    in0_block_w = _largest_divisor_at_most(k // tile // num_cores, 8) if (k // tile) % num_cores == 0 else 1
+    per_core_m = 1
+    per_core_n = math.ceil(n / (tile * num_cores))
+    return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        in0_block_w=max(1, in0_block_w),
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        fused_activation=None,
+    )
+
+
+class TTNNDotsOCRDRAMShardedLMHead(TTNNModule):
+    """LM head with DRAM-width-sharded weight chunks (N-parallel split).
+
+    Per-device weight is split into ``num_chunks`` slices along N. Each slice
+    is laid out ``WIDTH_SHARDED`` across the 12 DRAM banks of that device.
+    Forward path:
+        1. all_gather input on dim=-1 (K-sharded → replicated) -- one CCL.
+        2. interleaved_to_sharded(input) once -- L1 width-sharded.
+        3. For each weight chunk: ttnn.matmul with
+           MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig, output is
+           L1 width-sharded; sharded_to_interleaved(output) for concat.
+        4. concat across chunks, all_gather across mesh on N -- one CCL.
+        5. Return [B, M, vocab_padded] interleaved DRAM/L1 ready for argmax.
+    """
+
+    MAX_COLUMNS_PER_CHUNK = 12288  # see top-of-block notes
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.in_features = 0
+        self.out_features = 0
+        self._weight_torch = None
+        self._bias_torch = None
+        self.tt_weight_chunks = []
+        self.tt_bias_chunks = []
+        self._chunk_program_configs = []
+        self._chunk_n_cols_per_device = []
+        self._padded_vocab = 0
+        self._size_per_device = 0
+        self._input_shard_cfg = None
+        # Note: attr name is `compute_kernel_config` (no underscore prefix) so
+        # the pipeline's post-weight-load override in
+        # ``TTNNDotsOCRPipeline._set_device_and_preprocess`` (which assigns
+        # ``self.lm_head.compute_kernel_config = ...``) actually replaces the
+        # config used during forward.
+        self.compute_kernel_config = None
+
+    @classmethod
+    def from_torch(cls, linear: nn.Linear) -> "TTNNDotsOCRDRAMShardedLMHead":
+        new = cls()
+        new.in_features = int(linear.in_features)
+        new.out_features = int(linear.out_features)
+        new._fallback_torch_layer = linear
+        new._weight_torch = linear.weight  # [out, in] = [vocab, hidden]
+        new._bias_torch = linear.bias
+        return new
+
+    def preprocess_weights_impl(self):
+        # Defer all heavy work to move_weights_to_device_impl where we know
+        # the mesh shape and the DRAM bank count.
+        return
+
+    def move_weights_to_device_impl(self):
+        device = self.device
+        num_devices = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
+        tile = ttnn.TILE_SIZE
+
+        # Pad vocab to multiple of (tile * num_devices) so the per-device
+        # split is tile-aligned (otherwise concat would have padding holes).
+        padded_vocab = math.ceil(self.out_features / (tile * num_devices)) * (tile * num_devices)
+        self._padded_vocab = padded_vocab
+        size_per_device = padded_vocab // num_devices
+        self._size_per_device = size_per_device
+
+        weight_torch = self._weight_torch  # [out, in]
+        if weight_torch.dim() != 2:
+            raise ValueError(f"Expected weight [out,in], got {tuple(weight_torch.shape)}")
+        # Pad output dim to padded_vocab with zeros.
+        if int(weight_torch.shape[0]) < padded_vocab:
+            pad_rows = padded_vocab - int(weight_torch.shape[0])
+            weight_torch = torch.cat(
+                [weight_torch, torch.zeros(pad_rows, weight_torch.shape[1], dtype=weight_torch.dtype)],
+                dim=0,
+            )
+        # Transpose to [in, out] = [hidden, padded_vocab] for matmul.
+        weight_t = weight_torch.transpose(-2, -1).contiguous()
+
+        # Decide how many chunks per device. Chunks let the per-core L1
+        # output buffer stay small in the DRAM-sharded matmul kernel.
+        num_chunks = max(1, math.ceil(size_per_device / self.MAX_COLUMNS_PER_CHUNK))
+        # Make every chunk except possibly the last be a multiple of
+        # (tile * dram_cores) so the DRAM-shard math stays tile-aligned.
+        dram_cores = int(device.dram_grid_size().x) if hasattr(device, "dram_grid_size") else 12
+        chunk_align = tile * dram_cores
+        base_chunk = math.ceil(size_per_device / num_chunks)
+        base_chunk = math.ceil(base_chunk / chunk_align) * chunk_align
+        chunk_sizes = []
+        remaining = size_per_device
+        for _ in range(num_chunks - 1):
+            take = min(base_chunk, remaining)
+            chunk_sizes.append(take)
+            remaining -= take
+        chunk_sizes.append(remaining)
+        self._chunk_n_cols_per_device = chunk_sizes
+
+        self.tt_weight_chunks = []
+        for chunk_idx, chunk_n in enumerate(chunk_sizes):
+            # Build per-mesh tensor of shape [hidden, num_devices*chunk_n] so
+            # that ShardTensorToMesh(dim=-1) gives every device a [hidden, chunk_n]
+            # slice (mirrors tt_transformers/tt/lm_head.py weight loading).
+            device_splits = []
+            for d in range(num_devices):
+                start = d * size_per_device + sum(chunk_sizes[:chunk_idx])
+                end = start + chunk_n
+                device_splits.append(weight_t[:, start:end])
+            combined = torch.cat(device_splits, dim=-1)  # [hidden, num_devices*chunk_n]
+
+            mem_cfg = _dram_sharded_mem_config_2d(device, k=int(combined.shape[0]), n=chunk_n)
+            tt_chunk = ttnn.as_tensor(
+                combined,
+                device=device,
+                mesh_mapper=(ttnn.shard_tensor_to_mesh_mapper(device, dim=-1) if num_devices > 1 else None),
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                memory_config=mem_cfg,
+            )
+            self.tt_weight_chunks.append(tt_chunk)
+
+        # Bias is rarely set on lm_head; keep simple. If present, split
+        # along N like the weight (no DRAM sharding needed for the bias --
+        # it's small).
+        self.tt_bias_chunks = []
+        if self._bias_torch is not None:
+            bias_torch = self._bias_torch
+            if int(bias_torch.shape[0]) < padded_vocab:
+                bias_torch = torch.cat(
+                    [bias_torch, torch.zeros(padded_vocab - int(bias_torch.shape[0]), dtype=bias_torch.dtype)],
+                    dim=0,
+                )
+            for chunk_idx, chunk_n in enumerate(chunk_sizes):
+                device_splits = []
+                for d in range(num_devices):
+                    start = d * size_per_device + sum(chunk_sizes[:chunk_idx])
+                    end = start + chunk_n
+                    device_splits.append(bias_torch[start:end])
+                combined_b = torch.cat(device_splits, dim=-1).unsqueeze(0)  # [1, num_devices*chunk_n]
+                tt_b = ttnn.as_tensor(
+                    combined_b,
+                    device=device,
+                    mesh_mapper=(ttnn.shard_tensor_to_mesh_mapper(device, dim=-1) if num_devices > 1 else None),
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                self.tt_bias_chunks.append(tt_b)
+
+        # Build per-chunk program configs once.
+        self._chunk_program_configs = [
+            _dram_matmul_program_config_for(k=self.in_features, n=chunk_n, num_cores=8) for chunk_n in chunk_sizes
+        ]
+
+        # Cached input width-sharded mem config (input is M=32, K=hidden).
+        # We shard the K dim across 8 cores so each core gets K/8 columns.
+        # NOTE: ``create_sharded_memory_config(shape=...)`` without
+        # ``use_height_and_width_as_shard_shape`` interprets ``shape`` as the
+        # FULL tensor shape and divides the last dim by ``core_grid.x``. So
+        # we pass ``(tile, in_features)`` — the per-core shard width then
+        # comes out tile-aligned: ``in_features / 8`` tiles wide.
+        in_grid = ttnn.CoreGrid(y=1, x=8)
+        self._input_shard_cfg = ttnn.create_sharded_memory_config(
+            shape=(tile, self.in_features),
+            core_grid=in_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+
+        # Compute kernel: HiFi2 + bf8 weights + packer L1 acc + FP32 dest accum
+        # (matches the prior lm_head's stable argmax fidelity). The pipeline
+        # may override this attribute after weight load.
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+    def deallocate_weights_impl(self):
+        for w in self.tt_weight_chunks:
+            ttnn.deallocate(w)
+        for b in self.tt_bias_chunks:
+            ttnn.deallocate(b)
+        self.tt_weight_chunks = []
+        self.tt_bias_chunks = []
+        super().deallocate_weights_impl()
+
+    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+        device = self.device
+        num_devices = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
+
+        x = input_tensor
+        # The upstream final RMSNorm hands us a width-sharded tensor whose
+        # shard shape is not necessarily tile-aligned (e.g. (32, 24) for
+        # K=768 across 32 cores). The DRAM-sharded matmul kernel needs an
+        # input that is L1 WIDTH-sharded with a tile-aligned shard shape, so
+        # de-shard to interleaved DRAM first; the cost is one
+        # ``sharded_to_interleaved`` per token call (small for [1,32,K]).
+        if x.memory_config().is_sharded():
+            x = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Force shape to 4D [B, 1, M, K] for the matmul kernel.
+        in_shape = list(x.shape)
+        if len(in_shape) == 2:
+            in_shape = [1, 1] + in_shape
+        elif len(in_shape) == 3:
+            in_shape = [in_shape[0], 1, in_shape[1], in_shape[2]]
+        if list(x.shape) != in_shape:
+            x = ttnn.reshape(x, in_shape)
+
+        # Step 1: K-sharded → replicated (only if multi-device). Each device's
+        # input has K_per_dev columns; the lm_head weight is N-parallel which
+        # needs the full K, so all_gather along the last dim.
+        needs_ccl = num_devices > 1 and _tp_requires_ccl(device)
+        if needs_ccl and int(x.shape[-1]) < self.in_features:
+            x = ttnn.all_gather(
+                x,
+                dim=3,
+                num_links=_ccl_num_links(device),
+                cluster_axis=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Linear,
+            )
+
+        # Step 2: shard input to L1 width-sharded across 8 cores once.
+        x_sharded = ttnn.to_memory_config(x, self._input_shard_cfg)
+
+        # Step 3: per-chunk DRAM-sharded matmul, then sharded → interleaved.
+        chunk_outs = []
+        for i, (w_chunk, pc) in enumerate(zip(self.tt_weight_chunks, self._chunk_program_configs)):
+            bias_chunk = self.tt_bias_chunks[i] if self.tt_bias_chunks else None
+            out_chunk = ttnn.linear(
+                x_sharded,
+                w_chunk,
+                bias=bias_chunk,
+                program_config=pc,
+                compute_kernel_config=self.compute_kernel_config,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                dtype=ttnn.bfloat8_b,
+            )
+            out_chunk = ttnn.sharded_to_interleaved(out_chunk, ttnn.DRAM_MEMORY_CONFIG)
+            chunk_outs.append(out_chunk)
+        ttnn.deallocate(x_sharded)
+
+        # Step 4: concat per-chunk outputs (each [B, 1, M, chunk_n]) → [B, 1, M, size_per_device].
+        if len(chunk_outs) == 1:
+            full = chunk_outs[0]
+        else:
+            full = ttnn.concat(chunk_outs, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            for c in chunk_outs:
+                ttnn.deallocate(c)
+
+        # Step 5: all_gather across mesh on N to assemble full vocab on every
+        # device for argmax.
+        if needs_ccl:
+            full = ttnn.all_gather(
+                full,
+                dim=3,
+                num_links=_ccl_num_links(device),
+                cluster_axis=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Linear,
+            )
+
+        # If we padded the vocab during weight loading, slice back to logical vocab.
+        if self._padded_vocab > self.out_features:
+            full = ttnn.slice(
+                full,
+                [0, 0, 0, 0],
+                [int(full.shape[0]), 1, int(full.shape[-2]), self.out_features],
+            )
+
+        # Restore original logical input rank for downstream argmax.
+        if len(input_tensor.shape) == 3:
+            full = ttnn.reshape(full, [int(full.shape[0]), int(full.shape[-2]), int(full.shape[-1])])
+        elif len(input_tensor.shape) == 2:
+            full = ttnn.reshape(full, [int(full.shape[-2]), int(full.shape[-1])])
+        return full

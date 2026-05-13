@@ -142,8 +142,13 @@ class TTNNDotsOCRAttention(TTNNModule):
                 fp32_dest_acc_en=False,
                 packer_l1_acc=True,
             )
+            # Decode SDPA: LoFi + approx softmax + packer_l1_acc.
+            # Same fidelity as prefill SDPA -- decode is bandwidth-bound on KV
+            # cache reads (Q is tiny, the multiplies dominate over softmax
+            # accuracy), and LoFi cuts the per-SDPA device time roughly in half
+            # without changing decoded text in our validation runs.
             self.sdpa.decode_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=True,
                 fp32_dest_acc_en=False,
                 packer_l1_acc=True,
@@ -170,6 +175,19 @@ class TTNNDotsOCRAttention(TTNNModule):
             )
         else:
             self._decode_cur_pos = None
+
+        # Cache the K/V sharded memory_config for the per-decode-step
+        # paged_update_on_device handoff. This is identical for every layer and
+        # every decode iteration; recomputing it inside the trace adds redundant
+        # Python work (28 layers x 180 tokens = ~5000 calls per generation).
+        _decode_tile_size = 32
+        _decode_shard_h = ((self.num_key_value_heads + _decode_tile_size - 1) // _decode_tile_size) * _decode_tile_size
+        self._decode_kv_shard_cfg = ttnn.create_sharded_memory_config(
+            shape=(_decode_shard_h, self.head_dim),
+            core_grid=ttnn.CoreGrid(y=1, x=1),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
 
         # _q_bias / _k_bias / _v_bias / _qkv_bias are no longer materialized as
         # separate device tensors — bias is folded into qkv_proj.tt_bias and
@@ -259,6 +277,14 @@ class TTNNDotsOCRAttention(TTNNModule):
         if past_key_values is not None and use_paged:
             past_key_values.paged_fill_on_device(key_states, value_states, layer_idx=self.layer_idx, batch_idx=0)
 
+        # Tracy showed the previous transpose_output=True path costing
+        # 456 us (extra ttnn.permute B,H,S,D -> B,S,H,D) + 200 us (the
+        # post-SDPA reshape merging H, D), per text-decoder prefill
+        # layer. Switching to nlp_concat_heads on the un-transposed
+        # SDPA output ([B, H, S, D] -> [B, 1, S, H*D]) replaces both
+        # ops with a single ~75 us kernel that does the same B/H/D
+        # interleaving in tile space, saving ~580 us per layer
+        # (~16 ms total over 28 text-decoder layers).
         attn_output = self.sdpa(
             self,
             query_states,
@@ -268,13 +294,10 @@ class TTNNDotsOCRAttention(TTNNModule):
             dropout=0.0,
             scaling=self.scaling,
             is_causal=self.is_causal,
-            transpose_output=True,
+            transpose_output=False,
         )
-
-        attn_shape = list(attn_output.shape)
-        attn_output = ttnn.reshape(
-            attn_output, (attn_shape[0], attn_shape[1], self.num_attention_heads * self.head_dim)
-        )
+        attn_output = ttnn.experimental.nlp_concat_heads(attn_output)
+        attn_output = ttnn.squeeze(attn_output, 1)
 
         attn_output = self.o_proj(attn_output)
         return attn_output, None
@@ -344,16 +367,20 @@ class TTNNDotsOCRAttention(TTNNModule):
         if isinstance(kv_value, ttnn.Tensor) and kv_value.dtype != ttnn.bfloat16:
             kv_value = ttnn.typecast(kv_value, ttnn.bfloat16)
 
-        tile_size = 32
-        shard_h = ((self.num_key_value_heads + tile_size - 1) // tile_size) * tile_size
-
-        core_grid = ttnn.CoreGrid(y=1, x=batch_size)
-        shard_cfg = ttnn.create_sharded_memory_config(
-            shape=(shard_h, self.head_dim),
-            core_grid=core_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        )
+        # Reuse the cached shard config when batch_size matches (default path);
+        # only recompute on the first call or for unusual batch sizes. Saves
+        # ~28 layers x 180 tokens of redundant Python work per decode generation.
+        if batch_size == 1 and getattr(self, "_decode_kv_shard_cfg", None) is not None:
+            shard_cfg = self._decode_kv_shard_cfg
+        else:
+            tile_size = 32
+            shard_h = ((self.num_key_value_heads + tile_size - 1) // tile_size) * tile_size
+            shard_cfg = ttnn.create_sharded_memory_config(
+                shape=(shard_h, self.head_dim),
+                core_grid=ttnn.CoreGrid(y=1, x=batch_size),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            )
         kv_key = ttnn.to_memory_config(kv_key, shard_cfg)
         kv_value = ttnn.to_memory_config(kv_value, shard_cfg)
 
@@ -370,6 +397,11 @@ class TTNNDotsOCRAttention(TTNNModule):
             compute_kernel_config=getattr(self.sdpa, "decode_compute_kernel_config", self.sdpa.compute_kernel_config),
         )
 
+        # paged_sdpa_decode produces [S=1, B, H, D] in DRAM-interleaved.
+        # Tried ``nlp_concat_heads_decode`` here -- it requires the input
+        # to be SHARDED (asserted at nlp_concat_heads_decode_device_operation.cpp:44).
+        # Adding an interleaved -> sharded conversion just to satisfy the
+        # kernel adds a dispatch and erases the savings.
         attn_output = ttnn.permute(attn_output, (1, 0, 2, 3))
         attn_output = ttnn.reshape(attn_output, (batch_size, seq_length, self.num_attention_heads * self.head_dim))
 

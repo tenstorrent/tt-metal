@@ -38,8 +38,8 @@ from models.experimental.tt_symbiote.modules.dots_ocr_decoder_layer import (
 from models.experimental.tt_symbiote.modules.dots_ocr_vision import TTNNDotsOCRVisionTower
 from models.experimental.tt_symbiote.modules.embedding import TTNNEmbedding
 from models.experimental.tt_symbiote.modules.linear import (
+    TTNNDotsOCRDRAMShardedLMHead,
     TTNNLinearIColShardedWAllReduced,
-    TTNNLinearLLamaIColShardedWAllReduced,
 )
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 from models.experimental.tt_symbiote.utils.device_management import timed_call
@@ -230,7 +230,17 @@ class PipelineConfig:
 
 
 def _create_paged_kv_cache(model_config, device, batch_size: int = 1):
-    """Create a paged attention KV cache for dots.ocr."""
+    """Create a paged attention KV cache for dots.ocr.
+
+    Cache dtype is ``bfloat8_b``: halves the K/V DRAM read bandwidth in
+    ``paged_sdpa_decode`` (the dominant bandwidth in decode) and matches
+    the bfp8 fidelity already in use upstream of the cache. Dispatch
+    mode warmup pays a ~5x BF16->BFP8 conversion cost on every cache
+    write, but trace mode amortizes this fully -- the conversion is a
+    device-side op captured inside the trace. The cache itself supports
+    BFP8 (``paged_update_cache_device_operation:42-46``) and SDPA decode
+    supports BFP8 inputs (``sdpa_decode_device_operation:37-39``).
+    """
     head_dim = getattr(
         model_config,
         "head_dim",
@@ -250,6 +260,7 @@ def _create_paged_kv_cache(model_config, device, batch_size: int = 1):
         head_dim=head_dim,
         config=config,
         device=None,
+        tt_cache_dtype=ttnn.bfloat8_b,
     ).to_device(device)
 
 
@@ -365,8 +376,15 @@ class TTNNDotsOCRPipeline(TTNNModule):
         final_norm = TTNNDistributedRMSNorm.from_torch(hf_model.model.norm)
         final_norm._unique_name = "model.norm"
 
-        # AllReduced gives full vocab on each device for argmax
-        lm_head = TTNNLinearLLamaIColShardedWAllReduced.from_torch(hf_model.lm_head)
+        # DRAM-width-sharded N-parallel LM head: weight is split into N-chunks,
+        # each chunk laid out WIDTH_SHARDED across the 12 DRAM banks per
+        # device. The matmul kernel reads each chunk's weight tiles in
+        # parallel from all 12 banks, ~12x effective DRAM bandwidth vs the
+        # previous DRAM-interleaved (single-bank) read. Mirrors
+        # ``models/tt_transformers/tt/lm_head.py``. Theoretical decode-time
+        # saving: lm_head weight read 116 MB/call/dev → 415 µs (1 bank) becomes
+        # ~35 µs (12 banks) → ~70 ms over 180 tokens.
+        lm_head = TTNNDotsOCRDRAMShardedLMHead.from_torch(hf_model.lm_head)
         lm_head._unique_name = "lm_head"
 
         # Paged KV cache
@@ -679,6 +697,15 @@ class TTNNDotsOCRPipeline(TTNNModule):
                     ttnn.copy_host_to_device_tensor(cache_host_tt, self._decode_cache_position)
             else:
                 with _profile_stage(self.device, "decode.cache_position_device_inc"):
+                    # NOTE: tried ``ttnn.add(..., output_tensor=cache_position)``
+                    # to eliminate the explicit ``ttnn.copy`` + ``ttnn.deallocate``,
+                    # but the in-place output_tensor path raises
+                    # ``Optional output tensor with Row Major input is not
+                    # supported right now for Elementwise operations``
+                    # (ttnn/cpp/ttnn/operations/eltwise/binary/binary.cpp:362)
+                    # because ``_decode_cache_position`` is INT32 / ROW_MAJOR. Stay
+                    # on the temp-buffer path until in-place row-major elementwise
+                    # is supported.
                     cache_next = ttnn.add(self._decode_cache_position, 1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                     ttnn.copy(cache_next, self._decode_cache_position)
                     ttnn.deallocate(cache_next)

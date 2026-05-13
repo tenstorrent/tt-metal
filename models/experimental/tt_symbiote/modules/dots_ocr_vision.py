@@ -38,6 +38,154 @@ VISION_SDPA_MATH_FIDELITY = ttnn.MathFidelity.LoFi
 VISION_NORM_MATH_FIDELITY = ttnn.MathFidelity.HiFi2
 
 
+def _largest_divisor_le(value: int, limit: int) -> int:
+    for c in range(min(value, limit), 0, -1):
+        if value % c == 0:
+            return c
+    return 1
+
+
+# Cache program_config objects per (grid, m, k, n) so trace capture sees the
+# same Python object across calls. Recreating the config in the forward pass
+# every iteration breaks ttnn trace dedup and silently drops the entire
+# decode/prefill back to eager-mode dispatch (per-op kernel launches), which
+# in TP2 makes decode 4x slower than the trace-replay path.
+_VISION_MATMUL_PC_CACHE: dict = {}
+
+
+def _vision_matmul_program_config(device, m_dim: int, k_dim: int, n_dim: int):
+    """2D-mcast prefill matmul config for vision-tower DRAM-interleaved matmuls.
+
+    Tracy reports every vision matmul as ``SLOW`` because none of the vision
+    ttnn.linear calls passed an explicit program_config -- the auto-config
+    falls back to ``in0_block_w=1`` and small subblocks, which is why
+    QKV/MLP land at 26-29% TFLOPs and 12-13% DRAM. Setting a 2D-mcast config
+    with a larger ``in0_block_w`` reuses the L1-resident weight block across
+    more output tiles.
+
+    The 2D-mcast factory hard-asserts
+    ``num_blocks_y == m_tiles / per_core_M <= grid_y``, so for vision shapes
+    (M=12288 -> m_tiles=384, grid_y=8) we must run with ``per_core_M=48``.
+    With BFP8 output the natural ``per_core_M*per_core_N`` output CB is
+    ~3.4 MB which doesn't fit in 1.5 MB L1; we use ``out_block_h`` to chunk
+    the in-flight output and bound the actual L1 footprint to
+    ``out_block_h * per_core_N * tile_bytes`` instead of the full per-core
+    output. The kernel iterates ``per_core_M / out_block_h`` blocks per
+    core (matmul_multicore_reuse_mcast_2d_program_factory.cpp:111), so the
+    total work is unchanged but the L1 fits.
+
+    Returns ``None`` for shapes that don't tile cleanly so callers fall
+    back to the auto-config.
+    """
+    if device is None:
+        return None
+    grid = device.compute_with_storage_grid_size()
+    grid_x, grid_y = int(grid.x), int(grid.y)
+    tile = 32
+
+    cache_key = (grid_x, grid_y, m_dim, k_dim, n_dim)
+    cached = _VISION_MATMUL_PC_CACHE.get(cache_key)
+    if cached is not None or cache_key in _VISION_MATMUL_PC_CACHE:
+        return cached
+
+    if m_dim % tile != 0 or k_dim % tile != 0 or n_dim % tile != 0:
+        _VISION_MATMUL_PC_CACHE[cache_key] = None
+        return None
+
+    m_tiles = m_dim // tile
+    k_tiles = k_dim // tile
+    n_tiles = n_dim // tile
+
+    if m_tiles % grid_y != 0:
+        _VISION_MATMUL_PC_CACHE[cache_key] = None
+        return None
+
+    # ``num_blocks_x = ceil(n_tiles / per_core_n)`` in the 2D mcast factory
+    # (matmul_multicore_reuse_mcast_2d_program_factory.cpp:1669), so n_tiles
+    # doesn't need to divide grid_x cleanly -- the kernel pads the trailing
+    # output tiles internally. This unlocks the MLP gate/up matmuls
+    # (12288 x 1536 x 4224, n_tiles=132) which were falling back to the
+    # auto-config because 132 % 8 != 0. With per_core_n=ceil(132/8)=17 the
+    # 8x8 grid covers 136 tiles (4 padded) and we get the same in0_block_w
+    # tuning as the divisible matmuls.
+    per_core_m = m_tiles // grid_y
+    per_core_n = (n_tiles + grid_x - 1) // grid_x
+
+    if per_core_n > 24 or per_core_m > 64:
+        _VISION_MATMUL_PC_CACHE[cache_key] = None
+        return None
+
+    # Pick the largest in0_block_w (cap at 8) that divides K_tiles cleanly.
+    # Larger in0_block_w => fewer K iterations and better DRAM-to-L1
+    # weight-block reuse. For vision QKV (K=48 tiles) this picks 8 (vs the
+    # auto-config's 1) -> 6 K iterations instead of 48.
+    in0_block_w = _largest_divisor_le(k_tiles, 8)
+
+    # In-flight output block sized to keep total L1 (act + weight + output)
+    # comfortably under 1.5 MB per core. ``out_block_h`` chunks the per-core
+    # output along M; the kernel iterates ``per_core_M / out_block_h`` blocks
+    # per core. Larger ``out_block_h`` -> fewer outer-block iterations.
+    #
+    # Tracy ablation across the 4 vision matmul shapes (TP=2):
+    #   * QKV/gate/up (K=48 -> 6 inner-K iters/outer) and O proj (K=48):
+    #     out_block_h=16 either ties or *regresses* (O proj 40.8% -> 35.5%
+    #     FLOPs) -- the (16, 1) output-subblock shape fights the matmul
+    #     kernel's tile layout when N is small.
+    #   * Down (K=132 -> 22 inner-K iters/outer): out_block_h=16 wins
+    #     (28.8% -> 48.5% FLOPs) because the 33% saving in outer-M
+    #     iterations dominates each iteration's heavy K loop.
+    # Discriminate on inner-K iters per outer-M block: bigger K loop ->
+    # bigger out_block_h gains. For QKV (per_core_n=18, BFP8 out,
+    # in0_block_w=8) out_block_h=12 lands at ~384 KB act + 324 KB weight +
+    # 486 KB out (all double-buffered) = ~1.2 MB << 1.5 MB.
+    inner_k_iters = max(1, k_tiles // max(in0_block_w, 1))
+    target_out_block_h_tiles = 16 if inner_k_iters >= 12 else 12
+    out_block_h = min(per_core_m, target_out_block_h_tiles)
+    while out_block_h > 1 and per_core_m % out_block_h != 0:
+        out_block_h -= 1
+    out_block_w = per_core_n
+
+    # Pick (out_subblock_h, out_subblock_w) to fill the DST register budget
+    # (8 tiles when fp32_dest_acc_en=False, which is the vision matmul setup).
+    # Prefer a wide subblock (keeps the M loop tight); when out_block_w is
+    # prime (e.g. 17 for the MLP gate/up at n_tiles=132/8) the wide axis
+    # collapses to 1, so fall back to growing out_subblock_h to keep DST
+    # full. Empty 1x1 subblocks waste 7/8 of the DST register file and
+    # compound across the 384-tile M dimension of the vision matmuls.
+    dst_tiles_budget = 8
+    out_subblock_h = 1
+    out_subblock_w = 1
+    best_area = 0
+    for h in range(min(out_block_h, dst_tiles_budget), 0, -1):
+        if out_block_h % h != 0:
+            continue
+        for w in range(min(out_block_w, dst_tiles_budget // h), 0, -1):
+            if out_block_w % w != 0:
+                continue
+            area = h * w
+            if area > best_area:
+                best_area = area
+                out_subblock_h = h
+                out_subblock_w = w
+                break
+
+    pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(grid_x, grid_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        out_block_h=out_block_h,
+        out_block_w=out_block_w,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=False,
+    )
+    _VISION_MATMUL_PC_CACHE[cache_key] = pc
+    return pc
+
+
 def _vision_matmul_compute_config(device, *, math_fidelity: ttnn.MathFidelity) -> ttnn.DeviceComputeKernelConfig:
     """Compute config for vision linear/matmul ops.
 
@@ -493,6 +641,14 @@ class TTNNDotsVisionMLP(TTNNModule):
 
         mem = ttnn.DRAM_MEMORY_CONFIG
 
+        # Explicit 2D-mcast program_config: tracy showed gate/up running at
+        # 27.7% LoFi TFLOPs / 13% DRAM with the auto-config (in0_block_w=1).
+        # Setting a tuned in0_block_w + out_subblock_w increases L1 weight
+        # reuse and matches the text-decoder linears' ``SLOW``->faster path.
+        m_dim = int(hidden_states.shape[0]) * int(hidden_states.shape[1]) * int(hidden_states.shape[2])
+        k_dim = int(self.tt_fc1_weight.shape[-2])
+        n_dim = int(self.tt_fc1_weight.shape[-1])
+        gate_up_pc = _vision_matmul_program_config(self.device, m_dim, k_dim, n_dim)
         # Gate/up outputs are BFP8: halves the matmul writeback (38 MB BF16
         # -> 21 MB BFP8) and the matching read in the SILU multiply, with
         # no quality impact since the silu+mul output is already BFP8 in
@@ -505,6 +661,7 @@ class TTNNDotsVisionMLP(TTNNModule):
             dtype=ttnn.bfloat8_b,
             memory_config=mem,
             compute_kernel_config=self.compute_kernel_config,
+            program_config=gate_up_pc,
         )
         up = ttnn.linear(
             hidden_states,
@@ -513,6 +670,7 @@ class TTNNDotsVisionMLP(TTNNModule):
             dtype=ttnn.bfloat8_b,
             memory_config=mem,
             compute_kernel_config=self.compute_kernel_config,
+            program_config=gate_up_pc,
         )
         # SILU dominates this op (the elementwise mul is cheap; the per-tile
         # exp+sigmoid is the bottleneck). ``fast_and_approximate_mode=True``
@@ -536,6 +694,10 @@ class TTNNDotsVisionMLP(TTNNModule):
         # following residual add. The downstream RMSNorm/attention path
         # already operates on BFP8 cleanly, so this stays inside the existing
         # quantization envelope.
+        down_m = int(gate_up_mul.shape[0]) * int(gate_up_mul.shape[1]) * int(gate_up_mul.shape[2])
+        down_k = int(self.tt_fc2_weight.shape[-2])
+        down_n = int(self.tt_fc2_weight.shape[-1])
+        down_pc = _vision_matmul_program_config(self.device, down_m, down_k, down_n)
         output = ttnn.linear(
             gate_up_mul,
             self.tt_fc2_weight,
@@ -543,6 +705,7 @@ class TTNNDotsVisionMLP(TTNNModule):
             dtype=ttnn.bfloat8_b,
             memory_config=mem,
             compute_kernel_config=self.compute_kernel_config,
+            program_config=down_pc,
         )
         ttnn.deallocate(gate_up_mul)
 
@@ -863,7 +1026,18 @@ class TTNNDotsVisionAttention(TTNNModule):
         (e.g. 256 × 512 = 128K, leaves headroom for Q/K/V chunk buffers and
         the partial-output accumulator). Going beyond (e.g. 512 × 1024 =
         512K) overflows L1 with a "Statically allocated CBs grow to ... B"
-        error. We keep the proven q=256, k=512 schedule for long sequences.
+        error.
+
+        Tracy ablation (TP=2, S=12288):
+
+            q=256, k=512 -> 12,246 us / SDPA call (baseline -- kept)
+            q=512, k=256 -> 13,464 us / SDPA call (+10%, regressed)
+
+        The naive analysis says swapping should halve DRAM K/V re-reads
+        (24 outer Q chunks vs 48), but the kernel doesn't actually win:
+        the larger Q-chunk's softmax + DEST-register packing for the
+        16x8 QK^T tile shape eats the saved bandwidth and then some.
+        Stay at q=256/k=512.
         """
         grid = self.device.compute_with_storage_grid_size()
         grid_size = ttnn.CoreCoord(grid.x, grid.y)
@@ -904,6 +1078,10 @@ class TTNNDotsVisionAttention(TTNNModule):
         # non-llama ``ttnn.experimental.rotary_embedding`` preserves dtype,
         # so we don't need any typecasts around the rotary like the llama
         # kernel forced before.
+        qkv_m = int(hidden_states.shape[0]) * int(hidden_states.shape[1]) * s
+        qkv_k = int(self.tt_qkv_weight.shape[-2])
+        qkv_n = int(self.tt_qkv_weight.shape[-1])
+        qkv_pc = _vision_matmul_program_config(self.device, qkv_m, qkv_k, qkv_n)
         qkv = ttnn.linear(
             hidden_states,
             self.tt_qkv_weight,
@@ -911,6 +1089,7 @@ class TTNNDotsVisionAttention(TTNNModule):
             dtype=ttnn.bfloat8_b,
             memory_config=mem,
             compute_kernel_config=self.compute_kernel_config,
+            program_config=qkv_pc,
         )
 
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
@@ -931,10 +1110,25 @@ class TTNNDotsVisionAttention(TTNNModule):
             q = ttnn.experimental.rotary_embedding(q, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             k = ttnn.experimental.rotary_embedding(k, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # V is already BFP8 from the QKV matmul; no typecast needed for SDPA.
+        # V is BFP8 from the QKV matmul; cast to BFP4 to halve the V DRAM
+        # stream in the chunked SDPA kernel. Per-core SDPA reads V tiles
+        # ``q_per_core`` times during prefill (10 outer-Q iterations at
+        # q_chunk=256, S=12288), so V dominates DRAM bandwidth in non-causal
+        # attention. BFP4 V costs one typecast per layer (~0.1 ms reading
+        # 21 MB BFP8 + writing 10.5 MB BFP4) and saves ~2-3 ms per layer
+        # of SDPA bandwidth -- accuracy stays good because V only feeds
+        # the post-softmax weighted sum (no further matmul accumulation).
+        # Q/K stay BFP8: K participates in the full QK^T matmul where
+        # BFP4 would lose precision in the early-attention scores.
+        # SDPA validates BFP4 V in sdpa_device_operation.cpp:40 ("Data
+        # type ... must be BFLOAT16, BFLOAT8_B, or BFLOAT4_B"), and the
+        # output dtype matches Q's dtype (BFP8) regardless of V dtype.
+        v = ttnn.typecast(v, dtype=ttnn.bfloat4_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
         # SDPA still requires interleaved Q/K/V (sdpa_device_operation.cpp:44 forbids
-        # sharded inputs) and at S=12288 the BFP8 Q+K+V (~54 MB) plus SDPA's static
-        # circular buffers exceed the per-core L1 budget — keep these tensors on DRAM.
+        # sharded inputs) and at S=12288 the BFP8 Q+K (~36 MB) + BFP4 V (~10 MB)
+        # plus SDPA's static circular buffers exceed the per-core L1 budget --
+        # keep these tensors on DRAM.
 
         if cu_seqlens is None:
             program_config = self._get_sdpa_program_config(s)
@@ -948,12 +1142,17 @@ class TTNNDotsVisionAttention(TTNNModule):
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             ctx = self._concat_heads(ctx)
+            o_m = int(ctx.shape[0]) * int(ctx.shape[1]) * int(ctx.shape[2])
+            o_k = int(self.tt_o_proj_weight.shape[-2])
+            o_n = int(self.tt_o_proj_weight.shape[-1])
+            o_pc = _vision_matmul_program_config(self.device, o_m, o_k, o_n)
             return ttnn.linear(
                 ctx,
                 self.tt_o_proj_weight,
                 bias=self.tt_o_proj_bias,
                 memory_config=mem,
                 compute_kernel_config=self.compute_kernel_config,
+                program_config=o_pc,
             )
 
         cu_host = self._cu_seqlens_to_list(cu_seqlens, s)
@@ -998,12 +1197,17 @@ class TTNNDotsVisionAttention(TTNNModule):
             ctx = ttnn.concat(ctx_segments, dim=2) if len(ctx_segments) > 1 else ctx_segments[0]
 
         ctx = self._concat_heads(ctx)
+        o_m = int(ctx.shape[0]) * int(ctx.shape[1]) * int(ctx.shape[2])
+        o_k = int(self.tt_o_proj_weight.shape[-2])
+        o_n = int(self.tt_o_proj_weight.shape[-1])
+        o_pc = _vision_matmul_program_config(self.device, o_m, o_k, o_n)
         return ttnn.linear(
             ctx,
             self.tt_o_proj_weight,
             bias=self.tt_o_proj_bias,
             memory_config=mem,
             compute_kernel_config=self.compute_kernel_config,
+            program_config=o_pc,
         )
 
     def _cu_seqlens_to_list(self, cu_seqlens, expected_total: int) -> list[int]:
