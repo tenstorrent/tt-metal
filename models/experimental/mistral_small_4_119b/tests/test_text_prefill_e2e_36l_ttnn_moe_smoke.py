@@ -18,7 +18,6 @@ Run manually::
 
     export MISTRAL4_E2E_36L_TTNN_MOE=1
     export MISTRAL4_E2E_DEEP_N_LAYERS=36   # optional; default is 36
-    export MISTRAL4_E2E_DEEP_PCC=1        # optional; N must be 1 or 2; PCC vs host-MoE Tt stack (HF routing on TT)
     export MESH_DEVICE=P150x4             # optional
     export MESH_DEVICE=single             # optional: 1×1 mesh; fabric disabled (no QSFP mesh required)
     pytest models/experimental/mistral_small_4_119b/tests/test_text_prefill_e2e_36l_ttnn_moe_smoke.py -v -s \\
@@ -27,17 +26,10 @@ Run manually::
 Checks: ``TtMistral4TextPrefillLogits`` init, one **short** prefill forward (``seq_len=2``), logits shape
 ``[1, S, V]``, all finite.
 
-**PCC (opt-in):** set ``MISTRAL4_E2E_DEEP_PCC=1`` and ``MISTRAL4_E2E_DEEP_N_LAYERS`` to ``1`` or ``2`` only.
-Builds a **host-MoE** ``TtMistral4TextPrefillLogits`` (``use_ttnn_moe=False``) first, records logits, frees it,
-then builds the TTNN-MoE stack with ``moe_hf_torch_routing=True`` and asserts ``comp_pcc`` vs that reference
-(same floors as ``test_text_prefill_e2e_logits_pcc.py``: **~0.92** for ``N=1``, **~0.76** for ``N=2``).
-Pure **HF torch** logits vs TTNN MoE can sit near **~0.03** on short prefill (``lm_head`` amplifies device MoE
-drift); this smoke therefore does **not** assert vs HF. For ``N > 2`` or default device routing, no PCC here.
 """
 
 from __future__ import annotations
 
-import gc
 import os
 
 import pytest
@@ -46,7 +38,7 @@ import torch.nn.functional as F
 import ttnn
 from loguru import logger
 
-from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0_or_blackhole
+from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 from models.experimental.mistral_small_4_119b.constants import (
     EXPECTED_NUM_LAYERS,
     EXPECTED_VOCAB_SIZE,
@@ -97,10 +89,6 @@ def _load_state_dict(num_decoder_layers: int) -> dict:
         pytest.skip(f"Checkpoint load failed: {exc}")
 
 
-def _e2e_deep_want_logits_pcc() -> bool:
-    return os.environ.get("MISTRAL4_E2E_DEEP_PCC") == "1"
-
-
 def _e2e_deep_num_layers() -> int:
     raw = os.environ.get("MISTRAL4_E2E_DEEP_N_LAYERS", str(EXPECTED_NUM_LAYERS)).strip()
     try:
@@ -137,13 +125,6 @@ def test_mistral_small_4_text_prefill_e2e_36l_ttnn_moe_smoke(reset_seeds, mesh_d
     from transformers.models.mistral4.modeling_mistral4 import Mistral4RotaryEmbedding
 
     n = _e2e_deep_num_layers()
-    want_pcc = _e2e_deep_want_logits_pcc()
-    if want_pcc and n > 2:
-        pytest.skip(
-            f"MISTRAL4_E2E_DEEP_PCC=1 with MISTRAL4_E2E_DEEP_N_LAYERS={n}: PCC path only supports "
-            f"N in {{1, 2}} (memory / runtime). Unset MISTRAL4_E2E_DEEP_PCC for full-depth smoke, "
-            f"or set MISTRAL4_E2E_DEEP_N_LAYERS to 1 or 2."
-        )
 
     text = _text_config_eager_attn()
     logger.info(
@@ -166,39 +147,12 @@ def test_mistral_small_4_text_prefill_e2e_36l_ttnn_moe_smoke(reset_seeds, mesh_d
     rotary = Mistral4RotaryEmbedding(text).eval().to(torch.bfloat16)
     position_embeddings = rotary(hidden0, position_ids)
 
-    ref_logits = None
-    if want_pcc:
-        try:
-            ref_model = TtMistral4TextPrefillLogits(
-                mesh_device,
-                state_dict,
-                text,
-                num_decoder_layers=n,
-                use_ttnn_moe=False,
-            )
-        except Exception as exc:
-            if _is_dram_oom(exc):
-                pytest.skip(
-                    f"Host-MoE reference init OOM ({exc!r}); lower MISTRAL4_E2E_DEEP_N_LAYERS or disable DEEP_PCC."
-                )
-            pytest.skip(f"Host-MoE reference model init failed (MISTRAL4_E2E_DEEP_PCC=1): {exc}")
-        ref_logits = ref_model(
-            input_ids,
-            position_ids=position_ids,
-            position_embeddings=position_embeddings,
-            mode="prefill",
-        )
-        del ref_model
-        gc.collect()
-
     try:
         model = TtMistral4TextPrefillLogits(
             mesh_device,
             state_dict,
             text,
             num_decoder_layers=n,
-            use_ttnn_moe=True,
-            moe_hf_torch_routing=want_pcc,
         )
     except Exception as exc:
         if _is_dram_oom(exc):
@@ -233,18 +187,4 @@ def test_mistral_small_4_text_prefill_e2e_36l_ttnn_moe_smoke(reset_seeds, mesh_d
     assert tt_logits.dtype in (torch.bfloat16, torch.float32)
     assert torch.isfinite(tt_logits.to(torch.float32)).all(), "non-finite values in logits"
 
-    if want_pcc:
-        assert ref_logits is not None
-        # Same bars as ``test_text_prefill_e2e_logits_pcc``: host-MoE Tt stack vs HF; here TTNN MoE vs host-MoE Tt.
-        min_pcc = 0.76 if n >= 2 else 0.92
-        passing, pcc_message = comp_pcc(ref_logits, tt_logits, pcc=min_pcc)
-        logger.info(comp_allclose(ref_logits, tt_logits))
-        logger.info(
-            f"{n}-layer TTNN MoE vs host-MoE Tt prefill logits PCC (HF routing on TT, min={min_pcc}): {pcc_message}"
-        )
-        assert passing, f"PCC below {min_pcc}: {pcc_message}"
-
-    logger.info(
-        f"{n}-layer TTNN MoE E2E prefill smoke: OK (finite logits, expected shape"
-        f"{'; PCC vs host-MoE Tt' if want_pcc else ''})"
-    )
+    logger.info(f"{n}-layer TTNN MoE E2E prefill smoke: OK (finite logits, expected shape)")

@@ -70,8 +70,6 @@ class TtMistral4DecoderLayer(LightweightModule):
         mesh_device: ttnn.MeshDevice,
         state_dict: dict,
         layer_idx: int,
-        use_ttnn_moe: bool,
-        moe_hf_torch_routing: bool,
         compute_kernel_config,
     ):
         super().__init__()
@@ -92,13 +90,12 @@ class TtMistral4DecoderLayer(LightweightModule):
             compute_kernel_config=compute_kernel_config,
         )
 
-        # MoE
+        # bfloat4_b: 36 layers × 3 expert stacks × 64 MB = 6.9 GB; bf16 would be 27.6 GB (OOM).
         self.moe = TtMistral4MoELayer(
             mesh_device=mesh_device,
             state_dict=state_dict,
             layer_prefix=prefix,
-            use_ttnn_moe=use_ttnn_moe,
-            moe_hf_torch_routing=moe_hf_torch_routing,
+            expert_dtype=ttnn.bfloat4_b,
         )
 
     def forward(
@@ -193,18 +190,13 @@ class TtMistral4TextPrefillLogits:
     All neural computation uses TTNN ops (no PyTorch fallback).
     The only host-side operations are:
       - Loading / converting weights (one-time, at construction)
-      - Top-k expert routing mask construction (per forward call, O(seq × 128))
       - Final ``ttnn.to_torch()`` to return logits as a torch tensor
 
     Args:
-        mesh_device:          TTNN MeshDevice (e.g. P300 × 2 → [1, 2] mesh)
-        state_dict:           HF checkpoint dict (filtered to required prefixes)
-        text_config:          HF ``text_config`` (e.g. from AutoConfig.text_config)
-        num_decoder_layers:   Number of decoder layers to instantiate (1..36)
-        use_ttnn_moe:         If True, gate logits are computed on device (TTNN);
-                              if False, gate matmul still on TTNN but routing
-                              label "host" (both paths share same impl currently)
-        moe_hf_torch_routing: Reserved for PCC validation (same code path for now)
+        mesh_device:        TTNN MeshDevice (e.g. P300 × 2 → [1, 2] mesh)
+        state_dict:         HF checkpoint dict (filtered to required prefixes)
+        text_config:        HF ``text_config`` (e.g. from AutoConfig.text_config)
+        num_decoder_layers: Number of decoder layers to instantiate (1..36)
     """
 
     def __init__(
@@ -213,8 +205,6 @@ class TtMistral4TextPrefillLogits:
         state_dict: dict,
         text_config,
         num_decoder_layers: int,
-        use_ttnn_moe: bool = True,
-        moe_hf_torch_routing: bool = False,
     ):
         self.mesh_device = mesh_device
         self.num_decoder_layers = num_decoder_layers
@@ -247,8 +237,6 @@ class TtMistral4TextPrefillLogits:
                     mesh_device=mesh_device,
                     state_dict=state_dict,
                     layer_idx=i,
-                    use_ttnn_moe=use_ttnn_moe,
-                    moe_hf_torch_routing=moe_hf_torch_routing,
                     compute_kernel_config=self.compute_kernel_config,
                 )
             )
