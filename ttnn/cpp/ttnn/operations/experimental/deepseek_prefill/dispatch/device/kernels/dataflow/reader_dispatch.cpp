@@ -104,7 +104,7 @@ void kernel_main() {
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(dispatch_table_args.next_compile_time_args_offset());
     constexpr uint32_t aligned_row_major_input_page_size =
         get_compile_time_arg_val(dispatch_table_args.next_compile_time_args_offset() + 1);
-    constexpr uint32_t num_idle_cores =
+    constexpr uint32_t num_untilize_cores =
         get_compile_time_arg_val(dispatch_table_args.next_compile_time_args_offset() + 2);
     constexpr uint32_t cb_signal_id = get_compile_time_arg_val(dispatch_table_args.next_compile_time_args_offset() + 3);
     constexpr uint32_t total_workers =
@@ -150,18 +150,18 @@ void kernel_main() {
     uint32_t addr_ready_sem_l1_offset = get_semaphore(addr_ready_semaphore_id);
     uint32_t addr_value_sem_l1_offset = get_semaphore(addr_value_semaphore_id);
 
-    // Read per-idle-core NOC addresses for per-batch start signaling (unicast)
-    // x/y kept separately to build idle_mailbox_noc_addrs after the mbox_ready rendezvous.
-    uint64_t idle_start_noc_addrs[num_idle_cores];
-    uint32_t idle_noc_xs[num_idle_cores];
-    uint32_t idle_noc_ys[num_idle_cores];
-    for (uint32_t c = 0; c < num_idle_cores; c++) {
-        idle_noc_xs[c] = get_arg_val<uint32_t>(rt_args++);
-        idle_noc_ys[c] = get_arg_val<uint32_t>(rt_args++);
-        idle_start_noc_addrs[c] = get_noc_addr(idle_noc_xs[c], idle_noc_ys[c], start_sem_l1_offset);
+    // Read per-untilize-core NOC addresses for per-batch start signaling (unicast)
+    // x/y kept separately to build untilize_mailbox_noc_addrs after the mbox_ready rendezvous.
+    uint64_t untilize_start_noc_addrs[num_untilize_cores];
+    uint32_t untilize_noc_xs[num_untilize_cores];
+    uint32_t untilize_noc_ys[num_untilize_cores];
+    for (uint32_t c = 0; c < num_untilize_cores; c++) {
+        untilize_noc_xs[c] = get_arg_val<uint32_t>(rt_args++);
+        untilize_noc_ys[c] = get_arg_val<uint32_t>(rt_args++);
+        untilize_start_noc_addrs[c] = get_noc_addr(untilize_noc_xs[c], untilize_noc_ys[c], start_sem_l1_offset);
     }
 
-    // Bounding box covering all idle cores in this sender's group (for multicast)
+    // Bounding box covering all untilize cores in this sender's group (for multicast)
     uint32_t mcast_x_start = get_arg_val<uint32_t>(rt_args++);
     uint32_t mcast_y_start = get_arg_val<uint32_t>(rt_args++);
     uint32_t mcast_x_end = get_arg_val<uint32_t>(rt_args++);
@@ -190,7 +190,7 @@ void kernel_main() {
     DPRINT_DISPATCH << "Reader kernel: tokens=[" << token_start_idx << "," << token_end_idx << ")"
                     << " dispatch_core=" << dispatch_core_idx << "/" << num_dispatch_cores
 #ifdef IS_TILE_LAYOUT
-                    << " num_idle_cores=" << num_idle_cores
+                    << " num_untilize_cores=" << num_untilize_cores
 #endif
                     << ENDL();
 
@@ -246,14 +246,15 @@ void kernel_main() {
     uint32_t untilize_base = get_write_ptr(cb_untilize_id);
     uint32_t rt_scratch_base = get_write_ptr(cb_route_table_scratch_id);
 
-    // Multicast two addresses to all idle cores in this sender's group before signaling addr_ready:
-    //   1. receive buffer address (c_18 base) → idle cores write untilized data here
-    //   2. route-table scratch base → idle cores NOC-write their mailbox L1 address into
+    // Multicast two addresses to all untilize cores in this sender's group before signaling addr_ready:
+    //   1. receive buffer address (c_18 base) → untilize cores write untilized data here
+    //   2. route-table scratch base → untilize cores NOC-write their mailbox L1 address into
     //      slot [core_id * 4] of this buffer so the sender can read it locally (no NOC read).
     volatile tt_l1_ptr uint32_t* addr_value_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr_value_sem_l1_offset);
     *addr_value_ptr = untilize_base;
-    noc_async_write_multicast(addr_value_sem_l1_offset, mcast_addr_value_noc_addr, sizeof(uint32_t), num_idle_cores);
+    noc_async_write_multicast(
+        addr_value_sem_l1_offset, mcast_addr_value_noc_addr, sizeof(uint32_t), num_untilize_cores);
 
     uint32_t mbox_scratch_addr_sem_l1_offset = get_semaphore(mbox_scratch_addr_semaphore_id);
     volatile tt_l1_ptr uint32_t* mbox_scratch_addr_ptr =
@@ -262,24 +263,24 @@ void kernel_main() {
     uint64_t mcast_mbox_scratch_noc_addr =
         get_noc_multicast_addr(mcast_x_start, mcast_y_start, mcast_x_end, mcast_y_end, mbox_scratch_addr_sem_l1_offset);
     noc_async_write_multicast(
-        mbox_scratch_addr_sem_l1_offset, mcast_mbox_scratch_noc_addr, sizeof(uint32_t), num_idle_cores);
+        mbox_scratch_addr_sem_l1_offset, mcast_mbox_scratch_noc_addr, sizeof(uint32_t), num_untilize_cores);
     noc_async_write_barrier();
-    noc_semaphore_inc_multicast(mcast_addr_ready_noc_addr, 1, num_idle_cores);
+    noc_semaphore_inc_multicast(mcast_addr_ready_noc_addr, 1, num_untilize_cores);
     noc_async_atomic_barrier();
 
-    // Wait for all idle cores to NOC-write their mailbox L1 addresses into rt_scratch_base.
-    // Because idle cores use noc_inline_dw_write (ordered before noc_semaphore_inc on the NOC),
-    // each slot is guaranteed to be visible in local L1 once mbox_ready reaches num_idle_cores.
+    // Wait for all untilize cores to NOC-write their mailbox L1 addresses into rt_scratch_base.
+    // Because untilize cores use noc_inline_dw_write (ordered before noc_semaphore_inc on the NOC),
+    // each slot is guaranteed to be visible in local L1 once mbox_ready reaches num_untilize_cores.
     volatile tt_l1_ptr uint32_t* mbox_ready_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(mbox_ready_semaphore_id));
-    noc_semaphore_wait(mbox_ready_sem_ptr, num_idle_cores);
+    noc_semaphore_wait(mbox_ready_sem_ptr, num_untilize_cores);
     noc_semaphore_set(mbox_ready_sem_ptr, 0);
 
-    // Read idle mailbox addresses directly from own L1 scratch — no NOC reads needed.
+    // Read untilize mailbox addresses directly from own L1 scratch — no NOC reads needed.
     volatile tt_l1_ptr uint32_t* rt_scratch_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rt_scratch_base);
-    uint64_t idle_mailbox_noc_addrs[num_idle_cores];
-    for (uint32_t c = 0; c < num_idle_cores; c++) {
-        idle_mailbox_noc_addrs[c] = get_noc_addr(idle_noc_xs[c], idle_noc_ys[c], rt_scratch_ptr[c]);
+    uint64_t untilize_mailbox_noc_addrs[num_untilize_cores];
+    for (uint32_t c = 0; c < num_untilize_cores; c++) {
+        untilize_mailbox_noc_addrs[c] = get_noc_addr(untilize_noc_xs[c], untilize_noc_ys[c], rt_scratch_ptr[c]);
     }
 
     // Self-untilize setup: TensorAccessor for reading tiles from DRAM
@@ -311,13 +312,13 @@ void kernel_main() {
         bool batch_did_local_write = false;
 
 #ifdef IS_TILE_LAYOUT
-        // Batch prep: delegate to idle core, or self-untilize locally.
+        // Batch prep: delegate to untilize core, or self-untilize locally.
         uint32_t C = B % total_workers;
 
-        if (C < num_idle_cores) {
-            // ---- Worker-batch: delegate to idle core C ----
+        if (C < num_untilize_cores) {
+            // ---- Worker-batch: delegate to untilize core C ----
             // Read indices/weights before building the route table so routing
-            // decisions are known before we signal the idle core.
+            // decisions are known before we signal the untilize core.
             for (uint32_t t = 0; t < batch_count; t++) {
                 noc_async_read_page(batch_start + t, indices_addr_gen, indices_base + t * aligned_indices_page_size);
                 noc_async_read_page(batch_start + t, weights_addr_gen, weights_base + t * aligned_weights_page_size);
@@ -370,23 +371,23 @@ void kernel_main() {
                     entry_count++;
                 }
             }
-            // High bit signals the idle core whether to bulk-send back to us.
+            // High bit signals the untilize core whether to bulk-send back to us.
             rt[0] = entry_count | (has_non_local ? 0x80000000u : 0u);
 
-            // Write route table to idle core's mailbox, then signal start.
+            // Write route table to untilize core's mailbox, then signal start.
             uint32_t mailbox_write_bytes = sizeof(uint32_t) + entry_count * 6 * sizeof(uint32_t);
-            noc_async_write(rt_scratch_base, idle_mailbox_noc_addrs[C], mailbox_write_bytes);
+            noc_async_write(rt_scratch_base, untilize_mailbox_noc_addrs[C], mailbox_write_bytes);
             noc_async_write_barrier();
 
-            noc_semaphore_inc(idle_start_noc_addrs[C], 1);
+            noc_semaphore_inc(untilize_start_noc_addrs[C], 1);
             noc_async_atomic_barrier();
 
-            // Only wait if the idle core will actually send data back.
+            // Only wait if the untilize core will actually send data back.
             if (has_non_local) {
-                DPRINT_DISPATCH << "Waiting for idle core " << C << " batch " << B << ENDL();
+                DPRINT_DISPATCH << "Waiting for untilize core " << C << " batch " << B << ENDL();
                 noc_semaphore_wait(data_ready_sem_ptr, 1);
                 noc_semaphore_set(data_ready_sem_ptr, 0);
-                DPRINT_DISPATCH << "Got batch " << B << " from idle core " << C << ENDL();
+                DPRINT_DISPATCH << "Got batch " << B << " from untilize core " << C << ENDL();
             }
         } else {
             // ---- Self-batch: read tiles, untilize locally, no NOC transfer ----
@@ -428,7 +429,7 @@ void kernel_main() {
 
         // ---- Common inner token loop ----
 #ifdef IS_TILE_LAYOUT
-        bool is_delegated_batch = (C < num_idle_cores);
+        bool is_delegated_batch = (C < num_untilize_cores);
 #endif
         for (uint32_t t = 0; t < batch_count; t++) {
             uint32_t token_idx = batch_start + t;
@@ -463,7 +464,7 @@ void kernel_main() {
 
                 if (expert_chip == linearized_mesh_coord) {
 #ifdef IS_TILE_LAYOUT
-                    // For delegated batches the idle core's writer kernel handles
+                    // For delegated batches the untilize core's writer kernel handles
                     // local DRAM writes directly; skip them here.
                     if (!is_delegated_batch)
 #endif
@@ -523,7 +524,7 @@ void kernel_main() {
             noc_async_write_barrier();
         }
         // Release CB after self-batch so compute can reuse it next time
-        if (C >= num_idle_cores) {
+        if (C >= num_untilize_cores) {
             cb_pop_front(cb_untilize_id, read_batch_size);
         }
 #else

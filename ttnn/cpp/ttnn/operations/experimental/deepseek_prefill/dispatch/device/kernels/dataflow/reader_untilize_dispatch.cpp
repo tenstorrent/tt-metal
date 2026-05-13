@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //
-// Reader kernel for idle (worker) cores in the dispatch op.
+// Reader kernel for untilize (worker) cores in the dispatch op.
 // Pairs with writer_untilize_dispatch.cpp running on the other data-movement
 // RISC — this kernel focuses on streaming tiled input from DRAM so the writer
 // can overlap NOC-writes to the owning sender with the next batch's reads.
 //
-// Token batches are distributed round-robin across total_workers (k_s idle
+// Token batches are distributed round-robin across total_workers (k_s untilize
 // cores + the sender itself). Core i processes batches i, i+total_workers, …
 //
 // For each assigned batch:

@@ -3,13 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //
-// Writer kernel for idle (worker) cores in the dispatch op.
+// Writer kernel for untilize cores in the dispatch op.
 // Runs on the data-movement RISC opposite the reader so that the reader can
 // prefetch the next batch's DRAM tiles into cb_input_id while this kernel is
 // waiting for compute / the owning sender and performing the NOC write.
 //
-// Each idle core is permanently bound to ONE sender core (its owning sender).
-// Token batches are distributed round-robin across total_workers (k_s idle
+// Each untilize core is permanently bound to ONE sender core (its owning sender).
+// Token batches are distributed round-robin across total_workers (k_s untilize
 // cores + the sender itself).  Core i processes batches i, i+total_workers, …
 //
 // For each assigned batch:
