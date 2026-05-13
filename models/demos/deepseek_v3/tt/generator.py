@@ -280,6 +280,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         self._trace_positions: ttnn.Tensor | None = None
         self._trace_rot_idxs: ttnn.Tensor | None = None
         self._trace_output: ttnn.Tensor | None = None
+        self._trace_sample_output: ttnn.Tensor | None = None
         self._trace_page_tables_to_use: tuple[ttnn.Tensor, ...] | None = None
         self._mtp_verify_trace_id: int | None = None
         self._mtp_verify_trace_tokens: ttnn.Tensor | None = None
@@ -294,8 +295,6 @@ class DeepseekGenerator(WarmupForwardMixin):
         self._mtp_predict_trace_rot_idxs: ttnn.Tensor | None = None
         self._mtp_predict_trace_output: ttnn.Tensor | None = None
         self._mtp_predict_trace_page_table: ttnn.Tensor | None = None
-        self._sampling_trace_logits_device: ttnn.Tensor | None = None
-        self._sampling_trace_logits_host: ttnn.Tensor | None = None
         self.enable_trace = enable_trace
         self.enable_mem_profile = enable_mem_profile
         self.signpost = signpost
@@ -329,12 +328,13 @@ class DeepseekGenerator(WarmupForwardMixin):
                 sample_on_device=self.sample_on_device,
             )
             logger.debug(f"Phase 1: (ii) Warmup decode without trace for demo")
-            self._warmup_model_decode_demo(enable_trace=False, sample_on_device=self.sample_on_device)
+            self._warmup_model_decode_demo(sample_on_device=self.sample_on_device)
 
             if self.enable_trace:
-                # Phase 2: Warmup decode with trace (deepseek does not support prefill with trace)
-                logger.debug(f"Phase 2: Warmup decode with trace for demo")
-                self._warmup_model_decode_demo(enable_trace=True, sample_on_device=self.sample_on_device)
+                # Keep trace capture out of warmup: the real prefill runs after warmup
+                # and may allocate transient tensors. The first real decode captures
+                # the trace after prefill has completed.
+                logger.debug("Phase 2: Decode trace capture deferred until first real decode")
             else:
                 logger.debug("Demo was initiated without trace, skipping Phase 2: Warmup decode with trace")
             logger.info("Warmup completed for demo mode")
@@ -342,19 +342,21 @@ class DeepseekGenerator(WarmupForwardMixin):
         else:
             logger.info("vLLM runs its own warmup, no need to warmup explicitly for vLLM context")
 
-    def _warmup_model_decode_demo(self, enable_trace: bool, sample_on_device: bool):
+    def _warmup_model_decode_demo(self, sample_on_device: bool):
         warmup_tokens = torch.zeros(self.batch_size, dtype=torch.int32)
         warmup_start_pos = torch.zeros(self.batch_size, dtype=torch.int32)
         decode_logits = self.decode_forward(
             tokens=warmup_tokens,
             start_pos=warmup_start_pos,
-            enable_trace=enable_trace,
+            enable_trace=False,
             page_table=None,
             sample_on_device=sample_on_device,
         )
 
         if sample_on_device:
-            self._sample_tokens_device(decode_logits, enable_trace=enable_trace)
+            sampled_tokens = self._sample_tokens_device(decode_logits)
+            ttnn.deallocate(sampled_tokens)
+            ttnn.deallocate(decode_logits)
         else:
             self._sample_on_host(decode_logits)
 
@@ -461,7 +463,10 @@ class DeepseekGenerator(WarmupForwardMixin):
                     self._reset_sampling_state(normalized_sampling_params, self.batch_size, self.batch_size_per_row)
             else:
                 # create new sampling generator
-                enable_internal_trace_sampling = enable_trace
+                # DeepSeek owns trace ordering at the decode level. When tracing
+                # is enabled, on-device sampling is captured inside the decode
+                # trace instead of as a second independent trace.
+                enable_internal_trace_sampling = False
                 self.sampling_args = make_deepseek_sampling_args(
                     self.mesh_device,
                     self.hf_config.vocab_size,
@@ -670,6 +675,89 @@ class DeepseekGenerator(WarmupForwardMixin):
                 logger.warning(f"Failed to deallocate tensor {tensor_path}: {e}")
         self._weight_ttnn_cache.clear()
 
+    def _cleanup_decode_trace_state(self) -> None:
+        """Release the standard decode trace and its persistent tensors."""
+        if self._trace_id is not None:
+            ttnn.release_trace(self.mesh_device, self._trace_id)
+            self._trace_id = None
+
+        for attr in (
+            "_trace_tokens",
+            "_trace_positions",
+            "_trace_rot_idxs",
+            "_trace_output",
+            "_trace_sample_output",
+        ):
+            tensor = getattr(self, attr, None)
+            if tensor is not None:
+                ttnn.deallocate(tensor)
+                setattr(self, attr, None)
+
+        if self._trace_page_tables_to_use is not None:
+            if self._trace_page_tables_to_use is not getattr(self, "page_tables_tt", None):
+                for i, page_table in enumerate(self._trace_page_tables_to_use):
+                    try:
+                        ttnn.deallocate(page_table)
+                    except Exception as e:
+                        logger.warning(f"Failed to deallocate trace page table {i}: {e}")
+            self._trace_page_tables_to_use = None
+
+    def _cleanup_mtp_trace_state(self) -> None:
+        """Release MTP traces and their persistent tensors."""
+        if self._mtp_verify_trace_id is not None:
+            ttnn.release_trace(self.mesh_device, self._mtp_verify_trace_id)
+            self._mtp_verify_trace_id = None
+
+        for attr in (
+            "_mtp_verify_trace_tokens",
+            "_mtp_verify_trace_positions",
+            "_mtp_verify_trace_rot_idxs",
+        ):
+            tensor = getattr(self, attr, None)
+            if tensor is not None:
+                ttnn.deallocate(tensor)
+                setattr(self, attr, None)
+
+        if self._mtp_verify_trace_output is not None:
+            verify_logits_tt, verify_hidden_tt = self._mtp_verify_trace_output
+            ttnn.deallocate(verify_logits_tt)
+            ttnn.deallocate(verify_hidden_tt)
+            self._mtp_verify_trace_output = None
+
+        if self._mtp_verify_trace_page_tables is not None:
+            if self._mtp_verify_trace_page_tables is not getattr(self, "page_tables_tt", None):
+                for i, page_table in enumerate(self._mtp_verify_trace_page_tables):
+                    try:
+                        ttnn.deallocate(page_table)
+                    except Exception as e:
+                        logger.warning(f"Failed to deallocate MTP verify trace page table {i}: {e}")
+            self._mtp_verify_trace_page_tables = None
+
+        if self._mtp_predict_trace_id is not None:
+            ttnn.release_trace(self.mesh_device, self._mtp_predict_trace_id)
+            self._mtp_predict_trace_id = None
+
+        for attr in (
+            "_mtp_predict_trace_hidden",
+            "_mtp_predict_trace_tokens",
+            "_mtp_predict_trace_positions",
+            "_mtp_predict_trace_rot_idxs",
+            "_mtp_predict_trace_output",
+        ):
+            tensor = getattr(self, attr, None)
+            if tensor is not None:
+                ttnn.deallocate(tensor)
+                setattr(self, attr, None)
+
+        if self._mtp_predict_trace_page_table is not None:
+            if self._mtp_predict_trace_page_table is not getattr(self, "mtp_page_table_tt", None):
+                ttnn.deallocate(self._mtp_predict_trace_page_table)
+            self._mtp_predict_trace_page_table = None
+
+    def _cleanup_trace_state(self) -> None:
+        self._cleanup_decode_trace_state()
+        self._cleanup_mtp_trace_state()
+
     def cleanup_all(self) -> None:
         """Comprehensive cleanup of all resources managed by the generator."""
         # Clear TTNN weight cache
@@ -711,85 +799,7 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         # Clean up trace state
         try:
-            if self._trace_id is not None:
-                ttnn.release_trace(self.mesh_device, self._trace_id)
-                del self._trace_id
-            if self._trace_tokens is not None:
-                ttnn.deallocate(self._trace_tokens)
-                del self._trace_tokens
-            if self._trace_positions is not None:
-                ttnn.deallocate(self._trace_positions)
-                del self._trace_positions
-            if self._trace_rot_idxs is not None:
-                ttnn.deallocate(self._trace_rot_idxs)
-                del self._trace_rot_idxs
-            if self._trace_output is not None:
-                ttnn.deallocate(self._trace_output)
-                del self._trace_output
-            if self._trace_page_tables_to_use is not None and self._trace_page_tables_to_use is not self.page_tables_tt:
-                for i, page_table in enumerate(self._trace_page_tables_to_use):
-                    try:
-                        ttnn.deallocate(page_table)
-                    except Exception as e:
-                        logger.warning(f"Failed to deallocate trace page table {i}: {e}")
-                del self._trace_page_tables_to_use
-            if self._mtp_verify_trace_id is not None:
-                ttnn.release_trace(self.mesh_device, self._mtp_verify_trace_id)
-                del self._mtp_verify_trace_id
-            if self._mtp_verify_trace_tokens is not None:
-                ttnn.deallocate(self._mtp_verify_trace_tokens)
-                del self._mtp_verify_trace_tokens
-            if self._mtp_verify_trace_positions is not None:
-                ttnn.deallocate(self._mtp_verify_trace_positions)
-                del self._mtp_verify_trace_positions
-            if self._mtp_verify_trace_rot_idxs is not None:
-                ttnn.deallocate(self._mtp_verify_trace_rot_idxs)
-                del self._mtp_verify_trace_rot_idxs
-            if self._mtp_verify_trace_output is not None:
-                verify_logits_tt, verify_hidden_tt = self._mtp_verify_trace_output
-                ttnn.deallocate(verify_logits_tt)
-                ttnn.deallocate(verify_hidden_tt)
-                del self._mtp_verify_trace_output
-            if (
-                self._mtp_verify_trace_page_tables is not None
-                and self._mtp_verify_trace_page_tables is not self.page_tables_tt
-            ):
-                for i, page_table in enumerate(self._mtp_verify_trace_page_tables):
-                    try:
-                        ttnn.deallocate(page_table)
-                    except Exception as e:
-                        logger.warning(f"Failed to deallocate MTP verify trace page table {i}: {e}")
-                del self._mtp_verify_trace_page_tables
-            if self._mtp_predict_trace_id is not None:
-                ttnn.release_trace(self.mesh_device, self._mtp_predict_trace_id)
-                del self._mtp_predict_trace_id
-            if self._mtp_predict_trace_hidden is not None:
-                ttnn.deallocate(self._mtp_predict_trace_hidden)
-                del self._mtp_predict_trace_hidden
-            if self._mtp_predict_trace_tokens is not None:
-                ttnn.deallocate(self._mtp_predict_trace_tokens)
-                del self._mtp_predict_trace_tokens
-            if self._mtp_predict_trace_positions is not None:
-                ttnn.deallocate(self._mtp_predict_trace_positions)
-                del self._mtp_predict_trace_positions
-            if self._mtp_predict_trace_rot_idxs is not None:
-                ttnn.deallocate(self._mtp_predict_trace_rot_idxs)
-                del self._mtp_predict_trace_rot_idxs
-            if self._mtp_predict_trace_output is not None:
-                ttnn.deallocate(self._mtp_predict_trace_output)
-                del self._mtp_predict_trace_output
-            if (
-                self._mtp_predict_trace_page_table is not None
-                and self._mtp_predict_trace_page_table is not self.mtp_page_table_tt
-            ):
-                ttnn.deallocate(self._mtp_predict_trace_page_table)
-                del self._mtp_predict_trace_page_table
-            if self._sampling_trace_logits_device is not None:
-                ttnn.deallocate(self._sampling_trace_logits_device)
-                del self._sampling_trace_logits_device
-            if self._sampling_trace_logits_host is not None:
-                ttnn.deallocate(self._sampling_trace_logits_host)
-                del self._sampling_trace_logits_host
+            self._cleanup_trace_state()
         except Exception as e:
             logger.warning(f"Failed to cleanup trace state: {e}")
 
@@ -895,46 +905,13 @@ class DeepseekGenerator(WarmupForwardMixin):
         enable_trace: bool = False,
         user_slots: list[int] | None = None,
     ) -> ttnn.Tensor:
-        sampling_batch_size = self.sampling_generator.tt_sampling.max_batch_size
-        sampling_logits = logits
-        if logits.shape[2] != sampling_batch_size:
-            if logits.shape[2] <= 0 or logits.shape[2] > sampling_batch_size:
-                raise ValueError(
-                    f"Device sampling expects logits batch in [1, {sampling_batch_size}], got {logits.shape[2]}"
-                )
-            # Sampling kernels operate on the padded per-row batch size. Append filler rows so
-            # smaller decode/prefill batches can reuse the same device sampling path.
-            filler_row = ttnn.slice(
-                logits,
-                [0, 0, logits.shape[2] - 1, 0],
-                [1, 1, logits.shape[2], logits.shape[-1]],
+        if enable_trace:
+            raise RuntimeError(
+                "Traced decode captures on-device sampling inside the decode trace; "
+                "do not capture a separate sampling trace."
             )
-            filler = ttnn.repeat(filler_row, (1, 1, sampling_batch_size - logits.shape[2], 1))
-            ttnn.deallocate(filler_row)
-            padded_logits = ttnn.concat([logits, filler], dim=2)
-            ttnn.deallocate(filler)
-            if enable_trace:
-                if (
-                    self._sampling_trace_logits_device is None
-                    or self._sampling_trace_logits_host is None
-                    or self._sampling_trace_logits_device.shape != padded_logits.shape
-                ):
-                    if self._sampling_trace_logits_device is not None:
-                        ttnn.deallocate(self._sampling_trace_logits_device)
-                    if self._sampling_trace_logits_host is not None:
-                        ttnn.deallocate(self._sampling_trace_logits_host)
-                    self._sampling_trace_logits_device = ttnn.allocate_tensor_on_device(
-                        padded_logits.spec, self.mesh_device
-                    )
-                    self._sampling_trace_logits_host = ttnn.allocate_tensor_on_host(
-                        padded_logits.spec, self.mesh_device
-                    )
-                ttnn.copy_device_to_host_tensor(padded_logits, self._sampling_trace_logits_host)
-                ttnn.copy_host_to_device_tensor(self._sampling_trace_logits_host, self._sampling_trace_logits_device)
-                ttnn.deallocate(padded_logits)
-                sampling_logits = self._sampling_trace_logits_device
-            else:
-                sampling_logits = padded_logits
+
+        sampling_logits = self._pad_sampling_logits(logits)
 
         self.sampling_generator.seed_manager.get_new_values(user_slots)
         self.sampling_generator.enable_internal_trace = enable_trace
@@ -942,8 +919,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             tt_out = self.sampling_generator.sample(sampling_logits, enable_trace=enable_trace)
         finally:
             if sampling_logits is not logits:
-                if sampling_logits is not self._sampling_trace_logits_device:
-                    ttnn.deallocate(sampling_logits)
+                ttnn.deallocate(sampling_logits)
 
         if isinstance(tt_out, tuple):
             tt_tokens, tt_log_probs = tt_out
@@ -953,6 +929,26 @@ class DeepseekGenerator(WarmupForwardMixin):
             tt_out = tt_tokens
 
         return tt_out
+
+    def _pad_sampling_logits(self, logits: ttnn.Tensor) -> ttnn.Tensor:
+        sampling_batch_size = self.sampling_generator.tt_sampling.max_batch_size
+        if logits.shape[2] == sampling_batch_size:
+            return logits
+        if logits.shape[2] <= 0 or logits.shape[2] > sampling_batch_size:
+            raise ValueError(
+                f"Device sampling expects logits batch in [1, {sampling_batch_size}], got {logits.shape[2]}"
+            )
+
+        filler_row = ttnn.slice(
+            logits,
+            [0, 0, logits.shape[2] - 1, 0],
+            [1, 1, logits.shape[2], logits.shape[-1]],
+        )
+        filler = ttnn.repeat(filler_row, (1, 1, sampling_batch_size - logits.shape[2], 1))
+        ttnn.deallocate(filler_row)
+        padded_logits = ttnn.concat([logits, filler], dim=2)
+        ttnn.deallocate(filler)
+        return padded_logits
 
     def _tokens_from_device(self, tt_out_tok, mesh_device, batch_size_per_row: int) -> torch.Tensor:
         composed = ttnn.to_torch(
@@ -1931,6 +1927,9 @@ class DeepseekGenerator(WarmupForwardMixin):
             int(max_token_len),
         )
 
+        if self.enable_trace:
+            self._cleanup_trace_state()
+
         if warmup_cache_key not in self._warmup_completed_configs:
             if self.signpost:
                 signpost(header="warmup_model")
@@ -1971,13 +1970,12 @@ class DeepseekGenerator(WarmupForwardMixin):
         # Run one or more prefill+decode batches
         stop_token_ids = self._get_stop_token_ids() if stop_at_eos and teacher_forcing is None else set()
         for batch_idx in range(repeat_batches):
+            if self.enable_trace:
+                self._cleanup_trace_state()
+
             if self.sample_on_device:
                 # reset sampling state for each repeat batch, o/p tokens will be different for each repeat batch
                 assert self.sampling_params is not None, "sampling_params must be set when sampling on device"
-                if self.enable_trace and batch_idx > 0:
-                    # Previous batch deallocates trace-owned sampling output tensors.
-                    # Reset trace so the next batch captures fresh outputs.
-                    self.sampling_generator.reset_trace()
                 self._reset_sampling_state(
                     self.sampling_params,
                     self.batch_size,
@@ -2218,9 +2216,10 @@ class DeepseekGenerator(WarmupForwardMixin):
                         decode_forward_passes += 1
                         self.ccl.reset_sem_counters()
                         if self.sample_on_device:
-                            pred_tokens_device = self._sample_tokens_device(
-                                decode_logits, enable_trace=self.enable_trace
-                            )
+                            if self.enable_trace:
+                                pred_tokens_device = decode_logits
+                            else:
+                                pred_tokens_device = self._sample_tokens_device(decode_logits)
                             pred_tokens = self._tokens_from_device(
                                 pred_tokens_device, self.mesh_device, batch_size_per_row=self.batch_size_per_row
                             )
@@ -2261,13 +2260,21 @@ class DeepseekGenerator(WarmupForwardMixin):
                         decode_step_active_masks.append(step_active_mask)
                         decode_step_user_tokens.append(step_user_tokens)
 
-                # Trace path: deallocate once after replay loop completes.
-                if self.sample_on_device and self.enable_trace and pred_tokens_device is not None:
+                # Non-combined trace sampling owns temporary output tensors here; combined
+                # decode+sampling trace output is owned by the generator trace state.
+                if (
+                    self.sample_on_device
+                    and self.enable_trace
+                    and pred_tokens_device is not None
+                    and pred_tokens_device is not self._trace_sample_output
+                ):
                     ttnn.deallocate(pred_tokens_device)
                 profiler.end("inference_decode")
                 decode_steps_for_stats = decode_step_idx
                 decode_step_active_masks_for_stats = decode_step_active_masks
                 decode_step_user_tokens_for_stats = decode_step_user_tokens
+                if self.enable_trace:
+                    self._cleanup_trace_state()
 
             if early_print_first_user:
                 logger.info("\n===== Done =====")
@@ -2891,6 +2898,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         init_tokens: torch.Tensor,
         positions: torch.Tensor,
         page_tables: torch.Tensor | None = None,
+        sample_on_device: bool = False,
     ) -> None:
         """Allocate persistent inputs, capture trace for one decode iteration, and store trace state."""
         assert self._trace_id is None, "Trace already captured"
@@ -2918,6 +2926,11 @@ class DeepseekGenerator(WarmupForwardMixin):
             self._trace_page_tables_to_use = self._get_page_tables()
         ttnn.synchronize_device(self.mesh_device)
 
+        if sample_on_device:
+            self.sampling_generator.seed_manager.get_new_values()
+            self.sampling_generator.enable_internal_trace = False
+            ttnn.synchronize_device(self.mesh_device)
+
         # 2) Capture decode graph
         self.ccl.reset_sem_counters()
         logger.info("Begin capturing decode trace...")
@@ -2935,6 +2948,17 @@ class DeepseekGenerator(WarmupForwardMixin):
             page_tables=self._trace_page_tables_to_use,
             profile_decode=self.profile_decode,
         )
+        if sample_on_device:
+            sampling_logits = self._pad_sampling_logits(self._trace_output)
+            sampled = self.sampling_generator.sample(sampling_logits, enable_trace=False)
+            if sampling_logits is not self._trace_output:
+                ttnn.deallocate(sampling_logits)
+            if isinstance(sampled, tuple):
+                self._trace_sample_output, tt_log_probs = sampled
+                if tt_log_probs is not None:
+                    ttnn.deallocate(tt_log_probs)
+            else:
+                self._trace_sample_output = sampled
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         if self.signpost:
             signpost(header="decode_trace_capture")
@@ -2962,13 +2986,13 @@ class DeepseekGenerator(WarmupForwardMixin):
         else:
             # Capture trace and return trace output
             if self._trace_id is None:
-                self._capture_decode_trace(tokens, start_pos, page_table)
+                self._capture_decode_trace(tokens, start_pos, page_table, sample_on_device=sample_on_device)
                 # First call: return the captured run's output
                 assert self._trace_output is not None
 
                 if sample_on_device:
-                    # return trace output for sampling on device, no need to get logits on host
-                    return self._trace_output
+                    assert self._trace_sample_output is not None
+                    return self._trace_sample_output
 
                 logits = ttnn.to_torch(
                     self._trace_output,
@@ -3020,6 +3044,9 @@ class DeepseekGenerator(WarmupForwardMixin):
                     ttnn.copy_host_to_device_tensor(host_page_table, self._trace_page_tables_to_use[i])
                 self._update_decode_page_table_alias_masks(page_table)
 
+            if sample_on_device:
+                self.sampling_generator.seed_manager.get_new_values()
+
             self.ccl.reset_sem_counters()
             if profiler is not None:
                 profiler.start(f"trace_execution_{gen_idx}")
@@ -3033,13 +3060,13 @@ class DeepseekGenerator(WarmupForwardMixin):
             assert self._trace_output is not None
 
             if sample_on_device:
-                # return trace output for sampling on device, no need to get logits on host
+                assert self._trace_sample_output is not None
                 if self.signpost:
                     signpost(header="decode_execute_trace_sample_on_device")
                 if self.profile_decode:
                     # trigger the profiler to read the device side data each iteration to not miss any data
                     ttnn.ReadDeviceProfiler(self.mesh_device)
-                return self._trace_output
+                return self._trace_sample_output
 
             assert sample_on_device == False, "sample_on_device should be False at this point"
 
