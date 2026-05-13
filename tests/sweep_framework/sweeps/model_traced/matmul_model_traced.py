@@ -67,8 +67,15 @@ def mesh_device_fixture():
         # Create mesh device based on env var
         try:
             device = create_mesh_device(mesh_shape)
+            result = setup_sub_device_manager(device)
+            sub_device_mgr = None
+            if isinstance(result, tuple):
+                sub_device_mgr, _GLOBAL_CB = result
+            else:
+                sub_device_mgr = result
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
+            teardown_sub_device_manager(device, sub_device_mgr)
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
@@ -299,17 +306,29 @@ def run(
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-    # Strip prefetcher-specific fields for tracing without sub-device infra
-    _pc = op_kwargs.get("program_config")
-    if _pc is not None:
-        if hasattr(_pc, "num_global_cb_receivers"):
-            _pc.num_global_cb_receivers = 1
-        if hasattr(_pc, "gather_in0"):
-            _pc.gather_in0 = False
-    if "global_cb" in op_kwargs:
+    # Inject global_cb when weight is properly sharded; otherwise fallback
+    gcb_raw = kwargs.get("global_cb")
+    if gcb_raw is not None and gcb_raw != "__ABSENT__" and isinstance(gcb_raw, dict):
+        _w_mc = input_tensor_b.memory_config() if hasattr(input_tensor_b, "memory_config") else None
+        _w_sharded = _w_mc is not None and _w_mc.is_sharded()
+        if _w_sharded and _GLOBAL_CB is not None:
+            op_kwargs["global_cb"] = _GLOBAL_CB
+        else:
+            # Weight stayed in DRAM interleaved; disable prefetcher features
+            _pc = op_kwargs.get("program_config")
+            if _pc is not None:
+                if hasattr(_pc, "num_global_cb_receivers"):
+                    _pc.num_global_cb_receivers = 1
+                if hasattr(_pc, "gather_in0"):
+                    _pc.gather_in0 = False
+            if "sub_device_id" in op_kwargs:
+                del op_kwargs["sub_device_id"]
+            if "memory_config" in op_kwargs:
+                del op_kwargs["memory_config"]
+            if "program_config" in op_kwargs:
+                del op_kwargs["program_config"]
+    elif "global_cb" in op_kwargs:
         del op_kwargs["global_cb"]
-    if "sub_device_id" in op_kwargs:
-        del op_kwargs["sub_device_id"]
 
     try:
         start_time = start_measuring_time()

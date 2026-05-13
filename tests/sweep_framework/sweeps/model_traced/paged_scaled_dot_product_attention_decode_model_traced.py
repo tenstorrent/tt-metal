@@ -70,7 +70,12 @@ if model_traced_params:
 
 def mesh_device_fixture():
     mesh_shape = get_model_traced_mesh_shape()
-    device = create_mesh_device(mesh_shape)
+    # paged_sdpa kernel places writers on column-0 cores which conflict with
+    # COL dispatch. Use default dispatch (no COL, no num_command_queues=1).
+    device = ttnn.open_mesh_device(
+        mesh_shape=ttnn.MeshShape(*mesh_shape),
+        l1_small_size=79104,
+    )
     device_name = ttnn.get_arch_name()
     yield (device, device_name)
     ttnn.close_mesh_device(device)

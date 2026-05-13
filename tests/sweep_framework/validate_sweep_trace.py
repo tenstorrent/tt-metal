@@ -337,6 +337,19 @@ def _classify(path: str) -> str:
     return "value"
 
 
+
+def _is_tensor_metadata(d):
+    """Check if a dict looks like tensor metadata (not an op argument)."""
+    if not isinstance(d, dict):
+        return False
+    # Master format: has layout, memory_config, storage_type
+    if "layout" in d and "memory_config" in d:
+        return True
+    # Sweep format: has type=ttnn.Tensor, original_shape
+    if d.get("type") == "ttnn.Tensor" or "original_shape" in d:
+        return True
+    return False
+
 def deep_diff(master: Any, sweep: Any, prefix: str = "") -> list[Diff]:
     """Produce a list of leaf-level diffs between two normalized argument trees."""
     diffs: list[Diff] = []
@@ -356,9 +369,14 @@ def deep_diff(master: Any, sweep: Any, prefix: str = "") -> list[Diff]:
                     continue
                 diffs.append(Diff(child_path, "<missing>", sweep[k], "extra_key"))
             elif k not in sweep:
+                if _is_tensor_metadata(master.get(k)):
+                    continue
                 if master[k] is not None and k not in ("memory_config", "core_grid", "dtype", "sub_core_grids", "indices_tensor", "subdevice_id", "global_cb", "sub_device_id", "mesh_device", "persistent_output_tensor", "arg0", "arg1", "arg2", "arg3", "arg4"):
                     diffs.append(Diff(child_path, master[k], "<missing>", "extra_key"))
             else:
+                # Skip comparison of tensor metadata dicts (different tracing formats)
+                if _is_tensor_metadata(master[k]) and _is_tensor_metadata(sweep[k]):
+                    continue
                 diffs.extend(deep_diff(master[k], sweep[k], child_path))
     elif isinstance(master, list) and isinstance(sweep, list):
         for i in range(max(len(master), len(sweep))):

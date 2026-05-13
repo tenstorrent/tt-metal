@@ -733,7 +733,7 @@ def run(
                             op_kwargs["persistent_output_buffer"] = None
 
                         if subdevice_id is not None or "subdevice_id" not in absent_keys:
-                            op_kwargs["subdevice_id"] = subdevice_id
+                            op_kwargs["subdevice_id"] = worker_sub_device_id
                         # Ensure input tensor topology matches master trace
                         if input_a_tensor_placement:
                             from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
