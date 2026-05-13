@@ -9,57 +9,84 @@ This package is **self-contained** — it does not import from `models/experimen
 ## Architecture
 
 ```
-                           ┌──────────────────────────────────────────────────────┐
-                           │                  Inputs (per chunk)                   │
-                           │                                                       │
-                           │  ┌────────┐  ┌────────┐  ┌──────────┐  ┌───────────┐ │
-                           │  │ image1 │  │ image2 │  │ empty cam│  │ lang+state│ │
-                           │  │224×224 │  │ wrist  │  │  -1 fill │  │ 200 tokens│ │
-                           │  └───┬────┘  └───┬────┘  └────┬─────┘  └─────┬─────┘ │
-                           └──────┼───────────┼────────────┼──────────────┼───────┘
-                                  │           │            │              │
-                                  ▼           ▼            ▼              ▼
-                             ┌──────────────────────────────────┐  ┌────────────┐
-                             │      SigLIP-27 vision tower      │  │  Embeddings│
-                             │   (3× batched in single bs=N)    │  │  (sqrt-scl)│
-                             └────────────────┬─────────────────┘  └─────┬──────┘
-                                              │                          │
-                                              └─────────────┬────────────┘
-                                                            ▼
-                                              ┌─────────────────────────────┐
-                                              │ Prefix = [image][lang+state]│
-                                              │   (~750 tokens, TILE)       │
-                                              └──────────────┬──────────────┘
-                                                             ▼
-                                       ┌─────────────────────────────────────┐
-                                       │   VLM (Gemma 2B, 18-layer, KV-cache) │
-                                       │     bidirectional prefix prefill     │
-                                       │     → past_key_values (KV cache)     │
-                                       └────────────────────┬─────────────────┘
-                                                            │
-                                            ┌───────────────┴───────────────┐
-                                            │                               │
-                                            │       Denoise loop (Euler)    │
-                                            │       for t in [1.0 → 0.0]:   │
-                                            │                               │
-                                            │   ┌─────────────────────┐     │
-   x_t ──── action_in_proj ──► action emb ──┼──►│ AdaRMS Expert 18×   │     │
-                                            │   │ Gemma 300M layers   │     │
-   sincos(t) ─► time_mlp ──► adarms_cond ──►│──►│  (uses adarms_cond) │     │
-                                            │   └──────────┬──────────┘     │
-                                            │              │                │
-                                            │              ▼                │
-                                            │      action_out_proj          │
-                                            │              │                │
-                                            │              ▼                │
-                                            │       velocity v_t            │
-                                            │              │                │
-                                            │       x_t ← x_t + dt·v_t     │
-                                            └───────────────┬───────────────┘
-                                                            ▼
-                                                   actions (B, 50, 32)
-                                                   → take [:, :, :7] for libero
+┌─────────────────────────────────────────────────────────────────────────┐
+│                             PI0.5 Model                                 │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌─────────────────────────────────────┐   ┌──────────────────────────┐│
+│  │         PREFIX EMBEDDING            │   │    SUFFIX EMBEDDING      ││
+│  │                                     │   │                          ││
+│  │  ┌───────────┐   ┌───────────────┐  │   │           ┌────────┐     ││
+│  │  │  Images   │   │ Lang + State  │  │   │           │ Noisy  │     ││
+│  │  │  (224x224)│   │ (200 tokens,  │  │   │           │Actions │     ││
+│  │  │  (3 views)│   │  state→bins)  │  │   │           │(50, 32)│     ││
+│  │  └─────┬─────┘   └───────┬───────┘  │   │           └───┬────┘     ││
+│  │        │                 │          │   │               │          ││
+│  │        ▼                 │          │   │               ▼          ││
+│  │  ┌───────────┐           │          │   │      ┌────────────────┐  ││
+│  │  │  SigLIP   │           │          │   │      │ action_in_proj │  ││
+│  │  │  Vision   │           │          │   │      │  (32 → 1024)   │  ││
+│  │  │  Tower    │           │          │   │      └────────┬───────┘  ││
+│  │  │(27 blocks)│           │          │   │               │          ││
+│  │  └─────┬─────┘           │          │   │               │          ││
+│  │        │                 │          │   │  ┌──────────┐ │          ││
+│  │        ▼                 │          │   │  │ sincos(t)│ │          ││
+│  │  ┌───────────┐           │          │   │  └─────┬────┘ │          ││
+│  │  │Projector  │           │          │   │        ▼      │          ││
+│  │  │(1152→2048)│           │          │   │  ┌──────────┐ │          ││
+│  │  └─────┬─────┘           │          │   │  │ time_mlp │ │          ││
+│  │        │                 │          │   │  │ in→silu→ │ │          ││
+│  │        ▼                 ▼          │   │  │ out→silu │ │          ││
+│  │  ┌───────────────────────────────┐  │   │  └─────┬────┘ │          ││
+│  │  │  Image Embeds + Lang Embeds   │  │   │        │      │          ││
+│  │  │  (Gemma 2B embedding)         │  │   │  adarms_cond  │          ││
+│  │  └───────────────┬───────────────┘  │   └────────┼──────┼──────────┘│
+│  │                  │                  │            │      │           │
+│  └──────────────────┼──────────────────┘            │      │           │
+│                     │                               │      │           │
+│                     ▼                               │      ▼           │
+│  ┌──────────────────────────────────────────────────────────────────┐  │
+│  │               DUAL-EXPERT TRANSFORMER (18 layers)                │  │
+│  │  ┌────────────────────────┐    ┌────────────────────────┐        │  │
+│  │  │     Gemma 2B VLM       │    │   Gemma 300M Expert    │        │  │
+│  │  │   (processes prefix)   │    │ ★ AdaRMSNorm variant ★ │        │  │
+│  │  │   Plain RMSNorm        │    │                        │        │  │
+│  │  │                        │    │   adaRMS Dense per     │        │  │
+│  │  │  Q_vlm ──┐             │    │   layer:               │        │  │
+│  │  │  K_vlm ──┼─► SHARED ◄──┼────┼─ scale, shift, gate    │        │  │
+│  │  │  V_vlm ──┘   ATTN      │    │   ← from adarms_cond   │        │  │
+│  │  │                        │    │                        │        │  │
+│  │  │  MLP_vlm               │    │   normed = RMS(x)      │        │  │
+│  │  │                        │    │   out = normed*(1+s)+b │        │  │
+│  │  │                        │    │   residual ← gate * .  │        │  │
+│  │  └────────────────────────┘    └────────────────────────┘        │  │
+│  └────────────────────────────────────┬─────────────────────────────┘  │
+│                                       │                                │
+│                                       ▼                                │
+│                       ┌──────────────────────────────┐                 │
+│                       │     FLOW MATCHING DENOISER   │                 │
+│                       │     (10 denoising steps)     │                 │
+│                       │                              │                 │
+│                       │  for t in [1.0 → 0.0]:       │                 │
+│                       │    v_t = action_out_proj(    │                 │
+│                       │           expert_out)        │                 │
+│                       │    x_t ← x_t + dt · v_t      │                 │
+│                       └──────────────┬───────────────┘                 │
+│                                      │                                 │
+│                                      ▼                                 │
+│                        ┌──────────────────────────┐                    │
+│                        │      Action Output       │                    │
+│                        │     [batch=1, 50, 32]    │                    │
+│                        └──────────────────────────┘                    │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
+
+**Key architectural details:**
+- **Shared Attention**: VLM and Expert share K,V tensors (concatenated), but have separate Q and MLPs (same as PI0)
+- **AdaRMSNorm in Expert**: each layer reads `(scale, shift, gate)` from a Dense projection of `adarms_cond` (time-derived). `out = RMSNorm(x)·(1+scale) + shift`; residual is gated.
+- **State in language tokens**: 8-dim robot state → MEAN/STD normalize → discretize to 256 bins → append to prompt as `Task: …, State: <bins>; Action:`. No separate state token in the suffix.
+- **Flow Matching**: same Euler integration as PI0; 10 (or 4) denoising steps from N(0,I) → actions.
+- **Dual Experts**: VLM (2B) processes images+language+state-as-tokens; Expert (300M, adaRMS) processes only action tokens.
 
 ### What differs from PI0
 
