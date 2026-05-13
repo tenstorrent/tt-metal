@@ -290,7 +290,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
 
         reader_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
-            "reader_unary_transpose_wh_universal_input_cols_partitioned.cpp";
+            "reader_unary_transpose_wh_universal_input_cols_partitioned_legacy.cpp";
         reader_desc.compile_time_args = reader_compile_time_args;
         reader_desc.defines = {reader_defines.begin(), reader_defines.end()};
     }
@@ -330,8 +330,9 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     };
 
     const std::string compute_kernel =
-        std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce") +
-        (operation_attributes.negate ? "_h_neg" : "") + ".cpp";
+        operation_attributes.negate
+            ? "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h_neg.cpp"
+            : "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_legacy.cpp";
 
     KernelDescriptor compute_desc_g1;
     compute_desc_g1.kernel_source = compute_kernel;

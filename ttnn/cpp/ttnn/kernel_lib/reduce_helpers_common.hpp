@@ -9,8 +9,8 @@
 /**
  * @brief Determines whether a reduce operation should use the matmul path.
  *
- * SUM/AVG along REDUCE_ROW uses matmul_tiles (col-0 scaler).
- * All other combinations use reduce_tile LLK (row-0 scaler).
+ * SUM/AVG along REDUCE_ROW uses `matmul_tiles` (col-0 scaler).
+ * All other combinations use the regular `reduce_tile` LLK (with a row-0 scaler).
  */
 template <ckernel::PoolType pool_type, ckernel::ReduceDim reduce_dim>
 constexpr bool reduce_uses_matmul() {

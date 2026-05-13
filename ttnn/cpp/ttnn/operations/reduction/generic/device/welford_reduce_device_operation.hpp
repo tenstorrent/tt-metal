@@ -10,6 +10,7 @@
 #include "tt_stl/reflection.hpp"
 
 #include "welford_reduce_device_operation_types.hpp"
+#include "welford_reduce_program_factory.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::prim {
@@ -20,12 +21,10 @@ struct WelfordReduceDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    struct WelfordReduceProgramFactory {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-    };
+    // The welford program factory has been migrated to the Metal 2.0 host API and
+    // uses ProgramFactoryConcept (create + override_runtime_arguments) rather than
+    // the ProgramDescriptor-based create_descriptor() path.
+    using WelfordReduceProgramFactory = ::ttnn::prim::WelfordReduceProgramFactory;
 
     using program_factory_t = std::variant<WelfordReduceProgramFactory>;
 

@@ -131,8 +131,8 @@ Tensor reduce(
         [&](const Tensor& h_input, float h_scaler, float h_post_mul, tt::tt_metal::DataType h_out_dtype) {
             // Keep neg_input in h_input's memory config (pass std::nullopt) so the
             // pre-reduce negation stays in place; forcing output_mem_config here
-            // could trigger a reshard (DRAM↔L1, interleaved↔sharded) before the
-            // H-reduce.  Only the final neg enforces output_mem_config.
+            // could trigger a reshard before the H-reduce.  Only the final neg
+            // enforces output_mem_config.
             Tensor neg_input = ttnn::neg(h_input, std::nullopt, std::nullopt, sub_core_grids);
             Tensor h_out = ttnn::prim::reduce(
                 neg_input,

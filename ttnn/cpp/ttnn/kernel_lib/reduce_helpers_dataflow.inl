@@ -7,10 +7,25 @@
 
 #include <cmath>
 #include "llk_defs.h"
-#include "experimental/circular_buffer.h"
+#include "api/debug/dprint.h"
+#include "experimental/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/cb_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
+
+// NOTE on buffer abstraction:
+// The scaler helpers below take the buffer id as a constexpr template parameter
+// (so the per-CB/DFB compile-time metadata — data format, tile r/c dim — can be
+// resolved at compile time). The runtime sync portion (reserve_back / push_back
+// / get_write_ptr) is wrapped in `experimental::DataflowBuffer` rather than
+// `experimental::CircularBuffer`. The DataflowBuffer wrapper is arch-agnostic:
+// on Gen1 (WH/BH) it forwards to the same circular_buffer_interface ops as
+// CircularBuffer; on Gen2 (Quasar) it drives the real DFB hardware. The same
+// helper source therefore compiles for both archs without any `#ifdef` paths.
+//
+// Callers using the legacy CB-id interface (`prepare_reduce_scaler<cb_id, ...>`)
+// keep working unchanged: on Gen1 the DFB id IS the CB id, and on Gen2 callers
+// pass a constexpr DFB accessor id (`dfb::scaler.id`).
 
 namespace dataflow_kernel_lib {
 
@@ -247,7 +262,7 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_di
     // Unused for REDUCE_SCALAR (which always fills the full tile).
     constexpr uint32_t full_dim = (reduce_dim == ReduceDim::REDUCE_COL) ? tile_r_dim : tile_c_dim;
 
-    ::experimental::CircularBuffer cb(cb_id);
+    ::experimental::DataflowBuffer cb(cb_id);
 
     cb.reserve_back(1);
     uint32_t write_addr = cb.get_write_ptr();
@@ -279,6 +294,26 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_di
             }
         }
     }
+
+    // Quasar DM cores have a write-back L1 D-cache (4KB, per-core) + L2 cache
+    // (128KB, shared between DM cores). RISC stores flow Core -> L1 D$ -> L2 -> TL1
+    // (Tensix L1, the SRAM that other RISCs read). The volatile fills above land
+    // in DM-private caches; without an explicit flush, TRISC-side unpack reads
+    // stale TL1 contents (zeros) even though the DM observes its own writes via
+    // L1 D$ hits. This is consistent with the runtime evidence:
+    //   DM:    PRS:after_fill @0xbb780 : 0x3f803f80 ...
+    //   UNPACK U:scaler sh@0xbb780     : 0x0 0x0 ...
+    // For NoC-written input tiles the NoC engine writes directly to TL1 and
+    // bypasses DM caches, which is why those are visible to TRISC.
+    // flush_l2_cache_range probes L1 D$ for dirty data and writes through to TL1,
+    // so TRISC sees the freshly-filled scaler tile once we signal push_back.
+    // On non-Quasar (or non-DM) builds this is a no-op.
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    {
+        constexpr uint32_t tile_size_bytes = get_tile_size(cb_id);
+        flush_l2_cache_range(write_addr, tile_size_bytes);
+    }
+#endif
 
     cb.push_back(1);
 }
