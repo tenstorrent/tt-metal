@@ -20,6 +20,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.demo.decoder_stage import create_decoder_block_tensors
+from models.demos.deepseek_v3_b1.demo.weight_provider import resolve_sram_expert_ids
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
@@ -76,14 +77,51 @@ def _decode_expert_upload_mode(expert_upload_mode: str) -> tuple[int, int | None
 # ============================================================================
 
 
+class _MutableStateDictOverlay:
+    """Read-through wrapper that lets rig_experts write the rigged bias on top of
+    a read-only LazyStateDict. Overrides take precedence; everything else reads
+    from the base mapping."""
+
+    def __init__(self, base):
+        self._base = base
+        self._overrides: dict = {}
+
+    def __getitem__(self, key):
+        if key in self._overrides:
+            return self._overrides[key]
+        return self._base[key]
+
+    def __setitem__(self, key, value):
+        self._overrides[key] = value
+
+    def __contains__(self, key):
+        return key in self._overrides or key in self._base
+
+    def __iter__(self):
+        seen = set(self._overrides)
+        yield from self._overrides
+        for k in self._base:
+            if k not in seen:
+                yield k
+
+    def __len__(self):
+        return len(self._base) + sum(1 for k in self._overrides if k not in self._base)
+
+
 def rig_experts(state_dict, layer_idx, rigged_group_count):
     """Rig expert routing bias in state_dict for deterministic test routing.
 
     Generates RMS-normalized input for stability with rigged routing,
     modifies state_dict bias entries, and returns the rigged configuration.
 
-    Returns (rigged_group_ids, rigged_expert_ids, torch_input).
+    When state_dict is read-only (LazyStateDict), it is wrapped in a mutable
+    overlay so the bias write succeeds. The wrapped object is returned as the
+    last tuple element so callers can swap their handle.
+
+    Returns (rigged_group_ids, rigged_expert_ids, torch_input, state_dict).
     """
+    if not hasattr(state_dict, "__setitem__"):
+        state_dict = _MutableStateDictOverlay(state_dict)
     K = 7168
     shape = (1, K)
     torch_input_f32 = torch.randn(shape, dtype=torch.float32)
@@ -119,7 +157,7 @@ def rig_experts(state_dict, layer_idx, rigged_group_count):
         f"experts={[(grp, rigged_expert_ids[grp]) for grp in rigged_group_ids]}"
     )
 
-    return rigged_group_ids, rigged_expert_ids, torch_input
+    return rigged_group_ids, rigged_expert_ids, torch_input, state_dict
 
 
 def create_decoder_golden_tensors(
@@ -307,12 +345,14 @@ def create_decoder_golden_tensors(
         "rigged_groups8",
     ],
 )
-# SRAM placement scenario — mirrors test_moe_mlp. Non-trivial scenarios require a
-# rigged-routing mode so the test can deterministically pick winners/non-winners.
+# SRAM placement scenario. "default" runs in CI and resolves SRAM IDs through the
+# same code path as the production demo (resolve_sram_expert_ids → SRAM_PLACEMENT
+# / DEFAULT_SRAM_EXPERT_IDS). All explicit scenarios are opt-in (skip_post_commit).
 @pytest.mark.parametrize(
     "sram_scenario",
     [
-        "no_sram",
+        "default",
+        pytest.param("no_sram", marks=pytest.mark.skip_post_commit),
         pytest.param("t1_picked", marks=pytest.mark.skip_post_commit),
         pytest.param("t1_not_picked", marks=pytest.mark.skip_post_commit),
         pytest.param("t2_both_picked", marks=pytest.mark.skip_post_commit),
@@ -392,7 +432,14 @@ def test_decoder(
         pytest.skip("Test requires more devices than available")
 
     if use_real_weights and expert_upload_mode != "unrigged_all_experts":
-        pytest.skip("Real-weight decoder tests require unrigged_all_experts")
+        # Rigged routing rewrites e_score_correction_bias to force specific TopK
+        # winners. The golden reference uses the same modified state_dict, so the
+        # math stays consistent, but the real model's actual routing distribution
+        # is no longer being exercised — PCC may dip vs. unrigged real runs.
+        logger.warning(
+            "Real weights + {} rewrites gate bias to force TopK; PCC may be lower than unrigged",
+            expert_upload_mode,
+        )
     if use_real_weights and not os.getenv("DEEPSEEK_V3_HF_MODEL"):
         pytest.skip("DEEPSEEK_V3_HF_MODEL must be set to run real MTP layer tests")
 
@@ -422,34 +469,82 @@ def test_decoder(
     rigged_expert_ids = None
     torch_input = None
     if rigged_group_count is not None:
-        rigged_group_ids, rigged_expert_ids, torch_input = rig_experts(
+        rigged_group_ids, rigged_expert_ids, torch_input, state_dict = rig_experts(
             state_dict, ROUTED_EXPERT_LAYER_IDX, rigged_group_count
         )
 
-    # SRAM placement — mirrors test_moe_mlp scenarios. Non-trivial scenarios need
-    # a rigged mode so the test can pick winners/non-winners deterministically.
-    if sram_scenario != "no_sram" and rigged_expert_ids is None:
-        pytest.skip(f"sram_scenario={sram_scenario!r} requires a rigged expert_upload_mode")
-    if rigged_expert_ids is not None:
+    # SRAM placement scenarios. All paths go through resolve_sram_expert_ids
+    # (the same helper the demo's WeightProvider uses), with an override list
+    # per scenario. "default" passes None so SRAM_PLACEMENT / DEFAULT_SRAM_EXPERT_IDS
+    # decides — matching production exactly.
+    #
+    # Rigged: scenarios split TopK winners vs non-winners so *_picked fires at runtime
+    #         and *_not_picked stays idle (exercises the is_sram_expert filter).
+    # Unrigged: no winners known ahead of time; just take first N IDs (0..N-1).
+    #         *_picked / *_not_picked collapse since we can't distinguish.
+    if sram_scenario == "default":
+        sram_override = None
+    elif sram_scenario == "no_sram":
+        sram_override = []
+    elif rigged_expert_ids is not None:
         winners = [grp * 32 + e for grp in rigged_group_ids for e in rigged_expert_ids[grp]]
         non_winners = [eid for eid in range(256) if eid not in winners]
+        sram_override = {
+            "t1_picked": [winners[0]],
+            "t1_not_picked": [non_winners[0]],
+            "t2_both_picked": winners[:2],
+            "t2_partial": [winners[0], non_winners[0]],
+            "t2_none_picked": non_winners[:2],
+            "t4_all_picked": winners[:4],
+            "t8_all_picked": winners[:8],
+            "t8_one_picked": [winners[0]] + non_winners[:7],
+            "t8_none_picked": non_winners[:8],
+            "t8_partial": winners[:2] + non_winners[:6],
+        }[sram_scenario]
     else:
-        winners = []
-        non_winners = list(range(256))
-    sram_expert_ids = {
-        "no_sram": [],
-        "t1_picked": [winners[0]] if winners else [],
-        "t1_not_picked": [non_winners[0]],
-        "t2_both_picked": winners[:2],
-        "t2_partial": [winners[0], non_winners[0]] if winners else [],
-        "t2_none_picked": non_winners[:2],
-        "t4_all_picked": winners[:4],
-        "t8_all_picked": winners[:8],
-        "t8_one_picked": [winners[0]] + non_winners[:7] if winners else [],
-        "t8_none_picked": non_winners[:8],
-        "t8_partial": winners[:2] + non_winners[:6] if winners else [],
-    }[sram_scenario]
+        scenario_count = {
+            "t1_picked": 1,
+            "t1_not_picked": 1,
+            "t2_both_picked": 2,
+            "t2_partial": 2,
+            "t2_none_picked": 2,
+            "t4_all_picked": 4,
+            "t8_all_picked": 8,
+            "t8_one_picked": 8,
+            "t8_none_picked": 8,
+            "t8_partial": 8,
+        }[sram_scenario]
+        sram_override = list(range(scenario_count))
+    sram_expert_ids = resolve_sram_expert_ids(ROUTED_EXPERT_LAYER_IDX, sram_override)
     logger.info(f"SRAM scenario {sram_scenario!r}: sram_expert_ids={sram_expert_ids}")
+
+    # Log BSPM precision distribution for SRAM-placed experts. Helps explain PCC:
+    # if all tiles are bfp8, the BSPM would be near bf16 quality; if many bfp0/bfp2,
+    # BSPM compression is aggressive and forcing them through uniform-bfp4 SRAM
+    # may actually be more precise.
+    bspm_dir_env = _optional_bspm_dir()
+    if sram_expert_ids and bspm_dir_env is not None:
+        from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_layer
+
+        _bspm_path = bspm_dir_env / f"layer_{ROUTED_EXPERT_LAYER_IDX}" / "precision_eval" / "precision_map_B_3.5.bspm"
+        if _bspm_path.exists():
+            _bspm = load_bspm_for_layer(str(_bspm_path))
+            _fmt_names = ["bfp8", "bfp4", "bfp2", "bfp0"]
+            _proj_names = ["gate", "up", "down"]
+            for eid in sram_expert_ids:
+                if eid >= _bspm["n_experts"]:
+                    continue
+                for p_idx, p_name in enumerate(_proj_names):
+                    codes = _bspm["codes"][eid, p_idx]
+                    total = int(codes.size)
+                    pct = {
+                        _fmt_names[i]: f"{100 * int((codes == i).sum()) / total:.1f}%"
+                        for i in range(4)
+                        if int((codes == i).sum()) > 0
+                    }
+                    logger.info(f"BSPM expert {eid:3d} {p_name:4s}: {pct}")
+        else:
+            logger.warning(f"BSPM file not found, skipping distribution log: {_bspm_path}")
 
     logger.info("Preparing layer weights on device...")
     layer_weights = prepare_moe_layer_weights(

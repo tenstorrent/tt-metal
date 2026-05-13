@@ -2113,22 +2113,15 @@ def prepare_moe_layer_weights(
         bspm_budget=bspm_budget,
         compressed_tp8=compressed_tp8,
     )
-    # Resolve BSPM path same way as prepare_routed_expert_weights, so SRAM mirrors DRAM:
-    # uniform BFP4 when bspm_dir is None, BSPM mixed-precision when provided.
-    sram_bspm_path = None
-    if bspm_dir is not None:
-        sram_bspm_path = (
-            Path(bspm_dir)
-            / f"layer_{layer_idx}"
-            / "precision_eval"
-            / f"precision_map_{bspm_variant}_{bspm_budget:.1f}.bspm"
-        )
+    # SRAM uses uniform BFP4 regardless of bspm_dir. DRAM uses BSPM (resolved
+    # inside prepare_routed_expert_weights above). Decoupling keeps L1 SRAM
+    # weight CBs at deterministic per-device sizes — needed by the replicated
+    # cb_config tensor (see project_reconfig_cb_per_device_addrs.md).
     sram_gate, sram_up, sram_down = _build_moe_sram_routed_weights(
         device,
         state_dict,
         layer_idx,
         list(sram_expert_ids),
-        bspm_path=sram_bspm_path,
     )
     assert isinstance(attn.gate_mm, OverlappedTensor)
     assert attn.gate_bias is not None

@@ -37,6 +37,22 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
 )
 from models.demos.deepseek_v3_b1.weights.upload import Uploadable, two_phase_upload
 
+# Default SRAM placement: experts 0..7 (one per group, low IDs). Used when neither
+# the per-layer SRAM_PLACEMENT map nor an override is provided.
+DEFAULT_SRAM_EXPERT_IDS: list[int] = list(range(8))
+
+# Per-layer SRAM placement overrides. Maps layer_id → list of global expert IDs
+# (0..255) in slot order. Layers not present here fall back to DEFAULT_SRAM_EXPERT_IDS.
+# Callers can override per-call via load_moe_layer(sram_expert_ids_override=...).
+SRAM_PLACEMENT: dict[int, list[int]] = {}
+
+
+def resolve_sram_expert_ids(layer_id: int, override: list[int] | None) -> list[int]:
+    """Resolve SRAM expert IDs: override > SRAM_PLACEMENT[layer_id] > default 0..7."""
+    if override is not None:
+        return list(override)
+    return list(SRAM_PLACEMENT.get(layer_id, DEFAULT_SRAM_EXPERT_IDS))
+
 
 class WeightProvider(Protocol):
     """Provides embedding and LM head weights on demand; each host loads only what its stage needs."""
@@ -289,7 +305,7 @@ class CacheWeightProvider:
             bspm_variant=self._bspm_variant,
             bspm_budget=self._bspm_budget,
             compressed_tp8=True,
-            sram_expert_ids=sram_expert_ids_override or (),
+            sram_expert_ids=resolve_sram_expert_ids(layer_id, sram_expert_ids_override),
         )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
@@ -381,7 +397,7 @@ class SyntheticWeightProvider:
             bspm_variant=self._bspm_variant,
             bspm_budget=self._bspm_budget,
             compressed_tp8=True,
-            sram_expert_ids=sram_expert_ids_override or (),
+            sram_expert_ids=resolve_sram_expert_ids(layer_id, sram_expert_ids_override),
         )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
@@ -439,7 +455,7 @@ class StateDictWeightProvider:
             bspm_variant=self._bspm_variant,
             bspm_budget=self._bspm_budget,
             compressed_tp8=True,
-            sram_expert_ids=sram_expert_ids_override or (),
+            sram_expert_ids=resolve_sram_expert_ids(layer_id, sram_expert_ids_override),
         )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
