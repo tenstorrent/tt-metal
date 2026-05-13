@@ -12,6 +12,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <map>
@@ -215,6 +216,8 @@ class RunTimeOptions {
 
     bool clear_l1 = false;
     bool clear_dram = false;
+
+    size_t pinned_memory_cache_limit_bytes = 4ULL * 1024 * 1024 * 1024;
 
     bool skip_loading_fw = false;
 
@@ -610,6 +613,9 @@ public:
 
     bool get_clear_dram() const { return clear_dram; }
     void set_clear_dram(bool clear) { clear_dram = clear; }
+
+    size_t get_pinned_memory_cache_limit_bytes() const { return pinned_memory_cache_limit_bytes; }
+    void set_pinned_memory_cache_limit_bytes(size_t limit_bytes) { pinned_memory_cache_limit_bytes = limit_bytes; }
 
     std::string get_visible_devices() const { return visible_devices; }
     std::string get_arch_name() const { return arch_name; }
