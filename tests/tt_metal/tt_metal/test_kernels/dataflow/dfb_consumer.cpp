@@ -6,13 +6,10 @@
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
 #include "api/debug/dprint.h"
-#ifdef ARCH_QUASAR
 #include "experimental/kernel_args.h"
 #include "api/kernel_thread_globals.h"
-#endif
 
 void kernel_main() {
-#ifdef ARCH_QUASAR
     constexpr uint32_t num_entries_per_consumer = get_arg(args::num_entries_per_consumer);
     constexpr uint32_t blocked_consumer = get_arg(args::blocked_consumer);
     constexpr uint32_t implicit_sync = get_arg(args::implicit_sync);
@@ -24,38 +21,12 @@ void kernel_main() {
 
     DataflowBuffer dfb(dfb::in);
     Noc noc;
-#else
-    const uint32_t dst_addr_base = get_compile_time_arg_val(0);
-    const uint32_t num_entries_per_consumer = get_compile_time_arg_val(1);
-    const uint32_t blocked_consumer = get_compile_time_arg_val(2);
-    constexpr uint32_t implicit_sync = get_compile_time_arg_val(3);
-    constexpr auto dst_args = TensorAccessorArgs<4>();
-
-    uint32_t consumer_mask = get_arg_val<uint32_t>(0);
-    uint32_t logical_dfb_id = get_arg_val<uint32_t>(1);
-    // Base page offset for this core's slice of the global buffer.
-    // Single-core callers pass 0; multi-core callers pass core_idx * entries_per_core.
-    const uint32_t chunk_offset = get_arg_val<uint32_t>(2);
-    // Total entries in this core's slice; used to clamp the last consumer when
-    // entries_per_core is not a multiple of num_consumers.
-    const uint32_t entries_per_core = get_arg_val<uint32_t>(3);
-    const uint32_t num_consumers = static_cast<uint32_t>(__builtin_popcount(consumer_mask));
-
-    DataflowBuffer dfb(logical_dfb_id);
-    Noc noc;
-
-    uint32_t consumer_idx = 0;
-#endif
 
     // DPRINT << "consumer_idx: " << consumer_idx << " num_entries_per_consumer: " << num_entries_per_consumer <<
     // ENDL(); DEVICE_PRINT("consumer_idx: {} num_entries_per_consumer: {}\n", consumer_idx, num_entries_per_consumer);
 
     uint32_t entry_size = dfb.get_entry_size();
-#ifdef ARCH_QUASAR
     const auto tensor_accessor = TensorAccessor(ta::dst_tensor);
-#else
-    const auto tensor_accessor = TensorAccessor(dst_args, dst_addr_base);
-#endif
 
     for (uint32_t tile_id = 0; tile_id < num_entries_per_consumer; tile_id++) {
         uint32_t page_id = 0;

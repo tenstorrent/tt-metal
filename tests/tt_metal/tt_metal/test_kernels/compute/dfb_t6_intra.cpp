@@ -3,24 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_buffer.h"
-#ifdef ARCH_QUASAR
 #include "experimental/kernel_args.h"
-#endif
 
 void kernel_main() {
-#ifdef ARCH_QUASAR
     constexpr uint32_t entries_per_neo = get_arg(args::entries_per_neo);
     constexpr uint32_t words_per_entry = get_arg(args::words_per_entry);
 
     // Both PRODUCER ("out") and CONSUMER ("in") bindings on this kernel reference
     // the same self-looped DFB, so dfb::out and dfb::in resolve to the same ID.
     DataflowBuffer dfb(dfb::out);
-#else
-    const uint32_t entries_per_neo = get_compile_time_arg_val(0);
-    const uint32_t words_per_entry = get_compile_time_arg_val(1);
-
-    DataflowBuffer dfb(0);
-#endif
 
 #ifdef UCK_CHLKC_UNPACK
     uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();

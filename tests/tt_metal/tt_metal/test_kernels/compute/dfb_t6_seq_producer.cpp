@@ -15,26 +15,18 @@
 // next DFB.  Concurrent DM consumers therefore drain each DFB as soon as entries
 // arrive, then block on the next DFB until the Neo fills it.
 //
-// Compile-time args:
-//   [0]: num_dfbs                  � number of DFBs to loop through (legacy)
-//   [1]: num_entries_per_producer  � entries to signal per DFB (same for all)
-//
-// QUASAR named args:
-//   args::num_dfbs                  - same as legacy CTA[0]
-//   args::num_entries_per_producer  - same as legacy CTA[1]
-// QUASAR compiler defines:
-//   TEST_NUM_DFBS                   - matches args::num_dfbs; gates per-DFB binding
-//                                     dispatch (each unrolled case references
+// Named args:
+//   args::num_entries_per_producer  - entries to signal per DFB (same for all)
+// Compiler defines:
+//   TEST_NUM_DFBS                   - matches the kernel's binding count; gates per-DFB
+//                                     binding dispatch (each unrolled case references
 //                                     dfb::dfb_<i> which only exists for declared
 //                                     bindings). Prefixed to avoid collision with
 //                                     dfb::NUM_DFBS in dataflow_buffer_config.h.
 
 #include "api/dataflow/dataflow_buffer.h"
-#ifdef ARCH_QUASAR
 #include "experimental/kernel_args.h"
-#endif
 
-#ifdef ARCH_QUASAR
 #define DFB_T6_SEQ_PRODUCE(I)                                                       \
     do {                                                                            \
         DataflowBuffer dfb(dfb::dfb_##I);                                           \
@@ -44,10 +36,8 @@
         }                                                                           \
         dfb.finish();                                                               \
     } while (0)
-#endif
 
 void kernel_main() {
-#ifdef ARCH_QUASAR
     constexpr uint32_t num_entries_per_producer = get_arg(args::num_entries_per_producer);
 
 #if TEST_NUM_DFBS >= 1
@@ -67,19 +57,5 @@ void kernel_main() {
 #endif
 #if TEST_NUM_DFBS >= 6
     DFB_T6_SEQ_PRODUCE(5);
-#endif
-#else
-    constexpr uint32_t num_dfbs               = get_compile_time_arg_val(0);
-    const uint32_t     num_entries_per_producer = get_compile_time_arg_val(1);
-
-    for (uint32_t dfb_id = 0; dfb_id < num_dfbs; dfb_id++) {
-        DataflowBuffer dfb(dfb_id);
-        for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) {
-            dfb.reserve_back(1);
-            dfb.push_back(1);
-        }
-        // Blocks until all consumers of this DFB have acked every entry.
-        dfb.finish();
-    }
 #endif
 }

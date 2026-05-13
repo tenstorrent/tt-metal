@@ -6,13 +6,10 @@
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
 #include "api/debug/dprint.h"
-#ifdef ARCH_QUASAR
 #include "experimental/kernel_args.h"
 #include "api/kernel_thread_globals.h"
-#endif
 
 void kernel_main() {
-#ifdef ARCH_QUASAR
     constexpr uint32_t num_entries_per_producer = get_arg(args::num_entries_per_producer);
     constexpr uint32_t implicit_sync = get_arg(args::implicit_sync);
     constexpr uint32_t num_producers = get_arg(args::num_producers);
@@ -23,33 +20,9 @@ void kernel_main() {
 
     DataflowBuffer dfb(dfb::out);
     Noc noc;
-#else
-    const uint32_t src_addr_base = get_compile_time_arg_val(0);
-    const uint32_t num_entries_per_producer = get_compile_time_arg_val(1);
-    constexpr uint32_t implicit_sync = get_compile_time_arg_val(2);
-    constexpr auto src_args = TensorAccessorArgs<3>();
-
-    uint32_t producer_mask = get_arg_val<uint32_t>(0);
-    // Base page offset for this core's slice of the global buffer.
-    // Single-core callers pass 0; multi-core callers pass core_idx * entries_per_core.
-    const uint32_t chunk_offset = get_arg_val<uint32_t>(1);
-    // Total entries in this core's slice; used to clamp the last producer when
-    // num_entries_in_buffer is not a multiple of num_producers.
-    const uint32_t entries_per_core = get_arg_val<uint32_t>(2);
-    const uint32_t num_producers = static_cast<uint32_t>(__builtin_popcount(producer_mask));
-
-    DataflowBuffer dfb(0);
-    Noc noc;
-
-    uint32_t producer_idx = 0;
-#endif
 
     uint32_t entry_size = dfb.get_entry_size();
-#ifdef ARCH_QUASAR
     const auto tensor_accessor = TensorAccessor(ta::src_tensor);
-#else
-    const auto tensor_accessor = TensorAccessor(src_args, src_addr_base);
-#endif
 
     for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) {
         // Strided access: producer i owns pages i, i+P, i+2P, ...

@@ -5,22 +5,11 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/compute/common.h"
 #include "api/debug/dprint.h"
-#ifdef ARCH_QUASAR
 #include "experimental/kernel_args.h"
-#endif
 
 void kernel_main() {
-#ifdef ARCH_QUASAR
     constexpr uint32_t num_entries_per_consumer = get_arg(args::num_entries_per_consumer);
     DataflowBuffer dfb(dfb::in);
-#else
-    const uint32_t num_entries_per_consumer = get_compile_time_arg_val(1);
-    constexpr uint32_t blocked_consumer = get_compile_time_arg_val(2);
-
-    uint32_t logical_dfb_id = get_arg_val<uint32_t>(1);
-
-    DataflowBuffer dfb(logical_dfb_id);
-#endif
 
     // Each consumer pops exactly num_entries_per_consumer entries from its own TC(s).
     // No modulo-skip is needed: the DFB hardware delivers only this consumer's entries
