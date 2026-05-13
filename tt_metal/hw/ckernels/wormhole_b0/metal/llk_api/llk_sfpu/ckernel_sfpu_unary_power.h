@@ -267,7 +267,7 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
 }
 
 template <int ITERATIONS>
-inline void _sfpu_unary_power_bf16_(const uint32_t exponent) {
+inline void _sfpu_unary_power_bf16_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const uint32_t exponent) {
     // Convert exponent to float
     const float pow_scalar = Converter::as_float(exponent);
     const sfpi::vFloat pow = pow_scalar;
@@ -276,21 +276,21 @@ inline void _sfpu_unary_power_bf16_(const uint32_t exponent) {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat base = sfpi::dst_reg[0];
-            sfpi::dst_reg[0] = _sfpu_unary_power_21f_<true>(base, pow);
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = _sfpu_unary_power_21f_<true>(base, pow);
             sfpi::dst_reg++;
         }
     } else {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat base = sfpi::dst_reg[0];
-            sfpi::dst_reg[0] = _sfpu_unary_power_21f_<false>(base, pow);
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = _sfpu_unary_power_21f_<false>(base, pow);
             sfpi::dst_reg++;
         }
     }
 }
 
 template <int ITERATIONS>
-inline void _sfpu_unary_power_fp32_(const uint32_t exponent) {
+inline void _sfpu_unary_power_fp32_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const uint32_t exponent) {
     // Convert exponent to float
     const float pow_scalar = Converter::as_float(exponent);
     const sfpi::vFloat pow = pow_scalar;
@@ -299,14 +299,16 @@ inline void _sfpu_unary_power_fp32_(const uint32_t exponent) {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat base = sfpi::dst_reg[0];
-            sfpi::dst_reg[0] = _sfpu_unary_power_61f_updated_<true>(base, pow);
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] =
+                _sfpu_unary_power_61f_updated_<true>(base, pow);
             sfpi::dst_reg++;
         }
     } else {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat base = sfpi::dst_reg[0];
-            sfpi::dst_reg[0] = _sfpu_unary_power_61f_updated_<false>(base, pow);
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] =
+                _sfpu_unary_power_61f_updated_<false>(base, pow);
             sfpi::dst_reg++;
         }
     }
@@ -318,11 +320,11 @@ inline void _sfpu_unary_power_fp32_(const uint32_t exponent) {
  * @param exponent The exponent as IEEE 754 float bits (reinterpreted as uint32_t)
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
-inline void calculate_unary_power(const uint32_t exponent) {
+inline void calculate_unary_power(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const uint32_t exponent) {
     if constexpr (is_fp32_dest_acc_en) {
-        _sfpu_unary_power_fp32_<ITERATIONS>(exponent);
+        _sfpu_unary_power_fp32_<ITERATIONS>(dst_index_in, dst_index_out, exponent);
     } else {
-        _sfpu_unary_power_bf16_<ITERATIONS>(exponent);
+        _sfpu_unary_power_bf16_<ITERATIONS>(dst_index_in, dst_index_out, exponent);
     }
 }
 
@@ -332,13 +334,14 @@ inline void calculate_unary_power(const uint32_t exponent) {
  * @param exponent Non-negative integer exponent value
  */
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_unary_power_iterative(const uint32_t exponent) {
+inline void calculate_unary_power_iterative(
+    std::uint32_t dst_index_in, std::uint32_t dst_index_out, const uint32_t exponent) {
     // iterative approach for positive integer exponents
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
         if (exponent == 0) {
-            sfpi::dst_reg[0] = 1.0f;
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = 1.0f;
         } else {
             sfpi::vFloat result = in;
             uint32_t exp = exponent - 1;
@@ -350,7 +353,7 @@ inline void calculate_unary_power_iterative(const uint32_t exponent) {
                 in *= in;
                 exp >>= 1;
             }
-            sfpi::dst_reg[0] = result;
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = result;
         }
         sfpi::dst_reg++;
     }

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_sfpu_load_config.h"
 #include "sfpi.h"
 
@@ -13,7 +15,7 @@ namespace sfpu
 {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_sigmoid_(const int iterations)
+inline void _calculate_sigmoid_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const int iterations)
 {
     constexpr int lut_mode = 0; // SFPLUTFP32_MOD0_FP16_6ENTRY_TABLE1
     sfpi::vUInt l0         = sfpi::l_reg[sfpi::LRegs::LReg0];
@@ -28,7 +30,7 @@ inline void _calculate_sigmoid_(const int iterations)
     {
         sfpi::vFloat val = sfpi::dst_reg[0];
 
-        sfpi::dst_reg[0] = lut2(val, l0, l1, l2, l4, l5, l6, lut_mode) + 0.5f;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = lut2(val, l0, l1, l2, l4, l5, l6, lut_mode) + 0.5f;
 
         sfpi::dst_reg++;
     }

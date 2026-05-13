@@ -38,6 +38,15 @@ ALWI void sqrt_tile(uint32_t idst) {
     MATH(SFPU_FOUR_PARAM_KERNEL_ITER_FIRST_FN(calculate_sqrt, APPROX, 8, DST_ACCUM_MODE, FAST_APPROX, idst, RC));
 }
 
+template <bool FAST_APPROX = false>
+ALWI void sqrt_tile(uint32_t idst_in, uint32_t idst_out) {
+    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
+        ckernel::sfpu::calculate_sqrt<APPROX, 8, DST_ACCUM_MODE, FAST_APPROX>,
+        idst_in,
+        idst_out,
+        (int)VectorMode::RC)));
+}
+
 #endif
 
 }  // namespace ckernel

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <limits>
 
 #include "ckernel_sfpu_log.h"
@@ -80,7 +81,7 @@ sfpi_inline sfpi::vFloat _sfpu_cosine_maclaurin_series_(sfpi::vFloat val)
 // Legacy implementation.
 // Candidate for removal in future versions. See https://github.com/tenstorrent/tt-llk/issues/225 for more details.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_sine_(const int iterations)
+inline void _calculate_sine_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const int iterations)
 {
     // SFPU microcode
     for (int d = 0; d < iterations; d++)
@@ -99,7 +100,7 @@ inline void _calculate_sine_(const int iterations)
             v *= -1;
         }
         v_endif;
-        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = v;
         sfpi::dst_reg++;
     }
 }
@@ -107,7 +108,7 @@ inline void _calculate_sine_(const int iterations)
 // Legacy implementation.
 // Candidate for removal in future versions. See https://github.com/tenstorrent/tt-llk/issues/225 for more details.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_cosine_(const int iterations)
+inline void _calculate_cosine_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const int iterations)
 {
     // SFPU microcode
     for (int d = 0; d < iterations; d++)
@@ -126,7 +127,7 @@ inline void _calculate_cosine_(const int iterations)
             v *= -1;
         }
         v_endif;
-        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = v;
         sfpi::dst_reg++;
     }
 }
@@ -134,7 +135,7 @@ inline void _calculate_cosine_(const int iterations)
 // https://en.wikipedia.org/wiki/Inverse_hyperbolic_functions#Definitions_in_terms_of_logarithms
 // acosh(x) = log(x + sqrt(x^2 - 1))
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_acosh_()
+inline void _calculate_acosh_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++)
@@ -142,11 +143,11 @@ inline void _calculate_acosh_()
         sfpi::vFloat inp = sfpi::dst_reg[0];
         v_if (inp < sfpi::vConst1)
         {
-            sfpi::dst_reg[0] = std::numeric_limits<float>::quiet_NaN();
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = std::numeric_limits<float>::quiet_NaN();
         }
         v_elseif (inp == sfpi::vConst1)
         {
-            sfpi::dst_reg[0] = sfpi::vConst0;
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = sfpi::vConst0;
         }
         v_else
         {
@@ -154,7 +155,7 @@ inline void _calculate_acosh_()
             tmp              = tmp - sfpi::vConst1;
             tmp              = _calculate_sqrt_body_<APPROXIMATION_MODE>(tmp);
             tmp              = tmp + inp;
-            sfpi::dst_reg[0] = _calculate_log_body_no_init_(tmp);
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = _calculate_log_body_no_init_(tmp);
         }
         v_endif;
         sfpi::dst_reg++;
@@ -163,7 +164,7 @@ inline void _calculate_acosh_()
 
 // asinh(x) = log(x + sqrt(x^2 + 1))
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_asinh_()
+inline void _calculate_asinh_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++)
@@ -178,14 +179,14 @@ inline void _calculate_asinh_()
             res = -res;
         }
         v_endif;
-        sfpi::dst_reg[0] = res;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = res;
         sfpi::dst_reg++;
     }
 }
 
 // atanh[x] = 0.5 * ln((1 + x) / (1 - x))
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
-inline void _calculate_atanh_()
+inline void _calculate_atanh_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++)
@@ -221,7 +222,7 @@ inline void _calculate_atanh_()
             res              = 0.5f * den;
         }
         v_endif;
-        sfpi::dst_reg[0] = res;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = res;
         sfpi::dst_reg++;
     }
 }

@@ -25,7 +25,7 @@ namespace sfpu {
 // Clamping to [0, 1] gives exact boundary values (0 or 1),
 // so the final multiply produces exact 0 or exact x at transitions.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void hardmish() {
+inline void hardmish(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         sfpi::vFloat scale = x * 0.5f + 1.0f;
@@ -35,7 +35,7 @@ inline void hardmish() {
         sfpi::vec_min_max(low_bound, scale);   // scale = max(scale, 0.0)
         sfpi::vec_min_max(scale, high_bound);  // scale = min(scale, 1.0)
 
-        sfpi::dst_reg[0] = x * scale;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = x * scale;
         sfpi::dst_reg++;
     }
 }

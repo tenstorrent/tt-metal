@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_ops.h"
 #include "lltt.h"
 #include "sfpi.h"
@@ -14,7 +16,7 @@ namespace sfpu
 {
 
 template <bool APPROXIMATION_MODE /*unused*/, int ITERATIONS /*unused*/>
-inline void _calculate_cumsum_(const bool first)
+inline void _calculate_cumsum_(std::uint32_t /*dst_index_in*/, std::uint32_t /*dst_index_out*/, const bool first)
 {
     if (first)
     {

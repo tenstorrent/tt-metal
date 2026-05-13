@@ -18,7 +18,7 @@ template <typename T>
 constexpr bool is_supported_threshold_type_v = std::is_same_v<T, float> || std::is_same_v<T, std::uint32_t>;
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, typename T>
-inline void _calculate_threshold_(T threshold, T value)
+inline void _calculate_threshold_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, T threshold, T value)
 {
     static_assert(is_supported_threshold_type_v<T>, "Type T must be either float or uint32_t");
 
@@ -41,7 +41,7 @@ inline void _calculate_threshold_(T threshold, T value)
 
         v_if (in <= v_threshold)
         {
-            sfpi::dst_reg[0] = v_value;
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = v_value;
         }
         v_endif;
 

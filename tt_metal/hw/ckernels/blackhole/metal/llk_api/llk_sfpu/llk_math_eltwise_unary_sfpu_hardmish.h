@@ -10,13 +10,18 @@
 
 namespace ckernel {
 
-inline void llk_math_eltwise_unary_sfpu_hardmish_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::hardmish>();
-}
+inline void llk_math_eltwise_unary_sfpu_hardmish_init() { llk_math_eltwise_unary_sfpu_init<SfpuType::hardmish>(); }
 
 template <bool APPROXIMATE, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_hardmish(uint dst_index, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::hardmish<APPROXIMATE, ITERATIONS>, dst_index, vector_mode);
+}
+
+template <bool APPROXIMATE, int ITERATIONS = 8>
+inline void llk_math_eltwise_unary_sfpu_hardmish(
+    uint dst_index_in, uint dst_index_out, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_split_(
+        ckernel::sfpu::hardmish<APPROXIMATE, ITERATIONS>, dst_index_in, dst_index_out, vector_mode);
 }
 
 }  // namespace ckernel

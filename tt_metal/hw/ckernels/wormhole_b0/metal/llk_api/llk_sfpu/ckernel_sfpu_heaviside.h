@@ -14,7 +14,7 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_heaviside(uint value) {
+inline void calculate_heaviside(std::uint32_t dst_index_in, std::uint32_t dst_index_out, uint value) {
     // SFPU microcode
     vFloat s = Converter::as_float(value);
 
@@ -27,7 +27,7 @@ inline void calculate_heaviside(uint value) {
         v_else { v = s; }
         v_endif;
 
-        dst_reg[0] = v;
+        dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = v;
 
         dst_reg++;
     }

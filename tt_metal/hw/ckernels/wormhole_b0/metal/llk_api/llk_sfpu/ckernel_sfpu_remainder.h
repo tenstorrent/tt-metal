@@ -22,7 +22,8 @@ inline void init_remainder(const uint value, const uint recip) {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_remainder(const uint value, const uint recip) {
+inline void calculate_remainder(
+    std::uint32_t dst_index_in, std::uint32_t dst_index_out, const uint value, const uint recip) {
     // SFPU microcode
     vFloat s = vConstFloatPrgm0;
     vFloat recip_val = vConstFloatPrgm1;
@@ -70,7 +71,7 @@ inline void calculate_remainder(const uint value, const uint recip) {
         }
         v_if(sfpi::abs(v) - s == 0.0f) { v = 0.0f; }
         v_endif;
-        dst_reg[0] = v;
+        dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = v;
         dst_reg++;
     }
 }

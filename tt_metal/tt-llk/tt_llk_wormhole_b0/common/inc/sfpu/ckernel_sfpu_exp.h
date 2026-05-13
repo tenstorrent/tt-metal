@@ -12,6 +12,7 @@
 #include "ckernel_sfpu_polyval.h"
 // clang-format on
 #include "ckernel_sfpu_recip.h"
+#include "cmath_common.h"
 #include "lltt.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 
@@ -394,7 +395,7 @@ sfpi_inline sfpi::vFloat _ckernel_sfpu_exp_accurate_(sfpi::vFloat val, const std
 }
 
 template <bool APPROXIMATION_MODE, bool SCALE_EN, int ITERATIONS, bool CLAMP_NEGATIVE = true, bool is_fp32_dest_acc_en = false>
-void _calculate_exponential_(const std::uint16_t exp_base_scale_factor /* 1.0f in BF16 */)
+void _calculate_exponential_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const std::uint16_t exp_base_scale_factor /* 1.0f in BF16 */)
 {
     if constexpr (!APPROXIMATION_MODE)
     {
@@ -410,15 +411,16 @@ void _calculate_exponential_(const std::uint16_t exp_base_scale_factor /* 1.0f i
 #ifdef DISABLE_SFPLOADMACRO
         for (int d = 0; d < ITERATIONS; d++)
         {
-            TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
+            TT_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
             TTI_SFPSWAP(0, p_sfpu::LREG14, p_sfpu::LREG0, 9);
             TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
             TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
             TTI_SFPSHFT(15, p_sfpu::LREG0, p_sfpu::LREG0, 1);
-            TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
+            TT_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, (dst_index_out - dst_index_in) * 32);
             sfpi::dst_reg++;
         }
 #else
+        LLK_ASSERT(dst_index_out == dst_index_in, "exp SFPLOADMACRO path requires dst_index_out == dst_index_in");
         // Code below is hand-unrolled for 8 iterations
         // so it doesn't respect ITERATIONS. TODO: tt-llk#1486
         // static_assert(ITERATIONS == 8);
@@ -519,18 +521,19 @@ void _calculate_exponential_(const std::uint16_t exp_base_scale_factor /* 1.0f i
     {
         for (int d = 0; d < ITERATIONS; d++)
         {
-            TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
+            TT_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
             TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
             TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
             TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG1, 5); // lreg[1] = lreg[0] << 15
             TTI_SFPSETSGN(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);             // lreg[0] preserves sign, copies e/m from lreg[1]
-            TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
+            TT_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, (dst_index_out - dst_index_in) * 32);
             sfpi::dst_reg++;
         }
     }
 #else
     else if constexpr (APPROXIMATION_MODE && ITERATIONS == 8)
     {
+        LLK_ASSERT(dst_index_out == dst_index_in, "exp replay-buffer path requires dst_index_out == dst_index_in");
         // =======================================================================
         // 8-element version using replay buffer.
         // Total: ~20 cycles for 8 elements = 2.5 cycles/element
@@ -561,6 +564,7 @@ void _calculate_exponential_(const std::uint16_t exp_base_scale_factor /* 1.0f i
     }
     else if constexpr (APPROXIMATION_MODE && ITERATIONS == 32)
     {
+        LLK_ASSERT(dst_index_out == dst_index_in, "exp replay-buffer path requires dst_index_out == dst_index_in");
         // =======================================================================
         // 32-element version using replay buffer.
         // Total: ~68 cycles for 32 elements = 2.125 cycles/element

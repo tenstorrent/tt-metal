@@ -13,13 +13,13 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void cast_fp32_to_fp16a() {
+inline void cast_fp32_to_fp16a(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::dst_reg[0].mode<sfpi::SFPSTORE_MOD0_FMT_FP16A>() =
-            sfpi::convert<sfpi::vFloat16a>(x, sfpi::RoundMode::NearestEven);
-        sfpi::dst_reg++;
+        TTI_SFPLOAD(0, 0, 3, 0);
+        TTI_SFP_STOCH_RND(0, 0, 0, 0, 0, 8);
+        TT_SFPSTORE(0, 1, 3, (dst_index_out - dst_index_in) * TILE_R_DIM);
+        dst_reg++;
     }
 }
 

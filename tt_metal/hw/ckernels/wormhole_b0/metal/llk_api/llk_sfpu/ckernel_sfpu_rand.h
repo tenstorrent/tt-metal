@@ -16,7 +16,7 @@ inline void rand_init(uint32_t seed) {
 }
 
 template <bool APPROXIMATION_MODE>
-inline void rand(uint32_t from, uint32_t scale) {
+inline void rand(std::uint32_t dst_index_in, std::uint32_t dst_index_out, uint32_t from, uint32_t scale) {
     // Load scale param to lreg1
     TT_SFPLOADI(p_sfpu::LREG1, 10, scale & 0xFFFF);
     TT_SFPLOADI(p_sfpu::LREG1, 8, scale >> 16);
@@ -46,7 +46,7 @@ inline void rand(uint32_t from, uint32_t scale) {
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG0, 0);
         TTI_SFPNOP;
 
-        TTI_SFPSTORE(0, 3, 3, 0);
+        TT_SFPSTORE(0, 3, 3, (dst_index_out - dst_index_in) * TILE_R_DIM);
         dst_reg++;
     }
 }

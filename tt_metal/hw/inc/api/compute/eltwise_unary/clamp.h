@@ -30,6 +30,10 @@ ALWI void clamp_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
     MATH((llk_math_eltwise_unary_sfpu_clamp<APPROX>(idst, param0, param1)));
 }
 
+ALWI void clamp_tile(uint32_t idst_in, uint32_t idst_out, uint32_t param0, uint32_t param1) {
+    MATH((llk_math_eltwise_unary_sfpu_clamp<APPROX>(idst_in, idst_out, param0, param1)));
+}
+
 // clang-format off
 /**
  * Performs element-wise clamp operation for int32. The DST
@@ -47,6 +51,10 @@ ALWI void clamp_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
 // clang-format on
 ALWI void clamp_tile_int32(uint32_t idst, uint32_t param0, uint32_t param1) {
     MATH((llk_math_eltwise_unary_sfpu_clamp_int32<APPROX>(idst, param0, param1)));
+}
+
+ALWI void clamp_tile_int32(uint32_t idst_in, uint32_t idst_out, uint32_t param0, uint32_t param1) {
+    MATH((llk_math_eltwise_unary_sfpu_clamp_int32<APPROX>(idst_in, idst_out, param0, param1)));
 }
 
 /**

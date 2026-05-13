@@ -30,6 +30,11 @@ ALWI void bitwise_not_tile(uint32_t idst) {
     MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_bitwise_not, RC, APPROX, idst));
 }
 
+ALWI void bitwise_not_tile(uint32_t idst_in, uint32_t idst_out) {
+    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
+        ckernel::sfpu::calculate_bitwise_not<APPROX>, idst_in, idst_out, (int)VectorMode::RC)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */

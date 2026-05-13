@@ -93,6 +93,11 @@ ALWI void sigmoid_tile(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_sigmoid<fast_and_approx, DST_ACCUM_MODE>(idst, vec_mode)));
 }
 
+template <int vec_mode = VectorMode::RC, bool fast_and_approx = false>
+ALWI void sigmoid_tile(uint32_t idst_in, uint32_t idst_out) {
+    MATH((llk_math_eltwise_unary_sfpu_sigmoid<fast_and_approx, DST_ACCUM_MODE>(idst_in, idst_out, vec_mode)));
+}
+
 // clang-format off
 /**
  * Performs SILU (same as Swish) operation on each element of a tile
@@ -109,6 +114,10 @@ ALWI void sigmoid_tile(uint32_t idst) {
  */
 // clang-format on
 ALWI void silu_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_silu<APPROX, DST_ACCUM_MODE>(idst))); }
+
+ALWI void silu_tile(uint32_t idst_in, uint32_t idst_out) {
+    MATH((llk_math_eltwise_unary_sfpu_silu<APPROX, DST_ACCUM_MODE>(idst_in, idst_out)));
+}
 
 ALWI void silu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_silu_init<APPROX>())); }
 
@@ -154,6 +163,11 @@ ALWI void log_tile(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_log<APPROX, fast_and_approx, DST_ACCUM_MODE>(idst)));
 }
 
+template <bool fast_and_approx = false>
+ALWI void log_tile(uint32_t idst_in, uint32_t idst_out) {
+    MATH((llk_math_eltwise_unary_sfpu_log<APPROX, fast_and_approx, DST_ACCUM_MODE>(idst_in, idst_out)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */
@@ -181,6 +195,12 @@ ALWI void log_with_base_tile_init() {
 template <bool fast_and_approx = false>
 ALWI void log_with_base_tile(uint32_t idst, uint32_t base_scale) {
     MATH((llk_math_eltwise_unary_sfpu_log_with_base<APPROX, fast_and_approx, DST_ACCUM_MODE>(idst, base_scale)));
+}
+
+template <bool fast_and_approx = false>
+ALWI void log_with_base_tile(uint32_t idst_in, uint32_t idst_out, uint32_t base_scale) {
+    MATH((llk_math_eltwise_unary_sfpu_log_with_base<APPROX, fast_and_approx, DST_ACCUM_MODE>(
+        idst_in, idst_out, base_scale)));
 }
 
 // TODO: Move to trigonometry.h
@@ -224,6 +244,11 @@ ALWI void tanh_tile(uint32_t idst) {
 }
 
 template <bool fast_and_approx = false>
+ALWI void tanh_tile(uint32_t idst_in, uint32_t idst_out) {
+    MATH((llk_math_eltwise_unary_sfpu_tanh<fast_and_approx, DST_ACCUM_MODE>(idst_in, idst_out)));
+}
+
+template <bool fast_and_approx = false>
 ALWI void tanh_tile_pack(uint32_t idst) {
     PACK((llk_math_eltwise_unary_sfpu_tanh<fast_and_approx, DST_ACCUM_MODE>(idst)));
 }
@@ -249,6 +274,10 @@ ALWI void signbit_tile_init() { MATH((llk_math_eltwise_unary_sfpu_signbit_init()
 // clang-format on
 ALWI void signbit_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_signbit<APPROX>(idst))); }
 
+ALWI void signbit_tile(uint32_t idst_in, uint32_t idst_out) {
+    MATH((llk_math_eltwise_unary_sfpu_signbit<APPROX>(idst_in, idst_out)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */
@@ -270,6 +299,10 @@ ALWI void signbit_tile_int32_init() { MATH((llk_math_eltwise_unary_sfpu_signbit_
 // clang-format on
 ALWI void signbit_tile_int32(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_signbit_int32<APPROX>(idst))); }
 
+ALWI void signbit_tile_int32(uint32_t idst_in, uint32_t idst_out) {
+    MATH((llk_math_eltwise_unary_sfpu_signbit_int32<APPROX>(idst_in, idst_out)));
+}
+
 // clang-format off
 /**
  * Performs element-wise computation of absolute value on each element of a tile
@@ -285,6 +318,10 @@ ALWI void signbit_tile_int32(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_
  */
 // clang-format on
 ALWI void abs_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_abs<APPROX>(idst))); }
+
+ALWI void abs_tile(uint32_t idst_in, uint32_t idst_out) {
+    MATH((llk_math_eltwise_unary_sfpu_abs<APPROX>(idst_in, idst_out)));
+}
 
 /**
  * Please refer to documentation for any_init.
@@ -309,6 +346,10 @@ ALWI void abs_tile_init() { MATH((llk_math_eltwise_unary_sfpu_abs_init())); }
 // clang-format on
 ALWI void abs_tile_int32(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_abs_int32<APPROX>(idst))); }
 
+ALWI void abs_tile_int32(uint32_t idst_in, uint32_t idst_out) {
+    MATH((llk_math_eltwise_unary_sfpu_abs_int32<APPROX>(idst_in, idst_out)));
+}
+
 // clang-format off
 /**
  * Will store in the output of the compute core the signum of the tile.
@@ -324,6 +365,10 @@ ALWI void abs_tile_int32(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_abs_
  */
 // clang-format on
 ALWI void sign_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_sign<APPROX>(idst))); }
+
+ALWI void sign_tile(uint32_t idst_in, uint32_t idst_out) {
+    MATH((llk_math_eltwise_unary_sfpu_sign<APPROX>(idst_in, idst_out)));
+}
 
 /**
  * Please refer to documentation for any_init.
@@ -346,6 +391,10 @@ ALWI void sign_tile_init() { MATH((llk_math_eltwise_unary_sfpu_sign_init())); }
 // clang-format on
 ALWI void square_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_square<APPROX>(idst))); }
 
+ALWI void square_tile(uint32_t idst_in, uint32_t idst_out) {
+    MATH((llk_math_eltwise_unary_sfpu_square<APPROX>(idst_in, idst_out)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */
@@ -366,6 +415,10 @@ ALWI void square_tile_init() { MATH((llk_math_eltwise_unary_sfpu_square_init()))
  */
 // clang-format on
 ALWI void tiled_prod_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_tiled_prod<APPROX>(idst))); }
+
+ALWI void tiled_prod_tile(uint32_t idst_in, uint32_t idst_out) {
+    MATH((llk_math_eltwise_unary_sfpu_tiled_prod<APPROX>(idst_in, idst_out)));
+}
 
 /**
  * Please refer to documentation for any_init.
@@ -390,6 +443,10 @@ ALWI void tiled_prod_tile_init() { MATH((llk_math_eltwise_unary_sfpu_tiled_prod_
 // clang-format on
 ALWI void power_tile(uint32_t idst, uint32_t param0) {
     MATH((llk_math_eltwise_unary_sfpu_power<APPROX, DST_ACCUM_MODE>(idst, param0)));
+}
+
+ALWI void power_tile(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
+    MATH((llk_math_eltwise_unary_sfpu_power<APPROX, DST_ACCUM_MODE>(idst_in, idst_out, param0)));
 }
 
 /**
@@ -419,6 +476,10 @@ ALWI void power_iterative_tile(uint32_t idst, uint32_t param0) {
     MATH((llk_math_eltwise_unary_sfpu_power_iterative<APPROX>(idst, param0)));
 }
 
+ALWI void power_iterative_tile(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
+    MATH((llk_math_eltwise_unary_sfpu_power_iterative<APPROX>(idst_in, idst_out, param0)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */
@@ -440,6 +501,10 @@ ALWI void power_iterative_tile_init() { MATH((llk_math_eltwise_unary_sfpu_power_
  */
 // clang-format on
 ALWI void exp2_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_exp2<true, DST_ACCUM_MODE>(idst))); }
+
+ALWI void exp2_tile(uint32_t idst_in, uint32_t idst_out) {
+    MATH((llk_math_eltwise_unary_sfpu_exp2<true, DST_ACCUM_MODE>(idst_in, idst_out)));
+}
 
 /**
  * Please refer to documentation for any_init.
@@ -466,6 +531,10 @@ ALWI void heaviside_tile(uint32_t idst, uint32_t param0) {
     MATH((llk_math_eltwise_unary_sfpu_heaviside<APPROX>(idst, param0)));
 }
 
+ALWI void heaviside_tile(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
+    MATH((llk_math_eltwise_unary_sfpu_heaviside<APPROX>(idst_in, idst_out, param0)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */
@@ -489,6 +558,11 @@ ALWI void heaviside_tile_init() { MATH((llk_math_eltwise_unary_sfpu_heaviside_in
 template <bool approx = false>
 ALWI void expm1_tile(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_expm1<approx, DST_ACCUM_MODE>(idst)));
+}
+
+template <bool approx = false>
+ALWI void expm1_tile(uint32_t idst_in, uint32_t idst_out) {
+    MATH((llk_math_eltwise_unary_sfpu_expm1<approx, DST_ACCUM_MODE>(idst_in, idst_out)));
 }
 
 /**
@@ -826,6 +900,10 @@ ALWI void unary_max_int32_tile(uint32_t idst, uint32_t param0) {
     MATH((llk_math_eltwise_unary_sfpu_unary_max_int32<APPROX>(idst, param0)));
 }
 
+ALWI void unary_max_int32_tile(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
+    MATH((llk_math_eltwise_unary_sfpu_unary_max_int32<APPROX>(idst_in, idst_out, param0)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */
@@ -849,6 +927,10 @@ ALWI void unary_max_int32_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_
 // clang-format on
 ALWI void unary_max_uint32_tile(uint32_t idst, uint32_t param0) {
     MATH((llk_math_eltwise_unary_sfpu_unary_max_uint32<APPROX>(idst, param0)));
+}
+
+ALWI void unary_max_uint32_tile(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
+    MATH((llk_math_eltwise_unary_sfpu_unary_max_uint32<APPROX>(idst_in, idst_out, param0)));
 }
 
 /**
@@ -876,6 +958,10 @@ ALWI void unary_max_tile(uint32_t idst, uint32_t param0) {
     MATH((llk_math_eltwise_unary_sfpu_unary_max<APPROX>(idst, param0)));
 }
 
+ALWI void unary_max_tile(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
+    MATH((llk_math_eltwise_unary_sfpu_unary_max<APPROX>(idst_in, idst_out, param0)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */
@@ -898,6 +984,10 @@ ALWI void unary_max_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_max_in
 // clang-format on
 ALWI void alt_complex_rotate90_tile(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_alt_complex_rotate90<APPROX>(idst)));
+}
+
+ALWI void alt_complex_rotate90_tile(uint32_t idst_in, uint32_t idst_out) {
+    MATH((llk_math_eltwise_unary_sfpu_alt_complex_rotate90<APPROX>(idst_in, idst_out)));
 }
 
 /**
@@ -925,6 +1015,10 @@ ALWI void unary_min_int32_tile(uint32_t idst, uint32_t param0) {
     MATH((llk_math_eltwise_unary_sfpu_unary_min_int32<APPROX>(idst, param0)));
 }
 
+ALWI void unary_min_int32_tile(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
+    MATH((llk_math_eltwise_unary_sfpu_unary_min_int32<APPROX>(idst_in, idst_out, param0)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */
@@ -950,6 +1044,10 @@ ALWI void unary_min_uint32_tile(uint32_t idst, uint32_t param0) {
     MATH((llk_math_eltwise_unary_sfpu_unary_min_uint32<APPROX>(idst, param0)));
 }
 
+ALWI void unary_min_uint32_tile(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
+    MATH((llk_math_eltwise_unary_sfpu_unary_min_uint32<APPROX>(idst_in, idst_out, param0)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */
@@ -973,6 +1071,10 @@ ALWI void unary_min_uint32_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary
 // clang-format on
 ALWI void unary_min_tile(uint32_t idst, uint32_t param0) {
     MATH((llk_math_eltwise_unary_sfpu_unary_min<APPROX>(idst, param0)));
+}
+
+ALWI void unary_min_tile(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
+    MATH((llk_math_eltwise_unary_sfpu_unary_min<APPROX>(idst_in, idst_out, param0)));
 }
 
 /**

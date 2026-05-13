@@ -221,8 +221,9 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
  * recip_tile on only the columns 0:8 of a face
  */
 template <bool legacy_compat = true>
-void calculate_recip_first_column() {
+void calculate_recip_first_column(uint32_t dst_index_in, uint32_t dst_index_out) {
     constexpr int ITERATIONS_HALF_FACE = 4;
+    constexpr uint32_t SFP_DST_TILE_ROWS = 32;
     if constexpr (legacy_compat) {
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
             sfpi::vFloat in = sfpi::dst_reg[0];
@@ -819,15 +820,16 @@ void calculate_exponential_polynomial() {
  * exp_tile on only the columns 0:8 of a face
  */
 template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16>
-void calculate_exponential_first_column() {
+void calculate_exponential_first_column(uint32_t dst_index_in, uint32_t dst_index_out) {
     constexpr int ITERATIONS_HALF_FACE = 4;
+    constexpr uint32_t SFP_DST_TILE_ROWS = 32;
     if constexpr (SDPA_EXP_APPROX_MODE) {
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
             sfpi::vFloat result =
                 ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
                     val, scale_bf16);
-            sfpi::dst_reg[0] = result;
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * SFP_DST_TILE_ROWS] = result;
 
             // Stride by 2 to skip columns 8:16 of the face
             sfpi::dst_reg += 2;
@@ -893,7 +895,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
  * fused_max_sub_exp_add_tile
  */
 template <bool SDPA_EXP_APPROX_MODE>
-void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
+void calculate_fused_max_sub_exp_add_tile(uint32_t dst_index_in, uint32_t dst_index_out, int scale_bf16) {
     constexpr int ITERATIONS_HALF_FACE = 4;
     constexpr uint32_t prev_max_base_idx = 0;      // dst_reg_0 (Tile 0)
     constexpr uint32_t worker_max_base_idx = 32;   // dst_reg_1 (Tile 1)
@@ -1097,13 +1099,15 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
  * softplus_tile on only the columns 0:8 of a face
  */
 template <bool SDPA_EXP_APPROX_MODE>
-void calculate_softplus_first_column(uint param0, uint param1, uint param2) {
+void calculate_softplus_first_column(
+    uint32_t dst_index_in, uint32_t dst_index_out, uint param0, uint param1, uint param2) {
     constexpr int ITERATIONS_HALF_FACE = 4;
     float beta = ckernel::sfpu::Converter::as_float(param0);
     float beta_reciprocal = ckernel::sfpu::Converter::as_float(param1);
     float threshold = ckernel::sfpu::Converter::as_float(param2);
     for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
-        ckernel::sfpu::calculate_softplus_body<APPROX, DST_ACCUM_MODE>(beta, beta_reciprocal, threshold);
+        ckernel::sfpu::calculate_softplus_body<APPROX, DST_ACCUM_MODE>(
+            dst_index_in, dst_index_out, beta, beta_reciprocal, threshold);
         sfpi::dst_reg += 2;
     }
 }
@@ -1920,7 +1924,8 @@ void sdpa_inner_loop(
             sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
                 alias_cur_max, alias_cur_sum, Sk_chunk_t);
 
-            // Reconfigure unpackers: srcA (context 0) = cb_v_in, srcB (context 1) = cb_qk_im (operands are swapped in matmul)
+            // Reconfigure unpackers: srcA (context 0) = cb_v_in, srcB (context 1) = cb_qk_im (operands are swapped in
+            // matmul)
             reconfig_data_format(cb_v_in, cb_qk_im);
             pack_reconfig_data_format(alias_mm2_cur_out);
 

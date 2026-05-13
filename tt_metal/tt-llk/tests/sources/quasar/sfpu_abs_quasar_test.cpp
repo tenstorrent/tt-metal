@@ -160,7 +160,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // UNPACK-to-Dest), so it is offset by params.DST_INDEX.
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_abs_, params.DST_INDEX + i, num_sfpu_iterations);
+        _llk_math_eltwise_unary_sfpu_params_split_(ckernel::sfpu::_calculate_abs_, params.DST_INDEX + i, params.DST_INDEX + i, num_sfpu_iterations);
     }
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();

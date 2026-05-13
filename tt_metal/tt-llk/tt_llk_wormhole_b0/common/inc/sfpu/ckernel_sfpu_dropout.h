@@ -17,7 +17,7 @@ namespace sfpu
 // probability should be between 0 - INT_MAX (signed)
 // scale should be binary representation of a float32
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_dropout_(const int iterations, std::uint32_t probability, std::uint32_t scale)
+inline void _calculate_dropout_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const int iterations, std::uint32_t probability, std::uint32_t scale)
 {
     // SFPU microcode
 
@@ -30,9 +30,8 @@ inline void _calculate_dropout_(const int iterations, std::uint32_t probability,
     {
         ////////////////////////
         // Scale samples
-        // sfpi::dst_reg[0] = sfpi::dst_reg[0] * sFloat16b(scale);
         ///////////////////////
-        TTI_SFPLOAD(p_sfpu::LREG0, 0, 3, 0);
+        TT_SFPLOAD(p_sfpu::LREG0, 0, 3, 0);
         TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
 
         ////////////////////////
@@ -47,12 +46,12 @@ inline void _calculate_dropout_(const int iterations, std::uint32_t probability,
         ////////////////////////
         // Drop samples
         // v_if (rand < probability)
-        //   sfpi::dst_reg[0] = vConst0;
+        //   sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = vConst0;
         ///////////////////////
         TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG3, 10);
         TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
         TTI_SFPENCC(0, 0, 0, 0);
-        TTI_SFPSTORE(0, 0, 3, 0);
+        TT_SFPSTORE(0, 0, 3, (dst_index_out - dst_index_in) * 32);
 
         sfpi::dst_reg++;
     }

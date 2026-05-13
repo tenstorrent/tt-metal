@@ -82,6 +82,25 @@ ALWI void exp_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC, uint16_
 
 #ifndef ARCH_QUASAR
 
+template <
+    bool approx = false,
+    bool scale_en = false,
+    InputClamping input_clamping = InputClamping::ClampToNegative,
+    int iterations = 8>
+ALWI void exp_tile(uint32_t idst_in, uint32_t idst_out, int vector_mode, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
+    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
+        ckernel::sfpu::calculate_exponential<
+            approx,
+            DST_ACCUM_MODE,
+            scale_en,
+            iterations,
+            (input_clamping == InputClamping::ClampToNegative)>,
+        idst_in,
+        idst_out,
+        vector_mode,
+        scale)));
+}
+
 /**
  * Pack-thread variant of exp_tile_init. Runs the init on the pack thread
  * to enable FPU/SFPU overlap with math-thread matmul operations.

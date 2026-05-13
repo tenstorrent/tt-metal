@@ -14,7 +14,8 @@ namespace sfpu
 {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_hardtanh_(const int iterations, std::uint32_t param0, std::uint32_t param1, std::uint32_t param2)
+inline void _calculate_hardtanh_(
+    std::uint32_t dst_index_in, std::uint32_t dst_index_out, const int iterations, std::uint32_t param0, std::uint32_t param1, std::uint32_t param2)
 {
     // All params are in FP16_B format
     // param0 = -(neg_threshold)
@@ -46,7 +47,7 @@ inline void _calculate_hardtanh_(const int iterations, std::uint32_t param0, std
 
         val += p2; // 12 bits
 
-        sfpi::dst_reg[0] = val;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = val;
 
         sfpi::dst_reg++;
     }

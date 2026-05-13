@@ -457,7 +457,7 @@ inline void _top8_merge_sorted_8_() {
     }
 }
 
-inline void _calculate_top8_tile_(uint32_t tile_index) {
+inline void _calculate_top8_tile_(uint32_t /*dst_index_in*/, uint32_t /*dst_index_out*/, uint32_t tile_index) {
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
     //-------------------------------------------------------------------------

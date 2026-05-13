@@ -82,9 +82,10 @@ inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfp
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_i1() {
+inline void calculate_i1(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
     constexpr float I1_MAX_INPUT = 88.5f;
     constexpr float I1_THRESHOLD = 10.0f;
+    const int out_off = (dst_index_out - dst_index_in) * TILE_R_DIM;
 
 #pragma GCC unroll 1
     for (int d = 0; d < ITERATIONS; d++) {

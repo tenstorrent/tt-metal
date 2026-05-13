@@ -45,13 +45,13 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat x) {
 }
 
 template <bool APPROXIMATION_MODE>
-inline void calculate_erfinv() {
+inline void calculate_erfinv(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
     constexpr int ITERATIONS = 8;
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat result = calculate_erfinv_body<false>(in);
         in = sfpi::dst_reg[0];  // reload due to register pressure
-        sfpi::dst_reg[0] = sfpi::copysgn(result, in);
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = sfpi::copysgn(result, in);
         sfpi::dst_reg++;
     }
 }

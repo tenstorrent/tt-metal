@@ -13,12 +13,12 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_left_shift(const uint shift_amt) {
+inline void calculate_left_shift(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const uint shift_amt) {
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(0,4,3,0);
+        TTI_SFPLOAD(0, 4, 3, 0);
         TT_SFPSHFT(shift_amt,0,0,1);
-        TTI_SFPSTORE(0,4,3,0);
+        TT_SFPSTORE(0, 4, 3, (dst_index_out - dst_index_in) * TILE_R_DIM);
         dst_reg++;
     }
 }

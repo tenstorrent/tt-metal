@@ -10,14 +10,19 @@
 
 namespace ckernel {
 
-inline void llk_math_eltwise_unary_sfpu_heaviside_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::heaviside>();
-}
+inline void llk_math_eltwise_unary_sfpu_heaviside_init() { llk_math_eltwise_unary_sfpu_init<SfpuType::heaviside>(); }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_heaviside(uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::calculate_heaviside<APPROXIMATE>, dst_index, vector_mode, param0);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_heaviside(
+    uint dst_index_in, uint dst_index_out, uint param0, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_split_(
+        ckernel::sfpu::calculate_heaviside<APPROXIMATE>, dst_index_in, dst_index_out, vector_mode, param0);
 }
 
 }  // namespace ckernel

@@ -103,9 +103,9 @@ struct sfpu_op_dispatcher;
 template <>
 struct sfpu_op_dispatcher<SfpuType::exponential>
 {
-    static void call(int tile_idx, int num_sfpu_iterations)
+    static void call(std::uint32_t tile_idx, int num_sfpu_iterations)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_exp_<true>, tile_idx, num_sfpu_iterations);
+        _llk_math_eltwise_unary_sfpu_params_split_(_calculate_exp_<true>, tile_idx, tile_idx, num_sfpu_iterations);
     }
 };
 
@@ -117,68 +117,75 @@ struct sfpu_op_dispatcher<SfpuType::gelu>
         _init_gelu_();
     }
 
-    static void call(int tile_idx, int num_sfpu_iterations)
+    static void call(std::uint32_t tile_idx, int num_sfpu_iterations)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_gelu_, tile_idx, num_sfpu_iterations);
+        _llk_math_eltwise_unary_sfpu_params_split_(_calculate_gelu_, tile_idx, tile_idx, num_sfpu_iterations);
     }
 };
 
 template <>
 struct sfpu_op_dispatcher<SfpuType::relu>
 {
-    static void call(int tile_idx, int num_sfpu_iterations)
+    static void call(std::uint32_t tile_idx, int num_sfpu_iterations)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_relu_, tile_idx, num_sfpu_iterations);
+        _llk_math_eltwise_unary_sfpu_params_split_(_calculate_relu_, tile_idx, tile_idx, num_sfpu_iterations);
     }
 };
 
 template <>
 struct sfpu_op_dispatcher<SfpuType::reciprocal>
 {
-    static void call(int tile_idx, int num_sfpu_iterations)
+    static void call(std::uint32_t tile_idx, int num_sfpu_iterations)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_reciprocal_<true>, tile_idx, num_sfpu_iterations);
+        _llk_math_eltwise_unary_sfpu_params_split_(_calculate_reciprocal_<true>, tile_idx, tile_idx, num_sfpu_iterations);
     }
 };
 
 template <>
 struct sfpu_op_dispatcher<SfpuType::sqrt>
 {
-    static void call(int tile_idx, int num_sfpu_iterations)
+    static void call(std::uint32_t tile_idx, int num_sfpu_iterations)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_sqrt_<true>, tile_idx, num_sfpu_iterations);
+        _llk_math_eltwise_unary_sfpu_params_split_(_calculate_sqrt_<true>, tile_idx, tile_idx, num_sfpu_iterations);
     }
 };
 
 template <>
 struct sfpu_op_dispatcher<SfpuType::tanh>
 {
-    static void call(int tile_idx, int num_sfpu_iterations)
+    static void call(std::uint32_t tile_idx, int num_sfpu_iterations)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_tanh_<true>, tile_idx, num_sfpu_iterations);
+        _llk_math_eltwise_unary_sfpu_params_split_(_calculate_tanh_<true>, tile_idx, tile_idx, num_sfpu_iterations);
     }
 };
 
 template <>
 struct sfpu_op_dispatcher<SfpuType::sigmoid>
 {
-    static void call(int tile_idx, int num_sfpu_iterations)
+    static void call(std::uint32_t tile_idx, int num_sfpu_iterations)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_sigmoid_, tile_idx, num_sfpu_iterations);
+        // Wrap in lambda to disambiguate from the legacy 1-arg overload of _calculate_sigmoid_.
+        _llk_math_eltwise_unary_sfpu_params_split_(
+            [](std::uint32_t in, std::uint32_t out, const int iterations) { _calculate_sigmoid_(in, out, iterations); },
+            tile_idx,
+            tile_idx,
+            num_sfpu_iterations);
     }
 };
 
 template <>
 struct sfpu_op_dispatcher<SfpuType::silu>
 {
-    static void call(int tile_idx, int num_sfpu_iterations)
+    static void call(std::uint32_t tile_idx, int num_sfpu_iterations)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_silu_, tile_idx, num_sfpu_iterations);
+        // Wrap in lambda to disambiguate from the legacy 1-arg overload of _calculate_silu_.
+        _llk_math_eltwise_unary_sfpu_params_split_(
+            [](std::uint32_t in, std::uint32_t out, const int iterations) { _calculate_silu_(in, out, iterations); }, tile_idx, tile_idx, num_sfpu_iterations);
     }
 };
 
 // Convert constexpr SFPU_UNARY_OPERATION to template parameter using tag dispatch
-inline void call_sfpu_operation_quasar(int tile_idx, int num_sfpu_iterations)
+inline void call_sfpu_operation_quasar(std::uint32_t tile_idx, int num_sfpu_iterations)
 {
     // The compiler should optimize this to a direct call based on SFPU_UNARY_OPERATION
     constexpr SfpuType op = SFPU_UNARY_OPERATION;
@@ -267,7 +274,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Apply SFPU operation to all tiles using compile-time dispatch
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        call_sfpu_operation_quasar(static_cast<int>(params.DST_INDEX + i), static_cast<int>(num_sfpu_iterations));
+        call_sfpu_operation_quasar(static_cast<std::uint32_t>(params.DST_INDEX + i), static_cast<int>(num_sfpu_iterations));
     }
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();

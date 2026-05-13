@@ -29,20 +29,40 @@ ALWI void add_unary_tile(uint32_t idst, uint32_t param1) {
     MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, ADD_UNARY>(idst, param1)));
 }
 
+ALWI void add_unary_tile(uint32_t idst_in, uint32_t idst_out, uint32_t param1) {
+    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, ADD_UNARY>(idst_in, idst_out, param1)));
+}
+
 ALWI void sub_unary_tile(uint32_t idst, uint32_t param1) {
     MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, SUB_UNARY>(idst, param1)));
+}
+
+ALWI void sub_unary_tile(uint32_t idst_in, uint32_t idst_out, uint32_t param1) {
+    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, SUB_UNARY>(idst_in, idst_out, param1)));
 }
 
 ALWI void mul_unary_tile(uint32_t idst, uint32_t param1) {
     MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, MUL_UNARY>(idst, param1)));
 }
 
+ALWI void mul_unary_tile(uint32_t idst_in, uint32_t idst_out, uint32_t param1) {
+    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, MUL_UNARY>(idst_in, idst_out, param1)));
+}
+
 ALWI void div_unary_tile(uint32_t idst, uint32_t param1) {
     MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, DIV_UNARY>(idst, param1)));
 }
 
+ALWI void div_unary_tile(uint32_t idst_in, uint32_t idst_out, uint32_t param1) {
+    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, DIV_UNARY>(idst_in, idst_out, param1)));
+}
+
 ALWI void rsub_unary_tile(uint32_t idst, uint32_t param1) {
     MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, RSUB_UNARY>(idst, param1)));
+}
+
+ALWI void rsub_unary_tile(uint32_t idst_in, uint32_t idst_out, uint32_t param1) {
+    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, RSUB_UNARY>(idst_in, idst_out, param1)));
 }
 
 // clang-format off
@@ -64,6 +84,10 @@ ALWI void add_unary_tile_int32(uint32_t idst, uint32_t param1) {
     MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar_add_int32<APPROX, 8>(idst, param1)));
 }
 
+ALWI void add_unary_tile_int32(uint32_t idst_in, uint32_t idst_out, uint32_t param1) {
+    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar_add_int32<APPROX, 8>(idst_in, idst_out, param1)));
+}
+
 // clang-format off
 /**
 * Performs element-wise sub operation with int32 scalar. The DST
@@ -81,6 +105,10 @@ ALWI void add_unary_tile_int32(uint32_t idst, uint32_t param1) {
 
 ALWI void sub_unary_tile_int32(uint32_t idst, uint32_t param1) {
     MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar_sub_int32<APPROX, 8>(idst, param1)));
+}
+
+ALWI void sub_unary_tile_int32(uint32_t idst_in, uint32_t idst_out, uint32_t param1) {
+    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar_sub_int32<APPROX, 8>(idst_in, idst_out, param1)));
 }
 
 /**

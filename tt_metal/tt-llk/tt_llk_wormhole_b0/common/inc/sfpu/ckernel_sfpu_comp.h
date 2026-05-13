@@ -31,7 +31,7 @@ sfpi_inline void _calculate_comp_init_flag_(bool check, sfpi::vFloat& flag1, sfp
 }
 
 template <bool APPROXIMATION_MODE, bool invert_output, bool check_zero, bool second_check, bool is_less_than_equal_zero, int ITERATIONS>
-inline void _calculate_comp_(const int iterations, std::uint32_t exponent_size_8)
+inline void _calculate_comp_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const int iterations, std::uint32_t exponent_size_8)
 {
     // output_0 and output_1 hold the outputs use use when a zero or negative check is true/false.
     // False = 0.0 = kCONST_0 (5/8-bit exponent format)
@@ -100,7 +100,7 @@ inline void _calculate_comp_(const int iterations, std::uint32_t exponent_size_8
             result = flag1;
         }
 
-        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = result;
 
         sfpi::dst_reg++;
     }
@@ -194,13 +194,13 @@ inline void apply_zero_comp<SfpuType::less_than_equal_zero>(sfpi::vFloat& v, std
 }
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
-inline void _calculate_zero_comp_(std::uint32_t exponent_size_8)
+inline void _calculate_zero_comp_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, std::uint32_t exponent_size_8)
 {
     for (int d = ZERO; d < ITERATIONS; d++)
     {
         sfpi::vFloat v = sfpi::dst_reg[0];
         apply_zero_comp<COMP_MODE>(v, exponent_size_8);
-        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = v;
         sfpi::dst_reg++;
     }
 }
@@ -293,13 +293,13 @@ inline void apply_zero_comp_int<SfpuType::greater_than_equal_zero>(sfpi::vInt& v
 }
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
-inline void _calculate_zero_comp_int_()
+inline void _calculate_zero_comp_int_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
     for (int d = ZERO; d < ITERATIONS; d++)
     {
         sfpi::vInt v = sfpi::dst_reg[0];
         apply_zero_comp_int<COMP_MODE>(v);
-        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = v;
         sfpi::dst_reg++;
     }
 }
@@ -528,7 +528,7 @@ inline void apply_unary_comp_int<SfpuType::unary_le>(sfpi::vInt& val, const sfpi
 }
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
-inline void _calculate_comp_unary_int_(int scalar)
+inline void _calculate_comp_unary_int_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, int scalar)
 {
 #pragma GCC unroll 8
     for (int d = ZERO; d < ITERATIONS; d++)
@@ -538,7 +538,7 @@ inline void _calculate_comp_unary_int_(int scalar)
 
         apply_unary_comp_int<COMP_MODE>(val, v, scalar);
 
-        sfpi::dst_reg[0] = val;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = val;
         sfpi::dst_reg++;
     }
 }
@@ -631,7 +631,7 @@ inline void apply_unary_comp_float<SfpuType::unary_le>(sfpi::vFloat& val, const 
 }
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
-inline void _calculate_comp_unary_(std::uint32_t value)
+inline void _calculate_comp_unary_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, std::uint32_t value)
 {
     sfpi::vFloat s = value;
 
@@ -643,7 +643,7 @@ inline void _calculate_comp_unary_(std::uint32_t value)
 
         apply_unary_comp_float<COMP_MODE>(val, v, s);
 
-        sfpi::dst_reg[0] = val;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = val;
         sfpi::dst_reg++;
     }
 }

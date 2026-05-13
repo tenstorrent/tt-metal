@@ -40,4 +40,13 @@ ALWI void log1p_tile(uint32_t idst) {
     MATH(SFPU_UNARY_NO_PARAM_KERNEL_LOG1P_FN(calculate_log1p, RC, APPROX, fast_and_approx, DST_ACCUM_MODE, idst));
 }
 
+template <bool fast_and_approx = false>
+ALWI void log1p_tile(uint32_t idst_in, uint32_t idst_out) {
+    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
+        ckernel::sfpu::calculate_log1p<APPROX, fast_and_approx, DST_ACCUM_MODE>,
+        idst_in,
+        idst_out,
+        (int)VectorMode::RC)));
+}
+
 }  // namespace ckernel

@@ -29,6 +29,11 @@ ALWI void prelu_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_ONE_PARAM_KERNEL_FN(calculate_prelu, RC, APPROX, idst, param0));
 }
 
+ALWI void prelu_tile(uint32_t idst_in, uint32_t idst_out, uint32_t param0) {
+    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
+        ckernel::sfpu::calculate_prelu<APPROX>, idst_in, idst_out, (int)VectorMode::RC, param0)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */

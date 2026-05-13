@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_sfpu_rsqrt_compat.h"
 #include "sfpi.h"
 
@@ -76,7 +78,7 @@ sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat in)
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
-inline void _calculate_reciprocal_internal_(const int iterations)
+inline void _calculate_reciprocal_internal_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const int iterations)
 {
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
@@ -96,22 +98,22 @@ inline void _calculate_reciprocal_internal_(const int iterations)
         {
             out = _sfpu_reciprocal_<1>(in);
             out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::NearestEven);
-            }
-            sfpi::dst_reg[0] = out;
-            sfpi::dst_reg++;
+        }
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = out;
+        sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en, bool legacy_compat = false>
-inline void _calculate_reciprocal_(const int iterations)
+inline void _calculate_reciprocal_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const int iterations)
 {
     if constexpr (legacy_compat)
     {
-        _calculate_reciprocal_compat_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(iterations);
+        _calculate_reciprocal_compat_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(dst_index_in, dst_index_out, iterations);
     }
     else
     {
-        _calculate_reciprocal_internal_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(iterations);
+        _calculate_reciprocal_internal_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(dst_index_in, dst_index_out, iterations);
     }
 }
 

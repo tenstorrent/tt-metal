@@ -33,6 +33,25 @@ ALWI void logical_not_tile(uint32_t idst) {
     MATH(SFPU_UNARY_KERNEL_THREE_TEMPLATE_ARGS_FN(calculate_logical_not, APPROX, DATA_FORMAT, 8, idst, RC));
 }
 
+template <DataFormat DATA_FORMAT>
+ALWI void logical_not_tile(uint32_t idst_in, uint32_t idst_out) {
+    static_assert(
+        DATA_FORMAT == DataFormat::Float32 || DATA_FORMAT == DataFormat::Float16_b ||
+            DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 ||
+            DATA_FORMAT == DataFormat::UInt16 || DATA_FORMAT == DataFormat::Bfp8_b || DATA_FORMAT == DataFormat::Bfp4_b,
+        "Unsupported data format. Supported data formats are: Float32, Float16_b, Int32, UInt32, UInt16, Bfp8_b, "
+        "Bfp4_b.");
+    constexpr InstrModLoadStore INSTRUCTION_MODE =
+        (DATA_FORMAT == DataFormat::Float32 || DATA_FORMAT == DataFormat::Float16_b ||
+         DATA_FORMAT == DataFormat::Bfp8_b || DATA_FORMAT == DataFormat::Bfp4_b)
+            ? InstrModLoadStore::DEFAULT
+        : (DATA_FORMAT == DataFormat::UInt16)                                     ? InstrModLoadStore::LO16
+        : (DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32) ? InstrModLoadStore::INT32
+                                                                                  : InstrModLoadStore::DEFAULT;
+    MATH((_llk_math_eltwise_unary_sfpu_params_split_(
+        ckernel::sfpu::calculate_logical_not<APPROX, INSTRUCTION_MODE, 8>, idst_in, idst_out, (int)VectorMode::RC)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */

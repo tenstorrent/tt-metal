@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
@@ -118,7 +120,7 @@ inline sfpi::vFloat _calculate_isfinite_(const sfpi::vFloat& v)
 }
 
 template <SfpuType operation, bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_sfpu_isinf_isnan_()
+inline void _calculate_sfpu_isinf_isnan_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++)
@@ -127,23 +129,23 @@ inline void _calculate_sfpu_isinf_isnan_()
 
         if constexpr (operation == SfpuType::isinf)
         {
-            sfpi::dst_reg[0] = _calculate_isinf_<APPROXIMATION_MODE>(in);
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = _calculate_isinf_<APPROXIMATION_MODE>(in);
         }
         else if constexpr (operation == SfpuType::isposinf)
         {
-            sfpi::dst_reg[0] = _calculate_isposinf_<APPROXIMATION_MODE>(in);
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = _calculate_isposinf_<APPROXIMATION_MODE>(in);
         }
         else if constexpr (operation == SfpuType::isneginf)
         {
-            sfpi::dst_reg[0] = _calculate_isneginf_<APPROXIMATION_MODE>(in);
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = _calculate_isneginf_<APPROXIMATION_MODE>(in);
         }
         else if constexpr (operation == SfpuType::isnan)
         {
-            sfpi::dst_reg[0] = _calculate_isnan_<APPROXIMATION_MODE>(in);
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = _calculate_isnan_<APPROXIMATION_MODE>(in);
         }
         else if constexpr (operation == SfpuType::isfinite)
         {
-            sfpi::dst_reg[0] = _calculate_isfinite_<APPROXIMATION_MODE>(in);
+            sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = _calculate_isfinite_<APPROXIMATION_MODE>(in);
         }
 
         sfpi::dst_reg++;

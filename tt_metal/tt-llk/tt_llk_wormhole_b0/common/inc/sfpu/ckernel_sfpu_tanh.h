@@ -15,7 +15,7 @@ namespace sfpu
 {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_tanh_(const int iterations)
+inline void _calculate_tanh_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const int iterations)
 {
     // SFPU microcode
     sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
@@ -27,7 +27,7 @@ inline void _calculate_tanh_(const int iterations)
     {
         sfpi::vFloat val = sfpi::dst_reg[0];
         val              = lut(val, l0, l1, l2);
-        sfpi::dst_reg[0] = val;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = val;
 
         sfpi::dst_reg++;
     }

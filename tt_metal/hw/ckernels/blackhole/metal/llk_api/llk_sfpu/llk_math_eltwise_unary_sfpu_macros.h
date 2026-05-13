@@ -39,6 +39,26 @@ inline __attribute__((always_inline)) void _sfpu_check_and_call_(
         std::forward<Callable>(sfpu_func), dst_index, vector_mode, std::forward<Args>(args)...);
 }
 
+// Split-dest overload: separate read/write tile indices for SFPU ops that
+// take a source tile and write to a different destination tile. Asserts
+// both indices against the per-mode destination capacity, then dispatches
+// to _llk_math_eltwise_unary_sfpu_params_split_.
+template <DstSync DST_SYNC, bool DST_ACCUM, typename Callable, typename... Args>
+inline __attribute__((always_inline)) void _sfpu_check_and_call_(
+    Callable&& sfpu_func, std::uint32_t dst_index_in, std::uint32_t dst_index_out, int vector_mode, Args&&... args) {
+    LLK_ASSERT(
+        (dst_index_in < get_dest_max_tiles<DST_SYNC, DST_ACCUM, DstTileShape::Tile32x32>()),
+        "dst_index_in exceeds max dest tiles");
+    LLK_ASSERT(
+        (dst_index_out < get_dest_max_tiles<DST_SYNC, DST_ACCUM, DstTileShape::Tile32x32>()),
+        "dst_index_out exceeds max dest tiles");
+    LLK_ASSERT(
+        (dst_index_out >= dst_index_in),
+        "dst_index_out must be >= dst_index_in (unsigned store offset would underflow)");
+    _llk_math_eltwise_unary_sfpu_params_split_(
+        std::forward<Callable>(sfpu_func), dst_index_in, dst_index_out, vector_mode, std::forward<Args>(args)...);
+}
+
 }  // namespace ckernel
 
 /*
@@ -136,6 +156,36 @@ inline __attribute__((always_inline)) void _sfpu_check_and_call_(
         static_cast<_SFPU_EXPAND SIGNATURE>(::ckernel::sfpu::FN<_SFPU_EXPAND TEMPLATES>),        \
         DST_IDX,                                                                                 \
         VECTOR_MODE,                                                                             \
+        ##__VA_ARGS__)
+
+/*
+ * Split-dest variants of SFPU_CALL{,_MODE,_CAST}
+ *
+ * Same shape as their non-_SPLIT counterparts, but accept distinct
+ * (DST_IDX_IN, DST_IDX_OUT) and route through the split overload of
+ * ckernel::_sfpu_check_and_call_, which forwards into
+ * _llk_math_eltwise_unary_sfpu_params_split_. Use these when the
+ * underlying calculate function reads from one dest tile and writes to a
+ * different one.
+ */
+#define SFPU_CALL_SPLIT(DST_SYNC, DST_ACCUM, FN, TEMPLATES, DST_IDX_IN, DST_IDX_OUT, VECTOR_MODE, ...) \
+    ::ckernel::_sfpu_check_and_call_<DST_SYNC, DST_ACCUM>(                                             \
+        ::ckernel::sfpu::FN<_SFPU_EXPAND TEMPLATES>, DST_IDX_IN, DST_IDX_OUT, VECTOR_MODE, ##__VA_ARGS__)
+
+#define SFPU_CALL_MODE_SPLIT(DST_SYNC, DST_ACCUM, FN, TEMPLATES, MODE, DST_IDX_IN, DST_IDX_OUT, ...) \
+    ::ckernel::_sfpu_check_and_call_<DST_SYNC, DST_ACCUM>(                                           \
+        ::ckernel::sfpu::FN<_SFPU_EXPAND TEMPLATES>,                                                 \
+        DST_IDX_IN,                                                                                  \
+        DST_IDX_OUT,                                                                                 \
+        (int)::ckernel::VectorMode::MODE,                                                            \
+        ##__VA_ARGS__)
+
+#define SFPU_CALL_CAST_SPLIT(DST_SYNC, DST_ACCUM, FN, TEMPLATES, SIGNATURE, DST_IDX_IN, DST_IDX_OUT, VECTOR_MODE, ...) \
+    ::ckernel::_sfpu_check_and_call_<DST_SYNC, DST_ACCUM>(                                                             \
+        static_cast<_SFPU_EXPAND SIGNATURE>(::ckernel::sfpu::FN<_SFPU_EXPAND TEMPLATES>),                              \
+        DST_IDX_IN,                                                                                                    \
+        DST_IDX_OUT,                                                                                                   \
+        VECTOR_MODE,                                                                                                   \
         ##__VA_ARGS__)
 
 /*

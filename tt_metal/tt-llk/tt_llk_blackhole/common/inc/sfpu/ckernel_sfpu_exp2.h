@@ -13,7 +13,7 @@ namespace ckernel::sfpu
 {
 
 template <bool APPROXIMATION_MODE /*unused*/, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
-inline void _calculate_exp2_()
+inline void _calculate_exp2_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++)
@@ -33,7 +33,7 @@ inline void _calculate_exp2_()
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
         }
 
-        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = result;
         sfpi::dst_reg++;
     }
 }

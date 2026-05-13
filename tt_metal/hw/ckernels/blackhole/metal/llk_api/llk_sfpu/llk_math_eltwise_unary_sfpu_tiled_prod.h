@@ -10,13 +10,18 @@
 
 namespace ckernel {
 
-inline void llk_math_eltwise_unary_sfpu_tiled_prod_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::tiled_prod>();
-}
+inline void llk_math_eltwise_unary_sfpu_tiled_prod_init() { llk_math_eltwise_unary_sfpu_init<SfpuType::tiled_prod>(); }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_tiled_prod(uint dst_index, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::calculate_tiled_prod<APPROXIMATE>, dst_index, vector_mode);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_tiled_prod(
+    uint dst_index_in, uint dst_index_out, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_split_(
+        ckernel::sfpu::calculate_tiled_prod<APPROXIMATE>, dst_index_in, dst_index_out, vector_mode);
 }
 
 }  // namespace ckernel

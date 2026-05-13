@@ -117,7 +117,7 @@ template <
     bool HAS_BASE_SCALING,
     bool is_fp32_dest_acc_en,
     int ITERATIONS = 8>
-inline void calculate_log(uint log_base_scale_factor) {
+inline void calculate_log(std::uint32_t dst_index_in, std::uint32_t dst_index_out, uint log_base_scale_factor) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat result = calculate_log_body<FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en>(
@@ -125,7 +125,7 @@ inline void calculate_log(uint log_base_scale_factor) {
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
         }
-        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = result;
         sfpi::dst_reg++;
     }
 }

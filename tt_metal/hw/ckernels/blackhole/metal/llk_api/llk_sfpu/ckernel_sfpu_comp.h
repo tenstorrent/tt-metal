@@ -95,7 +95,7 @@ inline void calculate_comp() {
 }
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
-inline void calculate_comp_int() {
+inline void calculate_comp_int(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
     for (int d = 0; d < ITERATIONS; d++) {
         vInt v = dst_reg[0];
         vInt zero = 0;
@@ -142,13 +142,13 @@ inline void calculate_comp_int() {
             v_endif;
         }
 
-        dst_reg[0] = v;
+        dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = v;
         dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
-inline void calculate_comp_uint16() {
+inline void calculate_comp_uint16(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
     static_assert((COMP_MODE == SfpuType::equal_zero) or (COMP_MODE == SfpuType::not_equal_zero));
     constexpr int check = ((COMP_MODE == SfpuType::equal_zero) ? SFPSETCC_MOD1_LREG_EQ0 : SFPSETCC_MOD1_LREG_NE0);
     for (int d = 0; d < ITERATIONS; d++) {
@@ -163,26 +163,26 @@ inline void calculate_comp_uint16() {
         // end_if
         TTI_SFPENCC(0, 0, 0, 0);
         // store result
-        TTI_SFPSTORE(p_sfpu::LREG1, LO16, ADDR_MOD_7, 0);
+        TT_SFPSTORE(p_sfpu::LREG1, LO16, ADDR_MOD_7, (dst_index_out - dst_index_in) * TILE_R_DIM);
         dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_eqz_uint32() {
+inline void calculate_eqz_uint32(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
     int scalar = -5;  // used for shift operation
     _sfpu_load_imm32_(p_sfpu::LREG2, scalar);
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_7, 0);
         TTI_SFPLZ(0, 0, 1, 4);    // result in lreg1 is leading zero count
         TTI_SFPSHFT(0, 2, 1, 0);  // 32 >> 5 = 1 else 0
-        TTI_SFPSTORE(p_sfpu::LREG1, INT32, ADDR_MOD_7, 0);
+        TT_SFPSTORE(p_sfpu::LREG1, INT32, ADDR_MOD_7, (dst_index_out - dst_index_in) * TILE_R_DIM);
         dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_nez_uint32() {
+inline void calculate_nez_uint32(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_7, 0);
         // initially put 0 into output
@@ -194,13 +194,13 @@ inline void calculate_nez_uint32() {
         // end_if
         TTI_SFPENCC(0, 0, 0, 0);
         // store result
-        TTI_SFPSTORE(p_sfpu::LREG1, INT32, ADDR_MOD_7, 0);
+        TT_SFPSTORE(p_sfpu::LREG1, INT32, ADDR_MOD_7, (dst_index_out - dst_index_in) * TILE_R_DIM);
         dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
-inline void calculate_comp_unary_int(int scalar) {
+inline void calculate_comp_unary_int(std::uint32_t dst_index_in, std::uint32_t dst_index_out, int scalar) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vInt v = dst_reg[0];
@@ -216,7 +216,7 @@ inline void calculate_comp_unary_int(int scalar) {
             v_if(v == scalar) { val = 1; }
             v_endif;
         }
-        dst_reg[0] = val;
+        dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = val;
         dst_reg++;
     }
 }

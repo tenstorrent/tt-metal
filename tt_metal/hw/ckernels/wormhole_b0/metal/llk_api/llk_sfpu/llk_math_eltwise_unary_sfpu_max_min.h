@@ -21,6 +21,13 @@ inline void llk_math_eltwise_unary_sfpu_unary_max(uint dst_index, uint param0, i
         ckernel::sfpu::calculate_unary_max_min<true, APPROXIMATE>, dst_index, vector_mode, param0);
 }
 
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_unary_max(
+    uint dst_index_in, uint dst_index_out, uint param0, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_split_(
+        ckernel::sfpu::calculate_unary_max_min<true, APPROXIMATE>, dst_index_in, dst_index_out, vector_mode, param0);
+}
+
 inline void llk_math_eltwise_unary_sfpu_unary_max_int32_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::unary_max_int32>(sfpu::unary_max_min_int32_init<true, false>);
 }
@@ -30,6 +37,17 @@ inline void llk_math_eltwise_unary_sfpu_unary_max_int32(
     uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::calculate_unary_max_min_int32<true, false, APPROXIMATE>, dst_index, vector_mode, param0);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_unary_max_int32(
+    uint dst_index_in, uint dst_index_out, uint param0, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_split_(
+        ckernel::sfpu::calculate_unary_max_min_int32<true, false, APPROXIMATE>,
+        dst_index_in,
+        dst_index_out,
+        vector_mode,
+        param0);
 }
 
 inline void llk_math_eltwise_unary_sfpu_unary_max_uint32_init() {
@@ -43,6 +61,17 @@ inline void llk_math_eltwise_unary_sfpu_unary_max_uint32(
         ckernel::sfpu::calculate_unary_max_min_int32<true, true, APPROXIMATE>, dst_index, vector_mode, param0);
 }
 
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_unary_max_uint32(
+    uint dst_index_in, uint dst_index_out, uint param0, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_split_(
+        ckernel::sfpu::calculate_unary_max_min_int32<true, true, APPROXIMATE>,
+        dst_index_in,
+        dst_index_out,
+        vector_mode,
+        param0);
+}
+
 // Unary minimum
 inline void llk_math_eltwise_unary_sfpu_unary_min_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::unary_min>(sfpu::unary_max_min_init<false>);
@@ -52,6 +81,13 @@ template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_min(uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::calculate_unary_max_min<false, APPROXIMATE>, dst_index, vector_mode, param0);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_unary_min(
+    uint dst_index_in, uint dst_index_out, uint param0, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_split_(
+        ckernel::sfpu::calculate_unary_max_min<false, APPROXIMATE>, dst_index_in, dst_index_out, vector_mode, param0);
 }
 
 inline void llk_math_eltwise_unary_sfpu_unary_min_int32_init() {
@@ -65,6 +101,17 @@ inline void llk_math_eltwise_unary_sfpu_unary_min_int32(
         ckernel::sfpu::calculate_unary_max_min_int32<false, false, APPROXIMATE>, dst_index, vector_mode, param0);
 }
 
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_unary_min_int32(
+    uint dst_index_in, uint dst_index_out, uint param0, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_split_(
+        ckernel::sfpu::calculate_unary_max_min_int32<false, false, APPROXIMATE>,
+        dst_index_in,
+        dst_index_out,
+        vector_mode,
+        param0);
+}
+
 inline void llk_math_eltwise_unary_sfpu_unary_min_uint32_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::unary_min_uint32>(sfpu::unary_max_min_int32_init<false, true>);
 }
@@ -74,6 +121,17 @@ inline void llk_math_eltwise_unary_sfpu_unary_min_uint32(
     uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::calculate_unary_max_min_int32<false, true, APPROXIMATE>, dst_index, vector_mode, param0);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_unary_min_uint32(
+    uint dst_index_in, uint dst_index_out, uint param0, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_split_(
+        ckernel::sfpu::calculate_unary_max_min_int32<false, true, APPROXIMATE>,
+        dst_index_in,
+        dst_index_out,
+        vector_mode,
+        param0);
 }
 
 }  // namespace ckernel

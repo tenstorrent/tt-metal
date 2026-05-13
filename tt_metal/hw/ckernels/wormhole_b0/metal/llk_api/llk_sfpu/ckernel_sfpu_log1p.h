@@ -134,14 +134,14 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
  * @tparam ITERATIONS Number of iterations for given face
  */
 template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void calculate_log1p() {
+inline void calculate_log1p(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat result = calculate_log1p_fp32<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
         }
-        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * TILE_R_DIM] = result;
         sfpi::dst_reg++;
     }
 }

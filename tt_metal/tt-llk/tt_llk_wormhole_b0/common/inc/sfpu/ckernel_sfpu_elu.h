@@ -13,7 +13,7 @@ namespace ckernel::sfpu
 {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
-inline void _calculate_elu_(std::uint32_t slope)
+inline void _calculate_elu_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, std::uint32_t slope)
 {
     sfpi::vFloat alpha = Converter::as_float(slope);
 // unroll 2: with expm1_cw_clamped inlined the loop body is large enough that
@@ -34,7 +34,7 @@ inline void _calculate_elu_(std::uint32_t slope)
         {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
         }
-        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = result;
         sfpi::dst_reg++;
     }
 }

@@ -5,6 +5,7 @@
 
 #include <cstdint>
 
+#include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "sfpi.h"
@@ -13,31 +14,26 @@ namespace ckernel
 {
 namespace sfpu
 {
-// Calculates RELU for number of rows of output SFPU ops (Quasar = 2 rows)
-inline void _calculate_relu_sfp_rows_()
-{
-    TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0); // load from dest into lreg[0], uses ADDR_MOD_7 (set to all zeroes)
-
-    // SFPARECIP with RELU_MODE does relu eltwise
-    TTI_SFPNONLINEAR(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpnonlinear::RELU_MODE); // Read value from lreg[0], get relu value, load back into lreg[1]
-
-    // Store from lreg[1] into dest register
-    TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0, 0);
-}
-
 // Implements standard relu which does max(0, x)
-inline void _calculate_relu_(const int iterations = SFPU_ITERATIONS)
+inline void _calculate_relu_(std::uint32_t dst_tile_index_in, std::uint32_t dst_tile_index_out, const int iterations)
 {
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        _calculate_relu_sfp_rows_();
+        TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0,
+                   0); // load from dest into lreg[0], uses ADDR_MOD_7 (set to all zeroes)
+
+        // SFPARECIP with RELU_MODE does relu eltwise
+        TTI_SFPNONLINEAR(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpnonlinear::RELU_MODE); // Read value from lreg[0], get relu value, load back into lreg[1]
+
+        // Store from lreg[1] into dest register
+        TT_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0, (dst_tile_index_out - dst_tile_index_in) * 32);
         ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)
     }
 }
 
 // Calculates Leaky RELU for number of rows of output SFPU ops (Quasar = 2 rows)
-inline void _calculate_lrelu_sfp_rows_()
+inline void _calculate_lrelu_sfp_rows_(int store_offset)
 {
     TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0); // load from dest into lreg[0], uses ADDR_MOD_7 (set to all zeroes)
 
@@ -48,25 +44,26 @@ inline void _calculate_lrelu_sfp_rows_()
     TTI_SFPENCC(0, 0); // clear cc result reg
 
     // Store from lreg0 into dest register
-    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, 0, 0);
+    TT_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, 0, store_offset);
 }
 
 // Implements leaky relu which return x when x > 0 and x*slope when x < 0
-inline void _calculate_lrelu_(const std::uint32_t slope, const int iterations = SFPU_ITERATIONS)
+inline void _calculate_lrelu_(std::uint32_t dst_tile_index_in, std::uint32_t dst_tile_index_out, const std::uint32_t slope, const int iterations)
 {
+    const int store_offset = (dst_tile_index_out - dst_tile_index_in) * 32;
     TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, (slope >> 16)); // store slope in LREG2
     TTI_SFPENCC(1, 2);                                           // enable cc
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        _calculate_lrelu_sfp_rows_();
+        _calculate_lrelu_sfp_rows_(store_offset);
         ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)
     }
     TTI_SFPENCC(0, 2); // disable cc
 }
 
 // Calculates RELU MIN for number of rows of output SFPU ops (Quasar = 2 rows)
-inline void _calculate_relu_min_sfp_rows_()
+inline void _calculate_relu_min_sfp_rows_(int store_offset)
 {
     TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0); // load from dest into lreg[0], uses ADDR_MOD_7 (set to all zeroes)
 
@@ -78,26 +75,27 @@ inline void _calculate_relu_min_sfp_rows_()
     TTI_SFPENCC(0, 0); // clear cc result reg
 
     // Store from lreg0 into dest register
-    TTI_SFPSTORE(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, ADDR_MOD_7, 0, 0);
+    TT_SFPSTORE(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, ADDR_MOD_7, 0, store_offset);
 }
 
 // Implements relu min which returns x when x > threshold, otherwise return 0
 template <int ITERATIONS = SFPU_ITERATIONS>
-inline void _relu_min_(const std::uint32_t threshold)
+inline void _relu_min_(std::uint32_t dst_tile_index_in, std::uint32_t dst_tile_index_out, const std::uint32_t threshold)
 {
+    const int store_offset = (dst_tile_index_out - dst_tile_index_in) * 32;
     TTI_SFPLOADI(p_sfpu::LREG2, 0 /*Float16_b*/, (threshold >> 16)); // store slope in LREG2
     TTI_SFPENCC(1, 2);                                               // enable cc
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        _calculate_relu_min_sfp_rows_();
+        _calculate_relu_min_sfp_rows_(store_offset);
         ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)
     }
     TTI_SFPENCC(0, 2); // disable cc
 }
 
 // Calculates RELU MAX for number of rows of output SFPU ops (Quasar = 2 rows)
-inline void _calculate_relu_max_sfp_rows_()
+inline void _calculate_relu_max_sfp_rows_(int store_offset)
 {
     TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0); // load from dest into lreg[0], uses ADDR_MOD_7 (set to all zeroes)
 
@@ -114,18 +112,19 @@ inline void _calculate_relu_max_sfp_rows_()
     TTI_SFPENCC(0, 0); // reset cc
 
     // Store from lreg0 into dest register
-    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, 0, 0);
+    TT_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, 0, store_offset);
 }
 
 // Implements relu max
-inline void _relu_max_(const std::uint32_t threshold, const int iterations = SFPU_ITERATIONS)
+inline void _relu_max_(std::uint32_t dst_tile_index_in, std::uint32_t dst_tile_index_out, const std::uint32_t threshold, const int iterations)
 {
+    const int store_offset = (dst_tile_index_out - dst_tile_index_in) * 32;
     TTI_SFPLOADI(p_sfpu::LREG2, 0 /*Float16_b*/, (threshold >> 16)); // store slope in LREG2
     TTI_SFPENCC(1, 2);                                               // enable cc
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        _calculate_relu_max_sfp_rows_();
+        _calculate_relu_max_sfp_rows_(store_offset);
         ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)
     }
     TTI_SFPENCC(0, 2); // disable cc

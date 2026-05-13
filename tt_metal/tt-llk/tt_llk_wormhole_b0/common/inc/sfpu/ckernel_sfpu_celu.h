@@ -15,7 +15,7 @@ namespace ckernel::sfpu
 // celu(x) = x for x>=0, alpha*(exp(x/alpha)-1) for x<0
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
-inline void _calculate_celu_(std::uint32_t param0, std::uint32_t param1)
+inline void _calculate_celu_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, std::uint32_t param0, std::uint32_t param1)
 {
     sfpi::vFloat alpha       = Converter::as_float(param0);
     sfpi::vFloat alpha_recip = Converter::as_float(param1);
@@ -37,7 +37,7 @@ inline void _calculate_celu_(std::uint32_t param0, std::uint32_t param1)
         {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
         }
-        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg[(dst_index_out - dst_index_in) * 32] = result;
         sfpi::dst_reg++;
     }
 }
