@@ -96,11 +96,20 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
     gate_proj_parts.reserve(num_experts);
     up_proj_parts.reserve(num_experts);
 
-    // Pre-allocate the full output tensor [T_cap, H], zero-initialized so per-expert
-    // pad rows and any trailing slack (offsets[-1] < T_cap) stay zero. Each expert's
-    // down_proj writes directly into rows [row_lo, row_hi) of y — no concat.
-    auto y = ttml::core::zeros(
-        ttnn::Shape({1U, 1U, token_capacity, hidden_dim}), &ttml::autograd::ctx().get_device(), grouped_value.dtype());
+    // Pre-allocate the full output tensor [T_cap, H]. Per-expert pad rows
+    // (between offsets[e]+counts[e] and offsets[e+1]) are zeroed implicitly by the
+    // matmul: those input rows are zero in `grouped`, so the matmul output rows are
+    // zero. We only have to zero-init when there's TRAILING SLACK (offsets[-1] < T_cap),
+    // since no matmul writes those rows.
+    const bool has_trailing_slack = (offsets_host.back() < token_capacity);
+    auto y = has_trailing_slack ? ttml::core::zeros(
+                                      ttnn::Shape({1U, 1U, token_capacity, hidden_dim}),
+                                      &ttml::autograd::ctx().get_device(),
+                                      grouped_value.dtype())
+                                : ttml::core::empty(
+                                      ttnn::Shape({1U, 1U, token_capacity, hidden_dim}),
+                                      &ttml::autograd::ctx().get_device(),
+                                      grouped_value.memory_config());
 
     bool any_nonempty = false;
     for (uint32_t e = 0; e < num_experts; ++e) {
