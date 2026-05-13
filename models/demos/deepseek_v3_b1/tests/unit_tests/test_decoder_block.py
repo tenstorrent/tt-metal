@@ -307,6 +307,24 @@ def create_decoder_golden_tensors(
         "rigged_groups8",
     ],
 )
+# SRAM placement scenario — mirrors test_moe_mlp. Non-trivial scenarios require a
+# rigged-routing mode so the test can deterministically pick winners/non-winners.
+@pytest.mark.parametrize(
+    "sram_scenario",
+    [
+        "no_sram",
+        pytest.param("t1_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t1_not_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t2_both_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t2_partial", marks=pytest.mark.skip_post_commit),
+        pytest.param("t2_none_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t4_all_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_all_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_one_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_none_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_partial", marks=pytest.mark.skip_post_commit),
+    ],
+)
 @pytest.mark.parametrize(
     "enable_routing, use_hardcoded_expert_index, num_routed_experts",
     [
@@ -354,6 +372,7 @@ def test_decoder(
     noc_mode,
     num_internal_iterations,
     expert_upload_mode,
+    sram_scenario,
     enable_routing,
     use_hardcoded_expert_index,
     num_routed_experts,
@@ -407,6 +426,31 @@ def test_decoder(
             state_dict, ROUTED_EXPERT_LAYER_IDX, rigged_group_count
         )
 
+    # SRAM placement — mirrors test_moe_mlp scenarios. Non-trivial scenarios need
+    # a rigged mode so the test can pick winners/non-winners deterministically.
+    if sram_scenario != "no_sram" and rigged_expert_ids is None:
+        pytest.skip(f"sram_scenario={sram_scenario!r} requires a rigged expert_upload_mode")
+    if rigged_expert_ids is not None:
+        winners = [grp * 32 + e for grp in rigged_group_ids for e in rigged_expert_ids[grp]]
+        non_winners = [eid for eid in range(256) if eid not in winners]
+    else:
+        winners = []
+        non_winners = list(range(256))
+    sram_expert_ids = {
+        "no_sram": [],
+        "t1_picked": [winners[0]] if winners else [],
+        "t1_not_picked": [non_winners[0]],
+        "t2_both_picked": winners[:2],
+        "t2_partial": [winners[0], non_winners[0]] if winners else [],
+        "t2_none_picked": non_winners[:2],
+        "t4_all_picked": winners[:4],
+        "t8_all_picked": winners[:8],
+        "t8_one_picked": [winners[0]] + non_winners[:7] if winners else [],
+        "t8_none_picked": non_winners[:8],
+        "t8_partial": winners[:2] + non_winners[:6] if winners else [],
+    }[sram_scenario]
+    logger.info(f"SRAM scenario {sram_scenario!r}: sram_expert_ids={sram_expert_ids}")
+
     logger.info("Preparing layer weights on device...")
     layer_weights = prepare_moe_layer_weights(
         submesh,
@@ -416,6 +460,7 @@ def test_decoder(
         move_to_device=True,
         compressed_tp8=True,
         bspm_dir=_optional_bspm_dir(),
+        sram_expert_ids=sram_expert_ids,
     )
 
     logger.info("Creating decoder block tensors...")

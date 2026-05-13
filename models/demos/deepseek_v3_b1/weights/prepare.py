@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -218,6 +218,13 @@ class DeepSeekV3DenseLayerWeights(UploadableMixin):
     routed_up_proj: list[ttnn.Tensor]
     routed_down_proj: list[ttnn.Tensor]
 
+    # SRAM-resident routed-expert CompressedTensors, one per placed expert ID
+    # (slot ordering matches the encoding in create_gate_indices_tensor).
+    # Empty when no SRAM placement is configured for the layer.
+    sram_gate_proj: list[ttnn.Tensor] = field(default_factory=list)
+    sram_up_proj: list[ttnn.Tensor] = field(default_factory=list)
+    sram_down_proj: list[ttnn.Tensor] = field(default_factory=list)
+
 
 @dataclass
 class DeepSeekV3MoELayerWeights(UploadableMixin):
@@ -255,6 +262,13 @@ class DeepSeekV3MoELayerWeights(UploadableMixin):
     routed_gate_proj: list[ttnn.Tensor]
     routed_up_proj: list[ttnn.Tensor]
     routed_down_proj: list[ttnn.Tensor]
+
+    # SRAM-resident routed-expert CompressedTensors, one per placed expert ID
+    # (slot ordering matches the encoding in create_gate_indices_tensor).
+    # Empty when no SRAM placement is configured for the layer.
+    sram_gate_proj: list[ttnn.Tensor] = field(default_factory=list)
+    sram_up_proj: list[ttnn.Tensor] = field(default_factory=list)
+    sram_down_proj: list[ttnn.Tensor] = field(default_factory=list)
 
 
 @dataclass
@@ -687,6 +701,7 @@ def build_sram_expert_weights(
     sram_per_core_N: int,
     *,
     tile_w: int = 32,
+    per_expert_assignment_per_device: dict[int, list[np.ndarray]] | None = None,
 ) -> list:
     """Build T L1-allocated CompressedTensors for SRAM-resident routed experts.
 
@@ -721,6 +736,13 @@ def build_sram_expert_weights(
         sram_per_core_N: N tiles per core per expert (typically 1 for
             DeepSeek V3 routed gate/up at TP8).
         tile_w: tile width in elements (default 32).
+        per_expert_assignment_per_device: optional BSPM precision map per
+            expert per device. ``{eid: [per_device_assignment, ...]}`` where
+            each per-device assignment is a 2D ``(K_tiles, N_tiles)`` int8
+            array matching the per-device weight shape. When provided,
+            bypasses ``assigner`` and uses the pre-computed assignment
+            directly (mirrors the DRAM BSPM path). When ``None`` falls
+            back to the assigner-driven uniform path.
 
     Returns:
         list[CompressedTensor] of length ``len(sram_expert_ids)``, in slot
@@ -748,6 +770,20 @@ def build_sram_expert_weights(
         ),
     )
 
+    def _shuffle_assignment_per_device(asg_per_dev: np.ndarray) -> np.ndarray:
+        """Reorder a (K_tiles, N_tiles) per-device BSPM assignment to match
+        the per-core slab cat-along-K layout used by the weight shuffling."""
+        shards = []
+        for i in range(num_sram_cores):
+            k_idx = i // sram_n_parallel
+            n_idx = i % sram_n_parallel
+            k_start = k_idx * sram_k_per_core
+            k_end = k_start + sram_k_per_core
+            n_start = n_idx * sram_per_core_N
+            n_end = n_start + sram_per_core_N
+            shards.append(asg_per_dev[k_start:k_end, n_start:n_end])
+        return np.concatenate(shards, axis=0)
+
     sram_cts = []
     for eidx in sram_expert_ids:
         # Per-device, slice the K×N tensor into per-core (k_slice, n_slice)
@@ -773,14 +809,29 @@ def build_sram_expert_weights(
             num_sram_cores * sram_k_per_core * tile_w,
             sram_per_core_N * tile_w,
         )
-        ct = CompressedTensor.from_torch(
-            b_4d,
-            assigner,
-            device=mesh_device,
-            memory_config=sram_b_mem,
-            per_core_allocation=True,
-            mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)]),
-        )
+        if per_expert_assignment_per_device is not None:
+            # BSPM path: shuffle each per-device assignment to match the per-core
+            # slab layout, then stack devices along K (folded into tiles_h).
+            asg_per_dev_list = per_expert_assignment_per_device[eidx]
+            shuffled = [_shuffle_assignment_per_device(asg) for asg in asg_per_dev_list]
+            full_assignment = np.concatenate(shuffled, axis=0)
+            ct = CompressedTensor(
+                b_4d,
+                full_assignment,
+                device=mesh_device,
+                memory_config=sram_b_mem,
+                per_core_allocation=True,
+                mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)]),
+            )
+        else:
+            ct = CompressedTensor.from_torch(
+                b_4d,
+                assigner,
+                device=mesh_device,
+                memory_config=sram_b_mem,
+                per_core_allocation=True,
+                mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)]),
+            )
         sram_cts.append(ct)
     return sram_cts
 
@@ -1843,6 +1894,176 @@ def prepare_dense_layer_weights(
     return result
 
 
+def _build_moe_sram_routed_weights(
+    device,
+    state_dict: dict[str, torch.Tensor],
+    layer_idx: int,
+    sram_expert_ids: list[int],
+    *,
+    bspm_path: Path | None = None,
+) -> tuple[list, list, list]:
+    """Build SRAM-resident gate/up/down CompressedTensors for the given routed expert IDs.
+
+    Mirrors the SRAM-build path in test_moe_mlp.create_routed_expert_tensors and
+    the DRAM BSPM resolution in prepare_moe_routed_experts_bspm_tp8. Sources HF
+    weights from state_dict, per-device shards for TP8, and feeds each slot
+    through build_sram_expert_weights.
+
+    ``bspm_path``: when provided (and the file exists), the per-tile precision
+    map for each expert/projection is sliced per-device and fed to
+    ``build_sram_expert_weights`` so the SRAM CT carries the same BSPM bit
+    pattern as the DRAM CT for the same expert. When ``None``, falls back to
+    uniform BFP4 — matching the DRAM fallback path.
+
+    Returns (sram_gate_list, sram_up_list, sram_down_list), each of length T in slot
+    order. Empty lists when sram_expert_ids is empty.
+    """
+    if not sram_expert_ids:
+        return [], [], []
+
+    # Local imports to avoid prepare.py → fused_ops circular dependency at module load.
+    from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensorAssigner
+    from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
+    from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
+    from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert as _RE
+
+    moe_tp = device.shape[0] * device.shape[1]
+    N_per_dev = _RE.GATE_PROJ_N // moe_tp  # column-shard for gate/up
+    K_per_dev_down = _RE.GATE_PROJ_N // moe_tp  # row-shard for down (K-dim)
+    tile_w = _RE.TILE_W
+
+    a_cores, b_cores = SharedExpertOp.build_ab_grids()
+    sram_gate_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in a_cores])
+    sram_up_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in b_cores])
+    sram_down_core_grid = DownProj.build_matmul_core_grid()  # 112 cores
+
+    _sram_per_core_N = (N_per_dev // tile_w) // 8  # gate/up: 1 N-tile per core at TP8
+    _sram_down_per_core_N = (_RE.K // tile_w) // DownProj.NUM_MATMUL_CORES  # down: 2 tiles per core
+
+    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp4"])
+
+    # BSPM resolution — mirrors prepare_moe_routed_experts_bspm_tp8.
+    bspm_data = None
+    if bspm_path is not None:
+        bspm_path = Path(bspm_path)
+        if not bspm_path.exists():
+            raise FileNotFoundError(
+                f"BSPM file required for SRAM-resident experts at layer {layer_idx} but not found: {bspm_path}. "
+                f"Pass bspm_dir=None to use uniform BFP4 fallback."
+            )
+        logger.info("Loading BSPM for SRAM experts at layer {}: {}", layer_idx, bspm_path)
+        bspm_data = load_bspm_for_layer(str(bspm_path))
+
+    def _full_bspm_assignment_per_expert(proj_idx: int, N_full: int, K_full: int) -> dict[int, np.ndarray] | None:
+        """Return (K_tiles, N_tiles_padded) BSPM assignment for each SRAM expert,
+        or None when BSPM is disabled."""
+        if bspm_data is None:
+            return None
+        num_banks = device.dram_grid_size().x
+        N_padded_full = ((N_full + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+        tiles_h_full = K_full // tile_w
+        tiles_w_full_padded = N_padded_full // tile_w
+        out: dict[int, np.ndarray] = {}
+        for eid in sram_expert_ids:
+            if eid >= bspm_data["n_experts"]:
+                raise ValueError(f"SRAM expert {eid} out of range for BSPM (n_experts={bspm_data['n_experts']})")
+            out[eid] = np.ascontiguousarray(
+                bspm_data["codes"][eid, proj_idx].reshape(tiles_w_full_padded, tiles_h_full).T
+            )
+        return out
+
+    def _slice_assignment_per_device(
+        full_per_expert: dict[int, np.ndarray] | None,
+        shard_dim: int,
+        per_dev_tiles: int,
+    ) -> dict[int, list[np.ndarray]] | None:
+        """Slice each (K_tiles, N_tiles_padded) full-tensor assignment along
+        ``shard_dim`` (0=K, 1=N) into per-device chunks. Drops BSPM padding
+        in the cross-shard direction so it matches the per-device weight grid."""
+        if full_per_expert is None:
+            return None
+        out: dict[int, list[np.ndarray]] = {}
+        for eid, full in full_per_expert.items():
+            per_dev = []
+            for d in range(moe_tp):
+                if shard_dim == 1:
+                    per_dev.append(np.ascontiguousarray(full[:, d * per_dev_tiles : (d + 1) * per_dev_tiles]))
+                else:
+                    per_dev.append(np.ascontiguousarray(full[d * per_dev_tiles : (d + 1) * per_dev_tiles, :]))
+            out[eid] = per_dev
+        return out
+
+    def _per_device_gate_up(weight_key: str) -> dict[int, list[torch.Tensor]]:
+        out: dict[int, list[torch.Tensor]] = {}
+        for eid in sram_expert_ids:
+            w = state_dict[_key(layer_idx, f"mlp.experts.{eid}.{weight_key}")]
+            # HF shape (GATE_PROJ_N, K) → (K, GATE_PROJ_N), then column-shard N across devices.
+            w_kn = w.T.contiguous().reshape(_RE.K, _RE.GATE_PROJ_N)
+            out[eid] = [w_kn[:, d * N_per_dev : (d + 1) * N_per_dev].contiguous() for d in range(moe_tp)]
+        return out
+
+    def _per_device_down() -> dict[int, list[torch.Tensor]]:
+        out: dict[int, list[torch.Tensor]] = {}
+        for eid in sram_expert_ids:
+            w = state_dict[_key(layer_idx, f"mlp.experts.{eid}.down_proj.weight")]
+            # HF shape (K, GATE_PROJ_N) → (GATE_PROJ_N, K), then row-shard K-dim across devices.
+            w_kn = w.T.contiguous().reshape(_RE.GATE_PROJ_N, _RE.K)
+            out[eid] = [w_kn[d * K_per_dev_down : (d + 1) * K_per_dev_down, :].contiguous() for d in range(moe_tp)]
+        return out
+
+    # gate_proj_idx=0, up_proj_idx=1, down_proj_idx=2 (matches prepare_moe_routed_experts_bspm_tp8 proj_specs).
+    gate_asg = _slice_assignment_per_device(
+        _full_bspm_assignment_per_expert(0, _RE.GATE_PROJ_N, _RE.K),
+        shard_dim=1,
+        per_dev_tiles=N_per_dev // tile_w,
+    )
+    up_asg = _slice_assignment_per_device(
+        _full_bspm_assignment_per_expert(1, _RE.GATE_PROJ_N, _RE.K),
+        shard_dim=1,
+        per_dev_tiles=N_per_dev // tile_w,
+    )
+    down_asg = _slice_assignment_per_device(
+        _full_bspm_assignment_per_expert(2, _RE.K, _RE.GATE_PROJ_N),
+        shard_dim=0,
+        per_dev_tiles=K_per_dev_down // tile_w,
+    )
+
+    sram_gate = build_sram_expert_weights(
+        sram_expert_ids=sram_expert_ids,
+        full_torch_weights_per_device=_per_device_gate_up("gate_proj.weight"),
+        assigner=assigner,
+        mesh_device=device,
+        core_grid=sram_gate_core_grid,
+        sram_k_per_core=(_RE.K // tile_w) // 8,
+        sram_n_parallel=8,
+        sram_per_core_N=_sram_per_core_N,
+        per_expert_assignment_per_device=gate_asg,
+    )
+    sram_up = build_sram_expert_weights(
+        sram_expert_ids=sram_expert_ids,
+        full_torch_weights_per_device=_per_device_gate_up("up_proj.weight"),
+        assigner=assigner,
+        mesh_device=device,
+        core_grid=sram_up_core_grid,
+        sram_k_per_core=(_RE.K // tile_w) // 8,
+        sram_n_parallel=8,
+        sram_per_core_N=_sram_per_core_N,
+        per_expert_assignment_per_device=up_asg,
+    )
+    sram_down = build_sram_expert_weights(
+        sram_expert_ids=sram_expert_ids,
+        full_torch_weights_per_device=_per_device_down(),
+        assigner=assigner,
+        mesh_device=device,
+        core_grid=sram_down_core_grid,
+        sram_k_per_core=K_per_dev_down // tile_w,
+        sram_n_parallel=DownProj.NUM_MATMUL_CORES,
+        sram_per_core_N=_sram_down_per_core_N,
+        per_expert_assignment_per_device=down_asg,
+    )
+    return sram_gate, sram_up, sram_down
+
+
 def prepare_moe_layer_weights(
     device,
     state_dict: dict[str, torch.Tensor],
@@ -1855,11 +2076,16 @@ def prepare_moe_layer_weights(
     bspm_variant: BspmVariant = BspmVariant.B,
     bspm_budget: float = 3.5,
     compressed_tp8: bool = False,
+    sram_expert_ids: list[int] = (),
 ) -> DeepSeekV3MoELayerWeights:
     """Prepare fused weights for a single MoE decoder layer.
 
     ``bspm_dir``, when provided, must be the model-specific BSPM subdirectory
     (e.g. ``results/deepseek-r1-0528``), not the results root.
+
+    ``sram_expert_ids``: list of global routed-expert IDs (0..255) to place in L1
+    in slot order. Empty → DRAM-only. Must match the encoding in
+    create_gate_indices_tensor(sram_expert_ids=...).
     """
     logger.info("Preparing MoE layer {}...", layer_idx)
     t0 = time.perf_counter()
@@ -1887,6 +2113,23 @@ def prepare_moe_layer_weights(
         bspm_budget=bspm_budget,
         compressed_tp8=compressed_tp8,
     )
+    # Resolve BSPM path same way as prepare_routed_expert_weights, so SRAM mirrors DRAM:
+    # uniform BFP4 when bspm_dir is None, BSPM mixed-precision when provided.
+    sram_bspm_path = None
+    if bspm_dir is not None:
+        sram_bspm_path = (
+            Path(bspm_dir)
+            / f"layer_{layer_idx}"
+            / "precision_eval"
+            / f"precision_map_{bspm_variant}_{bspm_budget:.1f}.bspm"
+        )
+    sram_gate, sram_up, sram_down = _build_moe_sram_routed_weights(
+        device,
+        state_dict,
+        layer_idx,
+        list(sram_expert_ids),
+        bspm_path=sram_bspm_path,
+    )
     assert isinstance(attn.gate_mm, OverlappedTensor)
     assert attn.gate_bias is not None
     assert isinstance(routed, MoERoutedExpertWeights)
@@ -1909,6 +2152,9 @@ def prepare_moe_layer_weights(
         routed_gate_proj=routed.routed_gate_proj,
         routed_up_proj=routed.routed_up_proj,
         routed_down_proj=routed.routed_down_proj,
+        sram_gate_proj=sram_gate,
+        sram_up_proj=sram_up,
+        sram_down_proj=sram_down,
     )
     logger.info("MoE layer {} done in {:.3f}s", layer_idx, time.perf_counter() - t0)
     return result

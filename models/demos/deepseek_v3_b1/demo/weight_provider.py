@@ -47,7 +47,13 @@ class WeightProvider(Protocol):
     def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
         ...
 
-    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+    def load_moe_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        sram_expert_ids_override: list[int] | None = None,
+    ) -> DeepSeekV3MoELayerWeights:
         ...
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
@@ -265,7 +271,13 @@ class CacheWeightProvider:
             cache_config=self._cache_config(device),
         )
 
-    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+    def load_moe_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        sram_expert_ids_override: list[int] | None = None,
+    ) -> DeepSeekV3MoELayerWeights:
         return prepare_moe_layer_weights(
             device,
             self._state_dict,
@@ -277,6 +289,7 @@ class CacheWeightProvider:
             bspm_variant=self._bspm_variant,
             bspm_budget=self._bspm_budget,
             compressed_tp8=True,
+            sram_expert_ids=sram_expert_ids_override or (),
         )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
@@ -350,7 +363,13 @@ class SyntheticWeightProvider:
             move_to_device=True,
         )
 
-    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+    def load_moe_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        sram_expert_ids_override: list[int] | None = None,
+    ) -> DeepSeekV3MoELayerWeights:
         sd = _build_synthetic_moe_state_dict(layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
         return prepare_moe_layer_weights(
             device,
@@ -362,6 +381,7 @@ class SyntheticWeightProvider:
             bspm_variant=self._bspm_variant,
             bspm_budget=self._bspm_budget,
             compressed_tp8=True,
+            sram_expert_ids=sram_expert_ids_override or (),
         )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
@@ -402,7 +422,13 @@ class StateDictWeightProvider:
     def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
         return prepare_lm_head_weights(self._state_dict, device, move_to_device=True)
 
-    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+    def load_moe_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        sram_expert_ids_override: list[int] | None = None,
+    ) -> DeepSeekV3MoELayerWeights:
         return prepare_moe_layer_weights(
             device,
             self._state_dict,
@@ -413,6 +439,7 @@ class StateDictWeightProvider:
             bspm_variant=self._bspm_variant,
             bspm_budget=self._bspm_budget,
             compressed_tp8=True,
+            sram_expert_ids=sram_expert_ids_override or (),
         )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
