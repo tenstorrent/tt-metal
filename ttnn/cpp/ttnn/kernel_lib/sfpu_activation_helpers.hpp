@@ -11,11 +11,68 @@
 #include "api/compute/eltwise_unary/selu.h"
 #include "api/compute/eltwise_unary/softplus.h"
 #include "internal/risc_attribs.h"
-#include <cstring>  // for memcpy
 
+// KernelActivation is the host/device shared enum; kept at global scope so
+// the matmul kernels can reference it unqualified (matches the prior
+// bmm_fused_activation.hpp surface).
 using ttnn::operations::matmul::KernelActivation;
 
-// Helper templates to select activation variants based on parameters
+namespace compute_kernel_lib {
+
+/**
+ * Bundles an activation kind with its compile-time parameters into one type so
+ * that matmul_block / bias_add helpers can accept "the activation" as a single
+ * template argument instead of a (KernelActivation, uint32_t, uint32_t, uint32_t)
+ * tuple whose parameter slots are interpreted differently per activation.
+ *
+ * Use the named aliases below at hand-written call sites so the parameter meaning
+ * is explicit (HardtanhActivation<low, high>, SeluActivation<alpha, lambda>, …).
+ * For host-driven kernels that read activation + params from compile-time args,
+ * wrap them as ActivationOp<activation_type, activation_param0, activation_param1,
+ * activation_param2>.
+ */
+template <KernelActivation ACT, uint32_t P0 = 0, uint32_t P1 = 0, uint32_t P2 = 0>
+struct ActivationOp {
+    static constexpr KernelActivation activation = ACT;
+    static constexpr uint32_t param0 = P0;
+    static constexpr uint32_t param1 = P1;
+    static constexpr uint32_t param2 = P2;
+};
+
+// Named aliases — param meaning is documented per activation. See
+// ActivationApplyHelper below for the authoritative per-activation semantics.
+using NoneActivation = ActivationOp<KernelActivation::NONE>;
+using SiluActivation = ActivationOp<KernelActivation::SILU>;
+using HardsigmoidActivation = ActivationOp<KernelActivation::HARDSIGMOID>;
+// TanhActivation / GeluActivation: Fast=0 selects the accurate variant; non-zero selects fast.
+template <uint32_t Fast = 0>
+using TanhActivation = ActivationOp<KernelActivation::TANH, Fast>;
+template <uint32_t Fast = 0>
+using GeluActivation = ActivationOp<KernelActivation::GELU, Fast>;
+// Relu6Activation: MaxBits is the max value as a uint32_t bit pattern of the float;
+// 0 selects the default 6.0f.
+template <uint32_t MaxBits = 0>
+using Relu6Activation = ActivationOp<KernelActivation::RELU6, MaxBits>;
+// SigmoidActivation: VecMode 1=R, 2=C, else RC. Fast non-zero enables fast approximation.
+template <uint32_t VecMode = 0, uint32_t Fast = 0>
+using SigmoidActivation = ActivationOp<KernelActivation::SIGMOID, VecMode, Fast>;
+// HardtanhActivation<low_bits, high_bits>: low/high are uint32_t bit patterns of the floats.
+template <uint32_t LowBits, uint32_t HighBits>
+using HardtanhActivation = ActivationOp<KernelActivation::HARDTANH, LowBits, HighBits>;
+// SeluActivation<alpha_bits, lambda_bits>: alpha/lambda are uint32_t bit patterns.
+template <uint32_t AlphaBits, uint32_t LambdaBits>
+using SeluActivation = ActivationOp<KernelActivation::SELU, AlphaBits, LambdaBits>;
+// SoftplusActivation<beta_bits, threshold_bits, beta_reciprocal_bits>: float bit patterns.
+// beta must be non-zero (validated via static_assert in ActivationApplyHelper).
+template <uint32_t BetaBits, uint32_t ThresholdBits, uint32_t BetaReciprocalBits>
+using SoftplusActivation = ActivationOp<KernelActivation::SOFTPLUS, BetaBits, ThresholdBits, BetaReciprocalBits>;
+
+// Helper templates to select activation variants based on parameters.
+//
+// All three abstractions run on the PACKER thread (TRISC2): SFPU activation
+// is fused into the pack stage so it overlaps with the math thread starting
+// the next K-block. Math-thread post-compute hooks (PostComputeFn) run before
+// tile_regs_commit and are unaffected.
 template <KernelActivation ACT, uint32_t PARAM0 = 0, uint32_t PARAM1 = 0>
 struct ActivationInitHelper {
     // Compile-time validation
@@ -99,6 +156,9 @@ struct ActivationApplyHelper {
     }
 };
 
+// Bulk packer-thread activation. Wraps the math/pack semaphore wait, packer
+// dest-offset flip, per-tile apply loop, and final SFPU stall — replaces a
+// plain tile_regs_wait() at the same spot in the kernel pipeline.
 template <KernelActivation ACT, uint32_t PARAM0 = 0, uint32_t PARAM1 = 0, uint32_t PARAM2 = 0>
 FORCE_INLINE void apply_activation_from_pack(uint32_t out_subblock_num_tiles) {
     PACK(TTI_SEMWAIT(
@@ -114,3 +174,5 @@ FORCE_INLINE void apply_activation_from_pack(uint32_t out_subblock_num_tiles) {
     // Wait for SFPU completion before packing
     PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 }
+
+}  // namespace compute_kernel_lib
