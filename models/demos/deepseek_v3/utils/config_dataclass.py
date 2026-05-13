@@ -59,7 +59,7 @@ class DeepseekSamplingArgs:
 
 
 ConfigDevice = ttnn.MeshDevice | MeshDeviceStub
-ConfigWeight = ttnn.Tensor | FromWeightConfig
+ConfigWeight = ttnn.Tensor | SavedWeight | FromWeightConfig
 
 
 @dataclass
@@ -89,6 +89,7 @@ class LinearConfig(OpConfigBase):
     """Common parameters for a ttnn.linear op, weights are in input_tensor_b"""
 
     input_tensor_b: ConfigWeight
+    transpose_b: bool = False
     memory_config: ttnn.MemoryConfig | None = None
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None
     program_config: ProgramConfig | None = None
@@ -502,21 +503,6 @@ class MoEComputeConfig(OpConfigBase):
 
     output_height_shard_dim: int
     output_width_shard_dim: int
-    cluster_axis: int | None = None
-
-
-@dataclass
-class SelectiveReduceCombineConfig(OpConfigBase):
-    """Common parameters for a ttnn.selective_reduce_combine op"""
-
-    hidden_size: int
-    batch_size: int
-    seq_size: int
-    select_experts_k: int
-    experts: int
-    token_parallel_core_dim: int
-    data_parallel_core_dim: int
-    worker_cores: list[ttnn.CoreCoord]
     mux_core_range_set: ttnn.CoreRangeSet
     cluster_axis: int | None = None
     topology: ttnn.Topology = ttnn.Topology.Ring
