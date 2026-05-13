@@ -3,6 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "mpi_distributed_context.hpp"
+// OMPI_SKIP_MPICXX is defined in mpi_distributed_context.hpp before <mpi.h>; repeat here for safety
+// in case this .cpp is ever included standalone (e.g. unity builds with different ordering).
+#ifndef OMPI_SKIP_MPICXX
+#define OMPI_SKIP_MPICXX 1
+#endif
 #include <mpi.h>
 #include <mpi-ext.h>
 

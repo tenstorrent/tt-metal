@@ -4,6 +4,13 @@
 
 #pragma once
 
+// Suppress deprecated OpenMPI C++ bindings (MPI::* namespace) — tt-metal only uses the C API.
+// Without this, including mpi.h in C++ mode pulls in mpi_cxx.h which references ompi_mpi_cxx_op_intercept
+// from libmpi_cxx.so. In Release builds the compiler eliminates the inline destructor calls,
+// but in Debug builds they remain, causing undefined-reference link errors.
+#ifndef OMPI_SKIP_MPICXX
+#define OMPI_SKIP_MPICXX 1
+#endif
 #include <mpi.h>
 #include <memory>
 #include <optional>
