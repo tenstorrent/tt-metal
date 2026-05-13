@@ -504,7 +504,7 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
         {
             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MATMUL_RECIP");
             constexpr uint32_t N = 1;
-            mm_block_init_short(cur_sum_cb, col_identity_cb, 0, N, 1, N);
+            mm_init(cur_sum_cb, col_identity_cb, 0, N, 1, N);
             reconfig_data_format(col_identity_cb, cur_sum_cb);
 
             cb_wait_front(col_identity_cb, N);

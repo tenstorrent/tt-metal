@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
 #include "experimental/circular_buffer.h"
@@ -32,7 +33,8 @@ void kernel_main() {
     experimental::CircularBuffer out_cb(cb_out);
     experimental::CircularBuffer intermed0_cb(cb_intermed0);
 
-    mm_init(cb_in0, cb_in1, cb_intermed0);
+    compute_kernel_hw_startup(cb_in0, cb_in1, cb_intermed0);
+    mm_init(cb_in0, cb_in1);
 
     for (uint32_t b = 0; b < batch; b++) {
         bool spill = num_blocks > 1;
@@ -57,7 +59,7 @@ void kernel_main() {
                             copy_tile(cb_intermed0, i, i);
                         }
                         intermed0_cb.pop_front(out_subblock_num_tiles);
-                        mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed0);
+                        mm_init_with_dt(cb_in0, cb_in1, cb_intermed0);
                     }
 
                     // Compute output sub-block from in0_subblock x in1_subblock

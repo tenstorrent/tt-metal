@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
 #ifdef ARCH_QUASAR
@@ -33,49 +34,51 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
     // The TEST_INIT_SHORT WITH_DT path is not implemented for Quasar yet
 #else
-    mm_block_init(
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
+    mm_init(
         tt::CBIndex::c_0,
         tt::CBIndex::c_2,
-        tt::CBIndex::c_16,
         false,
         dst_tile_cols - 1,
         dst_tile_rows - 1,
         block_tile_dim - 1);
     // Corrected init short with dt
-    mm_block_init_short_with_dt(
+    mm_init_with_dt(
         tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_2, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
 #endif
 #elif (WITH_DT == 0)
     // Intentionally wrong init with same data formats
 #ifdef ARCH_QUASAR
-    mm_block_init(
+    compute_kernel_hw_startup(dfb1.get_id(), dfb0.get_id(), dfb_out.get_id());
+    mm_init(
         dfb1.get_id(),
         dfb0.get_id(),
-        dfb_out.get_id(),
         false,
         dst_tile_cols - 1,
         dst_tile_rows - 1,
         block_tile_dim - 1);
-    mm_block_init_short(dfb0.get_id(), dfb1.get_id(), false, dst_tile_cols, dst_tile_rows, block_tile_dim);
+    mm_init(dfb0.get_id(), dfb1.get_id(), false, dst_tile_cols, dst_tile_rows, block_tile_dim);
 #else
-    mm_block_init(
+    compute_kernel_hw_startup(tt::CBIndex::c_1, tt::CBIndex::c_0, tt::CBIndex::c_16);
+    mm_init(
         tt::CBIndex::c_1,
         tt::CBIndex::c_0,
-        tt::CBIndex::c_16,
         false,
         dst_tile_cols - 1,
         dst_tile_rows - 1,
         block_tile_dim - 1);
     // Corrected init short
-    mm_block_init_short(tt::CBIndex::c_0, tt::CBIndex::c_1, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
+    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
 #endif
 #endif
 #elif (TEST_INIT_SHORT == 0)
 #ifdef ARCH_QUASAR
-    mm_block_init(dfb0.get_id(), dfb1.get_id(), dfb_out.get_id(), false, dst_tile_cols, dst_tile_rows, block_tile_dim);
+    compute_kernel_hw_startup(dfb0.get_id(), dfb1.get_id(), dfb_out.get_id());
+    mm_init(dfb0.get_id(), dfb1.get_id(), false, dst_tile_cols, dst_tile_rows, block_tile_dim);
 #else
-    mm_block_init(
-        tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    mm_init(
+        tt::CBIndex::c_0, tt::CBIndex::c_1, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
 #endif
 #endif
 

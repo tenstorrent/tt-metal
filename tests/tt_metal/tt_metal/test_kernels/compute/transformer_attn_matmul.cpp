@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tilize.h"
@@ -28,7 +29,8 @@ void kernel_main() {
 
     constexpr uint32_t num_rows_in_one_tile = 32;
 
-    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, out_cb_id, transpose_hw);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_1, out_cb_id);
+    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, transpose_hw);
 
     for (uint32_t nb = 0; nb < batch; nb++) {
         for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) {    // output tile of C
@@ -62,7 +64,7 @@ void kernel_main() {
                     cb_pop_front(cb_intermed0, 1);
                     untilize_uninit(cb_intermed0);
 
-                    mm_init_short(tt::CBIndex::c_0, tt::CBIndex::c_1, transpose_hw);
+                    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, transpose_hw);
                 }
                 cb_pop_front(tt::CBIndex::c_0, Kt);
 
@@ -78,7 +80,7 @@ void kernel_main() {
                 cb_pop_front(cb_intermed2, 1);
                 tilize_uninit(cb_intermed2, out_cb_id);
 
-                mm_init_short(tt::CBIndex::c_0, tt::CBIndex::c_1, transpose_hw);
+                mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, transpose_hw);
             }
         }
     }

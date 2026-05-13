@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tilize.h"
 #include "api/compute/untilize.h"
 #include "api/compute/tile_move_copy.h"
@@ -135,7 +136,8 @@ void kernel_main() {
     init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(out_for_bias_cb_id, bias_cb_id, out_cb_id);
 #endif
 
-    mm_init(in0_cb_id, in1_cb_id, out_cb_id);
+    compute_kernel_hw_startup(in0_cb_id, in1_cb_id, out_cb_id);
+    mm_init(in0_cb_id, in1_cb_id);
     for (uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
 #ifdef FUSE_BIAS
         uint32_t bias_block_offset = 0;
@@ -146,7 +148,7 @@ void kernel_main() {
                 bool last_out = (in0_block_w_i == in0_num_blocks_w - 1);
                 if (tilize_in0) {
                     tilize_in(in0_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
-                    mm_init_short(tilized_in0_cb_id, in1_cb_id);
+                    mm_init(tilized_in0_cb_id, in1_cb_id);
                     cb_wait_front(tilized_in0_cb_id, in0_block_num_tiles);
                 } else {
                     cb_wait_front(in0_cb_id, in0_block_num_tiles);

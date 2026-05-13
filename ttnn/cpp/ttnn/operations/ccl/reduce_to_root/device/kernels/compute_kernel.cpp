@@ -8,6 +8,7 @@
 #define EXP_APPROX_MODE false
 
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/recip.h"
@@ -130,7 +131,8 @@ void kernel_main() {
     constexpr int vector_mode = use_half_tile ? VectorMode::R : VectorMode::RC;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-    mm_init(cb_out_accumulate_im, cb_out_accumulate_im, cb_out_accumulate_im);
+    compute_kernel_hw_startup(cb_out_accumulate_im, cb_out_accumulate_im, cb_out_accumulate_im);
+    mm_init(cb_out_accumulate_im, cb_out_accumulate_im);
 
     OutputCBs output_cbs = reduce_fct<scale_fp32, Sq_chunk_t, vDHt>(
         cb_out_o,

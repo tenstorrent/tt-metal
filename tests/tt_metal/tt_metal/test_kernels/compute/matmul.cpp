@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
 #include "experimental/circular_buffer.h"
@@ -21,7 +22,8 @@ void kernel_main() {
     experimental::CircularBuffer cb1(tt::CBIndex::c_1);
     experimental::CircularBuffer cb16(tt::CBIndex::c_16);
 
-    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
 
     acquire_dst();
     for (uint32_t b = 0; b < block_cnt; ++b) {

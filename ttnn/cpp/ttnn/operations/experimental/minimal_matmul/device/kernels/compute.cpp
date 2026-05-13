@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/untilize.h"
 #include "api/compute/tilize.h"
 #include "api/compute/matmul.h"
@@ -355,7 +356,8 @@ void kernel_main() {
     SFPU_OP_INIT_ACTIVATION
 #endif
 
-    mm_init(in0_cb, in1_cb, intermediate_cb);
+    compute_kernel_hw_startup(in0_cb, in1_cb, intermediate_cb);
+    mm_init(in0_cb, in1_cb);
 
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
@@ -383,7 +385,7 @@ void kernel_main() {
             current_N_block_tiles = n_tile_end - n_tile;
             current_subblock_w = std::min(current_N_block_tiles, subblock_w);
 
-            mm_block_init_short(
+            mm_init(
                 in0_cb,
                 in1_cb,
                 false /*transpose*/,

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
 #ifdef ARCH_QUASAR
@@ -39,13 +40,15 @@ void kernel_main() {
     experimental::DataflowBuffer dfb1(1);
     experimental::DataflowBuffer dfb_out(2);
 
-    mm_init(dfb0.get_id(), dfb1.get_id(), dfb_out.get_id());
+    compute_kernel_hw_startup(dfb0.get_id(), dfb1.get_id(), dfb_out.get_id());
+    mm_init(dfb0.get_id(), dfb1.get_id());
 #else
     experimental::CircularBuffer cb0(tt::CBIndex::c_0);
     experimental::CircularBuffer cb1(tt::CBIndex::c_1);
     experimental::CircularBuffer cb16(tt::CBIndex::c_16);
 
-    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
 #endif
 
     // the simplest possible version of outer product blocked matmul

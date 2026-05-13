@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
 #include "experimental/circular_buffer.h"
@@ -29,7 +30,8 @@ void kernel_main() {
     experimental::CircularBuffer cb24(tt::CBIndex::c_24);
     experimental::CircularBuffer cb16(tt::CBIndex::c_16);
 
-    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
     bool enable_reload = false;
 
     for (uint32_t block = 0; block < num_blocks; block++) {
@@ -50,7 +52,7 @@ void kernel_main() {
                         copy_tile(tt::CBIndex::c_24, i, i);
                     }
                     cb24.pop_front(out_subblock_num_tiles);
-                    mm_init_short(tt::CBIndex::c_0, tt::CBIndex::c_1);
+                    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
                 }
 
                 // Compute output sub-block from in0_subblock x in1_subblock

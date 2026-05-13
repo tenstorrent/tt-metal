@@ -218,9 +218,10 @@ void kernel_main() {
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
-        mm_init_short(cb_q_in, cb_k_in);
+        mm_init(cb_q_in, cb_k_in);
     } else {
-        mm_init(cb_q_in, cb_k_in, cb_qk_im);
+        compute_kernel_hw_startup(cb_q_in, cb_k_in, cb_qk_im);
+        mm_init(cb_q_in, cb_k_in);
     }
     cb_wait_front(cb_q_in, q_chunk_tiles);
 

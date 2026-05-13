@@ -46,7 +46,7 @@ void kernel_main() {
 #if defined FP32_DEST_ACC_EN
                     reconfig_data_format(cb_input, cb_scaler);
 #endif
-                    mm_init_short(cb_input, cb_scaler, false);
+                    mm_init(cb_input, cb_scaler, false);
                     matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
 
                     cb_pop_front(cb_input, onetile);
@@ -102,7 +102,7 @@ void kernel_main() {
 #if defined FP32_DEST_ACC_EN
             reconfig_data_format(cb_input, cb_scaler);
 #endif
-            mm_init_short(cb_input, cb_scaler, false);
+            mm_init(cb_input, cb_scaler, false);
             matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
             tile_regs_commit();
 

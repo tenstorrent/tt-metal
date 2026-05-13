@@ -11,6 +11,7 @@
 //            insertion-sort topk → softmax → pack final output
 
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_binary.h"
@@ -79,10 +80,10 @@ void kernel_main() {
     // NOTE: dst_full_sync_en = false (half-sync mode). We use tile_regs_*
     // consistently throughout the kernel for correctness. acquire_dst/release_dst
     // must NOT be mixed with tile_regs_* in half-sync mode.
-    mm_block_init(
+    compute_kernel_hw_startup(cb_input, cb_weight, cb_local_out);
+    mm_init(
         cb_input,
         cb_weight,
-        cb_local_out,
         /*transpose=*/0,
         /*ct_dim=*/1,
         /*rt_dim=*/1,

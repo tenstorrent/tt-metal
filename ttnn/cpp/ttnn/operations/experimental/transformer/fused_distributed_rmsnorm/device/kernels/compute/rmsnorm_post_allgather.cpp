@@ -13,6 +13,7 @@
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
@@ -42,7 +43,8 @@ void kernel_main() {
     constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(18);
 
     const uint32_t num_tile_rows_to_process = get_arg_val<uint32_t>(0);
-    mm_init(intermediate_cb, transformation_mat_cb, rotated_input_cb);
+    compute_kernel_hw_startup(intermediate_cb, transformation_mat_cb, rotated_input_cb);
+    mm_init(intermediate_cb, transformation_mat_cb);
 
     binary_op_init_common(input_cb, input_cb, input_cb);
 
@@ -169,7 +171,7 @@ void kernel_main() {
                  */
                 reconfig_data_format(transformation_mat_cb, intermediate_cb);
                 pack_reconfig_data_format(rotated_input_cb);
-                mm_init_short(intermediate_cb, transformation_mat_cb);
+                mm_init(intermediate_cb, transformation_mat_cb);
                 cb_wait_front(intermediate_cb, block_size);
                 cb_reserve_back(rotated_input_cb, block_size);
                 tile_regs_acquire();

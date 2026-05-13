@@ -8,6 +8,7 @@
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
 
@@ -94,7 +95,8 @@ void kernel_main() {
 
     constexpr uint32_t cb_chunk_start_idx = tt::CBIndex::c_8;
     uint32_t chunked_q_chunk_offset = 0;
-    mm_init(cb_q_in, cb_k_in, cb_out);
+    compute_kernel_hw_startup(cb_q_in, cb_k_in, cb_out);
+    mm_init(cb_q_in, cb_k_in);
 
     if constexpr (is_chunked) {
         if (use_chunk_start_idx_tensor != 0) {

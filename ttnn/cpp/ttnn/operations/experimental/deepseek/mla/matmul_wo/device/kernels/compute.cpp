@@ -6,6 +6,7 @@
 #include "tt-metalium/constants.hpp"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
 
 void kernel_main() {
@@ -56,7 +57,8 @@ void kernel_main() {
     reconfig_data_format_srca(cb_r2c_w);
 
     // Initialize matmul
-    mm_block_init(cb_s2c_in, cb_r2c_w, cb_c2w_out, /*transpose=*/false, /*ct_dim=*/7, /*rt_dim=*/1, /*kt_dim=*/1);
+    compute_kernel_hw_startup(cb_s2c_in, cb_r2c_w, cb_c2w_out);
+    mm_init(cb_s2c_in, cb_r2c_w, /*transpose=*/false, /*ct_dim=*/7, /*rt_dim=*/1, /*kt_dim=*/1);
 
     //---------------------------------------------------------------------
     // Compute in @ W

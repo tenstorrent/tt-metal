@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tilize.h"
@@ -61,12 +62,13 @@ void kernel_main() {
     constexpr uint32_t in0_num_blocks_w = 1; // TODO: Generalize
 
     // need switching between ColMajor and RowMajor for at least 32 times, inefficient
+    compute_kernel_hw_startup(cb_in0, cb_in1, cb_intermed0);
     #ifdef ARCH_GRAYSKULL
-    mm_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
+    mm_init(cb_in0, cb_in1, transpose_hw);
     #else
     // TODO: switch back to matmul block after didt solved
-    mm_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
-    // mm_block_init(cb_in0, cb_in1, cb_intermed0, transpose_hw, out_subblock_w, out_subblock_h, in0_block_w);
+    mm_init(cb_in0, cb_in1, transpose_hw);
+    // mm_init(cb_in0, cb_in1, transpose_hw, out_subblock_w, out_subblock_h, in0_block_w);
     #endif
 
     for (uint32_t b = 0; b < batch; b++) {

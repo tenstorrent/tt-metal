@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
 
 void kernel_main() {
@@ -25,7 +26,8 @@ void kernel_main() {
     constexpr uint32_t out_cb_id = tt::CBIndex::c_16;
 
     for (uint32_t l = 0; l < num_layers; ++l) {
-        mm_block_init(in0_cb_id, in1_cb_id, out_cb_id, false, out_block_w, out_block_h, in0_block_w);
+        compute_kernel_hw_startup(in0_cb_id, in1_cb_id, out_cb_id);
+        mm_init(in0_cb_id, in1_cb_id, false, out_block_w, out_block_h, in0_block_w);
 
         tile_regs_acquire();
 

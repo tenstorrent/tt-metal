@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
 #include "experimental/circular_buffer.h"
@@ -31,7 +32,8 @@ void kernel_main() {
     experimental::CircularBuffer in1_cb(cb_in1);
     experimental::CircularBuffer out_cb(cb_out);
 
-    mm_init(cb_in0, cb_in1, cb_out);
+    compute_kernel_hw_startup(cb_in0, cb_in1, cb_out);
+    mm_init(cb_in0, cb_in1);
 
     // the simplest possible version of outer product blocked matmul
     // the reader is expected to read the A's and B's tile rows and tile columns for each output tile

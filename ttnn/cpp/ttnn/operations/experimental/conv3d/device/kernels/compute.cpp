@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include <tt-metalium/constants.hpp>
 
 #include "api/compute/untilize.h"
@@ -33,7 +34,7 @@ void matmul_blocks(
     // precondition: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
-    mm_block_init_short(
+    mm_init(
         in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
     uint32_t output_num_tiles = M * N;
@@ -165,7 +166,8 @@ void kernel_main() {
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
     constexpr uint32_t batch_tiles = subblock_h * matmul_K_t;
 
-    mm_init(cb_vol2col_tiled, cb_weight_tiled, cb_matmul_interm_tiled);
+    compute_kernel_hw_startup(cb_vol2col_tiled, cb_weight_tiled, cb_matmul_interm_tiled);
+    mm_init(cb_vol2col_tiled, cb_weight_tiled);
 
     // Load range parameters
     uint32_t argidx = 0;

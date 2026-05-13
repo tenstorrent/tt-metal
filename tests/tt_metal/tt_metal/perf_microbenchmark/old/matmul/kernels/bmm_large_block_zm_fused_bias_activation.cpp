@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
 
@@ -38,7 +39,8 @@ void kernel_main() {
     init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(mm_bias_intermediate_cb_id, bias_cb_id, out_cb_id);
 #endif
 
-    mm_init(in0_cb_id, in1_cb_id, out_cb_id);
+    compute_kernel_hw_startup(in0_cb_id, in1_cb_id, out_cb_id);
+    mm_init(in0_cb_id, in1_cb_id);
 
     for (uint32_t b = 0; b < batch; b++) {
         bool spill = num_blocks > 1;
@@ -65,7 +67,7 @@ void kernel_main() {
                         }
                         cb_pop_front(mm_partials_cb_id, out_subblock_num_tiles);
                         // Reconfigure srcA back
-                        mm_init_short_with_dt(in0_cb_id, in1_cb_id, mm_partials_cb_id);
+                        mm_init_with_dt(in0_cb_id, in1_cb_id, mm_partials_cb_id);
                     }
 
                     // Compute output sub-block from in0_subblock x in1_subblock
@@ -113,7 +115,7 @@ void kernel_main() {
                         }
                         cb_pop_front(mm_bias_intermediate_cb_id, out_subblock_num_tiles);
                         // reconfigure init for matmul
-                        mm_init_short(in0_cb_id, in1_cb_id);
+                        mm_init(in0_cb_id, in1_cb_id);
                         // reconfigure unpacker df for src B
                         reconfig_data_format(in1_cb_id, in0_cb_id);
 #endif

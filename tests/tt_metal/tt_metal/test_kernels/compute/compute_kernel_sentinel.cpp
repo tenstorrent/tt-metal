@@ -42,14 +42,16 @@ void kernel_main() {
     binary_dest_reuse_tiles_init(cb_in2);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
-    mm_init(cb_in0, cb_in1, cb_out1);
-    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
-
-    mm_block_init_short(cb_in1, cb_in0);
+    // mm_init no longer performs hw_configure (the pack reconfig has moved to
+    // compute_kernel_hw_startup), so it only records SRCA/SRCB reconfigs.
+    mm_init(cb_in0, cb_in1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
 
-    mm_block_init(cb_in0, cb_in1, cb_out0);
-    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
+    mm_init(cb_in1, cb_in0);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
+
+    mm_init(cb_in0, cb_in1);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
 
     init_bcast<ELWADD, BroadcastType::NONE>(cb_in2, cb_in1, cb_out1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
