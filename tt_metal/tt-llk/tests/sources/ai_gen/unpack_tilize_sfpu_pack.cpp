@@ -73,14 +73,8 @@ void run_kernel(RUNTIME_PARAMETERS /*params*/)
     _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(0, formats.math, formats.math);
 
     // Step 2: Initialize and perform SFPU unary operation on the copied data
-    _llk_math_eltwise_unary_sfpu_init_<SFPU_UNARY_OPERATION>();
-    _llk_math_eltwise_unary_sfpu_start_<DST_SYNC>(0);
-
-    // Execute the specific SFPU operation
-    test_utils::call_sfpu_operation_32(SFPU_UNARY_OPERATION);
-
-    // Complete SFPU operation
-    _llk_math_eltwise_unary_sfpu_done_();
+    test_utils::call_unary_sfpu_operation_init<SFPU_UNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en, 32>();
+    test_utils::call_unary_sfpu_operation<DST_SYNC, is_fp32_dest_acc_en, SFPU_UNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en, 32>(0, formats.math);
 
     // Signal completion to packer
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();

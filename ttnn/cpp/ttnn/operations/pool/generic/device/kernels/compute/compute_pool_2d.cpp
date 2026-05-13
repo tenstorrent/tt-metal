@@ -208,7 +208,7 @@ void kernel_main() {
 
                     fast_tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
                     fast_tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
-                    fast_tilize_uninit(pre_tilize_cb_id, out_cb_id);
+                    fast_tilize_uninit(pre_tilize_cb_id, out_cb_id, in_ntiles_c);
 
                     out_cb.push_back(in_ntiles_c);
                     pre_tilize_cb.pop_front(TILE_HEIGHT * in_ntiles_c);

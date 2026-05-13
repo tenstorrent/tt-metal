@@ -23,49 +23,48 @@ void kernel_main() {
     experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_src;
     uint32_t ublock_size_tiles = 1;
 
-    // single-tile ublocks
-    #ifdef ARCH_QUASAR
-        constexpr uint32_t dfb_in0_id = get_compile_time_arg_val(0);
-        constexpr uint32_t dfb_in1_id = get_compile_time_arg_val(1);
-        experimental::DataflowBuffer dfb0(dfb_in0_id);
-        experimental::DataflowBuffer dfb1(dfb_in1_id);
-        uint32_t ublock_size_bytes_0 = dfb0.get_entry_size() * ublock_size_tiles;
-        uint32_t ublock_size_bytes_1 = dfb1.get_entry_size() * ublock_size_tiles;
-    #else
-        constexpr uint32_t cb_id_in0 = 0;
-        constexpr uint32_t cb_id_in1 = 1;
-        experimental::CircularBuffer cb0(cb_id_in0);
-        experimental::CircularBuffer cb1(cb_id_in1);
-        uint32_t ublock_size_bytes_0 = cb0.get_tile_size() * ublock_size_tiles;
-        uint32_t ublock_size_bytes_1 = cb1.get_tile_size() * ublock_size_tiles;
-    #endif
+// single-tile ublocks
+#ifdef ARCH_QUASAR
+    constexpr uint32_t dfb_in0_id = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_in1_id = get_compile_time_arg_val(1);
+    experimental::DataflowBuffer dfb0(dfb_in0_id);
+    experimental::DataflowBuffer dfb1(dfb_in1_id);
+    uint32_t ublock_size_bytes_0 = dfb0.get_entry_size() * ublock_size_tiles;
+    uint32_t ublock_size_bytes_1 = dfb1.get_entry_size() * ublock_size_tiles;
+#else
+    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t cb_id_in1 = 1;
+    experimental::CircularBuffer cb0(cb_id_in0);
+    experimental::CircularBuffer cb1(cb_id_in1);
+    uint32_t ublock_size_bytes_0 = cb0.get_tile_size() * ublock_size_tiles;
+    uint32_t ublock_size_bytes_1 = cb1.get_tile_size() * ublock_size_tiles;
+#endif
 
     // read ublocks from src0/src1 to CB0/CB1, then push ublocks to compute (unpacker)
     for (uint32_t i=0; i<num_tiles; i += ublock_size_tiles) {
         uint64_t src0_noc_addr = get_noc_addr_from_bank_id<true>(src0_bank_id, src0_addr);
         uint64_t src1_noc_addr = get_noc_addr_from_bank_id<true>(src1_bank_id, src1_addr);
 
-        #ifdef ARCH_QUASAR
-            dfb0.reserve_back(ublock_size_tiles);
-            dfb1.reserve_back(ublock_size_tiles);
-            noc.async_read(dram_src, dfb0, ublock_size_bytes_0, {.bank_id = src0_bank_id, .addr = src0_addr}, {});
-            noc.async_read(dram_src, dfb1, ublock_size_bytes_1, {.bank_id = src1_bank_id, .addr = src1_addr}, {});
-            noc.async_read_barrier();
-            dfb0.push_back(ublock_size_tiles);
-            dfb1.push_back(ublock_size_tiles);
-        #else
-            cb0.reserve_back(ublock_size_tiles);
-            cb1.reserve_back(ublock_size_tiles);
-            noc.async_read(dram_src, cb0, ublock_size_bytes_0, {.bank_id = src0_bank_id, .addr = src0_addr}, {});
-            noc.async_read(dram_src, cb1, ublock_size_bytes_1, {.bank_id = src1_bank_id, .addr = src1_addr}, {});
-            noc.async_read_barrier();
-            cb0.push_back(ublock_size_tiles);
-            cb1.push_back(ublock_size_tiles);
-        #endif
+#ifdef ARCH_QUASAR
+        dfb0.reserve_back(ublock_size_tiles);
+        dfb1.reserve_back(ublock_size_tiles);
+        noc.async_read(dram_src, dfb0, ublock_size_bytes_0, {.bank_id = src0_bank_id, .addr = src0_addr}, {});
+        noc.async_read(dram_src, dfb1, ublock_size_bytes_1, {.bank_id = src1_bank_id, .addr = src1_addr}, {});
+        noc.async_read_barrier();
+        dfb0.push_back(ublock_size_tiles);
+        dfb1.push_back(ublock_size_tiles);
+#else
+        cb0.reserve_back(ublock_size_tiles);
+        cb1.reserve_back(ublock_size_tiles);
+        noc.async_read(dram_src, cb0, ublock_size_bytes_0, {.bank_id = src0_bank_id, .addr = src0_addr}, {});
+        noc.async_read(dram_src, cb1, ublock_size_bytes_1, {.bank_id = src1_bank_id, .addr = src1_addr}, {});
+        noc.async_read_barrier();
+        cb0.push_back(ublock_size_tiles);
+        cb1.push_back(ublock_size_tiles);
+#endif
         src0_addr += ublock_size_bytes_0;
         src1_addr += ublock_size_bytes_1;
     }
-
 
     // This input populates dest with values before binary operation
     // executes, this is used to test eltwise binary with dest re-use

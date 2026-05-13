@@ -81,7 +81,11 @@ constexpr uint32_t MIN_BLOCKED_PACK_TILES = 8;
 ALWI bool should_use_blocked_pack_width(uint32_t pack_width) { return pack_width >= MIN_BLOCKED_PACK_TILES; }
 
 ALWI void configure_pack_width(uint32_t cb, uint32_t pack_width) {
-    PACK((llk_pack_mop_config<false, false, false>(cb, pack_width)));
+    PACK((llk_pack_init<
+          false /* untilize */,
+          false /* zero_output */,
+          false /* tilize */,
+          true /* skip_addrmod_config */>(cb, pack_width)));
 }
 
 ALWI void configure_single_tile_pack(uint32_t cb) { configure_pack_width(cb, 1); }

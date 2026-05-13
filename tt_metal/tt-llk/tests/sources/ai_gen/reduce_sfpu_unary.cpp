@@ -103,12 +103,8 @@ void run_kernel(RUNTIME_PARAMETERS /*params*/)
     //------------------------------------------------------------------
     // 2) SFPU unary directly on the reduced result in dest regs
     //------------------------------------------------------------------
-    _llk_math_eltwise_unary_sfpu_init_<SFPU_UNARY_OPERATION>();
-    _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncFull>(0);
-
-    test_utils::call_sfpu_operation_32(SFPU_UNARY_OPERATION);
-
-    _llk_math_eltwise_unary_sfpu_done_();
+    test_utils::call_unary_sfpu_operation_init<SFPU_UNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en, 32>();
+    test_utils::call_unary_sfpu_operation<DstSync::SyncFull, is_fp32_dest_acc_en, SFPU_UNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en, 32>(0, formats.math);
     _llk_math_dest_section_done_<DstSync::SyncFull, is_fp32_dest_acc_en>();
 }
 

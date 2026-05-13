@@ -107,6 +107,23 @@ struct DeviceStorage::MeshTensorHolder {
 
 DeviceStorage::DeviceStorage() : mesh_tensor_holder_(std::make_shared<MeshTensorHolder>()) {}
 
+DeviceStorage::DeviceStorage(DeviceStorage&& other) noexcept :
+    mesh_tensor_holder_(std::move(other.mesh_tensor_holder_)),
+    coords_(std::move(other.coords_)),
+    root_mesh_tensor_holder_(std::move(other.root_mesh_tensor_holder_)) {
+    other.mesh_tensor_holder_ = std::make_shared<MeshTensorHolder>();
+}
+
+DeviceStorage& DeviceStorage::operator=(DeviceStorage&& other) noexcept {
+    if (this != &other) {
+        mesh_tensor_holder_ = std::move(other.mesh_tensor_holder_);
+        coords_ = std::move(other.coords_);
+        root_mesh_tensor_holder_ = std::move(other.root_mesh_tensor_holder_);
+        other.mesh_tensor_holder_ = std::make_shared<MeshTensorHolder>();
+    }
+    return *this;
+}
+
 DeviceStorage::DeviceStorage(MeshTensor mesh_tensor) :
     mesh_tensor_holder_(std::make_shared<MeshTensorHolder>(std::move(mesh_tensor))),
     coords_(CMAKE_UNIQUE_NAMESPACE::get_all_mesh_coordinates(get_mesh_tensor().device())) {}
