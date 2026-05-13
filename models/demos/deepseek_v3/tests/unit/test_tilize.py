@@ -99,7 +99,7 @@ def test_tilize_with_val_padding(mesh_device, in_shape, out_shape, pad_val, dtyp
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 10000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
+    "device_params", [{"trace_region_size": 11000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
 )
 def test_tilize_fp8(mesh_device, shape, input_dtype, output_dtype, mem_config, layout, enable_trace):
     # Create FP8 input tensor in PyTorch
