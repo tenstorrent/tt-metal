@@ -315,11 +315,6 @@ MoEComputeMeshWorkloadFactory::create_at(
     const auto combine_data_parallel_cores = args.combine_params.num_data_parallel_cores;
 
     const uint32_t intermediate_size = args.intermediate_size;
-    TT_FATAL(
-        intermediate_size > 0 && intermediate_size % 32 == 0,
-        "intermediate_size ({}) must be a positive multiple of 32 (TILE_SIZE)",
-        intermediate_size);
-
     const uint32_t hidden_tiles = hidden_size / 32;
     const uint32_t intermediate_tiles = intermediate_size / 32;
 
@@ -340,13 +335,6 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     const uint32_t tilize_num_cores = tilize_core_range_set.num_cores();
     const uint32_t matmul_num_cores = matmul_core_range_set.num_cores();
-
-    TT_FATAL(
-        intermediate_tiles >= matmul_num_cores,
-        "intermediate_size ({}) must yield at least 1 tile per ring core ({} tiles < {} cores)",
-        intermediate_size,
-        intermediate_tiles,
-        matmul_num_cores);
 
     // IN2_TILES_PER_STEP = ceil(intermediate_tiles / matmul_num_cores)
     const uint32_t a2a_cb_pages_raw = (intermediate_tiles + matmul_num_cores - 1) / matmul_num_cores;

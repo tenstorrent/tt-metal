@@ -9,6 +9,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_align.hpp>
 
 namespace ttnn::experimental::prim {
@@ -81,6 +82,26 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     const auto max_tokens = detail::TOKEN_SIZE * combine_data_parallel_cores * combine_token_parallel_cores;
     TT_FATAL(
         max_tokens >= total_tokens, "Too many tokens in input, got: {} but expected max: {}", total_tokens, max_tokens);
+
+    // Validate intermediate_size
+    const uint32_t intermediate_size = args.intermediate_size;
+    TT_FATAL(
+        intermediate_size > 0 && intermediate_size % 32 == 0,
+        "intermediate_size ({}) must be a positive multiple of 32 (TILE_SIZE)",
+        intermediate_size);
+
+    // Validate intermediate_tiles >= matmul_num_cores (at least 1 tile per ring core)
+    auto* mesh_device = tensor_args.tilize_input_tensor.device();
+    const auto matmul_cores =
+        mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
+    const uint32_t matmul_num_cores = matmul_cores.size();
+    const uint32_t intermediate_tiles = intermediate_size / 32;
+    TT_FATAL(
+        intermediate_tiles >= matmul_num_cores,
+        "intermediate_size ({}) must yield at least 1 tile per ring core ({} tiles < {} cores)",
+        intermediate_size,
+        intermediate_tiles,
+        matmul_num_cores);
 }
 
 MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::compute_output_specs(
