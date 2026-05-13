@@ -6,7 +6,10 @@
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "gtest/gtest.h"
+#include <functional>
 #include <map>
+#include <memory>
+#include <vector>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "hostdevcommon/common_values.hpp"
@@ -24,6 +27,7 @@ struct SharedDevices {
     std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device;
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices;
     bool initialized {false};
+    bool needs_recovery {false};
 };
 
 // A dispatch-agnostic test fixture
@@ -53,11 +57,13 @@ private:
             shared.devices.push_back(device);
         }
         shared.initialized = true;
+        shared.needs_recovery = false;
     }
 
     static void destroy_shared_devices() {
         auto& shared = get_shared_devices();
         if (!shared.initialized) {
+            shared.needs_recovery = false;
             return;
         }
 
@@ -68,6 +74,7 @@ private:
         shared.id_to_device.clear();
         shared.devices.clear();
         shared.initialized = false;
+        shared.needs_recovery = false;
     }
 
 public:
@@ -113,6 +120,8 @@ protected:
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE, size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) :
         l1_small_size_{l1_small_size}, trace_region_size_{trace_region_size} {};
 
+    // Derived fixtures should override TestSuite SetUp/TearDown if different device instantiation
+    // is needed
     static void SetUpTestSuite() {
         // Create a shared device to reduce individual test startup time
         create_shared_devices();
@@ -124,19 +133,25 @@ protected:
 
     void SetUp() override {
         auto& shared = get_shared_devices();
+        if (shared.needs_recovery) {
+            destroy_shared_devices();
+        }
         if (!shared.initialized) {
             SetUpTestSuite();
         }
         this->devices_ = shared.devices;
 
         this->DetectDispatchMode();
-        this->arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        this->max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
+        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        this->max_cbs_ = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
     }
 
     void TearDown() override {
         // Devices are owned by the suite-shared state; per-test instances only hold borrowed shared_ptr copies.
         devices_.clear();
+        if (HasFailure()) {
+            get_shared_devices().needs_recovery = true;
+        }
     }
 
     void RunTestOnDevice(
