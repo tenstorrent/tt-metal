@@ -117,11 +117,12 @@ def test_mistral_small_4_prefill_smoke(reset_seeds, mesh_device):
         input_ids,
         state_dict["language_model.model.embed_tokens.weight"].to(torch.bfloat16),
     )
-    pos_emb = rotary(hidden0, position_ids)
+    cos_full, sin_full = rotary(hidden0, position_ids)
+    model.cache_rope_tables(cos_full, sin_full)
 
     logger.info(f"Running TTNN prefill (seq_len={seq_len})...")
     _log_mem("before prefill")
-    logits = model.prefill(input_ids, pos_emb)
+    logits = model.prefill(input_ids)
     _log_mem("after prefill")
 
     assert logits.shape == (
