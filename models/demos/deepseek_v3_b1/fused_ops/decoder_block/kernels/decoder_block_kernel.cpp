@@ -2573,15 +2573,21 @@ void kernel_main() {
             deepseek_b1_ops::MoeGather::ComputeArgs ag_args{};
             deepseek_b1_ops::MoeGather::ComputeArgs bg_args{};
 
-            // Gated Reduce (compute)
-            using GatedReduceCTArgs = deepseek_b1_ops::GatedReduce::ComputeCTArgs<
-                get_named_compile_time_arg_val("shared_gated_reduce_tiles_per_k"),
-                get_named_compile_time_arg_val("shared_gated_reduce_k_num_tiles")>;
+            // Gated Reduce (compute). Template = (TilesPerK, EnableScalar=0).
+            // k_num_tiles is a *runtime* field of ComputeArgs (not a template param) —
+            // decoder previously passed it as the 2nd template arg (mistakenly aliased to
+            // EnableScalar) AND omitted it from the args constructor, so k_num_tiles was 0
+            // → GR loop ran 0 iterations → no push to mcast_src_cb → SHARED_DOWN_MCAST
+            // BRISC sender hung on cb_wait_front(src_cb).
+            using GatedReduceCTArgs = deepseek_b1_ops::GatedReduce::ComputeCTArgs<get_named_compile_time_arg_val(
+                "shared_gated_reduce_tiles_per_k")>;
             deepseek_b1_ops::GatedReduce::ComputeArgs gated_reduce_args{
                 get_named_compile_time_arg_val("shared_gated_reduce_group1_cb"),
                 get_named_compile_time_arg_val("shared_gated_reduce_group2_cb"),
                 get_named_compile_time_arg_val("shared_gated_reduce_intermed_cb"),
                 get_named_compile_time_arg_val("shared_gated_reduce_mcast_src_cb"),
+                /*scalar_cb=*/0,  // shared path: no per-expert scale
+                get_named_compile_time_arg_val("shared_gated_reduce_k_num_tiles"),
             };
 
             // Down Mcast — compute no-op
@@ -3335,9 +3341,11 @@ void kernel_main() {
             Core::Shared::is_gated_reduce_core || Core::Shared::is_gate_compute_core ||
             Core::Shared::is_up_compute_core || Core::Shared::is_mcast_receiver_core ||
             Core::Routed::is_gate_proj_streamer_core || Core::Routed::is_down_proj_streamer_core) {
-            constexpr uint32_t sram_gather_num_active =
-                get_named_compile_time_arg_val("sram_gather_num_active_experts");
-            n_dram_active = sram_gather_num_active - n_sram_active;
+            // Base = total TopK / chunk count. Was previously sram_gather_num_active_experts
+            // which op.py emits as 0 when SRAM isn't placed → routing-no-SRAM got
+            // n_dram_active=0 → entire DRAM chain skipped → bad PCC / hang.
+            constexpr uint32_t num_active = get_named_compile_time_arg_val("gate_proj_num_active_experts");
+            n_dram_active = num_active - n_sram_active;
         }
 
         // 5b. Mcast Expert Scale: Broadcast expert scale to gate_proj cores. Skipped when

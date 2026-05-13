@@ -1751,9 +1751,13 @@ void kernel_main() {
             Core::Shared::is_gate_compute_core || Core::Shared::is_up_compute_core ||
             Core::Shared::is_mcast_receiver_core || Core::Routed::is_gate_proj_streamer_core ||
             Core::Routed::is_down_proj_streamer_core) {
-            constexpr uint32_t sram_gather_num_active =
-                get_named_compile_time_arg_val("sram_gather_num_active_experts");
-            n_dram_active = sram_gather_num_active - n_sram_active;
+            // Base = total TopK / chunk count. Was previously sram_gather_num_active_experts,
+            // but op.py emits that as 0 when SRAM isn't placed (it's tied to the SRAM gate
+            // setup, not the TopK count). For routing-without-SRAM, n_sram_active=0 and
+            // base=0 would give n_dram_active=0 → entire DRAM chain skips via
+            // dram_invoke_* → output drops the routed contribution → PCC tanks.
+            constexpr uint32_t num_active = get_named_compile_time_arg_val("gate_proj_num_active_experts");
+            n_dram_active = num_active - n_sram_active;
         }
 
         // 5b. Mcast Expert Scale: Broadcast expert scale to gate_proj cores.
