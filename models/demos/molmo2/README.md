@@ -177,12 +177,15 @@ curl http://localhost:8000/v1/chat/completions \
     "temperature": 0
   }'
 
-# Run 105-video benchmark suite against a running server
+# Run 105-video benchmark suite against a running server.
+# galaxy_t3k / t3k servers are batch=1 (max_concurrency=1) — use --concurrency 1.
+# For 4-way chassis throughput run 4 servers on ports 8000-8003 and bench each
+# with --concurrency 1 in parallel (see "4x parallel" section above).
 python models/demos/molmo2/verification/run_dp4_concurrent.py \
     --server http://localhost:8000 \
     --tests models/demos/molmo2/verification/test.jsonl \
     --baseline models/demos/molmo2/verification/test_results.jsonl \
-    --output /tmp/results.jsonl --concurrency 4
+    --output /tmp/results.jsonl --concurrency 1
 ```
 
 **Key server configuration** (`tt-inference-server/workflows/model_spec.py`):
