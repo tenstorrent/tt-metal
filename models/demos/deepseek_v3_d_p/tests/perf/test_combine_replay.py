@@ -151,11 +151,16 @@ def test_combine_replay(mesh_device, num_links, topology, capture_file):
         f"num_links={num_links}"
     )
 
-    # Buffer: use captured real values if present (rare; only when TT_DS_CAPTURE_COMBINE_FULL_BUFFER=1
-    # at capture time), otherwise synthesize a zero buffer of the right shape. Combine kernel
-    # cycle count is independent of buffer byte values, so dummy data gives the same perf.
+    # Buffer source: if the .pt has real captured bytes (only when TT_DS_CAPTURE_COMBINE_FULL_BUFFER=1
+    # at capture time), shard them onto the mesh. Otherwise allocate directly on device with
+    # ttnn.empty — zero host RAM, per-chip uninitialized bfloat8_b. Combine kernel only reads
+    # buffer bytes to multiply by a (captured) weight and write to a (captured) destination;
+    # uninitialized values produce garbage output but the per-iteration cycle count and fabric
+    # traffic pattern are identical to a real-data run. This is the same pattern used in
+    # test_ttnn_routed_expert.py (the "fast path" branch) — it avoids the 24 GB host allocation
+    # that the bf16-on-host route would require at 25K isl.
     if "dispatched_buffer" in blob:
-        buffer_source = "captured real values"
+        buffer_source = f"captured real values, host shape {tuple(blob['dispatched_buffer'].shape)} sharded onto mesh"
         tt_buf = ttnn.from_torch(
             blob["dispatched_buffer"],
             mesh_mapper=get_ep_mesh_mapper(mesh_device),
@@ -164,23 +169,17 @@ def test_combine_replay(mesh_device, num_links, topology, capture_file):
             dtype=ttnn.bfloat8_b,
         )
     else:
-        buf_shape = cfg["buffer_shape"]  # (1, dgs, experts_per_chip, max_tokens, emb_dim)
-        # Replicate a small per-device buffer instead of allocating the full per-column tensor
-        # on host (which would be ~23 GB at 25K isl). Each LB device gets identical zeros.
-        per_device_shape = [1, 1] + list(buf_shape[2:])  # (1, 1, experts_per_chip, max_tokens, emb_dim)
+        buf_shape = cfg["buffer_shape"]  # 4D: (1, dgs, max_dispatch_buffer_token_size, emb_dim)
+        per_device_shape = [1, 1] + list(buf_shape[2:])  # (1, 1, max_dispatch_buffer_token_size, emb_dim)
         buffer_source = (
-            f"synthesized zeros, per-device shape {tuple(per_device_shape)} replicated to "
-            f"{mesh_device.get_num_devices()} chips"
+            f"ttnn.empty on device, per-device shape {tuple(per_device_shape)} bfloat8_b " f"(no host allocation)"
         )
-        dummy_per_device = torch.zeros(per_device_shape, dtype=torch.bfloat16)
-        tt_buf = ttnn.from_torch(
-            dummy_per_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        tt_buf = ttnn.empty(
+            per_device_shape,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
-            dtype=ttnn.bfloat8_b,
         )
-        del dummy_per_device
     logger.info(f"[replay] buffer pushed to device: {buffer_source}")
 
     logger.info(f"[replay] pushing metadata {tuple(blob['dispatched_metadata'].shape)} int32...")

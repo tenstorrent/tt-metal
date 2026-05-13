@@ -1,4 +1,4 @@
-TT_DS_CAPTURE_COMBINE_LAYERS=3,20,40,55 TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/ TT_DS_COMBINE_CAPTURE_DIR=/data/nmilicevic/combine_captures TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528 python -m pytest -xvs models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py -k "pretrained and smoke and e256_device_fp32 and mesh-8x4 and 61_layers and longbook_qa_eng and 25600 and iter1 and balanced and right_pad"
+TT_DS_CAPTURE_COMBINE_LAYERS=all TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/ TT_DS_COMBINE_CAPTURE_DIR=/data/nmilicevic/combine_captures_1k TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528 python -m pytest -xvs models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py -k "pretrained and smoke and e256_device_fp32 and mesh-8x4 and 61_layers and longbook_qa_eng and 1024 and iter1 and balanced and right_pad"
 
 
 # Combine op: Galaxy → LoudBox ethernet measurement workflow
