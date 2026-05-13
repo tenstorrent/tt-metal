@@ -45,7 +45,8 @@ targets:
         - gpt_oss
         - wan2_2
         - deepseek_v3
-      trace: [9, 15, 13]
+        - qwen3-32b_3
+      trace: [9, 15, 13, 23]
 
   model_traced:
     - model:
@@ -198,7 +199,7 @@ registry:
     notes: 'flux 1 dev via pytest models/tt_dit/tests/models/flux1/test_pipeline_flux1.py   -k "4x8sp0tp1 and encoder_device and 28 and yes_use_cache and not not_traced"'
 
   - trace_id: 23
-    status: draft
+    status: active
     models: [qwen3-32b_3]
     hardware: {board_type: Wormhole, device_series: tt-galaxy-wh, card_count: 32}
     trace_uid: fea8b85d-4bd3-44e1-a7a5-0a758ecda3a2

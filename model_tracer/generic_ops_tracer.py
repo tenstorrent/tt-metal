@@ -1610,11 +1610,21 @@ Examples (Import existing traces):
             filtered_operations = []
 
             print(f"\n📝 Processing {len(result['trace_files'])} trace files...")
+            # Python-wrapper ops that delegate to a different C++ op.
+            # Remap BEFORE the valid_operations filter so the aliased name
+            # passes the filter (e.g. avg_pool2d -> global_avg_pool2d).
+            _COLLECT_ALIASES = {
+                "ttnn.avg_pool2d": "ttnn.global_avg_pool2d",
+            }
+
             for json_file in tqdm(result["trace_files"], desc="Converting JSONs", unit="file"):
                 operation = convert_json_to_master_format(json_file, test_source, machine_info)
                 if operation:
                     all_operations.append(operation)
                     op_name = operation.get("operation", "")
+                    if op_name in _COLLECT_ALIASES:
+                        op_name = _COLLECT_ALIASES[op_name]
+                        operation["operation"] = op_name
                     if is_valid_operation(op_name, valid_operations, excluded_operations):
                         filtered_operations.append(operation)
 
