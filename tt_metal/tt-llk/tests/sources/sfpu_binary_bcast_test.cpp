@@ -81,7 +81,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
         INPUT_TILE_B, formats.math, formats.math);
 
-    _llk_math_eltwise_binary_sfpu_start_<DST_SYNC>(0);
+    _llk_math_eltwise_binary_sfpu_start_(0);
 
     _sfpu_binary_bcast_init_<BCAST_DIM>();
 

@@ -1471,11 +1471,9 @@ uint32_t detail::ProgramImpl::create_semaphore(const CoreRangeSet& crs, uint32_t
         MetalContext::instance().is_coord_in_range(crs.ranges().back().end_coord, core_type),
         "Coordinates out of range");
 
-    // The allocated ID must be free on every core in crs. Find the max ID that's free on each
-    // range (they each return the smallest free ID on their cores) and use that everywhere.
     std::optional<uint32_t> semaphore_id;
+    std::bitset<NUM_SEMAPHORES> used_semaphore_ids;
     for (const auto& core_range : crs.ranges()) {
-        std::vector<uint32_t> semaphore_histogram(NUM_SEMAPHORES, 0);
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 CoreCoord logical_core(x, y);
@@ -1487,21 +1485,22 @@ uint32_t detail::ProgramImpl::create_semaphore(const CoreRangeSet& crs, uint32_t
                         NUM_SEMAPHORES);
                 }
                 for (const auto& semaphore : existing) {
-                    semaphore_histogram[semaphore.get().id()]++;
+                    used_semaphore_ids.set(semaphore.get().id());
                 }
             }
         }
-        std::optional<uint32_t> candidate;
-        for (uint32_t sem_id = 0; sem_id < semaphore_histogram.size(); sem_id++) {
-            if (semaphore_histogram[sem_id] == 0) {
-                candidate = sem_id;
-                break;
-            }
-        }
-        TT_FATAL(candidate.has_value(), "Unable to initialize semaphores on core range {}", core_range.str());
-        semaphore_id = semaphore_id.has_value() ? std::max(*semaphore_id, *candidate) : candidate;
     }
-    TT_FATAL(semaphore_id.has_value(), "Unable to initialize Semaphore!");
+    for (uint32_t sem_id = 0; sem_id < NUM_SEMAPHORES; sem_id++) {
+        if (!used_semaphore_ids.test(sem_id)) {
+            semaphore_id = sem_id;
+            break;
+        }
+    }
+    TT_FATAL(
+        semaphore_id.has_value(),
+        "Unable to initialize semaphore on CoreRangeSet {}: all {} IDs are in use",
+        crs.str(),
+        NUM_SEMAPHORES);
 
     this->add_semaphore(crs, *semaphore_id, initial_value, core_type);
     return *semaphore_id;

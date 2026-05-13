@@ -20,7 +20,20 @@
 #include <cstring>
 #include <sys/mman.h>
 #include <unistd.h>
+#if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
+#else
+// The hugepage D2H path requires explicit cache-line eviction (_mm_clflush + _mm_lfence)
+// because device PCIe writes may be non-snooped on WH.  This is x86-specific.
+// init_host_buffer_hugepage() will TT_FATAL before any of these are reached on non-x86;
+// stubs exist solely to allow the translation unit to compile.
+static inline void _mm_clflush(const void*) noexcept {
+    TT_THROW("D2H hugepage cache flush is x86-only and should never be reached on this architecture");
+}
+static inline void _mm_lfence() noexcept {
+    TT_THROW("D2H hugepage cache flush is x86-only and should never be reached on this architecture");
+}
+#endif
 
 namespace tt::tt_metal::distributed {
 
@@ -70,6 +83,13 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
 }
 
 D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer_hugepage(const std::shared_ptr<MeshDevice>& mesh_device) {
+#if !defined(__x86_64__) && !defined(__i386__)
+    // Cache management for WB + non-snooped PCIe DMA is x86-specific (clflush + lfence).
+    // WH — the only architecture that takes this hugepage path — is x86-only, so this
+    // should never be reachable on other architectures.
+    TT_FATAL(false, "D2H hugepage path is not supported on non-x86 architectures");
+    return {};
+#endif
     using_hugepage_ = true;
 
     auto* device = mesh_device->get_device(sender_core_.device_coord);

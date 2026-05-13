@@ -82,11 +82,19 @@ CombineProgramFactory::cached_mesh_workload_t CombineProgramFactory::create_mesh
                                                                             : tt::tt_metal::BufferType::L1;
     auto init_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(
         mesh_device, operation_attributes.worker_core_range_set, 0, sem_buffer_type);
+    auto exit_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(
+        mesh_device, operation_attributes.worker_core_range_set, 0, sem_buffer_type);
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
 
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(
-            operation_attributes, coord, tensor_args, tensor_return_value, tensor_coords, init_barrier_semaphore);
+            operation_attributes,
+            coord,
+            tensor_args,
+            tensor_return_value,
+            tensor_coords,
+            init_barrier_semaphore,
+            exit_barrier_semaphore);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(coord, std::move(cached_program.shared_variables));
     }
@@ -99,7 +107,8 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     const CombineInputs& tensor_args,
     ttnn::Tensor& tensor_return_value,
     const MeshCoordinateRangeSet& tensor_coords,
-    const GlobalSemaphore& init_semaphore) {
+    const GlobalSemaphore& init_semaphore,
+    const GlobalSemaphore& exit_semaphore) {
     tt::tt_metal::Program program{};
 
     const auto& dispatched_buffer = tensor_args.dispatched_buffer;
@@ -944,6 +953,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             output_tensor.buffer()->address(),
             zero_init_semaphore_id,
             (uint32_t)init_semaphore.address(),
+            (uint32_t)exit_semaphore.address(),
             zero_init_barrier_semaphore_id,
             num_cores,
             expert_start,
@@ -1019,6 +1029,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
          .zero_init_cores = zero_init_cores_vec,
          .idle_cores = idle_row_cores,
          .init_semaphore = init_semaphore,
+         .exit_semaphore = exit_semaphore,
          .zero_init_semaphore_id = zero_init_semaphore_id,
          .zero_init_barrier_semaphore_id = zero_init_barrier_semaphore_id,
          .counter_ready_semaphore_id = counter_ready_semaphore_id,
@@ -1052,6 +1063,7 @@ void CombineProgramFactory::override_runtime_arguments(
             writer_runtime_args.at(3) = tensor_args.expert_region_offsets.buffer()->address();
             writer_runtime_args.at(4) = tensor_return_value.buffer()->address();
             writer_runtime_args.at(6) = (uint32_t)shared_variables.init_semaphore.address();
+            writer_runtime_args.at(7) = (uint32_t)shared_variables.exit_semaphore.address();
         }
 
         for (const auto& core : shared_variables.zero_init_cores) {

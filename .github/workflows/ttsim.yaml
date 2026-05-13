@@ -21,7 +21,7 @@ on:
       ttsim-version:
         required: false
         type: string
-        default: "v1.5.6"
+        default: "v1.5.7"
       job-timeout:
         required: false
         type: number
@@ -275,8 +275,22 @@ jobs:
 
       # Note: The skip list YAML is available from the full checkout above (line 227-230).
       # No sparse checkout is needed because the ttnn-pytests job does a full checkout with submodules.
+      - name: Check arch_skip_groups
+        id: arch-skip
+        run: |
+          ARCH="${{ matrix.arch.name }}"
+          GROUP="${{ matrix.test-group.name }}"
+          SKIP_GROUPS=$(yq -r ".arch_skip_groups.${ARCH}[]?" "$TTSIM_SKIP_LIST_YAML" 2>/dev/null || true)
+          if printf '%s\n' "$SKIP_GROUPS" | grep -Fxq -- "$GROUP"; then
+            echo "::notice::Skipping test group '${GROUP}' for arch '${ARCH}' per arch_skip_groups in ${TTSIM_SKIP_LIST_YAML}"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build skip list arguments
         id: skip-list
+        if: steps.arch-skip.outputs.skip != 'true'
         run: |
           ARCH="${{ matrix.arch.name }}"
           SKIP_ARGS=$(yq -r ".${ARCH}[]" "$TTSIM_SKIP_LIST_YAML" | sed 's/^/--deselect=/' | tr '\n' ' ' | sed 's/[[:space:]]*$//')
@@ -285,6 +299,7 @@ jobs:
           echo "skip_args=${SKIP_ARGS}" >> "$GITHUB_OUTPUT"
 
       - name: Run TTNN Pytests - ${{ matrix.test-group.name }}
+        if: steps.arch-skip.outputs.skip != 'true'
         run: |
           # Run pytest with parallel execution, pytest-level timeouts disabled (more harm than good on sim), and skip list.
           # If a worker crashes, pytest-xdist only reports "worker crashed"
