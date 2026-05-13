@@ -232,7 +232,11 @@ class TestConfig:
     # TensixProcessorTypes::COUNT (5 on WH/BH, 24 on Quasar).
     # Subject to change once debug print is removed; it can be turned into a flat buffer
     # sized independently of thread count.
-    DEVICE_PRINT_BUFFER_BASE: ClassVar[int] = 0x13000
+    # 0x15000 fits the L1 gap between TRISC2_LOADER_INIT_MEM end and
+    # RUNTIME_ARGS_START (0x20000) on BH/WH/Quasar non-coverage layouts.
+    # Coverage builds extend TRISC sections past this address; device print
+    # is disabled under coverage so the conflict doesn't matter.
+    DEVICE_PRINT_BUFFER_BASE: ClassVar[int] = 0x15000
     DEVICE_PRINT_PER_THREAD_SIZE: ClassVar[int] = (
         1024  # matches DPRINT_BUFFER_SIZE in dprint.h
     )
@@ -531,6 +535,16 @@ class TestConfig:
         if test_name is None:
             raise RuntimeError(
                 "test_name argument needs to be passed in order to resolve which C++ file is compiled"
+            )
+
+        if (
+            device_print_build == DevicePrintBuild.Yes
+            and self.coverage_build == CoverageBuild.Yes
+        ):
+            raise RuntimeError(
+                "device_print_build=Yes is not supported under coverage builds: "
+                "the coverage linker scripts grow TRISC sections past the device "
+                "print buffer slot. Disable coverage or device print."
             )
 
         if TestConfig.SPEED_OF_LIGHT:
@@ -1244,11 +1258,12 @@ class TestConfig:
 
         # Zero the device print buffer before each kernel run so the
         # first DEVICE_PRINT() observes a clean wpos=rpos=0 state.
-        write_words_to_device(
-            TestConfig.TENSIX_LOCATION,
-            TestConfig.DEVICE_PRINT_BUFFER_BASE,
-            [0] * (TestConfig.DEVICE_PRINT_BUFFER_SIZE // 4),
-        )
+        if self.device_print_build == DevicePrintBuild.Yes:
+            write_words_to_device(
+                TestConfig.TENSIX_LOCATION,
+                TestConfig.DEVICE_PRINT_BUFFER_BASE,
+                [0] * (TestConfig.DEVICE_PRINT_BUFFER_SIZE // 4),
+            )
 
         if (
             TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR

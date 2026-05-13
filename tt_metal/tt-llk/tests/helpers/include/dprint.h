@@ -8,10 +8,12 @@
 
 #pragma once
 
-#ifdef DEBUG_PRINT_ENABLED
+#if defined(DEBUG_PRINT_ENABLED) && !defined(COVERAGE)
 
 #include <cstdint>
 
+// This mapping is arbitrary; currently it loosely mirrors Metal, but
+// it doesn't need to. It just needs to agree with device_print.py.
 #if defined(LLK_TRISC_UNPACK)
 #define PROCESSOR_INDEX 2
 #elif defined(LLK_TRISC_MATH)
@@ -23,7 +25,12 @@
 #endif
 
 // Mirrored in tests/python_tests/helpers/test_config.py.
-#define LLK_DEVICE_PRINT_BUFFER_BASE 0x13000 // Consumed by dprint_buffer.h
+// Disabled under COVERAGE: coverage linker scripts grow TRISC sections way
+// past this slot, so device print can't share L1 with them.
+// The header is guarded to compile out device print under coverage.
+// The alternative would require a lot more hacks; the only proper solution
+// is fixing the LLK infra memory layout across the board.
+#define LLK_DEVICE_PRINT_BUFFER_BASE 0x15000 // Consumed by dprint_buffer.h
 #define DPRINT_BUFFER_SIZE           1024    // Overrides dprint_common.h
 
 #define USE_DEVICE_PRINT
