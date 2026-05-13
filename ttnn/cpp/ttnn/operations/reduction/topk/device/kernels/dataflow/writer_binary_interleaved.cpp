@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // Runtime args
@@ -32,9 +32,9 @@ void kernel_main() {
     const auto values_tensor_accessor = TensorAccessor(values_tensor_args, dst_addr0);
     const auto indices_tensor_accessor = TensorAccessor(indices_tensor_args, dst_addr1);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer values_cb(values_cb_index);
-    experimental::CircularBuffer indices_cb(output_ind_cb_index);
+    Noc noc;
+    CircularBuffer values_cb(values_cb_index);
+    CircularBuffer indices_cb(output_ind_cb_index);
 
     // Get Kt rows of values and then Kt rows of indices from compute kernel
     for (uint32_t core_loop = 0; core_loop < work_per_core; core_loop++) {

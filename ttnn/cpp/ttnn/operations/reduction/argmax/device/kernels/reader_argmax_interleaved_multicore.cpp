@@ -4,12 +4,12 @@
 #include "argmax_common.hpp"
 #include "api/numeric/bfloat16.h"
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/endpoints.h"
-#include "experimental/noc_semaphore.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/tensor/noc_traits.h"
 
 #include <cstdint>
 
@@ -39,7 +39,7 @@
  */
 template <bool reduce_all, DataFormat data_format, typename AddrGen, typename SrcCb>
 inline void find_argmax_for_core(
-    const experimental::Noc& noc,
+    const Noc& noc,
     const uint32_t inner_dim_units,
     const uint32_t outer_idx,
     const uint32_t src_offset,
@@ -306,12 +306,12 @@ void kernel_main() {
     const auto s_src = TensorAccessor(s_src_args, src_base_addr);
     const auto s_dst = TensorAccessor(s_dst_args, dst_base_addr);
 
-    experimental::Noc noc;
-    experimental::UnicastEndpoint remote;
-    experimental::CircularBuffer src_cb(src_cb_idx);
-    experimental::CircularBuffer dst_cb(dst_cb_idx);
-    experimental::CircularBuffer red_idx_cb(red_idxs_cb_idx);
-    experimental::CircularBuffer red_val_cb(red_vals_cb_idx);
+    Noc noc;
+    UnicastEndpoint remote;
+    CircularBuffer src_cb(src_cb_idx);
+    CircularBuffer dst_cb(dst_cb_idx);
+    CircularBuffer red_idx_cb(red_idxs_cb_idx);
+    CircularBuffer red_val_cb(red_vals_cb_idx);
 
     // CB in L1 memory for storing input
     constexpr DataFormat src_cb_addr_data_format = get_dataformat(src_cb_idx);
@@ -344,8 +344,8 @@ void kernel_main() {
         "Partial result buffer must use the same data format as values.");
 
     // Semaphores
-    experimental::Semaphore<> start_sem(start_sem_idx);
-    experimental::Semaphore<> done_sem(done_sem_idx);
+    Semaphore<> start_sem(start_sem_idx);
+    Semaphore<> done_sem(done_sem_idx);
 
     uint32_t max_idx = 0;
     auto max_val = get_default_value<src_cb_addr_data_format>();
@@ -361,12 +361,12 @@ void kernel_main() {
 
             if constexpr (num_cores > 1) {
                 if (k > 0) {
-                    start_sem.set_multicast<experimental::Noc::McastMode::INCLUDE_SRC>(
+                    start_sem.set_multicast<Noc::McastMode::INCLUDE_SRC>(
                         noc, start_core_x0, start_core_y0, end_core_x0, end_core_y0, num_cores0);
                 }
 
                 if (num_cores1 > 0) {
-                    start_sem.set_multicast<experimental::Noc::McastMode::EXCLUDE_SRC>(
+                    start_sem.set_multicast<Noc::McastMode::EXCLUDE_SRC>(
                         noc, start_core_x1, start_core_y1, end_core_x1, end_core_y1, num_cores1);
                 }
 
@@ -400,13 +400,13 @@ void kernel_main() {
             // We now write these local values to the equivalent position in the reduction core
             if (core_id != reduce_core_id) {
                 noc.async_write(
-                    experimental::use<experimental::CircularBuffer::AddrSelector::WRITE_PTR>(red_idx_cb),
+                    use<CircularBuffer::AddrSelector::WRITE_PTR>(red_idx_cb),
                     remote,
                     red_idx_size_per_core,
                     {.offset_bytes = red_idx_offset},
                     {.noc_x = reduce_core_x, .noc_y = reduce_core_y, .addr = red_idx_cb_local_addr});
                 noc.async_write(
-                    experimental::use<experimental::CircularBuffer::AddrSelector::WRITE_PTR>(red_val_cb),
+                    use<CircularBuffer::AddrSelector::WRITE_PTR>(red_val_cb),
                     remote,
                     red_val_size_per_core,
                     {.offset_bytes = red_val_offset},
@@ -434,7 +434,7 @@ void kernel_main() {
                 }
 
                 noc.async_write(
-                    experimental::use<experimental::CircularBuffer::AddrSelector::WRITE_PTR>(dst_cb),
+                    use<CircularBuffer::AddrSelector::WRITE_PTR>(dst_cb),
                     s_dst,
                     dst_page_size,
                     {.offset_bytes = 0},
@@ -451,13 +451,13 @@ void kernel_main() {
         // We now write these local values to the equivalent position in the reduction core
         if (core_id != reduce_core_id) {
             noc.async_write(
-                experimental::use<experimental::CircularBuffer::AddrSelector::WRITE_PTR>(red_idx_cb),
+                use<CircularBuffer::AddrSelector::WRITE_PTR>(red_idx_cb),
                 remote,
                 red_idx_size_per_core,
                 {.offset_bytes = red_idx_offset},
                 {.noc_x = reduce_core_x, .noc_y = reduce_core_y, .addr = red_idx_cb_local_addr});
             noc.async_write(
-                experimental::use<experimental::CircularBuffer::AddrSelector::WRITE_PTR>(red_val_cb),
+                use<CircularBuffer::AddrSelector::WRITE_PTR>(red_val_cb),
                 remote,
                 red_val_size_per_core,
                 {.offset_bytes = red_val_offset},
@@ -482,7 +482,7 @@ void kernel_main() {
                 red_idx_size_per_core);
 
             noc.async_write(
-                experimental::use<experimental::CircularBuffer::AddrSelector::WRITE_PTR>(dst_cb),
+                use<CircularBuffer::AddrSelector::WRITE_PTR>(dst_cb),
                 s_dst,
                 dst_page_size,
                 {.offset_bytes = 0},

@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include <tt-metalium/constants.hpp>
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -36,10 +36,10 @@ void kernel_main() {
     constexpr DataFormat seeds_tensor_data_format = get_dataformat(seeds_cb_index);
     const auto seeds_tensor_dram = TensorAccessor(seeds_tensor_accessor_args, seeds_tensor_buffer_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer user_ids_cb(user_ids_cb_index);
-    experimental::CircularBuffer seeds_cb(seeds_cb_index);
-    experimental::CircularBuffer kernel_communication_cb(kernel_communication_cb_index);
+    Noc noc;
+    CircularBuffer user_ids_cb(user_ids_cb_index);
+    CircularBuffer seeds_cb(seeds_cb_index);
+    CircularBuffer kernel_communication_cb(kernel_communication_cb_index);
 
     // Read user_id from circular buffer
     user_ids_cb.reserve_back(one_tile);
@@ -57,8 +57,8 @@ void kernel_main() {
     // Process user_ids
     uint32_t seed = 0;
     bool is_user_id = false;
-    experimental::CoreLocalMem<volatile uint32_t> user_id(l1_write_addr_index);
-    experimental::CoreLocalMem<volatile uint32_t> seeds(seeds_l1_write_addr_index);
+    CoreLocalMem<volatile uint32_t> user_id(l1_write_addr_index);
+    CoreLocalMem<volatile uint32_t> seeds(seeds_l1_write_addr_index);
     for (uint32_t id = 0; id < number_of_ids; ++id) {
         if (core_id == user_id[id]) {
             is_user_id = true;  // Indicate match
@@ -69,7 +69,7 @@ void kernel_main() {
 
     // Prepare message for compute kernel
     kernel_communication_cb.reserve_back(one_tile);
-    experimental::CoreLocalMem<volatile uint32_t> communication_ptr(kernel_communication_cb.get_write_ptr());
+    CoreLocalMem<volatile uint32_t> communication_ptr(kernel_communication_cb.get_write_ptr());
     communication_ptr[0] = is_user_id ? 1 : 0;
     communication_ptr[1] = is_user_id ? seed : 0;
 

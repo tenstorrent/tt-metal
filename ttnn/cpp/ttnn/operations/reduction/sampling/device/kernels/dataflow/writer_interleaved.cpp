@@ -5,10 +5,10 @@
 #include "api/numeric/bfloat16.h"
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
@@ -73,15 +73,15 @@ void kernel_main() {
         calculate_and_prepare_reduce_scaler<scaler_sum_cb_id, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
     // read k, p, temp
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_k(cb_id_k);
-    experimental::CircularBuffer cb_p(cb_id_p);
-    experimental::CircularBuffer cb_temp(cb_id_temp);
-    experimental::CircularBuffer cb_rand(rand_tile_index);
-    experimental::CircularBuffer cb_final_indices(output_final_indices_rm_cb_index);
-    experimental::CircularBuffer cb_local_values(output_local_values_cb_index);
-    experimental::CircularBuffer cb_local_indices(output_local_indices_cb_index);
-    experimental::CircularBuffer cb_out(cb_id_out);
+    Noc noc;
+    CircularBuffer cb_k(cb_id_k);
+    CircularBuffer cb_p(cb_id_p);
+    CircularBuffer cb_temp(cb_id_temp);
+    CircularBuffer cb_rand(rand_tile_index);
+    CircularBuffer cb_final_indices(output_final_indices_rm_cb_index);
+    CircularBuffer cb_local_values(output_local_values_cb_index);
+    CircularBuffer cb_local_indices(output_local_indices_cb_index);
+    CircularBuffer cb_out(cb_id_out);
 
     const auto addrg_k = TensorAccessor(k_args, k_addr);
     cb_k.reserve_back(1);
@@ -90,7 +90,7 @@ void kernel_main() {
     noc.async_read(addrg_k, cb_k, k_chunk_size, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
     cb_k.push_back(1);
-    experimental::CoreLocalMem<volatile uint32_t> k_ptr(cb_id_k_ptr);
+    CoreLocalMem<volatile uint32_t> k_ptr(cb_id_k_ptr);
     // Index into the chunk to get this core's value
     uint32_t k = k_ptr[core_id];
 
@@ -101,7 +101,7 @@ void kernel_main() {
     noc.async_read(addrg_p, cb_p, p_chunk_size, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
     cb_p.push_back(1);
-    experimental::CoreLocalMem<volatile uint16_t> p_ptr(cb_id_p_ptr);
+    CoreLocalMem<volatile uint16_t> p_ptr(cb_id_p_ptr);
     // Index into the chunk to get this core's value
     uint32_t p = p_ptr[core_id];
 
@@ -113,7 +113,7 @@ void kernel_main() {
     noc.async_read_barrier();
     // cb_temp.push_back(1);
 
-    experimental::CoreLocalMem<volatile uint16_t> temp_ptr(cb_id_temp_ptr);
+    CoreLocalMem<volatile uint16_t> temp_ptr(cb_id_temp_ptr);
     // Index into the chunk to get this core's value
     uint16_t temp = temp_ptr[core_id];
     uint32_t temp_packed = (static_cast<uint32_t>(temp) << 16) + static_cast<uint32_t>(temp);
@@ -123,22 +123,21 @@ void kernel_main() {
     generate_mask<cb_id_mask, one>(one, ids_per_batch / 32, k - 1);
     // get random number
     cb_rand.wait_front(1);
-    experimental::CoreLocalMem<volatile uint16_t> rand_values(cb_rand.get_read_ptr());
+    CoreLocalMem<volatile uint16_t> rand_values(cb_rand.get_read_ptr());
     uint16_t rand = rand_values[0];
     // wait for compute kernel
     cb_final_indices.wait_front(32);
     cb_local_values.wait_front(1);
     cb_local_indices.wait_front(1);
     // Read producer-written compute outputs from these CBs in L1.
-    experimental::CoreLocalMem<volatile uint16_t> local_values(cb_local_values.get_read_ptr());
+    CoreLocalMem<volatile uint16_t> local_values(cb_local_values.get_read_ptr());
 
-    experimental::CoreLocalMem<volatile uint16_t> local_indices(cb_local_indices.get_read_ptr());
+    CoreLocalMem<volatile uint16_t> local_indices(cb_local_indices.get_read_ptr());
 
-    experimental::CoreLocalMem<volatile uint32_t> final_indices(
-        cb_final_indices.get_read_ptr() + core_id * final_indices_stick_size);
+    CoreLocalMem<volatile uint32_t> final_indices(cb_final_indices.get_read_ptr() + core_id * final_indices_stick_size);
 
     uint32_t out_addr = cb_out.get_write_ptr();
-    experimental::CoreLocalMem<volatile uint32_t> index_out(out_addr);
+    CoreLocalMem<volatile uint32_t> index_out(out_addr);
 
     uint32_t start_id_local_phase_0 = core_id * FACE_WIDTH;
     // each user is on 1 core, so core_id = user_id
@@ -232,7 +231,7 @@ void kernel_main() {
     const auto s_out = TensorAccessor(dst_args, dst_addr);
     // Write individual core result - output buffer should handle alignment
     noc.async_write(
-        experimental::use<experimental::CircularBuffer::AddrSelector::WRITE_PTR>(cb_out),
+        use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_out),
         s_out,
         4,
         {.offset_bytes = core_id * 4},

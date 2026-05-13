@@ -4,10 +4,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 /**
  * add a cb full of indices for the tile
  * each row is identical in the index tensor, so we just need to add an offset based on which row tile it is
@@ -16,9 +16,9 @@
  */
 FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
     // TODO: investigate moving to compile time (binary size is at risk)
-    experimental::CircularBuffer cb(cb_id);
+    CircularBuffer cb(cb_id);
     cb.reserve_back(1);
-    experimental::CoreLocalMem<volatile uint32_t> ptr(cb.get_write_ptr());
+    CoreLocalMem<volatile uint32_t> ptr(cb.get_write_ptr());
     uint16_t wt_offset = wt << 5;
 
     uint32_t count = 0;
@@ -60,9 +60,9 @@ void kernel_main() {
 
     const auto s1 = TensorAccessor(s1_args, indices_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer input_values_cb(input_values_cb_index);
-    experimental::CircularBuffer input_indices_cb(input_indices_cb_index);
+    Noc noc;
+    CircularBuffer input_values_cb(input_values_cb_index);
+    CircularBuffer input_indices_cb(input_indices_cb_index);
 
     uint32_t tile_id_input_values = 0;
     uint32_t tile_id_input_indices = 0;

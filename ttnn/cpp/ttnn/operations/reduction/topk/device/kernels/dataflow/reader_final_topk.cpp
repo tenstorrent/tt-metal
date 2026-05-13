@@ -4,9 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/noc_semaphore.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 
 void kernel_main() {
     // Compile time args
@@ -22,11 +22,11 @@ void kernel_main() {
     constexpr uint32_t final_values_cb_index = get_compile_time_arg_val(9);    // Aggregated TopK values
     constexpr uint32_t final_indices_cb_index = get_compile_time_arg_val(10);  // Aggregated TopK indices
 
-    experimental::Noc noc;
-    experimental::Semaphore<> receiver_sem(receiver_sem_id);
-    experimental::Semaphore<> sender_sem(sender_sem_id);
-    experimental::CircularBuffer final_values_cb(final_values_cb_index);
-    experimental::CircularBuffer final_indices_cb(final_indices_cb_index);
+    Noc noc;
+    Semaphore<> receiver_sem(receiver_sem_id);
+    Semaphore<> sender_sem(sender_sem_id);
+    CircularBuffer final_values_cb(final_values_cb_index);
+    CircularBuffer final_indices_cb(final_indices_cb_index);
 
     // Collect local TopK results from all cores
     for (uint32_t i = 0; i < Ht; ++i) {  // Process each height row
@@ -42,7 +42,7 @@ void kernel_main() {
         // Coordinate multicast reception
         // Enable all local cores to send their data simultaneously by broadcasting
         // the receiver semaphore state. This allows for efficient parallel transmission.
-        receiver_sem.set_multicast<experimental::Noc::McastMode::EXCLUDE_SRC>(
+        receiver_sem.set_multicast<Noc::McastMode::EXCLUDE_SRC>(
             noc, noc_start_x, noc_start_y, noc_end_x, noc_end_y, num_dests);
         noc.async_write_barrier();
 

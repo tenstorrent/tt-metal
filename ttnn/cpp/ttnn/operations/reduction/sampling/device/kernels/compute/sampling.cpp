@@ -18,7 +18,7 @@
 #include "api/compute/pack.h"
 #include "ckernel_sfpu.h"
 #include "api/compute/tilize.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 #define DEBUG_PRINT 0
@@ -27,7 +27,7 @@ using namespace ckernel;
 void generate_rand_tile(const uint32_t cb_id, const uint32_t seed) {
     init_sfpu(cb_id, cb_id);
 
-    experimental::CircularBuffer cb_obj(cb_id);
+    CircularBuffer cb_obj(cb_id);
 
     uint32_t rand_scale = 0;
     const float one_f = 1.0f;
@@ -57,8 +57,8 @@ void sub_exp_block_bcast_cols_inplace() {
     // Postcondition: in0_cb has rows*cols produced
     // Postcondition: in1_cb has rows produced
 
-    experimental::CircularBuffer in0_cb_obj(in0_cb);
-    experimental::CircularBuffer in1_cb_obj(in1_cb);
+    CircularBuffer in0_cb_obj(in0_cb);
+    CircularBuffer in1_cb_obj(in1_cb);
 
     sub_bcast_cols_init_short(in0_cb, in1_cb);
     exp_tile_init<true>();
@@ -91,8 +91,8 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles produced
-    experimental::CircularBuffer in0_cb_obj(in0_cb);
-    experimental::CircularBuffer in1_cb_obj(in1_cb);
+    CircularBuffer in0_cb_obj(in0_cb);
+    CircularBuffer in1_cb_obj(in1_cb);
 
     reconfig_data_format(in0_cb, in1_cb);
     add_tiles_init(in0_cb, in1_cb);
@@ -116,9 +116,9 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uin
     // Postcondition: in0_cb has rows*cols produced
     // Postcondition: in1_cb has rows consumed
 
-    experimental::CircularBuffer in0_cb_obj(in0_cb);
-    experimental::CircularBuffer in1_cb_obj(in1_cb);
-    experimental::CircularBuffer out_cb_obj(out_cb);
+    CircularBuffer in0_cb_obj(in0_cb);
+    CircularBuffer in1_cb_obj(in1_cb);
+    CircularBuffer out_cb_obj(out_cb);
 
     uint32_t num_tiles = rows * cols;
     mul_bcast_cols_init_short(in0_cb, in1_cb);
@@ -141,7 +141,7 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uin
 void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     // Precondition: in_cb has num_tiles produced
     // Postcondition: in_cb has num_tiles produced
-    experimental::CircularBuffer in_cb_obj(in_cb);
+    CircularBuffer in_cb_obj(in_cb);
 
     copy_tile_to_dst_init_short(in_cb);
     recip_tile_init();
@@ -202,12 +202,12 @@ void top_k() {
     constexpr uint32_t index_dest_end = 3;
     ckernel::topk_tile_init();
 
-    experimental::CircularBuffer input_cb(input_cb_index);
-    experimental::CircularBuffer index_cb(index_cb_index);
-    experimental::CircularBuffer input_transposed_cb(input_transposed_cb_index);
-    experimental::CircularBuffer index_transposed_cb(index_transposed_cb_index);
-    experimental::CircularBuffer values_cb(values_cb_index);
-    experimental::CircularBuffer output_ind_cb(output_ind_cb_index);
+    CircularBuffer input_cb(input_cb_index);
+    CircularBuffer index_cb(index_cb_index);
+    CircularBuffer input_transposed_cb(input_transposed_cb_index);
+    CircularBuffer index_transposed_cb(index_transposed_cb_index);
+    CircularBuffer values_cb(values_cb_index);
+    CircularBuffer output_ind_cb(output_ind_cb_index);
 
     if (first_call) {
         transpose_wh_init(input_cb_index, input_transposed_cb_index);
@@ -347,8 +347,8 @@ void mul_block_bcast_scalar_inplace() {
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_scalar_cb has 1 produced
 
-    experimental::CircularBuffer in0_cb_obj(in0_cb);
-    experimental::CircularBuffer in1_scalar_cb_obj(in1_scalar_cb);
+    CircularBuffer in0_cb_obj(in0_cb);
+    CircularBuffer in1_scalar_cb_obj(in1_scalar_cb);
 
     uint32_t dst_tiles = num_tiles;
     uint32_t granularity = 1;
@@ -419,7 +419,7 @@ void kernel_main() {
     // scale temperature
 
     // mask out all values except the top-k
-    experimental::CircularBuffer topk_mask_cb(topk_mask_cb_index);
+    CircularBuffer topk_mask_cb(topk_mask_cb_index);
     topk_mask_cb.wait_front(Kt);
     add_block_inplace(values_cb_index, topk_mask_cb_index, Ht * Kt);
     mul_block_bcast_scalar_inplace<values_cb_index, temp_cb_index, Ht * Kt>();

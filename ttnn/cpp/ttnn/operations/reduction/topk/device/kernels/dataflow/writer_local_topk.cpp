@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/endpoints.h"
-#include "experimental/noc_semaphore.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc_semaphore.h"
 
 void kernel_main() {
     // Runtime args
@@ -28,14 +28,14 @@ void kernel_main() {
     // Constants
     constexpr uint32_t onetile = 1;
 
-    experimental::Noc noc;
-    experimental::Semaphore<> receiver_sem(receiver_sem_id);
-    experimental::Semaphore<> sender_sem(sender_sem_id);
-    experimental::UnicastEndpoint remote;
-    experimental::CircularBuffer values_cb(values_cb_index);
-    experimental::CircularBuffer indices_cb(output_ind_cb_index);
-    experimental::CircularBuffer final_values_cb(final_values_cb_index);
-    experimental::CircularBuffer final_indices_cb(final_indices_cb_index);
+    Noc noc;
+    Semaphore<> receiver_sem(receiver_sem_id);
+    Semaphore<> sender_sem(sender_sem_id);
+    UnicastEndpoint remote;
+    CircularBuffer values_cb(values_cb_index);
+    CircularBuffer indices_cb(output_ind_cb_index);
+    CircularBuffer final_values_cb(final_values_cb_index);
+    CircularBuffer final_indices_cb(final_indices_cb_index);
 
     // Memory transfer configuration
     const uint32_t tile_bytes_values = get_tile_size(values_cb_index);

@@ -5,9 +5,9 @@
 #include "topk_dataflow_common.hpp"
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 #include <cstdint>
 
@@ -43,9 +43,9 @@ void kernel_main() {
     // Tensor accessor
     const auto inout_tensor_accessor = TensorAccessor(inout_tensor_args, src_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in0(cb_id_in0);
-    experimental::CircularBuffer cb_index(cb_intermed_index);
+    Noc noc;
+    CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_index(cb_intermed_index);
 
     // Read data and generate indices
     for (uint32_t core_loop = 0; core_loop < work_per_core; core_loop++) {

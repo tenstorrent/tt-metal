@@ -6,9 +6,9 @@
 #include "argmax_common.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 #include <stdint.h>
 
@@ -54,9 +54,9 @@ void kernel_main() {
 
     using dst_accessor_type = decltype(s_dst);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer src_cb(src_cb_idx);
-    experimental::CircularBuffer dst_cb(dst_cb_idx);
+    Noc noc;
+    CircularBuffer src_cb(src_cb_idx);
+    CircularBuffer dst_cb(dst_cb_idx);
 
     // CB for input data.
     const uint32_t src_cb_addr = src_cb.get_write_ptr();

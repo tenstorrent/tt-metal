@@ -3,9 +3,9 @@
 
 #include "argmax_common.hpp"
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 #include <stdint.h>
 
@@ -45,9 +45,9 @@ void kernel_main() {
     const auto s_src = TensorAccessor(s_src_args, src_base_addr);
     const auto s_dst = TensorAccessor(s_dst_args, dst_base_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer src_cb(src_cb_idx);
-    experimental::CircularBuffer dst_cb(dst_cb_idx);
+    Noc noc;
+    CircularBuffer src_cb(src_cb_idx);
+    CircularBuffer dst_cb(dst_cb_idx);
 
     // CB in L1 memory for storing input
     const uint32_t src_cb_addr = src_cb.get_write_ptr();
@@ -84,7 +84,7 @@ void kernel_main() {
 
         if constexpr (not reduce_all) {
             noc.async_write(
-                experimental::use<experimental::CircularBuffer::AddrSelector::WRITE_PTR>(dst_cb),
+                use<CircularBuffer::AddrSelector::WRITE_PTR>(dst_cb),
                 s_dst,
                 dst_page_size,
                 {.offset_bytes = 0},
@@ -97,7 +97,7 @@ void kernel_main() {
     if constexpr (reduce_all) {
         out_idxs[0] = max_idx;
         noc.async_write(
-            experimental::use<experimental::CircularBuffer::AddrSelector::WRITE_PTR>(dst_cb),
+            use<CircularBuffer::AddrSelector::WRITE_PTR>(dst_cb),
             s_dst,
             dst_page_size,
             {.offset_bytes = 0},

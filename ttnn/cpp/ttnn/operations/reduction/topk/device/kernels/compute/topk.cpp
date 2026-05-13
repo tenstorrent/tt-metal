@@ -9,7 +9,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 /**
  * Transpose tiles from width-height to height-width format and pack to destination buffer
@@ -21,8 +21,8 @@
  */
 FORCE_INLINE void transpose_and_pack(
     const uint32_t input_cb_index, const uint32_t dest_cb_index, const uint32_t total_tiles) {
-    experimental::CircularBuffer input_cb(input_cb_index);
-    experimental::CircularBuffer dest_cb(dest_cb_index);
+    CircularBuffer input_cb(input_cb_index);
+    CircularBuffer dest_cb(dest_cb_index);
 
     // Configure data formats for transpose operation.
     // Pack using the DESTINATION CB format: input_cb may be bf16 (higher-precision
@@ -94,7 +94,7 @@ FORCE_INLINE void read_cb_and_transpose(const uint32_t cb, const uint32_t base_o
  * @param count   Number of tiles to wait for and then remove from the front of the buffer
  */
 FORCE_INLINE void cb_wait_pop_front(const uint32_t cb, const uint32_t count) {
-    experimental::CircularBuffer cb_obj(cb);
+    CircularBuffer cb_obj(cb);
     cb_obj.wait_front(count);
     cb_obj.pop_front(count);
 }
@@ -107,7 +107,7 @@ FORCE_INLINE void cb_wait_pop_front(const uint32_t cb, const uint32_t count) {
  * @param count   Number of tile slots to reserve at the back and then mark as available
  */
 FORCE_INLINE void cb_reserve_push_back(const uint32_t cb, const uint32_t count) {
-    experimental::CircularBuffer cb_obj(cb);
+    CircularBuffer cb_obj(cb);
     cb_obj.reserve_back(count);
     cb_obj.push_back(count);
 }
@@ -135,12 +135,12 @@ void kernel_main() {
     transpose_wh_init(input_val_cb_index, output_val_cb_index);
     transpose_wh_init(input_ind_cb_index, output_ind_cb_index);
 
-    experimental::CircularBuffer input_val_cb(input_val_cb_index);
-    experimental::CircularBuffer input_ind_cb(input_ind_cb_index);
-    experimental::CircularBuffer transposed_val_cb(transposed_val_cb_index);
-    experimental::CircularBuffer transposed_ind_cb(transposed_ind_cb_index);
-    experimental::CircularBuffer result_prep_val_cb(result_prep_val_cb_index);
-    experimental::CircularBuffer result_prep_ind_cb(result_prep_ind_cb_index);
+    CircularBuffer input_val_cb(input_val_cb_index);
+    CircularBuffer input_ind_cb(input_ind_cb_index);
+    CircularBuffer transposed_val_cb(transposed_val_cb_index);
+    CircularBuffer transposed_ind_cb(transposed_ind_cb_index);
+    CircularBuffer result_prep_val_cb(result_prep_val_cb_index);
+    CircularBuffer result_prep_ind_cb(result_prep_ind_cb_index);
 
     constexpr uint32_t DST_VAL = 0;
     constexpr uint32_t DST_IND = 2;
@@ -304,8 +304,8 @@ void kernel_main() {
 
                 // Prepare data for merge operation
                 // Wait for required tiles to be available
-                experimental::CircularBuffer cb0_obj(cb0);
-                experimental::CircularBuffer cb1_obj(cb1);
+                CircularBuffer cb0_obj(cb0);
+                CircularBuffer cb1_obj(cb1);
                 cb0_obj.wait_front(in_cb_offset);  // Wait for existing sorted data
                 cb1_obj.wait_front(in_cb_offset);
                 if (transposed_offset == 0) {
