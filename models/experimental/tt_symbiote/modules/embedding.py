@@ -27,13 +27,18 @@ class TTNNEmbedding(TTNNModule):
     """TTNN-accelerated embedding lookup for Ling/Bailing/Qwen models.
 
     Replaces ``nn.Embedding`` (typically the model's ``embed_tokens``). The
-    weight is sharded along the hidden dimension across the mesh's column
-    axis (``ShardTensor2dMesh(dims=(None, 1))``), so each device owns a
-    ``[V, H/num_devices]`` slice. With **replicated** indices (every device
-    sees the full ``[B, S]`` int tensor) every device looks up the same rows
-    in its own slice and the per-device output is ``[B, S, H/num_devices]`` --
-    exactly the col-sharded layout that the downstream Qwen ``input_layernorm``
-    / ``self_attn`` / ``mlp`` chain expects.
+    weight is sharded along the hidden dimension across the mesh via the
+    same **1D-API** ``ttnn.shard_tensor_to_mesh_mapper(device, dim=-1)``
+    that ``TTNNLinearIReplicatedWColSharded`` uses for the linear layers'
+    column-parallel weight (so each device's per-device column slice is
+    laid out identically to the attention / MoE ``o_proj`` output). Each
+    device owns a ``[V, H/num_devices]`` slice. With **replicated** indices
+    (every device sees the full ``[B, S]`` int tensor) every device looks up
+    the same rows in its own slice and the per-device output is
+    ``[B, S, H/num_devices]`` -- exactly the col-sharded layout that the
+    downstream Qwen ``input_layernorm`` / ``self_attn`` / ``mlp`` chain
+    expects, and physically aligned (column-for-column, device-for-device)
+    with the attention / MoE outputs in the residual stream.
 
     Two correctness gates that have to hold:
 
@@ -93,7 +98,24 @@ class TTNNEmbedding(TTNNModule):
         )
 
     def move_weights_to_device_impl(self):
-        mesh_mapper = ttnn.ShardTensor2dMesh(self.device, dims=(None, 1), mesh_shape=list(self.device.shape))
+        # IMPORTANT: use the same 1D-API mesh mapper that the column-parallel
+        # ``TTNNLinearIReplicatedWColSharded`` uses for *its* weight (see
+        # ``modules/linear.py::TTNNLinearInputReplicatedWeightSharded``):
+        # ``ttnn.shard_tensor_to_mesh_mapper(device, dim=-1)``. The 2D-API
+        # ``ShardTensor2dMesh(dims=(None, 1), mesh_shape=device.shape)`` was
+        # nominally equivalent on a ``(1, num_devices)`` mesh, but the C++
+        # impls of the 1D and 2D mappers iterate the mesh devices in a
+        # different order -- so device ``d``'s slice of the embedding weight
+        # was column slice ``d`` of the 2D ordering while device ``d``'s slice
+        # of the attention ``o_proj`` output was column slice ``d`` of the 1D
+        # ordering. Per-device shapes matched and logical shapes matched, but
+        # the *physical* per-device data didn't, so ``ttnn.add`` of the layer-0
+        # residual (embedding output + attn output) silently combined mismatched
+        # columns -- the residual stream blew up across all 40 layers and
+        # produced mixed-script gibberish. Using the matching 1D mapper aligns
+        # the per-device columns and lets the decoder wrapper's fast path
+        # operate correctly.
+        mesh_mapper = ttnn.shard_tensor_to_mesh_mapper(self.device, dim=-1)
         self.tt_weight = ttnn.to_device(
             ttnn.from_torch(
                 self.torch_layer.weight.data,

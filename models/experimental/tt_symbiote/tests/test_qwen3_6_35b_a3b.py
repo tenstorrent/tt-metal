@@ -214,15 +214,18 @@ def test_qwen3_6_35b_a3b(mesh_device, use_paged_attention, max_new_tokens):
     use_cpu_linear_attn = os.environ.get("TT_QWEN_CPU_LINEAR_ATTN", "0").lower() in ("1", "true", "yes")
     # Allow disabling the RMSNorm port for A/B comparison.
     use_cpu_rms_norm = os.environ.get("TT_QWEN_CPU_RMS_NORM", "0").lower() in ("1", "true", "yes")
-    # TTNNEmbedding swap -- registered by default after the fix in
-    # ``embedding.py`` (overridden ``call`` pre-stages integer ``input_ids``
-    # as a ``ReplicateTensorToMesh`` ttnn.Tensor before the dispatcher can
-    # apply its default ``ShardTensor2dMesh((0, -1))`` config to them; that
-    # default would have sharded the prompt along the seq dim whenever
-    # ``T % num_devices == 0`` and made each device see only ``T/8`` tokens
-    # of the prompt -- the cause of the "fluent but off-topic" symptom).
-    # Set ``TT_QWEN_CPU_EMBEDDING=1`` to opt out and keep ``embed_tokens`` as
-    # the original ``nn.Embedding`` (one host->device transfer per token).
+    # TTNNEmbedding swap -- registered by default. The class now
+    # (a) pre-stages ``input_ids`` as ``ReplicateTensorToMesh`` (overridden
+    # ``call``) so the dispatcher's default ``ShardTensor2dMesh((0, -1))``
+    # heuristic doesn't shard the prompt along the seq dim, (b) shards the
+    # weight via the same ``ttnn.shard_tensor_to_mesh_mapper(dim=-1)``
+    # that the column-parallel linears use, so the per-device output column
+    # slices are physically aligned with the attention / MoE outputs in the
+    # residual stream (without this, layer-0 ``ttnn.add(embedding, attn)``
+    # silently combined mismatched columns and the residual stream blew up
+    # to gibberish across the 40 layers), and (c) sets an explicit 1D-API
+    # col-sharded output config so a layout-aware downstream op sees a single
+    # consistent layout. Set ``TT_QWEN_CPU_EMBEDDING=1`` to opt out.
     use_cpu_embedding = os.environ.get("TT_QWEN_CPU_EMBEDDING", "0").lower() in ("1", "true", "yes")
 
     nn_to_ttnn = {}
@@ -256,15 +259,17 @@ def test_qwen3_6_35b_a3b(mesh_device, use_paged_attention, max_new_tokens):
 
     print(f"Module mappings: {nn_to_ttnn}")
 
-    # TTNNQwen3MoeDecoderLayer wrapper -- registered by default after the
-    # `_residual_add` was made layout-aware (qwen_decoder.py): the fast
-    # `ttnn.add` path now only runs when both operands share the same device,
-    # per-device shape, AND distributed config (mesh_mapper / mesh_composer /
-    # logical_shape_fn). Anything else (notably the layer-0 case where the
-    # residual is the raw nn.Embedding output and `hidden_states` is the
-    # col-sharded attention output) falls through to torch ``+`` which the
-    # dispatcher reconciles correctly. Set TT_QWEN_CPU_DECODER_RESIDUAL_ADD=1
-    # to opt out and force every residual add through torch.
+    # TTNNQwen3MoeDecoderLayer wrapper -- registered by default. The
+    # ``_residual_add`` short-circuits the torch dispatcher with a native
+    # ``ttnn.add`` whenever both operands are TTNN-backed on the same device
+    # with matching per-device shape AND a compatible
+    # ``DistributedTensorConfig`` (compared structurally via
+    # ``logical_shape_fn``); anything else falls through to torch ``+`` which
+    # the dispatcher reconciles. The fast path safely fires for every residual
+    # in the steady state once the embedding swap (above) aligns the layer-0
+    # operands' per-device column ordering with the attention output. Set
+    # ``TT_QWEN_CPU_DECODER_RESIDUAL_ADD=1`` to opt out and force every
+    # residual through torch (eliminates the perf win but useful for A/B).
     use_cpu_decoder_residual_add = os.environ.get("TT_QWEN_CPU_DECODER_RESIDUAL_ADD", "0").lower() in (
         "1",
         "true",

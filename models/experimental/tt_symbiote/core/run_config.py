@@ -1075,14 +1075,20 @@ class TracedRun(LightweightRun):
 
         for arg_idx, arg in enumerate(func_args):
             if isinstance(arg, ttnn.Tensor):
+                original_layout = arg.get_layout()
                 host_tensor = arg.cpu() if arg.storage_type() != ttnn.StorageType.HOST else arg
                 trace_input = ttnn.to_device(host_tensor, device, memory_config=mem_config)
+                if trace_input.get_layout() != original_layout:
+                    trace_input = ttnn.to_layout(trace_input, original_layout, memory_config=mem_config)
                 trace_inputs.append(trace_input)
                 trace_func_args.append(trace_input)
             elif hasattr(arg, "ttnn_tensor") and arg.ttnn_tensor is not None:
                 t = arg.ttnn_tensor
+                original_layout = t.get_layout()
                 host_tensor = t.cpu() if t.storage_type() != ttnn.StorageType.HOST else t
                 trace_input = ttnn.to_device(host_tensor, device, memory_config=mem_config)
+                if trace_input.get_layout() != original_layout:
+                    trace_input = ttnn.to_layout(trace_input, original_layout, memory_config=mem_config)
                 trace_inputs.append(trace_input)
                 # Clone the wrapper and set trace input
                 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
@@ -1099,8 +1105,12 @@ class TracedRun(LightweightRun):
 
         def _alloc_kwarg_tensor(t):
             """Pre-allocate a single device buffer for a kwarg tensor."""
+            original_layout = t.get_layout()
             host = t.cpu() if t.storage_type() != ttnn.StorageType.HOST else t
-            return ttnn.to_device(host, device, memory_config=mem_config)
+            result = ttnn.to_device(host, device, memory_config=mem_config)
+            if result.get_layout() != original_layout:
+                result = ttnn.to_layout(result, original_layout, memory_config=mem_config)
+            return result
 
         for key, val in func_kwargs.items():
             if isinstance(val, ttnn.Tensor):

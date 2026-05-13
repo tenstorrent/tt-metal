@@ -1568,25 +1568,44 @@ class TTNNQwen3LinearAttention(TTNNModule):
 
         # === HYBRID FORWARD: TTNN projections + PyTorch DeltaNet kernel ===
 
-        # ALL-GATHER INPUT IF SHARDED: Ensure we have full hidden_size before projections
-        # The projections expect replicated input [batch, seq, hidden_size]
-        # If input is col-sharded (from previous MoE), all-gather it first
+        # ALL-GATHER INPUT IF SHARDED: Ensure we have full hidden_size before projections.
+        # _maybe_all_gather includes an explicit synchronize_device which is required
+        # because CCL (all_gather) and compute are on separate queues on TT hardware —
+        # without this sync the subsequent device matmuls may start before the CCL finishes.
         if self._is_distributed and not self._is_tensor_replicated(hidden_states):
             hidden_states = self._maybe_all_gather(hidden_states)
 
-        # Apply mask to hidden states (from PyTorch implementation)
+        # Read seq_len from shape metadata (no device sync needed — TTNN tracks this).
+        _input_seq: int = 1
+        try:
+            _input_seq = int(hidden_states.shape[-2])
+        except Exception:
+            pass
+
+        # Apply mask to hidden states only for prefill (seq_len > 1).
+        # During decode (seq_len == 1) apply_mask_to_padding_states is a no-op on causal
+        # padding, so skipping it eliminates one device→host→device round-trip per layer.
+        _mask_applied = False
         try:
             from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import apply_mask_to_padding_states
 
-            # After all-gather, input is REPLICATED (full hidden_size on each device)
-            # Use explicit replicated=True since we just all-gathered
-            hidden_states_pt = self._to_pytorch(hidden_states, replicated=True)
-            attention_mask_pt = self._to_pytorch(attention_mask)  # Auto-detect
-            hidden_states_masked = apply_mask_to_padding_states(hidden_states_pt, attention_mask_pt)
-            # Convert back to TTNN for projections
-            hidden_states_ttnn = self._to_ttnn(hidden_states_masked)
+            if _input_seq > 1:
+                hidden_states_pt = self._to_pytorch(hidden_states, replicated=True)
+                attention_mask_pt = self._to_pytorch(attention_mask)
+                hidden_states_masked = apply_mask_to_padding_states(hidden_states_pt, attention_mask_pt)
+                hidden_states_ttnn = self._to_ttnn(hidden_states_masked)
+                _mask_applied = True
         except ImportError:
-            hidden_states_ttnn = hidden_states
+            pass
+
+        if not _mask_applied:
+            # Decode path (or ImportError): use hidden_states directly as ttnn.Tensor.
+            if isinstance(hidden_states, ttnn.Tensor):
+                hidden_states_ttnn = hidden_states
+            elif hasattr(hidden_states, "ttnn_tensor") and hidden_states.ttnn_tensor is not None:
+                hidden_states_ttnn = hidden_states.ttnn_tensor
+            else:
+                hidden_states_ttnn = self._to_ttnn(self._to_pytorch(hidden_states, replicated=True))
 
         batch_size, seq_len, _ = hidden_states_ttnn.shape
 
@@ -1609,8 +1628,9 @@ class TTNNQwen3LinearAttention(TTNNModule):
             conv_state = cache_params.conv_states.get(self.layer_idx)
             recurrent_state = cache_params.recurrent_states.get(self.layer_idx)
 
-        # === TTNN Linear Projections ===
-        # Ensure tile layout for TTNN operations
+        # === Launch ALL TTNN projections before any sync or host transfer ===
+        # Dispatching all device ops first lets the hardware pipeline them; a single
+        # synchronize_device at the end drains everything before the host reads.
         if hidden_states_ttnn.layout != ttnn.TILE_LAYOUT:
             hidden_states_ttnn = ttnn.to_layout(
                 hidden_states_ttnn, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -1622,13 +1642,41 @@ class TTNNQwen3LinearAttention(TTNNModule):
         # Project: in_proj_z -> [batch, seq, value_dim]
         z_ttnn = self.in_proj_z(hidden_states_ttnn)
 
-        # All-gather for distributed mode (results are replicated - same data on all devices)
-        mixed_qkv_ttnn = self._maybe_all_gather(mixed_qkv_ttnn)
-        z_ttnn = self._maybe_all_gather(z_ttnn)
+        # Launch a/b matmuls NOW — before the CCL all_gathers — so the compute units are
+        # busy while the Ethernet links carry out the all_gather operations.
+        _ckernelcfg = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        _use_ttnn_ab = self._in_proj_a_weight_tt is not None and self._in_proj_b_weight_tt is not None
+        if _use_ttnn_ab:
+            b_ttnn = ttnn.linear(
+                hidden_states_ttnn,
+                self._in_proj_b_weight_tt,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=_ckernelcfg,
+            )
+            a_ttnn = ttnn.linear(
+                hidden_states_ttnn,
+                self._in_proj_a_weight_tt,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=_ckernelcfg,
+            )
 
-        # === Convert to PyTorch for DeltaNet kernel ===
-        # Use explicit replicated conversion since all_gather makes them replicated
-        # The _to_pytorch_replicated method properly handles multi-device extraction
+        # Dispatch both output all_gathers together (no individual syncs).
+        # The device pipelines them; a single sync below drains both CCL ops.
+        if self._is_distributed:
+            mixed_qkv_ttnn = ttnn.all_gather(mixed_qkv_ttnn, dim=-1, num_links=1, topology=ttnn.Topology.Linear)
+            z_ttnn = ttnn.all_gather(z_ttnn, dim=-1, num_links=1, topology=ttnn.Topology.Linear)
+
+        # Single synchronize_device for all pending compute + CCL operations.
+        ttnn.synchronize_device(self.device)
+
+        # Batch all device→host reads (data already ready after the sync above).
         mixed_qkv = self._to_pytorch_replicated(mixed_qkv_ttnn)
         z = self._to_pytorch_replicated(z_ttnn)
 
@@ -1663,45 +1711,12 @@ class TTNNQwen3LinearAttention(TTNNModule):
             z_diff = (z.float() - z_ref.float()).abs()
             print(f"[DEBUG] z max diff: {z_diff.max().item():.6f}, mean: {z_diff.mean().item():.6f}")
 
-        # === TTNN small-projection matmuls (in_proj_a, in_proj_b) ===
-        # Replicated input * replicated weight => replicated output, so each device computes
-        # the same `[batch, seq, num_v_heads]` result locally. This removes the
-        # whole-tensor `_to_pytorch_replicated(hidden_states_ttnn)` round trip that the
-        # previous torch path needed and eliminates the matching `_unwrap_to_torch` /
-        # `Linear` host calls per linear-attention layer per token.
-        # Note: ``_in_proj_*_weight_tt`` may be ``None`` if the module hasn't been moved to
-        # device yet (e.g. unit tests poking ``forward`` directly); fall back to the torch
-        # nn.Linear in that case so behavior matches the previous implementation.
-        if self._in_proj_a_weight_tt is not None and self._in_proj_b_weight_tt is not None:
-            b_ttnn = ttnn.linear(
-                hidden_states_ttnn,
-                self._in_proj_b_weight_tt,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                dtype=ttnn.bfloat16,
-                compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                    math_fidelity=ttnn.MathFidelity.HiFi2,
-                    math_approx_mode=False,
-                    fp32_dest_acc_en=True,
-                    packer_l1_acc=True,
-                ),
-            )
-            a_ttnn = ttnn.linear(
-                hidden_states_ttnn,
-                self._in_proj_a_weight_tt,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                dtype=ttnn.bfloat16,
-                compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                    math_fidelity=ttnn.MathFidelity.HiFi2,
-                    math_approx_mode=False,
-                    fp32_dest_acc_en=True,
-                    packer_l1_acc=True,
-                ),
-            )
+        # === Convert a/b to PyTorch ===
+        if _use_ttnn_ab:
             b = self._to_pytorch_replicated(b_ttnn).contiguous()
             a = self._to_pytorch_replicated(a_ttnn).contiguous()
         else:
-            # Fallback (weights not yet on device): replicate the input via the existing
-            # _to_pytorch_replicated helper and use the torch nn.Linear modules.
+            # Fallback (weights not yet on device): use the torch nn.Linear modules.
             hidden_states_pt = self._to_pytorch_replicated(hidden_states_ttnn)
             b = self.in_proj_b(hidden_states_pt).contiguous()
             a = self.in_proj_a(hidden_states_pt).contiguous()
