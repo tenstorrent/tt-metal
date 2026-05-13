@@ -2,12 +2,38 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+/*
+ * The fp32 log(x) code is derived from code by Norbert Juffa.
+ *
+ * Copyright (c) 2015-2023, Norbert Juffa
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ * 1. Redistributions of source code must retain the above copyright notice,
+ * this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
+
 #pragma once
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
-#include "sfpu/ckernel_sfpu_recip.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -74,102 +100,44 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat in, const uint log_base
     return result;
 }
 
-/*
- * This function implements ln(x) using polynomial approximation.
- * 1. Handle special cases (x <= 0, infinity, NaN)
- * 2. Extract exponent and mantissa: x = 2^n × m
- * 3. Reduce range: adjust m to be in [sqrt(2)/2, sqrt(2)]
- * 4. Compute ln(m) using polynomial approximation
- * 5. Return n×ln(2) + ln(m)
- */
 template <bool HAS_BASE_SCALING>
 sfpi_inline sfpi::vFloat calculate_log_f32_body(sfpi::vFloat val, const uint log_base_scale_factor) {
-    sfpi::vFloat result;
+    sfpi::vFloat result = std::numeric_limits<float>::quiet_NaN();
+    sfpi::vFloat infinity = std::numeric_limits<float>::infinity();
 
-    // Check for special cases
-    sfpi::vInt exp = sfpi::exexp(val);  // Get debiased exponent
+    v_if(val > 0.0f && val < infinity) {
+        sfpi::vFloat a = val;
 
-    v_if(sfpi::reinterpret<sfpi::vInt>(val) == 0x7F800000) {
-        // If input is infinity, return infinity
-        result = std::numeric_limits<float>::infinity();
-    }
-    v_elseif(exp == 128 || val < 0.f) {                    // +inf or negative input -> NaN
-        result = std::numeric_limits<float>::quiet_NaN();  // returns nan for fp32 and inf for bf16
-    }
-    v_elseif(val == 0.f) {
-        // Zero input -> -inf
-        result = -std::numeric_limits<float>::infinity();
-    }
-    v_else {
-        // Step 1: Extract exponent and mantissa
-        // Extract mantissa and construct m in [1, 2)
-        // Use setexp to normalize to [1, 2) range by setting exponent to 127 (bias)
-        sfpi::vFloat m = sfpi::setexp(val, 127);
+        sfpi::vFloat two_thirds = 0.666666667f;
+        sfpi::vInt u = sfpi::reinterpret<sfpi::vInt>(a) - sfpi::reinterpret<sfpi::vInt>(two_thirds);
+        sfpi::vInt e = sfpi::exexp_nodebias(sfpi::reinterpret<sfpi::vFloat>(u));
+        sfpi::vFloat m = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(u));
 
-        // Step 2: Range reduction
-        // If m >= sqrt(2), divide by 2 and increment exponent
-        // This ensures m is in [sqrt(2)/2, sqrt(2)] ≈ [0.707, 1.414]
-        v_if(m >= sfpi::vConstFloatPrgm1) {
-            m = m * 0.5f;   // Divide by 2
-            exp = exp + 1;  // Increment exponent
-        }
-        v_endif;
+        sfpi::vFloat e_float = sfpi::int32_to_float(e, sfpi::RoundMode::NearestEven);
+        e_float = sfpi::setsgn(e_float, sfpi::reinterpret<sfpi::vFloat>(u));
 
-        // Step 3: Transform to z = (m - 1) / (m + 1)
-        // This maps m ∈ [0.707, 1.414] to z ∈ [-0.172, 0.172]
-        // ln(m) = 2 × (z + z³/3 + z⁵/5 + z⁷/7 + ...)
-        sfpi::vFloat m_minus_1 = m - sfpi::vConst1;
-        sfpi::vFloat m_plus_1 = m + sfpi::vConst1;
-
-        // Compute z = (m - 1) / (m + 1) using reciprocal
-        // z = m_minus_1 * (1 / m_plus_1)
-        sfpi::vFloat m_plus_1_recip = _sfpu_reciprocal_<2>(m_plus_1);
-        sfpi::vFloat z = m_minus_1 * m_plus_1_recip;
-
-        // Compute z**2 for polynomial evaluation
-        sfpi::vFloat z2 = z * z;
-
-        // Step 4: Polynomial approximation using odd powers
-        // ln(m) = 2z(1 + (z**2)/3 + (z**4)/5 + (z**6)/7 + (z**8)/9 + (z**10)/11)
-        // Using Horner's method: p = 1 + z**2 * (c3 + z**2 * (c5 + z**2 * (c7 + z**2 * (c9 + z**2 * c11))))
-
-        // Polynomial coefficients for ln(m) where m in [sqrt(2)/2, sqrt(2)]
-        // ln(m) = 2z(1 + z²/3 + z⁴/5 + z⁶/7 + z⁸/9 + z¹⁰/11)
-        // where z = (m - 1) / (m + 1)
-        sfpi::vFloat p = PolynomialEvaluator::eval(
-            z2,
-            sfpi::vConst1,
-            0.3333333333333333f,
-            0.2f,
-            0.14285714285714285f,
-            0.1111111111111111f,
-            .09090909090909091f);
-
-        // Final computation: ln(m) = 2 * z * p
-        sfpi::vFloat ln_m = 2.0f * (z * p);
-
-        // We want to convert exponent to floating point using int32 -> float conversion.
-        // However, int32_to_float takes a sign-magnitude
-        // This is not an issue for positive numbers (same representation)
-        // For negative numbers, we need to explicitly convert to sign-magnitude format
-        v_if(exp < 0) {
-            // Compute absolute value: ~exp + 1 (two's complement negation)
-            sfpi::vInt exp_abs = ~exp + 1;
-            // Convert to sign-magnitude negative: setsgn(value, 1) sets MSB to 1
-            exp = sfpi::setsgn(exp_abs, 1);
-        }
-        v_endif;
-
-        // Convert to float - int32_to_float handles sign-magnitude format correctly
-        sfpi::vFloat expf = sfpi::int32_to_float(exp, sfpi::RoundMode::NearestEven);
-
-        // Step 5: Combine: ln(x) = exp×ln(2) + ln(m)
-        result = expf * sfpi::vConstFloatPrgm2 + ln_m;  // log(x) = log2(x) / log(2)
+        // m in [2/3, 4/3]. Compute log1p(m - 1) for m - 1 in [-1/3, 1/3].
+        m -= sfpi::vConst1;
+        sfpi::vFloat s = m * m;
+        sfpi::vFloat r = -0.130310059f;
+        sfpi::vFloat t = 0.140869141f;
+        r = r * s + -0.121486895f;
+        t = t * s + 0.139815226f;
+        r = r * s + -0.166845486f;
+        t = t * s + 0.200120315f;
+        r = r * s + -0.249996230f;
+        r = t * m + r;
+        r = r * m + 0.333331972f;
+        r = r * m + -0.500000000f;
+        r = r * s + m;
+        result = e_float * sfpi::vConstFloatPrgm0 + r;
 
         if constexpr (HAS_BASE_SCALING) {
             result *= sfpi::reinterpret<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
         }
     }
+    v_elseif(val == 0.0f) { result = -std::numeric_limits<float>::infinity(); }
+    v_elseif(val == infinity) { result = std::numeric_limits<float>::infinity(); }
     v_endif;
 
     return result;
@@ -203,11 +171,10 @@ inline void log_init() {
         sfpi::vConstFloatPrgm1 = -2.0069785118103027;
         sfpi::vConstFloatPrgm2 = 3.767500400543213;
     } else {
-        // _init_sfpu_reciprocal_ sets vConstFloatPrgm0 to 2.0f
-        _init_sfpu_reciprocal_</*approximation_mode*/ false>();
-        // But we can use 2 other programmable constants:
-        sfpi::vConstFloatPrgm1 = 1.4142135381698608f;   // sqrt(2)
-        sfpi::vConstFloatPrgm2 = 0.69314718246459961f;  // log(2)
+        constexpr float LOG_TWO = 0.693147182f;       // 0x1.62e430p-1
+        constexpr float TWO_TO_M23 = 1.19209290e-7f;  // 0x1.0p-23
+        // e represents k << 23, so pre-fold 2^(-23) into the exponent contribution.
+        sfpi::vConstFloatPrgm0 = LOG_TWO * TWO_TO_M23;
     }
 }
 
