@@ -22,12 +22,12 @@ namespace ckernel {
     // Init function for max
     template <bool fast_and_approx = true>
     ALWI void binary_max_tile_init() {
-        MATH(SFPU_UNARY_KERNEL_INIT(max, fast_and_approx));
+        MATH(SFPU_INIT(max));
     }
     // Compute function for max
     template <bool fast_and_approx = true>
     ALWI void binary_max_tile(uint32_t idst) {
-        MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_max, RC, fast_and_approx, idst));
+        MATH(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_max, (fast_and_approx), RC, idst));
     }
 }
 ```
@@ -41,11 +41,11 @@ namespace ckernel {
 namespace ckernel {
     template <bool fast_and_approx = true>
     ALWI void negative_tile_init() {
-        MATH(SFPU_UNARY_KERNEL_INIT(negative, fast_and_approx));
+        MATH(SFPU_INIT(negative));
     }
     template <bool fast_and_approx = true>
     ALWI void negative_tile(uint32_t idst) {
-        MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_negative, RC, fast_and_approx, idst));
+        MATH(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_negative, (fast_and_approx), RC, idst));
     }
 }
 ```
@@ -57,7 +57,7 @@ namespace ckernel {
    - `#include "llk_math_eltwise_unary_sfpu_macros.h"`
    - `#include "ckernel_sfpu_<op>.h"` (only include the kernel header needed for your op)
 3. **Use the macros to define your init and compute functions.**
-   - Choose the macro that matches your op's requirements or, if your op requires a new macro, add it to `llk_math_eltwise_unary_sfpu_macros.h` and document it.
+   - Prefer `SFPU_CALL`, `SFPU_CALL_MODE`, `SFPU_CALL_FN`, or `SFPU_CALL_CAST` for compute functions.
    - Pass the op name, type, and any required parameters.
 
 ## Migration Notes

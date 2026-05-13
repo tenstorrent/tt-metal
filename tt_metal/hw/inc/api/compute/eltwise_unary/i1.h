@@ -25,11 +25,13 @@ namespace ckernel {
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void i1_tile(uint32_t idst) { MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_i1, RC, APPROX, idst)); }
+ALWI void i1_tile(uint32_t idst) {
+    MATH(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_i1, (APPROX), RC, idst));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void i1_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(i1, sfpu::i1_init, APPROX)); }
+ALWI void i1_tile_init() { MATH(SFPU_INIT_CB(i1, sfpu::i1_init, (APPROX))); }
 
 }  // namespace ckernel
