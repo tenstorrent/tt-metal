@@ -300,6 +300,14 @@ void py_module(nb::module_& mod) {
         Configuration class for 1D multicast matmul operations with advanced features.
 
         This program config is for use with width and height sharded tensors, or very narrow interleaved tensors.
+
+        When ``gather_in0`` is False and the matmul op is invoked with a ``sub_device_id``,
+        ``compute_with_storage_grid_size`` is anchored at the sub-device's worker bounding-box start
+        instead of ``(0, 0)``. The 1D multicast targets a single bounding-box rectangle and the
+        per-core index math assumes a contiguous row-major rectangle, so the sub-device's worker
+        cores must themselves form a single rectangle. Non-rectangular sub-device worker grids are
+        rejected at validate time. When ``gather_in0`` is True, ``compute_with_storage_grid_size``
+        is ignored and the gather path can run on any sub-device worker layout.
     )doc");
 
     matmul_multi_core_reuse_multicast_1d_program_config
@@ -367,6 +375,10 @@ void py_module(nb::module_& mod) {
             Defines the 2D grid of cores that will be used for computation. In 1D multicast,
             this grid is used to determine the communication pattern for broadcasting data
             along one dimension while distributing computation.
+
+            When the matmul op is invoked with a ``sub_device_id`` (and ``gather_in0`` is False),
+            this rectangle is anchored at the sub-device's worker bounding-box start (instead of
+            ``(0, 0)``) and must fit inside that bounding box. Ignored when ``gather_in0`` is True.
         )doc")
         .def_rw("in0_block_w", &MatmulMultiCoreReuseMultiCast1DProgramConfig::in0_block_w, R"doc(
             Block width for both input tensors along the K dimension (shared inner dimension).
