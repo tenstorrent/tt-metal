@@ -104,22 +104,25 @@ void kernel_main() {
                         PackTile<cb_xpowadd, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
                 }
             } else {
-                tile_regs_acquire();
-                cb_wait_front(cb_correct_xpow, onetile);
-                cb_wait_front(cb_xpowadd, onetile);
-                cb_reserve_back(cb_xpowadd, onetile);
-
-                add_tiles_init_with_dt(cb_correct_xpow, cb_xpowadd);
-                add_tiles(cb_correct_xpow, cb_xpowadd, 0, 0, dst0);
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, cb_xpowadd);
-                tile_regs_release();
-
-                cb_pop_front(cb_correct_xpow, onetile);
-                cb_pop_front(cb_xpowadd, onetile);
-                cb_push_back(cb_xpowadd, onetile);
+                // PARTIAL migration: in-place accumulator add via eltwise_chain.
+                // cb_xpowadd = cb_correct_xpow + cb_xpowadd
+                compute_kernel_lib::eltwise_chain(
+                    onetile,
+                    compute_kernel_lib::BinaryFpu<
+                        cb_correct_xpow,
+                        cb_xpowadd,
+                        cb_xpowadd,
+                        compute_kernel_lib::BinaryFpuOp::Add,
+                        compute_kernel_lib::BroadcastDim::None,
+                        compute_kernel_lib::BinaryDataFormatReconfig::InputAndOutput,
+                        compute_kernel_lib::CopyTilePolicy::WaitAndPop,
+                        compute_kernel_lib::CopyTilePolicy::WaitAndPop,
+                        compute_kernel_lib::CbIndexMode::FirstTile,
+                        compute_kernel_lib::Dst::D0>{},
+                    compute_kernel_lib::PackTile<
+                        cb_xpowadd,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
             }
         }
         // Sum(|x|^p)
