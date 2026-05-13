@@ -23,7 +23,7 @@ struct SelectiveReduceCombineParams {
     uint32_t experts;
     uint32_t num_links;
 
-    std::optional<uint32_t> axis;
+    uint32_t axis;
     tt::tt_fabric::Topology topology;
 
     uint32_t num_token_parallel_cores;

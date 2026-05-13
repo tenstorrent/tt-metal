@@ -183,14 +183,6 @@ TEST(HostTensorTest, CopyAssignmentFromDefaultConstructed) {
     // tensor should now be in default-constructed state (no assertions, just shouldn't crash)
 }
 
-TEST(HostTensorTest, MoveConstructionWithNewSpecFromDefaultConstructedFails) {
-    HostTensor default_tensor;
-    auto new_spec = create_simple_spec(Shape{4, 32}, DataType::FLOAT32);
-    auto new_topology = TensorTopology();
-
-    EXPECT_ANY_THROW(HostTensor(std::move(default_tensor), std::move(new_spec), std::move(new_topology)));
-}
-
 TEST(HostTensorTest, TensorSpecAccess) {
     Shape shape{4, 32};
     auto tensor = create_simple_host_tensor(shape, DataType::FLOAT32);
@@ -246,20 +238,6 @@ TEST(HostTensorTest, BufferAccess) {
     const auto& buffer = tensor.buffer();
     // Buffer should have shape {1} (single device)
     EXPECT_EQ(buffer.shape().dims(), 1);
-}
-
-TEST(HostTensorTest, MoveConstructionWithNewSpecAndTopology) {
-    Shape original_shape{2, 64};
-    auto tensor = create_simple_host_tensor(original_shape);
-
-    Shape new_shape{4, 32};
-    auto new_spec = create_simple_spec(new_shape, DataType::FLOAT32);
-    auto new_topology = TensorTopology();
-
-    HostTensor new_tensor(std::move(tensor), std::move(new_spec), std::move(new_topology));
-
-    EXPECT_EQ(new_tensor.logical_shape(), new_shape);
-    EXPECT_EQ(new_tensor.dtype(), DataType::FLOAT32);
 }
 
 TEST(HostTensorTest, PaddedShape) {

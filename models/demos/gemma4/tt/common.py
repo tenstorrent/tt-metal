@@ -17,6 +17,7 @@ from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.ccl import CCLManager
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
+from models.demos.gemma4.tt.precision import Gemma4Precision
 
 
 def create_tt_model(
@@ -72,6 +73,12 @@ def create_tt_model(
 
     tensor_cache_path = str(model_args.weight_cache_path(model_path, dtype))
 
+    # Resolve per-module dtype overrides from precision_overrides.json. The
+    # mesh shape is the worker grid (rows x cols); a 1x1 mesh on a multi-device
+    # system still gets the 1x1 entry.
+    mesh_shape = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
+    precision = Gemma4Precision.load(model_path, mesh_shape)
+
     model = Gemma4Model(
         mesh_device=mesh_device,
         hf_config=model_args,
@@ -85,6 +92,7 @@ def create_tt_model(
         num_layers=num_layers,
         paged_attention_config=paged_attention_config,
         create_kv_cache=create_kv_cache,
+        precision=precision,
     )
 
     return model_args, model, model.tt_kv_cache, state_dict

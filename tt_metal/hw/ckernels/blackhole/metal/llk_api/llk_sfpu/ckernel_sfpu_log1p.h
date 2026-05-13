@@ -113,7 +113,7 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
         }
         // int32_to_float returns |e| as a real number in exponent-bit units;
         // restore sign and multiply by log(2) * 2^(-23) to recover k * log(2).
-        e_float = sfpi::setsgn(e_float, sfpi::reinterpret<sfpi::vFloat>(e));
+        e_float = sfpi::copysgn(e_float, sfpi::reinterpret<sfpi::vFloat>(e));
         r = r * s + m;
         sfpi::vFloat infinity = std::numeric_limits<float>::infinity();
         r = e_float * sfpi::vConstFloatPrgm0 + r;

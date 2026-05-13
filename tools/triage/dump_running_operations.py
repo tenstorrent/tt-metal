@@ -281,12 +281,7 @@ def _collect_running_operations(
 
             dispatch_mode = dispatcher_core_data.dispatch_mode
 
-            # The mailbox host_assigned_id is raw in fast dispatch but EncodePerDeviceProgramID-encoded
-            # in slow dispatch; the map handles both via `lookup`. lookup returns None on miss.
-            op_info = (
-                runtime_id_to_operation.lookup(dispatcher_core_data.host_assigned_id, dispatch_mode)
-                or OperationInfo.empty()
-            )
+            op_info = runtime_id_to_operation.lookup(dispatcher_core_data.host_assigned_id) or OperationInfo.empty()
 
             # Slow dispatch overwrites a single launch slot, so the "previous" entry is stale/invalid.
             if dispatch_mode == "HOST":
@@ -295,9 +290,7 @@ def _collect_running_operations(
             else:
                 prev_runtime_id = dispatcher_core_data.previous_host_assigned_id
                 if prev_runtime_id not in (None, 0):
-                    prev_op_info = (
-                        runtime_id_to_operation.lookup(prev_runtime_id, dispatch_mode) or OperationInfo.empty()
-                    )
+                    prev_op_info = runtime_id_to_operation.lookup(prev_runtime_id) or OperationInfo.empty()
                 else:
                     prev_op_info = OperationInfo.empty()
 

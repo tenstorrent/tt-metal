@@ -13,7 +13,7 @@
 #include "llk_io.h"
 #include "llk_operands.h"
 #include "llk_unpack_common.h"
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 /*************************************************************************
  * LLK UNPACK COMMON
