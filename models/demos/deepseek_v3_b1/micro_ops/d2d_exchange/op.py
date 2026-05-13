@@ -171,9 +171,6 @@ def _build_exchange_program(
     program.kernels[kernel_idx].runtime_args[my_core_coord.core_coord.x][my_core_coord.core_coord.y] = []
     rt_args_ref = program.kernels[kernel_idx].runtime_args[my_core_coord.core_coord.x][my_core_coord.core_coord.y]
 
-    program.kernels[0].runtime_args[my_core_coord.core_coord.x][my_core_coord.core_coord.y] = []
-    rt_args_ref = program.kernels[0].runtime_args[my_core_coord.core_coord.x][my_core_coord.core_coord.y]
-
     if use_fabric_on_sender:
         for idx in range(num_fwd_links):
             fwd_fabric_args = ttnn.setup_fabric_connection(
@@ -976,7 +973,7 @@ class ParallelSocketInterface:
                     device_program_entries.append((self.send_core_coords[i].device_coord, prog))
                 else:
                     assert self._downstream_sockets[i] is not None, f"Channel {i}: no upstream or downstream socket"
-                    dc = self.send_core_coords[i].device_coord
+                    dc = self.recv_core_coords[i].device_coord
                     prog = _build_exchange_program(
                         self.page_size,
                         self.termination_semaphore,

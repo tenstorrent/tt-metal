@@ -860,9 +860,6 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
     )
 
     # -- MoE tensor setup (needed before PipelineBlock to get correct reduce shard size) --
-    result_scores = None
-    result_indices = None
-    result_output = None
     r = None
     s = None
     state_dict = get_reference_model_state_dict(

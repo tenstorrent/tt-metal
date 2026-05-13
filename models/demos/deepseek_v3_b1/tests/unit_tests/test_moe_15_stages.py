@@ -169,10 +169,8 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
         entry_column = int(pipeline_config[pipeline_idx].entry_node_coord[1])
         reduce_exit_column = int(pipeline_config[pipeline_idx].exit_node_coord[1])
 
-    exit_column = entry_column
     entry_column_coords = [ttnn.MeshCoordinate(r, entry_column) for r in range(int(mesh_rows))]
     exit_column_coords = [ttnn.MeshCoordinate(r, reduce_exit_column) for r in range(int(mesh_rows))]
-    pipeline_column_coords = exit_column_coords
 
     # -- MoE tensor setup (needed before PipelineBlock to get correct reduce shard size) --
     state_dict = get_reference_model_state_dict(
@@ -685,7 +683,6 @@ def test_persistent_moe_15_stages(
     host_ios = None
     exit_socket_interface = None
     entry_socket_interface = None
-    stage0_program_entries = None
 
     try:
         if is_stage0:
@@ -1136,7 +1133,6 @@ def test_persistent_moe_multi_token(
     host_ios = None
     exit_socket_interface = None
     entry_socket_interface = None
-    stage0_program_entries = None
 
     try:
         if is_stage0:
