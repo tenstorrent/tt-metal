@@ -165,21 +165,30 @@ void kernel_main() {
     uint64_t mcast_counter_sem_noc_addr =
         get_noc_multicast_addr(mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, counter_ready_sem_l1_offset);
 
-    uint32_t start_semaphore_id = get_arg_val<uint32_t>(rt_args++);
-    uint32_t start_sem_l1_offset = get_semaphore(start_semaphore_id);
-    // Per-idle data_ready semaphores: each idle core in this sender's group has its own
-    // dedicated sem on the sender so the sender can wait on each individually instead of
-    // waiting on a shared counter.
+    // Per-idle semaphores (each scoped to just the (this sender, idle) pair):
+    //   data_ready: idle ++ after each non-local row it writes into receive_buf.  We do
+    //               wait(>=1) + atomic dec(-1) to consume exactly one per row.
+    //   credits:    init SLOTS_PER_IDLE on idle's L1; we ++ idle's copy each time we free
+    //               a row slot in its 16-deep ring on our receive_buf.
+    // Both the wait-side L1 ptr (on this sender) and the inc-side NOC address (on idle)
+    // refer to the same logical sem; pair-scoped allocation guarantees the L1 offset is
+    // identical on both cores.
+    constexpr uint32_t SLOTS_PER_IDLE = 16;
     volatile tt_l1_ptr uint32_t* data_ready_sem_ptrs[num_idle_cores_group];
-    uint64_t idle_start_noc_addrs[num_idle_cores_group];
+    uint64_t self_data_ready_noc_addrs[num_idle_cores_group];
+    uint64_t idle_credits_noc_addrs[num_idle_cores_group];
     uint32_t idle_noc_x[num_idle_cores_group];
     uint32_t idle_noc_y[num_idle_cores_group];
     for (uint32_t c = 0; c < num_idle_cores_group; c++) {
         uint32_t data_ready_semaphore_id = get_arg_val<uint32_t>(rt_args++);
-        data_ready_sem_ptrs[c] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(data_ready_semaphore_id));
+        uint32_t credits_semaphore_id = get_arg_val<uint32_t>(rt_args++);
         idle_noc_x[c] = get_arg_val<uint32_t>(rt_args++);
         idle_noc_y[c] = get_arg_val<uint32_t>(rt_args++);
-        idle_start_noc_addrs[c] = get_noc_addr(idle_noc_x[c], idle_noc_y[c], start_sem_l1_offset);
+        uint32_t data_ready_l1 = get_semaphore(data_ready_semaphore_id);
+        uint32_t credits_l1 = get_semaphore(credits_semaphore_id);
+        data_ready_sem_ptrs[c] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(data_ready_l1);
+        self_data_ready_noc_addrs[c] = get_noc_addr(my_x[noc_index], my_y[noc_index], data_ready_l1);
+        idle_credits_noc_addrs[c] = get_noc_addr(idle_noc_x[c], idle_noc_y[c], credits_l1);
     }
 #endif
 
@@ -257,8 +266,14 @@ void kernel_main() {
 
 #if IS_TILE_LAYOUT
     uint32_t untilize_base = get_write_ptr(cb_untilize_id);
-    // Idle cores now read their metadata from DRAM via reader_untilize, so the sender no
-    // longer unicasts metadata to them and does not need their c_9 L1 offsets.
+    // receive_buf is partitioned k_s ways: idle c gets a SLOTS_PER_IDLE-deep ring at
+    // [untilize_base + c * SLOTS_PER_IDLE * aligned_output_page_size, ...).  read_slots[c]
+    // tracks the next slot index (mod SLOTS_PER_IDLE) we'll pull from for idle c.  Slot
+    // state is monotonic across batches because idle's writes for that pair are too.
+    uint32_t read_slots[num_idle_cores_group];
+    for (uint32_t c = 0; c < num_idle_cores_group; c++) {
+        read_slots[c] = 0;
+    }
 #else
     cb_reserve_back(cb_dispatched_buffer_id, read_batch_size);
     uint32_t buffer_base = get_write_ptr(cb_dispatched_buffer_id);
@@ -333,12 +348,11 @@ void kernel_main() {
             }
             noc_async_read_barrier();
 
-            // Per-row handshake for non-local rows only.  Idle writes local rows on its own
-            // without any signal from us; for every non-local row we send GO (start_sem),
-            // wait for idle to land that single row in receive_buf (data_ready), then read
-            // it from the next compact slot and forward over fabric.  Local rows do not
-            // touch the semaphores or receive_buf.
-            uint32_t nonlocal_idx = 0;
+            // Credit-based per-row handshake.  For each non-local row in this batch we wait
+            // for idle to land one row in receive_buf (data_ready++), atomically consume
+            // exactly one (inc(-1)), read it from the current ring slot for this idle, then
+            // free the slot by ++ credits on idle's L1.  Local rows aren't visible to this
+            // loop and never touch the semaphores or receive_buf.
             for (uint32_t t = 0; t < batch_count; t++) {
                 volatile tt_l1_ptr uint32_t* metadata = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                     metadata_base + t * aligned_dispatched_metadata_page_size);
@@ -347,16 +361,16 @@ void kernel_main() {
                     continue;
                 }
 
-                noc_semaphore_inc(idle_start_noc_addrs[current_idle_core], 1);
+                noc_semaphore_wait_min(data_ready_sem_ptrs[current_idle_core], 1);
+                noc_semaphore_inc(self_data_ready_noc_addrs[current_idle_core], (uint32_t)-1);
                 noc_async_atomic_barrier();
-                noc_semaphore_wait(data_ready_sem_ptrs[current_idle_core], 1);
-                noc_semaphore_set(data_ready_sem_ptrs[current_idle_core], 0);
 
                 auto dst_token_idx = metadata[1];
                 auto dst_topk_indice = metadata[2];
                 uint32_t output_page_idx = dst_token_idx * num_experts_per_tok + dst_topk_indice;
-                uint32_t buffer_scratch_addr = untilize_base + nonlocal_idx * aligned_output_page_size;
-                nonlocal_idx++;
+                uint32_t slot = read_slots[current_idle_core];
+                uint32_t buffer_scratch_addr =
+                    untilize_base + (current_idle_core * SLOTS_PER_IDLE + slot) * aligned_output_page_size;
 
                 if constexpr (is_1d_topology<topology>()) {
                     uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
@@ -378,6 +392,11 @@ void kernel_main() {
                     noc_async_read_barrier();
                     cb_push_back(cb_output_for_writer_id, 1);
                 }
+
+                read_slots[current_idle_core] = (slot + 1) % SLOTS_PER_IDLE;
+                // Slot consumed — credit idle so it can reuse this slot in the ring.
+                noc_semaphore_inc(idle_credits_noc_addrs[current_idle_core], 1);
+                noc_async_atomic_barrier();
             }
 #else
             // ROW_MAJOR: no idle offload — this core does both the local writes and the
