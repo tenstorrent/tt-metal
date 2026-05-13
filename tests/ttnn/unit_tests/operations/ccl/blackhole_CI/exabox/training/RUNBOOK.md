@@ -1,8 +1,8 @@
 # Runbook — DistributedContext send/recv exabox tests on QUAD_BH
 
 End-to-end instructions for manually exercising the byte-level send/recv tests
-in this folder. Aligned with the parent `exabox/AGENTS.md` runbook style — read
-that first if you've never run an exabox test.
+in this folder. See `../multi_host/RUNBOOK.md` for the general exabox
+prerequisites and troubleshooting catalogue these instructions build on.
 
 ---
 

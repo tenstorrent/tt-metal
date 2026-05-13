@@ -74,7 +74,6 @@ Examples:
 
 See also:
   RUNBOOK.md (sibling file)            — full prerequisites and troubleshooting.
-  ../AGENTS.md                         — general exabox failure-mode catalogue.
 EOF
 }
 

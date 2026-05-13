@@ -6,11 +6,8 @@ on the BH Galaxy cluster. These are the "everyday" CCL exabox tests
 parametrized over the SINGLE_BH / DUAL_BH / QUAD_BH mesh sizes. Sister
 folders cover specialized scenarios:
 
-- `../single_pod/` — 16-rank single-pod blitz_decode pipeline framework + reduce-tree.
-- `../training/` — tt-train SocketManager-FABRIC and byte-level send/recv tests.
-
-Read `../AGENTS.md` first if you've never run an exabox test — it's the
-shared failure-mode catalogue these instructions reference.
+- `../deepseek_pipeline_tests/` — deepseek-v3 pipeline framework smoke test.
+- `../training/` — byte-level `DistributedContext.send/recv` tests for tt-train.
 
 ---
 
@@ -168,7 +165,7 @@ MESH_DEVICE=SINGLE_BH pytest --timeout=240 -v -k _8x4 \
 
 ## 7. Troubleshooting
 
-These mirror `../AGENTS.md` §4. The most common ones, abridged:
+The most common failures:
 
 ### 7.1 `Device N init: failed to initialize FW`
 
@@ -220,10 +217,6 @@ threshold to 0.998 for 32-device (axis=0) cases; keep 16-device strict.
 Reduce per-device counts. Working values for 16×4 / 32×4:
 `batches_per_device=2, experts_per_device=2, select_experts_k=2,
 hidden_size=1024`. See `test_all_to_all_*_exabox.py`.
-
-For more depth — including the cleanup recipe after a hung run, the
-mesh-coord verification pattern, and the per-test memory-budgeting
-cheat sheet — see `../AGENTS.md`.
 
 ---
 
