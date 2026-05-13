@@ -13,6 +13,10 @@
 
 using namespace ckernel::math;
 
+// Bit 11 enables 32 bit mode for dest as a workaround for budabackend#1372.
+// We need to wait for both math and pack to be fully idle before writing this bit
+// because it affects dest bank access which is shared by both pipelines.
+// Changing it while either pipeline is active can cause a race condition.
 inline void _llk_math_dbg_feature_disable_()
 {
     tensix_sync();
@@ -20,10 +24,11 @@ inline void _llk_math_dbg_feature_disable_()
     {
         asm volatile("nop");
     };
-    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11); // Set debug feature disable bit 11
-                                                             // workaround for bug tenstorrent/budabackend#1372
+    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11);
 }
 
+// Clears bit 11 to disable 32 bit mode for dest.
+// Same synchronization is needed here to avoid racing with active pipelines.
 inline void _llk_math_dbg_feature_enable_()
 {
     tensix_sync();
@@ -31,8 +36,7 @@ inline void _llk_math_dbg_feature_enable_()
     {
         asm volatile("nop");
     };
-    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0); // Clear debug feature disable bit 11
-                                                       // workaround for bug tenstorrent/budabackend#1372
+    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0);
 }
 
 inline void _llk_math_set_fp32_dest_acc_(bool enable)
@@ -57,9 +61,9 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
 
-    // Workaround for HW bugs:
-    // budabackend#1948: int32 dest and movd2a/b with int8 srcA/B
-    // budabackend#1948: fp32 dest and movd2a/b with UInt16 srcA/B
+    // Workaround for budabackend#1948: int8 srcA/B with int32 dest or UInt16 srcA/B with fp32 dest
+    // cause incorrect movd2a/movd2b behavior. Setting bit 11 enables 32 bit dest mode to fix this.
+    // We always explicitly set or clear bit 11 here to prevent state leaking between kernels.
     bool uint16_with_fp32_dest =
         is_fp32_dest_acc_en && ((srca_data_format == to_underlying(DataFormat::UInt16)) || (srcb_data_format == to_underlying(DataFormat::UInt16)));
 

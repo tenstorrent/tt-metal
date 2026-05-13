@@ -290,7 +290,7 @@ def test_topk_sfpu(
 ):
 
     if input_dimensions == [32, 1024]:
-        # For 32x1024 input on blackhole arch, we have observed some discrepancies in the topk values between hardware and golden.
+        # For 32x1024 input, we have observed some discrepancies in the topk values between hardware and golden.
         # TODO: Fix issue #1344 on tt-llk.
         pytest.skip(
             "Skipping test for 32x1024 input on blackhole arch due to observed discrepancies."
