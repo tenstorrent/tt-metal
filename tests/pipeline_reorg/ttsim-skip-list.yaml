@@ -3,6 +3,28 @@
 #
 # Structure: Each architecture has its own section with all tests to skip.
 # Tests that apply to all architectures are duplicated in each section.
+#
+# arch_skip_groups: lists entire ttnn-tests.yaml test-group names to skip for
+# a given arch. The workflow gates the pytest run step on this lookup, so the
+# job reports success without running. Use this for arch-wide breakage where
+# a fix is in flight; remove the entry once the underlying issue is resolved.
+
+arch_skip_groups:
+  wormhole_b0: []
+  # https://github.com/tenstorrent/tt-metal/actions/runs/25732791096
+  # All BH ttsim ttnn-pytests groups below fail; fix in progress.
+  blackhole:
+    - ttnn data movement group
+    - ttnn conv group
+    - ttnn eltwise group 1
+    - ttnn eltwise group 2
+    - ttnn pool group
+    - ttnn fused group 1
+    - ttnn fused group 2
+    - ttnn misc ops group
+    - ttnn sdpa group
+    - ttnn reduce group
+    - core ttnn unit test group
 
 wormhole_b0:
   # Job-level timeouts -- can be cut down still

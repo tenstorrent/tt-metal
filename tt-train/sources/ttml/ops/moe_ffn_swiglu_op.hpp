@@ -13,7 +13,7 @@ namespace ttml::ops {
 
 // MoE FFN forward+backward with SwiGLU, for tokens already packed per local
 // expert by the group op. For each local expert e:
-//     Y_e = (SiLU(X_e @ W_gate_e) * (X_e @ W_up_e)) @ W_down_e
+//     Y_e = (SiLU(X_e @ W_gate_e^T) * (X_e @ W_up_e^T)) @ W_down_e^T
 // where X_e = grouped[offsets[e] : offsets[e+1], :].
 //
 // `offsets` carries no gradient and stays a raw ttnn::Tensor.
@@ -24,8 +24,9 @@ namespace ttml::ops {
 // Shapes:
 //   grouped       : [1, 1, T_cap, hidden_dim]            bf16 TILE DRAM
 //   offsets       : [E_local + 1]                        uint32
-//   w_gate / w_up : E_local entries, each [1, 1, hidden_dim, intermediate_dim]
-//   w_down        : E_local entries, each [1, 1, intermediate_dim, hidden_dim]
+//   w_gate / w_up : E_local entries, each [1, 1, intermediate_dim, hidden_dim]
+//   w_down        : E_local entries, each [1, 1, hidden_dim, intermediate_dim]
+// (LinearLayer convention: weights stored as [out, in], matmul'd with transpose_b.)
 // Returns:
 //   Y             : [1, 1, T_cap, hidden_dim]            bf16 TILE DRAM
 autograd::TensorPtr moe_ffn_swiglu_fw(

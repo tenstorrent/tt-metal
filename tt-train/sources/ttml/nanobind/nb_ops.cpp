@@ -19,6 +19,7 @@
 #include "nb_fwd.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/distributed/comm_ops.hpp"
+#include "ops/distributed/losses.hpp"
 #include "ops/dropout_op.hpp"
 #include "ops/embedding_op.hpp"
 #include "ops/layernorm_op.hpp"
@@ -72,7 +73,10 @@ void py_module_types(nb::module_& m) {
     m.def_submodule("sample");
     m.def_submodule("swiglu");
     m.def_submodule("unary");
-    m.def_submodule("metal_ops");
+    auto py_metal = m.def_submodule("metal");
+    // Backwards-compatible alias for sparse MoE tests/branches that still use
+    // ttml.ops.metal_ops.* while main exposes ttml.ops.metal.*.
+    m.attr("metal_ops") = py_metal;
 }
 
 void py_module(nb::module_& m) {
@@ -154,6 +158,12 @@ void py_module(nb::module_& m) {
             nb::arg("grad_output_type") = ttml::ops::distributed::GradOutputType::SHARDED);
         py_distributed.def(
             "broadcast", &ttml::ops::distributed::broadcast, nb::arg("tensor"), nb::arg("cluster_axis") = nb::none());
+        py_distributed.def(
+            "vocab_parallel_cross_entropy_loss",
+            &ttml::ops::distributed::vocab_parallel_cross_entropy_loss,
+            nb::arg("logits"),
+            nb::arg("targets"),
+            nb::arg("cluster_axis") = nb::none());
     }
 
     {
@@ -523,11 +533,27 @@ void py_module(nb::module_& m) {
         py_unary.def("clip", &ttml::ops::clip, nb::arg("tensor"), nb::arg("lo"), nb::arg("hi"));
         py_unary.def(
             "polynorm3",
-            &ttml::ops::polynorm3,
+            [](const ttml::autograd::TensorPtr& tensor,
+               const ttml::autograd::TensorPtr& weight,
+               const ttml::autograd::TensorPtr& bias,
+               const float epsilon,
+               const bool fused_forward,
+               const bool fused_backward) {
+                const auto forward_variant = fused_forward
+                                                 ? ttml::ops::PolyNorm3ForwardVariant::Fused
+                                                 : ttml::ops::PolyNorm3ForwardVariant::CompositeComparisonOnly;
+                const auto backward_variant = fused_backward
+                                                  ? ttml::ops::PolyNorm3BackwardVariant::Fused
+                                                  : ttml::ops::PolyNorm3BackwardVariant::CompositeComparisonOnly;
+                return ttml::ops::polynorm3(tensor, weight, bias, epsilon, forward_variant, backward_variant);
+            },
             nb::arg("tensor"),
             nb::arg("weight"),
             nb::arg("bias"),
-            nb::arg("epsilon") = 1e-5F);
+            nb::arg("epsilon") = 1e-5F,
+            nb::kw_only(),
+            nb::arg("fused_forward") = true,
+            nb::arg("fused_backward") = true);
         py_unary.def("mean", &ttml::ops::mean, nb::arg("tensor"));
         // py_unary.def("sum", &ttml::ops::sum,
         //              nb::arg("tensor"));
@@ -537,7 +563,7 @@ void py_module(nb::module_& m) {
     }
 
     {
-        auto py_metal = m.def_submodule("metal_ops");
+        auto py_metal = static_cast<nb::module_>(m.attr("metal"));
         py_metal.def(
             "moe_group",
             [](const ttnn::Tensor& dispatched,

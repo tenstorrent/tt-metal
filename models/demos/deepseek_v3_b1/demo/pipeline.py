@@ -81,7 +81,6 @@ def create_single_galaxy_deepseek_pipeline_configuration(
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
         return EmbeddingStage(
             weight_provider.load_embedding(device),
-            forward_metadata=True,
             host_loopback=host_loopback,
         )
 
@@ -162,7 +161,7 @@ def create_single_pod_pipeline_configuration(
     fwd_payload = PassthroughPayload.ACTIVATION_W_TOKEN_META if enable_mtp else PassthroughPayload.TOKEN
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
-        return EmbeddingStage(weight_provider.load_embedding(device), forward_metadata=True)
+        return EmbeddingStage(weight_provider.load_embedding(device))
 
     def stage_14(device: ttnn.MeshDevice) -> StageKind:
         mtp_weights = weight_provider.load_mtp(device) if enable_mtp else None
@@ -179,7 +178,6 @@ def create_single_pod_pipeline_configuration(
         return lambda d: DenseDecoderStage(
             weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d),
             layer_idx=layer_id,
-            forward_metadata=True,
         )
 
     def _decoder_stage(
@@ -191,7 +189,6 @@ def create_single_pod_pipeline_configuration(
         return lambda d: MoEDecoderStage(
             weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d),
             layer_idx=layer_id,
-            forward_metadata=True,
             upstream_fifo_pages=upstream_fifo_pages,
             downstream_fifo_pages=downstream_fifo_pages,
         )
@@ -256,7 +253,6 @@ def create_single_pod_spec_decode_pipeline_configuration(
             weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d),
             layer_idx=layer_id,
             num_slots=num_slots,
-            forward_metadata=True,
         )
 
     def _decoder_stage(
@@ -269,7 +265,6 @@ def create_single_pod_spec_decode_pipeline_configuration(
             weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d),
             layer_idx=layer_id,
             num_slots=num_slots,
-            forward_metadata=True,
             upstream_fifo_pages=upstream_fifo_pages,
             downstream_fifo_pages=downstream_fifo_pages,
         )
@@ -379,7 +374,6 @@ def create_sp4_pipeline_configuration(
             weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d),
             layer_idx=layer_id,
             num_slots=num_slots,
-            forward_metadata=True,
         )
 
     def _decoder_stage(
@@ -392,7 +386,6 @@ def create_sp4_pipeline_configuration(
             weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d),
             layer_idx=layer_id,
             num_slots=num_slots,
-            forward_metadata=True,
             upstream_fifo_pages=upstream_fifo_pages,
             downstream_fifo_pages=downstream_fifo_pages,
         )

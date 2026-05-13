@@ -27,7 +27,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
-#include "device_fixture.hpp"
+#include "llk_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-logger/tt-logger.hpp>
@@ -60,6 +60,7 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"gelu", {{"SFPU_OP_CHAIN_0", "gelu_tile_init(); gelu_tile(0);"}}},
     {"sqrt", {{"SFPU_OP_CHAIN_0", "sqrt_tile_init(); sqrt_tile(0);"}}},
     {"sigmoid", {{"SFPU_OP_CHAIN_0", "sigmoid_tile_init(); sigmoid_tile(0);"}}},
+    {"silu", {{"SFPU_OP_CHAIN_0", "silu_tile_init(); silu_tile(0);"}}},
     {"log", {{"SFPU_OP_CHAIN_0", "log_tile_init(); log_tile(0);"}}},
     {"tanh", {{"SFPU_OP_CHAIN_0", "tanh_tile_init(); tanh_tile(0);"}}},
     {"sign", {{"SFPU_OP_CHAIN_0", "sign_tile_init(); sign_tile(0);"}}},
@@ -88,6 +89,11 @@ bfloat16 sfpu_function(const std::string& op_name, const bfloat16& input) {
     if (op_name == "sigmoid") {
         auto x = static_cast<float>(input);
         float result = 1 / (1 + std::exp(-x));
+        return bfloat16(result);
+    }
+    if (op_name == "silu") {
+        auto x = static_cast<float>(input);
+        float result = x / (1 + std::exp(-x));
         return bfloat16(result);
     }
     if (op_name == "log") {
@@ -327,7 +333,7 @@ bool run_sfpu_all_same_buffer(
 
 }  // namespace unit_tests::compute::sfpu
 class SingleCoreSingleMeshDeviceSfpuParameterizedFixture
-    : public MeshDeviceFixture,
+    : public LLKMeshDeviceFixture,
       public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
 TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedFixture, TensixSfpuCompute) {
     size_t num_tiles = std::get<0>(GetParam());
@@ -359,6 +365,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "gelu"),
         std::make_tuple(1, "sqrt"),
         std::make_tuple(1, "sigmoid"),
+        std::make_tuple(1, "silu"),
         std::make_tuple(1, "log"),
         std::make_tuple(1, "tanh"),
         std::make_tuple(1, "sign"),
@@ -368,12 +375,13 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "gelu"),
         std::make_tuple(4, "sqrt"),
         std::make_tuple(4, "sigmoid"),
+        std::make_tuple(4, "silu"),
         std::make_tuple(4, "log"),
         std::make_tuple(4, "tanh"),
         std::make_tuple(4, "sign")));
 
 class SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture
-    : public MeshDeviceFixture,
+    : public LLKMeshDeviceFixture,
       public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
 
 TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture, TensixSfpuCompute) {
@@ -410,6 +418,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "gelu"),
         std::make_tuple(1, "sqrt"),
         std::make_tuple(1, "sigmoid"),
+        std::make_tuple(1, "silu"),
         std::make_tuple(1, "log"),
         std::make_tuple(1, "tanh"),
         std::make_tuple(1, "sign"),
@@ -419,6 +428,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "gelu"),
         std::make_tuple(4, "sqrt"),
         std::make_tuple(4, "sigmoid"),
+        std::make_tuple(4, "silu"),
         std::make_tuple(4, "log"),
         std::make_tuple(4, "tanh"),
         std::make_tuple(4, "sign")));

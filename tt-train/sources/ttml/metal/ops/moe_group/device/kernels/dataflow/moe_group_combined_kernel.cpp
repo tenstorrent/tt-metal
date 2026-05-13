@@ -111,6 +111,11 @@ constexpr uint32_t SENTINEL = 0xFFFFFFFFU;
 constexpr uint16_t K_SLOT_SENTINEL = 0xFFFFU;
 constexpr uint32_t PLAN_CHUNK = 32U;
 constexpr uint32_t PREFILL_SEED_ENTRIES = 32U;
+// Wide L1 seed words: each uint64 covers two plan uint32s or four k_slot uint16s.
+constexpr uint64_t PLAN_SEED_U64 = (static_cast<uint64_t>(SENTINEL) << 32) | static_cast<uint64_t>(SENTINEL);
+constexpr uint64_t KS_SEED_U64 =
+    (static_cast<uint64_t>(K_SLOT_SENTINEL) << 48) | (static_cast<uint64_t>(K_SLOT_SENTINEL) << 32) |
+    (static_cast<uint64_t>(K_SLOT_SENTINEL) << 16) | static_cast<uint64_t>(K_SLOT_SENTINEL);
 constexpr uint32_t MD_ROW_STRIDE_U16 = md_aligned_page / sizeof(uint16_t);
 constexpr uint32_t SC_ROW_STRIDE_U16 = sc_aligned_page / sizeof(uint16_t);  // bf16 stride per row
 // SHARED_SLOT_U32 is defined above from CT arg 10. Each shared-table slot is
@@ -315,13 +320,13 @@ void kernel_main() {
         volatile tt_l1_ptr uint64_t* plan_seed = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(plan_stage);
         constexpr uint32_t plan_seed_u64 = (PREFILL_SEED_ENTRIES * sizeof(uint32_t)) / sizeof(uint64_t);
         for (uint32_t i = 0; i < plan_seed_u64; ++i) {
-            plan_seed[i] = 0xFFFFFFFFFFFFFFFFULL;
+            plan_seed[i] = PLAN_SEED_U64;
         }
 
         volatile tt_l1_ptr uint64_t* ks_seed = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(ks_stage);
         constexpr uint32_t ks_seed_u64 = (PREFILL_SEED_ENTRIES * sizeof(uint16_t)) / sizeof(uint64_t);
         for (uint32_t i = 0; i < ks_seed_u64; ++i) {
-            ks_seed[i] = 0xFFFFFFFFFFFFFFFFULL;
+            ks_seed[i] = KS_SEED_U64;
         }
 
         uint64_t plan_stamp_noc = get_noc_addr((uint32_t)plan_stage);

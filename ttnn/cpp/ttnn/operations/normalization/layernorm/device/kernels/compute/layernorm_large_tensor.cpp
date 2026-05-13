@@ -16,7 +16,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 #include "layernorm_compute_utils.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
@@ -70,18 +70,18 @@ void kernel_main() {
     constexpr uint32_t cb_x = cb_in;
 #endif
 
-    experimental::CircularBuffer cb_eps_obj(cb_eps);
-    experimental::CircularBuffer cb_in_obj(cb_in);
-    experimental::CircularBuffer cb_inb_obj(cb_inb);
-    experimental::CircularBuffer cb_out_obj(cb_out);
-    experimental::CircularBuffer cb_gamma_obj(cb_gamma);
-    experimental::CircularBuffer cb_beta_obj(cb_beta);
-    experimental::CircularBuffer cb_xmm_obj(cb_xmm);
-    experimental::CircularBuffer cb_ex_obj(cb_ex);
-    experimental::CircularBuffer cb_ex2_obj(cb_ex2);
-    experimental::CircularBuffer cb_xmm2_obj(cb_xmm2);
-    experimental::CircularBuffer cb_ex2pe_obj(cb_ex2pe);
-    experimental::CircularBuffer cb_accumulate_obj(cb_accumulate);
+    CircularBuffer cb_eps_obj(cb_eps);
+    CircularBuffer cb_in_obj(cb_in);
+    CircularBuffer cb_inb_obj(cb_inb);
+    CircularBuffer cb_out_obj(cb_out);
+    CircularBuffer cb_gamma_obj(cb_gamma);
+    CircularBuffer cb_beta_obj(cb_beta);
+    CircularBuffer cb_xmm_obj(cb_xmm);
+    CircularBuffer cb_ex_obj(cb_ex);
+    CircularBuffer cb_ex2_obj(cb_ex2);
+    CircularBuffer cb_xmm2_obj(cb_xmm2);
+    CircularBuffer cb_ex2pe_obj(cb_ex2pe);
+    CircularBuffer cb_accumulate_obj(cb_accumulate);
 
 #ifdef FUSE_PRE_ADD
     binary_op_init_common(cb_in, cb_inb, cb_x);
@@ -199,11 +199,11 @@ void kernel_main() {
             tile_regs_commit();
             tile_regs_wait();
 
-            experimental::CircularBuffer(pack_cb).reserve_back(onetile);
+            CircularBuffer(pack_cb).reserve_back(onetile);
             pack_reconfig_data_format(pack_cb);
             pack_tile(dst0, pack_cb);
             tile_regs_release();
-            experimental::CircularBuffer(pack_cb).push_back(onetile);
+            CircularBuffer(pack_cb).push_back(onetile);
         }
 
         // End of
@@ -334,13 +334,13 @@ void kernel_main() {
             if constexpr (!(do_gamma == 1 or do_beta == 1)) {
                 cb_fusion = cb_out;
             }
-            experimental::CircularBuffer(cb_fusion).reserve_back(block.full_block_size());
+            CircularBuffer(cb_fusion).reserve_back(block.full_block_size());
             pack_reconfig_data_format(cb_fusion);
             for (auto i : block.local()) {
                 pack_tile(i, cb_fusion);
             }
             tile_regs_release();
-            experimental::CircularBuffer(cb_fusion).push_back(block.full_block_size());
+            CircularBuffer(cb_fusion).push_back(block.full_block_size());
             cb_xmm_obj.pop_front(block.full_block_size());
 
             if constexpr (do_gamma == 1) {
@@ -351,7 +351,7 @@ void kernel_main() {
                     pack_reconfig_data_format(cb_out);
                 }
                 cb_gamma_obj.wait_front(block.full_block_size());
-                experimental::CircularBuffer(cb_fusion).wait_front(block.full_block_size());
+                CircularBuffer(cb_fusion).wait_front(block.full_block_size());
                 mul_bcast_rows_init_short(cb_fusion, cb_gamma);
                 for (auto i : block.local()) {
                     mul_tiles_bcast_rows(cb_fusion, cb_gamma, i, i, i);
@@ -367,7 +367,7 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 cb_gamma_obj.pop_front(block.full_block_size());
-                experimental::CircularBuffer(cb_fusion).pop_front(block.full_block_size());
+                CircularBuffer(cb_fusion).pop_front(block.full_block_size());
                 if constexpr (!do_beta) {
                     cb_out_obj.reserve_back(block.full_block_size());
                     for (auto i : block.local()) {
@@ -375,11 +375,11 @@ void kernel_main() {
                     }
                     cb_out_obj.push_back(block.full_block_size());
                 } else {
-                    experimental::CircularBuffer(cb_fusion).reserve_back(block.full_block_size());
+                    CircularBuffer(cb_fusion).reserve_back(block.full_block_size());
                     for (auto i : block.local()) {
                         pack_tile(i, cb_fusion);
                     }
-                    experimental::CircularBuffer(cb_fusion).push_back(block.full_block_size());
+                    CircularBuffer(cb_fusion).push_back(block.full_block_size());
                 }
 
                 tile_regs_release();
@@ -390,7 +390,7 @@ void kernel_main() {
                 reconfig_data_format(cb_fusion, cb_beta);
                 pack_reconfig_data_format(cb_out);
                 cb_beta_obj.wait_front(block.full_block_size());
-                experimental::CircularBuffer(cb_fusion).wait_front(block.full_block_size());
+                CircularBuffer(cb_fusion).wait_front(block.full_block_size());
                 add_bcast_rows_init_short(cb_fusion, cb_beta);
                 for (auto i : block.local()) {
                     add_tiles_bcast_rows(cb_fusion, cb_beta, i, i, i);
@@ -401,7 +401,7 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 cb_beta_obj.pop_front(block.full_block_size());
-                experimental::CircularBuffer(cb_fusion).pop_front(block.full_block_size());
+                CircularBuffer(cb_fusion).pop_front(block.full_block_size());
                 cb_out_obj.reserve_back(block.full_block_size());
                 for (auto i : block.local()) {
                     pack_tile(i, cb_out);
