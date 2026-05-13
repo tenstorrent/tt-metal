@@ -145,7 +145,7 @@ class DeepSeekPrefillConfig:
         self.permuted_weights = None  # Set by mlp.py after host-side permutation
         self._per_expert_weights = None
 
-        logger.info(
+        logger.debug(
             f"DeepSeekPrefillConfig: experts_per_chip={experts_per_chip}, "
             f"max_dispatched={max_dispatched}, max_buf={max_dispatch_buffer_token_size}, "
             f"dgs={dispatch_group_size}, ndg={num_dispatch_groups}"

@@ -460,7 +460,7 @@ def test_gpt_oss_demo(
     config = setup["config"]
     mesh_config = setup["mesh_config"]
 
-    logger.info(f"Using mesh config: {mesh_config}, model config: {config}")
+    logger.debug(f"Using mesh config: {mesh_config}, model config: {config}")
 
     # Configuration matching tt_transformers defaults
     num_devices = mesh_device.get_num_devices()
@@ -595,7 +595,7 @@ def test_gpt_oss_demo(
     num_tokens_generated_decode = []
 
     logger.info("Starting inference...")
-    logger.info(f"Page table: {page_table}")
+    logger.debug(f"Page table: {page_table}")
 
     # Main inference loop for repeat batches (like tt-transformers)
     for batch_idx, input_prompts_batch in enumerate(repeat_batch_prompts):
