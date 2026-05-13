@@ -10,7 +10,7 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-
+import torch.nn.functional as F
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.common.sampling import SamplingParams
 from models.tt_transformers.tt.common import PagedAttentionConfig
@@ -27,13 +27,6 @@ from models.tt_transformers.tt.model_config import ModelArgs
 from transformers import AutoProcessor, AutoModelForVision2Seq
 
 import re
-
-try:
-    from tracy import signpost
-except ImportError:
-
-    def signpost(*args, **kwargs):
-        pass
 
 
 def run_reference_demo_pipeline(messages, model_id="mistralai/Mistral-Small-3.1-24B-Instruct-2503"):
@@ -376,7 +369,6 @@ def load_separate_models_like_test_end2end(model_args, mesh_device, dtype, paged
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
     )
-    logger.info("Separate vision and text models loaded like test_end2end.py")
     return vision_model, text_model
 
 
@@ -412,7 +404,6 @@ def run_generation_exactly_like_test_end2end(
     logger.info("Running prefill...")
     run_t0 = time.perf_counter()
     prefill_t0 = time.perf_counter()
-    signpost("Mistral24B::Prefill::HarnessCall::Start")
     logits = generator.prefill_forward_text(
         input_tokens_prefill_pt,
         page_table=page_table,
@@ -421,18 +412,11 @@ def run_generation_exactly_like_test_end2end(
         vision_model=vision_model,
         processed_inputs=processed_inputs,
     )
-    signpost("Mistral24B::Prefill::HarnessCall::End")
     prefill_t1 = time.perf_counter()
     inference_prefill_time = prefill_t1 - prefill_t0
     num_prefill_tokens = int(prefill_lens[0])
 
     prefilled_token = torch.argmax(logits, dim=-1)
-
-    logger.info(f"Prefilled token: {prefilled_token}")
-
-    import torch.nn.functional as F
-
-    logger.info(f"Encoded prompt: {encoded_prompts[0]}")
 
     # logits: [1, 1, vocab_size]
     last_logits = logits[0, -1]  # shape: [vocab_size]
@@ -469,7 +453,6 @@ def run_generation_exactly_like_test_end2end(
     # Cache eos id once — avoids tokenizer attribute lookup every step.
     eos_token_id = model_args.tokenizer.eos_token_id
 
-    signpost("Mistral24B::DecodeLoop::Start", f"max_gen_len={generation_length}")
     # Wall-clock the whole decode loop: with read_from_device=False, decode_forward
     # returns after non-blocking trace submit (~µs), so per-call timers are meaningless.
     loop_start = time.perf_counter()
@@ -501,24 +484,10 @@ def run_generation_exactly_like_test_end2end(
             logger.info("EOS token detected, stopping generation.")
             break
 
-        # Stop if repetition detected (n-gram)
-        if len(all_outputs[0]) >= repetition_ngram_size * 2:
-            last_ngram = tuple(all_outputs[0][-repetition_ngram_size:])
-            for i in range(len(all_outputs[0]) - repetition_ngram_size):
-                if tuple(all_outputs[0][i : i + repetition_ngram_size]) == last_ngram:
-                    logger.info(f"Detected {repetition_ngram_size}-gram repetition, stopping.")
-                    break
-
         all_outputs[0].append(token_id)
         current_pos = current_pos + 1
 
-        # Early stopping (exactly like test_end2end.py)
-        if len(all_outputs[0]) >= 5 and all(t == all_outputs[0][-1] for t in all_outputs[0][-5:]):
-            logger.warning(f"Detected exact repetition of token {all_outputs[0][-1]} five times in a row. Stopping.")
-            break
-
     loop_end = time.perf_counter()
-    signpost("Mistral24B::DecodeLoop::End", f"generated={len(results)}")
 
     total_decode_time = loop_end - loop_start
     num_decoded = len(all_outputs[0]) - prefill_lens[0]
@@ -528,7 +497,6 @@ def run_generation_exactly_like_test_end2end(
     # Final response (exactly like test_end2end.py)
     response = model_args.tokenizer.decode(all_outputs[0], skip_special_tokens=True)
     logger.info(f"Final Generated Response:\n{response}")
-    logger.info(f"Generated {len(all_outputs[0])} tokens: {all_outputs[0]}")
     chat = parse_chat_output(response)
     display_chat(logger, chat)
 
@@ -562,8 +530,6 @@ def validate_e2e_outputs(results, expected_min_tokens=1):
     if len(results) < expected_min_tokens:
         logger.warning(f"Generated only {len(results)} tokens, expected at least {expected_min_tokens}")
         return False
-
-    logger.info(f"E2E pipeline validation passed ({len(results)} new token(s))")
     return True
 
 
@@ -693,8 +659,6 @@ def test_e2e_vision_text_pipeline(
             ),
         )
 
-    # Run generation following EXACT test_end2end.py pattern
-    logger.info("Running generation following EXACT test_end2end.py pattern...")
     results = run_generation_exactly_like_test_end2end(
         vision_model, text_model, processed_inputs, model_args, page_table, paged_attention_config, max_gen_len=1024 * 4
     )
