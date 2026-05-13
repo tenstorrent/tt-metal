@@ -36,9 +36,9 @@ constexpr auto cb_sum_pows = tt::CBIndex::c_7;  // Queue of row sums: [sum(x^2),
 constexpr auto cb_inv_rms = tt::CBIndex::c_8;   // Queue of inv_rms: [inv_rms(x), inv_rms(x^2), inv_rms(x^3)]
 // Preweighted inv_rms coefficients per row: [w2*inv_rms(x), w1*inv_rms(x^2), w0*inv_rms(x^3)].
 // Folds the 3 per-branch weight multiplies out of the Pass-2 inner loop.
-constexpr auto cb_weighted_coeffs = tt::CBIndex::c_10;
+constexpr auto cb_weighted_coeffs = tt::CBIndex::c_9;
 // CB with output data
-constexpr auto cb_output = tt::CBIndex::c_9;
+constexpr auto cb_output = tt::CBIndex::c_10;
 
 // Fused: row-reduce all three power sums [sum(x^2), sum(x^4), sum(x^6)] from cb_sum_pows
 // into inv_rms triplet [inv_rms(x), inv_rms(x^2), inv_rms(x^3)] in cb_inv_rms, in a single

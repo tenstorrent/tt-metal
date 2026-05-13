@@ -35,9 +35,9 @@ constexpr auto kBiasCbIndex = tt::CBIndex::c_6;
 constexpr auto kSumPowsCbIndex = tt::CBIndex::c_7;
 constexpr auto kInvRmsCbIndex = tt::CBIndex::c_8;
 // Preweighted inv_rms coefficients: [w2*inv_rms(x), w1*inv_rms(x^2), w0*inv_rms(x^3)]
-constexpr auto kWeightedCoeffCbIndex = tt::CBIndex::c_10;
+constexpr auto kWeightedCoeffCbIndex = tt::CBIndex::c_9;
 // CBs with output data
-constexpr auto kOutputCbIndex = tt::CBIndex::c_9;
+constexpr auto kOutputCbIndex = tt::CBIndex::c_10;
 
 constexpr uint32_t kNumOneTile = 1U;
 
@@ -135,7 +135,6 @@ PolyNorm3ForwardProgramFactory::cached_program_t PolyNorm3ForwardProgramFactory:
         create_circular_buffer(program, all_cores, kInputPass2CbIndex, data_format, bfloat16_tile_size, block_size);
     [[maybe_unused]] auto cb_scaler = create_circular_buffer(
         program, all_cores, kScalerCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
-    // cb_eps removed: eps is now a compute runtime arg applied via add_unary_tile.
     [[maybe_unused]] auto cb_w0 =
         create_circular_buffer(program, all_cores, kW0CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
     [[maybe_unused]] auto cb_w1 =
