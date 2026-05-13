@@ -26,9 +26,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4 /*num_faces */, 4 /* num_faces */);
-    _llk_unpack_AB_sub_bcast_col_init_custom_<BROADCAST_TYPE>();
+    _llk_unpack_AB_sub_bcast_col_init_custom_();
 
-    _llk_unpack_AB_sub_bcast_col_custom_<BROADCAST_TYPE>(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]), CT_DIM);
+    _llk_unpack_AB_sub_bcast_col_custom_(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]), CT_DIM);
 }
 
 #endif
@@ -46,7 +46,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-    _llk_math_eltwise_binary_init_custom_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY>(4, 0);
+    _llk_math_eltwise_binary_init_custom_<ELTWISE_BINARY_OP, BROADCAST_TYPE>(4);
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
 
@@ -61,7 +61,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 
 #include "llk_lib_pack_wrappers.h"
-#include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
 
@@ -70,19 +69,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-#ifdef ARCH_BLACKHOLE
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
-#else
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
-#endif
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false /* untilize */, false /* tilize */>(
+        formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);
 
-    _llk_pack_init_wrapper_<false, false>(formats.pack_dst);
+    _llk_pack_init_wrapper_<false /* untilize */, false /* zero_output */>(formats.pack_dst);
 
-#ifdef ARCH_BLACKHOLE
-    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-#else
-    _llk_pack_dest_init_<DstSync::SyncHalf, false, false>();
-#endif
+    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, false /* untilize */>();
 
     // wait for math to finish
     _llk_packer_wait_for_math_done_();

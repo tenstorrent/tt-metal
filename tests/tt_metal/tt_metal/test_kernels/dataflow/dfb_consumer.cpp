@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "experimental/dataflow_buffer.h"
-#include "experimental/noc.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 #include "api/debug/dprint.h"
 
 void kernel_main() {
@@ -19,10 +19,13 @@ void kernel_main() {
     // Base page offset for this core's slice of the global buffer.
     // Single-core callers pass 0; multi-core callers pass core_idx * entries_per_core.
     const uint32_t chunk_offset = get_arg_val<uint32_t>(2);
+    // Total entries in this core's slice; used to clamp the last consumer when
+    // entries_per_core is not a multiple of num_consumers.
+    const uint32_t entries_per_core = get_arg_val<uint32_t>(3);
     const uint32_t num_consumers = static_cast<uint32_t>(__builtin_popcount(consumer_mask));
 
-    experimental::DataflowBuffer dfb(logical_dfb_id);
-    experimental::Noc noc;
+    DataflowBuffer dfb(logical_dfb_id);
+    Noc noc;
 
     // TODO: Replace with get_thread_idx() kernel API when available
 #ifdef ARCH_QUASAR
@@ -46,11 +49,16 @@ void kernel_main() {
         } else {
             page_id = chunk_offset + tile_id * num_consumers + consumer_idx;
         }
+        // Skip if this consumer's slice overshoots the actual buffer size (happens when
+        // entries_per_core is not a multiple of num_consumers).
+        if (page_id >= chunk_offset + entries_per_core) {
+            break;
+        }
         // DPRINT << "consumer tile id " << tile_id << " page id " << page_id << ENDL();
         // DEVICE_PRINT("consumer tile id {} page id {}\n", tile_id, page_id);
         if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR
-            noc.async_write<experimental::Noc::TxnIdMode::ENABLED>(dfb, tensor_accessor, {}, {.page_id = page_id});
+            noc.async_write<Noc::TxnIdMode::ENABLED>(dfb, tensor_accessor, {}, {.page_id = page_id});
 #endif
         } else {
             dfb.wait_front(1);

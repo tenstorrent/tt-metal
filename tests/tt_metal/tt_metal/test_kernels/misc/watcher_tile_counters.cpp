@@ -6,7 +6,7 @@
 // DM producer posts tiles, 2 NEO TRISC0 consume and 2 NEO TRISC0 exit early
 // Creates predictable TC mismatches for watcher to detect and log
 
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/compile_time_args.h"
 #include "api/kernel_thread_globals.h"
 #include "risc_common.h"
@@ -24,7 +24,7 @@ constexpr uint32_t num_entries = get_compile_time_arg_val(1);
 void kernel_main() {
 #if defined(COMPILE_FOR_DM)
     // DM Producer: post tiles to DFB for all 4 NEO consumers
-    experimental::DataflowBuffer dfb(dfb_id);
+    DataflowBuffer dfb(dfb_id);
     for (uint32_t entry = 0; entry < num_entries; entry++) {
         dfb.reserve_back(1);
         dfb.push_back(1);
@@ -42,7 +42,7 @@ void kernel_main() {
     }
 
     // Running consumers: consume all entries
-    experimental::DataflowBuffer dfb(dfb_id);
+    DataflowBuffer dfb(dfb_id);
     for (uint32_t entry = 0; entry < num_entries; entry++) {
         dfb.wait_front(1);
         dfb.pop_front(1);

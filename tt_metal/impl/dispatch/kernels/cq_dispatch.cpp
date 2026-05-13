@@ -17,6 +17,7 @@
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_relay.hpp"
+#include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
 
 // The command queue write interface controls writes to the completion region, host owns the completion region read
 // interface Data requests from device and event states are written to the completion region
@@ -129,6 +130,15 @@ constexpr bool publish_noc_count = !distributed_dispatcher && dispatch_s_enabled
 // Note: due to the current method of release pages, up to 1 block of pages
 // may be unavailable to the prefetcher at any time
 constexpr uint32_t dispatch_cb_pages_per_block = dispatch_cb_pages / dispatch_cb_blocks;
+
+// Dispatch-core-local L1 region assigned by DispatchMemMap via
+// CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG. Address is supplied by host through
+// the REALTIME_PROFILER_MSG_ADDR compile-time define; the same value is wired into the
+// co-located cq_dispatch_subordinate kernel and the reserved RT-profiler tensix core, so
+// all three view the same physical L1. The embedded program_id_fifo is the BRISC
+// (producer) / dispatch_s NCRISC (consumer) handoff.
+volatile tt_l1_ptr realtime_profiler_msg_t* rt_profiler_msg =
+    reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(REALTIME_PROFILER_MSG_ADDR);
 
 static uint32_t cmd_ptr;   // walks through pages in cb cmd by cmd
 static uint32_t downstream_cb_data_ptr = downstream_cb_base;
@@ -1284,6 +1294,11 @@ re_run_command:
             // cmd->set_write_offset.offset1,
             //              cmd->set_write_offset.offset2, cmd->set_write_offset.program_host_id);
             DeviceTimestampedData("runtime_host_id_dispatch", cmd->set_write_offset.program_host_id);
+            if (rt_profiler_msg->realtime_profiler_core_noc_xy != 0) {
+                while (!program_id_fifo_append(rt_profiler_msg, cmd->set_write_offset.program_host_id)) {
+                    invalidate_l1_cache();
+                }
+            }
             uint32_t offset_count = cmd->set_write_offset.offset_count;
 
             ASSERT(offset_count <= std::size(write_offset));
@@ -1484,6 +1499,13 @@ void kernel_main() {
     }
 
     uint32_t l1_cache[l1_cache_elements_rounded];
+
+    // Reset RT profiler mailbox fields on every dispatch core startup.
+    // L1 is not guaranteed to be zero-initialized, and stale values here can
+    // incorrectly enable RT profiler paths when host-side RT setup is skipped.
+    rt_profiler_msg->realtime_profiler_core_noc_xy = 0;
+    rt_profiler_msg->realtime_profiler_remote_state_addr = 0;
+    rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
 
     dispatch_cb_reader.init();
     cmd_ptr = dispatch_cb_base;

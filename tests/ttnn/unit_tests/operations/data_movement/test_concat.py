@@ -447,3 +447,22 @@ def test_concat_sub_core_grids(device, layout, dim, input_shapes, sub_core_grids
     output = ttnn.to_torch(output)
 
     assert_equal(torch_output_tensor, output)
+
+
+@pytest.mark.parametrize(
+    "shapes, dim",
+    [
+        ([[217413, 1]] * 4, 1),
+    ],
+)
+def test_concat_large_page_l1_budget(device, shapes, dim):
+    torch_inputs = [torch.rand(*shape, dtype=torch.float32) for shape in shapes]
+    torch_output_tensor = torch.concat(torch_inputs, dim=dim)
+
+    input_tensors = [
+        ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32) for t in torch_inputs
+    ]
+    output = ttnn.concat(input_tensors, dim=dim)
+    output = ttnn.to_torch(output)
+
+    assert_with_pcc(torch_output_tensor, output)

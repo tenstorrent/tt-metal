@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/endpoints.h"
 
 void kernel_main() {
     // Compile-time arguments
@@ -20,8 +20,8 @@ void kernel_main() {
     uint32_t master_l1_local_address = mst_l1_base_address;
     uint32_t subordinate_l1_local_address = sub_l1_base_address;
 
-    experimental::Noc noc(noc_index);
-    experimental::UnicastEndpoint unicast_endpoint;
+    Noc noc(noc_index);
+    UnicastEndpoint unicast_endpoint;
 
     uint32_t subordinate_x_coord;
     uint32_t subordinate_y_coord;

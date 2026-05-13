@@ -70,7 +70,7 @@ sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat in)
 
     // Apply scaling factor, and set sign to match input.
     y = y * scale;
-    y = sfpi::setsgn(y, in);
+    y = sfpi::copysgn(y, in);
 
     return y;
 }

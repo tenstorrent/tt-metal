@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #ifdef ARCH_QUASAR
 #include "api/kernel_thread_globals.h"
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #endif
 
 void kernel_main() {
@@ -25,18 +25,18 @@ void kernel_main() {
 
     constexpr int onetile = 1;
 #ifdef ARCH_QUASAR
-    experimental::DataflowBuffer dfb(2);
+    DataflowBuffer dfb(2);
     const uint32_t tile_bytes = dfb.get_entry_size();
 #else
     constexpr uint32_t cb_id_out0 = 16;
     const uint32_t tile_bytes = get_tile_size(cb_id_out0);
-    experimental::CircularBuffer cb(cb_id_out0);
+    CircularBuffer cb(cb_id_out0);
 #endif
 
     constexpr auto dst_args = TensorAccessorArgs<0>();
     const auto s = TensorAccessor(dst_args, dst_addr);
 
-    experimental::Noc noc;
+    Noc noc;
 
     // C is MN so we iterate in tile RM order; batch_start offsets into the correct DRAM tile range
     uint32_t itileC = batch_start * Mt * Nt;

@@ -757,8 +757,7 @@ private:
             }
             num_links = max_link_id + 1;  // link_id is 0-indexed
 
-            // Per device max: 4 directions × num_links
-            mux_cores_per_device = NUM_DIRECTIONS * num_links;
+            mux_cores_per_device = device_info_provider_.get_max_connections_per_device() * num_links;
         }
 
         // 3. Build per-device receiver load histogram
@@ -907,7 +906,6 @@ private:
     static constexpr uint32_t MAX_CONFIGS_PER_CORE_CEILING = USABLE_L1_SIZE_BYTES / MIN_BUFFER_SIZE_BYTES;  // 64
     static constexpr uint32_t SAFETY_MARGIN_CORES = 2;
     static constexpr uint32_t DEFAULT_MIN_CONFIGS_PER_CORE = 1;
-    static constexpr uint32_t NUM_DIRECTIONS = 4;  // N, S, E, W
 
     // Mux kernel stack constraint: Maximum receiver cores per device per link when flow control enabled
     // Beyond this limit, receiver cores must be shared to prevent mux kernel stack overflow
