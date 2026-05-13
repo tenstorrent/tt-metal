@@ -625,8 +625,8 @@ MoEGPTMeshWorkloadFactory::create_at(
         const auto tilize_mapping_data_format = tt::tt_metal::datatype_to_dataformat_converter(expert_mapping.dtype());
         const auto tilize_output_data_format = tt::tt_metal::datatype_to_dataformat_converter(sparse_buffer.dtype());
 
-        // tiles_per_local_chunk for the drain core (used for CB sizing)
-        uint32_t shared_cb_num_pages = max_tiles_per_local_chunk;
+        // tiles_per_global_chunk: drain core gathers from all tilize cores before multicast
+        uint32_t shared_cb_num_pages = hidden_size / TILE_WIDTH;
 
         tt::tt_metal::create_cb(
             per_expert_total_tokens_cb_id,
