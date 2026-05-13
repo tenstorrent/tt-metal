@@ -132,20 +132,20 @@ DEVICE_PERF_EXPECTATIONS = {
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "vae_encode_1024x1024": {
-        "wormhole": 328_968_938,  # Note: this is an average value of 30 test runs due to high variability
-        "blackhole": 143_563_697,
+        "wormhole": 324_271_938,
+        "blackhole": 140_042_000,
     },
     "vae_encode_512x512": {
-        "wormhole": 85_005_572,  # Note: this is an average value of 30 test runs due to high variability
+        "wormhole": 83_537_085,
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "clip_encoder_1": {
-        "wormhole": 40_995_000,  # Note: this is an average value of 30 test runs due to high variability
-        "blackhole": 19_377_824,
+        "wormhole": 13_112_562,
+        "blackhole": 7_089_747,
     },
     "clip_encoder_2": {
-        "wormhole": 125_300_000,
-        "blackhole": 60_903_932,
+        "wormhole": 63_591_763,  # Note: this is an average value of 30 test runs due to high variability
+        "blackhole": 29_182_499,
     },
 }
 
@@ -161,7 +161,7 @@ def get_device_perf(test_id):
 
 
 @pytest.mark.parametrize(
-    "test_id, command, subdir, model_name, num_iterations, batch_size, margin, comments, op_support_count",
+    "test_id, command, subdir, model_name, num_iterations, batch_size, margin, comments",
     [
         (
             "unet_1024x1024",
@@ -172,7 +172,6 @@ def get_device_perf(test_id):
             1 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
             0.015,
             f"iterations={UNET_DEVICE_TEST_TOTAL_ITERATIONS}",
-            None,
         ),
         (
             "unet_512x512",
@@ -183,7 +182,6 @@ def get_device_perf(test_id):
             1 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
             0.015,
             f"iterations={UNET_DEVICE_TEST_TOTAL_ITERATIONS}",
-            None,
         ),
         (
             "refiner_unet_1024x1024",
@@ -194,7 +192,6 @@ def get_device_perf(test_id):
             1 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
             0.06,
             f"iterations={UNET_DEVICE_TEST_TOTAL_ITERATIONS}",
-            None,
         ),
         (
             "refiner_unet_512x512",
@@ -205,7 +202,6 @@ def get_device_perf(test_id):
             1 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
             0.06,
             f"iterations={UNET_DEVICE_TEST_TOTAL_ITERATIONS}",
-            None,
         ),
         (
             "vae_decode_1024x1024",
@@ -216,7 +212,6 @@ def get_device_perf(test_id):
             1,
             0.015,
             "",
-            None,
         ),
         (
             "vae_decode_512x512",
@@ -227,7 +222,6 @@ def get_device_perf(test_id):
             1,
             0.015,
             "",
-            None,
         ),
         (
             "vae_encode_1024x1024",
@@ -238,7 +232,6 @@ def get_device_perf(test_id):
             1,
             0.015,
             "",
-            None,
         ),
         (
             "vae_encode_512x512",
@@ -249,7 +242,6 @@ def get_device_perf(test_id):
             1,
             0.015,
             "",
-            None,
         ),
         (
             "clip_encoder_1",
@@ -260,7 +252,6 @@ def get_device_perf(test_id):
             1,
             0.015,
             "",
-            None,
         ),
         (
             "clip_encoder_2",
@@ -271,7 +262,6 @@ def get_device_perf(test_id):
             1,
             0.020,
             "",
-            5000,
         ),
     ],
     ids=[
@@ -288,9 +278,7 @@ def get_device_perf(test_id):
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
-def test_sdxl_perf_device(
-    test_id, command, subdir, model_name, num_iterations, batch_size, margin, comments, op_support_count
-):
+def test_sdxl_perf_device(test_id, command, subdir, model_name, num_iterations, batch_size, margin, comments):
     expected_perf = get_device_perf(test_id)
     if expected_perf is None:
         pytest.skip(f"Test {test_id} not configured for current device")
@@ -307,5 +295,4 @@ def test_sdxl_perf_device(
         batch_size=batch_size,
         margin=margin,
         comments=comments,
-        op_support_count=op_support_count,
     )

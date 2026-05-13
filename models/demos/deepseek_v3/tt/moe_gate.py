@@ -74,7 +74,7 @@ class MoEGate(AbstractModule):
             "gate_proj": {
                 "input_tensor_b": shard_and_save(
                     output_path / f"gate_proj.input_tensor_b",
-                    gate_weight.unsqueeze(0).unsqueeze(0).contiguous(),
+                    gate_weight.T.unsqueeze(0).unsqueeze(0),
                     shard_dims=(None, None),
                     mesh_device=mesh_device,
                     dtype=ttnn.bfloat16,
@@ -244,7 +244,6 @@ class MoEGate(AbstractModule):
             return {
                 "gate_proj": LinearConfig(
                     input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                    transpose_b=True,
                     memory_config=memory_config,
                     program_config=ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                         compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
@@ -286,7 +285,6 @@ class MoEGate(AbstractModule):
             return {
                 "gate_proj": LinearConfig(
                     input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                    transpose_b=True,
                     memory_config=memory_config,
                     compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
                 ),
@@ -475,7 +473,6 @@ class MoEGate(AbstractModule):
         mesh_device: ttnn.Device,
         dtype: ttnn.DataType,
         memory_config: ttnn.MemoryConfig,
-        transpose_b: bool = False,
         compute_kernel_config=None,
     ) -> ttnn.Tensor:
         """Linear fallback operation using torch.nn.functional.linear"""
@@ -493,7 +490,7 @@ class MoEGate(AbstractModule):
         )[0][0]
 
         torch_input_2d = torch_input.squeeze(0).squeeze(0)  # [seq_len, hidden_dim]
-        torch_weight_2d = torch_weight if transpose_b else torch_weight.T
+        torch_weight_2d = torch_weight.T  # [output_dim, hidden_dim]
 
         # use torch linear: input @ weight.T
         torch_output = torch.nn.functional.linear(torch_input_2d, torch_weight_2d)

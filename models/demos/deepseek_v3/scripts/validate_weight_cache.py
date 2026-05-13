@@ -14,9 +14,7 @@ from models.demos.deepseek_v3.utils.weight_config import (
     WeightConfigEncoder,
     locked_file,
     try_decode_saved_weight,
-    unwrap_weight_cache_payload,
     validate_weight_config_paths,
-    wrap_weight_cache_payload,
 )
 
 # Regex patterns for cache directory structure
@@ -221,12 +219,7 @@ def validate_cache_directory(cache_dir: Path, verbose: bool = False) -> dict[str
     # Load and decode config (with shared lock to prevent reading during writes)
     try:
         with locked_file(config_path, "r", exclusive=False) as f:
-            serialized_config = json.load(f, object_hook=try_decode_saved_weight)
-        weight_config = unwrap_weight_cache_payload(
-            serialized_config,
-            require_current_format=True,
-            config_path=config_path,
-        )
+            weight_config = json.load(f, object_hook=try_decode_saved_weight)
     except Exception as e:
         result["errors"].append(f"Failed to load config.json: {e}")
         return result
@@ -340,12 +333,7 @@ def repair_cache_directory(cache_dir: Path, verbose: bool = False) -> dict[str, 
     # Load and decode config (with exclusive lock for write)
     try:
         with locked_file(config_path, "r", exclusive=False) as f:
-            serialized_config = json.load(f, object_hook=try_decode_saved_weight)
-        weight_config = unwrap_weight_cache_payload(
-            serialized_config,
-            require_current_format=True,
-            config_path=config_path,
-        )
+            weight_config = json.load(f, object_hook=try_decode_saved_weight)
     except Exception as e:
         result["errors"].append(f"Failed to load config.json: {e}")
         return result
@@ -358,7 +346,7 @@ def repair_cache_directory(cache_dir: Path, verbose: bool = False) -> dict[str, 
         if num_repaired > 0:
             # Write repaired config back to disk (with exclusive lock)
             with locked_file(config_path, "w", exclusive=True) as f:
-                json.dump(wrap_weight_cache_payload(repaired_config), f, cls=WeightConfigEncoder, indent=2)
+                json.dump(repaired_config, f, cls=WeightConfigEncoder, indent=2)
             result["repaired"] = True
             if verbose:
                 print(f"Repaired {num_repaired} absolute path(s) in {cache_dir}")
@@ -539,12 +527,7 @@ def print_summary(stats: dict[str, Any]) -> None:
 
 def main():
     """Main entry point with argparse."""
-    parser = argparse.ArgumentParser(
-        description=(
-            "Validate current-format DeepSeek legacy weight cache directories and print a comprehensive summary. "
-            "Caches generated before the current SavedWeight metadata/versioning must be regenerated first."
-        )
-    )
+    parser = argparse.ArgumentParser(description="Validate weight cache directories and print a comprehensive summary.")
 
     # Create mutually exclusive group for cache discovery methods
     discovery_group = parser.add_mutually_exclusive_group()
@@ -569,7 +552,7 @@ def main():
     parser.add_argument(
         "--repair-absolute-paths",
         action="store_true",
-        help="Repair absolute paths by converting them to relative paths in current-format config.json files",
+        help="Repair absolute paths by converting them to relative paths in config.json files",
     )
 
     args = parser.parse_args()

@@ -33,8 +33,10 @@ from models.demos.deepseek_v3.utils.test_utils import (
 )
 
 
-def build_reference_model(hf_config):
+@pytest.fixture
+def reference_model(hf_config):
     """Build the routed-experts-only MoE reference used by the TT MoE test."""
+    torch.use_deterministic_algorithms(True)
     moe_config = deepcopy(hf_config)
     moe_config.n_shared_experts = None
     return DeepseekV3MoE(moe_config).eval()
@@ -105,6 +107,7 @@ def run_test_forward_pass_moe(
     mode,
     num_tokens,
     batch_size_per_row,
+    reference_model,
     hf_config,
     request,
     cache_path,
@@ -116,7 +119,7 @@ def run_test_forward_pass_moe(
     """Test forward pass against reference model."""
 
     moe_cls = _moe_cls(mesh_device, device_params["fabric_config"])
-    reference_model = build_reference_model(hf_config)
+
     module_path = "model.layers.3.mlp"
     checkpoint_state_dict = request.getfixturevalue("state_dict")
     state_dict, torch_input, reference_output = generate_reference_io(
@@ -202,6 +205,7 @@ def test_forward_pass(
     batch_size_per_row,
     seq_len,
     set_deterministic_env,
+    reference_model,
     hf_config,
     request,
     cache_path,
@@ -213,6 +217,7 @@ def test_forward_pass(
         mode=mode,
         num_tokens=batch_size_per_row * mesh_device.shape[0] if mode == "decode" else seq_len,
         batch_size_per_row=batch_size_per_row,
+        reference_model=reference_model,
         hf_config=hf_config,
         request=request,
         cache_path=cache_path,
@@ -234,6 +239,7 @@ def test_forward_pass(
 def test_mode_decode_forward_pass_batch_8_users_per_row(
     device_params,
     set_deterministic_env,
+    reference_model,
     hf_config,
     request,
     cache_path,
@@ -245,6 +251,7 @@ def test_mode_decode_forward_pass_batch_8_users_per_row(
         mode="decode",
         num_tokens=8 * mesh_device.shape[0],
         batch_size_per_row=8,
+        reference_model=reference_model,
         hf_config=hf_config,
         request=request,
         cache_path=cache_path,
