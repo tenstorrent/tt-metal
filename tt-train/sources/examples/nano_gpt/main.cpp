@@ -779,9 +779,13 @@ int main(int argc, char **argv) {
     };
 
     const bool needs_to_call_loss = pipeline_needs_to_call_loss(multihost_config);
-    // pipeline_parallel_llama still hardcodes gather_output=true at the LM head, so its
-    // last-stage logits are full-vocab
-    const bool use_vocab_parallel_loss = device_config.enable_tp && !is_pipeline_parallel_enabled(multihost_config);
+    // Env-var diagnostic toggle: TT_TRAIN_DISABLE_VOCAB_PARALLEL_LOSS=1 forces plain
+    // cross_entropy_loss; must be paired with the matching gather_output=true at the LM head
+    // (read in models/distributed/llama.cpp from the same env var).
+    // Default: vocab-parallel loss whenever TP is on and pipeline-parallel is off.
+    const bool disable_vocab_parallel_loss = std::getenv("TT_TRAIN_DISABLE_VOCAB_PARALLEL_LOSS") != nullptr;
+    const bool use_vocab_parallel_loss =
+        device_config.enable_tp && !is_pipeline_parallel_enabled(multihost_config) && !disable_vocab_parallel_loss;
 
     // Training loop
     for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {

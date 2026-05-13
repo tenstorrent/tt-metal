@@ -2,13 +2,14 @@ training_config:
   project_name: "tt_train_nano_gpt"
   seed: 5489
   model_save_interval: 500
-  batch_size: 1
+  batch_size: 8  # DDP=8 requires batch_size % dp_size == 0
   gradient_accumulation_steps: 1
   num_epochs: 1
-  max_steps: 5000
+  max_steps: 100
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
-  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/tinyllama.yaml"
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/tinyllama_bpe.yaml"
+  data_path: "/home/bklockiewicz/tt-metal/data/tokenized_shakespeare_tinyllama.yaml"
   optimizer:
     type: AdamW
     lr: 0.0003
@@ -20,8 +21,9 @@ training_config:
     stochastic_rounding: false
 
 device_config:
+  enable_ddp: true
   enable_tp: true
-  mesh_shape: [1, 32]
+  mesh_shape: [8, 4]  # axis 0 = DDP (8), axis 1 = TP (4)
 
 eval_config:
   repetition_penalty: 1.0
