@@ -46,7 +46,7 @@ from ttexalens.context import Context
 
 
 script_config = ScriptConfig(
-    depends=["operation_provider", "dump_op_mesh"],
+    depends=["operation_provider"],
     priority=ScriptPriority.HIGH,
 )
 

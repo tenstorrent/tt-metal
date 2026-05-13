@@ -104,6 +104,7 @@ def _format_cell(
     cd,
     label_to_ops: dict[str, list[RunningOperationAggregation]],
     leading_edge: int | None,
+    use_unique_id_labels: bool,
 ) -> str:
     if not mapped_device.isLocal:
         return f"(Mesh {mapped_device.fabricMeshId} Chip {mapped_device.fabricChipId})\n(remote)"
@@ -116,7 +117,8 @@ def _format_cell(
     prefix = _ubb_prefix(cd, device_id)
     chip_label = f"{prefix} (Device {device_id})".lstrip()
 
-    aggs = label_to_ops.get(str(device_id), [])
+    op_key = hex(metal_id_mapping.get_unique_id(metal_id)) if use_unique_id_labels else str(device_id)
+    aggs = label_to_ops.get(op_key, [])
     if not aggs:
         return f"{chip_label}\n(idle)"
 
@@ -151,6 +153,7 @@ def run(args, context: Context):
     bundle = get_operation_provider(args, context)
     label_to_ops = _build_label_to_ops(bundle.aggregations)
     leading_edge = _leading_edge_op_id(bundle.aggregations)
+    use_unique_id_labels = any(label.startswith("0x") for label in label_to_ops)
 
     fields_spec: list[tuple[str, type, object]] = [("r", str, triage_field("R\\C"))]
     fields_spec.extend((f"c{c}", str, triage_field(f"C{c}")) for c in range(cols))
@@ -159,7 +162,8 @@ def run(args, context: Context):
     out = []
     for r in range(rows):
         cells = [
-            _format_cell(mapped[r * cols + c], metal_id_mapping, cd, label_to_ops, leading_edge) for c in range(cols)
+            _format_cell(mapped[r * cols + c], metal_id_mapping, cd, label_to_ops, leading_edge, use_unique_id_labels)
+            for c in range(cols)
         ]
         out.append(MeshRow(str(r), *cells))
     return out

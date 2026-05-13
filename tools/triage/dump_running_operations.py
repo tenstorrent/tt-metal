@@ -52,7 +52,7 @@ from ttexalens.context import Context
 
 
 script_config = ScriptConfig(
-    depends=["operation_provider", "dump_op_window"],
+    depends=["operation_provider"],
     priority=ScriptPriority.HIGH,
 )
 
