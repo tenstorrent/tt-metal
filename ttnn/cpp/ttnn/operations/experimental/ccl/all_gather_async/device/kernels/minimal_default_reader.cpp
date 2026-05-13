@@ -6,6 +6,7 @@
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "api/debug/dprint.h"
 #include <cstdint>
 #include <utility>
 
@@ -39,7 +40,7 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // RUNTIME ARGS
     ///////////////////////////////////////////////////
-
+    DPRINT << "minimal_default_reader";
     uint32_t arg_idx = 0;
     address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
     address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);

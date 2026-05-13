@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include <cstdint>
 
 using address_t = uint32_t;
@@ -11,6 +12,7 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // COMPILE TIME ARGS
     ///////////////////////////////////////////////////
+    DPRINT << "broadcast_rm_reader";
     constexpr uint32_t cb0_id = get_compile_time_arg_val(0);
     constexpr uint32_t input_page_size = get_compile_time_arg_val(1);
     constexpr uint32_t cb_page_size = get_compile_time_arg_val(2);

@@ -354,6 +354,7 @@ def run_test_moe_mm(device, M, K, N, L, C, check_accuracy, dump_outputs):
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=input_sharded_mem_config,
             )
+        breakpoint()
         ttnn.experimental.deepseek.moe.moe_gate_mm(
             tt_input,
             w_tensor=tt_w,

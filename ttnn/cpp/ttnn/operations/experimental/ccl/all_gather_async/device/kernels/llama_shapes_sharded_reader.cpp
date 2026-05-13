@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include <tt-metalium/buffer_types.hpp>
 #include <cstdint>
 #include <utility>
@@ -25,7 +26,7 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
-
+    DPRINT << "llama_shapes_sharded_reader";
     size_t arg_idx = 0;
     // Load the input tensor spec
     address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);

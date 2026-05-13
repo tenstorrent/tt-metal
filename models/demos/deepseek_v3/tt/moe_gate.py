@@ -305,6 +305,19 @@ class MoEGate(AbstractModule):
             ModelDecodeConfig containing operator configurations for decode mode
         """
 
+        in0_core_coords = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+        in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
+        in0_core_range = [ttnn.CoreRange(in0_core_coord, in0_core_coord) for in0_core_coord in in0_core_coords_sorted]
+        in0_core_range_set = ttnn.CoreRangeSet(in0_core_range)
+        in0_shard_spec = ttnn.ShardSpec(
+            grid=in0_core_range_set,
+            shard_shape=(32, 7168),
+            shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        input_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in0_shard_spec
+        )
+
         if mode == "decode":
             memory_config = ttnn.L1_MEMORY_CONFIG
 
@@ -318,7 +331,7 @@ class MoEGate(AbstractModule):
                     dtype=ttnn.bfloat16,
                 ),
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
-                "input_memory_config": memory_config,
+                "input_memory_config": input_memory_config,
                 "output_memory_config": memory_config,
                 "input_output_shard_shape": (32, 32),
                 "token_shape": (16, 16),
@@ -339,7 +352,7 @@ class MoEGate(AbstractModule):
                     dtype=ttnn.bfloat16,
                 ),
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
-                "input_memory_config": memory_config,
+                "input_memory_config": input_memory_config,
                 "output_memory_config": memory_config,
                 "input_output_shard_shape": (32, 32),
                 "token_shape": (16, 16),
@@ -376,19 +389,7 @@ class MoEGate(AbstractModule):
         weight_tensor = cfg["weights"]["input_tensor_b"]
         output_tensor = cfg["gate_routing"]["ttnn_output_tensor"]
 
-        in0_core_coords = cfg["mesh_device"].get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
-        in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
-        in0_core_range = [ttnn.CoreRange(in0_core_coord, in0_core_coord) for in0_core_coord in in0_core_coords_sorted]
-        in0_core_range_set = ttnn.CoreRangeSet(in0_core_range)
         batch_size_per_iter = 32
-        in0_shard_spec = ttnn.ShardSpec(
-            grid=in0_core_range_set,
-            shard_shape=(batch_size_per_iter, x.shape[3]),
-            shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        input_sharded_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in0_shard_spec
-        )
         x = ttnn.view(x, (1, x.shape[2], x.shape[3]))
         padding_shape = (batch_size_per_iter - x.shape[1] % batch_size_per_iter) % batch_size_per_iter
         if padding_shape > 0:
@@ -401,8 +402,6 @@ class MoEGate(AbstractModule):
             x_chunk = x[:, start_index : start_index + batch_size_per_iter, :]
             if mode == "prefill":
                 x_chunk = ttnn.to_memory_config(x_chunk, ttnn.L1_MEMORY_CONFIG)
-            x_chunk = ttnn.repeat(x_chunk, (12, 1, 1))
-            x_chunk = ttnn.to_memory_config(x_chunk, input_sharded_mem_config)
 
             ttnn.experimental.deepseek.moe.moe_gate_mm(
                 x_chunk,
