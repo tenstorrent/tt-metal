@@ -5,6 +5,7 @@
 #include "moreh_adam.hpp"
 
 #include "ttnn/operations/moreh/moreh_adam/device/moreh_adam_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 using namespace tt::tt_metal;
 
@@ -29,6 +30,7 @@ std::vector<std::optional<Tensor>> moreh_adam(
     const std::optional<const Tensor>& max_exp_avg_sq_out,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    TT_OP_SCOPE("ttnn::moreh_adam");
     return prim::moreh_adam(
         param_in,
         grad,

@@ -6,10 +6,12 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
 Tensor stack(const std::vector<Tensor>& input_tensors, const int dim) {
+    TT_OP_SCOPE("ttnn::stack");
     TT_FATAL(!input_tensors.empty(), "Stack expects at least one tensor");
     std::vector<Tensor> expanded_tensors;
     expanded_tensors.reserve(input_tensors.size());

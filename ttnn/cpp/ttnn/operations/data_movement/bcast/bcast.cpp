@@ -7,6 +7,7 @@
 #include "ttnn/operations/data_movement/bcast/device/bcast_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -18,6 +19,7 @@ Tensor bcast(
     BcastOpDim bcast_dim,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output_tensor) {
+    TT_OP_SCOPE("ttnn::bcast");
     using namespace tt::constants;
 
     auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());

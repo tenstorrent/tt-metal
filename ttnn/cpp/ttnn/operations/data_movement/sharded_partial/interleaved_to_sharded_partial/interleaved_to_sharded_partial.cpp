@@ -6,6 +6,7 @@
 #include "device/interleaved_to_sharded_partial_op.hpp"
 #include "interleaved_to_sharded_partial.hpp"
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/graph/composite_trace.hpp"
 
 using namespace tt::tt_metal;
 
@@ -20,6 +21,7 @@ Tensor interleaved_to_sharded_partial(
     tt::tt_metal::TensorMemoryLayout shard_scheme,
     tt::tt_metal::ShardOrientation shard_orientation,
     const std::optional<DataType>& data_type_arg) {
+    TT_OP_SCOPE("ttnn::interleaved_to_sharded_partial");
     bool row_wise = shard_orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR;
     CoreCoord grid_size;
     CoreRangeSet grid_set;

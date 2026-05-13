@@ -15,6 +15,7 @@
 #include "ttnn/operations/transformer/sdpa/device/ring_distributed_sdpa_device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/device.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::transformer {
 
@@ -30,6 +31,7 @@ ttnn::Tensor scaled_dot_product_attention(
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<ttnn::Tensor>& attention_sink) {
+    TT_OP_SCOPE("ttnn::transformer::scaled_dot_product_attention");
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -87,6 +89,7 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    TT_OP_SCOPE("ttnn::transformer::chunked_scaled_dot_product_attention");
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -123,6 +126,7 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    TT_OP_SCOPE("ttnn::transformer::chunked_scaled_dot_product_attention");
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -159,6 +163,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
     ttnn::operations::transformer::SDPAProgramConfig program_config,
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    TT_OP_SCOPE("ttnn::transformer::joint_scaled_dot_product_attention");
     auto output_tensors = ttnn::prim::joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,
@@ -198,6 +203,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy) {
+    TT_OP_SCOPE("ttnn::transformer::ring_joint_scaled_dot_product_attention");
     auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,  // AllGather input
@@ -252,6 +258,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const uint32_t num_workers_per_link,
     const uint32_t num_buffers_per_channel) {
+    TT_OP_SCOPE("ttnn::transformer::exp_ring_joint_scaled_dot_product_attention");
     auto output_tensors = ttnn::prim::exp_ring_joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,  // AllGather input
@@ -292,6 +299,7 @@ ttnn::Tensor flash_mla_prefill(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    TT_OP_SCOPE("ttnn::transformer::flash_mla_prefill");
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -327,6 +335,7 @@ ttnn::Tensor chunked_flash_mla_prefill(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    TT_OP_SCOPE("ttnn::transformer::chunked_flash_mla_prefill");
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -365,6 +374,7 @@ ttnn::Tensor ring_distributed_scaled_dot_product_attention(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<ttnn::Tensor>& page_table,
     std::optional<int64_t> chunk_start_idx) {
+    TT_OP_SCOPE("ttnn::transformer::ring_distributed_scaled_dot_product_attention");
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();

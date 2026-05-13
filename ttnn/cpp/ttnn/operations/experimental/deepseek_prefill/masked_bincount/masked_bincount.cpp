@@ -4,6 +4,7 @@
 
 #include "masked_bincount.hpp"
 #include "device/masked_bincount_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::masked_bincount {
 
@@ -12,6 +13,7 @@ ttnn::Tensor masked_bincount(
     const ttnn::Tensor& expert_mask,
     uint32_t n_routed_experts,
     uint32_t num_experts_per_token) {
+    TT_OP_SCOPE("ttnn::experimental::deepseek_prefill::masked_bincount");
     return ttnn::prim::masked_bincount(input_tensor, expert_mask, n_routed_experts, num_experts_per_token);
 }
 

@@ -10,6 +10,7 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
@@ -27,6 +28,7 @@ ttnn::Tensor strided_all_gather_async(
     std::optional<uint32_t> mm_cores_y,
     std::optional<uint32_t> mm_block_ht,
     std::optional<uint32_t> mm_block_wt) {
+    TT_OP_SCOPE("ttnn::experimental::strided_all_gather_async");
     return ttnn::prim::strided_all_gather_async(
         input_tensor,
         persistent_output_buffer,

@@ -14,6 +14,7 @@
 #include "device/ternary_op_utils.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ternary_composite_op.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 using namespace ttnn::operations::ternary;
 
@@ -206,6 +207,7 @@ Tensor where(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    TT_OP_SCOPE("ttnn::where");
     return std::visit(
         [&](const auto& true_val, const auto& false_val) {
             return invoke_impl(predicate, true_val, false_val, memory_config, output, sub_core_grids);
@@ -223,6 +225,7 @@ Tensor where(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    TT_OP_SCOPE("ttnn::where");
     return ttnn::where_tss(predicate, value_true, value_false, memory_config, output, sub_core_grids);
 }
 
@@ -248,6 +251,7 @@ Tensor addcmul(
     operations::ternary::ScalarVariant value,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
+    TT_OP_SCOPE("ttnn::addcmul");
     log_debug(tt::LogOp, "Addcmul LLK - TTT");
 
     bool is_supported_dtype =
@@ -302,6 +306,7 @@ Tensor addcdiv(
     float value,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
+    TT_OP_SCOPE("ttnn::addcdiv");
     log_debug(tt::LogOp, "Addcdiv LLK - TTT");
 
     // Only TTT variant is supported for addcdiv
@@ -340,6 +345,7 @@ Tensor lerp(
     float weight,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
+    TT_OP_SCOPE("ttnn::lerp");
     auto broadcast_type = get_broadcast_type(input.logical_shape(), end.logical_shape());
 
     bool is_any_input_block_format = is_block_float(input.dtype()) || is_block_float(end.dtype());
@@ -371,6 +377,7 @@ Tensor lerp(
     const Tensor& weight,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
+    TT_OP_SCOPE("ttnn::lerp");
     auto broadcast_type = get_broadcast_type(input.logical_shape(), end.logical_shape(), weight.logical_shape());
 
     bool is_any_input_block_format =

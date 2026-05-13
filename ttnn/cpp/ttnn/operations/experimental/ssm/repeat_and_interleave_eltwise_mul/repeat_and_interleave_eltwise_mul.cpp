@@ -5,6 +5,7 @@
 #include "repeat_and_interleave_eltwise_mul.hpp"
 
 #include "device/repeat_and_interleave_eltwise_mul_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 using namespace tt::tt_metal;
 
@@ -16,6 +17,7 @@ ttnn::Tensor repeat_and_interleave_eltwise_mul(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DataType> dtype,
     const std::optional<tt::tt_metal::MathFidelity> math_fidelity) {
+    TT_OP_SCOPE("ttnn::experimental::repeat_and_interleave_eltwise_mul");
     return ttnn::prim::repeat_and_interleave_eltwise_mul(a, b, memory_config, dtype, math_fidelity);
 }
 

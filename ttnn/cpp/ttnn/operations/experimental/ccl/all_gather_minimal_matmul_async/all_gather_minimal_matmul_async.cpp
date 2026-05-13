@@ -7,6 +7,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 using namespace tt::tt_metal;
 
@@ -35,6 +36,7 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     uint32_t num_buffers_per_channel,
     int32_t chunks,
     int32_t dim) {
+    TT_OP_SCOPE("ttnn::experimental::all_gather_minimal_matmul_async");
     return ttnn::prim::all_gather_minimal_matmul_async(
         input_tensor,
         weight_tensor,

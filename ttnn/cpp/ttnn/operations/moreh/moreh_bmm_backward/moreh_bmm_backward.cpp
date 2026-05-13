@@ -5,6 +5,7 @@
 #include "moreh_bmm_backward.hpp"
 
 #include "ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -18,6 +19,7 @@ std::vector<std::optional<Tensor>> moreh_bmm_backward(
     const std::optional<MemoryConfig>& input_grad_memory_config,
     const std::optional<MemoryConfig>& mat2_grad_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    TT_OP_SCOPE("ttnn::moreh_bmm_backward");
     std::vector<std::optional<Tensor>> outputs(2);
     if (are_required_outputs.at(0)) {
         TT_FATAL(input_grad.has_value(), "input_grad needs to have a value when input_requires_grad is True.");

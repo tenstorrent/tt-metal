@@ -13,6 +13,7 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::operations::data_movement {
 namespace {
@@ -159,6 +160,7 @@ Tensor gather(
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    TT_OP_SCOPE("ttnn::gather");
     // Input tensor
     const ttnn::Shape& original_input_tensor_lshape = input_tensor.logical_shape();
     const auto input_tensor_rank = input_tensor.logical_shape().rank();

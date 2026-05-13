@@ -5,6 +5,7 @@
 #include "ttnn/operation.hpp"
 
 #include "moe_expert_token_remap.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -16,6 +17,7 @@ std::vector<ttnn::Tensor> moe_expert_token_remap(
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<ttnn::Tensor>& optional_reduced_tensor,
     const uint32_t reduction_size) {
+    TT_OP_SCOPE("ttnn::moe_expert_token_remap");
     return ttnn::prim::moe_expert_token_remap(
         topk_tensor,
         expert_mapping_tensor,

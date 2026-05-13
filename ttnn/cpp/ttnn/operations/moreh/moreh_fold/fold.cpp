@@ -5,6 +5,7 @@
 #include "fold.hpp"
 
 #include "device/fold_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn {
 
@@ -17,6 +18,7 @@ Tensor moreh_fold(
     const std::vector<uint32_t>& padding,
     const std::vector<uint32_t>& stride,
     const std::optional<MemoryConfig>& memory_config) {
+    TT_OP_SCOPE("ttnn::moreh_fold");
     return ttnn::prim::moreh_fold(input, output, output_size, kernel_size, dilation, padding, stride, memory_config);
 }
 

@@ -5,6 +5,7 @@
 #include "dit_layernorm_post_all_gather.hpp"
 
 #include "device/dit_layernorm_post_all_gather_device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental {
 
@@ -17,6 +18,7 @@ ttnn::Tensor dit_layernorm_post_allgather(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const DataType>& dtype) {
+    TT_OP_SCOPE("ttnn::experimental::dit_layernorm_post_allgather");
     auto arch = input_tensor.device()->arch();
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
