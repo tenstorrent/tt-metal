@@ -18,8 +18,6 @@
 
 #include "api/kernel_thread_globals.h"
 
-namespace experimental {
-
 inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id)
     : local_dfb_interface_(g_dfb_interface[logical_dfb_id]), logical_dfb_id_(logical_dfb_id) {}
 
@@ -414,7 +412,5 @@ Noc::async_write(
 }
 
 #endif  // !COMPILE_FOR_TRISC
-
-}  // namespace experimental
 
 #endif  // ARCH_QUASAR

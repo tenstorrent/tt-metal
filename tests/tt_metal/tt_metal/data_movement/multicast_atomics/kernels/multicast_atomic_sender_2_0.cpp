@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc_semaphore.h"
+#include "api/dataflow/noc_semaphore.h"
 
 void kernel_main() {
     // Compile-time arguments
@@ -23,8 +23,8 @@ void kernel_main() {
         std::swap(dst_start_y, dst_end_y);
     }
 
-    experimental::Noc noc(noc_index);
-    experimental::Semaphore semaphore(sem_id);
+    Noc noc(noc_index);
+    Semaphore semaphore(sem_id);
 
     {
         DeviceZoneScopedN("RISCV0");

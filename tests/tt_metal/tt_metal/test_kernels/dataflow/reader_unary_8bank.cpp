@@ -5,15 +5,15 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #ifdef ARCH_QUASAR
-#include "experimental/dataflow_buffer.h"
-#include "experimental/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
 #endif
 
 // #include "api/debug/dprint.h"
 
 void generate_bcast_scaler() {
 #ifdef ARCH_QUASAR
-    experimental::DataflowBuffer dfb1(1);
+    DataflowBuffer dfb1(1);
 #else
     constexpr uint32_t cb_in_2 = 2;
 #endif
@@ -58,8 +58,8 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
 #ifdef ARCH_QUASAR
-    experimental::Noc noc;
-    experimental::DataflowBuffer dfb0(0);
+    Noc noc;
+    DataflowBuffer dfb0(0);
     const uint32_t tile_bytes = dfb0.get_entry_size();
 #else
     constexpr uint32_t cb_id_in0 = 0;

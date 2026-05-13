@@ -312,12 +312,11 @@ def eltwise_rsqrt(
     else:
         # this case is for test_eltwise_rsqrt_in_depth.py with shape (3, 11, 92, 100) RM
         # either use this format or move the test to non-working as ttnn does not use run_with_autoformat
-        input_shape = t0.shape
         t0 = t0.cpu().pad_to_tile(0)
         t0 = t0.to(ttnn.TILE_LAYOUT)
         t0 = t0.to(device)
         t1 = ttnn.rsqrt(t0, memory_config=output_mem_config)
-        t1 = t1.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(input_shape)
+        t1 = t1.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
 
     return tt2torch_tensor(t1)
 
