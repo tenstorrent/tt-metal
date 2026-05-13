@@ -1,6 +1,10 @@
-# TT-RDMA-over-Ethernet — v1 Specification
+# TT-RDMA-over-Ethernet — v1.0 — SHIPPED 2026-05-13
 
-**Status:** living document. v1 architecture locked; phases P1–P4 shipped, P5+ in progress.
+**Status (2026-05-13):** v1.0 shipped. All eight v1 opcodes implemented end-to-end. Host SDK exposes `post_send` / `post_send_read` / `register_mr_slot` / `wait_completion`. TX 22–25.8 Gbps, RX 24.8 Gbps (Mellanox Gen3 x4 ceiling). 100 % wire-verified.
+
+**Repo tags:**
+- `tt-metal-external-eth`: `tt-rdma-v1.0` on branch `aperezvicente/external-mac-port-interop`
+- `budabackend-master`: `tt-rdma-v1.0` on branch `master` → pushed to `aperezvicente-TT/wh-erisc-fpga` as `tt-rdma-v1-import`
 **Target audience:** anyone touching the WH external CMAC path, the wire protocol, or the host SDK.
 
 This directory holds the design contract for **TT-RDMA**: a verbs-shaped, NIC-agnostic RDMA layer that runs over standard 100 GbE between a Wormhole erisc core's CMAC and any compliant partner (Mellanox NIC, FPGA-based NIC, or another WH chip).
@@ -67,27 +71,39 @@ Today's testbed: **WH ↔ Mellanox ConnectX-5 (Gen3 x4)**. Every Gbps number quo
 
 ## Where we are (shipped vs planned)
 
-### Shipped
+### Shipped (v1.0)
 
-| Phase | Description | Memory note | FW md5 |
+| Phase | Description | FW md5 (cumulative) |
+|---|---|---|
+| **Phase A** | CMAC PFC pause enable (RFE+PFCE + per-priority TFE) | b9b826ce |
+| **Phase B** | Wire opcode dispatch; fixed `/4 vs /16` BUF_START_WORD_ADDR bug | c14246df |
+| **Phase C** | Single-ring BUF_WRAP RX (eliminated ping-pong race) | b5f184f0 |
+| **TX jumbo** | 32-slot × 4096 B WQE ring | 883b6286 |
+| **P1** | L1 relayout: TX_BUF→0x29000, RXQ1 disabled, RX ring 14 KB | b697d5e7 |
+| **P2** | MR table at L1:0x8500, strict v1 opcode filter, 16 B alignment | e2525165 |
+| **P3** | WRITE opcode 0x10 (local memcpy) | 7116e420 |
+| **P4** | WRITE → `ncrisc_noc_fast_write` (off-fabric) | 377d5a57 |
+| **P5** | Host RxWqeRing — SEND DMA-pushed to host hugepage at +128 KB | 024982b8 |
+| **P6** | READ_REQ target-side handler + RESP staging | 088c139d |
+| **P6.1** | READ_RESP wire emission via CMAC TXQ1 | 6021e2b2 |
+| **P7** | Host `register_mr_slot` doorbell at RCB+0x28 | ccfd826e |
+| **Q(a)** | MAC JE=1 + MLX MTU 9000 + unicast → 100 % FW admit at 4080 B jumbo | b06cecae |
+| **Q(b)** | SEND_IMM (0x02) + WRITE_IMM (0x11) handlers | 790cbd15 |
+| **Q(c)** | READ_REQ uses `ncrisc_noc_fast_read` from full 64-bit MR base | cf8eb752 |
+| **Phase R** | ACK opcode 0x40 reception; receiver auto-ACKs; cumulative-ACK validated at 0 % drop | (no FW change) |
+| **Phase 3.3** | 4-deep NoC PCIe read pipeline (TX_BUF0_A/B/C/D + TRIDs 4–7) | 13e160cf |
+| **Phase I** | Host `post_send_read` + correlation table at L1:0x8800; round-trip with `--rx-echo-read` | **43bdcb46** |
+
+### Validated performance (sustained, warm chip)
+
+| Direction | Frame size | Number | What it means |
 |---|---|---|---|
-| **Phase A** | CMAC PFC pause enable (RFE+PFCE + per-priority TFE) | `project_phase_a_pfc_fw_fix.md` | b9b826ce |
-| **Phase B** | Wire opcode header at 0x1AF6; uncovered `/4 vs /16` ping-pong bug | `project_phase_b_buf_start_word_addr_bug.md` | c14246df |
-| **Phase C** | Single-ring BUF_WRAP RX (eliminated ping-pong race; 0 mixed_size) | `project_phase_c_single_ring.md` | b5f184f0 |
-| **TX jumbo** | WQE ring 64→32 / payload 1536→4096 → **20.84 Gbps TX** | `project_tx_jumbo_20gbps.md` | 883b6286 |
-| **P1** | L1 relayout: TX_BUF→0x29000, RXQ1 disabled, RX ring grew to 14 KB | `project_p1_l1_relayout.md` | b697d5e7 |
-| **P2** | MR table at L1:0x8500; strict v1-opcode filter; 16-byte alignment | `project_p2_mr_table_align.md` | e2525165 |
-| **P3** | WRITE opcode 0x10 (local-L1 memcpy); MR lookup + rkey/access/bounds validation | `project_p3_write_opcode.md` | 7116e420 |
-| **P4** | **WRITE handler uses `ncrisc_noc_fast_write` → off-fabric WRITE**; 1000/1000 @ 1024B | `project_p4_noc_write.md` | 377d5a57 |
+| **WH → MLX (TX)** | 4080 B jumbo | **22–25.8 Gbps** | 4-deep PCIe-read pipeline; 100 % wire-verified via Mellanox PHY counter |
+| **MLX → WH (RX)** | 4080 B jumbo | **24.8 Gbps** | 100 % CMAC admit, 99.997 % FW admit (28 ppm unknown-opcode noise) |
+| **Reliability** | 500 frames @ 0 % drop | **100 % success** | retx_runs=23 (normal cumulative-ACK pacing) |
+| **READ initiator** | 4 × 128 B | **4/4 landed** | host post_send_read → wire → MLX echo → local MR write — exact byte-match |
 
-### Validated performance (this rig)
-
-| Direction | Frame size | Number | What's measured |
-|---|---|---|---|
-| WH → wire TX | 4080 B | **20.84 Gbps** | sustained, PCIe-post-bound |
-| MLX → WH RX | 256 B / 1024 B (16-aligned) | **100% admit** | FW serviced every CMAC-admitted frame |
-| MLX → WH RX | 1450 B | (alignment-quirk; see P2 note) | requires post-strip size ≡ 0 mod 16 |
-| MLX → WH WRITE | 1000 × 1024 B | **1000/1000, 0 drops** | P4 NoC-direct WRITE, fire-and-forget |
+Both directions are within ~1 Gbps of the Mellanox PCIe Gen3 x4 ceiling.
 
 ### Locked-in design decisions
 
@@ -101,19 +117,17 @@ Today's testbed: **WH ↔ Mellanox ConnectX-5 (Gen3 x4)**. Every Gbps number quo
 - **RX ring**: single 14 KB at L1:0x4000–0x7800; CMAC BUF_WRAP enabled.
 - **TX layout**: 32 slots × 4096 B at WQE_PAYLOAD_BASE = 0x9000 (ends at 0x29000); TX_BUF0/1 at 0x29000/0x2A000.
 
-### Planned (in dependency order)
+### Planned (post-v1, in priority order)
 
-| # | Deliverable | Effort | Memory hook |
+| # | Deliverable | Effort | Note |
 |---|---|---|---|
-| **P5** | Host `RxWqeRing` (mirror of TX WQE-ring) for SEND/SEND_IMM/WRITE_IMM completion delivery to host hugepage via NoC→PCIe DMA-push | 2-3 days | TBD |
-| **P6** | READ_REQ / READ_RESP opcodes with FW-side request-correlation table | 2 days | TBD |
-| **P7** | Host `register_mr` API + CONTROL/CTRL_REG_MR FW handler (replaces hardcoded MR slot 0) | 1 day | TBD |
-| **P8** | End-to-end PFC validation (Mellanox `mlnx_qos` + VLAN PCP=3 tagging in DPDK app) | requires partner config | `project_phase_a_pfc_fw_fix.md` (FW side done) |
-| **P9** | Multi-queue TX (TXQ0+TXQ1 parallel) — pushes TX past 20.84 Gbps | 2 days | TBD |
-| **P10** | ATOMIC_CAS / FAA opcodes + READ-side ARQ | 3 days | TBD |
-| **(rig)** | Mellanox SR-IOV + switchdev — requires `mlxconfig SRIOV_EN=1` + reboot | ½ day after rig config | `project_switchdev_blocked_sriov.md` |
-
-P5–P7 finish the production WRITE/SEND/READ surface. P8–P10 are throughput + completeness polish. Switchdev unblocks host-side RDMA past the 5–6 Gbps eSwitch ceiling.
+| **v1.1 selective-ACK** | Per-seq ACK + rate-limited retx (replaces re-fire-whole-window) | ~1 week | v1 ships with cumulative-ACK + PFC-lossless wire; selective-ACK matters once we run over lossy fabrics |
+| **v1.1 PFC e2e** | Mellanox `mlnx_qos` + VLAN PCP=3 tagging in DPDK | rig-config-heavy | FW side already done (Phase A) |
+| **v1.1 SR-IOV bypass** | mlxconfig SRIOV_EN=1 → switchdev → vfio-pci | ½ day after rig config | unblocks the ~6 Gbps eSwitch ceiling for small frames |
+| **v1.2 ATOMIC** | FAA / CAS opcodes (0x30-range) | 3 days | wire format already reserved |
+| **v1.2 multi-chip** | Multi-NIC mesh, 8+ erisc per chip | ~2 weeks | scales the SDK API beyond one port |
+| **v1.2 1 h+ soak** | Long-run stability under sustained traffic | 1 day rig time | confirms no drift in dbg counters or admit rate |
+| **v1.2 dynamic ARQ** | tune retx_timeout based on RTT measurement | 2 days | currently fixed at 10 ms |
 
 ## Critical files in the repo
 
