@@ -264,31 +264,12 @@ jobs:
           echo "ERROR: Recovery failed after $MAX_RECOVERY_ATTEMPTS attempts"
           exit 1
 
-      - name: Verify Python env on workers
+      - name: Verify ttnn imports on workers
         working-directory: /tmp
         run: |
           mpirun --pernode --tag-output bash -lc '
-            echo "========== BEGIN PYTHON DIAGNOSTICS: $(hostname) =========="
-            echo "cwd=$(pwd)"
-            echo "PATH=$PATH"
-            echo "VIRTUAL_ENV=${VIRTUAL_ENV:-<unset>}"
-            echo "PYTHONPATH=${PYTHONPATH:-<unset>}"
-            echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-<unset>}"
-            echo "TT_METAL_HOME=${TT_METAL_HOME:-<unset>}"
-            echo "which python=$(command -v python || true)"
-            echo "which python3=$(command -v python3 || true)"
-            echo "which pip=$(command -v pip || true)"
-            echo "which pip3=$(command -v pip3 || true)"
-            python3 -V
-            uv pip --version
-            python3 -c "import sys; print(\"sys.executable=\" + sys.executable)"
-            python3 -c "import sys; print(\"sys.path=\"); [print(\"  \" + p) for p in sys.path]"
-            uv pip show ttnn || true
-            uv pip show transformers || true
-            python3 -c "import ttnn; print(\"ttnn module=\" + str(getattr(ttnn, \"__file__\", None)))"
+            python3 -c "import ttnn; print(\"ttnn import: OK\")"
             python3 -c "import ttnn.device; print(\"ttnn.device import: OK\")"
-            python3 -c "import transformers; print(\"transformers=\" + transformers.__version__)"
-            echo "========== END PYTHON DIAGNOSTICS: $(hostname) =========="
           '
 
       - name: ${{ matrix.test-group.name }}
