@@ -213,6 +213,11 @@ struct dp_typed_array_t {
 
 #define DEVICE_PRINT_INITIALIZE_LOCK() device_print_detail::locking::initialize_lock()
 #define DEVICE_PRINT_KERNEL_FINISHED() device_print_detail::locking::update_kernel_finished()
+#ifdef USE_DEVICE_PRINT_PROCESSOR_INDEX_SAVED
+#define DEVICE_PRINT_UPDATE_PROCESSOR_INDEX() PROCESSOR_INDEX = internal_::get_hw_thread_idx()
+#else
+#define DEVICE_PRINT_UPDATE_PROCESSOR_INDEX()
+#endif
 
 namespace device_print_detail {
 
@@ -1405,9 +1410,6 @@ void initialize_lock() {
     auto& lock_atomic = get_device_print_buffer()->aux.lock;
     lock_atomic = 0;
 #endif
-#ifdef USE_DEVICE_PRINT_PROCESSOR_INDEX_SAVED
-    PROCESSOR_INDEX = internal_::get_hw_thread_idx();
-#endif
 }
 
 uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer, uint32_t message_size) {
@@ -1666,5 +1668,6 @@ __attribute__((noinline)) void end_message_write() {
 #define DEVICE_PRINT(format, ...)
 #define DEVICE_PRINT_INITIALIZE_LOCK()
 #define DEVICE_PRINT_KERNEL_FINISHED()
+#define DEVICE_PRINT_UPDATE_PROCESSOR_INDEX()
 
 #endif

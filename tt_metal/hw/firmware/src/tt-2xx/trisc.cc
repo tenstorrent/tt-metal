@@ -117,6 +117,7 @@ extern "C" uint32_t _start1() {
     volatile tt_l1_ptr uint8_t* const trisc_run = &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))
                                                        ->subordinate_sync.map[hartid];  // first entry is for NCRISC
     WAYPOINT("I");
+    DEVICE_PRINT_UPDATE_PROCESSOR_INDEX();
 
     extern uint32_t __ldm_data_start[];
     do_crt1(__ldm_data_start);

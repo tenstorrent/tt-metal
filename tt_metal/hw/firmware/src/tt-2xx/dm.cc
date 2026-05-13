@@ -201,6 +201,10 @@ extern "C" uint32_t _start1() {
     extern uint32_t __ldm_tdata_init[];
     do_thread_crt1(__ldm_tdata_init);
     WAYPOINT("I");
+    DEVICE_PRINT_UPDATE_PROCESSOR_INDEX();
+    if (hartid == 0) {
+        DEVICE_PRINT_INITIALIZE_LOCK();
+    }
     // DPRINT << "DM0-FW: initialized" << ENDL();
     // DEVICE_PRINT("DM0-FW: initialized\n");
 
@@ -214,7 +218,6 @@ extern "C" uint32_t _start1() {
     if (hartid > 0) {
         signal_subordinate_completion();
     } else {  // This is DM0
-        DEVICE_PRINT_INITIALIZE_LOCK();
         risc_init();
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
         thread_sync_init();
