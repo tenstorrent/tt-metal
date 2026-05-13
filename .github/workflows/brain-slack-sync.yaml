@@ -65,69 +65,111 @@ jobs:
 
           CHANNELS = ["C05GRJC4J4A", "C08SJ7MGESY"]
 
+          def slack_get(endpoint, params):
+              url = f"https://slack.com/api/{endpoint}?" + urllib.parse.urlencode(params)
+              req = urllib.request.Request(url, headers={
+                  "Authorization": f"Bearer {SLACK_TOKEN}",
+              })
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      return json.loads(resp.read().decode("utf-8"))
+              except urllib.error.HTTPError as e:
+                  body = e.read().decode()
+                  print(f"  HTTP {e.code}: {body}")
+                  raise
+
+          def check_channel(channel_id):
+              """Print channel info for diagnostics."""
+              data = slack_get("conversations.info", {"channel": channel_id})
+              if not data.get("ok"):
+                  print(f"  conversations.info error: {data.get('error')} (warning: continuing)")
+                  return
+              ch = data.get("channel", {})
+              print(f"  Channel info: name={ch.get('name')!r} is_private={ch.get('is_private')} "
+                    f"is_member={ch.get('is_member')} is_archived={ch.get('is_archived')}")
+
           def compute_oldest():
-              """Return the 'oldest' param for conversations.history."""
               if AFTER_TS:
                   return AFTER_TS
               days = int(DAYS_BACK) if DAYS_BACK else 7
               return str(time.time() - days * 86400)
 
+          def fetch_replies(channel_id, thread_ts, oldest):
+              """Fetch all replies in a thread newer than oldest."""
+              replies = []
+              cursor = None
+              while True:
+                  params = {"channel": channel_id, "ts": thread_ts, "limit": "200", "oldest": oldest}
+                  if cursor:
+                      params["cursor"] = cursor
+                  data = slack_get("conversations.replies", params)
+                  if not data.get("ok"):
+                      print(f"  replies error for thread {thread_ts}: {data.get('error')}")
+                      break
+                  msgs = data.get("messages", [])
+                  # Skip index 0 — it's the parent message, already in history
+                  replies.extend(msgs[1:] if not cursor else msgs)
+                  meta = data.get("response_metadata", {})
+                  cursor = meta.get("next_cursor", "")
+                  if not cursor:
+                      break
+              return replies
+
           def fetch_channel(channel_id):
-              """Fetch all messages from a channel, paginated."""
+              """Fetch all top-level messages + thread replies from a channel."""
               all_messages = []
               cursor = None
               oldest = compute_oldest()
 
+              # Fetch top-level messages
               while True:
-                  params = {
-                      "channel": channel_id,
-                      "limit": "200",
-                      "oldest": oldest,
-                  }
+                  params = {"channel": channel_id, "limit": "200", "oldest": oldest}
                   if BEFORE_TS:
                       params["latest"] = BEFORE_TS
                   if cursor:
                       params["cursor"] = cursor
 
-                  url = "https://slack.com/api/conversations.history?" + urllib.parse.urlencode(params)
-                  req = urllib.request.Request(url, headers={
-                      "Authorization": f"Bearer {SLACK_TOKEN}",
-                      "Content-Type": "application/json; charset=utf-8",
-                  })
-
-                  try:
-                      with urllib.request.urlopen(req, timeout=30) as resp:
-                          data = json.loads(resp.read().decode("utf-8"))
-                  except urllib.error.HTTPError as e:
-                      print(f"HTTP error {e.code} for channel {channel_id}: {e.read().decode()}")
-                      raise
+                  data = slack_get("conversations.history", params)
 
                   if not data.get("ok"):
+                      print(f"  conversations.history error: {data.get('error')!r}")
+                      print(f"  Full response: {json.dumps(data)}")
                       raise RuntimeError(f"Slack API error for {channel_id}: {data.get('error', data)}")
 
                   messages = data.get("messages", [])
+                  print(f"  history page: {len(messages)} messages (has_more={data.get('has_more')})")
                   all_messages.extend(messages)
-                  print(f"  Fetched {len(messages)} messages (total so far: {len(all_messages)})")
 
-                  # Pagination
                   meta = data.get("response_metadata", {})
                   cursor = meta.get("next_cursor", "")
                   if not cursor:
                       break
+
+              # Fetch thread replies for messages that have them
+              threaded_parents = [m for m in all_messages if int(m.get("reply_count", 0)) > 0]
+              print(f"  Fetching replies for {len(threaded_parents)} threaded messages...")
+              reply_count = 0
+              for parent in threaded_parents:
+                  replies = fetch_replies(channel_id, parent["ts"], oldest)
+                  # Attach replies inline under parent for easy reading
+                  parent["_replies"] = replies
+                  reply_count += len(replies)
+              print(f"  Total replies fetched: {reply_count}")
 
               return all_messages
 
           os.makedirs("slack_output", exist_ok=True)
 
           for ch in CHANNELS:
-              print(f"Fetching channel {ch} ...")
+              print(f"\nFetching channel {ch} ...")
+              check_channel(ch)
               msgs = fetch_channel(ch)
               out_path = f"slack_output/slack_{ch}.json"
               with open(out_path, "w") as f:
                   json.dump(msgs, f)
-              print(f"  Wrote {len(msgs)} messages to {out_path}")
+              print(f"  Wrote {len(msgs)} top-level messages to {out_path}")
 
-          print("Done.")
+          print("\nDone.")
           PYEOF
 
       - name: Upload artifact
