@@ -106,7 +106,7 @@ sfpi_inline sfpi::vFloat inline_exp_sech2_tail(sfpi::vFloat a) {
     sfpi::vFloat poly = PolynomialEvaluator::eval(r, sfpi::vConst1, sfpi::vConst1, C2, C3, C4);
 
     // 2^k scaling via direct exponent bit manipulation (FREE)
-    sfpi::vInt p_exp = sfpi::exexp_nodebias(poly);
+    sfpi::vInt p_exp = sfpi::exexp(poly, sfpi::ExponentMode::NoDebias);
     sfpi::vInt new_exp = p_exp + k_int;
 
     // FTZ: if exponent underflows, result is 0 (natural zero saturation)

@@ -92,7 +92,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: bh_p150b_civ2_viommu,bh_p300
+      enabled-skus: bh_p300,bh_galaxy
       model: deepseek_decode
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       job-prefix: "[DeepSeek Decode] "
@@ -112,17 +112,18 @@ jobs:
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       job-prefix: "[Wan2.2] "
 
-  deepseek-sp1-tests:
-    name: "SP1 DeepSeek Tests"
-    needs: build-artifact
-    if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sp1_deepseek' || github.event_name == 'schedule' }}
-    secrets: inherit
-    uses: ./.github/workflows/demo-sp-multihost-impl.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      sp-config: sp1
+  # NOTE: Disabled SP1 tests for now as we debug SP4 pipeline
+  # deepseek-sp1-tests:
+  #   name: "SP1 DeepSeek Tests"
+  #   needs: build-artifact
+  #   if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sp1_deepseek' || github.event_name == 'schedule' }}
+  #   secrets: inherit
+  #   uses: ./.github/workflows/demo-sp-multihost-impl.yaml
+  #   with:
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     sp-config: sp1
 
   deepseek-sp4-tests:
     name: "SP4 DeepSeek Tests"

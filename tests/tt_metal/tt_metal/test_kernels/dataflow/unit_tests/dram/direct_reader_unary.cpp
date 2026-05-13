@@ -6,11 +6,11 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/kernel_thread_globals.h"
-#include "experimental/dataflow_buffer.h"
-#include "experimental/endpoints.h"
-#include "experimental/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
 #ifndef ARCH_QUASAR
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #endif
 
 void kernel_main() {
@@ -35,11 +35,11 @@ void kernel_main() {
     uint32_t producer_idx = 0;
 #endif
 
-    constexpr experimental::AllocatorBankType bank_type = experimental::AllocatorBankType::DRAM;
-    experimental::AllocatorBank<bank_type> src_dram;
-    experimental::Noc noc;
+    constexpr AllocatorBankType bank_type = AllocatorBankType::DRAM;
+    AllocatorBank<bank_type> src_dram;
+    Noc noc;
     if constexpr (use_dfbs) {
-        experimental::DataflowBuffer dfb(cb_id);
+        DataflowBuffer dfb(cb_id);
         uint32_t ublock_size_bytes = dfb.get_entry_size();
         // stride_factor = stride_in_entries: how many entry-sized slots one
         // producer skips per tile. For a DFB with N producers interleaved
@@ -50,7 +50,7 @@ void kernel_main() {
 
         for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
 #ifdef ARCH_QUASAR
-            noc.async_read<experimental::Noc::TxnIdMode::ENABLED>(src_dram, dfb, {.bank_id = src_bank_id, .addr = tlocal_src_addr}, {});
+            noc.async_read<Noc::TxnIdMode::ENABLED>(src_dram, dfb, {.bank_id = src_bank_id, .addr = tlocal_src_addr}, {});
 #else
             dfb.reserve_back(ublock_size_tiles);
             noc.async_read(src_dram, dfb, ublock_size_bytes, {.bank_id = src_bank_id, .addr = tlocal_src_addr}, {});
@@ -63,7 +63,7 @@ void kernel_main() {
     }
 #ifndef ARCH_QUASAR
     else {
-        experimental::CircularBuffer cb(cb_id);
+        CircularBuffer cb(cb_id);
         uint32_t ublock_size_bytes = cb.get_tile_size() * ublock_size_tiles;
 
         for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {

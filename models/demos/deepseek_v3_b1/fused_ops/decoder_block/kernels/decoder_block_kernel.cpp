@@ -2323,7 +2323,6 @@ void kernel_main() {
         const auto [skip_attention, skip_kv_cache_update, local_cur_pos] = get_device_mla_work_assignment(
             cur_pos, Core::kv_cache_sp_device_idx, Core::kv_cache_device_chunk_size, Core::kv_cache_num_sp_devices);
 
-        // DPRINT<<"CUR_POS: "<<cur_pos<<" CUR_SLOT: "<<metadata_ptr->slot_id<<ENDL();
         if (!skip_attention) {
             // ====================================================================
             // Matmul operation
@@ -2382,7 +2381,7 @@ void kernel_main() {
                 // ================================================================
                 {
                     DeviceZoneScopedN("QNOPE/MATMUL3");
-                    deepseek_b1_ops::Matmul::Op<Matmul3CTArgs, Core::is_qnope_core, true, false> matmul3;
+                    deepseek_b1_ops::Matmul::Op<Matmul3CTArgs, Core::is_qnope_core, true, false, true> matmul3;
                     matmul3(matmul3_args);
                 }
 
@@ -3042,6 +3041,15 @@ void kernel_main() {
             unified_kernels::reconfig_cb_interfaces(mla_cb_config);
             setup_mla_sharded_buffers();
         }
+        {
+            volatile tt_l1_ptr uint32_t* risc_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                get_named_compile_time_arg_val("risc_sync_semaphore_addr"));
+            unified_kernels::sync_riscs_enter(risc_sync_sem);
+            unified_kernels::sync_riscs_exit(risc_sync_sem);
+        }
+#if defined(COMPILE_FOR_TRISC)
+        deepseek_compute_kernel_init();
+#endif
 #ifdef ENABLE_REDUCE_TO_ONE
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_sender_core) {

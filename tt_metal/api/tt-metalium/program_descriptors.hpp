@@ -16,6 +16,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 
 #include <bitset>
+#include <filesystem>
 #include <optional>
 #include <variant>
 #include <vector>
@@ -120,6 +121,7 @@ struct KernelDescriptor {
     using CompileTimeArgs = std::vector<uint32_t>;
     using NamedCompileTimeArgs = std::vector<std::pair<std::string, uint32_t>>;
     using Defines = std::vector<std::pair<std::string, std::string>>;
+    using IncludePaths = std::vector<std::filesystem::path>;
     using CoreRuntimeArgs = std::vector<uint32_t>;
     using RuntimeArgs = std::vector<std::pair<CoreCoord, CoreRuntimeArgs>>;
     using CommonRuntimeArgs = CoreRuntimeArgs;
@@ -145,6 +147,8 @@ struct KernelDescriptor {
     std::optional<KernelBuildOptLevel> opt_level = std::nullopt;
 
     ConfigDescriptor config;
+
+    IncludePaths compiler_include_paths;
 
     // Buffer args declared via emplace_runtime_args() / emplace_common_runtime_args().
     // The framework resolves these to direct pointers into the cached Program on cache miss,

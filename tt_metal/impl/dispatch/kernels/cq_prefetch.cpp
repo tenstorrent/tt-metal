@@ -41,7 +41,13 @@ union CQPrefetchHToPrefetchDHeader {
 };
 static_assert((sizeof(CQPrefetchHToPrefetchDHeader) & (CQ_PREFETCH_CMD_BARE_MIN_SIZE - 1)) == 0);
 
+#if PREFETCH_Q_ENTRY_BITS == 16
 using prefetch_q_entry_type = uint16_t;
+#elif PREFETCH_Q_ENTRY_BITS == 32
+using prefetch_q_entry_type = uint32_t;
+#else
+#error "Unsupported PREFETCH_Q_ENTRY_BITS"
+#endif
 
 // Use named defines instead of get_compile_time_arg_val indices
 constexpr uint32_t downstream_cb_base = DOWNSTREAM_CB_BASE;

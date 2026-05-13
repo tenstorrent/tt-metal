@@ -1197,8 +1197,8 @@ def test_demo_text(
 
                 if teacher_forcing:
                     out_tok = ref_tokens[max_encoded_prompt_len + iteration + 1]
-                elif pcc_check:
-                    out_tok = tt_out_tok.argmax(dim=-1)
+                elif pcc_check and tt_out_tok.shape[-1] >= vocab_size:
+                    out_tok = tt_out_tok.float().argmax(dim=-1)
                 else:
                     out_tok = tt_out_tok.reshape(-1).to(torch.long)
 

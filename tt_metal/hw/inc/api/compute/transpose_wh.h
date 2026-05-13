@@ -35,12 +35,12 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __b
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     const std::uint32_t src_format = get_operand_src_format(icb);
     const std::uint32_t dst_format = get_operand_dst_format(icb);
+
+#ifndef ARCH_QUASAR
     const bool is_int32 = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;
     const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
                                        (dst_format == (std::uint32_t)DataFormat::UInt32) ||
                                        (dst_format == (std::uint32_t)DataFormat::Int32);
-
-#ifndef ARCH_QUASAR
     if (is_int32) {
         UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE, true>(icb)));
     } else {
@@ -59,7 +59,9 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __b
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
 #else
-    ASSERT(!is_int32);  // transpose dest not implemented for Quasar yet
+    const bool enable_unpack_to_dest =
+        (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
+    ASSERT(!enable_unpack_to_dest);  // transpose dest not implemented for Quasar yet, TODO: tt-llk#1559
     UNPACK((llk_unpack_hw_configure(icb)));
     UNPACK((llk_unpack_A_init<true /*transpose*/, DST_ACCUM_MODE>(icb)));
 
@@ -87,11 +89,11 @@ ALWI void transpose_wh_init_short(uint32_t icb, uint32_t call_line = __builtin_L
     state_configure(icb, call_line);
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     const std::uint32_t dst_format = get_operand_dst_format(icb);
+
+#ifndef ARCH_QUASAR
     const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
                                        (dst_format == (std::uint32_t)DataFormat::UInt32) ||
                                        (dst_format == (std::uint32_t)DataFormat::Int32);
-
-#ifndef ARCH_QUASAR
     if (enable_unpack_to_dest) {
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
             true, false, icb)));
@@ -102,7 +104,9 @@ ALWI void transpose_wh_init_short(uint32_t icb, uint32_t call_line = __builtin_L
         MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     }
 #else
-    ASSERT(!is_int32);  // transpose dest not implemented for Quasar yet
+    const bool enable_unpack_to_dest =
+        (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
+    ASSERT(!enable_unpack_to_dest);  // transpose dest not implemented for Quasar yet, TODO: tt-llk#1559
     UNPACK((llk_unpack_A_init<true /*transpose*/, DST_ACCUM_MODE>(icb)));
     MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
 #endif
@@ -131,11 +135,11 @@ ALWI void transpose_wh_init_short(uint32_t icb, uint32_t call_line = __builtin_L
 ALWI void transpose_wh_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     const std::uint32_t dst_format = get_operand_dst_format(icb);
+
+#ifndef ARCH_QUASAR
     const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
                                        (dst_format == (std::uint32_t)DataFormat::UInt32) ||
                                        (dst_format == (std::uint32_t)DataFormat::Int32);
-
-#ifndef ARCH_QUASAR
     if (enable_unpack_to_dest) {
         UNPACK(
             (llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(icb, itile)));
@@ -147,7 +151,9 @@ ALWI void transpose_wh_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
         MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(idst, icb)));
     }
 #else
-    ASSERT(!is_int32);  // transpose dest not implemented for Quasar yet
+    const bool enable_unpack_to_dest =
+        (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
+    ASSERT(!enable_unpack_to_dest);  // transpose dest not implemented for Quasar yet, TODO: tt-llk#1559
     UNPACK((llk_unpack_A(icb, itile)));
     MATH((llk_math_eltwise_unary_datacopy(idst, icb)));
 #endif

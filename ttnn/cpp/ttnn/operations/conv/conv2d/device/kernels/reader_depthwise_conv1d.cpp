@@ -47,7 +47,7 @@ void kernel_main() {
     experimental::CB act_cb(cb_id_act);
     experimental::CB sharded_act_cb(cb_id_sharded_act);
     experimental::CB reader_indices_cb(cb_reader_indices);
-    experimental::Noc noc;
+    Noc noc;
 
     // LOOP TO FILL READER INDICES
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =

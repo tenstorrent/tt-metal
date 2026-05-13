@@ -6,8 +6,8 @@
 #include "api/dataflow/dataflow_api.h"
 #ifdef ARCH_QUASAR
 #include "api/kernel_thread_globals.h"
-#include "experimental/dataflow_buffer.h"
-#include "experimental/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
 #endif
 
 void kernel_main() {
@@ -32,9 +32,9 @@ void kernel_main() {
     reader_id = get_my_thread_id();
     num_readers = get_num_threads();
     batch_start = get_arg_val<uint32_t>(9);
-    experimental::Noc noc;
-    experimental::DataflowBuffer dfb0(0);
-    experimental::DataflowBuffer dfb1(1);
+    Noc noc;
+    DataflowBuffer dfb0(0);
+    DataflowBuffer dfb1(1);
     const uint32_t src0_tile_bytes = dfb0.get_entry_size();
     const uint32_t src1_tile_bytes = dfb1.get_entry_size();
 #else

@@ -366,6 +366,38 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CbOnlyBuffers_Return
     EXPECT_TRUE(resolved.empty());
 }
 
+// Regression: when tensor_buffers contains the same Buffer* more than once
+// (e.g. matmul(X, X) in newton-schulz, or an output that aliases an input),
+// resolve_bindings cannot disambiguate which binding maps to which slot from
+// Buffer* alone.  std::find would silently return the first occurrence for
+// every binding, causing apply_resolved_bindings to write the same address to
+// every slot and producing wrong results on a future cache hit with two
+// distinct tensors.
+//
+// The fix bails out and returns an empty ResolvedBindings, forcing the
+// adapter onto the slow path (rebuild the descriptor) for that cache hit.
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_DuplicateBuffer_ReturnsEmpty) {
+    auto buf_a = MakeDramBuffer(device());
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    // Two bindings for the same Buffer*, simulating an op that takes the same
+    // tensor at two distinct positional slots.
+    kd.emplace_runtime_args({0, 0}, {buf_a.get(), buf_a.get()});
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+
+    Program program{desc};
+    // tensor_buffers reflects "X used twice" — the same Buffer* appears at
+    // both slots.  resolve_bindings must report empty so the adapter takes
+    // the slow path.
+    ResolvedBindings resolved = resolve_bindings(program, desc, {buf_a.get(), buf_a.get()});
+
+    EXPECT_TRUE(resolved.empty());
+    EXPECT_TRUE(resolved.rt_args.empty());
+    EXPECT_TRUE(resolved.cbs.empty());
+}
+
 // resolve_bindings fires TT_FATAL when a binding buffer is not in tensor_buffers.
 TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_BufferNotInTensorList_Throws) {
     auto buf_a = MakeDramBuffer(device());
@@ -381,6 +413,51 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_BufferNotInTensorLis
 
     // buf_a is not in the tensor list — should throw.
     EXPECT_ANY_THROW(resolve_bindings(program, desc, {buf_other.get()}));
+}
+
+// Regression: a scalar runtime arg whose value happens to numerically equal a
+// registered buffer's address must NOT trigger a safety-scan false positive.
+//
+// An earlier version of resolve_bindings ran a value-match scan that looked for
+// any uint32_t arg matching a registered buffer address but lacking a
+// BufferBinding at that position, and fired TT_FATAL. The intent was to catch
+// the push_back(buf->address()) factory-author mistake, but the check produced
+// false positives whenever a legitimate scalar arg (loop counter, shape dim,
+// etc.) happened to share the same numeric value as a buffer's address — most
+// notably under graph-capture (sentinel addresses) and for low-address buffers.
+//
+// The check was removed; this test pins that behavior so it is not silently
+// reintroduced.
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_ScalarMatchingBufferAddress_DoesNotThrow) {
+    auto buf_a = MakeDramBuffer(device());
+    const uint32_t collision_value = buf_a->address();
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    // arg[0] is the registered buffer; arg[1] is a plain scalar that happens to
+    // equal buf_a's address. The legacy value-match scan would have flagged
+    // arg[1] as an undeclared address; the current implementation must not.
+    kd.emplace_runtime_args({0, 0}, {buf_a.get(), collision_value});
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+
+    Program program{desc};
+    EXPECT_NO_THROW(resolve_bindings(program, desc, {buf_a.get()}));
+}
+
+// Regression: same idea for common runtime args.
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CommonScalarMatchingBufferAddress_DoesNotThrow) {
+    auto buf_a = MakeDramBuffer(device());
+    const uint32_t collision_value = buf_a->address();
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    kd.emplace_common_runtime_args({buf_a.get(), collision_value});
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+
+    Program program{desc};
+    EXPECT_NO_THROW(resolve_bindings(program, desc, {buf_a.get()}));
 }
 
 }  // namespace
