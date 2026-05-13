@@ -40,7 +40,11 @@ The rule passes you:
 
 3. **Check the test dir:**
    ```bash
-   test -d "<worktree>/tests/python_tests/<arch>"
+   if [ "<arch>" = "quasar" ]; then
+      test -d "<worktree>/tests/python_tests/quasar"
+   else
+      test -d "<worktree>/tests/python_tests"
+   fi
    ```
    If missing, stop and tell the user — the script will exit 3 anyway.
 
@@ -69,15 +73,33 @@ Use a blocking shell invocation with a sufficiently high timeout (~30 minutes) s
 | `--no-split`        | `run --no-split`  | combined compile+run in one pytest invocation               |
 | variant counting    | `count`           | outputs integer to stdout; collection log to stderr         |
 
+## Reading the Outcome (fast path)
+
+The script emits a single-line verdict marker at the very end of each phase:
+
+```
+=== RUN_LLK_TESTS_VERDICT === <VERDICT> (exit <N>, phase=<compile|simulate>, test=…, arch=…)
+```
+
+**Always start by tailing the output for this line** instead of scanning the
+full pytest stream. It tells you the outcome (and which phase produced it)
+without reading megabytes of `[gwN] PASSED` progress noise.
+
+For deeper context, look for these blocks (each appears at most once):
+- `RUN_LLK_TESTS_HANG: watchdog tripped` — full hang diagnosis incl. `tt-triage` (HANG only)
+- `=== FAILURES =` — pytest's own failures section listing every failed variant + reason (FAIL/HANG)
+- `ERROR | conftest:pytest_runtest_makereport:… - TENSIX TIMED OUT …` — live logger line per hung variant (HANG)
+
 ## Exit Code Diagnosis
 
-| Code | Meaning              | Action                                                                |
-|------|----------------------|-----------------------------------------------------------------------|
-| 0    | All tests passed     | Report PASS                                                           |
-| 1    | One or more failures | Surface failing variants from the script's stdout/stderr              |
-| 2    | Compile failed       | Surface compile error from the script's stdout/stderr                 |
-| 3    | Env error            | Likely venv missing, simulator port stuck, or `flock` timeout. Report root cause; do **not** retry blindly |
-| 4    | Bad args             | Bug in the rule/agent invocation — surface and stop                   |
+| Code | Verdict      | Action                                                                |
+|------|--------------|-----------------------------------------------------------------------|
+| 0    | PASS         | Report PASS                                                           |
+| 1    | FAIL         | Surface failing variants from `= FAILURES =` section                  |
+| 2    | COMPILE_FAIL | Surface compile error from compile phase output                       |
+| 3    | ENV_ERROR    | Likely venv missing, simulator port stuck, or `flock` timeout. Report root cause; do **not** retry blindly |
+| 4    | BAD_ARGS     | Bug in the rule/agent invocation — surface and stop                   |
+| 5    | HANG         | Watchdog tripped or post-mortem detected `TENSIX TIMED OUT`. Surface the `RUN_LLK_TESTS_HANG` block (includes `tt-triage` output if available). Device has already been reset (`tt-smi -r`) and any stale `pytest --compile-consumer` killed. Do **not** retry — report HANG with the failing variant and the triage summary. |
 
 The script does not persist logs to disk — pytest output is captured by the
 shell. Redirect to a file yourself if you need a persistent log.
@@ -103,6 +125,18 @@ FAIL — test_sfpu_square_quasar.py (arch=quasar, command=run)
 ENV_ERROR — test_eltwise_binary_quasar.py (arch=quasar)
 - Cause: simulator lock timeout (900s) — another agent is holding /tmp/tt-llk-test-quasar.lock
 - Suggestion: wait, or check for stale `emu-quasar` processes
+```
+
+```
+HANG — test_matmul.py (arch=blackhole, command=run)
+- Cause: TENSIX TIMED OUT during simulate phase
+- Failing variant(s): <variant id from longrepr>
+- tt-triage:
+    <one-paragraph summary of the triage block from the script's stderr —
+     which RISC, mailbox state, NoC, anything notable. Do NOT paste the
+     whole block; quote the key lines.>
+- Device reset: tt-smi -r ran after detection
+- Next: re-run debug-kernel rule with the variant id (don't retry the run — same hang will reappear)
 ```
 
 ## Limits

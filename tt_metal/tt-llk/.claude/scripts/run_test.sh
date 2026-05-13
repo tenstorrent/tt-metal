@@ -1,12 +1,12 @@
 #!/bin/bash
-# run_llk_tests.sh — centralised LLK test runner for codegen agents.
+# run_test.sh — centralised LLK test runner for codegen agents.
 #
 # Encapsulates the two-step compile-then-simulate flow, flock-based simulator
 # serialisation, stale-process cleanup, and temp-file lifecycle so agents never
 # have to manage any of that themselves.
 #
 # Usage:
-#   run_llk_tests.sh <COMMAND> --worktree DIR --arch ARCH --test FILE [OPTIONS]
+#   run_test.sh <COMMAND> --worktree DIR --arch ARCH --test FILE [OPTIONS]
 #
 # Commands:
 #   count     Count test variants (collection-only; outputs integer to stdout)
@@ -51,29 +51,36 @@
 #   2  Compile step failed  (only from the 'run' command)
 #   3  Environment error (flock timeout, simulator port stuck, venv missing)
 #   4  Usage / validation error (missing required options)
+#   5  Hang detected by watchdog. QSR: emu-quasar stalled (CPU ticks flat).
+#      BH/WH: pytest stdout went quiet past the silicon-stall threshold;
+#      tt-triage.py output (if available) is dumped to stderr and the device
+#      is reset with tt-smi -r. See _watchdog_emu / _watchdog_silicon.
 #
 # Agents invoke this via the Bash tool with timeout: 1800000 (synchronous,
 # never run_in_background). The script blocks until completion and returns one
 # of the exit codes above — the agent reads that code and decides the diagnosis
-# (PASS / compile error / test failure / ENV_ERROR) without parsing internals.
+# (PASS / compile error / test failure / ENV_ERROR / HANG) without parsing
+# internals. A HANG (exit 5) is the side-channel signal that the device or
+# simulator wedged, distinct from a normal test failure (exit 1) — same trick
+# as tt-metal's run_safe_pytest.sh uses with tt-triage.
 #
 # Examples:
-#   # Count variants before deciding --maxfail (see tester Step 2.1 table)
-#   VARIANT_COUNT=$(bash "$WORKTREE_DIR/codegen/scripts/run_llk_tests.sh" count \
+#   # Count variants before deciding --maxfail
+#   VARIANT_COUNT=$(bash "$WORKTREE_DIR/.claude/scripts/run_test.sh" count \
 #       --worktree "$WORKTREE_DIR" --arch quasar --test test_sfpu_square_quasar.py)
 #
 #   # Compile + simulate, stop after 5 failures
-#   bash "$WORKTREE_DIR/codegen/scripts/run_llk_tests.sh" run \
+#   bash "$WORKTREE_DIR/.claude/scripts/run_test.sh" run \
 #       --worktree "$WORKTREE_DIR" --arch quasar --test test_sfpu_square_quasar.py \
 #       --maxfail 5
 #   RUN_EXIT=$?
 #
 #   # Verification run — full matrix, no maxfail
-#   bash "$WORKTREE_DIR/codegen/scripts/run_llk_tests.sh" run \
+#   bash "$WORKTREE_DIR/.claude/scripts/run_test.sh" run \
 #       --worktree "$WORKTREE_DIR" --arch quasar --test test_sfpu_square_quasar.py
 #
 #   # Single variant by parametrize ID (single-quotes and brackets are safe)
-#   bash "$WORKTREE_DIR/codegen/scripts/run_llk_tests.sh" simulate \
+#   bash "$WORKTREE_DIR/.claude/scripts/run_test.sh" simulate \
 #       --worktree "$WORKTREE_DIR" --arch quasar --test test_sfpu_square_quasar.py \
 #       --test-id "test_sfpu_square_quasar.py::test_sfpu_square_quasar[formats:(..., 'SyncFull', ...)]"
 
@@ -189,6 +196,168 @@ _validate() {
   esac
 }
 
+# ── watchdog ──────────────────────────────────────────────────────────────────
+# Hang detection runs as a sidecar process during _do_simulate. It writes
+# HANG_LOG as the side-channel signal that the wrapper checks after wait —
+# non-empty = "this was a hang, not a normal pytest failure" (same pattern as
+# tt-metal's run_safe_pytest.sh uses with tt-triage's log file).
+#
+# Two flavours, picked by MODE inside _do_simulate:
+#   * QSR (emulation): poll emu-quasar's /proc/<pid>/stat for CPU tick
+#     progress. The simulator is a CPU-bound kHz emulation loop, so utime+stime
+#     advances continuously when it's healthy — flat ticks for tens of seconds
+#     means the sim itself is wedged, not just slow.
+#   * BH/WH (silicon): poll a heartbeat file's mtime (fed by tee-ing consumer
+#     stdout). On stall, run tt-triage.py to capture device callstacks/NoC
+#     state, dump them to HANG_LOG, and tt-smi -r afterwards. This is coarser
+#     than QSR's signal because pytest output is bursty (compile-consumer
+#     rebuilds variants in series), so the threshold has to absorb that.
+
+HANG_POLL_SECS=5
+HANG_STALL_QUASAR=30        # tight: healthy emu-quasar always burns CPU
+HANG_STALL_SILICON=300      # loose: absorbs compile-consumer's quiet phases
+LLK_TRIAGE_SCRIPT_REL=".claude/scripts/llk_triage.py"
+
+# Recursively kill PID and all descendants. We need this instead of
+# `pkill -9 -P pid` (which only walks one level) because the consumer tree
+# is `subshell → bash sim_script → pytest → xdist workers`. A shallow kill
+# leaves pytest alive and reparented to init, where it keeps holding the
+# device — which then makes the next run's consumer phase hang on device
+# acquisition, masquerading as a "tt-smi -r didn't recover" symptom.
+_kill_tree() {
+  local pid="$1" child
+  for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+    _kill_tree "$child"
+  done
+  kill -9 "$pid" 2>/dev/null || true
+}
+
+# Emit a single-line outcome marker at the very end of a phase so callers
+# (especially the llk-test-runner agent) can identify what happened by
+# tailing the output instead of scanning the full pytest stream. Goes to
+# stderr to stay distinct from pytest stdout.
+_emit_verdict() {
+  local exit_code="$1" phase="$2"
+  local verdict
+  case "$exit_code" in
+    0) verdict="PASS" ;;
+    1) verdict="FAIL" ;;
+    2) verdict="COMPILE_FAIL" ;;
+    3) verdict="ENV_ERROR" ;;
+    4) verdict="BAD_ARGS" ;;
+    5) verdict="HANG" ;;
+    *) verdict="EXIT_${exit_code}" ;;
+  esac
+  echo "=== RUN_LLK_TESTS_VERDICT === ${verdict} (exit ${exit_code}, phase=${phase}, test=${TEST_FILE}, arch=${ARCH})" >&2
+}
+
+# Record why the watchdog tripped. Just the reason line — actual device
+# triage runs later in _do_simulate's hang-handling section, AFTER the
+# consumer tree has been killed (so a fresh ttexalens session can open the
+# device handle the dying pytest just released).
+_dump_hang_diagnosis() {
+  local hang_log="$1" reason="$2"
+  printf '%s\n' "$reason" >"$hang_log"
+}
+
+# Run the LLK-specific triage script and stream output to stderr. Called
+# after _kill_tree (so the device handle is free) and before tt-smi -r
+# (so the wedged Tensix state is still observable). The script needs the
+# tests venv for ttexalens — activate it before invoking python3.
+#
+# tt-metal/tools/tt-triage.py is intentionally NOT used here. It reads
+# state through Metal's Inspector subsystem (RPC socket or
+# /tmp/tt-metal/inspector log dir). LLK tests bypass Metal entirely, so
+# Inspector data never exists and every downstream tt-triage check just
+# prints "Cannot run script due to failed dependencies".
+_run_llk_triage() {
+  local triage_script="${WORKTREE}/${LLK_TRIAGE_SCRIPT_REL}"
+  if [[ ! -f "$triage_script" ]]; then
+    echo "[llk-triage] not found: ${triage_script}" >&2
+    return
+  fi
+  echo "--- llk-triage ---" >&2
+  (
+    # shellcheck disable=SC1091
+    source "${VENV}/bin/activate"
+    timeout 60 python3 "$triage_script" --arch "$ARCH" 2>&1
+  ) >&2 || true
+  echo "--- end llk-triage ---" >&2
+}
+
+# QSR watchdog. Polls emu-quasar tick counter; on stall, writes HANG_LOG and
+# kills the consumer tree plus any straggler simulator processes.
+_watchdog_emu() {
+  local consumer_pid="$1" hang_log="$2" emu_name="$3"
+  local last_ticks=-1 stuck_for=0 emu_pid ticks
+
+  while kill -0 "$consumer_pid" 2>/dev/null; do
+    sleep "$HANG_POLL_SECS"
+    emu_pid=$(pgrep -f "$emu_name" 2>/dev/null | head -1)
+    if [[ -z "$emu_pid" ]]; then
+      last_ticks=-1
+      stuck_for=0
+      continue
+    fi
+    ticks=$(awk '{print $14+$15}' "/proc/${emu_pid}/stat" 2>/dev/null) || ticks=""
+    [[ -z "$ticks" ]] && continue
+    if [[ "$ticks" == "$last_ticks" ]]; then
+      stuck_for=$((stuck_for + HANG_POLL_SECS))
+      if [[ "$stuck_for" -ge "$HANG_STALL_QUASAR" ]]; then
+        printf '%s (pid %s) stalled at %s CPU ticks for %ds\n' \
+          "$emu_name" "$emu_pid" "$ticks" "$stuck_for" >"$hang_log"
+        kill -9 "$emu_pid" 2>/dev/null || true
+        _kill_tree "$consumer_pid"
+        return
+      fi
+    else
+      stuck_for=0
+      last_ticks="$ticks"
+    fi
+  done
+}
+
+# Silicon (BH/WH) watchdog. Two trip conditions:
+#   1. TENSIX TIMED OUT appears in the consumer's output. Inline detection
+#      lets us catch a per-test timeout the moment pytest emits it. NOTE: with
+#      stock pytest flags, the longrepr containing this string is buffered until
+#      the end-of-run failures section, so this path mostly catches the tail.
+#      The post-mortem grep in _do_simulate covers the buffered case.
+#   2. Heartbeat mtime hasn't advanced past HANG_STALL_SILICON seconds — pytest
+#      itself is wedged with no output at all (kernel hang where the Python
+#      side never gets its own timeout).
+# On trip: write HANG_LOG (with tt-triage output if available), kill the
+# consumer tree, return. _do_simulate runs tt-smi -r after wait so it doesn't
+# race with the still-running consumer.
+_watchdog_silicon() {
+  local consumer_pid="$1" hang_log="$2" heartbeat="$3"
+  local now mtime quiet_for tensix_line
+
+  while kill -0 "$consumer_pid" 2>/dev/null; do
+    sleep "$HANG_POLL_SECS"
+
+    # Live path: TENSIX TIMED OUT in the output stream.
+    tensix_line=$(grep -m1 "TENSIX TIMED OUT" "$heartbeat" 2>/dev/null || true)
+    if [[ -n "$tensix_line" ]]; then
+      _dump_hang_diagnosis "$hang_log" \
+        "tensix-timeout in output: ${tensix_line}"
+      _kill_tree "$consumer_pid"
+      return
+    fi
+
+    # Stall path: no output at all for HANG_STALL_SILICON seconds.
+    now=$(date +%s)
+    mtime=$(stat -c %Y "$heartbeat" 2>/dev/null || echo "$now")
+    quiet_for=$((now - mtime))
+    if [[ "$quiet_for" -ge "$HANG_STALL_SILICON" ]]; then
+      _dump_hang_diagnosis "$hang_log" \
+        "silicon hang: no pytest output for ${quiet_for}s (threshold ${HANG_STALL_SILICON}s)"
+      _kill_tree "$consumer_pid"
+      return
+    fi
+  done
+}
+
 # ── count ─────────────────────────────────────────────────────────────────────
 # Outputs the variant count (integer) to stdout.
 # Collection log (including any errors) goes to stderr so the caller can
@@ -218,7 +387,7 @@ _do_count() {
   # Last non-blank line looks like "N tests collected" or "N test collected"
   local last count
   last=$(printf '%s\n' "${output}" | grep -v '^[[:space:]]*$' | tail -1)
-  count=$(printf '%s' "${last}" | grep -oP '^\d+' || echo "0")
+  count=$(printf '%s' "${last}" | grep -oE '^[0-9]+' || echo "0")
   echo "${count}"
 }
 
@@ -276,10 +445,14 @@ _do_simulate() {
   # Write the pytest invocation to a temp file so that:
   #   1. flock can use "flock LOCK bash SCRIPT" without inline quoting nightmares
   #   2. TEST_ID values (single-quotes, brackets, commas) are literal, not shell-expanded
-  local sim_script
+  local sim_script hang_log heartbeat
   sim_script=$(mktemp /tmp/llk_run_sim_XXXXXX.sh)
-  # Trap ensures the temp file is removed even on SIGTERM / SIGINT
-  trap 'rm -f "${sim_script}"' EXIT INT TERM
+  hang_log=$(mktemp /tmp/llk_hang_XXXXXX.log)
+  heartbeat=$(mktemp /tmp/llk_heartbeat_XXXXXX.log)
+  : >"$hang_log"
+  : >"$heartbeat"
+  # Trap ensures temp files are removed even on SIGTERM / SIGINT
+  trap 'rm -f "${sim_script}" "${hang_log}" "${heartbeat}"' EXIT INT TERM
 
   # Build the pytest flags string.
   # Simulator mode adds --run-simulator/--port; hardware mode targets silicon directly.
@@ -337,8 +510,12 @@ _do_simulate() {
   _vlog "Acquiring ${MODE} lock: ${LOCKFILE} (timeout=${LOCK_TIMEOUT}s)"
 
   # Use fd-based flock so we can distinguish lock-timeout (exit 3) from test
-  # failure (exit 1).  The subshell scopes the fd so it closes automatically.
-  local sim_exit
+  # failure (exit 1). The subshell scopes the fd so it closes automatically.
+  # Consumer is backgrounded so the watchdog runs concurrently; `wait` gives
+  # us pytest's exit code. Output is tee'd through the heartbeat file so the
+  # silicon watchdog has an mtime signal to poll. LOG_DIR adds an extra tee
+  # target without disturbing the heartbeat path.
+  local sim_exit consumer_pid watchdog_pid=""
   if [[ -n "$LOG_DIR" ]]; then
     mkdir -p "$LOG_DIR"
     (
@@ -350,8 +527,8 @@ _do_simulate() {
       fi
       _vlog "Lock acquired; running ${MODE}"
       bash "${sim_script}"
-    ) > >(tee -a "${LOG_DIR}/run.log") 2> >(tee -a "${LOG_DIR}/run.log" >&2)
-    sim_exit=$?
+    ) > >(tee -a "${heartbeat}" "${LOG_DIR}/run.log") 2> >(tee -a "${heartbeat}" "${LOG_DIR}/run.log" >&2) &
+    consumer_pid=$!
   else
     (
       exec 9>>"${LOCKFILE}"
@@ -362,11 +539,72 @@ _do_simulate() {
       fi
       _vlog "Lock acquired; running ${MODE}"
       bash "${sim_script}"
-    )
-    sim_exit=$?
+    ) > >(tee -a "${heartbeat}") 2> >(tee -a "${heartbeat}" >&2) &
+    consumer_pid=$!
   fi
 
-  rm -f "${sim_script}"
+  # Spawn the appropriate watchdog. Picked by MODE rather than ARCH so future
+  # simulator/silicon arches inherit the right behaviour automatically.
+  if [[ "$MODE" == "simulator" ]]; then
+    _watchdog_emu "$consumer_pid" "$hang_log" "emu-${ARCH}" &
+    watchdog_pid=$!
+    _vlog "Watchdog: emu-${ARCH} tick monitor (stall=${HANG_STALL_QUASAR}s, poll=${HANG_POLL_SECS}s)"
+  else
+    _watchdog_silicon "$consumer_pid" "$hang_log" "$heartbeat" &
+    watchdog_pid=$!
+    _vlog "Watchdog: silicon stdout-cadence (stall=${HANG_STALL_SILICON}s, poll=${HANG_POLL_SECS}s)"
+  fi
+
+  wait "$consumer_pid"
+  sim_exit=$?
+
+  # Stop watchdog. If it already tripped and returned, this is a no-op.
+  kill "$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" 2>/dev/null || true
+
+  # Post-mortem: if the watchdog didn't trip live but pytest exited non-zero
+  # AND the captured output contains TENSIX TIMED OUT, reclassify as a hang.
+  # This is the common path on silicon: pytest's failures section emits the
+  # longrepr only at end of run, so the watchdog's live grep usually fires too
+  # late to kill pytest — but the device is still wedged from the last failing
+  # variant, so tt-triage can still read meaningful state.
+  if [[ ! -s "$hang_log" && $sim_exit -ne 0 && "$MODE" == "hardware" ]]; then
+    if grep -q "TENSIX TIMED OUT" "$heartbeat" 2>/dev/null; then
+      _dump_hang_diagnosis "$hang_log" \
+        "post-mortem: TENSIX TIMED OUT found in pytest output (pytest exit ${sim_exit})"
+    fi
+  fi
+
+  # Classification: non-empty hang_log = watchdog tripped or post-mortem
+  # caught it = this was a hang, not a normal failure. Override sim_exit with
+  # 5 and run the arch-specific cleanup (sim straggler kill, or device reset).
+  if [[ -s "$hang_log" ]]; then
+    echo "========================================" >&2
+    echo "RUN_LLK_TESTS_HANG: watchdog tripped" >&2
+    cat "$hang_log" >&2
+    if [[ "$MODE" == "simulator" ]]; then
+      pkill -9 -f "emu-${ARCH}" 2>/dev/null || true
+    else
+      # Reparented pytest descendants (PPID=1 after the parent subshell
+      # died) aren't reachable from _kill_tree, so pattern-kill them by
+      # cmdline before tt-smi -r. If a stale pytest survives the reset
+      # holding the device, the NEXT run's consumer phase hangs on device
+      # acquisition and looks like "tt-smi -r didn't work" — it did, but
+      # there was nothing to reset to.
+      pkill -9 -f "pytest.*--compile-consumer" 2>/dev/null || true
+      # LLK-specific triage runs HERE: the consumer's ttexalens session
+      # was released by _kill_tree + the safety-net pkill, but the Tensix
+      # is still wedged. A fresh ttexalens session can now read mailbox /
+      # RISC state. After triage, tt-smi -r fully resets the device.
+      _run_llk_triage
+      echo "Resetting device (tt-smi -r)..." >&2
+      tt-smi -r >&2 || echo "WARNING: tt-smi -r failed" >&2
+    fi
+    echo "========================================" >&2
+    sim_exit=5
+  fi
+
+  rm -f "${sim_script}" "${hang_log}" "${heartbeat}"
   trap - EXIT INT TERM
 
   return "$sim_exit"
@@ -394,11 +632,12 @@ _do_run() {
 
 # ── Dispatch ─────────────────────────────────────────────────────────────────
 
+_dispatch_exit=0
 case "${CMD}" in
-  count)    _do_count    ;;
-  compile)  _do_compile  ;;
-  simulate) _do_simulate ;;
-  run)      _do_run      ;;
+  count)    _do_count    ; _dispatch_exit=$? ;;
+  compile)  _do_compile  ; _dispatch_exit=$? ;;
+  simulate) _do_simulate ; _dispatch_exit=$? ;;
+  run)      _do_run      ; _dispatch_exit=$? ;;
   help|--help|-h)
     sed -n 's/^# \{0,1\}//p' "$0" | head -60
     exit 0
@@ -412,3 +651,12 @@ case "${CMD}" in
     exit 4
     ;;
 esac
+
+# Emit a single verdict line for the workflow commands. `count` is excluded
+# because its stdout contract is "just the integer" — a marker line would
+# corrupt callers like `COUNT=$(run_test.sh count …)`.
+case "${CMD}" in
+  compile|simulate|run) _emit_verdict "$_dispatch_exit" "$CMD" ;;
+esac
+
+exit "$_dispatch_exit"

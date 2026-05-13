@@ -54,48 +54,46 @@ If `--arch` is not provided, infer in this order:
    - `--no-split` → `run --no-split` (combined invocation)
    - Default → `run` (compile then simulate)
 
-3. **Spawn the `llk-test-runner` agent** with everything it needs to enforce env setup AND run the script:
+3. **Spawn the `llk-test-runner` agent.** Its system prompt covers env setup, script invocation, exit-code diagnosis, and output formatting — just pass the inputs:
 
    ```
    Agent tool:
      subagent_type: "llk-test-runner"
      description: "Run tests: {test_file} ({arch})"
      prompt: |
-       Run this LLK test:
-         test_file: {test_file}
-         arch:      {arch}
-         command:   {count|compile|simulate|run}
-         options:   {--k EXPR | --test-id ID | --maxfail N | --no-split | --port N | --timeout S} (whatever applies)
-
-       MANDATORY pre-flight (do these BEFORE invoking run_test.sh):
-
-       1. Verify the venv exists at `tests/.venv/bin/activate`.
-          If it does NOT exist, run from the tt-llk worktree root:
-              cd tests && CHIP_ARCH={arch} ./setup_testing_env.sh
-          The CHIP_ARCH env var is REQUIRED — setup builds arch-specific bits.
-          The script picks the test dir from --arch; do not pre-check it.
-
-       2. Then invoke the runner with the worktree path and arch:
-              bash .claude/scripts/run_test.sh {command} \
-                  --worktree "$(pwd)" \
-                  --arch {arch} \
-                  --test {test_file} \
-                  [other options]
-          (Resolve `$(pwd)` to the tt-llk root before passing.)
-
-       Read the script's exit code:
-         0 = pass, 1 = test failure, 2 = compile failure,
-         3 = env error (venv missing / lock timeout / port stuck), 4 = bad args.
-
-       On failure, surface the failing lines from the script's stdout/stderr
-       (the script does not persist logs to disk). Do not modify code.
+       test_file: {test_file}
+       arch:      {arch}
+       command:   {compile|simulate|run|count}
+       options:   {whatever applies from --k / --test-id / --maxfail / --no-split / --port / --timeout}
    ```
 
-4. **Report** the agent's result. If the agent reports exit 1 (test failure) or 2 (compile failure), suggest `/debug-kernel` as the next step. If exit 3 (env error), surface the root cause (venv missing, simulator port stuck, lock timeout) and stop — don't retry blindly.
+4. **Relay** the agent's verdict to the user. On FAIL or COMPILE_FAIL, suggest `/debug-kernel`. On ENV_ERROR or HANG, surface the agent's diagnosis and stop — don't auto-retry (the same hang will reappear, and env errors need a human fix).
 
-## Constraints
+## LLK Triage on Hang
 
-- **Never** call `pytest` directly. Always go through the script.
-- **Never** skip the venv check — the script exits 3 with a clear message, but the skill should detect-and-bootstrap rather than fail.
-- **Never** run setup with the wrong `CHIP_ARCH` — wrong-arch venvs silently produce broken builds.
-- **Never** run multiple simulator invocations in parallel from the same agent. The script's `flock` protects against concurrent agents, but a single agent should still serialise its own runs.
+When `run_test.sh` detects a silicon hang (exit 5), after killing the
+consumer tree and before resetting the device, it runs `.claude/scripts/llk_triage.py`.
+Output appears in the `RUN_LLK_TESTS_HANG` block as:
+
+```
+--- llk-triage ---
+=== LLK TRIAGE ===
+Arch:     blackhole
+Location: 0,0
+== Mailbox state ==
+  Unpacker @ 0x...  = 0x000000FF (KERNEL_COMPLETE)
+  Math     @ 0x...  = 0x00000000 (incomplete)
+  ...
+Hung kernel threads: Math
+== Tensix state (per RISC) ==
+  { ... PC, soft-reset, status per RISC ... }
+--- end llk-triage ---
+```
+
+Standalone use (e.g., to inspect a wedged device manually):
+
+```bash
+source tests/.venv/bin/activate
+python3 .claude/scripts/llk_triage.py --arch blackhole \
+    [--location 0,0] [--device-id 0]
+```
