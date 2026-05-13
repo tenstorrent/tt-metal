@@ -232,27 +232,10 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
         uint64_t key = (uint64_t(noc_x) << 32) | noc_y;
         auto it = __emule_core_map->find(key);
         if (it != __emule_core_map->end()) {
-            auto* target_core = it->second;
-
-            if (target_core->role() == tt_emule::CoreRole::DRAM) {
-                // Hardcoded for Wormhole (N150): 32-byte DRAM alignment.
-                // tt-emule does not currently expose arch() on the non-XY_PAIR Device,
-                // and emulation always targets WH per project policy.
-                constexpr size_t alignment = 32;
-
-                if (l1_offset % alignment != 0) {
-                    fprintf(stderr, "[ASAN ERROR] WH DRAM Alignment: Offset 0x%lx must be %zu-byte aligned\n",
-                            l1_offset, alignment);
-                    abort();
-                }
-            } else {
-                // L1 Universal Scalar Safety (4-byte)
-                if (l1_offset % 4 != 0) {
-                    fprintf(stderr, "[ASAN ERROR] L1 Alignment: Offset 0x%lx must be 4-byte aligned\n", l1_offset);
-                    abort();
-                }
-            }
-            return target_core->l1_ptr(static_cast<uint32_t>(l1_offset));
+            // Device-side L1/DRAM alignment is enforced inside tt-emule's
+            // Core::l1_ptr (role-aware) rather than here, so this resolver
+            // only handles the address → host pointer translation.
+            return it->second->l1_ptr(static_cast<uint32_t>(l1_offset));
         }
         if (emule_strict_noc_enabled()) {
             fprintf(stderr,
