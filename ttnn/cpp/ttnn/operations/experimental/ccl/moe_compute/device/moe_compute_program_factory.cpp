@@ -29,6 +29,10 @@ namespace {
 
 constexpr uint32_t TILE_WIDTH = 32;
 
+inline uint32_t non_tile_cb_page_size(tt::DataFormat data_format, uint32_t l1_alignment) {
+    return std::max({tt::datum_size(data_format), l1_alignment, CIRCULAR_BUFFER_COMPUTE_WORD_SIZE});
+}
+
 uint32_t get_num_pages_st(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->num_pages(); }
 
 uint32_t get_page_size_st(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->page_size(); }
@@ -667,7 +671,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         total_chunks_cb_id,
         program,
         tilize_core_range_set,
-        std::max({static_cast<uint32_t>(sizeof(uint32_t)), l1_alignment, CIRCULAR_BUFFER_COMPUTE_WORD_SIZE}),
+        non_tile_cb_page_size(tt::DataFormat::UInt32, l1_alignment),
         1,  // single page
         tt::DataFormat::UInt32);
 
@@ -680,17 +684,17 @@ MoEComputeMeshWorkloadFactory::create_at(
     //   DeepSeek  — hidden=7168  intermediate=2048  (Ht=224, Nt=64,  a2a_cb_pages=6)
     //   GPT-OSS   — hidden=2880  intermediate=2880  (Ht=90,  Nt=90,  a2a_cb_pages=8)
     /*
-        ------------------------------------------------------------------------------------------------------------------
-        |     Name       |   CB Index   |   Dtype   | Tile? | Tiles/CB  | DS  | GPT | Remarks |
-        ------------------------------------------------------------------------------------------------------------------
-        | cb_s2c_in      | CBIndex::c_0 | Float16_b | true  | (shared)  | 448 | 180 | Shared output buf, sized by shard
-       | | cb_r2c_w0      | CBIndex::c_3 | Bfp4_b    | true  | 14*6      |  84 |  84 | 3 triple-bufs of W0/W1 blocks |
-        | cb_c2w_rdy     | CBIndex::c_4 | Float32   | false | 1         |   — |   — | Compute→writer ready signal | |
-       cb_w2c_rdy     | CBIndex::c_5 | Float32   | false | 1         |   — |   — | Writer→compute ready signal       |
-        | cb_s2c_in2     | CBIndex::c_6 | Float16_b | true  | a2a*cores |  72 |  96 | Ring A2A activation exchange | |
-       cb_w2c_md      | CBIndex::c_7 | UInt32    | false | 2         |   — |   — | Metadata (token counts)           |
-        ------------------------------------------------------------------------------------------------------------------
-        Non-tile CBs use page_size >= max(datum_size, l1_alignment, CIRCULAR_BUFFER_COMPUTE_WORD_SIZE)
+        ----------------------------------------------------------------------------------------------------------
+        | Name           | CB Index     | Dtype     | Tile? | Tiles/CB  | DS  | GPT | Remarks                    |
+        ----------------------------------------------------------------------------------------------------------
+        | cb_s2c_in      | CBIndex::c_0 | Float16_b | true  | (shared)  | 448 | 180 | Shared output buf          |
+        | cb_r2c_w0      | CBIndex::c_3 | Bfp4_b    | true  | 14*6      |  84 |  84 | 3 triple-bufs W0/W1        |
+        | cb_c2w_rdy     | CBIndex::c_4 | Float32   | false | 1         |   — |   — | Compute->writer ready      |
+        | cb_w2c_rdy     | CBIndex::c_5 | Float32   | false | 1         |   — |   — | Writer->compute ready      |
+        | cb_s2c_in2     | CBIndex::c_6 | Float16_b | true  | a2a*cores |  72 |  96 | Ring A2A activation        |
+        | cb_w2c_md      | CBIndex::c_7 | UInt32    | false | 2         |   — |   — | Metadata (token counts)    |
+        ----------------------------------------------------------------------------------------------------------
+        Non-tile CBs use page_size >= non_tile_cb_page_size(data_format, l1_alignment)
         so LLK fifo_* fields (16 B words; circular_buffer_constants.h) are non-zero on compute push/pop.
     */
 
@@ -711,8 +715,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     // Create CBs
     for (const auto& [name, index, data_format, is_tile, tiles_per_cb] : matmul_cb_specs0) {
         const uint32_t bytes_per_tile =
-            is_tile ? tt::tile_size(data_format)
-                    : std::max({tt::datum_size(data_format), l1_alignment, CIRCULAR_BUFFER_COMPUTE_WORD_SIZE});
+            is_tile ? tt::tile_size(data_format) : non_tile_cb_page_size(data_format, l1_alignment);
         const auto cb_config = tt::tt_metal::CircularBufferConfig(tiles_per_cb * bytes_per_tile, {{index, data_format}})
                                    .set_page_size(index, bytes_per_tile);
 
