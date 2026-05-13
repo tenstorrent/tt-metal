@@ -38,11 +38,25 @@ attn precision combination to fit T3K DRAM.
 
 Weights are read from the HF hub (``DEVSTRAL2_LARGE_REPO_ID``) using only the
 shards that contain the layers we are testing.
+
+Reference golden (optional)
+-------------------------
+
+After the first successful HF forward, the reference ``last_hidden_state`` can be
+saved and reused so later runs skip the Hugging Face model entirely (only TTNN
+runs the model forward; host still loads safetensor shards for TT weights).
+
+* ``DEVSTRAL2_PCC_GOLDEN_PT`` — absolute path to the ``.pt`` file (highest priority).
+* ``DEVSTRAL2_PCC_GOLDEN_DIR`` — directory for auto-named files (default:
+  ``~/.cache/tt-metal/devstral2_large_pcc_ref/``).
+* ``DEVSTRAL2_PCC_REGOLDEN=1`` — ignore an existing golden, rerun HF, overwrite the file.
+* ``DEVSTRAL2_PCC_NO_SAVE_GOLDEN=1`` — do not write a golden after HF (read-only / CI).
 """
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 import torch
@@ -199,6 +213,100 @@ def _default_pcc_for_precision(precision: str) -> float:
     return {"bf16": 0.95, "bfp8": 0.90, "bfp4": 0.85}[precision]
 
 
+def _devstral_pcc_golden_path(
+    *,
+    n_layers: int,
+    seq_len: int,
+    batch_size: int,
+    repo_id: str,
+) -> Path:
+    if env_pt := os.environ.get("DEVSTRAL2_PCC_GOLDEN_PT"):
+        return Path(env_pt).expanduser().resolve()
+    base = Path(
+        os.environ.get(
+            "DEVSTRAL2_PCC_GOLDEN_DIR",
+            str(Path.home() / ".cache" / "tt-metal" / "devstral2_large_pcc_ref"),
+        )
+    ).expanduser()
+    repo_short = repo_id.strip("/").replace("/", "_")
+    fname = f"hf_last_hidden_{repo_short}_L{n_layers}_S{seq_len}_B{batch_size}_seed42.pt"
+    return (base / fname).resolve()
+
+
+def _devstral_pcc_try_load_golden(
+    path: Path,
+    *,
+    repo_id: str,
+    n_layers: int,
+    seq_len: int,
+    batch_size: int,
+    hidden_size: int,
+) -> torch.Tensor | None:
+    if not path.is_file():
+        return None
+    try:
+        try:
+            blob = torch.load(path, map_location="cpu", weights_only=False)
+        except TypeError:
+            blob = torch.load(path, map_location="cpu")
+    except Exception as exc:
+        logger.warning(f"Ignoring unreadable PCC golden {path}: {exc}")
+        return None
+    meta = blob.get("meta") or {}
+    expected = (repo_id, n_layers, seq_len, batch_size, 42, hidden_size)
+    got = (
+        meta.get("repo_id"),
+        meta.get("n_layers"),
+        meta.get("seq_len"),
+        meta.get("batch_size"),
+        meta.get("seed"),
+        meta.get("hidden_size"),
+    )
+    if got != expected:
+        logger.warning(
+            f"PCC golden {path} metadata mismatch (expected {expected}, got {got}); will recompute reference."
+        )
+        return None
+    ref = blob["last_hidden_state"]
+    if not isinstance(ref, torch.Tensor):
+        logger.warning(f"PCC golden {path} has invalid last_hidden_state; will recompute reference.")
+        return None
+    exp_shape = (batch_size, seq_len, hidden_size)
+    if tuple(ref.shape) != exp_shape:
+        logger.warning(f"PCC golden {path} shape {tuple(ref.shape)} != expected {exp_shape}; will recompute reference.")
+        return None
+    return ref.to(torch.bfloat16)
+
+
+def _devstral_pcc_save_golden(
+    path: Path,
+    ref_out: torch.Tensor,
+    *,
+    repo_id: str,
+    n_layers: int,
+    seq_len: int,
+    batch_size: int,
+    hidden_size: int,
+) -> None:
+    if os.environ.get("DEVSTRAL2_PCC_NO_SAVE_GOLDEN", "").lower() in ("1", "true", "yes"):
+        logger.info("DEVSTRAL2_PCC_NO_SAVE_GOLDEN set; not writing PCC golden.")
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "last_hidden_state": ref_out.detach().cpu().contiguous().to(torch.bfloat16),
+        "meta": {
+            "repo_id": repo_id,
+            "n_layers": n_layers,
+            "seq_len": seq_len,
+            "batch_size": batch_size,
+            "seed": 42,
+            "hidden_size": hidden_size,
+        },
+    }
+    torch.save(payload, path)
+    logger.info(f"Wrote HF reference PCC golden to {path}")
+
+
 def _log_memory_budget(n_layers: int, precision: str, mesh_device) -> None:
     """Print a quick on-device weight footprint estimate so callers see the math."""
     bytes_per_p = {"bf16": 2.0, "bfp8": 1.0625, "bfp4": 0.5625}
@@ -298,6 +406,10 @@ def test_ministral3_model_pcc_devstral2_large(
 
     Weights for the trimmed layer range are pulled from the Hub shard-by-shard (no full
     checkpoint load). HF reference and TtMinistral3Model both see the same N layers.
+
+    If a PCC golden file exists (see module docstring), the Hugging Face ``Ministral3Model``
+    forward is skipped and PCC uses the cached ``last_hidden_state``; safetensor shards
+    are still loaded for TT weights.
     """
     n_layers = devstral_n_text_layers
     precision = _parse_precision(os.environ.get("DEVSTRAL2_TT_PRECISION", "bfp4"))
@@ -327,6 +439,13 @@ def test_ministral3_model_pcc_devstral2_large(
     _log_memory_budget(n_layers, precision, mesh_device)
 
     text_cfg = _text_cfg_from_hf_cfg(model_args.hf_config)
+    golden_path = _devstral_pcc_golden_path(
+        n_layers=n_layers,
+        seq_len=seq_len,
+        batch_size=batch_size,
+        repo_id=DEVSTRAL2_LARGE_REPO_ID,
+    )
+    regolden = os.environ.get("DEVSTRAL2_PCC_REGOLDEN", "").lower() in ("1", "true", "yes")
 
     # Download only the keys we need: embed + final norm + the N decoder layers.
     hub_keys: list[str] = ["model.embed_tokens.weight", "model.norm.weight"]
@@ -344,41 +463,66 @@ def test_ministral3_model_pcc_devstral2_large(
     except Exception as exc:
         pytest.skip(f"HF→meta conversion failed: {exc}")
 
-    hf_sd: dict[str, torch.Tensor] = {}
-    for k, v in hf_partial.items():
-        short = k[len("model.") :] if k.startswith("model.") else k
-        hf_sd[short] = v
-
-    text_cfg._attn_implementation = "eager"
-    hf_model = Ministral3Model(text_cfg).eval().to(torch.bfloat16)
-    hf_model.load_state_dict(hf_sd, strict=True)
-
     _apply_precision_overrides(model_args, precision)
     _force_replicated_rmsnorm(model_args)
 
     torch.manual_seed(42)
     gen = torch.Generator(device="cpu").manual_seed(42)
     input_ids = torch.randint(0, text_cfg.vocab_size, (batch_size, seq_len), dtype=torch.long, generator=gen)
-    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
 
-    inputs_embeds = hf_model.embed_tokens(input_ids)
-    causal_mask = create_causal_mask(
-        config=text_cfg,
-        inputs_embeds=inputs_embeds,
-        attention_mask=None,
-        past_key_values=None,
-        position_ids=position_ids,
-    )
-    ref_out = hf_model(
-        input_ids=input_ids,
-        attention_mask=causal_mask,
-        position_ids=position_ids,
-        use_cache=False,
-    ).last_hidden_state
-    logger.info(f"HF reference output shape: {ref_out.shape}")
+    hidden_size = int(text_cfg.hidden_size)
+    ref_out: torch.Tensor | None = None
+    if not regolden:
+        ref_out = _devstral_pcc_try_load_golden(
+            golden_path,
+            repo_id=DEVSTRAL2_LARGE_REPO_ID,
+            n_layers=n_layers,
+            seq_len=seq_len,
+            batch_size=batch_size,
+            hidden_size=hidden_size,
+        )
 
-    # Free the HF reference before we upload TT weights; on T3K + N=8 this saves ~22 GB host RAM.
-    del hf_model, inputs_embeds, causal_mask
+    if ref_out is None:
+        hf_sd: dict[str, torch.Tensor] = {}
+        for k, v in hf_partial.items():
+            short = k[len("model.") :] if k.startswith("model.") else k
+            hf_sd[short] = v
+
+        text_cfg._attn_implementation = "eager"
+        hf_model = Ministral3Model(text_cfg).eval().to(torch.bfloat16)
+        hf_model.load_state_dict(hf_sd, strict=True)
+
+        position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
+        inputs_embeds = hf_model.embed_tokens(input_ids)
+        causal_mask = create_causal_mask(
+            config=text_cfg,
+            inputs_embeds=inputs_embeds,
+            attention_mask=None,
+            past_key_values=None,
+            position_ids=position_ids,
+        )
+        ref_out = hf_model(
+            input_ids=input_ids,
+            attention_mask=causal_mask,
+            position_ids=position_ids,
+            use_cache=False,
+        ).last_hidden_state
+        logger.info(f"HF reference output shape: {ref_out.shape}")
+
+        # Free the HF reference before we upload TT weights; on T3K + N=8 this saves ~22 GB host RAM.
+        del hf_model, inputs_embeds, causal_mask
+
+        _devstral_pcc_save_golden(
+            golden_path,
+            ref_out,
+            repo_id=DEVSTRAL2_LARGE_REPO_ID,
+            n_layers=n_layers,
+            seq_len=seq_len,
+            batch_size=batch_size,
+            hidden_size=hidden_size,
+        )
+    else:
+        logger.info(f"Using cached HF reference from {golden_path} (shape={tuple(ref_out.shape)})")
 
     tt_ccl = TT_CCL(mesh_device)
     transformation_mats = {"decode": None, "prefill": None}
