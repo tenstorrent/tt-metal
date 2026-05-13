@@ -196,7 +196,7 @@ FP32_DEST_ACC_EN = True
 #               non-divisor candidates would leave a partial chunk on the last
 #               ring iteration. No upper cap — large divisors don't add padding.
 MN_BLOCK_MIN, MN_BLOCK_MAX = 2, 16
-K_BLOCK_MIN = 4
+K_BLOCK_MIN = 2
 
 # L1 budget for pre-filtering block combos (KB).
 # BH L1 usable ~1464 KB; conservative threshold accounts for kernel/firmware overhead.
