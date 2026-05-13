@@ -171,7 +171,17 @@ def build_matmul_pcfg(
     activation=None,
     dst_budget: int = 8,
 ):
-    """Build a MatmulMultiCoreReuseMultiCastProgramConfig (2D BLOCK_SHARDED).
+    """Build a sharded-matmul program config.
+
+    For small M (suffix-side action expert: M=2 tiles), we'd waste rows of the
+    2D grid (only m_tiles of grid_y rows get work → 12×2 = 24 of 120 cores).
+    For these cases we return a 1D **width-sharded** config instead
+    (MatmulMultiCoreReuseMultiCast1DProgramConfig with mcast_in0=True), which
+    multicasts activations and spreads N across all 120 cores. That brings the
+    expert MLP/QKV/o_proj from ~22-24 cores to 60-120.
+
+    For larger M (VLM prefix: M=9 tiles, SigLIP: M=8 tiles) the 2D config
+    already uses 96-108 cores, so we keep it.
 
     Tuned for Blackhole Galaxy (compute grid 12x10): use grid=(12,10) and
     in0_block_w=4 for large MLP matmuls (CBs fit under the ~200 KB L1 headroom
@@ -182,6 +192,62 @@ def build_matmul_pcfg(
     """
     if m_tiles == 0 or k_tiles == 0 or n_tiles == 0:
         return None
+    total_cores = grid_x * grid_y
+
+    # --- 1D width-shard path: small M, big N -----------------------------
+    # When m_tiles is much smaller than grid_y, the 2D grid wastes rows.
+    # Switch to 1D width-shard so all 120 cores work on N slices.
+    if m_tiles * 4 <= grid_y and n_tiles >= total_cores // 4:
+        # Pick num_cores: largest divisor of n_tiles ≤ total_cores, and not
+        # smaller than half the grid (otherwise stick with 2D).
+        num_cores = min(total_cores, n_tiles)
+        while num_cores > total_cores // 2 and n_tiles % num_cores != 0:
+            num_cores -= 1
+        if n_tiles % num_cores != 0:
+            # No clean divisor available — fall back to ceil division on full grid
+            num_cores = total_cores
+            per_core_N_1d = (n_tiles + num_cores - 1) // num_cores
+        else:
+            per_core_N_1d = n_tiles // num_cores
+
+        # Choose in0_block_w for 1D (full M per core → larger CBs needed).
+        in0_bw = in0_block_w if in0_block_w is not None else 8
+        while k_tiles % in0_bw != 0 and in0_bw > 1:
+            in0_bw //= 2
+        if in0_bw < 2:
+            in0_bw = 1
+
+        # DST budget: out_subblock_w * out_subblock_h ≤ dst_budget.
+        out_subblock_w_1d = min(per_core_N_1d, dst_budget)
+        while out_subblock_w_1d > 1 and per_core_N_1d % out_subblock_w_1d != 0:
+            out_subblock_w_1d -= 1
+        out_subblock_h_1d = max(1, dst_budget // out_subblock_w_1d)
+        out_subblock_h_1d = min(m_tiles, out_subblock_h_1d)
+        while out_subblock_h_1d > 1 and m_tiles % out_subblock_h_1d != 0:
+            out_subblock_h_1d -= 1
+
+        # Grid: num_cores arranged as (grid_x, ceil(num_cores/grid_x)).
+        cfg_gx = min(grid_x, num_cores)
+        cfg_gy = (num_cores + cfg_gx - 1) // cfg_gx
+
+        key = (m_tiles, k_tiles, n_tiles, grid_x, grid_y, str(activation), dst_budget, "1d")
+        if key in _pcfg_cache:
+            return _pcfg_cache[key]
+        cfg = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(cfg_gx, cfg_gy),
+            in0_block_w=in0_bw,
+            out_subblock_h=out_subblock_h_1d,
+            out_subblock_w=out_subblock_w_1d,
+            per_core_M=m_tiles,
+            per_core_N=per_core_N_1d,
+            fuse_batch=True,
+            fused_activation=activation,
+            mcast_in0=True,
+        )
+        _pcfg_cache[key] = cfg
+        return cfg
+
+    # --- 2D block-shard path (default, large M) --------------------------
     per_core_M = (m_tiles + grid_y - 1) // grid_y
     per_core_N = (n_tiles + grid_x - 1) // grid_x
     if per_core_M == 0 or per_core_N == 0:
