@@ -3271,19 +3271,6 @@ void kernel_main() {
             shared_gu_matmul(moe.shared.gu_matmul_args);
         }
 
-        // 5c. Shared Expert: Gate Gather (A) — 64 gate cores send to sender core
-        //     Uses MoeGather (sender=BRISC) to avoid NOC contention with DRAM matmul (NCRISC)
-        {
-            DeviceZoneScopedN("SHARED_GATE_GATHER");
-            deepseek_b1_ops::MoeGather::Op<
-                Core::Shared::is_gate_compute_core,
-                Core::Shared::is_gated_reduce_core,
-                true,  // pop_src
-                true>  // UsePerCoreSenderIdx
-                shared_gate_gather;
-            shared_gate_gather(moe.shared.ag_args);
-        }
-
 #ifdef ENABLE_ROUTING
         // 3. Gather: Collect matmul outputs from compute cores to sender core
         {
@@ -3364,6 +3351,49 @@ void kernel_main() {
         }
 #endif  // ENABLE_ROUTING
 
+        // 5b.1. Shared Expert: Gate Gather (A) + Up Gather (B) — paired and placed AFTER
+        //       MCAST_INDEX + MCAST_EXPERT_SCALE so that BRISC on shared a/b cores receives
+        //       the mcasts (populating cb_index) BEFORE doing the gather sends. That way
+        //       TRISC's SRAM_GATE_PROJ / SRAM_UP_PROJ can start as soon as SHARED_GU_MATMUL
+        //       output is ready — no waiting for BRISC's gather send to finish first.
+        //       Both gathers fire back-to-back so SHARED_GATED_REDUCE (TRISC on sender_core)
+        //       starts as early as possible → SHARED_DOWN_MCAST BRISC fires earlier →
+        //       112-core SHARED_DOWN_MATMUL TRISC starts earlier.
+        {
+            DeviceZoneScopedN("SHARED_GATE_GATHER");
+            deepseek_b1_ops::MoeGather::Op<
+                Core::Shared::is_gate_compute_core,
+                Core::Shared::is_gated_reduce_core,
+                true,  // pop_src
+                true>  // UsePerCoreSenderIdx
+                shared_gate_gather;
+            shared_gate_gather(moe.shared.ag_args);
+        }
+
+        // 5d. Shared Expert: Up Gather (B) — 64 up cores send to sender core
+        {
+            DeviceZoneScopedN("SHARED_UP_GATHER");
+            deepseek_b1_ops::MoeGather::Op<
+                Core::Shared::is_up_compute_core,
+                Core::Shared::is_gated_reduce_core,
+                true,  // pop_src
+                true>  // UsePerCoreSenderIdx
+                shared_up_gather;
+            shared_up_gather(moe.shared.bg_args);
+        }
+
+        // 5e. Shared Expert: Gated Reduce — SiLU(sum(gate)) * sum(up).
+        //     Moved here (right after SHARED_UP_GATHER) so sender_core TRISC fires SHARED
+        //     GR as soon as both SHARED gathers complete. Output (shared_mcast_src_cb)
+        //     feeds SHARED_DOWN_MCAST below — having SHARED_GR done early lets
+        //     SHARED_DOWN_MCAST fire as the first down-side mcast on sender BRISC.
+        {
+            DeviceZoneScopedN("SHARED_GATED_REDUCE");
+            deepseek_b1_ops::GatedReduce::Op<Moe::Shared::GatedReduceCTArgs, Core::Shared::is_gated_reduce_core>
+                gated_reduce;
+            gated_reduce(moe.shared.gated_reduce_args);
+        }
+
         // 5c. SRAM Routed Expert pipeline (matmul → gather → GatedReduce → mcast → matmul).
         //     Lifted OUTSIDE #ifdef ENABLE_ROUTING so the dense MLP path can run the
         //     same SRAM chain. Every helper early-returns when n_sram_active == 0:
@@ -3398,82 +3428,13 @@ void kernel_main() {
             deepseek_b1_ops::sram_invoke_matmul(sram_up_proj, n_sram_active);
         }
 
-        {
-            DeviceZoneScopedN("SRAM_GATE_GATHER");
-            deepseek_b1_ops::MoeGather::Op<
-                Core::Shared::is_gate_compute_core,
-                Core::Shared::is_gated_reduce_core,
-                /*pop_src=*/true,
-                /*UsePerCoreSenderIdx=*/true>
-                sram_ag;
-            deepseek_b1_ops::sram_invoke_moe_gather(sram_ag, moe.routed.sram_ag_args, n_sram_active);
-        }
-        {
-            DeviceZoneScopedN("SRAM_UP_GATHER");
-            deepseek_b1_ops::MoeGather::Op<
-                Core::Shared::is_up_compute_core,
-                Core::Shared::is_gated_reduce_core,
-                /*pop_src=*/true,
-                /*UsePerCoreSenderIdx=*/true>
-                sram_bg;
-            deepseek_b1_ops::sram_invoke_moe_gather(sram_bg, moe.routed.sram_bg_args, n_sram_active);
-        }
-
-        {
-            DeviceZoneScopedN("SRAM_GATED_REDUCE");
-            deepseek_b1_ops::GatedReduce::Op<Moe::Routed::SramGatedReduceCTArgs, Core::Shared::is_gated_reduce_core>
-                sram_gated_reduce;
-            deepseek_b1_ops::sram_invoke_gated_reduce(
-                sram_gated_reduce, moe.routed.sram_gated_reduce_args, n_sram_active);
-        }
-
-        {
-            DeviceZoneScopedN("SRAM_DOWN_MCAST");
-            deepseek_b1_ops::Mcast::Op<
-                Moe::Routed::McastCTArgs,
-                Core::is_sender_core,
-                Core::is_mcast_grid_core,
-                Core::Shared::is_mcast_receiver_core,
-                /*pop_src=*/true,
-                /*ReceiverOnBrisc=*/true>
-                sram_down_mcast;
-            deepseek_b1_ops::sram_invoke_down_mcast(sram_down_mcast, moe.routed.sram_down_mcast_args, n_sram_active);
-        }
-
-        {
-            DeviceZoneScopedN("SRAM_DOWN_PROJ");
-            deepseek_b1_ops::MatmulExpertCompressedSRAM::Op<
-                Moe::Routed::SramDownProjCTArgs,
-                Core::Shared::is_mcast_receiver_core,
-                /*pop_in0=*/true,
-                /*pop_in1=*/false,
-                /*pop_index=*/false,
-                /*pop_out=*/false>
-                sram_down_proj;
-            deepseek_b1_ops::sram_invoke_matmul(sram_down_proj, n_sram_active);
-        }
-
-        // 5d. Shared Expert: Up Gather (B) — 64 up cores send to sender core
-        {
-            DeviceZoneScopedN("SHARED_UP_GATHER");
-            deepseek_b1_ops::MoeGather::Op<
-                Core::Shared::is_up_compute_core,
-                Core::Shared::is_gated_reduce_core,
-                true,  // pop_src
-                true>  // UsePerCoreSenderIdx
-                shared_up_gather;
-            shared_up_gather(moe.shared.bg_args);
-        }
-
-        // 5e. Shared Expert: Gated Reduce — SiLU(sum(gate)) * sum(up)
-        //     Runs on sender core after receiving both gathers
-        {
-            DeviceZoneScopedN("SHARED_GATED_REDUCE");
-            deepseek_b1_ops::GatedReduce::Op<Moe::Shared::GatedReduceCTArgs, Core::Shared::is_gated_reduce_core>
-                gated_reduce;
-            gated_reduce(moe.shared.gated_reduce_args);
-        }
-
+        // 6/7/8. DRAM gate_proj / up_proj / mul — moved up here from after SHARED_GATED_REDUCE
+        //        so NCRISC on streamer cores can prefetch DRAM weights into cb_in1 while
+        //        TRISC is still busy with the SRAM down chain (which doesn't touch streamer
+        //        cores). With SRAM matmul ahead of these blocks, streamer TRISC also gets
+        //        its DRAM compute kicked off as soon as SRAM_UP_PROJ finishes, instead of
+        //        waiting through the SRAM gather/GR/down phases. Skipped via
+        //        dram_invoke_matmul when n_dram_active==0.
         // 6. gate_proj: DRAM Matmul Expert Compressed + SiLU (PopIn0=false, keep input for up_proj)
         //    ResetCBIn1=true so the kernel's SW write-ptr wrap aligns with the CB's
         //    physical wrap — required because GP and UP share cb_in1 back-to-back.
@@ -3529,6 +3490,67 @@ void kernel_main() {
             deepseek_b1_ops::dram_invoke_eltwise_mul(mul_op, n_dram_active);
         }
 
+        // SRAM gathers + SRAM_GATED_REDUCE — placed before DRAM down gather/mcast because
+        // SRAM output (from SRAM_GATE/UP_PROJ TRISC, ready before MUL completes) arrives
+        // earlier than DRAM MUL output. Sender_core NCRISC processes the SRAM gather
+        // receives immediately, then sender_core TRISC fires SRAM_GATED_REDUCE.
+        //
+        // SRAM_DOWN_MCAST and SRAM_DOWN_PROJ are deferred to AFTER DOWN_PROJ_GATHER +
+        // DOWN_PROJ_MCAST so sender_core BRISC fires the DRAM down mcast first. That gets
+        // DRAM DOWN_PROJ's cb_in0 onto the down_proj streamer cores as early as possible,
+        // letting that 16-core TRISC chain (which is independent of the 112-core SRAM/
+        // SHARED chain) start without waiting for SRAM_DOWN_MCAST's 112-core mcast latency.
+        {
+            DeviceZoneScopedN("SRAM_GATE_GATHER");
+            deepseek_b1_ops::MoeGather::Op<
+                Core::Shared::is_gate_compute_core,
+                Core::Shared::is_gated_reduce_core,
+                /*pop_src=*/true,
+                /*UsePerCoreSenderIdx=*/true>
+                sram_ag;
+            deepseek_b1_ops::sram_invoke_moe_gather(sram_ag, moe.routed.sram_ag_args, n_sram_active);
+        }
+        {
+            DeviceZoneScopedN("SRAM_UP_GATHER");
+            deepseek_b1_ops::MoeGather::Op<
+                Core::Shared::is_up_compute_core,
+                Core::Shared::is_gated_reduce_core,
+                /*pop_src=*/true,
+                /*UsePerCoreSenderIdx=*/true>
+                sram_bg;
+            deepseek_b1_ops::sram_invoke_moe_gather(sram_bg, moe.routed.sram_bg_args, n_sram_active);
+        }
+
+        {
+            DeviceZoneScopedN("SRAM_GATED_REDUCE");
+            deepseek_b1_ops::GatedReduce::Op<Moe::Routed::SramGatedReduceCTArgs, Core::Shared::is_gated_reduce_core>
+                sram_gated_reduce;
+            deepseek_b1_ops::sram_invoke_gated_reduce(
+                sram_gated_reduce, moe.routed.sram_gated_reduce_args, n_sram_active);
+        }
+
+        // 10/11. DRAM down_proj Gather + Mcast — placed BEFORE SRAM_DOWN_MCAST/PROJ so
+        //        sender_core BRISC fires DOWN_PROJ_MCAST before SRAM_DOWN_MCAST. That gets
+        //        DRAM DOWN_PROJ's cb_in0 (the gathered+mcasted MUL output) onto the 16
+        //        down_proj streamer cores early, so the DRAM down matmul on those cores can
+        //        start without waiting for SRAM_DOWN_MCAST's 112-core mcast latency to
+        //        drain on sender_core BRISC. Skipped via dram_invoke_* when n_dram_active==0.
+        // 10. down_proj Gather: Gather fused output from gate_proj cores to sender core
+        {
+            DeviceZoneScopedN("DOWN_PROJ_GATHER");
+            deepseek_b1_ops::MoeGather::Op<Core::Routed::is_gate_proj_core, Core::is_sender_core, true, true>
+                down_proj_gather;
+            deepseek_b1_ops::dram_invoke_moe_gather(down_proj_gather, moe.routed.down_proj_gather_args, n_dram_active);
+        }
+
+        // Down-chain mcasts on sender_core BRISC, ordered by data-readiness time:
+        //   SHARED first (SHARED_GATED_REDUCE ran early, output ready earliest),
+        //   SRAM next (SRAM_GATED_REDUCE ran above, output ready after SRAM gathers),
+        //   DRAM (DOWN_PROJ_MCAST) last (waits for DOWN_PROJ_GATHER NCRISC which itself
+        //   waits for MUL).
+        // 112-core TRISC chain consumes them in the same order:
+        //   SHARED_DOWN_MATMUL → SRAM_DOWN_PROJ → SRAM_DOWN_MERGE → SHARED_RESIDUAL_ADD.
+
         // 9. Shared: Down Mcast — broadcast gated reduce output [1, K_down] to all 130 cores
         //      Source is mcast_src_cb (CB 31) filled by gated reduce, pop_src=true
         {
@@ -3543,7 +3565,37 @@ void kernel_main() {
             shared_down_mcast(moe.shared.down_mcast_args);
         }
 
-        // 9b. Shared: Down Proj Matmul — SRAM matmul [1, K_down] x [K_down, N_per_core] on 112 cores
+        // SRAM down Mcast: SRAM_GATED_REDUCE output → 112 receivers.
+        {
+            DeviceZoneScopedN("SRAM_DOWN_MCAST");
+            deepseek_b1_ops::Mcast::Op<
+                Moe::Routed::McastCTArgs,
+                Core::is_sender_core,
+                Core::is_mcast_grid_core,
+                Core::Shared::is_mcast_receiver_core,
+                /*pop_src=*/true,
+                /*ReceiverOnBrisc=*/true>
+                sram_down_mcast;
+            deepseek_b1_ops::sram_invoke_down_mcast(sram_down_mcast, moe.routed.sram_down_mcast_args, n_sram_active);
+        }
+
+        // 11. down_proj Mcast: Broadcast gathered fused output to all down_proj streamer cores
+        // (16 cores in gather mode, 8 otherwise) so secondaries' cb_in0 is also pushed.
+        {
+            DeviceZoneScopedN("DOWN_PROJ_MCAST");
+            deepseek_b1_ops::Mcast::Op<
+                Moe::Routed::McastCTArgs,
+                Core::is_sender_core,
+                Core::is_mcast_grid_core,
+                Core::Routed::is_down_proj_streamer_core,
+                true,
+                /*ReceiverOnBrisc=*/true>
+                down_proj_mcast;
+            deepseek_b1_ops::dram_invoke_mcast(down_proj_mcast, moe.routed.down_proj_mcast_args, n_dram_active);
+        }
+
+        // 9b. Shared: Down Proj Matmul — SRAM matmul [1, K_down] x [K_down, N_per_core] on 112 cores.
+        //     112-core TRISC, consumes SHARED_DOWN_MCAST data first.
         {
             DeviceZoneScopedN("SHARED_DOWN_MATMUL");
             deepseek_b1_ops::Matmul::Op<
@@ -3553,6 +3605,20 @@ void kernel_main() {
                 /*pop_in1=*/false>
                 shared_down_matmul;
             shared_down_matmul(moe.shared.down_matmul_args);
+        }
+
+        // SRAM down_proj on 112-core TRISC, consumes SRAM_DOWN_MCAST data after SHARED done.
+        {
+            DeviceZoneScopedN("SRAM_DOWN_PROJ");
+            deepseek_b1_ops::MatmulExpertCompressedSRAM::Op<
+                Moe::Routed::SramDownProjCTArgs,
+                Core::Shared::is_mcast_receiver_core,
+                /*pop_in0=*/true,
+                /*pop_in1=*/false,
+                /*pop_index=*/false,
+                /*pop_out=*/false>
+                sram_down_proj;
+            deepseek_b1_ops::sram_invoke_matmul(sram_down_proj, n_sram_active);
         }
 
         // 9b'. SRAM_DOWN_MERGE — combine SRAM down output with shared down output on 112
@@ -3610,29 +3676,6 @@ void kernel_main() {
                 /*ReceiverOnBrisc=*/true>
                 shared_output_mcast;
             shared_output_mcast(moe.shared.output_mcast_args);
-        }
-
-        // 10. down_proj Gather: Gather fused output from gate_proj cores to sender core
-        {
-            DeviceZoneScopedN("DOWN_PROJ_GATHER");
-            deepseek_b1_ops::MoeGather::Op<Core::Routed::is_gate_proj_core, Core::is_sender_core, true, true>
-                down_proj_gather;
-            deepseek_b1_ops::dram_invoke_moe_gather(down_proj_gather, moe.routed.down_proj_gather_args, n_dram_active);
-        }
-
-        // 11. down_proj Mcast: Broadcast gathered fused output to all down_proj streamer cores
-        // (16 cores in gather mode, 8 otherwise) so secondaries' cb_in0 is also pushed.
-        {
-            DeviceZoneScopedN("DOWN_PROJ_MCAST");
-            deepseek_b1_ops::Mcast::Op<
-                Moe::Routed::McastCTArgs,
-                Core::is_sender_core,
-                Core::is_mcast_grid_core,
-                Core::Routed::is_down_proj_streamer_core,
-                true,
-                /*ReceiverOnBrisc=*/true>
-                down_proj_mcast;
-            deepseek_b1_ops::dram_invoke_mcast(down_proj_mcast, moe.routed.down_proj_mcast_args, n_dram_active);
         }
 
         // 12. down_proj: DRAM Matmul Expert Compressed (PopIndex=true: last consumer of expert index CB)
