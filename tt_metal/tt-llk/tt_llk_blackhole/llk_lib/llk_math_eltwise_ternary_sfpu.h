@@ -13,6 +13,7 @@
 #include "ckernel_template.h"
 #include "cmath_common.h"
 #include "llk_math_common.h"
+#include "llk_math_eltwise_sfpu_common.h"
 #include "llk_sfpu_types.h"
 
 // local function declarations
@@ -41,24 +42,17 @@ inline void eltwise_ternary_sfpu_configure_mop();
 
 inline void _llk_math_eltwise_ternary_sfpu_start_(const std::uint32_t dst_index)
 {
-    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
-
-    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+    _llk_math_eltwise_sfpu_start_(dst_index);
 }
 
 inline void _llk_math_eltwise_ternary_sfpu_done_()
 {
-    math::clear_dst_reg_addr();
-
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::WAIT_SFPU);
-    // math::clear_addr_mod_base();
-    TTI_SETC16(2, 0); // clear addr mod base (use addr mods 0..3)
+    _llk_math_eltwise_sfpu_done_with_addrmod_reset_();
 }
 
 inline void _llk_math_eltwise_ternary_sfpu_inc_dst_face_addr_()
 {
-    math::inc_dst_addr<8>();
-    math::inc_dst_addr<8>();
+    _llk_math_eltwise_sfpu_inc_dst_face_addr_();
 }
 
 template <SfpuType sfpu_op>
@@ -71,5 +65,5 @@ inline void _llk_math_eltwise_ternary_sfpu_init_()
 
 inline void _llk_math_eltwise_ternary_sfpu_uninit_()
 {
-    // No state to restore - all states are transient or default
+    _llk_math_eltwise_sfpu_uninit_();
 }
