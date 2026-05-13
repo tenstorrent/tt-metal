@@ -76,10 +76,15 @@ void kernel_main() {
     constexpr uint32_t w2_tile_size = get_tile_size(cb_r2c_w2);
     constexpr uint32_t in2_tile_size = get_tile_size(cb_s2c_in2);
 
+    // Pre-computed shard lookup tables — same LUT definitions as compute.cpp.
+    constexpr auto shard_tiles_lut = moe_ring::make_shard_lut<Nt, num_cores>();
+    constexpr auto w2_shard_tiles_lut = moe_ring::make_w2_shard_lut<Ht, Nt, num_cores>();
+    constexpr auto w2_offset_lut = moe_ring::make_w2_offset_lut<Ht, Nt, num_cores>();
+
     // Constants for MoE — derived from compile-time shape args
     constexpr uint32_t num_w0_w1_tiles_h = Ht;
-    const uint32_t num_w0_w1_tiles_w = moe_ring::shard_tiles(Nt, ring_core_id, num_cores);
-    const uint32_t num_w2_tiles_w = moe_ring::w2_shard_tiles(Ht, ring_core_id, Nt, num_cores);
+    const uint32_t num_w0_w1_tiles_w = shard_tiles_lut[ring_core_id];
+    const uint32_t num_w2_tiles_w = w2_shard_tiles_lut[ring_core_id];
 
     // Derived ring constants
     constexpr uint32_t in2_tiles_per_step_raw = (Nt + num_cores - 1) / num_cores;
@@ -96,8 +101,8 @@ void kernel_main() {
     const uint32_t output_base_l1_addr = get_write_ptr(cb_s2c_in);
     cb_push_back(cb_s2c_in, 1);
     constexpr uint32_t source_width_tiles = w2_tiles_per_expert_w;
-    const uint32_t output_width_tiles_core = moe_ring::w2_shard_tiles(Ht, ring_core_id, Nt, num_cores);
-    const uint32_t width_tile_base = moe_ring::compute_w2_tile_offset(ring_core_id, Ht, Nt, num_cores);
+    const uint32_t output_width_tiles_core = w2_shard_tiles_lut[ring_core_id];
+    const uint32_t width_tile_base = w2_offset_lut[ring_core_id];
     constexpr uint32_t RING_CORES_PER_COMBINE_COL = num_cores / width_shard_dim;
     const uint32_t combine_core_x = ring_core_id / RING_CORES_PER_COMBINE_COL;
     const auto combine_semaphore_addr = get_semaphore(matmul_combine_sync_semaphore_id);
