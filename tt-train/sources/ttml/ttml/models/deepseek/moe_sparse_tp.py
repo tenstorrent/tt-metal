@@ -10,9 +10,9 @@ expert's intermediate dim (I) sharded across the cluster axis. Per chip:
 
     1. all_gather tokens across cluster_axis     → full [B, 1, S, H]
     2. moe_group                                 → grouped [T_cap, H]
-    3. moe_ffn_swiglu_fw with TP-sharded weights:
-         w_gate, w_up: [H, I/D]  (column-parallel, output dim sharded)
-         w_down:       [I/D, H]  (row-parallel,    input dim sharded)
+    3. moe_ffn_swiglu_fw with TP-sharded LinearLayer-layout weights:
+         w_gate, w_up: [I/D, H]  (column-parallel, output dim sharded)
+         w_down:       [H, I/D]  (row-parallel,    input dim sharded)
        → partial output [T_cap, H] per chip
     4. moe_ungroup                               → partial [B, 1, S, H]
     5. all_reduce across cluster_axis            → full [B, 1, S, H]
@@ -30,7 +30,7 @@ import ttml
 from ttml.modules import Parameter
 
 from .moe import MoE
-from .moe_sparse import _to_layout
+from .moe_sparse import _gather_topk, _to_layout
 from .autograd_ops import (
     moe_routing_normalize,
 )
@@ -53,10 +53,10 @@ def _first_replica_numpy(tensor: ttml.autograd.Tensor):
 def _make_sharded_param_from_dense_weight(dense_weight: ttml.autograd.Tensor, *, axis_name: str, tdim: int):
     """Create a leaf sharded parameter from a LinearLayer weight.
 
-    LinearLayer stores [1, 1, out, in]. moe_ffn_swiglu_fw consumes
-    [1, 1, in, out], so transpose on host once, then shard with the mapper.
+    LinearLayer stores [1, 1, out, in]. moe_ffn_swiglu_fw consumes that
+    layout directly and applies transpose_b inside the variable-M matmuls.
     """
-    weight_np = _first_replica_numpy(dense_weight).transpose(0, 1, 3, 2)
+    weight_np = _first_replica_numpy(dense_weight)
     mapper = ttml.mesh().axis_mapper(axis_name, tdim=tdim)
     return Parameter(ttml.autograd.Tensor.from_numpy(weight_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper))
 
@@ -98,16 +98,16 @@ class SparseMoETP(MoE):
         self.w_up = []
         self.w_down = []
         for e in range(config.n_routed_experts):
-            # w1/w3 become [H, I] and shard intermediate/output dim I.
+            # w1/w3 stay [I, H] and shard intermediate/output dim I.
             gate = _make_sharded_param_from_dense_weight(
-                self.experts[e].w1.weight.tensor, axis_name=self.axis_name, tdim=3
+                self.experts[e].w1.weight.tensor, axis_name=self.axis_name, tdim=2
             )
             up = _make_sharded_param_from_dense_weight(
-                self.experts[e].w3.weight.tensor, axis_name=self.axis_name, tdim=3
+                self.experts[e].w3.weight.tensor, axis_name=self.axis_name, tdim=2
             )
-            # w2 becomes [I, H] and shards intermediate/input dim I.
+            # w2 stays [H, I] and shards intermediate/input dim I.
             down = _make_sharded_param_from_dense_weight(
-                self.experts[e].w2.weight.tensor, axis_name=self.axis_name, tdim=2
+                self.experts[e].w2.weight.tensor, axis_name=self.axis_name, tdim=3
             )
 
             # Register each Parameter by name; storing only in a Python list
@@ -132,29 +132,25 @@ class SparseMoETP(MoE):
         # ── 2. routing (same as SparseMoE / dense MoE) ──
         scores, _topk_values, topk_indices = self.compute_routing(x)
         topk_indices_u32 = ttnn.typecast(topk_indices, ttnn.DataType.UINT32)
-        mask_parts = []
-        expert_count_scalars = []
-        for expert_idx in range(E):
-            match = ttnn.eq(topk_indices_u32, float(expert_idx))
-            match_f = ttnn.typecast(match, ttnn.DataType.BFLOAT16)
-            match_any = ttnn.sum(match_f, dim=-1, keepdim=True)
-            mask_narrow_bf = ttnn.typecast(ttnn.gt(match_any, 0.0), ttnn.DataType.BFLOAT16)
-            mask_parts.append(mask_narrow_bf)
-            expert_count_scalars.append(ttnn.reshape(ttnn.sum(mask_narrow_bf), [1, 1, 1, 1]))
+        topk_indices_rm = ttnn.to_layout(topk_indices, ttnn.ROW_MAJOR_LAYOUT)
+        expert_mask_all = ttnn.zeros([B, 1, S, E], ttnn.DataType.BFLOAT16, ttnn.ROW_MAJOR_LAYOUT, device)
+        expert_src = ttnn.ones([B, 1, S, K], ttnn.DataType.BFLOAT16, ttnn.ROW_MAJOR_LAYOUT, device)
+        expert_mask_all = ttnn.scatter(expert_mask_all, -1, topk_indices_rm, expert_src)
+        expert_mask_all = ttnn.to_layout(expert_mask_all, ttnn.TILE_LAYOUT)
 
         if self.score_func == "sigmoid":
-            full_mask = ttnn.concat(mask_parts, dim=-1)
-            routing_weights = moe_routing_normalize(scores, full_mask, self.route_scale, 1e-20)
+            routing_weights = moe_routing_normalize(scores, expert_mask_all, self.route_scale, 1e-20)
         else:
             if self.route_scale != 1.0:
                 routing_weights = ttml.ops.binary.mul(scores, self.route_scale)
             else:
                 routing_weights = scores
 
-        scores_for_routing = _gather_topk_via_existing(routing_weights, topk_indices_u32, E)
+        scores_for_routing = _gather_topk(routing_weights, topk_indices_u32, E)
 
         # Token-count accumulator (same as dense MoE).
-        batch_counts = ttnn.concat(expert_count_scalars, dim=-1)
+        mask_bs_flat = ttnn.reshape(expert_mask_all, [1, 1, B * S, E])
+        batch_counts = ttnn.sum(mask_bs_flat, dim=-2, keepdim=True)
         new_counts = ttnn.add(self._token_counts.tensor.get_value(), batch_counts)
         self._token_counts.tensor.set_value(new_counts)
 
@@ -216,47 +212,3 @@ class SparseMoETP(MoE):
             output = ttml.ops.binary.add(output, self.shared_experts(x))
 
         return output
-
-
-def _gather_topk_via_existing(routing_weights, topk_indices_u32, num_experts):
-    """Per-row gather without adding routing-module ops.
-
-    Same construction as SparseMoE's gather: per-K, per-expert one_hot
-    masked weighted sum. Defined here to keep moe_sparse_tp.py
-    self-contained (the SparseMoE version is private to that module).
-    """
-    from .autograd_ops import autograd_concat, autograd_slice
-
-    device = ttml.autograd.AutoContext.get_instance().get_device()
-    K = list(topk_indices_u32.shape)[-1]
-    rw_shape = list(routing_weights.get_value().shape)
-    base_idx_shape = list(topk_indices_u32.shape)
-
-    rw_per_expert = []
-    for e in range(num_experts):
-        end = list(rw_shape)
-        end[-1] = e + 1
-        rw_per_expert.append(autograd_slice(routing_weights, [0, 0, 0, e], end))
-
-    arange_E_u32 = ttnn.arange(0, num_experts, 1, dtype=ttnn.uint32, device=device)
-    arange_E_u32 = ttnn.reshape(arange_E_u32, [1, 1, 1, num_experts])
-
-    out_per_k = []
-    for k in range(K):
-        start = [0] * len(base_idx_shape)
-        end = list(base_idx_shape)
-        start[-1] = k
-        end[-1] = k + 1
-        idx_k = ttnn.slice(topk_indices_u32, start, end)
-        accumulator = None
-        for e in range(num_experts):
-            arange_e = ttnn.slice(arange_E_u32, [0, 0, 0, e], [1, 1, 1, e + 1])
-            mask = ttnn.eq(idx_k, arange_e)
-            mask = ttnn.typecast(mask, ttnn.float32)
-            mask = ttnn.typecast(mask, ttnn.bfloat16)
-            mask = ttnn.to_layout(mask, ttnn.TILE_LAYOUT)
-            mask_at = ttml.autograd.Tensor(mask, False)
-            contribution = ttml.ops.binary.mul(rw_per_expert[e], mask_at)
-            accumulator = contribution if accumulator is None else ttml.ops.binary.add(accumulator, contribution)
-        out_per_k.append(accumulator)
-    return autograd_concat(out_per_k, dim=-1)

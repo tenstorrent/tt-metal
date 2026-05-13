@@ -176,7 +176,6 @@ if(TARGET benchmark::benchmark)
         benchmark/adamw_benchmark.cpp
         benchmark/frobenius_normalize_benchmark.cpp
         benchmark/polynorm_fusion_benchmark.cpp
-        benchmark/variable_matmul_benchmark.cpp
         benchmark/transpose_matmul_benchmark.cpp
     )
 

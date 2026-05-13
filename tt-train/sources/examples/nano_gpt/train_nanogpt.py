@@ -193,6 +193,7 @@ class ModelConfig:
     n_limited_groups: int = 1
     score_func: str = "sigmoid"
     route_scale: float = 2.5
+    moe_type: Literal["sparse", "dense"] = "sparse"
     q_lora_rank: int = 256
     kv_lora_rank: int = 128
     qk_nope_head_dim: int = 64
@@ -638,6 +639,7 @@ def parse_model_config(yaml_config: dict) -> ModelConfig:
         config.n_limited_groups = transformer_config.get("n_limited_groups", config.n_limited_groups)
         config.score_func = transformer_config.get("score_func", config.score_func)
         config.route_scale = transformer_config.get("route_scale", config.route_scale)
+        config.moe_type = transformer_config.get("moe_type", config.moe_type)
         config.q_lora_rank = transformer_config.get("q_lora_rank", config.q_lora_rank)
         config.kv_lora_rank = transformer_config.get("kv_lora_rank", config.kv_lora_rank)
         config.qk_nope_head_dim = transformer_config.get("qk_nope_head_dim", config.qk_nope_head_dim)
@@ -1006,6 +1008,7 @@ def create_model_from_config(model_config: ModelConfig, use_tp: bool = False) ->
             n_limited_groups=model_config.n_limited_groups,
             score_func=model_config.score_func,
             route_scale=model_config.route_scale,
+            moe_type=model_config.moe_type,
             q_lora_rank=model_config.q_lora_rank,
             kv_lora_rank=model_config.kv_lora_rank,
             qk_nope_head_dim=model_config.qk_nope_head_dim,

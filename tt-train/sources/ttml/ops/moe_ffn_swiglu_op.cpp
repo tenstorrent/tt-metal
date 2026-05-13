@@ -206,15 +206,11 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                                    num_experts]() mutable {
         const auto dY = out->get_grad();
         const auto& grouped_value = grouped->get_value();
-        const auto& grouped_shape = grouped_value.logical_shape();
 
-        // Pre-allocate full dX_via_gate and dX_via_up tensors [T_cap, H]; per-expert matmuls
-        // write directly into row ranges. After the loop, one ttnn::add yields dX (single
-        // pass over the full tensor instead of E small adds + concat).
-        auto dX_via_gate =
-            ttml::core::empty(grouped_shape, &ttml::autograd::ctx().get_device(), grouped_value.memory_config());
-        auto dX_via_up =
-            ttml::core::empty(grouped_shape, &ttml::autograd::ctx().get_device(), grouped_value.memory_config());
+        // Pre-zero full dX_via_gate and dX_via_up tensors [T_cap, H]; per-expert
+        // matmuls overwrite active rows while slack/empty-expert rows stay zero.
+        auto dX_via_gate = ttml::core::zeros_like(grouped_value);
+        auto dX_via_up = ttml::core::zeros_like(grouped_value);
 
         // Fused silu·multiply spans for the bw recomputation of activated_e (same pattern as fwd).
         using EltwiseUnary = ttnn::operations::unary::EltwiseUnaryWithParam;

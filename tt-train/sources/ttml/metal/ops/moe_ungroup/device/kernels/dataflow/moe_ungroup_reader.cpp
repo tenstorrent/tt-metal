@@ -20,7 +20,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 #include "tt-train/sources/ttml/metal/ops/moe_ungroup/device/kernels/moe_ungroup_utils.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/matmul_dataflow_common.hpp"
 
 constexpr uint32_t cb_src0 = tt::CBIndex::c_0;
 constexpr uint32_t cb_zero = tt::CBIndex::c_3;  // small scratch for offsets read
