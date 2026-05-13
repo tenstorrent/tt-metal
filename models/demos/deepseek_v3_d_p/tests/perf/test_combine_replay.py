@@ -151,35 +151,35 @@ def test_combine_replay(mesh_device, num_links, topology, capture_file):
         f"num_links={num_links}"
     )
 
-    # Buffer source: if the .pt has real captured bytes (only when TT_DS_CAPTURE_COMBINE_FULL_BUFFER=1
-    # at capture time), shard them onto the mesh. Otherwise allocate directly on device with
-    # ttnn.empty — zero host RAM, per-chip uninitialized bfloat8_b. Combine kernel only reads
-    # buffer bytes to multiply by a (captured) weight and write to a (captured) destination;
-    # uninitialized values produce garbage output but the per-iteration cycle count and fabric
-    # traffic pattern are identical to a real-data run. This is the same pattern used in
-    # test_ttnn_routed_expert.py (the "fast path" branch) — it avoids the 24 GB host allocation
-    # that the bf16-on-host route would require at 25K isl.
+    # Buffer setup matches test_prefill_combine.py's working pattern exactly:
+    #   ttnn.from_torch + get_ep_mesh_mapper + dtype=bfloat16.
+    # The combine kernel inspects the tensor's sharded-mesh metadata to make fabric
+    # routing decisions. ttnn.empty(per_device_shape, ..., device=mesh_device) and
+    # ReplicateTensorToMesh both produce tensors WITHOUT that shard spec and cause the
+    # kernel to hang at synchronize_device. The cost of doing it right is a ~24 GB host
+    # bf16 allocation at 25K isl (proportional to seq_len_per_chip); freed immediately
+    # after from_torch via del dummy_host.
     if "dispatched_buffer" in blob:
         buffer_source = f"captured real values, host shape {tuple(blob['dispatched_buffer'].shape)} sharded onto mesh"
-        tt_buf = ttnn.from_torch(
-            blob["dispatched_buffer"],
-            mesh_mapper=get_ep_mesh_mapper(mesh_device),
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            dtype=ttnn.bfloat8_b,
-        )
+        dummy_host = blob["dispatched_buffer"]
     else:
         buf_shape = cfg["buffer_shape"]  # 4D: (1, dgs, max_dispatch_buffer_token_size, emb_dim)
-        per_device_shape = [1, 1] + list(buf_shape[2:])  # (1, 1, max_dispatch_buffer_token_size, emb_dim)
+        ram_gb = 1 * buf_shape[1] * buf_shape[-2] * buf_shape[-1] * 2 / (1024**3)
         buffer_source = (
-            f"ttnn.empty on device, per-device shape {tuple(per_device_shape)} bfloat8_b " f"(no host allocation)"
+            f"synthesized zeros, host shape {tuple(buf_shape)} bf16 sharded onto mesh "
+            f"(~{ram_gb:.1f} GB host RAM transient)"
         )
-        tt_buf = ttnn.empty(
-            per_device_shape,
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-        )
+        logger.info(f"[replay] allocating host zero buffer of shape {tuple(buf_shape)} bf16 (~{ram_gb:.1f} GB)...")
+        dummy_host = torch.zeros(buf_shape, dtype=torch.bfloat16)
+
+    tt_buf = ttnn.from_torch(
+        dummy_host,
+        mesh_mapper=get_ep_mesh_mapper(mesh_device),
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,  # matches test_prefill_combine.py; combine accepts both bf16 and bf8_b
+    )
+    del dummy_host
     logger.info(f"[replay] buffer pushed to device: {buffer_source}")
 
     logger.info(f"[replay] pushing metadata {tuple(blob['dispatched_metadata'].shape)} int32...")
