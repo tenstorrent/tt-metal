@@ -86,7 +86,11 @@ ttnn:
     bh_quietbox_2: 145
   integration:
     wh_llmbox: 30
-    wh_galaxy: 350
+    # wh_galaxy budget covers galaxy_integration_tests (~340 min) +
+    # galaxy_profiler_tests (~55 min: 10 min device + 45 min cross-reference).
+    # Profiler tests live here as a placeholder; final team / test-framework
+    # assignment tracked in https://github.com/tenstorrent/tt-metal/issues/44285
+    wh_galaxy: 405
 
 shield:
   e2e:
