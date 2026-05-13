@@ -194,10 +194,16 @@ def test_kokoro_sinegen_pcc_comparison_table(mesh_device):
     rows: list[tuple[str, float, float, float, float, float]] = []
     # (name, p_ttnn, min_ttnn, p_torch, min_torch, delta)
     # Full pipeline first: it is most sensitive to device state after heavy vocoder work.
+    # Floors track current achievable PCC on WH B0 after:
+    #   * SineGen downsample switched to sparse fp32 gather-lerp (decoder e2e 0.583 → 0.799 with TT SG).
+    #   * Predictor + text_encoder compute_kernel_config switched from HiFi4 to HiFi3 + fp32 dest acc
+    #     (avoids the WH HiFi4-fp32-accum HW bug; full-pipeline 0.137 → 0.81).
+    #   * Duration-projection weights pinned to fp32 so ``round(dur)`` aligns with PyTorch.
+    # Tighten as upstream LSTM / duration_encoder precision improves.
     scenarios = [
-        ("KokoroFullTtnn vs KokoroFullReference", _pcc_full_pipeline, 0.20, -0.15),
-        ("Generator vs PyTorch ref (decoder prefix on TTNN)", _pcc_generator, 0.61, 0.85),
-        ("KokoroDecoderTt e2e vs PyTorch Decoder", _pcc_decoder_tt_e2e, 0.58, 0.72),
+        ("KokoroFullTtnn vs KokoroFullReference", _pcc_full_pipeline, 0.80, 0.80),
+        ("Generator vs PyTorch ref (decoder prefix on TTNN)", _pcc_generator, 0.75, 0.85),
+        ("KokoroDecoderTt e2e vs PyTorch Decoder", _pcc_decoder_tt_e2e, 0.75, 0.90),
     ]
     for name, fn, min_ttnn, min_torch in scenarios:
         p_ttnn = fn(mesh_device, False)

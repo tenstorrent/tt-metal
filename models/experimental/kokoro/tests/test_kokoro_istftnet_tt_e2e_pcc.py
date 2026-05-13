@@ -5,7 +5,7 @@
 End-to-end PCC: full TTNN ``KokoroDecoderTt`` vs PyTorch ``Decoder`` (``disable_complex=True``).
 
 ``KokoroGenerator`` harmonic path is toggled via ``use_torch_sinegen`` on ``preprocess_kokoro_decoder_tt_parameters``.
-Deterministic waveform PCC vs full PyTorch is ~0.58 on Wormhole B0 with device ``KokoroTtnnSineGen`` and higher with
+Deterministic waveform PCC vs full PyTorch is ~0.80 on Wormhole B0 with device ``KokoroTtnnSineGen`` and higher with
 PyTorch ``SineGen`` on CPU. See ``test_kokoro_pcc_sinegen_comparison_report.py`` (``pytest -s``) for a one-shot table.
 
     pytest models/experimental/kokoro/tests/test_kokoro_istftnet_tt_e2e_pcc.py --confcutdir=models/experimental/kokoro -v
@@ -36,7 +36,7 @@ def ttnn_device():
     ttnn.close_device(device)
 
 
-@pytest.mark.parametrize("use_torch_sinegen,min_pcc", [(False, 0.58), (True, 0.72)])
+@pytest.mark.parametrize("use_torch_sinegen,min_pcc", [(False, 0.79), (True, 0.90)])
 def test_kokoro_decoder_tt_e2e_waveform_pcc(ttnn_device, use_torch_sinegen: bool, min_pcc: float):
     """Full decoder on TTNN vs PyTorch reference waveform (deterministic ``m_source``)."""
     dec_ref = load_decoder_from_huggingface(device="cpu", disable_complex=True).decoder
