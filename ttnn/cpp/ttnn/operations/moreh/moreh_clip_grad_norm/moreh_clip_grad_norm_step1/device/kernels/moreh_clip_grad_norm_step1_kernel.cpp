@@ -93,29 +93,36 @@ void kernel_main() {
         power_tile_to_cb(cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_correct_xpow, p, p_is_negative);
 
         if (tile_idx == 0) {
-            // PARTIAL migration: seed cb_xpowadd with first cb_correct_xpow tile.
-            using namespace compute_kernel_lib;
-            eltwise_chain(
+            // Seed cb_xpowadd with first cb_correct_xpow tile.
+            compute_kernel_lib::eltwise_chain(
                 onetile,
-                CopyTile<cb_correct_xpow, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-                PackTile<cb_xpowadd, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                compute_kernel_lib::CopyTile<
+                    cb_correct_xpow,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::CopyTilePolicy::WaitAndPop>{},
+                compute_kernel_lib::PackTile<
+                    cb_xpowadd,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
         } else {
-            tile_regs_acquire();
-            cb_wait_front(cb_correct_xpow, onetile);
-            cb_wait_front(cb_xpowadd, onetile);
-            cb_reserve_back(cb_xpowadd, onetile);
-
-            add_tiles_init(cb_correct_xpow, cb_xpowadd);
-            add_tiles(cb_correct_xpow, cb_xpowadd, 0, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile(dst0, cb_xpowadd);
-
-            cb_pop_front(cb_correct_xpow, onetile);
-            cb_pop_front(cb_xpowadd, onetile);
-            cb_push_back(cb_xpowadd, onetile);
-            tile_regs_release();
+            // cb_xpowadd = cb_correct_xpow + cb_xpowadd (in-place accumulator)
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::BinaryFpu<
+                    cb_correct_xpow,
+                    cb_xpowadd,
+                    cb_xpowadd,
+                    compute_kernel_lib::BinaryFpuOp::Add,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::BinaryDataFormatReconfig::InputAndOutput,
+                    compute_kernel_lib::CopyTilePolicy::WaitAndPop,
+                    compute_kernel_lib::CopyTilePolicy::WaitAndPop,
+                    compute_kernel_lib::CbIndexMode::FirstTile,
+                    compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::PackTile<
+                    cb_xpowadd,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
         }
     }
 
