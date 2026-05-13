@@ -118,20 +118,20 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
         combine_data_parallel_cores);
 
     // dm1 splits each ring A2A transfer into exactly 2 noc_async_write_one_packet calls.
-    // Each packet must fit within NOC_MAX_BURST_SIZE (8192 B on Wormhole).
-    constexpr uint32_t NOC_MAX_BURST_BYTES = 8192;
+    // Each packet must fit within NOC_MAX_BURST_SIZE (arch-dependent).
+    const uint32_t noc_max_burst_bytes = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? 16384u : 8192u;
     constexpr uint32_t FLOAT16_B_TILE_BYTES = 2048;  // 32 * 32 * 2
     const uint32_t tiles_per_step_raw = (intermediate_tiles + matmul_num_cores - 1) / matmul_num_cores;
     const uint32_t tiles_per_step = (tiles_per_step_raw + 1) & ~1u;  // round up to even
     const uint32_t a2a_packet_bytes = tiles_per_step * FLOAT16_B_TILE_BYTES / 2;
     TT_FATAL(
-        a2a_packet_bytes <= NOC_MAX_BURST_BYTES,
+        a2a_packet_bytes <= noc_max_burst_bytes,
         "intermediate_size ({}) produces a ring A2A packet of {} bytes which exceeds the "
         "NOC_MAX_BURST_SIZE limit of {} bytes (tiles_per_step={}). "
         "Reduce intermediate_size or increase the number of ring cores.",
         intermediate_size,
         a2a_packet_bytes,
-        NOC_MAX_BURST_BYTES,
+        noc_max_burst_bytes,
         tiles_per_step);
 }
 
