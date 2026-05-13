@@ -17,38 +17,37 @@
 
 #ifdef ARCH_WORMHOLE
 
-template <DataCopyType type, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool tilize = false, bool is_int_fpu_en = false>
+template <
+    DataCopyType type,
+    bool is_fp32_dest_acc_en,
+    BroadcastType src_b_bcast_type = BroadcastType::NONE,
+    [[maybe_unused]] bool tilize   = false,
+    bool is_int_fpu_en             = false>
 inline void _llk_math_eltwise_unary_datacopy_init_wrapper_(
-    const std::uint32_t num_faces = 4, const std::uint32_t dst_format = 255, const bool skip_bh_tilize_workaround = false)
+    const std::uint32_t num_faces = 4, const std::uint32_t dst_format = 255, [[maybe_unused]] const bool skip_bh_tilize_workaround = false)
 {
-    (void)tilize;
-    (void)skip_bh_tilize_workaround;
     _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en>(num_faces, dst_format);
 }
 
 template <DataCopyType type, DstSync Dst, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
 inline void _llk_math_eltwise_unary_datacopy_wrapper_(
-    const std::uint32_t dst_index, const std::uint32_t src_format, const std::uint32_t dst_format, const std::uint32_t num_faces = 4)
+    const std::uint32_t dst_index, const std::uint32_t src_format, const std::uint32_t dst_format, [[maybe_unused]] const std::uint32_t num_faces = 4)
 {
-    (void)num_faces;
     _llk_math_eltwise_unary_datacopy_<type, Dst, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest>(dst_index, src_format, dst_format);
 }
 
-template <bool is_fp32_dest_acc_en, bool transpose_of_faces = true, bool is_32bit = false>
+template <[[maybe_unused]] bool is_fp32_dest_acc_en, bool transpose_of_faces = true, bool is_32bit = false>
 inline void _llk_math_transpose_dest_wrapper_(const std::uint32_t dst_index)
 {
-    (void)is_fp32_dest_acc_en;
     _llk_math_transpose_dest_<transpose_of_faces, is_32bit>(dst_index);
 }
 
-inline void _llk_math_reconfig_remap_wrapper_(const bool remap_enable)
+inline void _llk_math_reconfig_remap_wrapper_([[maybe_unused]] const bool remap_enable)
 {
-    (void)remap_enable;
 }
 
-inline bool _llk_math_skip_bh_tilize_workaround_wrapper_(const std::uint32_t unpack_src_format)
+inline bool _llk_math_skip_bh_tilize_workaround_wrapper_([[maybe_unused]] const std::uint32_t unpack_src_format)
 {
-    (void)unpack_src_format;
     return false;
 }
 
@@ -91,11 +90,9 @@ inline bool _llk_math_skip_bh_tilize_workaround_wrapper_(const std::uint32_t unp
     return IS_8BIT_FORMAT(unpack_src_format);
 }
 
-template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
+template <[[maybe_unused]] std::uint32_t block_ct_dim, [[maybe_unused]] bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_reinit_wrapper_()
 {
-    (void)block_ct_dim;
-    (void)is_fp32_dest_acc_en;
     reduce_max_row_configure_addrmod_reinit_minimal();
 }
 
