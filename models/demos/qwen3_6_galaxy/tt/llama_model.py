@@ -86,6 +86,12 @@ class TtQwen36Transformer(LightweightModule):
         self.num_layers = num_layers if num_layers is not None else args.num_hidden_layers
         self.cluster_shape = list(args.cluster_shape)  # [8, 4]
 
+        # T14b.2: persistent input_ids device buffers, keyed by (B, T).  Each
+        # entry is a uint32 ROW_MAJOR replicated [1,1,1,B*T] tensor reused
+        # across forward calls via ``ttnn.copy_host_to_device_tensor`` so the
+        # captured trace can replay the embedding op without allocating fresh.
+        self._input_ids_buffers: dict[tuple[int, int], ttnn.Tensor] = {}
+
         assert (
             len(layers_weights) == self.num_layers
         ), f"layers_weights has {len(layers_weights)} entries, but num_layers={self.num_layers}"
@@ -193,8 +199,35 @@ class TtQwen36Transformer(LightweightModule):
     # Private: embedding helper
     # ------------------------------------------------------------------
 
+    def _get_input_ids_buffer(self, B: int, T: int) -> ttnn.Tensor:
+        """Return a preallocated, replicated device buffer for input_ids of
+        shape ``[1, 1, 1, B*T]`` uint32.
+
+        Lazily allocates on first call for that ``(B, T)`` shape; subsequent
+        calls reuse the same on-device handle.  The buffer is persistent —
+        callers MUST NOT deallocate it.
+        """
+        key = (B, T)
+        if key not in self._input_ids_buffers:
+            placeholder = torch.zeros(1, 1, 1, B * T, dtype=torch.int64)
+            self._input_ids_buffers[key] = ttnn.from_torch(
+                placeholder,
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        return self._input_ids_buffers[key]
+
     def _embed(self, input_ids: torch.Tensor) -> ttnn.Tensor:
         """Embed input_ids and return replicated [B, T, H] TTNN tensor.
+
+        T14b.2: refreshes a preallocated persistent device buffer via
+        ``ttnn.copy_host_to_device_tensor`` instead of allocating a fresh
+        device tensor with ``ttnn.from_torch`` each call.  This keeps the
+        input_ids tensor at a stable device address so a captured trace can
+        replay the embedding op without per-call allocation.
 
         Args:
             input_ids: CPU torch tensor [B, T] int64
@@ -203,45 +236,50 @@ class TtQwen36Transformer(LightweightModule):
             TTNN tensor [B, T, H] bfloat16, replicated across all mesh devices.
         """
         B, T = input_ids.shape
+        full_BT = B * T
+
         # ttnn.embedding expects input shape [1, 1, 1, B*T]
-        ids_flat = input_ids.reshape(1, 1, 1, B * T)
-        ids_tt = ttnn.from_torch(
+        ids_flat = input_ids.reshape(1, 1, 1, full_BT)
+
+        # Build a HOST tensor with the SAME dtype/layout/mesh_mapper as the
+        # persistent device buffer so copy_host_to_device_tensor can do an
+        # in-place per-shard write (no device= argument keeps it host-only;
+        # the Python reference goes out of scope after the copy).
+        ids_host_tt = ttnn.from_torch(
             ids_flat,
-            device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
+        ids_buf = self._get_input_ids_buffer(B, T)
+        ttnn.copy_host_to_device_tensor(ids_host_tt, ids_buf)
 
         # Embedding lookup.  TILE_LAYOUT tile-pads the row dim to a multiple of 32,
         # which is fine for prefill (T is already a multiple of 32) but corrupts
         # the logical shape for decode (T=1 stored in a 32-row tile).
         # For decode (B*T < 32), do the lookup in ROW_MAJOR_LAYOUT — exact rows,
         # no padding — then convert to TILE_LAYOUT after reshaping to [B, T, H].
-        full_BT = B * T
         if full_BT < TILE_HEIGHT:
             x_tt = ttnn.embedding(
-                ids_tt,
+                ids_buf,
                 self.emb_weight,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=ttnn.bfloat16,
             )
-            ids_tt.deallocate(True)
             # [1, 1, B*T, H] (no padding) → [B, T, H]
             x_tt = ttnn.reshape(x_tt, ttnn.Shape([B, T, self.hidden_size]))
             x_tt = ttnn.to_layout(x_tt, ttnn.TILE_LAYOUT)
         else:
             x_tt = ttnn.embedding(
-                ids_tt,
+                ids_buf,
                 self.emb_weight,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=ttnn.bfloat16,
             )
-            ids_tt.deallocate(True)
             x_tt = ttnn.reshape(x_tt, ttnn.Shape([B, T, self.hidden_size]))
+        # DO NOT deallocate ids_buf — it's the persistent buffer reused across calls.
         return x_tt
 
     # ------------------------------------------------------------------
