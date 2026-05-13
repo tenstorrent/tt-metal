@@ -7,7 +7,7 @@ Migration target: `compute_kernel_lib::eltwise_chain` (see `ttnn/cpp/ttnn/kernel
 
 ## TL;DR
 
-- **25 kernels migrated** across 25 commits this run. Each commit is per-kernel,
+- **26 kernels migrated** across 26 commits this run. Each commit is per-kernel,
   passes pre-commit clang-format, and either ran a representative pytest green or
   is annotated `untestable_locally` (multi-chip / mesh-only).
 - **Kernel_lib regression suite** (`tests/ttnn/unit_tests/kernel_lib/`): 465 passed,
@@ -44,6 +44,7 @@ Migration target: `compute_kernel_lib::eltwise_chain` (see `ttnn/cpp/ttnn/kernel
 | `61f720c8985` | `experimental/transformer/rotary_embedding/.../rotary_embedding_single_tile.cpp` | FULL | `test_rotary_embedding_*` PASS |
 | `b2ca12e0c5d` | `experimental/transformer/rotary_embedding/.../rotary_embedding.cpp` | PARTIAL (final add stage) | `test_rotary_embedding_*` PASS |
 | `537e8c724b4` | `normalization/rmsnorm_distributed/.../rmsnorm_pre_allgather.cpp` | PARTIAL (x² stage) | `test_layernorm_part_1_with_program_cache[rmsnorm-...]` PASS |
+| `252540c2f6b` | `normalization/rmsnorm_distributed/.../rmsnorm_pre_allgather_2d.cpp` | PARTIAL (x² stage, mirrors peer) | mesh-only — `untestable_locally`, shape mirrors `537e8c724b4` |
 
 ## Helper-coverage by `pack_patterns.tsv` source category
 
