@@ -6,7 +6,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
 #ifdef ARCH_QUASAR
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #endif
 
 void kernel_main() {
@@ -22,9 +22,9 @@ void kernel_main() {
     constexpr uint32_t dfb0_id = get_compile_time_arg_val(7);
     constexpr uint32_t dfb1_id = get_compile_time_arg_val(8);
     constexpr uint32_t dfb_out_id = get_compile_time_arg_val(9);
-    experimental::DataflowBuffer dfb0(dfb0_id);
-    experimental::DataflowBuffer dfb1(dfb1_id);
-    experimental::DataflowBuffer dfb_out(dfb_out_id);
+    DataflowBuffer dfb0(dfb0_id);
+    DataflowBuffer dfb1(dfb1_id);
+    DataflowBuffer dfb_out(dfb_out_id);
 #endif
 
 #if (TEST_INIT_SHORT == 1)

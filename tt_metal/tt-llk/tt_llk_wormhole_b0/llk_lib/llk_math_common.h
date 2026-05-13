@@ -101,16 +101,6 @@ inline void _llk_math_pack_sync_init_()
     }
 }
 
-inline void _llk_math_debug_dump_(std::uint8_t* data, std::uint32_t byte_size)
-{
-    debug_dump(data, byte_size);
-}
-
-inline void _llk_math_debug_dump_seek_(std::uint8_t offset)
-{
-    debug_dump_seek(offset);
-}
-
 template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_format)
 {

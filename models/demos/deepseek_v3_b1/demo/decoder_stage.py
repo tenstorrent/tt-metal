@@ -19,6 +19,7 @@ from models.demos.deepseek_v3_b1.demo.stage import (
     ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
     DEFAULT_ACTIVATION_FIFO_PAGES,
     PIPELINE_CORE_COORD,
+    TOKEN_FIFO_NUM_PAGES,
     StageContext,
     StageKind,
     activation_fifo_size_bytes,
@@ -37,9 +38,11 @@ from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert, SharedExp
 from models.demos.deepseek_v3_b1.utils import (
     deinterleave_kv_cache,
     get_pinned_optimal_dram_bank_to_logical_worker_assignment,
+    interleave_kv_cache,
 )
 from models.demos.deepseek_v3_b1.weights.prepare import (
     DeepSeekV3DenseLayerWeights,
+    DeepSeekV3EmbeddingLayerWeights,
     DeepSeekV3MoELayerWeights,
     create_gate_indices_tensor,
 )
@@ -929,6 +932,11 @@ class DecoderStage(StageKind):
             "reduce_root_coord": reduce_root_coord,
             "recv_socket": recv_socket,
             "downstream_sockets": downstream_sockets,
+            # Captured for get_kv_cache_host: ConcatMesh2dToTensor needs the mesh handle,
+            # interleave_kv_cache needs (device_chunk_size, num_sp).
+            "mesh_device": mesh_device,
+            "dcs": d["device_chunk_size"],
+            "num_sp": mesh_device.shape[0],
         }
 
         if self._persistent_mode:
@@ -944,6 +952,196 @@ class DecoderStage(StageKind):
 
     def terminate(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         self._persistent_loop.terminate()
+
+    def get_kv_cache_host(self) -> torch.Tensor | None:
+        """Pull this stage's on-device KV cache to host as a single torch tensor.
+
+        Caller must invoke this under a fast-dispatch context (e.g.
+        ``with ttnn.device.setup_fast_dispatch(mesh_device): ...``) since slow-dispatch
+        does not support arbitrary on-device reads. Persisting the result to disk
+        (filename, layout, suffixing, etc.) is the caller's responsibility — this
+        method only composes the sharded on-device KV cache into a host tensor
+        and returns it.
+
+        Returns:
+            The composed host KV-cache tensor of shape
+            ``(num_slots, 1, max_seq_len, kvpe_dim)`` dtype bfloat16, or ``None``
+            if invoked before ``setup`` (no KV cache to compose).
+        """
+        if not self._state or "d" not in self._state:
+            logger.warning("get_kv_cache_host called before setup; returning None")
+            return None
+        ttnn_kv_cache = self._state["d"]["ttnn_kv_cache"]
+        mesh_device = self._state["mesh_device"]
+        dcs = self._state["dcs"]
+        num_sp = self._state["num_sp"]
+        mesh_rows, mesh_cols = mesh_device.shape
+
+        ttnn.synchronize_device(mesh_device)
+
+        # KV cache mapper is ShardTensor2dMesh(dims=(2, None)): sharded along seq (dim 2)
+        # over rows, replicated over cols. ConcatMesh2dToTensor(dims=(2, 0)) concats seq
+        # along rows and stacks the replicated col copies along dim 0; slice to dedupe.
+        composed = ttnn.to_torch(
+            ttnn_kv_cache,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(mesh_rows, mesh_cols), dims=(2, 0)),
+        )
+
+        # TP-axis (cols) is replicated, so each `num_slots` block along dim 0 should be
+        # byte-identical. Mismatches mean a write landed on one TP replica but not all.
+        for col_idx in range(1, mesh_cols):
+            col0 = composed[: self._num_slots]
+            col_n = composed[col_idx * self._num_slots : (col_idx + 1) * self._num_slots]
+            if not torch.equal(col0, col_n):
+                n_diff = (col0 != col_n).any(dim=tuple(range(1, col0.dim()))).sum().item()
+                logger.warning(f"TP col mismatch: col 0 vs col {col_idx} differ on {n_diff}/{self._num_slots} slots")
+
+        composed = composed[: self._num_slots]
+        kv_cache_torch = interleave_kv_cache(composed, dcs, num_sp)
+        logger.info(f"composed KV cache shape={tuple(kv_cache_torch.shape)} dtype={kv_cache_torch.dtype}")
+        return kv_cache_torch
+
+
+class HostIoDecoderStage(DecoderStage):
+    """Decoder stage that runs as a single-stage pipeline talking directly to host I/O.
+
+    Compute layout is identical to :class:`DecoderStage` (broadcast → fused decoder
+    block → reduce-to-one), but the entry/exit D2D sockets are replaced by host I/O:
+
+      - H2D socket on the stage's entry node feeds ``MOE_SENDER_CORE`` via the fused
+        H2D + embedding kernel: each token id is looked up in the DRAM-resident
+        embedding table, and the ``embedding row + DeepseekMetadata`` payload is
+        pushed into the local socket pair that the decoder broadcast consumes.
+      - Multi-upstream D2H socket on the stage's exit node: ``len(gate_proj_cores)``
+        upstream feeders (one per allreduce shard) deliver one ``ACTIVATION_PAGE //
+        N`` slice each, the last shard appends the metadata tail, and the BRISC D2H
+        sender kernel assembles a single ``ACTIVATION_W_TOKEN_META`` page back to
+        host over PCIe.
+
+    Selecting ``LoopbackConfig.no_loopback(...)`` with this stage as the only stage
+    in the pipeline (``num_procs == 1``) trips ``PipelineBlock``'s combined H2D+D2H
+    branch (``_init_combined_h2d_d2h_stage``); no D2D socket interfaces are
+    constructed.
+    """
+
+    def __init__(
+        self,
+        *,
+        weights: DeepSeekV3MoELayerWeights | DeepSeekV3DenseLayerWeights,
+        embedding_weights: DeepSeekV3EmbeddingLayerWeights | None = None,
+        layer_idx: int,
+        metadata: DeepseekMetadata,
+        max_seq_len: int,
+        num_slots: int,
+        persistent_mode: bool,
+        is_torus: bool,
+        is_moe: bool,
+        num_routed_experts: int,
+        use_hardcoded_expert_index: bool,
+        enable_routing: bool,
+        inject_hidden_states: bool = False,
+    ) -> None:
+        # Two mutually-exclusive H2D modes:
+        #   - default (embedding lookup): host pushes a 256-byte token page; the fused
+        #     H2D+embedding kernel resolves token_id -> embedding row from DRAM.
+        #   - inject_hidden_states: host pushes a full
+        #     `activation (HIDDEN_SIZE bf16) || DeepseekMetadata` page; the simple
+        #     h2d_receiver kernel forwards verbatim. Used by tests that drive the
+        #     decoder with reference hidden-state traces.
+        if inject_hidden_states:
+            assert embedding_weights is None, (
+                "embedding_weights cannot be set when inject_hidden_states=True (the embedding "
+                "lookup is bypassed in this mode)"
+            )
+        else:
+            assert embedding_weights is not None, "embedding_weights is required unless inject_hidden_states=True"
+        super().__init__(
+            weights=weights,
+            layer_idx=layer_idx,
+            metadata=metadata,
+            max_seq_len=max_seq_len,
+            num_slots=num_slots,
+            persistent_mode=persistent_mode,
+            is_torus=is_torus,
+            is_moe=is_moe,
+            num_routed_experts=num_routed_experts,
+            use_hardcoded_expert_index=use_hardcoded_expert_index,
+            enable_routing=enable_routing,
+            host_loopback=False,
+        )
+        self._embedding_weights = embedding_weights
+        self._inject_hidden_states = inject_hidden_states
+
+    def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
+        mesh_device = ctx.mesh_device
+        pipeline_config = ctx.pipeline_config
+        my_stage_idx = ctx.my_stage_idx
+
+        # Multi-upstream feeders: same dram-bank-pinned worker cores DecoderStage uses for
+        # the gate_proj allreduce shards. They live on the stage's exit node alongside the
+        # D2H sender kernel.
+        gate_proj_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, ttnn.NOC.NOC_0)
+        gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
+        shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
+
+        stage_entry_device = pipeline_config[my_stage_idx].entry_node_coord
+        reduce_root_coord = pipeline_config[my_stage_idx].exit_node_coord
+
+        exit_upstream_cores = [ttnn.MeshCoreCoord(reduce_root_coord, c) for c in shard_cores_list]
+        assert (
+            ACTIVATION_PAGE_SIZE_BYTES % len(shard_cores_list) == 0
+        ), "ACTIVATION_PAGE_SIZE_BYTES must be divisible by len(shard_cores_list)"
+        exit_upstream_page_size = ACTIVATION_PAGE_SIZE_BYTES // len(shard_cores_list)
+
+        # Combined D2H page = activation + DeepseekMetadata; matches the assertion in
+        # PipelineBlock._init_combined_h2d_d2h_stage:
+        #   d2h_page_size == N * exit_upstream_page_size + DeepseekMetadata.aligned_size_bytes()
+        page_size = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
+
+        # Two H2D modes:
+        #   - default: 256-byte token page + DRAM embedding lookup (production).
+        #   - inject_hidden_states: full `activation || metadata` page direct from host;
+        #     embedding kernel bypassed. Smaller H2D FIFO depth since pages are 57x larger.
+        if self._inject_hidden_states:
+            h2d_socket_page_size = page_size
+            h2d_socket_fifo_size = h2d_socket_page_size * DEFAULT_ACTIVATION_FIFO_PAGES
+            embedding_tensor = None
+        else:
+            h2d_socket_page_size = DeepseekMetadata.aligned_size_bytes()
+            # H2D socket depth matches every other stage that pulls tokens from host
+            # (see EmbeddingStage / TOKEN_META_FIFO_SIZE).
+            h2d_socket_fifo_size = h2d_socket_page_size * TOKEN_FIFO_NUM_PAGES
+            embedding_tensor = self._embedding_weights.embedding
+
+        d2h_socket_page_size = page_size
+        d2h_socket_fifo_size = d2h_socket_page_size * DEFAULT_ACTIVATION_FIFO_PAGES
+        # Local socket pair between the H2D core and MOE_SENDER_CORE on the entry node.
+        h2d_to_compute_fifo_size = activation_fifo_size_bytes(page_size, DEFAULT_ACTIVATION_FIFO_PAGES)
+
+        return PipelineBlock(
+            mesh_device,
+            PIPELINE_CORE_COORD,
+            # The upstream/downstream D2D socket sizes are unused by the combined H2D+D2H
+            # branch but PipelineBlock's __init__ asserts FIFO >= page on them. Reuse the
+            # H2D-to-compute FIFO size + page size so the asserts pass with sensible values.
+            upstream_d2d_socket_fifo_size=h2d_to_compute_fifo_size,
+            downstream_d2d_socket_fifo_size=h2d_to_compute_fifo_size,
+            upstream_d2d_socket_page_size=page_size,
+            downstream_d2d_socket_page_size=page_size,
+            h2d_socket_fifo_size=h2d_socket_fifo_size,
+            h2d_socket_page_size=h2d_socket_page_size,
+            d2h_socket_fifo_size=d2h_socket_fifo_size,
+            d2h_socket_page_size=d2h_socket_page_size,
+            embedding_tensor=embedding_tensor,
+            entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, self.MOE_SENDER_CORE),
+            exit_node_upstream=exit_upstream_cores,
+            exit_upstream_page_size=exit_upstream_page_size,
+            forward_metadata=True,
+            my_stage_idx=my_stage_idx,
+            stages_metadata=ctx.stages_metadata,
+            pipeline_config=pipeline_config,
+            loopback=LoopbackConfig.no_loopback(HostIoPlacement.default(PIPELINE_CORE_COORD)),
+        )
 
 
 class MoEDecoderStage(DecoderStage):

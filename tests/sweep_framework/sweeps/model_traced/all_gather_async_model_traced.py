@@ -9,12 +9,12 @@ from math import prod
 from typing import Optional, Tuple
 
 import torch
-import ttnn
-from ttnn import ShardTensor2dMesh
-from tests.sweep_framework.sweep_utils.mesh_tensor_utils import replicate_with_topology
-
-from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
 from loguru import logger
+
+import ttnn
+
+# Import V2 master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.ccl_common import (
     device_context,
     get_mem_configs,
@@ -22,10 +22,10 @@ from tests.sweep_framework.sweep_utils.ccl_common import (
     mesh_shape_iterator,
     validate_serializable_shard_spec,
 )
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import replicate_with_topology
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-
-# Import V2 master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
+from ttnn import ShardTensor2dMesh
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -462,6 +462,7 @@ def run(
         # Coerce numeric params to correct types
         if dim is not None:
             dim = int(dim)
+        _cluster_axis_from_vector = cluster_axis is not None
         if cluster_axis is not None:
             cluster_axis = int(cluster_axis)
         if num_links is not None:
@@ -611,6 +612,14 @@ def run(
                 # Move from DRAM to the traced sharded layout if applicable
                 if target_sharded_config is not None:
                     tt_input = ttnn.to_memory_config(tt_input, target_sharded_config)
+                    # to_memory_config may reset topology; re-apply from vector
+                    if input_a_tensor_placement:
+                        from tests.sweep_framework.sweep_utils.mesh_tensor_utils import apply_tensor_placement_topology
+
+                        try:
+                            apply_tensor_placement_topology(tt_input, input_a_tensor_placement, mesh_shape)
+                        except Exception:
+                            pass  # Intentionally ignored: topology application is best-effort, fallback to default
 
             else:
                 # Use _get_tensors helper for generality format
@@ -686,8 +695,10 @@ def run(
                             "multi_device_global_semaphore": ccl_semaphore_handles[i],
                             "num_links": num_links,
                             "topology": topology,
-                            "cluster_axis": cluster_axis,
                         }
+                        # Only pass cluster_axis when the vector had it.
+                        if _cluster_axis_from_vector:
+                            op_kwargs["cluster_axis"] = cluster_axis
 
                         if memory_config_was_traced:
                             op_kwargs["memory_config"] = output_memory_config
@@ -719,22 +730,52 @@ def run(
                             # Master had `persistent_output_buffer=None` explicitly.
                             op_kwargs["persistent_output_buffer"] = None
 
+                        if subdevice_id is not None or "subdevice_id" not in absent_keys:
+                            op_kwargs["subdevice_id"] = subdevice_id
+                        # Ensure input tensor topology matches master trace
+                        if input_a_tensor_placement:
+                            from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+                                apply_tensor_placement_topology,
+                            )
+
+                            try:
+                                apply_tensor_placement_topology(tt_input, input_a_tensor_placement, mesh_shape)
+                            except Exception:
+                                pass  # Intentionally ignored: topology application is best-effort, fallback to default
                         tt_out_tensor = ttnn.experimental.all_gather_async(tt_input, **op_kwargs)
                     else:
-                        tt_out_tensor = ttnn.experimental.all_gather_async(
-                            tt_input,
-                            persistent_output_buffer,  # None is valid (optional persistent buffer)
-                            dim,
-                            ccl_semaphore_handles[i],
+                        _ag_kwargs = dict(
                             num_links=num_links,
                             memory_config=output_memory_config,
                             topology=topology,
-                            subdevice_id=worker_sub_device_id,
+                            subdevice_id=(
+                                subdevice_id
+                                if subdevice_id is not None or "subdevice_id" not in absent_keys
+                                else worker_sub_device_id
+                            ),
                             barrier_semaphore=barrier_semaphore_handles[i] if barrier_semaphore_handles else None,
-                            cluster_axis=cluster_axis,
                             chunks_per_sync=chunks_per_sync,
                             num_workers_per_link=num_workers_per_link,
                             num_buffers_per_channel=num_buffers_per_channel,
+                        )
+                        if _cluster_axis_from_vector:
+                            _ag_kwargs["cluster_axis"] = cluster_axis
+                        # Ensure input tensor topology matches master trace
+                        if input_a_tensor_placement:
+                            from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+                                apply_tensor_placement_topology,
+                            )
+
+                            try:
+                                apply_tensor_placement_topology(tt_input, input_a_tensor_placement, mesh_shape)
+                            except Exception:
+                                pass  # Intentionally ignored: topology application is best-effort, fallback to default
+                        tt_out_tensor = ttnn.experimental.all_gather_async(
+                            tt_input,
+                            persistent_output_buffer,
+                            dim,
+                            ccl_semaphore_handles[i],
+                            **_ag_kwargs,
                         )
 
                     ttnn.synchronize_device(device, sub_device_ids=sub_device_stall_group)

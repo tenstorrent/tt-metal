@@ -310,7 +310,7 @@ inline void _llk_pack_mop_config_(
     }
 }
 
-template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void _llk_pack_reconfig_data_format_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -318,16 +318,10 @@ inline void _llk_pack_reconfig_data_format_(
     const std::uint32_t face_r_dim = FACE_R_DIM,
     const std::uint32_t tile_c_dim = TILE_C_DIM,
     const std::uint32_t num_faces  = 4,
-    const bool partial_face        = false,
-    const std::uint32_t num_tiles  = 1)
+    const bool partial_face        = false)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face);
-
-    if constexpr (is_tile_dim_reconfig_en)
-    {
-        _llk_pack_mop_config_<false, false>(face_r_dim, tile_c_dim, num_faces, num_tiles);
-    }
 }
 
 inline void _llk_pack_set_fp32_dest_acc_(bool enable)
@@ -355,7 +349,7 @@ inline void _llk_pack_hw_configure_(
 }
 
 // TODO NC: Clean up as the part of tt-metal#34587
-template <bool untilize = false, bool zero_output = false, bool tilize = false>
+template <bool untilize = false, bool zero_output = false, bool tilize = false, bool skip_addrmod_config = false>
 inline void _llk_pack_init_(
     const std::uint32_t face_r_dim = FACE_R_DIM,
     const std::uint32_t tile_c_dim = TILE_C_DIM,
@@ -363,12 +357,15 @@ inline void _llk_pack_init_(
     const std::uint32_t num_tiles  = 1)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    _llk_pack_configure_addrmod_<untilize, tilize>();
+    if constexpr (!skip_addrmod_config)
+    {
+        _llk_pack_configure_addrmod_<untilize, tilize>();
+    }
     _llk_pack_mop_config_<untilize, zero_output, tilize>(face_r_dim, tile_c_dim, num_faces, num_tiles);
 }
 
 // TODO NC: Clean up as the part of tt-metal#34587
-template <bool untilize = false, bool zero_output = false, bool tilize = false>
+template <bool untilize = false, bool zero_output = false, bool tilize = false, bool skip_addrmod_config = false>
 inline void _llk_pack_init_(
     const std::uint32_t pack_src_format,
     const std::uint32_t face_r_dim,
@@ -392,13 +389,19 @@ inline void _llk_pack_init_(
     // so we can skip the workaround which involves unswizzling rows in the tile.
     if (skip_bh_tilize_workaround)
     {
-        _llk_pack_configure_addrmod_<untilize, false /* tilize */>();
+        if constexpr (!skip_addrmod_config)
+        {
+            _llk_pack_configure_addrmod_<untilize, false /* tilize */>();
+        }
         _llk_pack_mop_config_<untilize, zero_output, false /* tilize */>(face_r_dim, tile_c_dim, num_faces, num_tiles);
         set_packer_strides<untilize, false /* tilize */>(pack_src_format, tile_c_dim);
     }
     else
     {
-        _llk_pack_configure_addrmod_<untilize, tilize>();
+        if constexpr (!skip_addrmod_config)
+        {
+            _llk_pack_configure_addrmod_<untilize, tilize>();
+        }
         _llk_pack_mop_config_<untilize, zero_output, tilize>(face_r_dim, tile_c_dim, num_faces, num_tiles);
         set_packer_strides<untilize, tilize>(pack_src_format, tile_c_dim);
     }

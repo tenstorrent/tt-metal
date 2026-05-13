@@ -24,13 +24,17 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(5);
     constexpr uint32_t Wt = get_compile_time_arg_val(6);
     constexpr bool freq_per_head = get_compile_time_arg_val(7) == 1;
-    constexpr auto input_args = TensorAccessorArgs<8>();
+    constexpr uint32_t cos_Ht = get_compile_time_arg_val(8);
+    constexpr uint32_t sin_Ht = get_compile_time_arg_val(9);
+    constexpr uint32_t rotary_Ht = get_compile_time_arg_val(10);
+    constexpr auto input_args = TensorAccessorArgs<11>();
     constexpr auto cos_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
     constexpr auto trans_mat_args = TensorAccessorArgs<sin_args.next_compile_time_args_offset()>();
 
-    const uint32_t my_seq_tiles = seq_t_end - seq_t_start;
-    const uint32_t my_cos_sin_tiles = my_seq_tiles * Wt;
+    const uint32_t rotary_seq_t_end = seq_t_end < rotary_Ht ? seq_t_end : rotary_Ht;
+    const uint32_t my_rotary_seq_tiles = seq_t_start < rotary_seq_t_end ? rotary_seq_t_end - seq_t_start : 0;
+    const uint32_t my_cos_sin_tiles = my_rotary_seq_tiles * Wt;
 
     constexpr uint32_t onetile = 1;
     const uint32_t input_tile_bytes = get_tile_size(input_cb_id);
@@ -63,11 +67,15 @@ void kernel_main() {
     */
 
     for (uint32_t batch_id = batch_start; batch_id < batch_end; ++batch_id) {
+        uint32_t sin_l1_write_addr = 0;
+        uint32_t cos_l1_write_addr = 0;
 #if RELOAD_IMPL == 0
-        cb_reserve_back(sin_cb_id, my_cos_sin_tiles);
-        cb_reserve_back(cos_cb_id, my_cos_sin_tiles);
-        uint32_t sin_l1_write_addr = get_write_ptr(sin_cb_id);
-        uint32_t cos_l1_write_addr = get_write_ptr(cos_cb_id);
+        if (my_cos_sin_tiles > 0) {
+            cb_reserve_back(sin_cb_id, my_cos_sin_tiles);
+            cb_reserve_back(cos_cb_id, my_cos_sin_tiles);
+            sin_l1_write_addr = get_write_ptr(sin_cb_id);
+            cos_l1_write_addr = get_write_ptr(cos_cb_id);
+        }
 #endif
 
         // To make sure the sin/cos row are read only once
@@ -75,7 +83,7 @@ void kernel_main() {
         bool done_sin_cos = false;
 
         for (uint32_t head_num = 0; head_num < n_heads; ++head_num) {
-            for (uint32_t seq_tile = seq_t_start; seq_tile < seq_t_end; ++seq_tile) {
+            for (uint32_t seq_tile = seq_t_start; seq_tile < rotary_seq_t_end; ++seq_tile) {
 #if RELOAD_IMPL == 1
                 cb_reserve_back(sin_cb_id, Wt);
                 cb_reserve_back(cos_cb_id, Wt);
@@ -86,11 +94,14 @@ void kernel_main() {
                 cb_reserve_back(input_cb_id, Wt);
                 uint32_t input_l1_write_addr = get_write_ptr(input_cb_id);
                 uint32_t input_curr_idx = batch_id * n_heads * Ht * Wt + head_num * Ht * Wt + seq_tile * Wt;
-                uint32_t cos_sin_curr_idx;
+                uint32_t cos_curr_idx;
+                uint32_t sin_curr_idx;
                 if constexpr (freq_per_head) {
-                    cos_sin_curr_idx = head_num * Ht * Wt + seq_tile * Wt;
+                    cos_curr_idx = head_num * cos_Ht * Wt + seq_tile * Wt;
+                    sin_curr_idx = head_num * sin_Ht * Wt + seq_tile * Wt;
                 } else {
-                    cos_sin_curr_idx = seq_tile * Wt;
+                    cos_curr_idx = seq_tile * Wt;
+                    sin_curr_idx = seq_tile * Wt;
                 }
                 for (uint32_t j = 0; j < Wt; ++j) {
                     // Read input into CB
@@ -99,15 +110,12 @@ void kernel_main() {
                     input_l1_write_addr += input_tile_bytes;
 
                     if (!done_sin_cos) {
-                        // Read sin into CB
-                        noc_async_read_tile(cos_sin_curr_idx, s2, sin_l1_write_addr);
+                        noc_async_read_tile(sin_curr_idx, s2, sin_l1_write_addr);
+                        noc_async_read_tile(cos_curr_idx, s1, cos_l1_write_addr);
+                        sin_curr_idx++;
+                        cos_curr_idx++;
                         sin_l1_write_addr += sin_tile_bytes;
-
-                        // Read cos into CB
-                        noc_async_read_tile(cos_sin_curr_idx, s1, cos_l1_write_addr);
                         cos_l1_write_addr += cos_tile_bytes;
-
-                        cos_sin_curr_idx++;
                     }
                 }
 
@@ -125,7 +133,7 @@ void kernel_main() {
                     // Update sin_cos_row_cnt
                     sin_cos_row_cnt++;
 
-                    if (sin_cos_row_cnt == my_seq_tiles) {
+                    if (sin_cos_row_cnt == my_rotary_seq_tiles) {
                         done_sin_cos = true;
                     }
                 }

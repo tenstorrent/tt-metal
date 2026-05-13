@@ -116,7 +116,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     bool row_broadcast_bias = true,
     CoreCoord sub_device_start_core = {0, 0}) {
-    using tt::tt_metal::num_cores_to_corerangeset;
+    using tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids;
 
     // currently only support transpose of the full tile
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
@@ -198,6 +198,16 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     uint32_t start_core_y = start_core.y;
     uint32_t num_cores_c = compute_with_storage_grid_size.x;
 
+    // The matmul region is the rectangle of size `compute_with_storage_grid_size`
+    // anchored at `start_core`. Callers must ensure this rectangle lies entirely
+    // within the active sub-device's worker cores (validated upstream). Using a
+    // CoreRangeSet here lets num_cores_to_corerangeset_in_subcoregrids honour the
+    // start offset when the sub-device is not anchored at (0, 0).
+    CoreRangeSet matmul_core_rect(CoreRange(
+        start_core,
+        CoreCoord(
+            start_core_x + compute_with_storage_grid_size.x - 1, start_core_y + compute_with_storage_grid_size.y - 1)));
+
     uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
     uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
@@ -218,14 +228,14 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
     constexpr bool row_major = true;
     CoreRangeSet all_cores =
-        num_cores_to_corerangeset(start_core, num_cores, compute_with_storage_grid_size, row_major);
+        num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores, matmul_core_rect, row_major);
 
     CoreRangeSet in0_mcast_sender_cores =
-        num_cores_to_corerangeset(start_core, in0_sender_num_cores, compute_with_storage_grid_size, row_major);
+        num_cores_to_corerangeset_in_subcoregrids(start_core, in0_sender_num_cores, matmul_core_rect, row_major);
     CoreCoord in0_mcast_sender_cores_grid = in0_mcast_sender_cores.bounding_box().grid_size();
 
     CoreRangeSet all_cores_with_work =
-        num_cores_to_corerangeset(start_core, num_cores_with_work, compute_with_storage_grid_size, row_major);
+        num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores_with_work, matmul_core_rect, row_major);
     CoreRange in0_mcast_receiver_cores_bounding_box = all_cores_with_work.bounding_box();
     uint32_t in0_mcast_receiver_num_cores = in0_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
     uint32_t in0_mcast_receiver_num_dests = std::min(
@@ -247,11 +257,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             uint32_t core_idx_x = num_cores_with_work % num_cores_c;
             uint32_t core_idx_y = num_cores_with_work / num_cores_c;
             CoreCoord start_core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
-            in0_mcast_cores_without_work_and_in_receiver_grid = num_cores_to_corerangeset(
-                start_core,
-                in0_mcast_cores_without_work_and_in_receiver_grid_num_cores,
-                compute_with_storage_grid_size,
-                row_major);
+            in0_mcast_cores_without_work_and_in_receiver_grid = num_cores_to_corerangeset_in_subcoregrids(
+                start_core, in0_mcast_cores_without_work_and_in_receiver_grid_num_cores, matmul_core_rect, row_major);
         }
 
         if (in0_sender_num_cores > in0_mcast_receiver_num_dests) {
@@ -260,10 +267,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             uint32_t core_idx_x = in0_mcast_receiver_num_dests % num_cores_c;
             uint32_t core_idx_y = in0_mcast_receiver_num_dests / num_cores_c;
             CoreCoord start_core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
-            in0_mcast_cores_without_work_and_not_in_receiver_grid = num_cores_to_corerangeset(
+            in0_mcast_cores_without_work_and_not_in_receiver_grid = num_cores_to_corerangeset_in_subcoregrids(
                 start_core,
                 in0_mcast_cores_without_work_and_not_in_receiver_grid_num_cores,
-                compute_with_storage_grid_size,
+                matmul_core_rect,
                 row_major);
         }
 
@@ -280,11 +287,12 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     } else {
         in0_mcast_cores_with_work_and_in_receiver_grid = CoreRangeSet({CoreRange(start_core, start_core)});
         if (in0_mcast_receiver_num_cores > 1) {
-            auto receiver_start_core = start_core.x != (compute_with_storage_grid_size.x - 1)
-                                           ? CoreCoord{start_core.x + 1, start_core.y}
-                                           : CoreCoord{start_core.x, start_core.y + 1};
-            in0_mcast_receivers = num_cores_to_corerangeset(
-                receiver_start_core, num_cores - 1, compute_with_storage_grid_size, row_major);
+            // Check against the actual rectangle width (instead of bare grid_size.x-1) so that
+            // sub-devices anchored away from (0, 0) wrap correctly.
+            auto receiver_start_core = compute_with_storage_grid_size.x > 1 ? CoreCoord{start_core.x + 1, start_core.y}
+                                                                            : CoreCoord{start_core.x, start_core.y + 1};
+            in0_mcast_receivers = num_cores_to_corerangeset_in_subcoregrids(
+                receiver_start_core, num_cores - 1, matmul_core_rect, row_major);
         }
     }
 
@@ -1243,6 +1251,14 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
     CoreCoord start_core = sub_device_start_core;
 
+    // The matmul region is the rectangle of size `compute_with_storage_grid_size`
+    // anchored at `start_core`. Callers must ensure this rectangle lies entirely
+    // within the active sub-device's worker cores (validated upstream).
+    CoreRangeSet matmul_core_rect(CoreRange(
+        start_core,
+        CoreCoord(
+            start_core.x + compute_with_storage_grid_size.x - 1, start_core.y + compute_with_storage_grid_size.y - 1)));
+
     uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
     uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
@@ -1250,18 +1266,19 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
     constexpr bool row_major = true;
     CoreRangeSet all_cores =
-        tt::tt_metal::num_cores_to_corerangeset(start_core, num_cores, compute_with_storage_grid_size, row_major);
+        tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores, matmul_core_rect, row_major);
     CoreRange in1_mcast_receiver_cores_bounding_box = all_cores.bounding_box();
     uint32_t in1_mcast_receiver_num_cores = in1_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
 
     CoreRange in1_mcast_sender(start_core, start_core);
     CoreRangeSet in1_mcast_receivers;
     if (in1_mcast_receiver_num_cores > 1) {
-        auto receiver_start_core = start_core.x != (compute_with_storage_grid_size.x - 1)
-                                       ? CoreCoord{start_core.x + 1, start_core.y}
-                                       : CoreCoord{start_core.x, start_core.y + 1};
-        in1_mcast_receivers = tt::tt_metal::num_cores_to_corerangeset(
-            receiver_start_core, num_cores - 1, compute_with_storage_grid_size, row_major);
+        // Check against the actual rectangle width (instead of bare grid_size.x-1) so that
+        // sub-devices anchored away from (0, 0) wrap correctly.
+        auto receiver_start_core = compute_with_storage_grid_size.x > 1 ? CoreCoord{start_core.x + 1, start_core.y}
+                                                                        : CoreCoord{start_core.x, start_core.y + 1};
+        in1_mcast_receivers = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
+            receiver_start_core, num_cores - 1, matmul_core_rect, row_major);
     }
 
     // Mcast args
@@ -2944,7 +2961,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     bool row_broadcast_bias = true,
     CoreCoord sub_device_start_core = {0, 0}) {
-    using tt::tt_metal::num_cores_to_corerangeset;
+    using tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids;
 
     // currently only support transpose of the full tile
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
@@ -3026,6 +3043,14 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     uint32_t start_core_y = start_core.y;
     uint32_t num_cores_c = compute_with_storage_grid_size.x;
 
+    // The matmul region is the rectangle of size `compute_with_storage_grid_size`
+    // anchored at `start_core`. Callers must ensure this rectangle lies entirely
+    // within the active sub-device's worker cores (validated upstream).
+    CoreRangeSet matmul_core_rect(CoreRange(
+        start_core,
+        CoreCoord(
+            start_core_x + compute_with_storage_grid_size.x - 1, start_core_y + compute_with_storage_grid_size.y - 1)));
+
     uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
     uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
@@ -3046,14 +3071,14 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
 
     constexpr bool row_major = true;
     CoreRangeSet all_cores =
-        num_cores_to_corerangeset(start_core, num_cores, compute_with_storage_grid_size, row_major);
+        num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores, matmul_core_rect, row_major);
 
     CoreRangeSet in0_mcast_sender_cores =
-        num_cores_to_corerangeset(start_core, in0_sender_num_cores, compute_with_storage_grid_size, row_major);
+        num_cores_to_corerangeset_in_subcoregrids(start_core, in0_sender_num_cores, matmul_core_rect, row_major);
     CoreCoord in0_mcast_sender_cores_grid = in0_mcast_sender_cores.bounding_box().grid_size();
 
     CoreRangeSet all_cores_with_work =
-        num_cores_to_corerangeset(start_core, num_cores_with_work, compute_with_storage_grid_size, row_major);
+        num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores_with_work, matmul_core_rect, row_major);
     CoreRange in0_mcast_receiver_cores_bounding_box = all_cores_with_work.bounding_box();
     uint32_t in0_mcast_receiver_num_cores = in0_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
     uint32_t in0_mcast_receiver_num_dests = std::min(
@@ -3075,11 +3100,8 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
             uint32_t core_idx_x = num_cores_with_work % num_cores_c;
             uint32_t core_idx_y = num_cores_with_work / num_cores_c;
             CoreCoord start_core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
-            in0_mcast_cores_without_work_and_in_receiver_grid = num_cores_to_corerangeset(
-                start_core,
-                in0_mcast_cores_without_work_and_in_receiver_grid_num_cores,
-                compute_with_storage_grid_size,
-                row_major);
+            in0_mcast_cores_without_work_and_in_receiver_grid = num_cores_to_corerangeset_in_subcoregrids(
+                start_core, in0_mcast_cores_without_work_and_in_receiver_grid_num_cores, matmul_core_rect, row_major);
         }
 
         if (in0_sender_num_cores > in0_mcast_receiver_num_dests) {
@@ -3088,10 +3110,10 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
             uint32_t core_idx_x = in0_mcast_receiver_num_dests % num_cores_c;
             uint32_t core_idx_y = in0_mcast_receiver_num_dests / num_cores_c;
             CoreCoord start_core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
-            in0_mcast_cores_without_work_and_not_in_receiver_grid = num_cores_to_corerangeset(
+            in0_mcast_cores_without_work_and_not_in_receiver_grid = num_cores_to_corerangeset_in_subcoregrids(
                 start_core,
                 in0_mcast_cores_without_work_and_not_in_receiver_grid_num_cores,
-                compute_with_storage_grid_size,
+                matmul_core_rect,
                 row_major);
         }
 
@@ -3108,11 +3130,12 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     } else {
         in0_mcast_cores_with_work_and_in_receiver_grid = CoreRangeSet({CoreRange(start_core, start_core)});
         if (in0_mcast_receiver_num_cores > 1) {
-            auto receiver_start_core = start_core.x != (compute_with_storage_grid_size.x - 1)
-                                           ? CoreCoord{start_core.x + 1, start_core.y}
-                                           : CoreCoord{start_core.x, start_core.y + 1};
-            in0_mcast_receivers = num_cores_to_corerangeset(
-                receiver_start_core, num_cores - 1, compute_with_storage_grid_size, row_major);
+            // Check against the actual rectangle width (instead of bare grid_size.x-1) so that
+            // sub-devices anchored away from (0, 0) wrap correctly.
+            auto receiver_start_core = compute_with_storage_grid_size.x > 1 ? CoreCoord{start_core.x + 1, start_core.y}
+                                                                            : CoreCoord{start_core.x, start_core.y + 1};
+            in0_mcast_receivers = num_cores_to_corerangeset_in_subcoregrids(
+                receiver_start_core, num_cores - 1, matmul_core_rect, row_major);
         }
     }
 
@@ -4068,6 +4091,14 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
 
     CoreCoord start_core = sub_device_start_core;
 
+    // The matmul region is the rectangle of size `compute_with_storage_grid_size`
+    // anchored at `start_core`. Callers must ensure this rectangle lies entirely
+    // within the active sub-device's worker cores (validated upstream).
+    CoreRangeSet matmul_core_rect(CoreRange(
+        start_core,
+        CoreCoord(
+            start_core.x + compute_with_storage_grid_size.x - 1, start_core.y + compute_with_storage_grid_size.y - 1)));
+
     uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
     uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
@@ -4075,18 +4106,19 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
 
     constexpr bool row_major = true;
     CoreRangeSet all_cores =
-        tt::tt_metal::num_cores_to_corerangeset(start_core, num_cores, compute_with_storage_grid_size, row_major);
+        tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores, matmul_core_rect, row_major);
     CoreRange in1_mcast_receiver_cores_bounding_box = all_cores.bounding_box();
     uint32_t in1_mcast_receiver_num_cores = in1_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
 
     CoreRange in1_mcast_sender(start_core, start_core);
     CoreRangeSet in1_mcast_receivers;
     if (in1_mcast_receiver_num_cores > 1) {
-        auto receiver_start_core = start_core.x != (compute_with_storage_grid_size.x - 1)
-                                       ? CoreCoord{start_core.x + 1, start_core.y}
-                                       : CoreCoord{start_core.x, start_core.y + 1};
-        in1_mcast_receivers = tt::tt_metal::num_cores_to_corerangeset(
-            receiver_start_core, num_cores - 1, compute_with_storage_grid_size, row_major);
+        // Check against the actual rectangle width (instead of bare grid_size.x-1) so that
+        // sub-devices anchored away from (0, 0) wrap correctly.
+        auto receiver_start_core = compute_with_storage_grid_size.x > 1 ? CoreCoord{start_core.x + 1, start_core.y}
+                                                                        : CoreCoord{start_core.x, start_core.y + 1};
+        in1_mcast_receivers = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
+            receiver_start_core, num_cores - 1, matmul_core_rect, row_major);
     }
 
     // Mcast args — semaphore IDs assigned sequentially (0, 1)
@@ -5007,11 +5039,28 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     ////////////////////////////////////////////////////////////////////////////
     //                      Sub-device start core
     ////////////////////////////////////////////////////////////////////////////
+    // The 1D mcast matmul only supports rectangular sub-device worker grids, because the in0/in1
+    // multicast targets a single bounding-box rectangle and the per-core index math assumes a
+    // contiguous row-major rectangle of width `compute_with_storage_grid_size.x`.
     CoreCoord sub_device_start_core = {0, 0};
     if (sub_device_id.has_value()) {
-        auto sub_device_cores =
+        auto sd_worker_cores =
             device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
-        auto bbox = sub_device_cores.bounding_box();
+        auto bbox = sd_worker_cores.bounding_box();
+        TT_FATAL(
+            sd_worker_cores.num_cores() == bbox.size(),
+            "matmul_multicore_reuse_mcast_1d only supports rectangular sub-device worker grids. "
+            "Got sub-device worker cores: {} (bounding box: {})",
+            sd_worker_cores,
+            bbox);
+        TT_FATAL(
+            bbox.start_coord.x + compute_with_storage_grid_size.x - 1 <= bbox.end_coord.x &&
+                bbox.start_coord.y + compute_with_storage_grid_size.y - 1 <= bbox.end_coord.y,
+            "matmul_multicore_reuse_mcast_1d compute_with_storage_grid_size {} anchored at sub-device start {} "
+            "extends past the sub-device's worker bounding box {}",
+            compute_with_storage_grid_size,
+            bbox.start_coord,
+            bbox);
         sub_device_start_core = bbox.start_coord;
     }
 
@@ -5195,11 +5244,28 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
 
     tt_metal::Buffer* out_buffer = output.buffer();
 
+    // The 1D mcast matmul only supports rectangular sub-device worker grids, because the in0/in1
+    // multicast targets a single bounding-box rectangle and the per-core index math assumes a
+    // contiguous row-major rectangle of width `compute_with_storage_grid_size.x`.
     CoreCoord sub_device_start_core = {0, 0};
     if (operation_attributes.sub_device_id.has_value()) {
-        auto sub_device_cores = device->worker_cores(
+        auto sd_worker_cores = device->worker_cores(
             tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id.value());
-        auto bbox = sub_device_cores.bounding_box();
+        auto bbox = sd_worker_cores.bounding_box();
+        TT_FATAL(
+            sd_worker_cores.num_cores() == bbox.size(),
+            "matmul_multicore_reuse_mcast_1d only supports rectangular sub-device worker grids. "
+            "Got sub-device worker cores: {} (bounding box: {})",
+            sd_worker_cores,
+            bbox);
+        TT_FATAL(
+            bbox.start_coord.x + program_config.compute_with_storage_grid_size.x - 1 <= bbox.end_coord.x &&
+                bbox.start_coord.y + program_config.compute_with_storage_grid_size.y - 1 <= bbox.end_coord.y,
+            "matmul_multicore_reuse_mcast_1d compute_with_storage_grid_size {} anchored at sub-device start {} "
+            "extends past the sub-device's worker bounding box {}",
+            program_config.compute_with_storage_grid_size,
+            bbox.start_coord,
+            bbox);
         sub_device_start_core = bbox.start_coord;
     }
 

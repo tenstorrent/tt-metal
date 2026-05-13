@@ -98,19 +98,27 @@ struct RealtimeProfilerEligibility {
 
 // Consolidated eligibility check; logs the reason for disabling and returns
 // {enabled=false} on failure. Checks (in order):
-//   1. Device is MMIO-capable (D2H sockets need a PCIe-connected sender core).
-//   2. D2H socket memory-allocation path is supported (64-bit PCIe addressing requires IOMMU).
-//   3. Fabric tensix datamover (MUX / UDM) is disabled (it competes for the same dispatch pool).
-//   4. A tensix core was reserved for the RT profiler at dispatch_core_manager construction.
-//   5. Reserved coordinate lives inside the logical TENSIX grid.
-//   6. Kernels are not nullified (DEBUG_NULL_KERNELS / TT_METAL_NULL_KERNELS).
-//   7. Reserved profiler core's L1 bank fits the ring + socket-config layout.
+//   1. Device is not a mock.
+//   2. Device is MMIO-capable (D2H sockets need a PCIe-connected sender core).
+//   3. D2H socket memory-allocation path is supported (64-bit PCIe addressing requires IOMMU).
+//   4. Fabric tensix datamover (MUX / UDM) is disabled (it competes for the same dispatch pool).
+//   5. A tensix core was reserved for the RT profiler at dispatch_core_manager construction.
+//   6. Reserved coordinate lives inside the logical TENSIX grid.
+//   7. Kernels are not nullified (DEBUG_NULL_KERNELS / TT_METAL_NULL_KERNELS).
+//   8. Reserved profiler core's L1 bank fits the ring + socket-config layout.
 RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* device) {
     auto device_id = device->id();
     auto& metal = MetalContext::instance();
     const auto& hal = metal.hal();
     const auto& cluster = metal.get_cluster();
     auto& dispatch_core_manager = metal.get_dispatch_core_manager();
+
+    if (cluster.get_target_device_type() == tt::TargetDevice::Mock) {
+        log_debug(tt::LogMetal,
+                  "Real-time profiler disabled on device {}: target is mock.",
+                  device_id);
+        return {};
+    }
 
     if (!device->is_mmio_capable()) {
         log_debug(
@@ -286,7 +294,8 @@ RealtimeProfilerManager::DeviceState::DeviceState(DeviceState&& o) noexcept :
     sync_host_ts_addr(o.sync_host_ts_addr),
     sync_response_received(o.sync_response_received.load(std::memory_order_relaxed)),
     sync_host_time_before(o.sync_host_time_before),
-    last_finish_sync_at(o.last_finish_sync_at) {}
+    last_finish_sync_at(o.last_finish_sync_at),
+    pending_first_unthrottled_finish_sync(o.pending_first_unthrottled_finish_sync) {}
 
 RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevice>& mesh_device) {
     // HAL offsets are the same for all devices (same arch).
@@ -736,6 +745,10 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
         }
     });
 
+    for (auto& dev_state : devices_) {
+        dev_state.pending_first_unthrottled_finish_sync = true;
+    }
+
     // Background receiver thread that polls all device sockets round-robin.
     stop_.store(false);
     receiver_thread_ = std::thread([this]() {
@@ -1093,8 +1106,9 @@ void RealtimeProfilerManager::trigger_sync_check() {
     device_indices_to_sync.reserve(devices_.size());
     for (size_t i = 0; i < devices_.size(); i++) {
         const auto& dev_state = devices_[i];
-        if (!dev_state.last_finish_sync_at.has_value() ||
-            throttle_now - *dev_state.last_finish_sync_at >= kRtProfilerMinSyncInterval) {
+        const bool interval_elapsed = !dev_state.last_finish_sync_at.has_value() ||
+                                      throttle_now - *dev_state.last_finish_sync_at >= kRtProfilerMinSyncInterval;
+        if (interval_elapsed || dev_state.pending_first_unthrottled_finish_sync) {
             device_indices_to_sync.push_back(i);
         }
     }
@@ -1195,6 +1209,7 @@ void RealtimeProfilerManager::trigger_sync_check() {
                     dev_state.chip_id, dev_state.sync_host_time_before, device_time, dev_state.sync_frequency);
                 tracy_handler_->PushSyncCheckMarker(dev_state.chip_id, device_time, dev_state.sync_frequency);
                 dev_state.last_finish_sync_at = std::chrono::steady_clock::now();
+                dev_state.pending_first_unthrottled_finish_sync = false;
                 got_sync = true;
             } else {
                 uint64_t start_time = (static_cast<uint64_t>(rp[0]) << 32) | rp[1];

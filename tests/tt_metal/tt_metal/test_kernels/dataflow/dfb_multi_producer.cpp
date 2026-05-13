@@ -22,9 +22,9 @@
 //   [4]: chunk_offset              – page offset into the shared DRAM buffer
 //   [5..]: TensorAccessorArgs      – shared DRAM layout descriptor
 
-#include "experimental/dataflow_buffer.h"
-#include "experimental/noc.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const uint32_t num_entries_per_producer = get_compile_time_arg_val(0);
@@ -34,8 +34,8 @@ void kernel_main() {
     const uint32_t chunk_offset             = get_compile_time_arg_val(4);
     constexpr auto src_args                 = TensorAccessorArgs<5>();
 
-    experimental::DataflowBuffer dfb(dfb_id);
-    experimental::Noc noc;
+    DataflowBuffer dfb(dfb_id);
+    Noc noc;
     const uint32_t entry_size  = dfb.get_entry_size();
     const auto tensor_accessor = TensorAccessor(src_args, src_addr_base, entry_size);
 
@@ -44,7 +44,7 @@ void kernel_main() {
         const uint32_t page_id = chunk_offset + tile_id;
         if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR
-            noc.async_read<experimental::Noc::TxnIdMode::ENABLED>(
+            noc.async_read<Noc::TxnIdMode::ENABLED>(
                 tensor_accessor, dfb, {.page_id = page_id}, {});
 #endif
         } else {

@@ -802,7 +802,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"mesh_rows", mesh_view.num_rows()},
         {"mesh_cols", mesh_view.num_cols()},
         {"linearized_mesh_coord", linearized_mesh_coord},
-        {"cluster_axis", (uint32_t)(args.combine_params.axis.has_value() ? args.combine_params.axis.value() : 1)},
+        {"cluster_axis", args.combine_params.axis},
 
         // Coordinates for non-drain-sync to drain-sync synchronization
         {"drain_core_noc_x", (uint32_t)tilize_drain_core_physical.x},
@@ -1222,9 +1222,7 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     // Combine parameters (copy from args and set worker_cores for this mesh)
     TT_FATAL(args.combine_params.num_links > 0, "num_links must be greater than 0");
-    TT_FATAL(
-        !args.combine_params.axis.has_value() || args.combine_params.axis.value() < 2,
-        "cluster_axis must be 0 or 1");
+    TT_FATAL(args.combine_params.axis < 2, "cluster_axis must be 0 or 1");
 
     auto combine_params = args.combine_params;
     combine_params.worker_cores = combine_cores;
