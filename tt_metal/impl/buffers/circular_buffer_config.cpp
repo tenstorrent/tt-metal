@@ -7,6 +7,7 @@
 #include <unordered_map>
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/overloaded.hpp>
 #include "buffer.hpp"
 #include "hal.hpp"
 #include "impl/context/metal_context.hpp"
@@ -77,7 +78,14 @@ CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : tot
                 format_descriptor.buffer_index,
                 max_cbs);
         }
-        this->data_formats_[format_descriptor.buffer_index] = format_descriptor.data_format;
+        this->data_formats_[format_descriptor.buffer_index] = std::visit(
+            ttsl::overloaded{
+                [](tt::DataFormat data_format) -> tt::DataFormat { return data_format; },
+                [](tt::tt_metal::DataType data_type) -> tt::DataFormat {
+                    return datatype_to_dataformat_converter(data_type);
+                },
+            },
+            format_descriptor.data_format);
         if (this->total_size_ % format_descriptor.page_size != 0) {
             TT_THROW(
                 "Total circular buffer size {} B must be divisible by page size {} B",

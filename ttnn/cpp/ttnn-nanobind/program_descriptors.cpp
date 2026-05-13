@@ -356,7 +356,14 @@ void py_module_types(nb::module_& mod) {
                 // existing .data_format getter throws TypeError in Python.
                 // dataformat_to_datatype_converter() only handles 8 of ~20
                 // variants, so we expose the raw value for reliable comparison.
-                return static_cast<uint8_t>(self.data_format);
+                return static_cast<uint8_t>(std::visit(
+                    ttsl::overloaded{
+                        [](tt::DataFormat data_format) { return data_format; },
+                        [](tt::tt_metal::DataType data_type) {
+                            return tt::tt_metal::datatype_to_dataformat_converter(data_type);
+                        },
+                    },
+                    self.data_format));
             },
             "Raw tt::DataFormat enum value as uint8 (reliable getter for all formats)")
         .def_rw("page_size", &tt::tt_metal::CBFormatDescriptor::page_size, "Size of a page in bytes")

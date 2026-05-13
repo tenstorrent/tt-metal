@@ -58,7 +58,7 @@ struct TileDescriptor {
 
 struct CBFormatDescriptor {
     uint8_t buffer_index = 0;
-    tt::DataFormat data_format = tt::DataFormat::Float32;
+    std::variant<tt::DataFormat, tt::tt_metal::DataType> data_format = tt::DataFormat::Float32;
     uint32_t page_size = 0;
     std::optional<TileDescriptor> tile;
 };
