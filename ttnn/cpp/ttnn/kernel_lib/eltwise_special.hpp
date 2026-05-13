@@ -25,20 +25,20 @@ namespace compute_kernel_lib {
 template <Approx fast = Approx::Fast, Dst Slot = Dst::D0>
 struct Erf : UnaryOp<Erf<fast, Slot>, Slot> {
     static ALWI void init() { erf_tile_init<fast == Approx::Fast>(); }
-    static ALWI void call(uint32_t idst) { erf_tile<fast == Approx::Fast>(idst); }
+    static ALWI void exec_impl() { erf_tile<fast == Approx::Fast>(to_u32(Slot)); }
 };
 
 template <Dst Slot = Dst::D0>
 struct Erfc : UnaryOp<Erfc<Slot>, Slot> {
     static ALWI void init() { erfc_tile_init(); }
-    static ALWI void call(uint32_t idst) { erfc_tile(idst); }
+    static ALWI void exec_impl() { erfc_tile(to_u32(Slot)); }
 };
 
 #define ELTWISE_DECLARE_UNARY(Name, fn)                           \
     template <Dst Slot = Dst::D0>                                 \
     struct Name : UnaryOp<Name<Slot>, Slot> {                     \
         static ALWI void init() { fn##_tile_init(); }             \
-        static ALWI void call(uint32_t idst) { fn##_tile(idst); } \
+        static ALWI void exec_impl() { fn##_tile(to_u32(Slot)); } \
     };
 
 ELTWISE_DECLARE_UNARY(Erfinv, erfinv)
@@ -54,10 +54,11 @@ ELTWISE_DECLARE_UNARY(TanhDerivative, tanh_derivative)
 template <DataFormat DF, Dst Cond = Dst::D0, Dst A = Dst::D1, Dst B = Dst::D2, Dst Out = Dst::D0>
 struct Where : DestOnlyTag {
     static ALWI void init() { where_tile_init(); }
-    static ALWI void exec() { where_tile<DF>(to_u32(Cond), to_u32(A), to_u32(B), to_u32(Out)); }
+    static ALWI void exec_impl() { where_tile<DF>(to_u32(Cond), to_u32(A), to_u32(B), to_u32(Out)); }
+    ALWI void exec(uint32_t /*i*/) const { exec_impl(); }
     static ALWI void apply() {
         init();
-        exec();
+        exec_impl();
     }
 };
 

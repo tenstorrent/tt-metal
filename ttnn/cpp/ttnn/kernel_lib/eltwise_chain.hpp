@@ -428,16 +428,28 @@ enum class PackTileReconfig : uint8_t {
 // 5. CRTP bases — UnaryOp / BinaryOp / TernaryOp / QuaternaryOp
 // =============================================================================
 //
-// Derived structs supply `init()` and `call()`. The base provides slot fields,
-// `static_assert` guards on slot ranges + distinctness, `apply() = init() + exec()`,
-// and the DestOnlyTag inheritance.
+// Single dispatch contract (§4.5): every chain element exposes `void exec(uint32_t)
+// const`. The CRTP bases provide a default that forwards to a static `exec_impl()`
+// supplied by the derived op. Runtime-param ops (Power, Hardtanh, Threshold, …)
+// override `exec(uint32_t)` directly to capture their instance state. Forgetting
+// both is a compile error — no silent fallthrough.
 //
-// Example:
+// Example (static SFPU):
 //
 //   template <Approx A = Approx::Exact, Approx F = Approx::Fast, Dst Slot = Dst::D0>
 //   struct Exp : UnaryOp<Exp<A, F, Slot>, Slot> {
-//       static void init()              { exp_tile_init<A == Approx::Fast, F == Approx::Fast>(); }
-//       static void call(uint32_t idst) { exp_tile<A == Approx::Fast, F == Approx::Fast>(idst); }
+//       static void init()       { exp_tile_init<A == Approx::Fast, F == Approx::Fast>(); }
+//       static void exec_impl()  { exp_tile<A == Approx::Fast, F == Approx::Fast>(to_u32(Slot)); }
+//   };
+//
+// Example (runtime-param SFPU — overrides exec(uint32_t) directly):
+//
+//   template <Dst Slot = Dst::D0>
+//   struct Power : UnaryOp<Power<Slot>, Slot> {
+//       uint32_t exponent;
+//       constexpr explicit Power(uint32_t e) noexcept : exponent(e) {}
+//       static void init() { power_tile_init(); }
+//       void exec(uint32_t /*i*/) const { power_tile(to_u32(Slot), exponent); }
 //   };
 
 template <class Derived, Dst Slot>
@@ -448,14 +460,15 @@ struct UnaryOp : DestOnlyTag {
     static constexpr Dst dst_idx = Slot;
     static constexpr uint32_t max_dst() { return to_u32(Slot); }
 
-    /// init() + exec()
+    /// Pipeline dispatch — forwards to `Derived::exec_impl()`. Override in derived
+    /// to consume runtime payload (per-instance fields).
+    ALWI void exec(uint32_t /*i*/) const { Derived::exec_impl(); }
+
+    /// init() + exec_impl()
     static ALWI void apply() {
         Derived::init();
-        exec();
+        Derived::exec_impl();
     }
-
-    /// exec() runs Derived::call() on the bound DEST slot.
-    static ALWI void exec() { Derived::call(to_u32(Slot)); }
 };
 
 template <class Derived, Dst In0, Dst In1, Dst Out>
@@ -478,11 +491,11 @@ struct BinaryOp : DestOnlyTag {
         return a > b ? (a > c ? a : c) : (b > c ? b : c);
     }
 
+    ALWI void exec(uint32_t /*i*/) const { Derived::exec_impl(); }
     static ALWI void apply() {
         Derived::init();
-        exec();
+        Derived::exec_impl();
     }
-    static ALWI void exec() { Derived::call(to_u32(In0), to_u32(In1), to_u32(Out)); }
 };
 
 template <class Derived, Dst In0, Dst In1, Dst In2, Dst Out>
@@ -502,11 +515,11 @@ struct TernaryOp : DestOnlyTag {
     static constexpr Dst in2 = In2;
     static constexpr Dst out = Out;
 
+    ALWI void exec(uint32_t /*i*/) const { Derived::exec_impl(); }
     static ALWI void apply() {
         Derived::init();
-        exec();
+        Derived::exec_impl();
     }
-    static ALWI void exec() { Derived::call(to_u32(In0), to_u32(In1), to_u32(In2), to_u32(Out)); }
 };
 
 template <class Derived, Dst In0, Dst In1, Dst In2, Dst In3, Dst Out>
@@ -525,11 +538,11 @@ struct QuaternaryOp : DestOnlyTag {
     static constexpr Dst in3 = In3;
     static constexpr Dst out = Out;
 
+    ALWI void exec(uint32_t /*i*/) const { Derived::exec_impl(); }
     static ALWI void apply() {
         Derived::init();
-        exec();
+        Derived::exec_impl();
     }
-    static ALWI void exec() { Derived::call(to_u32(In0), to_u32(In1), to_u32(In2), to_u32(In3), to_u32(Out)); }
 };
 
 // =============================================================================

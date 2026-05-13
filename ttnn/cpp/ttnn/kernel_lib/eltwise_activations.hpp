@@ -30,46 +30,46 @@ namespace compute_kernel_lib {
 template <Dst Slot = Dst::D0>
 struct Relu : UnaryOp<Relu<Slot>, Slot> {
     static ALWI void init() { relu_tile_init(); }
-    static ALWI void call(uint32_t idst) { relu_tile(idst); }
+    static ALWI void exec_impl() { relu_tile(to_u32(Slot)); }
 };
 
 template <Dst Slot = Dst::D0>
 struct Sigmoid : UnaryOp<Sigmoid<Slot>, Slot> {
     static ALWI void init() { sigmoid_tile_init(); }
-    static ALWI void call(uint32_t idst) { sigmoid_tile(idst); }
+    static ALWI void exec_impl() { sigmoid_tile(to_u32(Slot)); }
 };
 
 template <Dst Slot = Dst::D0>
 struct Tanh : UnaryOp<Tanh<Slot>, Slot> {
     static ALWI void init() { tanh_tile_init(); }
-    static ALWI void call(uint32_t idst) { tanh_tile(idst); }
+    static ALWI void exec_impl() { tanh_tile(to_u32(Slot)); }
 };
 
 template <Dst Slot = Dst::D0>
 struct Gelu : UnaryOp<Gelu<Slot>, Slot> {
     static ALWI void init() { gelu_tile_init(); }
-    static ALWI void call(uint32_t idst) { gelu_tile(idst); }
+    static ALWI void exec_impl() { gelu_tile(to_u32(Slot)); }
 };
 
 template <Dst Slot = Dst::D0>
 struct Hardsigmoid : UnaryOp<Hardsigmoid<Slot>, Slot> {
     static ALWI void init() { hardsigmoid_tile_init(); }
-    static ALWI void call(uint32_t idst) { hardsigmoid_tile(idst); }
+    static ALWI void exec_impl() { hardsigmoid_tile(to_u32(Slot)); }
 };
 
 template <Dst Slot = Dst::D0>
 struct Softsign : UnaryOp<Softsign<Slot>, Slot> {
     static ALWI void init() { softsign_tile_init(); }
-    static ALWI void call(uint32_t idst) { softsign_tile(idst); }
+    static ALWI void exec_impl() { softsign_tile(to_u32(Slot)); }
 };
 
 template <Dst Slot = Dst::D0>
 struct Hardmish : UnaryOp<Hardmish<Slot>, Slot> {
     static ALWI void init() { hardmish_tile_init(); }
-    static ALWI void call(uint32_t idst) { hardmish_tile(idst); }
+    static ALWI void exec_impl() { hardmish_tile(to_u32(Slot)); }
 };
 
-// Hardtanh — runtime min/max via ctor.
+// Hardtanh — runtime min/max via ctor; overrides exec(uint32_t).
 template <Dst Slot = Dst::D0>
 struct Hardtanh : UnaryOp<Hardtanh<Slot>, Slot> {
     uint32_t min_param;
@@ -78,8 +78,6 @@ struct Hardtanh : UnaryOp<Hardtanh<Slot>, Slot> {
     constexpr Hardtanh() noexcept : min_param(0), max_param(0) {}
 
     static ALWI void init() { hardtanh_tile_init(); }
-    static ALWI void call(uint32_t /*idst*/) { /* runtime params — exec uses members */ }
-
     ALWI void exec(uint32_t /*i*/) const { hardtanh_tile(to_u32(Slot), min_param, max_param); }
 };
 
@@ -91,7 +89,6 @@ struct Elu : UnaryOp<Elu<Slot>, Slot> {
     constexpr Elu() noexcept : alpha(0) {}
 
     static ALWI void init() { elu_tile_init(); }
-    static ALWI void call(uint32_t /*idst*/) {}
     ALWI void exec(uint32_t /*i*/) const { elu_tile(to_u32(Slot), alpha); }
 };
 
@@ -102,7 +99,6 @@ struct Selu : UnaryOp<Selu<Slot>, Slot> {
     constexpr Selu(uint32_t s, uint32_t a) noexcept : scale(s), alpha(a) {}
     constexpr Selu() noexcept : scale(0), alpha(0) {}
     static ALWI void init() { selu_tile_init(); }
-    static ALWI void call(uint32_t /*idst*/) {}
     ALWI void exec(uint32_t /*i*/) const { selu_tile(to_u32(Slot), scale, alpha); }
 };
 
@@ -114,7 +110,6 @@ struct Softplus : UnaryOp<Softplus<Slot>, Slot> {
     constexpr Softplus(uint32_t b, uint32_t br, uint32_t t) noexcept : beta(b), beta_recip(br), threshold(t) {}
     constexpr Softplus() noexcept : beta(0), beta_recip(0), threshold(0) {}
     static ALWI void init() { softplus_tile_init(); }
-    static ALWI void call(uint32_t /*idst*/) {}
     ALWI void exec(uint32_t /*i*/) const { softplus_tile(to_u32(Slot), beta, beta_recip, threshold); }
 };
 
@@ -124,7 +119,6 @@ struct Prelu : UnaryOp<Prelu<Slot>, Slot> {
     constexpr explicit Prelu(uint32_t p) noexcept : param0(p) {}
     constexpr Prelu() noexcept : param0(0) {}
     static ALWI void init() { prelu_tile_init(); }
-    static ALWI void call(uint32_t /*idst*/) {}
     ALWI void exec(uint32_t /*i*/) const { prelu_tile(to_u32(Slot), param0); }
 };
 
@@ -135,7 +129,6 @@ struct LeakyRelu : UnaryOp<LeakyRelu<Slot>, Slot> {
     constexpr explicit LeakyRelu(uint32_t s) noexcept : slope(s) {}
     constexpr LeakyRelu() noexcept : slope(0) {}
     static ALWI void init() { leaky_relu_tile_init(); }
-    static ALWI void call(uint32_t /*idst*/) {}
     ALWI void exec(uint32_t /*i*/) const { leaky_relu_tile(to_u32(Slot), slope); }
 };
 

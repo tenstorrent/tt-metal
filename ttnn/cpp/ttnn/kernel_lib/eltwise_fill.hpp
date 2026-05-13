@@ -9,6 +9,7 @@
  *
  * These elements write a constant into a DEST slot. They derive `FillTileTag` (rooted in
  * `DestOnlyTag`) so trait sweeps that look at CB consumers / CB producers correctly skip them.
+ * Each overrides `exec(uint32_t)` directly to capture the runtime constant.
  */
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
@@ -23,7 +24,6 @@ struct FillScalar : FillTileTag, UnaryOp<FillScalar<DstSlot>, DstSlot> {
     constexpr FillScalar() noexcept : value(0.0f) {}
 
     static ALWI void init() { fill_tile_init(); }
-    static ALWI void call(uint32_t /*idst*/) {}
     ALWI void exec(uint32_t /*i*/) const { fill_tile(to_u32(DstSlot), value); }
 };
 
@@ -35,7 +35,6 @@ struct FillInt : FillTileTag, UnaryOp<FillInt<DF, DstSlot>, DstSlot> {
 
     // fill_tile_int shares the same init as fill_tile (no separate `_int_init`).
     static ALWI void init() { fill_tile_init(); }
-    static ALWI void call(uint32_t /*idst*/) {}
     ALWI void exec(uint32_t /*i*/) const { fill_tile_int<DF>(to_u32(DstSlot), value); }
 };
 
@@ -46,7 +45,6 @@ struct FillBitcast : FillTileTag, UnaryOp<FillBitcast<DstSlot>, DstSlot> {
     constexpr FillBitcast() noexcept : bits(0) {}
 
     static ALWI void init() { fill_tile_init(); }
-    static ALWI void call(uint32_t /*idst*/) {}
     ALWI void exec(uint32_t /*i*/) const { fill_tile_bitcast(to_u32(DstSlot), bits); }
 };
 

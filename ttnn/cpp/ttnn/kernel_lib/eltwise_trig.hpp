@@ -19,7 +19,7 @@ namespace compute_kernel_lib {
     template <Dst Slot = Dst::D0>                                 \
     struct Name : UnaryOp<Name<Slot>, Slot> {                     \
         static ALWI void init() { fn##_tile_init(); }             \
-        static ALWI void call(uint32_t idst) { fn##_tile(idst); } \
+        static ALWI void exec_impl() { fn##_tile(to_u32(Slot)); } \
     };
 
 ELTWISE_DECLARE_UNARY(Sin, sin)

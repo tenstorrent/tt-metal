@@ -843,15 +843,6 @@ ALWI void elem_push_at_end(const E& e, uint32_t n) {
 template <class E>
 ALWI void elem_init() { E::init(); }
 
-// SFINAE detector — does `E` have a callable `void exec(uint32_t) const` member?
-// Used to route runtime-param SFPU ops (UnaryNe / Clamp / MulUnary / FillScalar / RandTile / ...)
-// to member dispatch even though they inherit `DestOnlyTag` via the CRTP base.
-template <class T, class = void> struct has_member_exec : std::false_type {};
-template <class T>
-struct has_member_exec<T, std::void_t<decltype(std::declval<const T>().exec(uint32_t{}))>>
-    : std::true_type {};
-template <class T> inline constexpr bool has_member_exec_v = has_member_exec<T>::value;
-
 // =============================================================================
 // emit_pre_element_transitions<E, I, Es...>() (D2)
 //
@@ -900,6 +891,10 @@ ALWI void emit_pre_element_transitions() {
 // binary_dest_reuse_init; binary_dest_reuse_tiles`) and avoids state-clobbering when
 // multiple chain elements reconfigure the unpacker.
 //
+// Single dispatch contract (§4.5): every element exposes `void exec(uint32_t) const`.
+// CRTP bases (UnaryOp / BinaryOp / TernaryOp / QuaternaryOp) forward to `exec_impl()`;
+// runtime-param ops override `exec(uint32_t)` directly. No static-vs-member fork.
+//
 // `EmitInit`: when true, the per-tile path re-fires `E::init()` before exec (clash
 // chains). When false, the chain hoisted init() to boot — per-tile path skips it.
 template <bool EmitInit, class E>
@@ -907,19 +902,9 @@ ALWI void elem_compute_exec(const E& e, uint32_t i) {
     if constexpr (is_pack_tile_op_v<E>) {
         // Pack runs in the pack phase, not compute. Skip here.
         (void)e; (void)i;
-    } else if constexpr (has_member_exec_v<E>) {
-        // CB-bound element, Fill/Rand, OR runtime-param SFPU op (UnaryNe etc.) —
-        // dispatch via member exec(i) so runtime payload (param0, value, idx, ...) is captured.
+    } else {
         if constexpr (EmitInit) E::init();
         e.exec(i);
-    } else if constexpr (is_dest_only_op_v<E>) {
-        // Pure SFPU op via CRTP base — static init() + static exec().
-        if constexpr (EmitInit) E::init();
-        E::exec();
-    } else {
-        // Fallback (shouldn't reach for well-formed chain elements).
-        if constexpr (EmitInit) E::init();
-        (void)e; (void)i;
     }
 }
 

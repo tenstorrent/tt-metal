@@ -22,7 +22,7 @@ namespace compute_kernel_lib {
     template <Dst Slot = Dst::D0>                                 \
     struct Name : UnaryOp<Name<Slot>, Slot> {                     \
         static ALWI void init() { fn##_tile_init(); }             \
-        static ALWI void call(uint32_t idst) { fn##_tile(idst); } \
+        static ALWI void exec_impl() { fn##_tile(to_u32(Slot)); } \
     };
 
 ELTWISE_DECLARE_UNARY(Eqz, eqz)
@@ -40,12 +40,12 @@ ELTWISE_DECLARE_UNARY(Isneginf, isneginf)
 template <DataFormat DF, Dst Slot = Dst::D0>
 struct LogicalNot : UnaryOp<LogicalNot<DF, Slot>, Slot> {
     static ALWI void init() { logical_not_tile_init(); }
-    static ALWI void call(uint32_t idst) { logical_not_tile<DF>(idst); }
+    static ALWI void exec_impl() { logical_not_tile<DF>(to_u32(Slot)); }
 };
 
 #undef ELTWISE_DECLARE_UNARY
 
-// Runtime-param scalar comparisons (compares each element to a runtime u32 / packed-fp32 scalar).
+// Runtime-param scalar comparisons. Override exec(uint32_t) directly to capture param0.
 #define ELTWISE_DECLARE_UNARY_PARAM(Name, fn)                                     \
     template <Dst Slot = Dst::D0>                                                 \
     struct Name : UnaryOp<Name<Slot>, Slot> {                                     \
@@ -53,7 +53,6 @@ struct LogicalNot : UnaryOp<LogicalNot<DF, Slot>, Slot> {
         constexpr explicit Name(uint32_t p) noexcept : param0(p) {}               \
         constexpr Name() noexcept : param0(0) {}                                  \
         static ALWI void init() { fn##_tile_init(); }                             \
-        static ALWI void call(uint32_t /*idst*/) {}                               \
         ALWI void exec(uint32_t /*i*/) const { fn##_tile(to_u32(Slot), param0); } \
     };
 

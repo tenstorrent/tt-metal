@@ -27,7 +27,6 @@ struct Threshold : UnaryOp<Threshold<Slot>, Slot> {
     constexpr Threshold(uint32_t t, uint32_t v) noexcept : threshold(t), value(v) {}
     constexpr Threshold() noexcept : threshold(0), value(0) {}
     static ALWI void init() { threshold_tile_init(); }
-    static ALWI void call(uint32_t /*idst*/) {}
     ALWI void exec(uint32_t /*i*/) const { threshold_tile(to_u32(Slot), threshold, value); }
 };
 
@@ -39,7 +38,6 @@ struct Clamp : UnaryOp<Clamp<Slot>, Slot> {
     constexpr Clamp(uint32_t lo, uint32_t hi) noexcept : min_param(lo), max_param(hi) {}
     constexpr Clamp() noexcept : min_param(0), max_param(0) {}
     static ALWI void init() { clamp_tile_init(); }
-    static ALWI void call(uint32_t /*idst*/) {}
     ALWI void exec(uint32_t /*i*/) const { clamp_tile(to_u32(Slot), min_param, max_param); }
 };
 
@@ -51,7 +49,6 @@ struct Clamp : UnaryOp<Clamp<Slot>, Slot> {
         constexpr explicit Name(uint32_t p) noexcept : param0(p) {}        \
         constexpr Name() noexcept : param0(0) {}                           \
         static ALWI void init() { binop_with_scalar_tile_init(); }         \
-        static ALWI void call(uint32_t /*idst*/) {}                        \
         ALWI void exec(uint32_t /*i*/) const { fn(to_u32(Slot), param0); } \
     };
 
@@ -68,7 +65,6 @@ struct RdivUnary : UnaryOp<RdivUnary<Slot>, Slot> {
     constexpr explicit RdivUnary(uint32_t p) noexcept : param0(p) {}
     constexpr RdivUnary() noexcept : param0(0) {}
     static ALWI void init() { rdiv_tile_init(); }
-    static ALWI void call(uint32_t /*idst*/) {}
     ALWI void exec(uint32_t /*i*/) const { rdiv_tile(to_u32(Slot), param0); }
 };
 

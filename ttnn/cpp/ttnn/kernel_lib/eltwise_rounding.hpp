@@ -11,25 +11,25 @@ namespace compute_kernel_lib {
 template <Dst Slot = Dst::D0>
 struct Floor : UnaryOp<Floor<Slot>, Slot> {
     static ALWI void init() { rounding_op_tile_init(); }
-    static ALWI void call(uint32_t idst) { floor_tile(idst); }
+    static ALWI void exec_impl() { floor_tile(to_u32(Slot)); }
 };
 
 template <Dst Slot = Dst::D0>
 struct Ceil : UnaryOp<Ceil<Slot>, Slot> {
     static ALWI void init() { rounding_op_tile_init(); }
-    static ALWI void call(uint32_t idst) { ceil_tile(idst); }
+    static ALWI void exec_impl() { ceil_tile(to_u32(Slot)); }
 };
 
 template <Dst Slot = Dst::D0>
 struct Trunc : UnaryOp<Trunc<Slot>, Slot> {
     static ALWI void init() { rounding_op_tile_init(); }
-    static ALWI void call(uint32_t idst) { trunc_tile(idst); }
+    static ALWI void exec_impl() { trunc_tile(to_u32(Slot)); }
 };
 
 template <Dst Slot = Dst::D0>
 struct Frac : UnaryOp<Frac<Slot>, Slot> {
     static ALWI void init() { rounding_op_tile_init(); }
-    static ALWI void call(uint32_t idst) { frac_tile(idst); }
+    static ALWI void exec_impl() { frac_tile(to_u32(Slot)); }
 };
 
 // Round — runtime decimals.
@@ -39,7 +39,6 @@ struct Round : UnaryOp<Round<Slot>, Slot> {
     constexpr explicit Round(int32_t d) noexcept : decimals(d) {}
     constexpr Round() noexcept : decimals(0) {}
     static ALWI void init() { rounding_op_tile_init(); }
-    static ALWI void call(uint32_t /*idst*/) {}
     ALWI void exec(uint32_t /*i*/) const { round_tile(to_u32(Slot), decimals); }
 };
 
