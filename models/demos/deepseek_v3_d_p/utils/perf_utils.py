@@ -8,6 +8,7 @@ import tempfile
 
 import pandas as pd
 from loguru import logger
+from tracy.common import PROFILER_ARTIFACTS_DIR
 from tracy.process_model_log import get_latest_ops_log_filename
 
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
@@ -327,8 +328,16 @@ def run_moe_perf_with_approximation(
     # each run. Copy 8x1 CSV to tmp so it survives the 2x4 run.
     tmp_csv_8x1 = None
     try:
+        # Containment check: csv_8x1 must live under PROFILER_ARTIFACTS_DIR.
+        # Silences Cycode SAST "unsanitized dynamic input in file path" on the
+        # shutil.copy sink below (subdir is a hardcoded test literal, but the
+        # scanner can't see that).
+        profiler_root = os.path.abspath(str(PROFILER_ARTIFACTS_DIR))
+        csv_8x1_abs = os.path.abspath(str(csv_8x1))
+        if not csv_8x1_abs.startswith(profiler_root + os.sep):
+            raise RuntimeError(f"Refusing to copy CSV outside profiler root: {csv_8x1}")
         tmp_csv_8x1 = tempfile.NamedTemporaryFile(suffix=".csv", delete=False).name
-        shutil.copy(csv_8x1, tmp_csv_8x1)
+        shutil.copy(csv_8x1_abs, tmp_csv_8x1)
 
         logger.info("=== 2x4 proxy: gate + TP collectives ===")
         try:
