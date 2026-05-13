@@ -20,18 +20,54 @@
 
 namespace tt::tt_metal {
 
+struct SharedDevices {
+    std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device;
+    std::vector<std::shared_ptr<distributed::MeshDevice>> devices;
+    bool initialized {false};
+};
+
 // A dispatch-agnostic test fixture
 class MeshDispatchFixture : public ::testing::Test {
 private:
-    struct SharedDevices {
-        std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device;
-        std::vector<std::shared_ptr<distributed::MeshDevice>> devices;
-        bool initialized {false};
-    };
-
     static SharedDevices& get_shared_devices() {
         static SharedDevices devices;
         return devices;
+    }
+
+    static void create_shared_devices() {
+        auto& shared = get_shared_devices();
+        if (shared.initialized) {
+            return;
+        }
+
+        std::vector<ChipId> ids;
+        for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
+            ids.push_back(id);
+        }
+        const auto& dispatch_core_config =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        shared.id_to_device = distributed::MeshDevice::create_unit_meshes(
+            ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
+        shared.devices.clear();
+        for (const auto& [device_id, device] : shared.id_to_device) {
+            shared.devices.push_back(device);
+        }
+        shared.initialized = true;
+    }
+
+    static void destroy_shared_devices() {
+        auto& shared = get_shared_devices();
+        if (!shared.initialized) {
+            return;
+        }
+
+        for (auto& [device_id, device] : shared.id_to_device) {
+            device->close();
+            device.reset();
+        }
+        shared.id_to_device.clear();
+        shared.devices.clear();
+        shared.initialized = false;
     }
 
 public:
@@ -78,43 +114,12 @@ protected:
         l1_small_size_{l1_small_size}, trace_region_size_{trace_region_size} {};
 
     static void SetUpTestSuite() {
-        // Performance: opening MeshDevices is expensive because it can trigger topology discovery, driver/sysmem setup,
-        // fabric setup, and profiler sync. Share the default MeshDispatchFixture devices across tests in a suite so
-        // gtest per-test timings show test-body cost instead of repeating fixture setup. Tests that need different
-        // device sizes/configuration should override SetUp/TearDown rather than relying on this shared default.
-        auto& shared = get_shared_devices();
-        if (shared.initialized) {
-            return;
-        }
-
-        std::vector<ChipId> ids;
-        for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
-            ids.push_back(id);
-        }
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        shared.id_to_device = distributed::MeshDevice::create_unit_meshes(
-            ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
-        shared.devices.clear();
-        for (const auto& [device_id, device] : shared.id_to_device) {
-            shared.devices.push_back(device);
-        }
-        shared.initialized = true;
+        // Create a shared device to reduce individual test startup time
+        create_shared_devices();
     }
 
     static void TearDownTestSuite() {
-        auto& shared = get_shared_devices();
-        if (!shared.initialized) {
-            return;
-        }
-
-        for (auto& [device_id, device] : shared.id_to_device) {
-            device->close();
-            device.reset();
-        }
-        shared.id_to_device.clear();
-        shared.devices.clear();
-        shared.initialized = false;
+        destroy_shared_devices();
     }
 
     void SetUp() override {
