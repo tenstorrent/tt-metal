@@ -197,7 +197,8 @@ def test_demo_teacher_forcing_accuracy(
         stop_at_eos=False,
         sample_on_device=True,
         max_users_per_row=max_users_per_row,
-        sampling_temperature=1.0,
+        sampling_temperature=0.0,
+        sampling_top_k=1,
         sampling_top_p=1.0,
     )
 
