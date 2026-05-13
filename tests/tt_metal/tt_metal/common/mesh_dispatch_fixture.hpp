@@ -26,14 +26,10 @@ private:
     struct SharedDevices {
         std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device;
         std::vector<std::shared_ptr<distributed::MeshDevice>> devices;
-        tt::ARCH arch;
-        uint32_t max_cbs;
-        bool initialized;
-
-        SharedDevices() : arch(tt::ARCH::Invalid), max_cbs(0), initialized(false) {}
+        bool initialized {false};
     };
 
-    static SharedDevices& shared_devices() {
+    static SharedDevices& get_shared_devices() {
         static SharedDevices devices;
         return devices;
     }
@@ -82,17 +78,14 @@ protected:
         l1_small_size_{l1_small_size}, trace_region_size_{trace_region_size} {};
 
     static void SetUpTestSuite() {
-        auto& shared = shared_devices();
-        if (shared.initialized) {
-            return;
-        }
-
         // Performance: opening MeshDevices is expensive because it can trigger topology discovery, driver/sysmem setup,
         // fabric setup, and profiler sync. Share the default MeshDispatchFixture devices across tests in a suite so
         // gtest per-test timings show test-body cost instead of repeating fixture setup. Tests that need different
         // device sizes/configuration should override SetUp/TearDown rather than relying on this shared default.
-        shared.arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        shared.max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
+        auto& shared = get_shared_devices();
+        if (shared.initialized) {
+            return;
+        }
 
         std::vector<ChipId> ids;
         for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
@@ -110,7 +103,7 @@ protected:
     }
 
     static void TearDownTestSuite() {
-        auto& shared = shared_devices();
+        auto& shared = get_shared_devices();
         if (!shared.initialized) {
             return;
         }
@@ -121,20 +114,19 @@ protected:
         }
         shared.id_to_device.clear();
         shared.devices.clear();
-        shared.arch = tt::ARCH::Invalid;
-        shared.max_cbs = 0;
         shared.initialized = false;
     }
 
     void SetUp() override {
-        auto& shared = shared_devices();
+        auto& shared = get_shared_devices();
         if (!shared.initialized) {
             SetUpTestSuite();
         }
-        this->DetectDispatchMode();
-        this->arch_ = shared.arch;
-        this->max_cbs_ = shared.max_cbs;
         this->devices_ = shared.devices;
+
+        this->DetectDispatchMode();
+        this->arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        this->max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
     }
 
     void TearDown() override {
