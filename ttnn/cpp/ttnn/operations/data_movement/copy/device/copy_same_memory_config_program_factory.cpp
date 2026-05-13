@@ -102,7 +102,7 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
         }}},
     });
 
-    uint32_t output_cb_index = src0_cb_index;
+    uint32_t output_cb_index = src0_cb_index;  // same as input cb
     if (convert_dtype) {
         output_cb_index = tt::CBIndex::c_16;
         const uint32_t num_output_units = 2;

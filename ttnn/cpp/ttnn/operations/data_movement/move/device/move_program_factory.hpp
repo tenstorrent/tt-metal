@@ -9,6 +9,7 @@
 
 namespace ttnn::prim {
 
+// Program factory for MULTI_CORE and MULTI_CORE_OVERLAP strategies
 struct MoveProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const MoveOperationAttributes& operation_attributes,
