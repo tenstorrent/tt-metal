@@ -221,12 +221,6 @@ def _precompute_rope_table(rotary_cls, text_config, max_seq_len: int):
     return rotary(dummy, pos_ids)
 
 
-def _slice_rope(cos_full, sin_full, start, end):
-    if cos_full.dim() == 3:
-        return cos_full[:, start:end, :].contiguous(), sin_full[:, start:end, :].contiguous()
-    return cos_full[:, :, start:end, :].contiguous(), sin_full[:, :, start:end, :].contiguous()
-
-
 # ── Generation loop ────────────────────────────────────────────────────────────
 
 
@@ -248,7 +242,8 @@ def generate(
         f"({num_image_tokens} image-token slots + {seq_len - num_image_tokens} text/template tokens)"
     )
 
-    # Precompute RoPE for prefill + decode steps once on host.
+    # Precompute RoPE for prefill + decode steps once on host. Uploaded to
+    # device once after load_text; per-step lookups are an on-device slice.
     total_positions = seq_len + max_new_tokens
     cos_full, sin_full = _precompute_rope_table(rotary_cls, text_config, total_positions)
 
@@ -266,16 +261,17 @@ def generate(
         f"processor agrees with the image dimensions you fed encode_image."
     )
 
-    # Phase 2: load text model on device.
+    # Phase 2: load text model on device and cache RoPE tables.
     logger.info("Phase 2 — load_text (text model construction on device)…")
     t0 = time.perf_counter()
     model.load_text()
+    model.cache_rope_tables(cos_full, sin_full)
     logger.info(f"Phase 2 done in {time.perf_counter() - t0:.1f}s")
 
     # Phase 3: prefill + decode loop.
     logger.info(f"Phase 3 — prefill_multimodal (seq_len={seq_len})…")
     t0 = time.perf_counter()
-    next_id = model.prefill_multimodal(img_embeds_host, input_ids, _slice_rope(cos_full, sin_full, 0, seq_len))
+    next_id = model.prefill_multimodal(img_embeds_host, input_ids)
     logger.info(f"Prefill done in {(time.perf_counter() - t0) * 1000:.0f} ms")
 
     generated_ids = [next_id]
@@ -287,9 +283,7 @@ def generate(
     for step in range(1, max_new_tokens):
         current_pos = seq_len + step - 1
         t_dec = time.perf_counter()
-        tok_id = model.decode_next_token(
-            cur, _slice_rope(cos_full, sin_full, current_pos, current_pos + 1), current_pos
-        )
+        tok_id = model.decode_next_token(cur, current_pos)
         decode_times.append((time.perf_counter() - t_dec) * 1000)
 
         generated_ids.append(tok_id)

@@ -23,7 +23,6 @@ import os
 
 import pytest
 import torch
-import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
@@ -93,7 +92,6 @@ def test_mistral_small_4_text_decode_smoke(reset_seeds, mesh_device):
     vocab = state_dict[TEXT_MODEL_EMBED_TOKENS_WEIGHT_KEY].shape[0]
     assert vocab == EXPECTED_VOCAB_SIZE
 
-    embed_w = state_dict[TEXT_MODEL_EMBED_TOKENS_WEIGHT_KEY].to(torch.bfloat16)
     rotary = Mistral4RotaryEmbedding(text).eval().to(torch.bfloat16)
 
     # ── Build model ──────────────────────────────────────────────────────
@@ -112,13 +110,15 @@ def test_mistral_small_4_text_decode_smoke(reset_seeds, mesh_device):
     # ── Prefill ──────────────────────────────────────────────────────────
     torch.manual_seed(42)
     input_ids = torch.randint(0, vocab, (1, _PREFILL_LEN), dtype=torch.long)
-    position_ids = torch.arange(_PREFILL_LEN, dtype=torch.long).unsqueeze(0)
 
-    hidden0 = F.embedding(input_ids, embed_w).to(torch.bfloat16)
-    pos_emb_prefill = rotary(hidden0, position_ids)
+    # Cache RoPE for every position prefill + decode will touch (one HF call).
+    total_positions = _PREFILL_LEN + _N_STEPS
+    full_position_ids = torch.arange(total_positions, dtype=torch.long).unsqueeze(0)
+    cos_full, sin_full = rotary(torch.zeros(1, 1, 1, 1, dtype=torch.bfloat16), full_position_ids)
+    model.cache_rope_tables(cos_full, sin_full)
 
     logger.info(f"Running prefill (seq_len={_PREFILL_LEN})...")
-    prefill_logits = model.prefill(input_ids, pos_emb_prefill)
+    prefill_logits = model.prefill(input_ids)
 
     assert prefill_logits.shape == (
         1,
@@ -135,12 +135,8 @@ def test_mistral_small_4_text_decode_smoke(reset_seeds, mesh_device):
     for step in range(_N_STEPS):
         current_pos = _PREFILL_LEN + step
         tok_tensor = torch.tensor([[next_token]], dtype=torch.long)
-        dec_pos_ids = torch.tensor([[current_pos]], dtype=torch.long)
 
-        dec_hidden = F.embedding(tok_tensor, embed_w).to(torch.bfloat16)
-        pos_emb_decode = rotary(dec_hidden, dec_pos_ids)
-
-        decode_logits = model.decode(tok_tensor, pos_emb_decode, current_pos)
+        decode_logits = model.decode(tok_tensor, current_pos)
 
         assert decode_logits.shape == (
             1,

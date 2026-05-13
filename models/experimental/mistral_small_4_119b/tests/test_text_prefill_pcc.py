@@ -251,11 +251,12 @@ def test_mistral_small_4_prefill_pcc(reset_seeds, mesh_device):
         input_ids,
         state_dict["language_model.model.embed_tokens.weight"].to(torch.bfloat16),
     )
-    pos_emb = rotary(hidden0, position_ids)
+    cos_full, sin_full = rotary(hidden0, position_ids)
+    model.cache_rope_tables(cos_full, sin_full)
 
     logger.info(f"Running TTNN prefill (seq_len={seq_len})...")
     _log_mem("before TTNN prefill")
-    ttnn_logits_host = model.prefill(input_ids, pos_emb)  # [1, seq_len, vocab]
+    ttnn_logits_host = model.prefill(input_ids)  # [1, seq_len, vocab]
     _log_mem("after TTNN prefill")
     ttnn_logits = ttnn_logits_host[0].to(torch.float32)  # [seq_len, vocab]
 
