@@ -69,6 +69,17 @@ def _patch_includes(src: str) -> str:
     src = re.sub(r"namespace\s+NAMESPACE\s*\{\s*\n", "\n", src)
     src = re.sub(r"\}\s*//\s*namespace\s+NAMESPACE.*\n", "\n", src)
     src = src.replace("void MAIN {", "void kernel_main() {")
+    # generate_reduce_scaler.hpp moved from the deprecated dir to ttnn/cpp/ttnn/kernel/dataflow/
+    # and the function was renamed to wh_generate_reduce_scaler.
+    src = src.replace(
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp",
+        "ttnn/cpp/ttnn/kernel/dataflow/generate_reduce_scaler.hpp",
+    )
+    src = re.sub(r"\bgenerate_reduce_scaler\(", "wh_generate_reduce_scaler(", src)
+    # reduce_init / reduce_tile became template functions; the `#define REDUCE_OP / REDUCE_DIM`
+    # convention no longer satisfies the template args, so pass them explicitly.
+    src = re.sub(r"\breduce_init\(", "reduce_init<REDUCE_OP, REDUCE_DIM>(", src)
+    src = re.sub(r"\breduce_tile\(", "reduce_tile<REDUCE_OP, REDUCE_DIM>(", src)
     return src
 
 
@@ -106,6 +117,9 @@ README_SHAPES: dict[str, list[tuple]] = {
     "swiglu": [(1, 1, 32, 64), (1, 1, 128, 512), (1, 1, 1024, 4096)],
     "multigammaln_lanczos": [(1, 1, 32, 32), (1, 1, 32, 128), (1, 5, 2240, 32)],
     "glu_fused": [(32, 32, 32, 64), (3, 2, 32, 4096)],
+    # Bucket C (eltwise+reduction): shape sets are from Makora's per-op .json.
+    "atan_mean_tall": [(1, 1, 2048, 64), (1, 1, 1024, 64), (1, 1, 2048, 32), (1, 1, 1024, 32)],
+    "atan_mean_high_channel": [(1, 256, 64, 64), (256, 1, 64, 64), (1, 128, 128, 128), (128, 1, 128, 128)],
 }
 
 
@@ -170,6 +184,12 @@ def _ttnn_glu_fused(a):
     return glu_fused(a)
 
 
+def _ttnn_atan_mean(a):
+    from ttnn.operations.atan_mean import atan_mean
+
+    return atan_mean(a)
+
+
 # Per-op extras: `makora_op` overrides the Makora kernel folder (default = key);
 # `dtype` overrides ttnn.bfloat16 default; `safe_domain` shifts random inputs.
 OP_REGISTRY: dict[str, dict] = {
@@ -202,6 +222,23 @@ OP_REGISTRY: dict[str, dict] = {
         "makora_op": "glu",
         # No dtype override — both kernels run at bf16 (Makora's native dtype,
         # where its published 2.79x gmean speedup was measured).
+    },
+    "atan_mean_tall": {
+        "category": "eltwise_reduction",
+        "binary": False,
+        "ttnn": _ttnn_atan_mean,
+        "makora_kwargs": {},
+        "makora_op": "atan_mean_tall",
+        # bf16: avoids the freshly-rewritten fp32 row-reduce transpose path
+        # in llk_math_reduce.h that Makora's raw reduce_tile<SUM, REDUCE_ROW>
+        # hits. The historical bf16 path is well-tested.
+    },
+    "atan_mean_high_channel": {
+        "category": "eltwise_reduction",
+        "binary": False,
+        "ttnn": _ttnn_atan_mean,
+        "makora_kwargs": {},
+        "makora_op": "atan_mean_high_channel",
     },
 }
 
