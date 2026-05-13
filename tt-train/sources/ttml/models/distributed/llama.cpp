@@ -114,10 +114,14 @@ DistributedLlama::DistributedLlama(const LlamaConfig& config) {
     }
     ln_fc = std::make_shared<ttml::modules::RMSNormLayer>(embedding_dim);
     if (use_tp) {
-        // LM head keeps its output vocab-sharded ([B,1,S,V/tp_size] per device); pair it
-        // with ttml::ops::distributed::vocab_parallel_cross_entropy_loss.
+        // Env-var diagnostic toggle: TT_TRAIN_DISABLE_VOCAB_PARALLEL_LOSS=1 makes the LM head
+        // all-gather its output along vocab so plain cross_entropy_loss can be used in main.cpp
+        // (must be set on the matching loss site). Default: keep output vocab-sharded and pair
+        // with vocab_parallel_cross_entropy_loss.
+        const bool gather_output = std::getenv("TT_TRAIN_DISABLE_VOCAB_PARALLEL_LOSS") != nullptr;
+        fmt::print("    LM head gather_output: {}\n", gather_output ? "true" : "false");
         fc = std::make_shared<ttml::modules::distributed::ColumnParallelLinear>(
-            embedding_dim, vocab_size, /* has_bias */ false, /* gather_output */ false, tp_axis);
+            embedding_dim, vocab_size, /* has_bias */ false, gather_output, tp_axis);
     } else {
         fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size, /* has_bias */ false);
     }
