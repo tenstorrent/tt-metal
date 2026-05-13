@@ -600,10 +600,9 @@ The table below lists pre-built training configs paired with matching MGDs for l
 
 | Strategy | Mesh shape | Training config | MGD |
 |---|---|---|---|
-| TP=8 only | `[8, 1]` | [`training_configs/llama8b/training_shakespeare_llama_8b_tp8.yaml`](../configs/training_configs/llama8b/training_shakespeare_llama_8b_tp8.yaml) | [`mgd/bh_galaxy_tp8.textproto`](../configs/mgd/bh_galaxy_tp8.textproto) |
-| TP=8, DDP=4 | `[4, 8]` | [`training_configs/llama8b/training_shakespeare_llama_8b_tp8_ddp4.yaml`](../configs/training_configs/llama8b/training_shakespeare_llama_8b_tp8_ddp4.yaml) | [`mgd/bh_galaxy_tp8_ddp4.textproto`](../configs/mgd/bh_galaxy_tp8_ddp4.textproto) |
-| TP=4, DDP=8 | `[8, 4]` | [`training_configs/llama8b/training_shakespeare_llama_8b_tp4_ddp8.yaml`](../configs/training_configs/llama8b/training_shakespeare_llama_8b_tp4_ddp8.yaml) | [`mgd/bh_galaxy_tp4_ddp8.textproto`](../configs/mgd/bh_galaxy_tp4_ddp8.textproto) |
-| DDP=32 | `[32, 1]` | (bring your own — set `mesh_shape: [32, 1]`, `enable_ddp: true`) | [`mgd/bh_galaxy_ddp32.textproto`](../configs/mgd/bh_galaxy_ddp32.textproto) |
+| TP=8 only | `[8, 1]` | [`training_configs/llama8b/training_shakespeare_llama_8b_tp8.yaml`](../configs/training_configs/llama8b/training_shakespeare_llama_8b_tp8.yaml) | [`mgd/bh_galaxy_1_8_ring_ring.textproto`](../configs/mgd/bh_galaxy_1_8_ring_ring.textproto) |
+| TP=8, DDP=4 | `[4, 8]` | [`training_configs/llama8b/training_shakespeare_llama_8b_tp8_ddp4.yaml`](../configs/training_configs/llama8b/training_shakespeare_llama_8b_tp8_ddp4.yaml) | [`mgd/bh_galaxy_4_8_line_line.textproto`](../configs/mgd/bh_galaxy_4_8_line_line.textproto) |
+| TP=4, DDP=8 | `[8, 4]` | [`training_configs/llama8b/training_shakespeare_llama_8b_tp4_ddp8.yaml`](../configs/training_configs/llama8b/training_shakespeare_llama_8b_tp4_ddp8.yaml) | [`mgd/bh_galaxy_8_4_line_line.textproto`](../configs/mgd/bh_galaxy_8_4_line_line.textproto) |
 
 ### Run command
 
@@ -612,7 +611,7 @@ export TT_METAL_RUNTIME_ROOT=/path/to/tt-metal
 cd $TT_METAL_RUNTIME_ROOT
 
 # Pick one of the MGDs from the table
-export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_RUNTIME_ROOT/tt-train/configs/mgd/bh_galaxy_tp8_ddp4.textproto
+export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_RUNTIME_ROOT/tt-train/configs/mgd/bh_galaxy_4_8_line_line.textproto
 
 ./build/tt-train/sources/examples/nano_gpt/nano_gpt \
     --config tt-train/configs/training_configs/llama8b/training_shakespeare_llama_8b_tp8_ddp4.yaml
