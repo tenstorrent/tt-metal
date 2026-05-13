@@ -203,6 +203,25 @@ std::vector<uint32_t> skewed_counts(uint32_t E, uint32_t tokens, uint32_t K, flo
     return counts;
 }
 
+// EP-aware variants: per-expert M_e is computed using the GLOBAL expert count
+// (E_global), not the local one (E_local). Matches real EP deployments where
+// each device holds E_local = E_global / EP experts but the per-expert token
+// share is set by E_global.
+std::vector<uint32_t> uniform_counts_ep(uint32_t E_local, uint32_t tokens, uint32_t K, uint32_t E_global) {
+    const uint32_t per_expert = (tokens * K) / E_global;
+    return std::vector<uint32_t>(E_local, per_expert);
+}
+
+std::vector<uint32_t> skewed_counts_ep(
+    uint32_t E_local, uint32_t tokens, uint32_t K, float hot_frac, uint32_t E_global) {
+    const uint32_t per_device_total = (tokens * K * E_local) / E_global;
+    const uint32_t hot = static_cast<uint32_t>(static_cast<float>(per_device_total) * hot_frac);
+    const uint32_t rest = (per_device_total - hot) / (E_local - 1U);
+    std::vector<uint32_t> counts(E_local, rest);
+    counts[0] = hot;
+    return counts;
+}
+
 // ---------------------------------------------------------------------------
 // Output
 // ---------------------------------------------------------------------------
@@ -261,6 +280,20 @@ int main() {
             // H=4096, I=512, E_local=12, top-K=8, seq_len=4096
             {"h4096_i512_e12_uniform_4ktok", 12, 4096, 512, uniform_counts(12, /*tokens=*/4096, /*K=*/8)},
             {"h4096_i512_e12_skewed40_4ktok", 12, 4096, 512, skewed_counts(12, /*tokens=*/4096, /*K=*/8, 0.4F)},
+
+            // Same shape, but realistic EP=8 from 96 global experts:
+            // per-expert M_e = (4096*8)/96 = 341 -> padded to 11 tiles (352 rows). 12 local experts.
+            // T_cap per device = 12 * 352 = 4224.
+            {"h4096_i512_e12_g96_uniform_4ktok",
+             12,
+             4096,
+             512,
+             uniform_counts_ep(/*E_local=*/12, /*tokens=*/4096, /*K=*/8, /*E_global=*/96)},
+            {"h4096_i512_e12_g96_skewed40_4ktok",
+             12,
+             4096,
+             512,
+             skewed_counts_ep(/*E_local=*/12, /*tokens=*/4096, /*K=*/8, /*hot=*/0.4F, /*E_global=*/96)},
 
             // Smaller debug shape that fits comfortably and runs fast.
             {"debug_h512_i1024_e4_uniform_512tok", 4, 512, 1024, uniform_counts(4, /*tokens=*/512, /*K=*/2)},
