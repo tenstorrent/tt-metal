@@ -7,11 +7,15 @@
 // DRAM output tensor, then signals the combine reader cores via semaphore.
 // Deployed on idle cores to speed up zero-init process by spreading out across more banks.
 //
-// In TILE_LAYOUT, after zero-init completes this kernel also takes over the untilized-data
-// send path (previously in reader_untilize.cpp steps 3-7): it waits for compute to push a
-// batch onto cb_untilize_id, waits for the owning sender's "send now" signal, NOC-writes
-// the untilized rows to the sender's receive buffer, and signals the sender that data has
-// landed. The loop exits when compute pushes ROUTE_INFO_SENTINEL onto cb_stop_signal_id.
+// In TILE_LAYOUT, after zero-init completes this kernel also owns the per-row routing
+// decision: it waits for compute to push a batch onto cb_untilize_id, then walks the
+// batch's metadata one row at a time.  Local rows (dst_chip == this chip) are written
+// straight to the output tensor in DRAM with no sender involvement.  Non-local rows
+// run a tight per-row handshake with the sender — wait its GO (start_sem), write this
+// single row into receive_buf at the next compact slot, barrier, then inc data_ready
+// so the sender can read it back and fabric-forward to its destination chip before we
+// move to the next row.  The loop exits when compute pushes ROUTE_INFO_SENTINEL on
+// cb_stop_signal_id.
 //
 
 #include <cstdint>
@@ -97,18 +101,19 @@ void kernel_main() {
         get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 8);
     constexpr uint32_t linearized_mesh_coord =
         get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 9);
-    constexpr uint32_t total_transfer_size = read_batch_size * aligned_output_page_size;
     constexpr uint32_t counter_data_total_size = experts_tok_counter_pages * aligned_experts_tok_counter_page_size;
 
     // Runtime args appended after the sender_sem_noc_addrs loop above:
     //   counter_ready_semaphore_id   - sem the sender increments once after its counter multicast
     //   sender_noc_x / sender_noc_y  - NOC coords of the owning sender core
     //   data_ready_semaphore_id      - sender-side sem dedicated to THIS idle core (one per
-    //                                  (sender, idle) pair); this kernel increments it after each
-    //                                  send and once up-front for the c_9 addr handshake.  Because
-    //                                  every idle core has its own sem, there is no contention with
-    //                                  peers in the same group.
-    //   start_semaphore_id           - local sem the sender increments to say "send now"
+    //                                  (sender, idle) pair); this kernel increments it once
+    //                                  per non-local row after the row has landed in the
+    //                                  sender's receive_buf.  Local rows do not touch it.
+    //                                  Because every idle core has its own sem, there is no
+    //                                  contention with peers in the same group.
+    //   start_semaphore_id           - local sem the sender increments once per non-local row
+    //                                  to hand the next compact receive_buf slot to this idle
     uint32_t counter_ready_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t sender_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t sender_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
@@ -134,11 +139,14 @@ void kernel_main() {
     uint32_t sender_receive_buf_l1_offset = trailer[0];
     uint64_t sender_receive_buf_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, sender_receive_buf_l1_offset);
 
-    // Process untilized batches until compute pushes ROUTE_INFO_SENTINEL onto cb_stop_signal_id.
-    // A non-sentinel value carries the per-batch token count (forwarded from reader_untilize
-    // via cb_signal_id by compute).  Metadata for this batch is popped from cb_metadata_batch_id
-    // which reader_untilize on this same core has populated directly from DRAM — sender no
-    // longer unicasts metadata to us.
+    // Per-row routing: every batch goes through the same flow regardless of where the rows
+    // land.  Local-destined rows are written straight to the output tensor in DRAM here.
+    // Non-local-destined rows are packed contiguously into the sender's receive_buf in the
+    // order they appear in the batch's metadata, one row per non-local slot.  The sender's
+    // routing loop reads them back from receive_buf at the same compact offsets and forwards
+    // each row to its remote chip via fabric.  start_sem hands ownership of receive_buf from
+    // sender → idle for the upcoming batch; data_ready hands it back idle → sender once
+    // every local DRAM write and non-local receive_buf write for the batch is in flight.
     while (true) {
         cb_wait_front(cb_stop_signal_id, 1);
         volatile tt_l1_ptr uint32_t* stop_signal_ptr =
@@ -155,55 +163,51 @@ void kernel_main() {
         cb_wait_front(cb_untilize_id, read_batch_size);
         cb_wait_front(cb_metadata_batch_id, batch_count);
 
-        // Wait for the sender's "send now" signal — sender's per-batch pacing of receive_buf
-        // reuse depends on this being 1:1 with our data_ready inc below.
-        noc_semaphore_wait(start_sem_ptr, 1);
-        noc_semaphore_set(start_sem_ptr, 0);
-
         uint32_t untilize_read_ptr = get_read_ptr(cb_untilize_id);
         uint32_t metadata_read_ptr = get_read_ptr(cb_metadata_batch_id);
 
-        // Decide the per-batch path locally from the metadata we read ourselves.  If any row
-        // targets a different chip the sender owns the routing for this batch and we just
-        // copy the untilized rows into its receive buffer.  Otherwise every row stays on this
-        // chip and we write each one directly to the output tensor.
-        bool has_non_local = false;
+        // Per-row processing.  Local rows are written straight to the output tensor with no
+        // sender involvement.  Non-local rows do a tight per-row handshake with the sender:
+        // wait its GO (start_sem), write this single row into its receive_buf at the next
+        // compact slot, barrier, then inc data_ready so it can read and fabric-forward this
+        // row before we move to the next one.
+        uint32_t nonlocal_idx = 0;
         for (uint32_t t = 0; t < batch_count; t++) {
             const volatile tt_l1_ptr uint32_t* metadata = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(
                 metadata_read_ptr + t * aligned_dispatched_metadata_page_size);
-            if (metadata[0] != linearized_mesh_coord) {
-                has_non_local = true;
-                break;
-            }
-        }
+            uint32_t dst_chip = metadata[0];
+            uint32_t untilize_row_addr = untilize_read_ptr + t * aligned_output_page_size;
 
-        if (has_non_local) {
-            uint32_t off = 0;
-            while (off < total_transfer_size) {
-                uint32_t chunk = (total_transfer_size - off > (uint32_t)NOC_MAX_BURST_SIZE)
-                                     ? (uint32_t)NOC_MAX_BURST_SIZE
-                                     : (total_transfer_size - off);
-                noc_async_write(untilize_read_ptr + off, sender_receive_buf_noc_addr + off, chunk);
-                off += chunk;
-            }
-            noc_async_write_barrier();
-        } else {
-            for (uint32_t t = 0; t < batch_count; t++) {
-                const volatile tt_l1_ptr uint32_t* metadata = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(
-                    metadata_read_ptr + t * aligned_dispatched_metadata_page_size);
+            if (dst_chip == linearized_mesh_coord) {
                 uint32_t dst_token_idx = metadata[1];
                 uint32_t dst_topk_indice = metadata[2];
                 uint32_t output_page_idx = dst_token_idx * num_experts_per_tok + dst_topk_indice;
-                noc_async_write_page(
-                    output_page_idx, output_addr_gen, untilize_read_ptr + t * aligned_output_page_size);
+                noc_async_write_page(output_page_idx, output_addr_gen, untilize_row_addr);
                 noc_async_writes_flushed();
-            }
-            noc_async_write_barrier();
-        }
+            } else {
+                noc_semaphore_wait(start_sem_ptr, 1);
+                noc_semaphore_set(start_sem_ptr, 0);
 
-        // Signal the sender that this batch is done (data sent OR local writes done).
-        noc_semaphore_inc(sender_data_ready_noc_addr, 1);
-        noc_async_atomic_barrier();
+                uint64_t dst_addr = sender_receive_buf_noc_addr + nonlocal_idx * aligned_output_page_size;
+                uint32_t off = 0;
+                while (off < aligned_output_page_size) {
+                    uint32_t chunk = (aligned_output_page_size - off > (uint32_t)NOC_MAX_BURST_SIZE)
+                                         ? (uint32_t)NOC_MAX_BURST_SIZE
+                                         : (aligned_output_page_size - off);
+                    noc_async_write(untilize_row_addr + off, dst_addr + off, chunk);
+                    off += chunk;
+                }
+                noc_async_write_barrier();
+
+                noc_semaphore_inc(sender_data_ready_noc_addr, 1);
+                noc_async_atomic_barrier();
+                nonlocal_idx++;
+            }
+        }
+        // Make sure any local writes that hit only the writes-flushed path complete before
+        // we release the CBs (sender's per-row handshake already barriered the non-local
+        // writes).
+        noc_async_write_barrier();
 
         cb_pop_front(cb_metadata_batch_id, batch_count);
         cb_pop_front(cb_untilize_id, read_batch_size);

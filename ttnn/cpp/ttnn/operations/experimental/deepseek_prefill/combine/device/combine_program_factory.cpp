@@ -557,15 +557,13 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         }
     }
 
-    // cb_factor reduces CB size to fit L1: Wormhole needs 4x reduction
-    uint32_t cb_factor;
-    {
-        const auto arch = mesh_device->arch();
-        if (arch == tt::ARCH::BLACKHOLE || !is_tile_layout) {
-            cb_factor = 1;
-        } else {
-            cb_factor = 4;  // Wormhole_B0 and others for TILE_LAYOUT
-        }
+    // Largest divisor of (hidden_size / 32) that is <= 8.  Reader_untilize pushes tiles into
+    // cb_dispatched_buffer (c_0) in chunks of this size, and the untilize compute kernel consumes
+    // the same chunk size — so c_0 only needs to hold 2 * block_ct_dim pages for double-buffering.
+    const uint32_t full_ct_dim = static_cast<uint32_t>(hidden_size) / 32u;
+    uint32_t block_ct_dim = 8;
+    while (full_ct_dim % block_ct_dim != 0) {
+        --block_ct_dim;
     }
 
     if (is_tile_layout) {
@@ -582,12 +580,12 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
                     .set_page_size(tt::CBIndex::c_1, counter_page_size);
             tt::tt_metal::CreateCircularBuffer(program, idle_core_grid, c1_idle_config);
         }
-        // c_0 on idle cores: dispatched_buffer tiles
+        // c_0 on idle cores: dispatched_buffer tiles, sized for double-buffered block_ct_dim chunks.
         detail::create_tensor_cb(
             program,
             idle_core_grid,
             dispatched_buffer,
-            /*buffering_factor=*/hidden_size / (32 * cb_factor),
+            /*buffering_factor=*/2 * block_ct_dim,
             /*cb_id=*/tt::CBIndex::c_0,
             "dispatched_buffer_idle");
         // c_2 on idle cores: untilized output rows, one full batch (read_batch_size rows)
@@ -643,13 +641,15 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     std::vector<tt::tt_metal::KernelHandle> reader_untilize_kernel_ids;
     if (is_tile_layout) {
         // Compile-time args layout for reader_untilize (matching reader_untilize.cpp):
-        //   0-13: shared base (below, includes max_dispatch_buffer_token_size at 13)
-        //   14:   core_id   — local index within sender s's idle group (0..k_s-1)
-        //   15:   num_idle_cores — per-sender count k_s (for round-robin batch assignment)
-        //   16:   aligned_output_page_size
-        //   17:   aligned_experts_tok_counter_page_size
-        //   18:   cb_metadata_batch_id — CB this kernel pushes per-batch metadata pages into
-        //   19:   aligned_dispatched_metadata_page_size
+        //   0-12: shared base (below, includes max_dispatch_buffer_token_size at 12)
+        //   13:   core_id   — local index within sender s's idle group (0..k_s-1)
+        //   14:   num_idle_cores — per-sender count k_s (for round-robin batch assignment)
+        //   15:   aligned_output_page_size
+        //   16:   aligned_experts_tok_counter_page_size
+        //   17:   cb_metadata_batch_id — CB this kernel pushes per-batch metadata pages into
+        //   18:   aligned_dispatched_metadata_page_size
+        //   19:   block_ct_dim — tiles per chunk pushed to cb_dispatched_buffer_id (matches the
+        //                       compute kernel's per-block consumption)
         //   20+:  TensorAccessorArgs for dispatched_buffer, then TensorAccessorArgs for
         //         dispatched_metadata (no num_senders — single-sender kernel)
         const uint32_t tile_height = dispatched_buffer.tensor_spec().tile().get_height();
@@ -665,10 +665,9 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             read_batch_size,                                   // 7:  read_batch_size
             static_cast<uint32_t>(tt::CBIndex::c_3),           // 8:  cb_signal_id
             detail::get_aligned_page_size(dispatched_buffer),  // 9:  aligned_dispatched_buffer_page_size
-            cb_factor,                                         // 10: cb_factor
-            tile_height,                                       // 11: tile_height
-            tile_width,                                        // 12: tile_width
-            (uint32_t)max_dispatch_buffer_token_size,          // 13: max_dispatch_buffer_token_size
+            tile_height,                                       // 10: tile_height
+            tile_width,                                        // 11: tile_width
+            (uint32_t)max_dispatch_buffer_token_size,          // 12: max_dispatch_buffer_token_size
         };
 
         // Partitioned idle cores: each sender s owns a dedicated group of k_s idle cores.
@@ -682,12 +681,13 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             uint32_t k_s = static_cast<uint32_t>(sender_idle_groups[s].size());
             for (uint32_t j = 0; j < k_s; j++, global_idle_idx++) {
                 auto per_core_args = reader_untilize_compile_time_args_base;
-                per_core_args.push_back(j);    // 14: core_id (local to sender s's group)
-                per_core_args.push_back(k_s);  // 15: num_idle_cores (per-sender)
-                per_core_args.push_back(detail::get_aligned_page_size(output_tensor));        // 16
-                per_core_args.push_back(detail::get_aligned_page_size(expert_token_counts));  // 17
-                per_core_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_9));  // 18: cb_metadata_batch_id
-                per_core_args.push_back(detail::get_aligned_page_size(dispatched_metadata));  // 19
+                per_core_args.push_back(j);    // 13: core_id (local to sender s's group)
+                per_core_args.push_back(k_s);  // 14: num_idle_cores (per-sender)
+                per_core_args.push_back(detail::get_aligned_page_size(output_tensor));        // 15
+                per_core_args.push_back(detail::get_aligned_page_size(expert_token_counts));  // 16
+                per_core_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_9));  // 17: cb_metadata_batch_id
+                per_core_args.push_back(detail::get_aligned_page_size(dispatched_metadata));  // 18
+                per_core_args.push_back(block_ct_dim);                                        // 19: block_ct_dim
                 // 20+: TensorAccessorArgs for dispatched_buffer + dispatched_metadata
                 tt::tt_metal::TensorAccessorArgs(dispatched_buffer.buffer()).append_to(per_core_args);
                 tt::tt_metal::TensorAccessorArgs(dispatched_metadata.buffer()).append_to(per_core_args);
@@ -821,12 +821,6 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
 
     // Compute kernel on idle cores that untilizes dispatched_buffer data (TILE_LAYOUT only)
     if (is_tile_layout) {
-        const uint32_t full_ct_dim = static_cast<uint32_t>(hidden_size) / 32u;
-        uint32_t block_ct_dim = 8;
-        while (full_ct_dim % block_ct_dim != 0) {
-            --block_ct_dim;
-        }
-
         tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/compute/"
