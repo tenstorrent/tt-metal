@@ -23,6 +23,11 @@
 #include "dprint_tile.h"
 #endif
 
+#ifndef PROCESSOR_INDEX
+#define USE_DEVICE_PRINT_PROCESSOR_INDEX_SAVED 1
+#define PROCESSOR_INDEX device_print_detail::processor_index_saved
+#endif
+
 #define DEVICE_PRINT_STRINGS_SECTION_NAME ".device_print_strings"
 #define DEVICE_PRINT_STRINGS_INFO_SECTION_NAME ".device_print_strings_info"
 
@@ -210,6 +215,10 @@ struct dp_typed_array_t {
 #define DEVICE_PRINT_KERNEL_FINISHED() device_print_detail::locking::update_kernel_finished()
 
 namespace device_print_detail {
+
+#ifdef USE_DEVICE_PRINT_PROCESSOR_INDEX_SAVED
+static uint32_t processor_index_saved = 0;
+#endif
 
 // Helper to invoke a callable with arguments copied by value.
 // This allows DEVICE_PRINT to accept volatile packed struct fields,
@@ -797,30 +806,16 @@ template <>
 struct device_print_type<char*> {
     static constexpr device_print_type_info value = {'s', sizeof(char*)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, char* argument) {
-        if constexpr (sizeof(char*) == 4) {
-            *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset) =
-                reinterpret_cast<uint32_t>(argument);
-        } else if constexpr (sizeof(char*) == 8) {
-            *reinterpret_cast<device_print_buffer_ptr<uint64_t>>(device_print_buffer + offset) =
-                reinterpret_cast<uint64_t>(argument);
-        } else {
-            static_assert(sizeof(char*) == 4 || sizeof(char*) == 8, "Unsupported pointer size");
-        }
+        *reinterpret_cast<device_print_buffer_ptr<std::uintptr_t>>(device_print_buffer + offset) =
+                reinterpret_cast<std::uintptr_t>(argument);
     }
 };
 template <>
 struct device_print_type<const char*> {
     static constexpr device_print_type_info value = {'s', sizeof(const char*)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, const char* argument) {
-        if constexpr (sizeof(const char*) == 4) {
-            *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset) =
-                reinterpret_cast<uint32_t>(argument);
-        } else if constexpr (sizeof(const char*) == 8) {
-            *reinterpret_cast<device_print_buffer_ptr<uint64_t>>(device_print_buffer + offset) =
-                reinterpret_cast<uint64_t>(argument);
-        } else {
-            static_assert(sizeof(const char*) == 4 || sizeof(const char*) == 8, "Unsupported pointer size");
-        }
+        *reinterpret_cast<device_print_buffer_ptr<std::uintptr_t>>(device_print_buffer + offset) =
+                reinterpret_cast<std::uintptr_t>(argument);
     }
 };
 
@@ -830,13 +825,8 @@ template <>
 struct device_print_type<ct_string> {
     static constexpr device_print_type_info value = {'s', sizeof(const char*)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, ct_string argument) {
-        if constexpr (sizeof(const char*) == 4) {
-            *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset) =
-                reinterpret_cast<uint32_t>(argument.ptr);
-        } else if constexpr (sizeof(const char*) == 8) {
-            *reinterpret_cast<device_print_buffer_ptr<uint64_t>>(device_print_buffer + offset) =
-                reinterpret_cast<uint64_t>(argument.ptr);
-        }
+        *reinterpret_cast<device_print_buffer_ptr<std::uintptr_t>>(device_print_buffer + offset) =
+                reinterpret_cast<std::uintptr_t>(argument.ptr);
     }
 };
 
@@ -1412,6 +1402,9 @@ void initialize_lock() {
 #else
     auto& lock_atomic = get_device_print_buffer()->aux.lock;
     lock_atomic = 0;
+#endif
+#ifdef USE_DEVICE_PRINT_PROCESSOR_INDEX_SAVED
+    PROCESSOR_INDEX = internal_::get_hw_thread_idx();
 #endif
 }
 
