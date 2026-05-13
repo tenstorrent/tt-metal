@@ -908,28 +908,36 @@ ALWI void elem_pack_init() {
 }
 
 // =============================================================================
-// Three-phase per-element apply: compute_body / pop / pack
+// Two-phase per-element apply: compute / pack
 //
-// The chain pipeline makes three element-iterating calls per outer iter, with the
-// commit / wait_regs / release barriers between them:
+// Each element owns its full slice of the outer iteration. The pipeline makes two
+// element-iterating calls per outer iter with the commit/wait/release barriers
+// between them:
 //
 //   tile_regs_acquire();
-//   apply_compute_body_phase(...);     // wait + init? + for(j) exec
-//   tile_regs_commit();                // math done; unpacker has consumed input CB tiles
-//   apply_pop_phase(...);              // pop_per_tile (pop early — §11 free CB slot ASAP)
-//   tile_regs_wait();                  // pack waits for math
-//   apply_pack_phase(...);             // reserve + for(j) pack_exec + push
+//   apply_compute_phase(...);   // per element: wait + init? + for(j) exec + pop
+//   tile_regs_commit();
+//   tile_regs_wait();
+//   apply_pack_phase(...);      // per pack element: reserve + for(j) pack_exec + push
 //   tile_regs_release();
 //
 // After the outer loop ends, upfront-policy lifecycle fires:
 //   elem_pop_upfront_end(...) and elem_push_at_end(...).
+//
+// pop_per_tile / push_per_tile live INSIDE the apply body — each element owns its
+// full lifecycle slice. By the time the LLK exec call returns the unpack-read is
+// queued and the framework manages in-flight reads vs producer L1 reuse, so
+// cb_pop_front right after exec is safe. push fires right after pack_exec —
+// downstream consumer wakes on the new tile while DEST is still held. Both are
+// policy-guarded (no-op for upfront / no-pop / no-push policies; those fire after
+// the outer loop via elem_pop_upfront_end / elem_push_at_end).
 //
 // BlockSize == 1 today; commit 7 (auto-block) raises it. exec(i_outer * BlockSize + j)
 // passes the absolute tile index — identical to today's exec(i) at BlockSize=1.
 // =============================================================================
 
 template <bool EmitInit, std::size_t I, class ElemT, class... Es>
-ALWI void elem_apply_compute_body(const ElemT& elem, uint32_t i_outer, uint32_t block_size, uint32_t n_tiles) {
+ALWI void elem_apply_compute(const ElemT& elem, uint32_t i_outer, uint32_t block_size, uint32_t n_tiles) {
     if constexpr (is_pack_tile_op_v<ElemT>) {
         // Pack runs in pack phase, not compute. Skip.
         (void)elem; (void)i_outer; (void)block_size; (void)n_tiles;
@@ -944,6 +952,8 @@ ALWI void elem_apply_compute_body(const ElemT& elem, uint32_t i_outer, uint32_t 
         for (uint32_t j = 0; j < block_size; ++j) {
             elem.exec(i_outer * block_size + j);
         }
+        // pop early — policy-guarded; upfront pop fires at end-of-chain via elem_pop_upfront_end
+        elem.pop_per_tile(i_outer);
     } else if constexpr (is_dest_only_op_v<ElemT>) {
         // SFPU / Fill / Rand — no CB wait/pop; init + inner exec only.
         if constexpr (EmitInit) {
@@ -956,21 +966,8 @@ ALWI void elem_apply_compute_body(const ElemT& elem, uint32_t i_outer, uint32_t 
     }
 }
 
-template <class ElemT>
-ALWI void elem_apply_pop(const ElemT& elem, uint32_t i_outer) {
-    // pop_per_tile runs between tile_regs_commit() and tile_regs_wait() — earliest
-    // valid pop position (math done, unpacker has consumed). Frees the CB slot for
-    // the upstream producer ASAP (§11 "pop early"). Policy-guarded — no-op for
-    // upfront / no-pop policies (which fire elem_pop_upfront_end after outer loop).
-    if constexpr (is_cb_reader_op_v<ElemT>) {
-        elem.pop_per_tile(i_outer);
-    } else {
-        (void)elem; (void)i_outer;
-    }
-}
-
 template <std::size_t I, class ElemT, class... Es>
-ALWI void elem_apply_pack_body(const ElemT& elem, uint32_t i_outer, uint32_t block_size, uint32_t n_tiles) {
+ALWI void elem_apply_pack(const ElemT& elem, uint32_t i_outer, uint32_t block_size, uint32_t n_tiles) {
     if constexpr (is_pack_tile_op_v<ElemT>) {
         // reserve late — inside outer iter, policy-guarded (no-op for non-reserve policies)
         elem.reserve_per_tile(i_outer);
@@ -978,52 +975,31 @@ ALWI void elem_apply_pack_body(const ElemT& elem, uint32_t i_outer, uint32_t blo
         for (uint32_t j = 0; j < block_size; ++j) {
             elem.exec(i_outer * block_size + j);
         }
+        // push early — policy-guarded; upfront push fires at end-of-chain via elem_push_at_end
+        elem.push_per_tile(i_outer);
     } else {
         (void)elem; (void)i_outer; (void)block_size; (void)n_tiles;
     }
 }
 
-template <class ElemT>
-ALWI void elem_apply_push(const ElemT& elem, uint32_t i_outer) {
-    // push_per_tile runs AFTER tile_regs_release() — earliest position where the
-    // pack is fully visible AND DEST is freed for the next iter's acquire. Signals
-    // the downstream consumer ASAP (§11 "push early"). Policy-guarded — no-op for
-    // upfront / no-push policies (which fire elem_push_at_end after outer loop).
-    if constexpr (is_cb_writer_op_v<ElemT>) {
-        elem.push_per_tile(i_outer);
-    } else {
-        (void)elem; (void)i_outer;
-    }
-}
-
 template <bool EmitInit, std::size_t... Is, class... Es>
-ALWI void apply_compute_body_phase(std::index_sequence<Is...>, uint32_t i_outer, uint32_t block_size, uint32_t n_tiles, Es&... elts) {
+ALWI void apply_compute_phase(std::index_sequence<Is...>, uint32_t i_outer, uint32_t block_size, uint32_t n_tiles, Es&... elts) {
     auto run_one = [&](auto idx_const, auto& elem) {
         constexpr std::size_t II = decltype(idx_const)::value;
         using ElemT = std::remove_reference_t<decltype(elem)>;
-        elem_apply_compute_body<EmitInit, II, ElemT, Es...>(elem, i_outer, block_size, n_tiles);
+        elem_apply_compute<EmitInit, II, ElemT, Es...>(elem, i_outer, block_size, n_tiles);
     };
     (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
-}
-
-template <class... Es>
-ALWI void apply_pop_phase(uint32_t i_outer, Es&... elts) {
-    (elem_apply_pop(elts, i_outer), ...);
 }
 
 template <std::size_t... Is, class... Es>
-ALWI void apply_pack_body_phase(std::index_sequence<Is...>, uint32_t i_outer, uint32_t block_size, uint32_t n_tiles, Es&... elts) {
+ALWI void apply_pack_phase(std::index_sequence<Is...>, uint32_t i_outer, uint32_t block_size, uint32_t n_tiles, Es&... elts) {
     auto run_one = [&](auto idx_const, auto& elem) {
         constexpr std::size_t II = decltype(idx_const)::value;
         using ElemT = std::remove_reference_t<decltype(elem)>;
-        elem_apply_pack_body<II, ElemT, Es...>(elem, i_outer, block_size, n_tiles);
+        elem_apply_pack<II, ElemT, Es...>(elem, i_outer, block_size, n_tiles);
     };
     (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
-}
-
-template <class... Es>
-ALWI void apply_push_phase(uint32_t i_outer, Es&... elts) {
-    (elem_apply_push(elts, i_outer), ...);
 }
 
 // Hoisted init+transitions for non-clash chains (F-PERF-1).
@@ -1106,29 +1082,17 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
     }
 
     // Single outer loop — block_path and per-tile path collapse to one shape because
-    // every element owns its full slice in the apply_*_phase entry points
-    // (policy-guarded internally). Upfront wait/reserve fire inside the loop body
-    // (cumulative-count idempotent — wait-late per §11); upfront pop/push fire after
-    // the loop ends.
-    //
-    // Per-tile pop runs between tile_regs_commit() and tile_regs_wait() — earliest
-    // valid pop position (math done, unpacker has consumed input CB tiles). Frees CB
-    // slots for the upstream producer as early as possible (§11 "pop early").
-    //
-    // Per-tile push runs AFTER tile_regs_release() — earliest position where pack is
-    // fully visible AND DEST is freed (§11 "push early"). Signals downstream consumer
-    // before the next outer iter's acquire blocks. Both pop and push are policy-
-    // guarded (no-op for upfront / no-pop / no-push policies, which fire at end-of-
-    // chain via elem_pop_upfront_end / elem_push_at_end).
+    // every element owns its full wait/init/exec/pop slice in apply_compute_phase
+    // and reserve/pack/push slice in apply_pack_phase (policy-guarded internally).
+    // Upfront wait/reserve fire inside the loop body (cumulative-count idempotent —
+    // wait-late per §11); upfront pop/push fire after the loop ends.
     for (uint32_t i_outer = 0; i_outer < n_tiles; ++i_outer) {
         tile_regs_acquire();
-        detail::apply_compute_body_phase<emit_init_per_tile>(IdxSeq{}, i_outer, block_size, n_tiles, elts...);
+        detail::apply_compute_phase<emit_init_per_tile>(IdxSeq{}, i_outer, block_size, n_tiles, elts...);
         tile_regs_commit();
-        detail::apply_pop_phase(i_outer, elts...);
         tile_regs_wait();
-        detail::apply_pack_body_phase(IdxSeq{}, i_outer, block_size, n_tiles, elts...);
+        detail::apply_pack_phase(IdxSeq{}, i_outer, block_size, n_tiles, elts...);
         tile_regs_release();
-        detail::apply_push_phase(i_outer, elts...);
     }
 
     // End-of-chain upfront-policy lifecycle (policy-gated no-op for non-upfront elts).
