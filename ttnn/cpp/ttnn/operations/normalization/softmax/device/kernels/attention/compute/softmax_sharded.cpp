@@ -10,6 +10,7 @@
 #include "api/compute/softmax.h"
 #include "api/compute/reduce.h"
 #include "experimental/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 template <uint32_t block_w, uint32_t num_subblocks_w, uint32_t subblock_w>
@@ -238,24 +239,28 @@ void kernel_main() {
         reconfig_data_format(cb_exps, cb_recipsumexps);
         pack_reconfig_data_format(cb_out0);
         cb_recipsumexps_obj.wait_front(1);
-        mul_bcast_cols_init_short(cb_exps, cb_recipsumexps);
-        index_subblock_w_offset = 0;
-        for (uint32_t j = 0; j < num_subblocks_w; j++) {
-            tile_regs_acquire();
-            cb_out0_obj.reserve_back(subblock_w);
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                index = w + index_subblock_w_offset;
-                mul_tiles_bcast<BroadcastType::COL>(cb_exps, cb_recipsumexps, index, 0, w);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                pack_tile(w, cb_out0);
-            }
-            tile_regs_release();
-            cb_out0_obj.push_back(subblock_w);
-            index_subblock_w_offset += subblock_w;
-        }
+        // out[t] = cb_exps[t] * cb_recipsumexps[0] (column-broadcast). cb_exps
+        // was filled by the prior exp stage and cb_recipsumexps was just waited;
+        // both are caller-managed (NoWaitNoPop) — the chain only emits the
+        // per-tile FPU bcast op + reserve/push on cb_out0.
+        compute_kernel_lib::eltwise_chain(
+            block_w,
+            compute_kernel_lib::BinaryFpu<
+                cb_exps,
+                cb_recipsumexps,
+                cb_out0,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::Col,
+                compute_kernel_lib::BinaryDataFormatReconfig::None,
+                compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
+                compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
+                compute_kernel_lib::CbIndexMode::BlockIter,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::CbIndexMode::FirstTile>{},
+            compute_kernel_lib::PackTile<
+                cb_out0,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
         cb_recipsumexps_obj.pop_front(1);
         cb_exps_obj.pop_front(block_w);
     }
