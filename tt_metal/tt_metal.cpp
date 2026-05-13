@@ -77,6 +77,27 @@ struct TraceDescriptor;
 
 namespace {
 
+// Host-side use-after-free / use-before-allocation sanitizer for Buffer access.
+// Catches the case where a caller holds a live Buffer object (or shared_ptr to one)
+// whose backing device memory has been reclaimed by the allocator (DeallocateBuffer,
+// allocator reset, etc.) and then issues a host-side read/write through it. Without
+// this check, address() still returns the cached stale address and the write silently
+// stomps memory that the allocator may have already re-issued to another buffer.
+void check_buffer_allocated(const Buffer& buffer, const char* op) {
+    if (!buffer.is_allocated()) {
+        fprintf(
+            stderr,
+            "[ASAN ERROR] Use-After-Free: %s called on Buffer (unique_id=%zu, size=%lu, type=%d) "
+            "that is not currently allocated (either deallocated or never allocated). "
+            "This would access reclaimed device memory and corrupt unrelated allocations on silicon.\n",
+            op,
+            buffer.unique_id(),
+            static_cast<unsigned long>(buffer.size()),
+            static_cast<int>(buffer.buffer_type()));
+        std::abort();
+    }
+}
+
 CoreRangeSet GetCoreRangeSet(const std::variant<CoreCoord, CoreRange, CoreRangeSet>& specified_core_spec) {
     ZoneScoped;
     return std::visit(
@@ -645,6 +666,7 @@ void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, con
 }
 
 void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+    check_buffer_allocated(buffer, "WriteToBuffer");
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:  // fallthrough
         case BufferType::L1:    // fallthrough
@@ -764,6 +786,7 @@ void ReadFromBuffer(const std::shared_ptr<Buffer>& buffer, std::vector<uint32_t>
 }
 
 void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer) {
+    check_buffer_allocated(buffer, "ReadFromBuffer");
     IDevice* device = buffer.device();
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:
@@ -785,6 +808,7 @@ void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer) {
 }
 
 void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id) {
+    check_buffer_allocated(buffer, "ReadShard");
     IDevice* device = buffer.device();
     TT_ASSERT(is_sharded(buffer.buffer_layout()));
 
@@ -1149,6 +1173,7 @@ void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch)
 namespace experimental::core_subset_write {
 
 void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, const CoreRangeSet& logical_core_filter) {
+    check_buffer_allocated(buffer, "WriteToBuffer (core_subset_write)");
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:  // fallthrough
         case BufferType::L1:    // fallthrough
