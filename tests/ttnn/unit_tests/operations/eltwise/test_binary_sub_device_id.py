@@ -7,6 +7,7 @@
 import pytest
 import torch
 import ttnn
+from models.common.utility_functions import skip_for_slow_dispatch
 
 
 def setup_sub_device(device):
@@ -38,6 +39,7 @@ def teardown_sub_device(device, sub_device_manager):
     ],
 )
 @pytest.mark.parametrize("sub_device_idx", [0, 1])
+@skip_for_slow_dispatch()
 def test_binary_tensor_tensor_with_sub_device_id(device, op_fn, op_name, sub_device_idx):
     """Binary tensor-tensor op runs correctly on a specific sub-device."""
     torch.manual_seed(0)
@@ -77,6 +79,7 @@ def test_binary_tensor_tensor_with_sub_device_id(device, op_fn, op_name, sub_dev
         (ttnn.multiply, "multiply"),
     ],
 )
+@skip_for_slow_dispatch()
 def test_binary_tensor_scalar_with_sub_device_id(device, op_fn, op_name):
     """Binary tensor-scalar op runs correctly on a specific sub-device."""
     torch.manual_seed(0)
@@ -106,6 +109,7 @@ def test_binary_tensor_scalar_with_sub_device_id(device, op_fn, op_name):
 # ---------------------------------------------------------------------------
 # Mutual exclusion: sub_core_grids + sub_device_id = TT_FATAL
 # ---------------------------------------------------------------------------
+@skip_for_slow_dispatch()
 def test_binary_sub_device_id_and_sub_core_grids_mutual_exclusion(device):
     """TT_FATAL when both sub_core_grids and sub_device_id are provided."""
     torch.manual_seed(0)
@@ -136,6 +140,7 @@ def test_binary_sub_device_id_and_sub_core_grids_mutual_exclusion(device):
 # Inplace binary ops with sub_device_id
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("op_fn", [ttnn.add_, ttnn.multiply_])
+@skip_for_slow_dispatch()
 def test_binary_inplace_with_sub_device_id(device, op_fn):
     """Inplace binary op runs correctly on a specific sub-device."""
     torch.manual_seed(0)
@@ -167,6 +172,7 @@ def test_binary_inplace_with_sub_device_id(device, op_fn):
 # NEW: Different dtypes with sub_device_id
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@skip_for_slow_dispatch()
 def test_binary_sub_device_id_with_dtype(device, dtype):
     """Binary add with sub_device_id works across dtypes."""
     torch.manual_seed(42)
@@ -201,6 +207,7 @@ def test_binary_sub_device_id_with_dtype(device, dtype):
         [2, 1, 64, 64],
     ],
 )
+@skip_for_slow_dispatch()
 def test_binary_sub_device_id_various_shapes(device, shape):
     """Binary multiply with sub_device_id on various tensor shapes."""
     torch.manual_seed(0)
@@ -226,6 +233,7 @@ def test_binary_sub_device_id_various_shapes(device, shape):
 # ---------------------------------------------------------------------------
 # NEW: sub_device_id with output_dtype
 # ---------------------------------------------------------------------------
+@skip_for_slow_dispatch()
 def test_binary_sub_device_id_with_output_dtype(device):
     """Binary add with sub_device_id and explicit output_dtype."""
     torch.manual_seed(0)
@@ -252,6 +260,7 @@ def test_binary_sub_device_id_with_output_dtype(device):
 # ---------------------------------------------------------------------------
 # NEW: sub_device_id with memory_config
 # ---------------------------------------------------------------------------
+@skip_for_slow_dispatch()
 def test_binary_sub_device_id_with_memory_config(device):
     """Binary add with sub_device_id and explicit L1 memory config."""
     torch.manual_seed(0)
@@ -284,6 +293,7 @@ def test_binary_sub_device_id_with_memory_config(device):
 # ---------------------------------------------------------------------------
 # NEW: Verify sub_device_id=None has no effect (backward compat)
 # ---------------------------------------------------------------------------
+@skip_for_slow_dispatch()
 def test_binary_sub_device_id_none_backward_compat(device):
     """Passing sub_device_id=None is equivalent to not passing it."""
     torch.manual_seed(0)
@@ -306,6 +316,7 @@ def test_binary_sub_device_id_none_backward_compat(device):
 # ---------------------------------------------------------------------------
 # NEW: Relational binary op with sub_device_id
 # ---------------------------------------------------------------------------
+@skip_for_slow_dispatch()
 def test_binary_relational_with_sub_device_id(device):
     """Relational binary op (gt) with sub_device_id."""
     torch.manual_seed(0)
