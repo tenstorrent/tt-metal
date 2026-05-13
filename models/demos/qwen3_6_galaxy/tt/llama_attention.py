@@ -426,7 +426,7 @@ class TtQwen36GatedAttention(LightweightModule):
             self.wqkvg,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_hifi2,
+            compute_kernel_config=self.compute_kernel_hifi4,
         )
 
         # ------------------------------------------------------------------
@@ -553,7 +553,7 @@ class TtQwen36GatedAttention(LightweightModule):
             self.wo,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_hifi2,
+            compute_kernel_config=self.compute_kernel_hifi4,
         )
         gated.deallocate(True)
 
@@ -612,7 +612,7 @@ class TtQwen36GatedAttention(LightweightModule):
             self.wqkvg,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_hifi2,
+            compute_kernel_config=self.compute_kernel_hifi4,
         )
 
         # Split
@@ -727,7 +727,7 @@ class TtQwen36GatedAttention(LightweightModule):
             self.wo,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_hifi2,
+            compute_kernel_config=self.compute_kernel_hifi4,
         )
         gated.deallocate(True)
 

@@ -154,10 +154,11 @@ class TtQwen36DecoderLayer(LightweightModule):
             )
 
         # ------------------------------------------------------------------
-        # MLP (SwiGLU, local implementation using replicated weights)
+        # MLP (SwiGLU, TP-sharded over 8 mesh rows)
         # ------------------------------------------------------------------
         self.mlp = TtQwen36MLP(
             mesh_device=mesh_device,
+            args=args,
             state_dict=state_dict,
             dtype=dtype,
         )
