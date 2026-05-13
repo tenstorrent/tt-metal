@@ -176,6 +176,13 @@ USE_CASE_CONFIGS = {
 # Block sweep range
 MAX_BLOCK = 64
 
+# Whether the sweep uses fp32 dest accumulator. With fp32 dest, the DEST tile
+# capacity is halved (4 tiles instead of 8), so only subblocks with h*w == 4
+# match peak compute throughput — and among those, 2x2 is strictly preferred
+# over 4x1 / 1x4 (better tile reuse in the math LLK). So when fp32 dest is on
+# we skip the subblock sweep entirely and always pick 2x2 (when divisible).
+FP32_DEST_ACC_EN = True
+
 # Block-size candidate methodology:
 # - M/N block:  even sizes in [MN_BLOCK_MIN, MN_BLOCK_MAX]  union  divisors of
 #               per-core tile count in that same range. Extreme sizes (<4 or >16)
@@ -321,7 +328,19 @@ def pick_subblock(m_block, n_block, max_dest_volume=4):
 
 
 def generate_subblock_combos(m_block, n_block, max_dest_volume=4):
-    """Generate all valid (sb_h, sb_w) where sb_h|m_block, sb_w|n_block, sb_h*sb_w <= max_dest_volume."""
+    """Generate (sb_h, sb_w) candidates to measure.
+
+    With fp32 dest (FP32_DEST_ACC_EN=True), only 2x2 is competitive — return
+    [(2, 2)] when both blocks are even; else the single pick_subblock fallback.
+    Either way the result has at most one combo, which makes the orchestrator's
+    pass-2 subblock sweep a no-op for the fp32-dest sweep.
+
+    Without fp32 dest, returns all valid (h, w) with h|m, w|n, h*w <= max_dest_volume.
+    """
+    if FP32_DEST_ACC_EN:
+        if m_block % 2 == 0 and n_block % 2 == 0 and 2 * 2 <= max_dest_volume:
+            return [(2, 2)]
+        return [pick_subblock(m_block, n_block, max_dest_volume)]
     combos = []
     for h in range(1, min(m_block, max_dest_volume) + 1):
         if m_block % h != 0:
