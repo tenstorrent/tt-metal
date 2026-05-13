@@ -285,6 +285,16 @@ class TTNNLinearIReplicatedWColSharded(TTNNLinearInputReplicatedWeightSharded):
 
     def __init__(self, in_features, out_features) -> None:
         super().__init__(in_features, out_features, weight_dim=-1)
+        self._compute_kernel_config = None
+
+    def move_weights_to_device_impl(self):
+        super().move_weights_to_device_impl()
+        self._compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
     @run_on_devices(DeviceArch.T3K, DeviceArch.QB2)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
@@ -296,7 +306,12 @@ class TTNNLinearIReplicatedWColSharded(TTNNLinearInputReplicatedWeightSharded):
         while len(input_shape) < 4:
             input_shape.insert(1, 1)  # Add batch dimensions if needed
         input_tensor = ttnn.reshape(input_tensor, input_shape)
-        tt_output = ttnn.linear(input_tensor, self.tt_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_output = ttnn.linear(
+            input_tensor,
+            self.tt_weight,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self._compute_kernel_config,
+        )
         if self.tt_bias is not None:
             tt_output += self.tt_bias
         tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])

@@ -807,7 +807,7 @@ class TTNNQwen3MoE(TTNNMoE):
             x,
             dim=-1,
             num_links=1,
-            topology=ttnn.Topology.Linear,
+            topology=ttnn.Topology.Ring,
         )
 
         # 2. MoE gate routing

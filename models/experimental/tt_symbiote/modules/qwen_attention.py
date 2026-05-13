@@ -465,7 +465,7 @@ class TTNNQwen3FullAttention(TTNNModule):
             t,
             dim=-1,
             num_links=1,
-            topology=ttnn.Topology.Linear,
+            topology=ttnn.Topology.Ring,
         )
         # Synchronize to ensure all-gather completes before returning
         ttnn.synchronize_device(self.device)
@@ -534,7 +534,8 @@ class TTNNQwen3FullAttention(TTNNModule):
         After all-gather the data is identical on every device but the mesh
         topology metadata differs from ReplicateTensorToMesh. Paged-attention
         kernels require the replicated topology, so we round-trip through the
-        host for decode tokens (tiny tensors, negligible overhead).
+        host. Must stay in DRAM: paged_scaled_dot_product_attention_decode
+        requires Q (and KV inputs to the update kernel) in DRAM.
         """
         if self.device.get_num_devices() <= 1:
             return tensor
@@ -573,8 +574,10 @@ class TTNNQwen3FullAttention(TTNNModule):
         if self._is_distributed and not self._is_tensor_replicated(hidden_states):
             hidden_states = self._maybe_all_gather(hidden_states)
 
+        is_decode = hidden_states.shape[-2] == 1
+        _proj_mem_cfg = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
         if hidden_states.layout != ttnn.TILE_LAYOUT:
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=_proj_mem_cfg)
 
         # Project to Q, K, V
         # For Qwen3: q_proj outputs [batch, seq, num_heads * head_dim * 2] when has_q_gate=True
@@ -582,10 +585,12 @@ class TTNNQwen3FullAttention(TTNNModule):
         key_states = self.k_proj(hidden_states)  # [batch, seq, num_kv_heads * head_dim]
         value_states = self.v_proj(hidden_states)  # [batch, seq, num_kv_heads * head_dim]
 
-        # All-gather for distributed mode
-        q_proj_output = self._maybe_all_gather(q_proj_output)
-        key_states = self._maybe_all_gather(key_states)
-        value_states = self._maybe_all_gather(value_states)
+        # All-gather for distributed mode: dispatch all three before syncing once
+        if self._is_distributed:
+            q_proj_output = ttnn.all_gather(q_proj_output, dim=-1, num_links=1, topology=ttnn.Topology.Ring)
+            key_states = ttnn.all_gather(key_states, dim=-1, num_links=1, topology=ttnn.Topology.Ring)
+            value_states = ttnn.all_gather(value_states, dim=-1, num_links=1, topology=ttnn.Topology.Ring)
+            ttnn.synchronize_device(self.device)
 
         # Handle Q gating: split q_proj output into query_states and gate
         # PyTorch: query_states, gate = torch.chunk(q_proj(x).view(..., head_dim * 2), 2, dim=-1)
@@ -1278,7 +1283,7 @@ class TTNNQwen3LinearAttention(TTNNModule):
             t,
             dim=-1,
             num_links=1,
-            topology=ttnn.Topology.Linear,
+            topology=ttnn.Topology.Ring,
         )
         # Synchronize to ensure all-gather completes before returning
         ttnn.synchronize_device(self.device)
@@ -1670,8 +1675,8 @@ class TTNNQwen3LinearAttention(TTNNModule):
         # Dispatch both output all_gathers together (no individual syncs).
         # The device pipelines them; a single sync below drains both CCL ops.
         if self._is_distributed:
-            mixed_qkv_ttnn = ttnn.all_gather(mixed_qkv_ttnn, dim=-1, num_links=1, topology=ttnn.Topology.Linear)
-            z_ttnn = ttnn.all_gather(z_ttnn, dim=-1, num_links=1, topology=ttnn.Topology.Linear)
+            mixed_qkv_ttnn = ttnn.all_gather(mixed_qkv_ttnn, dim=-1, num_links=1, topology=ttnn.Topology.Ring)
+            z_ttnn = ttnn.all_gather(z_ttnn, dim=-1, num_links=1, topology=ttnn.Topology.Ring)
 
         # Single synchronize_device for all pending compute + CCL operations.
         ttnn.synchronize_device(self.device)

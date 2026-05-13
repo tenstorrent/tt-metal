@@ -162,7 +162,7 @@ class TTNNQwen3MoeRMSNorm(TTNNModule):
             out = ttnn.reshape(out, [out.shape[0], out.shape[2], out.shape[3]])
         return out
 
-    @run_on_devices(DeviceArch.T3K)
+    @run_on_devices(DeviceArch.T3K, DeviceArch.QB2)
     def _forward_distributed(self, x):
         # Pre-all-gather: per-device partial statistics (sum of squares).
         stats = ttnn.rms_norm_pre_all_gather(x, dtype=ttnn.bfloat16)
