@@ -135,9 +135,11 @@ SHAPES = [
     # cross_attn_kv: cross-attention KV via minimal_matmul_split, chunks=2 (11x10 grid)
     (128, 5120, 2560, 11, 10, False, "cross_attn_kv"),
     # WH AGMM Wan2.2 shapes (8x8 grid), K-fractured across 4 devices.
+    # All have bias (always allocated/passed by _build_op_runner).
+    # N=3456 has fused GELU (exact, non-approx) to match the test config.
     (3072, 5120, 3840, 8, 8, True, "plain"),
     (3072, 5120, 1280, 8, 8, True, "plain"),
-    (3072, 5120, 3456, 8, 8, True, "plain"),
+    (3072, 5120, 3456, 8, 8, True, "plain_gelu"),
     (3072, 3456, 5120, 8, 8, True, "plain"),
 ]
 
@@ -158,6 +160,11 @@ USE_CASE_CONFIGS = {
     },
     "ff1_gelu": {
         "fused_activation": (ttnn.UnaryOpType.GELU, True),
+    },
+    # Like "plain" but with exact (non-approx) GELU fused — matches the
+    # activation="gelu" config in test_all_gather_minimal_matmul_async.py.
+    "plain_gelu": {
+        "fused_activation": (ttnn.UnaryOpType.GELU, False),
     },
     "cross_attn_kv": {
         "chunks": 2,
