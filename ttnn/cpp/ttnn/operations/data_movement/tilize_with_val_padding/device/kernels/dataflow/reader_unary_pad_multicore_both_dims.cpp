@@ -8,22 +8,41 @@
 
 // Alignment-aware fill: writes 4 bytes at a time for the aligned middle,
 // and uses element-sized writes for unaligned start/end to avoid rv32 unaligned faults.
-// Assumption: if val_size < 4, multiple vals are packed into a single uint32_t val.
+// Supports 1-byte (FP8), 2-byte (BF16), and 4-byte (FP32) element sizes.
+// For val_size < 4, the value is replicated to fill a uint32_t for efficient aligned writes.
 template <uint32_t val_size>
 FORCE_INLINE void fill_with_val(uint32_t start_addr, uint32_t n_bytes, uint32_t val) {
-    static_assert(val_size == sizeof(uint16_t) || val_size == sizeof(uint32_t), "Unsupported val_size");
-    using IntType = std::conditional_t<(val_size == sizeof(uint16_t)), uint16_t, uint32_t>;
+    static_assert(
+        val_size == sizeof(uint8_t) || val_size == sizeof(uint16_t) || val_size == sizeof(uint32_t),
+        "Unsupported val_size");
+    using IntType = std::conditional_t<
+        (val_size == sizeof(uint8_t)),
+        uint8_t,
+        std::conditional_t<(val_size == sizeof(uint16_t)), uint16_t, uint32_t>>;
 
     const uint32_t end_addr = start_addr + n_bytes;
     const uint32_t start_addr_4B = (start_addr + 0x3) & 0xFFFFFFFC;
     const uint32_t end_addr_4B = end_addr & 0xFFFFFFFC;
+
+    // Prepare the 4-byte value for aligned writes
+    uint32_t val_4B = val;
+    if constexpr (val_size == sizeof(uint8_t)) {
+        // For 1-byte elements, replicate the byte 4 times
+        uint8_t byte_val = static_cast<uint8_t>(val);
+        val_4B =
+            (uint32_t(byte_val) << 24) | (uint32_t(byte_val) << 16) | (uint32_t(byte_val) << 8) | uint32_t(byte_val);
+    } else if constexpr (val_size == sizeof(uint16_t)) {
+        // For 2-byte elements, replicate the value 2 times
+        uint16_t short_val = static_cast<uint16_t>(val);
+        val_4B = (uint32_t(short_val) << 16) | uint32_t(short_val);
+    }
 
     // Write 4 bytes at a time for the aligned region
     {
         auto* start_ptr_4B = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_addr_4B);
         auto* end_ptr_4B = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(end_addr_4B);
         for (auto* ptr = start_ptr_4B; ptr < end_ptr_4B; ++ptr) {
-            *ptr = val;
+            *ptr = val_4B;
         }
     }
 
