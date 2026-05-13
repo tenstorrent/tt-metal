@@ -14,8 +14,6 @@
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
-
 namespace tt {
 enum class DataFormat : uint8_t;
 }  // namespace tt
