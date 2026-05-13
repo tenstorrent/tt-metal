@@ -84,8 +84,9 @@ jobs:
         # so repeated commits to a branch benefit from cached clang-tidy results.
         if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
-          # ctcache is not published on PyPI — install from source tag
-          uv pip install --quiet "ctcache @ git+https://github.com/matus-chochlik/ctcache.git@1.2.0" boto3
+          # ctcache is not published on PyPI — install from pinned commit SHA (tag 1.2.0)
+          # Pinned to SHA (not tag) to avoid supply-chain risk from mutable git tags
+          uv pip install --quiet "ctcache @ git+https://github.com/matus-chochlik/ctcache.git@e33c063ca6e52b48bcefbc45d46d8c150ffa81ca" boto3  # 1.2.0
 
           # Namespace encodes the clang-tidy version so a toolchain upgrade auto-invalidates
           CT_VERSION=$(clang-tidy-20 --version 2>/dev/null | grep -oP 'version \K[0-9]+' || echo "20")
@@ -120,9 +121,6 @@ jobs:
           HTTPS_PROXY="http://proxy.restricted-proxy.svc.cluster.local:3128" \
           python3 - << 'PYEOF'
           import boto3, botocore, os, sys
-          key_id = os.environ.get("AWS_ACCESS_KEY_ID", "")
-          print(f"Key ID prefix: {key_id[:4]!r}, length: {len(key_id)}")
-          print(f"Secret length: {len(os.environ.get('AWS_SECRET_ACCESS_KEY', ''))}")
           print(f"Endpoint: {os.environ.get('AWS_ENDPOINT_URL', '')}")
           print(f"HTTP_PROXY: {os.environ.get('HTTP_PROXY', '(not set)')}")
           try:
