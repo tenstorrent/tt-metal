@@ -46,14 +46,14 @@ from models.common.models.llama3_1b.model import LlamaForCausalLM1D
 # simple_text_demo.py with the corresponding test case to get real baseline values.
 EXPECTED_METRICS = {
     "performance": {
-        "N150": {"top1": 90, "top5": 97, "tok_s_u": 0, "ttft_ms": 0},
-        "N300": {"top1": 90, "top5": 97, "tok_s_u": 0, "ttft_ms": 0},
-        "T3K": {"top1": 90, "top5": 98, "tok_s_u": 0, "ttft_ms": 0},
+        "N150": {"top1": 78, "top5": 96, "tok_s_u": 57.3, "ttft_ms": 29.6},
+        "N300": {"top1": 78, "top5": 96, "tok_s_u": 74, "ttft_ms": 59},
+        "T3K": {"top1": 79, "top5": 95, "tok_s_u": 86, "ttft_ms": 45},
     },
     "accuracy": {
-        "N150": {"top1": 96, "top5": 100, "tok_s_u": 0, "ttft_ms": 0},
-        "N300": {"top1": 96, "top5": 100, "tok_s_u": 0, "ttft_ms": 0},
-        "T3K": {"top1": 97, "top5": 100, "tok_s_u": 0, "ttft_ms": 0},
+        "N150": {"top1": 88, "top5": 99, "tok_s_u": 59, "ttft_ms": 30.3},
+        "N300": {"top1": 86, "top5": 99, "tok_s_u": 72, "ttft_ms": 46},
+        "T3K": {"top1": 89, "top5": 99, "tok_s_u": 86, "ttft_ms": 51},
     },
 }
 
