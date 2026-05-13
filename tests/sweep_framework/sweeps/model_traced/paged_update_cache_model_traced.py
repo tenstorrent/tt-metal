@@ -4,24 +4,25 @@
 
 
 import re
+from functools import partial
 
 import torch
+
 import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
-from functools import partial
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
+    get_mesh_shape,
     mesh_tensor_to_torch,
     reconcile_golden_to_actual,
 )
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
 TIMEOUT = 300
 
@@ -98,7 +99,9 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(
+        kwargs, exclude={"page_table", "update_idxs_tensor"}, output_memory_config=output_memory_config
+    )
 
     # V2 vectors provide named tensors: update_idxs_tensor_* → input_c, page_table_* → input_d
     update_idxs_tensor_kwargs = extract_named_tensor_kwargs(kwargs, "update_idxs_tensor")
@@ -288,27 +291,13 @@ def run(
             _OrderedReprSet.__repr__ = lambda self: _mc_text
             _OrderedReprSet.__str__ = lambda self: _mc_text
             op_kwargs["mesh_coords"] = _OrderedReprSet(_coords_native)
-    try:
-        output_tensor = ttnn.experimental.paged_update_cache(
-            input_tensor_a,  # cache_tensor (positional)
-            input_tensor_b,  # input_tensor (positional)
-            update_idxs_tensor=(
-                input_tensor_c if input_tensor_c is not None else None
-            ),  # update_idxs_tensor (optional keyword)
-            page_table=input_tensor_d if input_tensor_d is not None else None,  # page_table (optional keyword)
-            **op_kwargs,
-        )
-    except TypeError:
-        # If that fails, try with memory_config
-        output_tensor = ttnn.experimental.paged_update_cache(
-            input_tensor_a,  # cache_tensor (positional)
-            input_tensor_b,  # input_tensor (positional)
-            update_idxs_tensor=(
-                input_tensor_c if input_tensor_c is not None else None
-            ),  # update_idxs_tensor (optional keyword)
-            page_table=input_tensor_d if input_tensor_d is not None else None,  # page_table (optional keyword)
-            **op_kwargs,
-        )
+    output_tensor = ttnn.experimental.paged_update_cache(
+        input_tensor_a,
+        input_tensor_b,
+        update_idxs_tensor=input_tensor_c if input_tensor_c is not None else None,
+        page_table=input_tensor_d if input_tensor_d is not None else None,
+        **op_kwargs,
+    )
     # paged_update_cache modifies cache_tensor in place, so output is the same as input_tensor_a
     output_tensor = input_tensor_a
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)

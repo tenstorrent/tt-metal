@@ -60,6 +60,9 @@ class _OuterFixture:
 def _patch_upload_tensor_types(monkeypatch):
     monkeypatch.setattr(upload.ttnn, "Tensor", _FakeTensor, raising=False)
     monkeypatch.setattr(upload, "OverlappedTensor", _FakeOverlappedTensor)
+    # Fake tensors aren't real ttnn.Tensor; treat them as host-staged so the
+    # UploadableMixin walk doesn't try to dispatch into ttnn for is-on-device.
+    monkeypatch.setattr(upload, "_tensor_is_on_device", lambda _t: False)
 
 
 class _FakeDevice:

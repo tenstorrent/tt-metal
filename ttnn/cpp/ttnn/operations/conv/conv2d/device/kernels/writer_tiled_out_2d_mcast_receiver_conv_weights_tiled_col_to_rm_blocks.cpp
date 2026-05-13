@@ -51,8 +51,8 @@ void kernel_main() {
     // Synchronization is required: the main reader signals when CB space is reserved,
     // and the second reader signals when it has finished writing its portion.
     constexpr bool split_reader_cb_shared = get_compile_time_arg_val(31) == 1;
-    experimental::Semaphore<> reserve_done_sem((split_reader_cb_shared) ? get_compile_time_arg_val(32) : 0);
-    experimental::Semaphore<> write_done_sem((split_reader_cb_shared) ? get_compile_time_arg_val(33) : 0);
+    Semaphore<> reserve_done_sem((split_reader_cb_shared) ? get_compile_time_arg_val(32) : 0);
+    Semaphore<> write_done_sem((split_reader_cb_shared) ? get_compile_time_arg_val(33) : 0);
     constexpr uint32_t act_write_offset = get_compile_time_arg_val(34);
     constexpr uint32_t act_write_offset_last = get_compile_time_arg_val(35);
 
@@ -70,9 +70,9 @@ void kernel_main() {
     const uint32_t weights_mcast_sender_noc_y = get_arg_val<uint32_t>(i++);
 
     // Experimental API objects
-    experimental::Noc noc;
-    experimental::Semaphore<> weights_mcast_sender_sem(get_arg_val<uint32_t>(i++));
-    experimental::Semaphore<> weights_mcast_receiver_sem(get_arg_val<uint32_t>(i++));
+    Noc noc;
+    Semaphore<> weights_mcast_sender_sem(get_arg_val<uint32_t>(i++));
+    Semaphore<> weights_mcast_receiver_sem(get_arg_val<uint32_t>(i++));
     experimental::CB cb_weight_obj(cb_id_weight);
     experimental::CB cb_bias_obj(bias_cb_id);
     experimental::CB cb_reader_indices_obj(cb_reader_indices);
