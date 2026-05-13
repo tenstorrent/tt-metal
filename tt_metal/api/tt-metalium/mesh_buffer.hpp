@@ -27,10 +27,10 @@ struct DeviceLocalBufferConfig {
     // Can be DRAM, L1, SYSTEM_MEMORY, L1_SMALL, TRACE.
     BufferType buffer_type = BufferType::DRAM;
 
-    BufferShardingArgs sharding_args;
+    BufferShardingArgs sharding_args = {};
 
     // The direction in which memory for this buffer is allocated.
-    std::optional<bool> bottom_up;
+    std::optional<bool> bottom_up = std::nullopt;
 
     // Optional: Specify the worker sub device this buffer will be allocated on
     std::optional<SubDeviceId> sub_device_id = std::nullopt;
