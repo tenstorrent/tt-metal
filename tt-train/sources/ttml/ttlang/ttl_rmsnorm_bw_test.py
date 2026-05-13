@@ -82,7 +82,8 @@ def _run_case(
 
 
 def main() -> None:
-    rtol, atol = 0.12, 5e-4
+    # Taken from tests/ops/rmsnorm_op_test.cpp
+    rtol, atol = 1.0e-3, 2.0e-3
     device = ttnn.open_device(device_id=0)
 
     try:
