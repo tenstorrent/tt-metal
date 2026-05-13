@@ -80,14 +80,32 @@ void kernel_main() {
                         PackTile<cb_cal, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
                 }
             } else {
+#ifdef IS_ZERO
+                // PARTIAL migration: in-place accumulator add via eltwise_chain.
+                // cb_cal = cb_val + cb_cal
+                compute_kernel_lib::eltwise_chain(
+                    onetile,
+                    compute_kernel_lib::BinaryFpu<
+                        cb_val,
+                        cb_cal,
+                        cb_cal,
+                        compute_kernel_lib::BinaryFpuOp::Add,
+                        compute_kernel_lib::BroadcastDim::None,
+                        compute_kernel_lib::BinaryDataFormatReconfig::InputAndOutput,
+                        compute_kernel_lib::CopyTilePolicy::WaitAndPop,
+                        compute_kernel_lib::CopyTilePolicy::WaitAndPop,
+                        compute_kernel_lib::CbIndexMode::FirstTile,
+                        compute_kernel_lib::Dst::D0>{},
+                    compute_kernel_lib::PackTile<
+                        cb_cal,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+#else
+                // BLOCKED: binary_max_tile held-DEST pattern; no BinaryMax in eltwise_chain.
                 tile_regs_acquire();
                 cb_wait_front(cb_val, onetile);
                 cb_wait_front(cb_cal, onetile);
                 cb_reserve_back(cb_cal, onetile);
-#ifdef IS_ZERO
-                add_tiles_init_with_dt(cb_val, cb_cal);
-                add_tiles(cb_val, cb_cal, 0, 0, dst0);
-#else
                 copy_tile_init_with_dt(cb_val);
                 copy_tile(cb_val, 0, dst0);
 
@@ -96,7 +114,6 @@ void kernel_main() {
 
                 binary_max_tile_init();
                 binary_max_tile(dst0, dst1, dst0);
-#endif
                 tile_regs_commit();
 
                 tile_regs_wait();
@@ -106,6 +123,7 @@ void kernel_main() {
                 cb_pop_front(cb_val, onetile);
                 cb_pop_front(cb_cal, onetile);
                 cb_push_back(cb_cal, onetile);
+#endif
             }
         }
 
