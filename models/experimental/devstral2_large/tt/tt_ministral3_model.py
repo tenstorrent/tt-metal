@@ -19,6 +19,8 @@ Mirrors ``transformers.models.ministral3.modeling_ministral3.Ministral3Model`` a
 ``state_dict`` must follow meta naming from :func:`~models.tt_transformers.tt.load_checkpoints.map_hf_to_meta_keys`
 (``layers.N.*``, ``tok_embeddings.weight``, ``norm.weight``). ``attention_mask`` is accepted for API parity with HF
 but ignored (TT attention is causal on device). ``use_cache`` / ``past_key_values`` are not implemented yet.
+
+Forward uses **ttnn only** for position indices and RoPE slicing (no PyTorch in the hot path).
 """
 
 from __future__ import annotations
@@ -26,7 +28,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional
 
-import torch
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
@@ -138,54 +139,58 @@ class TtMinistral3Model(LightweightModule):
         out = ttnn.unsqueeze_to_4D(embd_out)
         return ttnn.to_memory_config(out, skip_mem_cfg)
 
-    def _default_position_ids_torch(self, batch_size: int, seq_len: int, *, past_seen_tokens: int = 0) -> torch.Tensor:
-        row = torch.arange(seq_len, dtype=torch.long) + past_seen_tokens
-        return row.unsqueeze(0).expand(batch_size, -1)
+    def _default_position_ids_tt(self, batch_size: int, seq_len: int, *, past_seen_tokens: int = 0) -> ttnn.Tensor:
+        """Contiguous indices ``past_seen_tokens .. past_seen_tokens+seq_len-1`` per row (uint32, ROW_MAJOR)."""
+        row = ttnn.arange(
+            past_seen_tokens,
+            past_seen_tokens + seq_len,
+            1,
+            dtype=ttnn.uint32,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        row = ttnn.reshape(row, (1, seq_len))
+        if batch_size == 1:
+            return row
+        return ttnn.repeat(row, (batch_size, 1))
 
-    @staticmethod
-    def _contiguous_start_pos_from_position_ids(pos_torch: torch.Tensor) -> Optional[int]:
-        """Return start ``p`` if each row equals ``[p, p+1, ..., p+S-1]`` (sliceable RoPE cache), else ``None``."""
-        b, s = pos_torch.shape
-        row0 = pos_torch[0]
-        p = int(row0[0].item())
-        expected = torch.arange(p, p + s, dtype=pos_torch.dtype, device=pos_torch.device)
-        if not torch.equal(row0, expected):
-            return None
-        for i in range(1, b):
-            if not torch.equal(pos_torch[i], row0):
-                return None
-        return p
+    def _ensure_position_ids_bs_row_major_uint32(
+        self, pos_tt: ttnn.Tensor, batch_size: int, seq_len: int
+    ) -> ttnn.Tensor:
+        if tuple(int(x) for x in pos_tt.shape) != (batch_size, seq_len):
+            raise ValueError(
+                f"position_ids shape {tuple(pos_tt.shape)} does not match activations (batch={batch_size}, seq={seq_len})"
+            )
+        out = pos_tt
+        if out.layout != ttnn.ROW_MAJOR_LAYOUT:
+            out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+        if out.dtype != ttnn.uint32:
+            out = ttnn.typecast(out, ttnn.uint32)
+        return out
 
-    def _rot_mats_from_tt_rope(
+    def _expand_rot_mats_batch_if_needed(self, rot_mats, batch_dim: int):
+        if rot_mats is None or batch_dim <= 1:
+            return rot_mats
+        c0 = rot_mats[0]
+        if int(c0.shape[1]) >= batch_dim:
+            return rot_mats
+        return [
+            ttnn.repeat(c0, (1, batch_dim, 1, 1)),
+            ttnn.repeat(rot_mats[1], (1, batch_dim, 1, 1)),
+        ]
+
+    def _prepare_rot_mats_prefill(
         self,
-        hidden_states: ttnn.Tensor,
-        position_ids_torch: torch.Tensor,
-    ) -> list[ttnn.Tensor]:
-        """Slice pre-uploaded HF-format cos/sin (same idea as ``Transformer.prepare_inputs_prefill``)."""
-        b = int(hidden_states.shape[0])
-        s = int(hidden_states.shape[2])
-        if tuple(int(x) for x in position_ids_torch.shape) != (b, s):
-            raise ValueError(
-                f"position_ids shape {tuple(position_ids_torch.shape)} does not match activations (batch={b}, seq={s})"
-            )
-        start_pos = self._contiguous_start_pos_from_position_ids(position_ids_torch.long())
-        if start_pos is None:
-            raise ValueError(
-                "position_ids must be contiguous and identical across batch rows to slice "
-                "TtDevstral2LargeRotaryEmbedding caches; otherwise pass rot_mats_global=[cos_tt, sin_tt]."
-            )
-        end = start_pos + s
-        if end > self.rotary_emb.max_seq_len:
-            raise ValueError(
-                f"RoPE slice [{start_pos}, {end}) exceeds rotary_emb.max_seq_len={self.rotary_emb.max_seq_len}; "
-                "increase ModelArgs.max_seq_len or pass rot_mats_global."
-            )
-        cos_slice = self.rotary_emb.cos_matrix_prefill[:, :, start_pos:end, :]
-        sin_slice = self.rotary_emb.sin_matrix_prefill[:, :, start_pos:end, :]
-        if b > 1:
-            cos_slice = ttnn.repeat(cos_slice, (1, b, 1, 1))
-            sin_slice = ttnn.repeat(sin_slice, (1, b, 1, 1))
-        return [cos_slice, sin_slice]
+        rot_mats,
+        rope_start_pos: int,
+        batch_dim: int,
+        seq_len: int,
+    ):
+        if rot_mats is not None:
+            return self._expand_rot_mats_batch_if_needed(rot_mats, batch_dim)
+        rot_mats = self.rotary_emb.slice_rot_mats_prefill(rope_start_pos, seq_len)
+        return self._expand_rot_mats_batch_if_needed(rot_mats, batch_dim)
 
     def forward(
         self,
@@ -206,6 +211,7 @@ class TtMinistral3Model(LightweightModule):
         chunk_start_idx=None,
         kv_cache=None,
         batch_size: int = 1,
+        rope_start_pos: int = 0,
         **_kwargs: Any,
     ) -> TtMinistral3ModelOutput:
         if isinstance(mode, str):
@@ -247,22 +253,18 @@ class TtMinistral3Model(LightweightModule):
         s = int(hidden_states.shape[2])
 
         if position_ids is None:
-            pos_torch = self._default_position_ids_torch(b, s, past_seen_tokens=0)
+            pos_tt = self._default_position_ids_tt(b, s, past_seen_tokens=0)
         else:
-            pos_torch = ttnn.to_torch(position_ids).long()
-            if pos_torch.ndim == 1:
-                pos_torch = pos_torch.unsqueeze(0).expand(b, -1)
+            pid = position_ids
+            if len(pid.shape) == 1:
+                if int(pid.shape[0]) != s:
+                    raise ValueError(f"1D position_ids length {int(pid.shape[0])} does not match sequence length {s}")
+                pid = ttnn.reshape(pid, (1, s))
+                if b > 1:
+                    pid = ttnn.repeat(pid, (b, 1))
+            pos_tt = self._ensure_position_ids_bs_row_major_uint32(pid, b, s)
 
-        pos_tt = ttnn.from_torch(
-            pos_torch.to(torch.int32),
-            device=self.mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-
-        if rot_mats_global is None:
-            rot_mats_global = self._rot_mats_from_tt_rope(hidden_states, pos_torch)
+        rot_mats_global = self._prepare_rot_mats_prefill(rot_mats_global, rope_start_pos, b, s)
 
         for layer in self.layers:
             hidden_states = layer(
