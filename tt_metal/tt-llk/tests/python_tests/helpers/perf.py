@@ -19,7 +19,7 @@ from .llk_params import DestAccumulation, L1Accumulation, PerfRunType
 from .logger import logger
 from .profiler import Profiler, ProfilerData
 from .stimuli_config import StimuliConfig
-from .test_config import BuildMode, ProfilerBuild, TestConfig
+from .test_config import BuildMode, DevicePrintBuild, ProfilerBuild, TestConfig
 from .test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
 
 # Maps each run type to the kernel components whose text section sizes contribute to ELF_SIZE.
@@ -338,6 +338,7 @@ class PerfConfig(TestConfig):
             variant_stimuli,
             BootMode.DEFAULT,
             ProfilerBuild.Yes,
+            DevicePrintBuild.No,
             1,  # L1_2_L1s
             unpack_to_dest,
             unpack_to_srcs,
