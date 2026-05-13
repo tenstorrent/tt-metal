@@ -15,6 +15,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
 ALWI void ACQ() {
     tile_regs_acquire();
@@ -44,30 +45,43 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         /*
          * x**2
+         *
+         * Migrated: same-CB BinaryFpu(Mul) with cumulative wait + chain-owned pop, plus
+         * per-tile pack into cb_x2. CumulativeWaitPopAtEnd matches the inner-loop
+         * cb_wait_front(cb_inp, wt + blk) / per-iter pack pattern (blk == 1 in the
+         * program factory, so the inner wtr loop collapses to a single tile). Chain
+         * emits the entry-time srca/srcb + pack reconfig that replaces the inline
+         * reconfig_data_format / pack_reconfig_data_format / mul_tiles_init triad.
+         * Pack uses FirstTile because PerTileReserveAndPush advances the write
+         * pointer each push, making absolute idx wt equivalent to relative 0.
          */
-        reconfig_data_format(cb_inp, cb_inp);
-        pack_reconfig_data_format(cb_x2);
-        mul_tiles_init(cb_inp, cb_inp);
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_wait_front(cb_inp, wt + blk);  // cumulative wait
-            cb_reserve_back(cb_x2, blk);
-            ACQ();
-            for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                mul_tiles(cb_inp, cb_inp, wt + wtr, wt + wtr, wtr);
-                pack_tile(wtr, cb_x2, wt + wtr);
-            }
-            REL();
-            cb_push_back(cb_x2, blk);
-        }
+        compute_kernel_lib::eltwise_chain(
+            Wt,
+            compute_kernel_lib::BinaryFpu<
+                cb_inp,
+                cb_inp,
+                cb_x2,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::InputAndOutput,
+                compute_kernel_lib::CopyTilePolicy::CumulativeWaitPopAtEnd,
+                compute_kernel_lib::CopyTilePolicy::CumulativeWaitPopAtEnd,
+                compute_kernel_lib::CbIndexMode::BlockIter,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::CbIndexMode::BlockIter>{},
+            compute_kernel_lib::PackTile<
+                cb_x2,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
 
         /*
          * sum(x**2)
          */
-        // BulkWaitBulkPop: All Wt tiles already in CB (see cumulative wait above)
+        // BulkWaitBulkPop: All Wt tiles already in CB (chain pushed Wt tiles above)
         compute_kernel_lib::
             reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
                 cb_x2, cb_reduce, cb_out, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
-        cb_pop_front(cb_inp, Wt);
+        // cb_inp already popped by the chain (CumulativeWaitPopAtEnd) - no explicit pop here.
     }
     cb_pop_front(cb_reduce, 1);
 }
