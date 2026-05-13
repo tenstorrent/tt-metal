@@ -218,6 +218,7 @@ def dict_to_compute_kernel_config(cfg):
         math_approx_mode=_to_bool(cfg.get("math_approx_mode", False)),
         fp32_dest_acc_en=_to_bool(cfg.get("fp32_dest_acc_en", False)),
         packer_l1_acc=_to_bool(cfg.get("packer_l1_acc", True)),
+        dst_full_sync_en=_to_bool(cfg.get("dst_full_sync_en", False)),
     )
 
 

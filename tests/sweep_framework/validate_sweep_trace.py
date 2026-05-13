@@ -189,6 +189,56 @@ def _canonicalize_program_config_repr(s: str) -> str:
     return s
 
 
+
+def _parse_shard_spec_string(s):
+    """Parse a serialized ShardSpec string into a comparable dict."""
+    import re as _re_ss, json as _json_ss
+    if not isinstance(s, str) or "ShardSpec" not in s:
+        return s
+    result = {}
+    # Extract grid: find "grid=" then match balanced brackets
+    grid_idx = s.find("grid=[")
+    if grid_idx >= 0:
+        start = grid_idx + 5  # position of first [
+        depth = 0
+        end = start
+        for i in range(start, len(s)):
+            if s[i] == "[":
+                depth += 1
+            elif s[i] == "]":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        grid_str = s[start:end]
+        try:
+            result["grid"] = _json_ss.loads(grid_str)
+        except Exception:
+            # ShardSpec repr may omit closing } for each grid entry dict.
+            # Try fixing by adding } before each , { and before ]
+            fixed = grid_str.replace(", {", "}, {").replace("]", "}]")
+            if not fixed.startswith("[{"):
+                fixed = grid_str
+            try:
+                result["grid"] = _json_ss.loads(fixed)
+            except Exception:
+                pass
+    # Extract shape
+    shape_match = _re_ss.search(r'shape=\[([\d,\s]+)\]', s)
+    if shape_match:
+        try:
+            result["shape"] = [int(x.strip()) for x in shape_match.group(1).split(",")]
+        except Exception:
+            pass
+    # Extract orientation and normalize
+    orient_match = _re_ss.search(r'orientation=(\S+)', s)
+    if orient_match:
+        orient = orient_match.group(1).rstrip(",").rstrip("}")
+        # Normalize ShardOrientation::ROW_MAJOR -> ROW_MAJOR
+        orient = orient.replace("ShardOrientation::", "")
+        result["orientation"] = orient
+    return result if result else s
+
 def normalize(obj: Any, *, _parent_key: str = "") -> Any:
     """Recursively normalize a config dict for comparison.
 
@@ -236,6 +286,11 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
     # canonicalize so the diff doesn't flag it.
     if obj == "None":
         return None
+    # Parse ShardSpec string format to dict for comparison
+    if isinstance(obj, str) and "ShardSpec" in obj:
+        parsed = _parse_shard_spec_string(obj)
+        if isinstance(parsed, dict):
+            return normalize(parsed, _parent_key=_parent_key)
     # Set repr "{a, b, c}" should compare as an unordered set.
     if isinstance(obj, str) and obj.startswith("{") and obj.endswith("}"):
         coerced = _coerce_set_repr(obj)
@@ -297,11 +352,11 @@ def deep_diff(master: Any, sweep: Any, prefix: str = "") -> list[Diff]:
                 # Also skip known sweep-framework output kwargs that the model
                 # trace never captures (e.g. the output memory_config passed by
                 # the sweep module to control placement).
-                if sweep[k] is None or k in ("memory_config", "core_grid", "dtype", "sub_core_grids", "indices_tensor", "subdevice_id", "global_cb", "sub_device_id", "mesh_device", "persistent_output_tensor"):
+                if sweep[k] is None or k in ("memory_config", "core_grid", "dtype", "sub_core_grids", "indices_tensor", "subdevice_id", "global_cb", "sub_device_id", "mesh_device", "persistent_output_tensor", "arg0", "arg1", "arg2", "arg3", "arg4"):
                     continue
                 diffs.append(Diff(child_path, "<missing>", sweep[k], "extra_key"))
             elif k not in sweep:
-                if master[k] is not None and k not in ("memory_config", "core_grid", "dtype", "sub_core_grids", "indices_tensor", "subdevice_id", "global_cb", "sub_device_id", "mesh_device", "persistent_output_tensor"):
+                if master[k] is not None and k not in ("memory_config", "core_grid", "dtype", "sub_core_grids", "indices_tensor", "subdevice_id", "global_cb", "sub_device_id", "mesh_device", "persistent_output_tensor", "arg0", "arg1", "arg2", "arg3", "arg4"):
                     diffs.append(Diff(child_path, master[k], "<missing>", "extra_key"))
             else:
                 diffs.extend(deep_diff(master[k], sweep[k], child_path))

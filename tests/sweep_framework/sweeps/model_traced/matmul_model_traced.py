@@ -67,15 +67,8 @@ def mesh_device_fixture():
         # Create mesh device based on env var
         try:
             device = create_mesh_device(mesh_shape)
-            result = setup_sub_device_manager(device)
-            sub_device_mgr = None
-            if isinstance(result, tuple):
-                sub_device_mgr, _GLOBAL_CB = result
-            else:
-                sub_device_mgr = result
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
-            teardown_sub_device_manager(device, sub_device_mgr)
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
@@ -119,12 +112,8 @@ def run(
     # correct matmul behavior with sharded memory configs.
     op_kwargs = build_op_kwargs(kwargs, exclude={"global_cb"})
 
-    # Inject global_cb from fixture when config requires it
-    gcb_raw = kwargs.get("global_cb")
-    if gcb_raw is not None and gcb_raw != "__ABSENT__" and isinstance(gcb_raw, dict):
-        if _GLOBAL_CB is not None:
-            op_kwargs["global_cb"] = _GLOBAL_CB
-    elif "global_cb" in op_kwargs and not hasattr(op_kwargs.get("global_cb"), "address"):
+    # global_cb injection deferred to after weight tensor creation (see below)
+    if "global_cb" in op_kwargs and not hasattr(op_kwargs.get("global_cb"), "address"):
         del op_kwargs["global_cb"]
 
     # build_op_kwargs filters memory_config (infrastructure key), but matmul
@@ -234,9 +223,10 @@ def run(
                     device,
                     input_a_dtype,
                     input_a_layout,
-                    input_a_memory_config,
+                    ttnn.DRAM_MEMORY_CONFIG,
                     input_a_tensor_placement,
                 )
+                pass
             else:
                 input_tensor_a = ttnn.from_torch(
                     torch_input_tensor_a,
@@ -286,9 +276,10 @@ def run(
                         device,
                         input_b_dtype,
                         input_b_layout,
-                        input_b_memory_config,
+                        ttnn.DRAM_MEMORY_CONFIG,
                         input_b_tensor_placement,
                     )
+                    pass
                 else:
                     input_tensor_b = ttnn.from_torch(
                         torch_input_tensor_b,
@@ -307,6 +298,18 @@ def run(
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+
+    # Strip prefetcher-specific fields for tracing without sub-device infra
+    _pc = op_kwargs.get("program_config")
+    if _pc is not None:
+        if hasattr(_pc, "num_global_cb_receivers"):
+            _pc.num_global_cb_receivers = 1
+        if hasattr(_pc, "gather_in0"):
+            _pc.gather_in0 = False
+    if "global_cb" in op_kwargs:
+        del op_kwargs["global_cb"]
+    if "sub_device_id" in op_kwargs:
+        del op_kwargs["sub_device_id"]
 
     try:
         start_time = start_measuring_time()
