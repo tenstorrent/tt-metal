@@ -7,9 +7,10 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
 #include "api/compute/matmul.h"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_kloop_helpers.hpp"
 
 void kernel_main() {
-    constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
+    using namespace compute_kernel_lib;
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
     constexpr uint32_t reduce_semaphore_id = get_named_compile_time_arg_val("reduce_semaphore_id");
 
@@ -26,10 +27,15 @@ void kernel_main() {
     constexpr auto cb_s2c_in = tt::CBIndex::c_1;
     constexpr auto cb_c2w_out = tt::CBIndex::c_2;
 
+    // Buffer wrappers consumed by matmul_kloop_pack: in0/in1 feed the K-loop's
+    // FMA stream; out_buf receives the final pack_tile_block.
+    experimental::CircularBuffer in0_buf(cb_s2c_in);
+    experimental::CircularBuffer in1_buf(cb_r2c_w);
+    experimental::CircularBuffer out_buf(cb_c2w_out);
+
     // Constants for the kernel
     constexpr uint32_t num_w_tiles_w = matmul_wo_ring::NUM_W_TILES_W;
     constexpr uint32_t num_n_tiles_per_iter = matmul_wo_ring::N_TILES_PER_ITER;
-    constexpr uint32_t max_num_tiles_h = matmul_wo_ring::MAX_K_TILES_PER_CORE;
     constexpr uint32_t num_iters = num_w_tiles_w / num_n_tiles_per_iter;
     const uint32_t num_tiles_h = matmul_wo_ring::K_TILES_PER_CORE_A[dram_bank_id];
 
@@ -41,7 +47,6 @@ void kernel_main() {
     constexpr uint32_t w_tiles_per_block = w_tiles_per_txn * w_txns_per_block;
     const uint32_t num_blocks_per_iter =
         (num_tiles_h * num_n_tiles_per_iter + w_tiles_per_block - 1) / w_tiles_per_block;
-    const uint32_t w_total_blocks = num_blocks_per_iter * num_iters;
 
     //-------------------------------------------------------------------------
     // Compute
@@ -68,35 +73,17 @@ void kernel_main() {
         in0_index_base += matmul_wo_ring::K_TILES_PER_CORE_A[core_id];
     }
 
+    // matmul_kloop_pack absorbs the DST scope and the segmented K-loop
+    // (cb_wait / FMA stride / cb_pop on cb_r2c_w). KStepDefault advances
+    // in0_index from in0_index_base by 1 per FMA; SimplePack handles the
+    // pack_tile_block of num_n_tiles_per_iter tiles to cb_c2w_out.
+    const SegmentedKLoopShape iter_shape =
+        SegmentedKLoopShape::of(num_blocks_per_iter, w_tiles_per_block, /*ct_dim=*/num_n_tiles_per_iter);
     for (uint32_t iter_id = 0; iter_id < num_iters; ++iter_id) {
-        uint32_t in0_index = in0_index_base;
-
-        tile_regs_acquire();
-        for (uint32_t block_id = 0; block_id < num_blocks_per_iter; ++block_id) {
-            cb_wait_front(cb_r2c_w, w_tiles_per_block);
-
-            for (uint32_t k = 0; k < w_tiles_per_block; k += 7) {
-                matmul_block(
-                    cb_s2c_in,
-                    cb_r2c_w,
-                    in0_index++,
-                    /*in1_tile_index=*/k,
-                    /*idst=*/0,
-                    /*transpose=*/false,
-                    /*ct_dim=*/7,
-                    /*rt_dim=*/1,
-                    /*kt_dim=*/1);
-            }
-            cb_pop_front(cb_r2c_w, w_tiles_per_block);
-        }
-
-        tile_regs_commit();
-        tile_regs_wait();
-
-        cb_reserve_back(cb_c2w_out, num_n_tiles_per_iter);
-        pack_tile_block(0, cb_c2w_out, num_n_tiles_per_iter);
-        cb_push_back(cb_c2w_out, num_n_tiles_per_iter);
-        tile_regs_release();
+        KStepDefault<experimental::CircularBuffer> k_step{
+            in0_buf, in1_buf, /*in0_index=*/in0_index_base, /*transpose=*/false};
+        matmul_kloop_pack(
+            in1_buf, iter_shape, k_step, SimplePack<experimental::CircularBuffer>{out_buf, num_n_tiles_per_iter});
     }
 
     // Drain the pipeline - the last dummy push
