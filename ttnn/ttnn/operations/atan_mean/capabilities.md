@@ -1,10 +1,10 @@
 # Capabilities: atan_mean
 
-> Last updated: 2026-05-13 by ttnn-verifier (Phase 0)
+> Last updated: 2026-05-13 by ttnn-implementer (Refinement 2)
 
 | Dimension | Status | Details |
 |-----------|--------|---------|
-| **Data formats** | float32 only | Entry point validates `dtype == ttnn.float32`; bfloat16 / bfloat8_b raise `ValueError`. Internal scaler CB is bf16 (matmul col-0 convention), but this is invisible to the caller. |
+| **Data formats** | float32, bfloat16, bfloat8_b | Entry point validates `dtype ∈ {float32, bfloat16, bfloat8_b}`; other dtypes raise `ValueError`. Output dtype matches the input dtype. Internal scaler CB is bf16 (matmul col-0 convention) regardless of input dtype. Accumulation runs in fp32 (`fp32_dest_acc_en=True`), so the dominant numerical error for bf16/bf8 inputs comes from input quantisation, not the reduce path. |
 | **Layouts** | TILE only | Entry point validates `layout == ttnn.TILE_LAYOUT`. ROW_MAJOR raises `ValueError` — no in-kernel tilize path. Caller must `.to_layout(TILE_LAYOUT)` host-side first. |
 | **Memory configs** | DRAM interleaved (input + output) | Output is always allocated with `ttnn.DRAM_MEMORY_CONFIG` regardless of input memory config. No sharded path. Input may be L1 interleaved or DRAM (reader uses `TensorAccessor`), but this is not exercised in tests. |
 | **Core count** | Multi-core | Program descriptor uses `ttnn.split_work_to_cores(grid_size, total_row_tiles)` against the full `compute_with_storage_grid_size()`. Two-group split balances load with ≤1 row-tile difference per core. |
@@ -18,18 +18,19 @@
 
 ## Numerical precision
 
-Measured on shapes `[(1,1,32,32), (1,1,64,64), (1,1,256,128), (1,8,128,128)]` with N(0, 1) inputs:
-- PCC ≥ 0.99999995
-- Max abs error: ~1.3e-4
-- Mean abs error: ~3e-5
-- Relative RMS error: ~6.5e-4
+Measured on shapes `[(1,1,32,32), (1,1,64,64), (1,1,128,64), (1,1,32,96), (1,8,64,64)]` with N(0, 1) inputs:
 
-Errors are dominated by SFPU atan polynomial approximation; bf16 quantisation of the `1/W` scaler is bit-exact for power-of-two W (32, 64, 128, …) so it contributes nothing for the tested shapes.
+| dtype | PCC achieved | Max abs error | Notes |
+|-------|--------------|---------------|-------|
+| float32   | ≥ 0.99999995 | ≈ 1.3e-4 | Unchanged from Phase 0; dominated by SFPU atan polynomial. |
+| bfloat16  | ≥ 0.9998     | ≈ 6e-3   | Input bf16 quantisation (7-bit mantissa) is the dominant error; reduce accumulator is still fp32. |
+| bfloat8_b | ≥ 0.997      | ≈ 4e-2   | Block-format input quantisation dominates. Output is also bf8 (matches input dtype), so an additional round-trip pack-error appears on the host. |
 
-## Known limitations (Phase 0)
+The `1/W` reduce scaler is bf16 and bit-exact for power-of-two W (32, 64, 128, …) — it contributes nothing for the tested shapes. The matmul-mode REDUCE_ROW path unpacks the input on SrcA into a fp32 destination accumulator, so dtype-induced error scales with the input value range, not with W.
 
-- **No FLOAT32 alternative**: refusal of bfloat16 is by design — refinement would add bfloat16 + bfloat8_b support.
+## Known limitations
+
 - **No ROW_MAJOR input**: a caller passing a row-major tensor must convert first.
 - **No non-tile-aligned shapes**: the partial-scaler infrastructure in the kernel-lib is available but unwired.
 - **No `compute_kernel_config`**: callers cannot trade accuracy for throughput (e.g. HiFi3 / no fp32 dest accum).
-- **Large `W` will L1-overflow `cb_atan_tiles`**: sized to `Wt` fp32 pages. For W=8192 → Wt=256 → 1 MB just for this CB. The current shape set caps Wt at 4 so this is not yet a problem, but it caps the supported W ceiling.
+- **Large `W` will L1-overflow `cb_atan_tiles`**: sized to `Wt` input-dtype pages. For W=8192 with fp32 input → Wt=256 → 1 MB just for this CB. With bf16/bf8 input, the page size shrinks proportionally, so the W ceiling rises (~16K for bf16, ~32K for bf8), but the streaming-reduce refinement is still required for arbitrary W.

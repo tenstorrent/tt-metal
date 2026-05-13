@@ -54,7 +54,7 @@
   - HiFi3 with fp32 dest is the documented workaround for Wormhole-B0 HW issue #38306, which the Phase-0 HiFi4+fp32 combo nominally hits but the acceptance tests do not trip. Document this in changelog.
   - The matmul-mode REDUCE_ROW path through `reduce_helpers_compute.inl` already respects whatever fidelity the kernel was compiled with — no path changes.
 
-### [ ] Refinement 2 — Support bfloat16 (and bfloat8_b) input dtype
+### [x] Refinement 2 — Support bfloat16 (and bfloat8_b) input dtype
 - **Why**: PyTorch users routinely run atan/mean on bf16 in mixed-precision pipelines. The acceptance test currently rejects bf16.
 - **What changes**:
   - Relax the dtype validator in `_validate_input` to accept `bfloat16` (and optionally `bfloat8_b`).
