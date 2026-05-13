@@ -182,8 +182,10 @@ BASE_BLOCK_SIZES = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20]
 
 # AGMM-specific restricted candidate sets to reduce profiler overhead.
 # K: divisors only (all known-best K_blocks divide K_tiles on 12x9 grid).
-# N: restricted set covering all known-best N_block values (includes 3, 6 from configs).
-AGMM_N_BLOCK_CANDIDATES = [1, 2, 3, 4, 6, 8, 12, 16]
+# N: superset of common "1 block per core" choices across known shapes. Includes
+# 5 (N=1280/8), 15 (N=3840/8), 20 (N=5120/8) — natural fits for 8-N-axis grids
+# that the original tight list (max=16) missed.
+AGMM_N_BLOCK_CANDIDATES = [1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 16, 20, 24, 32]
 
 # L1 budget for pre-filtering block combos (KB).
 # BH L1 usable ~1464 KB; conservative threshold accounts for kernel/firmware overhead.
