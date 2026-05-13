@@ -9,13 +9,10 @@ import torch
 from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 from ttnn.experimental.moe_compute_utils import (
-    add_shared_expert_weights,
     determine_compute_matmul_cores,
     get_shared_experts_per_device,
     get_w0_w1_memory_config,
     get_w2_memory_config,
-    prepare_w0_w1_tensor_for_moe_compute,
-    prepare_w2_tensor_for_moe_compute,
 )
 
 import ttnn
@@ -30,6 +27,10 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     is_quad_mesh,
     is_ring_fabric,
     shard_and_save,
+)
+from models.demos.deepseek_v3.utils.quad_ring_packing import prepare_quad_ring_packed_experts
+from models.demos.deepseek_v3.utils.quad_ring_packing import (
+    quad_ring_shared_expert_to_device_map as _quad_ring_shared_expert_to_device_map,
 )
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
@@ -115,14 +116,10 @@ class Experts(AbstractModule):
             ]
         }
 
-    @staticmethod
-    def quad_ring_shared_expert_to_device_map(
-        n_routed_experts: int, n_shared_experts: int, n_devices: int
-    ) -> dict[int, list[int]]:
-        # Shared expert mapping for MoE module. This indicates that a single shared expert is replicated across all
-        # devices. (I hope this is the right place for this?)
-        shared_expert_id = n_routed_experts + n_shared_experts - 1
-        return {shared_expert_id: list(range(n_devices))}
+    # Kept as a static method so external callers (e.g. ``MoEOptimized``) can use it without
+    # importing the helper module directly. The single source of truth lives in
+    # ``models.demos.deepseek_v3.utils.quad_ring_packing``.
+    quad_ring_shared_expert_to_device_map = staticmethod(_quad_ring_shared_expert_to_device_map)
 
     @classmethod
     def _convert_weights_quad_ring(
@@ -181,72 +178,35 @@ class Experts(AbstractModule):
                 )
                 cls._warned_missing_quad_ring_prepared_checkpoint = True
 
-            w0 = (
-                cls._load_expert_weight(state_dict, "gate_proj", "experts", num_routed_experts)
-                .unsqueeze(0)
-                .transpose(-1, -2)
+            routed_gate = cls._load_expert_weight(state_dict, "gate_proj", "experts", num_routed_experts)
+            routed_up = cls._load_expert_weight(state_dict, "up_proj", "experts", num_routed_experts)
+            routed_down = cls._load_expert_weight(state_dict, "down_proj", "experts", num_routed_experts)
+            # HF stores the shared MLP as a single unindexed module (``shared_experts.{proj}.weight``).
+            shared_gate = get_dequantized_tensor(
+                state_dict, "shared_experts.gate_proj.weight", dtype=cls.WEIGHT_TORCH_DTYPE
             )
-            w1 = (
-                cls._load_expert_weight(state_dict, "up_proj", "experts", num_routed_experts)
-                .unsqueeze(0)
-                .transpose(-1, -2)
+            shared_up = get_dequantized_tensor(
+                state_dict, "shared_experts.up_proj.weight", dtype=cls.WEIGHT_TORCH_DTYPE
             )
-            w2 = (
-                cls._load_expert_weight(state_dict, "down_proj", "experts", num_routed_experts)
-                .unsqueeze(0)
-                .transpose(-1, -2)
+            shared_down = get_dequantized_tensor(
+                state_dict, "shared_experts.down_proj.weight", dtype=cls.WEIGHT_TORCH_DTYPE
             )
-            matmul_N = w0.shape[-1]
-
-            # HF stores the shared MLP as a single unindexed module (`shared_experts.{proj}.weight`).
-            # quad_ring_shared_expert_to_device_map currently emits one entry, so we load one tensor per projection.
-            assert num_shared_experts == 1 and len(shared_expert_ids_to_device) == 1, (
-                f"Only n_shared_experts=1 is supported here (got {num_shared_experts}); "
-                "the fat shared-MLP -> per-expert split is not implemented."
+            # matmul_N must match the post-transpose shape used downstream by get_w2_memory_config.
+            matmul_N = routed_gate.shape[-2]
+            prepared_w0_w1, prepared_w2 = prepare_quad_ring_packed_experts(
+                routed_gate=routed_gate,
+                routed_up=routed_up,
+                routed_down=routed_down,
+                shared_gate=shared_gate,
+                shared_up=shared_up,
+                shared_down=shared_down,
+                num_routed_experts=num_routed_experts,
+                num_shared_experts=num_shared_experts,
+                num_devices=num_devices,
+                hidden_size=hidden_size,
+                shared_expert_ids_to_devices=shared_expert_ids_to_device,
+                ring2cores=ring2cores,
             )
-            (shared_expert_id,) = shared_expert_ids_to_device.keys()
-
-            def _load_shared_expert_weight(hf_name: str) -> dict[int, torch.Tensor]:
-                weight = get_dequantized_tensor(
-                    state_dict, f"shared_experts.{hf_name}.weight", dtype=cls.WEIGHT_TORCH_DTYPE
-                )
-                # (out, in) -> (layers=1, experts=1, in, out) matching the routed-expert layout.
-                return {shared_expert_id: weight.unsqueeze(0).unsqueeze(0).transpose(-1, -2)}
-
-            shared_w0 = _load_shared_expert_weight("gate_proj")
-            shared_w1 = _load_shared_expert_weight("up_proj")
-            shared_w2 = _load_shared_expert_weight("down_proj")
-
-            w0, w1, w2 = add_shared_expert_weights(
-                w0, w1, w2, shared_w0, shared_w1, shared_w2, shared_expert_ids_to_device, num_devices
-            )
-
-            prepared_w0_w1 = []
-            prepared_w2 = []
-            for i in range(0, num_total_experts_on_devices, num_total_experts_per_device):
-                prepared_w0_w1_tensor = prepare_w0_w1_tensor_for_moe_compute(
-                    w0[:, i : i + num_total_experts_per_device, :, :],
-                    w1[:, i : i + num_total_experts_per_device, :, :],
-                    num_layers,
-                    num_total_experts_per_device,
-                    hidden_size,
-                    matmul_N,
-                    ring2cores,
-                )
-                prepared_w2_tensor = prepare_w2_tensor_for_moe_compute(
-                    w2[:, i : i + num_total_experts_per_device, :, :],
-                    num_layers,
-                    num_total_experts_per_device,
-                    matmul_N,
-                    hidden_size,
-                    ring2cores,
-                )
-
-                prepared_w0_w1.append(prepared_w0_w1_tensor)
-                prepared_w2.append(prepared_w2_tensor)
-
-            prepared_w0_w1 = torch.cat(prepared_w0_w1, dim=2)
-            prepared_w2 = torch.cat(prepared_w2, dim=2)
 
         w0_w1_memory_config = get_w0_w1_memory_config(
             num_layers, num_total_experts_per_device, hidden_size, compute_matmul_dram_core_range_set

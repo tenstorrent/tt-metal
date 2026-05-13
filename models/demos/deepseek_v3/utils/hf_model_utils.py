@@ -358,12 +358,6 @@ def _quad_ring_expert_weight_name(layer_idx: int, projection: str) -> str:
     return f"model.layers.{layer_idx}.mlp.experts_quad_ring.{projection}.weight"
 
 
-def _default_quad_ring_ring2cores() -> dict[int, tuple[int, int, int]]:
-    # Mirrors `determine_compute_matmul_cores()` pad/full-ring positions for 12 DRAM banks.
-    matmul_pad_cores = {1, 2, 4, 5, 7, 8, 10, 11}
-    return {ring_pos: (ring_pos, ring_pos, 1 if ring_pos in matmul_pad_cores else 0) for ring_pos in range(12)}
-
-
 def _validate_quad_ring_stacked_projection_shape(
     tensor: torch.Tensor,
     *,
@@ -386,59 +380,39 @@ def _prepare_quad_ring_expert_tensors(
     num_routed_experts: int,
     num_devices: int,
     hidden_size: int,
+    shared_gate: torch.Tensor | None = None,
+    shared_up: torch.Tensor | None = None,
+    shared_down: torch.Tensor | None = None,
+    num_shared_experts: int = 0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    from ttnn.experimental.moe_compute_utils import (
-        prepare_w0_w1_tensor_for_moe_compute,
-        prepare_w2_tensor_for_moe_compute,
+    """Thin wrapper kept as the script-side entry point (so existing test mocks still apply).
+
+    All real work happens in :func:`prepare_quad_ring_packed_experts`; this just builds the
+    ``shared_expert_ids_to_devices`` mapping the same way ``Experts._convert_weights_quad_ring``
+    does so the prepared checkpoint matches what the runtime path would produce.
+    """
+    from models.demos.deepseek_v3.utils.quad_ring_packing import (
+        prepare_quad_ring_packed_experts,
+        quad_ring_shared_expert_to_device_map,
     )
 
-    if num_routed_experts % num_devices != 0:
-        raise ValueError(
-            f"n_routed_experts ({num_routed_experts}) must be divisible by num_devices ({num_devices}) "
-            "for quad-ring expert preparation."
-        )
-    num_experts_per_device = num_routed_experts // num_devices
-    ring2cores = _default_quad_ring_ring2cores()
-
-    w0 = stacked_gate.unsqueeze(0).transpose(-1, -2)
-    w1 = stacked_up.unsqueeze(0).transpose(-1, -2)
-    w2 = stacked_down.unsqueeze(0).transpose(-1, -2)
-
-    if w0.shape[-2] != hidden_size:
-        raise ValueError(
-            f"Expected gate expert input hidden size {hidden_size}, got {w0.shape[-2]} "
-            f"(tensor shape: {tuple(w0.shape)})"
-        )
-    matmul_n = w0.shape[-1]
-
-    prepared_w0_w1_per_device: list[torch.Tensor] = []
-    prepared_w2_per_device: list[torch.Tensor] = []
-    for expert_offset in range(0, num_routed_experts, num_experts_per_device):
-        prepared_w0_w1_per_device.append(
-            prepare_w0_w1_tensor_for_moe_compute(
-                w0[:, expert_offset : expert_offset + num_experts_per_device, :, :],
-                w1[:, expert_offset : expert_offset + num_experts_per_device, :, :],
-                1,
-                num_experts_per_device,
-                hidden_size,
-                matmul_n,
-                ring2cores,
-            )
-        )
-        prepared_w2_per_device.append(
-            prepare_w2_tensor_for_moe_compute(
-                w2[:, expert_offset : expert_offset + num_experts_per_device, :, :],
-                1,
-                num_experts_per_device,
-                matmul_n,
-                hidden_size,
-                ring2cores,
-            )
-        )
-
-    return (
-        torch.cat(prepared_w0_w1_per_device, dim=2).contiguous(),
-        torch.cat(prepared_w2_per_device, dim=2).contiguous(),
+    shared_expert_ids_to_devices = (
+        quad_ring_shared_expert_to_device_map(num_routed_experts, num_shared_experts, num_devices)
+        if num_shared_experts > 0
+        else None
+    )
+    return prepare_quad_ring_packed_experts(
+        routed_gate=stacked_gate,
+        routed_up=stacked_up,
+        routed_down=stacked_down,
+        shared_gate=shared_gate,
+        shared_up=shared_up,
+        shared_down=shared_down,
+        num_routed_experts=num_routed_experts,
+        num_shared_experts=num_shared_experts,
+        num_devices=num_devices,
+        hidden_size=hidden_size,
+        shared_expert_ids_to_devices=shared_expert_ids_to_devices,
     )
 
 
@@ -760,6 +734,10 @@ def save_quad_ring_hf_checkpoint(
         first_moe_layer = int(config_obj.get("first_k_dense_replace", 0))
         num_routed_experts = int(config_obj["n_routed_experts"])
         hidden_size = int(config_obj["hidden_size"])
+        # n_shared_experts is optional; older / non-DeepSeek configs may omit it. When present,
+        # we mirror Experts._convert_weights_quad_ring and fold one shared MLP into the packed
+        # tensors so the prepared checkpoint already includes shared-expert weights.
+        num_shared_experts = int(config_obj.get("n_shared_experts", 0))
     except KeyError as e:
         raise ValueError(f"Missing required DeepSeek config field for quad-ring export: {e}") from e
     except (TypeError, ValueError) as e:
@@ -830,6 +808,22 @@ def save_quad_ring_hf_checkpoint(
                 num_routed_experts=num_routed_experts,
             )
 
+            shared_gate_weight = None
+            shared_up_weight = None
+            shared_down_weight = None
+            if num_shared_experts > 0:
+                # HF stores the shared MLP unindexed under ``...mlp.shared_experts.{proj}.weight``.
+                shared_gate_key = f"model.layers.{layer_idx}.mlp.shared_experts.gate_proj.weight"
+                shared_up_key = f"model.layers.{layer_idx}.mlp.shared_experts.up_proj.weight"
+                shared_down_key = f"model.layers.{layer_idx}.mlp.shared_experts.down_proj.weight"
+                shared_gate_weight = _load_tensor_from_shards(
+                    output_model_path, weight_map, file_handles, shared_gate_key
+                )
+                shared_up_weight = _load_tensor_from_shards(output_model_path, weight_map, file_handles, shared_up_key)
+                shared_down_weight = _load_tensor_from_shards(
+                    output_model_path, weight_map, file_handles, shared_down_key
+                )
+
             prepared_w0_w1, prepared_w2 = _prepare_quad_ring_expert_tensors(
                 gate_weight,
                 up_weight,
@@ -837,6 +831,10 @@ def save_quad_ring_hf_checkpoint(
                 num_routed_experts=num_routed_experts,
                 num_devices=num_devices,
                 hidden_size=hidden_size,
+                shared_gate=shared_gate_weight,
+                shared_up=shared_up_weight,
+                shared_down=shared_down_weight,
+                num_shared_experts=num_shared_experts,
             )
 
             quad_ring_shard_name = f"quad-ring-experts-layer-{layer_idx:05d}.safetensors"
@@ -880,6 +878,9 @@ def save_quad_ring_hf_checkpoint(
             del gate_weight
             del up_weight
             del down_weight
+            del shared_gate_weight
+            del shared_up_weight
+            del shared_down_weight
     finally:
         _close_shard_handles(file_handles)
 
