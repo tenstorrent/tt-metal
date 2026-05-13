@@ -27,18 +27,17 @@ constexpr uint32_t kWriterOutputBufferIdx = 0U;
 constexpr auto kInputPass1CbIndex = tt::CBIndex::c_0;
 constexpr auto kInputPass2CbIndex = tt::CBIndex::c_1;
 constexpr auto kScalerCbIndex = tt::CBIndex::c_2;
-// c_3 is unused (eps is now passed as a compute runtime arg and applied via add_unary_tile).
-constexpr auto kW0CbIndex = tt::CBIndex::c_4;
-constexpr auto kW1CbIndex = tt::CBIndex::c_5;
-constexpr auto kW2CbIndex = tt::CBIndex::c_6;
-constexpr auto kBiasCbIndex = tt::CBIndex::c_7;
+constexpr auto kW0CbIndex = tt::CBIndex::c_3;
+constexpr auto kW1CbIndex = tt::CBIndex::c_4;
+constexpr auto kW2CbIndex = tt::CBIndex::c_5;
+constexpr auto kBiasCbIndex = tt::CBIndex::c_6;
 // CBs with intermediate computations
-constexpr auto kSumPowsCbIndex = tt::CBIndex::c_8;
-constexpr auto kInvRmsCbIndex = tt::CBIndex::c_9;
+constexpr auto kSumPowsCbIndex = tt::CBIndex::c_7;
+constexpr auto kInvRmsCbIndex = tt::CBIndex::c_8;
 // Preweighted inv_rms coefficients: [w2*inv_rms(x), w1*inv_rms(x^2), w0*inv_rms(x^3)]
-constexpr auto kWeightedCoeffCbIndex = tt::CBIndex::c_11;
+constexpr auto kWeightedCoeffCbIndex = tt::CBIndex::c_10;
 // CBs with output data
-constexpr auto kOutputCbIndex = tt::CBIndex::c_10;
+constexpr auto kOutputCbIndex = tt::CBIndex::c_9;
 
 constexpr uint32_t kNumOneTile = 1U;
 
@@ -88,7 +87,6 @@ void assign_per_core_runtime_args(
                 num_rows_per_core,
                 num_rows_written,
                 scaler_fp32_bits,
-                eps_fp32_bits,
             });
 
         SetRuntimeArgs(program, kernels.writer, core, {output_buffer->address(), num_rows_per_core, num_rows_written});
@@ -262,7 +260,6 @@ void PolyNorm3ForwardProgramFactory::override_runtime_arguments(
         rr[1] = weight_buffer->address();
         rr[2] = bias_buffer->address();
         rr[5] = scaler_fp32_bits;
-        rr[6] = eps_fp32_bits;
 
         auto& wr = writer_runtime_args[core.x][core.y];
         wr[kWriterOutputBufferIdx] = output_buffer->address();
