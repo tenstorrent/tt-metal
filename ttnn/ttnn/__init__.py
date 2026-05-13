@@ -458,6 +458,7 @@ from ttnn.operations.matmul import (
     MatmulMultiCoreReuseOptimizedProgramFactory,
     create_matmul_attributes,
 )
+from ttnn.operations import matmul_auto_tune  # noqa: F401
 
 from ttnn.operations.normalization import (
     SoftmaxProgramConfig,
