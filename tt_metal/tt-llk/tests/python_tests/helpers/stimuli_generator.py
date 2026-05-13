@@ -70,10 +70,10 @@ def generate_random_face(
         return _generate_mxfp4_face(
             size, const_face, const_value, sfpu, negative_values
         )
-    elif stimuli_format == DataFormat.MxInt8:
-        # MxInt8 stimuli generation (no subnormal exclusion — MxInt has none)
-        return _generate_mxint8_face(
-            size, const_face, const_value, sfpu, negative_values
+    elif stimuli_format in (DataFormat.MxInt8, DataFormat.MxInt4):
+        # MxInt stimuli generation (no subnormal exclusion — MxInt has none)
+        return _generate_mxint_face(
+            stimuli_format, size, const_face, const_value, sfpu, negative_values
         )
     elif stimuli_format not in (DataFormat.Bfp8_b, DataFormat.Bfp4_b):
         if stimuli_format.is_integer():
@@ -220,24 +220,26 @@ def _generate_mxfp4_face(size, const_face, const_value, sfpu, negative_values=Fa
     return _exclude_mx_subnormals(face_data, DataFormat.MxFp4)
 
 
-def _generate_mxint8_face(size, const_face, const_value, sfpu, negative_values=False):
+def _generate_mxint_face(
+    stimuli_format, size, const_face, const_value, sfpu, negative_values=False
+):
     """
-    Generate test data for MxInt8 format (signed S1.6 with implicit 2^-6 scale + E8M0 block exp).
+    Generate test data for any MxInt format (signed 2's-complement with implicit
+    power-of-2 scale + E8M0 block exp).
 
-    MxInt8 OCP semantics:
-    - Element range (symmetric): ±127/64 ≈ ±1.984375
-    - Smallest representable nonzero magnitude: 1/64 ≈ 0.015625
-    - No NaN, no Inf, no subnormals
+    Per-format ranges (symmetric):
+    - MxInt8 (S1.6, 2^-6 scale): ±127/64 ≈ ±1.984, smallest |v|>0 is 1/64.
+    - MxInt4 (S1.2, 2^-2 scale): ±7/4 = ±1.75,   smallest |v|>0 is 1/4.
 
-    Uses a normal distribution scaled to 50% of max to avoid heavy saturation while
-    keeping good coverage of the representable range. No subnormal exclusion is
-    needed since MxInt has no subnormal regime — sub-1/64 values simply quantize
-    toward zero, which is a valid representable value.
+    No NaN, no Inf, no subnormals. Uses a normal distribution at 50% of the
+    format's max magnitude to give good representable-range coverage without
+    heavy saturation. No subnormal exclusion is needed since MxInt has no
+    subnormal regime — sub-step values quantize toward zero, which is valid.
     """
     if const_face:
         return torch.ones(size, dtype=torch.bfloat16) * const_value
 
-    scale = 0.5 * MX_INT_MAX[DataFormat.MxInt8]  # ≈ 0.992
+    scale = 0.5 * MX_INT_MAX[stimuli_format]
     face_data = torch.randn(size, dtype=torch.bfloat16) * scale
 
     if not negative_values:

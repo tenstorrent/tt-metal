@@ -49,6 +49,7 @@ from helpers.utils import passed_test
             DataFormat.Float16,
             DataFormat.MxFp4,
             DataFormat.MxInt8,
+            DataFormat.MxInt4,
         ],
     ),
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
