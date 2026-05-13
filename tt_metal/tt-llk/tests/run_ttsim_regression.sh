@@ -225,7 +225,11 @@ PYTEST_BASE_ARGS=(
     --run-simulator
     --timeout="$TIMEOUT"
     --forked
-    --show-progress
+    # --show-progress dropped: the in-tree JSONL hook in conftest.py
+    # (commit 0b899ae9291) writes one line per test outcome to
+    # /tmp/tt-llk-progress.jsonl, which is `tail -f`-able and doesn't pay
+    # the controller-side memory cost of pytest-progress's
+    # ProgressTerminalReporter accumulating 37K outcomes in lists.
     -m "not quasar and not nightly and not perf"
     --junit-xml="$XML_PATH"
     # ttsim writes via printf (stdout), so caplog and stderr are always
@@ -247,7 +251,15 @@ PYTEST_BASE_ARGS=(
 if [[ "$WORKERS" -gt 0 ]]; then
     PYTEST_BASE_ARGS+=(
         -n "$WORKERS"
-        --dist=loadfile
+        # worksteal (xdist 3.8+) distributes tests evenly then redistributes
+        # from busy workers when others idle — fixes the long-tail-file
+        # bottleneck that loadfile creates with parametrize-heavy classes
+        # (test_zzz_eltwise_binary, test_matmul, etc.). Cross-file build
+        # races were already defended at the test_config level by
+        # build_shared_artefacts' FileLock + done-marker stat-guard
+        # (see commits c2b04f5d5dd and fe282aa29ae), so loadfile's
+        # belt-AND-braces overkill no longer pays for itself.
+        --dist=worksteal
         --max-worker-restart=10000
     )
 fi
