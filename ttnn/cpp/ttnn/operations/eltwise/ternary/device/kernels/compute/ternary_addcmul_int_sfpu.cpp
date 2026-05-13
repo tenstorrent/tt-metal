@@ -16,7 +16,7 @@ namespace {
 template <DataFormat DF, compute_kernel_lib::Dst In0, compute_kernel_lib::Dst In1, compute_kernel_lib::Dst Out>
 struct MulIntInPlace : compute_kernel_lib::DestOnlyTag {
     static ALWI void init() { mul_int_tile_init<DF>(); }
-    static ALWI void exec() {
+    ALWI void exec(uint32_t /*i*/, uint32_t /*slot_offset*/) const {
         mul_int_tile<DF>(
             compute_kernel_lib::to_u32(In0), compute_kernel_lib::to_u32(In1), compute_kernel_lib::to_u32(Out));
     }
@@ -25,7 +25,7 @@ struct MulIntInPlace : compute_kernel_lib::DestOnlyTag {
 template <DataFormat DF, compute_kernel_lib::Dst In0, compute_kernel_lib::Dst In1, compute_kernel_lib::Dst Out>
 struct AddIntInPlace : compute_kernel_lib::DestOnlyTag {
     static ALWI void init() { add_int_tile_init(); }
-    static ALWI void exec() {
+    ALWI void exec(uint32_t /*i*/, uint32_t /*slot_offset*/) const {
         add_int_tile<DF>(
             compute_kernel_lib::to_u32(In0), compute_kernel_lib::to_u32(In1), compute_kernel_lib::to_u32(Out));
     }

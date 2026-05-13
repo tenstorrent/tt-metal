@@ -11,7 +11,6 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_block.hpp"
 
 namespace {
 // =============================================================================
@@ -39,7 +38,7 @@ struct BlockCopyTileStride3Cond : compute_kernel_lib::CopyTileTag {
     static ALWI void init() { copy_tile_to_dst_init_short(Cb); }
     ALWI void wait_per_tile(uint32_t /*i*/) const { cb_wait_front(Cb, BlockSize); }
     ALWI void wait_upfront(uint32_t /*n*/) const {}
-    ALWI void exec(uint32_t /*i*/) const {
+    ALWI void exec(uint32_t /*i*/, uint32_t /*slot_offset*/) const {
         for (uint32_t j = 0; j < BlockSize; ++j) {
             copy_tile(Cb, j, j * 3);
         }
@@ -70,7 +69,7 @@ struct LocalWhereStage : compute_kernel_lib::CopyTileTag {
     static ALWI void init() { copy_tile_to_dst_init_short(CbTensor); }
     ALWI void wait_per_tile(uint32_t /*i*/) const {}
     ALWI void wait_upfront(uint32_t /*n*/) const {}
-    ALWI void exec(uint32_t /*i*/) const {
+    ALWI void exec(uint32_t /*i*/, uint32_t /*slot_offset*/) const {
         for (uint32_t j = 0; j < BlockSize; ++j) {
 #if WHERE_TTS
             copy_tile(CbTensor, j, j * 3 + 1);
@@ -110,7 +109,7 @@ struct BlockPackTileStride3 : compute_kernel_lib::PackTileTag {
     static ALWI void init() {}
     ALWI void reserve_per_tile(uint32_t /*i*/) const { cb_reserve_back(Cb, BlockSize); }
     ALWI void reserve_upfront(uint32_t /*n*/) const {}
-    ALWI void exec(uint32_t /*i*/) const {
+    ALWI void exec(uint32_t /*i*/, uint32_t /*slot_offset*/) const {
         for (uint32_t j = 0; j < BlockSize; ++j) {
             pack_tile(j * 3, Cb, j);
         }

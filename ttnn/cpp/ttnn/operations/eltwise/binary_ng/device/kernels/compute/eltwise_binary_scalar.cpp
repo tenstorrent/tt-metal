@@ -10,7 +10,6 @@
 #include "eltwise_utils.hpp"
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_block.hpp"
 
 void kernel_main() {
     using namespace compute_kernel_lib;

@@ -11,7 +11,6 @@
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_block.hpp"
 
 namespace {
 template <uint32_t Cb, compute_kernel_lib::Dst DstSlot>
@@ -32,7 +31,9 @@ struct LocalLoadTile : compute_kernel_lib::CopyTileTag {
     static ALWI void init() { copy_tile_init(Cb); }
     ALWI void wait_per_tile(uint32_t /*i*/) const {}
     ALWI void wait_upfront(uint32_t /*n*/) const {}
-    ALWI void exec(uint32_t /*i*/) const { copy_tile(Cb, 0, compute_kernel_lib::to_u32(DstSlot)); }
+    ALWI void exec(uint32_t /*i*/, uint32_t /*slot_offset*/) const {
+        copy_tile(Cb, 0, compute_kernel_lib::to_u32(DstSlot));
+    }
     ALWI void pop_per_tile(uint32_t /*i*/) const {}
     ALWI void pop_upfront_end(uint32_t /*n*/) const {}
 };
@@ -42,7 +43,7 @@ struct LocalTernarySfpuStage : compute_kernel_lib::DestOnlyTag {
     static constexpr bool clashes_with_fpu = false;
     static constexpr uint32_t block_size = 1;
     static ALWI void init() { TERNARY_SFPU_OP_INIT(); }
-    static ALWI void exec() { TERNARY_SFPU_OP_FUNC(0, 1, 2, 0); }
+    ALWI void exec(uint32_t /*i*/, uint32_t /*slot_offset*/) const { TERNARY_SFPU_OP_FUNC(0, 1, 2, 0); }
 };
 }  // namespace
 

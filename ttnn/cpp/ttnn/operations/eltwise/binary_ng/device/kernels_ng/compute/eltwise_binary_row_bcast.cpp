@@ -13,7 +13,6 @@
 #include "experimental/circular_buffer.h"
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_block.hpp"
 
 namespace eltwise_binary_kernel_detail {
 template <ckernel::EltwiseBinaryType T>
@@ -96,21 +95,20 @@ void kernel_main() {
         exp_cb_post_rhs.wait_front(num_tiles_per_cycle);
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))
-        // ---- Migrated stage: BlockBinaryFpu + BlockPackTile (no-activations path).
+        // ---- Migrated stage: streaming BinaryFpu + PackTile (auto-block infra).
         //      CB lifecycle for inputs is owned by the outer scope (PREPROCESS / cb_post_*).
-        using BinElt = BlockBinaryFpu<
+        using BinElt = BinaryFpu<
             cb_post_lhs,
             cb_post_rhs,
+            cb_out,
             FPU_OP,
-            num_tiles_per_cycle,
-            Dst::D0,
             BroadcastDim::None,
             BinaryDataFormatReconfig::None,
             CopyTilePolicy::NoWaitNoPop,
             CopyTilePolicy::NoWaitNoPop>;
-        using PackElt = BlockPackTile<cb_out, num_tiles_per_cycle>;
-        // BlockBinaryFpu::init() emits the appropriate add/sub/mul_tiles_init internally.
-        eltwise_chain(1u, BinElt{}, PackElt{});
+        using PackElt = PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>;
+        // BinaryFpu::init() emits the appropriate add/sub/mul_tiles_init internally.
+        eltwise_chain(num_tiles_per_cycle, BinElt{}, PackElt{});
 #else
         // Activations path — keep raw (PROCESS_POST_ACTIVATIONS macro injection).
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);

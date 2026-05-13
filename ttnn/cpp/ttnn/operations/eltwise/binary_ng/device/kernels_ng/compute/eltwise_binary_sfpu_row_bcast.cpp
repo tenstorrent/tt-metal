@@ -30,7 +30,6 @@
 #include "experimental/circular_buffer.h"
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_block.hpp"
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
 namespace {
@@ -54,7 +53,7 @@ struct BlockCopyTileStride2Lhs : compute_kernel_lib::CopyTileTag {
     static ALWI void init() { copy_tile_to_dst_init_short_with_dt(OldCb, Cb); }
     ALWI void wait_per_tile(uint32_t /*i*/) const {}
     ALWI void wait_upfront(uint32_t /*n*/) const {}
-    ALWI void exec(uint32_t /*i*/) const {
+    ALWI void exec(uint32_t /*i*/, uint32_t /*slot_offset*/) const {
         for (uint32_t j = 0; j < BlockSize; ++j) {
             copy_tile(Cb, j, j * 2);
         }
@@ -82,7 +81,7 @@ struct BlockCopyTileStride2Rhs : compute_kernel_lib::CopyTileTag {
     static ALWI void init() { copy_tile_to_dst_init_short_with_dt(OldCb, Cb); }
     ALWI void wait_per_tile(uint32_t /*i*/) const {}
     ALWI void wait_upfront(uint32_t /*n*/) const {}
-    ALWI void exec(uint32_t /*i*/) const {
+    ALWI void exec(uint32_t /*i*/, uint32_t /*slot_offset*/) const {
         for (uint32_t j = 0; j < BlockSize; ++j) {
             copy_tile(Cb, j, j * 2 + 1);
         }
@@ -97,7 +96,7 @@ struct LocalBlockSfpuBinary : compute_kernel_lib::DestOnlyTag {
     static constexpr bool clashes_with_fpu = false;
     static constexpr uint32_t block_size = BlockSize;
     static ALWI void init() {}  // BINARY_SFPU_INIT done at kernel top
-    static ALWI void exec() {
+    ALWI void exec(uint32_t /*i*/, uint32_t /*slot_offset*/) const {
         for (uint32_t j = 0; j < BlockSize; ++j) {
             BINARY_SFPU_OP(j * 2, j * 2 + 1, j * 2);
         }
@@ -114,7 +113,7 @@ struct BlockPackTileStride2 : compute_kernel_lib::PackTileTag {
     static ALWI void init() {}
     ALWI void reserve_per_tile(uint32_t /*i*/) const {}  // outer scope reserves
     ALWI void reserve_upfront(uint32_t /*n*/) const {}
-    ALWI void exec(uint32_t /*i*/) const {
+    ALWI void exec(uint32_t /*i*/, uint32_t /*slot_offset*/) const {
         for (uint32_t j = 0; j < BlockSize; ++j) {
             pack_tile(j * 2, Cb, j);
         }

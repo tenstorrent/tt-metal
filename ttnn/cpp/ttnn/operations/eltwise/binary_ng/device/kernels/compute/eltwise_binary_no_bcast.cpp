@@ -10,7 +10,6 @@
 #include "eltwise_utils.hpp"
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_block.hpp"
 
 namespace eltwise_binary_kernel_detail {
 template <ckernel::EltwiseBinaryType T>
@@ -93,32 +92,13 @@ void kernel_main() {
         process_tiles(remainder);
     }
 #else
-    // No-activations fast path — block-mode chain.
-    using BinElt = BlockBinaryFpu<cb_post_lhs, cb_post_rhs, FPU_OP, num_tiles_per_cycle>;
-    using PackElt = BlockPackTile<cb_out, num_tiles_per_cycle>;
-
-    const uint32_t num_blocks = num_tiles / num_tiles_per_cycle;
-    eltwise_chain(num_blocks, BinElt{}, PackElt{});
-
-    const uint32_t remaining = num_tiles % num_tiles_per_cycle;
-    if (remaining > 0) {
-        binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
-        cb_wait_front(cb_post_lhs, remaining);
-        cb_wait_front(cb_post_rhs, remaining);
-        cb_reserve_back(cb_out, remaining);
-        tile_regs_acquire();
-        for (uint32_t i = 0; i < remaining; ++i) {
-            BINARY_OP(cb_post_lhs, cb_post_rhs, i, i, i);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t i = 0; i < remaining; ++i) {
-            pack_tile(i, cb_out);
-        }
-        tile_regs_release();
-        cb_push_back(cb_out, remaining);
-        cb_pop_front(cb_post_lhs, remaining);
-        cb_pop_front(cb_post_rhs, remaining);
-    }
+    // No-activations fast path — streaming chain over all tiles. Per-tile streaming
+    // (WaitAndPop) preserves reader-pushes-one-at-a-time semantics from prior block
+    // model; num_tiles_per_cycle is unused.
+    (void)num_tiles_per_cycle;
+    using BinElt =
+        BinaryFpu<cb_post_lhs, cb_post_rhs, cb_out, FPU_OP, BroadcastDim::None, BinaryDataFormatReconfig::None>;
+    using PackElt = PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>;
+    eltwise_chain(num_tiles, BinElt{}, PackElt{});
 #endif
 }

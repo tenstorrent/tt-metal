@@ -7,14 +7,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
-
-// Migrated stages: per-tile UnaryBcast<Scalar> + PackTile body.
-// Skipped stages: irregular outer (n, c) iteration with `num_tiles_read += HtWt - start_t` (one
-// input/output tile contributes more than 1 to the counter). Outer flow stays raw.
 void kernel_main() {
-    using namespace compute_kernel_lib;
-
     uint32_t arg_index = 0;
     uint32_t start_n = get_arg_val<uint32_t>(arg_index++);
     uint32_t start_c = get_arg_val<uint32_t>(arg_index++);
@@ -31,15 +24,24 @@ void kernel_main() {
 
     constexpr auto cb_id_src = get_compile_time_arg_val(0);
     constexpr auto cb_id_dst = get_compile_time_arg_val(1);
+    unary_bcast_init<BroadcastType::SCALAR>(cb_id_src, cb_id_dst);
 
     uint32_t HtWt = Ht * Wt;
     uint32_t num_tiles_read = 0;
     for (uint32_t n = start_n; n < N && num_tiles_read < num_tiles; ++n, start_c = 0) {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_t = 0) {
-            eltwise_chain(
-                1u,
-                UnaryBcast<BroadcastDim::Scalar, cb_id_src, cb_id_dst, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-                PackTile<cb_id_dst, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+            cb_wait_front(cb_id_src, 1);
+            tile_regs_acquire();
+            unary_bcast<BroadcastType::SCALAR>(cb_id_src, 0, 0);
+            tile_regs_commit();
+
+            cb_pop_front(cb_id_src, 1);
+            cb_reserve_back(cb_id_dst, 1);
+            tile_regs_wait();
+            pack_tile(0, cb_id_dst);
+
+            cb_push_back(cb_id_dst, 1);
+            tile_regs_release();
             num_tiles_read += HtWt - start_t;
         }
     }
