@@ -829,19 +829,6 @@ def main() -> None:
         """TTNN staging: never call ``.numpy()`` on tensors that may still require grad."""
         return t.detach().to(dtype=torch.float32).cpu().contiguous().numpy()
 
-    cfg_lo = float(args.cfg_interval_start)
-    cfg_hi = float(args.cfg_interval_end)
-
-    def _apply_cfg(
-        t_curr: float,
-        xt: Any,
-        vt_cond: Any,
-        vt_uncond: Any,
-    ) -> Any:
-        if cfg_lo <= t_curr <= cfg_hi:
-            return vt_uncond + float(gs) * (vt_cond - vt_uncond)
-        return vt_cond
-
     pred_latents: Any = None
     wav_bct_cpu: Any = None
 
