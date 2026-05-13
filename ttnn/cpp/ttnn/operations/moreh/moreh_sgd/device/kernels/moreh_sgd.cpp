@@ -6,7 +6,6 @@
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
-    CircularBuffer cb_grad_tmp_obj(cb_grad_tmp);
     constexpr auto cb_param_in = tt::CBIndex::c_0;
     constexpr auto cb_grad = tt::CBIndex::c_1;
     constexpr auto cb_momentum_in = tt::CBIndex::c_2;
@@ -74,6 +73,7 @@ void kernel_main() {
 #else
 // have to pop cb_grad_tmp
 #if defined(MOMENTUM_INITIALIZED)
+        CircularBuffer cb_grad_tmp_obj(cb_grad_tmp);
         cb_grad_tmp_obj.pop_front(1);
 #else
 // not pop this case because `cb_momentum_tmp == cb_grad_tmp`
