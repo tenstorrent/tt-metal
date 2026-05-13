@@ -516,3 +516,147 @@ Real blockers are missing **policies** (cumulative wait, in-DEST hold, mid-loop 
 - Missing primitive — LLK call doesn't exist yet.
 - Index mode the helper doesn't support (per §2.7) — add the mode rather than skipping, unless the mode itself requires new primitives.
 - Macro-injection (per §10.1) — the only "skip permanently" category.
+
+## 11. CB lifecycle ordering — wait late, pop early; reserve late, push early
+
+CB sync primitives are idempotent and cheap. The right place to emit them is the position that **maximizes producer/consumer overlap** and **enables in-place reuse of CB slots**:
+
+- **Wait as late as possible.** The latest valid wait position is the instruction just before the unpacker reads the tile. Earlier waits force the consumer to block when the data isn't strictly needed yet.
+- **Pop as early as possible.** The earliest valid pop position is the instruction right after the unpacker stops reading. Earlier pop frees the slot for the producer to refill, enabling in-place writes when consumer and producer share the CB.
+- **Reserve as late as possible.** The latest valid reserve position is right before `pack_tile`. Earlier reserves hold the slot longer than needed and block producers writing into the CB upstream.
+- **Push as early as possible.** The earliest valid push position is right after `pack_tile` (before `tile_regs_release`). Earlier push lets the downstream consumer wake on the new tile while the current iteration is still tearing DEST down.
+
+The pair `pop early + reserve late` is what enables an **in-place CB**: the consumer pops slot N, freeing it, and the producer (or a later step in the same kernel) reserves slot N for write — same physical slot, no second buffer. The four-rule discipline is the minimal contract for in-place lifecycles.
+
+### Per wait-shape positioning
+
+All three wait shapes are emitted **inside** the per-tile loop. Upfront and cumulative shapes are NOT moved to a pre-loop block — `cb_wait_front` is cumulative-count idempotent so calling it in-loop is correct, and emitting late ensures no premature blocking on tiles a later loop iteration may not even reach if an outer condition exits early.
+
+| Wait shape | Where to emit | Argument shape |
+|---|---|---|
+| Per-tile | inside the loop, just before the unpacker uses the tile | `cb_wait_front(cb, 1)` |
+| Cumulative | inside the loop, just before the unpacker uses the tile range | `cb_wait_front(cb, i+1)` (or `base + (i+1)*step`) |
+| Upfront | inside the loop, just before the unpacker first reads tile 0 — on iter 0 blocks for full N tiles, iter 1+ returns immediately (cumulative-count idempotent) | `cb_wait_front(cb, N)` |
+
+Same logic for pop / reserve / push: emit at the latest-still-valid (or earliest-still-valid for pop/push) position. The wait shape determines what's waited; the *position* in the loop is independent and follows the late/early rules above.
+
+The historical pattern of emitting `cb_wait_front(cb, N)` once **before** the per-tile loop is functionally equivalent for the N-tile case but is strictly less overlap-friendly: a producer running ahead by k < N tiles can't start filling the CB while the consumer is already computing on the k tiles that did arrive, because the consumer is still blocked on tile N. Moving the wait inside the loop (with full count N on every iter) recovers that overlap for free — the wait short-circuits once the producer has caught up, and the producer wasn't blocked from pushing in the meantime.
+
+### Concrete example
+
+Streaming-friendly bcast-Sub (softmax phase 2-style):
+
+```cpp
+// boot — caller's responsibility, NOT in the per-tile loop:
+binary_op_init_common(cb_input, cb_max_scaler, cb_output);
+
+for (uint32_t i = 0; i < N; ++i) {
+    cb_wait_front(cb_input, N);              // wait late (in-loop), upfront count — idempotent
+    cb_wait_front(cb_max, 1);                // wait late, single-tile
+
+    tile_regs_acquire();
+    sub_bcast_cols_init_short_with_dt(cb_input, cb_max);
+    sub_tiles_bcast<BroadcastType::COL>(cb_input, cb_max, /*a_idx=*/i, /*b_idx=*/0, /*dst=*/0);
+    exp_tile_init();
+    exp_tile(0);
+    tile_regs_commit();
+
+    tile_regs_wait();
+
+    cb_reserve_back(cb_exp, 1);              // reserve late — right before pack
+    pack_tile(0, cb_exp);
+    cb_push_back(cb_exp, 1);                 // push early — right after pack
+    tile_regs_release();
+}
+
+cb_pop_front(cb_input, N);                   // pop at end (CB lives across phases)
+cb_pop_front(cb_max, 1);
+```
+
+Three wins over a pre-loop-wait shape:
+1. Reader pushing tile `k < N` of `cb_input` is not blocked by the consumer — `cb_wait_front(cb_input, N)` short-circuits on iter 1+, reader pushes proceed in parallel with compute on tiles `[0..k]`.
+2. `cb_reserve_back` is the LAST thing before pack, so a producer writing to `cb_exp` from another core/phase has the maximum window to do so.
+3. `cb_push_back` runs before `tile_regs_release`, so the downstream consumer (Phase 3 SUM reduce) can start waking on `cb_exp[i]` while DEST is still being released.
+
+### Helper compliance
+
+Every chain element's `wait_per_tile` / `wait_upfront` / `pop_per_tile` / `pop_upfront_end` / `reserve_per_tile` / `reserve_upfront` / `push_per_tile` / `push_at_end` is emitted at the loop position prescribed by these rules. The chain framework calls them at the right loop position; the element gates by its own policy and emits no-op when not applicable.
+
+A helper that emits `cb_wait_front` early (e.g. at chain boot, before the loop) for an upfront-policy CB is correct but suboptimal — leaves overlap on the table. The current chain code does exactly this for `WaitUpfrontPopAtEnd` via the boot-time `elem_wait_upfront` fold. Moving it inside the loop (at the late-as-possible position) is the structural overlap fix that supersedes a separate `Cumulative` policy for most real cases.
+
+### Granularity — "loop iter" is the unit of work, not always a single tile
+
+The wait-late / pop-early / reserve-late / push-early rules apply at whatever **granularity** the chain's loop body operates on. The "tile" in the rules above is shorthand for "one acquire/commit/wait/release cycle's worth of work". Eltwise chains see only two granularities; everything else lives in the outer kernel.
+
+| Chain granularity | One chain-loop iter processes | Example families |
+|---|---|---|
+| **Tile** | 1 tile in 1 DEST slot | eltwise unary/binary, ternary, copy/transpose, the bulk of the chain inventory |
+| **DEST-batch** | N (>1) tiles into N DEST slots, indexed inside one acquire | binary-ng block paths, bcast, CCL reduction inner loops, rotary embedding |
+
+Restated four rules:
+
+- **Tile granularity** — unit = 1 tile. Wait per-tile inside loop; pop per-tile right after unpack stops; reserve per-tile right before pack; push per-tile right after pack. **§11 verbatim.**
+- **DEST-batch granularity** — unit = the batch of N tiles. Wait for `cb, N` once **inside** the outer iter (idempotent, so still in-loop-late); pop `cb, N` once after the last unpack of the batch (not after each tile — popping mid-batch shifts indices and corrupts indexed reads); reserve `out, N` once before the first pack of the batch; push `out, N` once after the last pack. **Per-tile waits/pops inside the inner batch loop are illegal.**
+
+
+### Acquire / commit / wait / release sit AT the granularity boundary
+
+`tile_regs_acquire` and `tile_regs_release` mark the unit-of-work boundary. Everything between them is "this iteration"; wait/reserve/pop/push positions are computed relative to that window:
+
+- **Wait late** = last position before the unpacker (inside acquire window) first reads.
+- **Pop early** = first position after the unpacker (inside acquire window) last reads.
+- **Reserve late** = last position before pack (after `tile_regs_wait`).
+- **Push early** = first position after pack (before `tile_regs_release`).
+
+When the acquire/release window wraps multiple tiles (DEST-batch), "first read" and "last read" are over the WHOLE window — wait sits at the top of the batch iter, pop at the bottom of the batch iter, reserve at start of pack phase, push at end.
+
+### Per-CB policy — how each input CB declares its lifecycle
+
+Granularity sets the loop unit; **per-CB policy** sets each input CB's lifecycle shape WITHIN that unit. Each input CB picks one independently.
+
+The chain already encodes this as `CopyTilePolicy` (misnamed — the same enum is consumed by every CB-reader chain element: `CopyTile`, both sides of `BinaryFpu`, `DestReuseBinary`, `UnaryBcast`. Rename to `CbReaderPolicy` planned).
+
+Wait shape × Pop shape is a true cartesian. Each axis is independent:
+
+| Wait shape | Pop shape | Enum value | Use case |
+|---|---|---|---|
+| per-tile `cb_wait_front(cb, 1)` | per-tile `cb_pop_front(cb, 1)` | `WaitAndPop` | Streaming producer/consumer in lock-step. The default. |
+| per-tile, idempotent | none in this chain | `WaitNoPop` | Pinned single-tile operand (scaler, mask, bcast tile). Caller or a later step pops. Used for fan-out FIRST loader (first reader of a shared CB waits; subsequent readers `NoWaitPop`). |
+| none | per-tile | `NoWaitPop` | Fan-out LAST loader (someone already waited; this loader pops). Or pre-waited streaming (caller waited outside, this chain pops). |
+| none | none | `NoWaitNoPop` | Caller owns the full lifecycle. CB persistent across multiple chain calls. Sharded tensors. Softmax `cb_input` reused Phase 1 → Phase 2 chain → kernel pops at end of row. |
+| upfront `cb_wait_front(cb, N)` | bulk `cb_pop_front(cb, N)` at end | `WaitUpfrontPopAtEnd` | Block-at-a-time access via `BlockIter` index. The wait-late amendment moves the upfront wait INSIDE the loop (idempotent), recovering producer/consumer overlap. End-of-loop bulk pop stays. |
+
+What this enum buys over a flatter "4 semantic policies" collapse:
+
+1. **Fan-out**: `WaitNoPop` + `NoWaitPop` paired on the same CB lets element A wait once, element B pop once. Cleaner than both elements either waiting or popping. Two same-CB elements with conflicting policies is the chain author's bug (the lessons file §2.1 calls this out).
+2. **Fan-out-second + streaming**: `NoWaitPop` on a CB that the caller pre-waited but the chain still pops per-tile — a real shape used by sharded ops.
+3. **Per-side independent on `BinaryFpu`**: A-side `WaitUpfrontPopAtEnd` + B-side `WaitNoPop` (softmax phase 2). Two independent CBs in one element, each with its own (wait, pop) pair.
+4. **Index-mode constraint**: only `WaitUpfrontPopAtEnd` and `NoWaitNoPop` stage a multi-tile window that justifies `BlockIter`/`Absolute` indexing. Other shapes are `FirstTile`-only. The enum captures this constraint directly.
+
+The missing useful cell is **Cumulative**: per-iter `cb_wait_front(cb, i+1)` (or `base + (i+1)*step`) with bulk pop at end. Note that the *naive* "streaming wait + bulk pop" shape — per-iter `cb_wait_front(cb, 1)` without pop — is NOT a new policy: with no pop between iters, the CB front never moves, so `cb_wait_front(cb, 1)` returns the same tile-0-present answer every call and adds zero new blocking. For `BlockIter`-style indexed access at iter i, the wait must grow with i; only the cumulative shape pipelines correctly.
+
+Today this shape is hand-rolled by callers outside the chain. Adding `CumulativeWaitPopAtEnd` (or equivalent) as an enum value covers the gap. The mechanical effect of moving `cb_wait_front(cb, N)` from boot-time into the per-iter loop (the late-wait amendment for `WaitUpfrontPopAtEnd`) is functionally equivalent when N is constant: `cb_wait_front(cb, N)` is also idempotent, blocks once on iter 0 until N tiles present, no-op thereafter. The distinction:
+
+| Shape | Per-iter wait call | Blocks until |
+|---|---|---|
+| `WaitUpfrontPopAtEnd` (late-emitted) | `cb_wait_front(cb, N)` | full N tiles present (heavyweight block on iter 0) |
+| `CumulativeWaitPopAtEnd` | `cb_wait_front(cb, i+1)` | just `i+1` tiles present (per-iter incremental block) |
+
+Both pop bulk at end. Both allow `BlockIter`. The cumulative shape lets the consumer start computing on tile 0 as soon as tile 0 is pushed, regardless of whether tiles 1..N-1 have arrived. The constant-count shape waits for all N before iter 0 can start.
+
+### Where the four rules forbid what looks like a legal optimization
+
+Two traps when applying the rules at Tile granularity to DEST-batch chains:
+
+1. **Per-tile pop inside DEST-batch** — looks like "pop early" but the CB front moves underfoot. Indexed reads of the remaining batch tiles return wrong data. Correct: batch-granular bulk pop after the last unpack.
+2. **Per-tile reserve inside DEST-batch output** — looks like "reserve late" but reserving 1 tile when N tiles will pack into N consecutive slots produces partial reservation. Correct: bulk reserve of N before the pack loop.
+
+The trap is the same one in both directions: confusing the chain's INTERNAL DEST batch loop (inner) with the chain's OUTER iter (outer). Lifecycle ops sit at the OUTER iter, never inside the inner DEST loop.
+
+### Helper compliance — granularity- and policy-aware
+
+A chain element's lifecycle methods MUST declare both:
+1. Its **granularity** (Tile or DEST-batch) — drives where the chain framework emits the method (per-inner-tile or per-batch-iter).
+2. Each CB's `CopyTilePolicy` value (rename pending → `CbReaderPolicy`) — drives whether the method fires at all and with what args.
+
+The chain framework's job is to call each method at the right loop position. The element's job is to gate by policy and emit no-op when not applicable. The four lifecycle rules bind unchanged across all granularity × policy combinations.
