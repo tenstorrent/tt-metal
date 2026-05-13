@@ -24,8 +24,7 @@ from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_confi
 TT_METAL_HOME = os.environ.get("TT_METAL_HOME")
 if not TT_METAL_HOME:
     raise EnvironmentError("TT_METAL_HOME environment variable is not set")
-CHECKPOINT_NAME = os.environ.get("PI0_CHECKPOINT", "pi0_base")
-CHECKPOINT_PATH = os.path.join(TT_METAL_HOME, "models/experimental/pi0/weights", CHECKPOINT_NAME)
+CHECKPOINT_PATH = os.path.join(TT_METAL_HOME, "models/experimental/pi0/weights/pi0_base")
 
 
 def create_pi0_pipeline_model(ttnn_model, device, inputs):
@@ -113,8 +112,8 @@ def create_test_inputs(config: PI0ModelConfig, device, batch_size: int = 1):
     "device_params",
     [
         {
-            "l1_small_size": 24576,
-            "trace_region_size": 80000000,
+            "l1_small_size": 16384,
+            "trace_region_size": 40000000,
             "num_command_queues": 2,
         }
     ],
@@ -177,8 +176,8 @@ def test_perf_pi0_ttnn(device, num_iterations, batch_size, expected_compile_time
 
     run_model = create_pi0_pipeline_model(model_ttnn, device, inputs)
 
-    # 2CQ with overlapped input (trace disabled - model allocates KV buffers internally)
-    config = PipelineConfig(use_trace=False, num_command_queues=2, all_transfers_on_separate_command_queue=False)
+    # Create pipeline configuration with 2CQ + Trace enabled
+    config = PipelineConfig(use_trace=True, num_command_queues=2, all_transfers_on_separate_command_queue=False)
     pipeline = create_pipeline_from_config(
         config,
         run_model,

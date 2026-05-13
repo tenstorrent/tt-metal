@@ -285,8 +285,7 @@ def main():
     print("\n🔌 Opening TTNN device...")
     device = ttnn.open_device(device_id=0)
     grid = device.compute_with_storage_grid_size()
-    arch = ttnn.get_arch_name()
-    print(f"✅ Device opened (arch: {arch}, grid: {grid.x}x{grid.y}, cores: {grid.x * grid.y})")
+    print(f"✅ Device opened (grid: {grid.x}x{grid.y})")
 
     try:
         _ = run_pi0_inference(

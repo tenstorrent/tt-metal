@@ -30,7 +30,6 @@ import torch
 import ttnn
 
 from models.experimental.pi0.common.configs import GemmaConfig
-from models.experimental.pi0.tt.ttnn_common import sdpa_prefill_chunk_sizes
 
 
 # ============================================================================
@@ -153,164 +152,6 @@ def precompute_freqs_cis_meta_format(
 
 
 # ============================================================================
-# Shared sharded-matmul program config helper
-# ============================================================================
-
-
-_pcfg_cache: Dict[Tuple[int, int, int, int, int, str], object] = {}
-
-
-def build_matmul_pcfg(
-    m_tiles: int,
-    k_tiles: int,
-    n_tiles: int,
-    grid_x: int,
-    grid_y: int,
-    *,
-    in0_block_w: Optional[int] = None,
-    activation=None,
-    dst_budget: int = 8,
-):
-    """Build a sharded-matmul program config.
-
-    For small M (suffix-side action expert: M=2 tiles), we'd waste rows of the
-    2D grid (only m_tiles of grid_y rows get work → 12×2 = 24 of 120 cores).
-    For these cases we return a 1D **width-sharded** config instead
-    (MatmulMultiCoreReuseMultiCast1DProgramConfig with mcast_in0=True), which
-    multicasts activations and spreads N across all 120 cores. That brings the
-    expert MLP/QKV/o_proj from ~22-24 cores to 60-120.
-
-    For larger M (VLM prefix: M=9 tiles, SigLIP: M=8 tiles) the 2D config
-    already uses 96-108 cores, so we keep it.
-
-    Tuned for Blackhole Galaxy (compute grid 12x10): use grid=(12,10) and
-    in0_block_w=4 for large MLP matmuls (CBs fit under the ~200 KB L1 headroom
-    left by trace-persistent KV cache buffers). For smaller attention matmuls,
-    pass in0_block_w=8.
-
-    Returns None if shapes don't admit a clean config.
-    """
-    if m_tiles == 0 or k_tiles == 0 or n_tiles == 0:
-        return None
-    total_cores = grid_x * grid_y
-
-    # --- 1D width-shard path: small M, big N -----------------------------
-    # When m_tiles is much smaller than grid_y, the 2D grid wastes rows.
-    # Switch to 1D width-shard so all 120 cores work on N slices.
-    if m_tiles * 4 <= grid_y and n_tiles >= total_cores // 4:
-        # Pick num_cores: largest divisor of n_tiles ≤ total_cores, and not
-        # smaller than half the grid (otherwise stick with 2D).
-        num_cores = min(total_cores, n_tiles)
-        while num_cores > total_cores // 2 and n_tiles % num_cores != 0:
-            num_cores -= 1
-        if n_tiles % num_cores != 0:
-            # No clean divisor available — fall back to ceil division on full grid
-            num_cores = total_cores
-            per_core_N_1d = (n_tiles + num_cores - 1) // num_cores
-        else:
-            per_core_N_1d = n_tiles // num_cores
-
-        # Choose in0_block_w for 1D (full M per core → larger CBs needed).
-        # 1D width-shard with small M (≤2 tiles) and small per_core_N (often 1-2)
-        # has tiny CBs — we can use a much larger block_w than the 2D default of
-        # 4-8 to reduce K-loop iterations. Cap at 16 to keep L1 happy when
-        # per_core_N is bigger (e.g. n_tiles=128, num_cores=64, per_core_N=2).
-        if in0_block_w is None:
-            in0_bw = 16
-        else:
-            in0_bw = in0_block_w
-        # Constrain by per_core_N for L1 safety: CB ~ in0_bw * per_core_N tiles.
-        while in0_bw > 1 and in0_bw * per_core_N_1d > 32:
-            in0_bw //= 2
-        while k_tiles % in0_bw != 0 and in0_bw > 1:
-            in0_bw //= 2
-        if in0_bw < 2:
-            in0_bw = 1
-
-        # DST budget: out_subblock_w * out_subblock_h ≤ dst_budget.
-        out_subblock_w_1d = min(per_core_N_1d, dst_budget)
-        while out_subblock_w_1d > 1 and per_core_N_1d % out_subblock_w_1d != 0:
-            out_subblock_w_1d -= 1
-        out_subblock_h_1d = max(1, dst_budget // out_subblock_w_1d)
-        out_subblock_h_1d = min(m_tiles, out_subblock_h_1d)
-        while out_subblock_h_1d > 1 and m_tiles % out_subblock_h_1d != 0:
-            out_subblock_h_1d -= 1
-
-        # Grid: num_cores arranged as (grid_x, ceil(num_cores/grid_x)).
-        cfg_gx = min(grid_x, num_cores)
-        cfg_gy = (num_cores + cfg_gx - 1) // cfg_gx
-
-        key = (m_tiles, k_tiles, n_tiles, grid_x, grid_y, str(activation), dst_budget, "1d")
-        if key in _pcfg_cache:
-            return _pcfg_cache[key]
-        cfg = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(cfg_gx, cfg_gy),
-            in0_block_w=in0_bw,
-            out_subblock_h=out_subblock_h_1d,
-            out_subblock_w=out_subblock_w_1d,
-            per_core_M=m_tiles,
-            per_core_N=per_core_N_1d,
-            fuse_batch=True,
-            fused_activation=activation,
-            mcast_in0=True,
-        )
-        _pcfg_cache[key] = cfg
-        return cfg
-
-    # --- 2D block-shard path (default, large M) --------------------------
-    per_core_M = (m_tiles + grid_y - 1) // grid_y
-    per_core_N = (n_tiles + grid_x - 1) // grid_x
-    if per_core_M == 0 or per_core_N == 0:
-        return None
-
-    # in0_block_w must divide K_tiles. SigLIP MLP has K=4304 padded to 4320
-    # (135 tiles) which doesn't divide cleanly into 4 or 2 — return None so
-    # caller falls back to the default core_grid path.
-    if in0_block_w is None:
-        # Adaptive choice: per_core_N drives CB size. block_w=8 is fastest
-        # but overflows L1 when per_core_N is large (CB ≈ block_w * per_core_N
-        # tiles, doubled for double-buffer). With pi0's trace KV pinning
-        # ~1.3 MB of L1, we have ~150 KB CB headroom per core.
-        # block_w=8 cap: per_core_N * 8 * 1024 * 2 ≤ 150 KB → per_core_N ≤ 9
-        if per_core_N <= 12:
-            in0_block_w = 8
-        else:
-            in0_block_w = 4
-    while k_tiles % in0_block_w != 0 and in0_block_w > 1:
-        in0_block_w //= 2
-    if in0_block_w == 1 and k_tiles > 32:
-        # Tiny block_w on a large K is unlikely to win — bail out.
-        return None
-
-    key = (m_tiles, k_tiles, n_tiles, grid_x, grid_y, str(activation), dst_budget)
-    if key in _pcfg_cache:
-        return _pcfg_cache[key]
-
-    # out_subblock_w * out_subblock_h <= dst_budget (DST register tile budget).
-    # fp32_dest_acc_en=True halves the budget to 4. bf16 dest accum allows 8.
-    out_subblock_w = min(per_core_N, dst_budget)
-    while out_subblock_w > 1 and per_core_N % out_subblock_w != 0:
-        out_subblock_w -= 1
-    out_subblock_h_budget = max(1, dst_budget // out_subblock_w)
-    out_subblock_h = min(per_core_M, out_subblock_h_budget)
-    while out_subblock_h > 1 and per_core_M % out_subblock_h != 0:
-        out_subblock_h -= 1
-
-    cfg = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(grid_x, grid_y),
-        in0_block_w=in0_block_w,
-        out_subblock_h=out_subblock_h,
-        out_subblock_w=out_subblock_w,
-        per_core_M=per_core_M,
-        per_core_N=per_core_N,
-        transpose_mcast=False,
-        fused_activation=activation,
-    )
-    _pcfg_cache[key] = cfg
-    return cfg
-
-
-# ============================================================================
 # Multi-Query Attention (TTNN - Optimized)
 # ============================================================================
 
@@ -350,11 +191,6 @@ class GemmaAttentionTTNN:
         self.layer_idx = layer_idx
         self.device = device
 
-        # Query device grid to use all available cores (P150: up to 13x10, N150: 8x8)
-        device_grid = device.compute_with_storage_grid_size()
-        self.grid_size = (device_grid.x, device_grid.y)
-        self.core_grid = ttnn.CoreGrid(y=device_grid.y, x=device_grid.x)
-
         # OPTIMIZATION: Use fused QKV weight (single linear instead of 3)
         self.wqkv = weights["self_attn.wqkv"]
         self.o_proj = weights["self_attn.o_proj.weight"]
@@ -383,14 +219,6 @@ class GemmaAttentionTTNN:
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
-        )
-
-        # SDPA compute config - HiFi2 sufficient for attention (matches tt_transformers)
-        self.compute_kernel_config_sdpa = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
         )
 
     def forward(
@@ -432,34 +260,18 @@ class GemmaAttentionTTNN:
 
         # OPTIMIZATION 1: Single fused QKV linear (instead of 3 separate)
         # Output: [batch, 1, seq, Q_dim + K_dim + V_dim]
-        # 2D BLOCK_SHARDED program_config (12x10 grid, in0_block_w=8 fits CBs since
-        # N_tiles=80 is small enough). Caching is by shape so the per-shape kernel
-        # is built once.
-        m_tiles = (seq_len + 31) // 32
-        k_tiles_in = self.hidden_size // 32
-        n_tiles_qkv = self.wqkv.shape[-1] // 32
-        wqkv_pcfg = build_matmul_pcfg(
-            m_tiles, k_tiles_in, n_tiles_qkv, self.grid_size[0], self.grid_size[1], in0_block_w=8
+
+        # Use WIDTH_SHARDED L1 memory config
+        xqkv = ttnn.linear(
+            hidden_states,
+            self.wqkv,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
         )
 
-        if wqkv_pcfg is not None:
-            xqkv = ttnn.linear(
-                hidden_states,
-                self.wqkv,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                compute_kernel_config=self.compute_kernel_config_hifi2,
-                program_config=wqkv_pcfg,
-            )
-        else:
-            xqkv = ttnn.linear(
-                hidden_states,
-                self.wqkv,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                compute_kernel_config=self.compute_kernel_config_hifi2,
-                core_grid=self.core_grid,
-            )
+        # Convert back to interleaved for nlp_create_qkv_heads
+        xqkv = ttnn.to_memory_config(xqkv, ttnn.L1_MEMORY_CONFIG)
 
         # OPTIMIZATION 2: Native TTNN head splitting (no PyTorch transfers!)
         # This splits the fused QKV into separate Q, K, V with proper head layout
@@ -504,26 +316,14 @@ class GemmaAttentionTTNN:
 
         new_cache = (k_rope, v) if use_cache else None
 
-        # SDPA chunk sizes aligned with models/tt_transformers/tt/model_config.py prefill defaults
-        kv_seq_len = k_rope.shape[2]
-        q_chunk, k_chunk = sdpa_prefill_chunk_sizes(seq_len, kv_seq_len)
-
-        sdpa_cfg = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.grid_size,
-            q_chunk_size=q_chunk,
-            k_chunk_size=k_chunk,
-            exp_approx_mode=True,
-        )
-
+        # Use TTNN scaled dot product attention
         attn_output = ttnn.transformer.scaled_dot_product_attention(
             q_rope,
             k_rope,
             v,
             attn_mask=attention_mask,
-            is_causal=False,
+            is_causal=False,  # Mask handles causality
             scale=self.scale,
-            program_config=sdpa_cfg,
-            compute_kernel_config=self.compute_kernel_config_sdpa,
         )
 
         # OPTIMIZATION 4: Native TTNN head concatenation (no PyTorch transfers!)
@@ -533,29 +333,14 @@ class GemmaAttentionTTNN:
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-        # Output projection — 2D BLOCK_SHARDED program config.
-        # K = num_heads*head_dim (concatenated heads), N = hidden_size.
-        oproj_k = (self.num_heads * self.head_dim) // 32
-        oproj_n = self.hidden_size // 32
-        oproj_pcfg = build_matmul_pcfg(m_tiles, oproj_k, oproj_n, self.grid_size[0], self.grid_size[1], in0_block_w=8)
-        if oproj_pcfg is not None:
-            output = ttnn.linear(
-                attn_concat,
-                self.o_proj,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                compute_kernel_config=self.compute_kernel_config_hifi2,
-                program_config=oproj_pcfg,
-            )
-        else:
-            output = ttnn.linear(
-                attn_concat,
-                self.o_proj,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                compute_kernel_config=self.compute_kernel_config_hifi2,
-                core_grid=self.core_grid,
-            )
+        # Output projection - use bfloat16 for residual add compatibility
+        output = ttnn.linear(
+            attn_concat,
+            self.o_proj,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
 
         # Reshape back to 3D: [batch, 1, seq, hidden] -> [batch, seq, hidden]
         output = ttnn.reshape(output, (batch_size, seq_len, self.hidden_size))
@@ -599,12 +384,12 @@ class GemmaMLPTTNN:
         self.config = config
         self.device = device
 
-        # Convert weights to TTNN as BF8_B for 2x DRAM bandwidth savings
+        # Convert weights to TTNN if they're PyTorch tensors
         def to_ttnn(w):
             if isinstance(w, torch.Tensor):
                 return ttnn.from_torch(
-                    w.T.contiguous(),
-                    dtype=ttnn.bfloat8_b,
+                    w.T.contiguous(),  # Transpose for linear
+                    dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
                     device=device,
                 )
@@ -613,33 +398,12 @@ class GemmaMLPTTNN:
         self.gate_proj = to_ttnn(weights["mlp.gate_proj.weight"])
         self.up_proj = to_ttnn(weights["mlp.up_proj.weight"])
         self.down_proj = to_ttnn(weights["mlp.down_proj.weight"])
-        self.hidden_size = config.width
-        self.intermediate_size = config.mlp_dim
 
-        # Query device grid to size chunks for available cores
-        device_grid = device.compute_with_storage_grid_size()
-        self.grid_size = (device_grid.x, device_grid.y)
-        self.core_grid = ttnn.CoreGrid(y=device_grid.y, x=device_grid.x)
-        num_cores = device_grid.x * device_grid.y
-
-        # Chunk size must be tile-aligned (multiple of 32).
-        # Scale chunk size with core count: more cores can process larger chunks
-        # in parallel. P150 (~130 cores) uses 544 (full seq, no chunking needed),
-        # N150 (64 cores) uses 256.
-        if num_cores >= 100:
-            self.chunk_size = 544
-        else:
-            self.chunk_size = 256
-
-        # BH Galaxy compute grid is 12x10 = 120 cores. Try full 12x10 first
-        # (uses all compute cores, smallest per_core_N = best L1 fit).
-        # Falls back to 12x8 / 8x8 on smaller devices.
-        if self.grid_size[0] >= 12 and self.grid_size[1] >= 10:
-            self._pcfg_grid = (12, 10)
-        elif self.grid_size[0] >= 12:
-            self._pcfg_grid = (12, 8)
-        else:
-            self._pcfg_grid = (8, 8)
+        # Chunk size must be tile-aligned (multiple of 32)
+        # 256 = 32 × 8, optimal for 64-core auto-sharding (4 tokens/core)
+        # 256 tokens × 16384 mlp_dim × 1 byte = ~4MB total
+        # With auto-sharding across 64 cores = ~64KB per core (fits L1)
+        self.chunk_size = 256
 
     def forward(self, x) -> ttnn.Tensor:
         """
@@ -686,15 +450,9 @@ class GemmaMLPTTNN:
             chunk_end = min(chunk_start + self.chunk_size, seq_len)
             actual_chunk_size = chunk_end - chunk_start
 
-            # BUGFIX: Previously this padded to self.chunk_size (e.g. 544 on BH Galaxy).
-            # That meant the expert MLP (seq=51) was running matmuls on (1, 544, 1024)
-            # tensors — ~10x more work than necessary. Now pad only to the next
-            # tile multiple (32). Verified savings: ~26 ms / inference (expert MLP
-            # gate+up+down accounted for 38 ms of matmul time, mostly wasted
-            # padding compute).
-            tile = 32
-            padded_chunk_size = ((actual_chunk_size + tile - 1) // tile) * tile
-            needs_chunk_padding = padded_chunk_size > actual_chunk_size
+            # Pad last chunk to tile alignment if needed
+            needs_chunk_padding = actual_chunk_size < self.chunk_size
+            padded_chunk_size = self.chunk_size if needs_chunk_padding else actual_chunk_size
 
             # Slice input chunk (always 4D)
             x_chunk = ttnn.slice(x, [0, 0, chunk_start, 0], [batch_size, 1, chunk_end, hidden])
@@ -706,69 +464,25 @@ class GemmaMLPTTNN:
                 x_chunk = ttnn.to_memory_config(x_chunk, ttnn.DRAM_MEMORY_CONFIG)
                 x_chunk = ttnn.pad(x_chunk, padding=((0, 0), (0, 0), (0, pad_amount), (0, 0)), value=0.0)
 
-            # OPTIMIZATION: precomputed program_config for 2D BLOCK_SHARDED matmul.
-            # Cached by (M_tiles, K_tiles, N_tiles) so the same config is reused
-            # across all 18 layers per MLP shape. The pcfg helper returns None for
-            # awkward shapes; we fall back to the default `core_grid` path then.
-            m_tiles = padded_chunk_size // 32
-            k_to_intermediate = self.hidden_size // 32
-            k_to_hidden = self.intermediate_size // 32
-            n_intermediate = self.intermediate_size // 32
-            n_hidden = self.hidden_size // 32
-
-            # MLP gate/up/down — let the helper auto-pick in0_block_w based on
-            # per_core_N. Large-N (gate/up, per_core_N=43) keeps block_w=4;
-            # small-N (down, per_core_N=6-22 depending on width) gets block_w=8.
-            gate_pcfg = build_matmul_pcfg(
-                m_tiles,
-                k_to_intermediate,
-                n_intermediate,
-                self._pcfg_grid[0],
-                self._pcfg_grid[1],
-                activation=(ttnn.UnaryOpType.GELU, True),
-            )
-            up_pcfg = build_matmul_pcfg(
-                m_tiles,
-                k_to_intermediate,
-                n_intermediate,
-                self._pcfg_grid[0],
-                self._pcfg_grid[1],
-            )
-            down_pcfg = build_matmul_pcfg(
-                m_tiles,
-                k_to_hidden,
-                n_hidden,
-                self._pcfg_grid[0],
-                self._pcfg_grid[1],
-            )
-
-            common_kwargs = dict(
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
-
-            if gate_pcfg is not None:
-                gate_activated = ttnn.linear(x_chunk, self.gate_proj, program_config=gate_pcfg, **common_kwargs)
-            else:
-                gate_activated = ttnn.linear(
-                    x_chunk, self.gate_proj, core_grid=self.core_grid, activation="gelu", **common_kwargs
-                )
-            if up_pcfg is not None:
-                up = ttnn.linear(x_chunk, self.up_proj, program_config=up_pcfg, **common_kwargs)
-            else:
-                up = ttnn.linear(x_chunk, self.up_proj, core_grid=self.core_grid, **common_kwargs)
+            # Gate and up projections - use bfloat8_b for 2x memory savings
+            # Use L1 interleaved (WIDTH_SHARDED incompatible with MLP dimensions)
+            gate = ttnn.linear(x_chunk, self.gate_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+            up = ttnn.linear(x_chunk, self.up_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(x_chunk)
 
-            # Element-wise multiply
+            # GELU activation - inherits sharding and dtype
+            gate_activated = ttnn.gelu(gate)
+            ttnn.deallocate(gate)
+
+            # Element-wise multiply - inherits sharding from inputs
             hidden_out = ttnn.multiply(gate_activated, up)
             ttnn.deallocate(gate_activated)
             ttnn.deallocate(up)
 
-            # Down projection
-            if down_pcfg is not None:
-                output_chunk = ttnn.linear(hidden_out, self.down_proj, program_config=down_pcfg, **common_kwargs)
-            else:
-                output_chunk = ttnn.linear(hidden_out, self.down_proj, core_grid=self.core_grid, **common_kwargs)
+            # Down projection - keep in L1 interleaved (simpler, avoids conversion overhead)
+            output_chunk = ttnn.linear(
+                hidden_out, self.down_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG
+            )
             ttnn.deallocate(hidden_out)
 
             # Slice back to actual size if padded
@@ -785,6 +499,9 @@ class GemmaMLPTTNN:
             for i in range(1, len(output_chunks)):
                 output = ttnn.concat([output, output_chunks[i]], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
                 ttnn.deallocate(output_chunks[i])
+
+        # Move final output to L1
+        output = ttnn.to_memory_config(output, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Reshape back to 3D if input was 3D
         if was_3d:
@@ -884,6 +601,9 @@ class GemmaBlockTTNN:
         )
         hidden_states = ttnn.add(hidden_states, attn_output)
         ttnn.deallocate(attn_output)
+        ttnn.ReadDeviceProfiler(
+            self.device
+        )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
 
         # Pre-MLP norm
         normed = rms_norm_ttnn(
@@ -897,6 +617,9 @@ class GemmaBlockTTNN:
         ttnn.deallocate(normed)
         hidden_states = ttnn.add(hidden_states, mlp_output)
         ttnn.deallocate(mlp_output)
+        ttnn.ReadDeviceProfiler(
+            self.device
+        )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
 
         return hidden_states, new_cache
 
