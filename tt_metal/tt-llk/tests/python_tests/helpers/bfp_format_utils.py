@@ -41,16 +41,30 @@ def bfp8b_to_float16b(operand: torch.Tensor, dimensions=None) -> torch.Tensor:
 
     signs = (bf16_bits >> 15) & 1
     exps = (bf16_bits >> 7) & 0xFF
-    mants = ((bf16_bits & 0x7F) >> 1) | 0x40
+    # Keep the FULL 8-bit normalized mantissa (implicit 1 + 7 explicit, range
+    # 128..255) so we can apply the hw round-to-nearest rule below. The old
+    # code pre-dropped the bf16 LSB via `(bf16_bits & 0x7F) >> 1 | 0x40` and
+    # then did pure `>> delta` truncation, mismatching the hw packer's
+    # `(m + (1 << shift)) >> (shift + 1)` rounding from ttsim PACR
+    # (src/tensix.cpp:3032). Sibling fix to the bfp4b_to_float16b patch.
+    mants_full = (bf16_bits & 0x7F) | 0x80
 
     exps_blocks = exps.view(-1, BFP8_BLOCK)
-    mants_blocks = mants.view(-1, BFP8_BLOCK)
+    mants_blocks_full = mants_full.view(-1, BFP8_BLOCK)
     signs_blocks = signs.view(-1, BFP8_BLOCK)
 
     shared_exps = exps_blocks.max(dim=1, keepdim=True).values
 
+    # Per ttsim PACR for dst_element_size_bits=8: shift = delta + 0, then
+    # m = (m + (1<<shift)) >> (shift+1) — i.e. always rounds at least 1 LSB.
+    # Cap deltas at 16 so the shift remains in int32 range; values whose
+    # mantissa shifts out entirely (delta > ~8) round to 0 naturally.
     deltas = shared_exps - exps_blocks
-    shifted = mants_blocks >> deltas
+    deltas_capped = torch.clamp(deltas, max=16)
+    rounding = 1 << deltas_capped
+    shifted = (mants_blocks_full + rounding) >> (deltas_capped + 1)
+    # Saturate at max_m - 1 = 127 per hw rule (ttsim PACR src/tensix.cpp:3035).
+    shifted = torch.clamp(shifted, max=127)
 
     values = shifted.float() * torch.exp2((shared_exps - 133).float())
     values = torch.where(signs_blocks.bool(), -values, values)
