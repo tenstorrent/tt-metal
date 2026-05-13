@@ -726,12 +726,42 @@ template <class... Es> struct chain_has_non_copy_tile_fpu_clash<EltwiseChain<Es.
                            is_dest_reuse_binary_op_v<Es> ||
                            is_unary_bcast_op_v<Es>) || ...)> {};
 
-template <class Chain>
-struct chain_loads_share_cb : std::false_type {};   // refined below for size-2 CopyTile-only chains
+// chain_loads_share_cb — N-element fold (item 7). True when every CopyTile element in
+// the chain reads from the same CB (or chain has ≤1 CopyTile, in which case the
+// constraint is vacuously satisfied). Drives the hoist gate together with
+// chain_has_non_copy_tile_fpu_clash: hoisting init() is safe only when no element
+// reprograms hardware state another element relies on.
 
-template <class A, class B>
-struct chain_loads_share_cb<EltwiseChain<A, B>>
-    : std::bool_constant<is_copy_tile_op_v<A> && is_copy_tile_op_v<B> && (A::cb == B::cb)> {};
+namespace detail {
+template <class E>
+constexpr uint32_t copy_tile_cb_of() {
+    if constexpr (is_copy_tile_op_v<E>) return E::cb;
+    else                                 return NO_PREV_CB;
+}
+
+template <class... Es>
+constexpr bool copy_tiles_share_cb_v = []() {
+    if constexpr (sizeof...(Es) == 0) {
+        return true;
+    } else {
+        constexpr uint32_t cbs[] = {copy_tile_cb_of<Es>()...};
+        uint32_t seen = NO_PREV_CB;
+        for (auto cb : cbs) {
+            if (cb == NO_PREV_CB) continue;
+            if (seen == NO_PREV_CB) seen = cb;
+            else if (seen != cb) return false;
+        }
+        return true;
+    }
+}();
+}  // namespace detail
+
+template <class Chain>
+struct chain_loads_share_cb : std::true_type {};  // default (empty chain — vacuously true)
+
+template <class... Es>
+struct chain_loads_share_cb<EltwiseChain<Es...>>
+    : std::bool_constant<detail::copy_tiles_share_cb_v<Es...>> {};
 
 // chain_has_duplicate_upfront_cbs / chain_pack_writes_collide:
 // defined as a runtime fold for now — every CB-reader / CB-writer pair is checked.
@@ -788,13 +818,20 @@ template <class... Es> struct chain_has_duplicate_upfront_cbs<EltwiseChain<Es...
 template <class... Es> struct chain_pack_writes_collide<EltwiseChain<Es...>>
     : detail::any_writer_dup<Es...> {};
 
-// `chain_is_hoist_safe` — default `false_type`. Generic N-element specialisation
-// lands in a later commit (item 7 of eltwise_helper_proposal.md). The size-2 and
-// size-3 fixed specialisations that previously lived here were unreachable —
-// the pipeline used `chain_has_non_copy_tile_fpu_clash_v` directly as the hoist
-// gate and never read this trait. Item 7 reintroduces a generic fold; until then
-// the trait is intentionally a permanent `false`.
-template <class Chain> struct chain_is_hoist_safe : std::false_type {};
+// `chain_is_hoist_safe` — generic N-element fold (item 7 + lessons §3.4).
+// Hoist init() out of the per-tile loop iff:
+//   1. No element with `clashes_with_fpu == true` outside the CopyTile family
+//      (BinaryFpu / DestReuseBinary / UnaryBcast reprogram unpack MOP per iter).
+//   2. All CopyTile elements share a single srca CB (or ≤1 CopyTile in chain).
+// SFPU ops program SFPU/SFPI state, not unpack MOP — they are always hoist-safe
+// as a group; the chain-shape gate covers the elements that DO touch unpack.
+template <class Chain>
+struct chain_is_hoist_safe : std::false_type {};
+
+template <class... Es>
+struct chain_is_hoist_safe<EltwiseChain<Es...>>
+    : std::bool_constant<!chain_has_non_copy_tile_fpu_clash_v<EltwiseChain<Es...>> &&
+                         chain_loads_share_cb_v<EltwiseChain<Es...>>> {};
 
 // =============================================================================
 // 10. Chain pipeline — per-iteration emit
@@ -998,14 +1035,16 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
     // ---- Detect upfront-block path (auto-detected via per-element `is_upfront`) ----
     constexpr bool block_path = ((Es::is_upfront) || ...);
 
-    // ---- F-PERF-1: per-tile init gate on FPU clash ----
+    // ---- Hoist gate (item 7 + lessons §3.4) ----
     //
-    // Chains without FPU clash (pure CopyTile + SFPU + PackTile) only need init()
-    // emitted once at boot — subsequent tiles re-use the programmed state. Chains
-    // with FPU clash (BinaryFpu, DestReuseBinary, UnaryBcast) need per-tile re-init
-    // because the FPU op overwrites unpacker state that copy_tile / SFPU programs.
-    constexpr bool has_clash = chain_has_non_copy_tile_fpu_clash_v<Chain>;
-    constexpr bool emit_init_per_tile = has_clash;
+    // Hoist all per-element init() to chain entry only when both:
+    //   - No FPU-clash element (BinaryFpu / DestReuseBinary / UnaryBcast reprogram
+    //     unpack MOP each iter — must reinit).
+    //   - All CopyTile elements share one CB (multi-CB CopyTile chains need per-iter
+    //     reinit because each CopyTile's hoisted init() reprograms srca and the next
+    //     element's hoisted init() overwrites it).
+    // The trait `chain_is_hoist_safe_v` folds both conditions.
+    constexpr bool emit_init_per_tile = !chain_is_hoist_safe_v<Chain>;
 
     using IdxSeq = std::make_index_sequence<sizeof...(Es)>;
 
@@ -1026,28 +1065,40 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
     // (no-op for non-PerTile policies), so emitting them inside the pack window
     // is safe in both block and per-tile paths.
     if constexpr (block_path) {
-        // Upfront block path: wait/reserve `n_tiles` worth of CB tiles upfront,
-        // run the per-tile loop, pop/push at end. Element types with block-size
-        // multipliers (e.g. BlockCopyTile<Cb, BlockSize>) scale `n_tiles` internally.
+        // Upfront block path: wait/reserve `n_tiles` worth of CB tiles, run the
+        // per-tile loop, pop/push at end. Element types with block-size multipliers
+        // (e.g. BlockCopyTile<Cb, BlockSize>) scale `n_tiles` internally.
+        //
+        // Wait-late amendment (item 6 / lessons §11): `cb_wait_front(cb, N)` and
+        // `cb_reserve_back(cb, N)` are cumulative-count idempotent — emitting them
+        // inside the loop blocks once on iter 0 and short-circuits thereafter,
+        // recovering producer/consumer overlap. Pop/push-at-end stay outside the
+        // loop (consumer needs the whole block visible until release).
         //
         // Mixed-policy chains (e.g. CopyTile WaitUpfrontPopAtEnd + PackTile
         // PerTileReserveAndPush — the softmax phase 2b pattern) need per-tile
         // reserve/push for the streaming output even though the input drove
-        // block_path=true.
-        (detail::elem_wait_upfront(elts, n_tiles), ...);
-        (detail::elem_reserve_upfront(elts, n_tiles), ...);
-
+        // block_path=true. Per-tile lifecycle ops are policy-guarded internally
+        // (no-op on upfront elements), so emitting them every iter is correct.
         for (uint32_t i = 0; i < n_tiles; ++i) {
+            // wait late — inside loop, late as possible before unpack reads
+            (detail::elem_wait_upfront(elts, n_tiles), ...);
+            (detail::elem_wait_per_tile(elts, i), ...);
+
             tile_regs_acquire();
             // Compute-phase: emit pre-element transitions (when init is per-tile)
             // and per-element exec.
             detail::compute_phase_for_each<emit_init_per_tile, emit_init_per_tile>(IdxSeq{}, i, elts...);
             tile_regs_commit();
             tile_regs_wait();
+            // reserve late — inside loop, right before pack
             (detail::elem_reserve_per_tile(elts, i), ...);
+            (detail::elem_reserve_upfront(elts, n_tiles), ...);
             (detail::elem_pack_exec(elts, i), ...);
             (detail::elem_push_per_tile(elts, i), ...);
             tile_regs_release();
+
+            (detail::elem_pop_per_tile(elts, i), ...);
         }
 
         (detail::elem_pop_upfront_end(elts, n_tiles), ...);
