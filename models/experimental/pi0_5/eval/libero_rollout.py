@@ -27,6 +27,8 @@ import argparse
 import os
 import sys
 import time
+from typing import Dict, List, Tuple
+
 import numpy as np
 import torch
 
@@ -363,6 +365,7 @@ def run_episode(
     num_steps_wait: int = 10,
     initial_state=None,
     seed: int = 0,
+    record_frames: bool = False,
 ) -> dict:
     """Run one episode. Returns metrics dict.
 
@@ -371,6 +374,9 @@ def run_episode(
       - waits `num_steps_wait` dummy steps for physics to settle
       - rotates camera images 180° (LIBERO renders are flipped vs training)
       - replans every `chunk_action_horizon` actions
+
+    If `record_frames=True`, returns a `frames` list of (H, W, 3) uint8 arrays —
+    the rotated agentview at every env.step. Caller writes mp4.
     """
     LIBERO_DUMMY_ACTION = [0.0] * 6 + [-1.0]  # no motion, gripper open
     env.reset()
@@ -382,9 +388,12 @@ def run_episode(
             if hasattr(env, "regenerate_obs_from_state")
             else env.reset()
         )
+    frames = [] if record_frames else None
     # Let physics settle (dropped objects need to fall in LIBERO)
     for _ in range(num_steps_wait):
         obs, _, _, _ = env.step(LIBERO_DUMMY_ACTION)
+        if record_frames:
+            frames.append(np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]))
     success = False
     n_steps = 0
     inference_times = []
@@ -432,6 +441,8 @@ def run_episode(
         for a in chunk[:chunk_action_horizon]:
             obs, _, done, _ = env.step(a.astype(np.float64))
             n_steps += 1
+            if record_frames:
+                frames.append(np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]))
             if done:
                 success = True
                 break
@@ -440,21 +451,55 @@ def run_episode(
         if success:
             break
 
-    return {
+    out = {
         "success": success,
         "steps": n_steps,
         "avg_chunk_pred_time": float(np.mean(inference_times)) if inference_times else 0.0,
         "n_chunks": len(inference_times),
     }
+    if record_frames:
+        out["frames"] = frames
+    return out
+
+
+# Per-suite max episode lengths matched to the longest training demos.
+# Values from openpi `examples/libero/main.py`.
+SUITE_MAX_STEPS = {
+    "libero_spatial": 220,
+    "libero_object": 280,
+    "libero_goal": 300,
+    "libero_10": 520,
+    "libero_90": 400,
+}
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--checkpoint", default="/storage/sdawle/pi05_weights/pi05_libero_finetuned")
-    ap.add_argument("--suite", default="libero_spatial")
-    ap.add_argument("--task-idx", type=int, default=0)
-    ap.add_argument("--num-episodes", type=int, default=3)
-    ap.add_argument("--max-steps", type=int, default=200)
+    ap.add_argument("--suite", default="libero_spatial", help="Single suite (legacy; overridden by --suites).")
+    ap.add_argument(
+        "--suites",
+        nargs="+",
+        default=None,
+        help="One or more suites to run (e.g. libero_spatial libero_object libero_goal libero_10). "
+        "Overrides --suite when set.",
+    )
+    ap.add_argument("--task-idx", type=int, default=0, help="Single task (legacy; overridden by --task-range).")
+    ap.add_argument(
+        "--task-range",
+        type=int,
+        nargs=2,
+        metavar=("START", "END"),
+        default=None,
+        help="Inclusive (start, end) over task indices per suite (e.g. 0 9 for all 10).",
+    )
+    ap.add_argument("--num-episodes", type=int, default=3, help="Init states per task.")
+    ap.add_argument(
+        "--max-steps",
+        type=int,
+        default=None,
+        help="Override env step cap. If unset, uses per-suite default (spatial=220, object=280, goal=300, 10=520).",
+    )
     ap.add_argument("--backend", default="pytorch", choices=["pytorch", "ttnn"])
     ap.add_argument(
         "--replan-steps",
@@ -470,7 +515,30 @@ def main():
         default=[10, 4],
         help="Denoising step counts to sweep over.",
     )
+    ap.add_argument(
+        "--video-dir",
+        type=str,
+        default=None,
+        help="If set, write one mp4 per episode. Layout: <video-dir>/N{N}/<suite>/<file>.mp4 .",
+    )
+    ap.add_argument(
+        "--video-fps",
+        type=int,
+        default=20,
+        help="Playback FPS for episode videos (sim runs at 20 Hz; set 10 for slow-mo).",
+    )
     args = ap.parse_args()
+    if args.video_dir:
+        os.makedirs(args.video_dir, exist_ok=True)
+        import imageio  # noqa: F401  (validate available before the rollout)
+
+    suites = args.suites if args.suites else [args.suite]
+    if args.task_range is not None:
+        task_idxs = list(range(args.task_range[0], args.task_range[1] + 1))
+    else:
+        task_idxs = [args.task_idx]
+    print(f"\n📦 Plan: suites={suites}, tasks={task_idxs}, N={args.steps_sweep}, eps/task={args.num_episodes}")
+    print(f"   total episodes = {len(suites) * len(task_idxs) * len(args.steps_sweep) * args.num_episodes}")
 
     print(f"\n📋 Loading PI0.5 LIBERO adapter (backend={args.backend}) from {args.checkpoint}")
     t0 = time.time()
@@ -490,55 +558,86 @@ def main():
         f"(real action dim = {adapter.real_action_dim}, state = {adapter.real_state_dim})"
     )
 
-    print(f"\n🤖 Making LIBERO env: {args.suite}, task {args.task_idx}")
-    env, task, initial_states = make_libero_env(args.suite, args.task_idx)
-    task_desc = task.language
-    print(f"   task: {task_desc!r}; {len(initial_states)} canonical init states available")
-
-    results = {}
+    # results[N][(suite, task_idx)] = list of per-ep stats dicts (no frames)
+    results: Dict[int, Dict[Tuple[str, int], List[dict]]] = {N: {} for N in args.steps_sweep}
     try:
         for N in args.steps_sweep:
-            print(f"\n⏱️  Rollouts at N={N} ({args.num_episodes} episodes)")
-            stats = []
-            for ep in range(args.num_episodes):
-                t_ep = time.time()
-                print(f"   ep {ep+1} starting…", flush=True)
-                m = run_episode(
-                    env,
-                    adapter,
-                    task_desc,
-                    N,
-                    max_steps=args.max_steps,
-                    chunk_action_horizon=args.replan_steps,
-                    initial_state=initial_states[ep % len(initial_states)],
-                    seed=ep,
-                )
-                stats.append(m)
-                print(
-                    f"   ep {ep+1}: success={m['success']} steps={m['steps']} "
-                    f"avg_chunk={1000*m['avg_chunk_pred_time']:.0f}ms "
-                    f"wall={time.time()-t_ep:.1f}s",
-                    flush=True,
-                )
-            results[N] = stats
-    finally:
-        env.close()
+            print(f"\n{'#' * 72}\n#  N={N} denoise steps\n{'#' * 72}")
+            for suite_name in suites:
+                max_steps = args.max_steps if args.max_steps else SUITE_MAX_STEPS.get(suite_name, 220)
+                for task_idx in task_idxs:
+                    print(f"\n🤖 {suite_name} / task {task_idx}  (max_steps={max_steps})")
+                    env, task, initial_states = make_libero_env(suite_name, task_idx)
+                    task_desc = task.language
+                    print(f"   task: {task_desc!r}")
+                    stats = []
+                    try:
+                        for ep in range(args.num_episodes):
+                            t_ep = time.time()
+                            m = run_episode(
+                                env,
+                                adapter,
+                                task_desc,
+                                N,
+                                max_steps=max_steps,
+                                chunk_action_horizon=args.replan_steps,
+                                initial_state=initial_states[ep % len(initial_states)],
+                                seed=ep,
+                                record_frames=bool(args.video_dir),
+                            )
+                            stats.append({k: v for k, v in m.items() if k != "frames"})
+                            if args.video_dir and m.get("frames"):
+                                import imageio
 
-    # Summary
-    print("\n" + "=" * 72)
-    print(f"  LIBERO ROLLOUT SUMMARY — backend={args.backend}, {args.suite} task {args.task_idx}")
-    print(f"  task: {task_desc!r}")
-    print(f"  episodes/N = {args.num_episodes}, max_steps = {args.max_steps}, " f"replan = {args.replan_steps}")
-    print("=" * 72)
-    for N, stats in results.items():
-        succ = sum(s["success"] for s in stats)
-        avg_steps = float(np.mean([s["steps"] for s in stats]))
-        avg_chunk = float(np.mean([s["avg_chunk_pred_time"] for s in stats]))
-        print(
-            f"  N={N:2d}:  success {succ}/{len(stats)}  avg_steps={avg_steps:.1f}  "
-            f"avg_chunk_pred={1000*avg_chunk:.0f}ms"
-        )
-    print("=" * 72)
+                                video_subdir = os.path.join(args.video_dir, f"N{N}", suite_name)
+                                os.makedirs(video_subdir, exist_ok=True)
+                                suffix = "success" if m["success"] else "failure"
+                                safe_task = "".join(c if c.isalnum() else "_" for c in task_desc)[:60]
+                                fname = f"task{task_idx:02d}_ep{ep+1:02d}_{safe_task}_{suffix}.mp4"
+                                fpath = os.path.join(video_subdir, fname)
+                                imageio.mimwrite(fpath, m["frames"], fps=args.video_fps, codec="libx264")
+                            print(
+                                f"   ep {ep+1}: success={m['success']} steps={m['steps']} "
+                                f"avg_chunk={1000*m['avg_chunk_pred_time']:.0f}ms "
+                                f"wall={time.time()-t_ep:.1f}s",
+                                flush=True,
+                            )
+                    finally:
+                        env.close()
+                    results[N][(suite_name, task_idx)] = stats
+
+        # Summary
+        print("\n" + "=" * 84)
+        print(f"  LIBERO ROLLOUT FULL SUMMARY — backend={args.backend}, replan={args.replan_steps}")
+        print(f"  suites={suites}, tasks={task_idxs}, init states/task={args.num_episodes}")
+        print("=" * 84)
+        for N in args.steps_sweep:
+            print(f"\n  --- N = {N} ---")
+            suite_totals: Dict[str, Tuple[int, int]] = {}
+            for (suite_name, task_idx), stats in results[N].items():
+                succ = sum(s["success"] for s in stats)
+                tot = len(stats)
+                avg_steps = float(np.mean([s["steps"] for s in stats])) if stats else 0
+                avg_chunk = float(np.mean([s["avg_chunk_pred_time"] for s in stats])) if stats else 0
+                print(
+                    f"  {suite_name:18s} task {task_idx:2d}:  {succ}/{tot}  "
+                    f"avg_steps={avg_steps:5.1f}  avg_chunk={1000*avg_chunk:4.0f}ms"
+                )
+                sucs, tots = suite_totals.get(suite_name, (0, 0))
+                suite_totals[suite_name] = (sucs + succ, tots + tot)
+            print(f"  {'-' * 80}")
+            grand_s, grand_t = 0, 0
+            for suite_name in suites:
+                sucs, tots = suite_totals.get(suite_name, (0, 0))
+                pct = 100.0 * sucs / max(tots, 1)
+                print(f"  {suite_name:18s} TOTAL    :  {sucs}/{tots} ({pct:.1f}%)")
+                grand_s += sucs
+                grand_t += tots
+            grand_pct = 100.0 * grand_s / max(grand_t, 1)
+            print(f"  {'GRAND TOTAL':18s}          :  {grand_s}/{grand_t} ({grand_pct:.1f}%)")
+        print("=" * 84)
+    finally:
+        pass
     if ttnn_device is not None:
         import ttnn
 
