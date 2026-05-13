@@ -307,25 +307,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
         "untilize_metadata_scratch");
 
     // ==================== Circular Buffers for SENDER cores ====================
-    // c_0: tiled input stripe for self-untilize (reader → compute on sender)
-    // Double-buffered blocks of 8 tiles (compute processes 8 at a time)
-    detail::create_tensor_cb(
-        program,
-        sender_core_grid,
-        input_tensor,
-        /*buffering_factor=*/16,
-        /*cb_id=*/tt::CBIndex::c_0,
-        "sender_input_scratch");
-    // c_10: signal CB for self-untilize (reader → compute on sender)
-    {
-        uint32_t signal_page_size = l1_alignment;
-        constexpr uint32_t signal_buffering = 2;
-        tt::tt_metal::CircularBufferConfig sender_signal_cb_config =
-            tt::tt_metal::CircularBufferConfig(
-                signal_buffering * signal_page_size, {{tt::CBIndex::c_10, tt::DataFormat::UInt32}})
-                .set_page_size(tt::CBIndex::c_10, signal_page_size);
-        tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, sender_signal_cb_config);
-    }
+    // Sender does fabric sends only — no self-untilize, no compute kernel, no c_0/c_10.
     // c_1: indices scratch
     detail::create_tensor_cb(
         program,
@@ -398,7 +380,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
         /*buffering_factor=*/detail::get_num_pages(dispatch_table_tensor),
         /*cb_id=*/tt::CBIndex::c_9,
         "dispatch_table_tensor");
-    // c_18: receive buffer for untilized data from untilize cores (also sender self-untilize output)
+    // c_18: receive buffer for untilized data from untilize cores
     // FP8 path: pack_untilize converts BF16 tiles → FP8 row-major; page size is one aligned FP8 row.
     detail::create_tensor_cb(
         program,
@@ -451,7 +433,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
     // ==================== Compile-time args shared by sender reader and writer ====================
     std::vector<uint32_t> compile_time_args = {
         // CB IDs (10)
-        static_cast<uint32_t>(tt::CBIndex::c_0),  // cb_input_id (used by sender reader for self-untilize)
+        static_cast<uint32_t>(tt::CBIndex::c_0),  // cb_input_id (row-major path only)
         static_cast<uint32_t>(tt::CBIndex::c_1),  // cb_indices_id
         static_cast<uint32_t>(tt::CBIndex::c_2),  // cb_weights_id
         static_cast<uint32_t>(tt::CBIndex::c_3),  // cb_offsets_id
@@ -546,14 +528,11 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
     reader_kernel_ids.reserve(num_cores);
     for (uint32_t s = 0; s < num_cores; s++) {
         uint32_t k_s = static_cast<uint32_t>(sender_untilize_groups[s].size());
-        uint32_t total_workers = k_s + 1;  // untilize cores + sender itself
         auto per_sender_compile_args = compile_time_args;
         per_sender_compile_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_18));  // cb_untilize_id (receive buf)
         per_sender_compile_args.push_back(
             detail::get_aligned_page_size(output_tensor));  // aligned_row_major_input_page_size
         per_sender_compile_args.push_back(k_s);             // num_untilize_cores
-        per_sender_compile_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_10));  // cb_signal_id
-        per_sender_compile_args.push_back(total_workers);                             // total_workers
         per_sender_compile_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_19));  // cb_route_table_scratch_id
 
         CoreRangeSet single_sender_core({CoreRange(sender_cores[s])});
@@ -601,7 +580,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
             }
         }
 
-        uint32_t total_workers = k_s + 1;  // untilize cores + sender itself
+        uint32_t total_workers = k_s;  // sender no longer self-untilizes; untilize cores own all batches
 
         // Reader compile args (DRAM-read side)
         std::vector<uint32_t> untilize_reader_compile_args = {
@@ -667,22 +646,6 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
             .compile_args = {
                 static_cast<uint32_t>(tt::CBIndex::c_10),  // cb_signal_id
                 static_cast<uint32_t>(tt::CBIndex::c_11),  // cb_untilize_id
-                static_cast<uint32_t>(tt::CBIndex::c_0),   // cb_in_id
-                (uint32_t)hidden_size,
-                read_batch_size,
-            }});
-
-    // Compute kernel on sender cores for self-untilize (output goes to c_18)
-    tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/compute/"
-        "untilize_dispatch.cpp",
-        sender_core_grid,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
-            .compile_args = {
-                static_cast<uint32_t>(tt::CBIndex::c_10),  // cb_signal_id
-                static_cast<uint32_t>(tt::CBIndex::c_18),  // cb_untilize_id (reuse receive buffer)
                 static_cast<uint32_t>(tt::CBIndex::c_0),   // cb_in_id
                 (uint32_t)hidden_size,
                 read_batch_size,

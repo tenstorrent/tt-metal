@@ -106,13 +106,9 @@ void kernel_main() {
         get_compile_time_arg_val(dispatch_table_args.next_compile_time_args_offset() + 1);
     constexpr uint32_t num_untilize_cores =
         get_compile_time_arg_val(dispatch_table_args.next_compile_time_args_offset() + 2);
-    constexpr uint32_t cb_signal_id = get_compile_time_arg_val(dispatch_table_args.next_compile_time_args_offset() + 3);
-    constexpr uint32_t total_workers =
-        get_compile_time_arg_val(dispatch_table_args.next_compile_time_args_offset() + 4);
     constexpr uint32_t cb_route_table_scratch_id =
-        get_compile_time_arg_val(dispatch_table_args.next_compile_time_args_offset() + 5);
+        get_compile_time_arg_val(dispatch_table_args.next_compile_time_args_offset() + 3);
 
-    constexpr uint32_t tiles_per_row = hidden_size / 32;
     constexpr uint32_t writer_page_size = aligned_row_major_input_page_size;
 #else
     constexpr uint32_t writer_page_size = aligned_input_page_size;
@@ -282,11 +278,6 @@ void kernel_main() {
     for (uint32_t c = 0; c < num_untilize_cores; c++) {
         untilize_mailbox_noc_addrs[c] = get_noc_addr(untilize_noc_xs[c], untilize_noc_ys[c], rt_scratch_ptr[c]);
     }
-
-    // Self-untilize setup: TensorAccessor for reading tiles from DRAM
-    const auto self_input_addr_gen = TensorAccessor(input_args, input_tensor_address, aligned_input_page_size);
-    constexpr uint32_t block_ct_dim = 8;
-    constexpr uint32_t num_tile_blocks = tiles_per_row / block_ct_dim;
 #else
     // Prefetch first batch of DRAM reads
     uint32_t first_batch_end =
@@ -312,124 +303,81 @@ void kernel_main() {
         bool batch_did_local_write = false;
 
 #ifdef IS_TILE_LAYOUT
-        // Batch prep: delegate to untilize core, or self-untilize locally.
-        uint32_t C = B % total_workers;
+        // Every batch is delegated to an untilize core (round-robin).
+        uint32_t C = B % num_untilize_cores;
 
-        if (C < num_untilize_cores) {
-            // ---- Worker-batch: delegate to untilize core C ----
-            // Read indices/weights before building the route table so routing
-            // decisions are known before we signal the untilize core.
-            for (uint32_t t = 0; t < batch_count; t++) {
-                noc_async_read_page(batch_start + t, indices_addr_gen, indices_base + t * aligned_indices_page_size);
-                noc_async_read_page(batch_start + t, weights_addr_gen, weights_base + t * aligned_weights_page_size);
-            }
-            noc_async_read_barrier();
-
-            // Build local-expert route table into the route table scratch CB.
-            // Only LOCAL entries go in the mailbox; cross-device entries are
-            // handled by the sender's main routing loop as normal.
-            // We track per-expert offset increments locally to mirror the main
-            // loop without touching the shared offsets[] array.
-            uint32_t local_offset_delta[n_routed_experts] = {};
-            volatile tt_l1_ptr uint32_t* rt = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rt_scratch_base);
-            uint32_t entry_count = 0;
-            bool has_non_local = false;
-
-            for (uint32_t t = 0; t < batch_count; t++) {
-                int32_t* indices_t = (int32_t*)(indices_base + t * aligned_indices_page_size);
-                uint16_t* weights_t = (uint16_t*)(weights_base + t * aligned_weights_page_size);
-                for (uint32_t k = 0; k < num_experts_per_tok; k++) {
-                    auto routed_expert = indices_t[k];
-                    if (((uint32_t)routed_expert & core_mask) != dispatch_core_idx) {
-                        continue;
-                    }
-                    auto expert_chip_og = expert_dispatch_table[routed_expert];
-                    if (expert_chip_og == -1) {
-                        continue;
-                    }
-                    // Mirror offset++ from main loop (covers both overflow and valid paths)
-                    uint32_t effective_offset = offsets[routed_expert] + local_offset_delta[routed_expert];
-                    local_offset_delta[routed_expert]++;
-
-                    if (effective_offset >= max_dispatch_buffer_token_size) {
-                        continue;
-                    }
-                    auto expert_chip = device_begin_idx + expert_chip_og * device_stride;
-                    if (expert_chip != linearized_mesh_coord) {
-                        has_non_local = true;
-                        continue;  // cross-device: sender handles in main routing loop
-                    }
-                    auto page_idx = effective_offset;
-
-                    uint32_t base = 1 + entry_count * 6;
-                    rt[base + 0] = t;
-                    rt[base + 1] = (uint32_t)page_idx;
-                    rt[base + 2] = batch_start + t;
-                    rt[base + 3] = k;
-                    rt[base + 4] = (uint32_t)routed_expert;
-                    rt[base + 5] = (uint32_t)(int32_t)(int16_t)weights_t[k];
-                    entry_count++;
-                }
-            }
-            // High bit signals the untilize core whether to bulk-send back to us.
-            rt[0] = entry_count | (has_non_local ? 0x80000000u : 0u);
-
-            // Write route table to untilize core's mailbox, then signal start.
-            uint32_t mailbox_write_bytes = sizeof(uint32_t) + entry_count * 6 * sizeof(uint32_t);
-            noc_async_write(rt_scratch_base, untilize_mailbox_noc_addrs[C], mailbox_write_bytes);
-            noc_async_write_barrier();
-
-            noc_semaphore_inc(untilize_start_noc_addrs[C], 1);
-            noc_async_atomic_barrier();
-
-            // Only wait if the untilize core will actually send data back.
-            if (has_non_local) {
-                DPRINT_DISPATCH << "Waiting for untilize core " << C << " batch " << B << ENDL();
-                noc_semaphore_wait(data_ready_sem_ptr, 1);
-                noc_semaphore_set(data_ready_sem_ptr, 0);
-                DPRINT_DISPATCH << "Got batch " << B << " from untilize core " << C << ENDL();
-            }
-        } else {
-            // ---- Self-batch: read tiles, untilize locally, no NOC transfer ----
-            DPRINT_DISPATCH << "Self-untilize batch " << B << ENDL();
-            uint32_t tile_base_page = B * tiles_per_row;
-
-            // Signal compute to untilize (before streaming tiles so compute is ready)
-            cb_reserve_back(cb_signal_id, 1);
-            volatile tt_l1_ptr uint32_t* signal_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_signal_id));
-            signal_ptr[0] = 0x00000000;
-            cb_push_back(cb_signal_id, 1);
-
-            // Stream tiles in blocks of 8 — compute consumes each block as it arrives
-            for (uint32_t blk = 0; blk < num_tile_blocks; blk++) {
-                cb_reserve_back(cb_input_id, block_ct_dim);
-                uint32_t blk_write_ptr = get_write_ptr(cb_input_id);
-                uint32_t blk_start = tile_base_page + blk * block_ct_dim;
-                for (uint32_t col = 0; col < block_ct_dim; col++) {
-                    noc_async_read_page(
-                        blk_start + col, self_input_addr_gen, blk_write_ptr + col * aligned_input_page_size);
-                }
-                noc_async_read_barrier();
-                cb_push_back(cb_input_id, block_ct_dim);
-            }
-
-            // Overlap reads with compute
-            for (uint32_t t = 0; t < batch_count; t++) {
-                noc_async_read_page(batch_start + t, indices_addr_gen, indices_base + t * aligned_indices_page_size);
-                noc_async_read_page(batch_start + t, weights_addr_gen, weights_base + t * aligned_weights_page_size);
-            }
-
-            // Wait for compute to finish (it writes untilized data into cb_untilize_id / c_18)
-            cb_wait_front(cb_untilize_id, read_batch_size);
-            noc_async_read_barrier();
-            DPRINT_DISPATCH << "Self-untilize batch " << B << " done" << ENDL();
+        // Read indices/weights before building the route table so routing
+        // decisions are known before we signal the untilize core.
+        for (uint32_t t = 0; t < batch_count; t++) {
+            noc_async_read_page(batch_start + t, indices_addr_gen, indices_base + t * aligned_indices_page_size);
+            noc_async_read_page(batch_start + t, weights_addr_gen, weights_base + t * aligned_weights_page_size);
         }
-#endif
+        noc_async_read_barrier();
 
-        // ---- Common inner token loop ----
-#ifdef IS_TILE_LAYOUT
-        bool is_delegated_batch = (C < num_untilize_cores);
+        // Build local-expert route table into the route table scratch CB.
+        // Only LOCAL entries go in the mailbox; cross-device entries are
+        // handled by the sender's main routing loop as normal.
+        // We track per-expert offset increments locally to mirror the main
+        // loop without touching the shared offsets[] array.
+        uint32_t local_offset_delta[n_routed_experts] = {};
+        volatile tt_l1_ptr uint32_t* rt = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rt_scratch_base);
+        uint32_t entry_count = 0;
+        bool has_non_local = false;
+
+        for (uint32_t t = 0; t < batch_count; t++) {
+            int32_t* indices_t = (int32_t*)(indices_base + t * aligned_indices_page_size);
+            uint16_t* weights_t = (uint16_t*)(weights_base + t * aligned_weights_page_size);
+            for (uint32_t k = 0; k < num_experts_per_tok; k++) {
+                auto routed_expert = indices_t[k];
+                if (((uint32_t)routed_expert & core_mask) != dispatch_core_idx) {
+                    continue;
+                }
+                auto expert_chip_og = expert_dispatch_table[routed_expert];
+                if (expert_chip_og == -1) {
+                    continue;
+                }
+                // Mirror offset++ from main loop (covers both overflow and valid paths)
+                uint32_t effective_offset = offsets[routed_expert] + local_offset_delta[routed_expert];
+                local_offset_delta[routed_expert]++;
+
+                if (effective_offset >= max_dispatch_buffer_token_size) {
+                    continue;
+                }
+                auto expert_chip = device_begin_idx + expert_chip_og * device_stride;
+                if (expert_chip != linearized_mesh_coord) {
+                    has_non_local = true;
+                    continue;  // cross-device: sender handles in main routing loop
+                }
+                auto page_idx = effective_offset;
+
+                uint32_t base = 1 + entry_count * 6;
+                rt[base + 0] = t;
+                rt[base + 1] = (uint32_t)page_idx;
+                rt[base + 2] = batch_start + t;
+                rt[base + 3] = k;
+                rt[base + 4] = (uint32_t)routed_expert;
+                rt[base + 5] = (uint32_t)(int32_t)(int16_t)weights_t[k];
+                entry_count++;
+            }
+        }
+        // High bit signals the untilize core whether to bulk-send back to us.
+        rt[0] = entry_count | (has_non_local ? 0x80000000u : 0u);
+
+        // Write route table to untilize core's mailbox, then signal start.
+        uint32_t mailbox_write_bytes = sizeof(uint32_t) + entry_count * 6 * sizeof(uint32_t);
+        noc_async_write(rt_scratch_base, untilize_mailbox_noc_addrs[C], mailbox_write_bytes);
+        noc_async_write_barrier();
+
+        noc_semaphore_inc(untilize_start_noc_addrs[C], 1);
+        noc_async_atomic_barrier();
+
+        // Only wait if the untilize core will actually send data back.
+        if (has_non_local) {
+            DPRINT_DISPATCH << "Waiting for untilize core " << C << " batch " << B << ENDL();
+            noc_semaphore_wait(data_ready_sem_ptr, 1);
+            noc_semaphore_set(data_ready_sem_ptr, 0);
+            DPRINT_DISPATCH << "Got batch " << B << " from untilize core " << C << ENDL();
+        }
 #endif
         for (uint32_t t = 0; t < batch_count; t++) {
             uint32_t token_idx = batch_start + t;
@@ -464,10 +412,8 @@ void kernel_main() {
 
                 if (expert_chip == linearized_mesh_coord) {
 #ifdef IS_TILE_LAYOUT
-                    // For delegated batches the untilize core's writer kernel handles
-                    // local DRAM writes directly; skip them here.
-                    if (!is_delegated_batch)
-#endif
+                    // Untilize core's writer kernel handles local DRAM writes for tile layout.
+#else
                     {
                         volatile tt_l1_ptr int32_t* metadata =
                             reinterpret_cast<volatile tt_l1_ptr int32_t*>(metadata_temp_addr);
@@ -482,6 +428,7 @@ void kernel_main() {
                         noc_async_writes_flushed();
                         batch_did_local_write = true;
                     }
+#endif
                 } else {
                     if constexpr (is_1d_topology<topology>()) {
                         uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
@@ -520,13 +467,7 @@ void kernel_main() {
         }
 
 #ifdef IS_TILE_LAYOUT
-        if (batch_did_local_write) {
-            noc_async_write_barrier();
-        }
-        // Release CB after self-batch so compute can reuse it next time
-        if (C >= num_untilize_cores) {
-            cb_pop_front(cb_untilize_id, read_batch_size);
-        }
+        // No local DRAM writes from the sender in tile layout — untilize cores own that path.
 #else
         // Issue next batch DRAM reads BEFORE write barrier to overlap read/write NOC channels
         uint32_t next_batch_start = batch_start + read_batch_size;
@@ -554,15 +495,6 @@ void kernel_main() {
         }
 #endif
     }
-
-#ifdef IS_TILE_LAYOUT
-    // Signal compute to exit
-    cb_reserve_back(cb_signal_id, 1);
-    volatile tt_l1_ptr uint32_t* signal_sentinel =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_signal_id));
-    signal_sentinel[0] = ROUTE_INFO_SENTINEL;
-    cb_push_back(cb_signal_id, 1);
-#endif
 
     // Push sentinel to signal writer that all dispatches are done
     cb_reserve_back(cb_route_info_id, 1);
