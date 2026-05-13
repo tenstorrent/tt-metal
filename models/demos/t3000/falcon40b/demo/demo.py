@@ -628,7 +628,9 @@ def run_falcon_demo_kv(
     if perf_mode:
         if perf_targets:
             expected_measurements = {
-                metric: True for metric in perf_targets if not metric.endswith("_tolerance") and metric not in {"tolerance"}
+                metric: True
+                for metric in perf_targets
+                if not metric.endswith("_tolerance") and metric not in {"tolerance"}
             }
             verify_perf(
                 measurements,
