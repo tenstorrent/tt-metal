@@ -238,8 +238,8 @@ def test_pipeline_performance(
         dynamic_load=dynamic_load,
         topology=topology,
         is_fsdp=is_fsdp,
-        target_height=height,
-        target_width=width,
+        height=height,
+        width=width,
         num_frames=num_frames,
     )
 
@@ -317,13 +317,22 @@ def test_pipeline_performance(
     if not is_ci_env:
         if int(ttnn.distributed_context_get_rank()) == 0:
             output_path = f"wan_output_video_{model_type}{'_traced' if traced else ''}.mp4"
-            export_to_video(frames, output_path, fps=16)
-            print(f"✓ Saved video to: {output_path}")
+            try:
+                export_to_video(frames, output_path, fps=16)
+                print(f"✓ Saved video to: {output_path}")
+            except ImportError:
+                print("Could not export video - imageio_ffmpeg not available")
         else:
             print(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
 
     # Calculate statistics
     text_encoder_times = [benchmark_profiler.get_duration("encoder", i) for i in range(num_perf_runs)]
+    prepare_latents_times = [benchmark_profiler.get_duration("prepare_latents", i) for i in range(num_perf_runs)]
+    vae_encode_times = (
+        [benchmark_profiler.get_duration("vae_encode", i) for i in range(num_perf_runs)]
+        if model_type == "i2v" and benchmark_profiler.contains_step("vae_encode")
+        else []
+    )
     denoising_times = [benchmark_profiler.get_duration("denoising", i) for i in range(num_perf_runs)]
     vae_times = [benchmark_profiler.get_duration("vae", i) for i in range(num_perf_runs)]
     total_times = [benchmark_profiler.get_duration("run", i) for i in range(num_perf_runs)]
@@ -353,6 +362,9 @@ def test_pipeline_performance(
         )
 
     print_stats("Text Encoding", text_encoder_times)
+    if model_type == "i2v":
+        print_stats("Image Encoding (total)", prepare_latents_times)
+        print_stats("  VAE Encoder only", vae_encode_times)
     print_stats("Denoising", denoising_times)
     print_stats("VAE Decoding", vae_times)
     print_stats("Total Pipeline", total_times)

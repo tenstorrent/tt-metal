@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bit>
 #include <vector>
 
 #include "moreh_adam_device_operation.hpp"
@@ -11,7 +12,17 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::moreh::moreh_adam {
-MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::ProgramFactory::create(
+
+using namespace tt::tt_metal;
+
+static constexpr const char* READER_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/kernels/reader_moreh_adam.cpp";
+static constexpr const char* WRITER_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/kernels/writer_moreh_adam.cpp";
+static constexpr const char* COMPUTE_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/kernels/moreh_adam.cpp";
+
+ProgramDescriptor MorehAdamOperation::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
@@ -41,17 +52,15 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
 
     uint32_t num_tiles = param_in.physical_volume() / tt::constants::TILE_HW;
 
-    Program program{};
-
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::tt_metal::IDevice* device = param_in.device();
+    IDevice* device = param_in.device();
     auto grid = device->compute_with_storage_grid_size();
     const auto num_cores_y = grid.y;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(grid, num_tiles);
+        split_work_to_cores(grid, num_tiles);
 
     auto arch = param_in.device()->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -60,114 +69,167 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(param_in.dtype());
+    auto data_format = datatype_to_dataformat_converter(param_in.dtype());
     auto intermed_cb_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        data_format,
-        {
-            {tt::CBIndex::c_0, 1},                      // param_in
-            {tt::CBIndex::c_1, 1},                      // grad
-            {tt::CBIndex::c_2, 1},                      // exp_avg_in
-            {tt::CBIndex::c_3, 1},                      // exp_avg_sq_in
-            {tt::CBIndex::c_4, 1},                      // max_exp_avg_sq_in (optional)
-            {tt::CBIndex::c_5, 5, intermed_cb_format},  // lr, beta1, beta2, eps, weight_decay
-            {tt::CBIndex::c_6, 1, intermed_cb_format},  // 1.0f
+    const uint32_t data_tile_size = tile_size(data_format);
+    const uint32_t intermed_tile_size = tile_size(intermed_cb_format);
 
-            {tt::CBIndex::c_24, 1, intermed_cb_format},  // tmp_grad
-            {tt::CBIndex::c_25, 1, intermed_cb_format},  // tmp_exp_avg
-            {tt::CBIndex::c_26, 1, intermed_cb_format},  // tmp_exp_avg_sq
-            {tt::CBIndex::c_27, 1, intermed_cb_format},  // tmp_max_exp_avg_sq
-            {tt::CBIndex::c_28, 1, intermed_cb_format},  //
-            {tt::CBIndex::c_29, 1, intermed_cb_format},  //
-            {tt::CBIndex::c_30, 1, intermed_cb_format},  // tmp1
-            {tt::CBIndex::c_31, 1, intermed_cb_format},  // tmp2
+    ProgramDescriptor desc;
 
-            {tt::CBIndex::c_16, 1},  // param_out
-            {tt::CBIndex::c_17, 1},  // exp_avg_out
-            {tt::CBIndex::c_18, 1},  // exp_avg_sq_out
-            {tt::CBIndex::c_19, 1},  // max_exp_avg_sq_out (optional)
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 1 * data_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_0, .data_format = data_format, .page_size = data_tile_size}}},
+    });  // param_in
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 1 * data_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_1, .data_format = data_format, .page_size = data_tile_size}}},
+    });  // grad
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 1 * data_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_2, .data_format = data_format, .page_size = data_tile_size}}},
+    });  // exp_avg_in
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 1 * data_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_3, .data_format = data_format, .page_size = data_tile_size}}},
+    });  // exp_avg_sq_in
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 1 * data_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_4, .data_format = data_format, .page_size = data_tile_size}}},
+    });  // max_exp_avg_sq_in (optional)
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 5 * intermed_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_5, .data_format = intermed_cb_format, .page_size = intermed_tile_size}}},
+    });  // lr, beta1, beta2, eps, weight_decay
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 1 * intermed_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_6, .data_format = intermed_cb_format, .page_size = intermed_tile_size}}},
+    });  // 1.0f
+
+    // Intermediate CBs (c_24 through c_31)
+    for (uint8_t cb_idx = static_cast<uint8_t>(tt::CBIndex::c_24); cb_idx <= static_cast<uint8_t>(tt::CBIndex::c_31);
+         ++cb_idx) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = 1 * intermed_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = cb_idx, .data_format = intermed_cb_format, .page_size = intermed_tile_size}}},
         });
+    }
+
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 1 * data_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_16, .data_format = data_format, .page_size = data_tile_size}}},
+    });  // param_out
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 1 * data_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_17, .data_format = data_format, .page_size = data_tile_size}}},
+    });  // exp_avg_out
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 1 * data_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_18, .data_format = data_format, .page_size = data_tile_size}}},
+    });  // exp_avg_sq_out
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 1 * data_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_19, .data_format = data_format, .page_size = data_tile_size}}},
+    });  // max_exp_avg_sq_out (optional)
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-
-    std::vector<uint32_t> reader_compile_time_args = {};
-    TensorAccessorArgs(*param_in.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*grad.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*exp_avg_in.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*exp_avg_sq_in.buffer()).append_to(reader_compile_time_args);
+    KernelDescriptor::CompileTimeArgs reader_ct_args;
+    TensorAccessorArgs(*param_in.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(*grad.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(*exp_avg_in.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(*exp_avg_sq_in.buffer()).append_to(reader_ct_args);
     if (max_exp_avg_sq_in.has_value()) {
-        TensorAccessorArgs(*max_exp_avg_sq_in.value().buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(*max_exp_avg_sq_in.value().buffer()).append_to(reader_ct_args);
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {};
-    TensorAccessorArgs(*param_out.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(*exp_avg_out.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(*exp_avg_sq_out.buffer()).append_to(writer_compile_time_args);
+    KernelDescriptor::CompileTimeArgs writer_ct_args;
+    TensorAccessorArgs(*param_out.buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(*exp_avg_out.buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(*exp_avg_sq_out.buffer()).append_to(writer_ct_args);
     if (max_exp_avg_sq_out.has_value()) {
-        TensorAccessorArgs(*max_exp_avg_sq_out.value().buffer()).append_to(writer_compile_time_args);
+        TensorAccessorArgs(*max_exp_avg_sq_out.value().buffer()).append_to(writer_ct_args);
     }
 
-    const auto* const reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/kernels/"
-        "reader_moreh_adam.cpp";
-    const auto* const writer_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/kernels/"
-        "writer_moreh_adam.cpp";
-
-    std::map<std::string, std::string> data_movement_defines{};
+    KernelDescriptor::Defines data_movement_defines;
+    KernelDescriptor::Defines compute_defines;
     if (amsgrad) {
-        data_movement_defines["AMSGRAD"] = "1";
+        data_movement_defines.emplace_back("AMSGRAD", "1");
+        compute_defines.emplace_back("AMSGRAD", "1");
     }
     if (fp32_dest_acc_en) {
-        data_movement_defines["FP32_DEST_ACC_EN"] = "1";
+        data_movement_defines.emplace_back("FP32_DEST_ACC_EN", "1");
+        compute_defines.emplace_back("FP32_DEST_ACC_EN", "1");
     }
-    const auto reader_kernel_id =
-        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, data_movement_defines);
-    const auto writer_kernel_id =
-        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args, data_movement_defines);
+
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = READER_KERNEL_PATH;
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_ct_args);
+    reader_desc.defines = data_movement_defines;
+    reader_desc.config = ReaderConfigDescriptor{};
+    reader_desc.runtime_args.reserve(num_cores);
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = WRITER_KERNEL_PATH;
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_ct_args);
+    writer_desc.defines = data_movement_defines;
+    writer_desc.config = WriterConfigDescriptor{};
+    writer_desc.runtime_args.reserve(num_cores);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::map<std::string, std::string> compute_defines{};
-    if (amsgrad) {
-        compute_defines["AMSGRAD"] = "1";
-    }
+    ComputeConfigDescriptor compute_config{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .math_approx_mode = math_approx_mode,
+    };
 
-    if (fp32_dest_acc_en) {
-        compute_defines["FP32_DEST_ACC_EN"] = "1";
-    }
+    KernelDescriptor compute_desc_1;
+    compute_desc_1.kernel_source = COMPUTE_KERNEL_PATH;
+    compute_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc_1.core_ranges = core_group_1;
+    compute_desc_1.compile_time_args = {num_tiles_per_core_group_1};
+    compute_desc_1.defines = compute_defines;
+    compute_desc_1.config = compute_config;
 
-    const std::vector<uint32_t> compute_args_group_1{num_tiles_per_core_group_1};
-
-    const auto* const compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/kernels/"
-        "moreh_adam.cpp";
-
-    auto compute_kernel_1_id = CreateComputeKernel(
-        program,
-        compute_kernel_file,
-        {core_group_1, num_tiles_per_core_group_1, compute_args_group_1},
-        compute_defines,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode);
-    KernelHandle compute_kernel_2_id = -1;
-    if (!core_group_2.ranges().empty()) {
-        const std::vector<uint32_t> compute_args_group_2{num_tiles_per_core_group_2};
-
-        compute_kernel_2_id = CreateComputeKernel(
-            program,
-            compute_kernel_file,
-            {core_group_2, num_tiles_per_core_group_2, compute_args_group_2},
-            compute_defines,
-            math_fidelity,
-            fp32_dest_acc_en,
-            math_approx_mode);
+    KernelDescriptor compute_desc_2;
+    bool has_core_group_2 = !core_group_2.ranges().empty();
+    if (has_core_group_2) {
+        compute_desc_2.kernel_source = COMPUTE_KERNEL_PATH;
+        compute_desc_2.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        compute_desc_2.core_ranges = core_group_2;
+        compute_desc_2.compile_time_args = {num_tiles_per_core_group_2};
+        compute_desc_2.defines = compute_defines;
+        compute_desc_2.config = compute_config;
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -185,15 +247,11 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     const auto exp_avg_sq_out_addr = exp_avg_sq_out.buffer()->address();
     const auto max_exp_avg_sq_out_addr = max_exp_avg_sq_out.has_value() ? max_exp_avg_sq_out->buffer()->address() : 0;
 
-    union {
-        float f;
-        uint32_t u;
-    } f2u_lr{}, f2u_beta1{}, f2u_beta2{}, f2u_eps{}, f2u_weight_decay{};
-    f2u_lr.f = lr;
-    f2u_beta1.f = beta1;
-    f2u_beta2.f = beta2;
-    f2u_eps.f = eps;
-    f2u_weight_decay.f = weight_decay;
+    const uint32_t f2u_lr = std::bit_cast<uint32_t>(lr);
+    const uint32_t f2u_beta1 = std::bit_cast<uint32_t>(beta1);
+    const uint32_t f2u_beta2 = std::bit_cast<uint32_t>(beta2);
+    const uint32_t f2u_eps = std::bit_cast<uint32_t>(eps);
+    const uint32_t f2u_weight_decay = std::bit_cast<uint32_t>(weight_decay);
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -207,124 +265,53 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
             TT_THROW("Core not in specified core ranges.");
         }
 
-        const std::vector<uint32_t> reader_runtime_args{
-            param_in_addr,
-            grad_addr,
-            exp_avg_in_addr,
-            exp_avg_sq_in_addr,
-            max_exp_avg_sq_in_addr,
-            f2u_lr.u,
-            f2u_beta1.u,
-            f2u_beta2.u,
-            f2u_eps.u,
-            f2u_weight_decay.u,
-            step,
-            static_cast<uint32_t>(amsgrad),
-            num_tiles_per_core,
-            tile_offset};
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+        reader_desc.runtime_args.emplace_back(
+            core,
+            KernelDescriptor::CoreRuntimeArgs{
+                param_in_addr,
+                grad_addr,
+                exp_avg_in_addr,
+                exp_avg_sq_in_addr,
+                max_exp_avg_sq_in_addr,
+                f2u_lr,
+                f2u_beta1,
+                f2u_beta2,
+                f2u_eps,
+                f2u_weight_decay,
+                step,
+                static_cast<uint32_t>(amsgrad),
+                num_tiles_per_core,
+                tile_offset});
 
-        const std::vector<uint32_t> writer_runtime_args{
-            param_out_addr,
-            exp_avg_out_addr,
-            exp_avg_sq_out_addr,
-            max_exp_avg_sq_out_addr,
-            num_tiles_per_core,
-            tile_offset};
-        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+        writer_desc.runtime_args.emplace_back(
+            core,
+            KernelDescriptor::CoreRuntimeArgs{
+                param_out_addr,
+                exp_avg_out_addr,
+                exp_avg_sq_out_addr,
+                max_exp_avg_sq_out_addr,
+                num_tiles_per_core,
+                tile_offset});
 
+        // compute — runtime args go to the correct kernel descriptor
+        KernelDescriptor::CoreRuntimeArgs compute_rt{step};
         if (core_group_1.contains(core)) {
-            tt::tt_metal::SetRuntimeArgs(program, compute_kernel_1_id, core, {step});
-        } else if (core_group_2.contains(core)) {
-            tt::tt_metal::SetRuntimeArgs(program, compute_kernel_2_id, core, {step});
+            compute_desc_1.runtime_args.emplace_back(core, std::move(compute_rt));
         } else {
-            TT_THROW("Core not in specified core ranges.");
+            compute_desc_2.runtime_args.emplace_back(core, std::move(compute_rt));
         }
 
         tile_offset += num_tiles_per_core;
     }
 
-    return {
-        std::move(program),
-        {reader_kernel_id,
-         writer_kernel_id,
-         compute_kernel_1_id,
-         compute_kernel_2_id,
-         core_group_1,
-         core_group_2,
-         num_cores,
-         num_cores_y}};
-}
-
-void MorehAdamOperation::ProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
-    auto& compute_kernel_1_id = cached_program.shared_variables.compute_kernel_group1_id;
-    auto& compute_kernel_2_id = cached_program.shared_variables.compute_kernel_group2_id;
-
-    auto* param_in_buffer = tensor_args.param_in.buffer();
-    auto* grad_buffer = tensor_args.grad.buffer();
-    auto* exp_avg_in_buffer = tensor_args.exp_avg_in.buffer();
-    auto* exp_avg_sq_in_buffer = tensor_args.exp_avg_sq_in.buffer();
-    auto* max_exp_avg_sq_in_buffer =
-        tensor_args.max_exp_avg_sq_in.has_value() ? tensor_args.max_exp_avg_sq_in->buffer() : nullptr;
-
-    auto* param_out_buffer = tensor_return_value.at(0)->buffer();
-    auto* exp_avg_out_buffer = tensor_return_value.at(1)->buffer();
-    auto* exp_avg_sq_out_buffer = tensor_return_value.at(2)->buffer();
-    auto* max_exp_avg_sq_out_buffer = operation_attributes.amsgrad ? tensor_return_value.at(3)->buffer() : nullptr;
-
-    auto& core_group_1 = cached_program.shared_variables.core_group_1;
-    auto& core_group_2 = cached_program.shared_variables.core_group_2;
-
-    auto num_cores = cached_program.shared_variables.num_cores;
-    auto num_cores_y = cached_program.shared_variables.num_cores_y;
-
-    union {
-        float f;
-        uint32_t u;
-    } f2u_lr{};
-
-    f2u_lr.f = operation_attributes.lr;
-
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        {
-            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = param_in_buffer->address();
-            runtime_args[1] = grad_buffer->address();
-            runtime_args[2] = exp_avg_in_buffer->address();
-            runtime_args[3] = exp_avg_sq_in_buffer->address();
-            if (max_exp_avg_sq_in_buffer != nullptr) {
-                runtime_args[4] = max_exp_avg_sq_in_buffer->address();
-            }
-            runtime_args[5] = f2u_lr.u;
-            runtime_args[10] = operation_attributes.step;
-        }
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = param_out_buffer->address();
-            runtime_args[1] = exp_avg_out_buffer->address();
-            runtime_args[2] = exp_avg_sq_out_buffer->address();
-            if (max_exp_avg_sq_out_buffer != nullptr) {
-                runtime_args[3] = max_exp_avg_sq_out_buffer->address();
-            }
-        }
-        {
-            if (core_group_1.contains(core)) {
-                tt::tt_metal::SetRuntimeArgs(program, compute_kernel_1_id, core, {operation_attributes.step});
-            } else if (core_group_2.contains(core)) {
-                tt::tt_metal::SetRuntimeArgs(program, compute_kernel_2_id, core, {operation_attributes.step});
-            } else {
-                TT_THROW("Core not in specified core ranges.");
-            }
-        }
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc_1));
+    if (has_core_group_2) {
+        desc.kernels.push_back(std::move(compute_desc_2));
     }
+
+    return desc;
 }
+
 }  // namespace ttnn::operations::moreh::moreh_adam

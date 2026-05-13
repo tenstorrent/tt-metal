@@ -5,12 +5,12 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #ifdef ARCH_QUASAR
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #else
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #endif
-#include "experimental/noc.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 
 // #include "api/debug/dprint.h"
 
@@ -25,12 +25,12 @@ void kernel_main() {
     constexpr uint32_t in_id = get_compile_time_arg_val(0);
     constexpr auto src_args = TensorAccessorArgs<1>();
 #ifdef ARCH_QUASAR
-    experimental::DataflowBuffer dfb_in(in_id);
+    DataflowBuffer dfb_in(in_id);
 #else
-    experimental::CircularBuffer cb(in_id);
+    CircularBuffer cb(in_id);
 #endif
 
-    experimental::Noc noc;
+    Noc noc;
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;

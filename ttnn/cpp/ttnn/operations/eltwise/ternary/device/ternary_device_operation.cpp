@@ -506,8 +506,22 @@ ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
 
         // Include true/false tensor volumes so "true broadcast, false full" and "true full, false
         // broadcast" get distinct cache keys (broadcast_type alone is the same for both).
+        // Also include H,W dimensions (last 2 dims) since they determine per-tensor broadcast
+        // configuration (SRC_BCAST_*, SRC_ROW_BCAST_*, SRC_SCALAR_*) in ROW_COL_BCAST kernels.
         const auto b_shape = input_b->padded_shape();
         const auto c_shape = input_c->padded_shape();
+
+        // Extract H,W dims (last 2 dimensions) for broadcast configuration differentiation
+        // Use logical_shape() since broadcast logic depends on logical dimensions, not padded
+        const auto& a_logical = input_a.logical_shape();
+        const auto& b_logical = input_b->logical_shape();
+        const auto& c_logical = input_c->logical_shape();
+        const uint32_t a_h = a_logical.rank() >= 2 ? a_logical[-2] : 1;
+        const uint32_t a_w = a_logical[-1];
+        const uint32_t b_h = b_logical.rank() >= 2 ? b_logical[-2] : 1;
+        const uint32_t b_w = b_logical[-1];
+        const uint32_t c_h = c_logical.rank() >= 2 ? c_logical[-2] : 1;
+        const uint32_t c_w = c_logical[-1];
 
         hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
             args,
@@ -520,6 +534,12 @@ ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
             a_shape.volume(),
             b_shape.volume(),
             c_shape.volume(),
+            a_h,
+            a_w,  // Predicate H,W
+            b_h,
+            b_w,  // True tensor H,W
+            c_h,
+            c_w,  // False tensor H,W
             shard_volumes);
 
     } else if (variant == TernaryVariant::TTS) {
@@ -529,6 +549,16 @@ ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
             input_a.tensor_spec(), input_b->tensor_spec(), std::nullopt, compute_output_specs(args, tensor_args));
 
         const auto b_shape = input_b->padded_shape();
+
+        // Include H,W dims for broadcast configuration differentiation
+        // Use logical_shape() since broadcast logic depends on logical dimensions, not padded
+        const auto& a_logical = input_a.logical_shape();
+        const auto& b_logical = input_b->logical_shape();
+        const uint32_t a_h = a_logical.rank() >= 2 ? a_logical[-2] : 1;
+        const uint32_t a_w = a_logical[-1];
+        const uint32_t b_h = b_logical.rank() >= 2 ? b_logical[-2] : 1;
+        const uint32_t b_w = b_logical[-1];
+
         hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
             args,
             input_a.dtype(),
@@ -537,6 +567,10 @@ ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
             input_b.value().memory_config(),
             a_shape.volume(),
             b_shape.volume(),
+            a_h,
+            a_w,
+            b_h,
+            b_w,
             shard_volumes);
     } else if (variant == TernaryVariant::TST) {
         TT_FATAL(is_device_tensor(*input_c), "Unexpected Tensor type {}", input_c->storage_type());
@@ -545,6 +579,16 @@ ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
             input_a.tensor_spec(), std::nullopt, input_c->tensor_spec(), compute_output_specs(args, tensor_args));
 
         const auto c_shape = input_c->padded_shape();
+
+        // Include H,W dims for broadcast configuration differentiation
+        // Use logical_shape() since broadcast logic depends on logical dimensions, not padded
+        const auto& a_logical = input_a.logical_shape();
+        const auto& c_logical = input_c->logical_shape();
+        const uint32_t a_h = a_logical.rank() >= 2 ? a_logical[-2] : 1;
+        const uint32_t a_w = a_logical[-1];
+        const uint32_t c_h = c_logical.rank() >= 2 ? c_logical[-2] : 1;
+        const uint32_t c_w = c_logical[-1];
+
         hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
             args,
             input_a.dtype(),
@@ -553,6 +597,10 @@ ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
             input_c.value().memory_config(),
             a_shape.volume(),
             c_shape.volume(),
+            a_h,
+            a_w,
+            c_h,
+            c_w,
             shard_volumes);
     }
 

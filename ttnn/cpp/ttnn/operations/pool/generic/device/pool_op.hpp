@@ -16,6 +16,7 @@
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operation.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::pool {
 // Generic pool uop -- called from the macro-ops
@@ -42,46 +43,34 @@ struct Pool2D {
     using tensor_return_value_t = std::vector<Tensor>;
 
     struct MultiCore {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle reader0_kernel{};
-            tt::tt_metal::KernelHandle reader1_kernel{};
-            tt::tt_metal::KernelHandle compute_kernel{};
-            tt::tt_metal::CBHandle raw_in_cb{};
-            tt::tt_metal::CBHandle out_cb{};
-            tt::tt_metal::CBHandle out_idx_cb{};
-            tt::tt_metal::CBHandle in_scalar_cb_0{};
-            tt::tt_metal::CBHandle in_scalar_cb_1{};
-            tt::tt_metal::CBHandle clear_value_cb{};
-            tt::tt_metal::CBHandle in_reader_indices_cb{};
-            tt::tt_metal::CBHandle in_cb_0{};
-            tt::tt_metal::CBHandle in_cb_1{};
-            tt::tt_metal::CBHandle pre_tilize_cb{};
-            tt::tt_metal::CBHandle config_cb{};
-            tt::tt_metal::CBHandle in_idx_cb{};
-            tt::tt_metal::CBHandle pack_tmp_cb{};
-            tt::tt_metal::CBHandle pack_idx_tmp_cb{};
-            tt::tt_metal::CBHandle right_inc_cb{};
-            tt::tt_metal::CBHandle down_left_wrap_inc_cb{};
-            tt::tt_metal::CBHandle up_left_wrap_inc_cb{};
-            tt::tt_metal::CBHandle intra_kernel_right_inc_cb{};
-            tt::tt_metal::CBHandle intra_kernel_down_left_wrap_inc_cb{};
-            tt::tt_metal::CBHandle compute_tmp_idx_cb{};
-            uint32_t ncores{};
-            tt::tt_metal::DeviceStorage reader_indices_storage;
-            tt::tt_metal::DeviceStorage scalar_config_storage;
+        // Persistent device-side state owned across cache hits.
+        //  - reader_indices_device: encodes the per-core sliding-window halo
+        //    lookup table (built by sliding_window::move_config_tensor_to_device).
+        //  - scalar_config_device: only set for avg-pool variants where a single
+        //    scalar per core is insufficient (ceil_mode w/ ceil padding, or
+        //    !count_include_pad with non-zero padding) and divisor_override is
+        //    not set; built by create_scalar_config_tensor + Tensor::to_device.
+        // Both buffers must outlive program execution; the framework keeps the
+        // Resources struct alongside the cached Program and re-passes it into
+        // each create_descriptor() call so .buffer = resources.X->buffer() in
+        // CBDescriptor remains valid on cache hit.
+        // Tensor's default ctor is explicit, so wrap in optional to satisfy the
+        // framework's `resource_t{}` value-init.
+        struct Resources {
+            std::optional<Tensor> reader_indices_device;
+            std::optional<Tensor> scalar_config_device;
         };
 
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
+        static Resources prepare_resources(
             const operation_attributes_t& op_attr,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output_tensor);
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
+
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& op_attr,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output_tensor);
+            tensor_return_value_t& output_tensor,
+            Resources& resources);
     };
 
     using program_factory_t = std::variant<MultiCore>;

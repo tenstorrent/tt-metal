@@ -61,7 +61,11 @@ auto make_method_wrapper(Ret (*func)(FuncArgs...)) {
 template <typename Wrapper, typename Class, typename Func, typename... Args>
 void add_call_overload(Class& cls, const overload_t<Func, Args...>& spec) {
     auto method = make_method_wrapper<Wrapper>(spec.func);
-    std::apply([&cls, &method](const Args&... args) { cls.def("__call__", method, args...); }, spec.args);
+    std::apply(
+        [&cls, &method](const Args&... args) {
+            cls.def("__call__", method, args..., nb::call_guard<nb::gil_scoped_release>());
+        },
+        spec.args);
 }
 
 }  // namespace detail

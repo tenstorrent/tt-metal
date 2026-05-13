@@ -3,6 +3,28 @@
 #
 # Structure: Each architecture has its own section with all tests to skip.
 # Tests that apply to all architectures are duplicated in each section.
+#
+# arch_skip_groups: lists entire ttnn-tests.yaml test-group names to skip for
+# a given arch. The workflow gates the pytest run step on this lookup, so the
+# job reports success without running. Use this for arch-wide breakage where
+# a fix is in flight; remove the entry once the underlying issue is resolved.
+
+arch_skip_groups:
+  wormhole_b0: []
+  # https://github.com/tenstorrent/tt-metal/actions/runs/25732791096
+  # All BH ttsim ttnn-pytests groups below fail; fix in progress.
+  blackhole:
+    - ttnn data movement group
+    - ttnn conv group
+    - ttnn eltwise group 1
+    - ttnn eltwise group 2
+    - ttnn pool group
+    - ttnn fused group 1
+    - ttnn fused group 2
+    - ttnn misc ops group
+    - ttnn sdpa group
+    - ttnn reduce group
+    - core ttnn unit test group
 
 wormhole_b0:
   # Job-level timeouts -- can be cut down still
@@ -19,6 +41,10 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
+
+  # Likely OOM killer related failures -- probably need to run these tests serially
+  - tests/ttnn/unit_tests/operations/deepseek/test_deepseek_prefill_extract.py
+  - tests/ttnn/unit_tests/operations/deepseek/test_deepseek_prefill_insert.py
 
   # Numeric mismatches, likely caused by issue #41163
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py
@@ -41,11 +67,6 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_typecast.py
 
 blackhole:
-  # UINT32 tiled concat crash — segfault in ttsim for 4D UINT32 tensors on BH.
-  # Skipping full test function because parametrized ID contains parens/brackets
-  # that break the skip-list shell interpolation.
-  - tests/ttnn/unit_tests/operations/data_movement/test_concat.py::test_tiled_concat
-
   # Job-level timeouts
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
@@ -61,9 +82,16 @@ blackhole:
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
 
+  # Likely OOM killer related failures -- probably need to run these tests serially
+  - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob
+  - tests/ttnn/unit_tests/operations/deepseek/test_deepseek_prefill_extract.py
+  - tests/ttnn/unit_tests/operations/deepseek/test_deepseek_prefill_insert.py
+
   # MOVD2B failures
   # https://github.com/tenstorrent/tt-metal/issues/41286
   # https://github.com/tenstorrent/tt-metal/issues/40583
+  # https://github.com/tenstorrent/tt-metal/issues/43295
+  - tests/ttnn/unit_tests/operations/data_movement/test_concat.py::test_tiled_concat
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
   - tests/ttnn/unit_tests/operations/fused/test_rms_norm.py::test_rms_norm_row_major

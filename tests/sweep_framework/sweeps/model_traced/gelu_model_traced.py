@@ -2,21 +2,24 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.common.utility_functions import torch_random
 from functools import partial
+
+import torch
+
+import ttnn
+from models.common.utility_functions import torch_random
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
+    get_mesh_composer,
+    get_model_traced_mesh_shape,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
-from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
-
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, parse_dict_value
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
 TIMEOUT = 300
 
@@ -39,25 +42,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_mesh_shape()
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -77,16 +66,20 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
-    # Restore output memory_config for the op if present in traced kwargs
+    # Only restore memory_config if the master trace actually recorded it.
+    # Do NOT add it from output_memory_config when master didn't have it —
+    # that creates an extra_key diff in validation.
+    absent_keys = set(kwargs.get("__absent_keys__") or [])
     traced_memory_config = kwargs.get("memory_config")
-    if traced_memory_config is not None and traced_memory_config != "__ABSENT__" and "memory_config" not in op_kwargs:
-        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
-
+    if (
+        "memory_config" not in absent_keys
+        and traced_memory_config is not None
+        and traced_memory_config != "__ABSENT__"
+        and "memory_config" not in op_kwargs
+    ):
         parsed_mc = parse_dict_value("memory_config", traced_memory_config)
         if parsed_mc is not None:
             op_kwargs["memory_config"] = parsed_mc
-    elif output_memory_config is not None and "memory_config" not in op_kwargs:
-        op_kwargs["memory_config"] = output_memory_config
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
@@ -145,13 +138,16 @@ def run(
 
     start_time = start_measuring_time()
     output_tensor = ttnn.gelu(input_tensor_a, **op_kwargs)
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 
     # Slice output back to original shape in case tile padding expanded it
     if output_tensor.shape != torch_output_tensor.shape:
         output_tensor = output_tensor[tuple(slice(0, s) for s in torch_output_tensor.shape)]
 
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
     return [pcc, e2e_perf]

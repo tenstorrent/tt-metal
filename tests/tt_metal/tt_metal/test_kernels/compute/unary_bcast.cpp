@@ -13,7 +13,7 @@
 #ifdef ARCH_QUASAR
 #include "experimental/dataflow_buffer.h"
 #else
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #endif
 
 void kernel_main() {
@@ -44,8 +44,8 @@ void kernel_main() {
         }
     }
 #else
-    experimental::CircularBuffer cb0(tt::CBIndex::c_0);
-    experimental::CircularBuffer cb16(tt::CBIndex::c_16);
+    CircularBuffer cb0(tt::CBIndex::c_0);
+    CircularBuffer cb16(tt::CBIndex::c_16);
 
     unary_bcast_init<BCAST_DIM>(tt::CBIndex::c_0, tt::CBIndex::c_16);
 

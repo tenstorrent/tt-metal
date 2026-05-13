@@ -79,7 +79,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.sha }}
-          submodules: recursive
+          filter: blob:none
           path: docker-job
       - name: ⬇️  Setup Job
         uses: ./docker-job/.github/actions/setup-job
@@ -91,7 +91,7 @@ jobs:
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       - name: Run t3k fabric tests
         id: t3k-fabric-tests
-        timeout-minutes: 20
+        timeout-minutes: ${{ inputs.timeout }}
         if: ${{ inputs.run-fabric-tests == 'true' }}
         run: |
           mkdir -p generated/test_reports

@@ -6,7 +6,7 @@ import torch
 import ttnn
 import pytest
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_with_ulp, assert_allclose
+from tests.ttnn.utils_for_testing import assert_equal
 from math import isnan
 
 
@@ -425,9 +425,9 @@ def test_where_tst(device, dtype, h, w, scalar):
 @pytest.mark.parametrize(
     "scalar1, scalar2",
     [
-        [15.5, 31.2],
+        [15.5, 31.25],
         [15.5, float("nan")],
-        [float("nan"), 31.2],
+        [float("nan"), 31.25],
         [float("inf"), -float("inf")],
         [-float("inf"), float("nan")],
     ],
@@ -453,10 +453,7 @@ def test_where_tss(device, dtype, h, w, scalar1, scalar2):
     ttnn_result = ttnn.where(ttnn_C, T, F)
     result = ttnn.to_torch(ttnn_result)
 
-    if dtype == torch.bfloat16:
-        assert_with_pcc(result, golden)
-    else:
-        assert torch_equal_nan(result, golden)
+    assert torch_equal_nan(result, golden)
 
 
 @pytest.mark.parametrize(
@@ -879,8 +876,8 @@ def test_where_subcore_grid(device, shape, sub_core_grid, dtype, scalar, variant
 @pytest.mark.parametrize(
     "scalar_true, scalar_false",
     [
-        (15.5, 31.2),
-        (0.0, -11.33),
+        (15.5, 31.25),
+        (0.0, -11.3125),
     ],
 )
 @pytest.mark.parametrize("condition", [1, 0])
@@ -898,10 +895,7 @@ def test_where_tss_subcore_grid(device, shape, sub_core_grid, dtype, scalar_true
     ttnn_result = ttnn.where(ttnn_C, scalar_true, scalar_false, sub_core_grids=sub_core_grid)
     result = ttnn.to_torch(ttnn_result)
 
-    if dtype == torch.bfloat16:
-        assert_with_pcc(result, golden)
-    else:
-        assert torch_equal_nan(result, golden)
+    assert torch_equal_nan(result, golden)
 
 
 # Tests for INT32/UINT32 predicate with sub_core_grids — exercises the typecast path
@@ -1075,3 +1069,79 @@ def test_where_ttt_int32_predicate_sub_core_grid(device, shape, sub_core_grid, c
     result = ttnn.to_torch(ttnn_result)
 
     assert torch_equal_nan(result, golden)
+
+
+# Program cache bug tests - ensure different broadcast configurations don't collide
+# Issue 43368: When padded shapes are identical but logical shapes differ (e.g., [1,1,32] vs [1,8,1]),
+# the program cache key must distinguish them to avoid using wrong kernel configuration.
+
+
+@pytest.mark.parametrize("variant", ["TTT", "TTS", "TST"])
+def test_where_program_cache_different_broadcast_shapes(device, variant):
+    """
+    Test that sequential where ops with same broadcast_type but different
+    per-operand broadcast configurations don't collide in program cache.
+    """
+    torch.manual_seed(42)
+
+    # First where: predicate broadcasts on rows (1x32 -> 4x32)
+    pred1 = torch.zeros(1, 1, 32, dtype=torch.bfloat16)
+    pred1[:, :, 16:] = 1.0
+
+    # Second where: predicate broadcasts on columns (8x1 -> 8x32)
+    pred2 = torch.zeros(1, 8, 1, dtype=torch.bfloat16)
+    pred2[:, 4:, :] = 1.0
+
+    if variant == "TTT":
+        true1 = torch.randn(1, 1, 1, dtype=torch.bfloat16)
+        false1 = torch.randn(1, 4, 32, dtype=torch.bfloat16)
+        true2 = torch.randn(1, 1, 1, dtype=torch.bfloat16)
+        false2 = torch.randn(1, 8, 32, dtype=torch.bfloat16)
+
+        expected1 = torch.where(pred1.bool().expand_as(false1), true1.expand_as(false1), false1)
+        expected2 = torch.where(pred2.bool().expand_as(false2), true2.expand_as(false2), false2)
+
+        pred1_ttnn = ttnn.from_torch(pred1, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        true1_ttnn = ttnn.from_torch(true1, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        false1_ttnn = ttnn.from_torch(false1, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        result1 = ttnn.to_torch(ttnn.where(pred1_ttnn, true1_ttnn, false1_ttnn))
+
+        pred2_ttnn = ttnn.from_torch(pred2, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        true2_ttnn = ttnn.from_torch(true2, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        false2_ttnn = ttnn.from_torch(false2, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        result2 = ttnn.to_torch(ttnn.where(pred2_ttnn, true2_ttnn, false2_ttnn))
+
+    elif variant == "TTS":
+        true1 = torch.randn(1, 4, 32, dtype=torch.bfloat16)
+        true2 = torch.randn(1, 8, 32, dtype=torch.bfloat16)
+        scalar_false = 0.0
+
+        expected1 = torch.where(pred1.bool().expand_as(true1), true1, torch.full_like(true1, scalar_false))
+        expected2 = torch.where(pred2.bool().expand_as(true2), true2, torch.full_like(true2, scalar_false))
+
+        pred1_ttnn = ttnn.from_torch(pred1, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        true1_ttnn = ttnn.from_torch(true1, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        result1 = ttnn.to_torch(ttnn.where(pred1_ttnn, true1_ttnn, scalar_false))
+
+        pred2_ttnn = ttnn.from_torch(pred2, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        true2_ttnn = ttnn.from_torch(true2, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        result2 = ttnn.to_torch(ttnn.where(pred2_ttnn, true2_ttnn, scalar_false))
+
+    elif variant == "TST":
+        false1 = torch.randn(1, 4, 32, dtype=torch.bfloat16)
+        false2 = torch.randn(1, 8, 32, dtype=torch.bfloat16)
+        scalar_true = 1.0
+
+        expected1 = torch.where(pred1.bool().expand_as(false1), torch.full_like(false1, scalar_true), false1)
+        expected2 = torch.where(pred2.bool().expand_as(false2), torch.full_like(false2, scalar_true), false2)
+
+        pred1_ttnn = ttnn.from_torch(pred1, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        false1_ttnn = ttnn.from_torch(false1, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        result1 = ttnn.to_torch(ttnn.where(pred1_ttnn, scalar_true, false1_ttnn))
+
+        pred2_ttnn = ttnn.from_torch(pred2, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        false2_ttnn = ttnn.from_torch(false2, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        result2 = ttnn.to_torch(ttnn.where(pred2_ttnn, scalar_true, false2_ttnn))
+
+    assert_equal(expected1, result1)
+    assert_equal(expected2, result2)

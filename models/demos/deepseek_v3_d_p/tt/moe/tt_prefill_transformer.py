@@ -13,7 +13,7 @@ but targeting the TT prefill path with SP+TP parallelism.
 
 import os
 from pathlib import Path
-from typing import Optional, Union
+from typing import Callable, Optional, Union
 
 import torch
 from loguru import logger
@@ -101,13 +101,13 @@ class TtPrefillTransformer(LightweightModule):
         state_dict: dict,
         num_layers: int,
         seq_len: int,
+        dispatch_buffer_capacity_factor: int = 2,
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Linear,
         sp_axis: int = 0,
         tp_axis: int = 1,
         is_balanced: bool = False,
         padding_side: str = "right",
-        capacity_factor: int = 2,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
         routed_expert_weights_dtype=ttnn.bfloat4_b,
@@ -121,24 +121,19 @@ class TtPrefillTransformer(LightweightModule):
         self.padding_side = padding_side
 
         # Log environment variables that define reference output cache and TTNN weights cache.
-        # This is to prevent accidental cache creation at unusal places and fill disk space.
+        # This is to prevent accidental cache creation at unusual places and fill disk space.
         TT_DS_PREFILL_TTNN_CACHE = os.getenv("TT_DS_PREFILL_TTNN_CACHE", None)
         TT_DS_PREFILL_HOST_REF_CACHE = os.getenv("TT_DS_PREFILL_HOST_REF_CACHE", None)
-
         logger.debug(f"{TT_DS_PREFILL_TTNN_CACHE=}")
         logger.debug(f"{TT_DS_PREFILL_HOST_REF_CACHE=}")
         if TT_DS_PREFILL_TTNN_CACHE is None:
-            logger.error(f"TT_DS_PREFILL_TTNN_CACHE environment variable is not set; export TT_DS_PREFILL_TTNN_CACHE=")
-            import pytest
-
-            pytest.fail(f"{TT_DS_PREFILL_TTNN_CACHE=}")
-        if TT_DS_PREFILL_HOST_REF_CACHE is None:
-            logger.error(
-                f"TT_DS_PREFILL_HOST_REF_CACHE environment variable is not set; export TT_DS_PREFILL_HOST_REF_CACHE="
+            raise RuntimeError(
+                "TT_DS_PREFILL_TTNN_CACHE environment variable is not set; export TT_DS_PREFILL_TTNN_CACHE=<path>"
             )
-            import pytest
-
-            pytest.fail(f"{TT_DS_PREFILL_HOST_REF_CACHE=}")
+        if TT_DS_PREFILL_HOST_REF_CACHE is None:
+            raise RuntimeError(
+                "TT_DS_PREFILL_HOST_REF_CACHE environment variable is not set; export TT_DS_PREFILL_HOST_REF_CACHE=<path>"
+            )
 
         logger.info(f"Building TtPrefillTransformer with {num_layers} layers, seq_len={seq_len}")
 
@@ -165,12 +160,12 @@ class TtPrefillTransformer(LightweightModule):
                 state_dict=layer_state,
                 layer_idx=i,
                 seq_len=seq_len,
+                dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
                 num_links=num_links,
                 topology=topology,
                 sp_axis=sp_axis,
                 tp_axis=tp_axis,
                 is_balanced=is_balanced,
-                capacity_factor=capacity_factor,
                 gate_fallback_mode=gate_fallback_mode,
                 routed_expert_activations_dtype=routed_expert_activations_dtype,
                 routed_expert_weights_dtype=routed_expert_weights_dtype,
@@ -230,6 +225,7 @@ class TtPrefillTransformer(LightweightModule):
         return_intermediates: bool = False,
         read_profiler: bool = False,
         temperature: Union[float, list[float]] = 0.0,
+        on_layer_complete: Optional[Callable[[int, ttnn.Tensor], None]] = None,
     ):
         """
         Forward pass: embed -> [block x N] -> norm -> lm_head.
@@ -242,6 +238,11 @@ class TtPrefillTransformer(LightweightModule):
             read_profiler: if True, read TTNN profiler after each layer to avoid profiler buffer overflows
             temperature: Temperature for sampling. Can be a single float or list of floats.
                         If list, returns first temperature result but stores all in intermediates.
+            on_layer_complete: optional callback invoked by MLA after fill_cache_for_user_().
+                Called as on_layer_complete(layer_idx, kvpe_cache). Used for KV cache
+                migration in disaggregated prefill/decode. When set, MLA also zeros
+                the padding region of the cache before fill so migration sees valid KV
+                + zero padding. When None, no migration or zeroing.
 
         Returns:
             Tuple of (first_token_id, first_token_prob, intermediates_dict or None)
@@ -263,7 +264,15 @@ class TtPrefillTransformer(LightweightModule):
 
         for i, layer in enumerate(self.layers):
             signpost(f"forward_layer_{i}_start")
-            h, _ = layer(h, rope_tensors, kvpe_cache, cache_layer_idx=i)
+            h, _ = layer(
+                h,
+                rope_tensors,
+                kvpe_cache,
+                cache_layer_idx=i,
+                return_intermediates=return_intermediates,
+                on_layer_complete=on_layer_complete,
+                actual_isl=number_of_non_padded_tokens,
+            )
             signpost(f"forward_layer_{i}_end")
             if return_intermediates:
                 ttnn.synchronize_device(self.mesh_device)

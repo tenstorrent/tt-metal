@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/compute/common.h"
 #include "api/debug/dprint.h"
 
@@ -13,7 +13,7 @@ void kernel_main() {
     // only posts credits so the DM consumer knows data is available.
     const uint32_t num_entries_per_producer = get_compile_time_arg_val(1);
 
-    experimental::DataflowBuffer dfb(0);
+    DataflowBuffer dfb(0);
 
     for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) {
         DEVICE_PRINT("producer tile id {}\n", tile_id);

@@ -15,8 +15,11 @@ inputs:
     required: false
 outputs:
   slack_ts:
-    description: "The timestamp of the sent Slack message (only available when using Bot Token)"
+    description: "The timestamp of the first sent Slack message (only available when using Bot Token)"
     value: ${{ steps.slack_send.outputs.ts }}
+  slack_ts_map:
+    description: "JSON map keyed '<workflow_name> / <job_name>' (or just '<workflow_name>' when a regression has no failing jobs) to that entry's Slack thread timestamp. Bot Token only."
+    value: ${{ steps.slack_send.outputs.slack_ts_map }}
 runs:
   using: "composite"
   steps:
@@ -118,129 +121,70 @@ runs:
         trap cleanup_chunk_dir EXIT
 
         chunk_index=0
-        current_chunk_text=""
 
-        # Process each regression
+        # ── Per-JOB granularity ──────────────────────────────────────────
+        # Every failing job becomes its OWN top-level Slack message and its
+        # own entry in TS_MAP.  Boundary key format:
+        #   "<workflow_name> / <job_name>"  (matches the lookup key used by
+        #   trigger-auto-triage-for-regressions/index.js)
+        #
+        # Regressions that have zero failing jobs still emit one message so
+        # the operator sees them; those boundaries are keyed by the
+        # workflow name alone, and the trigger action's fallback chain
+        # resolves them via slackTsMap[workflow.name].
         for i in $(seq 0 $((REGRESSION_COUNT - 1))); do
           regression=$(jq -c ".[$i]" "$tmp_file")
           regression_name=$(echo "$regression" | jq -r '.name // "Unknown"')
           regression_header=$(format_regression_header "$regression")
 
-          # Get failing jobs
           failing_jobs_count=$(echo "$regression" | jq -r '.failing_jobs | if type == "array" then length else 0 end')
 
           echo "Processing regression $((i + 1)): $regression_name with $failing_jobs_count failing jobs"
 
           if [ "$failing_jobs_count" -eq 0 ]; then
-            # No failing jobs, just add the header
-            test_text="${current_chunk_text}"
-            if [ -n "$test_text" ]; then
-              test_text="${test_text}${NEWLINE}${regression_header}"
-            else
-              test_text="${HEADER_PREFIX}${regression_header}"
+            # No failing jobs — single workflow-level message.
+            boundary_key="$regression_name"
+            echo "$boundary_key" > "${GITHUB_WORKSPACE}/slack_regression_boundary_${chunk_index}.txt"
+            echo "  → Workflow-only boundary [$chunk_index]: $boundary_key"
+
+            chunk_text="${HEADER_PREFIX}${regression_header}"
+            chunk_length=${#chunk_text}
+            if [ "$chunk_length" -gt "$((MAX_BLOCK_TEXT_LENGTH - CHUNK_INDICATOR_BUFFER))" ]; then
+              echo "⚠️ Workflow-only message for '$regression_name' is ${chunk_length} chars, exceeds budget $((MAX_BLOCK_TEXT_LENGTH - CHUNK_INDICATOR_BUFFER)); truncating header"
+              chunk_text="${HEADER_PREFIX}*${regression_name}*"
             fi
-
-            test_length=$(printf '%s' "$test_text" | wc -c)
-            if [ "$test_length" -gt "$MAX_BLOCK_TEXT_LENGTH" ] && [ -n "$current_chunk_text" ]; then
-              # Save current chunk and start new one
-              echo "$current_chunk_text" > "${chunk_dir}/chunk_${chunk_index}.txt"
-              chunk_index=$((chunk_index + 1))
-              current_chunk_text="${HEADER_PREFIX}${regression_header}"
-            else
-              current_chunk_text="$test_text"
-            fi
-          else
-            # Has failing jobs - may need to split them
-            jobs_added=0
-            is_first_job_batch=true
-
-            while [ "$jobs_added" -lt "$failing_jobs_count" ]; do
-              # Build text for this batch of jobs
-              if [ "$is_first_job_batch" = true ]; then
-                # First batch includes the regression header
-                if [ -n "$current_chunk_text" ]; then
-                  batch_text="${current_chunk_text}${NEWLINE}${regression_header}"
-                else
-                  batch_text="${HEADER_PREFIX}${regression_header}"
-                fi
-              else
-                # Continuation batch
-                if [ -n "$current_chunk_text" ]; then
-                  batch_text="${current_chunk_text}${NEWLINE}_(continued)_ *${regression_name}*"
-                else
-                  batch_text="${HEADER_PREFIX}_(continued)_ *${regression_name}*"
-                fi
-              fi
-
-              # Add jobs one at a time until we hit the limit
-              jobs_in_this_batch=0
-              for j in $(seq "$jobs_added" $((failing_jobs_count - 1))); do
-                job=$(echo "$regression" | jq -c ".failing_jobs[$j]")
-                job_text=$(format_single_job "$job")
-
-                if [ -z "$job_text" ]; then
-                  jobs_added=$((jobs_added + 1))
-                  continue
-                fi
-
-                test_batch="${batch_text}${NEWLINE}${job_text}"
-                test_length=$(printf '%s' "$test_batch" | wc -c)
-
-                # Reserve space for chunk indicator
-                test_length_with_buffer=$((test_length + CHUNK_INDICATOR_BUFFER))
-
-                if [ "$test_length_with_buffer" -gt "$MAX_BLOCK_TEXT_LENGTH" ]; then
-                  # This job would exceed the limit
-                  if [ "$jobs_in_this_batch" -eq 0 ] && [ -z "$current_chunk_text" ]; then
-                    # This single job is too large even for a fresh chunk - add it anyway
-                    batch_text="${test_batch}"
-                    jobs_added=$((jobs_added + 1))
-                    jobs_in_this_batch=$((jobs_in_this_batch + 1))
-                    echo "⚠️ Warning: Single job exceeds limit, adding anyway"
-                  fi
-                  # Stop adding jobs to this batch
-                  break
-                else
-                  # Add this job
-                  batch_text="${test_batch}"
-                  jobs_added=$((jobs_added + 1))
-                  jobs_in_this_batch=$((jobs_in_this_batch + 1))
-                fi
-              done
-
-              # If we added jobs but didn't finish, save this chunk and continue
-              if [ "$jobs_added" -lt "$failing_jobs_count" ] && [ "$jobs_in_this_batch" -gt 0 ]; then
-                echo "$batch_text" > "${chunk_dir}/chunk_${chunk_index}.txt"
-                chunk_index=$((chunk_index + 1))
-                current_chunk_text=""
-                is_first_job_batch=false
-              else
-                # All jobs fit or we're done
-                current_chunk_text="$batch_text"
-                is_first_job_batch=false
-              fi
-
-              # Safety check to prevent infinite loop
-              if [ "$jobs_in_this_batch" -eq 0 ] && [ "$jobs_added" -lt "$failing_jobs_count" ]; then
-                # No progress made - save what we have and continue after skipping this job
-                if [ -n "$current_chunk_text" ]; then
-                  echo "$current_chunk_text" > "${chunk_dir}/chunk_${chunk_index}.txt"
-                  chunk_index=$((chunk_index + 1))
-                  current_chunk_text=""
-                fi
-                is_first_job_batch=false
-                # Force increment jobs_added to skip problematic job and allow next iteration
-                jobs_added=$((jobs_added + 1))
-              fi
-            done
+            echo "$chunk_text" > "${chunk_dir}/chunk_${chunk_index}.txt"
+            chunk_index=$((chunk_index + 1))
+            continue
           fi
-        done
 
-        # Save the last chunk if it has content
-        if [ -n "$current_chunk_text" ]; then
-          echo "$current_chunk_text" > "${chunk_dir}/chunk_${chunk_index}.txt"
-          chunk_index=$((chunk_index + 1))
-        fi
+          for j in $(seq 0 $((failing_jobs_count - 1))); do
+            job=$(echo "$regression" | jq -c ".failing_jobs[$j]")
+            job_text=$(format_single_job "$job")
+            job_name=$(echo "$job" | jq -r 'if type == "object" then (.name // "Unknown") else . end')
+
+            if [ -z "$job_text" ]; then
+              echo "  → Skipping empty job_text for job index $j in $regression_name"
+              continue
+            fi
+
+            boundary_key="${regression_name} / ${job_name}"
+            echo "$boundary_key" > "${GITHUB_WORKSPACE}/slack_regression_boundary_${chunk_index}.txt"
+            echo "  → Per-job boundary [$chunk_index]: $boundary_key"
+
+            chunk_text="${HEADER_PREFIX}${regression_header}${NEWLINE}${job_text}"
+            chunk_length=${#chunk_text}
+            if [ "$chunk_length" -gt "$((MAX_BLOCK_TEXT_LENGTH - CHUNK_INDICATOR_BUFFER))" ]; then
+              # A single regression-header + job-line that exceeds the budget
+              # is unexpected; log loudly and fall back to a minimal message
+              # so the operator still sees *something* for this job.
+              echo "⚠️ Per-job message for '$boundary_key' is ${chunk_length} chars, exceeds budget $((MAX_BLOCK_TEXT_LENGTH - CHUNK_INDICATOR_BUFFER)); falling back to minimal body"
+              chunk_text="${HEADER_PREFIX}*${regression_name}*${NEWLINE}    • ${job_name}"
+            fi
+            echo "$chunk_text" > "${chunk_dir}/chunk_${chunk_index}.txt"
+            chunk_index=$((chunk_index + 1))
+          done
+        done
 
         TOTAL_CHUNKS=$chunk_index
         echo "total_chunks=$TOTAL_CHUNKS" >> "$GITHUB_OUTPUT"
@@ -387,9 +331,10 @@ runs:
       run: |
         set -euo pipefail
 
-        # Ensure payload files are cleaned up even if this step fails
+        # Ensure payload and boundary files are cleaned up even if this step fails
         cleanup_payload_files() {
           rm -f "${GITHUB_WORKSPACE}"/slack_payload_*.json 2>/dev/null || true
+          rm -f "${GITHUB_WORKSPACE}"/slack_regression_boundary_*.txt 2>/dev/null || true
         }
         trap cleanup_payload_files EXIT
 
@@ -410,6 +355,15 @@ runs:
 
         if [ -n "${SLACK_BOT_TOKEN:-}" ] && [ -n "${CHANNEL_ID:-}" ]; then
           # Using Bot Token method - supports threading
+          # TS_MAP tracks {boundary_key: slack_ts} where boundary_key is
+          # "<workflow_name> / <job_name>" for per-job messages, or just
+          # "<workflow_name>" for the zero-failing-jobs edge case.
+          TS_MAP="{}"
+          # CURRENT_REGRESSION_TS holds the top-level ts for the message currently
+          # being sent; since this loop now emits one top-level message per chunk,
+          # it's reset on every boundary (which is every chunk).
+          CURRENT_REGRESSION_TS=""
+
           # Temporarily disable exit on error for the loop so we can send all messages even if one fails
           set +e
           for i in $(seq 0 $((TOTAL_CHUNKS - 1))); do
@@ -447,15 +401,29 @@ runs:
               continue
             fi
 
+            # Check for a regression boundary marker written by the build step.
+            # When present, this chunk is the first message for a new pipeline, so
+            # it must be sent as a top-level message (no thread_ts).
+            boundary_file="${GITHUB_WORKSPACE}/slack_regression_boundary_${i}.txt"
+            boundary_regression_name=""
+            if [ -f "$boundary_file" ]; then
+              boundary_regression_name=$(cat "$boundary_file" 2>/dev/null || echo "")
+              CURRENT_REGRESSION_TS=""
+              echo "New regression boundary for: $boundary_regression_name"
+              rm -f "$boundary_file" || echo "⚠️ Failed to remove boundary file: $boundary_file"
+            fi
+
             # Build request body with channel and optional thread_ts
             REQUEST_BODY=""
-            if [ -z "$FIRST_TS" ]; then
+            if [ -z "$CURRENT_REGRESSION_TS" ]; then
+              # Top-level message (first chunk of a regression, or legacy single-message mode)
               REQUEST_BODY=$(echo "$PAYLOAD" | \
                 jq -c --arg channel "$CHANNEL_ID" \
                 '. + {channel: $channel}' 2>/dev/null || echo "")
             else
+              # Continuation chunk — thread under the regression's top-level message
               REQUEST_BODY=$(echo "$PAYLOAD" | \
-                jq -c --arg channel "$CHANNEL_ID" --arg thread_ts "$FIRST_TS" \
+                jq -c --arg channel "$CHANNEL_ID" --arg thread_ts "$CURRENT_REGRESSION_TS" \
                 '. + {channel: $channel, thread_ts: $thread_ts}' 2>/dev/null || echo "")
             fi
 
@@ -471,11 +439,21 @@ runs:
               -d "$REQUEST_BODY" 2>/dev/null || echo '{"ok":false,"error":"curl_failed"}')
 
             # Extract timestamp for threading subsequent messages
-            if [ -z "$FIRST_TS" ]; then
-              FIRST_TS=$(echo "$RESPONSE" | jq -r '.ts // empty' 2>/dev/null || echo "")
-              if [ -n "$FIRST_TS" ] && [ "$FIRST_TS" != "null" ] && [ "$FIRST_TS" != "" ]; then
+            MSG_TS=$(echo "$RESPONSE" | jq -r '.ts // empty' 2>/dev/null || echo "")
+            if [ -z "$CURRENT_REGRESSION_TS" ] && [ -n "$MSG_TS" ] && [ "$MSG_TS" != "null" ]; then
+              CURRENT_REGRESSION_TS="$MSG_TS"
+              # Record the first-ever ts for backward-compat output
+              if [ -z "$FIRST_TS" ]; then
+                FIRST_TS="$MSG_TS"
                 echo "ts=$FIRST_TS" >> "$GITHUB_OUTPUT"
                 echo "First message timestamp: $FIRST_TS"
+              fi
+              # Add this message's ts to the boundary-keyed map
+              if [ -n "$boundary_regression_name" ]; then
+                TS_MAP=$(echo "$TS_MAP" | \
+                  jq -c --arg name "$boundary_regression_name" --arg ts "$MSG_TS" \
+                  '. + {($name): $ts}' 2>/dev/null || echo "$TS_MAP")
+                echo "Recorded ts=$MSG_TS for boundary: $boundary_regression_name"
               fi
             fi
 
@@ -493,6 +471,10 @@ runs:
             fi
           done
           set -e
+
+          # Output the boundary-keyed ts map for downstream steps
+          echo "slack_ts_map=$(echo "$TS_MAP" | jq -c .)" >> "$GITHUB_OUTPUT"
+          echo "Final slack_ts_map: $(echo "$TS_MAP" | jq -c .)"
 
           if [ "$SEND_ERRORS" -gt 0 ]; then
             echo "⚠️ Warning: $SEND_ERRORS out of $TOTAL_CHUNKS messages failed to send"

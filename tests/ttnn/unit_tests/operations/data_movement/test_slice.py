@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 from tests.ttnn.unit_tests.operations.test_utils import round_up
 import math
 
@@ -75,7 +75,7 @@ def run_slice_rm_sharded(device, n, c, h, w):
         tt_output_tensor = ttnn.to_memory_config(tt_output_tensor, ttnn.L1_MEMORY_CONFIG)
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
-    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
+    assert_equal(torch_output_tensor, tt_output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -186,7 +186,7 @@ def test_slice_rm(device, n, c, h, w):
     activation_pyt_padded_out = ttnn.to_memory_config(activation_pyt_padded, ttnn.L1_MEMORY_CONFIG)
     activation_pyt_padded_out = ttnn.from_device(activation_pyt_padded_out)
     activation_pyt_padded_out = ttnn.to_torch(activation_pyt_padded_out)
-    assert_with_pcc(torch_output_tensor, activation_pyt_padded_out, 0.9999)
+    assert_equal(torch_output_tensor, activation_pyt_padded_out)
 
 
 def slice_test(
@@ -1309,7 +1309,7 @@ def test_slice_sharded_auto_shard_spec_recomputation(
     tt_output_torch = ttnn.to_torch(tt_output_cpu)
     torch_expected = torch_input[begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2], begins[3] : ends[3]]
 
-    assert_with_pcc(torch_expected, tt_output_torch, 0.9999)
+    assert_equal(torch_expected, tt_output_torch)
 
 
 @pytest.mark.parametrize(
@@ -1371,7 +1371,7 @@ def test_slice_within_tile_vs_across_tiles(input_shape, begins, ends, layout, us
         tt_output = ttnn.to_memory_config(tt_output, ttnn.DRAM_MEMORY_CONFIG)
     tt_output_torch = ttnn.to_torch(tt_output)
 
-    assert_with_pcc(torch_expected, tt_output_torch, 0.9999)
+    assert_equal(torch_expected, tt_output_torch)
 
 
 @pytest.mark.parametrize(
@@ -1433,7 +1433,7 @@ def test_slice_sharding_independence(input_shape, begins, ends, use_sharding, de
         tt_output = ttnn.to_memory_config(tt_output, ttnn.DRAM_MEMORY_CONFIG)
     tt_output_torch = ttnn.to_torch(tt_output)
 
-    assert_with_pcc(torch_expected, tt_output_torch, 0.9999)
+    assert_equal(torch_expected, tt_output_torch)
 
 
 def test_issue_38841_regression(device):
@@ -1467,7 +1467,7 @@ def test_issue_38841_regression(device):
     torch_expected = torch_input[0:1, 0:1, 0:128, 0:32]
     tt_output_torch = ttnn.to_torch(tt_output)
 
-    assert_with_pcc(torch_expected, tt_output_torch, 0.9999)
+    assert_equal(torch_expected, tt_output_torch)
 
 
 @pytest.mark.parametrize(

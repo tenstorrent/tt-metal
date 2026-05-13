@@ -27,7 +27,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include "device_fixture.hpp"
+#include "llk_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -464,7 +464,7 @@ void run_single_core_unary_broadcast(
 using namespace unit_tests::compute::unary_broadcast;
 
 // FIXME: https://github.com/tenstorrent/tt-metal/issues/36142
-TEST_F(MeshDeviceFixture, DISABLED_TensixComputeSingleTileUnaryBroadcast) {
+TEST_F(LLKMeshDeviceFixture, DISABLED_TensixComputeSingleTileUnaryBroadcast) {
     if (this->arch_ == tt::ARCH::QUASAR) {
         GTEST_SKIP() << "Quasar uses TensixComputeUnaryBroadcastQuasarDfb";
     }

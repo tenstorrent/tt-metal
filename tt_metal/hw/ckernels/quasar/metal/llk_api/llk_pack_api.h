@@ -15,7 +15,7 @@
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "llk_pack_untilize_api.h"
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 /*************************************************************************
  * LLK PACK
