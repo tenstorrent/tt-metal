@@ -31,12 +31,17 @@ constexpr uint32_t expert_mapping_cb_page_size = get_compile_time_arg_val(21);  
 constexpr uint32_t expert_indices_num_pages = get_compile_time_arg_val(22);
 constexpr uint32_t expert_mapping_num_pages = get_compile_time_arg_val(23);
 constexpr uint32_t mesh_cols = get_compile_time_arg_val(24);  // mesh_shape[1]; needed to decode linearized device ids
+constexpr uint32_t num_shared_experts = get_compile_time_arg_val(25);
+// Host packs the BF16 scale (upper 16 bits of float32) into the low 16 bits of this CT arg.
+constexpr uint16_t shared_expert_scale_bf16 = static_cast<uint16_t>(get_compile_time_arg_val(26) & 0xFFFF);
+
+constexpr uint32_t num_routed_experts = reduction_dim_size - num_shared_experts;
 
 constexpr uint32_t face2_offset = 512;  // face 2 starts 512 elements into tile
 
 // TensorAccessor CT args, chained:
-//   activation @ 25, scores @ next, expert_indices @ next, expert_mapping @ next.
-constexpr uint32_t initial_ct_idx_act = 25;
+//   activation @ 27, scores @ next, expert_indices @ next, expert_mapping @ next.
+constexpr uint32_t initial_ct_idx_act = 27;
 constexpr uint32_t initial_ct_idx_scores = TensorAccessorArgs<initial_ct_idx_act>::next_compile_time_args_offset();
 constexpr uint32_t initial_ct_idx_expert_indices =
     TensorAccessorArgs<initial_ct_idx_scores>::next_compile_time_args_offset();
@@ -172,18 +177,27 @@ void kernel_main() {
     // [token][1][s=1][k] -> [k][1][t][s_padded=32]
     for (uint32_t k = 0; k < reduction_dim_size; ++k) {
         volatile tt_l1_ptr uint16_t* expert_tile = scores_tile_u16 + k * tile_u16_stride;
+        const bool is_shared_expert = (k >= num_routed_experts);
 
         // Fill Face 0 (rows 0-15, col 0) for tokens t = 0..15
         for (uint32_t t = 0; t < 16 && t < num_tokens; ++t) {
-            // score location in RM: t * (cb_scores_rm_page_size / 2) + k
-            const uint16_t score = scores_rm_u16[t * (cb_scores_rm_page_size / 2) + k];
-            expert_tile[t * 16] = compute_on_axis(t, k) ? score : bf16_zero;
+            if (is_shared_expert) {
+                expert_tile[t * 16] = shared_expert_scale_bf16;
+            } else {
+                // score location in RM: t * (cb_scores_rm_page_size / 2) + k
+                const uint16_t score = scores_rm_u16[t * (cb_scores_rm_page_size / 2) + k];
+                expert_tile[t * 16] = compute_on_axis(t, k) ? score : bf16_zero;
+            }
         }
         // Fill Face 2 (rows 16-31, col 0) for tokens t = 16..num_tokens-1
         if (num_tokens > 16) {
             for (uint32_t t = 16; t < num_tokens; ++t) {
-                const uint16_t score = scores_rm_u16[t * (cb_scores_rm_page_size / 2) + k];
-                expert_tile[face2_offset + (t - 16) * 16] = compute_on_axis(t, k) ? score : bf16_zero;
+                if (is_shared_expert) {
+                    expert_tile[face2_offset + (t - 16) * 16] = shared_expert_scale_bf16;
+                } else {
+                    const uint16_t score = scores_rm_u16[t * (cb_scores_rm_page_size / 2) + k];
+                    expert_tile[face2_offset + (t - 16) * 16] = compute_on_axis(t, k) ? score : bf16_zero;
+                }
             }
         }
     }

@@ -119,16 +119,51 @@ def _torch_golden_gated(
     mesh_coord,
     cluster_axis,
     num_replicated_devices,
+    num_shared_experts,
+    shared_expert_scale_bf16,
 ):
-    """Per-device golden: zero off-axis scores, then standard permute / mul / split-sum."""
+    """Per-device golden with shared-expert support.
+
+    Activation layout: ``u_local`` has effective_k = select_experts_k + num_shared_experts entries
+    along the reduction dim (dim 0). The first select_experts_k are routed experts (multiplied by
+    on-axis-gated scores); the trailing num_shared_experts are shared experts (multiplied by a
+    constant BF16 scale, no per-token gating — matches the kernel which writes
+    shared_expert_scale_bf16 unconditionally into those score-tile slots).
+    """
+    select_experts_k = s_local.shape[-1]
+    effective_k = u_local.shape[0]
+    assert effective_k == select_experts_k + num_shared_experts
+
+    # Routed contribution: gate off-axis scores to zero, then permute/mul/split-sum.
     on_axis = _on_axis_mask(ind_local, mapping, mesh_shape, mesh_coord, cluster_axis)
     gated_scores = torch.where(on_axis, s_local, torch.zeros_like(s_local))
-    return _torch_golden_scale_and_fast_reduce_nc(u_local, gated_scores, num_replicated_devices=num_replicated_devices)
+    routed_u = u_local[:select_experts_k]
+    routed_weights = gated_scores.permute(3, 1, 0, 2)
+    routed_scaled = routed_u * routed_weights
+
+    # Shared-expert contribution: constant BF16 scale, no per-token gating.
+    shared_u = u_local[select_experts_k:]
+    shared_scaled = shared_u * shared_expert_scale_bf16
+
+    scaled = torch.cat([routed_scaled, shared_scaled], dim=0)
+    hidden_size = scaled.shape[-1]
+    split_size = hidden_size // num_replicated_devices
+    assert hidden_size % split_size == 0
+    num_chunks = hidden_size // split_size
+    return [scaled[:, :, :, i * split_size : (i + 1) * split_size].sum(dim=0, keepdim=True) for i in range(num_chunks)]
 
 
 PCC_THRESHOLD = 0.999
 
 
+@pytest.mark.parametrize(
+    "num_shared_experts, shared_expert_scale",
+    [
+        pytest.param(0, 1.0, id="no_shared"),
+        pytest.param(1, 0.5, id="1_shared_scale_0p5"),
+        pytest.param(2, 0.25, id="2_shared_scale_0p25"),
+    ],
+)
 @pytest.mark.parametrize("batch_per_device", [32, 8, 3, 1])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("seq", [1])
@@ -141,9 +176,18 @@ PCC_THRESHOLD = 0.999
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("cluster_axis", [0])
+@pytest.mark.parametrize("cluster_axis", [0, 1])
 def test_deepseek_moe_fast_reduce_nc_fused(
-    mesh_device, mesh_shape, batch_per_device, select_experts_k, seq, hidden_size, experts_per_device, cluster_axis
+    mesh_device,
+    mesh_shape,
+    batch_per_device,
+    select_experts_k,
+    seq,
+    hidden_size,
+    experts_per_device,
+    cluster_axis,
+    num_shared_experts,
+    shared_expert_scale,
 ):
     torch.manual_seed(2005)
     random.seed(2005)
@@ -153,6 +197,13 @@ def test_deepseek_moe_fast_reduce_nc_fused(
     num_replicated_devices = mesh_shape[1 - cluster_axis]
     batch = batch_per_device * num_dispatch_devices
     experts = experts_per_device * num_devices
+
+    # Activation's reduction dim covers routed experts + trailing shared-expert slots.
+    # The kernel treats indices [select_experts_k, effective_select_experts_k) as shared experts,
+    # multiplying those activation slices by ``shared_expert_scale_bf16`` (no per-token gating).
+    effective_select_experts_k = select_experts_k + num_shared_experts
+    # Pre-quantize the scale through BF16 so the golden mirrors the kernel's BF16 storage.
+    shared_expert_scale_bf16 = torch.tensor(shared_expert_scale, dtype=torch.bfloat16)
 
     # Memory configs (identical to test_deepseek_moe_fast_reduce_nc_single.py)
     activation_memory_config = ttnn.L1_MEMORY_CONFIG
@@ -179,12 +230,13 @@ def test_deepseek_moe_fast_reduce_nc_fused(
 
     replicate_mapper = ttnn.replicate_tensor_to_mesh_mapper(mesh_device)
 
-    # Global tensors (same dimensions as the original multi-chip test)
-    torch_unsqueezed_global = torch.rand((select_experts_k, 1, batch, hidden_size), dtype=torch.bfloat16) - 0.5
-    # torch_unsqueezed_global = torch.ones((select_experts_k, 1, batch, hidden_size), dtype=torch.bfloat16)
+    # Global tensors. Activation reduction dim now spans routed + shared expert slots.
+    torch_unsqueezed_global = (
+        torch.rand((effective_select_experts_k, 1, batch, hidden_size), dtype=torch.bfloat16) - 0.5
+    )
 
+    # Scores tensor only carries the routed scores; the kernel synthesizes shared-expert "scores"
     torch_expert_scores_global = torch.rand((batch, 1, seq, select_experts_k), dtype=torch.bfloat16)
-    # torch_expert_scores_global = torch.ones((batch, 1, seq, select_experts_k), dtype=torch.bfloat16)
 
     torch_expert_scores_global = torch_expert_scores_global / torch_expert_scores_global.sum(dim=-1, keepdim=True)
 
@@ -204,7 +256,7 @@ def test_deepseek_moe_fast_reduce_nc_fused(
             s_slice = torch_expert_scores_global[t0:t1, :, :, :].contiguous()
             ind_slice = torch_expert_indices_global[t0:t1, :, :, :].contiguous()
 
-            # Per-device golden — gated on this device's cluster-axis membership.
+            # Per-device golden — gated routed contribution + constant-scale shared contribution.
             per_device_goldens.append(
                 _torch_golden_gated(
                     u_slice,
@@ -215,6 +267,8 @@ def test_deepseek_moe_fast_reduce_nc_fused(
                     mesh_coord,
                     cluster_axis,
                     num_replicated_devices,
+                    num_shared_experts,
+                    shared_expert_scale_bf16,
                 )
             )
 
@@ -270,8 +324,10 @@ def test_deepseek_moe_fast_reduce_nc_fused(
     )
 
     # Single fused call replacing permute + to_layout + mul + deepseek_moe_fast_reduce_nc.
-    # Now also performs per-(t, k) on-axis gating using the expert_indices / expert_mapping
-    # tensors and cluster_axis: scores for slots whose expert lives off-axis are zeroed.
+    # Performs per-(t, k) on-axis gating using the expert_indices / expert_mapping tensors and
+    # cluster_axis (off-axis scores are zeroed). The trailing ``num_shared_experts`` slots along
+    # the activation's reduction dim are multiplied by ``shared_expert_scale`` (no gating) and
+    # summed into the output.
     tt_fused_outputs = ttnn.experimental.deepseek_moe_fast_reduce_nc_fused(
         tt_activation,
         tt_expert_indices,
@@ -281,6 +337,8 @@ def test_deepseek_moe_fast_reduce_nc_fused(
         cluster_axis=cluster_axis,
         output_memory_config=fast_reduce_output_memory_config,
         scores_tensor=tt_scores_dram,
+        num_shared_experts=num_shared_experts,
+        shared_expert_scale=shared_expert_scale,
     )
 
     for cidx, tt_out_list in enumerate(tt_fused_outputs):

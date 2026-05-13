@@ -18,6 +18,8 @@ struct DeepseekMoEFastReduceNCFusedParams {
     uint64_t split_size;
     uint32_t cluster_axis;
     tt::tt_metal::MemoryConfig output_memory_config;
+    uint32_t num_shared_experts;
+    float shared_expert_scale;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
 };
 

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <cstring>
 #include <optional>
 #include <vector>
 
@@ -20,7 +21,7 @@ using namespace tt::tt_metal;
 
 namespace {
 
-// Matches compile-time arg order in deepseek_moe_fast_reduce_nc_fused_reader.cpp (get_compile_time_arg_val 0..24).
+// Matches compile-time arg order in deepseek_moe_fast_reduce_nc_fused_reader.cpp (get_compile_time_arg_val 0..26).
 struct DeepseekMoeFastReduceNcFusedReaderCtArgs {
     uint32_t cb_in_act_id{};
     uint32_t cb_scores_id{};
@@ -47,6 +48,8 @@ struct DeepseekMoeFastReduceNcFusedReaderCtArgs {
     uint32_t expert_indices_num_pages{};
     uint32_t expert_mapping_num_pages{};
     uint32_t mesh_cols{};  // mesh_shape[1]; lets the kernel decode linearized device ids into (row, col)
+    uint32_t num_shared_experts{};
+    uint32_t shared_expert_scale_bf16{};  // BF16 bit pattern in low 16 bits (upper 16 bits of float32)
 };
 
 std::vector<uint32_t> to_reader_ct_arg_vector(const DeepseekMoeFastReduceNcFusedReaderCtArgs& ct) {
@@ -76,6 +79,8 @@ std::vector<uint32_t> to_reader_ct_arg_vector(const DeepseekMoeFastReduceNcFused
         ct.expert_indices_num_pages,
         ct.expert_mapping_num_pages,
         ct.mesh_cols,
+        ct.num_shared_experts,
+        ct.shared_expert_scale_bf16,
     };
 }
 
@@ -229,8 +234,15 @@ DeepseekMoEFastReduceNCFusedMeshWorkloadFactory::create_at(
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    // Reader CT args: fields 0..17 = DeepseekMoeFastReduceNcFusedReaderCtArgs; then four
+    // Reader CT args: fields 0..26 = DeepseekMoeFastReduceNcFusedReaderCtArgs; then four
     // TensorAccessorArgs (input, scores, expert_indices, expert_mapping) appended in that order.
+    // Convert the host-side float32 scale to BF16 by taking the upper 16 bits of its IEEE-754
+    // representation (truncation, matching the BF16 layout used elsewhere on device).
+    uint32_t shared_expert_scale_f32_bits = 0;
+    const float shared_expert_scale_value = operation_attributes.shared_expert_scale;
+    std::memcpy(&shared_expert_scale_f32_bits, &shared_expert_scale_value, sizeof(uint32_t));
+    const uint32_t shared_expert_scale_bf16 = shared_expert_scale_f32_bits >> 16;
+
     const DeepseekMoeFastReduceNcFusedReaderCtArgs reader_ct_named{
         .cb_in_act_id = cb_in_act_id,
         .cb_scores_id = cb_scores_id,
@@ -257,6 +269,8 @@ DeepseekMoEFastReduceNCFusedMeshWorkloadFactory::create_at(
         .expert_indices_num_pages = expert_indices_num_pages,
         .expert_mapping_num_pages = expert_mapping_num_pages,
         .mesh_cols = mesh_cols,
+        .num_shared_experts = operation_attributes.num_shared_experts,
+        .shared_expert_scale_bf16 = shared_expert_scale_bf16,
     };
     std::vector<uint32_t> reader_ct_args = to_reader_ct_arg_vector(reader_ct_named);
     TensorAccessorArgs(input_tensor.buffer()).append_to(reader_ct_args);

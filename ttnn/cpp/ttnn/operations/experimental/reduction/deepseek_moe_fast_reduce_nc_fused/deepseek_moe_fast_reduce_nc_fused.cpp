@@ -24,6 +24,8 @@ std::vector<ttnn::Tensor> deepseek_moe_fast_reduce_nc_fused(
     uint32_t cluster_axis,
     const tt::tt_metal::MemoryConfig& output_memory_config,
     const std::optional<ttnn::Tensor>& scores_tensor,
+    uint32_t num_shared_experts,
+    float shared_expert_scale,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     if (!scores_tensor.has_value()) {
         // Fallback path: expert_indices / expert_mapping / cluster_axis are unused without scores.
@@ -49,6 +51,8 @@ std::vector<ttnn::Tensor> deepseek_moe_fast_reduce_nc_fused(
         split_size,
         cluster_axis,
         output_memory_config,
+        num_shared_experts,
+        shared_expert_scale,
         config);
 }
 

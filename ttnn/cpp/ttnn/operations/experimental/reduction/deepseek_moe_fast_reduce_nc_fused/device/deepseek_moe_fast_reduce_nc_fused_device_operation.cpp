@@ -88,11 +88,20 @@ void DeepseekMoEFastReduceNCFusedDeviceOperation::validate_on_program_cache_miss
     TT_FATAL(input_rank == 4, "input tensor must be rank 4, but has {}", input_rank);
 
     const uint32_t reduction_dim_size = input_shape[reduction_dim];
+    const uint32_t num_shared_experts_val = operation_attributes.num_shared_experts;
     TT_FATAL(
-        scores_shape[-1] == reduction_dim_size,
-        "scores last dim ({}) must equal input reduction dim size ({})",
-        scores_shape[-1],
+        num_shared_experts_val <= reduction_dim_size,
+        "num_shared_experts ({}) must not exceed reduction dim size ({})",
+        num_shared_experts_val,
         reduction_dim_size);
+    const uint32_t num_routed_experts = reduction_dim_size - num_shared_experts_val;
+    TT_FATAL(
+        scores_shape[-1] == num_routed_experts,
+        "scores last dim ({}) must equal num_routed_experts ({} = reduction_dim_size {} - num_shared_experts {})",
+        scores_shape[-1],
+        num_routed_experts,
+        reduction_dim_size,
+        num_shared_experts_val);
 
     const uint32_t num_tokens = input_shape[-2];
     TT_FATAL(
@@ -150,12 +159,20 @@ std::vector<ttnn::Tensor> deepseek_moe_fast_reduce_nc_fused(
     uint64_t split_size,
     uint32_t cluster_axis,
     const tt::tt_metal::MemoryConfig& output_memory_config,
+    uint32_t num_shared_experts,
+    float shared_expert_scale,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
     using OperationType = ttnn::experimental::prim::DeepseekMoEFastReduceNCFusedDeviceOperation;
 
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
-            reduce_dim, split_size, cluster_axis, output_memory_config, compute_kernel_config},
+            reduce_dim,
+            split_size,
+            cluster_axis,
+            output_memory_config,
+            num_shared_experts,
+            shared_expert_scale,
+            compute_kernel_config},
         OperationType::tensor_args_t{input_tensor, scores_tensor, expert_indices_tensor, expert_mapping_tensor});
 }
 

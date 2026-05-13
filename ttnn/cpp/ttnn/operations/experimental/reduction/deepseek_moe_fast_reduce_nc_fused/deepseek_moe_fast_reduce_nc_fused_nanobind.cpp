@@ -60,6 +60,8 @@ void bind_deepseek_moe_fast_reduce_nc_fused(nb::module_& mod) {
         nb::arg("cluster_axis"),
         nb::arg("output_memory_config").noconvert() = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         nb::arg("scores_tensor") = nb::none(),
+        nb::arg("num_shared_experts") = 0,
+        nb::arg("shared_expert_scale") = 1.0f,
         nb::arg("compute_kernel_config").noconvert() = nb::none());
 }
 
