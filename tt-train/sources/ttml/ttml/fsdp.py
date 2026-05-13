@@ -211,7 +211,7 @@ class FSDPState:
             # it; we'll explicitly deallocate it after set_grad to release the
             # full-size buffer on device immediately.
             gathered_grad = param_tensor.get_grad()
-            reduced = ttml.core.distributed.ttnn_reduce_scatter(
+            reduced = ttml.core.distributed.reduce_scatter(
                 gathered_grad,
                 shard_dim,
                 self.axis_index,
@@ -249,7 +249,7 @@ class FSDPState:
         for param_tensor, shard_dim in self.managed:
             current = param_tensor.get_value()
             self._cached_shards[id(param_tensor)] = current
-            gathered = ttml.core.distributed.ttnn_all_gather(current, shard_dim, self.axis_index)
+            gathered = ttml.core.distributed.all_gather(current, shard_dim, self.axis_index)
             param_tensor.set_value(gathered)
 
     def _gather_accumulated_grads(self) -> None:
@@ -264,7 +264,7 @@ class FSDPState:
             if not param_tensor.is_grad_initialized():
                 continue
             shard_grad = param_tensor.get_grad()
-            gathered_grad = ttml.core.distributed.ttnn_all_gather(
+            gathered_grad = ttml.core.distributed.all_gather(
                 shard_grad,
                 shard_dim,
                 self.axis_index,

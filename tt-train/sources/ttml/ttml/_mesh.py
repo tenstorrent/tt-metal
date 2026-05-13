@@ -233,7 +233,7 @@ def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",)):
 
         grad = param.get_grad()
         for axis in axes_for_param:
-            grad = ttnn.all_reduce(grad, cluster_axis=axis)
+            grad = ttml.core.distributed.all_reduce(grad, cluster_axis=axis)
         grad = ttnn.multiply(grad, inv_scaler)
         param.set_grad(grad)
 

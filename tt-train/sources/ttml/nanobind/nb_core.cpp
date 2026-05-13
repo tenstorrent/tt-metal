@@ -184,21 +184,21 @@ void py_module(nb::module_& m) {
         // Unlike ttml.ops.distributed.* these do NOT register graph nodes, so they can be
         // freely invoked from FSDP pre/post hooks without polluting the autograd graph.
         py_distributed.def(
-            "ttnn_all_gather",
+            "all_gather",
             &ttml::ttnn_fixed::distributed::all_gather,
             nb::arg("tensor"),
             nb::arg("dim"),
             nb::arg("cluster_axis") = nb::none(),
             "Raw all_gather without autograd tracking. Returns a new tt::tt_metal::Tensor.");
         py_distributed.def(
-            "ttnn_reduce_scatter",
+            "reduce_scatter",
             &ttml::ttnn_fixed::distributed::reduce_scatter,
             nb::arg("tensor"),
             nb::arg("dim"),
             nb::arg("cluster_axis") = nb::none(),
             "Raw reduce_scatter without autograd tracking. Returns a new tt::tt_metal::Tensor.");
         py_distributed.def(
-            "ttnn_all_reduce",
+            "all_reduce",
             &ttml::ttnn_fixed::distributed::all_reduce,
             nb::arg("tensor"),
             nb::arg("cluster_axis") = nb::none(),
