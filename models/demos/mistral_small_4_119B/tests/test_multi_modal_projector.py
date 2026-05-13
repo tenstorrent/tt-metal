@@ -178,22 +178,53 @@ def _snapshot_dir() -> Path:
     return Path(__file__).resolve().parents[1] / "models" / "mistral_small_4"
 
 
+def _try_load_real_context():
+    """Return (hf_config, weights) from the local snapshot if fully available, else None.
+
+    Calls the checkpoint helpers defined later in this module; Python resolves
+    those names at call-time so forward-reference is fine.
+    """
+    snap = _snapshot_dir()
+    if not (snap / "config.json").is_file():
+        return None
+    hf_config = _load_checkpoint_hf_config(snap)
+    if hf_config is None:
+        return None
+    weights = _load_checkpoint_projector_weights(snap)
+    if weights is None:
+        return None
+    return hf_config, weights
+
+
 # ─── Synthetic test ───────────────────────────────────────────────────────────
 
 
 def test_multi_modal_projector_synthetic(device, tmp_path):
-    """``forward_prefill`` vs torch reference – tiny config, random weights.
+    """``forward_prefill`` vs torch reference – two-image forward pass.
 
-    Image layout used:
-        Two images: 8×8 pixels and 8×8 pixels.
-        patch_size=4 → 2×2 = 4 patches each.
-        spatial_merge_size=2 → 1 merged token each → 2 total merged tokens.
+    Tries to load real checkpoint weights first; falls back to a tiny synthetic
+    config with random weights when the snapshot is absent.
+
+    Real-weights layout (patch_size=14, spatial_merge_size=2):
+        Two 28×28 images → 2×2 patch grid each → 1 merged token each.
+    Fallback layout (patch_size=4, spatial_merge_size=2):
+        Two 8×8 images → 2×2 patch grid each → 1 merged token each.
     """
-    cfg = _tiny_config(vision_hidden=32, text_hidden=64, patch_size=4, spatial_merge_size=2)
-    weights = _build_random_weights(cfg, seed=7)
+    real = _try_load_real_context()
+    if real is not None:
+        cfg, weights = real
+        ps, s = cfg.vision_config.patch_size, cfg.spatial_merge_size
+        img_dim = ps * s  # smallest square image with exactly one merged token (28×28)
+        image_sizes = [(img_dim, img_dim), (img_dim, img_dim)]
+        logger.info(
+            f"Using real checkpoint weights (vision={cfg.vision_config.hidden_size}, text={cfg.text_config.hidden_size})"
+        )
+    else:
+        cfg = _tiny_config(vision_hidden=32, text_hidden=64, patch_size=4, spatial_merge_size=2)
+        weights = _build_random_weights(cfg, seed=7)
+        image_sizes = [(8, 8), (8, 8)]
+        logger.info("Snapshot absent – using random weights with tiny config")
 
-    # Two 8×8 images → 4 patches each → 8 total patches
-    image_sizes = [(8, 8), (8, 8)]
     total_patches = sum(
         (h // cfg.vision_config.patch_size) * (w // cfg.vision_config.patch_size) for h, w in image_sizes
     )
@@ -254,13 +285,33 @@ def test_multi_modal_projector_synthetic(device, tmp_path):
 
 
 def test_multi_modal_projector_single_image(device, tmp_path):
-    """Same as synthetic test but with a single non-square image (16×8 pixels)."""
-    cfg = _tiny_config(vision_hidden=32, text_hidden=64, patch_size=4, spatial_merge_size=2)
-    weights = _build_random_weights(cfg, seed=13)
+    """``forward_prefill`` with a single non-square image.
 
-    # 16×8 image: 4×2 = 8 patches → 2 merged tokens (2×1 after 2×2 merge, non-square)
-    image_sizes = [(16, 8)]
-    gh, gw = 16 // 4, 8 // 4  # 4×2 grid
+    Tries to load real checkpoint weights first; falls back to a tiny synthetic
+    config with random weights when the snapshot is absent.
+
+    Real-weights layout (patch_size=14, spatial_merge_size=2):
+        One 56×28 image → 4×2 patch grid → 2 merged tokens.
+    Fallback layout (patch_size=4, spatial_merge_size=2):
+        One 16×8 image → 4×2 patch grid → 2 merged tokens.
+    """
+    real = _try_load_real_context()
+    if real is not None:
+        cfg, weights = real
+        ps, s = cfg.vision_config.patch_size, cfg.spatial_merge_size
+        # Non-square: 4 patch-cols × 2 patch-rows after merge → 2 merged tokens
+        image_sizes = [(ps * s * 2, ps * s)]  # (56, 28) with real weights
+        logger.info(
+            f"Using real checkpoint weights (vision={cfg.vision_config.hidden_size}, text={cfg.text_config.hidden_size})"
+        )
+    else:
+        cfg = _tiny_config(vision_hidden=32, text_hidden=64, patch_size=4, spatial_merge_size=2)
+        weights = _build_random_weights(cfg, seed=13)
+        image_sizes = [(16, 8)]  # 4×2 patch grid → 2 merged tokens
+        logger.info("Snapshot absent – using random weights with tiny config")
+
+    ps = cfg.vision_config.patch_size
+    gh, gw = image_sizes[0][0] // ps, image_sizes[0][1] // ps
     total_patches = gh * gw
     vision_h = cfg.vision_config.hidden_size
 
@@ -331,7 +382,7 @@ def _load_checkpoint_projector_weights(snapshot_dir: Path) -> dict | None:
     with open(index_path) as f:
         index = json.load(f)
 
-    prefix = "model.multi_modal_projector."
+    prefix = "multi_modal_projector."
     keys_needed = {
         "norm.weight",
         "patch_merger.merging_layer.weight",
