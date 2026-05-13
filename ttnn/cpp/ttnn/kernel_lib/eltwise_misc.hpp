@@ -20,38 +20,38 @@ namespace compute_kernel_lib {
 template <Dst Slot = Dst::D0>
 struct Identity : UnaryOp<Identity<Slot>, Slot> {
     static ALWI void init() { identity_tile_init(); }
-    static ALWI void exec_impl() { identity_tile(to_u32(Slot)); }
+    static ALWI void exec_impl(uint32_t slot_offset) { identity_tile(to_u32(Slot) + slot_offset); }
 };
 
 template <Dst Slot = Dst::D0>
 struct Negative : UnaryOp<Negative<Slot>, Slot> {
     static ALWI void init() { negative_tile_init(); }
-    static ALWI void exec_impl() { negative_tile(to_u32(Slot)); }
+    static ALWI void exec_impl(uint32_t slot_offset) { negative_tile(to_u32(Slot) + slot_offset); }
 };
 
 template <Dst Slot = Dst::D0>
 struct Abs : UnaryOp<Abs<Slot>, Slot> {
     static ALWI void init() { abs_tile_init(); }
-    static ALWI void exec_impl() { abs_tile(to_u32(Slot)); }
+    static ALWI void exec_impl(uint32_t slot_offset) { abs_tile(to_u32(Slot) + slot_offset); }
 };
 
 template <Dst Slot = Dst::D0>
 struct Sign : UnaryOp<Sign<Slot>, Slot> {
     static ALWI void init() { sign_tile_init(); }
-    static ALWI void exec_impl() { sign_tile(to_u32(Slot)); }
+    static ALWI void exec_impl(uint32_t slot_offset) { sign_tile(to_u32(Slot) + slot_offset); }
 };
 
 template <Dst Slot = Dst::D0>
 struct Square : UnaryOp<Square<Slot>, Slot> {
     static ALWI void init() { square_tile_init(); }
-    static ALWI void exec_impl() { square_tile(to_u32(Slot)); }
+    static ALWI void exec_impl(uint32_t slot_offset) { square_tile(to_u32(Slot) + slot_offset); }
 };
 
 // Typecast — compile-time in/out dtype encoded as numeric IDs (uint32_t form expected by LLK).
 template <uint32_t InDF, uint32_t OutDF, Dst Slot = Dst::D0>
 struct Typecast : UnaryOp<Typecast<InDF, OutDF, Slot>, Slot> {
     static ALWI void init() { typecast_tile_init<InDF, OutDF>(); }
-    static ALWI void exec_impl() { typecast_tile<InDF, OutDF>(to_u32(Slot)); }
+    static ALWI void exec_impl(uint32_t slot_offset) { typecast_tile<InDF, OutDF>(to_u32(Slot) + slot_offset); }
 };
 
 // Mask — bakes the hardcoded `mask_tile` LLK contract (mask lives at DataSlot+1) into
@@ -66,7 +66,9 @@ struct Mask : BinaryOp<Mask<DF, DataSlot>, DataSlot, static_cast<Dst>(to_u32(Dat
         to_u32(DataSlot) + 1 < DEST_AUTO_LIMIT,
         "Mask: DataSlot + 1 exceeds DEST_AUTO_LIMIT (mask tile lives at DataSlot + 1).");
     static ALWI void init() { mask_tile_init(); }
-    static ALWI void exec_impl() { mask_tile(to_u32(DataSlot), to_u32(DataSlot) + 1, DF); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        mask_tile(to_u32(DataSlot) + slot_offset, to_u32(DataSlot) + 1 + slot_offset, DF);
+    }
 };
 
 }  // namespace compute_kernel_lib

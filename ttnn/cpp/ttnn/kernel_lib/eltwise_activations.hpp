@@ -30,43 +30,43 @@ namespace compute_kernel_lib {
 template <Dst Slot = Dst::D0>
 struct Relu : UnaryOp<Relu<Slot>, Slot> {
     static ALWI void init() { relu_tile_init(); }
-    static ALWI void exec_impl() { relu_tile(to_u32(Slot)); }
+    static ALWI void exec_impl(uint32_t slot_offset) { relu_tile(to_u32(Slot) + slot_offset); }
 };
 
 template <Dst Slot = Dst::D0>
 struct Sigmoid : UnaryOp<Sigmoid<Slot>, Slot> {
     static ALWI void init() { sigmoid_tile_init(); }
-    static ALWI void exec_impl() { sigmoid_tile(to_u32(Slot)); }
+    static ALWI void exec_impl(uint32_t slot_offset) { sigmoid_tile(to_u32(Slot) + slot_offset); }
 };
 
 template <Dst Slot = Dst::D0>
 struct Tanh : UnaryOp<Tanh<Slot>, Slot> {
     static ALWI void init() { tanh_tile_init(); }
-    static ALWI void exec_impl() { tanh_tile(to_u32(Slot)); }
+    static ALWI void exec_impl(uint32_t slot_offset) { tanh_tile(to_u32(Slot) + slot_offset); }
 };
 
 template <Dst Slot = Dst::D0>
 struct Gelu : UnaryOp<Gelu<Slot>, Slot> {
     static ALWI void init() { gelu_tile_init(); }
-    static ALWI void exec_impl() { gelu_tile(to_u32(Slot)); }
+    static ALWI void exec_impl(uint32_t slot_offset) { gelu_tile(to_u32(Slot) + slot_offset); }
 };
 
 template <Dst Slot = Dst::D0>
 struct Hardsigmoid : UnaryOp<Hardsigmoid<Slot>, Slot> {
     static ALWI void init() { hardsigmoid_tile_init(); }
-    static ALWI void exec_impl() { hardsigmoid_tile(to_u32(Slot)); }
+    static ALWI void exec_impl(uint32_t slot_offset) { hardsigmoid_tile(to_u32(Slot) + slot_offset); }
 };
 
 template <Dst Slot = Dst::D0>
 struct Softsign : UnaryOp<Softsign<Slot>, Slot> {
     static ALWI void init() { softsign_tile_init(); }
-    static ALWI void exec_impl() { softsign_tile(to_u32(Slot)); }
+    static ALWI void exec_impl(uint32_t slot_offset) { softsign_tile(to_u32(Slot) + slot_offset); }
 };
 
 template <Dst Slot = Dst::D0>
 struct Hardmish : UnaryOp<Hardmish<Slot>, Slot> {
     static ALWI void init() { hardmish_tile_init(); }
-    static ALWI void exec_impl() { hardmish_tile(to_u32(Slot)); }
+    static ALWI void exec_impl(uint32_t slot_offset) { hardmish_tile(to_u32(Slot) + slot_offset); }
 };
 
 // Hardtanh — runtime min/max via ctor; overrides exec(uint32_t).
@@ -78,7 +78,9 @@ struct Hardtanh : UnaryOp<Hardtanh<Slot>, Slot> {
     constexpr Hardtanh() noexcept : min_param(0), max_param(0) {}
 
     static ALWI void init() { hardtanh_tile_init(); }
-    ALWI void exec(uint32_t /*i*/) const { hardtanh_tile(to_u32(Slot), min_param, max_param); }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
+        hardtanh_tile(to_u32(Slot) + slot_offset, min_param, max_param);
+    }
 };
 
 // Elu — runtime alpha.
@@ -89,7 +91,7 @@ struct Elu : UnaryOp<Elu<Slot>, Slot> {
     constexpr Elu() noexcept : alpha(0) {}
 
     static ALWI void init() { elu_tile_init(); }
-    ALWI void exec(uint32_t /*i*/) const { elu_tile(to_u32(Slot), alpha); }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { elu_tile(to_u32(Slot) + slot_offset, alpha); }
 };
 
 template <Dst Slot = Dst::D0>
@@ -99,7 +101,7 @@ struct Selu : UnaryOp<Selu<Slot>, Slot> {
     constexpr Selu(uint32_t s, uint32_t a) noexcept : scale(s), alpha(a) {}
     constexpr Selu() noexcept : scale(0), alpha(0) {}
     static ALWI void init() { selu_tile_init(); }
-    ALWI void exec(uint32_t /*i*/) const { selu_tile(to_u32(Slot), scale, alpha); }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { selu_tile(to_u32(Slot) + slot_offset, scale, alpha); }
 };
 
 template <Dst Slot = Dst::D0>
@@ -110,7 +112,9 @@ struct Softplus : UnaryOp<Softplus<Slot>, Slot> {
     constexpr Softplus(uint32_t b, uint32_t br, uint32_t t) noexcept : beta(b), beta_recip(br), threshold(t) {}
     constexpr Softplus() noexcept : beta(0), beta_recip(0), threshold(0) {}
     static ALWI void init() { softplus_tile_init(); }
-    ALWI void exec(uint32_t /*i*/) const { softplus_tile(to_u32(Slot), beta, beta_recip, threshold); }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
+        softplus_tile(to_u32(Slot) + slot_offset, beta, beta_recip, threshold);
+    }
 };
 
 template <Dst Slot = Dst::D0>
@@ -119,7 +123,7 @@ struct Prelu : UnaryOp<Prelu<Slot>, Slot> {
     constexpr explicit Prelu(uint32_t p) noexcept : param0(p) {}
     constexpr Prelu() noexcept : param0(0) {}
     static ALWI void init() { prelu_tile_init(); }
-    ALWI void exec(uint32_t /*i*/) const { prelu_tile(to_u32(Slot), param0); }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { prelu_tile(to_u32(Slot) + slot_offset, param0); }
 };
 
 // LeakyRelu — runtime slope.
@@ -129,7 +133,7 @@ struct LeakyRelu : UnaryOp<LeakyRelu<Slot>, Slot> {
     constexpr explicit LeakyRelu(uint32_t s) noexcept : slope(s) {}
     constexpr LeakyRelu() noexcept : slope(0) {}
     static ALWI void init() { leaky_relu_tile_init(); }
-    ALWI void exec(uint32_t /*i*/) const { leaky_relu_tile(to_u32(Slot), slope); }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { leaky_relu_tile(to_u32(Slot) + slot_offset, slope); }
 };
 
 }  // namespace compute_kernel_lib

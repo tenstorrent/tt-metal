@@ -27,7 +27,9 @@ struct Threshold : UnaryOp<Threshold<Slot>, Slot> {
     constexpr Threshold(uint32_t t, uint32_t v) noexcept : threshold(t), value(v) {}
     constexpr Threshold() noexcept : threshold(0), value(0) {}
     static ALWI void init() { threshold_tile_init(); }
-    ALWI void exec(uint32_t /*i*/) const { threshold_tile(to_u32(Slot), threshold, value); }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
+        threshold_tile(to_u32(Slot) + slot_offset, threshold, value);
+    }
 };
 
 // Clamp — runtime min/max.
@@ -38,18 +40,20 @@ struct Clamp : UnaryOp<Clamp<Slot>, Slot> {
     constexpr Clamp(uint32_t lo, uint32_t hi) noexcept : min_param(lo), max_param(hi) {}
     constexpr Clamp() noexcept : min_param(0), max_param(0) {}
     static ALWI void init() { clamp_tile_init(); }
-    ALWI void exec(uint32_t /*i*/) const { clamp_tile(to_u32(Slot), min_param, max_param); }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
+        clamp_tile(to_u32(Slot) + slot_offset, min_param, max_param);
+    }
 };
 
 // Generic binop-with-scalar wrappers — share `binop_with_scalar_tile_init`.
-#define ELTWISE_DECLARE_BINOP_SCALAR(Name, fn)                             \
-    template <Dst Slot = Dst::D0>                                          \
-    struct Name : UnaryOp<Name<Slot>, Slot> {                              \
-        uint32_t param0;                                                   \
-        constexpr explicit Name(uint32_t p) noexcept : param0(p) {}        \
-        constexpr Name() noexcept : param0(0) {}                           \
-        static ALWI void init() { binop_with_scalar_tile_init(); }         \
-        ALWI void exec(uint32_t /*i*/) const { fn(to_u32(Slot), param0); } \
+#define ELTWISE_DECLARE_BINOP_SCALAR(Name, fn)                                                                 \
+    template <Dst Slot = Dst::D0>                                                                              \
+    struct Name : UnaryOp<Name<Slot>, Slot> {                                                                  \
+        uint32_t param0;                                                                                       \
+        constexpr explicit Name(uint32_t p) noexcept : param0(p) {}                                            \
+        constexpr Name() noexcept : param0(0) {}                                                               \
+        static ALWI void init() { binop_with_scalar_tile_init(); }                                             \
+        ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { fn(to_u32(Slot) + slot_offset, param0); } \
     };
 
 ELTWISE_DECLARE_BINOP_SCALAR(AddUnary, add_unary_tile)
@@ -65,7 +69,7 @@ struct RdivUnary : UnaryOp<RdivUnary<Slot>, Slot> {
     constexpr explicit RdivUnary(uint32_t p) noexcept : param0(p) {}
     constexpr RdivUnary() noexcept : param0(0) {}
     static ALWI void init() { rdiv_tile_init(); }
-    ALWI void exec(uint32_t /*i*/) const { rdiv_tile(to_u32(Slot), param0); }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { rdiv_tile(to_u32(Slot) + slot_offset, param0); }
 };
 
 #undef ELTWISE_DECLARE_BINOP_SCALAR

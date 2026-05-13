@@ -226,14 +226,16 @@ struct CopyTile : CopyTileTag {
         }
     }
 
-    ALWI void exec(uint32_t i) const {
+    ALWI void exec(uint32_t i, uint32_t slot_offset) const {
         const uint32_t in_idx = [&]() -> uint32_t {
             if constexpr (IndexMode == CbIndexMode::FirstTile) return 0;
             else if constexpr (IndexMode == CbIndexMode::BlockIter) return i;
             else return cb_tile_idx_;  // Pinned / Absolute
         }();
-        copy_tile(Cb, in_idx, to_u32(DstSlot));
+        copy_tile(Cb, in_idx, to_u32(DstSlot) + slot_offset);
     }
+
+    static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
 
     ALWI void pop_per_tile(uint32_t /*i*/) const {
         if constexpr (Policy == CopyTilePolicy::WaitAndPop || Policy == CopyTilePolicy::NoWaitPop) {
@@ -313,14 +315,16 @@ struct PackTile : PackTileTag {
         }
     }
 
-    ALWI void exec(uint32_t i) const {
+    ALWI void exec(uint32_t i, uint32_t slot_offset) const {
         const uint32_t out_idx = [&]() -> uint32_t {
             if constexpr (IndexMode == PackTileIndexMode::FirstTile) return 0;
             else if constexpr (IndexMode == PackTileIndexMode::BlockIter) return i;
             else return output_tile_idx_;  // Pinned / Absolute
         }();
-        pack_tile(to_u32(DstSlot), Cb, out_idx);
+        pack_tile(to_u32(DstSlot) + slot_offset, Cb, out_idx);
     }
+
+    static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
 
     ALWI void push_per_tile(uint32_t /*i*/) const {
         if constexpr (Policy == PackTilePolicy::PerTileReserveAndPush) {
@@ -382,9 +386,11 @@ struct PackTileBlock : PackTileTag {
             cb_reserve_back(Cb, n * NTiles);
         }
     }
-    ALWI void exec(uint32_t /*i*/) const {
-        pack_tile_block(to_u32(FirstSlot), Cb, NTiles);
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
+        pack_tile_block(to_u32(FirstSlot) + slot_offset, Cb, NTiles);
     }
+
+    static constexpr uint32_t lane_width = to_u32(FirstSlot) + NTiles;
     ALWI void push_per_tile(uint32_t /*i*/) const {
         if constexpr (Policy == PackTilePolicy::PerTileReserveAndPush) {
             cb_push_back(Cb, NTiles);
@@ -510,7 +516,7 @@ struct BinaryFpu : BinaryFpuTag {
         if constexpr (!same_cb && BPolicy == CopyTilePolicy::WaitUpfrontPopAtEnd) cb_wait_front(CbB, n);
     }
 
-    ALWI void exec(uint32_t i) const {
+    ALWI void exec(uint32_t i, uint32_t slot_offset) const {
         // Per-side index mode. AIndex drives a_idx, BIndex drives b_idx. The
         // canonical bcast walk is A=BlockIter (walks the tile range) + B=FirstTile
         // (pins the scaler/vector operand at tile 0).
@@ -524,19 +530,22 @@ struct BinaryFpu : BinaryFpuTag {
             else if constexpr (BIndex == CbIndexMode::BlockIter)  return i;
             else                                                  return b_tile_idx_;  // Pinned / Absolute
         }();
+        const uint32_t dst = to_u32(DstSlot) + slot_offset;
         if constexpr (Bcast == BroadcastDim::None) {
-            if constexpr      (Op == BinaryFpuOp::Add) add_tiles(CbA, CbB, a_idx, b_idx, to_u32(DstSlot));
-            else if constexpr (Op == BinaryFpuOp::Sub) sub_tiles(CbA, CbB, a_idx, b_idx, to_u32(DstSlot));
-            else                                       mul_tiles(CbA, CbB, a_idx, b_idx, to_u32(DstSlot));
+            if constexpr      (Op == BinaryFpuOp::Add) add_tiles(CbA, CbB, a_idx, b_idx, dst);
+            else if constexpr (Op == BinaryFpuOp::Sub) sub_tiles(CbA, CbB, a_idx, b_idx, dst);
+            else                                       mul_tiles(CbA, CbB, a_idx, b_idx, dst);
         } else {
             // Broadcast variants via the generic `add/sub/mul_tiles_bcast<BroadcastType>` template
             // — these forward to `any_tiles_bcast<EltwiseBinaryType, BroadcastType>` internally.
             constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Bcast));
-            if constexpr      (Op == BinaryFpuOp::Add) add_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, to_u32(DstSlot));
-            else if constexpr (Op == BinaryFpuOp::Sub) sub_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, to_u32(DstSlot));
-            else                                       mul_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, to_u32(DstSlot));
+            if constexpr      (Op == BinaryFpuOp::Add) add_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, dst);
+            else if constexpr (Op == BinaryFpuOp::Sub) sub_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, dst);
+            else                                       mul_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, dst);
         }
     }
+
+    static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
 
     ALWI void pop_per_tile(uint32_t /*i*/) const {
         if constexpr (APolicy == CopyTilePolicy::WaitAndPop || APolicy == CopyTilePolicy::NoWaitPop) {
@@ -624,7 +633,7 @@ struct DestReuseBinary : DestReuseBinaryTag {
     ALWI void wait_upfront(uint32_t n) const {
         if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) cb_wait_front(Cb, n);
     }
-    ALWI void exec(uint32_t i) const {
+    ALWI void exec(uint32_t i, uint32_t slot_offset) const {
         constexpr auto et = (Op == BinaryFpuOp::Add) ? ckernel::EltwiseBinaryType::ELWADD :
                             (Op == BinaryFpuOp::Sub) ? ckernel::EltwiseBinaryType::ELWSUB :
                                                        ckernel::EltwiseBinaryType::ELWMUL;
@@ -636,8 +645,11 @@ struct DestReuseBinary : DestReuseBinaryTag {
             else if constexpr (IndexMode == CbIndexMode::BlockIter) return i;
             else return cb_tile_idx_;
         }();
-        binary_dest_reuse_tiles<et, reuse>(Cb, in_idx, to_u32(DstIn));
+        binary_dest_reuse_tiles<et, reuse>(Cb, in_idx, to_u32(DstIn) + slot_offset);
     }
+
+    static constexpr uint32_t lane_width =
+        (to_u32(DstIn) > to_u32(DstOut)) ? (to_u32(DstIn) + 1) : (to_u32(DstOut) + 1);
     ALWI void pop_per_tile(uint32_t /*i*/) const {
         if constexpr (Policy == CopyTilePolicy::WaitAndPop || Policy == CopyTilePolicy::NoWaitPop) {
             cb_pop_front(Cb, 1);
@@ -703,10 +715,12 @@ struct UnaryBcast : UnaryBcastTag {
     ALWI void wait_upfront(uint32_t n) const {
         if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) cb_wait_front(Cb, n);
     }
-    ALWI void exec(uint32_t /*i*/) const {
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
         constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
-        unary_bcast<bt>(Cb, /*in_tile_index=*/0, to_u32(DstSlot));
+        unary_bcast<bt>(Cb, /*in_tile_index=*/0, to_u32(DstSlot) + slot_offset);
     }
+
+    static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
     ALWI void pop_per_tile(uint32_t /*i*/) const {
         if constexpr (Policy == CopyTilePolicy::WaitAndPop || Policy == CopyTilePolicy::NoWaitPop) {
             cb_pop_front(Cb, 1);
@@ -796,6 +810,32 @@ struct chain_loads_share_cb : std::true_type {};  // default (empty chain — va
 template <class... Es>
 struct chain_loads_share_cb<EltwiseChain<Es...>>
     : std::bool_constant<detail::copy_tiles_share_cb_v<Es...>> {};
+
+// chain_lane_width — N-element fold (item 2). Max of per-element `lane_width`. Drives
+// auto-block: chain BlockSize = DEST_AUTO_LIMIT / chain_lane_width when AutoBlock::On.
+// Each element writes to DEST[dst_slot + j * chain_lane_width] for lane j in [0, BlockSize).
+namespace detail {
+template <class... Es>
+constexpr uint32_t chain_lane_width_impl_v = []() {
+    if constexpr (sizeof...(Es) == 0) {
+        return uint32_t{1};
+    } else {
+        uint32_t w = 1;
+        ((w = (Es::lane_width > w ? Es::lane_width : w)), ...);
+        return w;
+    }
+}();
+}  // namespace detail
+
+template <class Chain>
+struct chain_lane_width;
+
+template <class... Es>
+struct chain_lane_width<EltwiseChain<Es...>>
+    : std::integral_constant<uint32_t, detail::chain_lane_width_impl_v<Es...>> {};
+
+template <class Chain>
+inline constexpr uint32_t chain_lane_width_v = chain_lane_width<Chain>::value;
 
 // chain_has_duplicate_upfront_cbs / chain_pack_writes_collide:
 // defined as a runtime fold for now — every CB-reader / CB-writer pair is checked.
@@ -971,67 +1011,78 @@ ALWI void elem_pack_init() {
 // =============================================================================
 
 template <bool EmitInit, std::size_t I, class ElemT, class... Es>
-ALWI void elem_apply_compute(const ElemT& elem, uint32_t i_outer, uint32_t block_size, uint32_t n_tiles) {
+ALWI void elem_apply_compute(
+    const ElemT& elem, uint32_t i_outer, uint32_t block_size, uint32_t chain_lane_width, uint32_t n_tiles) {
     if constexpr (is_pack_tile_op_v<ElemT>) {
-        // Pack runs in pack phase, not compute. Skip.
-        (void)elem; (void)i_outer; (void)block_size; (void)n_tiles;
+        (void)elem; (void)i_outer; (void)block_size; (void)chain_lane_width; (void)n_tiles;
     } else if constexpr (is_cb_reader_op_v<ElemT>) {
-        // wait late — inside outer iter, policy-guarded (no-op for non-wait policies)
         elem.wait_per_tile(i_outer);
         elem.wait_upfront(n_tiles);
         if constexpr (EmitInit) {
             emit_pre_element_transitions<ElemT, I, Es...>();
             ElemT::init();
         }
+        // Inner DEST-batch loop: lane j writes to DEST[dst_slot + j * chain_lane_width].
+        // At BlockSize=1 (AutoBlock::Off) j only equals 0 → slot_offset=0 → identical
+        // to pre-auto-block shape.
         for (uint32_t j = 0; j < block_size; ++j) {
-            elem.exec(i_outer * block_size + j);
+            elem.exec(i_outer * block_size + j, j * chain_lane_width);
         }
-        // pop early — policy-guarded; upfront pop fires at end-of-chain via elem_pop_upfront_end
         elem.pop_per_tile(i_outer);
     } else if constexpr (is_dest_only_op_v<ElemT>) {
-        // SFPU / Fill / Rand — no CB wait/pop; init + inner exec only.
         if constexpr (EmitInit) {
             emit_pre_element_transitions<ElemT, I, Es...>();
             ElemT::init();
         }
         for (uint32_t j = 0; j < block_size; ++j) {
-            elem.exec(i_outer * block_size + j);
+            elem.exec(i_outer * block_size + j, j * chain_lane_width);
         }
     }
 }
 
 template <std::size_t I, class ElemT, class... Es>
-ALWI void elem_apply_pack(const ElemT& elem, uint32_t i_outer, uint32_t block_size, uint32_t n_tiles) {
+ALWI void elem_apply_pack(
+    const ElemT& elem, uint32_t i_outer, uint32_t block_size, uint32_t chain_lane_width, uint32_t n_tiles) {
     if constexpr (is_pack_tile_op_v<ElemT>) {
-        // reserve late — inside outer iter, policy-guarded (no-op for non-reserve policies)
         elem.reserve_per_tile(i_outer);
         elem.reserve_upfront(n_tiles);
         for (uint32_t j = 0; j < block_size; ++j) {
-            elem.exec(i_outer * block_size + j);
+            elem.exec(i_outer * block_size + j, j * chain_lane_width);
         }
-        // push early — policy-guarded; upfront push fires at end-of-chain via elem_push_at_end
         elem.push_per_tile(i_outer);
     } else {
-        (void)elem; (void)i_outer; (void)block_size; (void)n_tiles;
+        (void)elem; (void)i_outer; (void)block_size; (void)chain_lane_width; (void)n_tiles;
     }
 }
 
 template <bool EmitInit, std::size_t... Is, class... Es>
-ALWI void apply_compute_phase(std::index_sequence<Is...>, uint32_t i_outer, uint32_t block_size, uint32_t n_tiles, Es&... elts) {
+ALWI void apply_compute_phase(
+    std::index_sequence<Is...>,
+    uint32_t i_outer,
+    uint32_t block_size,
+    uint32_t chain_lane_width,
+    uint32_t n_tiles,
+    Es&... elts) {
     auto run_one = [&](auto idx_const, auto& elem) {
         constexpr std::size_t II = decltype(idx_const)::value;
         using ElemT = std::remove_reference_t<decltype(elem)>;
-        elem_apply_compute<EmitInit, II, ElemT, Es...>(elem, i_outer, block_size, n_tiles);
+        elem_apply_compute<EmitInit, II, ElemT, Es...>(elem, i_outer, block_size, chain_lane_width, n_tiles);
     };
     (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
 }
 
 template <std::size_t... Is, class... Es>
-ALWI void apply_pack_phase(std::index_sequence<Is...>, uint32_t i_outer, uint32_t block_size, uint32_t n_tiles, Es&... elts) {
+ALWI void apply_pack_phase(
+    std::index_sequence<Is...>,
+    uint32_t i_outer,
+    uint32_t block_size,
+    uint32_t chain_lane_width,
+    uint32_t n_tiles,
+    Es&... elts) {
     auto run_one = [&](auto idx_const, auto& elem) {
         constexpr std::size_t II = decltype(idx_const)::value;
         using ElemT = std::remove_reference_t<decltype(elem)>;
-        elem_apply_pack<II, ElemT, Es...>(elem, i_outer, block_size, n_tiles);
+        elem_apply_pack<II, ElemT, Es...>(elem, i_outer, block_size, chain_lane_width, n_tiles);
     };
     (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
 }
@@ -1073,7 +1124,7 @@ ALWI void hoisted_init_for_each(std::index_sequence<Is...>, Es&... elts) {
 //     immediately before that stage's chain call).
 // =============================================================================
 
-template <class... Es>
+template <AutoBlock Block, class... Es>
 ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
     using Chain = EltwiseChain<Es...>;
 
@@ -1085,47 +1136,41 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
                   "eltwise_chain: two PackTile elements collide on (cb, dst_slot). "
                   "Pack writes must target distinct (cb, dst) tuples.");
 
-    // ---- Hoist gate (item 7 + lessons §3.4) ----
-    //
-    // Hoist all per-element init() to chain entry only when both:
-    //   - No FPU-clash element (BinaryFpu / DestReuseBinary / UnaryBcast reprogram
-    //     unpack MOP each iter — must reinit).
-    //   - All CopyTile elements share one CB (multi-CB CopyTile chains need per-iter
-    //     reinit because each CopyTile's hoisted init() reprograms srca and the next
-    //     element's hoisted init() overwrites it).
-    // The trait `chain_is_hoist_safe_v` folds both conditions.
     constexpr bool emit_init_per_tile = !chain_is_hoist_safe_v<Chain>;
 
-    // ---- Inner DEST-batch block size (commit 7 / item 2 placeholder) ----
-    // BlockSize == 1 today; the auto-block work (item 2 of eltwise_helper_proposal.md)
-    // changes this to DEST_AUTO_LIMIT / max_lane_width. The chain's structural shape
-    // is already block-aware — the inner `for (j = 0; j < block_size; ++j)` lives in
-    // apply_compute_phase / apply_pack_phase.
-    constexpr uint32_t block_size = 1;
+    // ---- Auto-block (item 2 of eltwise_helper_proposal.md) ----
+    //
+    // AutoBlock::On  → BlockSize = DEST_AUTO_LIMIT / chain_lane_width.
+    //                  Each outer iter processes BlockSize tiles in BlockSize DEST lanes
+    //                  (lane j at slot dst_slot + j * chain_lane_width).
+    // AutoBlock::Off → BlockSize = 1 (today's per-tile shape).
+    constexpr uint32_t chain_lane_w = chain_lane_width_v<Chain>;
+    constexpr uint32_t auto_block_size = DEST_AUTO_LIMIT / chain_lane_w;
+    constexpr uint32_t block_size = (Block == AutoBlock::On) ? auto_block_size : 1u;
+    static_assert(block_size >= 1, "eltwise_chain: chain_lane_width exceeds DEST_AUTO_LIMIT");
 
     using IdxSeq = std::make_index_sequence<sizeof...(Es)>;
 
     // ---- F-PERF-4: hoist pack init out of per-tile loop ----
-    // Pack reconfig is fold-driven (D2) and idempotent — emit once at chain entry.
     (detail::elem_pack_init<Es>(), ...);
 
     if constexpr (!emit_init_per_tile) {
-        // Hoist-safe chain: emit all per-element transitions + init() once at boot.
-        // The per-outer-iter path emits only the lifecycle + exec.
         detail::hoisted_init_for_each(IdxSeq{}, elts...);
     }
 
-    // Single outer loop — block_path and per-tile path collapse to one shape because
-    // every element owns its full wait/init/exec/pop slice in apply_compute_phase
-    // and reserve/pack/push slice in apply_pack_phase (policy-guarded internally).
-    // Upfront wait/reserve fire inside the loop body (cumulative-count idempotent —
-    // wait-late per §11); upfront pop/push fire after the loop ends.
-    for (uint32_t i_outer = 0; i_outer < n_tiles; ++i_outer) {
+    // Outer loop processes `block_size` tiles per iter. Runtime tail handles the case
+    // where `n_tiles % block_size != 0`: the last iter's inner block size clamps to
+    // `n_tiles - i_outer * block_size`.
+    for (uint32_t i_outer = 0; i_outer * block_size < n_tiles; ++i_outer) {
+        const uint32_t base_tile = i_outer * block_size;
+        const uint32_t this_iter_size =
+            (base_tile + block_size <= n_tiles) ? block_size : (n_tiles - base_tile);
         tile_regs_acquire();
-        detail::apply_compute_phase<emit_init_per_tile>(IdxSeq{}, i_outer, block_size, n_tiles, elts...);
+        detail::apply_compute_phase<emit_init_per_tile>(
+            IdxSeq{}, i_outer, this_iter_size, chain_lane_w, n_tiles, elts...);
         tile_regs_commit();
         tile_regs_wait();
-        detail::apply_pack_phase(IdxSeq{}, i_outer, block_size, n_tiles, elts...);
+        detail::apply_pack_phase(IdxSeq{}, i_outer, this_iter_size, chain_lane_w, n_tiles, elts...);
         tile_regs_release();
     }
 
@@ -1248,23 +1293,18 @@ constexpr uint32_t first_pack_cb() { return first_pack_cb_impl<Es...>(); }
 
 }  // namespace detail
 
-template <class... Es>
+template <AutoBlock Block, class... Es>
 ALWI void eltwise_chain_with_init(uint32_t n_tiles, Es... elts) {
-    // Compile-time CB deduction. Note: CB ID 0 is a legitimate index
-    // (tt::CBIndex::c_0), so we gate presence on the has_any_* predicates rather
-    // than on `cb != 0`.
     static_assert(detail::has_any_pack_tile_v<Es...>,
                   "eltwise_chain_with_init: chain has no PackTile element. Multi-stage kernels "
                   "must use explicit per-stage compute_kernel_hw_startup, not this wrapper.");
 
     constexpr uint32_t cb_out = detail::first_pack_cb<Es...>();
-    // Reader-less chains (fill-only) boot the engine using cb_out for both srca/srcb
-    // — matches the legacy EltwiseChainPipelineInit::run() no-reader fallback.
     constexpr uint32_t cb_a   = detail::has_any_cb_reader_v<Es...> ? detail::first_cb_a<Es...>() : cb_out;
     constexpr uint32_t cb_b   = detail::has_any_binary_v<Es...> ? detail::first_cb_b<Es...>() : cb_a;
 
     compute_kernel_hw_startup(cb_a, cb_b, cb_out);
-    eltwise_chain(n_tiles, elts...);
+    eltwise_chain<Block>(n_tiles, elts...);
 }
 
 }  // namespace compute_kernel_lib

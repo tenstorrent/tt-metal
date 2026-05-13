@@ -319,6 +319,13 @@ constexpr uint32_t to_u32(Dst s) noexcept { return static_cast<uint32_t>(s); }
 enum class Approx : bool { Exact = false, Fast = true };
 enum class Legacy : bool { Off = false, On = true };
 
+/// Auto-block toggle (item 2 of eltwise_helper_proposal.md). Chain-wide template
+/// parameter on `eltwise_chain<AutoBlock, ...>`. When On, chain computes
+/// `BlockSize = DEST_AUTO_LIMIT / chain_lane_width` and runs that many lanes per
+/// outer iter (each lane offsets DEST slot by `j * chain_lane_width`). When Off,
+/// `BlockSize = 1` — every outer iter processes one tile (today's per-tile shape).
+enum class AutoBlock : bool { Off = false, On = true };
+
 // =============================================================================
 // 4. Policy enums — CB lifecycle, indexing, reconfig, broadcast
 // =============================================================================
@@ -464,15 +471,21 @@ struct UnaryOp : DestOnlyTag {
 
     static constexpr Dst dst_idx = Slot;
     static constexpr uint32_t max_dst() { return to_u32(Slot); }
+    /// Per-lane DEST footprint (item 2). Used by chain to pick auto BlockSize.
+    /// Default = `to_u32(Slot) + 1` (op writes only Slot). Override per-op when the
+    /// op references more slots (e.g. Mask uses DataSlot AND DataSlot+1).
+    static constexpr uint32_t lane_width = to_u32(Slot) + 1;
 
-    /// Pipeline dispatch — forwards to `Derived::exec_impl()`. Override in derived
-    /// to consume runtime payload (per-instance fields).
-    ALWI void exec(uint32_t /*i*/) const { Derived::exec_impl(); }
+    /// Pipeline dispatch — forwards to `Derived::exec_impl(slot_offset)`. Override
+    /// in derived to consume runtime payload (per-instance fields). `slot_offset`
+    /// is added by the chain to shift DEST writes into lane `j` when auto-block is
+    /// on; AutoBlock::Off passes 0 (today's shape).
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { Derived::exec_impl(slot_offset); }
 
-    /// init() + exec_impl()
+    /// init() + exec_impl() at lane 0.
     static ALWI void apply() {
         Derived::init();
-        Derived::exec_impl();
+        Derived::exec_impl(0);
     }
 };
 
@@ -495,11 +508,12 @@ struct BinaryOp : DestOnlyTag {
         uint32_t a = to_u32(In0), b = to_u32(In1), c = to_u32(Out);
         return a > b ? (a > c ? a : c) : (b > c ? b : c);
     }
+    static constexpr uint32_t lane_width = max_dst() + 1;
 
-    ALWI void exec(uint32_t /*i*/) const { Derived::exec_impl(); }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { Derived::exec_impl(slot_offset); }
     static ALWI void apply() {
         Derived::init();
-        Derived::exec_impl();
+        Derived::exec_impl(0);
     }
 };
 
@@ -519,11 +533,24 @@ struct TernaryOp : DestOnlyTag {
     static constexpr Dst in1 = In1;
     static constexpr Dst in2 = In2;
     static constexpr Dst out = Out;
+    static constexpr uint32_t lane_width = []() {
+        uint32_t m = to_u32(In0);
+        if (to_u32(In1) > m) {
+            m = to_u32(In1);
+        }
+        if (to_u32(In2) > m) {
+            m = to_u32(In2);
+        }
+        if (to_u32(Out) > m) {
+            m = to_u32(Out);
+        }
+        return m + 1;
+    }();
 
-    ALWI void exec(uint32_t /*i*/) const { Derived::exec_impl(); }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { Derived::exec_impl(slot_offset); }
     static ALWI void apply() {
         Derived::init();
-        Derived::exec_impl();
+        Derived::exec_impl(0);
     }
 };
 
@@ -542,11 +569,27 @@ struct QuaternaryOp : DestOnlyTag {
     static constexpr Dst in2 = In2;
     static constexpr Dst in3 = In3;
     static constexpr Dst out = Out;
+    static constexpr uint32_t lane_width = []() {
+        uint32_t m = to_u32(In0);
+        if (to_u32(In1) > m) {
+            m = to_u32(In1);
+        }
+        if (to_u32(In2) > m) {
+            m = to_u32(In2);
+        }
+        if (to_u32(In3) > m) {
+            m = to_u32(In3);
+        }
+        if (to_u32(Out) > m) {
+            m = to_u32(Out);
+        }
+        return m + 1;
+    }();
 
-    ALWI void exec(uint32_t /*i*/) const { Derived::exec_impl(); }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { Derived::exec_impl(slot_offset); }
     static ALWI void apply() {
         Derived::init();
-        Derived::exec_impl();
+        Derived::exec_impl(0);
     }
 };
 
@@ -710,7 +753,7 @@ inline constexpr bool chain_is_hoist_safe_v = chain_is_hoist_safe<Chain>::value;
 ///
 /// Block-mode auto-detection: if any element in `Es...` exposes `is_upfront == true`,
 /// the helper takes the upfront-block path (wait N upfront, loop, pop N at end).
-template <class... Es>
+template <AutoBlock Block = AutoBlock::Off, class... Es>
 ALWI void eltwise_chain(uint32_t n_tiles, Es... elts);
 
 /// Run the chain over `n_tiles` iterations, plus emit `compute_kernel_hw_startup`
@@ -727,7 +770,7 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts);
 /// kernels (different PACK output CB per stage) MUST keep explicit per-stage
 /// `compute_kernel_hw_startup` calls — `eltwise_chain_with_init` would emit it once
 /// with stage-1 CBs and stage 2's PACK would target the wrong CB.
-template <class... Es>
+template <AutoBlock Block = AutoBlock::Off, class... Es>
 ALWI void eltwise_chain_with_init(uint32_t n_tiles, Es... elts);
 
 }  // namespace compute_kernel_lib

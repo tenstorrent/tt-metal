@@ -138,11 +138,13 @@ struct BlockCopyTile : CopyTileTag {
         }
     }
 
-    ALWI void exec(uint32_t /*i*/) const {
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
         for (uint32_t j = 0; j < BlockSize; ++j) {
-            copy_tile(Cb, j, to_u32(BaseDst) + j);
+            copy_tile(Cb, j, to_u32(BaseDst) + j + slot_offset);
         }
     }
+
+    static constexpr uint32_t lane_width = to_u32(BaseDst) + BlockSize;
 
     ALWI void pop_per_tile(uint32_t /*i*/) const {
         if constexpr (Policy == CopyTilePolicy::WaitAndPop || Policy == CopyTilePolicy::NoWaitPop) {
@@ -258,12 +260,9 @@ struct BlockBinaryFpu : BinaryFpuTag {
         }
     }
 
-    ALWI void exec(uint32_t /*i*/) const {
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
         for (uint32_t j = 0; j < BlockSize; ++j) {
-            const uint32_t dst = to_u32(BaseDst) + j;
-            // Per-side index: BlockIter walks j, FirstTile pins at 0. Asymmetric
-            // (A=BlockIter + B=FirstTile) is the canonical bcast walk — A streams the
-            // tile range while B is pinned to the scaler/vector tile.
+            const uint32_t dst = to_u32(BaseDst) + j + slot_offset;
             const uint32_t a_idx = (AIndex == CbIndexMode::BlockIter) ? j : 0u;
             const uint32_t b_idx = (BIndex == CbIndexMode::BlockIter) ? j : 0u;
             if constexpr (Bcast == BroadcastDim::None) {
@@ -286,6 +285,8 @@ struct BlockBinaryFpu : BinaryFpuTag {
             }
         }
     }
+
+    static constexpr uint32_t lane_width = to_u32(BaseDst) + BlockSize;
 
     ALWI void pop_per_tile(uint32_t /*i*/) const {
         if constexpr (APolicy == CopyTilePolicy::WaitAndPop || APolicy == CopyTilePolicy::NoWaitPop) {
@@ -350,11 +351,13 @@ struct BlockPackTile : PackTileTag {
         }
     }
 
-    ALWI void exec(uint32_t /*i*/) const {
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
         for (uint32_t j = 0; j < BlockSize; ++j) {
-            pack_tile(to_u32(BaseDst) + j, Cb, j);
+            pack_tile(to_u32(BaseDst) + j + slot_offset, Cb, j);
         }
     }
+
+    static constexpr uint32_t lane_width = to_u32(BaseDst) + BlockSize;
 
     ALWI void push_per_tile(uint32_t /*i*/) const {
         if constexpr (Policy == PackTilePolicy::PerTileReserveAndPush) {

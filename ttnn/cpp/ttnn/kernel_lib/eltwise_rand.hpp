@@ -27,7 +27,9 @@ struct RandTile : RandTileTag, UnaryOp<RandTile<DstSlot, Seed>, DstSlot> {
     constexpr RandTile() noexcept : from_(0), scale_(0) {}
 
     static ALWI void init() { rand_tile_init(Seed); }  // seed is compile-time NTTP
-    ALWI void exec(uint32_t /*i*/) const { rand_tile(to_u32(DstSlot), from_, scale_); }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
+        rand_tile(to_u32(DstSlot) + slot_offset, from_, scale_);
+    }
 };
 
 }  // namespace compute_kernel_lib

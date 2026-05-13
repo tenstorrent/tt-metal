@@ -24,7 +24,7 @@ struct FillScalar : FillTileTag, UnaryOp<FillScalar<DstSlot>, DstSlot> {
     constexpr FillScalar() noexcept : value(0.0f) {}
 
     static ALWI void init() { fill_tile_init(); }
-    ALWI void exec(uint32_t /*i*/) const { fill_tile(to_u32(DstSlot), value); }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { fill_tile(to_u32(DstSlot) + slot_offset, value); }
 };
 
 template <DataFormat DF, Dst DstSlot>
@@ -35,7 +35,9 @@ struct FillInt : FillTileTag, UnaryOp<FillInt<DF, DstSlot>, DstSlot> {
 
     // fill_tile_int shares the same init as fill_tile (no separate `_int_init`).
     static ALWI void init() { fill_tile_init(); }
-    ALWI void exec(uint32_t /*i*/) const { fill_tile_int<DF>(to_u32(DstSlot), value); }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
+        fill_tile_int<DF>(to_u32(DstSlot) + slot_offset, value);
+    }
 };
 
 template <Dst DstSlot>
@@ -45,7 +47,9 @@ struct FillBitcast : FillTileTag, UnaryOp<FillBitcast<DstSlot>, DstSlot> {
     constexpr FillBitcast() noexcept : bits(0) {}
 
     static ALWI void init() { fill_tile_init(); }
-    ALWI void exec(uint32_t /*i*/) const { fill_tile_bitcast(to_u32(DstSlot), bits); }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
+        fill_tile_bitcast(to_u32(DstSlot) + slot_offset, bits);
+    }
 };
 
 }  // namespace compute_kernel_lib

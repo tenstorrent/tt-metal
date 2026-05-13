@@ -25,20 +25,20 @@ namespace compute_kernel_lib {
 template <Approx fast = Approx::Fast, Dst Slot = Dst::D0>
 struct Erf : UnaryOp<Erf<fast, Slot>, Slot> {
     static ALWI void init() { erf_tile_init<fast == Approx::Fast>(); }
-    static ALWI void exec_impl() { erf_tile<fast == Approx::Fast>(to_u32(Slot)); }
+    static ALWI void exec_impl(uint32_t slot_offset) { erf_tile<fast == Approx::Fast>(to_u32(Slot) + slot_offset); }
 };
 
 template <Dst Slot = Dst::D0>
 struct Erfc : UnaryOp<Erfc<Slot>, Slot> {
     static ALWI void init() { erfc_tile_init(); }
-    static ALWI void exec_impl() { erfc_tile(to_u32(Slot)); }
+    static ALWI void exec_impl(uint32_t slot_offset) { erfc_tile(to_u32(Slot) + slot_offset); }
 };
 
-#define ELTWISE_DECLARE_UNARY(Name, fn)                           \
-    template <Dst Slot = Dst::D0>                                 \
-    struct Name : UnaryOp<Name<Slot>, Slot> {                     \
-        static ALWI void init() { fn##_tile_init(); }             \
-        static ALWI void exec_impl() { fn##_tile(to_u32(Slot)); } \
+#define ELTWISE_DECLARE_UNARY(Name, fn)                                                             \
+    template <Dst Slot = Dst::D0>                                                                   \
+    struct Name : UnaryOp<Name<Slot>, Slot> {                                                       \
+        static ALWI void init() { fn##_tile_init(); }                                               \
+        static ALWI void exec_impl(uint32_t slot_offset) { fn##_tile(to_u32(Slot) + slot_offset); } \
     };
 
 ELTWISE_DECLARE_UNARY(Erfinv, erfinv)
@@ -53,12 +53,28 @@ ELTWISE_DECLARE_UNARY(TanhDerivative, tanh_derivative)
 // slot binding. Skips TernaryOp CRTP's distinctness assert (out may equal a/b).
 template <DataFormat DF, Dst Cond = Dst::D0, Dst A = Dst::D1, Dst B = Dst::D2, Dst Out = Dst::D0>
 struct Where : DestOnlyTag {
+    static constexpr uint32_t lane_width = []() {
+        uint32_t m = to_u32(Cond);
+        if (to_u32(A) > m) {
+            m = to_u32(A);
+        }
+        if (to_u32(B) > m) {
+            m = to_u32(B);
+        }
+        if (to_u32(Out) > m) {
+            m = to_u32(Out);
+        }
+        return m + 1;
+    }();
     static ALWI void init() { where_tile_init(); }
-    static ALWI void exec_impl() { where_tile<DF>(to_u32(Cond), to_u32(A), to_u32(B), to_u32(Out)); }
-    ALWI void exec(uint32_t /*i*/) const { exec_impl(); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        where_tile<DF>(
+            to_u32(Cond) + slot_offset, to_u32(A) + slot_offset, to_u32(B) + slot_offset, to_u32(Out) + slot_offset);
+    }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { exec_impl(slot_offset); }
     static ALWI void apply() {
         init();
-        exec_impl();
+        exec_impl(0);
     }
 };
 

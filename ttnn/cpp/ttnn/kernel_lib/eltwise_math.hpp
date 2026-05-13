@@ -29,49 +29,51 @@ namespace compute_kernel_lib {
 template <Approx approx = Approx::Exact, Approx fast = Approx::Fast, Dst Slot = Dst::D0>
 struct Exp : UnaryOp<Exp<approx, fast, Slot>, Slot> {
     static ALWI void init() { exp_tile_init<approx == Approx::Fast, fast == Approx::Fast>(); }
-    static ALWI void exec_impl() { exp_tile<approx == Approx::Fast, fast == Approx::Fast>(to_u32(Slot)); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        exp_tile<approx == Approx::Fast, fast == Approx::Fast>(to_u32(Slot) + slot_offset);
+    }
 };
 
 // ---- Log ----
 template <Approx fast = Approx::Exact, Dst Slot = Dst::D0>
 struct Log : UnaryOp<Log<fast, Slot>, Slot> {
     static ALWI void init() { log_tile_init<fast == Approx::Fast>(); }
-    static ALWI void exec_impl() { log_tile<fast == Approx::Fast>(to_u32(Slot)); }
+    static ALWI void exec_impl(uint32_t slot_offset) { log_tile<fast == Approx::Fast>(to_u32(Slot) + slot_offset); }
 };
 
 // ---- Sqrt ----
 template <Approx fast = Approx::Exact, Dst Slot = Dst::D0>
 struct Sqrt : UnaryOp<Sqrt<fast, Slot>, Slot> {
     static ALWI void init() { sqrt_tile_init(); }
-    static ALWI void exec_impl() { sqrt_tile<fast == Approx::Fast>(to_u32(Slot)); }
+    static ALWI void exec_impl(uint32_t slot_offset) { sqrt_tile<fast == Approx::Fast>(to_u32(Slot) + slot_offset); }
 };
 
 // ---- Recip (1/x) ----
 template <Dst Slot = Dst::D0>
 struct Recip : UnaryOp<Recip<Slot>, Slot> {
     static ALWI void init() { recip_tile_init(); }
-    static ALWI void exec_impl() { recip_tile(to_u32(Slot)); }
+    static ALWI void exec_impl(uint32_t slot_offset) { recip_tile(to_u32(Slot) + slot_offset); }
 };
 
 // ---- Rsqrt — Approx (Fast/Exact) and Legacy (On/Off). Templated on both.
 template <Approx fast = Approx::Exact, Legacy legacy = Legacy::Off, Dst Slot = Dst::D0>
 struct Rsqrt : UnaryOp<Rsqrt<fast, legacy, Slot>, Slot> {
     static ALWI void init() { rsqrt_tile_init(); }
-    static ALWI void exec_impl() { rsqrt_tile<fast == Approx::Fast>(to_u32(Slot)); }
+    static ALWI void exec_impl(uint32_t slot_offset) { rsqrt_tile<fast == Approx::Fast>(to_u32(Slot) + slot_offset); }
 };
 
 // ---- Cbrt ----
 template <Dst Slot = Dst::D0>
 struct Cbrt : UnaryOp<Cbrt<Slot>, Slot> {
     static ALWI void init() { cbrt_tile_init(); }
-    static ALWI void exec_impl() { cbrt_tile(to_u32(Slot)); }
+    static ALWI void exec_impl(uint32_t slot_offset) { cbrt_tile(to_u32(Slot) + slot_offset); }
 };
 
 // ---- Log1p — fast_and_approx template ----
 template <Approx fast = Approx::Fast, Dst Slot = Dst::D0>
 struct Log1p : UnaryOp<Log1p<fast, Slot>, Slot> {
     static ALWI void init() { log1p_tile_init<fast == Approx::Fast>(); }
-    static ALWI void exec_impl() { log1p_tile<fast == Approx::Fast>(to_u32(Slot)); }
+    static ALWI void exec_impl(uint32_t slot_offset) { log1p_tile<fast == Approx::Fast>(to_u32(Slot) + slot_offset); }
 };
 
 // ---- Power — runtime exponent. ----
@@ -81,7 +83,7 @@ struct Power : UnaryOp<Power<Slot>, Slot> {
     constexpr explicit Power(uint32_t e) noexcept : exponent(e) {}
     constexpr Power() noexcept : exponent(0) {}
     static ALWI void init() { power_tile_init(); }
-    ALWI void exec(uint32_t /*i*/) const { power_tile(to_u32(Slot), exponent); }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { power_tile(to_u32(Slot) + slot_offset, exponent); }
 };
 
 // ---- Rpow — base^x, runtime base. ----
@@ -91,7 +93,7 @@ struct Rpow : UnaryOp<Rpow<Slot>, Slot> {
     constexpr explicit Rpow(uint32_t b) noexcept : base(b) {}
     constexpr Rpow() noexcept : base(0) {}
     static ALWI void init() { rpow_tile_init(); }
-    ALWI void exec(uint32_t /*i*/) const { rpow_tile(to_u32(Slot), base); }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { rpow_tile(to_u32(Slot) + slot_offset, base); }
 };
 
 }  // namespace compute_kernel_lib

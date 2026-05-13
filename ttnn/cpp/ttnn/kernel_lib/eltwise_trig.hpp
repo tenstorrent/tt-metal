@@ -15,11 +15,11 @@
 
 namespace compute_kernel_lib {
 
-#define ELTWISE_DECLARE_UNARY(Name, fn)                           \
-    template <Dst Slot = Dst::D0>                                 \
-    struct Name : UnaryOp<Name<Slot>, Slot> {                     \
-        static ALWI void init() { fn##_tile_init(); }             \
-        static ALWI void exec_impl() { fn##_tile(to_u32(Slot)); } \
+#define ELTWISE_DECLARE_UNARY(Name, fn)                                                             \
+    template <Dst Slot = Dst::D0>                                                                   \
+    struct Name : UnaryOp<Name<Slot>, Slot> {                                                       \
+        static ALWI void init() { fn##_tile_init(); }                                               \
+        static ALWI void exec_impl(uint32_t slot_offset) { fn##_tile(to_u32(Slot) + slot_offset); } \
     };
 
 ELTWISE_DECLARE_UNARY(Sin, sin)

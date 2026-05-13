@@ -23,25 +23,33 @@ namespace compute_kernel_lib {
 template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
 struct AddBinary : BinaryOp<AddBinary<In0, In1, Out>, In0, In1, Out> {
     static ALWI void init() { add_binary_tile_init(); }
-    static ALWI void exec_impl() { add_binary_tile(to_u32(In0), to_u32(In1), to_u32(Out)); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        add_binary_tile(to_u32(In0) + slot_offset, to_u32(In1) + slot_offset, to_u32(Out) + slot_offset);
+    }
 };
 
 template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
 struct SubBinary : BinaryOp<SubBinary<In0, In1, Out>, In0, In1, Out> {
     static ALWI void init() { sub_binary_tile_init(); }
-    static ALWI void exec_impl() { sub_binary_tile(to_u32(In0), to_u32(In1), to_u32(Out)); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        sub_binary_tile(to_u32(In0) + slot_offset, to_u32(In1) + slot_offset, to_u32(Out) + slot_offset);
+    }
 };
 
 template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
 struct MulBinary : BinaryOp<MulBinary<In0, In1, Out>, In0, In1, Out> {
     static ALWI void init() { mul_binary_tile_init(); }
-    static ALWI void exec_impl() { mul_binary_tile(to_u32(In0), to_u32(In1), to_u32(Out)); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        mul_binary_tile(to_u32(In0) + slot_offset, to_u32(In1) + slot_offset, to_u32(Out) + slot_offset);
+    }
 };
 
 template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
 struct DivBinary : BinaryOp<DivBinary<In0, In1, Out>, In0, In1, Out> {
     static ALWI void init() { div_binary_tile_init(); }
-    static ALWI void exec_impl() { div_binary_tile(to_u32(In0), to_u32(In1), to_u32(Out)); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        div_binary_tile(to_u32(In0) + slot_offset, to_u32(In1) + slot_offset, to_u32(Out) + slot_offset);
+    }
 };
 
 }  // namespace compute_kernel_lib
