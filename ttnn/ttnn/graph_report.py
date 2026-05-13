@@ -30,8 +30,9 @@ from loguru import logger
 
 # Support both `import ttnn.graph_report` (package) and standalone
 # `import graph_report` from tests that put ttnn/ttnn on sys.path to skip
-# loading the C++-backed ttnn/__init__.py.
-try:
+# loading the C++-backed ttnn/__init__.py. Branch on __package__ so real
+# import failures inside stack_trace_source surface instead of being masked.
+if __package__:
     from .stack_trace_source import (
         CREATE_INDEX_STACK_TRACES_SOURCE_FILE_SQL,
         CREATE_SOURCE_FILES_TABLE_SQL,
@@ -40,7 +41,7 @@ try:
         normalize_source_path_from_stack_trace,
         read_source_file,
     )
-except ImportError:
+else:
     from stack_trace_source import (
         CREATE_INDEX_STACK_TRACES_SOURCE_FILE_SQL,
         CREATE_SOURCE_FILES_TABLE_SQL,
