@@ -8,6 +8,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
+#include "api/debug/assert.h"
 #include "api/debug/waypoint.h"
 #include "llk_defs.h"
 #include "llk_io.h"
@@ -98,9 +99,9 @@ inline void llk_unpack_reconfig_data_format_srca(
     static_assert(
         dim_stride_target == p_dim_stride_target::IGNORE,
         "Quasar unpack reconfig does not support stride/tile-dimension changes");
-    if (should_reconfig_src_reg_df(srca_old_operand, srca_new_operand)) {
-        llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, dim_stride_target, to_from_int8>(srca_new_operand);
-    }
+    // Caller must only invoke reconfig when operand formats actually differ.
+    ASSERT(should_reconfig_src_reg_df(srca_old_operand, srca_new_operand));
+    llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, dim_stride_target, to_from_int8>(srca_new_operand);
 }
 
 template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
@@ -109,9 +110,9 @@ inline void llk_unpack_reconfig_data_format_srcb(
     static_assert(
         dim_stride_target == p_dim_stride_target::IGNORE,
         "Quasar unpack reconfig does not support stride/tile-dimension changes");
-    if (should_reconfig_src_reg_df(srcb_old_operand, srcb_new_operand)) {
-        llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, dim_stride_target, to_from_int8>(srcb_new_operand);
-    }
+    // Caller must only invoke reconfig when operand formats actually differ.
+    ASSERT(should_reconfig_src_reg_df(srcb_old_operand, srcb_new_operand));
+    llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, dim_stride_target, to_from_int8>(srcb_new_operand);
 }
 
 template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
