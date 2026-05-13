@@ -66,6 +66,9 @@
 #ifdef ENABLE_FORWARD
 #include "../../unified_kernels/forward.hpp"
 #endif
+#ifdef ENABLE_COLUMN_WISE_PIPELINE_STAGE_SYNC
+#include "../../unified_kernels/column_wise_pipeline_stage_sync.hpp"
+#endif
 
 #include "api/debug/dprint.h"
 
@@ -95,6 +98,10 @@ struct Core {
     // Reduce-to-one core roles
     static constexpr bool is_reduce_worker_core = get_named_compile_time_arg_val("is_reduce_worker_core") == 1;
     static constexpr bool is_reduce_fabric_core = get_named_compile_time_arg_val("is_reduce_fabric_core") == 1;
+
+    // Pipeline stage sync core role (runs ColumnWisePipelineStageSync between iterations)
+    static constexpr bool is_pipeline_stage_sync_core =
+        get_named_compile_time_arg_val("is_pipeline_stage_sync_core") == 1;
 };
 
 void kernel_main() {
@@ -578,7 +585,6 @@ void kernel_main() {
                 get_named_compile_time_arg_val("reduce_r3_buffer_offset"),
                 get_named_compile_time_arg_val("reduce_socket_page_size"),
                 get_named_compile_time_arg_val("reduce_total_num_workers"),
-                get_named_compile_time_arg_val("reduce_persistent_fabric_signal_enable"),
                 get_named_compile_time_arg_val("reduce_is_exit_column"),
                 1,  // useRawSemAddrs
                 0,  // isReduceToAll
@@ -731,16 +737,7 @@ void kernel_main() {
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 18),  // r3_sem_addr
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 19),  // socket_config_addr
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 20),  // metadata_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 21),  // agg_sem_l1_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 22),  // agg_core_noc_x
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 23),  // agg_core_noc_y
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 24),  // persistent_enable
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 25),  // persistent_dst_noc_x
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 26),  // persistent_dst_noc_y
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 27),  // persistent_dst_mesh_id
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 28),  // persistent_dst_chip_id
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 29),  // persistent_dst_sem_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 30),  // shard_idx
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 21),  // shard_idx
         };
     }
 #endif
@@ -1449,6 +1446,8 @@ void kernel_main() {
 
         // Reduce fabric cores signal sender core that fabric sends are done.
         // Sender core NCRISC waits before starting next iteration.
+        // On the designated pipeline sync fabric core, after signaling reduce_sync,
+        // run the ColumnWisePipelineStageSync protocol (BRISC).
 #ifdef ENABLE_REDUCE_TO_ALL
 #if defined(COMPILE_FOR_BRISC)
         if constexpr (Core::is_reduce_fabric_core) {
@@ -1457,6 +1456,43 @@ void kernel_main() {
             constexpr uint32_t sync_noc_y = get_named_compile_time_arg_val("reduce_sync_noc_y");
             uint64_t sync_sem_noc_addr = get_noc_addr(sync_noc_x, sync_noc_y, sync_sem_addr);
             noc_semaphore_inc(sync_sem_noc_addr, 1);
+
+#ifdef ENABLE_COLUMN_WISE_PIPELINE_STAGE_SYNC
+            if constexpr (persistent_mode != 0 && Core::is_pipeline_stage_sync_core) {
+                DeviceZoneScopedN("PIPELINE_STAGE_SYNC");
+                constexpr uint32_t is_entry_device = get_named_compile_time_arg_val("pipeline_sync_is_entry_device");
+                constexpr uint32_t sync_entry_core_noc_x =
+                    get_named_compile_time_arg_val("pipeline_sync_entry_core_noc_x");
+                constexpr uint32_t sync_entry_core_noc_y =
+                    get_named_compile_time_arg_val("pipeline_sync_entry_core_noc_y");
+                constexpr uint32_t sync_r1_sem_addr = get_named_compile_time_arg_val("pipeline_sync_r1_sem_addr");
+                constexpr uint32_t sync_r2_sem_addr = get_named_compile_time_arg_val("pipeline_sync_r2_sem_addr");
+                constexpr uint32_t sync_r3_sem_addr = get_named_compile_time_arg_val("pipeline_sync_r3_sem_addr");
+                constexpr size_t PIPELINE_SYNC_FABRIC_ARG_BASE_RT_IDX = 3;
+                size_t sync_fabric_arg_base =
+                    static_cast<size_t>(get_arg_val<uint32_t>(PIPELINE_SYNC_FABRIC_ARG_BASE_RT_IDX));
+                constexpr uint32_t sync_sender_noc_x = get_named_compile_time_arg_val("pipeline_sync_sender_noc_x");
+                constexpr uint32_t sync_sender_noc_y = get_named_compile_time_arg_val("pipeline_sync_sender_noc_y");
+
+                if constexpr (is_entry_device) {
+                    deepseek_b1_ops::ColumnWisePipelineStageSync::entry_device_impl(
+                        sync_entry_core_noc_x,
+                        sync_entry_core_noc_y,
+                        sync_r1_sem_addr,
+                        sync_r2_sem_addr,
+                        sync_r3_sem_addr,
+                        sync_fabric_arg_base);
+
+                    uint64_t sender_sem_noc =
+                        get_noc_addr(sync_sender_noc_x, sync_sender_noc_y, persistent_next_iter_sem_addr);
+                    noc_semaphore_inc(sender_sem_noc, 1);
+                    noc_async_atomic_barrier();
+                } else {
+                    deepseek_b1_ops::ColumnWisePipelineStageSync::exit_device_impl(
+                        sync_entry_core_noc_x, sync_entry_core_noc_y, sync_r1_sem_addr, sync_fabric_arg_base);
+                }
+            }
+#endif
         }
 #elif defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_sender_core) {

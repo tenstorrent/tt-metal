@@ -69,7 +69,10 @@ class MoeSem:
     REDUCE_FC_BWD_R2 = 22
     REDUCE_FC_R3_FWD = 23
     FORWARD_CROSS_COL_SYNC = 24
-    NUM_SEMAPHORES = 25
+    PIPELINE_SYNC_R1 = 25
+    PIPELINE_SYNC_R2 = 26
+    PIPELINE_SYNC_R3 = 27
+    NUM_SEMAPHORES = 28
 
 
 @dataclass
@@ -2023,8 +2026,8 @@ class MoeRoutedExpertOp:
                 other_value=0,
             ),
             UnifiedCompileTimeCoreDescriptor(
-                named_compile_time_arg="reduce_persistent_fabric_signal_enable",
-                core_range=ttnn.CoreRangeSet([]),  # Set per-device on designated device
+                named_compile_time_arg="is_pipeline_stage_sync_core",
+                core_range=ttnn.CoreRangeSet([]),  # Set per-device in persistent mode
                 value=1,
                 other_value=0,
             ),
@@ -4242,12 +4245,6 @@ class MoeOp:
         _update_ncrisc_ct("reduce_is_residual_device", is_residual_device)
         _update_trisc_ct("reduce_is_residual_device", is_residual_device)
 
-        persistent_signal_eligible = self.persistent_next_iter_sem_addr != 0 and self.downstream_sockets is not None
-        if ctx.enable_forward:
-            is_persistent_device = persistent_signal_eligible and is_exit_col
-        else:
-            is_persistent_device = persistent_signal_eligible and chip_id == 0
-
         # Update fabric core descriptor
         fabric_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in reduce_params["fabric_cores"]])
         for i, desc in enumerate(self.device_unified_core_descs):
@@ -4289,66 +4286,6 @@ class MoeOp:
 
         self._persistent_fabric_core = None
         self._persistent_target_node = None
-        persistent_fc_wait_sem_noc_x = 0
-        persistent_fc_wait_sem_noc_y = 0
-        persistent_fc_wait_sem_addr = 0
-        if is_persistent_device and ctx.enable_bcast:
-            persistent_fabric_core = reduce_params["fabric_cores"][0]
-            persistent_fabric_core_phys = routed_ctx.device.worker_core_from_logical_core(persistent_fabric_core)
-            persistent_fabric_signal_sem_addr = self.sem_addrs[MoeSem.REDUCE_PERSISTENT_FABRIC_SIGNAL]
-            persistent_fc_wait_sem_noc_x = persistent_fabric_core_phys.x
-            persistent_fc_wait_sem_noc_y = persistent_fabric_core_phys.y
-            persistent_fc_wait_sem_addr = persistent_fabric_signal_sem_addr
-            self._persistent_fabric_core = persistent_fabric_core
-            bcast_sender_coord = ctx.bcast_sender_coord
-            self._persistent_target_node = mesh_device.get_fabric_node_id(bcast_sender_coord)
-            self._persistent_bcast_dst_noc_x = sender_core_physical.x
-            self._persistent_bcast_dst_noc_y = sender_core_physical.y
-            self._persistent_bcast_dst_mesh_id = int(self._persistent_target_node.mesh_id)
-            self._persistent_bcast_dst_chip_id = int(self._persistent_target_node.chip_id)
-            self._persistent_bcast_dst_sem_addr = self.persistent_next_iter_sem_addr
-
-            # Set the CTA descriptor so the chosen fabric core gets its own kernel group
-            for i, desc in enumerate(self.device_unified_core_descs):
-                if desc.named_compile_time_arg == "reduce_persistent_fabric_signal_enable":
-                    self.device_unified_core_descs[i] = UnifiedCompileTimeCoreDescriptor(
-                        named_compile_time_arg="reduce_persistent_fabric_signal_enable",
-                        core_range=ttnn.CoreRangeSet([ttnn.CoreRange(persistent_fabric_core, persistent_fabric_core)]),
-                        value=1,
-                        other_value=0,
-                    )
-                    break
-        elif is_persistent_device and ctx.enable_forward:
-            persistent_fabric_core = reduce_params["fabric_cores"][0]
-            persistent_fabric_core_phys = routed_ctx.device.worker_core_from_logical_core(persistent_fabric_core)
-            persistent_fabric_signal_sem_addr = self.sem_addrs[MoeSem.REDUCE_PERSISTENT_FABRIC_SIGNAL]
-            # Workers will bump this FC's wait_sem directly
-            persistent_fc_wait_sem_noc_x = persistent_fabric_core_phys.x
-            persistent_fc_wait_sem_noc_y = persistent_fabric_core_phys.y
-            persistent_fc_wait_sem_addr = persistent_fabric_signal_sem_addr
-            self._persistent_fabric_core = persistent_fabric_core
-
-            # Determine entry partner for the cross-chip (or local) signal.
-            # Entry devices are those at exit_column (they have forward sockets).
-            entry_partner_col = self.exit_column
-            entry_partner_coord = ttnn.MeshCoordinate(row, entry_partner_col)
-            self._persistent_target_node = mesh_device.get_fabric_node_id(entry_partner_coord)
-
-            self._persistent_bcast_dst_noc_x = sender_core_physical.x
-            self._persistent_bcast_dst_noc_y = sender_core_physical.y
-            self._persistent_bcast_dst_mesh_id = int(self._persistent_target_node.mesh_id)
-            self._persistent_bcast_dst_chip_id = int(self._persistent_target_node.chip_id)
-            self._persistent_bcast_dst_sem_addr = self.persistent_next_iter_sem_addr
-
-            for i, desc in enumerate(self.device_unified_core_descs):
-                if desc.named_compile_time_arg == "reduce_persistent_fabric_signal_enable":
-                    self.device_unified_core_descs[i] = UnifiedCompileTimeCoreDescriptor(
-                        named_compile_time_arg="reduce_persistent_fabric_signal_enable",
-                        core_range=ttnn.CoreRangeSet([ttnn.CoreRange(persistent_fabric_core, persistent_fabric_core)]),
-                        value=1,
-                        other_value=0,
-                    )
-                    break
         fwd_r1_sem_addr = self.sem_addrs[MoeSem.REDUCE_FC_FWD_R1]
         fwd_r2_sem_addr = self.sem_addrs[MoeSem.REDUCE_FC_FWD_R2]
         bwd_r1_sem_addr = self.sem_addrs[MoeSem.REDUCE_FC_BWD_R1]
@@ -4441,38 +4378,15 @@ class MoeOp:
                     r3_fwd_sem_addr,  # 18 (L1 addr)
                     socket_config_addr,  # 19
                     worker_metadata_addr,  # 20 metadata_addr
-                    0,  # 21 agg_sem_l1_addr (unused, workers bump FC directly)
-                    0,  # 22 agg_core_noc_x (unused)
-                    0,  # 23 agg_core_noc_y (unused)
-                    int(is_persistent_device),  # 24 persistent_enable: all workers on exit device
-                    persistent_fc_wait_sem_noc_x if is_persistent_device else 0,  # 25
-                    persistent_fc_wait_sem_noc_y if is_persistent_device else 0,  # 26
-                    0,  # 27 persistent_dst_mesh_id (unused by workers)
-                    0,  # 28 persistent_dst_chip_id (unused by workers)
-                    persistent_fc_wait_sem_addr if is_persistent_device else 0,  # 29
-                    shard_idx,  # 30
+                    shard_idx,  # 21
                 ]
                 reduce_brisc_per_core_args.append((core, worker_args))
 
-            reduce_brisc_per_core_args.append((fc, [fwd_r1_sem_addr, fwd_r2_sem_addr, r3_fwd_sem_addr]))
+            fc_brisc_args = [fwd_r1_sem_addr, fwd_r2_sem_addr, r3_fwd_sem_addr]
+            if self.persistent_mode and (ctx.enable_forward or ctx.enable_bcast):
+                fc_brisc_args.append(0)  # placeholder for pipeline_sync_fabric_arg_base (index 3)
+            reduce_brisc_per_core_args.append((fc, fc_brisc_args))
 
-            # NOTE: ttnn.CoreCoord.__eq__ raises TypeError when compared to
-            # None, so guard with `is not None` before the equality check.
-            is_this_persistent_fc = (
-                is_persistent_device and self._persistent_fabric_core is not None and fc == self._persistent_fabric_core
-            )
-            if is_this_persistent_fc:
-                # Stash the per-core persistent payload; it's appended AFTER
-                # fwd_conn + r3_conn in _setup_fabric_connections to keep the
-                # arg_idx order matching the kernel's read order.
-                self._persistent_fc_payload = [
-                    persistent_fabric_signal_sem_addr,
-                    self._persistent_bcast_dst_noc_x,
-                    self._persistent_bcast_dst_noc_y,
-                    self._persistent_bcast_dst_mesh_id,
-                    self._persistent_bcast_dst_chip_id,
-                    self._persistent_bcast_dst_sem_addr,
-                ]
             # FC NCRISC: BWD forwarding (R1+R2)
             reduce_ncrisc_per_core_args.append((fc, [bwd_r1_sem_addr, bwd_r2_sem_addr]))
 
@@ -4759,35 +4673,64 @@ class MoeOp:
 
                 program.kernels[ncrisc_idx].runtime_args[fc.x][fc.y].extend(bwd_conn)
 
-        if ctx.enable_reduce_to_all and self._persistent_fabric_core is not None:
+        # Pipeline stage sync fabric connections (ColumnWisePipelineStageSync)
+        if getattr(self, "_pipeline_sync_core", None) is not None:
             mesh_device = ctx.mesh_device
-            fc_core = self._persistent_fabric_core
-            src_fabric_node_id = mesh_device.get_fabric_node_id(coord)
-            dst_fabric_node_id = self._persistent_target_node
+            sync_core = self._pipeline_sync_core
+            is_entry = self._pipeline_sync_is_entry_device
+            sync_row = self._pipeline_sync_row
+            sync_col = self._pipeline_sync_col
+            mesh_rows = self._pipeline_sync_mesh_rows
+            mesh_cols = self._pipeline_sync_mesh_cols
 
-            fc_kernel_idx = None
+            # Find the BRISC kernel index for the sync core (FC BRISC runs the sync)
+            sync_kernel_idx = None
             for group in kernel_result.groups:
                 if group.compile_time_arg_values.get(
-                    "reduce_persistent_fabric_signal_enable"
-                ) == 1 and group.core_range_set.contains(fc_core):
-                    fc_kernel_idx = group.brisc_kernel_index
+                    "is_pipeline_stage_sync_core"
+                ) == 1 and group.core_range_set.contains(sync_core):
+                    sync_kernel_idx = group.brisc_kernel_index
                     break
-            if fc_kernel_idx is not None:
-                payload = getattr(self, "_persistent_fc_payload", None)
-                assert payload is not None, "persistent FC payload missing — _build_reduce_per_device must set it"
-                program.kernels[fc_kernel_idx].runtime_args[fc_core.x][fc_core.y].extend(payload)
-                # Only set up fabric connection when src != dst (cross-chip).
-                # When local-only (entry == exit on same chip), the kernel
-                # uses the local NoC path and no fabric sender args are needed.
-                is_cross_chip = (
-                    src_fabric_node_id.chip_id != dst_fabric_node_id.chip_id
-                    or src_fabric_node_id.mesh_id != dst_fabric_node_id.mesh_id
+            assert sync_kernel_idx is not None, f"No kernel group with is_pipeline_stage_sync_core=1 for {sync_core}"
+
+            existing_args = program.kernels[sync_kernel_idx].runtime_args[sync_core.x][sync_core.y]
+            if existing_args is None:
+                program.kernels[sync_kernel_idx].runtime_args[sync_core.x][sync_core.y] = []
+                existing_args = program.kernels[sync_kernel_idx].runtime_args[sync_core.x][sync_core.y]
+            fabric_arg_base = len(existing_args)
+            PIPELINE_SYNC_FABRIC_ARG_BASE_RT_IDX = 3
+            existing_args[PIPELINE_SYNC_FABRIC_ARG_BASE_RT_IDX] = fabric_arg_base
+            sync_rt_args_ref = existing_args
+
+            fabric_src_node_id = mesh_device.get_fabric_node_id(self._pipeline_sync_coord)
+            link_index = 0
+
+            if is_entry:
+                # Entry device: 2 connections (row-1 and row+1 neighbors in same column)
+                dst_node_a = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate((sync_row - 1) % mesh_rows, sync_col))
+                dst_node_b = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate((sync_row + 1) % mesh_rows, sync_col))
+                fabric_args = ttnn.setup_routing_plane_connection(
+                    fabric_src_node_id,
+                    [dst_node_a, dst_node_b],
+                    [link_index, link_index],
+                    program,
+                    sync_kernel_idx,
+                    sync_core,
                 )
-                if is_cross_chip:
-                    persistent_fabric_rt_args = ttnn.setup_fabric_connection(
-                        src_fabric_node_id, dst_fabric_node_id, 0, program, fc_core
-                    )
-                    program.kernels[fc_kernel_idx].runtime_args[fc_core.x][fc_core.y].extend(persistent_fabric_rt_args)
+                sync_rt_args_ref.extend(fabric_args)
+            else:
+                # Exit device: 1 connection (to entry device in same row, other column)
+                partner_col = (sync_col + 1) % mesh_cols
+                dst_node = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(sync_row, partner_col))
+                fabric_args = ttnn.setup_routing_plane_connection(
+                    fabric_src_node_id,
+                    [dst_node],
+                    [link_index],
+                    program,
+                    sync_kernel_idx,
+                    sync_core,
+                )
+                sync_rt_args_ref.extend(fabric_args)
 
         # Broadcast fabric connections
         if ctx.enable_bcast and len(self.bcast_dst_nodes) > 0:
@@ -5141,6 +5084,23 @@ class MoeOp:
         brisc_args += [("termination_semaphore_addr", self.termination_sem_addr)]
         trisc_args += [("termination_semaphore_addr", self.termination_sem_addr)]
 
+        pipeline_sync_r1 = self.sem_addrs[MoeSem.PIPELINE_SYNC_R1] if self.persistent_mode else 0
+        pipeline_sync_r2 = self.sem_addrs[MoeSem.PIPELINE_SYNC_R2] if self.persistent_mode else 0
+        pipeline_sync_r3 = self.sem_addrs[MoeSem.PIPELINE_SYNC_R3] if self.persistent_mode else 0
+        pipeline_sync_ct = [
+            ("pipeline_sync_is_entry_device", 0),
+            ("pipeline_sync_entry_core_noc_x", 0),
+            ("pipeline_sync_entry_core_noc_y", 0),
+            ("pipeline_sync_r1_sem_addr", pipeline_sync_r1),
+            ("pipeline_sync_r2_sem_addr", pipeline_sync_r2),
+            ("pipeline_sync_r3_sem_addr", pipeline_sync_r3),
+            ("pipeline_sync_sender_noc_x", 0),
+            ("pipeline_sync_sender_noc_y", 0),
+        ]
+        ncrisc_args += list(pipeline_sync_ct)
+        brisc_args += list(pipeline_sync_ct)
+        trisc_args += list(pipeline_sync_ct)
+
     def _build_semaphore_descriptors(self):
         """Build semaphore descriptors — empty, global semaphores are used instead."""
         return []
@@ -5208,6 +5168,8 @@ class MoeOp:
             defines += [("RECONFIG_MOE_CBS", "1")]
         if self.ctx.enable_forward:
             defines += [("ENABLE_FORWARD", "1"), ("ENABLE_SOCKET_READER", "1")]
+        if self.persistent_mode and (self.ctx.enable_forward or self.ctx.enable_bcast):
+            defines += [("ENABLE_COLUMN_WISE_PIPELINE_STAGE_SYNC", "1")]
         return defines
 
     def _build_descriptors(self):
@@ -5233,7 +5195,7 @@ class MoeOp:
         """Build all per-device state: compile-time args, descriptor copies, and reduce modifications."""
         self._persistent_fabric_core = None
         self._persistent_target_node = None
-        self._persistent_fc_payload = None
+        self._pipeline_sync_core = None
         # Start from shared descriptors
         self.ncrisc_args = []
         self.brisc_args = []
@@ -5271,6 +5233,75 @@ class MoeOp:
 
         # Apply forward modifications (no-op when forward disabled)
         self._build_forward_per_device(coord, row, col, chip_id)
+
+        # Apply pipeline stage sync modifications (no-op when not persistent)
+        self._build_pipeline_stage_sync_per_device(coord, row, col, chip_id)
+
+    def _build_pipeline_stage_sync_per_device(self, coord, row, col, chip_id):
+        """Set up ColumnWisePipelineStageSync per-device state for persistent mode.
+
+        Designates the first reduce fabric core as the pipeline stage sync core.
+        The FC BRISC is idle after reduce forwarding + reduce_sync signaling, so
+        it opens new linear-API fabric connections and runs the sync protocol.
+        On entry devices it runs entry_device_impl (3-round gossip), then signals
+        the sender core's persistent_next_iter_sem via NoC. On exit devices it
+        runs exit_device_impl (sends r1 to entry).
+        """
+        ctx = self.ctx
+        if not self.persistent_mode or not (ctx.enable_forward or ctx.enable_bcast):
+            return
+
+        mesh_device = ctx.mesh_device
+        routed_ctx = ctx.routed_ctx
+        reduce_params = routed_ctx.reduce_params
+        if reduce_params is None:
+            return
+
+        sender_core = routed_ctx.sender_core
+        sender_core_phys = routed_ctx.device.worker_core_from_logical_core(sender_core)
+
+        sync_core = reduce_params["fabric_cores"][0]
+        sync_core_phys = routed_ctx.device.worker_core_from_logical_core(sync_core)
+
+        if ctx.enable_forward:
+            is_entry_device = col == self.exit_column
+        elif ctx.enable_bcast:
+            is_entry_device = chip_id == 0
+        else:
+            return
+
+        def _update_ct(name, value):
+            for lst in (self.ncrisc_args, self.brisc_args, self.trisc_args):
+                for i, (n, _) in enumerate(lst):
+                    if n == name:
+                        lst[i] = (name, value)
+                        break
+
+        _update_ct("pipeline_sync_is_entry_device", int(is_entry_device))
+        _update_ct("pipeline_sync_entry_core_noc_x", sync_core_phys.x)
+        _update_ct("pipeline_sync_entry_core_noc_y", sync_core_phys.y)
+        _update_ct("pipeline_sync_sender_noc_x", sender_core_phys.x)
+        _update_ct("pipeline_sync_sender_noc_y", sender_core_phys.y)
+
+        for i, desc in enumerate(self.device_unified_core_descs):
+            if desc.named_compile_time_arg == "is_pipeline_stage_sync_core":
+                self.device_unified_core_descs[i] = UnifiedCompileTimeCoreDescriptor(
+                    named_compile_time_arg="is_pipeline_stage_sync_core",
+                    core_range=ttnn.CoreRangeSet([ttnn.CoreRange(sync_core, sync_core)]),
+                    value=1,
+                    other_value=0,
+                )
+                break
+
+        mesh_rows = ctx.mesh_rows
+        mesh_cols = ctx.mesh_cols
+        self._pipeline_sync_core = sync_core
+        self._pipeline_sync_is_entry_device = is_entry_device
+        self._pipeline_sync_coord = coord
+        self._pipeline_sync_row = row
+        self._pipeline_sync_col = col
+        self._pipeline_sync_mesh_rows = mesh_rows
+        self._pipeline_sync_mesh_cols = mesh_cols
 
     @staticmethod
     def op(

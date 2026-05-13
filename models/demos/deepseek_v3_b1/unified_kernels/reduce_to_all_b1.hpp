@@ -107,7 +107,6 @@ struct ReduceToAllB1 {
         uint32_t r3BufferOffset,
         uint32_t socketPageSize = 0,
         uint32_t totalNumWorkers = 0,
-        uint32_t persistentFabricSignalEnable = 0,
         uint32_t isExitColumn = 0,
         uint32_t useRawSemAddrs = 0,
         uint32_t isReduceToAll = 0,
@@ -139,7 +138,6 @@ struct ReduceToAllB1 {
         static constexpr uint32_t socket_page_size = socketPageSize;
         static constexpr bool enable_downstream_socket = socketPageSize > 0;
         static constexpr uint32_t total_num_workers = totalNumWorkers;
-        static constexpr uint32_t persistent_fabric_signal_enable = persistentFabricSignalEnable;
         static constexpr uint32_t is_exit_column = isExitColumn;
         static constexpr uint32_t use_raw_sem_addrs = useRawSemAddrs;
         static constexpr uint32_t is_reduce_to_all = isReduceToAll;
@@ -212,15 +210,6 @@ struct ReduceToAllB1 {
         uint32_t r3_sem_addr;
         uint32_t socket_config_addr;
         uint32_t metadata_addr;
-        uint32_t agg_sem_l1_addr;
-        uint32_t agg_core_noc_x;
-        uint32_t agg_core_noc_y;
-        uint32_t persistent_enable;
-        uint32_t persistent_dst_noc_x;
-        uint32_t persistent_dst_noc_y;
-        uint32_t persistent_dst_mesh_id;
-        uint32_t persistent_dst_chip_id;
-        uint32_t persistent_dst_sem_addr;
         uint32_t shard_idx;
     };
 
@@ -404,6 +393,9 @@ struct ReduceToAllB1 {
                     r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
                     r3_sem_addr_val = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
                 }
+#ifdef ENABLE_COLUMN_WISE_PIPELINE_STAGE_SYNC
+                arg_idx++;  // skip pipeline_sync_fabric_arg_base slot
+#endif
 
                 auto fwd_sender =
                     tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
@@ -442,44 +434,6 @@ struct ReduceToAllB1 {
                     }
                     r3_sender.close();
                     noc_async_full_barrier();
-                }
-
-                // Persistent next-iteration signal. On exit devices, all reduce
-                // workers bump this FC's wait_sem directly after finishing their
-                // iteration. The FC waits for total_num_workers increments, then
-                // signals the entry device's sender_core.
-                if constexpr (CTArgs::persistent_fabric_signal_enable != 0) {
-                    uint32_t wait_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-                    uint32_t dst_noc_x = get_arg_val<uint32_t>(arg_idx++);
-                    uint32_t dst_noc_y = get_arg_val<uint32_t>(arg_idx++);
-                    uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
-                    uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
-                    uint32_t dst_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-
-                    volatile tt_l1_ptr uint32_t* wait_sem_ptr =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wait_sem_addr);
-                    noc_semaphore_wait_min(wait_sem_ptr, CTArgs::total_num_workers);
-                    noc_semaphore_set(wait_sem_ptr, 0);
-
-                    if (dst_sem_addr != 0) {
-                        constexpr uint32_t pkt_hdr_bytes_p = sizeof(PACKET_HEADER_TYPE);
-                        PacketHeaderPool::reset();
-                        auto route_id = PacketHeaderPool::allocate_header_n(1);
-                        volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = PacketHeaderPool::header_table[route_id].first;
-                        set_unicast_route(
-                            hdr, static_cast<uint16_t>(dst_chip_id), static_cast<uint16_t>(dst_mesh_id), 1);
-                        hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                            get_noc_addr(dst_noc_x, dst_noc_y, dst_sem_addr), 1});
-                        auto persistent_sender =
-                            tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(
-                                arg_idx);
-                        persistent_sender.open();
-                        persistent_sender.wait_for_empty_write_slot();
-                        persistent_sender.send_payload_flush_blocking_from_address(
-                            reinterpret_cast<uint32_t>(hdr), pkt_hdr_bytes_p);
-                        persistent_sender.close();
-                        noc_async_full_barrier();
-                    }
                 }
 
                 return;
@@ -578,13 +532,6 @@ struct ReduceToAllB1 {
                         args.r3_slot_bit);
                     cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
                 }
-
-                if (args.persistent_enable != 0) {
-                    uint64_t fc_sem = get_noc_addr(
-                        args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr);
-                    noc_semaphore_inc(fc_sem, 1);
-                    noc_async_atomic_barrier();
-                }
             } else {
                 // Exit column: copy column sum to reload for TRISC R3 computation,
                 // then wait for global sum and write output
@@ -662,15 +609,6 @@ struct ReduceToAllB1 {
                             noc_async_write_barrier();
                             socket_barrier(sender_socket);
                             update_socket_config(sender_socket);
-                            uint64_t fc_sem = get_noc_addr(
-                                args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr);
-                            noc_semaphore_inc(fc_sem, 1);
-                            noc_async_atomic_barrier();
-                        } else if (args.persistent_enable != 0) {
-                            uint64_t fc_sem = get_noc_addr(
-                                args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr);
-                            noc_semaphore_inc(fc_sem, 1);
-                            noc_async_atomic_barrier();
                         }
                     }
 

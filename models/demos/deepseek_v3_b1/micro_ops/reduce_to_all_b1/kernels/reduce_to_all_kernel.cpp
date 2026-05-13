@@ -61,7 +61,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("r3_buffer_offset"),
         0,  // socketPageSize (unused in standalone)
         0,  // totalNumWorkers (unused in standalone)
-        0,  // persistentFabricSignalEnable (unused in standalone)
         get_named_compile_time_arg_val("is_exit_column"),
         0,  // useRawSemAddrs (use get_semaphore for program-local sems)
         1,  // isReduceToAll: all devices send AND receive R3
@@ -92,15 +91,6 @@ void kernel_main() {
             get_semaphore(get_arg_val<uint32_t>(18)),  // r3_sem_addr (from sem ID)
             0,                                         // socket_config_addr (unused in standalone)
             0,                                         // metadata_addr (unused in standalone)
-            0,                                         // agg_sem_l1_addr
-            0,                                         // agg_core_noc_x
-            0,                                         // agg_core_noc_y
-            0,                                         // persistent_enable
-            0,                                         // persistent_dst_noc_x
-            0,                                         // persistent_dst_noc_y
-            0,                                         // persistent_dst_mesh_id
-            0,                                         // persistent_dst_chip_id
-            0,                                         // persistent_dst_sem_addr
             get_arg_val<uint32_t>(19),                 // shard_idx
         };
     }
