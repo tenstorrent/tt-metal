@@ -47,3 +47,15 @@ jobs:
             echo "Unexpected agent output; expected CURSOR_CI_OK"
             exit 1
           fi
+
+      - name: Notify full-ci-triage Slack channel
+        if: ${{ always() }}
+        uses: slackapi/slack-github-action@v2.1.1
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            {
+              "channel": "C0B1F8Z7GQM",
+              "text": "<@U0AK4BVCFM0> are you here?\nTriage ping from `${{ github.workflow }}` on `${{ github.ref_name }}`: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }
