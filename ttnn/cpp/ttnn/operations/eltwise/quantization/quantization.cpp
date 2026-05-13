@@ -177,7 +177,7 @@ ttnn::Tensor reshape_per_channel_vector_args(
         }
     }
     const ttnn::Tensor result = ttnn::reshape(ttnn::typecast(vector, out_dtype), tensor_shape);
-    assert(result.logical_shape().rank() == rank);
+    assert(result.logical_shape().rank() == static_cast<size_t>(rank));
     assert(result.logical_shape()[axis] == vector.logical_volume());
     assert(result.logical_volume() == vector.logical_volume());
     return result;
