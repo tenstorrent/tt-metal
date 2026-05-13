@@ -211,7 +211,17 @@ def build_matmul_pcfg(
             per_core_N_1d = n_tiles // num_cores
 
         # Choose in0_block_w for 1D (full M per core → larger CBs needed).
-        in0_bw = in0_block_w if in0_block_w is not None else 8
+        # 1D width-shard with small M (≤2 tiles) and small per_core_N (often 1-2)
+        # has tiny CBs — we can use a much larger block_w than the 2D default of
+        # 4-8 to reduce K-loop iterations. Cap at 16 to keep L1 happy when
+        # per_core_N is bigger (e.g. n_tiles=128, num_cores=64, per_core_N=2).
+        if in0_block_w is None:
+            in0_bw = 16
+        else:
+            in0_bw = in0_block_w
+        # Constrain by per_core_N for L1 safety: CB ~ in0_bw * per_core_N tiles.
+        while in0_bw > 1 and in0_bw * per_core_N_1d > 32:
+            in0_bw //= 2
         while k_tiles % in0_bw != 0 and in0_bw > 1:
             in0_bw //= 2
         if in0_bw < 2:
