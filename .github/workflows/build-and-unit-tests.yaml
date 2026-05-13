@@ -54,11 +54,11 @@ jobs:
               rm -rf /tmp/kernels
               mkdir -p /tmp/kernels
               TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.${GTEST_FILTER}
-            regression-handling: false
+            auto-triage: false
           - name: data_movement
             cmd: |
               ./build/test/tt_metal/unit_tests_data_movement --gtest_filter=$GTEST_FILTER
-            regression-handling: false
+            auto-triage: false
           - name: debug_tools and device and dispatch
             cmd: |
               ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=$GTEST_FILTER
@@ -68,11 +68,11 @@ jobs:
               ./build/test/tt_metal/unit_tests_inspector --gtest_filter=$GTEST_FILTER
               ./build/test/tt_metal/unit_tests_device --gtest_filter=$GTEST_FILTER
               ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=$GTEST_FILTER
-            regression-handling: false
+            auto-triage: false
           - name: FD2
             cmd: |
               { [ "$GTEST_FILTER" = "*NIGHTLY_*" ]; } && echo "Skipping run_cpp_fd2_tests.sh (nightly filter: $GTEST_FILTER)" || ./tests/scripts/run_cpp_fd2_tests.sh
-            regression-handling: true
+            auto-triage: true
     name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
     runs-on: >-
       ${{
@@ -112,7 +112,7 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
-          regression-handling: ${{ !inputs.enable-watcher && matrix.test-group.regression-handling }}
+          auto-triage: ${{ !inputs.enable-watcher && matrix.test-group.auto-triage }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |

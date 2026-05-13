@@ -148,9 +148,9 @@ ClangBuildAnalyzer.ini
 ttnn/ttnn/.rpath_checked__ttnn
 Testing
 
-.regression_handling/logs
-.regression_handling/data
-.regression_handling/output
+.auto_triage/logs
+.auto_triage/data
+.auto_triage/output
 .github/actions/*/node_modules/
 models/experimental/petr/resources/*.pth
 

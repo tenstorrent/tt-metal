@@ -126,7 +126,7 @@ runs:
         # Every failing job becomes its OWN top-level Slack message and its
         # own entry in TS_MAP.  Boundary key format:
         #   "<workflow_name> / <job_name>"  (matches the lookup key used by
-        #   trigger-regression-handling-for-regressions/index.js)
+        #   trigger-auto-triage-for-regressions/index.js)
         #
         # Regressions that have zero failing jobs still emit one message so
         # the operator sees them; those boundaries are keyed by the

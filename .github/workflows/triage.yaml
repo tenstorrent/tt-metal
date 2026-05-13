@@ -72,7 +72,7 @@ jobs:
           enable-watcher: ${{ inputs.enable-watcher }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
-          regression-handling: false # Disable regression-handling because we need to run triage tests explicitly
+          auto-triage: false # Disable auto-triage because we need to run triage tests explicitly
       - name: Run triage tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |

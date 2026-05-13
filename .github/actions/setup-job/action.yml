@@ -37,7 +37,7 @@ inputs:
     description: 'Skip download and installation of build artifacts and wheel as theyre pre-installed in evaluation image'
     default: false
     type: boolean
-  regression-handling:
+  auto-triage:
     description: 'Enable detection of timeout on fast dispatch and automatically call tt-triage'
     default: true
     type: boolean
@@ -141,8 +141,8 @@ runs:
         mkdir -p /tmp/ccache
       shell: bash
 
-    - name: Set up env vars for regression-handling
-      if: ${{ inputs.regression-handling == 'true' }}
+    - name: Set up env vars for auto-triage
+      if: ${{ inputs.auto-triage == 'true' }}
       working-directory: ${{ inputs.path }}
       run: |
         echo "Enabling detection of timeout on fast dispatch and automatically call tt-triage"

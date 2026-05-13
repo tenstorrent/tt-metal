@@ -225,7 +225,7 @@ async function run() {
     // Walks stayed-failing pipelines in order, taking failing jobs until N
     // is reached.  Each elevated pipeline clones its envelope but replaces
     // `failing_jobs` with the chosen subset, so the slack-report per-job
-    // loop and trigger-regression-handling both see a well-formed regression entry.
+    // loop and trigger-auto-triage both see a well-formed regression entry.
     // A single stayed-failing pipeline with many jobs can absorb the whole
     // budget.
     const failuresToElevateRaw = (core.getInput('failures_to_elevate') || '').trim();
