@@ -34,15 +34,6 @@
  *             if (do_mask) run_op<true>(n); else run_op<false>(n);
  *         }
  *
- * @section per_element_fp32_dest_acc_optional Per-element fp32-dest-acc (D6)
- *
- * `OptionalChainElement<COND, Inner>` is on the **SKIP list** for D6 — the wrapper
- * itself does not expose `EnableFp32DestAcc`. When `COND == true` and `Inner` is a
- * CARRY element, `Inner::EnableFp32DestAcc` participates in the fold via the SFINAE
- * probe (the wrapper's chosen specialisation IS the `Inner` struct). When
- * `COND == false`, the no-op specialisation has no `EnableFp32DestAcc` member; the
- * fold's SFINAE probe returns the running prev — transparent pass-through.
- *
  * @section optional_caveats Caveats
  *
  * Mid-loop per-iteration runtime conditions (`if (col_idx == Wt-1) mask_tile(...)`)

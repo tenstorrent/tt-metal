@@ -222,15 +222,13 @@ void kernel_main() {
                     CopyTilePolicy::NoWaitNoPop,
                     CopyTilePolicy::NoWaitNoPop,
                     CbIndexMode::Pinned,
-                    Dst::D0,
-                    /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{first_tile, beta2_tile},
+                    Dst::D0>{first_tile, beta2_tile},
                 PackTile<
                     cb_tmp1,
                     Dst::D0,
                     PackTilePolicy::PerTileReserveAndPush,
                     PackTileIndexMode::FirstTile,
-                    PackTileReconfig::Output,
-                    /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
+                    PackTileReconfig::Output>{});
         }
 
         // cb_tmp2 = grad * grad

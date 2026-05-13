@@ -40,8 +40,7 @@ void kernel_main() {
             Dst::D0,
             PackTilePolicy::PerTileReserveAndPush,
             PackTileIndexMode::FirstTile,
-            PackTileReconfig::Output,
-            /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
+            PackTileReconfig::Output>{});
 #endif
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
@@ -61,8 +60,7 @@ void kernel_main() {
                 Dst::D0,
                 PackTilePolicy::PerTileReserveAndPush,
                 PackTileIndexMode::FirstTile,
-                PackTileReconfig::Output,
-                /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
+                PackTileReconfig::Output>{});
 
 #if defined(DIVISOR)
         // T1.29: cb_tmp1 * cb_tmp_weight -> cb_tmp3
@@ -78,15 +76,13 @@ void kernel_main() {
                 CopyTilePolicy::WaitAndPop,
                 CopyTilePolicy::WaitAndPop,
                 CbIndexMode::FirstTile,
-                Dst::D0,
-                /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{},
+                Dst::D0>{},
             PackTile<
                 cb_tmp3,
                 Dst::D0,
                 PackTilePolicy::PerTileReserveAndPush,
                 PackTileIndexMode::FirstTile,
-                PackTileReconfig::Output,
-                /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
+                PackTileReconfig::Output>{});
 
         // T1.30: cb_tmp3 * cb_divisor_recip (bcast scalar, B held) -> cb_output
         eltwise_chain(
@@ -101,15 +97,13 @@ void kernel_main() {
                 CopyTilePolicy::WaitAndPop,
                 CopyTilePolicy::WaitNoPop,
                 CbIndexMode::FirstTile,
-                Dst::D0,
-                /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{},
+                Dst::D0>{},
             PackTile<
                 cb_output,
                 Dst::D0,
                 PackTilePolicy::PerTileReserveAndPush,
                 PackTileIndexMode::FirstTile,
-                PackTileReconfig::Output,
-                /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
+                PackTileReconfig::Output>{});
 #else
         // WEIGHT && !DIVISOR: cb_tmp1 * cb_tmp_weight -> cb_output
         eltwise_chain(
@@ -124,15 +118,13 @@ void kernel_main() {
                 CopyTilePolicy::WaitAndPop,
                 CopyTilePolicy::WaitAndPop,
                 CbIndexMode::FirstTile,
-                Dst::D0,
-                /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{},
+                Dst::D0>{},
             PackTile<
                 cb_output,
                 Dst::D0,
                 PackTilePolicy::PerTileReserveAndPush,
                 PackTileIndexMode::FirstTile,
-                PackTileReconfig::Output,
-                /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
+                PackTileReconfig::Output>{});
 #endif
 #else
 #if defined(DIVISOR)
@@ -153,8 +145,7 @@ void kernel_main() {
                 Dst::D0,
                 PackTilePolicy::PerTileReserveAndPush,
                 PackTileIndexMode::FirstTile,
-                PackTileReconfig::Output,
-                /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
+                PackTileReconfig::Output>{});
 
         eltwise_chain(
             onetile,
@@ -168,15 +159,13 @@ void kernel_main() {
                 CopyTilePolicy::WaitAndPop,
                 CopyTilePolicy::WaitNoPop,
                 CbIndexMode::FirstTile,
-                Dst::D0,
-                /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{},
+                Dst::D0>{},
             PackTile<
                 cb_output,
                 Dst::D0,
                 PackTilePolicy::PerTileReserveAndPush,
                 PackTileIndexMode::FirstTile,
-                PackTileReconfig::Output,
-                /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
+                PackTileReconfig::Output>{});
 #else
         // !WEIGHT && !DIVISOR: -cb_tmp_input -> cb_output
         eltwise_chain(
@@ -193,8 +182,7 @@ void kernel_main() {
                 Dst::D0,
                 PackTilePolicy::PerTileReserveAndPush,
                 PackTileIndexMode::FirstTile,
-                PackTileReconfig::Output,
-                /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
+                PackTileReconfig::Output>{});
 #endif
 #endif
     }

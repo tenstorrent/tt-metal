@@ -32,7 +32,7 @@
  * Element kinds:
  *  - `BlockCopyTile<Cb, BlockSize, BaseDst, Policy, Reconfig>` — N CB → DEST loads.
  *  - `BlockBinaryFpu<CbA, CbB, Op, BlockSize, ...>` — N FPU binary ops.
- *  - `BlockPackTile<Cb, BlockSize, BaseDst, Policy, Reconfig, EnableFp32DestAcc>` — N DEST → CB packs.
+ *  - `BlockPackTile<Cb, BlockSize, BaseDst, Policy, Reconfig>` — N DEST → CB packs.
  *
  * The streaming chain pipeline already supports these — they just present a different
  * `wait_per_tile` / `pop_per_tile` / `exec` shape (waits N, pops N, runs N inner ops).
@@ -49,13 +49,11 @@
  * Block-element `init()` bodies no longer emit reconfig — they program only the
  * per-op LLK shape (`add_tiles_init`, math+unpack bcast short init, `copy_tile_init`).
  *
- * @section block_path_carry_skip CARRY / SKIP element classification (D6)
+ * @section block_path_fp32 FP32 DEST accumulation
  *
- * | List | Block elements | Carries `EnableFp32DestAcc` template? |
- * |---|---|---|
- * | CARRY | `BlockBinaryFpu`, `BlockPackTile` | Yes (default `false`); `static_assert(!EnableFp32DestAcc \|\|
- * DST_ACCUM_MODE)` enforces FP32_DEST_ACC_EN at compile time. | | SKIP  | `BlockCopyTile` | No template parameter; fold
- * treats it as transparent (passes prev fp32 through). |
+ * Block elements inherit the kernel's build-time DST_ACCUM_MODE (from FP32_DEST_ACC_EN).
+ * No per-element opt-in; no mid-kernel enable/disable. DEST_AUTO_LIMIT already accounts
+ * for the halved slot count under fp32 mode.
  *
  * @section block_caller_init_contract Caller-init contract — reminder
  *
@@ -79,7 +77,6 @@
  *       CopyTilePolicy::WaitNoPop,             // B: wait 1, never pop (caller pops)
  *       CbIndexMode::BlockIter,                // AIndex — A walks 0..stripe_tiles-1
  *       0,                                     // BWaitTiles (deprecated)
- *       false,                                 // EnableFp32DestAcc
  *       CbIndexMode::FirstTile>;               // BIndex — B pinned at tile 0
  *
  *   eltwise_chain(num_stripes, SubBcast{}, Exp<>{}, BlockPackTile<cb_exps, stripe_tiles>{});
@@ -175,7 +172,6 @@ template <
     CopyTilePolicy BPolicy = CopyTilePolicy::WaitAndPop,
     CbIndexMode AIndex = CbIndexMode::BlockIter,
     uint32_t BWaitTiles = 0,  // deprecated B-wait override; prefer BIndex=FirstTile (kept for back-compat)
-    bool EnableFp32DestAccV = false,
     CbIndexMode BIndex = AIndex>
 struct BlockBinaryFpu : BinaryFpuTag {
     static_assert(
@@ -237,13 +233,6 @@ struct BlockBinaryFpu : BinaryFpuTag {
             UNPACK((llk_unpack_AB_init<bt>(CbA, CbB)));
         }
     }
-
-    // D6 static_assert (CARRY) + member exposure for fold SFINAE probe.
-    static_assert(
-        !EnableFp32DestAccV || DST_ACCUM_MODE,
-        "BlockBinaryFpu<...EnableFp32DestAcc=true> requires kernel built with FP32_DEST_ACC_EN "
-        "(DST_ACCUM_MODE must be 1).");
-    static constexpr bool EnableFp32DestAcc = EnableFp32DestAccV;
 
     // Per-side wait counts. BlockIter walks tiles 0..BlockSize-1 → wait BlockSize.
     // FirstTile pins at tile 0 → wait 1 (or BWaitTiles override for legacy callers
@@ -325,15 +314,10 @@ template <
     uint32_t BlockSize,
     Dst BaseDst = Dst::D0,
     PackTilePolicy Policy = PackTilePolicy::PerTileReserveAndPush,
-    PackTileReconfig Reconfig = PackTileReconfig::None,
-    bool EnableFp32DestAccV = false>
+    PackTileReconfig Reconfig = PackTileReconfig::None>
 struct BlockPackTile : PackTileTag {
     static_assert(
         to_u32(BaseDst) + BlockSize <= DEST_AUTO_LIMIT, "BlockPackTile: BaseDst + BlockSize exceeds DEST_AUTO_LIMIT");
-    static_assert(
-        !EnableFp32DestAccV || DST_ACCUM_MODE,
-        "BlockPackTile<...EnableFp32DestAcc=true> requires kernel built with FP32_DEST_ACC_EN.");
-    static constexpr bool EnableFp32DestAcc = EnableFp32DestAccV;
 
     static constexpr uint32_t cb = Cb;
     static constexpr uint32_t pack_cb_id() { return Cb; }

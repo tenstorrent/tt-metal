@@ -16,8 +16,7 @@
  *   - per-chain-element init / exec dispatch,
  *   - CB lifecycle (wait/pop on inputs, reserve/push on outputs) via per-element policy enums,
  *   - input-side and pack-side dtype reconfig via per-element policy enums (compile-time-elided
- *     via prev-CB / prev-fp32-dest-acc folds — see @ref per_element_fp32_dest_acc),
- *   - per-element fp32-dest-acc transitions (D6 — see @ref per_element_fp32_dest_acc),
+ *     via prev-CB fold),
  *   - compile-time invariant checks (illegal lifecycle/index combos, duplicate upfront CBs,
  *     pack collisions, hoist-safety).
  *
@@ -41,10 +40,13 @@
  * `copy_tile_init(cb)` / `copy_tile_to_dst_init_short(cb)` | **chain** | Per-CopyTile / per-BlockCopyTile, fold-driven
  * prev-CB. | The fold emits the equivalent `_with_dt` form by combining `reconfig_data_format_srca(curr) +
  * copy_tile_init(curr)`. | | `reconfig_data_format_srca/srcb(cb)` / `pack_reconfig_data_format(cb)` | **chain** |
- * Per-element, fold-driven (D2 + D7). | Compile-time-elided when prev_cb == cur_cb. | | `enable_fp32_dest_acc()` /
- * `disable_fp32_dest_acc()` | **chain** | Per-element fold transition (D6). | Compile-time-elided when prev_fp32 ==
- * cur_fp32. | | `tile_regs_acquire / commit / wait / release` | **chain** | Per-iteration. | Chain owns the lifecycle.
- * |
+ * Per-element, fold-driven (D2 + D7). | Compile-time-elided when prev_cb == cur_cb. | | `tile_regs_acquire / commit /
+ * wait / release` | **chain** | Per-iteration. | Chain owns the lifecycle. |
+ *
+ * Note on FP32 DEST accumulation: the chain inherits the kernel's build-time DST_ACCUM_MODE
+ * (from `FP32_DEST_ACC_EN`). All DEST slot indexing already accounts for this via
+ * `DEST_AUTO_LIMIT`. No per-element opt-in or mid-kernel `enable_fp32_dest_acc()` /
+ * `disable_fp32_dest_acc()` toggles — DEST mode is kernel-wide.
  *
  * @section hw_startup_placement compute_kernel_hw_startup placement (D5)
  *
@@ -72,39 +74,13 @@
  * for single-stage kernels.** Multi-stage (different PACK output CB per stage) MUST keep the
  * explicit per-stage `compute_kernel_hw_startup` pattern.
  *
- * @section per_element_fp32_dest_acc Per-element EnableFp32DestAcc (D6)
+ * @section fp32_dest_acc FP32 DEST accumulation — build-flag-driven (no per-element opt-in)
  *
- * The chain inherits **no** fp32-dest-acc state from the kernel. Each chain element on the **CARRY
- * list** (DEST-format-sensitive LLK) carries an `EnableFp32DestAcc` template parameter (default
- * `false`). The chain's compile-time fold walks the element pack and emits
- * `enable_fp32_dest_acc()` / `disable_fp32_dest_acc()` before any element where the running mode
- * differs from the prior element's mode.
- *
- * | List | Elements | EnableFp32DestAcc behavior |
- * |---|---|---|
- * | **CARRY** | `BinaryFpu`, `BlockBinaryFpu`, `DestReuseBinary`, `UnaryBcast`, `PackTile`, `PackTileBlock`,
- * `BlockPackTile` (and the SFPU `BinarySfpu` family — `AddBinary` / `SubBinary` / `MulBinary` / `DivBinary` — once
- * F-UX-9 lifts the SFPU-family deferral) | Carries `bool EnableFp32DestAcc = false` template parameter.
- * `static_assert(!EnableFp32DestAcc \|\| DST_ACCUM_MODE)` rejects opt-in on kernels not built with `FP32_DEST_ACC_EN`.
- * The fold's SFINAE probe reads `E::EnableFp32DestAcc`. | | **SKIP** | `CopyTile`, `BlockCopyTile`, `FillScalar`,
- * `FillInt`, `FillBitcast`, `RandTile`, `OptionalChainElement<COND, Inner>` | No `EnableFp32DestAcc` template parameter
- * — dest-mode-irrelevant. The fold's SFINAE probe returns the running prev value (transparent pass-through). |
- *
- * Pattern for kernels wanting "global fp32 chain":
- *
- * @code
- *   constexpr bool kFp32 =
- *   #ifdef FP32_DEST_ACC_EN
- *       true;
- *   #else
- *       false;
- *   #endif
- *   // then per CARRY element:
- *   BinaryFpu<cbA, cbB, cbOut, BinaryFpuOp::Add, BroadcastDim::None,
- *             BinaryDataFormatReconfig::InputAndOutput,
- *             CopyTilePolicy::WaitAndPop, CopyTilePolicy::WaitAndPop,
- *             CbIndexMode::FirstTile, Dst::D0, kFp32>{}
- * @endcode
+ * The kernel's build flag `FP32_DEST_ACC_EN` determines DEST accumulation mode for the whole
+ * kernel. `DEST_AUTO_LIMIT` (in `dest_helpers.hpp`) already accounts for the halved slot count
+ * when fp32 is on. Chain elements operate transparently under whatever mode the build picked —
+ * no per-element template parameter, no SFINAE fold, no mid-kernel `enable_fp32_dest_acc()` /
+ * `disable_fp32_dest_acc()` transitions.
  *
  * @section block_path_fold Block-path fold (D7)
  *
@@ -123,8 +99,6 @@
  *    `compute_kernel_hw_startup.h:26-30` (MMIO write mid-kernel; race conditions under load).
  * 2. **Chain-only kernel forgetting `compute_kernel_hw_startup`** — silent miscompile; default-
  *    format reconfigs may match by accident; first mismatched-dtype kernel produces garbage.
- * 3. **`EnableFp32DestAcc=true` on a kernel built without `FP32_DEST_ACC_EN`** — compile-time
- *    `static_assert` per CARRY element fires immediately.
  *
  * @section big_init_grep_gate D8 grep gate
  *
@@ -194,21 +168,6 @@
  *       Exp<>{},
  *       PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{}
  *   );
- *
- *   // Mixed CARRY + SKIP + fp32 transitions (D6)
- *   //   (BinaryFpu's 11th template arg is EnableFp32DestAcc; passing `true` here)
- *   eltwise_chain(num_tiles,
- *       CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitAndPop>{},                          // SKIP — transparent
- *       BinaryFpu<cb_in, cb_b, cb_tmp, BinaryFpuOp::Add, BroadcastDim::None,             // CARRY, fp32=true
- *                 BinaryDataFormatReconfig::InputAndOutput,
- *                 CopyTilePolicy::WaitAndPop, CopyTilePolicy::WaitAndPop,
- *                 CbIndexMode::FirstTile, Dst::D0, true>{},
- *       Exp<>{},                                                                        // SKIP — transparent
- *       PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush,                 // CARRY, fp32=false (default)
- *                PackTileIndexMode::FirstTile, PackTileReconfig::None>{}
- *   );
- *   // Fold emits: `enable_fp32_dest_acc()` before BinaryFpu (transition from default false → true)
- *   //             `disable_fp32_dest_acc()` before PackTile (transition from true → false)
  *
  * Non-goals
  * ---------
@@ -609,7 +568,6 @@ template <
     CopyTilePolicy BPolicy = CopyTilePolicy::WaitAndPop,
     CbIndexMode AIndex = CbIndexMode::FirstTile,
     Dst DstSlot = Dst::D0,
-    bool EnableFp32DestAcc = false,
     CbIndexMode BIndex = AIndex>
 struct BinaryFpu;
 
@@ -621,8 +579,7 @@ template <
     Dst DstOut = Dst::D0,
     DestReuseReconfig Reconfig = DestReuseReconfig::None,
     CopyTilePolicy Policy = CopyTilePolicy::WaitAndPop,
-    CbIndexMode IndexMode = CbIndexMode::FirstTile,
-    bool EnableFp32DestAcc = false>
+    CbIndexMode IndexMode = CbIndexMode::FirstTile>
 struct DestReuseBinary;
 
 template <
@@ -631,8 +588,7 @@ template <
     uint32_t CbOut = 0,
     Dst DstSlot = Dst::D0,
     CopyTilePolicy Policy = CopyTilePolicy::WaitAndPop,
-    UnaryBcastReconfig Reconfig = UnaryBcastReconfig::None,
-    bool EnableFp32DestAcc = false>
+    UnaryBcastReconfig Reconfig = UnaryBcastReconfig::None>
 struct UnaryBcast;
 
 template <
@@ -640,8 +596,7 @@ template <
     Dst DstSlot = Dst::D0,
     PackTilePolicy Policy = PackTilePolicy::PerTileReserveAndPush,
     PackTileIndexMode IndexMode = PackTileIndexMode::FirstTile,
-    PackTileReconfig Reconfig = PackTileReconfig::None,
-    bool EnableFp32DestAcc = false>
+    PackTileReconfig Reconfig = PackTileReconfig::None>
 struct PackTile;
 
 template <
@@ -649,8 +604,7 @@ template <
     Dst FirstSlot,
     uint32_t NTiles,
     PackTilePolicy Policy = PackTilePolicy::PerTileReserveAndPush,
-    PackTileReconfig Reconfig = PackTileReconfig::None,
-    bool EnableFp32DestAcc = false>
+    PackTileReconfig Reconfig = PackTileReconfig::None>
 struct PackTileBlock;
 
 // Fill / Rand forward declarations — implementations live in eltwise_fill.hpp / eltwise_rand.hpp.

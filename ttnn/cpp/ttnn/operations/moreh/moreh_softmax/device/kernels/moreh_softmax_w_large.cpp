@@ -34,8 +34,7 @@ ALWI void moreh_bin_chain() {
         PopA ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
         PopB ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
         CbIndexMode::Pinned,
-        Dst::D0,
-        /*EnableFp32DestAcc=*/DST_ACCUM_MODE>;
+        Dst::D0>;
     eltwise_chain(
         1,
         BinElt{IdxA, IdxB},
@@ -44,8 +43,7 @@ ALWI void moreh_bin_chain() {
             Dst::D0,
             PackTilePolicy::PerTileReserveAndPush,
             PackTileIndexMode::FirstTile,
-            PackTileReconfig::Output,
-            /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
+            PackTileReconfig::Output>{});
 }
 
 template <uint32_t CbIn, uint32_t CbOut, uint32_t Idx, bool Pop>
@@ -65,8 +63,7 @@ ALWI void moreh_copy_chain() {
             Dst::D0,
             PackTilePolicy::PerTileReserveAndPush,
             PackTileIndexMode::FirstTile,
-            PackTileReconfig::Output,
-            /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
+            PackTileReconfig::Output>{});
 }
 
 // Unary SFPU chain: CopyTile(in, FirstTile, WaitAndPop) -> Sfpu(D0) -> PackTile(out).
@@ -82,8 +79,7 @@ ALWI void moreh_unary_chain() {
             Dst::D0,
             PackTilePolicy::PerTileReserveAndPush,
             PackTileIndexMode::FirstTile,
-            PackTileReconfig::Output,
-            /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
+            PackTileReconfig::Output>{});
 }
 
 // rexp(x) = exp(-x): CopyTile -> Negative -> Exp -> PackTile.
@@ -100,8 +96,7 @@ ALWI void moreh_rexp_chain() {
             Dst::D0,
             PackTilePolicy::PerTileReserveAndPush,
             PackTileIndexMode::FirstTile,
-            PackTileReconfig::Output,
-            /*EnableFp32DestAcc=*/DST_ACCUM_MODE>{});
+            PackTileReconfig::Output>{});
 }
 
 }  // namespace

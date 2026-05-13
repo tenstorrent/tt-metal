@@ -147,69 +147,6 @@ constexpr uint32_t prev_cb_for_idx() {
     }
 }
 
-// =============================================================================
-// fp32_or_default<E, Default> — SFINAE probe for D6 EnableFp32DestAcc member.
-//
-// Returns `E::EnableFp32DestAcc` when E (a CARRY-list element) carries the flag;
-// returns `Default` (the running prev) when E does not (SKIP-list elements).
-// Used by the fp32-dest-acc fold to pass the running value through SKIP elements
-// transparently.
-// =============================================================================
-
-template <class E, bool Default, class = void>
-struct fp32_or_default {
-    static constexpr bool value = Default;
-};
-template <class E, bool Default>
-struct fp32_or_default<E, Default, std::void_t<decltype(E::EnableFp32DestAcc)>> {
-    static constexpr bool value = E::EnableFp32DestAcc;
-};
-
-// has_fp32_dest_acc_v<E> — true when E::EnableFp32DestAcc is a member.
-// Resolved by the same SFINAE machinery as `fp32_or_default`.
-template <class E, class = void>
-struct has_fp32_dest_acc : std::false_type {};
-template <class E>
-struct has_fp32_dest_acc<E, std::void_t<decltype(E::EnableFp32DestAcc)>> : std::true_type {};
-
-// =============================================================================
-// prev_fp32_dest_acc_for_idx<I, Es...>()
-//
-// Walks Es[0..I-1] forwards (recursive pack-peel), threading the running fp32 flag
-// through each element. SKIP elements keep the prior value (no member); CARRY
-// elements anchor it (`E::EnableFp32DestAcc`). Default (no prior element) is `false`
-// per Q6 — chain inherits no fp32 state from the kernel.
-//
-// `prev_fp32_walk` is the recursion: K = current index, I = stop index, running =
-// the value seen so far.
-// =============================================================================
-
-template <std::size_t K, std::size_t I, bool Running, class First, class... Rest>
-constexpr bool prev_fp32_walk_step() {
-    if constexpr (K == I) {
-        return Running;
-    } else {
-        constexpr bool next = has_fp32_dest_acc<First>::value
-                                  ? fp32_or_default<First, Running>::value
-                                  : Running;
-        if constexpr (sizeof...(Rest) == 0) {
-            // Walked the whole pack but K < I — should not happen for well-formed I; guard.
-            return next;
-        } else {
-            return prev_fp32_walk_step<K + 1, I, next, Rest...>();
-        }
-    }
-}
-
-template <std::size_t I, class... Es>
-constexpr bool prev_fp32_dest_acc_for_idx() {
-    if constexpr (I == 0 || sizeof...(Es) == 0) {
-        return false;
-    } else {
-        return prev_fp32_walk_step<0, I, false, Es...>();
-    }
-}
-
 }  // namespace detail
 
 // =============================================================================
@@ -318,13 +255,8 @@ template <uint32_t Cb,
           Dst DstSlot,
           PackTilePolicy Policy,
           PackTileIndexMode IndexMode,
-          PackTileReconfig Reconfig,
-          bool EnableFp32DestAccV>
+          PackTileReconfig Reconfig>
 struct PackTile : PackTileTag {
-    static_assert(!EnableFp32DestAccV || DST_ACCUM_MODE,
-                  "PackTile<...EnableFp32DestAcc=true> requires kernel built with FP32_DEST_ACC_EN.");
-    // D6 carry: expose member name EnableFp32DestAcc for the SFINAE fold probe.
-    static constexpr bool EnableFp32DestAcc = EnableFp32DestAccV;
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "PackTile: DEST slot exceeds DEST_AUTO_LIMIT");
     static_assert(!(Policy == PackTilePolicy::PerTileReserveAndPush && IndexMode == PackTileIndexMode::BlockIter),
@@ -408,16 +340,12 @@ template <uint32_t Cb,
           Dst FirstSlot,
           uint32_t NTiles,
           PackTilePolicy Policy,
-          PackTileReconfig Reconfig,
-          bool EnableFp32DestAccV>
+          PackTileReconfig Reconfig>
 struct PackTileBlock : PackTileTag {
     static_assert(NTiles >= 1 && NTiles <= DEST_AUTO_LIMIT,
                   "PackTileBlock: NTiles must be in [1, DEST_AUTO_LIMIT]");
     static_assert(to_u32(FirstSlot) + NTiles <= DEST_AUTO_LIMIT,
                   "PackTileBlock: FirstSlot + NTiles exceeds DEST_AUTO_LIMIT (consecutive slots required)");
-    static_assert(!EnableFp32DestAccV || DST_ACCUM_MODE,
-                  "PackTileBlock<...EnableFp32DestAcc=true> requires kernel built with FP32_DEST_ACC_EN.");
-    static constexpr bool EnableFp32DestAcc = EnableFp32DestAccV;
 
     static constexpr uint32_t cb           = Cb;
     static constexpr uint32_t pack_cb_id() { return Cb; }
@@ -476,7 +404,6 @@ template <uint32_t CbA,
           CopyTilePolicy BPolicy,
           CbIndexMode AIndex,
           Dst DstSlot,
-          bool EnableFp32DestAccV,
           CbIndexMode BIndex>
 struct BinaryFpu : BinaryFpuTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
@@ -492,12 +419,6 @@ struct BinaryFpu : BinaryFpuTag {
     static_assert((CbA != CbB) || AIndex == BIndex,
                   "BinaryFpu: when CbA == CbB, AIndex and BIndex must match "
                   "(B-side wait/pop is deduped — asymmetric indices would under-wait).");
-    // D6: EnableFp32DestAcc requires the kernel was built with FP32_DEST_ACC_EN.
-    static_assert(!EnableFp32DestAccV || DST_ACCUM_MODE,
-                  "BinaryFpu<...EnableFp32DestAcc=true> requires kernel built with FP32_DEST_ACC_EN "
-                  "(DST_ACCUM_MODE must be 1).");
-    // D6 carry: expose member name EnableFp32DestAcc for the SFINAE fold probe.
-    static constexpr bool EnableFp32DestAcc = EnableFp32DestAccV;
 
     static constexpr uint32_t      cb_a_id()  { return CbA; }
     static constexpr uint32_t      cb_b_id()  { return CbB; }
@@ -632,16 +553,12 @@ template <uint32_t Cb,
           Dst DstOut,
           DestReuseReconfig Reconfig,
           CopyTilePolicy Policy,
-          CbIndexMode IndexMode,
-          bool EnableFp32DestAccV>
+          CbIndexMode IndexMode>
 struct DestReuseBinary : DestReuseBinaryTag {
     static_assert(to_u32(DstIn) < DEST_AUTO_LIMIT && to_u32(DstOut) < DEST_AUTO_LIMIT,
                   "DestReuseBinary: DEST slot exceeds DEST_AUTO_LIMIT");
     static_assert(!(Policy == CopyTilePolicy::WaitAndPop && IndexMode == CbIndexMode::BlockIter),
                   "DestReuseBinary: BlockIter index requires Upfront / NoWaitNoPop policy");
-    static_assert(!EnableFp32DestAccV || DST_ACCUM_MODE,
-                  "DestReuseBinary<...EnableFp32DestAcc=true> requires kernel built with FP32_DEST_ACC_EN.");
-    static constexpr bool EnableFp32DestAcc = EnableFp32DestAccV;
 
     static constexpr uint32_t       cb_a_id()         { return Cb; }
     static constexpr uint32_t       cb_b_id()         { return 0;  }
@@ -719,14 +636,10 @@ template <BroadcastDim Dim,
           uint32_t CbOut,
           Dst DstSlot,
           CopyTilePolicy Policy,
-          UnaryBcastReconfig Reconfig,
-          bool EnableFp32DestAccV>
+          UnaryBcastReconfig Reconfig>
 struct UnaryBcast : UnaryBcastTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "UnaryBcast: DEST slot exceeds DEST_AUTO_LIMIT");
-    static_assert(!EnableFp32DestAccV || DST_ACCUM_MODE,
-                  "UnaryBcast<...EnableFp32DestAcc=true> requires kernel built with FP32_DEST_ACC_EN.");
-    static constexpr bool EnableFp32DestAcc = EnableFp32DestAccV;
 
     static constexpr uint32_t       cb_a_id()         { return Cb; }
     static constexpr uint32_t       cb_b_id()         { return 0;  }
@@ -940,33 +853,20 @@ struct has_member_exec<T, std::void_t<decltype(std::declval<const T>().exec(uint
 template <class T> inline constexpr bool has_member_exec_v = has_member_exec<T>::value;
 
 // =============================================================================
-// emit_pre_element_transitions<E, I, Es...>() (D2 + D6)
+// emit_pre_element_transitions<E, I, Es...>() (D2)
 //
-// For element at position I in pack Es..., emit:
-//   1. fp32-dest-acc transition (if curr_fp32 != prev_fp32)
-//   2. srca / srcb / pack reconfig (each compile-time-elided when prev_*_cb == curr_*_cb)
+// For element at position I in pack Es..., emit srca / srcb / pack reconfig (each
+// compile-time-elided when prev_*_cb == curr_*_cb). Compile-time elision means a
+// chain whose elements all share a CB on a side emits the reconfig once (at element
+// 0, where prev == NO_PREV_CB) and never again on that side. Run-time cost: zero —
+// `if constexpr` resolves at compile time.
 //
-// Compile-time elision means a chain whose elements all share a CB on a side emits
-// the reconfig once (at element 0, where prev == NO_PREV_CB) and never again on that
-// side. Run-time cost: zero — `if constexpr` resolves at compile time.
-//
-// D6 transition fold: the fp32 fold walks Es[0..I-1] threading SKIP elements through
-// transparently and anchoring on CARRY-list elements. CARRY elements that don't
-// declare `EnableFp32DestAcc` (yet — D6 lands in commit 5) are treated as SKIP via
-// the SFINAE probe, so this commit's fold is a structural no-op for fp32 transitions
-// until D6 elements ship.
+// DEST accumulation mode is build-flag-driven (DST_ACCUM_MODE / FP32_DEST_ACC_EN) —
+// no per-element fp32 fold here.
 // =============================================================================
 
 template <class E, std::size_t I, class... Es>
 ALWI void emit_pre_element_transitions() {
-    // ---- D6 fp32 transition ----
-    constexpr bool prev_fp32 = prev_fp32_dest_acc_for_idx<I, Es...>();
-    constexpr bool curr_fp32 = fp32_or_default<E, prev_fp32>::value;
-    if constexpr (curr_fp32 != prev_fp32) {
-        if constexpr (curr_fp32) { enable_fp32_dest_acc(); }
-        else                     { disable_fp32_dest_acc(); }
-    }
-
     // ---- D2 prev-CB elision ----
     constexpr uint32_t curr_a = cb_for_side<Side::SrcA, E>();
     if constexpr (curr_a != NO_PREV_CB) {
