@@ -934,7 +934,7 @@ class TtModelArgs:
             # Only used when seq_len >= 4096
             # Best configs found through sweep (sweep_llama70b_agmm_block_sizes.py)
             def prefill_ff2_minimal_matmul_config(seq_len):
-                if seq_len <= 16384:
+                if seq_len <= 16384:  # Both 8K and 16K share the same config
                     return ttnn.MinimalMatmulConfig(
                         M_block_size=8,
                         K_block_size=7,
@@ -945,18 +945,7 @@ class TtModelArgs:
                             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 8))}
                         ),
                     )
-                elif seq_len <= 16384:  # Both 8K and 16K share the same config
-                    return ttnn.MinimalMatmulConfig(
-                        M_block_size=8,
-                        K_block_size=8,
-                        N_block_size=8,
-                        subblock_h=2,
-                        subblock_w=4,
-                        allowed_worker_cores=ttnn.CoreRangeSet(
-                            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 7))}
-                        ),
-                    )
-                elif seq_len <= 32768:
+                elif seq_len <= 32768:  # 32K
                     return ttnn.MinimalMatmulConfig(
                         M_block_size=8,
                         K_block_size=8,

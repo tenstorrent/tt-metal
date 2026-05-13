@@ -36,8 +36,6 @@ def test_with_ops(device):
 
     output = ttnn.matmul(a, b, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    output = ttnn.matmul(a, b, memory_config=ttnn.L1_MEMORY_CONFIG)
-
 
 def test_mesh_device(
     mesh_device,

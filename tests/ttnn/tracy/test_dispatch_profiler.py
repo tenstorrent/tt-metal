@@ -40,7 +40,7 @@ def test_with_ops(device):
     b = ttnn.to_layout(b, ttnn.TILE_LAYOUT)
 
     for i in range(1000):
-        output = ttnn.matmul(a, b, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.matmul(a, b, memory_config=ttnn.L1_MEMORY_CONFIG)
 
 
 @pytest.mark.parametrize(

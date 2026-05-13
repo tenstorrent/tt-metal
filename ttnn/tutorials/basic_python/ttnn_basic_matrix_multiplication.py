@@ -18,8 +18,6 @@ def main():
 
     output = a @ b
 
-    output = a @ b
-
     print(output.layout)
 
     output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
@@ -34,8 +32,6 @@ def main():
     b = ttnn.rand(
         (k, n), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
     )
-
-    output = ttnn.matmul(a, b, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     output = ttnn.matmul(a, b, memory_config=ttnn.L1_MEMORY_CONFIG)
 
