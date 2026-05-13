@@ -77,21 +77,206 @@ def _pad_cols(t: torch.Tensor, target_cols: int, value: float = 0.0) -> torch.Te
 def _make_qknorm_weight_tt(weight_torch: torch.Tensor, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
     """Create zero-centered QK-norm weight on device.
 
-    Applies (1+w) and stores as [1, 1, head_dim//32, 32] tile-aligned row-major,
+    Applies (1+w) and stores as [1, head_dim//TILE, TILE] (3-D) row-major,
     replicated across all mesh devices.
+
+    TTNN rms_norm constraint: gamma.padded_shape[-1] == tile_width (32) AND
+    gamma.physical_volume / tile_width == input.padded_shape[-1] / tile_width.
+    A 3-D weight [1, hd//32, 32] satisfies this for any input with last padded
+    dim == hd (including 2-D input [rows, hd] from _apply_qk_norm).
+
+    3-D weight is preferred over 4-D [1, 1, hd//32, 32] because the 4-D format
+    can produce wrong results when the input's n_kv_pc dim is 1 due to tile
+    padding interactions.
     """
     w = 1.0 + weight_torch.float()
     dim = w.numel()
     assert dim % TILE == 0, f"head_dim={dim} must be tile-aligned"
-    w_4d = w.reshape(1, 1, dim // TILE, TILE)
+    w_3d = w.reshape(1, dim // TILE, TILE)  # [1, hd//32, 32]
     return ttnn.from_torch(
-        w_4d,
+        w_3d,
         device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
+
+
+def _qknorm_flat_to_heads(
+    x_flat: "ttnn.Tensor",
+    weight: "ttnn.Tensor",
+    eps: float,
+    B: int,
+    n_heads: int,
+    T: int,
+    hd: int,
+    compute_kernel_config,
+) -> "ttnn.Tensor":
+    """Apply per-head RMSNorm and return [B, n_heads, T, hd].
+
+    Processes each head independently via slice, rms_norm, then concatenates.
+
+    Why not reshape [B, T, n_heads*hd] → [B, n_heads, T, hd] then rms_norm?
+    -----------------------------------------------------------------------
+    A row-major reshape [B, T, N*hd] → [B, N, T, hd] reinterprets the data
+    as N contiguous blocks of T*hd elements each, NOT as N interleaved slots
+    of hd within each time step. To get the correct per-head per-time-step
+    view, one would need reshape to [B, T, N, hd] + transpose(1,2). But
+    n_heads (N=6 or N=1) is < 32, causing tile-padding issues in TILE_LAYOUT
+    when that dimension is second-to-last.
+
+    Slice approach:
+    -----------------------------------------------------------------------
+    For each head h (0..n_heads-1), slice [B, T, hd] from x_flat starting at
+    column h*hd. Each such slice has T and hd both tile-aligned → no padding
+    issues. Apply rms_norm to [B, T, hd] with weight [1, hd//32, 32]:
+      - input.padded_shape[-1] = hd
+      - gamma.physical_volume / 32 = hd/32 ✓
+      - Normalizes each of B*T rows of hd elements independently.
+
+    Args:
+        x_flat: [B, T, n_heads*hd] flat projection from wqkvg split
+        weight: [1, hd//32, 32] in ROW_MAJOR_LAYOUT (zero-centered, 1+w baked in)
+        eps: RMSNorm epsilon
+        B, n_heads, T, hd: logical dimensions
+        compute_kernel_config: TTNN compute kernel config
+
+    Returns:
+        [B, n_heads, T, hd] per-head normalized tensor.
+    """
+    if n_heads == 1:
+        # Fast path: x_flat is already [B, T, hd] (single head)
+        # Apply rms_norm directly, then reshape to [B, 1, T, hd].
+        x_normed_3d = ttnn.rms_norm(
+            x_flat,
+            weight=weight,
+            epsilon=eps,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=compute_kernel_config,
+        )
+        # ttnn.reshape creates a VIEW (shares buffer with x_normed_3d).
+        # Clone immediately to get an independent buffer before x_normed_3d is freed.
+        view_4d = ttnn.reshape(x_normed_3d, [B, 1, T, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.clone(view_4d, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        view_4d.deallocate(True)
+        x_normed_3d.deallocate(True)
+        return out  # [B, 1, T, hd]
+
+    # Multi-head path: slice each head, norm, then concat along new head dim.
+    # IMPORTANT: ttnn.reshape creates a view (alias) — do NOT deallocate any
+    # intermediate tensor while a reshape view of it is still live.  We keep
+    # both the normed 3D tensor AND its 4D reshape view alive until after
+    # ttnn.concat (which copies data into its own new buffer).
+    head_normed_list = []  # [B, T, hd] normed tensors (keep alive until after concat)
+    head_tensors = []  # [B, 1, T, hd] reshape views (aliases of head_normed_list)
+    for h in range(n_heads):
+        # Slice head h: [B, T, hd] (all tile-aligned)
+        head_h = ttnn.slice(x_flat, [0, 0, h * hd], [B, T, (h + 1) * hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Per-head rms_norm creates a new independent buffer:
+        head_normed = ttnn.rms_norm(
+            head_h,
+            weight=weight,
+            epsilon=eps,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=compute_kernel_config,
+        )
+        head_h.deallocate(True)
+        # Reshape [B, T, hd] → [B, 1, T, hd]: this is a VIEW of head_normed.
+        # Keep head_normed alive (in head_normed_list) until after concat.
+        head_normed_4d = ttnn.reshape(head_normed, [B, 1, T, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        head_normed_list.append(head_normed)
+        head_tensors.append(head_normed_4d)
+
+    # Concatenate: concat creates its own new buffer — safe to deallocate views.
+    out = ttnn.concat(head_tensors, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # Now safe to release all intermediate tensors
+    for t in head_tensors:
+        t.deallocate(True)
+    for t in head_normed_list:
+        t.deallocate(True)
+    return out  # [B, n_heads, T, hd]
+
+
+def _flat_to_heads(
+    x_flat: "ttnn.Tensor",
+    B: int,
+    n_heads: int,
+    T: int,
+    hd: int,
+) -> "ttnn.Tensor":
+    """Convert [B, T, n_heads*hd] → [B, n_heads, T, hd] via slice+reshape+concat.
+
+    Avoids tile-padding problems of reshaping n_heads into the second-to-last
+    tile dimension (which gets padded to 32 when n_heads < 32).
+
+    For n_heads=1: simple reshape [B, T, hd] → [B, 1, T, hd].
+    """
+    if n_heads == 1:
+        # ttnn.reshape creates a VIEW — clone immediately to get an independent buffer.
+        # (Caller typically deallocates x_flat after this call, which would otherwise
+        # invalidate the reshape view.)
+        view_4d = ttnn.reshape(x_flat, [B, 1, T, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.clone(view_4d, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        view_4d.deallocate(True)
+        return out
+
+    # Keep slices alive until after concat (reshape creates a view, not a copy).
+    slice_list = []  # [B, T, hd] slice tensors (keep alive until after concat)
+    head_tensors = []  # [B, 1, T, hd] reshape views (aliases of slice_list)
+    for h in range(n_heads):
+        head_h = ttnn.slice(x_flat, [0, 0, h * hd], [B, T, (h + 1) * hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        head_h_4d = ttnn.reshape(head_h, [B, 1, T, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        slice_list.append(head_h)
+        head_tensors.append(head_h_4d)
+
+    out = ttnn.concat(head_tensors, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for t in head_tensors:
+        t.deallocate(True)
+    for s in slice_list:
+        s.deallocate(True)
+    return out  # [B, n_heads, T, hd]
+
+
+def _heads_to_flat(
+    x_heads: "ttnn.Tensor",
+    B: int,
+    n_heads: int,
+    T: int,
+    hd: int,
+) -> "ttnn.Tensor":
+    """Convert [B, n_heads, T, hd] → [B, T, n_heads*hd] via slice+reshape+concat.
+
+    Reverses _flat_to_heads. Avoids tile-padding problems.
+
+    For n_heads=1: simple reshape [B, 1, T, hd] → [B, T, hd].
+    """
+    if n_heads == 1:
+        # ttnn.reshape creates a VIEW — clone to get an independent buffer before
+        # caller deallocates x_heads.
+        view_3d = ttnn.reshape(x_heads, [B, T, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.clone(view_3d, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        view_3d.deallocate(True)
+        return out
+
+    # Slice each head [B, 1, T, hd] and reshape to [B, T, hd].
+    # Keep slices alive until after concat (reshape creates a view, not a copy).
+    slice_list = []  # [B, 1, T, hd] slice tensors (keep alive until concat)
+    time_slice_tensors = []  # [B, T, hd] reshape views (aliases of slice_list)
+    for h in range(n_heads):
+        head_h = ttnn.slice(
+            x_heads, [0, h, 0, 0], [B, h + 1, T, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )  # [B, 1, T, hd]
+        head_h_3d = ttnn.reshape(head_h, [B, T, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        slice_list.append(head_h)
+        time_slice_tensors.append(head_h_3d)
+
+    out = ttnn.concat(time_slice_tensors, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for t in time_slice_tensors:
+        t.deallocate(True)
+    for s in slice_list:
+        s.deallocate(True)
+    return out  # [B, T, n_heads*hd]
 
 
 # ---------------------------------------------------------------------------
@@ -499,53 +684,34 @@ class TtQwen36GatedAttention(LightweightModule):
         )
         xqkvg.deallocate(True)
 
-        # Reshape per-col: each col has its own slice of heads
-        q_h = ttnn.reshape(q_flat, [B, T, n_q_pc, hd])  # [B, T, 6, 256]
+        # ------------------------------------------------------------------
+        # 3. QK-norm (per head_dim, zero-centered weight = 1+w baked in)
+        # Reshape flat [B, T, n*hd] → [B, n, T, hd] and apply rms_norm in one shot.
+        # This avoids the [B, T, n, hd] intermediate that has n < 32 (tile-padding
+        # in the n_heads dim would make a subsequent reshape to [B*T*n, 1, hd]
+        # physically incompatible).  See _qknorm_flat_to_heads docstring.
+        # ------------------------------------------------------------------
         # Keep gate_flat as [B, T, g_dim_pc=1536] for now (apply after SDPA)
-        k_h = ttnn.reshape(k_flat, [B, T, n_kv_pc, hd])  # [B, T, 1, 256]
-        v_h = ttnn.reshape(v_flat, [B, T, n_kv_pc, hd])  # [B, T, 1, 256]
+        q_rot_pre = _qknorm_flat_to_heads(
+            q_flat, self.q_norm_w, self.eps, B, n_q_pc, T, hd, self.compute_kernel_hifi4
+        )  # [B, n_q_pc, T, hd]
+        k_rot_pre = _qknorm_flat_to_heads(
+            k_flat, self.k_norm_w, self.eps, B, n_kv_pc, T, hd, self.compute_kernel_hifi4
+        )  # [B, n_kv_pc, T, hd]
         q_flat.deallocate(True)
         k_flat.deallocate(True)
+
+        # V: [B, T, n_kv_pc*hd] → [B, n_kv_pc, T, hd] (no norm for V)
+        v_t = _flat_to_heads(v_flat, B, n_kv_pc, T, hd)
         v_flat.deallocate(True)
 
         # ------------------------------------------------------------------
-        # 3. QK-norm (per head_dim, zero-centered weight = 1+w baked in)
-        # HiFi4+fp32_dest_acc on head_dim=256: small enough to fit in L1 CBs.
+        # 4-5. Partial RoPE on Q and K (already in [B, n_heads, T, hd] format)
         # ------------------------------------------------------------------
-        q_normed = ttnn.rms_norm(
-            q_h,
-            weight=self.q_norm_w,
-            epsilon=self.eps,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_hifi4,
-        )
-        k_normed = ttnn.rms_norm(
-            k_h,
-            weight=self.k_norm_w,
-            epsilon=self.eps,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_hifi4,
-        )
-        q_h.deallocate(True)
-        k_h.deallocate(True)
-
-        # ------------------------------------------------------------------
-        # 4. Transpose to [B, n_heads, T, hd]
-        # ------------------------------------------------------------------
-        q_t = ttnn.transpose(q_normed, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        k_t = ttnn.transpose(k_normed, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        v_t = ttnn.transpose(v_h, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        q_normed.deallocate(True)
-        k_normed.deallocate(True)
-        v_h.deallocate(True)
-
-        # ------------------------------------------------------------------
-        # 5. Partial RoPE on Q and K
-        # ------------------------------------------------------------------
-        q_rot = self._apply_partial_rope(q_t, cos_tt, sin_tt)
-        k_rot = self._apply_partial_rope(k_t, cos_tt, sin_tt)
-        q_t.deallocate(True)
-        k_t.deallocate(True)
+        q_rot = self._apply_partial_rope(q_rot_pre, cos_tt, sin_tt)
+        k_rot = self._apply_partial_rope(k_rot_pre, cos_tt, sin_tt)
+        q_rot_pre.deallocate(True)
+        k_rot_pre.deallocate(True)
 
         # ------------------------------------------------------------------
         # 6. KV cache fill
@@ -603,11 +769,11 @@ class TtQwen36GatedAttention(LightweightModule):
         # ------------------------------------------------------------------
         # 9. Output gate (per col): sigmoid(gate_flat) * attn_out
         # ------------------------------------------------------------------
-        # attn_out: [B, n_q_pc, T, hd], gate_flat: [B, T, q_dim_pc=1536]
-        attn_t = ttnn.transpose(attn_out, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # attn_out: [B, n_q_pc, T, hd] (heads-first)
+        # gate_flat: [B, T, q_dim_pc=1536] (time-first, heads-interleaved)
+        # Convert attn_out → [B, T, q_dim_pc] via _heads_to_flat for gate multiply.
+        attn_flat = _heads_to_flat(attn_out, B, n_q_pc, T, hd)
         attn_out.deallocate(True)
-        attn_flat = ttnn.reshape(attn_t, [B, T, q_dim_pc])  # per col: [B, T, 1536]
-        attn_t.deallocate(True)
 
         gate_sig = ttnn.sigmoid(gate_flat, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         gate_flat.deallocate(True)
@@ -686,6 +852,15 @@ class TtQwen36GatedAttention(LightweightModule):
             B, T, H = orig_shape
             x_3d = x
 
+        # TTNN tile layout pads T to the nearest multiple of 32 (minimum 32).
+        # For decode mode the true sequence length is always 1, but the on-device tensor
+        # may report T=32 due to tile padding.  Slice back to T=1 so that all downstream
+        # matmuls, SDPA, and reshapes operate on 1 real token (not 32 with 31 zero-padded
+        # rows that would corrupt SDPA outputs and shape-mismatch on return).
+        T_logical = 1
+        if T > T_logical:
+            x_3d = ttnn.slice(x_3d, [0, 0, 0], [B, T_logical, H], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            T = T_logical
         assert T == 1, f"Decode expects T=1, got T={T}"
 
         hd = self.head_dim  # 256
@@ -723,44 +898,27 @@ class TtQwen36GatedAttention(LightweightModule):
         )
         xqkvg.deallocate(True)
 
-        q_h = ttnn.reshape(q_flat, [B, T, n_q_pc, hd])  # [B, T, 6, 256] per col
-        k_h = ttnn.reshape(k_flat, [B, T, n_kv_pc, hd])  # [B, T, 1, 256] per col
-        v_h = ttnn.reshape(v_flat, [B, T, n_kv_pc, hd])  # [B, T, 1, 256] per col
+        # QK-norm: reshape flat [B, T, n*hd] → [B, n, T, hd] and apply rms_norm.
+        # Skips the [B, T, n, hd] intermediate (n < 32 → tile-padding issues).
+        # See _qknorm_flat_to_heads docstring for tile-compatibility analysis.
+        q_normed = _qknorm_flat_to_heads(
+            q_flat, self.q_norm_w, self.eps, B, n_q_pc, T, hd, self.compute_kernel_hifi4
+        )  # [B, n_q_pc, T, hd]
+        k_normed = _qknorm_flat_to_heads(
+            k_flat, self.k_norm_w, self.eps, B, n_kv_pc, T, hd, self.compute_kernel_hifi4
+        )  # [B, n_kv_pc, T, hd]
         q_flat.deallocate(True)
         k_flat.deallocate(True)
+
+        # V: [B, T, n_kv_pc*hd] → [B, n_kv_pc, T, hd] (no norm for V)
+        v_t = _flat_to_heads(v_flat, B, n_kv_pc, T, hd)
         v_flat.deallocate(True)
 
-        # QK-norm (HiFi4+fp32_dest_acc on head_dim=256, fits in L1 CBs)
-        q_normed = ttnn.rms_norm(
-            q_h,
-            weight=self.q_norm_w,
-            epsilon=self.eps,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_hifi4,
-        )
-        k_normed = ttnn.rms_norm(
-            k_h,
-            weight=self.k_norm_w,
-            epsilon=self.eps,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_hifi4,
-        )
-        q_h.deallocate(True)
-        k_h.deallocate(True)
-
-        # Transpose to [B, n_heads, T, hd]
-        q_t = ttnn.transpose(q_normed, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        k_t = ttnn.transpose(k_normed, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        v_t = ttnn.transpose(v_h, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Partial RoPE (already in [B, n_heads, T, hd] format — no transpose needed)
+        q_rot = self._apply_partial_rope(q_normed, cos_tt, sin_tt)
+        k_rot = self._apply_partial_rope(k_normed, cos_tt, sin_tt)
         q_normed.deallocate(True)
         k_normed.deallocate(True)
-        v_h.deallocate(True)
-
-        # Partial RoPE
-        q_rot = self._apply_partial_rope(q_t, cos_tt, sin_tt)
-        k_rot = self._apply_partial_rope(k_t, cos_tt, sin_tt)
-        q_t.deallocate(True)
-        k_t.deallocate(True)
 
         # KV cache update
         if kv_cache is not None:
@@ -787,7 +945,10 @@ class TtQwen36GatedAttention(LightweightModule):
         k_rot.deallocate(True)
         v_t.deallocate(True)
 
-        # Slice KV cache up to cur_pos_int (per-col, n_kv_pc=1 dim)
+        # Slice KV cache up to cur_pos_int (per-col, n_kv_pc=1 dim).
+        # T_kv is the number of VALID tokens; T_kv_pad is tile-aligned (≥ T_kv).
+        # Important: the tile-padded region beyond T_kv contains zeros — we must
+        # mask those positions with -inf in SDPA so they don't corrupt attention.
         T_kv = cur_pos_int + 1
         T_kv_pad = ((T_kv + TILE - 1) // TILE) * TILE
         k_cached = ttnn.slice(
@@ -804,7 +965,24 @@ class TtQwen36GatedAttention(LightweightModule):
         k_cached.deallocate(True)
         v_cached.deallocate(True)
 
-        # Decode SDPA per col: q [B, 6, 1, hd] attends to k/v [B, 6, T_kv, hd]
+        # Build attention mask: mask positions T_kv..T_kv_pad with -inf so the
+        # zero-padded KV slots don't corrupt the attention distribution.
+        # TTNN SDPA requires mask_shape[2] == q_shape[2] (T_q=1).
+        if T_kv_pad > T_kv:
+            decode_mask_cpu = torch.zeros(B, 1, T_logical, T_kv_pad, dtype=torch.bfloat16)
+            decode_mask_cpu[:, :, :, T_kv:] = float("-inf")  # mask pad slots for q row 0
+            decode_mask_tt = ttnn.from_torch(
+                decode_mask_cpu,
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        else:
+            decode_mask_tt = None
+
+        # Decode SDPA per col: q [B, 6, 1, hd] attends to k/v [B, 6, T_kv_pad, hd]
         attn_out = ttnn.transformer.scaled_dot_product_attention(
             q_rot,
             k_exp,
@@ -813,16 +991,18 @@ class TtQwen36GatedAttention(LightweightModule):
             scale=self.scale,
             compute_kernel_config=self.compute_kernel_hifi4,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            attn_mask=decode_mask_tt,
         )
+        if decode_mask_tt is not None:
+            decode_mask_tt.deallocate(True)
         k_exp.deallocate(True)
         v_exp.deallocate(True)
         q_rot.deallocate(True)
 
         # Output gate (per col)
-        attn_t = ttnn.transpose(attn_out, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # attn_out: [B, n_q_pc, T, hd] (heads-first) → [B, T, q_dim_pc] (time-first)
+        attn_flat = _heads_to_flat(attn_out, B, n_q_pc, T, hd)
         attn_out.deallocate(True)
-        attn_flat = ttnn.reshape(attn_t, [B, T, q_dim_pc])  # [B, 1, 1536] per col
-        attn_t.deallocate(True)
 
         gate_sig = ttnn.sigmoid(gate_flat, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         gate_flat.deallocate(True)
@@ -850,7 +1030,7 @@ class TtQwen36GatedAttention(LightweightModule):
         )
         dense_partial.deallocate(True)
 
-        dense_out = ttnn.experimental.fast_reduce_nc(
+        dense_out_full = ttnn.experimental.fast_reduce_nc(
             gathered,
             dims=[0],
             output=None,
@@ -858,6 +1038,14 @@ class TtQwen36GatedAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         gathered.deallocate(True)
+
+        # fast_reduce_nc tile-pads T to 32; slice back to T_logical=1 for decode.
+        out_T = list(dense_out_full.shape)[-2]
+        if out_T != T_logical:
+            dense_out = ttnn.slice(dense_out_full, [0, 0, 0], [B, T_logical, H], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            dense_out_full.deallocate(True)
+        else:
+            dense_out = dense_out_full
 
         return dense_out
 
