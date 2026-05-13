@@ -35,7 +35,7 @@ training_config:
 # ...
 
 device_config:
-  enable_fsdp: true       # <-- mutually exclusive with enable_ddp
+  enable_fsdp: true
   mesh_shape: [32, 1]
 ```
 

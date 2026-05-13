@@ -508,6 +508,9 @@ def _wrap_forward(module: AbstractModuleBase) -> None:
                     wrapped_input = True
                     break
 
+        if not wrapped_input:
+            raise RuntimeError("No input tensor found to wrap with backward_post callback.")
+
         out = original_forward(*new_args, **kwargs)
 
         # Wrap the output so backward_pre fires BEFORE internal bwd closures.
