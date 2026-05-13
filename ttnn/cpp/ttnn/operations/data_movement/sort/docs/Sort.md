@@ -40,7 +40,7 @@ requires; users do not need to pre-format inputs.
 | Layout       | Supported | Notes                                                                                |
 | ------------ | --------- | ------------------------------------------------------------------------------------ |
 | `TILE`       | ✓         | Native kernel layout.                                                                |
-| `ROW_MAJOR`  | ✓         | Composite layer tilizes on input and untilizes on output.                            |
+| `ROW_MAJOR`  | ✓         | Handled natively by the sort kernels (tilize/untilize happens inside the kernels, not as a composite-layer layout conversion). |
 
 #### Supported memory configurations
 
@@ -84,7 +84,7 @@ Both `ROW_MAJOR` and `COL_MAJOR` shard orientations are accepted.
 - `memory_config` (optional): output memory config when `out=` is omitted.
   Defaults to the input's memory config.
 - `stable` (bool): **not supported** in this implementation. Passing
-  `stable=True` is currently silently treated as `False` by the kernel.
+  `stable=True` raises a `TT_FATAL` error.
 
 ## Tensor Transformations
 

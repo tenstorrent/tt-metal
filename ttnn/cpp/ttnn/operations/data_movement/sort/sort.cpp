@@ -58,17 +58,7 @@ Tensor pre_sort_transform_tensor(
         return input_tensor;
     }
 
-    Tensor transposed_tensor;
-    if (!is_dim_last_idx && input_tensor.layout() == Layout::ROW_MAJOR && input_tensor.dtype() == DataType::FLOAT32) {
-        // Lossless FP32 ROW_MAJOR transpose: to_layout uses Fp32Mode::Lossless; TILE transpose
-        // has no intermediate tilize step so no precision loss. Result is converted back to
-        // ROW_MAJOR so the sort kernel runs on ROW_MAJOR natively.
-        const Tensor tile_tensor = ttnn::to_layout(input_tensor, Layout::TILE);
-        const Tensor transposed_tile = ttnn::transpose(tile_tensor, dim, -1, tile_tensor.memory_config());
-        transposed_tensor = ttnn::to_layout(transposed_tile, Layout::ROW_MAJOR);
-    } else {
-        transposed_tensor = reduction_common::perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
-    }
+    const Tensor transposed_tensor = reduction_common::perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
     const Tensor transformed_tensor = reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
 
     Tensor padded_tensor = transformed_tensor;
@@ -201,18 +191,8 @@ std::vector<Tensor> post_sort_transform_tensor(
 
     // Transpose back to original dimension order if needed
     if (!is_dim_last_idx) {
-        if (input_tensor.layout() == Layout::ROW_MAJOR && input_tensor.dtype() == DataType::FLOAT32) {
-            const auto lossless_transpose = [&](const Tensor& t) {
-                const Tensor tile = ttnn::to_layout(t, Layout::TILE);
-                const Tensor transposed = ttnn::transpose(tile, dim, -1, tile.memory_config());
-                return ttnn::to_layout(transposed, Layout::ROW_MAJOR);
-            };
-            result[0] = lossless_transpose(result[0]);
-            result[1] = lossless_transpose(result[1]);
-        } else {
-            result[0] = ttnn::transpose(result[0], dim, -1, input_tensor.memory_config());
-            result[1] = ttnn::transpose(result[1], dim, -1, input_tensor.memory_config());
-        }
+        result[0] = ttnn::transpose(result[0], dim, -1, input_tensor.memory_config());
+        result[1] = ttnn::transpose(result[1], dim, -1, input_tensor.memory_config());
     }
 
     TT_FATAL(
@@ -250,12 +230,18 @@ std::vector<Tensor> sort(
     const bool stable,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<std::tuple<Tensor&, Tensor&>> optional_output_tensors) {
+    TT_FATAL(!stable, "ttnn::sort: stable=True is not yet implemented.");
+
     const ttnn::Shape& original_lshape = input_tensor.logical_shape();
     const auto rank = input_tensor.logical_shape().rank();
 
+    // FLOAT32 inputs require UINT32 indices (device-side validation enforces this for the
+    // non-early-exit path; keep early exits consistent).
+    const DataType index_dtype = (input_tensor.dtype() == DataType::FLOAT32) ? DataType::UINT32 : DataType::UINT16;
+
     // Check for early exit for scalar or empty tensors tensors
     if ((original_lshape == ttnn::Shape{}) || (original_lshape == ttnn::Shape{1})) {
-        auto indices = ttnn::zeros_like(input_tensor, DataType::UINT16);
+        auto indices = ttnn::zeros_like(input_tensor, index_dtype);
         if (operations::data_movement::CMAKE_UNIQUE_NAMESPACE::validate_optional_output_tensors_for_early_exit(
                 optional_output_tensors, original_lshape)) {
             std::get<0>(*optional_output_tensors) = input_tensor;
@@ -265,9 +251,15 @@ std::vector<Tensor> sort(
         return {input_tensor, indices};
     }
 
-    const int8_t normalized_dim = dim < 0 ? rank + dim : dim;
+    TT_FATAL(
+        dim >= -static_cast<int8_t>(rank) && dim < static_cast<int8_t>(rank),
+        "Sort dim {} is out of range for rank-{} tensor",
+        dim,
+        rank);
+
+    const int32_t normalized_dim = dim < 0 ? static_cast<int32_t>(rank) + dim : dim;
     if (original_lshape[normalized_dim] == 1) {
-        auto indices = ttnn::zeros_like(input_tensor, DataType::UINT16);
+        auto indices = ttnn::zeros_like(input_tensor, index_dtype);
         if (operations::data_movement::CMAKE_UNIQUE_NAMESPACE::validate_optional_output_tensors_for_early_exit(
                 optional_output_tensors, original_lshape)) {
             std::get<0>(*optional_output_tensors) = input_tensor;

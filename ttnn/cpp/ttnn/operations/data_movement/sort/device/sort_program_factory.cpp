@@ -225,10 +225,6 @@ ProgramDescriptor SortProgramFactorySingleRowSingleCore::create_descriptor(
     // -----------------------------------------------------------------------
     // Kernels
     // -----------------------------------------------------------------------
-    const uint32_t loop_count = all_core_utilization_loop_count ? all_core_utilization_loop_count : 1;
-    const bool needs_residuum_bump =
-        (all_core_utilization_loop_count != 0) && (all_core_utilization_loop_residuum != 0);
-
     std::vector<uint32_t> reader_compile_time_args = {
         input_tensor_cb_index,
         index_tensor_output_cb_index,
@@ -1044,14 +1040,10 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
 
     ProgramDescriptor desc;
 
-    // Circular buffers
-    constexpr uint32_t buffer_scale_factor = 2;
-
-    ProgramDescriptor desc;
-
     // -----------------------------------------------------------------------
     // Circular buffers (c_0–c_5 on all cores, c_6–c_9 RM-only)
     // -----------------------------------------------------------------------
+    constexpr uint32_t buffer_scale_factor = 2;
     constexpr uint32_t input_tensor_cb_index = tt::CBIndex::c_0;
     desc.cbs.push_back(CBDescriptor{
         .total_size = buffer_scale_factor * input_tensor_tile_size,
@@ -1202,8 +1194,6 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
         .core_ranges = all_core_set,
         .initial_value = 0,
     });
-
-    const auto coordinator_core_physical_coord = device->worker_core_from_logical_core(coordinator_core);
 
     // -----------------------------------------------------------------------
     // Kernels

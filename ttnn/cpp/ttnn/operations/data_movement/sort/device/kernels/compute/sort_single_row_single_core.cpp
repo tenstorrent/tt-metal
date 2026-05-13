@@ -287,6 +287,9 @@ void kernel_main() {
             constexpr uint32_t TILE_H = 32;
 
             constexpr uint32_t MAX_DEST_TILES = DST_ACCUM_MODE ? 4 : 8;
+            // Wt is always a power-of-two (pre_sort_transform_tensor pads the last dim to the
+            // next power-of-two ≥ 2×TILE_WIDTH before dispatching).  MAX_DEST_TILES is also a
+            // power-of-two (4 or 8), so Wt % SUB_BLOCK_DIM == 0 is always satisfied.
             constexpr uint32_t SUB_BLOCK_DIM = (Wt < MAX_DEST_TILES) ? Wt : MAX_DEST_TILES;
             constexpr uint32_t NUM_SUB_BLOCKS = Wt / SUB_BLOCK_DIM;
             static_assert(Wt % SUB_BLOCK_DIM == 0, "Wt must be divisible by SUB_BLOCK_DIM");

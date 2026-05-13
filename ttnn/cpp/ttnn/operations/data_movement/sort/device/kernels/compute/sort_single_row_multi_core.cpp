@@ -243,21 +243,25 @@ void kernel_main() {
                             }
 
                             if constexpr (is_row_major) {
-                                pack_untilize_init<false>(input_tensor_output_cb_index, 2, rm_output_value_cb_index);
+                                // 2 tiles arranged 1-wide × 2-tall; block_ct_dim=1, block_rt_dim=2
+                                // → produces 2*TILE_H RM output rows, each 1 tile wide.
+                                pack_untilize_init<1>(input_tensor_output_cb_index, rm_output_value_cb_index);
                                 cb_wait_front(input_tensor_output_cb_index, 2);
                                 cb_reserve_back(rm_output_value_cb_index, 2 * TILE_H);
-                                pack_untilize_block<false>(input_tensor_output_cb_index, 2, rm_output_value_cb_index);
+                                pack_untilize_block<1>(input_tensor_output_cb_index, 2, rm_output_value_cb_index);
                                 cb_pop_front(input_tensor_output_cb_index, 2);
                                 cb_push_back(rm_output_value_cb_index, 2 * TILE_H);
+                                pack_untilize_uninit(rm_output_value_cb_index);
                                 binary_op_init_common(
                                     rm_input_index_cb_index, rm_input_index_cb_index, index_tensor_output_cb_index);
 
-                                pack_untilize_init<false>(index_tensor_output_cb_index, 2, rm_output_index_cb_index);
+                                pack_untilize_init<1>(index_tensor_output_cb_index, rm_output_index_cb_index);
                                 cb_wait_front(index_tensor_output_cb_index, 2);
                                 cb_reserve_back(rm_output_index_cb_index, 2 * TILE_H);
-                                pack_untilize_block<false>(index_tensor_output_cb_index, 2, rm_output_index_cb_index);
+                                pack_untilize_block<1>(index_tensor_output_cb_index, 2, rm_output_index_cb_index);
                                 cb_pop_front(index_tensor_output_cb_index, 2);
                                 cb_push_back(rm_output_index_cb_index, 2 * TILE_H);
+                                pack_untilize_uninit(rm_output_index_cb_index);
                                 // Reset compute state for the next pair's tilize.
                                 binary_op_init_common(
                                     rm_input_value_cb_index, rm_input_index_cb_index, input_tensor_cb_index);

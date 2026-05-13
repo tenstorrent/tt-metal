@@ -60,19 +60,14 @@ void kernel_main() {
     constexpr uint32_t input_dest_end = 1;
     constexpr uint32_t index_dest_end = 3;
 
-    // LLK setup
-    //
-    // ROW_MAJOR requires compute_kernel_hw_startup to be called once before
-    // tilize_block (initialises MATH-PACK DST semaphore via
-    // llk_math_pack_sync_init + llk_pack_dest_init).  Without it, the first
-    // tilize_block deadlocks on llk_math_wait_for_dest_available.  The TILE
-    // path falls back to the original topk_tile_init + transpose_wh_init.
+    // LLK setup — one compute_kernel_hw_startup at the start, then full inits.
+    compute_kernel_hw_startup(
+        is_row_major ? rm_input_cb_index : input_tensor_cb_index, index_tensor_cb_index, input_tensor_cb_index);
     if constexpr (is_row_major) {
-        compute_kernel_hw_startup(rm_input_cb_index, index_tensor_cb_index, input_tensor_cb_index);
-    } else {
-        ckernel::topk_tile_init();
-        transpose_wh_init(input_tensor_cb_index, input_tensor_transposed_cb_index);
+        binary_op_init_common(input_tensor_cb_index, index_tensor_cb_index, input_tensor_transposed_cb_index);
     }
+    ckernel::topk_tile_init();
+    transpose_wh_init(input_tensor_cb_index, input_tensor_transposed_cb_index);
 
     for (uint32_t h = 0; h < Ht; h++) {
         if constexpr (is_row_major) {
@@ -84,10 +79,6 @@ void kernel_main() {
             cb_push_back(input_tensor_cb_index, number_of_tiles_per_core);
             cb_pop_front(rm_input_cb_index, TILE_H);
             tilize_uninit(rm_input_cb_index, input_tensor_cb_index);
-
-            binary_op_init_common(input_tensor_cb_index, index_tensor_cb_index, input_tensor_transposed_cb_index);
-            ckernel::topk_tile_init();
-            transpose_wh_init(input_tensor_cb_index, input_tensor_transposed_cb_index);
         }
 
         bool dir = ascending ^ ((core_id & 1) == 1);
@@ -303,7 +294,16 @@ void kernel_main() {
             // tilize_block/sort loops drained them), then pack_untilize them
             // into TILE_H RM rows for the writer/reader to drain.
             constexpr uint32_t TILE_H = 32;
+            // DST_ACCUM_MODE is a compile-time macro injected by the framework when
+            // fp32_dest_acc_en=true is set in ComputeConfigDescriptor (controlled by
+            // is_32_bit_data in sort_program_factory.cpp: true for Float32 input or
+            // UInt32 index).  MAX_DEST_TILES is therefore data-format-dependent:
+            // 32-bit DEST holds 4 tiles; 16-bit (BF16) DEST holds 8 tiles.
             constexpr uint32_t MAX_DEST_TILES = DST_ACCUM_MODE ? 4 : 8;
+            // number_of_tiles_per_core is a power-of-two: get_number_of_tiles_per_core()
+            // returns Wt / num_cores, and Wt is always a power-of-two (padded by
+            // pre_sort_transform_tensor).  MAX_DEST_TILES is also a power-of-two (4 or 8),
+            // so number_of_tiles_per_core % SUB_BLOCK_DIM == 0 is always satisfied.
             constexpr uint32_t SUB_BLOCK_DIM =
                 (number_of_tiles_per_core < MAX_DEST_TILES) ? number_of_tiles_per_core : MAX_DEST_TILES;
             constexpr uint32_t NUM_SUB_BLOCKS = number_of_tiles_per_core / SUB_BLOCK_DIM;

@@ -66,7 +66,12 @@ void SortDeviceOperation::validate_on_program_cache_miss(
 
     const int8_t rank = static_cast<int8_t>(input_pshape.rank());
     const int8_t dim = operation_attributes.dim;
-    TT_FATAL(dim >= -rank && dim < rank, "Sort dim {} is out of range for rank-{} tensor", dim, rank);
+    TT_FATAL(
+        dim == -1 || dim == rank - 1,
+        "Sort device op requires dim to be the last axis (-1 or {}), got {}. "
+        "The composite sort() layer must transpose before dispatching.",
+        rank - 1,
+        dim);
 
     TT_FATAL(
         input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::UINT16 || input.dtype() == DataType::FLOAT32,
