@@ -9,9 +9,18 @@ import os
 import re
 import signal
 import sys
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
+
+# Live-progress JSONL: pytest's --junit-xml only writes at session end, which
+# leaves operators flying blind during long parallel regressions. This file
+# is appended-to by every xdist worker (POSIX atomic-append for lines under
+# PIPE_BUF), so `tail -f /tmp/tt-llk-progress.jsonl` gives real-time
+# per-test outcome + duration + worker id. Truncated once at session start
+# by the xdist controller (so re-runs don't bleed into each other).
+_PROGRESS_LOG_PATH = os.environ.get("TTSIM_PROGRESS_LOG", "/tmp/tt-llk-progress.jsonl")
 
 # ttsim runs in-process (no ExalensServer). Its init must complete before any helpers.* import,
 # because helpers.chip_architecture.get_chip_architecture() reaches check_context() and this
@@ -453,6 +462,29 @@ def pytest_runtest_logreport(report):
             props.append(("ttsim_func", func))
             report.user_properties = props
 
+    # Live progress: one JSONL line per test "call" phase (the actual test
+    # body) plus collection-error/setup-fail cases. POSIX guarantees atomic
+    # appends for writes <= PIPE_BUF (4096) on regular files, so the dozens
+    # of xdist workers can all append to the same file without locks.
+    if report.when in ("call", "setup", "teardown") and (
+        report.failed or report.skipped or (report.when == "call" and report.passed)
+    ):
+        try:
+            entry = {
+                "ts": time.time(),
+                "phase": report.when,
+                "outcome": report.outcome,
+                "duration": round(report.duration, 4),
+                "nodeid": report.nodeid,
+                "worker": os.environ.get("PYTEST_XDIST_WORKER", "main"),
+            }
+            line = json.dumps(entry, separators=(",", ":")) + "\n"
+            # Mode "a" is O_APPEND — kernel-level atomic seek+write per syscall.
+            with open(_PROGRESS_LOG_PATH, "a", encoding="utf-8") as f:
+                f.write(line)
+        except OSError:
+            pass  # never let progress logging break the test run
+
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
@@ -595,6 +627,15 @@ def pytest_runtest_setup(item):
 def pytest_sessionstart(session):
     if hasattr(session.config, "workerinput"):
         return
+
+    # Truncate the live-progress JSONL once on the controller — workers will
+    # open in append mode. Avoid raising if the path is unwritable; live
+    # progress is best-effort, not a correctness gate.
+    try:
+        Path(_PROGRESS_LOG_PATH).parent.mkdir(parents=True, exist_ok=True)
+        Path(_PROGRESS_LOG_PATH).write_text("")
+    except OSError:
+        pass
 
     test_target = TestTargetConfig()
     if not test_target.run_simulator and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
