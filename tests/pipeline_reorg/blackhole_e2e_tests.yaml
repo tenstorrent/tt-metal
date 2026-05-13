@@ -293,6 +293,6 @@
     pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_dispatch_combine_l1_small_semaphores.py -vvv --tb=short
   skus:
     bh_llmbox:
-      timeout: 40
+      timeout: 30
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
