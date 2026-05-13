@@ -52,7 +52,7 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
         nb::arg("batch_offset") = 0,
         nb::arg("compute_kernel_config").noconvert() = nb::none(),
         nb::arg("mesh_coords").noconvert() = nb::none(),
-        nb::arg("block_size").noconvert() = nb::none());
+        nb::arg("block_size") = nb::none());
 
     const auto* paged_fused_update_cache_doc =
         R"doc(

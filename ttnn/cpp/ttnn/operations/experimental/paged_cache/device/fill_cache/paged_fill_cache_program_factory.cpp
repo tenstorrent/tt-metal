@@ -34,7 +34,7 @@ PagedFillCacheProgramFactory::cached_program_t PagedFillCacheProgramFactory::cre
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     // input_tensor: [1, num_heads, input_seq_len, head_dim]
-    // cache_tensor: [max_num_blocks, 1, block_size, head_dim]
+    // cache_tensor: [max_num_blocks, num_heads_or_num_kv_heads, block_size, head_dim]
     // page_table_tensor: [b, max_num_blocks_per_seq]
     //
     // ``head_dim`` (and therefore ``Wt``) is read from the input —

@@ -45,7 +45,12 @@ void PagedFillCacheDeviceOperation::validate_on_program_cache_miss(
     auto input_shape = input_tensor.padded_shape();
     auto page_table_shape = page_table_tensor.padded_shape();
 
-    TT_FATAL(args.batch_idx_fallback <= cache_shape[0], "Batch idx must fit in cache batch size");
+    // The kernel uses the batch index to select a row from the page table,
+    // so validate against the page-table batch dimension, not the cache's
+    // block dimension.
+    TT_FATAL(
+        args.batch_idx_fallback < page_table_shape[0],
+        "Batch idx must be within the page_table batch size");
 
     // Per-block byte-count consistency check. ``paged_fill_cache``'s
     // kernel addresses cache pages at a stride of

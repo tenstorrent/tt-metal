@@ -17,8 +17,9 @@ The tests cover:
 * legacy behavior (no override, matching head_dim): byte-identical to
   the pre-change path.
 * "flips view" cases in both directions: cache allocated as one shape,
-  written through the override as the other shape; verified via a
-  torch ``view`` reshape of the round-tripped buffer.
+  written through the override as the other shape; verified by
+  reinterpreting the round-tripped buffer with ``_permute_tile_grid``
+  rather than a torch ``view`` reshape.
 * shared buffer with both views interleaved: one physical cache, writes
   from each view land at disjoint block IDs without trampling.
 * negative cases: byte-count mismatch and override without page_table
@@ -27,7 +28,6 @@ The tests cover:
 
 import pytest
 import torch
-from loguru import logger
 
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
