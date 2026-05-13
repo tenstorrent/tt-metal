@@ -362,7 +362,7 @@ def create_decoder_golden_tensors(
         pytest.param("t8_all_picked", marks=pytest.mark.skip_post_commit),
         pytest.param("t8_one_picked", marks=pytest.mark.skip_post_commit),
         pytest.param("t8_none_picked", marks=pytest.mark.skip_post_commit),
-        pytest.param("t8_partial", marks=pytest.mark.skip_post_commit),
+        "t8_partial",
     ],
 )
 @pytest.mark.parametrize(
