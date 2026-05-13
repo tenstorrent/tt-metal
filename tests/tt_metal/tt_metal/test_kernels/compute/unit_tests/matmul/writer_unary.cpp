@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/endpoints.h"
-#include "experimental/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
 
 void kernel_main() {
     const uint32_t out_cb = get_compile_time_arg_val(0);
@@ -15,9 +15,9 @@ void kernel_main() {
 
     // single-tile ublocks
 
-    experimental::CircularBuffer cb(out_cb);
-    experimental::Noc noc;
-    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_dst;
+    CircularBuffer cb(out_cb);
+    Noc noc;
+    AllocatorBank<AllocatorBankType::DRAM> dram_dst;
 
     uint32_t ublock_size_bytes = cb.get_tile_size();
     uint32_t ublock_size_tiles = 1;

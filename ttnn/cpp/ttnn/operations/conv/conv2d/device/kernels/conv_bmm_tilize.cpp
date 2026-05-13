@@ -43,13 +43,21 @@ void tilize_in(
                                      : compute_kernel_lib::tilize_config::InitUninitMode::InitOnly)
                     : (uninit_tilize ? compute_kernel_lib::tilize_config::InitUninitMode::UninitOnly
                                      : compute_kernel_lib::tilize_config::InitUninitMode::Neither);
+    // Split-reader fires tilize_in twice back-to-back (first: init=true+uninit=false,
+    // second: init=false+uninit=true). The second call must NOT reconfig datatypes —
+    // doing so clobbers the bf16 SrcA override that fast_tilize_init installs for
+    // fp32 input on BH (see _llk_unpack_fast_tilize_init_), breaking the second
+    // tilize's MOP. Only reconfig on the init call; continuation reuses that state.
+    constexpr auto reconfig_mode =
+        init_tilize ? compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure
+                    : compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure;
     compute_kernel_lib::tilize<
         in_block_w,
         in_cb_id,
         out_cb_id,
         init_uninit_mode,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure>(in_num_subblocks);
+        reconfig_mode>(in_num_subblocks);
 }  // tilize_in()
 
 template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id>
@@ -155,7 +163,7 @@ inline void tilize_in_reuse_split_reader(
     // and trips the LLK bounds assert (see GH #42510).
     PACK((get_local_cb_interface(out_cb_id).fifo_wr_ptr = out_cb_addr_init));
     out_cb.push_back(out_cb_tiles);
-    fast_tilize_uninit(in2_cb_id, out_cb_id);
+    fast_tilize_uninit(in2_cb_id, out_cb_id, in_block_w);
 }
 
 template <uint32_t out_subblock_w, uint32_t out_block_w>

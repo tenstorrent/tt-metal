@@ -4,8 +4,8 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 
 using uint32_t = std::uint32_t;
 
@@ -36,7 +36,7 @@ void kernel_main() {
 
     const auto s0 = TensorAccessor(src0_args, src0_addr);
 
-    experimental::CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_in0(cb_id_in0);
 
     // Sticks are a row of elements in a single tile (32 elements)
     // Stick id increments row-wise
