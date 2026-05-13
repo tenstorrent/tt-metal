@@ -404,6 +404,22 @@ enum class BinaryDataFormatReconfig : uint8_t {
 
 /// FPU broadcast dimension. Caller MUST pass explicitly — no inference.
 /// Mirrors `ckernel::BroadcastType` values (NONE=0, COL=1, ROW=2, SCALAR=3).
+///
+/// Reduce↔Broadcast mapping — the "reduce-row produces column-shaped output"
+/// surprise that lives where it is needed:
+///
+///   | Reduce direction | Output shape | Broadcast direction downstream     |
+///   |------------------|--------------|------------------------------------|
+///   | REDUCE_ROW       | (N, 1)       | BroadcastDim::Col (bcast cols)    |
+///   | REDUCE_COL       | (1, M)       | BroadcastDim::Row (bcast rows)    |
+///   | REDUCE_SCALAR    | (1, 1)       | BroadcastDim::Scalar              |
+///   | REDUCE_W (alias) | (N, 1)       | BroadcastDim::Col                 |
+///   | REDUCE_H (alias) | (1, M)       | BroadcastDim::Row                 |
+///
+/// Example: softmax computes a per-row max (REDUCE_ROW → (N,1)) then needs to
+/// subtract that vector across columns of the original — that subtract is a
+/// `sub_tiles_bcast<BroadcastDim::Col>`, NOT `BroadcastDim::Row`. The dim names
+/// describe which axis is BROADCAST, not which axis was reduced.
 enum class BroadcastDim : uint8_t {
     None = 0,
     Col = 1,
