@@ -84,20 +84,20 @@ void kernel_main() {
         mul_tiles_init(c_a, c_b);
         for (uint32_t i = 0; i < BS; i++) {
             mul_tiles(c_a, c_b, i, i, i);
+            // tile_regs_commit() equivalent: wait for the FPU pipeline to drain, then signal PACK.
+            // t6_semaphore_post<MATH> inserts the STALLWAIT(SYNC, MATH) for us before SEMPOST.
+            MATH(ckernel::t6_semaphore_post<p_stall::MATH>(semaphore::MATH_PACK));
         }
-        // tile_regs_commit() equivalent: wait for the FPU pipeline to drain, then signal PACK.
-        // t6_semaphore_post<MATH> inserts the STALLWAIT(SYNC, MATH) for us before SEMPOST.
-        MATH(ckernel::t6_semaphore_post<p_stall::MATH>(semaphore::MATH_PACK));
-
-        // tile_regs_wait() equivalent on PACK: wait for MATH to produce, then decrement.
-        // STALL_TDMA | STALL_CFG | STALL_SYNC blocks PACK from issuing further Sync Unit /
-        // packer / cfg instructions until the wait clears.
-        PACK(
-            ckernel::t6_semaphore_wait_on_zero < p_stall::STALL_TDMA | p_stall::STALL_CFG |
-            p_stall::STALL_SYNC > (semaphore::MATH_PACK));
-        PACK(ckernel::t6_semaphore_get(semaphore::MATH_PACK));
 
         for (uint32_t i = 0; i < BS; i++) {
+            // tile_regs_wait() equivalent on PACK: wait for MATH to produce, then decrement.
+            // STALL_TDMA | STALL_CFG | STALL_SYNC blocks PACK from issuing further Sync Unit /
+            // packer / cfg instructions until the wait clears.
+            PACK(
+                ckernel::t6_semaphore_wait_on_zero < p_stall::STALL_TDMA | p_stall::STALL_CFG |
+                p_stall::STALL_SYNC > (semaphore::MATH_PACK));
+            PACK(ckernel::t6_semaphore_get(semaphore::MATH_PACK));
+
             relu_packthread_tile(i);
         }
 
