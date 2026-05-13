@@ -432,6 +432,113 @@ Both agent-generated kernels land within 4% of Makora's hand-written kernels on 
 - **multigammaln_lanczos**: Phase 0 implementer used a per-iteration accumulator CB (6 DST cycles per tile), about 25% off Makora's pure-DST design. A single-line refinement prompt ("don't round-trip through cb_accumulator") was enough for the implementer to refactor to Makora-equivalent structure (1 DST cycle per tile). Algebraic regrouping and one register-pressure trick are agent-original.
 - **glu_fused**: Phase 0 implementer invented the tile-pair reader directly from the no-slice constraint. The 4% residual gap is in the noise band; functional outputs are bit-identical at bf16. No structural refinement needed; only a dtype-aware compute config to actually realize the perf at bf16.
 
+## Methodology notes (working scratchpad)
+
+Tacit findings from running multigammaln_lanczos and glu_fused end-to-end —
+not yet integrated into the formal methodology, kept here as a checkpoint for
+the next exploration round (bucket C / eltwise+reduction).
+
+### Prompt design
+
+- **Bucket A prompts have a clear "paste the TTNN composite" template** —
+  multigammaln_lanczos and glu_fused both used it. The agent is told to
+  translate a named algorithm with explicit prohibitions on which ttnn::* /
+  SFPU primitives it can call from the entry point.
+- **Bucket C has no TTNN composite to translate from.** Eltwise+reduction
+  patterns (atan_mean_*, log_max_square, sigmoid_min_*) only have a
+  user-written ttnn.X() ; ttnn.Y() chain as their baseline. The prompt
+  structure must shift: describe the math against a PyTorch reference
+  directly, list the building-block primitives the agent may use
+  (atan, sigmoid, mean, max, …), and let the agent design the fusion from
+  scratch. There is no "this composite, but fused" instruction to give.
+- **Minimal prompts beat heavy prompts on refinements.** A 70-line
+  refinement spec that pre-solved the DST-budget allocation problem
+  produced an inferior result to a one-line "Try not to round-trip through
+  cb_accumulator" + non-regression rule. Heavy spec defeats the eval — it
+  measures transcription, not engineering judgement. Default to minimal;
+  add detail only if the agent visibly diverges.
+- **The `# golden: <op_name>` header drives the pipeline's output
+  directory.** If the prompt's import path uses a different name (e.g.
+  `# golden: glu` but `from ttnn.operations.glu_fused import glu_fused`),
+  the pipeline writes to the wrong dir and the acceptance test breaks.
+  Always keep `# golden:` + import path + signature name consistent.
+
+### Compute config
+
+- **Phase 0 "max precision" settings (HiFi4 + fp32_dest_acc + UnpackToDestFp32)
+  are correct for fp32 inputs but pure overhead at bf16.** The fp32 settings
+  on a bf16 input ran ~1.3× slower than the bf16-tuned settings (LoFi +
+  fp32_dest_acc_en=False + default unpack) with **bit-identical output**.
+  The 33% gap was config, not kernel structure.
+- **Refinement 2 (bf16 support) is more than a validator change.** It must
+  also dispatch a dtype-aware compute config in the program descriptor.
+  Without that, bf16 "works" but at the wrong precision regime.
+- **Math fidelity has no effect on SFPU-only kernels.** Multiply via
+  `SfpuMul` doesn't use the FPU, so HiFi4 vs LoFi changes nothing for those
+  ops. The setting still affects FPU ops (matmul, reduce, conv).
+
+### Kernel structure findings
+
+- **The "tile-pair reader" trick (`a_tile_idx = ...; b_tile_idx = a + W_half`)
+  was invented independently by the agent** from the constraint "no
+  `ttnn::slice` allowed". The TTNN op model has no general abstraction for
+  reader-level slicing; the agent worked it out from first principles. This
+  trick is reusable for any "operate on halves of a single input" pattern.
+- **DST register reuse across iterations is the high-leverage refinement
+  for chained-accumulation kernels.** The Phase 0 multigammaln_lanczos
+  kernel issued 6 `tile_regs_acquire/release` cycles per output element
+  (one per lgamma sub-evaluation + finalize). Collapsing to 1 cycle
+  (accumulator stays in D0 across iterations) closed most of the gap to
+  Makora. The agent invented a "spill D1 to compute (a-0.5)*log(a+4.5),
+  reload from CB" register-pressure trick during this refinement —
+  documented in the kernel comments.
+
+### Pipeline + harness gotchas
+
+- **`run_safe_pytest.sh` acquires `/tmp/tt-device.lock` on its own fd 9.**
+  Wrapping it with an outer `flock /tmp/tt-device.lock` causes
+  self-deadlock — the inner flock waits forever for a lock the outer
+  process already holds on a different fd. `verify_makora.py` does NOT
+  flock internally, so wrap *it* with flock when sharing the device.
+- **Two nuke patterns coexist.** Standalone ops (e.g.
+  `ttnn/cpp/ttnn/operations/multigammaln_lanczos/`) → handled by the
+  `/nuke-op` skill's directory discovery. Inline composite functions
+  inside shared `*_composite_op.cpp` files (glu, isclose, multigammaln
+  forward) → require manual surgery: remove the function definition,
+  the header declaration, the nanobind binding, and any Python golden
+  function registration. The skill won't find these. Plan separately.
+- **JIT cache must be cleared with `rm -rf built/tt-metal-cache*` after
+  source edits.** Per the `TT_METAL_CACHE` env var in `.bashrc`. The cache
+  is content-hashed so modified sources get a new dir, but stale cached
+  entries waste disk and can confuse subsequent runs.
+- **The `# golden:` header → pipeline output dir mapping** (already noted
+  above under prompt design). Repeating because it cost us a full pipeline
+  launch once.
+
+### Eltwise+reduction prep (when picking this up next)
+
+Makora's bucket C kernels live at
+`/localdev/dnijemcevic/kernels/Tenstorrent/fusion_store/eltwise_reduction/`.
+Six kernels:
+- `atan_mean_high_channel`, `atan_mean_tall`
+- `log_max_square`
+- `sigmoid_min_high_channel`, `sigmoid_min_tall`, `sigmoid_min_wide`
+
+Per-op published speedups from Makora's README are **0.74–0.95×** — Makora
+is *slower* than the naive `ttnn.atan(); ttnn.mean()` Python chain at large
+shapes. Two open questions for this category:
+
+1. Is there a kernel-level reason Makora is slower (specific implementation
+   choice), or is the bare ttnn-op chain just well-optimised for these
+   patterns?
+2. Would a from-scratch agent-generated fused kernel land closer to the
+   ttnn chain (matching its perf) or closer to Makora (worse)?
+
+Prompt template for the first eltwise+reduction op would be different from
+multigammaln_lanczos.txt and glu_fused.txt — no composite to paste, just a
+PyTorch reference and the list of allowed primitives (SFPU activations +
+the reduce helper family at `ttnn/cpp/ttnn/kernel_lib/reduce_helpers_*.hpp`).
+
 ## Status / next steps
 
 Verified end-to-end (11 of 12 wired ops):
