@@ -8,6 +8,11 @@ Tenstorrent SwiGLU FFN for Hugging Face Ministral3 (``Ministral3MLP``).
 Implementation follows ``models.tt_transformers.tt.mlp.MLP`` (same ``w1``/``w3``/``w2``
 mapping and forward schedule) so Devstral text checkpoints continue to use
 ``layers.{i}.feed_forward.*`` meta keys without importing that class.
+
+**Long prefill:** on non‑Galaxy devices, ``PREFILL`` with very large sequence length (>4096 tokens)
+runs the same math in **fixed-size sequence slabs**, then concatenates, so FF1 / FF3 / FF2 peaks are
+bounded by slab length × hidden/intermediate—not a single O(full-seq) activation tensor.
+Galaxy unchanged.
 """
 
 from __future__ import annotations
@@ -26,6 +31,9 @@ class TtMinistralMLP(LightweightModule):
     # Chunk activations (cap below) and run **minimal_matmul** on non-Galaxy (same idea as FF2 for long seq).
     _PREFILL_MLP_M_CAP = 128
     _SHORT_PREFILL_MAX_GRID_CORES = 110
+
+    #: Non-Galaxy ``PREFILL``: if ``seq_len`` exceeds this, run FFN slab-by-slab on dim seq (dram peak).
+    _PREFILL_FFN_DRAM_CHUNK = 4096
 
     def __init__(
         self,
@@ -115,6 +123,111 @@ class TtMinistralMLP(LightweightModule):
 
             self.prefetcher.register_callback(register_weights)
 
+    def _prefill_nc_minimal_ffn_fragment(self, x: ttnn.Tensor):
+        """One non-Galaxy PREFILL FFN slab: ``x`` is ``[1, 1, L, hidden]``. Destroys ``x`` (or reshaped alias)."""
+        mode = Mode.PREFILL
+        full_seq_len = int(x.shape[-2])
+        layer_num = max(self.layer_num, 0)
+        activation_dtype = self.decoders_optimizations.get_tensor_dtype(
+            decoder_id=layer_num, tensor=TensorGroup.ACTIVATION
+        )
+        li_ff1_3_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
+            decoder_id=layer_num, op=OpGroup.LI_FF1_FF3, configuration=self.args
+        )
+
+        cfg_seq = full_seq_len
+        max_chunk = min(int(self.args.prefill_len_cutoff), int(self._PREFILL_MLP_M_CAP))
+        max_chunk = max(max_chunk, 1)
+        chunk_m = max_chunk
+        while chunk_m > 1 and full_seq_len % chunk_m != 0:
+            chunk_m -= 1
+        if full_seq_len > chunk_m:
+            x = ttnn.reshape(x, [1, full_seq_len // chunk_m, chunk_m, -1])
+            cfg_seq = chunk_m
+
+        pc_2 = self.args.get_mlp_ff2_prg_config(mode, cfg_seq, self.prefetcher)
+        grid = self.args.mlp1_3_grid(cfg_seq)
+        mmc_ff13 = ttnn.MinimalMatmulConfig(
+            M_block_size=8,
+            K_block_size=8,
+            N_block_size=8,
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
+        )
+        w1_out = ttnn.experimental.minimal_matmul(
+            x,
+            self.w1,
+            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+            config=mmc_ff13,
+        )
+        w3_out = ttnn.experimental.minimal_matmul(
+            x,
+            self.w3,
+            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+            config=mmc_ff13,
+        )
+        ttnn.deallocate(x)
+
+        w2_in = ttnn.mul(
+            w1_out,
+            w3_out,
+            input_tensor_a_activations=[self.activation_type],
+            dtype=activation_dtype or ttnn.bfloat8_b,
+            memory_config=w1_out.memory_config(),
+        )
+        ttnn.deallocate(w3_out)
+        ttnn.deallocate(w1_out)
+
+        li_ff2_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
+            decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
+        )
+        if cfg_seq > 128:
+            w2_out = ttnn.experimental.minimal_matmul(
+                w2_in,
+                self.w2,
+                compute_kernel_config=li_ff2_compute_kernel_cfg,
+                config=pc_2,
+            )
+        else:
+            w2_out = ttnn.linear(
+                w2_in,
+                self.w2,
+                compute_kernel_config=li_ff2_compute_kernel_cfg,
+                dtype=self.args.ccl_dtype if self.args.is_galaxy else activation_dtype or ttnn.bfloat16,
+                program_config=pc_2,
+                memory_config=self.args.get_mlp_ff2_mem_config(mode, self.prefetcher),
+                core_grid=None,
+            )
+        ttnn.deallocate(w2_in)
+
+        TG = self.args.is_galaxy
+        w2_out_reduced = tt_all_reduce(
+            w2_out,
+            self.mesh_device,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=0 if (TG and self.dim < 8192) else 3,
+            sharded=False,
+            memory_config=self.args.get_mlp_ff2_all_reduce_mem_config(mode, w2_out),
+            rs_memory_config=self.model_config["MLP_RS_CONFIG"]["rs_memory_config"]
+            if mode == Mode.DECODE
+            else ttnn.DRAM_MEMORY_CONFIG,
+            dtype=self.args.ccl_dtype,
+            use_composite=True if self.dim == 8192 else False,
+            topology=self.args.ccl_topology(),
+            chunks_per_sync=self.model_config["MLP_RS_CONFIG"]["chunks_per_sync"] if mode == Mode.DECODE else 10,
+            num_workers_per_link=self.model_config["MLP_RS_CONFIG"]["num_workers_per_link"]
+            if mode == Mode.DECODE
+            else 2,
+            subdevice_id=self.prefetcher.worker_sub_device_id
+            if mode == Mode.DECODE and self.prefetcher is not None
+            else None,
+        )
+        original_shape = w2_out_reduced.shape
+        return ttnn.reshape(
+            w2_out_reduced,
+            (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1]),
+        )
+
     def forward(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
         """
         w1 -> gate_proj
@@ -128,6 +241,34 @@ class TtMinistralMLP(LightweightModule):
         activation_dtype = self.decoders_optimizations.get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.ACTIVATION
         )
+
+        slab_cap = getattr(self.args, "mlp_prefill_dram_chunk_tokens", None)
+        slab_cap = int(slab_cap) if slab_cap is not None else int(self._PREFILL_FFN_DRAM_CHUNK)
+
+        if mode == Mode.PREFILL and not TG and full_seq_len > slab_cap:
+            hid = int(x.shape[-1])
+            merged: ttnn.Tensor | None = None
+            s_idx = 0
+            try:
+                while s_idx < full_seq_len:
+                    e_idx = min(s_idx + slab_cap, full_seq_len)
+                    x_slab = ttnn.slice(x, (0, 0, s_idx, 0), (1, 1, e_idx, hid))
+                    y_slab = self._prefill_nc_minimal_ffn_fragment(x_slab)
+                    if merged is None:
+                        merged = y_slab
+                    else:
+                        new_merged = ttnn.concat([merged, y_slab], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                        ttnn.deallocate(merged)
+                        ttnn.deallocate(y_slab)
+                        merged = new_merged
+                    s_idx = e_idx
+            finally:
+                ttnn.deallocate(x)
+
+            if merged is None:
+                raise RuntimeError("FFN slab prefill produced no output")
+            return merged
+
         li_ff1_3_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_FF1_FF3, configuration=self.args
         )
