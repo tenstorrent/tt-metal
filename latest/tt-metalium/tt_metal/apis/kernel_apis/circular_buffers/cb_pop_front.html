@@ -123,6 +123,7 @@
 <p>Pops a specified number of tiles from the front of the specified CB. This also frees this number of tiles in the circular buffer. This call is used by the consumer to free up the space in the CB.</p>
 <p>We use the convention that the producer pushes tiles into the “back” of the CB queue and the consumer consumes tiles from the “front” of the CB queue.</p>
 <p>Note that the act of reading of the tile data from the CB does not free up the space in the CB. Waiting on available tiles and popping them is separated in order to allow the consumer to: 1) read the tile data from the CB via multiple reads of sub-tiles 2) access the tiles (or their sub-tiles) that are visible to the consumer by random access of the valid section of the CB</p>
+<p>Important note: the total number of tiles popped within one complete cycle of the CB must sum to exactly the CB size (fifo_num_pages) so that the internal read pointer wraps correctly. Individual pop amounts do not need to evenly divide the CB size. Example: on a CB of size 12, cb_pop_front(5) followed by cb_pop_front(7) is correct (total 12 = CB size). However, cb_pop_front(7) followed by cb_pop_front(7) on the same CB is incorrect (total 14 != 12). Out-of-bounds pointer advancement is detected at runtime when watcher or lightweight kernel asserts are enabled.</p>
 <p>Return value: None</p>
 <p></p>
 <table class="docutils align-default">

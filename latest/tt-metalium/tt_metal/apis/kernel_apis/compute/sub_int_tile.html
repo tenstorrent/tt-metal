@@ -126,13 +126,14 @@
 </dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel14sub_int32_tileE8uint32_t8uint32_t8uint32_t">
-<span class="target" id="namespaceckernel_1af995470c7075126ef818564343c79c26"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">sub_int32_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">odst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel14sub_int32_tileE8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4I_10DataFormatEN7ckernel12sub_int_tileEv8uint32_t8uint32_t8uint32_t">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">DataFormat</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">data_format</span></span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1aa27492806eae5f29f7ca6feac78c97d7"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">sub_int_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">odst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_10DataFormatEN7ckernel12sub_int_tileEv8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
 <p>Performs an elementwise sub operation with the two integer inputs: y = sub(x0,x1) Output overwrites odst in DST.</p>
 <p>The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine. A maximum of 4 tiles from each operand can be loaded into DST at once, for a total of 8 tiles, when using 16 bit formats. This gets reduced to 2 tiles from each operand for 32 bit formats.</p>
-<p>Return value: None</p>
+<p>
+Return value: None</p>
 <p></p>
 <table class="docutils align-default">
 <thead>
@@ -169,21 +170,14 @@
 </tbody>
 </table>
 
+<dl class="field-list simple">
+<dt class="field-odd">Template Parameters<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p><strong>data_format</strong> – Template argument specifying the data type. Supported data formats are: DataFormat::Int32, DataFormat::UInt32, DataFormat::UInt16</p>
 </dd>
 </dl>
-
-<dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel15sub_uint32_tileE8uint32_t8uint32_t8uint32_t">
-<span class="target" id="namespaceckernel_1a742dfad3874e0f09f6984478c4f4cf9a"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">sub_uint32_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">odst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel15sub_uint32_tileE8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
-</dt>
-<dd></dd>
-</dl>
-
-<dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel15sub_uint16_tileE8uint32_t8uint32_t8uint32_t">
-<span class="target" id="namespaceckernel_1a1485da3128a62ffd3a49c1d18f81e94d"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">sub_uint16_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">odst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel15sub_uint16_tileE8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
-</dt>
-<dd></dd>
+</dd>
 </dl>
 
 </section>

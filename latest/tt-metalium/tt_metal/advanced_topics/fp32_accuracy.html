@@ -115,7 +115,7 @@
 <span id="id1"></span><h1>Achieving FP32 Accuracy for Computation<a class="headerlink" href="#achieving-fp32-accuracy-for-computation" title="Permalink to this heading"></a>
 </h1>
 <p>Tensix provides two main compute engines: the matrix engine (FPU) and the vector engine (SFPU). Each has distinct strengths and limitations that affect numerical accuracy and throughput. For a detailed overview of these engines, see <a class="reference internal" href="compute_engines_and_dataflow_within_tensix.html#compute-engines-and-dataflow-within-tensix"><span class="std std-ref">Compute Engines and Data Flow within Tensix</span></a>.</p>
-<p>The matrix engine is built for speed and scale, handling large matrix operations efficiently. Its design favors throughput, but this comes with a trade-off: most operations use bfloat16 or TF32 formats, which offer less precision than standard IEEE 754 FP32. Additionally, the matrix engine does not handle special values (inf, NaN, …) properly. For many machine learning tasks, this is sufficient, but it may not meet the needs of workloads that demand high numerical accuracy. For detailed information about FPU and SFPU numerical accuracy characteristics, please review the follwoing documentations:</p>
+<p>The matrix engine is built for speed and scale, handling large matrix operations efficiently. Its design favors throughput, but this comes with a trade-off: most operations use bfloat16 or TF32 formats, which offer less precision than standard IEEE 754 FP32. Additionally, the matrix engine does not handle special values (inf, NaN, …) properly. For many machine learning tasks, this is sufficient, but it may not meet the needs of workloads that demand high numerical accuracy. For detailed information about FPU and SFPU numerical accuracy characteristics, please review the following documentations:</p>
 <ul class="simple">
 <li><p><a class="reference external" href="https://github.com/tenstorrent/tt-isa-documentation/blob/main/Miscellaneous/FMA/README.md#correctness-of-fma_model_ieee">SFPU FMA Numerical Accuracy</a></p></li>
 <li><p><a class="reference external" href="https://github.com/tenstorrent/tt-isa-documentation/blob/main/WormholeB0/TensixTile/TensixCoprocessor/FloatBitPatterns.md">Floaring Point Bit Patterns</a></p></li>
@@ -182,8 +182,7 @@
 <span class="cp">#include</span><span class="w"> </span><span class="cpf">"compute_kernel_api/tile_move_copy.h"</span>
 <span class="cp">#include</span><span class="w"> </span><span class="cpf">"compute_kernel_api/binary.h"</span>
 
-<span class="k">namespace</span><span class="w"> </span><span class="nn">NAMESPACE</span><span class="w"> </span><span class="p">{</span>
-<span class="kt">void</span><span class="w"> </span><span class="n">MAIN</span><span class="w"> </span><span class="p">{</span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">cb_in0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_in0</span><span class="p">;</span>
 <span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">cb_in1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_in1</span><span class="p">;</span>
 <span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">cb_out0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_out0</span><span class="p">;</span>
@@ -237,7 +236,6 @@
 <span class="w">        </span><span class="n">cb_pop_front</span><span class="p">(</span><span class="n">cb_in1</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="p">}</span>
-<span class="p">}</span><span class="w"> </span><span class="c1">// NAMESPACE</span>
 </pre></div>
 </div>
 <div class="admonition warning">

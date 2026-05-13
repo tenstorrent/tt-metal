@@ -71,6 +71,7 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.from_device.html">ttnn.from_device</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.from_torch.html">ttnn.from_torch</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.get_device_tensors.html">ttnn.get_device_tensors</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.get_optimal_worker_cores_for_sharded_tensor.html">ttnn.get_optimal_worker_cores_for_sharded_tensor</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.load_tensor.html">ttnn.load_tensor</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.reallocate.html">ttnn.reallocate</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.split_work_to_cores.html">ttnn.split_work_to_cores</a></li>
@@ -154,7 +155,7 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.dump_tensor">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">dump_tensor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">file_name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">pathlib.Path</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">`None`</span></span></span><a class="headerlink" href="#ttnn.dump_tensor" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">dump_tensor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">file_name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">pathlib.Path</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mode</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.DumpTensorMode</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">`None`</span></span></span><a class="headerlink" href="#ttnn.dump_tensor" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Dump tensor to a file.</p>
@@ -167,9 +168,23 @@
 <li><p><strong>tensor</strong> (<em>ttnn.Tensor</em>) – the tensor to be dumped.</p></li>
 </ul>
 </dd>
-<dt class="field-even">Returns<span class="colon">:</span>
+<dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
+<p><strong>mode</strong> (<em>ttnn.DumpTensorMode</em><em>, </em><em>optional</em>) – </p>
+<p>How host-side distributed tensors are written. Defaults to
+<code class="docutils literal notranslate"><span class="pre">DISTRIBUTED_GATHER</span></code>.</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">DISTRIBUTED_GATHER</span></code>: perform a host all-gather, write the full tensor from global rank 0 only,
+and synchronize with barriers. Use this for a single canonical file from a distributed tensor.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">LOCAL</span></code>: skip collectives and write the caller’s local shard only. In multi-host runs, each process
+must use a distinct <code class="docutils literal notranslate"><span class="pre">file_name</span></code> (for example a per-host cache path).</p></li>
+</ul>
+
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
 <p><cite>None</cite> – tensor saved to a specified file.</p>
 </dd>
 </dl>

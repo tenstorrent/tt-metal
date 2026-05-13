@@ -186,7 +186,7 @@ See <a class="reference external" href="https://arxiv.org/abs/1502.03167">Spatia
 <li><p><strong>weight</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – the weight or gamma value of shape <cite>[1, C, 1, 1]</cite>. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>bias</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – the bias or beta value of shape <cite>[1, C, 1, 1]</cite>. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>training</strong> (<em>bool</em><em>, </em><em>optional</em>) – Selection between training mode and inference (evaluation) mode. Defaults to <cite>False</cite> (Inference mode).</p></li>
-<li><p><strong>output</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensor to store batch norm result of shape <cite>[N, C, H, W]</cite>. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>output</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensor to store batch norm result of shape <cite>[N, C, H, W]</cite>. Must have the same dtype as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – device compute kernel configuration for the operation. Defaults to <cite>None</cite>.</p></li>
 </ul>
@@ -217,7 +217,9 @@ See <a class="reference external" href="https://arxiv.org/abs/1502.03167">Spatia
 </tbody>
 </table>
 <p>These apply for all the tensor inputs to this operation, including the optional <code class="xref py py-attr docutils literal notranslate"><span class="pre">output</span></code> tensor.</p>
-<p>The output tensor will be in TILE layout and have the same dtype as the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code></p>
+<p>Mixed precision is supported: <code class="docutils literal notranslate"><span class="pre">input</span></code> (and <code class="docutils literal notranslate"><span class="pre">output</span></code>, if provided) may use a different dtype from the
+parameter tensors (<code class="docutils literal notranslate"><span class="pre">running_mean</span></code>, <code class="docutils literal notranslate"><span class="pre">running_var</span></code>, <code class="docutils literal notranslate"><span class="pre">weight</span></code>, <code class="docutils literal notranslate"><span class="pre">bias</span></code>). The output dtype always
+matches the input dtype. All parameter tensors must share the same dtype with each other.</p>
 </div>
 <dl class="simple">
 <dt>Memory Support:</dt>

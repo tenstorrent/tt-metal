@@ -195,7 +195,7 @@ It offers an abstraction between the host system (e.g., desktop with x86 CPU) an
 <dt><strong>Step 4: Single-core Matrix Multiplication</strong></dt>
 <dd>
 <p>Implement a <a class="reference internal" href="../tt_metal/examples/matmul_single_core.html#matmul-single-core-example"><span class="std std-ref">Single-core Matrix Multiplication Kernel</span></a> that performs matrix multiplication using the matrix engine. This will help you understand how to handle complex dataflow and computations on the Tensix core.</p>
-<p><strong>What you’ll learn:</strong> Complex dataflow, tilized operatins and using the matrix engine for matrix multiplication.</p>
+<p><strong>What you’ll learn:</strong> Complex dataflow, tilized operations and using the matrix engine for matrix multiplication.</p>
 </dd>
 </dl>
 </section>
@@ -210,7 +210,7 @@ It offers an abstraction between the host system (e.g., desktop with x86 CPU) an
 </dd>
 <dt><strong>Step 6: Optimized Multi-core Matrix Multiplication</strong></dt>
 <dd>
-<p><a class="reference internal" href="../tt_metal/examples/matmul_multi_core_optimized.html#matmul-multi-core-example"><span class="std std-ref">Optimize the multi-core matrix multiplication</span></a> kernel by implementing exploting the grid structure of the processor. Avoid redundant reads from DRAM and avoid NoC congestion by reading with one core and broadcasting the data to other cores. This will help you understand how to optimize performance by minimizing unneeded data movement and maximizing data reuse.</p>
+<p><a class="reference internal" href="../tt_metal/examples/matmul_multi_core_optimized.html#matmul-multi-core-example"><span class="std std-ref">Optimize the multi-core matrix multiplication</span></a> kernel by exploiting the grid structure of the processor. Avoid redundant reads from DRAM and avoid NoC congestion by reading with one core and broadcasting the data to other cores. This will help you understand how to optimize performance by minimizing unneeded data movement and maximizing data reuse.</p>
 <p><strong>What you’ll learn:</strong> Performance optimization techniques for high-performance kernels.</p>
 </dd>
 </dl>

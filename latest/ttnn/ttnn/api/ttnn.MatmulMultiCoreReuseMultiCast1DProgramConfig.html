@@ -73,6 +73,7 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.MatmulMultiCoreReuseMultiCastProgramConfig.html">ttnn.MatmulMultiCoreReuseMultiCastProgramConfig</a></li>
 <li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.html">ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig.html">ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-unary">Pointwise Unary</a></li>
@@ -179,6 +180,7 @@ along one dimension while distributing computation.</p>
 <p>When true, batch dimensions are incorporated into the matrix computation,
 allowing for more efficient processing of batched operations in the 1D
 multicast implementation.</p>
+<p>Note: the batch dimensions need to all be 1 for the second input tensor when fuse_batch is true.</p>
 </dd>
 </dl>
 

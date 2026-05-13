@@ -152,30 +152,30 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.empty_like">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">empty_like</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">reference</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dtype</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.DataType</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">ttnn.bfloat16</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">layout</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Layout</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">ttnn.ROW_MAJOR</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Device</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">ttnn.MeshDevice</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">ttnn.DRAM_MEMORY_CONFIG</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.empty_like" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">empty_like</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tensor:</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dtype:</span> <span class="pre">ttnn.DataType</span> <span class="pre">=</span> <span class="pre">the</span> <span class="pre">input</span> <span class="pre">tensor's</span> <span class="pre">dtype</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">layout:</span> <span class="pre">ttnn.Layout</span> <span class="pre">=</span> <span class="pre">the</span> <span class="pre">input</span> <span class="pre">tensor's</span> <span class="pre">layout</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device:</span> <span class="pre">ttnn.Device</span> <span class="pre">|</span> <span class="pre">ttnn.MeshDevice</span> <span class="pre">=</span> <span class="pre">the</span> <span class="pre">input</span> <span class="pre">tensor's</span> <span class="pre">device</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config:</span> <span class="pre">ttnn.MemoryConfig</span> <span class="pre">=</span> <span class="pre">the</span> <span class="pre">input</span> <span class="pre">tensor's</span> <span class="pre">memory</span> <span class="pre">config</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.empty_like" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Creates a new tensor with the same shape as the given <cite>reference</cite>, but without initializing its values. The data type, layout, device, and memory configuration of the new tensor can be specified.</p>
+<p>Creates a new tensor with the same shape as the given tensor, but without initializing its values. The data type, layout, device, and memory configuration of the new tensor can be specified.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><strong>reference</strong> (<em>ttnn.Tensor</em>) – The reference tensor whose shape will be used for the output tensor.</p>
+<p><strong>tensor</strong> (<em>ttnn.Tensor</em>) – The reference tensor whose shape will be used for the output tensor.</p>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>) – The desired data type of the output tensor. Defaults to <cite>ttnn.bfloat16</cite>.</p></li>
-<li><p><strong>layout</strong> (<em>ttnn.Layout</em><em>, </em><em>optional</em>) – The desired layout of the output tensor. Defaults to <cite>ttnn.ROW_MAJOR</cite>.</p></li>
-<li><p><strong>device</strong> (<em>ttnn.Device</em><em> | </em><em>ttnn.MeshDevice</em><em>, </em><em>optional</em>) – The device where the tensor will be allocated. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – The memory configuration for the operation. Defaults to <cite>ttnn.DRAM_MEMORY_CONFIG</cite>.</p></li>
+<li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>) – The desired data type of the output tensor. Defaults to the input tensor’s dtype.</p></li>
+<li><p><strong>layout</strong> (<em>ttnn.Layout</em><em>, </em><em>optional</em>) – The desired layout of the output tensor. Defaults to the input tensor’s layout.</p></li>
+<li><p><strong>device</strong> (<em>ttnn.Device</em><em> | </em><em>ttnn.MeshDevice</em><em>, </em><em>optional</em>) – The device where the tensor will be allocated. Defaults to the input tensor’s device.</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – The memory configuration for the operation. Defaults to the input tensor’s memory config.</p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>ttnn.Tensor</em> – The output uninitialized tensor with the same shape as the reference tensor.</p>
+<p><em>ttnn.Tensor</em> – The output uninitialized tensor with the same shape as the input tensor.</p>
 </dd>
 </dl>
 <div class="admonition-example admonition">

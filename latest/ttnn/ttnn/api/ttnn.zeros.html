@@ -168,16 +168,9 @@
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – The memory configuration of the tensor. Defaults to <cite>None</cite>.</p></li>
 </ul>
 </dd>
-</dl>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>ROW_MAJOR_LAYOUT requires last dimension (shape[-1]) to be a multiple of 2 with dtype BFLOAT16 or UINT16.
-TILE_LAYOUT requires requires width (shape[-1]), height (shape[-2]) dimension to be multiple of 32.</p>
-</div>
-<dl class="field-list simple">
-<dt class="field-odd">Returns<span class="colon">:</span>
+<dt class="field-even">Returns<span class="colon">:</span>
 </dt>
-<dd class="field-odd">
+<dd class="field-even">
 <p><em>ttnn.Tensor</em> – A tensor filled with 0.0.</p>
 </dd>
 </dl>
@@ -186,12 +179,14 @@ TILE_LAYOUT requires requires width (shape[-1]), height (shape[-2]) dimension to
 <p>Supported dtypes, layouts, and ranks:</p>
 </div>
 <table class="docutils align-default">
-<tbody>
+<thead>
 <tr class="row-odd">
-<td><p>Dtypes</p></td>
-<td><p>Layouts</p></td>
-<td><p>Ranks</p></td>
+<th class="head"><p>Dtypes</p></th>
+<th class="head"><p>Layouts</p></th>
+<th class="head"><p>Ranks</p></th>
 </tr>
+</thead>
+<tbody>
 <tr class="row-even">
 <td><p>BFLOAT16, FLOAT32</p></td>
 <td><p>ROW_MAJOR, TILE</p></td>

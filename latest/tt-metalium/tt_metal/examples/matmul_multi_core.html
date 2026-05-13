@@ -355,8 +355,7 @@ changes to:</p>
 </div>
 <p>The compute kernel does not handle IO directly and is not concerned with how work is distributed among the cores. It only needs to know how many tiles to compute and the size of the inner dimension. The kernel is almost identical to the single core version, except that the number of tiles to process is passed as a parameter:</p>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="k">namespace</span><span class="w"> </span><span class="nn">NAMESPACE</span><span class="w"> </span><span class="p">{</span>
-<span class="kt">void</span><span class="w"> </span><span class="n">MAIN</span><span class="w"> </span><span class="p">{</span>
+<div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_output_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span><span class="w"> </span><span class="c1">// Number of output tiles to produce</span>
 <span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">Kt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span><span class="w"> </span><span class="c1">// Size of the inner dimension (K)</span>
 

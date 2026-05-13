@@ -152,18 +152,73 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.complex_tensor">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">complex_tensor</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.complex_tensor" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">complex_tensor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">real</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">imag</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.ComplexTensor</span></span></span><a class="headerlink" href="#ttnn.complex_tensor" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Create a complex tensor from real and imaginary part tensors.</p>
-<p>:param * <a class="reference internal" href="ttnn.real.html#ttnn.real" title="ttnn.real"><code class="xref py py-attr docutils literal notranslate"><span class="pre">real</span></code></a>:
-:param * <a class="reference internal" href="ttnn.imag.html#ttnn.imag" title="ttnn.imag"><code class="xref py py-attr docutils literal notranslate"><span class="pre">imag</span></code></a>:</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<ul class="simple">
+<li><p><strong>real</strong> (<em>ttnn.Tensor</em>) – the real part tensor.</p></li>
+<li><p><strong>imag</strong> (<em>ttnn.Tensor</em>) – the imaginary part tensor.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span>
+</dt>
+<dd class="field-even">
+<p><em>ttnn.ComplexTensor</em> – the complex tensor with real and imag parts.</p>
+</dd>
+</dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This operation supports tensors according to the following data types and layouts:</p>
+<table class="docutils align-default" id="id2">
+<caption>
+<span class="caption-text">real and imag tensors</span><a class="headerlink" href="#id2" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype
+- layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, UINT32, INT32, UINT16, UINT8
+- TILE</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>BFLOAT16, FLOAT32, UINT32, INT32, UINT16, UINT8
+- ROW_MAJOR</p></td>
+</tr>
+</tbody>
+</table>
+<dl class="simple">
+<dt>Memory Support:</dt>
+<dd>
+<ul class="simple">
+<li><p>Interleaved: DRAM and L1</p></li>
+<li><p>Height, Width, Block, and ND Sharded: DRAM and L1</p></li>
+</ul>
+</dd>
+<dt>Limitations:</dt>
+<dd>
+<ul class="simple">
+<li><p>The real and imag tensors must have the same shape and layout (both must be TILE or ROW_MAJOR).</p></li>
+</ul>
+</dd>
+</dl>
+</div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
-<div class="doctest highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">real</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)),</span> <span class="n">device</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">imag</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)),</span> <span class="n">device</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">complex_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">complex_tensor</span><span class="p">(</span><span class="n">real</span><span class="p">,</span> <span class="n">imag</span><span class="p">)</span>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Create a TT-NN complex tensor from real and imaginary parts using ttnn.Tensor constructor</span>
+<span class="n">real</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Tensor</span><span class="p">([</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">2.0</span><span class="p">],</span> <span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>
+<span class="n">imag</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Tensor</span><span class="p">([</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">2.0</span><span class="p">],</span> <span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>
+<span class="n">complex_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">complex_tensor</span><span class="p">(</span><span class="n">real</span><span class="p">,</span> <span class="n">imag</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"TT-NN complex tensor:"</span><span class="p">,</span> <span class="n">complex_tensor</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>

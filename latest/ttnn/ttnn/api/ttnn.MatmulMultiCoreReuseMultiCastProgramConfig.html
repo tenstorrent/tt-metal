@@ -73,6 +73,7 @@
 <li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.MatmulMultiCoreReuseMultiCastProgramConfig</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.html">ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.html">ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig.html">ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-unary">Pointwise Unary</a></li>
@@ -178,6 +179,7 @@ and affects multicast communication patterns.</p>
 <p>When true, batch dimensions are fused with the M dimension, allowing for more
 efficient processing of batched matrix multiplications. This can improve performance
 for operations with large batch sizes. Defaults to true.</p>
+<p>Note: the batch dimensions need to all be 1 for the second input tensor when fuse_batch is true.</p>
 </dd>
 </dl>
 

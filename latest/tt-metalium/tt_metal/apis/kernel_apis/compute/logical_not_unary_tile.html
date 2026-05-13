@@ -117,8 +117,8 @@
 <h1>logical_not_unary_tile<a class="headerlink" href="#logical-not-unary-tile" title="Permalink to this heading"></a>
 </h1>
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel27logical_not_unary_tile_initEv">
-<span class="target" id="namespaceckernel_1aea8c76b173d12fc2c8d4b6a69268fd90"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">logical_not_unary_tile_init</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel27logical_not_unary_tile_initEv" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel21logical_not_tile_initEv">
+<span class="target" id="namespaceckernel_1ae619e05bf00dd2d933be6f0ddfc085c6"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">logical_not_tile_init</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel21logical_not_tile_initEv" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
 <p>Please refer to documentation for any_init. </p>
@@ -126,12 +126,13 @@
 </dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel22logical_not_unary_tileE8uint32_t">
-<span class="target" id="namespaceckernel_1a8eb2237676286e9427ec296e6cc5ab26"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">logical_not_unary_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel22logical_not_unary_tileE8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4I_10DataFormatEN7ckernel16logical_not_tileEv8uint32_t">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">DataFormat</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">DATA_FORMAT</span></span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1a699a90e2e40e33ee26419424e2f4786a"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">logical_not_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_10DataFormatEN7ckernel16logical_not_tileEv8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Performs element-wise computation of the logical not unary operation on each element of a tile in DST register at index tile_index. The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>
-<p>Return value: None</p>
+<p>Performs element-wise computation of the logical not operation on each element of a tile in DST register at index tile_index. The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>
+<p>
+Return value: None</p>
 <p></p>
 <table class="docutils align-default">
 <thead>
@@ -154,21 +155,14 @@
 </tbody>
 </table>
 
+<dl class="field-list simple">
+<dt class="field-odd">Template Parameters<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p><strong>data_format</strong> – Template argument specifying the data type. Supported data formats are: DataFormat::Int32, DataFormat::UInt32, DataFormat::UInt16, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp4_b.</p>
 </dd>
 </dl>
-
-<dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel28logical_not_unary_tile_int32E8uint32_t">
-<span class="target" id="namespaceckernel_1a45d47e773190783234d39cac87adfd98"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">logical_not_unary_tile_int32</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel28logical_not_unary_tile_int32E8uint32_t" title="Permalink to this definition"></a><br>
-</dt>
-<dd></dd>
-</dl>
-
-<dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel29logical_not_unary_tile_uint32E8uint32_t">
-<span class="target" id="namespaceckernel_1ad7e805ef586c57b46eb751433246989c"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">logical_not_unary_tile_uint32</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel29logical_not_unary_tile_uint32E8uint32_t" title="Permalink to this definition"></a><br>
-</dt>
-<dd></dd>
+</dd>
 </dl>
 
 </section>

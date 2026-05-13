@@ -175,10 +175,13 @@ See <a class="reference external" href="https://arxiv.org/abs/1803.08494">Group 
 This implementation is slightly different, in that it forms the groups using the tensor’s last dimension.
 Concretely, the input tensor is expected to have a shape of [N, 1, H*W, C], where C is the dimension along which the groups are formed.</p>
 <dl class="simple">
-<dt>TTNN provides utility functions to help prepare this op’s inputs.</dt>
+<dt>TTNN provides utility functions to help prepare this op’s inputs for different types of input tensors:</dt>
 <dd>
 <ul class="simple">
 <li><p>When using sharded input tensors, <code class="xref py py-func docutils literal notranslate"><span class="pre">ttnn.determine_expected_group_norm_sharded_config_and_grid_size()</span></code> can provide the appropriate memory configuration and grid size.</p></li>
+<li><p>When using interleaved (DRAM) input tensors, <code class="xref py py-func docutils literal notranslate"><span class="pre">ttnn.determine_expected_group_norm_dram_grid_size()</span></code> can provide the appropriate grid size.</p></li>
+<li><p><code class="xref py py-func docutils literal notranslate"><span class="pre">ttnn.dram_group_norm_params_from_torch()</span></code> is a convenience function that prepares the weight, bias, and input mask from PyTorch tensors for interleaved inputs.</p></li>
+<li><p><code class="xref py py-func docutils literal notranslate"><span class="pre">ttnn.get_group_norm_cores_across_channel()</span></code> returns the number of cores that split the channel axis for a given memory layout, grid, and shard orientation. This value must be passed consistently to <code class="xref py py-func docutils literal notranslate"><span class="pre">ttnn.create_group_norm_input_mask()</span></code> and <code class="xref py py-func docutils literal notranslate"><span class="pre">ttnn.create_group_norm_weight_bias_rm()</span></code>. For HEIGHT_SHARDED inputs this is always 1; for BLOCK_SHARDED inputs it is <code class="docutils literal notranslate"><span class="pre">core_grid.x</span></code> when using ROW_MAJOR shard orientation, or <code class="docutils literal notranslate"><span class="pre">core_grid.y</span></code> when using COL_MAJOR.</p></li>
 <li><p><code class="xref py py-func docutils literal notranslate"><span class="pre">ttnn.create_group_norm_input_mask()</span></code> creates the appropriate input mask for a given tensor dimension and group size.</p></li>
 <li><p><code class="xref py py-func docutils literal notranslate"><span class="pre">ttnn.create_group_norm_weight_bias_rm()</span></code> converts the weight and bias tensors into appropriately padded and tiled inputs</p></li>
 </ul>
@@ -200,18 +203,18 @@ Concretely, the input tensor is expected to have a shape of [N, 1, H*W, C], wher
 <li><p><strong>num_groups</strong> (<em>int</em>) – Number of groups to split the tensor’s channels into.</p></li>
 <li><p><strong>epsilon</strong> (<em>float</em>) – Defaults to 1e-12.</p></li>
 <li><p><strong>input_mask</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>. When processing the inputs, the mask is used to only look at the elements of the current group.</p></li>
-<li><p><strong>weight</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>bias</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>weight</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Gamma (scale) parameter for the affine transformation. When omitted, no scaling is applied. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>bias</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Beta (shift) parameter for the affine transformation. When omitted, no shift is applied. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>core_grid</strong> (<em>CoreGrid</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>inplace</strong> (<em>bool</em><em>, </em><em>optional</em>) – Defaults to <cite>True</cite>.</p></li>
 <li><p><strong>output_layout</strong> (<em>ttnn.Layout</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>num_out_blocks</strong> (<em>int</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>num_out_blocks</strong> (<em>int</em><em>, </em><em>optional</em>) – For non-sharded (interleaved) inputs, splits the per-core output height (<code class="docutils literal notranslate"><span class="pre">block_h</span></code>, in tiles) into <code class="docutils literal notranslate"><span class="pre">num_out_blocks</span></code> chunks so each iteration uses less SRAM, at the cost of performance. Ignored for sharded inputs. Should only be set if needed to relieve SRAM pressure. Accepted explicit values are <code class="docutils literal notranslate"><span class="pre">-1</span></code> (use the built-in auto-heuristic) or a chunk count in range <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">block_h]</span></code>. Defaults to <cite>None</cite>, whose meaning depends on <code class="xref py py-attr docutils literal notranslate"><span class="pre">core_grid</span></code> (non-sharded inputs only): when <code class="xref py py-attr docutils literal notranslate"><span class="pre">core_grid</span></code> is also <cite>None</cite> (auto-selected), <code class="docutils literal notranslate"><span class="pre">num_out_blocks</span></code> is determined automatically using the same auto-heuristic as <code class="docutils literal notranslate"><span class="pre">-1</span></code>, and passing an explicit <code class="docutils literal notranslate"><span class="pre">num_out_blocks</span></code> in that case is rejected. When <code class="xref py py-attr docutils literal notranslate"><span class="pre">core_grid</span></code> is provided and <code class="docutils literal notranslate"><span class="pre">num_out_blocks</span></code> is <cite>None</cite> (default), <code class="docutils literal notranslate"><span class="pre">num_out_blocks</span></code> defaults to <code class="docutils literal notranslate"><span class="pre">1</span></code> (no chunking).</p></li>
 <li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – Compute kernel configuration for the op. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>negative_mask</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>. Can be used only in row-major sharded input/output tensors. Used to reduce the number of CB’s used in the sharded version of the kernel by overlapping the CB’s used for tilized input and output. (The kernel is in fact row major variant, but is internally tilizing RM into tilized inputs).</p></li>
 <li><p><strong>use_welford</strong> (<em>bool</em><em>, </em><em>optional</em>) – Defaults to <cite>False</cite>. If <cite>True</cite>, the Welford’s algorithm is used to compute the mean and variance.</p></li>
-<li><p><strong>reciprocals</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>. FP32 tensor containing pre-computed reciprocal values. Only valid when use_welford is True. Must be sharded to L1 memory in each core.</p></li>
+<li><p><strong>reciprocals</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>. FP32 tensor containing pre-computed reciprocal values. Only valid when <code class="docutils literal notranslate"><span class="pre">use_welford</span></code> is True. Must be sharded to L1 using the legacy <code class="docutils literal notranslate"><span class="pre">ShardSpec</span></code> representation, with the shard grid matching the compute <code class="xref py py-attr docutils literal notranslate"><span class="pre">core_grid</span></code>. Interleaved tensors and <code class="docutils literal notranslate"><span class="pre">NdShardSpec</span></code> sharding are currently not supported for the <code class="xref py py-attr docutils literal notranslate"><span class="pre">reciprocals</span></code> tensor.</p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
@@ -290,7 +293,7 @@ Concretely, the input tensor is expected to have a shape of [N, 1, H*W, C], wher
 <li><p><code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> is a 4D tensor of shape [N, 1, H*W, C] and is allocated on the device</p></li>
 <li><p>For the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, H*W must be a multiple of the tile size (32) and C must be a multiple of the tile size and divide evenly into <code class="xref py py-attr docutils literal notranslate"><span class="pre">num_groups</span></code>.</p></li>
 <li><p>For the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_mask</span></code>, C must match the number of groups, H must match a tile’s height, and W must be a multiple of a tile’s width.</p></li>
-<li><p><code class="xref py py-attr docutils literal notranslate"><span class="pre">gamma</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">beta</span></code> must be provided</p></li>
+<li><p>If <code class="xref py py-attr docutils literal notranslate"><span class="pre">core_grid</span></code> is not provided, it is inferred from the inputs: for a sharded <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, from the bounding box of its shard grid; otherwise, for sharded <code class="xref py py-attr docutils literal notranslate"><span class="pre">reciprocals</span></code> (when provided), from the bounding box of the reciprocals shard grid; otherwise (interleaved/DRAM input), via the same logic as <code class="xref py py-func docutils literal notranslate"><span class="pre">ttnn.determine_expected_group_norm_dram_grid_size()</span></code>. The inferred grid may not be optimal; pass <code class="xref py py-attr docutils literal notranslate"><span class="pre">core_grid</span></code> explicitly to override it. To prepare a sharded input ahead of time and obtain a matching grid in one step, see <code class="xref py py-func docutils literal notranslate"><span class="pre">ttnn.determine_expected_group_norm_sharded_config_and_grid_size()</span></code>.</p></li>
 <li><p><code class="xref py py-attr docutils literal notranslate"><span class="pre">inplace</span></code> is not supported for TILE-layout inputs and requires input and output layouts to be identical.</p></li>
 <li><p>When generating inputs (e.g. weight, bias) for block sharded tensors, the number of cores in a column should draw upon core.x rather than core.y.</p></li>
 <li><p>When generating inputs (e.g. weight, bias) for height sharded tensors, the number of cores in a column should be 1 rather than core.y.</p></li>
@@ -321,7 +324,8 @@ Concretely, the input tensor is expected to have a shape of [N, 1, H*W, C], wher
 <span class="n">torch_output_tensor</span> <span class="o">=</span> <span class="n">torch_output_tensor</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">W</span> <span class="o">*</span> <span class="n">H</span><span class="p">,</span> <span class="n">C</span><span class="p">)</span>
 
 <span class="c1"># Prepare TTNN input</span>
-<span class="c1"># Determine how to shard the input tensor</span>
+<span class="c1"># Determine how to shard the input tensor - this example uses height sharding</span>
+<span class="c1"># For interleaved (non-sharded) tensors, use ttnn.determine_expected_group_norm_dram_grid_size instead to determine the grid size.</span>
 <span class="n">sharded_mem_config</span><span class="p">,</span> <span class="n">grid_size</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">determine_expected_group_norm_sharded_config_and_grid_size</span><span class="p">(</span>
     <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
     <span class="n">num_channels</span><span class="o">=</span><span class="n">C</span><span class="p">,</span>
@@ -339,7 +343,15 @@ Concretely, the input tensor is expected to have a shape of [N, 1, H*W, C], wher
     <span class="n">memory_config</span><span class="o">=</span><span class="n">sharded_mem_config</span><span class="p">,</span>
 <span class="p">)</span>
 
-<span class="c1"># Input mask - this is needed for each group to be able to select the correct elements of the input tensor</span>
+<span class="c1"># To prepare the input tensors, we need to know how many cores split the channel dimension.</span>
+<span class="c1"># For height sharding (as in this example) this is always 1; for block sharding it depends on the shard orientation.</span>
+<span class="n">num_cores_across_channel</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">get_group_norm_cores_across_channel</span><span class="p">(</span>
+    <span class="n">ttnn</span><span class="o">.</span><span class="n">types</span><span class="o">.</span><span class="n">TensorMemoryLayout</span><span class="o">.</span><span class="n">HEIGHT_SHARDED</span><span class="p">,</span>
+    <span class="n">grid_size</span><span class="p">,</span>
+    <span class="n">ttnn</span><span class="o">.</span><span class="n">ShardOrientation</span><span class="o">.</span><span class="n">ROW_MAJOR</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="c1"># Create the input mask which helps each group select the correct elements of the input tensor</span>
 <span class="c1"># In general, it will have dimensions of [1, num_groups, 32, 32*block_wt]</span>
 
 <span class="c1"># In this example, C=64 and num_groups=2, so each group is 32 channels (i.e. one tile) wide</span>
@@ -352,7 +364,7 @@ Concretely, the input tensor is expected to have a shape of [N, 1, H*W, C], wher
 <span class="n">input_mask_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">create_group_norm_input_mask</span><span class="p">(</span>
     <span class="n">num_channel</span><span class="o">=</span><span class="n">C</span><span class="p">,</span>
     <span class="n">num_groups</span><span class="o">=</span><span class="n">num_groups</span><span class="p">,</span>
-    <span class="n">num_cores_across_channel</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>  <span class="c1"># As explained in the Limitations, supply 1 for height sharded input tensors</span>
+    <span class="n">num_cores_across_channel</span><span class="o">=</span><span class="n">num_cores_across_channel</span><span class="p">,</span>
     <span class="n">data_type</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat8_b</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="n">input_mask_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">input_mask_tensor</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>
@@ -360,10 +372,12 @@ Concretely, the input tensor is expected to have a shape of [N, 1, H*W, C], wher
 <span class="c1"># Prepare gamma and beta for TTNN. Currently these are just 1D tensors of size [C], which isn't compatible with tile based processing</span>
 <span class="c1"># First they will zero padded if needed (does not apply to this example)</span>
 <span class="c1"># Then reshaped to be [1, 1, tiles_per_core_total, 32], which in this case will be [1, 1, 2, 32]</span>
-
-<span class="c1"># As with the input mask, we supply a core count of 1 for height sharded input tensors</span>
-<span class="n">gamma</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">create_group_norm_weight_bias_rm</span><span class="p">(</span><span class="n">input_tensor</span><span class="o">=</span><span class="n">torch_weight</span><span class="p">,</span> <span class="n">num_channels</span><span class="o">=</span><span class="n">C</span><span class="p">,</span> <span class="n">num_cores_x</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
-<span class="n">beta</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">create_group_norm_weight_bias_rm</span><span class="p">(</span><span class="n">input_tensor</span><span class="o">=</span><span class="n">torch_bias</span><span class="p">,</span> <span class="n">num_channels</span><span class="o">=</span><span class="n">C</span><span class="p">,</span> <span class="n">num_cores_x</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">gamma</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">create_group_norm_weight_bias_rm</span><span class="p">(</span>
+    <span class="n">input_tensor</span><span class="o">=</span><span class="n">torch_weight</span><span class="p">,</span> <span class="n">num_channels</span><span class="o">=</span><span class="n">C</span><span class="p">,</span> <span class="n">num_cores_x</span><span class="o">=</span><span class="n">num_cores_across_channel</span>
+<span class="p">)</span>
+<span class="n">beta</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">create_group_norm_weight_bias_rm</span><span class="p">(</span>
+    <span class="n">input_tensor</span><span class="o">=</span><span class="n">torch_bias</span><span class="p">,</span> <span class="n">num_channels</span><span class="o">=</span><span class="n">C</span><span class="p">,</span> <span class="n">num_cores_x</span><span class="o">=</span><span class="n">num_cores_across_channel</span>
+<span class="p">)</span>
 
 <span class="n">gamma_t</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
     <span class="n">gamma</span><span class="p">,</span>

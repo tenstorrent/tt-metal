@@ -187,6 +187,7 @@ Its output should be combined across devices with <a class="reference internal" 
 <li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – the compute kernel configuration. Defaults to None.</p></li>
 <li><p><strong>program_config</strong> (<em>ttnn.ProgramConfig</em><em>, </em><em>optional</em>) – the program configuration. Defaults to None.</p></li>
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – the memory configuration. Defaults to None.</p></li>
+<li><p><strong>recip_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – the reciprocals tensor for Welford algorithm. Required when using Welford (use_welford=True in program_config). Create using <code class="xref py py-func docutils literal notranslate"><span class="pre">ttnn.create_layer_norm_reciprocals()</span></code>. Defaults to None.</p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
@@ -242,6 +243,7 @@ Its output should be combined across devices with <a class="reference internal" 
 <li><p>Unsharded runs: <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> must be interleaved.</p></li>
 <li><p>Sharded runs: inputs cannot be height-sharded, padded height must equal TILE_HEIGHT (32).</p></li>
 <li><p>When using <code class="xref py py-attr docutils literal notranslate"><span class="pre">residual_input_tensor</span></code> with sharding, it must match the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> padded shape and sharding.</p></li>
+<li><p>When using Welford algorithm (use_welford=True), <code class="xref py py-attr docutils literal notranslate"><span class="pre">recip_tensor</span></code> must be provided.</p></li>
 </ul>
 </dd>
 </dl>

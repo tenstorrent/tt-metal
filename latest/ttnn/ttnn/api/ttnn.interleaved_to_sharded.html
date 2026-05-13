@@ -98,6 +98,8 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.reshape_on_device.html">ttnn.reshape_on_device</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.reshard.html">ttnn.reshard</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.roll.html">ttnn.roll</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.scatter.html">ttnn.scatter</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.scatter_add.html">ttnn.scatter_add</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.sharded_to_interleaved.html">ttnn.sharded_to_interleaved</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.sharded_to_interleaved_partial.html">ttnn.sharded_to_interleaved_partial</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.slice.html">ttnn.slice</a></li>
@@ -199,7 +201,7 @@
 :kwtype * <code class="xref py py-attr docutils literal notranslate"><span class="pre">output_dtype</span></code>: Optional[ttnn.DataType]</p>
 <p>Example 1 (using grid, shape, scheme, orienttion):</p>
 <div class="doctest highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">sharded_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">sharded_to_interleaved</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">CoreGrid</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="mi">3</span><span class="p">),</span> <span class="p">[</span><span class="mi">32</span><span class="p">,</span><span class="mi">32</span><span class="p">],</span> <span class="n">ttl</span><span class="o">.</span><span class="n">tensor</span><span class="o">.</span><span class="n">TensorMemoryLayout</span><span class="o">.</span><span class="n">HEIGHT_SHARDED</span><span class="p">,</span> <span class="n">ttl</span><span class="o">.</span><span class="n">tensor</span><span class="o">.</span><span class="n">ShardOrientation</span><span class="o">.</span><span class="n">ROW_MAJOR</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">sharded_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">interleaved_to_sharded</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">CoreGrid</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="mi">3</span><span class="p">),</span> <span class="p">[</span><span class="mi">32</span><span class="p">,</span><span class="mi">32</span><span class="p">],</span> <span class="n">ttl</span><span class="o">.</span><span class="n">tensor</span><span class="o">.</span><span class="n">TensorMemoryLayout</span><span class="o">.</span><span class="n">HEIGHT_SHARDED</span><span class="p">,</span> <span class="n">ttl</span><span class="o">.</span><span class="n">tensor</span><span class="o">.</span><span class="n">ShardOrientation</span><span class="o">.</span><span class="n">ROW_MAJOR</span><span class="p">)</span>
 </pre></div>
 </div>
 <dl>
@@ -217,7 +219,7 @@
 <span class="go">    strategy=ttnn.ShardStrategy.BLOCK,</span>
 <span class="go">),</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">shard_memory_config</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">create_sharded_memory_config</span><span class="p">(</span><span class="n">input_shape</span><span class="p">,</span> <span class="o">**</span><span class="n">input_sharded_memory_config_args</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">sharded_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">sharded_to_interleaved</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">shard_memory_config</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">sharded_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">interleaved_to_sharded</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">shard_memory_config</span><span class="p">)</span>
 </pre></div>
 </div>
 </dd>

@@ -20,6 +20,8 @@
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
@@ -147,9 +149,14 @@
 <dd>
 <blockquote>
 <div>
-<p>Computes addcmul: output = input_a + value * input_b * input_c</p>
+<p>Multiplies <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> by a scalar, multiplies the result
+element-wise by <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_c</span></code>, and adds it to
+<code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code>.
+Returns a tensor with the same layout as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code>.</p>
 </div>
 </blockquote>
+<div class="math notranslate nohighlight">
+\[\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i + (value * \mathrm{input\_tensor\_b}_i * \mathrm{input\_tensor\_c}_i)\]</div>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
@@ -164,7 +171,7 @@
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>value</strong> (<em>float</em><em>, </em><em>optional</em>) – scalar value to multiply with input_b * input_c. Defaults to 1.0.</p></li>
+<li><p><strong>value</strong> (<em>float</em><em>, </em><em>optional</em>) – scalar value used in the operation. Defaults to 1.0.</p></li>
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
 </ul>
@@ -177,20 +184,18 @@
 </dl>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>Supported dtypes, layouts, and ranks:</p>
+<p>Supported dtypes and layouts:</p>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd">
 <th class="head"><p>Dtypes</p></th>
 <th class="head"><p>Layouts</p></th>
-<th class="head"><p>Ranks</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>FLOAT32, BFLOAT16, BFLOAT8_B, INT32</p></td>
+<td><p>FLOAT32, BFLOAT16, BFLOAT8_B, INT32, UINT32</p></td>
 <td><p>TILE</p></td>
-<td><p>2, 3, 4</p></td>
 </tr>
 </tbody>
 </table>

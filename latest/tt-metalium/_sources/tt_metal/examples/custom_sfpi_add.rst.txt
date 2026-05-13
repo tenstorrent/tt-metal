@@ -116,8 +116,7 @@ The overall flow follows the same pattern as other compute kernels:
 .. code-block:: cpp
 
     // tt_metal/programming_examples/custom_sfpi_add/kernels/compute/tiles_add.cpp
-    namespace NAMESPACE {
-    void MAIN {
+    void kernel_main() {
         uint32_t n_tiles = get_arg_val<uint32_t>(0);
 
         constexpr auto cb_in0 = tt::CBIndex::c_0;
@@ -147,7 +146,6 @@ The overall flow follows the same pattern as other compute kernels:
             tile_regs_release();
         }
     }
-    } // namespace NAMESPACE
 
 Custom SFPI Implementation
 --------------------------
@@ -182,7 +180,7 @@ The core of this example is the custom SFPI function ``my_add_tiles``. It's impl
 
     // High-level API function
     void my_add_tile(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
-        MATH(_llk_math_eltwise_binary_sfpu_params_<false>(add_tile_face, idx_dst0, idx_dst1, idx_out0));
+        MATH(_llk_math_eltwise_binary_sfpu_params_(add_tile_face, idx_dst0, idx_dst1, idx_out0));
     }
 
 

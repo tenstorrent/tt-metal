@@ -252,7 +252,7 @@
 <ul class="simple">
 <li><p><strong>grad_tensor</strong> (<em>ttnn.Tensor</em>) – the input gradient tensor.</p></li>
 <li><p><strong>input_tensor_a</strong> (<em>ttnn.Tensor</em>) – the input tensor.</p></li>
-<li><p><strong>input_tensor_b</strong> (<em>ttnn.Tensor</em><em> or </em><em>Number</em>) – the input tensor.</p></li>
+<li><p><strong>input_tensor_b</strong> (<em>ttnn.Tensor</em><em> or </em><em>Number</em>) – the input tensor or scalar.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
@@ -268,24 +268,22 @@
 </dl>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>Supported dtypes, layouts, and ranks:</p>
+<p>Supported dtypes and layouts:</p>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd">
 <th class="head"><p>Dtypes</p></th>
 <th class="head"><p>Layouts</p></th>
-<th class="head"><p>Ranks</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
 <td><p>BFLOAT16</p></td>
-<td><p>TILE</p></td>
-<td><p>2, 3, 4</p></td>
+<td><p>TILE, ROW_MAJOR</p></td>
 </tr>
 </tbody>
 </table>
-<p>For more details about BFLOAT8_B, refer to the <a class="reference external" href="../tensor.html#limitation-of-bfloat8-b">BFLOAT8_B limitations</a>.</p>
+<p>bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT</p>
 </div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>

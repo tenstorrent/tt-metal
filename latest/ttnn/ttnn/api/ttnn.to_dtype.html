@@ -71,6 +71,7 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.from_device.html">ttnn.from_device</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.from_torch.html">ttnn.from_torch</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.get_device_tensors.html">ttnn.get_device_tensors</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.get_optimal_worker_cores_for_sharded_tensor.html">ttnn.get_optimal_worker_cores_for_sharded_tensor</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.load_tensor.html">ttnn.load_tensor</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.reallocate.html">ttnn.reallocate</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.split_work_to_cores.html">ttnn.split_work_to_cores</a></li>
@@ -154,17 +155,71 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.to_dtype">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">to_dtype</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.to_dtype" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">to_dtype</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dtype</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.DataType</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.to_dtype" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Converts a tensor to the desired dtype</p>
-<p>:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">tensor</span></code>: the ttnn.Tensor
-:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">dtype</span></code>: <cite>ttnn</cite> data type.</p>
+<p>Converts a host tensor to the desired dtype.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<ul class="simple">
+<li><p><strong>tensor</strong> (<em>ttnn.Tensor</em>) – the tensor to be converted to the desired dtype.</p></li>
+<li><p><strong>dtype</strong> (<em>ttnn.DataType</em>) – the desired data type.</p></li>
+</ul>
+</dd>
+</dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This operations supports tensors according to the following data types and layout:</p>
+<table class="docutils align-default" id="id2">
+<caption>
+<span class="caption-text">tensor</span><a class="headerlink" href="#id2" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype
+- layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, UINT32, INT32, UINT16, UINT8
+- TILE</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>BFLOAT16, FLOAT32, UINT32, INT32, UINT16, UINT8
+- ROW_MAJOR</p></td>
+</tr>
+</tbody>
+</table>
+<dl class="simple">
+<dt>Memory Support:</dt>
+<dd>
+<ul class="simple">
+<li><p>Interleaved: DRAM and L1</p></li>
+<li><p>Height, Width, Block, and ND Sharded: DRAM and L1</p></li>
+</ul>
+</dd>
+<dt>Limitations:</dt>
+<dd>
+<ul class="simple">
+<li><p>tensor must be on the host.</p></li>
+</ul>
+</dd>
+</dl>
+</div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
-<div class="doctest highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">10</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">))</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_dtype</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">uint16</span><span class="p">)</span>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Create a TT-NN tensor on the host and convert it to a different data type</span>
+<span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">10</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
+<span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_device</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>  <span class="c1"># to_dtype requires a host tensor</span>
+<span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_dtype</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">uint8</span><span class="p">)</span>
+<span class="k">assert</span> <span class="n">tensor</span><span class="o">.</span><span class="n">dtype</span> <span class="o">==</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">uint8</span>
+<span class="k">assert</span> <span class="n">tensor</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">)</span>
+
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"TT-NN tensor shape after converting to uint8"</span><span class="p">,</span> <span class="n">tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>

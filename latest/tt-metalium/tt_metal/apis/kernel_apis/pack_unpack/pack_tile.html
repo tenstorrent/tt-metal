@@ -232,8 +232,8 @@
 </dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel25pack_reconfig_data_formatEK8uint32_t">
-<span class="target" id="namespaceckernel_1acf3b8db847f3303013fd120fef491dac"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">pack_reconfig_data_format</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">new_cb_id</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel25pack_reconfig_data_formatEK8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4I_bEN7ckernel25pack_reconfig_data_formatEvK8uint32_t">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">is_tile_dim_reconfig_en</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1a1826287bba2df9d73493f00b79da886f"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">pack_reconfig_data_format</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">new_cb_id</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_bEN7ckernel25pack_reconfig_data_formatEvK8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
 <p>Reconfigures the packer output data format by specifying the CB ID of the new operand. This function call will always perform the reconfiguration, regardless of the data format of the old operand. If the new CB ID is the same as the current one, reconfiguration will still occur.</p>
@@ -253,6 +253,14 @@
 </thead>
 <tbody>
 <tr class="row-even">
+<td><p>Template   </p></td>
+<td><p>is_tile_dim_reconfig_en   </p></td>
+<td><p>Toggle tile reconfiguration   </p></td>
+<td><p>bool   </p></td>
+<td><p>true/false   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-odd">
 <td><p>Function   </p></td>
 <td><p>new_cb_id   </p></td>
 <td><p>New data format operand value   </p></td>
@@ -267,8 +275,8 @@
 </dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel25pack_reconfig_data_formatEK8uint32_tK8uint32_t">
-<span class="target" id="namespaceckernel_1a61c686246be6a10b4764e6ea44695aa5"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">pack_reconfig_data_format</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">old_cb_id</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">new_cb_id</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel25pack_reconfig_data_formatEK8uint32_tK8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4I_bEN7ckernel25pack_reconfig_data_formatEvK8uint32_tK8uint32_t">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">is_tile_dim_reconfig_en</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1a5d7e43ed8d7e696b580ddce98748b59f"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">pack_reconfig_data_format</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">old_cb_id</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">new_cb_id</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_bEN7ckernel25pack_reconfig_data_formatEvK8uint32_tK8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
 <p>Reconfigures the packer output data format by specifying the CB IDs of the old and new operands. This function internally calls the reconfiguration function with the new CB ID, but before it does so, it checks if the old and new data formats are different. If they are the same, it does not perform the reconfiguration. This function is useful when you want to ensure that the packer only reconfigures when different data format is wanted, avoiding unnecessary reconfiguration overhead.</p>
@@ -288,6 +296,14 @@
 </thead>
 <tbody>
 <tr class="row-even">
+<td><p>Template   </p></td>
+<td><p>is_tile_dim_reconfig_en   </p></td>
+<td><p>Toggle tile reconfiguration   </p></td>
+<td><p>bool   </p></td>
+<td><p>true/false   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-odd">
 <td><p>Function   </p></td>
 <td><p>old_cb_id   </p></td>
 <td><p>Previous data format operand value   </p></td>
@@ -295,7 +311,7 @@
 <td><p>Any   </p></td>
 <td><p>True    </p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p>Function   </p></td>
 <td><p>new_cb_id   </p></td>
 <td><p>New data format operand value   </p></td>

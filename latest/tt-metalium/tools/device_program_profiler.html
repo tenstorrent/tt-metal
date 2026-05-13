@@ -66,6 +66,8 @@
 <li class="toctree-l1"><a class="reference internal" href="../tt_metal/environment_variables/index.html">Environment Variables</a></li>
 <li class="toctree-l1 current"><a class="reference internal" href="index.html">Tools</a><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="kernel_print.html">Kernel Debug Print</a></li>
+<li class="toctree-l2"><a class="reference internal" href="checkpoint.html">Debug Checkpoints</a></li>
+<li class="toctree-l2"><a class="reference internal" href="device_print.html">Device Debug Print</a></li>
 <li class="toctree-l2"><a class="reference internal" href="watcher.html">Watcher</a></li>
 <li class="toctree-l2"><a class="reference internal" href="tracy_profiler.html">Tracy Profiler</a></li>
 <li class="toctree-l2 current"><a class="current reference internal" href="#">Device Program Profiler</a><ul>
@@ -84,6 +86,7 @@
 <li class="toctree-l2"><a class="reference internal" href="llk_asserts.html">LLK Asserts</a></li>
 <li class="toctree-l2"><a class="reference internal" href="inspector.html">Inspector</a></li>
 <li class="toctree-l2"><a class="reference internal" href="triage.html">tt-triage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="noc_debug_dump.html">NOC Debug Dump</a></li>
 </ul>
 </li>
 </ul>
@@ -193,7 +196,7 @@
 <p>The host code in <code class="docutils literal notranslate"><span class="pre">test_full_buffer.cpp</span></code> sets up and runs a simple kernel, defines compile-time arguments like <code class="docutils literal notranslate"><span class="pre">LOOP_COUNT</span></code>, and calls <code class="docutils literal notranslate"><span class="pre">ReadDeviceProfilerResults</span></code> to collect the data.</p>
 <p>The kernel code in <code class="docutils literal notranslate"><span class="pre">kernels/full_buffer.cpp</span></code> uses <code class="docutils literal notranslate"><span class="pre">DeviceZoneScopedN</span></code> to profile a loop of <code class="docutils literal notranslate"><span class="pre">nop</span></code> instructions:</p>
 <div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="linenos"> 1</span><span class="c1">// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.</span>
+<div class="highlight"><pre><span></span><span class="linenos"> 1</span><span class="c1">// SPDX-FileCopyrightText: 2023 Tenstorrent USA, Inc.</span>
 <span class="linenos"> 2</span><span class="c1">//</span>
 <span class="linenos"> 3</span><span class="c1">// SPDX-License-Identifier: Apache-2.0</span>
 <span class="linenos"> 4</span>

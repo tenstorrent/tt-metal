@@ -371,8 +371,7 @@ Key operations include:</p>
 <p>The dimensions <code class="docutils literal notranslate"><span class="pre">Mt</span></code>, <code class="docutils literal notranslate"><span class="pre">Kt</span></code>, <code class="docutils literal notranslate"><span class="pre">Nt</span></code> are passed as compile-time arguments, enabling the compiler to optimize the kernel structure for these specific dimensions.</p>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="c1">// tt_metal/programming_examples/matmul_single_core/kernels/compute/mm.cpp</span>
-<span class="k">namespace</span><span class="w"> </span><span class="nn">NAMESPACE</span><span class="w"> </span><span class="p">{</span>
-<span class="kt">void</span><span class="w"> </span><span class="n">MAIN</span><span class="w"> </span><span class="p">{</span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">Mt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_compile_time_arg_val</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
 <span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">Kt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_compile_time_arg_val</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
 <span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">Nt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_compile_time_arg_val</span><span class="p">(</span><span class="mi">2</span><span class="p">);</span>
@@ -409,7 +408,6 @@ Key operations include:</p>
 <span class="w">            </span><span class="n">tile_regs_release</span><span class="p">();</span>
 <span class="w">        </span><span class="p">}</span>
 <span class="w">    </span><span class="p">}</span>
-<span class="p">}</span>
 <span class="p">}</span>
 </pre></div>
 </div>

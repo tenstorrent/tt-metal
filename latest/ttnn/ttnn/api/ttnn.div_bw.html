@@ -241,10 +241,11 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.div_bw">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">div_bw</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">grad_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ComplexTensor</span> <span class="pre">or</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_a</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ComplexTensor</span> <span class="pre">or</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_b</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ComplexTensor</span> <span class="pre">or</span> <span class="pre">ttnn.Tensor</span> <span class="pre">or</span> <span class="pre">Number</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rounding_mode</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">are_required_outputs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">bool</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">[True,</span> <span class="pre">True]</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_grad</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">other_grad</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">List</span> <span class="pre">of</span> <span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.div_bw" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">div_bw</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">grad_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ComplexTensor</span> <span class="pre">or</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_a</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ComplexTensor</span> <span class="pre">or</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_b</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ComplexTensor</span> <span class="pre">or</span> <span class="pre">ttnn.Tensor</span> <span class="pre">or</span> <span class="pre">Number</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">are_required_outputs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">bool</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">[True,</span> <span class="pre">True]</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rounding_mode</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_grad</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">other_grad</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.div_bw" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Performs backward operations for divide on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">alpha</span></code> or <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">rounding_mode</span></code>,  with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p>
+<p>Performs backward operations for divide on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">alpha</span></code> or <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">rounding_mode</span></code>,  with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.
+Supports broadcasting.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
@@ -259,41 +260,32 @@
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>rounding_mode</strong> (<em>str</em><em>, </em><em>optional</em>) – Round mode for the operation (when input tensors are not ComplexTensor type). Can be  None, “trunc”, “floor”. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>are_required_outputs</strong> (<em>List</em><em>[</em><em>bool</em><em>]</em><em>, </em><em>optional</em>) – List of required outputs. Defaults to <cite>[True, True]</cite>.</p></li>
+<li><p><strong>rounding_mode</strong> (<em>string</em><em>, </em><em>optional</em>) – Rounding mode. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>input_grad</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensor for gradient of <cite>input_tensor</cite>. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>other_grad</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensor for gradient of <cite>other_tensor</cite>. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>input_grad</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensor for gradient of <cite>input_tensor_a</cite>. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>other_grad</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensor for gradient of <cite>input_tensor_b</cite>. Defaults to <cite>None</cite>.</p></li>
 </ul>
 </dd>
-<dt class="field-odd">Returns<span class="colon">:</span>
-</dt>
-<dd class="field-odd">
-<p><em>List of ttnn.Tensor</em> – the output tensor.</p>
-</dd>
 </dl>
-<p>Supports broadcasting.</p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>Supported dtypes, layouts, and ranks:</p>
+<p>Supported dtypes and layouts:</p>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd">
 <th class="head"><p>Dtypes</p></th>
 <th class="head"><p>Layouts</p></th>
-<th class="head"><p>Ranks</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
 <td><p>BFLOAT16, BFLOAT8_B</p></td>
-<td><p>TILE</p></td>
-<td><p>2, 3, 4</p></td>
+<td><p>TILE, ROW_MAJOR</p></td>
 </tr>
 </tbody>
 </table>
 <p>bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT</p>
-<p>Performance of the PCC may degrade when using BFLOAT8_B. For more details, refer to the <a class="reference external" href="../tensor.html#limitation-of-bfloat8-b">BFLOAT8_B limitations</a>.</p>
 </div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>

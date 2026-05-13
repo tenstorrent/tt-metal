@@ -237,7 +237,7 @@
 </div>
 </div>
 <p>As can be seen, matrix multiplication produces outputs in a tile layout. That is because it’s much more efficient to use this layout for computing matrix multiplications on Tenstorrent accelerators compared to a row-major layout.</p>
-<p>And this is also why the logs show 2 tilize operations, as the inputs get automatically convered to the tile layout if they are in a row-major layout.</p>
+<p>And this is also why the logs show 2 tilize operations, as the inputs get automatically converted to the tile layout if they are in a row-major layout.</p>
 <p>Learn more about tile layout <a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_layouts/tensor_layouts.md#32-tiled-layout">here</a></p>
 </section>
 <section id="Inspect-the-result-of-the-matrix-multiplication">
@@ -262,7 +262,7 @@
 <section id="Matrix-multiply-tensor-a-and-b-by-using-more-performant-config">
 <h2>Matrix multiply tensor a and b by using more performant config<a class="headerlink" href="#Matrix-multiply-tensor-a-and-b-by-using-more-performant-config" title="Permalink to this heading"></a>
 </h2>
-<p>By default, matrix multiplication might not be as effecient as it could be. To speed it up further, the user can specify how many cores they want matrix multiplication to use. This can speed up the operation significantly.</p>
+<p>By default, matrix multiplication might not be as efficient as it could be. To speed it up further, the user can specify how many cores they want matrix multiplication to use. This can speed up the operation significantly.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:

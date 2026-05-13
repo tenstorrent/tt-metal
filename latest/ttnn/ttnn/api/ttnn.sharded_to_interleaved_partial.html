@@ -98,6 +98,8 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.reshape_on_device.html">ttnn.reshape_on_device</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.reshard.html">ttnn.reshard</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.roll.html">ttnn.roll</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.scatter.html">ttnn.scatter</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.scatter_add.html">ttnn.scatter_add</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.sharded_to_interleaved.html">ttnn.sharded_to_interleaved</a></li>
 <li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.sharded_to_interleaved_partial</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.slice.html">ttnn.slice</a></li>
@@ -179,26 +181,39 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.sharded_to_interleaved_partial">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">sharded_to_interleaved_partial</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.sharded_to_interleaved_partial" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">sharded_to_interleaved_partial</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_slices</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slice_index</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_dtype</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.DataType</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.sharded_to_interleaved_partial" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Converts a partial tensor from sharded_to_interleaved memory layout</p>
-<p>:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>: input tensor
-:type * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>: ttnn.Tensor
-:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">cache_tensor</span></code>: cache tensor
-:type * <code class="xref py py-attr docutils literal notranslate"><span class="pre">cache_tensor</span></code>: ttnn.Tensor
-:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">num_slices</span></code>: Number of slices.
-:type * <code class="xref py py-attr docutils literal notranslate"><span class="pre">num_slices</span></code>: int
-:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">slice_index</span></code>: Slice index.
-:type * <code class="xref py py-attr docutils literal notranslate"><span class="pre">slice_index</span></code>: int</p>
-<p>:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">memory_config</span></code>: Memory configuration for the operation.
-:kwtype * <code class="xref py py-attr docutils literal notranslate"><span class="pre">memory_config</span></code>: Optional[ttnn.MemoryConfig]
-:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">output_dtype</span></code>: Output data type, defaults to same as input.
-:kwtype * <code class="xref py py-attr docutils literal notranslate"><span class="pre">output_dtype</span></code>: Optional[ttnn.DataType]</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<ul class="simple">
+<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – input tensor</p></li>
+<li><p><strong>cache_tensor</strong> (<em>ttnn.Tensor</em>) – cache tensor</p></li>
+<li><p><strong>num_slices</strong> (<em>int</em>) – Number of slices.</p></li>
+<li><p><strong>slice_index</strong> (<em>int</em>) – Slice index.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Keyword Arguments<span class="colon">:</span>
+</dt>
+<dd class="field-even">
+<ul class="simple">
+<li><p><strong>memory_config</strong> (<em>Optional</em><em>[</em><em>ttnn.MemoryConfig</em><em>]</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>output_dtype</strong> (<em>Optional</em><em>[</em><em>ttnn.DataType</em><em>]</em>) – Output data type, defaults to same as input. Defaults to <cite>None</cite>.</p></li>
+</ul>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p><em>ttnn.Tensor</em> – the cache tensor with the partial data written.</p>
+</dd>
+</dl>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="doctest highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">interleaved_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">sharded_to_interleaved</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">cache_tensor</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">interleaved_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">sharded_to_interleaved_partial</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">cache_tensor</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>

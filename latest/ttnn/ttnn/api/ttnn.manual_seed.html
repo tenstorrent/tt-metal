@@ -161,7 +161,7 @@
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><strong>seeds</strong> (<em>uint32_t</em><em> or </em><em>ttnn.Tensor</em>) – A single integer seed or a tensor of seeds to initialize the random number generator.</p>
+<p><strong>seeds</strong> (<em>uint32_t</em><em> or </em><em>ttnn.Tensor</em>) – A single integer seed or a tensor of seeds to initialize the random number generator. Pass UINT32_MAX (4294967295) to skip random number generator initialization (rand_tile_init is not called).</p>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>

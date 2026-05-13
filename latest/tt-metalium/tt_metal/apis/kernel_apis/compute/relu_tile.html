@@ -120,9 +120,7 @@
 <dt class="sig sig-object cpp" id="_CPPv4N7ckernel14relu_tile_initEv">
 <span class="target" id="namespaceckernel_1a6a214735fbd70467722ab3af7f2fb87b"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">relu_tile_init</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel14relu_tile_initEv" title="Permalink to this definition"></a><br>
 </dt>
-<dd>
-<p>Please refer to documentation for any_init. </p>
-</dd>
+<dd></dd>
 </dl>
 
 <dl class="cpp function">
@@ -130,7 +128,7 @@
 <span class="target" id="namespaceckernel_1abb21cee43ed0d618c23762c357dcf1c2"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">relu_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel9relu_tileE8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Performs element-wise computation of relu(x) = (0 if x is negative else x) on each element of a tile in DST register at index tile_index. The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>
+<p>Performs element-wise computation of relu(x) = (0 if x is negative else x) on each element of a tile in DST register at index tile_index. The DST register buffer must be in acquired state via <em>tile_regs_acquire</em> call. This call is blocking and is only available on the compute engine.</p>
 <p>Return value: None</p>
 <p></p>
 <table class="docutils align-default">
@@ -173,9 +171,7 @@
 <dt class="sig sig-object cpp" id="_CPPv4N7ckernel18relu_max_tile_initEv">
 <span class="target" id="namespaceckernel_1aebd335c04a4da54f27b29814dc3ba06c"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">relu_max_tile_init</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel18relu_max_tile_initEv" title="Permalink to this definition"></a><br>
 </dt>
-<dd>
-<p>Please refer to documentation for any_init. </p>
-</dd>
+<dd></dd>
 </dl>
 
 <dl class="cpp function">
@@ -183,7 +179,7 @@
 <span class="target" id="namespaceckernel_1ab022361921e28e620e0aa64449d707a8"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">relu_max_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">param0</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel13relu_max_tileE8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Performs element-wise computation of relu max (relu(max(x, upper_limit))) on each element of a tile in DST register at index tile_index. The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>
+<p>Performs element-wise computation of relu max (relu(max(x, upper_limit))) on each element of a tile in DST register at index tile_index. The DST register buffer must be in acquired state via <em>tile_regs_acquire</em> call. This call is blocking and is only available on the compute engine.</p>
 <p>Return value: None</p>
 <p></p>
 <table class="docutils align-default">
@@ -240,9 +236,7 @@
 <dt class="sig sig-object cpp" id="_CPPv4N7ckernel18relu_min_tile_initEv">
 <span class="target" id="namespaceckernel_1accf551de7b8a1527a9f8d2ffde7ec468"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">relu_min_tile_init</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel18relu_min_tile_initEv" title="Permalink to this definition"></a><br>
 </dt>
-<dd>
-<p>Please refer to documentation for any_init. </p>
-</dd>
+<dd></dd>
 </dl>
 
 <dl class="cpp function">
@@ -250,7 +244,7 @@
 <span class="target" id="namespaceckernel_1a2055cc5f849f59581322d4f99aafe7fd"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">relu_min_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">param0</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel13relu_min_tileE8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Performs element-wise computation of relu min (relu(min(x, lower_limit))) on each element of a tile in DST register at index tile_index. The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>
+<p>Performs element-wise computation of relu min (relu(min(x, lower_limit))) on each element of a tile in DST register at index tile_index. The DST register buffer must be in acquired state via <em>tile_regs_acquire</em> call. This call is blocking and is only available on the compute engine.</p>
 <p>Return value: None</p>
 <p></p>
 <table class="docutils align-default">
@@ -307,9 +301,7 @@
 <dt class="sig sig-object cpp" id="_CPPv4N7ckernel20leaky_relu_tile_initEv">
 <span class="target" id="namespaceckernel_1ac696b79d37bcb5188163ffb166566ca6"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">leaky_relu_tile_init</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel20leaky_relu_tile_initEv" title="Permalink to this definition"></a><br>
 </dt>
-<dd>
-<p>Please refer to documentation for any_init. </p>
-</dd>
+<dd></dd>
 </dl>
 
 <dl class="cpp function">
@@ -317,7 +309,7 @@
 <span class="target" id="namespaceckernel_1a5d7638b5d0bc57926375ed28a3546e56"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">leaky_relu_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">slope</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel15leaky_relu_tileE8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Performs element-wise computation of leaky relu (relu(x) + slope*-relu(-x)) on each element of a tile in DST register at index tile_index. The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>
+<p>Performs element-wise computation of leaky relu (relu(x) + slope*-relu(-x)) on each element of a tile in DST register at index tile_index. The DST register buffer must be in acquired state via <em>tile_regs_acquire</em> call. This call is blocking and is only available on the compute engine.</p>
 <p>Return value: None</p>
 <p></p>
 <table class="docutils align-default">

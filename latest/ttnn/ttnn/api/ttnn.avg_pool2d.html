@@ -142,28 +142,28 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.avg_pool2d">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">avg_pool2d</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">input_tensor_a:</span> <span class="pre">ttnn.Tensor,</span> <span class="pre">batch_size:</span> <span class="pre">int,</span> <span class="pre">input_h:</span> <span class="pre">int,</span> <span class="pre">input_w:</span> <span class="pre">int,</span> <span class="pre">channels:</span> <span class="pre">int,</span> <span class="pre">kernel_size:</span> <span class="pre">List</span> <span class="pre">of</span> <span class="pre">[int],</span> <span class="pre">stride:</span> <span class="pre">List</span> <span class="pre">of</span> <span class="pre">[int],</span> <span class="pre">padding:</span> <span class="pre">List</span> <span class="pre">of</span> <span class="pre">[int],</span> <span class="pre">ceil_mode:</span> <span class="pre">bool,</span> <span class="pre">count_include_pad:</span> <span class="pre">bool,</span> <span class="pre">divisor_override:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">None,</span> <span class="pre">*,</span> <span class="pre">memory_config:</span> <span class="pre">ttnn.MemoryConfig</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">applied_shard_scheme:</span> <span class="pre">ttnn.TensorMemoryLayout</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">deallocate_input:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False,</span> <span class="pre">reallocate_halo_output:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">True,</span> <span class="pre">dtype:</span> <span class="pre">ttnn.DataType</span> <span class="pre">=</span> <span class="pre">ttnn.bfloat16,</span> <span class="pre">output_layout:</span> <span class="pre">ttnn.Layout</span> <span class="pre">=</span> <span class="pre">ttnn.ROW_MAJOR_LAYOUT,</span> <span class="pre">compute_kernel_config:</span> <span class="pre">DeviceComputeKernelConfig</span> <span class="pre">=</span> <span class="pre">None</span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.avg_pool2d" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">avg_pool2d</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">input_tensor:</span> <span class="pre">ttnn.Tensor,</span> <span class="pre">batch_size:</span> <span class="pre">int,</span> <span class="pre">input_h:</span> <span class="pre">int,</span> <span class="pre">input_w:</span> <span class="pre">int,</span> <span class="pre">channels:</span> <span class="pre">int,</span> <span class="pre">kernel_size:</span> <span class="pre">List</span> <span class="pre">of</span> <span class="pre">[int],</span> <span class="pre">stride:</span> <span class="pre">List</span> <span class="pre">of</span> <span class="pre">[int],</span> <span class="pre">padding:</span> <span class="pre">List</span> <span class="pre">of</span> <span class="pre">[int],</span> <span class="pre">ceil_mode:</span> <span class="pre">bool,</span> <span class="pre">count_include_pad:</span> <span class="pre">bool,</span> <span class="pre">divisor_override:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">None,</span> <span class="pre">*,</span> <span class="pre">memory_config:</span> <span class="pre">ttnn.MemoryConfig</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">applied_shard_scheme:</span> <span class="pre">ttnn.TensorMemoryLayout</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">deallocate_input:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False,</span> <span class="pre">reallocate_halo_output:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">True,</span> <span class="pre">dtype:</span> <span class="pre">ttnn.DataType</span> <span class="pre">=</span> <span class="pre">ttnn.bfloat16,</span> <span class="pre">output_layout:</span> <span class="pre">ttnn.Layout</span> <span class="pre">=</span> <span class="pre">ttnn.ROW_MAJOR_LAYOUT,</span> <span class="pre">compute_kernel_config:</span> <span class="pre">DeviceComputeKernelConfig</span> <span class="pre">=</span> <span class="pre">None</span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.avg_pool2d" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Applies an average pool convolution to the input tensor. The resulting output Tensor will contain the average
-value for each channel within a kernel window. The input tensor is expected to be in [NHW, C] format and
-should be on the device. Height, width and block sharding schemes are supported.</p>
+<p>Applies average pooling to the input tensor. Each output element contains the average value within a
+sliding kernel window per channel. The input tensor is expected to be in [NHW, C] or [N, H, W, C]
+format and should be on the device. Height, width and block sharding schemes are supported.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor_a</strong> (<em>ttnn.Tensor</em>) – the tensor to be convolved.</p></li>
-<li><p><strong>batch_size</strong> (<em>int</em>) – the number of batches (N in a [N, C, H, W] shaped tensor).</p></li>
-<li><p><strong>input_h</strong> (<em>int</em>) – the height of the input tensor (H in a [N, C, H, W] shaped tensor).</p></li>
-<li><p><strong>input_w</strong> (<em>int</em>) – the width of the input tensor (W in a [N, C, H, W] shaped tensor).</p></li>
-<li><p><strong>channels</strong> (<em>int</em>) – the number of channels (C in a [N, C, H, W] shaped tensor).</p></li>
+<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – the input tensor.</p></li>
+<li><p><strong>batch_size</strong> (<em>int</em>) – the number of batches (N).</p></li>
+<li><p><strong>input_h</strong> (<em>int</em>) – the height of the input tensor (H).</p></li>
+<li><p><strong>input_w</strong> (<em>int</em>) – the width of the input tensor (W).</p></li>
+<li><p><strong>channels</strong> (<em>int</em>) – the number of channels (C).</p></li>
 <li><p><strong>kernel_size</strong> (<em>List</em><em> of </em><em>[</em><em>int</em><em>]</em>) – the (h, w) size of the kernel window.</p></li>
 <li><p><strong>stride</strong> (<em>List</em><em> of </em><em>[</em><em>int</em><em>]</em>) – the (h, w) stride of the kernel window.</p></li>
-<li><p><strong>padding</strong> (<em>List</em><em> of </em><em>[</em><em>int</em><em>]</em>) – the (h, w) padding of the input tensor.</p></li>
-<li><p><strong>ceil_mode</strong> (<em>bool</em>) – When True, uses ‘ceiling’ function instead of ‘floor’ function in the formula to compute output shape. Default: False.</p></li>
+<li><p><strong>padding</strong> (<em>List</em><em> of </em><em>[</em><em>int</em><em>]</em>) – the (h, w) or (top, bottom, left, right) padding.</p></li>
+<li><p><strong>ceil_mode</strong> (<em>bool</em>) – When True, uses ‘ceiling’ instead of ‘floor’ to compute output shape. Default: False.</p></li>
 <li><p><strong>count_include_pad</strong> (<em>bool</em>) – When True, includes zero-padding in the avg calculation. Default: True.</p></li>
-<li><p><strong>divisor_override</strong> (<em>int</em><em>, </em><em>optional</em>) – If specified, it will be used as a divisor, otherwise size of the pooling region will be used. Default: None. Not currently supported in ttnn.</p></li>
+<li><p><strong>divisor_override</strong> (<em>int</em><em>, </em><em>optional</em>) – If specified, it will be used as a divisor, otherwise size of the pooling region will be used. Default: None.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
@@ -182,7 +182,7 @@ should be on the device. Height, width and block sharding schemes are supported.
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>ttnn.Tensor</em> – the average pool convolved output tensor.</p>
+<p><em>ttnn.Tensor</em> – the output tensor.</p>
 </dd>
 </dl>
 <div class="admonition-example admonition">

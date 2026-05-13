@@ -376,20 +376,17 @@
 <a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#debug-print-api">Debug Print API</a><ul>
 <li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#printing-a-tile-in-a-dataflow-kernel">Printing a Tile in a Dataflow Kernel</a></li>
 <li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#caveats-and-best-practices">Caveats and Best Practices</a></li>
-<li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#exercise-4-using-dprint-to-debug-a-kernel">Exercise 4: Using DPRINT to Debug a Kernel</a></li>
 </ul>
 </li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#exercise-4-using-device-print-to-debug-a-kernel">Exercise 4: Using DEVICE_PRINT to Debug a Kernel</a></li>
 <li class="toctree-l4">
 <a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#debugging-hangs-using-stack-traces">Debugging Hangs using Stack Traces</a><ul>
 <li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#tt-triage-dependencies"><code class="docutils literal notranslate"><span class="pre">tt-triage</span></code> Dependencies</a></li>
-<li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#exercise-5-using-tt-triage-to-debug-a-hang">Exercise 5: Using tt-triage to Debug a Hang</a></li>
 </ul>
 </li>
-<li class="toctree-l4">
-<a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#device-performance-profiling">Device Performance Profiling</a><ul>
-<li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#exercise-6-using-device-profiling-to-profile-kernels">Exercise 6: Using Device Profiling to Profile Kernels</a></li>
-</ul>
-</li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#exercise-5-using-tt-triage-to-debug-a-hang">Exercise 5: Using tt-triage to Debug a Hang</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#device-performance-profiling">Device Performance Profiling</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#exercise-6-using-device-profiling-to-profile-kernels">Exercise 6: Using Device Profiling to Profile Kernels</a></li>
 </ul>
 </li>
 <li class="toctree-l3">
@@ -399,6 +396,80 @@
 </li>
 <li class="toctree-l3"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#conclusion">Conclusion</a></li>
 <li class="toctree-l3"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#troubleshooting-and-additional-resources">Troubleshooting and Additional Resources</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="tt_metal/labs/matmul/lab2/lab2.html">Lab 2: Multi Core Matrix Multiplication</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/labs/matmul/lab2/lab2.html#introduction">Introduction</a></li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/labs/matmul/lab2/lab2.html#from-single-core-to-multi-core-matrix-multiplication">From Single Core to Multi Core Matrix Multiplication</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab2/lab2.html#work-distribution-for-multi-core-programs">Work Distribution for Multi Core Programs</a></li>
+<li class="toctree-l4">
+<a class="reference internal" href="tt_metal/labs/matmul/lab2/lab2.html#work-distribution-in-tt-metalium">Work Distribution in TT-Metalium</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab2/lab2.html#determine-number-of-available-tensix-cores">Determine Number of Available Tensix Cores</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab2/lab2.html#split-work-among-tensix-cores">Split Work Among Tensix Cores</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab2/lab2.html#create-circular-buffers-and-kernels-on-multiple-cores">Create Circular Buffers and Kernels on Multiple Cores</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab2/lab2.html#set-per-core-runtime-arguments">Set Per-Core Runtime Arguments</a></li>
+</ul>
+</li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab2/lab2.html#inspecting-and-choosing-cores">Inspecting and Choosing Cores</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab2/lab2.html#exercise-1-multi-core-matrix-multiplication">Exercise 1: Multi Core Matrix Multiplication</a></li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/labs/matmul/lab2/lab2.html#data-reuse-in-multi-core-matrix-multiplication">Data Reuse in Multi Core Matrix Multiplication</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab2/lab2.html#motivation">Motivation</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab2/lab2.html#blocked-matrix-multiplication">Blocked Matrix Multiplication</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab2/lab2.html#limiting-on-chip-memory-usage">Limiting On-Chip Memory Usage</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab2/lab2.html#blocked-matrix-multiplication-with-data-reuse-pseudocode">Blocked Matrix Multiplication with Data Reuse Pseudocode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab2/lab2.html#data-reuse-evaluation">Data Reuse Evaluation</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab2/lab2.html#blocked-matrix-multiplication-in-tt-metalium">Blocked Matrix Multiplication in TT-Metalium</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab2/lab2.html#exercise-2-multi-core-matrix-multiplication-with-data-reuse">Exercise 2: Multi Core Matrix Multiplication with Data Reuse</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/labs/matmul/lab2/lab2.html#potential-additional-optimizations">Potential Additional Optimizations</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/labs/matmul/lab2/lab2.html#conclusion">Conclusion</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="tt_metal/labs/matmul/lab3/lab3.html">Lab 3: Multicast for Improved Data Reuse in Multi Core Matrix Multiplication</a><ul>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/labs/matmul/lab3/lab3.html#introduction">Introduction</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab3/lab3.html#high-level-motivation">High-Level Motivation</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/labs/matmul/lab3/lab3.html#background-tenstorrent-noc-and-multicast">Background: Tenstorrent NoC and Multicast</a></li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/labs/matmul/lab3/lab3.html#example-multicast-program">Example Multicast Program</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab3/lab3.html#synchronization-with-semaphores">Synchronization with Semaphores</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab3/lab3.html#high-level-multicast-protocol">High-Level Multicast Protocol</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab3/lab3.html#overview-of-provided-files">Overview of Provided Files</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab3/lab3.html#logical-vs-device-coordinates">Logical vs. Device Coordinates</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab3/lab3.html#data-movement-processors-and-noc-selection">Data Movement Processors and NoC Selection</a></li>
+<li class="toctree-l4">
+<a class="reference internal" href="tt_metal/labs/matmul/lab3/lab3.html#receiver-kernel-overview">Receiver Kernel Overview</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab3/lab3.html#semaphores-local-vs-remote-access">Semaphores: Local vs. Remote Access</a></li>
+</ul>
+</li>
+<li class="toctree-l4">
+<a class="reference internal" href="tt_metal/labs/matmul/lab3/lab3.html#sender-kernel-overview">Sender Kernel Overview</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab3/lab3.html#cb-address-synchronization">CB Address Synchronization</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab3/lab3.html#multicast-operation">Multicast Operation</a></li>
+</ul>
+</li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab3/lab3.html#compute-and-writer-kernels">Compute and Writer Kernels</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab3/lab3.html#multicast-and-double-buffering">Multicast and Double Buffering</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab3/lab3.html#multicast-exclusions">Multicast Exclusions</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/labs/matmul/lab3/lab3.html#debugging-hangs-with-watcher">Debugging Hangs with Watcher</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/labs/matmul/lab3/lab3.html#exercise-1-debugging-multicast-issues-using-watcher">Exercise 1: Debugging Multicast Issues Using Watcher</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/labs/matmul/lab3/lab3.html#exercise-2-extending-the-standalone-multicast-example">Exercise 2: Extending the Standalone Multicast Example</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/labs/matmul/lab3/lab3.html#exercise-3-batched-multicast-for-improved-throughput">Exercise 3: Batched Multicast for Improved Throughput</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/labs/matmul/lab3/lab3.html#applying-multicast-to-multi-core-matrix-multiplication">Applying Multicast to Multi Core Matrix Multiplication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/labs/matmul/lab3/lab3.html#exercise-4-multi-core-matrix-multiplication-with-multicast">Exercise 4: Multi Core Matrix Multiplication with Multicast</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/labs/matmul/lab3/lab3.html#conclusion">Conclusion</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/labs/matmul/lab3/lab3.html#appendix-a-watcher-log-file-format">Appendix A: Watcher Log File Format</a></li>
 </ul>
 </li>
 </ul>
@@ -524,6 +595,67 @@
 <a class="reference internal" href="tt_metal/apis/kernel_apis.html#data-movement">Data Movement</a><ul>
 <li class="toctree-l4">
 <a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/data_movement.html">Data Movement APIs</a><ul>
+<li class="toctree-l5">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html">Device 2.0 Data Movement API Migration Guide</a><ul>
+<li class="toctree-l6"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#table-of-contents">Table of Contents</a></li>
+<li class="toctree-l6"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#overview">Overview</a></li>
+<li class="toctree-l6"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#header-files">Header Files</a></li>
+<li class="toctree-l6">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#key-classes">Key Classes</a><ul>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#experimental-noc"><code class="docutils literal notranslate"><span class="pre">experimental::Noc</span></code></a></li>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#experimental-circularbuffer"><code class="docutils literal notranslate"><span class="pre">experimental::CircularBuffer</span></code></a></li>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#experimental-corelocalmem-t"><code class="docutils literal notranslate"><span class="pre">experimental::CoreLocalMem&lt;T&gt;</span></code></a></li>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#experimental-semaphore"><code class="docutils literal notranslate"><span class="pre">experimental::Semaphore</span></code></a></li>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#endpoints">Endpoints</a></li>
+</ul>
+</li>
+<li class="toctree-l6">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#migration-patterns">Migration Patterns</a><ul>
+<li class="toctree-l7">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#noc-operations">NoC Operations</a><ul>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#async-read">Async Read</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#async-write">Async Write</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#async-write-with-state-optimized-repeated-writes">Async Write with State (Optimized Repeated Writes)</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#multicast-write">Multicast Write</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#transaction-id-support">Transaction ID Support</a></li>
+</ul>
+</li>
+<li class="toctree-l7">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#circular-buffer-operations">Circular Buffer Operations</a><ul>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#basic-operations">Basic Operations</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#using-circularbuffer-with-noc">Using CircularBuffer with Noc</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#selecting-read-write-pointer-for-noc-async-read-write-api">Selecting Read/Write Pointer for Noc Async Read/Write API</a></li>
+</ul>
+</li>
+<li class="toctree-l7">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#semaphore-operations">Semaphore Operations</a><ul>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#local-semaphore-operations">Local Semaphore Operations</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#remote-semaphore-operations">Remote Semaphore Operations</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#multicast-semaphore">Multicast Semaphore</a></li>
+</ul>
+</li>
+<li class="toctree-l7">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#memory-access">Memory Access</a><ul>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#safe-local-memory-access">Safe Local Memory Access</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#struct-access">Struct Access</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#pointer-arithmetic">Pointer Arithmetic</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l6">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#complete-migration-examples">Complete Migration Examples</a><ul>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#example-1-tile-read-kernel">Example 1: Tile Read Kernel</a></li>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#example-2-core-to-core-communication">Example 2: Core-to-Core Communication</a></li>
+</ul>
+</li>
+<li class="toctree-l6">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#troubleshooting">Troubleshooting</a><ul>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/device_api_migration_guide.html#common-issues">Common Issues</a></li>
+</ul>
+</li>
+</ul>
+</li>
 <li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_read.html">noc_async_read</a></li>
 <li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_read_set_state.html">noc_async_read_set_state</a></li>
 <li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_read_with_state.html">noc_async_read_with_state</a></li>
@@ -658,7 +790,6 @@
 <li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/unary_le_tile.html">unary_le_tile</a></li>
 <li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/unary_max_tile.html">unary_max_tile</a></li>
 <li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/unary_min_tile.html">unary_min_tile</a></li>
-<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/max_tile.html">max_tile</a></li>
 <li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/binary_max_tile.html">binary_max_tile</a></li>
 <li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/binary_min_tile.html">binary_min_tile</a></li>
 <li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/ltz_tile.html">ltz_tile</a></li>
@@ -873,6 +1004,48 @@
 </ul>
 </li>
 <li class="toctree-l2">
+<a class="reference internal" href="tools/checkpoint.html">Debug Checkpoints</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tools/checkpoint.html#quick-start">Quick Start</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/checkpoint.html#overview">Overview</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/checkpoint.html#enabling">Enabling</a></li>
+<li class="toctree-l3">
+<a class="reference internal" href="tools/checkpoint.html#single-core-checkpoints">Single-Core Checkpoints</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tools/checkpoint.html#usage">Usage</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tools/checkpoint.html#knobs">Knobs</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tools/checkpoint.html#how-it-works">How it works</a></li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="tools/checkpoint.html#global-checkpoints-cross-core">Global Checkpoints (Cross-Core)</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tools/checkpoint.html#id1">Usage</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tools/checkpoint.html#id2">How it works</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="tools/checkpoint.html#output-format">Output Format</a></li>
+<li class="toctree-l3">
+<a class="reference internal" href="tools/checkpoint.html#standalone-dump-utilities">Standalone Dump Utilities</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tools/checkpoint.html#debug-dump-cb-cb-id-num-words"><code class="docutils literal notranslate"><span class="pre">debug_dump_cb(cb_id,</span> <span class="pre">num_words)</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="tools/checkpoint.html#debug-dump-cb-typed-cb-id-tile-idx"><code class="docutils literal notranslate"><span class="pre">debug_dump_cb_typed(cb_id,</span> <span class="pre">tile_idx)</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="tools/checkpoint.html#debug-dump-l1-addr-num-words"><code class="docutils literal notranslate"><span class="pre">debug_dump_l1(addr,</span> <span class="pre">num_words)</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="tools/checkpoint.html#comparison-with-dprint-tensix-dest-regs">Comparison with dprint_tensix_dest_regs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/checkpoint.html#files">Files</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="tools/device_print.html">Device Debug Print</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tools/device_print.html#overview">Overview</a></li>
+<li class="toctree-l3">
+<a class="reference internal" href="tools/device_print.html#enabling">Enabling</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tools/device_print.html#strings">Strings</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tools/device_print.html#enums">Enums</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tools/device_print.html#circular-buffers">Circular Buffers</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2">
 <a class="reference internal" href="tools/watcher.html">Watcher</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="tools/watcher.html#overview">Overview</a></li>
 <li class="toctree-l3"><a class="reference internal" href="tools/watcher.html#enabling">Enabling</a></li>
@@ -885,6 +1058,8 @@
 <li class="toctree-l3"><a class="reference internal" href="tools/watcher.html#stack-usage-measurement">Stack Usage Measurement</a></li>
 <li class="toctree-l3"><a class="reference internal" href="tools/watcher.html#debug-delays">Debug Delays</a></li>
 <li class="toctree-l3"><a class="reference internal" href="tools/watcher.html#eth-link">Eth Link</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/watcher.html#circular-buffer-out-of-bounds">Circular Buffer Out-of-Bounds</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/watcher.html#hw-exceptions-quasar-only">HW Exceptions (Quasar only)</a></li>
 </ul>
 </li>
 <li class="toctree-l2">
@@ -944,13 +1119,17 @@
 <a class="reference internal" href="tools/llk_asserts.html">LLK Asserts</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="tools/llk_asserts.html#overview">Overview</a></li>
 <li class="toctree-l3"><a class="reference internal" href="tools/llk_asserts.html#enabling">Enabling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/llk_asserts.html#quick-start-running-a-test-with-llk-asserts">Quick-start: Running a Test with LLK Asserts</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/llk_asserts.html#llk-assert-macro">LLK_ASSERT Macro</a></li>
 <li class="toctree-l3"><a class="reference internal" href="tools/llk_asserts.html#what-llk-asserts-validate">What LLK Asserts Validate</a></li>
 <li class="toctree-l3"><a class="reference internal" href="tools/llk_asserts.html#examples-from-tt-llk-code">Examples from tt-llk Code</a></li>
 <li class="toctree-l3"><a class="reference internal" href="tools/llk_asserts.html#location-in-codebase">Location in Codebase</a></li>
 <li class="toctree-l3"><a class="reference internal" href="tools/llk_asserts.html#ci-cd-integration">CI/CD Integration</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/llk_asserts.html#adding-new-llk-assert-required-procedure">Adding New LLK_ASSERT — Required Procedure</a></li>
 <li class="toctree-l3"><a class="reference internal" href="tools/llk_asserts.html#when-to-use-llk-asserts">When to Use LLK Asserts</a></li>
 <li class="toctree-l3"><a class="reference internal" href="tools/llk_asserts.html#performance-impact">Performance Impact</a></li>
 <li class="toctree-l3"><a class="reference internal" href="tools/llk_asserts.html#debugging-failed-llk-asserts">Debugging Failed LLK Asserts</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/llk_asserts.html#real-world-examples">Real-World Examples</a></li>
 <li class="toctree-l3"><a class="reference internal" href="tools/llk_asserts.html#see-also">See Also</a></li>
 </ul>
 </li>
@@ -973,6 +1152,14 @@
 <li class="toctree-l3"><a class="reference internal" href="tools/triage.html#running">Running</a></li>
 <li class="toctree-l3"><a class="reference internal" href="tools/triage.html#arguments">Arguments</a></li>
 <li class="toctree-l3"><a class="reference internal" href="tools/triage.html#extending">Extending</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="tools/noc_debug_dump.html">NOC Debug Dump</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tools/noc_debug_dump.html#overview">Overview</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/noc_debug_dump.html#enabling">Enabling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/noc_debug_dump.html#example">Example</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/noc_debug_dump.html#limitations">Limitations</a></li>
 </ul>
 </li>
 </ul>

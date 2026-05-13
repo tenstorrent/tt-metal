@@ -228,8 +228,7 @@
 </ol>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="c1">// tt_metal/programming_examples/custom_sfpi_add/kernels/compute/tiles_add.cpp</span>
-<span class="k">namespace</span><span class="w"> </span><span class="nn">NAMESPACE</span><span class="w"> </span><span class="p">{</span>
-<span class="kt">void</span><span class="w"> </span><span class="n">MAIN</span><span class="w"> </span><span class="p">{</span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">n_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
 
 <span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">cb_in0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_0</span><span class="p">;</span>
@@ -259,7 +258,6 @@
 <span class="w">        </span><span class="n">tile_regs_release</span><span class="p">();</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="p">}</span>
-<span class="p">}</span><span class="w"> </span><span class="c1">// namespace NAMESPACE</span>
 </pre></div>
 </div>
 </section>
@@ -295,7 +293,7 @@
 
 <span class="c1">// High-level API function</span>
 <span class="kt">void</span><span class="w"> </span><span class="nf">my_add_tile</span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">idx_dst0</span><span class="p">,</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">idx_dst1</span><span class="p">,</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">idx_out0</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="n">MATH</span><span class="p">(</span><span class="n">_llk_math_eltwise_binary_sfpu_params_</span><span class="o">&lt;</span><span class="nb">false</span><span class="o">&gt;</span><span class="p">(</span><span class="n">add_tile_face</span><span class="p">,</span><span class="w"> </span><span class="n">idx_dst0</span><span class="p">,</span><span class="w"> </span><span class="n">idx_dst1</span><span class="p">,</span><span class="w"> </span><span class="n">idx_out0</span><span class="p">));</span>
+<span class="w">    </span><span class="n">MATH</span><span class="p">(</span><span class="n">_llk_math_eltwise_binary_sfpu_params_</span><span class="p">(</span><span class="n">add_tile_face</span><span class="p">,</span><span class="w"> </span><span class="n">idx_dst0</span><span class="p">,</span><span class="w"> </span><span class="n">idx_dst1</span><span class="p">,</span><span class="w"> </span><span class="n">idx_out0</span><span class="p">));</span>
 <span class="p">}</span>
 </pre></div>
 </div>

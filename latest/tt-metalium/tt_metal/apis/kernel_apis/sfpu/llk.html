@@ -312,10 +312,10 @@ namespace.</p>
 <p>However note that <code class="docutils literal notranslate"><span class="pre">v_if</span></code> and alike works via predication. In other words, both sides of the conditional are executed and only the enabled vector elements are written. RISC-V instructions are executed normally. For example:</p>
 <div class="highlight-c++ notranslate">
 <div class="highlight"><pre><span></span><span class="n">v_if</span><span class="w"> </span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="n">DPRINT</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">"a &lt; b</span><span class="se">\n</span><span class="s">"</span><span class="p">;</span>
+<span class="w">    </span><span class="n">DEVICE_PRINT</span><span class="p">(</span><span class="s">"a &lt; b</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
 <span class="p">}</span><span class="w"> </span><span class="n">v_else</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">b</span><span class="p">;</span>
-<span class="w">    </span><span class="n">DPRINT</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">"a &gt;= b</span><span class="se">\n</span><span class="s">"</span><span class="p">;</span>
+<span class="w">    </span><span class="n">DEVICE_PRINT</span><span class="p">(</span><span class="s">"a &gt;= b</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
 <span class="p">}</span>
 <span class="n">v_endif</span><span class="p">;</span>
 </pre></div>
@@ -634,10 +634,10 @@ example:</p>
 <p>loads dst_reg[0] and dst_reg[1] into temporary LREGs (as expected).</p>
 <p>The compiler will not spill registers.  Exceeding the number of registers
 available will result in the cryptic: <code class="docutils literal notranslate"><span class="pre">error:</span> <span class="pre">cannot</span> <span class="pre">store</span> <span class="pre">SFPU</span> <span class="pre">register</span>
-<span class="pre">(reigster</span> <span class="pre">spill?)</span> <span class="pre">-</span> <span class="pre">exiting!</span></code> without a line number.</p>
+<span class="pre">(register</span> <span class="pre">spill?)</span> <span class="pre">-</span> <span class="pre">exiting!</span></code> without a line number.</p>
 <p>The compiler does a reasonable job with lifetime analysis when assigning
 variables to registers.  Reloading or recalculating results helps the compiler
-free up and re-use registers and is a good way to correct a spilling error.</p>
+free up and reuse registers and is a good way to correct a spilling error.</p>
 </section>
 <section id="optimizer">
 <h3>Optimizer<a class="headerlink" href="#optimizer" title="Permalink to this heading"></a>
@@ -719,7 +719,7 @@ Therefore, all function calls must be inlined.  To ensure this use
 </h3>
 <p>The compiler does not implement register spilling.  Since there are only 8 general purpose
 LRegs, running out of registers is not an uncommon occurrence.  If you see the
-following: <code class="docutils literal notranslate"><span class="pre">error:</span> <span class="pre">cannot</span> <span class="pre">store</span> <span class="pre">SFPU</span> <span class="pre">register</span> <span class="pre">(reigster</span> <span class="pre">spill?)</span> <span class="pre">-</span> <span class="pre">exiting!</span></code>
+following: <code class="docutils literal notranslate"><span class="pre">error:</span> <span class="pre">cannot</span> <span class="pre">store</span> <span class="pre">SFPU</span> <span class="pre">register</span> <span class="pre">(register</span> <span class="pre">spill?)</span> <span class="pre">-</span> <span class="pre">exiting!</span></code>
 you have most likely run out of registers.</p>
 <p>You can potentially spill registers by storing values to <code class="docutils literal notranslate"><span class="pre">l_reg[]</span></code> and
 reloading them later. However this is not done automatically via the compiler

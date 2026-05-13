@@ -124,7 +124,7 @@
 <span id="matmul-multi-core-optimized-data-mcast-example"></span><h1>Data Multicasting in <cite>matmul_multicore_reuse_mcast</cite><a class="headerlink" href="#data-multicasting-in-matmul-multicore-reuse-mcast" title="Permalink to this heading"></a>
 </h1>
 <p><strong>Note</strong>: This example only works on Grayskull.</p>
-<p>Let’s level up our code and show how you can leverage and fully customize METALIUM’s core-to-core communication through a data broadcasting scheme. METALIUM offers you customizability for creating your very own compute fabric, allowing precise control over which cores disseminate, collect, or process segments of work. This example builds off of the data_reuse one, so we employ the same intemediate (partial) results handling scheme on-core.  However, rather than map tile-work statically to your coregrid, we map in0’s rows and in1’s columns to the coregrid’s edges, and cascade work core-to-core dynamically.  A fun tidbit: “torrent” in Tenstorrent pays homage to this concept of tensor computation flowing like an ultra fast stream of water.</p>
+<p>Let’s level up our code and show how you can leverage and fully customize METALIUM’s core-to-core communication through a data broadcasting scheme. METALIUM offers you customizability for creating your very own compute fabric, allowing precise control over which cores disseminate, collect, or process segments of work. This example builds off of the data_reuse one, so we employ the same intermediate (partial) results handling scheme on-core.  However, rather than map tile-work statically to your coregrid, we map in0’s rows and in1’s columns to the coregrid’s edges, and cascade work core-to-core dynamically.  A fun tidbit: “torrent” in Tenstorrent pays homage to this concept of tensor computation flowing like an ultra fast stream of water.</p>
 <section id="additional-compile-time-argument">
 <h2>Additional Compile-Time Argument<a class="headerlink" href="#additional-compile-time-argument" title="Permalink to this heading"></a>
 </h2>
@@ -183,7 +183,7 @@
 </blockquote>
 </li>
 <li>
-<p><strong>``all_except_left_column``</strong>: Designates which cores will peform their share of in0 and in1 tile work, and calculate their partial results.</p>
+<p><strong>``all_except_left_column``</strong>: Designates which cores will perform their share of in0 and in1 tile work, and calculate their partial results.</p>
 <blockquote>
 <div>
 <div class="highlight-cpp notranslate">
@@ -202,7 +202,7 @@
 <span class="w">    </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_x</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_y</span><span class="p">},</span><span class="w"> </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_x</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_y</span><span class="p">});</span>
 </pre></div>
 </div>
-<p>Then we mcast send in0 rows of work vertically down the coregrid’s left_column (from DRAM into each of these core’s L1).  These left_column cores are responsible for disseminating the <strong>same</strong> in0 row tile data to each core, thereby leveraging the data reuse scheme as we mentioned in the last section.  We also ensure they are desginated as receiver cores because they will also take on in1 column work.</p>
+<p>Then we mcast send in0 rows of work vertically down the coregrid’s left_column (from DRAM into each of these core’s L1).  These left_column cores are responsible for disseminating the <strong>same</strong> in0 row tile data to each core, thereby leveraging the data reuse scheme as we mentioned in the last section.  We also ensure they are designated as receiver cores because they will also take on in1 column work.</p>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="n">CoreRange</span><span class="w"> </span><span class="nf">in0_sender_in1_receiver</span><span class="p">(</span>
 <span class="w">    </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_x</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_y</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">},</span>
@@ -216,7 +216,7 @@
 <span class="w">    </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_x</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">num_cores_c</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_y</span><span class="p">});</span>
 </pre></div>
 </div>
-<p>The remining tiles act as receivers for both in0 and in1 tile data.  Essentially we are computing output_tile work (partial results of our output matrix) on each core, wherein each core has been simultaneously mcasted a unique chunk of in0 and in1 tile data to compute on.</p>
+<p>The remaining tiles act as receivers for both in0 and in1 tile data.  Essentially we are computing output_tile work (partial results of our output matrix) on each core, wherein each core has been simultaneously mcasted a unique chunk of in0 and in1 tile data to compute on.</p>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="n">CoreRange</span><span class="w"> </span><span class="nf">in0_receiver_in1_receiver</span><span class="p">(</span>
 <span class="w">    </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_x</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_y</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">},</span>
@@ -250,7 +250,7 @@
 <section id="multicast-reader-writer-kernel-setup">
 <h2>Multicast Reader/Writer Kernel Setup<a class="headerlink" href="#multicast-reader-writer-kernel-setup" title="Permalink to this heading"></a>
 </h2>
-<p>In datareuse, we spawned reader and writer kernels per core.  In mcast, we have desginated core ranges (or more generally speaking, “groups”), and METALIUM gives us functionality to relegate a certain type of reader/writer kernel to a group.</p>
+<p>In datareuse, we spawned reader and writer kernels per core.  In mcast, we have designated core ranges (or more generally speaking, “groups”), and METALIUM gives us functionality to relegate a certain type of reader/writer kernel to a group.</p>
 <p>Below, let’s set some core ID’s associated with a specific sender-receiver kernel.  Take note that each ID is designated as one of two data movement processors, NCRISC (loading data from DRAM to L1) or BRISC (storing data from L1 to DRAM), as defined in the <code class="docutils literal notranslate"><span class="pre">$TT_METAL_HOME/tt_metal/impl/kernels/data_types.hpp</span></code> file.</p>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="c1">// Create reader and writer kernels per core group</span>
@@ -304,7 +304,7 @@
 <section id="new-compute-kernel-fused-bias-addition-and-activation-functions">
 <h2>New Compute Kernel: Fused Bias Addition and Activation Functions<a class="headerlink" href="#new-compute-kernel-fused-bias-addition-and-activation-functions" title="Permalink to this heading"></a>
 </h2>
-<p>Like all the examples preceeding, we call our compute kernel as usual, except here we introduce a new one called “bmm_large_block_zm_fused_bias_activation”.</p>
+<p>Like all the examples preceding, we call our compute kernel as usual, except here we introduce a new one called “bmm_large_block_zm_fused_bias_activation”.</p>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">mm_kernel_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateKernel</span><span class="p">(</span>
 <span class="w">    </span><span class="n">program</span><span class="p">,</span>
@@ -389,7 +389,7 @@
 <section id="kernel-runtime-arguments">
 <h2>Kernel Runtime Arguments<a class="headerlink" href="#kernel-runtime-arguments" title="Permalink to this heading"></a>
 </h2>
-<p>Recall that we just desginated NCRISCs to handle our DRAM-&gt;CoreGrid L1 data movement.  METALIUM lets us pass in a buffer of tensors and dereference them with a stride by multiples of core coordintates.</p>
+<p>Recall that we just designated NCRISCs to handle our DRAM-&gt;CoreGrid L1 data movement.  METALIUM lets us pass in a buffer of tensors and dereference them with a stride by multiples of core coordinates.</p>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">mm_reader_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">src0_dram_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">(),</span><span class="w"> </span><span class="c1">// in0_buffer_addr</span>
@@ -412,9 +412,7 @@
 </div>
 <p>For runtime, we need to set a few more IDs on corner cores of our CoreGrid, that will act solely as worker cores.</p>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">KernelHandle</span><span class="o">&gt;</span><span class="w"> </span><span class="n">reader_kernel_ids</span><span class="p">;</span>
-<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">KernelHandle</span><span class="o">&gt;</span><span class="w"> </span><span class="n">writer_kernel_ids</span><span class="p">;</span>
-<span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">core_idx_y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">core_idx_y</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">num_cores_r</span><span class="p">;</span><span class="w"> </span><span class="n">core_idx_y</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<div class="highlight"><pre><span></span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">core_idx_y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">core_idx_y</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">num_cores_r</span><span class="p">;</span><span class="w"> </span><span class="n">core_idx_y</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">core_idx_x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">core_idx_x</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">num_cores_c</span><span class="p">;</span><span class="w"> </span><span class="n">core_idx_x</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="n">CoreCoord</span><span class="w"> </span><span class="n">core</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="w"> </span><span class="n">start_core_x</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">core_idx_x</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="w"> </span><span class="n">start_core_y</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">core_idx_y</span><span class="p">};</span>
 
@@ -433,7 +431,7 @@
 <span class="w">        </span><span class="k">auto</span><span class="w"> </span><span class="n">bottom_core_physical</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">device</span><span class="o">-&gt;</span><span class="n">worker_core_from_logical_core</span><span class="p">(</span><span class="n">bottom_core</span><span class="p">);</span>
 </pre></div>
 </div>
-<p>At this point we can specificy exactly which worker core plays which role for mcasting in0 and in1 data.  Here we can map the physical core on device with:</p>
+<p>At this point we can specify exactly which worker core plays which role for mcasting in0 and in1 data.  Here we can map the physical core on device with:</p>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">right_core_physical</span><span class="p">.</span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_mcast_dest_noc_start_x</span>
 <span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">right_core_physical</span><span class="p">.</span><span class="n">y</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_mcast_dest_noc_start_y</span>
@@ -457,13 +455,11 @@
 <span class="p">...</span>
 </pre></div>
 </div>
-<p>Finally, we push our IDs into our reader and writer kernel handler vectors, and targets our NCRISC (RISCV_0) and BRISC (RISCV_1) processors.  For our master send core (0,0), which initiates data movement for both matrices in0 and in1:</p>
+<p>Finally, we target our NCRISC (RISCV_0) and BRISC (RISCV_1) processors. For our master send core (0,0), which initiates data movement for both matrices in0 and in1:</p>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="k">if</span><span class="p">(</span><span class="n">core_idx_x</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="k">and</span><span class="w"> </span><span class="n">core_idx_y</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">SetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">mm_reader_kernel_in0_sender_in1_sender_id</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">mm_reader_args</span><span class="p">);</span><span class="w"> </span><span class="c1">// RISCV_0_default</span>
 <span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">SetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">unary_writer_kernel_noc1_id</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">writer_args</span><span class="p">);</span><span class="w"> </span><span class="c1">// RISCV_1_default</span>
-<span class="w">    </span><span class="n">reader_kernel_ids</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">mm_reader_kernel_in0_sender_in1_sender_id</span><span class="p">);</span>
-<span class="w">    </span><span class="n">writer_kernel_ids</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">unary_writer_kernel_noc1_id</span><span class="p">);</span>
 <span class="p">}</span>
 </pre></div>
 </div>
@@ -472,8 +468,6 @@
 <div class="highlight"><pre><span></span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">core_idx_x</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="k">and</span><span class="w"> </span><span class="n">core_idx_y</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">SetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">mm_reader_kernel_in0_sender_in1_receiver_id</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">mm_reader_args</span><span class="p">);</span><span class="w"> </span><span class="c1">// RISCV_0_default</span>
 <span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">SetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">unary_writer_kernel_noc1_id</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">writer_args</span><span class="p">);</span><span class="w"> </span><span class="c1">// RISCV_1_default</span>
-<span class="w">    </span><span class="n">reader_kernel_ids</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">mm_reader_kernel_in0_sender_in1_receiver_id</span><span class="p">);</span>
-<span class="w">    </span><span class="n">writer_kernel_ids</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">unary_writer_kernel_noc1_id</span><span class="p">);</span>
 <span class="p">}</span>
 </pre></div>
 </div>
@@ -482,8 +476,6 @@
 <div class="highlight"><pre><span></span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">core_idx_x</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="k">and</span><span class="w"> </span><span class="n">core_idx_y</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">SetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">mm_reader_kernel_in0_receiver_in1_sender_id</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">mm_reader_args</span><span class="p">);</span><span class="w"> </span><span class="c1">// RISCV_1_default</span>
 <span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">SetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">unary_writer_kernel_noc0_id</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">writer_args</span><span class="p">);</span><span class="w"> </span><span class="c1">// RISCV_0_default</span>
-<span class="w">    </span><span class="n">reader_kernel_ids</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">mm_reader_kernel_in0_receiver_in1_sender_id</span><span class="p">);</span>
-<span class="w">    </span><span class="n">writer_kernel_ids</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">unary_writer_kernel_noc0_id</span><span class="p">);</span>
 <span class="p">}</span>
 </pre></div>
 </div>
@@ -492,8 +484,6 @@
 <div class="highlight"><pre><span></span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">SetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">mm_reader_kernel_in0_receiver_in1_receiver_id</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">mm_reader_args</span><span class="p">);</span><span class="w"> </span><span class="c1">// RISCV_1_default</span>
 <span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">SetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">unary_writer_kernel_noc0_id</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">writer_args</span><span class="p">);</span><span class="w"> </span><span class="c1">// RISCV_0_default</span>
-<span class="w">    </span><span class="n">reader_kernel_ids</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">mm_reader_kernel_in0_receiver_in1_receiver_id</span><span class="p">);</span>
-<span class="w">    </span><span class="n">writer_kernel_ids</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">unary_writer_kernel_noc0_id</span><span class="p">);</span>
 <span class="p">}</span>
 </pre></div>
 </div>

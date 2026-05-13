@@ -165,12 +165,13 @@
 </dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel13fill_tile_intE8uint32_t4uint">
-<span class="target" id="namespaceckernel_1ac7a79dfaa4264d73832098d3b0db3273"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">fill_tile_int</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span>, <span class="n"><span class="pre">uint</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">param0</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel13fill_tile_intE8uint32_t4uint" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4I_10DataFormatEN7ckernel13fill_tile_intEv8uint32_t8uint32_t">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">DataFormat</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">DATA_FORMAT</span></span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1af34540654d02b953b5209667d4525b47"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">fill_tile_int</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">param0</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_10DataFormatEN7ckernel13fill_tile_intEv8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
 <p>Performs element-wise fill operation. The value to be filled in the tile is provided as const param0. The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>
-<p>Return value: None</p>
+<p>
+Return value: None</p>
 <p></p>
 <table class="docutils align-default">
 <thead>
@@ -200,6 +201,13 @@
 </tbody>
 </table>
 
+<dl class="field-list simple">
+<dt class="field-odd">Template Parameters<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p><strong>data_format</strong> – Template argument specifying the data type. Supported data formats are: DataFormat::Int32, DataFormat::UInt32, DataFormat::UInt16.</p>
+</dd>
+</dl>
 </dd>
 </dl>
 

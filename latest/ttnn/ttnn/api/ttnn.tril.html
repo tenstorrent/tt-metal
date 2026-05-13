@@ -186,6 +186,7 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.trunc.html">ttnn.trunc</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.unary_chain.html">ttnn.unary_chain</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.var_hw.html">ttnn.var_hw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.xielu.html">ttnn.xielu</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-binary">Pointwise Binary</a></li>
@@ -257,12 +258,18 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.tril">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">tril</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">diagonal</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.tril" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">tril</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">diagonal</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.tril" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Performs tril function on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">diagonal</span></code>.</p>
+<p>Returns the lower triangular part of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> by zeroing out elements above the specified <code class="xref py py-attr docutils literal notranslate"><span class="pre">diagonal</span></code>.
+Elements on and below the given <code class="xref py py-attr docutils literal notranslate"><span class="pre">diagonal</span></code> are preserved, while elements above it are set to zero.</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">diagonal</span> <span class="pre">=</span> <span class="pre">0</span></code> selects the main diagonal (keeps elements on and below the main diagonal)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">diagonal</span> <span class="pre">&gt;</span> <span class="pre">0</span></code> selects a diagonal above the main diagonal (keeps more elements)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">diagonal</span> <span class="pre">&lt;</span> <span class="pre">0</span></code> selects a diagonal below the main diagonal (keeps fewer elements)</p></li>
+</ul>
 <div class="math notranslate nohighlight">
-\[\mathrm{{output\_tensor}}_i = \verb|tril|(\mathrm{{input\_tensor}}_i, \verb|diagonal|)\]</div>
+\[\mathrm{{output\_tensor}}_i = \verb|tril|(\mathrm{{input\_tensor}}_i, \mathrm{diagonal})\]</div>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
@@ -273,7 +280,7 @@
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>diagonal</strong> (<em>float</em>) – diagonal value. Defaults to <cite>0</cite>.</p></li>
+<li><p><strong>diagonal</strong> (<em>int</em><em>, </em><em>optional</em>) – diagonal value. Defaults to <cite>0</cite>.</p></li>
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
 </ul>
 </dd>
@@ -285,20 +292,18 @@
 </dl>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>Supported dtypes, layouts, and ranks:</p>
+<p>Supported dtypes and layouts:</p>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd">
 <th class="head"><p>Dtypes</p></th>
 <th class="head"><p>Layouts</p></th>
-<th class="head"><p>Ranks</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16, BFLOAT8_B</p></td>
-<td><p>TILE</p></td>
-<td><p>2, 3, 4</p></td>
+<td><p>FLOAT32, BFLOAT16, BFLOAT8_B</p></td>
+<td><p>TILE, ROW_MAJOR</p></td>
 </tr>
 </tbody>
 </table>
@@ -306,12 +311,37 @@
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="highlight-python notranslate">
-<div class="highlight"><pre><span></span><span class="c1"># Create a tensor with random values</span>
-<span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><span class="c1"># Create a 4x4 tensor with values from 1 to 16</span>
+<span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">17</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span>
+    <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span>
+    <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span>
+    <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+<span class="p">)</span>
 
-<span class="c1"># Extract lower triangular part</span>
-<span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">tril</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">diagonal</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Lower triangular: </span><span class="si">{</span><span class="n">output</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="n">output_diag_0</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">tril</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">diagonal</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Lower triangular (diagonal=0): </span><span class="si">{</span><span class="n">output_diag_0</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="c1"># Result:</span>
+<span class="c1"># [[ 1,  0,  0,  0],</span>
+<span class="c1">#  [ 5,  6,  0,  0],</span>
+<span class="c1">#  [ 9, 10, 11,  0],</span>
+<span class="c1">#  [13, 14, 15, 16]]</span>
+
+<span class="n">output_diag_1</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">tril</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">diagonal</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Lower triangular (diagonal=1): </span><span class="si">{</span><span class="n">output_diag_1</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="c1"># Result:</span>
+<span class="c1"># [[ 1,  2,  0,  0],</span>
+<span class="c1">#  [ 5,  6,  7,  0],</span>
+<span class="c1">#  [ 9, 10, 11, 12],</span>
+<span class="c1">#  [13, 14, 15, 16]]</span>
+
+<span class="n">output_diag_neg1</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">tril</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">diagonal</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Lower triangular (diagonal=-1): </span><span class="si">{</span><span class="n">output_diag_neg1</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="c1"># Result:</span>
+<span class="c1"># [[ 0,  0,  0,  0],</span>
+<span class="c1">#  [ 5,  0,  0,  0],</span>
+<span class="c1">#  [ 9, 10,  0,  0],</span>
+<span class="c1">#  [13, 14, 15,  0]]</span>
 </pre></div>
 </div>
 </div>

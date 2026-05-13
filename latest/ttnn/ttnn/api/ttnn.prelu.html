@@ -186,6 +186,7 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.trunc.html">ttnn.trunc</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.unary_chain.html">ttnn.unary_chain</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.var_hw.html">ttnn.var_hw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.xielu.html">ttnn.xielu</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-binary">Pointwise Binary</a></li>
@@ -291,23 +292,22 @@ Elementwise operations operate natively in tile format, tiled tensors are prefer
 L1 sharded layout is preferred, with no broadcast and matching tensor specs for A, B and C.</p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>Supported dtypes, layouts, and ranks:</p>
+<p>Supported dtypes and layouts:</p>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd">
 <th class="head"><p>Dtypes</p></th>
 <th class="head"><p>Layouts</p></th>
-<th class="head"><p>Ranks</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16, BFLOAT8_B</p></td>
-<td><p>TILE</p></td>
-<td><p>2, 3, 4, 5</p></td>
+<td><p>BFLOAT16, BFLOAT8_B, FLOAT32</p></td>
+<td><p>TILE, ROW_MAJOR</p></td>
 </tr>
 </tbody>
 </table>
+<p>If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.</p>
 <p>PReLU supports the case where weight is a scalar or 1D list/array of size=1 or a 1D tensor <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> of size = the second dimension in <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code></p>
 </div>
 <div class="admonition-example admonition">

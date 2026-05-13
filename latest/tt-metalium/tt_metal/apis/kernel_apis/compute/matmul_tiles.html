@@ -117,8 +117,8 @@
 <h1>matmul_tiles<a class="headerlink" href="#matmul-tiles" title="Permalink to this heading"></a>
 </h1>
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel7mm_initE8uint32_t8uint32_t8uint32_tK8uint32_t">
-<span class="target" id="namespaceckernel_1a7da923ead8572a39f426d226c60a2049"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">mm_init</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">in0_cb_id</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">in1_cb_id</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">out_cb_id</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">transpose</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel7mm_initE8uint32_t8uint32_t8uint32_tK8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel7mm_initE8uint32_t8uint32_t8uint32_tK8uint32_t8uint32_t">
+<span class="target" id="namespaceckernel_1a98ec3548059036d6ad4ae29c9ac08a2b"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">mm_init</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">in0_cb_id</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">in1_cb_id</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">out_cb_id</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">transpose</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">call_line</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">__builtin_LINE</span></span><span class="p"><span class="pre">(</span></span><span class="p"><span class="pre">)</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel7mm_initE8uint32_t8uint32_t8uint32_tK8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
 <p>Initialization for matmul_tiles operation. Must be called before matmul_tiles.</p>
@@ -160,7 +160,7 @@
 <td><p>transpose   </p></td>
 <td><p>The transpose flag for performing transpose operation on B   </p></td>
 <td><p>uint32_t   </p></td>
-<td><p>Any positive value will indicate tranpose is set   </p></td>
+<td><p>Any positive value will indicate transpose is set   </p></td>
 <td><p>False   </p></td>
 </tr>
 </tbody>
@@ -213,7 +213,7 @@
 <td><p>transpose   </p></td>
 <td><p>The transpose flag for performing transpose operation on B   </p></td>
 <td><p>uint32_t   </p></td>
-<td><p>Any positive value will indicate tranpose is set   </p></td>
+<td><p>Any positive value will indicate transpose is set   </p></td>
 <td><p>False   </p></td>
 </tr>
 </tbody>
@@ -223,8 +223,8 @@
 </dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel13mm_init_shortE8uint32_t8uint32_tK8uint32_t">
-<span class="target" id="namespaceckernel_1a5c85d04ab406c19b4042fc3b6b013cd2"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">mm_init_short</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">in0_cb_id</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">in1_cb_id</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">transpose</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel13mm_init_shortE8uint32_t8uint32_tK8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel13mm_init_shortE8uint32_t8uint32_tK8uint32_t8uint32_t">
+<span class="target" id="namespaceckernel_1a129a98361d727f2ccd90d2ab811b6a9f"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">mm_init_short</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">in0_cb_id</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">in1_cb_id</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">transpose</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">call_line</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">__builtin_LINE</span></span><span class="p"><span class="pre">(</span></span><span class="p"><span class="pre">)</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel13mm_init_shortE8uint32_t8uint32_tK8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
 <p>A short version of matmul_tiles initialization. Configure the unpacker and math engine to matmul mode.</p>
@@ -259,7 +259,7 @@
 <td><p>transpose   </p></td>
 <td><p>The transpose flag for performing transpose operation on B   </p></td>
 <td><p>uint32_t   </p></td>
-<td><p>Any positive value will indicate tranpose is set   </p></td>
+<td><p>Any positive value will indicate transpose is set   </p></td>
 <td><p>False   </p></td>
 </tr>
 </tbody>

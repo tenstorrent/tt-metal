@@ -186,6 +186,7 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.trunc.html">ttnn.trunc</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.unary_chain.html">ttnn.unary_chain</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.var_hw.html">ttnn.var_hw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.xielu.html">ttnn.xielu</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-binary">Pointwise Binary</a></li>
@@ -257,7 +258,7 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.sigmoid">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">sigmoid</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">vector_mode</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">4</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fast_and_approximate_mode</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.sigmoid" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">sigmoid</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">vector_mode</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">4</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mode</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.SigmoidMode</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">SigmoidMode.Accurate</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.sigmoid" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Applies sigmoid to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p>
@@ -274,7 +275,7 @@
 <dd class="field-even">
 <ul class="simple">
 <li><p><strong>vector_mode</strong> (<em>int</em><em>, </em><em>optional</em>) – Use vector mode to get better performance. Defaults to 4. Use 2 or 4 for different vector modes (2 -&gt; Vector Mode C and 4 -&gt; Vector Mode RC)”.</p></li>
-<li><p><strong>fast_and_approximate_mode</strong> (<em>bool</em><em>, </em><em>optional</em>) – Use the fast and approximate mode. Defaults to <cite>False</cite>.</p></li>
+<li><p><strong>mode</strong> (<em>ttnn.SigmoidMode</em><em>, </em><em>optional</em>) – Select sigmoid mode to use. Defaults to <cite>SigmoidMode.Accurate</cite>.</p></li>
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
 </ul>
@@ -287,20 +288,18 @@
 </dl>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>Supported dtypes, layouts, and ranks:</p>
+<p>Supported dtypes and layouts:</p>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd">
 <th class="head"><p>Dtypes</p></th>
 <th class="head"><p>Layouts</p></th>
-<th class="head"><p>Ranks</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
 <td><p>BFLOAT16</p></td>
-<td><p>TILE</p></td>
-<td><p>2, 3, 4</p></td>
+<td><p>TILE, ROW_MAJOR</p></td>
 </tr>
 </tbody>
 </table>
@@ -314,7 +313,7 @@
 <span class="p">)</span>
 
 <span class="c1"># Apply sigmoid activation function with vector mode</span>
-<span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">sigmoid</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">vector_mode</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span> <span class="n">fast_and_approximate_mode</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">sigmoid</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">vector_mode</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">SigmoidMode</span><span class="o">.</span><span class="n">FastApproximate</span><span class="p">)</span>
 <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Sigmoid: </span><span class="si">{</span><span class="n">output</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 </pre></div>
 </div>

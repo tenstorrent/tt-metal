@@ -27,7 +27,7 @@
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="ttnn.acos" href="ttnn.acos.html" />
-    <link rel="prev" title="ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig" href="ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.html" /> 
+    <link rel="prev" title="ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig" href="ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -186,6 +186,7 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.trunc.html">ttnn.trunc</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.unary_chain.html">ttnn.unary_chain</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.var_hw.html">ttnn.var_hw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.xielu.html">ttnn.xielu</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-binary">Pointwise Binary</a></li>
@@ -257,7 +258,7 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.abs">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">abs</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span> <span class="pre">or</span> <span class="pre">ComplexTensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.abs" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">abs</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span> <span class="pre">or</span> <span class="pre">ComplexTensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_core_grids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.CoreRangeSet</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.abs" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Applies abs to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p>
@@ -274,7 +275,8 @@
 <dd class="field-even">
 <ul class="simple">
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – preallocated output tensor. Defaults to <cite>None</cite>. When <code class="docutils literal notranslate"><span class="pre">input_tensor</span></code> is a <code class="docutils literal notranslate"><span class="pre">ttnn.ComplexTensor</span></code>, this argument is not supported.</p></li>
+<li><p><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>) – sub core grids for the operation. Defaults to <cite>None</cite>. When <code class="docutils literal notranslate"><span class="pre">input_tensor</span></code> is a <code class="docutils literal notranslate"><span class="pre">ttnn.ComplexTensor</span></code>, this argument is not supported.</p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
@@ -285,23 +287,7 @@
 </dl>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>Supported dtypes, layouts, and ranks:</p>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd">
-<th class="head"><p>Dtypes</p></th>
-<th class="head"><p>Layouts</p></th>
-<th class="head"><p>Ranks</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>BFLOAT16, BFLOAT8_B</p></td>
-<td><p>TILE</p></td>
-<td><p>2, 3, 4</p></td>
-</tr>
-</tbody>
-</table>
+<p>Supported dtypes: BFLOAT16, BFLOAT8_B, FLOAT32</p>
 </div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
@@ -327,7 +313,7 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.html" class="btn btn-neutral float-left" title="ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig.html" class="btn btn-neutral float-left" title="ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
         <a href="ttnn.acos.html" class="btn btn-neutral float-right" title="ttnn.acos" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 

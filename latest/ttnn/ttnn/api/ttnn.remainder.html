@@ -186,6 +186,7 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.trunc.html">ttnn.trunc</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.unary_chain.html">ttnn.unary_chain</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.var_hw.html">ttnn.var_hw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.xielu.html">ttnn.xielu</a></li>
 </ul>
 </li>
 <li class="toctree-l3 current"><a class="reference internal" href="../api.html#pointwise-binary">Pointwise Binary</a><ul class="current">
@@ -244,8 +245,6 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.rpow.html">ttnn.rpow</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.rsub.html">ttnn.rsub</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.rsub_.html">ttnn.rsub_</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.scatter.html">ttnn.scatter</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.scatter_add.html">ttnn.scatter_add</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.squared_difference.html">ttnn.squared_difference</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.squared_difference_.html">ttnn.squared_difference_</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.subalpha.html">ttnn.subalpha</a></li>
@@ -322,12 +321,12 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.remainder">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">remainder</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor_a</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_b</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span> <span class="pre">or</span> <span class="pre">Number</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_core_grids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.CoreRangeSet</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.remainder" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">remainder</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor_a</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_b</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span> <span class="pre">or</span> <span class="pre">Number</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dtype</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.DataType</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">activations</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.remainder" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Performs an eltwise-modulus operation.</p>
+<p>Computes the remainder of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code> by <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> and returns the tensor with the same layout as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code></p>
 <div class="math notranslate nohighlight">
-\[\mathrm{{output\_tensor}} = \verb|remainder|(\mathrm{{input\_tensor\_a,input\_tensor\_b}})\]</div>
+\[\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i \mod \mathrm{{input\_tensor\_b}}_i\]</div>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
@@ -342,7 +341,9 @@
 <dd class="field-even">
 <ul class="simple">
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>) – sub core grids for the operation. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>) – data type for the output tensor. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>activations</strong> (<em>List</em><em>[</em><em>str</em><em>]</em><em>, </em><em>optional</em>) – list of activation functions to apply to the output tensor. Defaults to <cite>None</cite>.</p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
@@ -359,23 +360,22 @@ Elementwise operations operate natively in tile format, tiled tensors are prefer
 L1 sharded layout is preferred, with no broadcast and matching tensor specs for A, B and C.</p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>Supported dtypes, layouts, and ranks:</p>
+<p>Supported dtypes and layouts:</p>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd">
 <th class="head"><p>Dtypes</p></th>
 <th class="head"><p>Layouts</p></th>
-<th class="head"><p>Ranks</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16</p></td>
-<td><p>TILE</p></td>
-<td><p>2, 3, 4</p></td>
+<td><p>BFLOAT16, FLOAT32, INT32</p></td>
+<td><p>TILE, ROW_MAJOR</p></td>
 </tr>
 </tbody>
 </table>
+<p>If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.</p>
 </div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>

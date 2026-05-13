@@ -152,24 +152,38 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.moe">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">moe</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.moe" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">moe</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">expert_mask_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">topk_mask_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">k</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">number</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.moe" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Returns the weight of the zero-th MoE expert.</p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>This is equivalent to the following PyTorch code:
-val, ind = torch.topk(input_tensor + expert_mask_tensor, k)
-return torch.sum(torch.softmax(val+topk_mask_tensor, dim=-1)*(ind==0), dim=-1)</p>
+<p>This is equivalent to the following PyTorch code:</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">val</span><span class="p">,</span> <span class="n">ind</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">topk</span><span class="p">(</span><span class="n">input_tensor</span> <span class="o">+</span> <span class="n">expert_mask_tensor</span><span class="p">,</span> <span class="n">k</span><span class="p">)</span>
+<span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">val</span><span class="o">+</span><span class="n">topk_mask_tensor</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span><span class="o">*</span><span class="p">(</span><span class="n">ind</span><span class="o">==</span><span class="mi">0</span><span class="p">),</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+</pre></div>
 </div>
-<p>:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>: Input Tensor for moe.
-:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">expert_mask_tensor</span></code>: Expert Mask Tensor for mask to out invalid experts.
-:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">topk_mask_tensor</span></code>: Topk Mask Tensor for mask to out everything except topk.
-:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">k</span></code>: the number of top elements to look for</p>
-<p>:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">memory_config</span></code>: Memory Config of the output tensors
-:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">output_tensor</span></code>: preallocated output tensors
-:kwtype * <code class="xref py py-attr docutils literal notranslate"><span class="pre">output_tensor</span></code>: Optional[ttnn.Tensor]</p>
+</div>
 <dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<ul class="simple">
+<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – Input Tensor for moe.</p></li>
+<li><p><strong>expert_mask_tensor</strong> (<em>ttnn.Tensor</em>) – Expert Mask Tensor to mask out invalid experts.</p></li>
+<li><p><strong>topk_mask_tensor</strong> (<em>ttnn.Tensor</em>) – Topk Mask Tensor to mask out everything except topk.</p></li>
+<li><p><strong>k</strong> (<em>number</em>) – the number of top elements to look for</p></li>
+</ul>
+</dd>
+<dt class="field-even">Keyword Arguments<span class="colon">:</span>
+</dt>
+<dd class="field-even">
+<ul class="simple">
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory Config of the output tensors</p></li>
+<li><p><strong>output_tensor</strong> (<em>Optional</em><em>[</em><em>ttnn.Tensor</em><em>]</em>) – preallocated output tensors</p></li>
+</ul>
+</dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">

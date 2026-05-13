@@ -123,6 +123,7 @@
 <p>Pushes a given number of tiles in the back of the specified CB’s queue. Decreases the available space in the circular buffer by this number of tiles. This call is used by the producer to make the tiles visible to the consumer of the CB.</p>
 <p>We use the convention that the producer pushes tiles into the “back” of the CB queue and the consumer consumes tiles from the “front” of the CB queue.</p>
 <p>Note that the act of writing the tile data into the CB does not make the tiles visible to the consumer. Writing of the tiles and pushing is separated to allow the producer to: 1) write the tile data to the CB via multiple writes of sub-tiles 2) modify tiles (or sub-tiles) by random access of the valid section of the CB</p>
+<p>Important note: the total number of tiles pushed within one complete cycle of the CB must sum to exactly the CB size (fifo_num_pages) so that the internal write pointer wraps correctly. Individual push amounts do not need to evenly divide the CB size. Example: on a CB of size 12, cb_push_back(5) followed by cb_push_back(7) is correct (total 12 = CB size). However, cb_push_back(7) followed by cb_push_back(7) on the same CB is incorrect (total 14 != 12). Out-of-bounds pointer advancement is detected at runtime when watcher or lightweight kernel asserts are enabled.</p>
 <p>Return value: None</p>
 <p></p>
 <table class="docutils align-default">

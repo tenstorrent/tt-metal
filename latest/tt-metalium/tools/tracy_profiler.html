@@ -66,6 +66,8 @@
 <li class="toctree-l1"><a class="reference internal" href="../tt_metal/environment_variables/index.html">Environment Variables</a></li>
 <li class="toctree-l1 current"><a class="reference internal" href="index.html">Tools</a><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="kernel_print.html">Kernel Debug Print</a></li>
+<li class="toctree-l2"><a class="reference internal" href="checkpoint.html">Debug Checkpoints</a></li>
+<li class="toctree-l2"><a class="reference internal" href="device_print.html">Device Debug Print</a></li>
 <li class="toctree-l2"><a class="reference internal" href="watcher.html">Watcher</a></li>
 <li class="toctree-l2 current"><a class="current reference internal" href="#">Tracy Profiler</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="#overview">Overview</a></li>
@@ -93,6 +95,7 @@
 <li class="toctree-l2"><a class="reference internal" href="llk_asserts.html">LLK Asserts</a></li>
 <li class="toctree-l2"><a class="reference internal" href="inspector.html">Inspector</a></li>
 <li class="toctree-l2"><a class="reference internal" href="triage.html">tt-triage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="noc_debug_dump.html">NOC Debug Dump</a></li>
 </ul>
 </li>
 </ul>
@@ -139,7 +142,7 @@
 <h2>Overview<a class="headerlink" href="#overview" title="Permalink to this heading"></a>
 </h2>
 <p><a class="reference external" href="https://github.com/wolfpld/tracy">Tracy</a> is an opens-source C++ profiling tool with sampling and code instrumentation profiling capabilities. Metalium uses a fork for Tracy adapted to the the Tensix Processors as it’s primary profiling tool.</p>
-<p>Detais documentation about Tracy itself can be found here: <a class="reference external" href="https://github.com/wolfpld/tracy/releases/latest/download/tracy.pdf">https://github.com/wolfpld/tracy/releases/latest/download/tracy.pdf</a>. Reading the <code class="docutils literal notranslate"><span class="pre">Quick-start</span> <span class="pre">guide</span></code> section can help with the rest of this documentation.</p>
+<p>Detailed documentation about Tracy itself can be found here: <a class="reference external" href="https://github.com/wolfpld/tracy/releases/latest/download/tracy.pdf">https://github.com/wolfpld/tracy/releases/latest/download/tracy.pdf</a>. Reading the <code class="docutils literal notranslate"><span class="pre">Quick-start</span> <span class="pre">guide</span></code> section can help with the rest of this documentation.</p>
 <p>All host-side code, including python code in <code class="docutils literal notranslate"><span class="pre">tt_metal</span></code> can be profiled using Tracy.</p>
 </section>
 <section id="enabling-tracy">

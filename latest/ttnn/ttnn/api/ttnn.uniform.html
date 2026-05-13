@@ -180,11 +180,50 @@
 <p><em>ttnn.Tensor</em> – The <cite>input</cite> tensor with updated values drawn from the specified uniform distribution.</p>
 </dd>
 </dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This operation supports tensors according to the following data types and layouts:</p>
+<table class="docutils align-default" id="id2">
+<caption>
+<span class="caption-text">input tensor</span><a class="headerlink" href="#id2" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype
+- layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16, FLOAT32
+- TILE</p></td>
+</tr>
+</tbody>
+</table>
+<dl class="simple">
+<dt>Memory Support:</dt>
+<dd>
+<ul class="simple">
+<li><p>Interleaved: DRAM and L1</p></li>
+<li><p>Height, Width, Block, and ND Sharded: DRAM and L1</p></li>
+</ul>
+</dd>
+<dt>Limitations:</dt>
+<dd>
+<ul class="simple">
+<li><p>The input tensor must be on the device.</p></li>
+<li><p>The <cite>from</cite> parameter must be less than the <cite>to</cite> parameter.</p></li>
+</ul>
+</dd>
+</dl>
+</div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
-<div class="doctest highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="nb">input</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)),</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">ttnn</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="nb">input</span><span class="p">)</span>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Create a TT-NN tensor with random values uniformly distributed between 0.0 and 1.0</span>
+<span class="nb">input</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">ones</span><span class="p">([</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="nb">input</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"TT-NN uniform tensor:"</span><span class="p">,</span> <span class="nb">input</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>

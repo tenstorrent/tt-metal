@@ -124,8 +124,6 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.rpow.html">ttnn.rpow</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.rsub.html">ttnn.rsub</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.rsub_.html">ttnn.rsub_</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.scatter.html">ttnn.scatter</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.scatter_add.html">ttnn.scatter_add</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.squared_difference.html">ttnn.squared_difference</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.squared_difference_.html">ttnn.squared_difference_</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.subalpha.html">ttnn.subalpha</a></li>
@@ -241,23 +239,22 @@ Elementwise operations operate natively in tile format, tiled tensors are prefer
 L1 sharded layout is preferred, with no broadcast and matching tensor specs for A, B and C.</p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>Supported dtypes, layouts, and ranks:</p>
+<p>Supported dtypes and layouts:</p>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd">
 <th class="head"><p>Dtypes</p></th>
 <th class="head"><p>Layouts</p></th>
-<th class="head"><p>Ranks</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16</p></td>
-<td><p>TILE</p></td>
-<td><p>2, 3, 4</p></td>
+<td><p>BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16</p></td>
+<td><p>TILE, ROW_MAJOR</p></td>
 </tr>
 </tbody>
 </table>
+<p>If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.</p>
 </div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>

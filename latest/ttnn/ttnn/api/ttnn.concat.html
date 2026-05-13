@@ -98,6 +98,8 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.reshape_on_device.html">ttnn.reshape_on_device</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.reshard.html">ttnn.reshard</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.roll.html">ttnn.roll</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.scatter.html">ttnn.scatter</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.scatter_add.html">ttnn.scatter_add</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.sharded_to_interleaved.html">ttnn.sharded_to_interleaved</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.sharded_to_interleaved_partial.html">ttnn.sharded_to_interleaved_partial</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.slice.html">ttnn.slice</a></li>
@@ -179,7 +181,7 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.concat">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">concat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor:</span> <span class="pre">List</span> <span class="pre">of</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim:</span> <span class="pre">number</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config:</span> <span class="pre">ttnn.MemoryConfig</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor:</span> <span class="pre">ttnn.Tensor</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">groups:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">1</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.concat" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">concat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor:</span> <span class="pre">List</span> <span class="pre">of</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim:</span> <span class="pre">number</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_core_grids:</span> <span class="pre">ttnn.CoreRangeSet</span> <span class="pre">=</span> <span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.concat" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <dl class="field-list simple">
@@ -198,6 +200,7 @@
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>groups</strong> (<em>int</em><em>, </em><em>optional</em>) – When <cite>groups</cite> is set to a value greater than 1, the inputs are split into N <cite>groups</cite> partitions, and elements are interleaved from each group into the output tensor. Each group is processed independently, and elements from each group are concatenated in an alternating pattern based on the number of groups. This is useful for recombining grouped convolution outputs during residual concatenation. Defaults to <cite>1</cite>. Currently, groups &gt; <cite>1</cite> is only supported for two height sharded input tensors.</p></li>
+<li><p><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>) – Sub-core grid to use for interleaved (L1 or DRAM) output tensors. If provided, the concatenation will run on the specified sub-core grid instead of the full compute grid. Defaults to <cite>None</cite>.</p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>

@@ -158,6 +158,67 @@
 <ul>
 <li class="toctree-l1">
 <a class="reference internal" href="kernel_apis/data_movement/data_movement.html">Data Movement APIs</a><ul>
+<li class="toctree-l2">
+<a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html">Device 2.0 Data Movement API Migration Guide</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#table-of-contents">Table of Contents</a></li>
+<li class="toctree-l3"><a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#overview">Overview</a></li>
+<li class="toctree-l3"><a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#header-files">Header Files</a></li>
+<li class="toctree-l3">
+<a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#key-classes">Key Classes</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#experimental-noc"><code class="docutils literal notranslate"><span class="pre">experimental::Noc</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#experimental-circularbuffer"><code class="docutils literal notranslate"><span class="pre">experimental::CircularBuffer</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#experimental-corelocalmem-t"><code class="docutils literal notranslate"><span class="pre">experimental::CoreLocalMem&lt;T&gt;</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#experimental-semaphore"><code class="docutils literal notranslate"><span class="pre">experimental::Semaphore</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#endpoints">Endpoints</a></li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#migration-patterns">Migration Patterns</a><ul>
+<li class="toctree-l4">
+<a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#noc-operations">NoC Operations</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#async-read">Async Read</a></li>
+<li class="toctree-l5"><a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#async-write">Async Write</a></li>
+<li class="toctree-l5"><a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#async-write-with-state-optimized-repeated-writes">Async Write with State (Optimized Repeated Writes)</a></li>
+<li class="toctree-l5"><a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#multicast-write">Multicast Write</a></li>
+<li class="toctree-l5"><a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#transaction-id-support">Transaction ID Support</a></li>
+</ul>
+</li>
+<li class="toctree-l4">
+<a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#circular-buffer-operations">Circular Buffer Operations</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#basic-operations">Basic Operations</a></li>
+<li class="toctree-l5"><a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#using-circularbuffer-with-noc">Using CircularBuffer with Noc</a></li>
+<li class="toctree-l5"><a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#selecting-read-write-pointer-for-noc-async-read-write-api">Selecting Read/Write Pointer for Noc Async Read/Write API</a></li>
+</ul>
+</li>
+<li class="toctree-l4">
+<a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#semaphore-operations">Semaphore Operations</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#local-semaphore-operations">Local Semaphore Operations</a></li>
+<li class="toctree-l5"><a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#remote-semaphore-operations">Remote Semaphore Operations</a></li>
+<li class="toctree-l5"><a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#multicast-semaphore">Multicast Semaphore</a></li>
+</ul>
+</li>
+<li class="toctree-l4">
+<a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#memory-access">Memory Access</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#safe-local-memory-access">Safe Local Memory Access</a></li>
+<li class="toctree-l5"><a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#struct-access">Struct Access</a></li>
+<li class="toctree-l5"><a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#pointer-arithmetic">Pointer Arithmetic</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#complete-migration-examples">Complete Migration Examples</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#example-1-tile-read-kernel">Example 1: Tile Read Kernel</a></li>
+<li class="toctree-l4"><a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#example-2-core-to-core-communication">Example 2: Core-to-Core Communication</a></li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#troubleshooting">Troubleshooting</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="kernel_apis/data_movement/device_api_migration_guide.html#common-issues">Common Issues</a></li>
+</ul>
+</li>
+</ul>
+</li>
 <li class="toctree-l2"><a class="reference internal" href="kernel_apis/data_movement/noc_async_read.html">noc_async_read</a></li>
 <li class="toctree-l2"><a class="reference internal" href="kernel_apis/data_movement/noc_async_read_set_state.html">noc_async_read_set_state</a></li>
 <li class="toctree-l2"><a class="reference internal" href="kernel_apis/data_movement/noc_async_read_with_state.html">noc_async_read_with_state</a></li>
@@ -296,7 +357,6 @@
 <li class="toctree-l5"><a class="reference internal" href="kernel_apis/compute/unary_le_tile.html">unary_le_tile</a></li>
 <li class="toctree-l5"><a class="reference internal" href="kernel_apis/compute/unary_max_tile.html">unary_max_tile</a></li>
 <li class="toctree-l5"><a class="reference internal" href="kernel_apis/compute/unary_min_tile.html">unary_min_tile</a></li>
-<li class="toctree-l5"><a class="reference internal" href="kernel_apis/compute/max_tile.html">max_tile</a></li>
 <li class="toctree-l5"><a class="reference internal" href="kernel_apis/compute/binary_max_tile.html">binary_max_tile</a></li>
 <li class="toctree-l5"><a class="reference internal" href="kernel_apis/compute/binary_min_tile.html">binary_min_tile</a></li>
 <li class="toctree-l5"><a class="reference internal" href="kernel_apis/compute/ltz_tile.html">ltz_tile</a></li>

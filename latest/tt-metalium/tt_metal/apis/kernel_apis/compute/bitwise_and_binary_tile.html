@@ -117,13 +117,14 @@
 <h1>bitwise_and_binary_tile<a class="headerlink" href="#bitwise-and-binary-tile" title="Permalink to this heading"></a>
 </h1>
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel23bitwise_and_binary_tileE8uint32_t8uint32_t8uint32_t">
-<span class="target" id="namespaceckernel_1a04c863f50e95292e094cc738ba5b9140"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">bitwise_and_binary_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">odst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel23bitwise_and_binary_tileE8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4I_10DataFormatEN7ckernel23bitwise_and_binary_tileEv8uint32_t8uint32_t8uint32_t">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">DataFormat</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">data_format</span></span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1ad44cbcdd022818358b11522760a64fc2"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">bitwise_and_binary_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">odst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_10DataFormatEN7ckernel23bitwise_and_binary_tileEv8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
 <p>Performs an elementwise binary bitwise operation with the two inputs: y = bitwise(x0,x1) Output overwrites odst in DST.</p>
 <p>The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine. A maximum of 4 tiles from each operand can be loaded into DST at once, for a total of 8 tiles, when using 16 bit formats. This gets reduced to 2 tiles from each operand for 32 bit formats.</p>
-<p>Return value: None</p>
+<p>
+Return value: None</p>
 <p></p>
 <table class="docutils align-default">
 <thead>
@@ -160,14 +161,14 @@
 </tbody>
 </table>
 
+<dl class="field-list simple">
+<dt class="field-odd">Template Parameters<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p><strong>data_format</strong> – Template argument specifying the data type. Supported data formats are: DataFormat::Int32, DataFormat::UInt32, DataFormat::UInt16</p>
 </dd>
 </dl>
-
-<dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel30bitwise_and_uint16_binary_tileE8uint32_t8uint32_t8uint32_t">
-<span class="target" id="namespaceckernel_1a5111ce4d9fb4f032fe04fa7aca485a54"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">bitwise_and_uint16_binary_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">odst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel30bitwise_and_uint16_binary_tileE8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
-</dt>
-<dd></dd>
+</dd>
 </dl>
 
 </section>
