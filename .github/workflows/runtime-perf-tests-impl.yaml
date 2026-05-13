@@ -99,8 +99,8 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           path: |
-            pgm_bench.json
-            buffer_bench.json
+            docker-job/pgm_bench.json
+            docker-job/buffer_bench.json
           prefix: "perf_benchmarks_json_"
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
