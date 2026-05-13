@@ -61,6 +61,27 @@ def test_w2_shard_tiles_glm5():
     assert sum(result) == 192
 
 
+def test_w2_shard_tiles_complementary_off():
+    """When n_big_nt + n_big_ht != n_cores, w2_shard_tiles falls back to shard_tiles.
+
+    Ht=224, Nt=96, n=12: n_big_nt=96%12=0, n_big_ht=224%12=8, 0+8!=12 -> fallback.
+    """
+    Ht, Nt, n = 224, 96, 12
+    result = [w2_shard_tiles(Ht, c, Nt, n) for c in range(n)]
+    fallback = [shard_tiles(Ht, c, n) for c in range(n)]
+    assert result == fallback, "Expected fallback to shard_tiles when complementary condition not met"
+    assert sum(result) == Ht
+
+
+def test_w2_shard_tiles_complementary_off_another():
+    """Ht=160, Nt=64, n=12: n_big_nt=4, n_big_ht=4, 4+4=8!=12 -> fallback."""
+    Ht, Nt, n = 160, 64, 12
+    result = [w2_shard_tiles(Ht, c, Nt, n) for c in range(n)]
+    fallback = [shard_tiles(Ht, c, n) for c in range(n)]
+    assert result == fallback
+    assert sum(result) == Ht
+
+
 def test_w2_shard_tiles_dsv4_flash():
     """DS V4 Flash: Ht=128, Nt=64, n=12. n_big_nt=4, n_big_ht=8, 4+8=12 → complement."""
     result = [w2_shard_tiles(128, c, 64, 12) for c in range(12)]
@@ -92,3 +113,26 @@ def test_shard_tiles_total_always_correct():
     for n_tiles, n_cores in shapes:
         result = [shard_tiles(n_tiles, c, n_cores) for c in range(n_cores)]
         assert sum(result) == n_tiles, f"Failed for n_tiles={n_tiles}, n_cores={n_cores}"
+
+
+def test_intermediate_tiles_must_exceed_core_count():
+    """Verify that configurations with intermediate_tiles < n_cores are detectable.
+
+    The C++ validate function enforces intermediate_tiles >= matmul_num_cores
+    via TT_FATAL. This test validates the invariant at the formula level:
+    if intermediate_size / 32 < n_cores, the shard_tiles distribution degenerates
+    (some cores get 0 tiles).
+    """
+    n_cores = 12
+    # intermediate_size = 256 -> intermediate_tiles = 8, which is < 12
+    small_intermediate_tiles = 256 // 32  # = 8
+    assert small_intermediate_tiles < n_cores
+    shards = [shard_tiles(small_intermediate_tiles, c, n_cores) for c in range(n_cores)]
+    # At least one core gets 0 tiles -- degenerate, triggers TT_FATAL on device
+    assert any(s == 0 for s in shards), "Expected degenerate shard distribution with 0-tile cores"
+    assert sum(shards) == small_intermediate_tiles
+
+    # Boundary: intermediate_tiles == n_cores -> exactly 1 tile per core, valid
+    boundary_tiles = n_cores
+    boundary_shards = [shard_tiles(boundary_tiles, c, n_cores) for c in range(n_cores)]
+    assert all(s == 1 for s in boundary_shards)
