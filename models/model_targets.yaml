@@ -144,10 +144,10 @@ targets:
             status: active
             perf:
               prefill_t/s: 56.0
-              # decode targets lowered from 27 → 22 after observed regression
+              # decode targets lowered from 27 → 24 after observed regression
               # to 24.95 t/s in scheduled run 25778148259 (2026-05-13).
-              decode_t/s/u: 22.0
-              decode_t/s: 22.0
+              decode_t/s/u: 24.0
+              decode_t/s: 24.0
             accuracy: {}
 
   gemma-3-27b:
