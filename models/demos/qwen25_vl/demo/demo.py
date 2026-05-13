@@ -839,9 +839,7 @@ def test_demo(
 
         if targets:
             expected_measurements = {
-                metric: True
-                for metric in targets
-                if not metric.endswith("_tolerance") and metric not in {"tolerance"}
+                metric: True for metric in targets if not metric.endswith("_tolerance") and metric not in {"tolerance"}
             }
             verify_perf(
                 measurements=measurements,
