@@ -30,7 +30,7 @@ void SplitDeviceOperation::validate_on_program_cache_miss(
         input_tensor.padded_shape()[args.dim] % args.num_splits == 0,
         "Dim being split must be evenly divisible by number of splits");
     TT_FATAL(
-        args.dim >= 0 && static_cast<size_t>(args.dim) <= input_tensor.padded_shape().rank(), "Dim being split must be from 0 to rank - 1");
+        args.dim >= 0 && static_cast<size_t>(args.dim) < input_tensor.padded_shape().rank(), "Dim being split must be from 0 to rank - 1");
     TT_FATAL(input_tensor.padded_shape().rank() == 4, "Tensor needs to be rank 4");
     TT_FATAL(input_tensor.layout() == Layout::TILE, "Tensor needs to be in TILE Layout");
 }
