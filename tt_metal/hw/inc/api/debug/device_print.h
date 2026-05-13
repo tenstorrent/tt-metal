@@ -1346,6 +1346,7 @@ void acquire_lock() {
     // After acquiring the lock, invalidate our L1 cache to ensure we see the most up-to-date data in the buffer
     invalidate_l1_cache();
 
+#if defined(KERNEL_BUILD)
     // Check if we should print kernel id
     volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer = get_device_print_buffer();
     if (device_print_buffer->aux.wpos != DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
@@ -1371,6 +1372,7 @@ void acquire_lock() {
             }
         }
     }
+#endif
 }
 
 void update_kernel_finished() {
