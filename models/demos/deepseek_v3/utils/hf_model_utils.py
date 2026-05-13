@@ -387,7 +387,10 @@ def _prepare_quad_ring_expert_tensors(
     num_devices: int,
     hidden_size: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    from tests.nightly.tg.ccl.moe.test_moe_compute_6U import prepare_w0_w1_tensor, prepare_w2_tensor
+    from ttnn.experimental.moe_compute_utils import (
+        prepare_w0_w1_tensor_for_moe_compute,
+        prepare_w2_tensor_for_moe_compute,
+    )
 
     if num_routed_experts % num_devices != 0:
         raise ValueError(
@@ -412,7 +415,7 @@ def _prepare_quad_ring_expert_tensors(
     prepared_w2_per_device: list[torch.Tensor] = []
     for expert_offset in range(0, num_routed_experts, num_experts_per_device):
         prepared_w0_w1_per_device.append(
-            prepare_w0_w1_tensor(
+            prepare_w0_w1_tensor_for_moe_compute(
                 w0[:, expert_offset : expert_offset + num_experts_per_device, :, :],
                 w1[:, expert_offset : expert_offset + num_experts_per_device, :, :],
                 1,
@@ -423,7 +426,7 @@ def _prepare_quad_ring_expert_tensors(
             )
         )
         prepared_w2_per_device.append(
-            prepare_w2_tensor(
+            prepare_w2_tensor_for_moe_compute(
                 w2[:, expert_offset : expert_offset + num_experts_per_device, :, :],
                 1,
                 num_experts_per_device,
