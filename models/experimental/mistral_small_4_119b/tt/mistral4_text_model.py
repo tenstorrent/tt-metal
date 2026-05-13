@@ -155,6 +155,19 @@ class TtMistral4TextModel:
         ttnn.deallocate(ids_tt)
         return x
 
+    def embed_tokens(self, input_ids: torch.Tensor) -> ttnn.Tensor:
+        """
+        Public token-embedding lookup for multimodal scatter.
+
+        Returns a ttnn tensor of shape ``[1, 1, seq_len, HIDDEN_SIZE]`` in
+        TILE layout, replicated on the mesh. Callers may slice/concat this
+        with vision embeddings before calling ``prefill_from_embeds``.
+        """
+        seq_len = input_ids.shape[1]
+        x = self._embed(input_ids)
+        x = ttnn.reshape(x, [1, 1, seq_len, HIDDEN_SIZE])
+        return ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+
     def _to_logits(self, x: ttnn.Tensor) -> torch.Tensor:
         """Final norm → lm_head → gather to host."""
         x = _rms_norm(x, self.final_norm_w, self.compute_kernel_config)
@@ -339,4 +352,59 @@ class TtMistral4TextModel:
 
         token_id = self._next_token_on_device(x)
         ttnn.deallocate(x)
+        return token_id
+
+    # ── Embedding-input entry points (multimodal) ──────────────────────────
+
+    def prefill_from_embeds(
+        self,
+        inputs_embeds: ttnn.Tensor,
+        position_embeddings: Tuple[torch.Tensor, torch.Tensor],
+    ) -> torch.Tensor:
+        """
+        Prefill from a caller-built embedding sequence (skip ``embed_tokens``).
+
+        Args:
+            inputs_embeds:       ttnn [1, 1, seq_len, HIDDEN_SIZE], replicated on mesh.
+                                 Typically built by ``embed_tokens`` for text positions
+                                 and the multi-modal projector for image positions,
+                                 spliced together via slice/concat on device.
+            position_embeddings: (cos, sin) covering positions [0, seq_len).
+        Returns:
+            logits: [1, seq_len, vocab_size] bf16 CPU tensor.
+        """
+        seq_len = inputs_embeds.shape[-2]
+        cos_tt, sin_tt = self._prepare_rope(position_embeddings, seq_len)
+
+        x = inputs_embeds
+        for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
+            x = layer.forward_with_cache(x, cos_tt, sin_tt, kv_cache)
+
+        ttnn.deallocate(cos_tt)
+        ttnn.deallocate(sin_tt)
+        return self._to_logits(x)
+
+    def prefill_from_embeds_next_token(
+        self,
+        inputs_embeds: ttnn.Tensor,
+        position_embeddings: Tuple[torch.Tensor, torch.Tensor],
+    ) -> int:
+        """
+        Same as ``prefill_from_embeds`` but returns the greedy next-token id with
+        on-device argmax — only a single uint32 crosses the PCIe boundary.
+        """
+        seq_len = inputs_embeds.shape[-2]
+        cos_tt, sin_tt = self._prepare_rope(position_embeddings, seq_len)
+
+        x = inputs_embeds
+        for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
+            x = layer.forward_with_cache(x, cos_tt, sin_tt, kv_cache)
+
+        ttnn.deallocate(cos_tt)
+        ttnn.deallocate(sin_tt)
+
+        x_last = ttnn.slice(x, [0, 0, seq_len - 1, 0], [1, 1, seq_len, HIDDEN_SIZE])
+        ttnn.deallocate(x)
+        token_id = self._next_token_on_device(x_last)
+        ttnn.deallocate(x_last)
         return token_id
