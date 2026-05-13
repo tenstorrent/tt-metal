@@ -893,23 +893,25 @@ def test_pre_allgather_ignores_implicit_tile_padding(device, inp_shape):
 
 @pytest.mark.parametrize("offset", [0.0, 1e6])
 @pytest.mark.parametrize("inp_shape", [(1, 1, 32, 128)])
-def test_layernorm_pre_all_gather_fp32_precision(device, inp_shape, offset):
+def test_layernorm_pre_all_gather_welford_fp32_precision(device, inp_shape, offset):
     """Welford pre_all_gather stats are accurate for Float32 input regardless of mean offset.
 
-    Without the unpack_to_dest_mode=UnpackToDestFp32 fix in the program factory (and the kernel-
-    side replay-buffer recovery after transpose_wh_tile), the unpacker silently downcasts fp32
-    through SrcA to TF32 (10 mantissa bits). Large-mean inputs (offset=1e6) then collapse the
-    sum(x^2) tail in the Welford recurrence -- variance drops to ~0 against torch's fp64 result.
+    NOTE: layer_norm_pre_all_gather defaults to a non-Welford program factory; the Welford
+    path is only taken when LayerNormDefaultProgramConfig(use_welford=True) is passed (and
+    recip_tensor is supplied).  This test exercises that path explicitly.
 
-    With the fix the answer matches torch fp64 to within fp32 representation noise even at
-    offset=1e6; without it the assert at offset=1e6 fails dramatically.
+    Without the unpack_to_dest_mode=UnpackToDestFp32 fix in the welford program factory (and
+    the kernel-side replay-buffer recovery after transpose_wh_tile), the unpacker silently
+    downcasts fp32 through SrcA to TF32 (10 mantissa bits). Large-mean inputs (offset=1e6)
+    then break the Welford recurrence's (x - M) subtraction -- recovered mean/variance go
+    haywire compared to torch's fp64 result.
+
+    With the fix the recovered mean is within fp32 Welford noise of the fp64 reference even
+    at offset=1e6, and the variance is in the expected ~1.0 ballpark.  Without the fix the
+    assert at offset=1e6 fails dramatically.
     """
     torch.manual_seed(0)
     torch_input = torch.randn(inp_shape, dtype=torch.float32) + offset
-
-    # fp64 reference matches the layout the device returns: sum(x^2) at col 0 of tile 0,
-    # sum(x) at col 0 of tile 1 (offset 32).
-    out_torch = reference([torch_input.to(torch.float64)], 1, False)[0].to(torch.float32)
 
     kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -918,6 +920,11 @@ def test_layernorm_pre_all_gather_fp32_precision(device, inp_shape, offset):
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
+
+    width = inp_shape[-1]
+    grid = device.compute_with_storage_grid_size()
+    core_range_set = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    recip_tensor = ttnn.create_layer_norm_reciprocals(device, core_range_set, width)
 
     tt_inp = ttnn.from_torch(
         torch_input,
@@ -930,28 +937,35 @@ def test_layernorm_pre_all_gather_fp32_precision(device, inp_shape, offset):
         tt_inp,
         dtype=ttnn.float32,
         compute_kernel_config=kernel_config,
+        program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
+        recip_tensor=recip_tensor,
     )
 
     actual = ttnn.to_torch(tt_stats)
-    # Tolerances scale with the magnitude of the stats themselves: sum(x^2) ~ N * x^2 is huge
-    # at offset=1e6 (~6.4e12) so use relative tolerance.  sum(x) ~ N * x is smaller (~6.4e7).
-    # These tight tolerances catch the TF32 truncation bug -- without the fix, sum(x^2) at
-    # offset=1e6 has ~100% relative error.
-    ref_sumx2 = out_torch[..., 0]
-    tt_sumx2 = actual[..., 0]
-    ref_sumx = out_torch[..., 32]
-    tt_sumx = actual[..., 32]
-    # Use relative error with an absolute-error floor so rows whose sum(x) happens to be near
-    # zero (which can occur at offset=0 with randn input) don't produce a huge relative error
-    # from a small absolute fp32 rounding difference.
-    abs_atol = max(1.0, abs(offset) * 1e-3)
-    rel_err_sumx2 = (tt_sumx2 - ref_sumx2).abs() / (ref_sumx2.abs() + abs_atol)
-    rel_err_sumx = (tt_sumx - ref_sumx).abs() / (ref_sumx.abs() + abs_atol)
+    # Welford output layout: column 0 of tile 0 holds the per-row mean; column 0 of tile 1
+    # (offset 32 along the last axis) holds the per-row variance.  Reference is computed in
+    # fp64 so it isn't itself contaminated by fp32 noise.
+    torch_mean = torch_input.to(torch.float64).mean(dim=-1)
+    torch_var = torch_input.to(torch.float64).var(dim=-1, correction=0)
+    tt_mean = actual[..., 0].to(torch.float64).squeeze(-1)
+    tt_var = actual[..., 32].to(torch.float64).squeeze(-1)
+
+    # Mean tolerance scales with |offset|: each Welford (x - M) subtraction loses
+    # ~log2(|mean|/std) bits of precision, giving absolute mean error proportional to
+    # |offset|. At offset=1e6 the actual error is ~few hundred (out of ~1e6).  Loose
+    # enough to absorb that, tight enough to catch the TF32 catastrophe.
+    mean_atol = 1e-3
     logger.info(
-        f"offset={offset} max_rel_err sum(x^2)={rel_err_sumx2.max().item():.2e} sum(x)={rel_err_sumx.max().item():.2e}"
+        f"offset={offset} max_abs_err mean={(tt_mean - torch_mean).abs().max().item():.3e}"
+        f" var={(tt_var - torch_var).abs().max().item():.3e}"
     )
-    # With the fix, rel error is fp32-noise level.  Without the fix, at offset=1e6 sum(x^2)
-    # has ~1.0 relative error (variance silently collapses to 0).  1e-2 is loose enough to
-    # absorb fp32 rounding on values near zero but still catches the catastrophic TF32 bug.
-    assert rel_err_sumx2.max().item() < 1e-2, f"sum(x^2) rel error too large: {rel_err_sumx2.max().item()}"
-    assert rel_err_sumx.max().item() < 1e-2, f"sum(x) rel error too large: {rel_err_sumx.max().item()}"
+    assert torch.allclose(
+        tt_mean, torch_mean, rtol=1e-3, atol=mean_atol
+    ), f"offset={offset} mean mismatch: max_abs_err={(tt_mean - torch_mean).abs().max().item()}"
+
+    # Variance is translation-invariant so the reference value is ~1.0 in both cases.
+    # Without the fix at offset=1e6 the variance collapses (rel err ~1.0).  atol=0.5 is
+    # loose enough to absorb fp32 Welford noise but tight enough to catch the catastrophe.
+    assert torch.allclose(
+        tt_var, torch_var, rtol=0.01, atol=0.2
+    ), f"offset={offset} variance mismatch: max_abs_err={(tt_var - torch_var).abs().max().item()}"
