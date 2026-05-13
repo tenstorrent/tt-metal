@@ -837,6 +837,41 @@ struct chain_lane_width<EltwiseChain<Es...>>
 template <class Chain>
 inline constexpr uint32_t chain_lane_width_v = chain_lane_width<Chain>::value;
 
+// chain_supports_block — N-element fold. True when every CB-reader element uses a
+// policy that stages a multi-tile DEST window (Upfront / Cumulative / NoWaitNoPop).
+// Streaming policies (WaitAndPop / WaitNoPop / NoWaitPop) consume ONE tile per iter
+// and are incompatible with chain BlockSize > 1 (chain consumes BlockSize tiles per
+// outer iter). The chain `static_assert`s on this predicate when AutoBlock::On.
+namespace detail {
+constexpr bool policy_supports_block(CopyTilePolicy p) {
+    return p == CopyTilePolicy::WaitUpfrontPopAtEnd ||
+           p == CopyTilePolicy::CumulativeWaitPopAtEnd ||
+           p == CopyTilePolicy::NoWaitNoPop;
+}
+
+template <class E>
+constexpr bool element_supports_block() {
+    if constexpr (is_cb_reader_op_v<E>) {
+        return policy_supports_block(E::a_policy()) && policy_supports_block(E::b_policy());
+    } else {
+        return true;  // non-CB-reader elements don't constrain block_size
+    }
+}
+
+template <class... Es>
+constexpr bool chain_supports_block_impl_v = (element_supports_block<Es>() && ...);
+}  // namespace detail
+
+template <class Chain>
+struct chain_supports_block;
+
+template <class... Es>
+struct chain_supports_block<EltwiseChain<Es...>>
+    : std::bool_constant<detail::chain_supports_block_impl_v<Es...>> {};
+
+template <class Chain>
+inline constexpr bool chain_supports_block_v = chain_supports_block<Chain>::value;
+
 // chain_has_duplicate_upfront_cbs / chain_pack_writes_collide:
 // defined as a runtime fold for now — every CB-reader / CB-writer pair is checked.
 // Static assertions in the chain pipeline use these as constexpr-evaluated booleans.
@@ -1139,8 +1174,15 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
     //
     // AutoBlock::On  → BlockSize = DEST_AUTO_LIMIT / chain_lane_width.
     //                  Each outer iter processes BlockSize tiles in BlockSize DEST lanes
-    //                  (lane j at slot dst_slot + j * chain_lane_width).
+    //                  (lane j at slot dst_slot + j * chain_lane_width). Requires every
+    //                  CB-reader policy to stage a multi-tile window — see
+    //                  chain_supports_block_v.
     // AutoBlock::Off → BlockSize = 1 (today's per-tile shape).
+    static_assert(Block == AutoBlock::Off || chain_supports_block_v<Chain>,
+                  "eltwise_chain<AutoBlock::On>: streaming CB-reader policy (WaitAndPop / "
+                  "WaitNoPop / NoWaitPop) consumes one tile per iter — incompatible with "
+                  "BlockSize > 1. Switch the reader to WaitUpfrontPopAtEnd, "
+                  "CumulativeWaitPopAtEnd, or NoWaitNoPop, or call eltwise_chain<AutoBlock::Off>.");
     constexpr uint32_t chain_lane_w = chain_lane_width_v<Chain>;
     constexpr uint32_t auto_block_size = DEST_AUTO_LIMIT / chain_lane_w;
     constexpr uint32_t block_size = (Block == AutoBlock::On) ? auto_block_size : 1u;
