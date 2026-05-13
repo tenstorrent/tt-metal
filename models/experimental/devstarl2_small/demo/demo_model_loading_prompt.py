@@ -17,7 +17,8 @@ Dense KV uses ``max_kv_cache_seq_len`` via ``devstral_tt_kv_cache_max_seq_len`` 
 ``demo_devstral2_tt_multimodal.py``)—run-sized DRAM, not full 256K per layer unless needed.
 
 **HF path** (``--backend hf``, default): ``AutoProcessor`` + ``AutoModelForImageTextToText``; same
-``--vision-max-edge`` / ``--vision-square-pixels`` as TT before ``processor`` (default max-edge 336).
+``--vision-max-edge`` / ``--vision-square-pixels`` as TT before ``processor`` (default max-edge ``0`` =
+no PIL resize; use ``--vision-square-pixels`` e.g. ``1540`` for square HF-style sizing).
 Default image ``reference/sample.jpeg``; ``max_new_tokens=100``.
 
 **TT path** (``--backend tt``): loads :class:`TtDevstral2SmallModel` (Pixtral vision + projector +
@@ -644,9 +645,10 @@ def main() -> None:
     parser.add_argument(
         "--vision-max-edge",
         type=int,
-        default=336,
-        help="HF and TT: max longest image side (px) PIL thumbnail before processor (ignored if "
-        "--vision-square-pixels is set). On TT, 0 can exceed Pixtral L1; HF may use 0 safely.",
+        default=0,
+        help="HF and TT: max longest image side (px) PIL thumbnail before processor (0 = no thumbnail; "
+        "ignored if --vision-square-pixels is set). Large native images on TT can exceed Pixtral L1; "
+        "prefer --vision-square-pixels for a bounded patch grid.",
     )
     parser.add_argument(
         "--vision-square-pixels",
