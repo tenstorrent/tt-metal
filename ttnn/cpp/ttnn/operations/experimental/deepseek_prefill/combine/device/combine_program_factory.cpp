@@ -556,12 +556,15 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         //                  sender atomically dec(-1) per row consumed.  Count = rows in flight
         //                  in idle's ring.  Pair-scoped so sender can use get_semaphore(id)
         //                  for fast local waits AND idle can NOC-inc to sender's copy.
-        //   credits    (init SLOTS_PER_IDLE = 16, scoped to {idle only}): sender ++ idle's L1
-        //                  via NOC each time it frees a row slot.  Allocated on idle-only CRS
-        //                  so it does not consume a sem slot on sender (which is at the 16/
-        //                  core limit for senders with k_s≈7); sender still derives the L1
-        //                  offset via the uniform `get_semaphore(id)` formula and addresses
-        //                  it remotely.
+        //   credits    (init 0, scoped to {idle only}): sender ++ idle's L1 via NOC each
+        //                  time it frees a row slot.  Idle's kernel-side local_credits
+        //                  already starts at SLOTS_PER_IDLE to cover the initially-empty
+        //                  ring; the sem must start at 0 so idle doesn't double-count the
+        //                  initial credits when it later sucks the sem (otherwise it would
+        //                  overwrite live slots).  Allocated on idle-only CRS so it does
+        //                  not consume a sem slot on sender (which is at the 16/core limit
+        //                  for senders with k_s≈7); sender still derives the L1 offset via
+        //                  the uniform `get_semaphore(id)` formula and addresses it remotely.
         // Per-pair sems are scoped tightly so they don't burn one of the 16 per-core slots
         // on cores that don't need them.
         for (uint32_t s = 0; s < num_cores; s++) {
@@ -571,8 +574,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
                     std::set<CoreRange>{CoreRange(sender_cores[s]), CoreRange(sender_idle_groups[s][c])});
                 CoreRangeSet idle_only_grid(std::set<CoreRange>{CoreRange(sender_idle_groups[s][c])});
                 data_ready_semaphore_ids[s].push_back(tt::tt_metal::CreateSemaphore(program, pair_grid, 0));
-                credits_semaphore_ids[s].push_back(
-                    tt::tt_metal::CreateSemaphore(program, idle_only_grid, SLOTS_PER_IDLE));
+                credits_semaphore_ids[s].push_back(tt::tt_metal::CreateSemaphore(program, idle_only_grid, 0));
             }
         }
     }
