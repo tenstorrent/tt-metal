@@ -91,7 +91,7 @@ bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mes
     distributed::MeshWorkload workload;
 
     auto local_buffer_config =
-        distributed::DeviceLocalBufferConfig{.page_size = tile_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
+        distributed::DeviceLocalBufferConfig{.page_size = tile_size, .buffer_type = BufferType::DRAM, .sharding_args = {}, .bottom_up = false};
     auto distributed_buffer_config = distributed::ShardedBufferConfig{
         .global_size = tile_size,
         .global_buffer_shape = {32, 32},

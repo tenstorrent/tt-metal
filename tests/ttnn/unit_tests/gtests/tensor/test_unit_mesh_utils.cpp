@@ -39,7 +39,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateAndDisaggregate) {
         auto buffer = tt::tt_metal::distributed::MeshBuffer::create(
             tt::tt_metal::distributed::ReplicatedBufferConfig{.size = 16 << 10},
             tt::tt_metal::distributed::DeviceLocalBufferConfig{
-                .page_size = 1024, .buffer_type = tt::tt_metal::BufferType::DRAM},
+                .page_size = 1024, .buffer_type = tt::tt_metal::BufferType::DRAM, .sharding_args = {}},
             mesh_device_.get());
         EXPECT_TRUE(buffer->is_allocated());
         return buffer->address();

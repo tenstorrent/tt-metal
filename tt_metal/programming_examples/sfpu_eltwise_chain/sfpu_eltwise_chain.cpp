@@ -134,7 +134,7 @@ int main() {
     // Dram buffer config
     constexpr uint32_t single_tile_size = sizeof(bfloat16) * constants::TILE_HEIGHT * constants::TILE_WIDTH;
     distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
+        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM, .sharding_args = {}};
     distributed::ReplicatedBufferConfig buffer_config{.size = sizeof(bfloat16) * src_vec.size()};
     std::shared_ptr<distributed::MeshBuffer> src_dram_buffer =
         distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());  // Input buffer

@@ -178,7 +178,7 @@ TEST_F(MeshEndToEnd2x4Tests, BufferRoundtripTest) {
         mesh_device_->num_rows() * 32 * mesh_device_->num_cols() * 32 * tile_size_bytes;
 
     auto local_buffer_config =
-        DeviceLocalBufferConfig{.page_size = tile_size_bytes, .buffer_type = BufferType::L1, .bottom_up = false};
+        DeviceLocalBufferConfig{.page_size = tile_size_bytes, .buffer_type = BufferType::L1, .sharding_args = {}, .bottom_up = false};
     auto distributed_buffer_config = ShardedBufferConfig{
         .global_size = distributed_buffer_size_bytes,
         .global_buffer_shape = distributed_buffer_shape,
@@ -207,7 +207,7 @@ TEST_F(MeshEndToEnd2x4Tests, UntracedEltwiseAddTest) {
     auto distributed_buffer_size_bytes = mesh_device_->num_rows() * mesh_device_->num_cols() * tile_size_bytes;
 
     auto local_buffer_config =
-        DeviceLocalBufferConfig{.page_size = tile_size_bytes, .buffer_type = BufferType::DRAM, .bottom_up = false};
+        DeviceLocalBufferConfig{.page_size = tile_size_bytes, .buffer_type = BufferType::DRAM, .sharding_args = {}, .bottom_up = false};
     auto distributed_buffer_config = tt::tt_metal::distributed::ShardedBufferConfig{
         .global_size = distributed_buffer_size_bytes,
         .global_buffer_shape = distributed_buffer_shape,
@@ -270,7 +270,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseAddTest) {
     auto distributed_buffer_size_bytes = mesh_device_->num_rows() * mesh_device_->num_cols() * tile_size_bytes;
 
     auto local_buffer_config =
-        DeviceLocalBufferConfig{.page_size = tile_size_bytes, .buffer_type = BufferType::DRAM, .bottom_up = false};
+        DeviceLocalBufferConfig{.page_size = tile_size_bytes, .buffer_type = BufferType::DRAM, .sharding_args = {}, .bottom_up = false};
     auto distributed_buffer_config = tt::tt_metal::distributed::ShardedBufferConfig{
         .global_size = distributed_buffer_size_bytes,
         .global_buffer_shape = distributed_buffer_shape,
@@ -334,7 +334,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseMulTest) {
     auto distributed_buffer_size_bytes = mesh_device_->num_rows() * mesh_device_->num_cols() * tile_size_bytes;
 
     auto local_buffer_config =
-        DeviceLocalBufferConfig{.page_size = tile_size_bytes, .buffer_type = BufferType::DRAM, .bottom_up = false};
+        DeviceLocalBufferConfig{.page_size = tile_size_bytes, .buffer_type = BufferType::DRAM, .sharding_args = {}, .bottom_up = false};
     auto distributed_buffer_config = tt::tt_metal::distributed::ShardedBufferConfig{
         .global_size = distributed_buffer_size_bytes,
         .global_buffer_shape = distributed_buffer_shape,
