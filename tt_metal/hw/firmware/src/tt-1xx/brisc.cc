@@ -318,15 +318,29 @@ inline void start_ncrisc_kernel_run(uint32_t enables) {
 }
 
 inline void wait_ncrisc_trisc() {
+    // Clobber detection: if SR0 becomes non-zero during the wait, something
+    // re-asserted subordinate resets after BRISC cleared them.
+    // Write findings to L1 at 0x100000 for host-side diagnostics on timeout.
+    //   [0] = SR0 value that appeared (0 if no clobber)
+    //   [1] = wall_clock_lo when clobber detected
+    volatile uint32_t* const clobber = reinterpret_cast<volatile uint32_t*>(0x100000);
+    clobber[0] = 0;
+    clobber[1] = 0;
+
     WAYPOINT("NTW");
     while (subordinate_sync->all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
 #if defined(ARCH_WORMHOLE)
-        // Avoid hammering L1 while other cores are trying to work. Seems not to
-        // be needed on Blackhole, probably because invalidate_l1_cache takes
-        // time.
         asm volatile("nop; nop; nop; nop; nop");
 #endif
         invalidate_l1_cache();
+
+        {
+            uint32_t sr0 = READ_REG(RISCV_DEBUG_REG_SOFT_RESET_0);
+            if (sr0 != 0x0) {
+                clobber[0] = sr0;
+                clobber[1] = READ_REG(0xFFB121F0);  // wall_clock_lo
+            }
+        }
     }
     WAYPOINT("NTD");
 }

@@ -36,6 +36,7 @@
 #include "umd/device/utils/semver.hpp"
 #include <umd/device/cluster.hpp>
 #include <umd/device/cluster_descriptor.hpp>
+#include <umd/device/tt_device/tt_device.hpp>
 #include <umd/device/simulation/simulation_chip.hpp>
 #include <umd/device/pcie/pci_device.hpp>
 #include <umd/device/types/arch.hpp>
@@ -748,10 +749,45 @@ void Cluster::assert_risc_reset_at_core(const tt_cxy_pair& core, const tt::umd::
     this->driver_->assert_risc_reset(core.chip, core_coord, soft_resets);
 }
 
-tt::umd::RiscType Cluster::get_risc_reset_state_at_core(const tt_cxy_pair& core) const {
-    const metal_SocDescriptor& soc_desc = this->get_soc_desc(core.chip);
+void Cluster::deassert_risc_reset_at_core_immediate(
+    const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets, bool staggered_start) const {
+    const ChipId chip_id = core.chip;
+    const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
-    return this->driver_->get_risc_reset_state(core.chip, core_coord);
+    auto* tt_device = this->driver_->get_tt_device(chip_id);
+    auto* arch_impl = tt_device->get_architecture_implementation();
+
+    // Read current SR0 via UMD's get_risc_reset_state (same read path used by
+    // UMD's own deassert_risc_reset — the read side was never the problem).
+    uint32_t current_state = tt_device->get_risc_reset_state(core_coord);
+
+    uint32_t update = arch_impl->get_soft_reset_reg_value(soft_resets);
+    uint32_t new_state = current_state & ~update;
+    if (staggered_start) {
+        new_state |= arch_impl->get_soft_reset_staggered_start();
+    }
+
+    // Write via write_core_immediate (volatile per-word stores through UC TLB)
+    // instead of set_risc_reset_state (memcpy through WC TLB) to prevent
+    // the posted-write coalescing race on Blackhole.
+    uint64_t sr0_addr = arch_impl->get_tensix_soft_reset_addr();
+    write_core_immediate(&new_state, sizeof(new_state), core, sr0_addr);
+}
+
+void Cluster::assert_risc_reset_at_core_immediate(const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets) const {
+    const ChipId chip_id = core.chip;
+    const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
+    tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
+    auto* tt_device = this->driver_->get_tt_device(chip_id);
+    auto* arch_impl = tt_device->get_architecture_implementation();
+
+    uint32_t current_state = tt_device->get_risc_reset_state(core_coord);
+
+    uint32_t update = arch_impl->get_soft_reset_reg_value(soft_resets);
+    uint32_t new_state = current_state | update;
+
+    uint64_t sr0_addr = arch_impl->get_tensix_soft_reset_addr();
+    write_core_immediate(&new_state, sizeof(new_state), core, sr0_addr);
 }
 
 void Cluster::write_dram_vec(
