@@ -44,7 +44,7 @@ from __future__ import annotations
 
 import warnings
 from enum import Enum
-from typing import Any, Callable, Iterable, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, List, Literal, Optional, Tuple, Union
 
 import ttnn
 
