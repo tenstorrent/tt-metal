@@ -1,55 +1,14 @@
-name: "(triage) Cursor CLI smoke test"
+name: "(triage) Notify full-ci-triage"
 
 on:
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 jobs:
-  cursor-cli-smoke-test:
+  notify-full-ci-triage:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        timeout-minutes: 20
-
-      - name: Ensure CURSOR_API_KEY is configured
-        env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-        run: |
-          if [ -z "$CURSOR_API_KEY" ]; then
-            echo "Missing secret CURSOR_API_KEY"
-            exit 1
-          fi
-
-      - name: Install Cursor CLI
-        run: |
-          set -euo pipefail
-          install_script="$(mktemp)"
-          curl --fail --show-error --silent --location \
-            --proto '=https' --tlsv1.2 \
-            https://cursor.com/install \
-            -o "$install_script"
-          bash "$install_script"
-          rm -f "$install_script"
-          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
-
-      - name: Run simple Cursor prompt
-        env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-        run: |
-          set -euo pipefail
-          output="$(agent -p "Reply with exactly: CURSOR_CI_OK")"
-          echo "Agent output: $output"
-          if [[ "$output" != *"CURSOR_CI_OK"* ]]; then
-            echo "Unexpected agent output; expected CURSOR_CI_OK"
-            exit 1
-          fi
-
       - name: Notify full-ci-triage Slack channel
-        if: ${{ always() }}
         uses: slackapi/slack-github-action@v2.1.1
         with:
           method: chat.postMessage
