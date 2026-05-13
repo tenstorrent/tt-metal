@@ -688,7 +688,7 @@ MoEGPTMeshWorkloadFactory::create_at(
             program,
             tilize_core_range_set,
             tt::align((2 * experts_per_device + 1) * sizeof(uint32_t), l1_alignment),
-            tokens,
+            tokens + 1,
             tt::DataFormat::UInt32);
 
         tt::tt_metal::create_cb(
