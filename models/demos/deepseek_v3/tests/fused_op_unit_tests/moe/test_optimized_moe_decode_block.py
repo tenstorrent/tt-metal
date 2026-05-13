@@ -1217,7 +1217,7 @@ def test_optimized_moe_decode_block(
             tt_expert_mapping,
             reduce_dim=0,
             cluster_axis=cluster_axis,
-            split_size=int(tt_scaled_output.shape[-1] // num_replicated_devices),
+            split_size=int(tt_unsqueezed_output.shape[-1] // num_replicated_devices),
             output_memory_config=fast_reduce_output_memory_config,
             scores_tensors=topk_experts_weights,
             num_shared_experts=num_shared_experts,

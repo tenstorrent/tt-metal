@@ -23,10 +23,6 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
-# REFERENCE_MESH_SHAPE = (1, 1)
-REFERENCE_MESH_SHAPE = (16, 8)
-NUM_REFERENCE_MESH_DEVICES = REFERENCE_MESH_SHAPE[0] * REFERENCE_MESH_SHAPE[1]
-
 
 def _bf16_to_float(bf16):
     """Convert a torch.bfloat16 scalar or tensor to float32 using numpy reinterpretation"""
@@ -274,16 +270,6 @@ def test_deepseek_moe_fast_reduce_nc_fused(
                 )
             )
 
-    # Pad u_slice along dim=2 (tokens) to be a multiple of 32 if necessary
-    current_tokens = u_slice.shape[2]
-    target_tokens = ((current_tokens + 31) // 32) * 32  # Next multiple of 32
-    if current_tokens < target_tokens:
-        pad_amt = target_tokens - current_tokens
-        pad_shape = list(u_slice.shape)
-        pad_shape[2] = pad_amt
-        pad_tensor = torch.zeros(pad_shape, dtype=u_slice.dtype, device=u_slice.device)
-        u_slice = torch.cat([u_slice, pad_tensor], dim=2)
-
     def _shard_dims(dim):
         return (dim, None) if cluster_axis == 0 else (None, dim)
 
@@ -346,11 +332,10 @@ def test_deepseek_moe_fast_reduce_nc_fused(
     for cidx, tt_out_list in enumerate(tt_fused_outputs):
         for didx, tt_out in enumerate(ttnn.get_device_tensors(tt_out_list)):
             tt_host = ttnn.to_torch(tt_out, dtype=torch.bfloat16)
-            tt_host_slice = tt_host[:, :, 0:current_tokens, :]
 
             ref = per_device_goldens[didx][cidx]
 
-            ok, msg = comp_pcc(ref, tt_host_slice, pcc=PCC_THRESHOLD)
+            ok, msg = comp_pcc(ref, tt_host, pcc=PCC_THRESHOLD)
             logger.info(f"virtual_dev={didx} mesh_coord={mesh_coord} chunk={cidx}: {msg}")
             assert ok, f"virtual_dev={didx} mesh_coord={mesh_coord} chunk={cidx} failed: {msg}"
 

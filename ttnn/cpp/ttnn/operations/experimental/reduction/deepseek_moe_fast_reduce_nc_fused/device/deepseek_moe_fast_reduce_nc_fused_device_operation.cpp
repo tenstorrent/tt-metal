@@ -105,10 +105,10 @@ void DeepseekMoEFastReduceNCFusedDeviceOperation::validate_on_program_cache_miss
 
     const uint32_t num_tokens = input_shape[-2];
     TT_FATAL(
-        (scores_shape[0] > num_tokens - TILE_WIDTH) && (scores_shape[0] <= num_tokens),
+        (scores_shape[0] > num_tokens - tt::constants::TILE_WIDTH) && (scores_shape[0] <= num_tokens),
         "scores dim 0 (tokens in slice = {}) must be between {} and {} for the current fused kernel",
         scores_shape[0],
-        num_tokens - TILE_WIDTH + 1,
+        num_tokens - tt::constants::TILE_WIDTH + 1,
         num_tokens);
 }
 
