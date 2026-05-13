@@ -86,10 +86,13 @@ ttnn:
     bh_quietbox_2: 145
   integration:
     wh_llmbox: 30
-    # wh_galaxy budget covers galaxy_integration_tests (~340 min) +
+    # Placeholder allocation for wh_galaxy under integration, based on the
+    # current expected runtime of galaxy_integration_tests (~340 min) and
     # galaxy_profiler_tests (~45 min: 30 min device + 15 min cross-reference).
-    # Profiler tests live here as a placeholder; final team / test-framework
-    # assignment tracked in https://github.com/tenstorrent/tt-metal/issues/44285
+    # This comment is bookkeeping only; time-budget verification does not
+    # enforce a combined cap across multiple test YAML files. Final team /
+    # test-framework assignment tracked in
+    # https://github.com/tenstorrent/tt-metal/issues/44285
     wh_galaxy: 385
 
 shield:
