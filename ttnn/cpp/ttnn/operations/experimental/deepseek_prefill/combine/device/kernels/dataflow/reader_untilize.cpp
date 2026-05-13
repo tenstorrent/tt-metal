@@ -137,7 +137,6 @@ void kernel_main() {
         TensorAccessor(dispatched_buffer_args, dispatched_buffer_addr, aligned_dispatched_buffer_page_size);
     const auto dispatched_metadata_addr_gen =
         TensorAccessor(dispatched_metadata_args, dispatched_metadata_addr, aligned_dispatched_metadata_page_size);
-    uint32_t buffer_base = get_write_ptr(cb_dispatched_buffer_id);
 
     // Dynamic dispatch buffer: experts are packed contiguously, each occupying
     // ceil(local_expert_counts[e] / tile_height) tile rows. Compute the per-expert
@@ -207,11 +206,15 @@ void kernel_main() {
             cb_push_back(cb_metadata_batch_id, batch_count);
 
             // 3. Read tiles for this batch in block_ct_dim-sized chunks so each push matches one
-            //    compute-side pack_untilize_block consumption of block_ct_dim tiles.
+            //    compute-side pack_untilize_block consumption of block_ct_dim tiles.  The CB
+            //    write pointer advances with every push, so re-fetch it after each
+            //    `cb_reserve_back` — capturing it once before the loop lands every chunk in
+            //    the same slot and leaves the other slot uninitialized.
             constexpr uint32_t num_blocks = tiles_per_batch / block_ct_dim;
             for (uint32_t cnt = 0; cnt < num_blocks; cnt++) {
                 uint32_t batch_tile = batch_tile_start + cnt * block_ct_dim;
                 cb_reserve_back(cb_dispatched_buffer_id, block_ct_dim);
+                uint32_t buffer_base = get_write_ptr(cb_dispatched_buffer_id);
                 for (uint32_t t = 0; t < block_ct_dim; t++) {
                     noc_async_read_page(
                         batch_tile + t,
