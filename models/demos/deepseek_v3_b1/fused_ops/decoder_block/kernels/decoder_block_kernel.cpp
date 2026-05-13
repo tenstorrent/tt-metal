@@ -3040,8 +3040,22 @@ void kernel_main() {
             unified_kernels::reconfig_cb_interfaces(mla_cb_config);
             setup_mla_sharded_buffers();
         }
-        // MATH((llk_math_pack_sync_init<fp32_dest_acc_en>()));
-        // PACK((llk_pack_dest_init<fp32_dest_acc_en, false>(0)));
+        // Workaround for tenstorrent/tt-metal#43563 (Deepseek Blitz Alternating PCC).
+        // Restored after the surgical fix at flash_mla.hpp:748 was empirically a no-op:
+        // the SDPA SFPU helpers (ckernel_sfpu_sdpa_reduce_row.h:144,177,202 and
+        // sdpa.h:169,180,200) already TT_SETC16 the per-thread MATH_Offset to
+        // `src_index + get_dest_buffer_base()` themselves before every PACK-frontend
+        // SFPLOAD, so a write to MATH_Offset at iter top is overwritten before any
+        // SFPU read. The divergence is therefore not in per-thread MATH_Offset
+        // management — bank 1 produces numerically different output from bank 0
+        // even when all known DEST-addressing registers (TRISC1.MATH_Offset,
+        // TRISC2.MATH_Offset via SDPA helpers, PACK_SEC0..3) point at the correct
+        // bank. Root cause still open; iter-top re-init papers over it by forcing
+        // every iter to run in bank 0.
+#if defined(COMPILE_FOR_TRISC)
+        MATH((llk_math_pack_sync_init<false>()));
+        PACK((llk_pack_dest_init<false, false>(0)));
+#endif
 #ifdef ENABLE_REDUCE_TO_ONE
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_sender_core) {
