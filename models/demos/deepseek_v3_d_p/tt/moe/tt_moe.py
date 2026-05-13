@@ -265,6 +265,7 @@ class TtMoe(LightweightModule):
             cluster_axis=0,
             num_links=self.row_num_links,
             topology=self.row_topology,
+            layer_idx=layer_idx,
         )
 
         # Initialize combine module (row axis: axis 0)
@@ -279,6 +280,7 @@ class TtMoe(LightweightModule):
             num_links=self.row_num_links,
             topology=self.row_topology,
             init_zeros=True,
+            layer_idx=layer_idx,
         )
 
         # Build (group, chip, local_expert) -> global expert id table, sharded

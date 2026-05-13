@@ -34,11 +34,18 @@ TtCombineModule reads from these buffers using the same offsets to reconstruct t
 original token ordering after expert processing.
 """
 
+import os
+
 import torch
 from loguru import logger
+from tracy import Profiler, signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+
+_tracy = Profiler()
+_tracy.disable()
+_PROFILE_OPS = os.getenv("TT_DS_PROFILE_OPS") == "1"
 
 
 class TtDispatchModule(LightweightModule):
@@ -65,6 +72,7 @@ class TtDispatchModule(LightweightModule):
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Linear,
         fp8_output: bool = False,
+        layer_idx: int = -1,
     ):
         """
         Initialize dispatch module with configuration parameters.
@@ -102,6 +110,7 @@ class TtDispatchModule(LightweightModule):
         self.num_links = num_links
         self.topology = topology
         self.fp8_output = fp8_output
+        self.layer_idx = layer_idx
 
     @staticmethod
     def shard_expert_offsets(
@@ -245,6 +254,9 @@ class TtDispatchModule(LightweightModule):
         )
         logger.debug(f"  cluster_axis={self.cluster_axis}, num_links={self.num_links}, topology={self.topology}")
 
+        if _PROFILE_OPS:
+            signpost(header=f"dispatch_L{self.layer_idx}_start")
+            _tracy.enable()
         (
             tt_dispatched_buffer,
             tt_dispatch_metadata,
@@ -265,6 +277,9 @@ class TtDispatchModule(LightweightModule):
             topology=self.topology,
             use_fp8_dispatch=self.fp8_output,
         )
+        if _PROFILE_OPS:
+            _tracy.disable()
+            signpost(header=f"dispatch_L{self.layer_idx}_end")
 
         if tt_dispatched_buffer.dtype == ttnn.uint8:
             logger.warning(
