@@ -55,7 +55,7 @@
     wh_galaxy:
       timeout: 5
 
-# DISABLED: galaxy-multiprocess hangs consistently (~1 month). Tracked in issue #PLACEHOLDER.
+# DISABLED: galaxy-multiprocess hangs consistently (~1 month). Tracked in issue #44339.
 # Re-enable once the hang root cause is identified and fixed.
 # - id: galaxy-multiprocess
 #   name: Galaxy Multi-Process tests
