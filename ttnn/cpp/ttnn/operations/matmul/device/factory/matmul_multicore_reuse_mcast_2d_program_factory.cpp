@@ -1565,7 +1565,8 @@ create_program_mcast_in0_in1(
     tt::DataFormat output_data_format,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
-    bool row_broadcast_bias = true,
+    bool row_broadcast_bias,
+    bool tile_pack_row_major = false,
     CoreCoord sub_device_start_core = {0, 0}) {
     using namespace tt;
     using tt::tt_metal::TensorMemoryLayout;
@@ -1613,7 +1614,11 @@ create_program_mcast_in0_in1(
         B,
         per_core_M * per_core_N,
         B * per_core_M * per_core_N);
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // TILE_PACK_ROW_MAJOR: compute packs the last K-block per M-row-group at absolute CB offsets.
+    // The helper reserves/pushes per row-group (smaller than the full out_block), so the
+    // shared out/interm0 L1 region assumption — that interm0 fully drains before out_cb is
+    // written — no longer holds. Force separate regions when tile_pack_row_major is on.
+    bool do_not_inplace_interm0_out_CB = (output_is_sharded && (per_core_M != out_block_h)) || tile_pack_row_major;
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -2050,11 +2055,10 @@ create_program_mcast_in0_in1(
         // batch args
         (std::uint32_t)M * N  // MtNt
     };
-    if (bias_buffer != nullptr) {
-        in1_receiver_writer_compile_time_args.push_back((std::uint32_t)in1_block_w);
-    } else {
-        in1_receiver_writer_compile_time_args.push_back(0);  // Placeholder; not used
-    }
+    // Always pass in1_block_w (= out_block_w / bias block width). Consumed by the FUSE_BIAS
+    // path as in3_block_w and by the TILE_PACK_ROW_MAJOR path as the row-group stride, so the
+    // value must be populated regardless of which kernel-side flags are set.
+    in1_receiver_writer_compile_time_args.push_back((std::uint32_t)in1_block_w);
     in1_receiver_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_reduce_scatter()));
     tt::tt_metal::TensorAccessorArgs(*out_buffer).append_to(in1_receiver_writer_compile_time_args);
 
@@ -2118,6 +2122,16 @@ create_program_mcast_in0_in1(
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_other_noc_setup_defines["OUT_SHARDED"] = "1";
+    }
+
+    // TILE_PACK_ROW_MAJOR: compute packs tiles at absolute CB offsets row-first, writer reads
+    // per-M-row-group. Must be emitted to both compute and writer sides (sender + both receiver
+    // variants) so their CB consumption orders stay aligned.
+    if (tile_pack_row_major) {
+        mm_kernel_defines["TILE_PACK_ROW_MAJOR"] = "1";
+        mm_kernel_in1_sender_writer_defines["TILE_PACK_ROW_MAJOR"] = "1";
+        mm_kernel_in1_receiver_writer_defines["TILE_PACK_ROW_MAJOR"] = "1";
+        mm_kernel_in1_receiver_writer_other_noc_setup_defines["TILE_PACK_ROW_MAJOR"] = "1";
     }
 
     // Intermediate CB read
@@ -3088,6 +3102,7 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
     auto per_core_M = program_config.per_core_M;
     auto per_core_N = program_config.per_core_N;
     auto transpose_mcast = program_config.transpose_mcast;
+    auto tile_pack_row_major = program_config.tile_pack_row_major;
 
     TT_FATAL(
         operation_attributes.compute_kernel_config.has_value(),
@@ -3282,6 +3297,7 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
         untilize_out,
         fused_op_signaler,
         fused_matmul_bias_row_broadcastable(bias),
+        tile_pack_row_major,
         sub_device_start_core);
 }
 

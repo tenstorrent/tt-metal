@@ -12,6 +12,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_kloop_helpers.hpp"
 
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
@@ -63,8 +64,61 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
     PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(2, 3, 2)));
 };
 
+// ── Functors threaded into compute_kernel_lib::matmul_kloop_pack ───────────
+
+// W0/W1 pack body. Custom STALL_CFG semwait variant (replaces tile_regs_wait
+// so the trailing TT_SETC16 is held until math is done with DST), then a
+// PACK-thread silu/swiglu activation, then out-of-order packs of DST 0 and
+// DST 2 to two cb_s2c_in2 slots indexed by tile_id / tile_id+1.
+template <MoEActivationFunction Activation, uint32_t OutCbId>
+struct MoEComputeW0W1Pack {
+    uint32_t tile_id;
+
+    ALWI void operator()() const {
+        PACK(TTI_SEMWAIT(
+            p_stall::STALL_TDMA | p_stall::STALL_CFG, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO));
+        PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+        pack_compute_activation<Activation>();
+        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+
+        ::pack_tile</*out_of_order_output=*/true>(0, OutCbId, /*output_tile_index=*/tile_id);
+        ::pack_tile</*out_of_order_output=*/true>(2, OutCbId, /*output_tile_index=*/tile_id + 1);
+    }
+};
+
+// W2 pack body: pack_untilize_dest sequence (init / dest / uninit) packing
+// DST into row-major-byte output at block_c_index = iter.
+template <uint32_t OutCbId, uint32_t BlockCtDim, uint32_t FullCtDim>
+struct MoEComputeW2UntilizePack {
+    uint32_t iter;
+
+    ALWI void operator()() const {
+        tile_regs_wait();
+        pack_untilize_dest_init<BlockCtDim, FullCtDim>(OutCbId);
+        pack_untilize_dest<BlockCtDim, FullCtDim>(OutCbId, /*block_rt_dim=*/1, /*block_c_index=*/iter);
+        pack_untilize_uninit(OutCbId);
+    }
+};
+
+// W2 ring step callback. moe_compute allocates enough in2 space to hold all
+// ring slots linearly — each ring step advances in0_index by tiles_per_step
+// (no wraparound).
+template <uint32_t TilesPerStep>
+struct MoEComputeW2RingStep {
+    uint32_t ring_core_id;
+
+    ALWI compute_kernel_lib::RingStepResult operator()(uint32_t step_idx) const {
+        return {
+            /*in0_index=*/step_idx * TilesPerStep,
+            /*tiles_remaining=*/moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][step_idx],
+        };
+    }
+};
+
 }  // namespace detail
 void kernel_main() {
+    using namespace compute_kernel_lib;
+
     // Extract config type from compile-time argument
     constexpr uint32_t moe_config_type_value = get_named_compile_time_arg_val("moe_config_type");
     constexpr bool has_bias = get_named_compile_time_arg_val("has_bias") == 1;
@@ -73,8 +127,6 @@ void kernel_main() {
     using config_t = moe_ring::ConfigType_t<has_bias, config_type>;
 
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
-    constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
-    constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
     constexpr auto activation_type =
         ttnn::experimental::prim::detail::MoEActivationFunction(get_named_compile_time_arg_val("activation_function"));
 
@@ -108,6 +160,19 @@ void kernel_main() {
 
     // CB Aliases
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_3;  // reuse cb_r2c_w0_w1
+
+    // Buffer wrappers consumed by the matmul_segmented_kloop K-step functors.
+    // Three distinct (in0, in1) pairs feed FMAs across the two cycles: in × W0/W1
+    // (or ones × W0/W1 for bias), in2 × W2 (or ones × W2 for bias).
+    // cb_r2c_w0_w1 and cb_r2c_w2 alias to the same CB index, so one weight
+    // wrapper covers both branches. w2c_rdy_buf wraps the ring sync CB used by
+    // KStepWithRing during the W2 cycle to advance ring slots when the active
+    // slot's tile budget is exhausted.
+    experimental::CircularBuffer in_buf(cb_s2c_in);
+    experimental::CircularBuffer in2_buf(cb_s2c_in2);
+    experimental::CircularBuffer ones_buf(cb_c2c_ones_tile);
+    experimental::CircularBuffer w_buf(cb_r2c_w0_w1);  // == cb_r2c_w2
+    experimental::CircularBuffer w2c_rdy_buf(cb_w2c_rdy);
 
     // Constants for MoE
     constexpr uint32_t num_w0_w1_tiles_h = config_t::NUM_W0_W1_TILES_H;
@@ -244,74 +309,39 @@ void kernel_main() {
             //---------------------------------------------------------------------
             // Compute in @ {W0,W1}
             //---------------------------------------------------------------------
+            // matmul_kloop_pack Form 2 per (tile_id, tile_id+1) output pair.
+            // With bias, KStepWithBias interleaves a bias FMA (ones × bias_row)
+            // at the K-tile position past the regular weights and skips
+            // remaining padding K-slots; without bias, KStepDefault fires
+            // every K-slot as a regular FMA.
+            using KStepBias = KStepWithBias<experimental::CircularBuffer>;
+            using KStepNoBias = KStepDefault<experimental::CircularBuffer>;
+            using W0W1Pack = detail::MoEComputeW0W1Pack<activation_type, cb_s2c_in2>;
+            const SegmentedKLoopShape w0_w1_kloop_shape = SegmentedKLoopShape::of(
+                /*num_blocks=*/w0_w1_blocks_per_two_elt_tile,
+                /*tiles_per_block=*/w0_w1_tiles_per_block,
+                /*ct_dim=*/4);
             for (uint32_t tile_id = 0; tile_id < tiles_per_step; tile_id += 2) {
                 uint32_t in0_index = use_second_half_buffer ? num_w0_w1_tiles_h : 0;
+                W0W1Pack pack_body{/*tile_id=*/tile_id};
 
-                tile_regs_acquire();
-                [[maybe_unused]] uint32_t k_tracker = 0;
-                for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
-                    cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
-
-                    for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
-                        if constexpr (has_bias) {
-                            if (k_tracker == num_w0_w1_tiles_h) {
-                                // Bias addition: matmul(ones_tile, bias_row)
-                                matmul_block(
-                                    cb_c2c_ones_tile,
-                                    cb_r2c_w0_w1,
-                                    0,
-                                    /*in1_index=*/k,
-                                    /*idst=*/0,
-                                    /*transpose=*/false,
-                                    /*ct_dim=*/4,
-                                    /*rt_dim=*/1,
-                                    /*kt_dim=*/1);
-                                k_tracker++;
-                                continue;
-                            } else if (k_tracker > num_w0_w1_tiles_h) {
-                                k_tracker++;
-                                continue;  // skip padding K slots after bias
-                            }
-                        }
-                        matmul_block(
-                            cb_s2c_in,
-                            cb_r2c_w0_w1,
-                            in0_index++,
-                            /*in1_index=*/k,
-                            /*idst=*/0,
-                            /*transpose=*/false,
-                            /*ct_dim=*/4,
-                            /*rt_dim=*/1,
-                            /*kt_dim=*/1);
-                        if constexpr (has_bias) {
-                            k_tracker++;
-                        }
-                    }
-                    cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+                if constexpr (has_bias) {
+                    KStepBias k_step{
+                        .in0_buf = in_buf,
+                        .in1_buf = w_buf,
+                        .bias_buf = ones_buf,
+                        .in0_index = in0_index,
+                        .bias_at = num_w0_w1_tiles_h,
+                    };
+                    matmul_kloop_pack(w_buf, w0_w1_kloop_shape, k_step, pack_body);
+                } else {
+                    KStepNoBias k_step{
+                        .in0_buf = in_buf,
+                        .in1_buf = w_buf,
+                        .in0_index = in0_index,
+                    };
+                    matmul_kloop_pack(w_buf, w0_w1_kloop_shape, k_step, pack_body);
                 }
-
-                tile_regs_commit();
-
-                // The below is equivalent to tile_regs_wait(), but we stall CFG as well, so that the succeeding
-                // TT_SETC16 instruction is also stalled until math thread is done with these dest registers.
-                PACK(TTI_SEMWAIT(
-                    p_stall::STALL_TDMA | p_stall::STALL_CFG,
-                    semaphore::t6_sem(semaphore::MATH_PACK),
-                    p_stall::STALL_ON_ZERO));
-
-                // Make SFPU access the appropriate half of the destination registers
-                PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-
-                //---------------------------------------------------------------------
-                // Apply activation
-                //---------------------------------------------------------------------
-                detail::pack_compute_activation<activation_type>();
-
-                PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-
-                pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2, /*output_tile_index=*/tile_id);
-                pack_tile</*out_of_order_output=*/true>(2, cb_s2c_in2, /*output_tile_index=*/tile_id + 1);
-                tile_regs_release();
             }
 
             // Signal to DM1 that the output from this core is ready
@@ -321,77 +351,62 @@ void kernel_main() {
             //---------------------------------------------------------------------
             // Compute in2 @ W2 (in pairs of 4)
             //---------------------------------------------------------------------
-
+            // matmul_kloop_pack Form 2 per a2a iter. KStepWithRing adds ring-CB
+            // sync on top of bias / padding-skip — when the active ring slot's
+            // tile budget hits 0, it pops cb_w2c_rdy, waits on the next slot,
+            // and refreshes in0_index / dm1_tiles_remaining via ring_step_fn.
+            // The kernel cb_wait_fronts the FIRST ring slot before each call
+            // and pops it after the call returns (the in-loop ring transitions
+            // are owned by KStepWithRing).
+            // Monotonic in2 offset: each ring step advances by tiles_per_step.
+            // moe_compute allocates enough in2 space to hold all ring slots
+            // linearly, no wraparound.
             cb_reserve_back(cb_c2s_out, num_w0_w1_tiles_h);
+            using W2RingStep = detail::MoEComputeW2RingStep<tiles_per_step>;
+            using W2KStepBias = KStepWithRing<true, experimental::CircularBuffer, W2RingStep>;
+            using W2KStepNoBias = KStepWithRing<false, experimental::CircularBuffer, W2RingStep>;
+            using W2Pack = detail::MoEComputeW2UntilizePack<cb_c2s_out, /*BlockCtDim=*/4, /*FullCtDim=*/20>;
+            const SegmentedKLoopShape w2_kloop_shape = SegmentedKLoopShape::of(
+                /*num_blocks=*/w2_blocks_per_four_mm2_tile,
+                /*tiles_per_block=*/w2_tiles_per_block,
+                /*ct_dim=*/4);
+            W2RingStep w2_ring_step{/*ring_core_id=*/ring_core_id};
+            const RingStepResult w2_initial = w2_ring_step(0);
             for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
-                uint32_t dm1_step = 0;
-                uint32_t dm1_tiles_remaining = config_t::W0_W1_TILES_PER_CORE_PER_STEP[ring_core_id][0];
                 cb_wait_front(cb_w2c_rdy, 1);
+                W2Pack pack_body{/*iter=*/iter};
 
-                uint32_t in2_offset = 0, in2_index = 0;
-
-                tile_regs_acquire();
-
-                uint32_t w2_k_tracker = 0;
-                for (uint32_t block_id = 0; block_id < w2_blocks_per_a2a_iter; ++block_id) {
-                    cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
-                    for (uint32_t k = 0; k < w2_tiles_per_block; k += w2_tiles_per_iter_w) {
-                        if constexpr (has_bias) {
-                            if (w2_k_tracker == num_w2_tiles_h) {
-                                // Bias addition: matmul(ones_tile, bias_row); padding K slots do not consume in2/dm1.
-                                matmul_block(
-                                    cb_c2c_ones_tile,
-                                    cb_r2c_w2,
-                                    0,
-                                    /*in1_index=*/k,
-                                    /*idst=*/0,
-                                    /*transpose=*/false,
-                                    /*ct_dim=*/4,
-                                    /*rt_dim=*/1,
-                                    /*kt_dim=*/1);
-                                w2_k_tracker++;
-                                continue;
-                            }
-                        }
-                        if (w2_k_tracker >= num_w2_tiles_h) {
-                            continue;  // skip padding K slots (bias: after bias tile; no_bias: at/past logical K)
-                        }
-                        if (dm1_tiles_remaining == 0) {
-                            cb_pop_front(cb_w2c_rdy, 1);
-                            cb_wait_front(cb_w2c_rdy, 1);
-                            dm1_tiles_remaining = config_t::W0_W1_TILES_PER_CORE_PER_STEP[ring_core_id][++dm1_step];
-                            in2_offset += tiles_per_step;
-                            in2_index = in2_offset;
-                        }
-                        dm1_tiles_remaining--;
-
-                        matmul_block(
-                            cb_s2c_in2,
-                            cb_r2c_w2,
-                            in2_index++,
-                            /*in1_index=*/k,
-                            /*idst=*/0,
-                            /*transpose=*/false,
-                            /*ct_dim=*/4,
-                            /*rt_dim=*/1,
-                            /*kt_dim=*/1);
-                        w2_k_tracker++;
-                    }
-                    cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
+                // The matmul_kloop_pack helper subsumes the new-base's manual
+                // dm1_step / dm1_tiles_remaining tracking via ring_step_fn (which
+                // walks config_t::W0_W1_TILES_PER_CORE_PER_STEP under the hood
+                // through W2RingStep) and the W2KStep* structs' initial state
+                // captured from w2_initial.
+                if constexpr (has_bias) {
+                    W2KStepBias k_step{
+                        .in0_buf = in2_buf,
+                        .in1_buf = w_buf,
+                        .bias_buf = ones_buf,
+                        .ring_cb_buf = w2c_rdy_buf,
+                        .in0_index = w2_initial.in0_index,
+                        .bias_at = num_w2_tiles_h,
+                        .dm1_tiles_remaining = w2_initial.tiles_remaining,
+                        .ring_step_fn = w2_ring_step,
+                    };
+                    matmul_kloop_pack(w_buf, w2_kloop_shape, k_step, pack_body);
+                } else {
+                    W2KStepNoBias k_step{
+                        .in0_buf = in2_buf,
+                        .in1_buf = w_buf,
+                        .bias_buf = ones_buf,  // unused when HasBias=false
+                        .ring_cb_buf = w2c_rdy_buf,
+                        .in0_index = w2_initial.in0_index,
+                        .bias_at = num_w2_tiles_h,
+                        .dm1_tiles_remaining = w2_initial.tiles_remaining,
+                        .ring_step_fn = w2_ring_step,
+                    };
+                    matmul_kloop_pack(w_buf, w2_kloop_shape, k_step, pack_body);
                 }
                 cb_pop_front(cb_w2c_rdy, 1);
-
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_untilize_dest_init</*block_ct_dim=*/w2_tiles_per_iter_w, /*full_ct_dim=*/w2_tiles_per_expert_w>(
-                    cb_c2s_out);
-
-                pack_untilize_dest</*block_ct_dim=*/w2_tiles_per_iter_w, /*full_ct_dim=*/w2_tiles_per_expert_w>(
-                    cb_c2s_out, /*block_rt_dim=*/1, /*block_c_index=*/iter);
-                pack_untilize_uninit(cb_c2s_out);
-
-                tile_regs_release();
             }
 
             cb_push_back(cb_c2s_out, num_w0_w1_tiles_h);

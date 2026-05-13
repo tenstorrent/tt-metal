@@ -13,65 +13,9 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
-
-// Slightly modified from compute_common.hpp
-void matmul_blocks(
-    const uint32_t in0_cb,
-    const uint32_t in1_cb,
-    const uint32_t out_cb,
-    const uint32_t M,
-    const uint32_t N,
-    const uint32_t K,
-    const uint32_t in0_num_subblocks,
-    const uint32_t in1_num_subblocks,
-    const uint32_t in0_block_w,
-    const uint32_t subblock_h,
-    const uint32_t subblock_w,
-    const bool transpose) {
-    // precondition: in0_cb has M*K produced
-    // precondition: in1_cb has K*N produced
-    // postcondition: in0_cb is full, in1_cb is empty
-    // postcondition: out_cb has M*N produced
-    mm_block_init_short(
-        in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
-
-    uint32_t output_num_tiles = M * N;
-    uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
-    uint32_t in0_index_offset = 0;
-
-    reconfig_data_format(in1_cb, in0_cb);
-
-    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
-        uint32_t in1_index_offset = 0;
-        for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
-            tile_regs_acquire();
-
-            uint32_t dst_index = 0;
-            uint32_t in0_index = in0_index_offset;
-            uint32_t in1_index = in1_index_offset;
-
-            for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                matmul_block(
-                    in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, in0_block_w);
-                in0_index++;
-                in1_index += N;
-            }
-            tile_regs_commit();
-
-            cb_reserve_back(out_cb, out_subblock_num_tiles);
-            tile_regs_wait();
-            for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                pack_tile(i, out_cb);
-            }
-            tile_regs_release();
-            cb_push_back(out_cb, out_subblock_num_tiles);
-            in1_index_offset += subblock_w;
-        }
-        in0_index_offset += subblock_h * in0_block_w;
-    }
-}
 
 template <uint32_t rows, uint32_t cols>
 void add_bias_inplace(uint32_t inout_cb, uint32_t bias_cb) {
@@ -266,8 +210,12 @@ void kernel_main() {
 
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
-    constexpr uint32_t batch_tiles = subblock_h * matmul_K_t;
     constexpr uint32_t subblock_tiles = subblock_h * matmul_N_t;
+
+    // CircularBuffer wrappers for compute_kernel_lib helpers.
+    experimental::CircularBuffer cb_vol2col_tiled_buf(cb_vol2col_tiled);
+    experimental::CircularBuffer cb_weight_tiled_buf(cb_weight_tiled);
+    experimental::CircularBuffer cb_matmul_interm_tiled_buf(cb_matmul_interm_tiled);
 
     mm_init(cb_vol2col_tiled, cb_weight_tiled, cb_matmul_interm_tiled);
 
@@ -334,25 +282,35 @@ void kernel_main() {
                                         pack_reconfig_data_format(cb_matmul_interm_tiled);
                                     }
 
-                                    // Wait for weights — deferred so tilize overlaps with BRISC's DRAM read.
-                                    cb_wait_front(cb_weight_tiled, weight_tiles);
-
-                                    // Phase 2: matmul the batch
-                                    cb_wait_front(cb_vol2col_tiled, batch_tiles);
-                                    matmul_blocks(
-                                        cb_vol2col_tiled,
-                                        cb_weight_tiled,
-                                        cb_matmul_interm_tiled,
-                                        subblock_h,
-                                        matmul_N_t,
-                                        matmul_K_t,
-                                        in0_num_subblocks,
-                                        in1_num_subblocks,
-                                        in0_block_w,
-                                        subblock_h,
-                                        subblock_w,
-                                        false /* transpose */);
-                                    cb_pop_front(cb_vol2col_tiled, batch_tiles);
+                                    // Phase 2: matmul the batch.
+                                    // Helper waits in0/in1 internally (mirrors the deferred weight
+                                    // wait — wait_front lands inside the helper, after the tilize
+                                    // above, preserving tilize/DRAM-read overlap).
+                                    // in1_policy=WaitAndRetainOnLastBlock: weights stay across all
+                                    // matmul_M_t/subblock_h invocations within this output block
+                                    // (popped at the c_out_block level, see end of c_out_block loop).
+                                    // interm_buf = out_buf because num_k_blocks==1: interm is unused
+                                    // and passing the same buffer makes mm_block_init configure pack
+                                    // for the correct (matmul_interm) format.
+                                    compute_kernel_lib::matmul_block<
+                                        /*transpose=*/false,
+                                        /*packer_l1_acc=*/false,
+                                        compute_kernel_lib::LastBlockTarget::Out,
+                                        compute_kernel_lib::OutputLayout::SubblockMajor,
+                                        compute_kernel_lib::matmul_config::InitMode::Full,
+                                        compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,
+                                        compute_kernel_lib::InputPolicy::WaitAndRetainOnLastBlock>(
+                                        cb_vol2col_tiled_buf,
+                                        cb_weight_tiled_buf,
+                                        cb_matmul_interm_tiled_buf,
+                                        cb_matmul_interm_tiled_buf,
+                                        compute_kernel_lib::MatmulBlockShape::of(
+                                            in0_num_subblocks,
+                                            in1_num_subblocks,
+                                            subblock_h,
+                                            subblock_w,
+                                            in0_block_w,
+                                            /*num_k_blocks=*/1));
 
                                     if constexpr (enable_streaming_output) {
                                         // Streaming emits subblocks before cb_matmul_interm_tiled is physically full,

@@ -509,7 +509,10 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
     uint32_t sbh) {
     configure_single_tile_pack(scratch_cb);
     for (uint32_t s = 0; s < sbh; s++) {
-        // 1+2. Fused matmul_reduce + recip: sum × col_identity → recip → 1/sum in scratch
+        // 1+2. Fused matmul_reduce + recip: sum × col_identity → recip → 1/sum in scratch.
+        // 1×1 matmul through compute_kernel_lib::matmul_block with a PostCompute that
+        // injects recip_tile in DST between matmul and pack — same DST window as before,
+        // expressed through the helper's PostComputeFn slot.
         {
             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MATMUL_RECIP");
             constexpr uint32_t N = 1;
@@ -522,27 +525,46 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
                 pack_reconfig_data_format(scratch_cb);
             }
 
-            cb_wait_front(col_identity_cb, N);
-            cb_wait_front(cur_sum_cb, 1);
-
-            cb_reserve_back(scratch_cb, 1);
-            tile_regs_acquire();
-            matmul_block(cur_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
+            struct RecipPost {
+                ALWI void operator()(uint32_t /* out_subblock_num_tiles */) const {
 #ifdef ARCH_BLACKHOLE
-            recip_tile_init<false>();
-            MATH((recip_tile<false>(0, (int)VectorMode::C)));
+                    recip_tile_init<false>();
+                    MATH((recip_tile<false>(0, (int)VectorMode::C)));
 #else
-            recip_tile_init();
-            MATH((recip_tile_first_column_wh_idst0_direct()));
+                    recip_tile_init();
+                    MATH((recip_tile_first_column_wh_idst0_direct()));
 #endif
-            tile_regs_commit();
+                }
+            };
 
-            tile_regs_wait();
-            pack_tile(0, scratch_cb);
-            tile_regs_release();
-            cb_push_back(scratch_cb, 1);
+            experimental::CircularBuffer cur_sum_buf(cur_sum_cb);
+            experimental::CircularBuffer col_identity_buf(col_identity_cb);
+            experimental::CircularBuffer scratch_buf(scratch_cb);
 
-            cb_pop_front(cur_sum_cb, 1);
+            // num_k_blocks=1, so the helper's K-accumulation path is inert and cur_sum_buf
+            // is forwarded as the unused interm placeholder. in1_policy keeps col_identity
+            // fronted for subsequent iterations of the outer loop.
+            compute_kernel_lib::matmul_block<
+                /*transpose=*/false,
+                /*packer_l1_acc=*/false,
+                compute_kernel_lib::LastBlockTarget::Out,
+                compute_kernel_lib::OutputLayout::SubblockMajor,
+                compute_kernel_lib::matmul_config::InitMode::None,
+                compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,
+                compute_kernel_lib::InputPolicy::WaitAndRetainOnLastBlock,
+                RecipPost>(
+                cur_sum_buf,
+                col_identity_buf,
+                scratch_buf,
+                cur_sum_buf,
+                compute_kernel_lib::MatmulBlockShape::of(
+                    /*in0_num_subblocks=*/1,
+                    /*in1_num_subblocks=*/1,
+                    /*out_subblock_h=*/1,
+                    /*out_subblock_w=*/1,
+                    /*in0_block_w=*/1,
+                    /*num_k_blocks=*/1),
+                RecipPost{});
         }
 
         // 3. Normalize: multiply output tiles by bcast_cols(1/sum)

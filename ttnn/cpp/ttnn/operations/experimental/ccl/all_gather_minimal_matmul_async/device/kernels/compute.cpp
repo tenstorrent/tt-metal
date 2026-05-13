@@ -14,6 +14,8 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
+
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     copy_tile_to_dst_init_short(in_cb);
     reconfig_data_format_srca(in_cb);
@@ -266,63 +268,23 @@ void add_bias_and_addcmul_block(
     cb_pop_front(intermediate_cb, out_block_num_tiles);
 }
 
-// Slightly modified from compute_common.hpp
-void matmul_blocks(
-    const uint32_t in0_cb,
-    const uint32_t in1_cb,
-    const uint32_t out_cb,
-    const uint32_t M_block_tiles,
-    const uint32_t N_block_tiles,
-    const uint32_t full_N_block_tiles,
-    const uint32_t K_block_tiles,
-    const uint32_t subblock_h,
-    const uint32_t subblock_w) {
-    uint32_t in0_index_offset = 0;
-
-    for (uint32_t M_start = 0; M_start < M_block_tiles; M_start += subblock_h) {
-        uint32_t in1_index_offset = 0;
-        for (uint32_t N_start = 0; N_start < N_block_tiles; N_start += subblock_w) {
-            tile_regs_acquire();
-
-            uint32_t dst_index = 0;
-            uint32_t in0_index = in0_index_offset;
-            uint32_t in1_index = in1_index_offset;
-
-            for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
-                matmul_block(
-                    in0_cb,
-                    in1_cb,
-                    in0_index,
-                    in1_index,
-                    dst_index,
-                    false /*transpose*/,
-                    subblock_w,
-                    subblock_h,
-                    K_block_tiles);
-                in0_index++;
-                in1_index += full_N_block_tiles;
-            }
-            tile_regs_commit();
-
-            tile_regs_wait();
-            uint32_t write_dst_index = 0;
-            for (uint32_t h = 0; h < subblock_h; h++) {
-                uint32_t h_tile_id = M_start + h;
-                for (uint32_t w = 0; w < subblock_w; w++) {
-                    uint32_t w_tile_id = N_start + w;
-                    uint32_t out_tile_id = h_tile_id * full_N_block_tiles + w_tile_id;
-                    pack_tile<true>(write_dst_index, out_cb, out_tile_id);
-                    write_dst_index++;
-                    dst_index++;
-                }
-            }
-            tile_regs_release();
-
-            in1_index_offset += subblock_w;
-        }
-        in0_index_offset += subblock_h * K_block_tiles;
-    }
-}
+// The pre-migration kernel had a private `matmul_blocks(...)` that walked an
+// in0/in1 K-block, packed each output sub-block via per-tile pack_tile<true> at
+// absolute offsets, and the kernel below wrapped that in a K-loop with
+// L1_ACC accumulation into a single pre-reserved intermediate buffer. The K-loop
+// helper now covers all of that via:
+//   LastBlockTarget::Interm + OutputLayout::RowMajor → pack_subblock_row_major_strided
+//     packs each subblock at absolute row positions inside the row group;
+//   packer_l1_acc + pack_last_to_interm → llk_pack_reconfig_l1_acc(0 → 1) per K-block
+//     so block 0 writes fresh and blocks 1..N-1 accumulate into the same L1 cells;
+//   caller_owns_pack_target=true → helper skips its own reserve_back/push_back/drain
+//     so the caller's outer cb_reserve_back / cb_push_back around the helper call
+//     is the single producer/consumer counter advance.
+// in0_policy controls the outer-loop in0 reuse: when reusing across the next
+// n_block_iter we keep in0 fronted on the last K-block (WaitAndRetainOnLastBlock);
+// on the final n iter we pop it to free the slot (WaitAndPopPerKBlock). The
+// runtime if-else picks between two helper template instantiations (one per
+// in0_policy value).
 
 void kernel_main() {
     constexpr uint32_t K_num_blocks = get_compile_time_arg_val(0);
@@ -361,16 +323,19 @@ void kernel_main() {
     SFPU_OP_INIT_ACTIVATION
 #endif
 
-    mm_init(in0_cb, in1_cb, intermediate_cb);
+    using namespace compute_kernel_lib;
+
+    // Boot-time matmul block init. The helper invocation below uses InitMode::None,
+    // so the per-(m,n) mm_block_init_short below is the only re-init that fires.
+    mm_block_init(in0_cb, in1_cb, intermediate_cb, false /*transpose*/, subblock_w, subblock_h, K_block_tiles);
 
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 
-    constexpr uint32_t M_num_subblocks = M_block_tiles / subblock_h;
-    constexpr uint32_t N_num_subblocks = N_block_tiles / subblock_w;
-
-    bool reuse_in0_block = false;
+    experimental::CircularBuffer in0_buf(in0_cb);
+    experimental::CircularBuffer in1_buf(in1_cb);
+    experimental::CircularBuffer intermediate_buf(intermediate_cb);
 
     uint32_t current_M_block_tiles = M_block_tiles;
     uint32_t current_N_block_tiles = N_block_tiles;
@@ -398,41 +363,88 @@ void kernel_main() {
                 K_block_tiles /*kt_dim*/);
             reconfig_data_format(in1_cb, in0_cb);
             pack_reconfig_data_format(intermediate_cb);
-            // Accumulation buffer
+            // Single outer reserve over the entire K-loop accumulation. The helper
+            // packs all K-blocks into this region with L1_ACC accumulating; no
+            // per-block reserve/push/drain (caller_owns_pack_target=true).
             cb_reserve_back(intermediate_cb, out_block_num_tiles);
-            for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
-                cb_wait_front(in0_cb, in0_block_num_tiles);
-                cb_wait_front(in1_cb, in1_block_num_tiles);
 
-                matmul_blocks(
-                    in0_cb,
-                    in1_cb,
-                    intermediate_cb,
-                    current_M_block_tiles,
-                    current_N_block_tiles,
-                    N_block_tiles,
-                    K_block_tiles,
-                    current_subblock_h,
-                    current_subblock_w);
+            const uint32_t in0_subblocks = current_M_block_tiles / current_subblock_h;
+            const uint32_t in1_subblocks = current_N_block_tiles / current_subblock_w;
+            const auto shape = MatmulBlockShape::of(
+                in0_subblocks,
+                in1_subblocks,
+                current_subblock_h,
+                current_subblock_w,
+                K_block_tiles,
+                K_num_blocks,
+                /*batch=*/1);
 
-                if (k_block == K_num_blocks - 1) {
-                    /**
-                     * On next iteration we might get reuse on in0
-                     *
-                     */
-                    if (n_block_iter < N_blocks_per_core - 1) {
-                        // going to stride on N, so reuse in0
-                        reuse_in0_block = true;
-                    }
-                }
-                if (!reuse_in0_block) {
-                    cb_pop_front(in0_cb, in0_block_num_tiles);
-                }
-                cb_pop_front(in1_cb, in1_block_num_tiles);
-                reuse_in0_block = false;
-                if (k_block == 0) {
-                    PACK((llk_pack_reconfig_l1_acc(1)));
-                }
+            // in0_policy selection: WaitAndRetainOnLastBlock when reusing in0 across
+            // the next n iter (helper skips popping in0 on the last K-block);
+            // WaitAndPopPerKBlock on the last n iter so the slot is freed for the
+            // next m iter.
+            if (n_block_iter < N_blocks_per_core - 1) {
+                matmul_block<
+                    /*transpose=*/false,
+                    /*packer_l1_acc=*/true,
+                    LastBlockTarget::Interm,
+                    OutputLayout::RowMajor,
+                    matmul_config::InitMode::None,
+                    InputPolicy::WaitAndRetainOnLastBlock,
+                    InputPolicy::WaitAndPopPerKBlock,
+                    NoPostCompute,
+                    NoPreKBlock,
+                    /*pin_interm_to_captured_base=*/false,
+                    NoPostKBlock,
+                    /*untilize_block_ct_dim=*/0,
+                    NoKBlockInnerDimFn,
+                    NoIn0Source,
+                    NoIn1BaseOffset,
+                    /*caller_owns_pack_target=*/true>(
+                    in0_buf,
+                    in1_buf,
+                    intermediate_buf,
+                    intermediate_buf,
+                    shape,
+                    NoPostCompute{},
+                    NoPreKBlock{},
+                    /*in1_per_core_w=*/N_block_tiles,
+                    /*out_row_width=*/N_block_tiles,
+                    NoPostKBlock{},
+                    NoKBlockInnerDimFn{},
+                    NoIn0Source{},
+                    NoIn1BaseOffset{});
+            } else {
+                matmul_block<
+                    /*transpose=*/false,
+                    /*packer_l1_acc=*/true,
+                    LastBlockTarget::Interm,
+                    OutputLayout::RowMajor,
+                    matmul_config::InitMode::None,
+                    InputPolicy::WaitAndPopPerKBlock,
+                    InputPolicy::WaitAndPopPerKBlock,
+                    NoPostCompute,
+                    NoPreKBlock,
+                    /*pin_interm_to_captured_base=*/false,
+                    NoPostKBlock,
+                    /*untilize_block_ct_dim=*/0,
+                    NoKBlockInnerDimFn,
+                    NoIn0Source,
+                    NoIn1BaseOffset,
+                    /*caller_owns_pack_target=*/true>(
+                    in0_buf,
+                    in1_buf,
+                    intermediate_buf,
+                    intermediate_buf,
+                    shape,
+                    NoPostCompute{},
+                    NoPreKBlock{},
+                    /*in1_per_core_w=*/N_block_tiles,
+                    /*out_row_width=*/N_block_tiles,
+                    NoPostKBlock{},
+                    NoKBlockInnerDimFn{},
+                    NoIn0Source{},
+                    NoIn1BaseOffset{});
             }
 
             cb_push_back(intermediate_cb, out_block_num_tiles);
