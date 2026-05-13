@@ -675,7 +675,7 @@ targets:
             owner_id: U0491KT8MNY # Mohamed Bahnas
             team: models
   phi-3-mini:
-    aliases: ["Phi-3-mini", "microsoft/Phi-3-mini-128k-instruct"]
+    aliases: ["Phi-3-mini", "Phi-3-mini-128k-instruct", "microsoft/Phi-3-mini-128k-instruct"]
     skus:
       wh_n150:
         entries:
