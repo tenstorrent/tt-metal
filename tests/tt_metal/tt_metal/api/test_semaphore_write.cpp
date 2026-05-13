@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// To run:
+// $ROOT/tt-metal/build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.Semaphore_Direct_Write_SanityCheck"
+
 #include <gtest/gtest.h>
 
 #include <tt-metalium/host_api.hpp>

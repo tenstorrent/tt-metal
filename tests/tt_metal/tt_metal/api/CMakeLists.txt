@@ -14,9 +14,12 @@ target_sources(unit_tests_api_lib PRIVATE
     test_fabric_allocation.cpp
     test_metadata_size.cpp
     test_noc_without_barrier.cpp
+    test_padded_write.cpp
     test_pointer_size.cpp
     test_semaphore_write.cpp
     test_tensor_bad_acess.cpp
+    test_write_beyond_res_pages.cpp
+    test_write_outside_tensor.cpp
 )
 
 target_include_directories(

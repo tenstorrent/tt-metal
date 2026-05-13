@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "emulated_program_runner.hpp"
+#include "emule_live_ranges.hpp"
 
 #include <dlfcn.h>
 #include <unistd.h>
@@ -140,6 +141,49 @@ thread_local uint32_t __emule_sem_l1_range_end = 0;
 // noc_async_read_barrier, checked at cb_push_back.
 thread_local uint32_t __emule_pending_noc_reads = 0;
 
+// Per-kernel-thread out-of-bounds-tensor sanitizer state. Populated below
+// when emule_strict_tensor_enabled() returns true; otherwise the pointer is
+// left null and the inline check in __emule_local_l1_to_ptr is a no-op.
+thread_local uint32_t __emule_l1_unreserved_base = 0;
+thread_local const uint64_t* __emule_l1_tensor_ranges = nullptr;
+thread_local uint32_t __emule_l1_tensor_ranges_count = 0;
+
+// DRAM mirror of the L1 OOB-tensor state. Consumed by the check inside
+// __emule_dram_ptr below. dram_unreserved_base is the start of user-
+// allocatable DRAM as reported by the allocator (mirrors l1_unreserved_base);
+// accesses below it are reserved system regions and pass through.
+thread_local uint32_t __emule_dram_unreserved_base = 0;
+thread_local const uint64_t* __emule_dram_tensor_ranges = nullptr;
+thread_local uint32_t __emule_dram_tensor_ranges_count = 0;
+
+// Per-kernel-thread tensor-padding sanitizer state. Populated below when
+// emule_strict_padding_enabled() returns true; otherwise the pointer is left
+// null and the inline check in __emule_local_l1_to_ptr is a no-op. Each
+// uint64_t entry is packed (logical_end << 32) | physical_end — an access
+// that falls in [logical_end, physical_end) is reported as a padding
+// violation.
+thread_local const uint64_t* __emule_l1_padding_ranges = nullptr;
+thread_local uint32_t __emule_l1_padding_ranges_count = 0;
+
+// Per-kernel-thread CB-boundary sanitizer state. Two windows per CB:
+//   __emule_cb_reserved_pages[i] — active write reservation: page count
+//       starting at cb.write_idx (mod num_pages). Bumped on cb_reserve_back,
+//       drained on cb_push_back. Catches NoC reads/writes into CB pages that
+//       have not yet been cb_reserve_back'd.
+//   __emule_cb_waited_pages[i]   — active read window: page count starting
+//       at cb.read_idx (mod num_pages). Bumped on cb_wait_front, drained on
+//       cb_pop_front. Catches NoC reads/writes that source from CB pages the
+//       consumer has not yet waited on (producer may still be writing).
+// Both windows are checked together: the access is OOB only if it falls
+// outside BOTH. Producer threads only populate reserved; consumer threads
+// only populate waited — the unused window is zero on each side, so the
+// combined check Just Works without distinguishing reads from writes.
+// The strict flag gates both — off by default since legacy kernels that
+// NoC into unreserved CB pages would false-positive until audited.
+thread_local uint32_t __emule_cb_reserved_pages[32] = {};
+thread_local uint32_t __emule_cb_waited_pages[32] = {};
+thread_local bool __emule_cb_boundary_strict = false;
+
 // Core map for cross-core NOC address resolution (shared across all threads).
 thread_local std::unordered_map<uint64_t, tt_emule::Core*>* __emule_core_map = nullptr;
 
@@ -178,6 +222,31 @@ static constexpr uint32_t NOC_NODE_MASK = (1 << NOC_NODE_ID_BITS) - 1;
 
 // C-linkage bridge functions for JIT kernels.
 extern "C" uint8_t* __emule_dram_ptr(uint64_t offset) {
+    // Out-of-bounds-tensor sanitizer for DRAM. Active only when
+    // emulated_program_runner populated the live DRAM ranges (i.e.
+    // TT_EMULE_STRICT_TENSOR is set). Accesses below dram_unreserved_base are
+    // reserved system regions and pass through; at-or-above must hit a live
+    // DRAM tensor extent.
+    if (__emule_dram_tensor_ranges != nullptr &&
+        static_cast<uint32_t>(offset) >= __emule_dram_unreserved_base) {
+        uint32_t addr = static_cast<uint32_t>(offset);
+        bool in_tensor = false;
+        for (uint32_t i = 0; i < __emule_dram_tensor_ranges_count; ++i) {
+            uint64_t packed = __emule_dram_tensor_ranges[i];
+            uint32_t r_start = static_cast<uint32_t>(packed >> 32);
+            uint32_t r_end = static_cast<uint32_t>(packed);
+            if (addr >= r_start && addr < r_end) {
+                in_tensor = true;
+                break;
+            }
+        }
+        if (!in_tensor) {
+            fprintf(stderr,
+                    "[ASAN ERROR] Out-of-Bounds Write: Attempted to access DRAM address 0x%x which is not part of any allocated tensor\n",
+                    addr);
+            abort();
+        }
+    }
     return __emule_bridge_dram ? __emule_bridge_dram + offset : nullptr;
 }
 
@@ -206,6 +275,50 @@ extern "C" uint8_t* __emule_local_l1_ptr(uint32_t offset) {
 static bool emule_strict_noc_enabled() {
     static const bool enabled = []() {
         const char* v = std::getenv("TT_EMULE_STRICT_NOC");
+        return v != nullptr && v[0] != '\0' && v[0] != '0';
+    }();
+    return enabled;
+}
+
+// TT_EMULE_STRICT_TENSOR: when set, populate the live-tensor-range thread_locals
+// before each kernel launch so __emule_local_l1_to_ptr aborts on accesses that
+// land at-or-above l1_unreserved_base but inside no allocated L1 buffer.
+// Off by default — many existing tests/kernels touch L1 regions (CB pages,
+// device-side scratch) that aren't yet registered as live ranges and would
+// false-positive.
+static bool emule_strict_tensor_enabled() {
+    static const bool enabled = []() {
+        const char* v = std::getenv("TT_EMULE_STRICT_TENSOR");
+        return v != nullptr && v[0] != '\0' && v[0] != '0';
+    }();
+    return enabled;
+}
+
+// TT_EMULE_STRICT_CB_BOUNDARY: when set, populate __emule_cb_boundary_strict
+// before each kernel launch so __emule_local_l1_to_ptr aborts on accesses
+// that land inside a CB byte range but outside the currently-reserved
+// sub-range. Off by default for the same reason as STRICT_TENSOR: existing
+// kernels may legitimately touch CB pages outside an active reservation
+// (e.g. consumer-side speculative reads, cross-CB scratch use) and would
+// false-positive until those sites are audited.
+static bool emule_strict_cb_boundary_enabled() {
+    static const bool enabled = []() {
+        const char* v = std::getenv("TT_EMULE_STRICT_CB_BOUNDARY");
+        return v != nullptr && v[0] != '\0' && v[0] != '0';
+    }();
+    return enabled;
+}
+
+// TT_EMULE_STRICT_PADDING: when set, populate the L1 padding-range thread_locals
+// before each kernel launch so __emule_local_l1_to_ptr aborts on accesses
+// that land inside a buffer's declared padding region [logical_end, physical_end).
+// Independent of STRICT_TENSOR: padding-only checks can be enabled without
+// requiring every buffer to be registered as a live tensor. Padding regions
+// are populated by Buffer::set_logical_size — buffers that never call it
+// have no padding entry and contribute nothing to the check.
+static bool emule_strict_padding_enabled() {
+    static const bool enabled = []() {
+        const char* v = std::getenv("TT_EMULE_STRICT_PADDING");
         return v != nullptr && v[0] != '\0' && v[0] != '0';
     }();
     return enabled;
@@ -1874,19 +1987,38 @@ static std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>> build_per_thr
     return per_thread_dfbs;
 }
 
+// Per-program snapshot for the L1 OOB-tensor sanitizer. Held alive on the
+// stack of execute_program_emulated for the duration of launch_cores, threaded
+// through into each kernel thread's thread_local pointers.
+struct EmuleOobTensorState {
+    uint32_t l1_unreserved_base = 0;
+    const uint64_t* tensor_ranges = nullptr;
+    uint32_t tensor_ranges_count = 0;
+    uint32_t dram_unreserved_base = 0;
+    const uint64_t* dram_tensor_ranges = nullptr;
+    uint32_t dram_tensor_ranges_count = 0;
+    bool cb_boundary_strict = false;
+    // Tensor-padding sanitizer state. Independent of (tensor_ranges,
+    // dram_tensor_ranges) above: STRICT_PADDING can be enabled without
+    // STRICT_TENSOR. Null means "no padding check this launch".
+    const uint64_t* l1_padding_ranges = nullptr;
+    uint32_t l1_padding_ranges_count = 0;
+};
+
 // ---------------------------------------------------------------------------
 // launch_cores: Spawn concurrent threads per core, each runs its kernels.
 // ---------------------------------------------------------------------------
 static void launch_cores(
     std::vector<CoreSetup>& core_setups,
     uint8_t* dram_data,
-    std::unordered_map<uint64_t, tt_emule::Core*>* core_map_ptr) {
+    std::unordered_map<uint64_t, tt_emule::Core*>* core_map_ptr,
+    const EmuleOobTensorState& oob_state) {
     std::vector<std::thread> core_threads;
     std::vector<std::exception_ptr> core_exceptions(core_setups.size());
 
     for (size_t core_idx = 0; core_idx < core_setups.size(); ++core_idx) {
         core_threads.emplace_back(
-            [&cs = core_setups[core_idx], dram_data, core_map_ptr, &core_ep = core_exceptions[core_idx]]() {
+            [&cs = core_setups[core_idx], dram_data, core_map_ptr, oob_state, &core_ep = core_exceptions[core_idx]]() {
                 try {
                     auto* core = cs.core;
                     uint8_t* l1_data = core->l1_data();
@@ -1933,6 +2065,7 @@ static void launch_cores(
                                               sem_size,
                                               kidx,
                                               single_kernel_on_core,
+                                              oob_state,
                                               &kep = kernel_exceptions[kidx]]() {
                             (void)kidx;
                             auto& ki = *ki_ptr;
@@ -1962,6 +2095,19 @@ static void launch_cores(
                             __emule_sem_l1_range_start = sem_base;
                             __emule_sem_l1_range_end = sem_base + sem_size;
                             __emule_pending_noc_reads = 0;
+                            __emule_l1_unreserved_base = oob_state.l1_unreserved_base;
+                            __emule_l1_tensor_ranges = oob_state.tensor_ranges;
+                            __emule_l1_tensor_ranges_count = oob_state.tensor_ranges_count;
+                            __emule_dram_unreserved_base = oob_state.dram_unreserved_base;
+                            __emule_dram_tensor_ranges = oob_state.dram_tensor_ranges;
+                            __emule_dram_tensor_ranges_count = oob_state.dram_tensor_ranges_count;
+                            __emule_l1_padding_ranges = oob_state.l1_padding_ranges;
+                            __emule_l1_padding_ranges_count = oob_state.l1_padding_ranges_count;
+                            for (uint32_t i = 0; i < EMULE_NUM_CBS; ++i) {
+                                __emule_cb_reserved_pages[i] = 0;
+                                __emule_cb_waited_pages[i] = 0;
+                            }
+                            __emule_cb_boundary_strict = oob_state.cb_boundary_strict;
 
                             __emule_neo_id = ki.is_tensix ? ki.processor_id : 0;
                             __emule_trisc_id = 0;
@@ -2024,6 +2170,19 @@ static void launch_cores(
                             __emule_sem_l1_range_start = 0;
                             __emule_sem_l1_range_end = 0;
                             __emule_pending_noc_reads = 0;
+                            __emule_l1_unreserved_base = 0;
+                            __emule_l1_tensor_ranges = nullptr;
+                            __emule_l1_tensor_ranges_count = 0;
+                            __emule_dram_unreserved_base = 0;
+                            __emule_dram_tensor_ranges = nullptr;
+                            __emule_dram_tensor_ranges_count = 0;
+                            __emule_l1_padding_ranges = nullptr;
+                            __emule_l1_padding_ranges_count = 0;
+                            for (uint32_t i = 0; i < EMULE_NUM_CBS; ++i) {
+                                __emule_cb_reserved_pages[i] = 0;
+                                __emule_cb_waited_pages[i] = 0;
+                            }
+                            __emule_cb_boundary_strict = false;
                         });
                     }
 
@@ -2148,7 +2307,50 @@ void execute_program_emulated(IDevice* device, Program& program) {
 
     // Phase 3: Launch all cores concurrently
     uint8_t* dram_data = dram_core ? dram_core->l1_data() : nullptr;
-    launch_cores(core_setups, dram_data, core_map_ptr);
+
+    // Snapshot live L1 tensor ranges and the allocator's unreserved base for
+    // the OOB-tensor sanitizer (TT_EMULE_STRICT_TENSOR). When disabled, leave
+    // ranges null so the inline check in __emule_local_l1_to_ptr is a no-op.
+    EmuleOobTensorState oob_state;
+    std::vector<uint64_t> live_ranges_snapshot;
+    std::vector<uint64_t> dram_live_ranges_snapshot;
+    std::vector<uint64_t> padding_ranges_snapshot;
+    // Sentinel for the "no live ranges" case — vector::data() on an empty
+    // vector may return nullptr, which would short-circuit the check and let
+    // accesses through. A non-null sentinel with count=0 forces the check to
+    // run and abort, which is the correct behavior when no tensor is live.
+    static const uint64_t kEmptyRange = 0;
+    if (emule_strict_tensor_enabled()) {
+        live_ranges_snapshot = tt::tt_metal::emule::LiveL1Ranges::snapshot(device_id);
+        oob_state.l1_unreserved_base = static_cast<uint32_t>(
+            device->allocator()->get_base_allocator_addr(HalMemType::L1));
+        oob_state.tensor_ranges = live_ranges_snapshot.empty()
+            ? &kEmptyRange
+            : live_ranges_snapshot.data();
+        oob_state.tensor_ranges_count = static_cast<uint32_t>(live_ranges_snapshot.size());
+
+        dram_live_ranges_snapshot = tt::tt_metal::emule::LiveDramRanges::snapshot(device_id);
+        oob_state.dram_unreserved_base = static_cast<uint32_t>(
+            device->allocator()->get_base_allocator_addr(HalMemType::DRAM));
+        oob_state.dram_tensor_ranges = dram_live_ranges_snapshot.empty()
+            ? &kEmptyRange
+            : dram_live_ranges_snapshot.data();
+        oob_state.dram_tensor_ranges_count = static_cast<uint32_t>(dram_live_ranges_snapshot.size());
+    }
+    if (emule_strict_padding_enabled()) {
+        padding_ranges_snapshot = tt::tt_metal::emule::LiveL1PaddingRanges::snapshot(device_id);
+        // Padding check is per-range only — no buffer means no padding to
+        // check. Leave the pointer null in that case so the inline check is a
+        // pure no-op (unlike the OOB-tensor check which must trap on accesses
+        // when no tensor is live, the padding check has nothing to validate).
+        if (!padding_ranges_snapshot.empty()) {
+            oob_state.l1_padding_ranges = padding_ranges_snapshot.data();
+            oob_state.l1_padding_ranges_count = static_cast<uint32_t>(padding_ranges_snapshot.size());
+        }
+    }
+    oob_state.cb_boundary_strict = emule_strict_cb_boundary_enabled();
+
+    launch_cores(core_setups, dram_data, core_map_ptr, oob_state);
 
     // Phase 4: Host-side dirty-CB sanitizer — final whole-program sweep. The
     // per-kernel kernel-side check inside launch_cores only fires for cores

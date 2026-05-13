@@ -31,6 +31,10 @@
 #include "tt_align.hpp"
 #include <tt-metalium/allocator.hpp>
 
+#ifdef TT_METAL_USE_EMULE
+#include "impl/emulation/emule_live_ranges.hpp"
+#endif
+
 namespace tt::tt_metal {
 namespace {
 
@@ -428,6 +432,20 @@ void Buffer::allocate_impl() {
         // Requires updating all use cases of buffer address to accept a u64 to remove
         TT_ASSERT(address_ <= std::numeric_limits<uint32_t>::max());
 
+#ifdef TT_METAL_USE_EMULE
+        if (buffer_type_ == BufferType::L1 || buffer_type_ == BufferType::L1_SMALL) {
+            tt::tt_metal::emule::LiveL1Ranges::add(
+                device_->id(),
+                static_cast<uint32_t>(address_),
+                static_cast<uint32_t>(address_ + size_));
+        } else if (buffer_type_ == BufferType::DRAM) {
+            tt::tt_metal::emule::LiveDramRanges::add(
+                device_->id(),
+                static_cast<uint32_t>(address_),
+                static_cast<uint32_t>(address_ + size_));
+        }
+#endif
+
 #if defined(TRACY_ENABLE)
         if (tt::tt_metal::MetalContext::instance(extract_context_id(device_))
                 .rtoptions()
@@ -471,6 +489,17 @@ void Buffer::deallocate_impl() {
             }
 #endif
             validate_sub_device_manager_id(sub_device_manager_id_, device_);
+#ifdef TT_METAL_USE_EMULE
+            if (buffer_type_ == BufferType::L1 || buffer_type_ == BufferType::L1_SMALL) {
+                tt::tt_metal::emule::LiveL1Ranges::remove(
+                    device_->id(), static_cast<uint32_t>(address_));
+                tt::tt_metal::emule::LiveL1PaddingRanges::clear(
+                    device_->id(), static_cast<uint32_t>(address_));
+            } else if (buffer_type_ == BufferType::DRAM) {
+                tt::tt_metal::emule::LiveDramRanges::remove(
+                    device_->id(), static_cast<uint32_t>(address_));
+            }
+#endif
             allocator_->deallocate_buffer(this);
         }
 
@@ -506,6 +535,33 @@ void Buffer::set_page_size(DeviceAddr page_size) {
     page_size_ = page_size;
     this->buffer_distribution_spec_ = std::nullopt;
     this->buffer_page_mapping_ = nullptr;
+}
+
+void Buffer::set_logical_size(DeviceAddr logical_size) {
+    TT_FATAL(
+        logical_size <= size_,
+        "logical_size ({}) must not exceed buffer size ({})",
+        logical_size,
+        size_);
+#ifdef TT_METAL_USE_EMULE
+    if (allocation_status_ != AllocationStatus::ALLOCATED) {
+        return;
+    }
+    if (buffer_type_ != BufferType::L1 && buffer_type_ != BufferType::L1_SMALL) {
+        return;
+    }
+    uint32_t start = static_cast<uint32_t>(address_);
+    uint32_t physical_end = static_cast<uint32_t>(address_ + size_);
+    if (logical_size == size_) {
+        tt::tt_metal::emule::LiveL1PaddingRanges::clear(device_->id(), start);
+    } else {
+        uint32_t logical_end = static_cast<uint32_t>(address_ + logical_size);
+        tt::tt_metal::emule::LiveL1PaddingRanges::set(
+            device_->id(), start, logical_end, physical_end);
+    }
+#else
+    (void)logical_size;
+#endif
 }
 
 uint32_t Buffer::num_pages() const { return page_size() == 0 ? 0 : size() / page_size(); }

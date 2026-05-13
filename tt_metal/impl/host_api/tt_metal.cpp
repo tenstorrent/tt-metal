@@ -98,6 +98,33 @@ void check_buffer_allocated(const Buffer& buffer, const char* op) {
         std::abort();
     }
 }
+
+// Host→device alignment sanitizers. Device/kernel-side accesses are checked
+// inside tt-emule's Core::l1_ptr; these guard the symmetric host entry points
+// (WriteToDevice{L1,DRAMChannel}, ReadFromDevice{L1,DRAMChannel}) so misaligned
+// addresses passed from host code are caught before they reach the cluster
+// write path. Alignment values match WH/N150.
+void check_host_l1_alignment(uint32_t address, const char* op) {
+    if (address % 4 != 0) {
+        fprintf(
+            stderr,
+            "[ASAN ERROR] L1 Alignment: %s host address 0x%x must be 4-byte aligned\n",
+            op,
+            address);
+        std::abort();
+    }
+}
+
+void check_host_dram_alignment(uint32_t address, const char* op) {
+    if (address % 32 != 0) {
+        fprintf(
+            stderr,
+            "[ASAN ERROR] DRAM Alignment: %s host address 0x%x must be 32-byte aligned (WH)\n",
+            op,
+            address);
+        std::abort();
+    }
+}
 struct DataMovementConfigStatus {
     bool riscv0_in_use;
     bool riscv1_in_use;
@@ -238,6 +265,7 @@ namespace detail {
 
 bool WriteToDeviceDRAMChannel(
     IDevice* device, int dram_channel, uint32_t address, std::span<const std::uint8_t> host_buffer) {
+    check_host_dram_alignment(address, "WriteToDeviceDRAMChannel");
     TT_FATAL(
         address >= device->allocator()->get_base_allocator_addr(HalMemType::DRAM),
         "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!",
@@ -256,6 +284,7 @@ bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t addres
 }
 
 bool ReadFromDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::span<uint8_t> host_buffer) {
+    check_host_dram_alignment(address, "ReadFromDeviceDRAMChannel");
     bool pass = true;
     MetalContext::instance().get_cluster().dram_barrier(device->id());
     MetalContext::instance().get_cluster().read_dram_vec(
@@ -277,6 +306,7 @@ bool WriteToDeviceL1(
     std::span<const std::uint8_t> host_buffer,
     CoreType core_type) {
     ZoneScoped;
+    check_host_l1_alignment(address, "WriteToDeviceL1");
     auto worker_core = device->virtual_core_from_logical_core(logical_core, core_type);
     MetalContext::instance().get_cluster().write_core(device->id(), worker_core, host_buffer, address);
     return true;
@@ -308,6 +338,7 @@ bool ReadFromDeviceL1(
     uint32_t address,
     std::span<uint8_t> host_buffer,
     CoreType core_type) {
+    check_host_l1_alignment(address, "ReadFromDeviceL1");
     MetalContext::instance().get_cluster().l1_barrier(device->id());
     auto virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
     MetalContext::instance().get_cluster().read_core(
@@ -322,6 +353,7 @@ bool ReadFromDeviceL1(
     uint32_t size,
     std::vector<uint32_t>& host_buffer,
     CoreType core_type) {
+    check_host_l1_alignment(address, "ReadFromDeviceL1");
     MetalContext::instance().get_cluster().l1_barrier(device->id());
     auto virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
     host_buffer = MetalContext::instance().get_cluster().read_core(device->id(), virtual_core, address, size);

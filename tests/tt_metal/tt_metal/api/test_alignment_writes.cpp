@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// To run:
+// $ROOT/tt-metal/build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.L1_Alignment_SanityCheck:MeshDeviceFixture.DRAM_Alignment_SanityCheck_WH"
+
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <vector>
