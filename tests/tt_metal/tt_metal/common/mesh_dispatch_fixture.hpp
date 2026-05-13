@@ -23,45 +23,67 @@
 
 namespace tt::tt_metal {
 
-struct SharedDevices {
+struct SharedMeshDeviceState {
     std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device;
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices;
+    uint32_t max_cbs {0};
     bool initialized {false};
     bool needs_recovery {false};
+};
+
+struct UnitMeshDeviceConfig {
+    std::vector<ChipId> chip_ids;
+    size_t l1_small_size {DEFAULT_L1_SMALL_SIZE};
+    size_t trace_region_size {DEFAULT_TRACE_REGION_SIZE};
+    uint8_t num_hw_cqs {1};
+    size_t worker_l1_size {DEFAULT_WORKER_L1_SIZE};
 };
 
 // A dispatch-agnostic test fixture
 class MeshDispatchFixture : public ::testing::Test {
 private:
-    static SharedDevices& get_shared_devices() {
-        static SharedDevices devices;
+    static SharedMeshDeviceState& get_shared_devices() {
+        static SharedMeshDeviceState devices;
         return devices;
     }
 
-    static void create_shared_devices() {
-        auto& shared = get_shared_devices();
+    static UnitMeshDeviceConfig get_default_unit_mesh_config() {
+        UnitMeshDeviceConfig config;
+        for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
+            config.chip_ids.push_back(id);
+        }
+        return config;
+    }
+
+    static void create_shared_devices(SharedMeshDeviceState& shared, const UnitMeshDeviceConfig& config) {
         if (shared.initialized) {
             return;
         }
 
-        std::vector<ChipId> ids;
-        for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
-            ids.push_back(id);
-        }
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
         shared.id_to_device = distributed::MeshDevice::create_unit_meshes(
-            ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
+            config.chip_ids,
+            config.l1_small_size,
+            config.trace_region_size,
+            config.num_hw_cqs,
+            dispatch_core_config,
+            {},
+            config.worker_l1_size);
         shared.devices.clear();
         for (const auto& [device_id, device] : shared.id_to_device) {
             shared.devices.push_back(device);
         }
+        shared.max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
         shared.initialized = true;
         shared.needs_recovery = false;
     }
 
-    static void destroy_shared_devices() {
-        auto& shared = get_shared_devices();
+    static void create_shared_devices() {
+        create_shared_devices(get_shared_devices(), get_default_unit_mesh_config());
+    }
+
+    static void destroy_shared_devices(SharedMeshDeviceState& shared) {
         if (!shared.initialized) {
             shared.needs_recovery = false;
             return;
@@ -73,8 +95,13 @@ private:
         }
         shared.id_to_device.clear();
         shared.devices.clear();
+        shared.max_cbs = 0;
         shared.initialized = false;
         shared.needs_recovery = false;
+    }
+
+    static void destroy_shared_devices() {
+        destroy_shared_devices(get_shared_devices());
     }
 
 public:
@@ -143,7 +170,7 @@ protected:
 
         this->DetectDispatchMode();
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        this->max_cbs_ = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
+        this->max_cbs_ = shared.max_cbs;
     }
 
     void TearDown() override {
