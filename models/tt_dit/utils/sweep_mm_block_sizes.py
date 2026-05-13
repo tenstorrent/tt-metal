@@ -186,16 +186,16 @@ FP32_DEST_ACC_EN = True
 
 # Block-size candidate methodology:
 # - M/N block:  even sizes in [MN_BLOCK_MIN, MN_BLOCK_MAX]  union  divisors of
-#               per-core tile count in that same range. Extreme sizes (<4 or >16)
-#               are excluded because they're either dispatch-overhead-dominated
-#               (tiny) or low-pipelining (huge); divisors are added to give a
-#               "1 block per core" option even when it's odd (e.g. 5, 15).
+#               per-core tile count in that same range. Floor at 2 (1 is usually
+#               dispatch-overhead-bound); cap at 16 because larger blocks reduce
+#               pipelining. Divisors are added to give a "1 block per core"
+#               option even when it's odd (e.g. 5, 15).
 # - K block:    divisors of K_per_device (AGMM) / K_tiles (non-AGMM) at >=
 #               K_BLOCK_MIN. K_block MUST divide K_per_device for AGMM (the ring
 #               all-gather delivers K_per_device tiles in K_block-sized chunks);
 #               non-divisor candidates would leave a partial chunk on the last
 #               ring iteration. No upper cap — large divisors don't add padding.
-MN_BLOCK_MIN, MN_BLOCK_MAX = 4, 16
+MN_BLOCK_MIN, MN_BLOCK_MAX = 2, 16
 K_BLOCK_MIN = 4
 
 # L1 budget for pre-filtering block combos (KB).
