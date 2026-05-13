@@ -169,6 +169,7 @@ def build_matmul_pcfg(
     *,
     in0_block_w: Optional[int] = None,
     activation=None,
+    dst_budget: int = 8,
 ):
     """Build a MatmulMultiCoreReuseMultiCastProgramConfig (2D BLOCK_SHARDED).
 
@@ -186,21 +187,28 @@ def build_matmul_pcfg(
     if per_core_M == 0 or per_core_N == 0:
         return None
 
-    # in0_block_w must divide K_tiles
+    # in0_block_w must divide K_tiles. SigLIP MLP has K=4304 padded to 4320
+    # (135 tiles) which doesn't divide cleanly into 4 or 2 — return None so
+    # caller falls back to the default core_grid path. We could also handle
+    # odd K with in0_block_w=1 but that's slow; default path is fine.
     if in0_block_w is None:
         in0_block_w = 4
     while k_tiles % in0_block_w != 0 and in0_block_w > 1:
         in0_block_w //= 2
+    if in0_block_w == 1 and k_tiles > 32:
+        # Tiny block_w on a large K is unlikely to win — bail out.
+        return None
 
-    key = (m_tiles, k_tiles, n_tiles, grid_x, grid_y, str(activation))
+    key = (m_tiles, k_tiles, n_tiles, grid_x, grid_y, str(activation), dst_budget)
     if key in _pcfg_cache:
         return _pcfg_cache[key]
 
-    # out_subblock_w * out_subblock_h <= 8 (DST register tile budget)
-    out_subblock_w = min(per_core_N, 8)
+    # out_subblock_w * out_subblock_h <= dst_budget (DST register tile budget).
+    # fp32_dest_acc_en=True halves the budget to 4. bf16 dest accum allows 8.
+    out_subblock_w = min(per_core_N, dst_budget)
     while out_subblock_w > 1 and per_core_N % out_subblock_w != 0:
         out_subblock_w -= 1
-    out_subblock_h_budget = max(1, 8 // out_subblock_w)
+    out_subblock_h_budget = max(1, dst_budget // out_subblock_w)
     out_subblock_h = min(per_core_M, out_subblock_h_budget)
     while out_subblock_h > 1 and per_core_M % out_subblock_h != 0:
         out_subblock_h -= 1

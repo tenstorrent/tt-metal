@@ -28,6 +28,7 @@ import tt_lib.fallback_ops as fallback_ops  # For position embedding interpolati
 
 from models.experimental.pi0.common.configs import SigLIPConfig
 from models.experimental.pi0.tt.ttnn_common import sdpa_prefill_chunk_sizes, tensor_1d_to_2d_ttnn
+from models.experimental.pi0.tt.ttnn_gemma import build_matmul_pcfg
 
 
 # ============================================================================
@@ -364,15 +365,44 @@ class SigLIPAttentionTTNN:
 
         # OPTIMIZATION 1: Single fused QKV linear (instead of 3 separate)
         # Output: [batch, 1, seq, 3 * num_heads * padded_head_dim]
-        xqkv_fused = ttnn.linear(
-            hidden_states,
-            self.wqkv,
-            bias=self.bqkv,
-            dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-            core_grid=self.core_grid,
+        ndim = len(hidden_states.shape)
+        m_eff_attn = 1
+        for i in range(ndim - 1):
+            m_eff_attn *= int(hidden_states.shape[i])
+        attn_k = (int(hidden_states.shape[-1]) + 31) // 32
+        attn_n_qkv = (int(self.wqkv.shape[-1]) + 31) // 32
+        m_t_attn = (m_eff_attn + 31) // 32
+
+        qkv_pcfg = build_matmul_pcfg(
+            m_t_attn,
+            attn_k,
+            attn_n_qkv,
+            self.grid_size[0],
+            self.grid_size[1],
+            in0_block_w=4,
+            dst_budget=4,
         )
+
+        if qkv_pcfg is not None:
+            xqkv_fused = ttnn.linear(
+                hidden_states,
+                self.wqkv,
+                bias=self.bqkv,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+                program_config=qkv_pcfg,
+            )
+        else:
+            xqkv_fused = ttnn.linear(
+                hidden_states,
+                self.wqkv,
+                bias=self.bqkv,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+                core_grid=self.core_grid,
+            )
 
         # OPTIMIZATION 2: Native TTNN head splitting
         # This splits the fused QKV into separate Q, K, V with proper head layout
@@ -419,16 +449,38 @@ class SigLIPAttentionTTNN:
         )
         ttnn.deallocate(attn_output)
 
-        # Output projection — fuse bias into the linear.
-        output = ttnn.linear(
-            attn_concat,
-            self.wo,
-            bias=self.bo,
-            dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-            core_grid=self.core_grid,
+        # Output projection — sharded program_config + fused bias.
+        wo_k = (int(self.wo.shape[-2]) + 31) // 32
+        wo_n = (int(self.wo.shape[-1]) + 31) // 32
+        wo_pcfg = build_matmul_pcfg(
+            m_t_attn,
+            wo_k,
+            wo_n,
+            self.grid_size[0],
+            self.grid_size[1],
+            in0_block_w=4,
+            dst_budget=4,
         )
+        if wo_pcfg is not None:
+            output = ttnn.linear(
+                attn_concat,
+                self.wo,
+                bias=self.bo,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+                program_config=wo_pcfg,
+            )
+        else:
+            output = ttnn.linear(
+                attn_concat,
+                self.wo,
+                bias=self.bo,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+                core_grid=self.core_grid,
+            )
         ttnn.deallocate(attn_concat)
 
         # Reshape back to 3D: [batch, 1, seq, hidden] -> [batch, seq, hidden]
@@ -512,28 +564,88 @@ class SigLIPMLPTTNN:
         Returns:
             TTNN tensor (batch_size, seq_len, hidden_size)
         """
-        # FC1 with GELU activation
-        x = ttnn.linear(
-            hidden_states,
-            self.fc1_weight,
-            bias=self.fc1_bias,
-            dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
-            core_grid=self.core_grid,
-            activation="gelu",
+        # Compute matmul tile counts. SigLIP runs at bs=2 (2 images stacked).
+        # The matmul kernel collapses leading dims into M: M_eff = product of dims
+        # before the last (hidden) dim. Input shape: (2, 1, 256, 1152) → M_eff = 512.
+        ndim = len(hidden_states.shape)
+        m_eff = 1
+        for i in range(ndim - 1):
+            m_eff *= int(hidden_states.shape[i])
+        hidden = int(hidden_states.shape[-1])
+        intermediate = int(self.fc1_weight.shape[-1])
+        m_t = (m_eff + 31) // 32
+        # Ceil division — the matmul kernel pads K up to a tile-multiple internally,
+        # and the in0_block_w divisor check applies to the *padded* K.
+        k_t_fc1 = (hidden + 31) // 32
+        n_t_fc1 = (intermediate + 31) // 32
+        k_t_fc2 = (intermediate + 31) // 32
+        n_t_fc2 = (hidden + 31) // 32
+
+        # SigLIP compute config uses fp32_dest_acc_en=True → DST budget = 4 tiles.
+        fc1_pcfg = build_matmul_pcfg(
+            m_t,
+            k_t_fc1,
+            n_t_fc1,
+            self.grid_size[0],
+            self.grid_size[1],
+            in0_block_w=4,
+            activation=(ttnn.UnaryOpType.GELU, True),
+            dst_budget=4,
+        )
+        fc2_pcfg = build_matmul_pcfg(
+            m_t,
+            k_t_fc2,
+            n_t_fc2,
+            self.grid_size[0],
+            self.grid_size[1],
+            in0_block_w=4,
+            dst_budget=4,
         )
 
-        # FC2 — fuse bias into the linear (was: separate ttnn.add per block).
-        output = ttnn.linear(
-            x,
-            self.fc2_weight,
-            bias=self.fc2_bias,
-            dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
-            core_grid=self.core_grid,
-        )
+        # FC1 with GELU
+        if fc1_pcfg is not None:
+            x = ttnn.linear(
+                hidden_states,
+                self.fc1_weight,
+                bias=self.fc1_bias,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=fc1_pcfg,
+            )
+        else:
+            x = ttnn.linear(
+                hidden_states,
+                self.fc1_weight,
+                bias=self.fc1_bias,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config,
+                core_grid=self.core_grid,
+                activation="gelu",
+            )
+
+        # FC2
+        if fc2_pcfg is not None:
+            output = ttnn.linear(
+                x,
+                self.fc2_weight,
+                bias=self.fc2_bias,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=fc2_pcfg,
+            )
+        else:
+            output = ttnn.linear(
+                x,
+                self.fc2_weight,
+                bias=self.fc2_bias,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config,
+                core_grid=self.core_grid,
+            )
         ttnn.deallocate(x)
 
         return output
