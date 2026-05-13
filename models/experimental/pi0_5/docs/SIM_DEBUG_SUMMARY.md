@@ -1,6 +1,6 @@
 # PI0.5 LIBERO Sim Debug — Summary
 
-**Date:** 2026-05-12
+**Date:** 2026-05-13
 **Author:** sdawle
 **Status:** **Simulator working on TTNN/Blackhole.** Headline numbers on
 `libero_spatial` task 0:
@@ -13,11 +13,28 @@
 | TTNN    | 4  | 5 | 5/5 (100%) | 74.2  | 226 |
 | **TTNN** | **4** | **50** | **48/50 (96%)** | **82.6** | **229** |
 
+After cherry-picking the pi0_p150 perf optimizations (2D BLOCK_SHARDED matmuls
+for Gemma + SigLIP, MLP padding bugfix, bf8 attention weights, MMProjector
+sharding), traced inference latency drops from **142 ms → 102.70 ms / chunk at
+N=10** (−28% latency, +38% action throughput). Rollout untraced steady-state
+goes 229 → 201-214 ms / chunk at N=4. Task success unchanged (4/5 in a 5-ep
+sanity sweep post-optims, statistically consistent with the 48/50 baseline).
+
 All configs use `replan_steps=5`, `max_steps=220`, task description
 `"pick up the black bowl between the plate and the ramekin and place it on the plate"`.
 
+### Trace-mode perf (test_perf_ttnn_full_e2e_trace.py, N=10)
+
+| metric | before perf optims | **after** | delta |
+|---|---|---|---|
+| per-call latency | 142.0 ms | **102.70 ms** | **−28%** |
+| chunk throughput | 7.04 chunks/s | **9.74 chunks/s** | **+38%** |
+| action throughput | 352 actions/s | **486.86 actions/s** | **+38%** |
+| jitter (stddev) | — | 0.03 ms | very tight |
+
 Key takeaways:
-- TTNN is ~12× faster per chunk than pytorch CPU (229ms vs 5538ms at N=4/N=10).
+- TTNN is ~24× faster per chunk than pytorch CPU after both rounds of optims
+  (~200ms rollout, ~102ms traced).
 - **N=4 outperforms N=10** on this task — 96% (48/50) vs 80% (4/5) — and ~2×
   faster per chunk. Matches the Dense-Jump Flow Matching paper claim that
   flow-matching policies often peak at 2–4 steps.
@@ -114,6 +131,74 @@ Symptom: 0/N task success.
    Found the **missing trailing `silu`** on the time MLP. Fixed it.
 6. Re-ran the rollout: **3/3 success**.
 
+## Pi0 → Pi0.5 perf-optim port (May 13)
+
+After the simulator started working, cherry-picked the matmul-sharding perf
+wins developed on the `sdawle/dvartanians/pi0_p150` branch onto `pi0.5_bh`.
+Because pi0.5 imports the shared infrastructure files from
+`models/experimental/pi0/tt/` (Gemma attention/MLP, SigLIP, PaliGemma backbone,
+prefix embedding), most wins transferred directly with no per-architecture
+adaptation.
+
+Cherry-picked (in chronological order):
+
+| commit | what | pi0 gain |
+|---|---|---|
+| `b9f7b08af0d` | GemmaMLP padding (was padding to chunk_size=544, now next tile-32 multiple) + bf8 attn QKV/o_proj weights | 133→126 ms (−6%) |
+| `92812ddc9ca` | 2D BLOCK_SHARDED matmul program_config for Gemma MLP (12×10 grid, in0_block_w=4) | 126→111 ms (−12%) |
+| `b852ded530e` | 2D BLOCK_SHARDED for Gemma attention (wqkv, o_proj) | 111→100 ms (−10%) |
+| `055b73819f4` | 2D BLOCK_SHARDED for SigLIP MLP + attention (adaptive K_tiles, dst_budget for fp32_dest_acc_en) | 100→98 ms (−2%) |
+| `cc41296111d` | Adaptive in0_block_w by per_core_N + MMProjector shard | 98→96 ms (−2%) |
+| `27466aa2d3c` | Disable `resample_noise` before `begin_trace_capture` (test-side fix; `from_torch` mid-trace was forbidden) | (test fix) |
+
+Conflicts:
+- `f7ef0742612` (Gemma attention 2D shard) conflicted on the o_proj block —
+  pi0.5_bh had an older `core_grid=…` variant, took the new 2D sharded
+  version with fallback.
+- `be6a5818f10` (initial misc perf bundle) was already merged into pi0.5_bh
+  as part of the DiT-cond mega-commit `ed45a26cb01`; skipped.
+
+Risks considered:
+- **adaRMSNorm in pi0.5 action expert.** The matmul-sharding changes are at
+  the GemmaMLP / GemmaAttention level — RMSNorm flavor (plain vs adaRMS) is
+  applied outside those classes, so the changes are drop-in. Verified by
+  running the 50-ep N=4 rollout post-merge.
+- **KV-cache L1 footprint.** pi0.5's 200-token prompt is larger than pi0's
+  32-token prompt, so trace-persistent KV buffers eat more L1. The
+  `in0_block_w=4` for MLP was tuned against pi0's L1 headroom; could
+  overflow on pi0.5. Did not overflow in practice (trace captured cleanly,
+  zero CB-overflow errors).
+- **Trace + `from_torch` interaction.** The fresh-noise-per-call fix issues a
+  `ttnn.from_torch` inside `sample_actions`, which trace capture forbids.
+  Tests that need the captured trace must set `model.resample_noise = False`
+  before `begin_trace_capture` and refresh `model.x_t_ttnn` from host
+  between trace replays. Production rollouts don't trace, so they retain
+  the resample-per-call behavior.
+
+### Trace-mode perf result (test_perf_ttnn_full_e2e_trace.py, N=10)
+
+```
+Trace capture:        476.68 ms (one-time)
+Per-call avg:         102.70 ms
+Per-call min:         102.65 ms
+Per-call max:         102.76 ms
+Per-call stddev:        0.03 ms
+Chunk throughput:       9.74 chunks/s
+Action throughput:    486.86 actions/s
+```
+
+(was 142 ms / chunk / 352 actions/s pre-merge → **−28% latency, +38% throughput**)
+
+### Rollout correctness post-merge (5-ep N=4)
+
+```
+N=4: success 4/5  avg_steps=127.6  avg_chunk_pred=231ms
+```
+
+Steady-state untraced is 201-214 ms / chunk; the 231 ms avg includes the
+chunk-1 6.01s JIT-compile warmup. Statistically consistent with the
+pre-merge 48/50 (96%) baseline — perf optims did not regress correctness.
+
 ## How to keep iterating
 
 ### Reproduce the 50-ep N=4 TTNN result (recommended starting point)
@@ -148,19 +233,29 @@ cp -r /storage/sdawle/openpi/src/openpi/models_pytorch/transformers_replace/* \
 This installs openpi's transformers fork (adds adaRMS support to Gemma), used
 to confirm our reference matches openpi's PI05Pytorch.
 
-## Files changed this session
+## Files changed (whole pi0.5 sim debug + perf-port arc)
 
 ```
 M  models/experimental/pi0_5/eval/libero_rollout.py        (MEAN_STD norm)
 M  models/experimental/pi0_5/tt/ttnn_pi0_5_model.py        (fresh noise per call)
 M  models/experimental/pi0_5/tests/perf/test_denoise_step_accuracy.py  (opt-out flag)
+M  models/experimental/pi0_5/tests/perf/test_perf_ttnn_full_e2e_trace.py  (resample_noise=False for trace)
 M  models/experimental/pi0_5/reference/torch_suffix.py     (trailing silu)
 M  models/experimental/pi0_5/tt/ttnn_suffix.py             (trailing silu)
+M  models/experimental/pi0/tt/ttnn_gemma.py                (build_matmul_pcfg + sharded MLP/attn + bf8 + chunk-pad fix)
+M  models/experimental/pi0/tt/ttnn_siglip.py               (sharded SigLIP MLP/attention)
 M  models/experimental/pi0_5/docs/SIM_DEBUG_SUMMARY.md     (this file)
 ```
 
 ## Commits
 
 - `00842239a43` — normalization + TTNN noise resampling
-- `600198b1c61` — missing trailing silu on time MLP (root cause)
+- `600198b1c61` — missing trailing silu on time MLP (root cause of wrong-direction actions)
 - `93c3561d5d5` — initial summary with 3/3 pytorch result
+- `817e196564e` — TTNN parity + N=4 50-ep result (48/50 = 96%)
+- `b9f7b08af0d` — pi0 GemmaMLP padding bugfix + bf8 attn weights (cherry-pick)
+- `92812ddc9ca` — 2D BLOCK_SHARDED Gemma MLP (cherry-pick)
+- `b852ded530e` — 2D BLOCK_SHARDED Gemma attention (cherry-pick + conflict resolution)
+- `055b73819f4` — 2D BLOCK_SHARDED SigLIP (cherry-pick)
+- `cc41296111d` — adaptive in0_block_w + MMProjector shard (cherry-pick)
+- `27466aa2d3c` — trace perf test: disable resample_noise before begin_trace_capture
