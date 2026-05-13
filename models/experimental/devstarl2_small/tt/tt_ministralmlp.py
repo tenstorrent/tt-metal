@@ -9,8 +9,8 @@ Implementation follows ``models.tt_transformers.tt.mlp.MLP`` (same ``w1``/``w3``
 mapping and forward schedule) so Devstral text checkpoints continue to use
 ``layers.{i}.feed_forward.*`` meta keys without importing that class.
 
-**Long prefill:** on non‑Galaxy devices, ``PREFILL`` with very large sequence length (>4096 tokens)
-runs the same math in **fixed-size sequence slabs**, then concatenates, so FF1 / FF3 / FF2 peaks are
+**Long prefill:** on non‑Galaxy devices, ``PREFILL`` with sequence length **≥** :data:`_PREFILL_FFN_DRAM_CHUNK`
+(1024 tokens) runs the same math in **fixed-size sequence slabs**, then concatenates, so FF1 / FF3 / FF2 peaks are
 bounded by slab length × hidden/intermediate—not a single O(full-seq) activation tensor.
 Galaxy unchanged.
 """
@@ -30,10 +30,11 @@ class TtMinistralMLP(LightweightModule):
     # Prefill FF1/FF3: factory ``ttnn.linear`` + reuse-mcast program blows L1 on 5k×32k-class matmuls.
     # Chunk activations (cap below) and run **minimal_matmul** on non-Galaxy (same idea as FF2 for long seq).
     _PREFILL_MLP_M_CAP = 128
-    _SHORT_PREFILL_MAX_GRID_CORES = 110
 
-    #: Non-Galaxy ``PREFILL``: if ``seq_len`` exceeds this, run FFN slab-by-slab on dim seq (dram peak).
-    _PREFILL_FFN_DRAM_CHUNK = 4096
+    #: Non-Galaxy ``PREFILL``: if ``seq_len`` reaches this, run FFN slab-by-slab on dim seq (dram peak).
+    #: Kept at 1024 so multimodal prefills in the ~1.5k–4k token range still chunk; the single-pass path
+    #: below can blow Wormhole L1 when combined with a short-seq minimal_matmul grid heuristic.
+    _PREFILL_FFN_DRAM_CHUNK = 1024
 
     def __init__(
         self,
@@ -245,7 +246,7 @@ class TtMinistralMLP(LightweightModule):
         slab_cap = getattr(self.args, "mlp_prefill_dram_chunk_tokens", None)
         slab_cap = int(slab_cap) if slab_cap is not None else int(self._PREFILL_FFN_DRAM_CHUNK)
 
-        if mode == Mode.PREFILL and not TG and full_seq_len > slab_cap:
+        if mode == Mode.PREFILL and not TG and full_seq_len >= slab_cap:
             hid = int(x.shape[-1])
             merged: ttnn.Tensor | None = None
             s_idx = 0
@@ -289,17 +290,10 @@ class TtMinistralMLP(LightweightModule):
         # ``ttnn.linear`` + reuse-mcast program config blows L1 on wide (~5k × ~32k) prefill matmuls.
         # Use the same minimal matmul path as FF2 for long prefills (smaller static CBs); Galaxy keeps linear.
         x_to_deallocate_after_ff13 = None
+        # Non-Galaxy PREFILL: use ``mlp1_3_grid`` and DRAM activations only (same as slab fragments).
+        # A ~full-chip grid + L1 input activations overflows per-bank L1 on Wormhole for wide FF1/FF3.
         if mode == Mode.PREFILL and not TG:
             grid = self.args.mlp1_3_grid(cfg_seq)
-            if cfg_seq <= self._PREFILL_MLP_M_CAP:
-                max_grid = self.args.max_grid_size
-                grid_y = min(max_grid.y, self._SHORT_PREFILL_MAX_GRID_CORES)
-                grid_x = min(max_grid.x, self._SHORT_PREFILL_MAX_GRID_CORES // grid_y)
-                grid = (grid_x, grid_y)
-                x_l1 = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
-                if x_l1 is not x:
-                    x_to_deallocate_after_ff13 = x
-                x = x_l1
             mmc_ff13 = ttnn.MinimalMatmulConfig(
                 M_block_size=8,
                 K_block_size=8,
