@@ -599,6 +599,12 @@ def run_test_linear(
         (115200, 5120, 1280, True, True, None, 1, True, 10, 8, 6, 2, 1),
         (115200, 5120, 1280, True, True, None, 1, False, 10, 8, 6, 2, 1),
         (115200, 5120, 3456, True, True, "gelu", 1, False, 7, 5, 12, 1, 2),
+        # K-fractured-across-4-devices shapes (K_block_size chosen to evenly
+        # divide K-tiles per device: 40 for K=5120, 27 for K=3456).
+        (3072, 5120, 7680, True, False, None, 1, False, 8, 8, 8, 2, 2),
+        (3072, 5120, 2560, True, False, None, 1, False, 8, 8, 8, 2, 2),
+        (3072, 5120, 6912, True, False, None, 1, False, 8, 8, 8, 2, 2),
+        (3072, 3456, 5120, True, False, None, 1, False, 8, 9, 8, 2, 2),
     ],
     ids=[
         "4k4k4k",
@@ -619,6 +625,10 @@ def run_test_linear(
         "1xssg720pdenseattn1",
         "1xssg720pdenseattn2",
         "1xssg720pff1",
+        "3072x5120x7680",
+        "3072x5120x2560",
+        "3072x5120x6912",
+        "3072x3456x5120",
     ],
 )
 @pytest.mark.parametrize(
