@@ -60,7 +60,13 @@ from ttml.models.deepseek import (
     DeepSeekConfig,
 )
 from ttml.modules import Parameter
-from ttml.common.utils import round_up_to_tile, get_tt_metal_runtime_root, create_optimizer, summary
+from ttml.common.utils import (
+    round_up_to_tile,
+    get_tt_metal_runtime_root,
+    create_optimizer,
+    get_loss_over_devices,
+    summary,
+)
 from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig, DeviceConfig
 from ttml.common.data import CharTokenizer, build_causal_mask
 from ttml.common.profiler_utils import profiler_marker
@@ -410,8 +416,75 @@ def create_dataset_from_text(
     return InMemoryTokenDataset(tokens, sequence_length), tokenizer
 
 
+def build_mesh(device_config: DeviceConfig) -> ttml.Mesh:
+    """Build a named device mesh from DeviceConfig.
+
+    Mirrors the C++ axis-assignment rule in autograd/auto_context.cpp:140-195
+    so that ttml.sync_gradients and mesh.axis_mapper("dp"|"tp", ...) bind to
+    the same physical axes the C++ trainer would.
+
+    Line topology (at most one mesh dim > 1): exactly one of enable_ddp /
+    enable_tp must be true; that name is assigned to the active (non-trivial)
+    axis. 2D mesh (both dims > 1): both axes must be enabled and are assigned
+    in DP -> TP order. CP/PP are out of scope here.
+
+    When neither parallelism is enabled, all axes get placeholder names so
+    ``ttml.mesh()`` still works and ``has_axis("dp")`` returns False, which
+    is the right behavior for single-device / no-DDP runs.
+    """
+    shape = tuple(int(s) for s in device_config.mesh_shape)
+    n = len(shape)
+    nontrivial = [i for i, s in enumerate(shape) if s > 1]
+    is_line = len(nontrivial) <= 1
+    enabled = (
+        ("dp" if device_config.enable_ddp else None),
+        ("tp" if device_config.enable_tp else None),
+    )
+    enabled_names = tuple(name for name in enabled if name is not None)
+
+    axis_names = [f"_{i}" for i in range(n)]
+    if not enabled_names:
+        return ttml.Mesh(shape, tuple(axis_names))
+
+    if is_line:
+        if len(enabled_names) != 1:
+            raise ValueError(
+                f"Line mesh {shape} requires exactly one of enable_ddp / enable_tp; got enabled={enabled_names}"
+            )
+        active = nontrivial[0] if nontrivial else 0
+        axis_names[active] = enabled_names[0]
+    else:
+        if len(enabled_names) != n:
+            raise ValueError(f"2D mesh {shape} requires both axes assigned (DP and TP). Got enabled={enabled_names}")
+        for i, name in enumerate(enabled_names):
+            axis_names[i] = name
+
+    return ttml.Mesh(shape, tuple(axis_names))
+
+
+def _dp_mapper() -> Optional["ttnn.CppTensorToMesh"]:
+    """Return an axis mapper that shards along the batch dim across the ``dp`` axis.
+
+    Returns ``None`` when no mesh has been opened, the mesh lacks a ``dp`` axis,
+    or the ``dp`` axis size is 1. In those cases the tensor is replicated by
+    the framework, which is the right behavior for single-device / no-DDP runs.
+    """
+    mesh = ttml.maybe_mesh()
+    if mesh is None:
+        return None
+    if not mesh.has_axis("dp") or mesh.axis_size("dp") <= 1:
+        return None
+    return mesh.axis_mapper("dp", tdim=0)
+
+
 def collate_fn(samples: list, sequence_length: int) -> Tuple[ttml.autograd.Tensor, ttml.autograd.Tensor]:
     """Collate function.
+
+    When the active mesh has a ``dp`` axis with size > 1, inputs and targets
+    are sharded along the batch dim across that axis (matches main.cpp:551-609
+    Shard{BATCH_DIM} in the C++ trainer). Otherwise the tensors replicate
+    across whatever mesh is open, which is the right behavior for single-device
+    and TP-only configurations.
 
     Args:
         samples: List of (sequence, target) tuples
@@ -427,10 +500,12 @@ def collate_fn(samples: list, sequence_length: int) -> Tuple[ttml.autograd.Tenso
     data_np = np.array(data, dtype=np.uint32).reshape(actual_batch_size, 1, 1, sequence_length)
     targets_np = np.array(targets, dtype=np.uint32).reshape(actual_batch_size, sequence_length)
 
-    # Create tensors directly from NumPy with correct shape (single host-to-device transfer)
-    data_tensor = ttml.autograd.Tensor.from_numpy(data_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32)
+    mapper = _dp_mapper()
+    data_tensor = ttml.autograd.Tensor.from_numpy(
+        data_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32, mapper=mapper
+    )
     targets_tensor = ttml.autograd.Tensor.from_numpy(
-        targets_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
+        targets_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32, mapper=mapper
     )
 
     return data_tensor, targets_tensor
@@ -706,6 +781,13 @@ def collate_packed(blocks: list, sequence_length: int) -> Tuple[ttml.autograd.Te
     teacher-forcing layout). Casts uint16 -> uint32 since ttnn token tensors
     use UINT32 indices.
 
+    Under DDP (active mesh with a ``dp`` axis of size > 1) the caller passes
+    the *global* batch and the leading batch dim is sharded along the ``dp``
+    axis so each DP rank receives ``len(blocks) / dp_size`` blocks (matches
+    train_nanogpt.py's convention: ``yaml.batch_size`` is global). Without
+    DDP the tensors replicate across the (1x1) mesh and behavior is unchanged
+    from the pre-DDP path.
+
     Args:
         blocks: list of uint16 numpy arrays, each of length ``sequence_length + 1``.
         sequence_length: target sequence length L.
@@ -726,11 +808,12 @@ def collate_packed(blocks: list, sequence_length: int) -> Tuple[ttml.autograd.Te
     inputs_np = arr[:, :sequence_length].reshape(actual_batch_size, 1, 1, sequence_length)
     targets_np = arr[:, 1 : sequence_length + 1]
 
+    mapper = _dp_mapper()
     data_tensor = ttml.autograd.Tensor.from_numpy(
-        inputs_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
+        inputs_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32, mapper=mapper
     )
     targets_tensor = ttml.autograd.Tensor.from_numpy(
-        targets_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
+        targets_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32, mapper=mapper
     )
     return data_tensor, targets_tensor
 
@@ -774,6 +857,13 @@ def _run_eval(
     val_iter = iter(val_pds)
     losses = []
     eval_t0 = time.time()
+    # ``batch_size`` here is the *global* batch (matches train_nanogpt.py's
+    # convention: yaml.batch_size is global, the dp axis_mapper inside
+    # ``collate_packed`` shards it across DP ranks so each rank receives
+    # ``batch_size / dp_size`` blocks). Under DDP the per-rank loss is
+    # averaged across the ``dp`` axis for logging.
+    mesh = ttml.maybe_mesh()
+    use_dp_loss = mesh is not None and mesh.has_axis("dp") and mesh.axis_size("dp") > 1
     for _ in range(eval_iters):
         blocks = []
         try:
@@ -787,7 +877,10 @@ def _run_eval(
         inp, tgt = collate_packed(blocks, seq_len)
         logits = model(inp, attn_mask)
         loss = ttml.ops.loss.cross_entropy_loss(logits, tgt, reduce=ttml.ops.ReduceType.MEAN)
-        losses.append(get_loss_value(loss))
+        if use_dp_loss:
+            losses.append(float(get_loss_over_devices(loss)))
+        else:
+            losses.append(get_loss_value(loss))
         ttml.autograd.AutoContext.get_instance().reset_graph()
 
     eval_time = time.time() - eval_t0
@@ -860,7 +953,31 @@ def train_step(
     # Scale loss for gradient accumulation
     loss = gradient_accumulator.scale(loss)
 
-    loss_float = get_loss_value(loss)
+    # Under DDP each rank produced loss on its own microbatch, so the
+    # printed/accumulated value must be the mean across the ``dp`` axis.
+    # get_loss_over_devices internally builds a concat_mesh_to_tensor composer
+    # and takes the mean, mirroring how the C++ trainer logs per-rank loss
+    # when DDP is on. Single-device/no-DDP runs take the fast no-NumPy path.
+    mesh = ttml.maybe_mesh()
+    if mesh is not None and mesh.has_axis("dp") and mesh.axis_size("dp") > 1:
+        # # --- DDP debug: log per-chip loss spread for the first few microsteps
+        # # so we can tell if chips are diverged (high std) or in sync (~0 std).
+        # # Strip this block once the divergence root cause is fixed.
+        # if train_step._ddp_debug_remaining > 0:
+        #     train_step._ddp_debug_remaining -= 1
+        #     _composer = ttml.core.distributed.concat_mesh_to_tensor_composer(
+        #         ttml.autograd.AutoContext.get_instance().get_device(), 0
+        #     )
+        #     _per_chip = loss.to_numpy(ttnn.DataType.FLOAT32, composer=_composer).ravel()
+        #     print(
+        #         f"[ddp-loss-spread] microstep: per-chip loss n={_per_chip.size} "
+        #         f"min={_per_chip.min():.4f} max={_per_chip.max():.4f} "
+        #         f"mean={_per_chip.mean():.4f} std={_per_chip.std():.4f}"
+        #     )
+        # # --- end DDP debug
+        loss_float = float(get_loss_over_devices(loss))
+    else:
+        loss_float = get_loss_value(loss)
 
     profiler_marker(None, "forward_pass_done")
 
@@ -891,9 +1008,18 @@ def train_step(
     should_step = gradient_accumulator.should_step()
 
     if should_step:
-        # Gradient clipping
+        # All-reduce gradients across the ``dp`` axis (no-op when there is no
+        # mesh, no ``dp`` axis, or dp size == 1). Mirrors main.cpp:817-823 in
+        # the C++ trainer and train_nanogpt.py:521-524.
+        ttml.sync_gradients(model.parameters())
+
+        # Gradient clipping. clip_grad_norm is incorrect under TP because
+        # parameters are sharded across the ``tp`` axis and the per-rank norm
+        # is not the global norm; mirror main.cpp:826-828 with a hard error.
         if use_clip_grad_norm:
-            # Use ttml.core.clip_grad_norm which works with model parameters directly
+            mesh = ttml.maybe_mesh()
+            if mesh is not None and mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
+                raise ValueError("Clip grad norm is not supported with TP")
             ttml.core.clip_grad_norm(
                 model.parameters(),
                 clip_grad_norm_max_norm,
@@ -914,6 +1040,11 @@ def train_step(
 
     step_time = (time.time() - start_time) * 1000  # Convert to ms
     return loss_float, step_time, should_step
+
+
+# # DDP debug: cap on how many microsteps print the per-chip loss spread.
+# # Anything > grad_accum_steps lets us see at least one full optimizer step.
+# train_step._ddp_debug_remaining = 12
 
 
 def parse_model_config(yaml_config: dict) -> ModelConfig:
@@ -1336,6 +1467,17 @@ def _tensor_to_numpy_entry(tensor: "ttml.autograd.Tensor") -> dict:
 
     Mirrors the format used for ``model_state`` so model and optimizer tensors
     share the same on-disk layout.
+
+    Under DDP each parameter is *replicated* across the dp axis of the mesh
+    (sync_gradients keeps them in sync; the C++ initializers create them via
+    host-replication). The straight ``to_numpy(composer=None)`` path then
+    trips on ``host_buffer::get_host_buffer`` because the host storage is
+    distributed over the mesh shape. Instead we use
+    ``ttnn.get_device_tensors(...)[0]`` to grab only chip 0's single-device
+    view — all chips hold identical data for a replicated param, so chip 0
+    is the canonical copy and we avoid the 32x bandwidth of gathering every
+    replica only to throw 31/32 of it away. For single-device / no-DDP runs
+    the multi-device path is skipped and behavior is unchanged.
     """
     # ttml.autograd.Tensor and ttnn.Tensor expose the same get_value()/get_layout()
     # surface through this code path; both are accepted here.
@@ -1343,7 +1485,17 @@ def _tensor_to_numpy_entry(tensor: "ttml.autograd.Tensor") -> dict:
     layout = inner.get_layout()
     # prefer_half=True reads bf16 storage directly, avoiding a device-side float32 typecast
     # (and its persistent cache in AutocastTensor); the cast to float32 is done on the host.
-    numpy_array = tensor.to_numpy(cast_on_device=False)
+    _mesh = ttml.maybe_mesh()
+    if _mesh is not None and _mesh.num_devices() > 1:
+        # Grab the chip-0 view directly. ``get_device_tensors`` returns a list
+        # of single-device ttnn::Tensors (one per mesh coord), each backed by
+        # exactly one buffer so ``to_numpy`` can read it without a composer.
+        _chip0 = ttnn.get_device_tensors(inner)[0]
+        # Wrap back into ttml.autograd.Tensor so we reuse its bf16-preserving
+        # to_numpy path (autocast disabled to read bf16 storage directly).
+        numpy_array = ttml.autograd.Tensor(_chip0, False).to_numpy(cast_on_device=False)
+    else:
+        numpy_array = tensor.to_numpy(cast_on_device=False)
     return {
         "data": numpy_array,
         "layout": layout.value if hasattr(layout, "value") else str(layout),
@@ -1873,8 +2025,22 @@ def main():
     # Check if we're in inference-only mode (prompt + explicit model_path).
     inference_only = args.prompt and args.model_path
 
-    # Initialize device early (needed for both training and inference)
-    ttml.autograd.AutoContext.get_instance().open_device()
+    # Parse device config from YAML (mesh_shape, enable_ddp, enable_tp). When
+    # enable_ddp is true with a multi-device mesh, build_mesh assigns the
+    # ``dp`` name to the active axis, ``open_device_mesh`` enables TT-Fabric
+    # and opens the real mesh, and the data/loss/grad-sync helpers below pick
+    # up the mesh via ``ttml.maybe_mesh()``. When no parallelism is enabled
+    # the mesh is opened with anonymous axis names and all DDP code paths
+    # collapse to single-device behavior.
+    device_config = DeviceConfig(yaml_config)
+    if device_config.enable_tp and args.model_save_path:
+        # Pickle checkpoint format can't round-trip TP-sharded parameters
+        # (mirrors train_nanogpt.py:1378-1384 / main.cpp:447-451).
+        raise ValueError("--model_save_path is not supported with tensor parallelism (device_config.enable_tp=true).")
+    mesh = build_mesh(device_config)
+    if device_config.enable_ddp or device_config.enable_tp:
+        print(f"Mesh: shape={mesh.shape}, axis_names={mesh.axis_names}")
+    ttml.open_device_mesh(mesh, tuple(device_config.device_ids) if device_config.device_ids else None)
     ttml.autograd.AutoContext.get_instance().get_device()
 
     # Start memory tracking if enabled
@@ -2319,6 +2485,41 @@ def main():
         # Set model to training mode
         model.train()
 
+        # # --- DDP debug: verify model parameters are replicated identically
+        # # across the dp axis at init. If hashes diverge here, then C++ model
+        # # construction sampled random init per-chip and DDP can never recover
+        # # (sync_gradients only averages grads, not params). Strip this block
+        # # once the issue is diagnosed and fixed.
+        # _ddp_mesh_for_debug = ttml.maybe_mesh()
+        # if (
+        #     _ddp_mesh_for_debug is not None
+        #     and _ddp_mesh_for_debug.has_axis("dp")
+        #     and _ddp_mesh_for_debug.axis_size("dp") > 1
+        # ):
+        #     import hashlib as _hashlib
+
+        #     _dp_axis_idx = _ddp_mesh_for_debug.axis_index("dp")
+        #     _dp_size = _ddp_mesh_for_debug.axis_size("dp")
+        #     _composer = ttml.core.distributed.concat_mesh_to_tensor_composer(
+        #         ttml.autograd.AutoContext.get_instance().get_device(), 0
+        #     )
+        #     print(f"[ddp-init-check] dp_size={_dp_size}, gathering first 3 params for replication check...")
+        #     for _name, _param in list(model.parameters().items())[:3]:
+        #         _all = _param.tensor.to_numpy(ttnn.DataType.FLOAT32, composer=_composer)
+        #         # Split the gathered tensor back into per-chip chunks along the
+        #         # concat dim (=0). Each chunk is what a single chip held.
+        #         _chunks = np.array_split(_all, _dp_size, axis=0)
+        #         _hashes = [_hashlib.sha256(np.ascontiguousarray(c).tobytes()).hexdigest()[:12] for c in _chunks]
+        #         _unique = sorted(set(_hashes))
+        #         if len(_unique) == 1:
+        #             print(f"[ddp-init-check] OK  {_name}: all 32 chips identical (hash={_unique[0]})")
+        #         else:
+        #             print(
+        #                 f"[ddp-init-check] BAD {_name}: {len(_unique)} unique hashes across {_dp_size} chips; "
+        #                 f"first={_hashes[0]}, last={_hashes[-1]}"
+        #             )
+        # # --- end DDP debug
+
         # Training setup
         loss_meter = LossAverageMeter()
         gradient_accumulator = GradientAccumulator(training_config.gradient_accumulation_steps)
@@ -2332,11 +2533,15 @@ def main():
 
         # Training loop
         start_time = time.time()
-        # Cache values used in hot path
+        # Cache values used in hot path. ``batch_size`` from the YAML is the
+        # *global* batch per microstep (matches train_nanogpt.py and
+        # training_llama8b_dp2_tp4.yaml: the dp axis_mapper inside
+        # collate_packed shards this batch across DP ranks so each rank gets
+        # ``batch_size / dp_size`` blocks). When DDP is off the tensor is
+        # replicated and dp_size == 1 makes per-rank == global.
         batch_size = training_config.batch_size
         max_steps = training_config.max_steps
         dataset_len = len(dataset)
-        num_devices = DeviceConfig(yaml_config).total_devices()
 
         # Flag to track if first iteration is complete (for memory tracking)
         is_everything_compiled = False
@@ -2385,7 +2590,11 @@ def main():
             avg_loss = gradient_accumulator.average_loss()
             loss_meter.update(avg_loss)
 
-            global_tokens = actual_batch_size * num_devices * seq_len * training_config.gradient_accumulation_steps
+            # ``actual_batch_size`` is the *global* batch (yaml.batch_size is
+            # global per train_nanogpt.py's convention; the dp axis_mapper
+            # inside collate_packed sharded it across DP ranks). So we must
+            # NOT multiply by num_devices here.
+            global_tokens = actual_batch_size * seq_len * training_config.gradient_accumulation_steps
             tps = global_tokens / (macro_batch_step_time / 1000.0) if macro_batch_step_time > 0 else 0.0
             achieved_tflops = None
             mfu = None
@@ -2476,7 +2685,11 @@ def main():
         if packed_train_pds is not None:
             # Prime the iterator with the saved cursor (no-op on a fresh start).
             packed_train_pds.load_state_dict(resume_train_iter_state)
-            # TinyLlama / lit_gpt PackedDataset-style step-driven loop.
+            # TinyLlama / lit_gpt PackedDataset-style step-driven loop. Pull
+            # one *global* batch (``batch_size`` blocks) per microstep;
+            # collate_packed shards along the ``dp`` axis so each DP rank
+            # gets ``batch_size / dp_size`` blocks. Without DDP the tensor
+            # replicates and the host-side count equals the per-rank count.
             train_iter = iter(packed_train_pds)
             while global_step < max_steps:
                 blocks = []

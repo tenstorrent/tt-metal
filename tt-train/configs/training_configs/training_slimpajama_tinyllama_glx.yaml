@@ -3,16 +3,19 @@ training_config:
   seed: 5489
   # model_save_interval: 1000
   model_save_interval: 10
-  # Per-chip micro batch = 5, no gradient accumulation.
-  # -> global batch = 5 * 1 * 32 chips = 160 sequences.
-  # Per-chip activation (e.g. SwiGLU [B, T, intermediate_dim] = [5, 2048, 5632]
-  # bf16 ~= 115 MiB) fits comfortably; batch=32 hit DRAM OOM at this seq_len.
-  batch_size: 5
+  # Global batch per optimizer step. The data path follows train_nanogpt.py:
+  # ``batch_size`` is the GLOBAL count of sequences pulled from the host per
+  # microstep, and the dp axis_mapper inside ``collate_packed`` shards it
+  # across the 32 DP chips so each chip processes ``batch_size / dp_size``
+  # = 160 / 32 = 5 sequences (the per-chip micro batch). At per-chip = 5,
+  # SwiGLU activation [5, 2048, 5632] bf16 ~= 115 MiB which fits comfortably;
+  # higher per-chip values hit DRAM OOM at this seq_len.
+  batch_size: 160
   gradient_accumulation_steps: 1
   num_epochs: 1
   # ~1 epoch through SlimPajama-6B-tokenized train split (6,405,226,567 tokens
-  # per train/meta.json). Tokens / opt step = 5 * 1 * 32 * 2048 = 327,680.
-  # 6.41B / 327,680 ~= 19,547 opt steps; rounded to 19,550.
+  # per train/meta.json). Tokens / opt step = batch_size * seq_len = 160 * 2048
+  # = 327,680. 6.41B / 327,680 ~= 19,547 opt steps; rounded to 19,550.
   # max_steps: 19550
   max_steps: 20
   scheduler_type: warmup_linear
