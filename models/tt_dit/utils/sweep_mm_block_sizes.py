@@ -313,7 +313,13 @@ def _subblock_for(m_block, k_blk, n_blk, explicit_subblocks):
 
 
 def pick_subblock(m_block, n_block, max_dest_volume=4):
-    """Pick best valid (sb_h, sb_w) where sb_h|m_block, sb_w|n_block, sb_h*sb_w <= max_dest_volume."""
+    """Pick best valid (sb_h, sb_w) where sb_h|m_block, sb_w|n_block, sb_h*sb_w <= max_dest_volume.
+
+    For fp32 dest, (2, 2) is strictly preferred among same-product candidates
+    (better math LLK tile reuse than 4x1 / 1x4), so check it first.
+    """
+    if FP32_DEST_ACC_EN and m_block % 2 == 0 and n_block % 2 == 0 and 4 <= max_dest_volume:
+        return (2, 2)
     best = (1, 1)
     best_product = 1
     for h in range(1, min(m_block, max_dest_volume) + 1):
