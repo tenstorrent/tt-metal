@@ -11,6 +11,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <random>
 #include <string>
 #include <variant>
 #include <vector>
@@ -31,8 +32,11 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/packing.hpp"
+#include "tt_metal/test_utils/print_helpers.hpp"
 #include <umd/device/types/arch.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
+#include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -347,6 +351,237 @@ bool single_core_reconfig(
 
     return pass;
 }
+
+// Minimal IEEE 754 binary16 (fp16) <-> float32 helpers used to populate the two
+// Float16-formatted DFBs (d2, d3) in single_core_reconfig_quasar and to compute
+// their golden contributions. Random stimulus is in [0, 2), so subnormal / inf /
+// NaN paths are unreachable; only +/-0 needs the explicit short-circuit.
+inline uint16_t float_to_fp16_bits(float f) {
+    const uint32_t x = std::bit_cast<uint32_t>(f);
+    if ((x & 0x7FFFFFFFu) == 0) {
+        return static_cast<uint16_t>((x >> 16) & 0x8000u);
+    }
+    const uint32_t sign = (x >> 16) & 0x8000u;
+    const uint32_t exp = ((x >> 23) & 0xFFu) - 112u;  // bias diff: 127 - 15
+    const uint32_t mant = (x >> 13) & 0x3FFu;
+    return static_cast<uint16_t>(sign | (exp << 10) | mant);
+}
+
+inline float fp16_bits_to_float(uint16_t h) {
+    if ((h & 0x7FFFu) == 0) {
+        return std::bit_cast<float>(static_cast<uint32_t>(h & 0x8000u) << 16);
+    }
+    const uint32_t sign = static_cast<uint32_t>(h & 0x8000u) << 16;
+    const uint32_t exp = static_cast<uint32_t>((h >> 10) & 0x1Fu) + 112u;
+    const uint32_t mant = static_cast<uint32_t>(h & 0x3FFu);
+    return std::bit_cast<float>(sign | (exp << 23) | (mant << 13));
+}
+
+bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    constexpr uint32_t kNumOps = 3;
+    const uint32_t f16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    const uint32_t out_bytes = kNumOps * f16_tile_size;
+
+    const CoreCoord core = {0, 0};
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
+    tt_metal::Program program = tt_metal::CreateProgram();
+    workload.add_program(device_range, std::move(program));
+    auto& program_ = workload.get_programs().at(device_range);
+
+    distributed::DeviceLocalBufferConfig f16_dram_cfg{
+        .page_size = f16_tile_size, .buffer_type = tt::tt_metal::BufferType::DRAM, .bottom_up = false};
+    distributed::ReplicatedBufferConfig f16_buf_cfg{.size = f16_tile_size};
+    distributed::ReplicatedBufferConfig out_buf_cfg{.size = out_bytes};
+
+    auto inp0_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
+    auto inp1_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
+    auto inp2_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
+    auto inp3_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
+    auto inp4_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
+    auto inp5_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
+    auto out_dram = distributed::MeshBuffer::create(out_buf_cfg, f16_dram_cfg, mesh_device.get());
+
+    tt_metal::experimental::dfb::DataflowBufferConfig f16_input_dfb_cfg = {
+        .entry_size = f16_tile_size,
+        .num_entries = 1,
+        .num_producers = 1,
+        .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+        .num_consumers = 1,
+        .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+        .enable_implicit_sync = false,
+        .data_format = tt::DataFormat::Float16_b,
+    };
+    // d2, d3 use Float16 (fp16) to exercise reconfig_data_format on Quasar.
+    // Each reconfig must reprogram the unpacker OUT_DATA_FORMAT register:
+    // Float16_b (d0, d1) -> Float16 (d2, d3) -> Float16_b (d4, d5). fp16 and
+    // bfloat16 share the same per-element byte size, so entry_size matches.
+    tt_metal::experimental::dfb::DataflowBufferConfig fp16_input_dfb_cfg = {
+        .entry_size = f16_tile_size,
+        .num_entries = 1,
+        .num_producers = 1,
+        .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+        .num_consumers = 1,
+        .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+        .enable_implicit_sync = false,
+        .data_format = tt::DataFormat::Float16,
+    };
+    tt_metal::experimental::dfb::DataflowBufferConfig out_dfb_cfg = {
+        .entry_size = f16_tile_size,
+        .num_entries = kNumOps,
+        .num_producers = 1,
+        .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+        .num_consumers = 1,
+        .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+        .enable_implicit_sync = false,
+        .data_format = tt::DataFormat::Float16_b,
+    };
+
+    const uint32_t inp0_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, f16_input_dfb_cfg);
+    const uint32_t inp1_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, f16_input_dfb_cfg);
+    const uint32_t inp2_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, fp16_input_dfb_cfg);
+    const uint32_t inp3_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, fp16_input_dfb_cfg);
+    const uint32_t inp4_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, f16_input_dfb_cfg);
+    const uint32_t inp5_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, f16_input_dfb_cfg);
+    const uint32_t out_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, out_dfb_cfg);
+
+    std::vector<uint32_t> reader_cta = {inp0_dfb, inp1_dfb, inp2_dfb, inp3_dfb, inp4_dfb, inp5_dfb};
+    std::vector<uint32_t> writer_cta = {out_dfb};
+    std::vector<uint32_t> compute_cta = {inp0_dfb, inp1_dfb, inp2_dfb, inp3_dfb, inp4_dfb, inp5_dfb, out_dfb};
+
+    auto reader_kernel = tt_metal::experimental::quasar::CreateKernel(
+        program_,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_six_input.cpp",
+        core,
+        tt_metal::experimental::quasar::QuasarDataMovementConfig{
+            .num_threads_per_cluster = 1, .compile_args = reader_cta});
+
+    auto writer_kernel = tt_metal::experimental::quasar::CreateKernel(
+        program_,
+        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        core,
+        tt_metal::experimental::quasar::QuasarDataMovementConfig{
+            .num_threads_per_cluster = 1, .compile_args = writer_cta});
+
+    auto compute_kernel = tt_metal::experimental::quasar::CreateKernel(
+        program_,
+        "tests/tt_metal/tt_metal/test_kernels/compute/reconfig_quasar.cpp",
+        core,
+        tt_metal::experimental::quasar::QuasarComputeConfig{
+            .num_threads_per_cluster = 1, .math_fidelity = MathFidelity::HiFi4, .compile_args = compute_cta});
+
+    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+        program_, inp0_dfb, reader_kernel, compute_kernel);
+    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+        program_, inp1_dfb, reader_kernel, compute_kernel);
+    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+        program_, inp2_dfb, reader_kernel, compute_kernel);
+    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+        program_, inp3_dfb, reader_kernel, compute_kernel);
+    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+        program_, inp4_dfb, reader_kernel, compute_kernel);
+    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+        program_, inp5_dfb, reader_kernel, compute_kernel);
+    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+        program_, out_dfb, compute_kernel, writer_kernel);
+
+    // Random stimulus: U(0, 2) per element, distinct seeds per input. Inputs 0/1/4/5
+    // are bfloat16-packed; inputs 2/3 are fp16-bit-packed to match their DFB format.
+    constexpr int kRandMax = 2;
+    auto src0 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x1001);
+    auto src1 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x1002);
+    auto gen_fp16_stimulus = [&](uint32_t seed) {
+        std::vector<uint32_t> out(f16_tile_size / sizeof(uint32_t), 0);
+        std::mt19937 rng(seed);
+        std::uniform_real_distribution<float> dist(0.0f, static_cast<float>(kRandMax));
+        for (auto& word : out) {
+            const uint16_t lo = float_to_fp16_bits(dist(rng));
+            const uint16_t hi = float_to_fp16_bits(dist(rng));
+            word = static_cast<uint32_t>(lo) | (static_cast<uint32_t>(hi) << 16);
+        }
+        return out;
+    };
+    auto src2 = gen_fp16_stimulus(0x1003);
+    auto src3 = gen_fp16_stimulus(0x1004);
+    auto src4 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x1005);
+    auto src5 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x1006);
+
+    distributed::WriteShard(cq, inp0_dram, src0, zero_coord, false);
+    distributed::WriteShard(cq, inp1_dram, src1, zero_coord, false);
+    distributed::WriteShard(cq, inp2_dram, src2, zero_coord, false);
+    distributed::WriteShard(cq, inp3_dram, src3, zero_coord, false);
+    distributed::WriteShard(cq, inp4_dram, src4, zero_coord, false);
+    distributed::WriteShard(cq, inp5_dram, src5, zero_coord, false);
+
+    auto in0 = unpack_uint32_vec_into_bfloat16_vec(src0);
+    auto in1 = unpack_uint32_vec_into_bfloat16_vec(src1);
+    auto unpack_fp16 = [](const std::vector<uint32_t>& packed) {
+        std::vector<float> out;
+        out.reserve(packed.size() * 2);
+        for (uint32_t w : packed) {
+            out.push_back(fp16_bits_to_float(static_cast<uint16_t>(w & 0xFFFFu)));
+            out.push_back(fp16_bits_to_float(static_cast<uint16_t>(w >> 16)));
+        }
+        return out;
+    };
+    auto in2 = unpack_fp16(src2);
+    auto in3 = unpack_fp16(src3);
+    auto in4 = unpack_uint32_vec_into_bfloat16_vec(src4);
+    auto in5 = unpack_uint32_vec_into_bfloat16_vec(src5);
+
+    const uint32_t elems_per_tile = f16_tile_size / sizeof(bfloat16);
+    std::vector<bfloat16> golden(kNumOps * elems_per_tile);
+    for (uint32_t e = 0; e < elems_per_tile; ++e) {
+        golden[0 * elems_per_tile + e] = bfloat16(static_cast<float>(in0[e]) + static_cast<float>(in1[e]));
+        golden[1 * elems_per_tile + e] = bfloat16(static_cast<float>(in2[e]) + static_cast<float>(in3[e]));
+        golden[2 * elems_per_tile + e] = bfloat16(static_cast<float>(in4[e]) + static_cast<float>(in5[e]));
+    }
+    auto packed_golden = pack_vector<uint32_t, bfloat16>(golden);
+
+    tt_metal::SetRuntimeArgs(
+        program_,
+        reader_kernel,
+        core,
+        {
+            static_cast<uint32_t>(inp0_dram->address()),
+            0u,
+            static_cast<uint32_t>(inp1_dram->address()),
+            0u,
+            static_cast<uint32_t>(inp2_dram->address()),
+            0u,
+            static_cast<uint32_t>(inp3_dram->address()),
+            0u,
+            static_cast<uint32_t>(inp4_dram->address()),
+            0u,
+            static_cast<uint32_t>(inp5_dram->address()),
+            0u,
+            1u,  // num_tiles
+        });
+    tt_metal::SetRuntimeArgs(program_, writer_kernel, core, {static_cast<uint32_t>(out_dram->address()), 0u, kNumOps});
+
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
+
+    std::vector<uint32_t> dest_buffer_data;
+    distributed::ReadShard(cq, dest_buffer_data, out_dram, zero_coord, false);
+
+    int failed_index = -1;
+    bool pass = is_close_packed_vectors<bfloat16, uint32_t>(
+        dest_buffer_data,
+        packed_golden,
+        [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.0155f); },
+        &failed_index);
+    if (not pass) {
+        log_info(tt::LogTest, "Failed Index={}", failed_index);
+        log_info(tt::LogTest, "Device output:");
+        print_vector_fixed_numel_per_row(unpack_vector<bfloat16, uint32_t>(dest_buffer_data), 32);
+        log_info(tt::LogTest, "Golden:");
+        print_vector_fixed_numel_per_row(unpack_vector<bfloat16, uint32_t>(packed_golden), 32);
+    }
+    return pass;
+}
 }  // namespace unit_tests::compute::reconfig
 
 ////////////////////////////////////////////////////////////////////////////
@@ -409,6 +644,12 @@ TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigL1Acc) {
                 ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(devices_.at(id), test_config));
             }
         }
+    }
+}
+
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReconfigQuasarDfb) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig_quasar(devices_.at(id)));
     }
 }
 

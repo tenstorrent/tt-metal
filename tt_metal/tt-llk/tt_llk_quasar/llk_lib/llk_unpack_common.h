@@ -88,38 +88,42 @@ inline void _llk_unpack_dest_dvalid_section_done_()
  * L1 layout and input encoding stay in the buffer descriptor; `unpack_src_format` is the BD/L1
  * DataFormat and is not written to unpacker config here.
  *
- * @tparam UNP_SEL              Unpacker to update: p_unpacr::UNP_A or UNP_DEST (unpacker 0), UNP_B (1), UNP_S (2).
+ * UNP_DEST is not a valid selector: there is no source register to reprogram for the dest path.
+ *
+ * @tparam UNP_SEL              Unpacker to update
  * @tparam is_fp32_dest_acc_en  FP32 dest accumulation (validated with `unpack_src_format` / `unpack_dst_format`).
- * @tparam unpack_to_dest       Unpack-to-dest / SrcS vs SrcA/SrcB path (validated with the format pair).
  * @param unpack_src_format     BD/L1 input DataFormat (used only for the conversion check).
  * @param unpack_dst_format     OUT_DATA_FORMAT register value to program (unpacker gasket output).
  */
-template <std::uint32_t UNP_SEL, bool is_fp32_dest_acc_en, bool unpack_to_dest>
+template <std::uint32_t UNP_SEL, bool is_fp32_dest_acc_en>
 inline void _llk_unpack_reconfig_data_format_src_(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format)
 {
     static_assert(
-        (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_S) || (UNP_SEL == p_unpacr::UNP_DEST),
-        "UNP_SEL must be p_unpacr::UNP_A, UNP_B, UNP_S, or UNP_DEST");
+        (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_S), "UNP_SEL must be p_unpacr::UNP_A, UNP_B, or UNP_S");
 
     LLK_ASSERT(
-        ckernel::unpack::is_quasar_unpack_reconfig_pair_supported(unpack_src_format, unpack_dst_format, is_fp32_dest_acc_en, unpack_to_dest),
+        ckernel::unpack::is_quasar_unpack_reconfig_pair_supported(unpack_src_format, unpack_dst_format, is_fp32_dest_acc_en, false /* unpack_to_dest */),
         "Unsupported Quasar unpacker OUT_DATA_FORMAT for this L1 format and unpack path.");
 
     const auto out_fmt = static_cast<std::uint8_t>(unpack_dst_format);
 
-    if constexpr (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
+    // Select stall mask for the chosen unpacker. The _RMW macro expands to (addr, shamt, mask) and
+    // cannot be folded into a single variable, so the cfg_rmw call stays branched per unpacker.
+    constexpr std::uint32_t unpacker_stall_mask = (UNP_SEL == p_unpacr::UNP_A)   ? p_stall::UNPACK0
+                                                  : (UNP_SEL == p_unpacr::UNP_B) ? p_stall::UNPACK1
+                                                                                 : p_stall::UNPACK2;
+    TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, unpacker_stall_mask);
+
+    if constexpr (UNP_SEL == p_unpacr::UNP_A)
     {
-        TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::UNPACK0);
         cfg_rmw(THCON_UNPACKER0_REG0_OUT_DATA_FORMAT_RMW, out_fmt);
     }
     else if constexpr (UNP_SEL == p_unpacr::UNP_B)
     {
-        TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::UNPACK1);
         cfg_rmw(THCON_UNPACKER1_REG0_OUT_DATA_FORMAT_RMW, out_fmt);
     }
     else // UNP_S
     {
-        TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::UNPACK2);
         cfg_rmw(THCON_UNPACKER2_REG0_OUT_DATA_FORMAT_RMW, out_fmt);
     }
 }

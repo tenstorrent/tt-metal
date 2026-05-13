@@ -22,7 +22,7 @@ constexpr static std::uint32_t TRISC_ID               = 0;
  *
  * Rules follow the Quasar Unpacker Format Conversions table (gasket outside TDMA).
  */
-inline bool is_quasar_unpack_reconfig_pair_supported(
+__attribute__((noinline, optimize("no-jump-tables"))) bool is_quasar_unpack_reconfig_pair_supported(
     const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const bool is_fp32_dest_acc_en, const bool unpack_to_dest)
 {
     const DataFormat src = static_cast<DataFormat>(unpack_src_format);

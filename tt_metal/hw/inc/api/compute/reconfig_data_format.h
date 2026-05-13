@@ -11,6 +11,8 @@ namespace ckernel {
 /**
  * Helper function to reconfigure srca and srcb data formats.
  */
+// TODO(quasar): drop the ARCH_QUASAR ifdefs below once Quasar has empty
+// llk_math_reconfig_data_format[/_srca/_srcb] wrappers.
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 ALWI void reconfig_data_format(const uint32_t srca_new_operand, const uint32_t srcb_new_operand) {
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
