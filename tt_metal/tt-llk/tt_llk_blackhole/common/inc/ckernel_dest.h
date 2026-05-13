@@ -11,6 +11,7 @@
 
 #include "cfg_defines.h"
 #include "ckernel.h"
+#include "ckernel_defs.h"
 #include "tensix_types.h"
 
 #define RISCV_DEST_START_ADDR 0xFFBD8000
@@ -24,170 +25,6 @@
 
 namespace ckernel
 {
-
-template <ThreadId thread_id>
-inline void set_dest_fmt(std::uint32_t fmt)
-{
-    static_assert(
-        thread_id == MathThreadId || thread_id == PackThreadId || thread_id == UnpackThreadId, "Thread must be UnpackThreadId or MathThreadId or PackThreadId");
-
-    if constexpr (thread_id == UnpackThreadId)
-    {
-        cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC0_fmt_RMW, fmt);
-    }
-    else if constexpr (thread_id == MathThreadId)
-    {
-        cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC1_fmt_RMW, fmt);
-    }
-    else if constexpr (thread_id == PackThreadId)
-    {
-        cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_fmt_RMW, fmt);
-    }
-}
-
-inline void set_dest_fmt(std::uint32_t fmt, ThreadId thread_id)
-{
-    // FWLOG1("Setting RISC-dest access format to %d", fmt);
-    if (thread_id == UnpackThreadId)
-    {
-        set_dest_fmt<UnpackThreadId>(fmt);
-    }
-    else if (thread_id == MathThreadId)
-    {
-        set_dest_fmt<MathThreadId>(fmt);
-    }
-    else
-    {
-        set_dest_fmt<PackThreadId>(fmt);
-    }
-}
-
-template <ThreadId thread_id, bool is_signed>
-inline void set_dest_int8_int16_signed()
-{
-    static_assert(
-        thread_id == MathThreadId || thread_id == PackThreadId || thread_id == UnpackThreadId, "Thread must be UnpackThreadId or MathThreadId or PackThreadId");
-
-    constexpr int val = is_signed ? 0 : 1;
-
-    if constexpr (thread_id == UnpackThreadId)
-    {
-        cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC0_unsigned_int_RMW, val);
-    }
-    else if constexpr (thread_id == MathThreadId)
-    {
-        cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC1_unsigned_int_RMW, val);
-    }
-    else if constexpr (thread_id == PackThreadId)
-    {
-        cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_unsigned_int_RMW, val);
-    }
-}
-
-template <ThreadId thread_id>
-inline void set_dest_int8_int16_signed(bool const is_signed)
-{
-    static_assert(
-        thread_id == MathThreadId || thread_id == PackThreadId || thread_id == UnpackThreadId, "Thread must be UnpackThreadId or MathThreadId or PackThreadId");
-
-    const int val = is_signed ? 0 : 1;
-
-    if constexpr (thread_id == UnpackThreadId)
-    {
-        cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC0_unsigned_int_RMW, val);
-    }
-    else if constexpr (thread_id == MathThreadId)
-    {
-        cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC1_unsigned_int_RMW, val);
-    }
-    else if constexpr (thread_id == PackThreadId)
-    {
-        cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_unsigned_int_RMW, val);
-    }
-}
-
-template <ThreadId thread_id, bool enable>
-inline void set_dest_enable_swizzling()
-{
-    static_assert(
-        thread_id == MathThreadId || thread_id == PackThreadId || thread_id == UnpackThreadId, "Thread must be UnpackThreadId or MathThreadId or PackThreadId");
-
-    constexpr int val = enable ? 0 : 1;
-    // In unswizzled mode, values are written into dest as-is with
-    // no saturation checks and no bit shuffling. This means they
-    // are incompatible with the FPU, but it could be useful for
-    // debugging
-    if constexpr (thread_id == UnpackThreadId)
-    {
-        cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC0_no_swizzle_RMW, val);
-    }
-    else if constexpr (thread_id == MathThreadId)
-    {
-        cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC1_no_swizzle_RMW, val);
-    }
-    else if constexpr (thread_id == PackThreadId)
-    {
-        cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_no_swizzle_RMW, val);
-    }
-}
-
-template <ThreadId thread_id>
-inline void set_dest_enable_swizzling(bool const enable)
-{
-    static_assert(
-        thread_id == MathThreadId || thread_id == PackThreadId || thread_id == UnpackThreadId, "Thread must be UnpackThreadId or MathThreadId or PackThreadId");
-
-    if (enable)
-    {
-        // In unswizzled mode, values are written into dest as-is with
-        // no saturation checks and no bit shuffling. This means they
-        // are incompatible with the FPU, but it could be useful for
-        // debugging
-        if constexpr (thread_id == UnpackThreadId)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC0_no_swizzle_RMW, 0);
-        }
-        else if constexpr (thread_id == MathThreadId)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC1_no_swizzle_RMW, 0);
-        }
-        else if constexpr (thread_id == PackThreadId)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_no_swizzle_RMW, 0);
-        }
-    }
-    else
-    {
-        if constexpr (thread_id == UnpackThreadId)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC0_no_swizzle_RMW, 1);
-        }
-        else if constexpr (thread_id == MathThreadId)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC1_no_swizzle_RMW, 1);
-        }
-        else if constexpr (thread_id == PackThreadId)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_no_swizzle_RMW, 1);
-        }
-    }
-}
-
-inline void set_dest_enable_swizzling(ThreadId const thread_id, bool const enable)
-{
-    if (thread_id == UnpackThreadId)
-    {
-        set_dest_enable_swizzling<UnpackThreadId>(enable);
-    }
-    else if (thread_id == MathThreadId)
-    {
-        set_dest_enable_swizzling<MathThreadId>(enable);
-    }
-    else
-    {
-        set_dest_enable_swizzling<PackThreadId>(enable);
-    }
-}
 
 inline std::uint8_t fmt_to_dest_type(DataFormat fmt)
 {
@@ -213,9 +50,94 @@ inline std::uint8_t fmt_to_dest_type(DataFormat fmt)
 }
 
 template <ThreadId thread_id>
+inline void set_dest_fmt(std::uint32_t fmt)
+{
+    static_assert(IS_TRISC_THREAD<thread_id>, "Thread must be UnpackThreadId or MathThreadId or PackThreadId");
+
+    if constexpr (thread_id == UnpackThreadId)
+    {
+        cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC0_fmt_RMW, fmt);
+    }
+    else if constexpr (thread_id == MathThreadId)
+    {
+        cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC1_fmt_RMW, fmt);
+    }
+    else if constexpr (thread_id == PackThreadId)
+    {
+        cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_fmt_RMW, fmt);
+    }
+}
+
+template <ThreadId thread_id>
 inline void set_dest_fmt(DataFormat fmt)
 {
     set_dest_fmt<thread_id>(fmt_to_dest_type(fmt));
+}
+
+template <ThreadId thread_id>
+constexpr void set_dest_unsigned_int_rmw(const int val)
+{
+    static_assert(IS_TRISC_THREAD<thread_id>, "Thread must be UnpackThreadId or MathThreadId or PackThreadId");
+
+    if constexpr (thread_id == UnpackThreadId)
+    {
+        cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC0_unsigned_int_RMW, val);
+    }
+    else if constexpr (thread_id == MathThreadId)
+    {
+        cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC1_unsigned_int_RMW, val);
+    }
+    else if constexpr (thread_id == PackThreadId)
+    {
+        cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_unsigned_int_RMW, val);
+    }
+}
+
+template <ThreadId thread_id, bool is_signed>
+constexpr void set_dest_int8_int16_signed()
+{
+    set_dest_unsigned_int_rmw<thread_id>(is_signed ? 0 : 1);
+}
+
+template <ThreadId thread_id>
+inline void set_dest_int8_int16_signed(bool const is_signed)
+{
+    set_dest_unsigned_int_rmw<thread_id>(is_signed ? 0 : 1);
+}
+
+template <ThreadId thread_id>
+constexpr void set_dest_no_swizzle_rmw(const int val)
+{
+    static_assert(IS_TRISC_THREAD<thread_id>, "Thread must be UnpackThreadId or MathThreadId or PackThreadId");
+
+    // In unswizzled mode, values are written into dest as-is with
+    // no saturation checks and no bit shuffling. This means they
+    // are incompatible with the FPU, but it could be useful for
+    // debugging
+    if constexpr (thread_id == UnpackThreadId)
+    {
+        cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC0_no_swizzle_RMW, val);
+    }
+    else if constexpr (thread_id == MathThreadId)
+    {
+        cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC1_no_swizzle_RMW, val);
+    }
+    else if constexpr (thread_id == PackThreadId)
+    {
+        cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_no_swizzle_RMW, val);
+    }
+}
+
+template <ThreadId thread_id, bool enable>
+constexpr void set_dest_enable_swizzling()
+{
+    set_dest_no_swizzle_rmw<thread_id>(enable ? 0 : 1);
+}
+
+template <ThreadId thread_id>
+inline void set_dest_enable_swizzling(bool const enable)
+{
+    set_dest_no_swizzle_rmw<thread_id>(enable ? 0 : 1);
 }
 
 } // namespace ckernel
