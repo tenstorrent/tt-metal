@@ -12,7 +12,7 @@ Override via env var ``MESH_DEVICE``:
     P150x4   → (1, 4)   (4 × BlackHole P150)
     P150x2   → (1, 2)
     N300     → (1, 2)   (2 × WH N300)
-    T3K      → (1, 4)   (WH T3000, 4-chip rack half)
+    T3K      → (1, 8)   (WH T3000, full 8-chip rack)
     single   → (1, 1)   (single chip; E2E smoke uses disabled fabric for 1×1 — no Ethernet mesh required)
 """
 
@@ -29,7 +29,7 @@ def mesh_device_request_param() -> tuple[int, int]:
         "P150X4": (1, 4),
         "P150X2": (1, 2),
         "N300": (1, 2),
-        "T3K": (1, 4),
+        "T3K": (1, 8),
         "SINGLE": (1, 1),
     }
     return _MAP.get(env, (1, 2))
