@@ -237,7 +237,7 @@ static bool run_test_integrity_dram(
     return pass;
 }
 
-TEST_F(MeshDispatchFixture, TensixDeploymentEthernetDataIntegrityDram) {
+TEST_F(MeshDispatchFixture, TensixDeploymentEthernetData03IntegrityDram) {
     const auto num_eriscs = MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
 
     vector<LinkError> errors;

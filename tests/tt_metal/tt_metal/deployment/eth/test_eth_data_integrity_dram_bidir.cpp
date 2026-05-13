@@ -201,7 +201,7 @@ static bool run_test_integrity_dram_bidir(
     return pass;
 }
 
-TEST_F(MeshDispatchFixture, TensixDeploymentEthernetDataIntegrityDramBidir) {
+TEST_F(MeshDispatchFixture, TensixDeploymentEthernetData04IntegrityDramBidir) {
     vector<LinkError> errors;
 
     for (const auto& sender_mesh_device : devices_) {

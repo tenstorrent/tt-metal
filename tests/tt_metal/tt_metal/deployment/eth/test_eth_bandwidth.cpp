@@ -101,7 +101,7 @@ static bool run_test_bandwidth(
     return pass;
 }
 
-TEST_F(MeshDispatchFixture, TensixDeploymentEthernetBandwidth) {
+TEST_F(MeshDispatchFixture, TensixDeploymentEthernet01Bandwidth) {
     const auto num_eriscs = MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
 
     vector<LinkError> errors;
