@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "llk_pack_common_api.h"
+#include <cstdint>
 
 /*************************************************************************
  * LLK PACK ROWS (Quasar)
