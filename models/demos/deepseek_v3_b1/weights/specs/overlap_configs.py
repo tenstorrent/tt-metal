@@ -142,7 +142,7 @@ class QAB_KVA_PROJ_SingleDeviceOverlapSpec:
     transform.
     """
 
-    transform_version: int = 1  # bump when shuffle/preprocess logic in this class changes
+    transform_version: int = 3  # bump when shuffle/preprocess logic in this class changes
 
     num_qnope_heads: int = 64
     num_qrope_heads: int = 64
@@ -251,7 +251,7 @@ class O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec:
     * **ffn_norm** — BFP16, (1, 7168), on core (12, 9).
     """
 
-    transform_version: int = 1  # bump when shuffle/preprocess logic in this class changes
+    transform_version: int = 5  # bump when shuffle/preprocess logic in this class changes
 
     o_proj: OverlappedTensorSpec = field(
         default_factory=lambda: OverlappedTensorSpec(
@@ -333,7 +333,7 @@ O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC = O_PROJ_GATE_MM_RMSNORM
 class KVB12_PROJ_SingleDeviceOverlapSpec:
     """Configuration for the kv_b1 / kv_b2 weight overlap."""
 
-    transform_version: int = 1  # bump when shuffle/preprocess logic in this class changes
+    transform_version: int = 3  # bump when shuffle/preprocess logic in this class changes
 
     kv_b1_shard_spec: OverlappedTensorSpec = field(
         default_factory=lambda: OverlappedTensorSpec(
@@ -411,7 +411,7 @@ KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC = KVB12_PROJ_SingleDeviceOverlapSpec()
 class GATE_UP_PROJ_SingleDeviceOverlapSpec:
     """Configuration for the gate / up projection weight overlap."""
 
-    transform_version: int = 1  # bump when shuffle/preprocess logic in this class changes
+    transform_version: int = 4  # bump when shuffle/preprocess logic in this class changes
 
     gate_shard_spec: OverlappedTensorSpec = field(
         default_factory=lambda: OverlappedTensorSpec(

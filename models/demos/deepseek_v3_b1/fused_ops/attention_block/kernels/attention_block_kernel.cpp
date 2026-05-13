@@ -112,8 +112,8 @@ void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
     constexpr uint32_t bcast_writer_common_rt_count = 5;
     // CTArgs type aliases (required for Op templates)
-    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
+    using RawInputRMSInvCTArgs = deepseek_b1_ops::RMSInverse::ReaderCTArgs;
     using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
 
     deepseek_b1_ops::Mcast::DMArgs mcast_metadata_args{
@@ -126,8 +126,8 @@ void kernel_main() {
             },
     };
 
-    // RMSNorm reader runtime args
-    deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm_args{};
+    // Raw-input RMSInverse reader runtime args (NCRISC is no-op)
+    deepseek_b1_ops::RMSInverse::ReaderArgs raw_input_rms_inv_args{};
 
     // Mcast receiver args (from compile-time args, passed to op as runtime args)
     deepseek_b1_ops::Mcast::DMArgs mcast_args{
@@ -186,6 +186,17 @@ void kernel_main() {
                 get_named_compile_time_arg_val("mcast2_data_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("matmul2_in0"),
                 get_named_compile_time_arg_val("mcast2_dst_num_pages"),
+            },
+    };
+
+    // RMSInverse mcast receiver args (dkv matmul cores receive 1/RMS scalar from input core)
+    deepseek_b1_ops::Mcast::DMArgs rms_inv_mcast_args{
+        .sender = {},
+        .receiver =
+            {
+                get_named_compile_time_arg_val("rms_inv_mcast_data_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("raw_input_rms_inv_dst_cb"),
+                get_named_compile_time_arg_val("rms_inv_mcast_dst_num_pages"),
             },
     };
 
@@ -252,6 +263,7 @@ void kernel_main() {
 
     // Matmul CTArgs type alias (NCRISC uses ReaderCTArgs)
     using DKV_MatmulCTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
+    using DKV_MatmulApplyRMSCTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
 
     // Matmul reader args (NCRISC is no-op)
     deepseek_b1_ops::Matmul::ReaderArgs dkv_matmul_args{};
@@ -673,18 +685,18 @@ void kernel_main() {
     constexpr uint32_t metadata_addr_common_rta_idx = 1;
 
     // CTArgs type aliases (required for Op templates)
-    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;  // BRISC is no-op
+    using RawInputRMSInvCTArgs = deepseek_b1_ops::RMSInverse::WriterCTArgs;  // BRISC is no-op
     using McastCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
         get_named_compile_time_arg_val("mcast_num_cores"),
         get_named_compile_time_arg_val("mcast_is_part_of_receiver_grid"),
         Core::is_input_core && Core::is_full_mcast_grid_core>;  // loopback = false
 
-    // RMSNorm writer args (BRISC is no-op)
-    deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm_args{};
-
     // RMSNorm2 writer args (BRISC is no-op)
     deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm2_args{};
+
+    // Raw-input RMSInverse writer args (BRISC is no-op)
+    deepseek_b1_ops::RMSInverse::WriterArgs raw_input_rms_inv_args{};
 
     deepseek_b1_ops::Mcast::DMArgs mcast_metadata_args{
         .sender =
@@ -782,8 +794,31 @@ void kernel_main() {
         .receiver = {},
     };
 
+    // RMSInverse mcast sender args (input core mcasts 1/RMS scalar to dkv matmul cores)
+    // Uses same grid and sender semaphore as first mcast; new receiver semaphore.
+    constexpr uint32_t rms_inv_mcast_src_cb = get_named_compile_time_arg_val("raw_input_rms_inv_output_cb");
+    constexpr uint32_t rms_inv_mcast_dst_cb = get_named_compile_time_arg_val("raw_input_rms_inv_dst_cb");
+    deepseek_b1_ops::Mcast::DMArgs rms_inv_mcast_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+                get_named_compile_time_arg_val("mcast_data_sender_semaphore_addr"),
+                get_named_compile_time_arg_val("rms_inv_mcast_data_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("rms_inv_mcast_data_size_bytes"),
+                rms_inv_mcast_src_cb,
+                get_named_compile_time_arg_val("rms_inv_mcast_src_num_pages"),
+                get_read_ptr(rms_inv_mcast_src_cb),
+                get_write_ptr(rms_inv_mcast_dst_cb),
+            },
+        .receiver = {},
+    };
+
     // Matmul writer args (BRISC is no-op)
     using DKV_MatmulCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
+    using DKV_MatmulApplyRMSCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
     deepseek_b1_ops::Matmul::WriterArgs dkv_matmul_args{};
 
     // Gather: BRISC is no-op (ReceiverOnNCRISC mode)
@@ -1042,28 +1077,23 @@ void kernel_main() {
 #elif defined(COMPILE_FOR_TRISC)
     // CTArgs type aliases (required for Op templates)
 
-    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
-        get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
-        get_named_compile_time_arg_val("rmsnorm_num_tiles"),
-        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
-        get_named_compile_time_arg_val("rmsnorm_input_cb"),
-        get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
-        get_named_compile_time_arg_val("rmsnorm_output_cb")>;
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
         get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
         get_named_compile_time_arg_val("rmsnorm2_num_tiles"),
         get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
         get_named_compile_time_arg_val("rmsnorm2_input_cb"),
-        get_named_compile_time_arg_val("rmsnorm2_gamma_cb"),
-        get_named_compile_time_arg_val("rmsnorm2_output_cb")>;
+        0,  // gamma_cb unused (DoGamma=false)
+        get_named_compile_time_arg_val("rmsnorm2_output_cb"),
+        false>;
+    // Front half of RMSNorm: input core computes 1/RMS of the same raw input
+    // it just mcast and stores the scalar; nothing applied here.
+    using RawInputRMSInvCTArgs = deepseek_b1_ops::RMSInverse::ComputeCTArgs<
+        get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
+        get_named_compile_time_arg_val("rmsnorm_num_tiles"),
+        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
+        get_named_compile_time_arg_val("rmsnorm_input_cb"),
+        get_named_compile_time_arg_val("raw_input_rms_inv_output_cb")>;
     using McastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
-
-    // RMSNorm compute runtime args
-    deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
-        get_common_arg_val<uint32_t>(0),   // epsilon
-        get_common_arg_val<float>(1),      // scalar (1/sqrt(7168))
-        get_common_arg_val<uint32_t>(16),  // rmsnorm_gamma_addr
-    };
 
     // Mcast compute args (no-op for TRISC)
     deepseek_b1_ops::Mcast::ComputeArgs mcast_args{};
@@ -1103,9 +1133,15 @@ void kernel_main() {
 
     // RMSNorm2 compute args (separate CBs with exact sizes for testing)
     deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm2_args{
-        get_common_arg_val<uint32_t>(0),   // epsilon (same as rmsnorm1)
-        get_common_arg_val<float>(2),      // scalar (1/sqrt(1536))
-        get_common_arg_val<uint32_t>(17),  // rmsnorm2_gamma_addr
+        get_common_arg_val<uint32_t>(0),  // epsilon (same as rmsnorm1)
+        get_common_arg_val<float>(2),     // scalar (1/sqrt(1536))
+        0,                                // gamma_addr unused (DoGamma=false)
+    };
+
+    // Raw-input RMSInverse compute args (runs on input core; reuses rmsnorm1 epsilon/scalar)
+    deepseek_b1_ops::RMSInverse::ComputeArgs raw_input_rms_inv_args{
+        get_common_arg_val<uint32_t>(0),  // epsilon (same as rmsnorm1)
+        get_common_arg_val<float>(1),     // scalar (1/sqrt(K), same as rmsnorm1)
     };
 
     // Matmul2 CTArgs type alias (out_w is compile-time for TRISC)
@@ -1123,6 +1159,9 @@ void kernel_main() {
 
     // Mcast2 compute args (no-op for TRISC)
     deepseek_b1_ops::Mcast::ComputeArgs mcast2_args{};
+
+    // RMSInverse mcast compute args (no-op for TRISC)
+    deepseek_b1_ops::Mcast::ComputeArgs rms_inv_mcast_args{};
 
     // Matmul3 CTArgs type alias (out_w is compile-time for TRISC)
     using Matmul3CTArgs =
@@ -1160,9 +1199,19 @@ void kernel_main() {
         get_named_compile_time_arg_val("cqh_rope_tiles"),
     };
 
-    // DKV Matmul compute args
+    // DKV Matmul compute args.
+    // Two flavors: knope cores run a plain matmul; krope cores run the same
+    // matmul with the deepseek-private CUSTOM_SFPU activation fused in, which
+    // multiplies the matmul output by the mcasted 1/RMS scalar from
+    // raw_input_rms_inv_dst_cb (replaces the standalone RMSApply pass).
     using DKV_MatmulCTArgs =
         deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val("dkv_matmul_out_w_per_core")>;
+    using DKV_MatmulApplyRMSCTArgs = deepseek_b1_ops::Matmul::ComputeCTArgs<
+        get_named_compile_time_arg_val("dkv_matmul_out_w_per_core"),
+        /*transpose=*/false,
+        (uint32_t)FusedActivation::CUSTOM_SFPU,
+        /*approx_mode=*/false,
+        get_named_compile_time_arg_val("raw_input_rms_inv_dst_cb")>;
 
     // DKV Matmul compute args (from compile-time args, passed to op as runtime args)
     deepseek_b1_ops::Matmul::ComputeArgs dkv_matmul_args{
@@ -1183,13 +1232,14 @@ void kernel_main() {
         get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
         get_named_compile_time_arg_val("kv_rmsnorm_input_cb"),
         get_named_compile_time_arg_val("kv_rmsnorm_gamma_cb"),
-        get_named_compile_time_arg_val("kv_rmsnorm_output_cb")>;
+        get_named_compile_time_arg_val("kv_rmsnorm_output_cb"),
+        true>;  // DoGamma=true: kv_rmsnorm consumes gamma at runtime via kv_rmsnorm_gamma_cb
 
     // RMSNorm compute runtime args
     deepseek_b1_ops::RMSNorm::ComputeArgs kv_rmsnorm_args{
-        get_common_arg_val<uint32_t>(0),   // epsilon
-        get_common_arg_val<float>(3),      // kv_scalar (1/sqrt(512))
-        get_common_arg_val<uint32_t>(18),  // kv_rmsnorm_gamma_addr
+        get_common_arg_val<uint32_t>(0),  // epsilon
+        get_common_arg_val<float>(3),     // kv_scalar (1/sqrt(512))
+        0,                                // gamma_addr override = 0 -> RMSNorm::Op uses cb_wait_front(gamma_cb)
     };
 
     using K_RopeCTArgs = deepseek_b1_ops::Rope::
@@ -1362,7 +1412,10 @@ void kernel_main() {
         // Receive on the whole grid. This is used to block downstream ccls
         Core::is_full_mcast_grid_core,
         Core::is_matmul_core || Core::is_dkv_matmul_core,
-        true>
+        // pop_src=false: leave rmsnorm_input_cb populated so the input core's
+        // RMSInverse pass below can read the same raw input. RMSInverse runs
+        // with pop_input=true and is responsible for freeing the CB.
+        false>
         mcast;
     {
         DeviceZoneScopedN("MCAST_INIT");
@@ -1398,6 +1451,13 @@ void kernel_main() {
             cb_reserve_back(rmsnorm_input_cb, rmsnorm_num_tiles);
             cb_push_back(rmsnorm_input_cb, rmsnorm_num_tiles);
         }
+        if constexpr (Core::is_kv_rmsnorm_core) {
+            // Stage the kv_rmsnorm gamma tile into its CB once at kernel startup so
+            // TRISC's cb_wait_front(gamma_cb, num_tiles) returns immediately.
+            constexpr uint32_t kv_rmsnorm_gamma_cb = get_named_compile_time_arg_val("kv_rmsnorm_gamma_cb");
+            constexpr uint32_t kv_rmsnorm_num_tiles = get_named_compile_time_arg_val("kv_rmsnorm_num_tiles");
+            unified_kernels::setup_sharded_buffer(kv_rmsnorm_gamma_cb, kv_rmsnorm_num_tiles);
+        }
 #endif
         // This first mcast is also used to synchronize downstream ccls, so must always run.
         {
@@ -1414,17 +1474,40 @@ void kernel_main() {
 
         // TODO: These can be moved into the skip_attention block below now that we have the metadata mcast.
         // ====================================================================
-        // Input core: RMSNorm + Mcast send
+        // Input core: Mcast send (raw broadcast input — q_proj cores start their
+        // matmul against folded weights immediately, and dkv cores feed the raw
+        // mcast bytes directly into their matmul (no pre-RMSNorm).
         // ====================================================================
-        {
-            DeviceZoneScopedN("RMSNORM");
-            deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, false> rmsnorm;
-            rmsnorm(rmsnorm_args);
-        }
-
         {
             DeviceZoneScopedN("MCAST");
             mcast(mcast_args);
+        }
+
+        // ====================================================================
+        // Raw-input RMSInverse: input core computes 1/RMS of the raw input it
+        // just mcast and stores the scalar in raw_input_rms_inv_output_cb.
+        // The inverse is NOT applied here — it is reserved for downstream use.
+        // pop_input=true frees rmsnorm_input_cb for the next iteration.
+        // ====================================================================
+        {
+            DeviceZoneScopedN("RAW_INPUT_RMS_INV");
+            deepseek_b1_ops::RMSInverse::Op<RawInputRMSInvCTArgs, Core::is_input_core, true> raw_input_rms_inv;
+            raw_input_rms_inv(raw_input_rms_inv_args);
+        }
+
+        // ====================================================================
+        // RMSInverse mcast: input core broadcasts the 1/RMS scalar tile to
+        // every dkv matmul core. Reuses the main mcast grid + sender semaphore;
+        // a dedicated receiver semaphore separates this handshake from the raw
+        // input mcast. pop_src=true frees raw_input_rms_inv_output_cb after the
+        // bytes are dispatched.
+        // ====================================================================
+        {
+            DeviceZoneScopedN("RMS_INV_MCAST");
+            deepseek_b1_ops::Mcast::
+                Op<McastCTArgs, Core::is_input_core, Core::is_dkv_matmul_core, Core::is_dkv_matmul_core, true>
+                    rms_inv_mcast;
+            rms_inv_mcast(rms_inv_mcast_args);
         }
 
         if constexpr (Core::is_input_core) {
@@ -1575,13 +1658,23 @@ void kernel_main() {
             if (!skip_kv_cache_update) {
                 DeviceZoneScopedN("KV CACHE");
                 // ================================================================
-                // DKV Matmul: 9x2 grid, each core handles 1 head of 32 dim
+                // DKV Matmul: each dkv_matmul core reads the raw mcast input directly
+                // from matmul_input_cb (no pre-RMSNorm). pop_in0=true consumes
+                // matmul_input_cb so the next iteration's mcast_reserve_back can succeed.
+                // pop_in1=false because weights are persistent.
+                //
+                // Split by sub-grid: knope cores run a plain matmul (their output is
+                // gathered + rmsnorm'd downstream); krope cores run a matmul with the
+                // CUSTOM_SFPU activation fused in, scaling the output by 1/RMS from
+                // raw_input_rms_inv_dst_cb so krope can read pre-normalized values.
                 // ================================================================
                 {
                     DeviceZoneScopedN("DKV_MATMUL");
-                    // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
-                    deepseek_b1_ops::Matmul::Op<DKV_MatmulCTArgs, Core::is_dkv_matmul_core, false, false> dkv_matmul;
-                    dkv_matmul(dkv_matmul_args);
+                    deepseek_b1_ops::Matmul::Op<DKV_MatmulCTArgs, Core::is_knope_core, true, false> dkv_matmul_knope;
+                    dkv_matmul_knope(dkv_matmul_args);
+                    deepseek_b1_ops::Matmul::Op<DKV_MatmulApplyRMSCTArgs, Core::is_krope_core, true, false>
+                        dkv_matmul_krope;
+                    dkv_matmul_krope(dkv_matmul_args);
                 }
 
                 // ================================================================
@@ -1605,7 +1698,8 @@ void kernel_main() {
                 }
 
                 // ================================================================
-                // RoPE
+                // RoPE (1/RMS scaling is fused into the krope-side dkv_matmul above
+                // via FusedActivation::CUSTOM_SFPU; no standalone RMSApply pass).
                 // ================================================================
                 {
                     DeviceZoneScopedN("K_ROPE");

@@ -20,6 +20,9 @@
 #include "ckernel_sfpu_exp.h"
 #include "llk_math_eltwise_unary_sfpu_sigmoid.h"
 #include "llk_math_eltwise_unary_sfpu_silu.h"
+// Deepseek-private SFPU op (relative include — file is intentionally not
+// surfaced via llk_math_unary_sfpu_api.h; see header for usage rules).
+#include "internal/llk_math_eltwise_unary_sfpu_apply_scaler.h"
 #endif
 #endif
 
@@ -28,6 +31,12 @@ enum class FusedActivation : uint32_t {
     NONE = 0,
     SIGMOID = 1,
     SILU = 2,
+    // Bound to the deepseek-private apply_scaler SFPU op (see
+    // unified_kernels/internal/llk_math_eltwise_unary_sfpu_apply_scaler.h).
+    // Multiplies dst tile face quadrants 0/2/16/18 by the scaler pre-loaded
+    // into LReg0 via TT_SFPLOADI in the init block. Requires custom_sfpu_cb_
+    // to be set so the init block can wait for and load the scaler tile.
+    CUSTOM_SFPU = 3,
 };
 
 namespace deepseek_b1_ops {
@@ -58,18 +67,25 @@ struct Matmul {
     struct WriterCTArgs {};
 
     // Compute CTArgs (TRISC): out_w (output width in tiles), transpose, fused_activation
+    // custom_sfpu_cb_ is an optional CB id consumed by the CUSTOM_SFPU activation path
+    // (e.g. a scalar/scale tile loaded into the SFPU before the per-tile op). 0 means
+    // "no CB" — has_custom_sfpu_cb tells the user-supplied stub whether to read it.
     template <
         uint32_t out_w_,
         bool transpose_ = false,
         uint32_t fused_activation_ = 0,
-        bool fused_activation_approx_mode_ = false>
+        bool fused_activation_approx_mode_ = false,
+        uint32_t custom_sfpu_cb_ = 0>
     struct ComputeCTArgs {
         static constexpr uint32_t out_w = out_w_;
         static constexpr bool transpose = transpose_;
         static constexpr FusedActivation fused_activation = static_cast<FusedActivation>(fused_activation_);
         static constexpr bool fuse_sigmoid = fused_activation == FusedActivation::SIGMOID;
         static constexpr bool fuse_silu = fused_activation == FusedActivation::SILU;
+        static constexpr bool fuse_custom_sfpu = fused_activation == FusedActivation::CUSTOM_SFPU;
         static constexpr bool fused_activation_approx_mode = fused_activation_approx_mode_;
+        static constexpr uint32_t custom_sfpu_cb = custom_sfpu_cb_;
+        static constexpr bool has_custom_sfpu_cb = custom_sfpu_cb_ > 0;
     };
 
     // ========================================================================
@@ -148,8 +164,52 @@ struct Matmul {
                 // Initialize activation on PACK thread
                 if constexpr (CTArgs::fuse_sigmoid) {
                     PACK((ckernel::llk_math_eltwise_unary_sfpu_sigmoid_init<CTArgs::fused_activation_approx_mode>()));
-                } else {
+                } else if constexpr (CTArgs::fuse_silu) {
                     PACK((ckernel::llk_math_eltwise_unary_sfpu_silu_init<CTArgs::fused_activation_approx_mode>()));
+                } else if constexpr (CTArgs::fuse_custom_sfpu) {
+                    // Bit-copy the first 16-bit element of custom_sfpu_cb into SFPU LReg0
+                    // via SFPLOADI on the PACK thread. Mode SFPLOADI_MOD0_FLOATB (0)
+                    // treats the 16 bits as BF16 and lands them in LReg[31:16] with
+                    // LReg[15:0] zeroed — that's the FP32 representation of the BF16
+                    // value, ready to consume as a vFloat in the SFPU. Other useful
+                    // modes (sfpi/sfpi_constants.h):
+                    //   FLOATA (1)  FP16  → FP32
+                    //   USHORT (2)  uint16 → uint32 (zero-extend; bits land low half)
+                    //   SHORT  (4)  int16 → int32  (sign-extend)
+                    //   UPPER  (8)  raw  → LReg[31:16], LReg[15:0] PRESERVED
+                    //   LOWER  (10) raw  → LReg[15:0], LReg[31:16] preserved
+                    // See:
+                    //   tt-isa-documentation/BlackholeA0/TensixTile/TensixCoprocessor/SFPLOADI.md
+                    //
+                    // Two layers of UNPACK→PACK sync:
+                    //   1. cb_wait_front (cb_api.h) is TRISC_UNPACK-guarded; UNPACK posts
+                    //      semaphore::UNPACK_OPERAND_SYNC after the wait returns so PACK
+                    //      knows the producer's tile is committed in L1.
+                    //   2. get_tile_address (cb_api.h:155-177) does its own mailbox handoff
+                    //      of the byte address: UNPACK computes (fifo_rd_ptr + off)<<4 and
+                    //      writes to the MathThread/PackThread mailboxes; PACK's invocation
+                    //      blocks on mailbox_read until UNPACK posts.
+                    if constexpr (CTArgs::has_custom_sfpu_cb) {
+                        UNPACK(({ cb_wait_front(CTArgs::custom_sfpu_cb, 1); }));
+                        UNPACK((t6_semaphore_post<p_stall::UNPACK0>(semaphore::UNPACK_OPERAND_SYNC)));
+
+                        PACK((t6_semaphore_wait_on_zero<p_stall::STALL_PACK>(semaphore::UNPACK_OPERAND_SYNC)));
+                        uint32_t cb_rd_addr = get_tile_address(CTArgs::custom_sfpu_cb, 0);
+                        PACK(({
+                            volatile tt_l1_ptr uint16_t* l1_ptr =
+                                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_rd_addr);
+                            uint16_t bits = l1_ptr[0];
+                            TT_SFPLOADI(/*lreg=*/0, /*mod=*/0, bits);
+                            // SFPTRANSP shuffles out the apply value loaded above so the
+                            // calculate_apply_scaler op below can pick it up from the
+                            // expected LReg slot (transposes {LReg0..3} and {LReg4..7}
+                            // as two independent 4-lane groups).
+                            TTI_SFPTRANSP(0, 0, 0, 0);
+                        }));
+                        PACK((t6_semaphore_get<p_stall::PACK>(semaphore::UNPACK_OPERAND_SYNC)));
+                    }
+                    PACK((ckernel::llk_math_eltwise_unary_sfpu_apply_scaler_init<
+                          CTArgs::fused_activation_approx_mode>()));
                 }
 
                 // Per-tile: matmul -> activation on PACK -> pack
@@ -162,7 +222,7 @@ struct Matmul {
 
                     // Run activation on PACK thread
                     PACK(TTI_SEMWAIT(
-                        p_stall::STALL_TDMA | p_stall::STALL_CFG,
+                        p_stall::STALL_TDMA | p_stall::STALL_CFG | p_stall::STALL_SFPU,
                         semaphore::t6_sem(semaphore::MATH_PACK),
                         p_stall::STALL_ON_ZERO));
                     PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
@@ -172,9 +232,14 @@ struct Matmul {
                         PACK((ckernel::
                                   llk_math_eltwise_unary_sfpu_sigmoid<CTArgs::fused_activation_approx_mode, false, 2>(
                                       0, (int)VectorMode::R)));
-                    } else {
+                    } else if constexpr (CTArgs::fuse_silu) {
                         PACK((ckernel::llk_math_eltwise_unary_sfpu_silu<CTArgs::fused_activation_approx_mode, false, 2>(
                             0, (int)VectorMode::R)));
+                    } else if constexpr (CTArgs::fuse_custom_sfpu) {
+                        PACK((ckernel::llk_math_eltwise_unary_sfpu_apply_scaler<
+                              CTArgs::fused_activation_approx_mode,
+                              /*is_fp32_dest_acc_en=*/false,
+                              /*ITERATIONS=*/2>(0, (int)VectorMode::R)));
                     }
 
                     PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
@@ -205,6 +270,16 @@ struct Matmul {
             if constexpr (pop_in1) {
                 cb_pop_front(args.in1, args.k_num_tiles * out_w);
             }
+            // Pop the per-invocation custom SFPU scalar (UNPACK-side, since cb_pop_front
+            // is also TRISC_UNPACK-guarded). One scalar per Op call.
+            // TODO(custom-sfpu): if the same scalar is reused across many matmul
+            // invocations (e.g. fused MoE expert scaling), hoist push/pop to the caller
+            // and remove this block.
+            if constexpr (CTArgs::fuse_custom_sfpu && CTArgs::has_custom_sfpu_cb) {
+                UNPACK(({ cb_pop_front(CTArgs::custom_sfpu_cb, 1); }));
+            }
+
+            cb_push_back(args.out, out_w);
 #endif
         }
     };  // class Op
