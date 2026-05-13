@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
-#include "experimental/core_local_mem.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "api/core_local_mem.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
@@ -60,8 +60,8 @@ void kernel_main() {
     auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_tensor_address);
     auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_tensor_address);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb(cb0_id);
+    Noc noc;
+    CircularBuffer cb(cb0_id);
 
     ///////////////////////////////////////////////////
     // FABRIC INIT
@@ -126,9 +126,9 @@ void kernel_main() {
         // fill CB page
         for (uint32_t i = 0; i < inputs_per_cb_page && input_page_id < input_page_id_end; ++i) {
             auto page_id = next_input_page_id();
-            noc.async_read<experimental::Noc::TxnIdMode::ENABLED>(
+            noc.async_read<Noc::TxnIdMode::ENABLED>(
                 input_tensor_accessor,
-                experimental::CoreLocalMem<uint32_t>(l1_write_addr),
+                CoreLocalMem<uint32_t>(l1_write_addr),
                 input_page_size,
                 {.page_id = page_id},
                 {},
@@ -147,7 +147,7 @@ void kernel_main() {
         curr_trid = (curr_trid == max_trid) ? 1 : curr_trid + 1;
         if (txns_in_flight) {
             // push_back() will unblock the writer to send Fabric data in opposite dir
-            noc.async_read_barrier<experimental::Noc::BarrierMode::TXN_ID>(wait_trid);
+            noc.async_read_barrier<Noc::BarrierMode::TXN_ID>(wait_trid);
             cb.push_back(1);
             wait_trid = (wait_trid == max_trid) ? 1 : (wait_trid + 1);
 
@@ -174,7 +174,7 @@ void kernel_main() {
     // Drain in-flight reads
     while (wait_trid != curr_trid) {
         // push_back() will unblock the writer to send Fabric data in opposite dir
-        noc.async_read_barrier<experimental::Noc::BarrierMode::TXN_ID>(wait_trid);
+        noc.async_read_barrier<Noc::BarrierMode::TXN_ID>(wait_trid);
         cb.push_back(1);
         wait_trid = (wait_trid == max_trid) ? 1 : (wait_trid + 1);
 

@@ -3,18 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 
 using namespace tt::tt_fabric::linear::experimental;
 
-// Generic helper class to send pages to remote device.
-// Deals with how to packetize pages and interact with Fabric infra.
+// Helper class to send pages to remote device.
+// Deals with how to packetize pages and interact with Fabric APIs.
 template <uint32_t page_size, uint32_t packet_size, bool alternate_routes>
 class FabricWriter {
 public:
     FabricWriter(
-        const experimental::Noc& noc,
+        const Noc& noc,
         tt::tt_fabric::RoutingPlaneConnectionManager& manager,
         uint32_t num_connections,
         uint8_t range_hops_1,
@@ -176,7 +177,7 @@ private:
     // a single page.
     static constexpr uint32_t last_payload_size = page_size - ((packets_per_page - 1) * packet_size);
 
-    const experimental::Noc& noc;
+    const Noc& noc;
     tt::tt_fabric::RoutingPlaneConnectionManager& fabric_connection;
     uint8_t scatter_route_id_1;
     uint8_t scatter_route_id_2;

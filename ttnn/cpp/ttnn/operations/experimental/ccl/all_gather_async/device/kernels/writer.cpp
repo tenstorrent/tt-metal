@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
-#include "experimental/core_local_mem.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "api/core_local_mem.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
@@ -63,8 +63,8 @@ void kernel_main() {
 
     auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_tensor_address);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb(cb0_id);
+    Noc noc;
+    CircularBuffer cb(cb0_id);
 
     // DPRINT << "output_page_size=" << output_page_size << " pages_per_packet=" << pages_per_packet << " pages_per_cb="
     // << pages_per_cb_entry << ENDL();
@@ -139,8 +139,8 @@ void kernel_main() {
             // Local write.
             // For local writes use posted writes (to skip waiting for ack) on different virtual channel
             // (to avoid interfering with Fabric writes on same noc)
-            noc.async_write<experimental::Noc::TxnIdMode::DISABLED, experimental::Noc::ResponseMode::POSTED>(
-                experimental::CoreLocalMem<uint32_t>(l1_read_addr),
+            noc.async_write<Noc::TxnIdMode::DISABLED, Noc::ResponseMode::POSTED>(
+                CoreLocalMem<uint32_t>(l1_read_addr),
                 output_tensor_accessor,
                 output_page_size,
                 {},
@@ -150,8 +150,8 @@ void kernel_main() {
             l1_read_addr += output_page_size;
         }
 
-        noc.async_writes_flushed<experimental::Noc::ResponseMode::POSTED>();  // wait for local writes
-        fabric.flush();                                                       // wait for Fabric writes
+        noc.async_writes_flushed<Noc::ResponseMode::POSTED>();  // wait for local writes
+        fabric.flush();                                         // wait for Fabric writes
         cb.pop_front(1);
     }
 
