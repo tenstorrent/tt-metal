@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agent vs Makora — TTNN kernel-generation comparison</title>
+<style>
+  @page { size: 1280px 720px landscape; margin: 0; }
+  html, body {
+    margin: 0; padding: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Helvetica Neue", Arial, sans-serif;
+    color: #1a1a1a;
+    background: #ececef;
+  }
+  .slide {
+    width: 1280px;
+    height: 720px;
+    margin: 24px auto;
+    padding: 48px 64px;
+    box-sizing: border-box;
+    background: white;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+    page-break-after: always;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  h1 {
+    font-size: 32px;
+    font-weight: 600;
+    margin: 0 0 4px 0;
+    color: #6f1ab1;
+    letter-spacing: -0.01em;
+  }
+  h2 {
+    font-size: 18px;
+    font-weight: 400;
+    margin: 0 0 20px 0;
+    color: #555;
+  }
+  h3 {
+    font-size: 17px;
+    font-weight: 600;
+    margin: 14px 0 8px 0;
+    color: #6f1ab1;
+  }
+  p { line-height: 1.5; margin: 6px 0; font-size: 15px; }
+  ul { line-height: 1.55; font-size: 15px; margin: 6px 0; padding-left: 22px; }
+  li { margin: 5px 0; }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.92em;
+    background: #f5f0f9;
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: #4a0f7a;
+  }
+  a {
+    color: #6f1ab1;
+    text-decoration: none;
+    border-bottom: 1px dotted #b888d4;
+  }
+  a:hover { border-bottom-style: solid; }
+  .ev {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: #6f1ab1;
+    text-decoration: none;
+    border: 1px solid #d4b8e8;
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: #faf6fd;
+    margin-left: 4px;
+    white-space: nowrap;
+  }
+  .ev:hover { background: #f0e0fa; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 6px 0;
+    font-size: 14px;
+  }
+  th, td {
+    text-align: left;
+    padding: 7px 12px;
+    border-bottom: 1px solid #e8e8ec;
+  }
+  th {
+    background: #f5f0f9;
+    color: #6f1ab1;
+    font-weight: 600;
+    border-bottom: 2px solid #d4b8e8;
+  }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .highlight td { background: #fff8e1; }
+  .win { color: #1a7a1a; font-weight: 700; }
+  .lose { color: #b92a2a; font-weight: 700; }
+  .footnote {
+    font-size: 13px;
+    color: #555;
+    margin-top: auto;
+    padding-top: 14px;
+    border-top: 1px solid #e8e8ec;
+    line-height: 1.5;
+  }
+  .bucket-split {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 28px;
+    flex: 1;
+    overflow: hidden;
+  }
+  .bucket {
+    border-left: 4px solid #6f1ab1;
+    padding-left: 16px;
+    overflow: hidden;
+  }
+  .bucket.lose { border-left-color: #b92a2a; }
+  .bucket.lose h3 { color: #b92a2a; }
+  .pad-top { margin-top: 12px; }
+  .small { font-size: 13px; color: #555; line-height: 1.5; }
+  @media print {
+    html, body { background: white; }
+    .slide { margin: 0; box-shadow: none; height: 720px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- SLIDE 1 — Background: where Makora's claims came from -->
+<section class="slide">
+  <h1>Where did Makora's <a href="https://github.com/makora-ai/kernels/blob/main/Tenstorrent/README.md" target="_blank">wins</a> come from?</h1>
+  <h2>Same mechanism (fusion vs TTNN composite) — two outcomes depending on whether the composite still exists today</h2>
+  <div class="bucket-split">
+    <div class="bucket">
+      <h3>Bucket A — Composite still exists (claims hold)</h3>
+      <p class="small">TTNN baseline is an <b>N-op composite</b>; each step writes to DRAM. Fusion collapses N programs into 1, eliminating N-1 DRAM round-trips. TTNN has not (yet) replaced the composite.</p>
+      <table class="pad-top">
+        <tr><th>Op</th><th class="num">Makora claim</th><th class="num">Measured today</th></tr>
+        <tr><td>multigammaln</td><td class="num">5.06×</td><td class="num win">5.39×</td></tr>
+        <tr><td>glu</td><td class="num">2.79×</td><td class="num win">3.30×</td></tr>
+      </table>
+      <p class="small pad-top">
+        <b>multigammaln:</b> TTNN composite calls a 6-term Lanczos polynomial 4× (~150 programs).
+        <a class="ev" href="https://github.com/tenstorrent/tt-metal/blob/main/ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_composite_op.cpp#L196" target="_blank">multigammaln@main:196</a>
+        <a class="ev" href="https://github.com/tenstorrent/tt-metal/blob/main/ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_composite_op.cpp#L32" target="_blank">_lgamma@main:32</a><br>
+        <b>glu:</b> TTNN composite calls 2× <code>ttnn.slice</code> + sigmoid + multiply.
+        Slices are real DRAM copies; reader-level split eliminates them.
+        <a class="ev" href="https://github.com/tenstorrent/tt-metal/blob/main/ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_composite_op.cpp#L338" target="_blank">glu@main:338</a>
+      </p>
+    </div>
+    <div class="bucket lose">
+      <h3>Bucket B — TTNN replaced the composite (claims inverted)</h3>
+      <p class="small">Same fusion mechanism as bucket A at Makora's benchmark time — TTNN was a multi-program composite chain. <b>TTNN then replaced these composites with single-program SFPU primitives</b> in March–April 2026. The primitives are also algorithmically better than Makora's general kernel.</p>
+      <table class="pad-top">
+        <tr><th>Op</th><th class="num">Makora claim</th><th class="num">Measured today</th></tr>
+        <tr><td>atan2</td><td class="num">5.12×</td><td class="num lose">0.29×</td></tr>
+        <tr><td>lgamma</td><td class="num">3.80×</td><td class="num lose">0.44×</td></tr>
+      </table>
+      <p class="small pad-top">
+        <b>atan2 (2026-04-07):</b> commit message: <i>"atan2 was composite and would benefit from a dedicated SFPU implementation."</i> Replaced an 11-op chain (reciprocal + multiply + atan + 8 quadrant-fixup ops).
+        <a class="ev" href="https://github.com/tenstorrent/tt-metal/commit/aed2421dfe6c7ccd50c05e23a4bc62dab556632a" target="_blank">commit aed2421</a><br>
+        <b>lgamma (2026-03):</b> replaced the same <code>_lgamma</code> Lanczos chain that still serves <code>multigammaln</code>. Makora ships that chain fused; TTNN now ships a Stirling SFPU primitive.
+        <a class="ev" href="https://github.com/tenstorrent/tt-metal/commit/41c953b14826ff9c217c05b17c5e3d44d068371f" target="_blank">commit 41c953b (bf16)</a>
+        <a class="ev" href="https://github.com/tenstorrent/tt-metal/commit/22ad2b3975aec7efb54974baff3cc91410c4a7a2" target="_blank">commit 22ad2b3 (fp32)</a>
+      </p>
+    </div>
+  </div>
+  <p class="footnote">
+    After attribution, roughly <b>half of Makora's published wins evaporate or invert</b> on current TTNN <code>main</code> — bucket A's fusion math is durable; bucket B's algorithmic gap closed without anyone replicating Makora's kernel approach.
+  </p>
+</section>
+
+<!-- SLIDE 2 — Setup: agent vs agent -->
+<section class="slide">
+  <h1>Two agents, same problem</h1>
+  <h2>Bucket A is the question we can ask: can our pipeline match Makora's fused kernels?</h2>
+  <ul>
+    <li><b>Makora</b> — external set of 19 AI-generated fused TTNN kernels, each produced by an unknown agent process. Published per-op benchmarks against TTNN composites and chains.</li>
+    <li><b>Our pipeline</b> — incremental agent flow: <b>planner → implementer → verifier → refinements</b>. Generates a complete TTNN op (Python entry point + program descriptor + reader / compute / writer kernels) from a single prompt, with tests and refinement-tracking docs as a byproduct.</li>
+  </ul>
+  <h3 class="pad-top">Three ops regenerated end-to-end and benchmarked head-to-head</h3>
+  <table>
+    <tr><th>Op</th><th>Bucket</th><th>What it tests</th></tr>
+    <tr><td><code>multigammaln_lanczos</code></td><td>A</td><td>Translate a 35-step C++ Lanczos composite into one fused kernel</td></tr>
+    <tr><td><code>glu_fused</code></td><td>A</td><td>Eliminate <code>ttnn.slice</code> via a reader-level tile-pair split</td></tr>
+    <tr><td><code>atan_mean</code> (vs Makora's tall + high_channel variants)</td><td>C</td><td>No TTNN op exists — fuse SFPU activation + row reduction from scratch</td></tr>
+  </table>
+  <p class="footnote">
+    End-to-end pipeline time per op: <b>~26–30 min</b> (planner ~12 + implementer ~9 + verifier ~5).
+    Each refinement is a separate ~5–10 min agent invocation. The verifier produces precision baselines, data-transfer analysis, numerical-stability analysis, and a refinement checklist as part of its normal output.
+  </p>
+</section>
+
+<!-- SLIDE 3 — Compute kernel head-to-head + structural matchup -->
+<section class="slide">
+  <h1>Compute kernel head-to-head</h1>
+  <h2>NoC stripped from readers / writers, compute config matched 1:1 — pure compute kernel duration</h2>
+  <table>
+    <tr><th>Op</th><th>dtype</th><th class="num">Agent gmean (ns)</th><th class="num">Makora gmean (ns)</th><th class="num">Ratio</th><th class="num">Agent $ (Phase 0)</th></tr>
+    <tr><td>multigammaln_lanczos</td><td>fp32</td><td class="num">160,516</td><td class="num">156,048</td><td class="num">1.03×</td><td class="num">≈$27.6</td></tr>
+    <tr><td>glu_fused</td><td>bf16</td><td class="num">24,619</td><td class="num">23,898</td><td class="num">1.03×</td><td class="num">$15.89</td></tr>
+    <tr class="highlight"><td>atan_mean (tall)</td><td>bf16</td><td class="num">9,839</td><td class="num">10,576</td><td class="num win">0.93×</td><td class="num">$21.10</td></tr>
+    <tr><td>atan_mean (high_channel)</td><td>bf16</td><td class="num">125,578</td><td class="num">126,901</td><td class="num">0.99×</td><td class="num" style="color:#888;">— same op</td></tr>
+  </table>
+  <h3 class="pad-top">Load-bearing structural choices discovered independently from the prompt</h3>
+  <ul>
+    <li><b>glu_fused:</b> invented the "tile-pair reader" (read <code>tile(t)</code> and <code>tile(t + Wt/2)</code> from one tensor, no slice op) from the prompt constraint "no <code>ttnn::slice</code> allowed".
+      <a class="ev" href="https://github.com/tenstorrent/tt-metal/blob/dnijemcevic/backward_softmax_agentic/ttnn/ttnn/operations/glu_fused/kernels/glu_fused_reader.cpp" target="_blank">glu_fused_reader.cpp</a></li>
+    <li><b>multigammaln_lanczos:</b> independent register-pressure trick — spill DST[1] to a CB, run the inner multiply, reload — to keep the Lanczos accumulator pinned in DST[0] across iterations.
+      <a class="ev" href="https://github.com/tenstorrent/tt-metal/blob/dnijemcevic/backward_softmax_agentic/ttnn/ttnn/operations/multigammaln_lanczos/kernels/multigammaln_lanczos_compute.cpp" target="_blank">multigammaln_lanczos_compute.cpp</a></li>
+    <li><b>atan_mean:</b> <b>one parameterised kernel covers both of Makora's shape-specialised variants</b> (<code>tall</code> + <code>high_channel</code>) — the split had no structural justification.
+      <a class="ev" href="https://github.com/tenstorrent/tt-metal/blob/dnijemcevic/backward_softmax_agentic/ttnn/ttnn/operations/atan_mean/kernels/atan_mean_compute.cpp" target="_blank">atan_mean_compute.cpp</a></li>
+    <li>Agent builds on the <code>kernel_lib</code> helper layer (<code>sfpu_atan</code>, <code>reduce&lt;AVG, REDUCE_ROW&gt;</code>, <code>calculate_and_prepare_reduce_scaler</code>). Makora hand-rolls raw LLK calls.</li>
+  </ul>
+  <p class="footnote">
+    Across the four head-to-heads: Makora is <b>at most 3% faster</b> (two ops), parity on a third, and the agent is <b>7% faster</b> on the fourth. Numerical output bit-equivalent (PCC = 1.0000) end-to-end; compute-only numbers above strip NoC to isolate kernel speed.
+    <a class="ev" href="https://github.com/tenstorrent/tt-metal/blob/dnijemcevic/backward_softmax_agentic/verify_makora.py" target="_blank">verify_makora.py</a>
+  </p>
+</section>
+
+<!-- SLIDE 5 — Takeaway -->
+<section class="slide">
+  <h1>Takeaway</h1>
+  <ul style="font-size:17px;">
+    <li><b>Two agent stacks at parity.</b> Across four compute-kernel head-to-heads, Makora is at most <b>3% faster</b>; the agent is <b>7% faster</b> on one of them.</li>
+    <li><b>End-to-end cost per op: one working session.</b> Planner ~12 min, implementer ~9 min, verifier ~5 min. Refinements 5–10 min each. Tests, capability docs, and refinement checklist are byproducts.</li>
+    <li><b>The compounding wins are below the kernel.</b> The agent's edge comes from the <code>kernel_lib</code> helpers absorbing complexity, and from a prompt + refinement protocol that captures hardware constraints precisely. The kernel-level work is straightforward; the leverage is in the layers around it.</li>
+    <li><b>Helpers are an LLM-friendly surface.</b> Writing kernels through the <code>kernel_lib</code> helper layer is materially easier for the agent to get right than hand-rolling raw LLK calls. The same pipeline already generated <b>backward_softmax</b> — one of Makora's upcoming deliverables — end-to-end on 2026-05-08, with <b>34/43</b> tests green at the Phase-0 verifier checkpoint.
+      <a class="ev" href="https://github.com/tenstorrent/tt-metal/commit/7e4d134b14cb52c055f1b4ee855a5bbf96c2551a" target="_blank">commit 7e4d134</a>
+      <a class="ev" href="https://github.com/tenstorrent/tt-metal/blob/dnijemcevic/backward_softmax_agentic/ttnn/ttnn/operations/backward_softmax/kernels/backward_softmax_compute.cpp" target="_blank">backward_softmax_compute.cpp</a></li>
+  </ul>
+  <p class="footnote">
+    Bucket B (TTNN-primitive baseline) was not part of this comparison — TTNN's own primitives were uplifted in March–April 2026 and now beat Makora 2–4× without any agent involvement; those kernels are obsolete.
+  </p>
+</section>
+
+</body>
+</html>
