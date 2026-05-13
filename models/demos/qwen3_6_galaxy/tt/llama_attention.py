@@ -195,68 +195,113 @@ class TtQwen36GatedAttention(LightweightModule):
     # ------------------------------------------------------------------
 
     def _build_weights(self, sd: dict):
-        """Prepare and upload all weights to device.
+        """Upload weights with column-parallel sharding across the 4 mesh cols.
 
-        q_proj.weight layout (HF Qwen3Next convention):
-            [Q_h0(hd) | gate_h0(hd) | Q_h1(hd) | gate_h1(hd) | ...]
-            shape: [n_q * 2 * head_dim, H] = [12288, 5120]
+        Parallelization plan (cluster_axis=1, 4 cols):
+            Each col handles n_q/4=6 Q-heads, 6 gate-heads, n_kv/4=1 K-head, 1 V-head.
+            wqkvg sharded by output dim across cols → per col [H, (6+6+1+1)*hd = 3584].
+            wo sharded by INPUT dim across cols → per col [6*hd=1536, H].
+            Forward: each col runs its own attention independently; wo all-reduces
+            partial sums across cols (all_gather + fast_reduce_nc on cluster_axis=1).
 
-        We de-interleave into separate Q and gate blocks, then fuse as:
-            wqkvg = [Q_native | gate_native | K_native | V_native].T
-        shape on device (2D): [H=5120, (n_q+n_q+n_kv+n_kv)*hd] = [5120, 14336]
+        HF q_proj layout: [Q_h0(hd) | gate_h0(hd) | Q_h1(hd) | gate_h1(hd) | ...].
+        We de-interleave Q vs gate first, then concat [Q | gate | K | V] by head
+        groups so that contiguous slices on the output dim correspond to whole heads.
 
-        WO weight is stored as native [n_q*hd, H] = [6144, 5120].
+        Per-chip weight DRAM (BF16, sharded /4 cols):
+            wqkvg: 5120 × 3584 × 2 = 36.7 MB    (vs 147 MB replicated)
+            wo:    1536 × 5120 × 2 = 15.7 MB    (vs 31 MB replicated bfloat8_b)
+            Total per layer per chip: ~52 MB    (vs 178 MB replicated)
         """
         hd = self.head_dim  # 256
         n_q = self.n_q  # 24
         n_kv = self.n_kv  # 4
         H = self.hidden_size  # 5120
+        n_cols = self.cluster_shape[1]  # 4
+        assert n_q % n_cols == 0, f"n_q={n_q} not divisible by n_cols={n_cols}"
+        assert n_kv % n_cols == 0, f"n_kv={n_kv} not divisible by n_cols={n_cols}"
+        n_q_per_col = n_q // n_cols  # 6
+        n_kv_per_col = n_kv // n_cols  # 1
+        self.n_q_per_col = n_q_per_col
+        self.n_kv_per_col = n_kv_per_col
+        self.q_dim_per_col = n_q_per_col * hd  # 1536
+        self.gate_dim_per_col = n_q_per_col * hd  # 1536
+        self.k_dim_per_col = n_kv_per_col * hd  # 256
+        self.v_dim_per_col = n_kv_per_col * hd  # 256
+        # total_per_col = (n_q + n_q + n_kv + n_kv)/n_cols * hd = 3584
+        self.total_per_col = self.q_dim_per_col + self.gate_dim_per_col + self.k_dim_per_col + self.v_dim_per_col
 
         # 1. De-interleave Q and gate from q_proj.weight
         q_proj_w = sd["q_proj.weight"]  # [12288, 5120]
         expected_q = (n_q * 2 * hd, H)
         assert q_proj_w.shape == expected_q, f"q_proj.weight: expected {expected_q}, got {q_proj_w.shape}"
-        # Reshape to [n_q, 2, hd, H] then split on dim=1
         q_2hd = q_proj_w.reshape(n_q, 2, hd, H)
         wq_native = q_2hd[:, 0, :, :].reshape(n_q * hd, H)  # [6144, 5120]
         wgate_native = q_2hd[:, 1, :, :].reshape(n_q * hd, H)  # [6144, 5120]
-
         wk_native = sd["k_proj.weight"]  # [1024, 5120]
         wv_native = sd["v_proj.weight"]  # [1024, 5120]
 
-        # 2. Fuse: [Q | gate | K | V] then transpose — all native sizes
-        # Total = (n_q + n_q + n_kv + n_kv) * hd = (24+24+4+4)*256 = 14336
-        wqkvg = torch.cat([wq_native, wgate_native, wk_native, wv_native], dim=0)  # [14336, 5120]
-        # TTNN linear(x, W): x=[B,T,H], W=[H, out_dim=14336]
-        # Use 2D [H, out_dim] to keep output rank same as input
-        wqkvg_T = wqkvg.T.contiguous()  # [5120, 14336]
+        # 2. Build the col-sharded wqkvg by interleaving HEAD GROUPS per col.
+        #    For col c (0..n_cols-1):
+        #      [ Q_heads (c*n_q_per_col .. (c+1)*n_q_per_col),
+        #        gate_heads same range,
+        #        K_heads (c*n_kv_per_col .. (c+1)*n_kv_per_col),
+        #        V_heads same range ]
+        #    Concatenated along the OUTPUT dim, the i-th col's slice occupies columns
+        #    [c*total_per_col, (c+1)*total_per_col]. Then ShardTensor2dMesh on cols
+        #    splits cleanly so each col owns its own head group.
+        col_blocks = []
+        for c in range(n_cols):
+            qs = c * n_q_per_col * hd
+            qe = (c + 1) * n_q_per_col * hd
+            ks = c * n_kv_per_col * hd
+            ke = (c + 1) * n_kv_per_col * hd
+            col_blocks.append(
+                torch.cat(
+                    [
+                        wq_native[qs:qe],  # 6 Q-heads for this col
+                        wgate_native[qs:qe],  # 6 gate-heads for this col
+                        wk_native[ks:ke],  # 1 K-head for this col
+                        wv_native[ks:ke],  # 1 V-head for this col
+                    ],
+                    dim=0,
+                )
+            )  # [total_per_col=3584, H]
+        wqkvg = torch.cat(col_blocks, dim=0)  # [total_per_col * n_cols = 14336, H]
+        wqkvg_T = wqkvg.T.contiguous()  # [H, total_per_col * n_cols]
 
+        col_parallel = ttnn.ShardTensor2dMesh(
+            self.mesh_device, dims=(None, 1), mesh_shape=self.cluster_shape
+        )  # split along TENSOR dim=1 across MESH cols (cluster_axis=1)
         self.wqkvg = ttnn.from_torch(
             wqkvg_T,
             device=self.mesh_device,
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
+            mesh_mapper=col_parallel,
+        )  # per chip: [H, total_per_col=3584]
 
-        # 3. WO weight: [H, n_q * hd] = [5120, 6144] → store as [n_q*hd, H] = [6144, 5120]
-        wo_native = sd["o_proj.weight"]  # [5120, 6144]
+        # 3. WO weight: row-parallel — shard the INPUT dim (n_q*hd=6144) across cols.
+        #    For col c, the rows that match col c's Q heads: rows [c*n_q_per_col*hd, (c+1)*n_q_per_col*hd]
+        wo_native = sd["o_proj.weight"]  # [H=5120, n_q*hd=6144]
         expected_wo = (H, n_q * hd)
         assert wo_native.shape == expected_wo, f"o_proj.weight: expected {expected_wo}, got {wo_native.shape}"
-        # TTNN linear(x, W): x=[B,T,n_q*hd=6144], W=[6144, H=5120]
+        # Transpose to [n_q*hd, H] = [6144, 5120]; split dim 0 across cols
         wo_T = wo_native.T.contiguous()  # [6144, 5120]
-
+        row_parallel_cols = ttnn.ShardTensor2dMesh(
+            self.mesh_device, dims=(None, 0), mesh_shape=self.cluster_shape
+        )  # split tensor dim=0 across mesh cols
         self.wo = ttnn.from_torch(
             wo_T,
             device=self.mesh_device,
-            dtype=ttnn.bfloat8_b,
+            dtype=self.dtype,  # BF16 (no quantization per user constraint #2)
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
+            mesh_mapper=row_parallel_cols,
+        )  # per chip: [1536, H]
 
-        # 4. QK-norm weights (zero-centered: bake +1 shift)
+        # 4. QK-norm weights (zero-centered: bake +1 shift) — small, replicate
         self.q_norm_w = _make_qknorm_weight_tt(sd["q_norm.weight"], self.mesh_device)
         self.k_norm_w = _make_qknorm_weight_tt(sd["k_norm.weight"], self.mesh_device)
 
@@ -265,10 +310,12 @@ class TtQwen36GatedAttention(LightweightModule):
     # ------------------------------------------------------------------
 
     def _build_kv_cache(self):
-        """Allocate on-device KV cache tensors.
+        """Allocate on-device KV cache, sharded across cols.
 
-        Shape: [max_batch_size, n_kv, max_seq_len, head_dim]
-        Replicated across all mesh devices.
+        Shape (logical): [max_batch_size, n_kv=4, max_seq_len, head_dim]
+        Sharded on dim=1 (n_kv) across 4 mesh cols → per chip:
+            [max_batch_size, n_kv_per_col=1, max_seq_len, head_dim]
+        Replicated across rows (same content on all 8 rows of a given col).
         """
         cache_k = torch.zeros(
             self.max_batch_size,
@@ -282,6 +329,9 @@ class TtQwen36GatedAttention(LightweightModule):
             self.kv_cache_max_seq_len,
             self.head_dim,
         )
+        col_shard_kv = ttnn.ShardTensor2dMesh(
+            self.mesh_device, dims=(None, 1), mesh_shape=self.cluster_shape
+        )  # split tensor dim=1 (n_kv) across mesh cols
         self.layer_past = [
             ttnn.from_torch(
                 kv,
@@ -289,7 +339,7 @@ class TtQwen36GatedAttention(LightweightModule):
                 dtype=self.dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=col_shard_kv,
             )
             for kv in [cache_k, cache_v]
         ]
@@ -410,16 +460,18 @@ class TtQwen36GatedAttention(LightweightModule):
             x_3d = x
 
         hd = self.head_dim  # 256
-        n_q = self.n_q  # 24
-        n_kv = self.n_kv  # 4
-        q_dim = n_q * hd  # 6144
-        g_dim = n_q * hd  # 6144
-        k_dim = n_kv * hd  # 1024
-        v_dim = n_kv * hd  # 1024
-        total = q_dim + g_dim + k_dim + v_dim  # 14336
+        # Col-sharded sizes: each chip in col c sees only its own 6 Q-heads + 1 KV-head
+        n_q_pc = self.n_q_per_col  # 6
+        n_kv_pc = self.n_kv_per_col  # 1
+        q_dim_pc = self.q_dim_per_col  # 6*256 = 1536
+        g_dim_pc = self.gate_dim_per_col  # 1536
+        k_dim_pc = self.k_dim_per_col  # 256
+        v_dim_pc = self.v_dim_per_col  # 256
+        total_pc = self.total_per_col  # 3584
 
         # ------------------------------------------------------------------
-        # 1. QKVgate projection: x [B, T, H] @ wqkvg [H, 14336] → [B, T, 14336]
+        # 1. QKVgate projection: x [B, T, H] @ wqkvg_per_col [H, 3584] → [B, T, 3584] per col
+        #    (each col holds different Q/K/V data; rows in same col are replicated)
         # ------------------------------------------------------------------
         xqkvg = ttnn.linear(
             x_3d,
@@ -430,21 +482,28 @@ class TtQwen36GatedAttention(LightweightModule):
         )
 
         # ------------------------------------------------------------------
-        # 2. Split Q, gate, K, V (native sizes)
+        # 2. Split Q, gate, K, V (per-col sizes)
         # ------------------------------------------------------------------
-        q_flat = ttnn.slice(xqkvg, [0, 0, 0], [B, T, q_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        gate_flat = ttnn.slice(xqkvg, [0, 0, q_dim], [B, T, q_dim + g_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        k_flat = ttnn.slice(
-            xqkvg, [0, 0, q_dim + g_dim], [B, T, q_dim + g_dim + k_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
+        q_flat = ttnn.slice(xqkvg, [0, 0, 0], [B, T, q_dim_pc], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        gate_flat = ttnn.slice(
+            xqkvg, [0, 0, q_dim_pc], [B, T, q_dim_pc + g_dim_pc], memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        v_flat = ttnn.slice(xqkvg, [0, 0, q_dim + g_dim + k_dim], [B, T, total], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        k_flat = ttnn.slice(
+            xqkvg,
+            [0, 0, q_dim_pc + g_dim_pc],
+            [B, T, q_dim_pc + g_dim_pc + k_dim_pc],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        v_flat = ttnn.slice(
+            xqkvg, [0, 0, q_dim_pc + g_dim_pc + k_dim_pc], [B, T, total_pc], memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
         xqkvg.deallocate(True)
 
-        # Reshape to [B, T, n_heads, hd]
-        q_h = ttnn.reshape(q_flat, [B, T, n_q, hd])
-        # Keep gate_flat as [B, T, g_dim] for now (apply after SDPA)
-        k_h = ttnn.reshape(k_flat, [B, T, n_kv, hd])
-        v_h = ttnn.reshape(v_flat, [B, T, n_kv, hd])
+        # Reshape per-col: each col has its own slice of heads
+        q_h = ttnn.reshape(q_flat, [B, T, n_q_pc, hd])  # [B, T, 6, 256]
+        # Keep gate_flat as [B, T, g_dim_pc=1536] for now (apply after SDPA)
+        k_h = ttnn.reshape(k_flat, [B, T, n_kv_pc, hd])  # [B, T, 1, 256]
+        v_h = ttnn.reshape(v_flat, [B, T, n_kv_pc, hd])  # [B, T, 1, 256]
         q_flat.deallocate(True)
         k_flat.deallocate(True)
         v_flat.deallocate(True)
@@ -483,23 +542,24 @@ class TtQwen36GatedAttention(LightweightModule):
         else:
             keys_cache, values_cache = self.layer_past[0], self.layer_past[1]
 
-        # k_rot: [B, n_kv, T, hd]  v_t: [B, n_kv, T, hd]
+        # KV-cache fill: each col stores its OWN single KV head (per-chip [B, 1, max_seq, hd])
+        # k_rot, v_t are per-col [B, n_kv_pc=1, T, hd] — matches the sharded cache layout.
         ttnn.fill_cache(keys_cache, k_rot, user_id % max(self.max_batch_size, 1))
         ttnn.fill_cache(values_cache, v_t, user_id % max(self.max_batch_size, 1))
 
         # ------------------------------------------------------------------
-        # 7. GQA expand K, V: n_kv → n_q heads (native ratio = n_q // n_kv = 6)
+        # 7. GQA expand K, V (per col): n_kv_pc=1 → n_q_pc=6 heads
         # ------------------------------------------------------------------
-        gqa = self.gqa_ratio  # 6
-        k_exp = ttnn.repeat_interleave(k_rot, gqa, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        v_exp = ttnn.repeat_interleave(v_t, gqa, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        gqa_pc = self.n_q_per_col // self.n_kv_per_col  # 6
+        k_exp = ttnn.repeat_interleave(k_rot, gqa_pc, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        v_exp = ttnn.repeat_interleave(v_t, gqa_pc, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         k_rot.deallocate(True)
         v_t.deallocate(True)
 
         # ------------------------------------------------------------------
-        # 8. SDPA with causal mask
+        # 8. SDPA with causal mask (per col — each col attends to its own KV head)
         # ------------------------------------------------------------------
-        # Build causal mask on CPU and move to device
+        # Build causal mask on CPU and move to device (replicated — same mask on all chips)
         causal = torch.zeros(B, 1, T, T, dtype=torch.bfloat16)
         causal = causal.masked_fill(torch.triu(torch.ones(T, T, dtype=torch.bool), diagonal=1), float("-inf"))
         mask_tt = ttnn.from_torch(
@@ -511,6 +571,7 @@ class TtQwen36GatedAttention(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
+        # attn_out per col: [B, n_q_pc=6, T, hd]
         attn_out = ttnn.transformer.scaled_dot_product_attention(
             q_rot,
             k_exp,
@@ -527,18 +588,14 @@ class TtQwen36GatedAttention(LightweightModule):
         q_rot.deallocate(True)
 
         # ------------------------------------------------------------------
-        # 9. Output gate: sigmoid(gate) * attn_out
+        # 9. Output gate (per col): sigmoid(gate_flat) * attn_out
         # ------------------------------------------------------------------
-        # attn_out: [B, n_q, T, hd]
-        # gate_flat: [B, T, g_dim=n_q*hd=6144]
-
-        # Transpose attn_out to [B, T, n_q, hd] then flatten to [B, T, g_dim]
+        # attn_out: [B, n_q_pc, T, hd], gate_flat: [B, T, q_dim_pc=1536]
         attn_t = ttnn.transpose(attn_out, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn_out.deallocate(True)
-        attn_flat = ttnn.reshape(attn_t, [B, T, q_dim])
+        attn_flat = ttnn.reshape(attn_t, [B, T, q_dim_pc])  # per col: [B, T, 1536]
         attn_t.deallocate(True)
 
-        # gate_flat: [B, T, g_dim=6144] — sigmoid then multiply
         gate_sig = ttnn.sigmoid(gate_flat, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         gate_flat.deallocate(True)
         gated = ttnn.multiply(attn_flat, gate_sig, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -546,16 +603,37 @@ class TtQwen36GatedAttention(LightweightModule):
         gate_sig.deallocate(True)
 
         # ------------------------------------------------------------------
-        # 10. WO projection: [B, T, n_q*hd=6144] @ [6144, H=5120]
+        # 10. WO projection: per col [B,T,1536] @ [1536, H] → [B,T,H] PARTIAL per col
+        #     Then all-gather + fast_reduce_nc across cols (cluster_axis=1) to sum.
         # ------------------------------------------------------------------
-        dense_out = ttnn.linear(
+        dense_partial = ttnn.linear(
             gated,
             self.wo,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_hifi4,
-        )
+        )  # [B, T, H] partial per col
         gated.deallocate(True)
+
+        # All-reduce across the 4 cols: gather + sum (same pattern as MLP/DeltaNet)
+        gathered = ttnn.all_gather(
+            dense_partial,
+            dim=0,
+            num_links=1,
+            cluster_axis=1,
+            topology=ttnn.Topology.Linear,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # stacks 4 col partials on dim=0
+        dense_partial.deallocate(True)
+
+        dense_out = ttnn.experimental.fast_reduce_nc(
+            gathered,
+            dims=[0],
+            output=None,
+            compute_kernel_config=None,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [B, T, H] replicated
+        gathered.deallocate(True)
 
         return dense_out
 
@@ -598,15 +676,16 @@ class TtQwen36GatedAttention(LightweightModule):
         assert T == 1, f"Decode expects T=1, got T={T}"
 
         hd = self.head_dim  # 256
-        n_q = self.n_q  # 24
-        n_kv = self.n_kv  # 4
-        q_dim = n_q * hd  # 6144
-        g_dim = n_q * hd  # 6144
-        k_dim = n_kv * hd  # 1024
-        v_dim = n_kv * hd  # 1024
-        total = q_dim + g_dim + k_dim + v_dim  # 14336
+        # Per-col sizes (col-sharded attention)
+        n_q_pc = self.n_q_per_col  # 6
+        n_kv_pc = self.n_kv_per_col  # 1
+        q_dim_pc = self.q_dim_per_col  # 1536
+        g_dim_pc = self.gate_dim_per_col  # 1536
+        k_dim_pc = self.k_dim_per_col  # 256
+        v_dim_pc = self.v_dim_per_col  # 256
+        total_pc = self.total_per_col  # 3584
 
-        # QKVgate projection
+        # QKVgate projection (col-sharded weights)
         xqkvg = ttnn.linear(
             x_3d,
             self.wqkvg,
@@ -615,18 +694,25 @@ class TtQwen36GatedAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_hifi4,
         )
 
-        # Split
-        q_flat = ttnn.slice(xqkvg, [0, 0, 0], [B, T, q_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        gate_flat = ttnn.slice(xqkvg, [0, 0, q_dim], [B, T, q_dim + g_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        k_flat = ttnn.slice(
-            xqkvg, [0, 0, q_dim + g_dim], [B, T, q_dim + g_dim + k_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
+        # Split per-col
+        q_flat = ttnn.slice(xqkvg, [0, 0, 0], [B, T, q_dim_pc], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        gate_flat = ttnn.slice(
+            xqkvg, [0, 0, q_dim_pc], [B, T, q_dim_pc + g_dim_pc], memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        v_flat = ttnn.slice(xqkvg, [0, 0, q_dim + g_dim + k_dim], [B, T, total], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        k_flat = ttnn.slice(
+            xqkvg,
+            [0, 0, q_dim_pc + g_dim_pc],
+            [B, T, q_dim_pc + g_dim_pc + k_dim_pc],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        v_flat = ttnn.slice(
+            xqkvg, [0, 0, q_dim_pc + g_dim_pc + k_dim_pc], [B, T, total_pc], memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
         xqkvg.deallocate(True)
 
-        q_h = ttnn.reshape(q_flat, [B, T, n_q, hd])
-        k_h = ttnn.reshape(k_flat, [B, T, n_kv, hd])
-        v_h = ttnn.reshape(v_flat, [B, T, n_kv, hd])
+        q_h = ttnn.reshape(q_flat, [B, T, n_q_pc, hd])  # [B, T, 6, 256] per col
+        k_h = ttnn.reshape(k_flat, [B, T, n_kv_pc, hd])  # [B, T, 1, 256] per col
+        v_h = ttnn.reshape(v_flat, [B, T, n_kv_pc, hd])  # [B, T, 1, 256] per col
         q_flat.deallocate(True)
         k_flat.deallocate(True)
         v_flat.deallocate(True)
@@ -669,32 +755,31 @@ class TtQwen36GatedAttention(LightweightModule):
             )
             cur_pos_int = int(cur_pos_cpu[0].item())
 
-        # Update KV cache at position cur_pos_int for batch 0
-        # k_rot: [B=1, n_kv=4, T=1, hd=256] — matches cache [1, 4, 512, 256] layout
+        # Update KV cache at position cur_pos_int for batch 0.  Each col stores
+        # its own 1 KV head (cache per-chip shape: [1, n_kv_pc=1, max_seq, hd]).
         ttnn.update_cache(keys_cache, k_rot, cur_pos_int, batch_offset=0)
         ttnn.update_cache(values_cache, v_t, cur_pos_int, batch_offset=0)
         k_rot.deallocate(True)
         v_t.deallocate(True)
 
-        # Slice KV cache to [0 .. cur_pos_int] for attention
-        # Cache shape: [1, n_kv, max_seq_len, hd] → slice seq_len to cur_pos+1
+        # Slice KV cache up to cur_pos_int (per-col, n_kv_pc=1 dim)
         T_kv = cur_pos_int + 1
-        # Pad to nearest TILE for SDPA
         T_kv_pad = ((T_kv + TILE - 1) // TILE) * TILE
-        k_cached = ttnn.slice(keys_cache, [0, 0, 0, 0], [B, n_kv, T_kv_pad, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        k_cached = ttnn.slice(
+            keys_cache, [0, 0, 0, 0], [B, n_kv_pc, T_kv_pad, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
         v_cached = ttnn.slice(
-            values_cache, [0, 0, 0, 0], [B, n_kv, T_kv_pad, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            values_cache, [0, 0, 0, 0], [B, n_kv_pc, T_kv_pad, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
 
-        # GQA expand K, V: n_kv → n_q heads (native ratio = n_q // n_kv = 6)
-        gqa = self.gqa_ratio  # 6
-        k_exp = ttnn.repeat_interleave(k_cached, gqa, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        v_exp = ttnn.repeat_interleave(v_cached, gqa, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # GQA expand (per col): n_kv_pc=1 → n_q_pc=6
+        gqa_pc = n_q_pc // n_kv_pc  # 6
+        k_exp = ttnn.repeat_interleave(k_cached, gqa_pc, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        v_exp = ttnn.repeat_interleave(v_cached, gqa_pc, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         k_cached.deallocate(True)
         v_cached.deallocate(True)
 
-        # Decode SDPA: q [B, n_q, T=1, hd] attends to k/v [B, n_q, T_kv, hd]
-        # No mask needed: causal is satisfied by attending only to 0..cur_pos
+        # Decode SDPA per col: q [B, 6, 1, hd] attends to k/v [B, 6, T_kv, hd]
         attn_out = ttnn.transformer.scaled_dot_product_attention(
             q_rot,
             k_exp,
@@ -708,11 +793,10 @@ class TtQwen36GatedAttention(LightweightModule):
         v_exp.deallocate(True)
         q_rot.deallocate(True)
 
-        # Output gate
-        # attn_out: [B, n_q, T, hd] → transpose → [B, T, n_q, hd] → flatten
+        # Output gate (per col)
         attn_t = ttnn.transpose(attn_out, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn_out.deallocate(True)
-        attn_flat = ttnn.reshape(attn_t, [B, T, q_dim])
+        attn_flat = ttnn.reshape(attn_t, [B, T, q_dim_pc])  # [B, 1, 1536] per col
         attn_t.deallocate(True)
 
         gate_sig = ttnn.sigmoid(gate_flat, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -721,8 +805,8 @@ class TtQwen36GatedAttention(LightweightModule):
         attn_flat.deallocate(True)
         gate_sig.deallocate(True)
 
-        # WO projection
-        dense_out = ttnn.linear(
+        # WO projection (row-parallel by input dim across cols) → partial → all-reduce
+        dense_partial = ttnn.linear(
             gated,
             self.wo,
             dtype=ttnn.bfloat16,
@@ -730,6 +814,25 @@ class TtQwen36GatedAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_hifi4,
         )
         gated.deallocate(True)
+
+        gathered = ttnn.all_gather(
+            dense_partial,
+            dim=0,
+            num_links=1,
+            cluster_axis=1,
+            topology=ttnn.Topology.Linear,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        dense_partial.deallocate(True)
+
+        dense_out = ttnn.experimental.fast_reduce_nc(
+            gathered,
+            dims=[0],
+            output=None,
+            compute_kernel_config=None,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        gathered.deallocate(True)
 
         return dense_out
 
