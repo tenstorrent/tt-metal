@@ -466,7 +466,18 @@ def pytest_runtest_logreport(report):
     # body) plus collection-error/setup-fail cases. POSIX guarantees atomic
     # appends for writes <= PIPE_BUF (4096) on regular files, so the dozens
     # of xdist workers can all append to the same file without locks.
-    if report.when in ("call", "setup", "teardown") and (
+    #
+    # Skip on the xdist controller: pytest-xdist forwards every worker's
+    # logreport up to the controller, where this hook also runs — without
+    # the skip, every test gets written twice (once by gwN, once by main).
+    # The controller's copy of a forwarded report carries report.worker_id;
+    # local reports (on workers, and on the serial-mode single process)
+    # don't. So gating on `report.worker_id is not None` lets serial-mode
+    # write exactly once and xdist mode write exactly once per test on the
+    # worker that actually ran it.
+    if getattr(report, "worker_id", None) is not None:
+        pass  # forwarded report on controller — worker already wrote it
+    elif report.when in ("call", "setup", "teardown") and (
         report.failed or report.skipped or (report.when == "call" and report.passed)
     ):
         try:
