@@ -86,6 +86,9 @@ void kernel_main() {
 
 #ifdef PACKER_L1_ACC
         cb_partials.reserve_back(out_block_num_tiles);
+        if (block_id == 0) {
+            pack_reconfig_l1_acc(0);
+        }
         for (uint32_t tile_index = 0; tile_index < out_block_num_tiles; tile_index++) {
             pack_tile(tile_index, partials_id);
         }
