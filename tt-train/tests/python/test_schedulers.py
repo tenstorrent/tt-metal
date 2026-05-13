@@ -172,6 +172,38 @@ class TestCosineAnnealingStateDict:
         assert dst._T_max == T_MAX
         assert dst._eta_min == pytest.approx(ETA_MIN, abs=1e-12)
 
+    def test_base_lr_persists_when_resumed_optimizer_has_decayed_lr(self):
+        """Reproduces the bug where ``_base_lr`` is not part of the saved state.
+
+        Real-world resume sequence: the optimizer is loaded from a checkpoint
+        with its CURRENT (already-decayed) LR, and the scheduler is then
+        reconstructed on top of it. Without persisting ``_base_lr`` in the
+        state dict, the new scheduler captures the decayed LR as its base,
+        and every subsequent step computes the cosine with the wrong
+        amplitude ``0.5 * (decayed_lr - eta_min)`` instead of
+        ``0.5 * (BASE_LR - eta_min)``.
+        """
+        src_opt, src = _make_cosine()  # noqa: F841
+        for _ in range(5):
+            _step(src_opt, src)
+        decayed_lr = src_opt.get_lr()
+        assert decayed_lr != pytest.approx(BASE_LR)  # sanity: the LR really did decay
+        state = src.get_state_dict()
+
+        # Mimic checkpoint resume: optimizer.get_lr() now returns the decayed value.
+        dst_opt = _make_opt(decayed_lr)
+        dst = CosineAnnealingScheduler(dst_opt, T_MAX, ETA_MIN)
+        dst.set_state_dict(state)
+
+        # Direct check: the scheduler must remember its ORIGINAL base lr,
+        # not whatever happens to be on the optimizer right now.
+        assert dst._base_lr == pytest.approx(BASE_LR, abs=1e-7)
+
+        # Behavioral check: the next step must produce the same LR as the source.
+        src.step()
+        dst.step()
+        assert dst.get_last_lr() == pytest.approx(src.get_last_lr(), abs=1e-7)
+
     def test_restore_before_first_step_is_noop(self):
         opt_a, sched_a = _make_cosine()  # noqa: F841
         opt_b, sched_b = _make_cosine()  # noqa: F841
@@ -267,6 +299,30 @@ class TestStepSchedulerStateDict:
         dst.set_state_dict(src.get_state_dict())
         assert dst._step_size == STEP_SIZE
         assert dst._gamma == pytest.approx(GAMMA, abs=1e-12)
+
+    def test_base_lr_persists_when_resumed_optimizer_has_decayed_lr(self):
+        """Reproduces the ``_base_lr``-not-saved bug for StepScheduler.
+
+        StepScheduler computes ``base_lr * gamma**num_decays``; if ``base_lr``
+        comes from a freshly-restored (decayed) optimizer instead of the
+        original training value, the LR is silently mis-scaled.
+        """
+        # Step over a boundary so the LR really has dropped before save.
+        src_opt, src = _make_step()  # noqa: F841
+        for _ in range(STEP_SIZE + 1):  # past the first boundary
+            _step(src_opt, src)
+        decayed_lr = src_opt.get_lr()
+        assert decayed_lr != pytest.approx(BASE_LR)  # sanity
+        state = src.get_state_dict()
+
+        dst_opt = _make_opt(decayed_lr)
+        dst = StepScheduler(dst_opt, STEP_SIZE, GAMMA)
+        dst.set_state_dict(state)
+
+        assert dst._base_lr == pytest.approx(BASE_LR, abs=1e-7)
+        src.step()
+        dst.step()
+        assert dst.get_last_lr() == pytest.approx(src.get_last_lr(), abs=1e-7)
 
     def test_restore_before_first_step_is_noop(self):
         opt_a, sched_a = _make_step()  # noqa: F841
@@ -376,6 +432,29 @@ class TestLinearSchedulerStateDict:
         assert dst._start_factor == pytest.approx(START_FACTOR, abs=1e-12)
         assert dst._end_factor == pytest.approx(END_FACTOR, abs=1e-12)
         assert dst._total_steps == TOTAL_STEPS
+
+    def test_base_lr_persists_when_resumed_optimizer_has_decayed_lr(self):
+        """Reproduces the ``_base_lr``-not-saved bug for LinearScheduler.
+
+        LinearScheduler computes ``base_lr * factor``; if ``base_lr`` comes
+        from a freshly-restored (decayed) optimizer instead of the original
+        training value, the LR is silently mis-scaled.
+        """
+        src_opt, src = _make_linear()  # noqa: F841
+        for _ in range(5):
+            _step(src_opt, src)
+        decayed_lr = src_opt.get_lr()
+        assert decayed_lr != pytest.approx(BASE_LR)
+        state = src.get_state_dict()
+
+        dst_opt = _make_opt(decayed_lr)
+        dst = LinearScheduler(dst_opt, START_FACTOR, END_FACTOR, TOTAL_STEPS)
+        dst.set_state_dict(state)
+
+        assert dst._base_lr == pytest.approx(BASE_LR, abs=1e-7)
+        src.step()
+        dst.step()
+        assert dst.get_last_lr() == pytest.approx(src.get_last_lr(), abs=1e-7)
 
     def test_restore_before_first_step_is_noop(self):
         opt_a, sched_a = _make_linear()  # noqa: F841
@@ -574,6 +653,29 @@ class TestLambdaSchedulerStateDict:
         # Its ``__dict__`` was not mutated.
         assert dst._lr_lambda.__dict__ == dict_before
         assert dst._lr_lambda.tag == "untouched"  # type: ignore[attr-defined]
+
+    def test_base_lr_persists_when_resumed_optimizer_has_decayed_lr(self):
+        """Reproduces the ``_base_lr``-not-saved bug for LambdaScheduler.
+
+        LambdaScheduler computes ``base_lr * lr_lambda(step)``; if ``base_lr``
+        comes from a freshly-restored (decayed) optimizer instead of the
+        original training value, the LR is silently mis-scaled.
+        """
+        src_opt, src = _make_lambda()  # noqa: F841
+        for _ in range(5):
+            _step(src_opt, src)
+        decayed_lr = src_opt.get_lr()
+        assert decayed_lr != pytest.approx(BASE_LR)
+        state = src.get_state_dict()
+
+        dst_opt = _make_opt(decayed_lr)
+        dst = LambdaScheduler(dst_opt, _LAMBDA)
+        dst.set_state_dict(state)
+
+        assert dst._base_lr == pytest.approx(BASE_LR, abs=1e-7)
+        src.step()
+        dst.step()
+        assert dst.get_last_lr() == pytest.approx(src.get_last_lr(), abs=1e-7)
 
     def test_restore_before_first_step_is_noop(self):
         opt_a, sched_a = _make_lambda()  # noqa: F841
