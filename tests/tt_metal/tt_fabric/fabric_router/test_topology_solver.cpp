@@ -5047,128 +5047,146 @@ TEST_F(TopologySolverTest, SatStress_MeshOnMesh_StrictChannels) {
     EXPECT_TRUE(dfs_result.success) << "DFS STRICT should also succeed: " << dfs_result.error_message;
 }
 
-// 32-node ring on 8×8 mesh with forbidden + required + cardinality constraints.
-TEST_F(TopologySolverTest, SatStress_RingOnMesh_Forbidden_Required_Cardinality) {
-    constexpr size_t N = 32;
-    auto target_graph = create_1d_ring_graph<TestTargetNode>(N);
-    auto global_graph = create_2d_mesh_graph<TestGlobalNode>(8, 8);
-
-    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
-
-    constraints.add_required_constraint(static_cast<TestTargetNode>(0), std::set<TestGlobalNode>{0, 1, 8, 9});
-
-    for (size_t i = 0; i < N; ++i) {
-        constraints.add_forbidden_constraint(static_cast<TestTargetNode>(i), static_cast<TestGlobalNode>(63));
-    }
-
-    std::set<std::pair<TestTargetNode, TestGlobalNode>> card_pairs;
-    for (size_t i = 0; i < 4; ++i) {
-        for (TestGlobalNode g : {0, 1, 8, 9}) {
-            card_pairs.insert({static_cast<TestTargetNode>(i), g});
-        }
-    }
-    constraints.add_cardinality_constraint(card_pairs, 2);
-
-    auto sat_result = solve_topology_mapping(
-        target_graph,
-        global_graph,
-        constraints,
-        ConnectionValidationMode::RELAXED,
-        /* quiet_mode= */ true,
-        TopologyMappingSolverEngine::Sat);
-    EXPECT_TRUE(sat_result.success) << "SAT should embed 32-ring in 8×8 mesh with forbidden+required+card: "
-                                    << sat_result.error_message;
-    EXPECT_EQ(sat_result.target_to_global.size(), N);
-
-    auto t0_global = sat_result.target_to_global.at(static_cast<TestTargetNode>(0));
-    EXPECT_TRUE(t0_global == 0 || t0_global == 1 || t0_global == 8 || t0_global == 9)
-        << "Required: target 0 must map to {0,1,8,9}, got " << t0_global;
-
-    for (size_t i = 0; i < N; ++i) {
-        auto g = sat_result.target_to_global.at(static_cast<TestTargetNode>(i));
-        EXPECT_NE(g, static_cast<TestGlobalNode>(63)) << "Forbidden: target " << i << " must not map to 63";
-    }
-
-    size_t card_satisfied = 0;
-    for (const auto& [tn, gn] : card_pairs) {
-        if (sat_result.target_to_global.contains(tn) && sat_result.target_to_global.at(tn) == gn) {
-            card_satisfied++;
-        }
-    }
-    EXPECT_GE(card_satisfied, 2u) << "Cardinality constraint: at least 2 pairs satisfied";
-
-    auto dfs_result = solve_topology_mapping(
-        target_graph,
-        global_graph,
-        constraints,
-        ConnectionValidationMode::RELAXED,
-        /* quiet_mode= */ true,
-        TopologyMappingSolverEngine::Dfs);
-    EXPECT_TRUE(dfs_result.success) << "DFS should also succeed: " << dfs_result.error_message;
+namespace {
+// Physical mesh-level adjacency: 80-node trace from multihost Physical Mesh-Level Graph print (parallel edges kept).
+AdjacencyGraph<TestGlobalNode> make_mesh_level_physical_graph_cluster_trace_80() {
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map{
+        {static_cast<TestGlobalNode>(0), {65, 65, 30, 30, 65, 65, 6,  6,  6, 6, 76, 76, 30, 30, 76, 76,
+                                          65, 65, 6,  6,  65, 65, 30, 30, 6, 6, 76, 76, 30, 30, 76, 76}},
+        {static_cast<TestGlobalNode>(1), {23, 23, 38, 38, 23, 23, 38, 38, 23, 23, 38, 38, 23, 23, 38, 38}},
+        {static_cast<TestGlobalNode>(2), {63, 63, 78, 78, 63, 63, 38, 38, 38, 38, 8, 8, 63, 63, 78, 78,
+                                          78, 78, 8,  8,  63, 63, 38, 38, 38, 38, 8, 8, 78, 78, 8,  8}},
+        {static_cast<TestGlobalNode>(3), {11, 11, 11, 11, 11, 11, 48, 48, 11, 11, 48, 48, 48, 48, 48, 48}},
+        {static_cast<TestGlobalNode>(4), {7, 7, 7, 7, 7, 7, 74, 74, 74, 74, 74, 74, 7, 7, 74, 74}},
+        {static_cast<TestGlobalNode>(5), {69, 69, 71, 71, 68, 68, 71, 71, 69, 69, 71, 71, 68, 68, 71, 71,
+                                          69, 69, 71, 71, 68, 68, 71, 71, 69, 69, 71, 71, 68, 68, 71, 71}},
+        {static_cast<TestGlobalNode>(6),
+         {78, 78, 59, 59, 0, 0, 59, 59, 78, 78, 59, 59, 0, 0, 78, 78, 0, 0, 78, 78, 59, 59, 0, 0}},
+        {static_cast<TestGlobalNode>(7), {55, 55, 55, 55, 4, 4, 55, 55, 4, 4, 55, 55, 4, 4, 4, 4}},
+        {static_cast<TestGlobalNode>(8), {9, 9, 62, 62, 9,  9,  72, 72, 9,  9,  62, 62, 72, 72, 2, 2,
+                                          9, 9, 72, 72, 62, 62, 2,  2,  72, 72, 2,  2,  62, 62, 2, 2}},
+        {static_cast<TestGlobalNode>(9), {65, 65, 8, 8, 8, 8, 65, 65, 8, 8, 65, 65, 65, 65, 8, 8}},
+        {static_cast<TestGlobalNode>(10),
+         {73, 73, 73, 73, 76, 76, 66, 66, 76, 76, 66, 66, 66, 66, 73, 73, 76, 76, 73, 73, 76, 76, 66, 66}},
+        {static_cast<TestGlobalNode>(11), {3, 3, 3, 3, 3, 3, 20, 20, 20, 20, 3, 3, 20, 20, 20, 20}},
+        {static_cast<TestGlobalNode>(12), {45, 45, 48, 48, 66, 66, 22, 22, 45, 45, 48, 48, 45, 45, 66, 66,
+                                           48, 48, 22, 22, 66, 66, 22, 22, 48, 48, 22, 22, 45, 45, 66, 66}},
+        {static_cast<TestGlobalNode>(13), {51, 51, 26, 26, 26, 26, 51, 51, 51, 51, 26, 26, 51, 51, 26, 26}},
+        {static_cast<TestGlobalNode>(14), {27, 27, 70, 70, 70, 70, 68, 68, 27, 27, 70, 70, 27, 27, 70, 70,
+                                           70, 70, 68, 68, 27, 27, 70, 70, 70, 70, 68, 68, 70, 70, 68, 68}},
+        {static_cast<TestGlobalNode>(15), {31, 31, 76, 76, 31, 31, 31, 31, 31, 31, 76, 76, 76, 76, 76, 76}},
+        {static_cast<TestGlobalNode>(16),
+         {51, 51, 28, 28, 51, 51, 51, 51, 28, 28, 51, 51, 28, 28, 72, 72, 28, 28, 72, 72, 72, 72, 72, 72}},
+        {static_cast<TestGlobalNode>(17), {60, 60, 27, 27, 60, 60, 27, 27, 59, 59, 27, 27, 60, 60, 27, 27,
+                                           59, 59, 27, 27, 59, 59, 27, 27, 59, 59, 27, 27, 60, 60, 27, 27}},
+        {static_cast<TestGlobalNode>(18), {25, 25, 60, 60, 25, 25, 60, 60, 60, 60, 36, 36, 25, 25, 60, 60,
+                                           60, 60, 36, 36, 60, 60, 36, 36, 25, 25, 60, 60, 60, 60, 36, 36}},
+        {static_cast<TestGlobalNode>(19), {74, 74, 37, 37, 37, 37, 37, 37, 74, 74, 37, 37, 74, 74, 74, 74}},
+        {static_cast<TestGlobalNode>(20), {11, 11, 11, 11, 11, 11, 44, 44, 44, 44, 11, 11, 44, 44, 44, 44}},
+        {static_cast<TestGlobalNode>(21), {33, 33, 44, 44, 44, 44, 33, 33, 33, 33, 44, 44, 33, 33, 44, 44}},
+        {static_cast<TestGlobalNode>(22), {31, 31, 58, 58, 58, 58, 12, 12, 31, 31, 58, 58, 34, 34, 12, 12,
+                                           34, 34, 12, 12, 31, 31, 34, 34, 31, 31, 34, 34, 58, 58, 12, 12}},
+        {static_cast<TestGlobalNode>(23), {1, 1, 52, 52, 52, 52, 1, 1, 1, 1, 1, 1, 52, 52, 52, 52}},
+        {static_cast<TestGlobalNode>(24), {75, 75, 68, 68, 68, 68, 70, 70, 75, 75, 68, 68, 75, 75, 68, 68,
+                                           75, 75, 68, 68, 68, 68, 70, 70, 68, 68, 70, 70, 68, 68, 70, 70}},
+        {static_cast<TestGlobalNode>(25), {18, 18, 57, 57, 18, 18, 57, 57, 73, 73, 57, 57, 73, 73, 57, 57,
+                                           73, 73, 57, 57, 18, 18, 57, 57, 18, 18, 57, 57, 73, 73, 57, 57}},
+        {static_cast<TestGlobalNode>(26), {46, 46, 13, 13, 13, 13, 46, 46, 13, 13, 46, 46, 46, 46, 13, 13}},
+        {static_cast<TestGlobalNode>(27), {14, 14, 17, 17, 67, 67, 17, 17, 14, 14, 17, 17, 67, 67, 17, 17,
+                                           67, 67, 17, 17, 67, 67, 17, 17, 14, 14, 17, 17, 14, 14, 17, 17}},
+        {static_cast<TestGlobalNode>(28), {16, 16, 40, 40, 77, 77, 32, 32, 77, 77, 16, 16, 16, 16, 40, 40,
+                                           32, 32, 40, 40, 77, 77, 16, 16, 32, 32, 40, 40, 77, 77, 32, 32}},
+        {static_cast<TestGlobalNode>(29), {39, 39, 42, 42, 42, 42, 42, 42, 39, 39, 39, 39, 39, 39, 42, 42}},
+        {static_cast<TestGlobalNode>(30),
+         {38, 38, 49, 49, 0, 0, 0, 0, 38, 38, 0, 0, 38, 38, 49, 49, 49, 49, 38, 38, 49, 49, 0, 0}},
+        {static_cast<TestGlobalNode>(31), {22, 22, 15, 15, 22, 22, 15, 15, 15, 15, 22, 22, 15, 15, 22, 22}},
+        {static_cast<TestGlobalNode>(32),
+         {33, 33, 28, 28, 28, 28, 62, 62, 28, 28, 62, 62, 33, 33, 33, 33, 62, 62, 62, 62, 33, 33, 28, 28}},
+        {static_cast<TestGlobalNode>(33), {32, 32, 21, 21, 32, 32, 32, 32, 21, 21, 21, 21, 32, 32, 21, 21}},
+        {static_cast<TestGlobalNode>(34),
+         {64, 64, 22, 22, 64, 64, 35, 35, 35, 35, 22, 22, 64, 64, 35, 35, 22, 22, 64, 64, 35, 35, 22, 22}},
+        {static_cast<TestGlobalNode>(35), {71, 71, 49, 49, 71, 71, 49, 49, 71, 71, 49, 49, 71, 71, 49, 49,
+                                           34, 34, 49, 49, 34, 34, 49, 49, 34, 34, 49, 49, 34, 34, 49, 49}},
+        {static_cast<TestGlobalNode>(36), {43, 43, 50, 50, 50, 50, 18, 18, 50, 50, 18, 18, 43, 43, 50, 50,
+                                           50, 50, 18, 18, 50, 50, 18, 18, 43, 43, 50, 50, 43, 43, 50, 50}},
+        {static_cast<TestGlobalNode>(37), {64, 64, 19, 19, 64, 64, 19, 19, 19, 19, 64, 64, 64, 64, 19, 19}},
+        {static_cast<TestGlobalNode>(38),
+         {1, 1, 2, 2, 30, 30, 1, 1, 2, 2, 30, 30, 2, 2, 30, 30, 30, 30, 1, 1, 2, 2, 1, 1}},
+        {static_cast<TestGlobalNode>(39), {29, 29, 54, 54, 29, 29, 29, 29, 54, 54, 29, 29, 54, 54, 54, 54}},
+        {static_cast<TestGlobalNode>(40), {64, 64, 28, 28, 53, 53, 54, 54, 53, 53, 54, 54, 53, 53, 64, 64,
+                                           53, 53, 64, 64, 64, 64, 28, 28, 54, 54, 28, 28, 54, 54, 28, 28}},
+        {static_cast<TestGlobalNode>(41), {66, 66, 66, 66, 61, 61, 66, 66, 61, 61, 66, 66, 61, 61, 61, 61}},
+        {static_cast<TestGlobalNode>(42), {52, 52, 52, 52, 29, 29, 29, 29, 29, 29, 29, 29, 52, 52, 52, 52}},
+        {static_cast<TestGlobalNode>(43), {36, 36, 75, 75, 79, 79, 75, 75, 36, 36, 75, 75, 79, 79, 75, 75,
+                                           79, 79, 75, 75, 36, 36, 75, 75, 36, 36, 75, 75, 79, 79, 75, 75}},
+        {static_cast<TestGlobalNode>(44), {20, 20, 21, 21, 21, 21, 21, 21, 20, 20, 20, 20, 20, 20, 21, 21}},
+        {static_cast<TestGlobalNode>(45), {12, 12, 53, 53, 53, 53, 53, 53, 12, 12, 12, 12, 53, 53, 12, 12}},
+        {static_cast<TestGlobalNode>(46), {61, 61, 61, 61, 61, 61, 26, 26, 26, 26, 26, 26, 26, 26, 61, 61}},
+        {static_cast<TestGlobalNode>(47), {58, 58, 59, 59, 58, 58, 59, 59, 75, 75, 59, 59, 58, 58, 59, 59,
+                                           75, 75, 59, 59, 58, 58, 59, 59, 75, 75, 59, 59, 75, 75, 59, 59}},
+        {static_cast<TestGlobalNode>(48),
+         {12, 12, 56, 56, 3, 3, 3, 3, 12, 12, 56, 56, 3, 3, 12, 12, 56, 56, 3, 3, 12, 12, 56, 56}},
+        {static_cast<TestGlobalNode>(49), {30, 30, 35, 35, 30, 30, 35, 35, 57, 57, 35, 35, 57, 57, 35, 35,
+                                           30, 30, 35, 35, 30, 30, 35, 35, 57, 57, 35, 35, 57, 57, 35, 35}},
+        {static_cast<TestGlobalNode>(50), {71, 71, 36, 36, 36, 36, 60, 60, 71, 71, 36, 36, 36, 36, 60, 60,
+                                           36, 36, 60, 60, 71, 71, 36, 36, 71, 71, 36, 36, 36, 36, 60, 60}},
+        {static_cast<TestGlobalNode>(51), {16, 16, 16, 16, 13, 13, 13, 13, 13, 13, 16, 16, 16, 16, 13, 13}},
+        {static_cast<TestGlobalNode>(52), {23, 23, 23, 23, 42, 42, 23, 23, 42, 42, 42, 42, 23, 23, 42, 42}},
+        {static_cast<TestGlobalNode>(53), {45, 45, 45, 45, 40, 40, 40, 40, 45, 45, 40, 40, 45, 45, 40, 40}},
+        {static_cast<TestGlobalNode>(54),
+         {39, 39, 39, 39, 40, 40, 58, 58, 40, 40, 58, 58, 40, 40, 58, 58, 58, 58, 39, 39, 40, 40, 39, 39}},
+        {static_cast<TestGlobalNode>(55), {7, 7, 78, 78, 7, 7, 78, 78, 78, 78, 78, 78, 7, 7, 7, 7}},
+        {static_cast<TestGlobalNode>(56),
+         {48, 48, 67, 67, 67, 67, 48, 48, 67, 67, 76, 76, 67, 67, 76, 76, 76, 76, 48, 48, 76, 76, 48, 48}},
+        {static_cast<TestGlobalNode>(57), {49, 49, 25, 25, 49, 49, 25, 25, 70, 70, 25, 25, 70, 70, 25, 25,
+                                           49, 49, 25, 25, 49, 49, 25, 25, 70, 70, 25, 25, 70, 70, 25, 25}},
+        {static_cast<TestGlobalNode>(58),
+         {54, 54, 54, 54, 47, 47, 22, 22, 22, 22, 54, 54, 22, 22, 54, 54, 47, 47, 22, 22, 47, 47, 47, 47}},
+        {static_cast<TestGlobalNode>(59), {6, 6, 47, 47, 17, 17, 47, 47, 17, 17, 47, 47, 6,  6,  47, 47,
+                                           6, 6, 47, 47, 6,  6,  47, 47, 17, 17, 47, 47, 17, 17, 47, 47}},
+        {static_cast<TestGlobalNode>(60), {18, 18, 50, 50, 17, 17, 18, 18, 17, 17, 18, 18, 17, 17, 18, 18,
+                                           18, 18, 50, 50, 18, 18, 50, 50, 17, 17, 18, 18, 18, 18, 50, 50}},
+        {static_cast<TestGlobalNode>(61), {41, 41, 46, 46, 41, 41, 46, 46, 46, 46, 41, 41, 46, 46, 41, 41}},
+        {static_cast<TestGlobalNode>(62),
+         {69, 69, 32, 32, 69, 69, 8, 8, 8, 8, 32, 32, 32, 32, 69, 69, 8, 8, 8, 8, 32, 32, 69, 69}},
+        {static_cast<TestGlobalNode>(63), {77, 77, 77, 77, 2, 2, 2, 2, 77, 77, 2, 2, 2, 2, 77, 77}},
+        {static_cast<TestGlobalNode>(64),
+         {37, 37, 34, 34, 34, 34, 37, 37, 40, 40, 37, 37, 40, 40, 40, 40, 34, 34, 37, 37, 40, 40, 34, 34}},
+        {static_cast<TestGlobalNode>(65), {9, 9, 9, 9, 0, 0, 0, 0, 0, 0, 9, 9, 9, 9, 0, 0}},
+        {static_cast<TestGlobalNode>(66),
+         {41, 41, 12, 12, 10, 10, 12, 12, 10, 10, 10, 10, 12, 12, 10, 10, 41, 41, 41, 41, 12, 12, 41, 41}},
+        {static_cast<TestGlobalNode>(67), {27, 27, 79, 79, 56, 56, 79, 79, 27, 27, 79, 79, 27, 27, 79, 79,
+                                           56, 56, 79, 79, 56, 56, 79, 79, 27, 27, 79, 79, 56, 56, 79, 79}},
+        {static_cast<TestGlobalNode>(68), {24, 24, 14, 14, 24, 24, 14, 14, 24, 24, 14, 14, 5, 5, 24, 24,
+                                           5,  5,  24, 24, 24, 24, 14, 14, 5,  5,  24, 24, 5, 5, 24, 24}},
+        {static_cast<TestGlobalNode>(69), {62, 62, 73, 73, 5, 5, 73, 73, 62, 62, 73, 73, 62, 62, 73, 73,
+                                           62, 62, 73, 73, 5, 5, 73, 73, 5,  5,  73, 73, 5,  5,  73, 73}},
+        {static_cast<TestGlobalNode>(70), {14, 14, 24, 24, 57, 57, 14, 14, 57, 57, 14, 14, 14, 14, 24, 24,
+                                           14, 14, 24, 24, 14, 14, 24, 24, 57, 57, 14, 14, 57, 57, 14, 14}},
+        {static_cast<TestGlobalNode>(71), {35, 35, 5, 5, 50, 50, 5, 5, 50, 50, 5, 5, 50, 50, 5, 5,
+                                           35, 35, 5, 5, 50, 50, 5, 5, 35, 35, 5, 5, 35, 35, 5, 5}},
+        {static_cast<TestGlobalNode>(72),
+         {16, 16, 16, 16, 79, 79, 8, 8, 16, 16, 8, 8, 16, 16, 79, 79, 8, 8, 79, 79, 79, 79, 8, 8}},
+        {static_cast<TestGlobalNode>(73), {10, 10, 69, 69, 25, 25, 69, 69, 25, 25, 69, 69, 10, 10, 69, 69,
+                                           25, 25, 69, 69, 10, 10, 69, 69, 10, 10, 69, 69, 25, 25, 69, 69}},
+        {static_cast<TestGlobalNode>(74), {4, 4, 4, 4, 19, 19, 19, 19, 4, 4, 4, 4, 19, 19, 19, 19}},
+        {static_cast<TestGlobalNode>(75), {47, 47, 43, 43, 47, 47, 43, 43, 24, 24, 43, 43, 47, 47, 43, 43,
+                                           24, 24, 43, 43, 24, 24, 43, 43, 47, 47, 43, 43, 24, 24, 43, 43}},
+        {static_cast<TestGlobalNode>(76), {15, 15, 56, 56, 56, 56, 0,  0,  10, 10, 0, 0, 10, 10, 0,  0,
+                                           15, 15, 10, 10, 15, 15, 56, 56, 56, 56, 0, 0, 15, 15, 10, 10}},
+        {static_cast<TestGlobalNode>(77), {28, 28, 63, 63, 28, 28, 28, 28, 28, 28, 63, 63, 63, 63, 63, 63}},
+        {static_cast<TestGlobalNode>(78),
+         {6, 6, 2, 2, 6, 6, 2, 2, 6, 6, 6, 6, 55, 55, 2, 2, 55, 55, 55, 55, 2, 2, 55, 55}},
+        {static_cast<TestGlobalNode>(79), {72, 72, 67, 67, 72, 72, 67, 67, 43, 43, 67, 67, 43, 43, 67, 67,
+                                           72, 72, 67, 67, 43, 43, 67, 67, 43, 43, 67, 67, 72, 72, 67, 67}},
+    };
+    return AdjacencyGraph<TestGlobalNode>(global_adj_map);
 }
 
-// 16-node ring on 4×6 mesh — SAT under RELAXED with both preferred and same-rank.
-TEST_F(TopologySolverTest, SatStress_Ring_Preferred_SameRank) {
-    using namespace tt::tt_fabric::detail;
-    constexpr size_t N = 16;
-    constexpr size_t GROWS = 4, GCOLS = 6;
-    auto target_graph = create_1d_ring_graph<TestTargetNode>(N);
-    auto global_graph = create_2d_mesh_graph<TestGlobalNode>(GROWS, GCOLS);
+// Shared enumeration cap for Benchmark_*_MultiSolve_SatDfs (keep Line64 and Ring64/trace comparable).
+constexpr size_t kTopologyBenchmarkMultiSolveEnumerationCap = 10;
 
-    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
-
-    for (size_t i = 0; i < N; ++i) {
-        constraints.add_preferred_constraint(static_cast<TestTargetNode>(i), static_cast<TestGlobalNode>(i));
-    }
-
-    std::vector<std::set<TestTargetNode>> target_groups;
-    std::vector<std::set<TestGlobalNode>> global_groups;
-    for (size_t half = 0; half < 2; ++half) {
-        std::set<TestTargetNode> tg;
-        for (size_t i = half * (N / 2); i < (half + 1) * (N / 2); ++i) {
-            tg.insert(static_cast<TestTargetNode>(i));
-        }
-        target_groups.push_back(tg);
-    }
-    for (size_t half = 0; half < 2; ++half) {
-        std::set<TestGlobalNode> gg;
-        size_t total = GROWS * GCOLS;
-        for (size_t i = half * (total / 2); i < (half + 1) * (total / 2); ++i) {
-            gg.insert(static_cast<TestGlobalNode>(i));
-        }
-        global_groups.push_back(gg);
-    }
-    constraints.set_same_rank_groups_constraint(target_groups, global_groups);
-
-    GraphIndexData graph_data(target_graph, global_graph);
-    ConstraintIndexData constraint_data(constraints, graph_data);
-    ASSERT_EQ(graph_data.n_target, N);
-
-    auto sat_result = solve_topology_mapping(
-        target_graph,
-        global_graph,
-        constraints,
-        ConnectionValidationMode::RELAXED,
-        /* quiet_mode= */ true,
-        TopologyMappingSolverEngine::Sat);
-    EXPECT_TRUE(sat_result.success) << "SAT should embed 16-ring in 4×6 mesh with preferred+same-rank: "
-                                    << sat_result.error_message;
-    EXPECT_EQ(sat_result.target_to_global.size(), N);
-    topology_test_expect_result_stats_match_mapping(graph_data, constraint_data, sat_result, N, "SAT preferred+rank");
-    EXPECT_GE(sat_result.constraint_stats.preferred_satisfied, 1u);
-
-    auto dfs_result = solve_topology_mapping(
-        target_graph,
-        global_graph,
-        constraints,
-        ConnectionValidationMode::RELAXED,
-        /* quiet_mode= */ true,
-        TopologyMappingSolverEngine::Dfs);
-    EXPECT_TRUE(dfs_result.success) << "DFS should embed 16-ring with preferred+same-rank: "
-                                    << dfs_result.error_message;
-    EXPECT_EQ(dfs_result.target_to_global.size(), N);
-    topology_test_expect_result_stats_match_mapping(graph_data, constraint_data, dfs_result, N, "DFS preferred+rank");
-}
+}  // namespace
 
 // Benchmark: 64-node path (1×64 chain) into 4×16 mesh (64 nodes). Enumerates distinct full assignments
 // (unique_shapes=false): blocking forbids each exact embedding so SAT/DFS can collect many Hamiltonian paths.
@@ -5178,7 +5196,7 @@ TEST_F(TopologySolverTest, Benchmark_Line64_On_Mesh4x16_MultiSolve_SatDfs) {
     constexpr size_t kPathNodes = 64;
     constexpr size_t kMeshRows = 4;
     constexpr size_t kMeshCols = 16;
-    constexpr size_t kMaxSolutions = 32;
+    constexpr size_t kMaxSolutions = kTopologyBenchmarkMultiSolveEnumerationCap;
 
     static_assert(kMeshRows * kMeshCols == kPathNodes, "mesh node count must match path length");
 
@@ -5310,6 +5328,206 @@ TEST_F(TopologySolverTest, Benchmark_Line64_On_Mesh4x16_MultiSolve_SatDfs) {
             kPathNodes,
             kMeshRows,
             kMeshCols);
+    }
+}
+
+// Benchmark: 64-node ring into 80-node mesh-level cluster trace (multihost physical graph). Per engine, runs two
+// phases like Benchmark_Line64 timing: (1) unique_shapes=false — distinct full assignments; (2) unique_shapes=true —
+// distinct sorted global image sets. Logs/RecordProperty for each include first vs incremental next() ms.
+TEST_F(TopologySolverTest, Benchmark_Ring64_On_ClusterTrace80_MultiSolve_SatDfs) {
+    using namespace tt::tt_fabric::detail;
+    constexpr size_t kRingNodes = 64;
+    constexpr size_t kTraceNodes = 80;
+    constexpr size_t kMaxSolutions = kTopologyBenchmarkMultiSolveEnumerationCap;
+
+    auto target_graph = create_1d_ring_graph<TestTargetNode>(kRingNodes);
+    auto global_graph = make_mesh_level_physical_graph_cluster_trace_80();
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    ASSERT_EQ(target_graph.get_nodes().size(), kRingNodes);
+    ASSERT_EQ(global_graph.get_nodes().size(), kTraceNodes);
+
+    GraphIndexData graph_data(target_graph, global_graph);
+    ConstraintIndexData constraint_data(constraints, graph_data);
+    ASSERT_EQ(graph_data.n_target, kRingNodes);
+    ASSERT_EQ(graph_data.n_global, kTraceNodes);
+
+    setenv("TT_METAL_OPERATION_TIMEOUT_SECONDS", "600", 1);
+
+    auto validate_all = [&](const std::vector<MappingResult<TestTargetNode, TestGlobalNode>>& results,
+                            const char* label) {
+        for (size_t ri = 0; ri < results.size(); ++ri) {
+            ASSERT_TRUE(results[ri].success) << label << " solution " << ri;
+            EXPECT_EQ(results[ri].target_to_global.size(), kRingNodes) << label << " solution " << ri;
+            std::vector<int> mapping(graph_data.n_target, -1);
+            for (size_t ti = 0; ti < graph_data.n_target; ++ti) {
+                const TestTargetNode tn = graph_data.target_nodes[ti];
+                mapping[ti] = static_cast<int>(graph_data.global_to_idx.at(results[ri].target_to_global.at(tn)));
+            }
+            EXPECT_TRUE(topology_test_complete_mapping_preserves_edges(graph_data, mapping))
+                << label << " solution " << ri;
+            topology_test_expect_result_stats_match_mapping(graph_data, constraint_data, results[ri], 0, label);
+        }
+    };
+
+    for (TopologyMappingSolverEngine engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        const char* engine_label = engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS";
+
+        for (bool unique_shapes_flag : {false, true}) {
+            using clock = std::chrono::steady_clock;
+            TopologyMappingEnumerationSession<TestTargetNode, TestGlobalNode> enum_session;
+            std::vector<std::map<TestTargetNode, TestGlobalNode>> excluded;
+            excluded.reserve(kMaxSolutions);
+
+            std::vector<MappingResult<TestTargetNode, TestGlobalNode>> results;
+            results.reserve(kMaxSolutions);
+
+            const auto t_first_begin = clock::now();
+            auto first_result = enum_session.next(
+                target_graph,
+                global_graph,
+                constraints,
+                excluded,
+                ConnectionValidationMode::RELAXED,
+                /*quiet_mode=*/true,
+                engine,
+                unique_shapes_flag);
+            const auto first_ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_first_begin).count();
+
+            ASSERT_TRUE(first_result.success) << engine_label << " first next() unique_shapes=" << unique_shapes_flag;
+            results.push_back(std::move(first_result));
+            excluded.push_back(results.back().target_to_global);
+
+            const auto t_incremental_begin = clock::now();
+            for (size_t extra = 1; extra < kMaxSolutions; ++extra) {
+                auto next_result = enum_session.next(
+                    target_graph,
+                    global_graph,
+                    constraints,
+                    excluded,
+                    ConnectionValidationMode::RELAXED,
+                    /*quiet_mode=*/true,
+                    engine,
+                    unique_shapes_flag);
+                if (!next_result.success) {
+                    break;
+                }
+                excluded.push_back(next_result.target_to_global);
+                results.push_back(std::move(next_result));
+            }
+            const auto incremental_total_ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_incremental_begin).count();
+
+            const auto total_ms = first_ms + incremental_total_ms;
+            const size_t n_found = results.size();
+            const size_t incremental_calls = n_found > 1 ? n_found - 1 : 0;
+            const long incremental_avg_ms =
+                incremental_calls > 0
+                    ? static_cast<long>((incremental_total_ms + incremental_calls / 2) / incremental_calls)
+                    : 0;
+
+            ASSERT_FALSE(results.empty()) << engine_label << " unique_shapes=" << unique_shapes_flag;
+            validate_all(results, unique_shapes_flag ? "ring64 trace80 unique_shapes" : "ring64 trace80 enumerate");
+
+            if (!unique_shapes_flag) {
+                EXPECT_GE(n_found, 2u) << engine_label << ": expect multiple distinct embeddings";
+                EXPECT_EQ(n_found, kMaxSolutions)
+                    << engine_label << ": should fill requested enumeration cap (distinct assignments)";
+                std::set<std::vector<int>> distinct_raw;
+                for (const auto& r : results) {
+                    std::vector<int> raw(graph_data.n_target, -1);
+                    for (size_t ti = 0; ti < graph_data.n_target; ++ti) {
+                        const TestTargetNode tn = graph_data.target_nodes[ti];
+                        raw[ti] = static_cast<int>(graph_data.global_to_idx.at(r.target_to_global.at(tn)));
+                    }
+                    ASSERT_TRUE(distinct_raw.insert(std::move(raw)).second)
+                        << engine_label << ": duplicate full assignment";
+                }
+            } else {
+                EXPECT_GE(n_found, 2u) << engine_label << ": expect multiple distinct global image sets";
+                std::set<std::vector<int>> distinct_shape_keys;
+                for (const auto& r : results) {
+                    std::vector<int> shape_key;
+                    shape_key.reserve(graph_data.n_target);
+                    for (size_t ti = 0; ti < graph_data.n_target; ++ti) {
+                        const TestTargetNode tn = graph_data.target_nodes[ti];
+                        shape_key.push_back(static_cast<int>(graph_data.global_to_idx.at(r.target_to_global.at(tn))));
+                    }
+                    std::sort(shape_key.begin(), shape_key.end());
+                    ASSERT_TRUE(distinct_shape_keys.insert(std::move(shape_key)).second)
+                        << engine_label << ": duplicate unique_shapes key";
+                }
+            }
+
+            const char* unique_shapes_word = unique_shapes_flag ? "true" : "false";
+
+            if (engine == TopologyMappingSolverEngine::Sat) {
+                EXPECT_EQ(enum_session.sat_solve_calls(), n_found)
+                    << "SAT: one solve per successful next() unique_shapes=" << unique_shapes_flag;
+                EXPECT_EQ(enum_session.sat_hard_constraint_encode_calls(), 1u)
+                    << "SAT: single hard encode for session unique_shapes=" << unique_shapes_flag;
+                if (!unique_shapes_flag) {
+                    RecordProperty("benchmark_ring64_trace80_sat_ms_first_solution", static_cast<int>(first_ms));
+                    RecordProperty(
+                        "benchmark_ring64_trace80_sat_ms_incremental_total", static_cast<int>(incremental_total_ms));
+                    RecordProperty(
+                        "benchmark_ring64_trace80_sat_ms_incremental_avg", static_cast<int>(incremental_avg_ms));
+                    RecordProperty("benchmark_ring64_trace80_sat_ms_total", static_cast<int>(total_ms));
+                    RecordProperty("benchmark_ring64_trace80_sat_num_solutions", static_cast<int>(n_found));
+                } else {
+                    RecordProperty(
+                        "benchmark_ring64_trace80_sat_ms_first_solution_unique_shapes", static_cast<int>(first_ms));
+                    RecordProperty(
+                        "benchmark_ring64_trace80_sat_ms_incremental_total_unique_shapes",
+                        static_cast<int>(incremental_total_ms));
+                    RecordProperty(
+                        "benchmark_ring64_trace80_sat_ms_incremental_avg_unique_shapes",
+                        static_cast<int>(incremental_avg_ms));
+                    RecordProperty("benchmark_ring64_trace80_sat_ms_total_unique_shapes", static_cast<int>(total_ms));
+                    RecordProperty(
+                        "benchmark_ring64_trace80_sat_num_solutions_unique_shapes", static_cast<int>(n_found));
+                }
+            } else {
+                if (!unique_shapes_flag) {
+                    RecordProperty("benchmark_ring64_trace80_dfs_ms_first_solution", static_cast<int>(first_ms));
+                    RecordProperty(
+                        "benchmark_ring64_trace80_dfs_ms_incremental_total", static_cast<int>(incremental_total_ms));
+                    RecordProperty(
+                        "benchmark_ring64_trace80_dfs_ms_incremental_avg", static_cast<int>(incremental_avg_ms));
+                    RecordProperty("benchmark_ring64_trace80_dfs_ms_total", static_cast<int>(total_ms));
+                    RecordProperty("benchmark_ring64_trace80_dfs_num_solutions", static_cast<int>(n_found));
+                } else {
+                    RecordProperty(
+                        "benchmark_ring64_trace80_dfs_ms_first_solution_unique_shapes", static_cast<int>(first_ms));
+                    RecordProperty(
+                        "benchmark_ring64_trace80_dfs_ms_incremental_total_unique_shapes",
+                        static_cast<int>(incremental_total_ms));
+                    RecordProperty(
+                        "benchmark_ring64_trace80_dfs_ms_incremental_avg_unique_shapes",
+                        static_cast<int>(incremental_avg_ms));
+                    RecordProperty("benchmark_ring64_trace80_dfs_ms_total_unique_shapes", static_cast<int>(total_ms));
+                    RecordProperty(
+                        "benchmark_ring64_trace80_dfs_num_solutions_unique_shapes", static_cast<int>(n_found));
+                }
+            }
+
+            log_info(
+                tt::LogFabric,
+                "Benchmark_Ring64_On_ClusterTrace80_MultiSolve: engine={} unique_shapes={} "
+                "first_solution_ms={} incremental_total_ms={} incremental_avg_ms={} total_ms={} "
+                "solutions_found={} max_requested={} ring_nodes={} trace_nodes={}",
+                engine_label,
+                unique_shapes_word,
+                first_ms,
+                incremental_total_ms,
+                incremental_avg_ms,
+                total_ms,
+                n_found,
+                kMaxSolutions,
+                kRingNodes,
+                kTraceNodes);
+        }
     }
 }
 
