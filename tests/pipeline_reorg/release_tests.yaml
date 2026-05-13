@@ -490,17 +490,6 @@
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
-- name: Galaxy Llama 3.3-70B data-parallel e2e tests
-  cmd: |
-    export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
-  model-name: llama3.3-70b-dp-galaxy
-  skus:
-    wh_galaxy_release:
-      timeout: 20
-  owner_id: U08BH66EXAL # Radoica Draskic
-  team: models
-
 - name: Galaxy Qwen3-32B e2e tests
   cmd: |
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B

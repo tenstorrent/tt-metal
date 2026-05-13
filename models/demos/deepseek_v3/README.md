@@ -310,7 +310,6 @@ export PYTHON_ENV_DIR=$TT_METAL_HOME/build/python_env_vllm
 source $VLLM_DIR/tt_metal/setup-metal.sh
 source $PYTHON_ENV_DIR/bin/activate
 
-export VLLM_TARGET_DEVICE="tt"
 export ARCH_NAME=wormhole_b0
 export HF_HOME=<hugging face home directory>
 export HF_MODEL="deepseek-ai/DeepSeek-R1-0528"
@@ -324,11 +323,11 @@ Launch the server with long-lived RPC settings and TT mesh sizing:
 ```bash
 VLLM_RPC_TIMEOUT=1000000 \
 MESH_DEVICE="(4,8)" \
-python examples/server_example_tt.py \
+python plugins/vllm-tt-plugin/examples/server_example_tt.py \
   --model "deepseek-ai/DeepSeek-R1-0528" \
   --max_model_len 1024 \
   --block_size 32 \
-  --override_tt_config '{"trace_mode": false}'
+  --plugin-config '{"tt": {"trace_mode": false}}'
 ```
 
 In another terminal, send a client request:

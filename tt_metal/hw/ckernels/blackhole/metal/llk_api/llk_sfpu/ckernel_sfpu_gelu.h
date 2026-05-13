@@ -139,8 +139,8 @@ inline sfpi::vFloat calculate_gelu_chebyshev(sfpi::vFloat val) {
             2.98325768482e-05,
             val);
 
-        // Ensure result has the same sign as input using setsgn
-        result = setsgn(result, val);
+        // Ensure result has the same sign as input using copysgn
+        result = copysgn(result, val);
     }
     v_endif;
 
