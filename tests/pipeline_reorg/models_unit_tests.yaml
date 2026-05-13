@@ -341,7 +341,7 @@
 - name: GPT-OSS 20B unit tests
   cmd: |
     uv pip install -r models/demos/gpt_oss/requirements.txt
-    export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=openai/gpt-oss-20b TT_METAL_WATCHER=300
+    export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=openai/gpt-oss-20b
     pytest --timeout 600 models/demos/gpt_oss/tests/unit/
   model: gpt-oss-20b
   skus:
@@ -362,7 +362,7 @@
 - name: GPT-OSS 120B unit tests
   cmd: |
     uv pip install -r models/demos/gpt_oss/requirements.txt
-    export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ TT_METAL_WATCHER=600
+    export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/
     pytest --timeout 1500 models/demos/gpt_oss/tests/unit
   model: gpt-oss-120b
   skus:
