@@ -67,8 +67,7 @@ const bool is_int_fpu_en = true;
 const bool is_int_fpu_en = false;
 #endif
 
-#include "llk_math_common.h"
-#include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_lib_math_wrappers.h"
 #include "params.h"
 
 using namespace ckernel;
@@ -87,11 +86,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // copy srca to dest
     // Use B2D for all broadcasts except NONE (data in srcB), A2D for NONE (data in srcA)
     constexpr DataCopyType copy_type = (BROADCAST_TYPE == BroadcastType::NONE || unpack_to_dest) ? DataCopyType::A2D : DataCopyType::B2D;
-#ifdef ARCH_BLACKHOLE
-    _llk_math_eltwise_unary_datacopy_init_<copy_type, is_fp32_dest_acc_en, BROADCAST_TYPE, false, is_int_fpu_en>(params.num_faces, formats.math);
-#else
-    _llk_math_eltwise_unary_datacopy_init_<copy_type, is_fp32_dest_acc_en, BROADCAST_TYPE, is_int_fpu_en>(params.num_faces, formats.math);
-#endif
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<copy_type, is_fp32_dest_acc_en, BROADCAST_TYPE, false /* tilize */, is_int_fpu_en>(
+        params.num_faces, formats.math);
     _llk_math_pack_sync_init_<sync_mode, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     for (std::uint32_t block = 0; block < num_blocks; ++block)
@@ -114,7 +110,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
-#include "llk_pack.h"
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 #include "params.h"
 
@@ -128,21 +124,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Test configuration constants
     constexpr DstSync sync_mode = DstSync::SyncHalf;
-#ifdef ARCH_BLACKHOLE
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false /* untilize */, false /* tilize */>(
         formats.pack_src, formats.pack_dst, params.TEST_FACE_R_DIM * params.TEST_FACE_C_DIM * 4, params.TEST_FACE_R_DIM, TILE_C_DIM, params.num_faces);
-    _llk_pack_init_<false, false>(params.TEST_FACE_R_DIM, TILE_C_DIM, params.num_faces);
-#else
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(
-        formats.pack_src, formats.pack_dst, params.TEST_FACE_R_DIM * params.TEST_FACE_C_DIM * 4, params.TEST_FACE_R_DIM, params.num_faces);
-    _llk_pack_init_<false, false>(formats.pack_dst, params.TEST_FACE_R_DIM, params.num_faces);
-#endif
+    _llk_pack_init_wrapper_<false /* untilize */, false /* zero_output */>(formats.pack_dst, params.TEST_FACE_R_DIM, TILE_C_DIM, params.num_faces);
 
-#ifdef ARCH_BLACKHOLE
-    _llk_pack_dest_init_<sync_mode, is_fp32_dest_acc_en>();
-#else
-    _llk_pack_dest_init_<sync_mode, false, false>();
-#endif
+    _llk_pack_dest_init_wrapper_<sync_mode, is_fp32_dest_acc_en, false /* untilize */>();
 
     for (std::uint32_t block = 0; block < num_blocks; ++block)
     {
