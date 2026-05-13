@@ -15,6 +15,11 @@ import torch
 from loguru import logger
 from safetensors import safe_open
 
+# TT-only prepared tensors in the HF index; must not appear on the root view (reference load_state_dict).
+_QUAD_RING_EXPERT_FULL_RE = re.compile(
+    r"^model\.layers\.(?P<layer>\d+)\.mlp\.experts_quad_ring\.(?P<projection>w0_w1|w2)\.weight$"
+)
+
 _STACKED_EXPERT_ALIAS_RE = re.compile(
     r"^model\.layers\.(?P<layer>\d+)\.mlp\.experts\.(?P<expert>\d+)\.(?P<projection>gate_proj|down_proj|up_proj)\.weight$"
 )
@@ -243,6 +248,18 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         layer_part = full_key[len(prefix) :].split(".", 1)[0]
         return (not layer_part.isdigit()) or (int(layer_part) < self._num_layers)
 
+    def _visible_quad_ring_physical_key(self, full_key: str) -> bool:
+        """
+        Quad-ring prepared tensors live in the HF index but are not part of DeepseekV3ForCausalLM.
+
+        Hide them from the root mapping (so reference load_state_dict stays strict) while keeping
+        them visible under ``*.mlp.`` views used by TT MoE expert conversion.
+        """
+        if _QUAD_RING_EXPERT_FULL_RE.match(full_key) is None:
+            return True
+        base = self._base_prefix
+        return base.endswith("mlp.") and full_key.startswith(base)
+
     def _get_stacked_num_experts(self, stacked_full_key: str) -> int:
         num_experts = self._stacked_num_experts.get(stacked_full_key)
         if num_experts is None:
@@ -274,6 +291,8 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
             FileNotFoundError: if the index points to a weight file that does not exist on disk.
         """
         full_key = self._full_key(key)
+        if not self._visible_quad_ring_physical_key(full_key):
+            raise KeyError(key)
         if full_key in self._cache:
             if (
                 full_key in self._full_to_file
@@ -308,6 +327,8 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         if not isinstance(key, str):
             raise TypeError(f"Key must be a string but got {type(key)}")
         full_key = self._full_key(key)
+        if not self._visible_quad_ring_physical_key(full_key):
+            return False
         if (
             full_key in self._full_to_file
             and self._passes_layer_filter(full_key)
@@ -345,6 +366,8 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
                 continue
 
             if full_key.startswith(base):
+                if not self._visible_quad_ring_physical_key(full_key):
+                    continue
                 yield full_key[len(base) :]
 
     def __len__(self) -> int:
