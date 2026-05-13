@@ -31,9 +31,9 @@ COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
 
 def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int):
     """Program configs for the gate / up / down matmuls on Blackhole."""
-    grid = ttnn.CoreCoord(11, 10)
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(10, 9))})
     gate = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid,
+        allowed_worker_cores=grid,
         in0_block_w=4,
         out_subblock_h=1,
         out_subblock_w=8,
@@ -44,7 +44,7 @@ def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int
         fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
     )
     up = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid,
+        allowed_worker_cores=grid,
         in0_block_w=4,
         out_subblock_h=1,
         out_subblock_w=8,
@@ -54,7 +54,7 @@ def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int
         mcast_in0=False,
     )
     down = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid,
+        allowed_worker_cores=grid,
         in0_block_w=1,
         out_subblock_h=1,
         out_subblock_w=8,
@@ -68,9 +68,9 @@ def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int
 
 def get_wh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int):
     """Program configs for the gate / up / down matmuls on Wormhole."""
-    grid = ttnn.CoreCoord(8, 8)
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
     gate = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid,
+        allowed_worker_cores=grid,
         in0_block_w=4,
         out_subblock_h=1,
         out_subblock_w=8,
@@ -81,7 +81,7 @@ def get_wh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int
         fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
     )
     up = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid,
+        allowed_worker_cores=grid,
         in0_block_w=4,
         out_subblock_h=1,
         out_subblock_w=8,
@@ -91,7 +91,7 @@ def get_wh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int
         mcast_in0=False,
     )
     down = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid,
+        allowed_worker_cores=grid,
         in0_block_w=1,
         out_subblock_h=1,
         out_subblock_w=1,

@@ -1270,7 +1270,7 @@ def test_linear_fused_non_broadcast_bias_width_sharded_in0_in1(device, m, k, n):
         memory_config=mem_config_bias,
     )
     sharded_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(1, 1),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
         in0_block_w=k // num_mm // 32,
         out_subblock_h=1,
         out_subblock_w=1,

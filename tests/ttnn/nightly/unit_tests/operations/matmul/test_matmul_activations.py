@@ -192,7 +192,9 @@ def test_matmul_with_fused_activations(
         fused_activation = activation
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(grid_size[0], grid_size[1]),
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))}
+        ),
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
@@ -289,7 +291,9 @@ def test_matmul_with_custom_activation_params(
 
     # activation is already UnaryWithParam in this test, no conversion needed
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(grid_size[0], grid_size[1]),
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))}
+        ),
         in0_block_w=K // num_cores // 32,  # K/num_cores/32
         out_subblock_h=1,
         out_subblock_w=1,
@@ -406,7 +410,9 @@ def test_activation_with_different_program_configs(
         out_subblock_w = min(2, per_core_N) if per_core_N > 0 else 1
 
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(grid_size[0], grid_size[1]),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))}
+            ),
             in0_block_w=K // num_cores // 32,
             out_subblock_h=1,
             out_subblock_w=out_subblock_w,
@@ -422,7 +428,9 @@ def test_activation_with_different_program_configs(
         out_subblock_w = min(2, per_core_N) if per_core_N > 0 else 1
 
         program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(grid_size[0], grid_size[1]),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))}
+            ),
             in0_block_w=K // grid_size[0] // 32,
             out_subblock_h=1,
             out_subblock_w=out_subblock_w,
@@ -1015,7 +1023,9 @@ def test_matmul_1d_gather_with_activations(
 
     # Create program config with activation
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid[0] - 1, grid[1] - 1))}
+        ),
         in0_block_w=2,
         out_subblock_h=1,
         out_subblock_w=1,
