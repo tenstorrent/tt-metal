@@ -245,9 +245,6 @@ def _run_kernel_bw_only(bw_kernel: str = "metal") -> None:
 
                 def run_step() -> None:
                     d_in, d_gamma = ttml.ops.rmsnorm.rmsnorm_bw(x_t, g_t, rms_t, dL_t, 0)
-                    ttnn.synchronize_device(mesh)
-                    d_in.deallocate_storage()
-                    d_gamma.deallocate_storage()
 
             elif bw_kernel == "ttl":
                 assert ttl_mod is not None
@@ -300,7 +297,6 @@ def _run_kernel_bw_only(bw_kernel: str = "metal") -> None:
 
                 def run_step() -> None:
                     k_2pass(x_p, g_p, rms_p, dL_p, out_da, out_dg)
-                    ttnn.synchronize_device(mesh)
 
             else:
                 raise ValueError(f"unknown bw_kernel: {bw_kernel}")
@@ -312,6 +308,7 @@ def _run_kernel_bw_only(bw_kernel: str = "metal") -> None:
             for _ in range(NUM_MEASURE):
                 t0 = time.perf_counter()
                 run_step()
+                ttnn.synchronize_device(mesh)
                 total += time.perf_counter() - t0
             avg_s = total / NUM_MEASURE
             if bw_kernel == "metal":
