@@ -157,22 +157,24 @@ class PaliGemmaBackboneTTNN:
         v_key = f"{prefix}self_attn.v_proj.weight"
 
         if q_key in weights and k_key in weights and v_key in weights:
-            # Get Q, K, V weights, transpose for TTNN linear, and convert to TTNN
+            # Get Q, K, V weights, transpose for TTNN linear, and convert to TTNN.
+            # OPTIMIZATION: bf16 -> bf8_b for attention weights. Halves DRAM bandwidth
+            # on the per-step QKV linear (180 calls for expert, 18 for VLM prefill).
             wq_ttnn = ttnn.from_torch(
                 weights[q_key].T.contiguous(),  # [hidden, num_heads * head_dim]
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
             wk_ttnn = ttnn.from_torch(
                 weights[k_key].T.contiguous(),  # [hidden, num_kv_heads * head_dim]
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
             wv_ttnn = ttnn.from_torch(
                 weights[v_key].T.contiguous(),  # [hidden, num_kv_heads * head_dim]
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
@@ -210,9 +212,13 @@ class PaliGemmaBackboneTTNN:
                 if len(value.shape) == 1:
                     block_weights[new_key] = tensor_1d_to_2d_ttnn(value, self.device, dtype=ttnn.bfloat16)
                 else:
+                    # OPTIMIZATION: o_proj weight bf16 -> bf8_b (halves DRAM bandwidth).
+                    # Norm weights stay bf16 (small and precision-sensitive).
+                    is_norm = "layernorm" in new_key or "norm" in new_key
+                    weight_dtype = ttnn.bfloat16 if is_norm else ttnn.bfloat8_b
                     block_weights[new_key] = ttnn.from_torch(
                         value,
-                        dtype=ttnn.bfloat16,
+                        dtype=weight_dtype,
                         layout=layout,
                         device=self.device,
                     )
@@ -286,9 +292,13 @@ class PaliGemmaBackboneTTNN:
                 if len(value.shape) == 1:
                     block_weights[new_key] = tensor_1d_to_2d_ttnn(value, self.device, dtype=ttnn.bfloat16)
                 else:
+                    # OPTIMIZATION: o_proj weight bf16 -> bf8_b (halves DRAM bandwidth).
+                    # Norm weights stay bf16 (small and precision-sensitive).
+                    is_norm = "layernorm" in new_key or "norm" in new_key
+                    weight_dtype = ttnn.bfloat16 if is_norm else ttnn.bfloat8_b
                     block_weights[new_key] = ttnn.from_torch(
                         value,
-                        dtype=ttnn.bfloat16,
+                        dtype=weight_dtype,
                         layout=layout,
                         device=self.device,
                     )

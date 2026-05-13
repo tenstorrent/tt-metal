@@ -488,9 +488,15 @@ class GemmaMLPTTNN:
             chunk_end = min(chunk_start + self.chunk_size, seq_len)
             actual_chunk_size = chunk_end - chunk_start
 
-            # Pad last chunk to tile alignment if needed
-            needs_chunk_padding = actual_chunk_size < self.chunk_size
-            padded_chunk_size = self.chunk_size if needs_chunk_padding else actual_chunk_size
+            # BUGFIX: Previously this padded to self.chunk_size (e.g. 544 on BH Galaxy).
+            # That meant the expert MLP (seq=51) was running matmuls on (1, 544, 1024)
+            # tensors — ~10x more work than necessary. Now pad only to the next
+            # tile multiple (32). Verified savings: ~26 ms / inference (expert MLP
+            # gate+up+down accounted for 38 ms of matmul time, mostly wasted
+            # padding compute).
+            tile = 32
+            padded_chunk_size = ((actual_chunk_size + tile - 1) // tile) * tile
+            needs_chunk_padding = padded_chunk_size > actual_chunk_size
 
             # Slice input chunk (always 4D)
             x_chunk = ttnn.slice(x, [0, 0, chunk_start, 0], [batch_size, 1, chunk_end, hidden])
