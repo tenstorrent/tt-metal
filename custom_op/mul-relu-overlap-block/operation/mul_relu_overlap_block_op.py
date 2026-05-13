@@ -2,12 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# mul_relu_add_overlap_op: experimental fused y = relu(a * b) + c via ttnn.generic_op.
+# mul_relu_overlap_block_op: experimental fused y = relu(a * b) via ttnn.generic_op.
 #
 # Block-based sequential baseline (no FPU/SFPU overlap yet): mul_tiles (FPU/MATH)
-# -> relu_tile (SFPU/MATH) -> add via DEST->SrcA reuse (FPU/MATH), all on TRISC1,
-# processing BS tiles per acquire/commit window. A future iteration will move
-# relu to PACK (TRISC2) to overlap with the surrounding FPU ops.
+# -> relu_tile (SFPU/MATH), all on TRISC1, processing BS tiles per acquire/commit
+# window. A future iteration will introduce overlap.
 #
 # Block size is dtype-driven and fixed by the operation (compile-time on all
 # three kernels). DST half-sync capacity sets the cap:
@@ -20,9 +19,9 @@
 # kernel always sees full BS-tile blocks.
 #
 # Supported scope:
-#   - dtype:   bfloat16 or float32 (all three inputs must match)
+#   - dtype:   bfloat16 or float32 (both inputs must match)
 #   - memory:  interleaved DRAM, tile layout
-#   - shapes:  same shape for a, b, c, output (no broadcast, no sharding)
+#   - shapes:  same shape for a, b, output (no broadcast, no sharding)
 
 from __future__ import annotations
 
@@ -38,7 +37,7 @@ _TILE_ELEMENTS = _TILE_H * _TILE_W
 
 
 @dataclass
-class MulReluAddOverlapConfig:
+class MulReluOverlapBlockConfig:
     """Placeholder for future overlap toggles. Empty for now."""
 
     pass
@@ -53,26 +52,21 @@ def _dtype_params(dtype):
     raise AssertionError(f"Unsupported dtype: {dtype}")
 
 
-def mul_relu_add_overlap_op(
+def mul_relu_overlap_block_op(
     input_a: ttnn.Tensor,
     input_b: ttnn.Tensor,
-    input_c: ttnn.Tensor,
-    config: MulReluAddOverlapConfig = MulReluAddOverlapConfig(),
+    config: MulReluOverlapBlockConfig = MulReluOverlapBlockConfig(),
 ) -> ttnn.Tensor:
-    """y = relu(a * b) + c, elementwise, bfloat16 or float32, DRAM-interleaved tile layout."""
+    """y = relu(a * b), elementwise, bfloat16 or float32, DRAM-interleaved tile layout."""
     # --- Validation ---------------------------------------------------------
     dtype = input_a.dtype
     assert dtype in (ttnn.bfloat16, ttnn.float32), f"Only bfloat16/float32 supported, got {dtype}"
     assert input_b.dtype == dtype, f"dtype mismatch a vs b: {dtype} vs {input_b.dtype}"
-    assert input_c.dtype == dtype, f"dtype mismatch a vs c: {dtype} vs {input_c.dtype}"
     assert input_a.layout == ttnn.TILE_LAYOUT, "Inputs must be in TILE_LAYOUT"
     assert input_b.layout == ttnn.TILE_LAYOUT, "Inputs must be in TILE_LAYOUT"
-    assert input_c.layout == ttnn.TILE_LAYOUT, "Inputs must be in TILE_LAYOUT"
     assert input_a.memory_config() == ttnn.DRAM_MEMORY_CONFIG, "Input A must be in DRAM (interleaved)"
     assert input_b.memory_config() == ttnn.DRAM_MEMORY_CONFIG, "Input B must be in DRAM (interleaved)"
-    assert input_c.memory_config() == ttnn.DRAM_MEMORY_CONFIG, "Input C must be in DRAM (interleaved)"
     assert list(input_a.shape) == list(input_b.shape), f"Shape mismatch a vs b: {input_a.shape} vs {input_b.shape}"
-    assert list(input_a.shape) == list(input_c.shape), f"Shape mismatch a vs c: {input_a.shape} vs {input_c.shape}"
 
     device = input_a.device()
     block_size, fp32_dest_acc_en, bytes_per_elem = _dtype_params(dtype)
@@ -117,17 +111,15 @@ def mul_relu_add_overlap_op(
 
     cb_a_desc = _cb_desc(0)  # c_0: input A
     cb_b_desc = _cb_desc(1)  # c_1: input B
-    cb_c_desc = _cb_desc(2)  # c_2: input C
-    cb_out_desc = _cb_desc(3)  # c_3: output
+    cb_out_desc = _cb_desc(2)  # c_2: output
 
     # --- Compile-time args --------------------------------------------------
     ta_a = ttnn.TensorAccessorArgs(input_a).get_compile_time_args()
     ta_b = ttnn.TensorAccessorArgs(input_b).get_compile_time_args()
-    ta_c = ttnn.TensorAccessorArgs(input_c).get_compile_time_args()
     ta_out = ttnn.TensorAccessorArgs(output).get_compile_time_args()
 
-    reader_ct_args = [0, 1, 2, block_size] + ta_a + ta_b + ta_c
-    writer_ct_args = [3, block_size] + ta_out
+    reader_ct_args = [0, 1, block_size] + ta_a + ta_b
+    writer_ct_args = [2, block_size] + ta_out
     compute_ct_args = [block_size]
 
     # --- Runtime args (per-core) -------------------------------------------
@@ -137,7 +129,6 @@ def mul_relu_add_overlap_op(
 
     a_addr = input_a.buffer_address()
     b_addr = input_b.buffer_address()
-    c_addr = input_c.buffer_address()
     out_addr = output.buffer_address()
 
     current_tile = 0
@@ -154,7 +145,6 @@ def mul_relu_add_overlap_op(
                     reader_rt_args[x][y] = [
                         a_addr,
                         b_addr,
-                        c_addr,
                         work_per_core,  # num_tiles
                         current_tile,  # start_tile_id
                     ]
@@ -169,10 +159,10 @@ def mul_relu_add_overlap_op(
     assert current_tile == total_tiles, f"work distribution mismatch: {current_tile} vs {total_tiles}"
 
     # --- Kernel descriptors -------------------------------------------------
-    _DATAFLOW = "custom_op/mul-relu-add-overlap/operation/kernels/dataflow"
+    _DATAFLOW = "custom_op/mul-relu-overlap-block/operation/kernels/dataflow"
     reader_path = f"{_DATAFLOW}/reader_block.cpp"
     writer_path = f"{_DATAFLOW}/writer_block.cpp"
-    compute_path = "custom_op/mul-relu-add-overlap/operation/kernels/compute/compute_mul_relu_add_overlap.cpp"
+    compute_path = "custom_op/mul-relu-overlap-block/operation/kernels/compute/compute_mul_relu_overlap_block.cpp"
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=reader_path,
@@ -213,7 +203,7 @@ def mul_relu_add_overlap_op(
     program = ttnn.ProgramDescriptor(
         kernels=[reader_kernel, writer_kernel, compute_kernel],
         semaphores=[],
-        cbs=[cb_a_desc, cb_b_desc, cb_c_desc, cb_out_desc],
+        cbs=[cb_a_desc, cb_b_desc, cb_out_desc],
     )
 
-    return ttnn.generic_op([input_a, input_b, input_c, output], program)
+    return ttnn.generic_op([input_a, input_b, output], program)
