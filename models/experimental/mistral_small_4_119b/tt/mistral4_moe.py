@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Mistral4 Mixture-of-Experts (MoE) layer — prefill mode, no PyTorch fallback.
+Mistral4 Mixture-of-Experts (MoE) layer — fully on device, no host fallback.
 
 Architecture:
   • 128 routed experts  (Mistral4NaiveMoe)
@@ -19,20 +19,13 @@ Sharding strategy for N-device mesh:
 
   Shared-expert and gate weights are replicated on every device.
 
-Routing:
-  use_ttnn_moe=True   (default):
-    Gate logits and softmax computed on device via TTNN;
-    top-k indices are pulled to host only to build the routing-weight mask
-    (a small [seq, num_experts] gather), which is pushed back as a
-    device-sharded tensor for the expert loop.
-
-  use_ttnn_moe=False  (host routing / reference):
-    Gate logits computed on device; top-k + softmax on host; routing mask
-    pushed back to device.  Useful for PCC comparison runs.
-
-  moe_hf_torch_routing=True (for PCC validation only):
-    HF model router is called externally; caller supplies routing_weights_tt.
-    Not used in normal inference.
+Routing (fully on device):
+  Gate logits, softmax, top-k, sum-normalisation, and scatter into a dense
+  [1, 1, seq, NUM_EXPERTS] weight tensor are all TTNN ops.
+  A pre-computed per-device block-column selection matrix (routing_shard_proj,
+  created once at __init__ via ShardTensorToMesh) projects the replicated
+  [1,1,seq,128] routing weights to a per-device [1,1,seq,EPD] slice on device
+  via a single ttnn.matmul — no host round-trip in the forward path.
 
 Weight loading:
   Hugging Face ``Mistral4NaiveMoe`` (Mistral-Small-4) uses fused parameters:
@@ -317,8 +310,6 @@ class TtMistral4MoELayer(LightweightModule):
         mesh_device: ttnn.MeshDevice,
         state_dict: dict,
         layer_prefix: str,
-        use_ttnn_moe: bool = True,
-        moe_hf_torch_routing: bool = False,
         expert_dtype: ttnn.DataType = ttnn.bfloat16,
     ):
         super().__init__()
@@ -326,8 +317,6 @@ class TtMistral4MoELayer(LightweightModule):
         self.num_devices = mesh_device.get_num_devices()
         self.num_experts = NUM_EXPERTS
         self.num_active = NUM_ACTIVE_EXPERTS
-        self.use_ttnn_moe = use_ttnn_moe
-        self.moe_hf_torch_routing = moe_hf_torch_routing
 
         assert self.num_experts % self.num_devices == 0, (
             f"num_experts ({self.num_experts}) must be divisible by " f"num_devices ({self.num_devices})"
@@ -346,11 +335,12 @@ class TtMistral4MoELayer(LightweightModule):
 
         # ── Gate (router) weight ───────────────────────────────────────────
         # shape: [num_experts, HIDDEN_SIZE] → [HIDDEN_SIZE, num_experts] for matmul
+        # bfloat8_b: saves 18 MB / 12 banks ≈ 1.5 MB/bank across 36 layers.
         self.gate_weight = _load_replicated(
             state_dict,
             mlp_prefix + "gate.weight",
             transpose=True,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             mesh_device=mesh_device,
         )  # [HIDDEN_SIZE, NUM_EXPERTS]
 
@@ -368,6 +358,32 @@ class TtMistral4MoELayer(LightweightModule):
             )  # [1, 1, 1, NUM_EXPERTS] replicated on all devices
         else:
             self.gate_bias_tt = None
+
+        # ── Per-device routing shard selector (one-time init) ──────────────
+        # At runtime, _compute_routing_weights produces a replicated dense
+        # [1, 1, seq, NUM_EXPERTS] routing tensor.  To give each device only
+        # its local EPD columns without a host round-trip, we pre-build a
+        # per-device block-column selection matrix [1, 1, NUM_EXPERTS, EPD]:
+        #   device k's matrix has ones at rows [k*EPD : (k+1)*EPD], zeros elsewhere.
+        # ttnn.matmul([1,1,seq,E], [1,1,E,EPD]) → [1,1,seq,EPD] per device.
+        sel = torch.zeros(
+            self.num_devices,
+            1,
+            self.num_experts,
+            self.experts_per_device,
+            dtype=torch.bfloat16,
+        )
+        for k in range(self.num_devices):
+            for i in range(self.experts_per_device):
+                sel[k, 0, k * self.experts_per_device + i, i] = 1.0
+        self.routing_shard_proj = ttnn.as_tensor(
+            sel,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        )  # per device: [1, 1, NUM_EXPERTS, experts_per_device]
 
         # ── Stacked routed expert weights (sharded on expert axis) ─────────
         self.expert_gate = _load_stacked_experts(
@@ -401,12 +417,13 @@ class TtMistral4MoELayer(LightweightModule):
         )  # per device: [experts_per_device, 1, intermediate, HIDDEN_SIZE]
 
         # ── Shared expert ──────────────────────────────────────────────────
+        # bfloat8_b: 36 layers × 3 shared-expert weights × 8 MB = 0.86 GB vs 1.73 GB at bf16.
         self.shared_expert = TtMistral4SharedMLP(
             mesh_device=mesh_device,
             state_dict=state_dict,
             prefix=mlp_prefix + "shared_experts.",
             intermediate_size=SHARED_EXPERT_INTERMEDIATE_SIZE,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             compute_kernel_config=ttnn.init_device_compute_kernel_config(
                 mesh_device.arch(),
                 math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -424,11 +441,10 @@ class TtMistral4MoELayer(LightweightModule):
         seq_len: int,
     ) -> ttnn.Tensor:
         """
-        Compute per-device routing-weight tensors — fully on device.
+        Compute per-device routing-weight tensors — fully on device, no host round-trip.
 
-        Returns a TTNN tensor sharded on dim=3 across devices:
-          each device's slice: [1, 1, seq_len, experts_per_device]
-          device k holds the weights for its local experts k*E..(k+1)*E-1.
+        Returns [1, 1, seq_len, experts_per_device] per device:
+          device k holds the weights for its local experts k*EPD..(k+1)*EPD-1.
 
         Routing algorithm (all TTNN ops):
           1. Gate logits on device (HiFi2).
@@ -437,7 +453,7 @@ class TtMistral4MoELayer(LightweightModule):
           4. TopK on device → values + indices.
           5. Sum-normalize top-k weights on device.
           6. Scatter into dense [1, 1, seq, NUM_EXPERTS] on device.
-          7. To-host / re-upload only for sharding along expert axis (data movement, no compute).
+          7. matmul with pre-computed per-device block-column selector → [1,1,seq,EPD].
         """
         # 1. Gate logits on device: [1, 1, seq, NUM_EXPERTS]
         gate_logits_tt = ttnn.linear(
@@ -481,24 +497,17 @@ class TtMistral4MoELayer(LightweightModule):
         ttnn.deallocate(topk_vals_tt)
         ttnn.deallocate(topk_idx_tt)
 
-        # 7. Re-shard along expert axis so each device sees only its local expert slice.
-        #    This requires a host round-trip (data movement only, no compute on host).
-        routing_host = ttnn.to_torch(
+        # 7. Project [1,1,seq,E] → [1,1,seq,EPD] per device.
+        #    routing_shard_proj is [1,1,E,EPD] on each device (different per device),
+        #    pre-computed at __init__ via ShardTensorToMesh — no host round-trip.
+        routing_local = ttnn.matmul(
             dense_routing_tt,
-            mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0),
-        )[
-            0:1
-        ].to(torch.bfloat16)
-        ttnn.deallocate(dense_routing_tt)
-
-        return ttnn.as_tensor(
-            routing_host,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
+            self.routing_shard_proj,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=3),
+            dtype=ttnn.bfloat16,
         )
+        ttnn.deallocate(dense_routing_tt)
+        return routing_local
 
     # ── Forward ────────────────────────────────────────────────────────────
 

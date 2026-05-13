@@ -54,7 +54,6 @@ class TtMistral4TextModel:
         text_config:        HF ``text_config`` object
         num_decoder_layers: layers to instantiate (1..36; default 36)
         max_seq_len:        maximum total tokens (prefill + decode); sets cache size
-        use_ttnn_moe:       True = gate logits on device (default); False = host routing
     """
 
     def __init__(
@@ -64,7 +63,6 @@ class TtMistral4TextModel:
         text_config,
         num_decoder_layers: int = EXPECTED_NUM_LAYERS,
         max_seq_len: int = 4096,
-        use_ttnn_moe: bool = True,
     ):
         self.mesh_device = mesh_device
         self.num_decoder_layers = num_decoder_layers
@@ -98,8 +96,6 @@ class TtMistral4TextModel:
                 mesh_device=mesh_device,
                 state_dict=state_dict,
                 layer_idx=i,
-                use_ttnn_moe=use_ttnn_moe,
-                moe_hf_torch_routing=False,
                 compute_kernel_config=self.compute_kernel_config,
             )
             self.decoder_layers.append(layer)
@@ -109,13 +105,14 @@ class TtMistral4TextModel:
         self.final_norm_w = _load_norm_weight(state_dict, "language_model.model.norm.weight", HIDDEN_SIZE, mesh_device)
 
         lm_head_w = state_dict["language_model.lm_head.weight"].to(torch.bfloat16).T.contiguous()
+        # bfloat8_b: 64 MB per device (vs 128 MB bfloat16) after sharding across 8 devices.
         self.lm_head_weight = ttnn.as_tensor(
             lm_head_w,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
         )
 
     # ── Internals ──────────────────────────────────────────────────────────
@@ -169,13 +166,60 @@ class TtMistral4TextModel:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(x)
-        # Both devices have replicated logits; take device-0 slice.
+        # lm_head_weight is column-sharded across devices (dim=1 of [hidden, vocab]).
+        # Each device produces partial logits [1, 1, seq_len, vocab/n_devices].
+        # Concatenate along the vocab dim to reconstruct full logits.
         logits_host = ttnn.to_torch(
             logits_tt,
-            mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0),
+            mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=3),
         )
         ttnn.deallocate(logits_tt)
         return logits_host[0].to(torch.bfloat16)
+
+    def _next_token_on_device(self, x_last: ttnn.Tensor) -> int:
+        """
+        On-device greedy next-token from one hidden state.
+
+        x_last: [1, 1, 1, HIDDEN_SIZE] (last position's hidden, replicated on mesh).
+        Returns the token id as a Python int.
+
+        Pipeline: rms_norm → lm_head (partial) → all_gather over vocab → argmax → readback.
+        Only a single uint32 per device crosses the PCIe boundary.
+        """
+        x_normed = _rms_norm(x_last, self.final_norm_w, self.compute_kernel_config)
+        partial = ttnn.linear(
+            x_normed,
+            self.lm_head_weight,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # per device: [1, 1, 1, vocab/num_devices]
+        ttnn.deallocate(x_normed)
+
+        num_devices = self.mesh_device.get_num_devices()
+        if num_devices > 1:
+            full = ttnn.all_gather(
+                partial,
+                dim=3,
+                num_links=1,
+                topology=ttnn.Topology.Ring,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )  # per device: [1, 1, 1, vocab]
+            ttnn.deallocate(partial)
+        else:
+            full = partial
+
+        idx_tt = ttnn.argmax(full, dim=-1)  # per device: [1, 1, 1] uint32 ROW_MAJOR
+        ttnn.deallocate(full)
+
+        # Every device holds the same full logits, so every argmax result is identical.
+        # Pull the first device's value.
+        idx_host = ttnn.to_torch(
+            idx_tt,
+            mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0),
+        )
+        ttnn.deallocate(idx_tt)
+        return int(idx_host.flatten()[0].item())
 
     # ── Public API ─────────────────────────────────────────────────────────
 
@@ -240,3 +284,59 @@ class TtMistral4TextModel:
         ttnn.deallocate(sin_tt)
 
         return self._to_logits(x)
+
+    # ── Greedy generation entry points (on-device argmax) ──────────────────
+
+    def prefill_next_token(
+        self,
+        input_ids: torch.Tensor,
+        position_embeddings: Tuple[torch.Tensor, torch.Tensor],
+    ) -> int:
+        """
+        Run prefill (filling all KV caches) and return the greedy next token id.
+
+        Same as ``prefill`` but the argmax over the last position's logits runs
+        on device — only a single uint32 crosses the PCIe boundary.
+        """
+        seq_len = input_ids.shape[1]
+        cos_tt, sin_tt = self._prepare_rope(position_embeddings, seq_len)
+
+        x = self._embed(input_ids)
+        x = ttnn.reshape(x, [1, 1, seq_len, HIDDEN_SIZE])
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+
+        for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
+            x = layer.forward_with_cache(x, cos_tt, sin_tt, kv_cache)
+
+        ttnn.deallocate(cos_tt)
+        ttnn.deallocate(sin_tt)
+
+        # Extract the last position's hidden state: [1, 1, 1, HIDDEN_SIZE].
+        x_last = ttnn.slice(x, [0, 0, seq_len - 1, 0], [1, 1, seq_len, HIDDEN_SIZE])
+        ttnn.deallocate(x)
+        token_id = self._next_token_on_device(x_last)
+        ttnn.deallocate(x_last)
+        return token_id
+
+    def decode_next_token(
+        self,
+        input_id: torch.Tensor,
+        position_embeddings: Tuple[torch.Tensor, torch.Tensor],
+        current_pos: int,
+    ) -> int:
+        """Decode one token and return the greedy next token id (on-device argmax)."""
+        cos_tt, sin_tt = self._prepare_rope(position_embeddings, 1)
+
+        x = self._embed(input_id)
+        x = ttnn.reshape(x, [1, 1, 1, HIDDEN_SIZE])
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+
+        for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
+            x = layer.forward_decode(x, cos_tt, sin_tt, kv_cache, current_pos)
+
+        ttnn.deallocate(cos_tt)
+        ttnn.deallocate(sin_tt)
+
+        token_id = self._next_token_on_device(x)
+        ttnn.deallocate(x)
+        return token_id
