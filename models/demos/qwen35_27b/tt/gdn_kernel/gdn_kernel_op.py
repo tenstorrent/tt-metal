@@ -320,34 +320,39 @@ def _gdn_recurrence_fused(
 
 
 def _gdn_recurrence_ttnn(q, k_row, k_col, v, g, beta, state):
-    """GDN recurrence step using standard ttnn ops (fallback)."""
+    """GDN recurrence step using standard ttnn ops (fallback).
+
+    Inputs (q, k_*, v, g, beta, state) stay in caller-provided memory (DRAM).
+    All intermediates produced here are allocated in L1 interleaved to avoid
+    DRAM round-trips between sub-ops. The step-4b ADD writes back into the
+    caller's DRAM state buffer via output_tensor=. The step-5 result is L1
+    and gets copied to the caller's DRAM output buffer by the wrapper.
+    """
+    l1 = ttnn.L1_MEMORY_CONFIG
+
     # Step 1: decay
-    g_exp = ttnn.exp(g)
-    state_b = ttnn.multiply(state, g_exp)
+    g_exp = ttnn.exp(g, memory_config=l1)
+    state_b = ttnn.multiply(state, g_exp, memory_config=l1)
     ttnn.deallocate(g_exp)
 
     # Step 2: kv_mem = k_row @ state
-    kv_mem = ttnn.matmul(k_row, state_b)
+    kv_mem = ttnn.matmul(k_row, state_b, memory_config=l1)
 
     # Step 3: delta = beta * (v - kv_mem)
-    diff = ttnn.subtract(v, kv_mem)
+    diff = ttnn.subtract(v, kv_mem, memory_config=l1)
     ttnn.deallocate(kv_mem)
-    delta = ttnn.multiply(beta, diff)
+    delta = ttnn.multiply(beta, diff, memory_config=l1)
     ttnn.deallocate(diff)
 
-    # Step 4: state += outer(k_col, delta)
-    outer = ttnn.matmul(k_col, delta)
+    # Step 4: state += outer(k_col, delta)  -- writes back into caller's DRAM state
+    outer = ttnn.matmul(k_col, delta, memory_config=l1)
     ttnn.deallocate(delta)
-    new_state = ttnn.add(state_b, outer)
+    ttnn.add(state_b, outer, output_tensor=state)
     ttnn.deallocate(state_b)
     ttnn.deallocate(outer)
 
-    # Step 5: output = q @ new_state
-    output = ttnn.matmul(q, new_state)
-
-    # Update state in-place
-    ttnn.copy(new_state, state)
-    ttnn.deallocate(new_state)
+    # Step 5: output = q @ state  -- intermediate, caller copies to DRAM output
+    output = ttnn.matmul(q, state, memory_config=l1)
 
     return output
 

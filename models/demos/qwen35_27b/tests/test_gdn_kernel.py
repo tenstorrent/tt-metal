@@ -87,7 +87,9 @@ def test_gdn_kernel_correctness(mesh_device, reset_seeds, ensure_gc, num_pairs):
 
     # Run reference
     out_ref, state_new_ref = ref_recurrence_single_step(q_ref, k_ref, v_ref, g_ref, beta_ref, state_ref.clone())
-    logger.info(f"Reference output: shape={out_ref.shape}, range=[{out_ref.min():.4f}, {out_ref.max():.4f}]")
+    logger.info(
+        f"Reference output: shape={out_ref.shape}, range=[{out_ref.min().item():.4f}, {out_ref.max().item():.4f}]"
+    )
 
     # Convert to bfloat16 for device
     def to_tt(t):
@@ -134,7 +136,9 @@ def test_gdn_kernel_correctness(mesh_device, reset_seeds, ensure_gc, num_pairs):
     out_tt_cpu = ttnn.to_torch(output_tt).float()
     state_tt_cpu = ttnn.to_torch(state_tt).float()
 
-    logger.info(f"Kernel output: shape={out_tt_cpu.shape}, range=[{out_tt_cpu.min():.4f}, {out_tt_cpu.max():.4f}]")
+    logger.info(
+        f"Kernel output: shape={out_tt_cpu.shape}, range=[{out_tt_cpu.min().item():.4f}, {out_tt_cpu.max().item():.4f}]"
+    )
 
     # Compare output
     out_diff = (out_ref - out_tt_cpu).abs()
