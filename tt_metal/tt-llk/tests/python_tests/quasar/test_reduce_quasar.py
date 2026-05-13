@@ -5,7 +5,7 @@ from itertools import product
 
 import pytest
 import torch
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ReduceGapoolGolden,
     ReduceGolden,
@@ -214,6 +214,127 @@ def test_reduce_quasar(
         golden_tensor,
         res_tensor,
         formats.output_format,
+    )
+
+    assert test_passed, "Assert against golden failed"
+
+
+# 2x-packed FP4 register-format variants for the reduce-GAPOOL pipeline. L1 stays MxFp4;
+# the unpacker produces MxFp4_2x_A/B in src registers. GAPOOL is one of the op_mmul-gated
+# instructions (alongside MVMUL/MVMULDI per tt_instruction_issue.sv), so the FP4-2x
+# sub-datum expansion in the SrcA format-mux fires correctly for Sum/Average pool types.
+# Max pool uses GMPOOL which is NOT in the op_mmul list and is therefore excluded.
+#
+# Only reduce_dim=Column is exercised here. MXFP4_2x is op_mmul-family-only on Quasar
+# (MVMUL/MVMULDI/GAPOOL); the column-reduce LLK path issues only GAPOOLs and works as
+# designed. The row/scalar paths in llk_math_reduce.h commit per-face results via
+# MOVD2B -> ZEROSRC -> ELWADDDI, and ELWADDDI is not op_mmul, so it reads SrcB through
+# the FP4 zf mux while srca_fmt_spec is still MXFP4_2x -- producing all-zero Dest.
+# Re-enabling row/scalar requires a kernel-side srca_fmt_spec override before the ELWADDDI commit.
+REDUCE_QSR_MXFP4_2X_FORMATS = [
+    InputOutputFormat(
+        DataFormat.MxFp4,
+        DataFormat.Float16,
+        register_format_hint=DataFormat.MxFp4_2x_A,
+    ),
+    InputOutputFormat(
+        DataFormat.MxFp4,
+        DataFormat.Float16_b,
+        register_format_hint=DataFormat.MxFp4_2x_B,
+    ),
+]
+
+
+@pytest.mark.quasar
+@parametrize(
+    format=REDUCE_QSR_MXFP4_2X_FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    reduce_dim=[ReduceDimension.Column],
+    pool_type=[ReducePool.Sum, ReducePool.Average],
+    math_fidelity=MATH_FIDELITY_MODES,
+    dest_sync_mode=[DestSync.Half, DestSync.Full],
+)
+def test_reduce_quasar_mxfp4_2x_gapool(
+    format,
+    dest_acc,
+    reduce_dim,
+    pool_type,
+    math_fidelity,
+    dest_sync_mode,
+):
+    input_dimensions = [64, 64]
+
+    src_A, tile_cnt, _, _ = generate_stimuli_v2(
+        stimuli_format_A=format.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=format.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+
+    # SrcB scale: Sum uses 1.0 per element; Average uses 1/32 so the row/col reduce gives
+    # the mean across the 32-element pool dimension.
+    if pool_type == ReducePool.Sum:
+        src_B = torch.full((1024,), 1)
+    else:  # Average
+        src_B = torch.full((1024,), 1 / 32)
+
+    generate_golden = get_golden_generator(ReduceGapoolGolden)
+    golden_tensor = generate_golden(
+        src_A,
+        src_B,
+        format.output_format,
+        reduce_dim,
+        math_fidelity,
+        tile_cnt,
+        input_format=format.input_format,
+    )
+
+    mathop = mathop_mapping[reduce_dim]
+
+    configuration = TestConfig(
+        "sources/quasar/reduce_quasar_test.cpp",
+        format,
+        templates=[
+            MATH_FIDELITY(math_fidelity),
+            MATH_OP(mathop=mathop, pool_type=pool_type),
+            UNPACKER_ENGINE_SEL(),
+            # MX input -> implied math format on the kernel side (matches matmul 2x).
+            IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
+            DEST_SYNC(dest_sync_mode),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt),
+            TEST_FACE_DIMS(),
+            NUM_FACES(),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            format.input_format,
+            src_B,
+            format.input_format,
+            format.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=1,
+            tile_count_res=tile_cnt,
+        ),
+        unpack_to_dest=False,
+        dest_acc=dest_acc,
+        disable_format_inference=False,
+    )
+
+    res_from_L1 = configuration.run().result
+
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golden tensor are not of the same length"
+
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[format.output_format])
+
+    test_passed = passed_test(
+        golden_tensor,
+        res_tensor,
+        format.output_format,
+        print_errors=False,
     )
 
     assert test_passed, "Assert against golden failed"
