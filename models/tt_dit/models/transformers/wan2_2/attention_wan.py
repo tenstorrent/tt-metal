@@ -400,9 +400,13 @@ class WanAttention(Module):
         if prompt_1BLP is None:
             # Self attention
             if self.parallel_config.sequence_parallel.factor > 1:
-                # Q and K already cast by norm kernel; only V needs explicit typecast
-                if sdpa_input_dtype is not None and v_BHNE.dtype != sdpa_input_dtype:
-                    v_BHNE = ttnn.typecast(v_BHNE, sdpa_input_dtype)
+                # Q and K already cast by norm kernel; cast V and dummy joint inputs to match
+                dummy_joint = self.dummy_joint_input
+                if sdpa_input_dtype is not None:
+                    if v_BHNE.dtype != sdpa_input_dtype:
+                        v_BHNE = ttnn.typecast(v_BHNE, sdpa_input_dtype)
+                    if dummy_joint.dtype != sdpa_input_dtype:
+                        dummy_joint = ttnn.typecast(dummy_joint, sdpa_input_dtype)
 
                 # HACK: pass null joint inputs to take advantage of ring attention, even though this is self-attention.
                 if self.use_exp_ring_sdpa:
@@ -410,9 +414,9 @@ class WanAttention(Module):
                         q_BHNE,
                         k_BHNE,
                         v_BHNE,
-                        self.dummy_joint_input,
-                        self.dummy_joint_input,
-                        self.dummy_joint_input,
+                        dummy_joint,
+                        dummy_joint,
+                        dummy_joint,
                         persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
                             k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=k_BHNE.dtype
                         ),
@@ -440,9 +444,9 @@ class WanAttention(Module):
                         q_BHNE,
                         k_BHNE,
                         v_BHNE,
-                        self.dummy_joint_input,
-                        self.dummy_joint_input,
-                        self.dummy_joint_input,
+                        dummy_joint,
+                        dummy_joint,
+                        dummy_joint,
                         persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
                             k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=k_BHNE.dtype
                         ),
