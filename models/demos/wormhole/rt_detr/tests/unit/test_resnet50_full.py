@@ -1,53 +1,65 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
+
 import sys
 from pathlib import Path
 
 import torch
-import torchvision.models as models
-
 import ttnn
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
+
+REPO_PATH = Path(__file__).parent.parent.parent / "RT-DETR" / "rtdetr_pytorch"
+sys.path.insert(0, str(REPO_PATH))
+
+from src.core import YAMLConfig
+
+from tt.resnet_backbone import presnet50
+from tt.weight_utils import get_backbone_parameters
 from models.common.utility_functions import comp_pcc
 
+REF      = Path(__file__).parent.parent / "reference_outputs.pt"
+CFG_PATH = REPO_PATH / "configs/rtdetr/rtdetr_r50vd_6x_coco.yml"
+CKPT     = Path(__file__).parent.parent.parent / "weights/rtdetr_r50vd.pth"
 
-def _conv2d(x_tt, w, device, bs, h, w_in, in_c, out_c, ksize, stride, pad):
-    if isinstance(w, torch.Tensor):
-        w = ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-
-    out = ttnn.conv2d(
-        input_tensor=x_tt,
-        weight_tensor=w,
-        in_channels=in_c,
-        out_channels=out_c,
-        device=device,
-        batch_size=bs,
-        input_height=h,
-        input_width=w_in,
-        kernel_size=ksize,
-        stride=stride,
-        padding=pad,
-        dilation=(1, 1),
-        groups=1,
-    )
-
-    out = ttnn.to_torch(out)
-    out_h = (h + 2 * pad[0] - ksize[0]) // stride[0] + 1
-    out_w = (w_in + 2 * pad[1] - ksize[1]) // stride[1] + 1
-    return out.reshape(bs, out_h, out_w, out_c).permute(0, 3, 1, 2).contiguous()
+PCC_THRESHOLD = 0.97
 
 
-def _bn(x, w, b, mean, var, relu=True, eps=1e-5):
-    x = (x - mean.view(1, -1, 1, 1)) / torch.sqrt(var.view(1, -1, 1, 1) + eps)
-    x = x * w.view(1, -1, 1, 1) + b.view(1, -1, 1, 1)
-    return torch.relu(x) if relu else x
+@pytest.fixture(scope="module")
+def ref():
+    return torch.load(REF, map_location="cpu")
 
 
-def _to_tt(x_torch, device):
+@pytest.fixture(scope="module")
+def device():
+    dev = ttnn.open_device(device_id=0, l1_small_size=16384)
+    yield dev
+    ttnn.close_device(dev)
+
+
+@pytest.fixture(scope="module")
+def torch_model():
+    cfg   = YAMLConfig(str(CFG_PATH))
+    model = cfg.model
+    ckpt  = torch.load(str(CKPT), map_location="cpu")
+    model.load_state_dict(ckpt["ema"]["module"])
+    model.eval()
+    return model
+
+
+@pytest.fixture(scope="module")
+def backbone_params(torch_model, device):
+
+    return get_backbone_parameters(torch_model, device)
+
+
+def _to_device(t, device):
+    # ttnn.conv2d expects (N, H, W, C) ROW_MAJOR — permute on CPU first
+    t_nhwc = t.permute(0, 2, 3, 1).contiguous()  # (1,3,640,640) -> (1,640,640,3)
     return ttnn.from_torch(
-        x_torch.permute(0, 2, 3, 1).contiguous(),
+        t_nhwc,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
@@ -55,111 +67,198 @@ def _to_tt(x_torch, device):
     )
 
 
-def _block_weights(block):
-    """pull conv+bn weights out of a torchvision bottleneck block"""
-    ds = block.downsample
-    return dict(
-        c1w=block.conv1.weight,
-        b1=(block.bn1.weight, block.bn1.bias, block.bn1.running_mean, block.bn1.running_var),
-        c2w=block.conv2.weight,
-        b2=(block.bn2.weight, block.bn2.bias, block.bn2.running_mean, block.bn2.running_var),
-        c3w=block.conv3.weight,
-        b3=(block.bn3.weight, block.bn3.bias, block.bn3.running_mean, block.bn3.running_var),
-        ds_cw=ds[0].weight if ds else None,
-        ds_bn=(ds[1].weight, ds[1].bias, ds[1].running_mean, ds[1].running_var) if ds else None,
-    )
+def _tt_to_nchw(tt_tensor, h, w):
+    t = ttnn.to_torch(tt_tensor).squeeze(0).squeeze(0)  # (H*W, C)
+    c = t.shape[-1]
+    return t.reshape(h, w, c).permute(2, 0, 1).unsqueeze(0)  # (1, C, H, W)
 
 
-def bottleneck(x, bw, device, bs, in_c, mid_c, out_c, stride):
-    h, w = x.shape[2], x.shape[3]
-    identity = x
+class TestResNet50Backbone:
+    
+    def test_pcc_s3(self, ref, device, backbone_params):
+        x_tt = _to_device(ref["backbone_input"], device)
+        s3_tt, _, _ = presnet50(x_tt, backbone_params, device)
+        s3 = _tt_to_nchw(s3_tt, 80, 80)
 
-    out = _conv2d(_to_tt(x, device), bw["c1w"], device, bs, h, w, in_c, mid_c, (1, 1), (1, 1), (0, 0))
-    out = _bn(out, *bw["b1"])
+        # compare stats before PCC
+        ref_s3 = ref["backbone_s3"]
+        print(f"\nref  s3: shape={tuple(ref_s3.shape)} min={ref_s3.min():.3f} max={ref_s3.max():.3f} mean={ref_s3.mean():.3f}")
+        print(f"ttnn s3: shape={tuple(s3.shape)}     min={s3.min():.3f}     max={s3.max():.3f}     mean={s3.mean():.3f}")
 
-    out = _conv2d(
-        _to_tt(out, device),
-        bw["c2w"],
-        device,
-        bs,
-        out.shape[2],
-        out.shape[3],
-        mid_c,
-        mid_c,
-        (3, 3),
-        (stride, stride),
-        (1, 1),
-    )
-    out = _bn(out, *bw["b2"])
+        passing, pcc_msg = comp_pcc(ref_s3, s3, PCC_THRESHOLD)
+        print(f"backbone s3 PCC: {pcc_msg}")
+        assert passing, f"s3 PCC below threshold — {pcc_msg}"
 
-    out = _conv2d(
-        _to_tt(out, device), bw["c3w"], device, bs, out.shape[2], out.shape[3], mid_c, out_c, (1, 1), (1, 1), (0, 0)
-    )
-    out = _bn(out, *bw["b3"], relu=False)
+    def test_pcc_s4(self, ref, device, backbone_params):
+        x_tt = _to_device(ref["backbone_input"], device)
+        _, s4_tt, _ = presnet50(x_tt, backbone_params, device)
+        s4 = _tt_to_nchw(s4_tt, 40, 40)
 
-    if bw["ds_cw"] is not None:
-        identity = _conv2d(
-            _to_tt(identity, device), bw["ds_cw"], device, bs, h, w, in_c, out_c, (1, 1), (stride, stride), (0, 0)
-        )
-        identity = _bn(identity, *bw["ds_bn"], relu=False)
+        passing, pcc_msg = comp_pcc(ref["backbone_s4"], s4, PCC_THRESHOLD)
+        print(f"\nbackbone s4 PCC: {pcc_msg}")
+        assert passing, f"s4 PCC below threshold — {pcc_msg}"
 
-    return torch.relu(out + identity)
+    def test_pcc_s5(self, ref, device, backbone_params):
+        x_tt = _to_device(ref["backbone_input"], device)
+        _, _, s5_tt = presnet50(x_tt, backbone_params, device)
+        s5 = _tt_to_nchw(s5_tt, 20, 20)
+
+        passing, pcc_msg = comp_pcc(ref["backbone_s5"], s5, PCC_THRESHOLD)
+        print(f"\nbackbone s5 PCC: {pcc_msg}")
+        assert passing, f"s5 PCC below threshold — {pcc_msg}"
+
+    def test_pcc_s5(self, ref, device, backbone_params):
+        x_tt = _to_device(ref["backbone_input"], device)
+        _, _, s5_tt = presnet50(x_tt, backbone_params, device)
+        s5 = _tt_to_nchw(s5_tt, 20, 20)
+
+        passing, pcc_msg = comp_pcc(ref["backbone_s5"], s5, PCC_THRESHOLD)
+        print(f"\nbackbone s5 PCC: {pcc_msg}")
+        assert passing, f"s5 PCC below threshold — {pcc_msg}"
+    
+    def test_stage0_pcc(self, ref, device, backbone_params):
+        from tt.resnet_backbone import _stem, _stage
+        import torch.nn.functional as F
+
+        # run TTNN stem + stage0
+        x_tt = _to_device(ref["backbone_input"], device)
+        x_tt, h, w = _stem(x_tt, backbone_params, device)
+        x_tt, h, w = _stage(x_tt, backbone_params.stages[0], device, 1, h, w)
+        stage0_out = _tt_to_nchw(x_tt, h, w)  # expect (1, 256, 160, 160)
+
+        # CPU reference
+        cfg_ref = YAMLConfig(str(CFG_PATH))
+        m = cfg_ref.model
+        ck = torch.load(str(CKPT), map_location="cpu")
+        m.load_state_dict(ck["ema"]["module"])
+        m.eval()
+
+        with torch.no_grad():
+            x = ref["backbone_input"]
+            stem_ref = m.backbone.conv1(x)
+            pool_ref = F.max_pool2d(stem_ref, kernel_size=3, stride=2, padding=1)
+            stage0_ref = m.backbone.res_layers[0](pool_ref)  # (1, 256, 160, 160)
+
+        print(f"\nref  stage0: shape={tuple(stage0_ref.shape)} "
+            f"min={stage0_ref.min():.3f} max={stage0_ref.max():.3f} mean={stage0_ref.mean():.3f}")
+        print(f"ttnn stage0: shape={tuple(stage0_out.shape)} "
+            f"min={stage0_out.min():.3f} max={stage0_out.max():.3f} mean={stage0_out.mean():.3f}")
+
+        diff = torch.abs(stage0_ref - stage0_out)
+        print(f"Max difference:  {diff.max().item():.6f}")
+        print(f"Mean difference: {diff.mean().item():.6f}")
+        print(f"99% of errors are under: {torch.quantile(diff.float(), 0.99).item():.6f}")
+
+        passing, pcc_msg = comp_pcc(stage0_ref, stage0_out, 0.97)
+        print(f"stage0 PCC: {pcc_msg}")
+        assert passing, f"stage0 PCC failed — {pcc_msg}"
+
+    def test_stage1_pcc(self, ref, device, backbone_params):
+        from tt.resnet_backbone import _stem, _stage
+        import torch.nn.functional as F
+
+        x_tt = _to_device(ref["backbone_input"], device)
+        x_tt, h, w = _stem(x_tt, backbone_params, device)
+        x_tt, h, w = _stage(x_tt, backbone_params.stages[0], device, 1, h, w)
+        x_tt, h, w = _stage(x_tt, backbone_params.stages[1], device, 2, h, w)
+        out = _tt_to_nchw(x_tt, h, w)  # expect (1, 512, 80, 80)
+
+        cfg_ref = YAMLConfig(str(CFG_PATH))
+        m = cfg_ref.model
+        m.load_state_dict(torch.load(str(CKPT), map_location="cpu")["ema"]["module"])
+        m.eval()
+        with torch.no_grad():
+            x = ref["backbone_input"]
+            p = F.max_pool2d(m.backbone.conv1(x), 3, stride=2, padding=1)
+            r0 = m.backbone.res_layers[0](p)
+            ref_out = m.backbone.res_layers[1](r0)
+
+        print(f"\nref  s1: min={ref_out.min():.3f} max={ref_out.max():.3f} mean={ref_out.mean():.3f}")
+        print(f"ttnn s1: min={out.min():.3f} max={out.max():.3f} mean={out.mean():.3f}")
+        passing, pcc_msg = comp_pcc(ref_out, out, 0.97)
+        print(f"stage1 PCC: {pcc_msg}")
+        assert passing, f"stage1 PCC failed — {pcc_msg}"
 
 
-def resnet50_backbone(x, model, device, bs=1):
-    # stem
-    out = _conv2d(_to_tt(x, device), model.conv1.weight, device, bs, 224, 224, 3, 64, (7, 7), (2, 2), (3, 3))
-    out = _bn(out, model.bn1.weight, model.bn1.bias, model.bn1.running_mean, model.bn1.running_var)
-    out = torch.nn.functional.max_pool2d(out, 3, stride=2, padding=1)
+    def test_stage2_pcc(self, ref, device, backbone_params):
+        from tt.resnet_backbone import _stem, _stage
+        import torch.nn.functional as F
 
-    # layer configs: (layer, in_c per block, mid_c, out_c, first_stride)
-    layers = [
-        (model.layer1, [64, 256, 256], 64, 256, 1),
-        (model.layer2, [256, 512, 512], 128, 512, 2),
-        (model.layer3, [512, 1024, 1024], 256, 1024, 2),
-        (model.layer4, [1024, 2048, 2048], 512, 2048, 2),
-    ]
+        x_tt = _to_device(ref["backbone_input"], device)
+        x_tt, h, w = _stem(x_tt, backbone_params, device)
+        x_tt, h, w = _stage(x_tt, backbone_params.stages[0], device, 1, h, w)
+        x_tt, h, w = _stage(x_tt, backbone_params.stages[1], device, 2, h, w)
+        x_tt, h, w = _stage(x_tt, backbone_params.stages[2], device, 2, h, w)
+        out = _tt_to_nchw(x_tt, h, w)  # expect (1, 1024, 40, 40)
 
-    features = []
-    for layer, in_cs, mid_c, out_c, first_stride in layers:
-        for i, block in enumerate(layer):
-            stride = first_stride if i == 0 else 1
-            out = bottleneck(
-                out, _block_weights(block), device, bs, in_cs[min(i, len(in_cs) - 1)], mid_c, out_c, stride
-            )
-        features.append(out)
+        cfg_ref = YAMLConfig(str(CFG_PATH))
+        m = cfg_ref.model
+        m.load_state_dict(torch.load(str(CKPT), map_location="cpu")["ema"]["module"])
+        m.eval()
+        with torch.no_grad():
+            x = ref["backbone_input"]
+            p  = F.max_pool2d(m.backbone.conv1(x), 3, stride=2, padding=1)
+            r0 = m.backbone.res_layers[0](p)
+            r1 = m.backbone.res_layers[1](r0)
+            ref_out = m.backbone.res_layers[2](r1)
 
-    return features  # [c2, c3, c4, c5]
+        print(f"\nref  s2: min={ref_out.min():.3f} max={ref_out.max():.3f} mean={ref_out.mean():.3f}")
+        print(f"ttnn s2: min={out.min():.3f} max={out.max():.3f} mean={out.mean():.3f}")
+        passing, pcc_msg = comp_pcc(ref_out, out, 0.97)
+        print(f"stage2 PCC: {pcc_msg}")
+        assert passing, f"stage2 PCC failed — {pcc_msg}"
 
 
-def test_full_resnet50(device):
-    torch.manual_seed(0)
+    def test_stage3_pcc(self, ref, device, backbone_params):
+        from tt.resnet_backbone import _stem, _stage
+        import torch.nn.functional as F
 
-    resnet = models.resnet50(pretrained=False).eval()
-    x = torch.randn(1, 3, 224, 224)
+        x_tt = _to_device(ref["backbone_input"], device)
+        x_tt, h, w = _stem(x_tt, backbone_params, device)
+        x_tt, h, w = _stage(x_tt, backbone_params.stages[0], device, 1, h, w)
+        x_tt, h, w = _stage(x_tt, backbone_params.stages[1], device, 2, h, w)
+        x_tt, h, w = _stage(x_tt, backbone_params.stages[2], device, 2, h, w)
+        x_tt, h, w = _stage(x_tt, backbone_params.stages[3], device, 2, h, w)
+        out = _tt_to_nchw(x_tt, h, w)  # expect (1, 2048, 20, 20)
 
-    with torch.no_grad():
-        stem = resnet.maxpool(resnet.relu(resnet.bn1(resnet.conv1(x))))
-        refs = [resnet.layer1(stem)]
-        refs.append(resnet.layer2(refs[-1]))
-        refs.append(resnet.layer3(refs[-1]))
-        refs.append(resnet.layer4(refs[-1]))
+        cfg_ref = YAMLConfig(str(CFG_PATH))
+        m = cfg_ref.model
+        m.load_state_dict(torch.load(str(CKPT), map_location="cpu")["ema"]["module"])
+        m.eval()
+        with torch.no_grad():
+            x = ref["backbone_input"]
+            p  = F.max_pool2d(m.backbone.conv1(x), 3, stride=2, padding=1)
+            r0 = m.backbone.res_layers[0](p)
+            r1 = m.backbone.res_layers[1](r0)
+            r2 = m.backbone.res_layers[2](r1)
+            ref_out = m.backbone.res_layers[3](r2)
 
-    feats = resnet50_backbone(x, resnet, device)
-
-    names = ["c2", "c3", "c4", "c5"]
-    for name, ref, feat in zip(names, refs, feats):
-        pcc = comp_pcc(ref, feat)
-        pcc = pcc[1] if isinstance(pcc, tuple) else pcc
-        print(f"{name} pcc: {pcc:.4f}")
-        assert pcc >= 0.98, f"{name} pcc too low: {pcc:.4f}"
-
-    print("resnet50 backbone ok")
+        print(f"\nref  s3: min={ref_out.min():.3f} max={ref_out.max():.3f} mean={ref_out.mean():.3f}")
+        print(f"ttnn s3: min={out.min():.3f} max={out.max():.3f} mean={out.mean():.3f}")
+        passing, pcc_msg = comp_pcc(ref_out, out, 0.97)
+        print(f"stage3 PCC: {pcc_msg}")
+        assert passing, f"stage3 PCC failed — {pcc_msg}"
 
 
 if __name__ == "__main__":
-    device = ttnn.open_device(device_id=0, l1_small_size=16384)
+    dev = ttnn.open_device(device_id=0, l1_small_size=16384)
     try:
-        test_full_resnet50(device)
+        r   = torch.load(REF, map_location="cpu")
+        cfg = YAMLConfig(str(CFG_PATH))
+        m   = cfg.model
+        ck  = torch.load(str(CKPT), map_location="cpu")
+        m.load_state_dict(ck["ema"]["module"])
+        m.eval()
+
+        params = get_backbone_parameters(m, dev)
+
+        t = TestResNet50Backbone()
+        t.test_output_shapes(r, dev, params)
+        t.test_pcc_s3(r, dev, params)
+        t.test_pcc_s4(r, dev, params)
+        t.test_pcc_s5(r, dev, params)
+        t.test_stages_have_distinct_shapes(r, dev, params)
+        t.test_bn_folding_is_applied(m, dev, params)
+        print("passed")
     finally:
-        ttnn.close_device(device)
+        ttnn.close_device(dev)
