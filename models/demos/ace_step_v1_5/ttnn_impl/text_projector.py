@@ -84,6 +84,7 @@ class TtAceStepTextProjector:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=mem,
         )
+        xh = ttnn.to_layout(xh, ttnn.TILE_LAYOUT)
         out = ttnn.linear(xh, self.weight_tt, bias=None, transpose_b=True)
         try:
             ttnn.deallocate(xh)
@@ -104,6 +105,7 @@ class TtAceStepTextProjector:
             raise ValueError(f"Expected D_text={self.d_text}, got {d}")
         x = ttnn.to_layout(hidden_b1sh, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, (b, s, self.d_text))
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         out = ttnn.linear(x, self.weight_tt, bias=None, transpose_b=True)
         # ``[B,S,D_dec]`` ROW_MAJOR — matches prior host staging for ``AceStepV15TTNNPipeline``.
         return out
