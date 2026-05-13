@@ -1,10 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import math
 
 import torch
 import ttnn
+
+from models.common.rmsnorm import RMSNorm
+from models.tt_transformers.tt.common import Mode
 
 
 def _repeat_kv_ttnn(kv: ttnn.Tensor, repeats: int) -> ttnn.Tensor:
@@ -25,11 +30,16 @@ def _repeat_kv_ttnn(kv: ttnn.Tensor, repeats: int) -> ttnn.Tensor:
 
 
 class VoxtralTTAttention:
-    """Voxtral text attention (GQA): TT linear, ``nlp_create_qkv_heads``, TT RoPE, SDPA, output proj.
+    """Voxtral attention: TT linear, ``nlp_create_qkv_heads``, optional RoPE, SDPA, output projection.
 
-    RoPE uses ``ttnn.experimental.rotary_embedding`` (HF split-half), matching ``models.tt_transformers`` /
-    Mistral-style layouts. Acoustic path passes identity cos/sin so RoPE is a no-op without extra ops.
-    ``cos`` / ``sin`` may be host tensors only for upload via ``ttnn.from_torch`` (no PyTorch math in forward).
+    **Text / acoustic (default):** GQA, Mistral-style RoPE when ``cos``/``sin`` are non-identity, SDPA
+    non-causal (bidirectional acoustic uses identity cos/sin).
+
+    **Audio tokenizer (opt-in):** set ``is_causal=True`` for causal SDPA; set ``use_qk_norm=True`` to apply
+    per-head RMSNorm on Q/K (checkpoint keys ``{weight_prefix}.q_norm`` / ``k_norm``) before RoPE; pass
+    ``attn_mask`` as a device tensor for explicit masks (mutually exclusive with ``is_causal``).
+    ``attention_mask`` may be a host ``torch.Tensor`` (uploaded once) or a ``ttnn.Tensor``; prefer keyword
+    ``attn_mask`` for device-resident masks.
     """
 
     def __init__(
@@ -44,6 +54,11 @@ class VoxtralTTAttention:
         weight_dtype=ttnn.bfloat16,
         output_dtype=ttnn.bfloat16,
         compute_kernel_config=None,
+        *,
+        is_causal: bool = False,
+        use_qk_norm: bool = False,
+        qk_norm_eps: float = 1e-6,
+        qk_norm_mode: Mode | str = Mode.PREFILL,
     ) -> None:
         self.device = device
         self.hidden_size = hidden_size
@@ -53,6 +68,36 @@ class VoxtralTTAttention:
         self.output_dtype = output_dtype
         self.scale = 1.0 / math.sqrt(head_dim)
         self.compute_kernel_config = compute_kernel_config
+        self.is_causal = is_causal
+        self.use_qk_norm = use_qk_norm
+        self._qk_norm_mode = qk_norm_mode
+
+        self.q_norm: RMSNorm | None = None
+        self.k_norm: RMSNorm | None = None
+        if use_qk_norm:
+            prefix = f"{weight_prefix}." if not weight_prefix.endswith(".") else weight_prefix
+            self.q_norm = RMSNorm(
+                device=device,
+                dim=num_attention_heads * head_dim,
+                eps=qk_norm_eps,
+                state_dict=state_dict,
+                weight_key="q_norm",
+                state_dict_prefix=prefix,
+                weight_dtype=weight_dtype,
+                is_distributed=None,
+                tt_ccl=None,
+            )
+            self.k_norm = RMSNorm(
+                device=device,
+                dim=num_key_value_heads * head_dim,
+                eps=qk_norm_eps,
+                state_dict=state_dict,
+                weight_key="k_norm",
+                state_dict_prefix=prefix,
+                weight_dtype=weight_dtype,
+                is_distributed=None,
+                tt_ccl=None,
+            )
 
         def get_weight(key: str) -> torch.Tensor:
             if key in state_dict:
@@ -87,12 +132,16 @@ class VoxtralTTAttention:
     def __call__(
         self,
         hidden_states: ttnn.Tensor,
-        cos: torch.Tensor,
-        sin: torch.Tensor,
-        attention_mask: torch.Tensor | None = None,
+        cos: torch.Tensor | None,
+        sin: torch.Tensor | None,
+        attention_mask: torch.Tensor | ttnn.Tensor | None = None,
+        *,
+        attn_mask: ttnn.Tensor | None = None,
+        qk_norm_mode: Mode | str | None = None,
     ) -> ttnn.Tensor:
         # hidden_states: [B, 1, S, H]
         seq_len = hidden_states.shape[-2]
+        _qk_mode = self._qk_norm_mode if qk_norm_mode is None else qk_norm_mode
 
         _lin_kw = {
             "dtype": self.output_dtype,
@@ -101,6 +150,26 @@ class VoxtralTTAttention:
         if self.compute_kernel_config is not None:
             _lin_kw["compute_kernel_config"] = self.compute_kernel_config
         xqkv = ttnn.linear(hidden_states, self.wqkv, **_lin_kw)
+
+        if self.use_qk_norm and self.q_norm is not None and self.k_norm is not None:
+            b, one, s, _ = tuple(xqkv.shape)
+            q_width = self.num_attention_heads * self.head_dim
+            k_width = self.num_key_value_heads * self.head_dim
+            v_width = self.num_key_value_heads * self.head_dim
+            xq = ttnn.slice(xqkv, [0, 0, 0, 0], [b, one, s, q_width])
+            xk = ttnn.slice(xqkv, [0, 0, 0, q_width], [b, one, s, q_width + k_width])
+            xv = ttnn.slice(
+                xqkv,
+                [0, 0, 0, q_width + k_width],
+                [b, one, s, q_width + k_width + v_width],
+            )
+            ttnn.deallocate(xqkv)
+            xq = self.q_norm(xq, mode=_qk_mode)
+            xk = self.k_norm(xk, mode=_qk_mode)
+            xqkv = ttnn.concat([xq, xk, xv], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(xq)
+            ttnn.deallocate(xk)
+            ttnn.deallocate(xv)
 
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             xqkv,
@@ -111,18 +180,41 @@ class VoxtralTTAttention:
         )
         ttnn.deallocate(xqkv)
 
-        cos_slice = cos[:, :seq_len]
-        sin_slice = sin[:, :seq_len]
-        identity_rope = bool(torch.all(cos_slice == 1) and torch.all(sin_slice == 0))
+        identity_rope = cos is None or sin is None
+        if not identity_rope:
+            cos_slice = cos[:, :seq_len]
+            sin_slice = sin[:, :seq_len]
+            identity_rope = bool(torch.all(cos_slice == 1) and torch.all(sin_slice == 0))
 
+        mask_tt: ttnn.Tensor | None = attn_mask
+        mask_owned = False
         if attention_mask is not None:
+            if mask_tt is not None:
+                ttnn.deallocate(q)
+                ttnn.deallocate(k)
+                ttnn.deallocate(v)
+                raise ValueError("Pass only one of attention_mask and attn_mask.")
+            if isinstance(attention_mask, torch.Tensor):
+                mask_tt = ttnn.from_torch(
+                    attention_mask,
+                    device=self.device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                mask_owned = True
+            else:
+                mask_tt = attention_mask  # ttnn.Tensor from legacy positional arg
+
+        if mask_tt is not None and self.is_causal:
             ttnn.deallocate(q)
             ttnn.deallocate(k)
             ttnn.deallocate(v)
-            raise NotImplementedError("VoxtralTTAttention does not support attention_mask on TT yet.")
+            raise ValueError("is_causal and attn_mask/attention_mask are mutually exclusive.")
 
         # Text RoPE on device (HF-style cos/sin broadcast [1, 1, S, D] over heads).
         if not identity_rope:
+            assert cos is not None and sin is not None
             q_shape = tuple(q.shape)
             k_shape = tuple(k.shape)
 
@@ -175,16 +267,20 @@ class VoxtralTTAttention:
         n_rep = self.num_attention_heads // self.num_key_value_heads
         k_rep = _repeat_kv_ttnn(k, n_rep)
         v_rep = _repeat_kv_ttnn(v, n_rep)
-        ttnn.deallocate(k)
-        ttnn.deallocate(v)
+        # When n_rep == 1 (MHA), _repeat_kv_ttnn returns k/v unchanged — do not deallocate before SDPA.
+        if n_rep > 1:
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
         _sdpa_kw = {
-            "attn_mask": None,
-            "is_causal": False,
+            "attn_mask": mask_tt,
+            "is_causal": self.is_causal if mask_tt is None else False,
             "scale": self.scale,
         }
         if self.compute_kernel_config is not None:
             _sdpa_kw["compute_kernel_config"] = self.compute_kernel_config
         attn_out = ttnn.transformer.scaled_dot_product_attention(q, k_rep, v_rep, **_sdpa_kw)
+        if mask_owned and mask_tt is not None:
+            ttnn.deallocate(mask_tt)
         ttnn.deallocate(q)
         ttnn.deallocate(k_rep)
         ttnn.deallocate(v_rep)
