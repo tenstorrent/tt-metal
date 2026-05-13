@@ -269,11 +269,27 @@ jobs:
         working-directory: /tmp
         run: |
           mpirun --pernode --tag-output bash -lc '
-            echo "host=$(hostname)"
-            echo "python3=$(command -v python3)"
+            echo "========== BEGIN PYTHON DIAGNOSTICS: $(hostname) =========="
+            echo "cwd=$(pwd)"
+            echo "PATH=$PATH"
+            echo "VIRTUAL_ENV=${VIRTUAL_ENV:-<unset>}"
+            echo "PYTHONPATH=${PYTHONPATH:-<unset>}"
+            echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-<unset>}"
+            echo "TT_METAL_HOME=${TT_METAL_HOME:-<unset>}"
+            echo "which python=$(command -v python || true)"
+            echo "which python3=$(command -v python3 || true)"
+            echo "which pip=$(command -v pip || true)"
+            echo "which pip3=$(command -v pip3 || true)"
             python3 -V
+            python3 -m pip -V
+            python3 -c "import sys; print(\"sys.executable=\" + sys.executable)"
+            python3 -c "import sys; print(\"sys.path=\"); [print(\"  \" + p) for p in sys.path]"
+            python3 -m pip show ttnn || true
+            python3 -m pip show transformers || true
+            python3 -c "import ttnn; print(\"ttnn module=\" + ttnn.__file__)"
             python3 -c "import ttnn.device; print(\"ttnn.device import: OK\")"
             python3 -c "import transformers; print(\"transformers=\" + transformers.__version__)"
+            echo "========== END PYTHON DIAGNOSTICS: $(hostname) =========="
           '
 
       - name: ${{ matrix.test-group.name }}
