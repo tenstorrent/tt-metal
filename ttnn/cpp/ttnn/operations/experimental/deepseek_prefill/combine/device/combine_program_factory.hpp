@@ -27,8 +27,10 @@ struct CombineSharedVariables {
     uint32_t zero_init_barrier_semaphore_id = 0;     // Barrier: writer signals reader after global init
     uint32_t counter_ready_semaphore_id = 0;         // Sender signals idle cores after token count multicast
     std::vector<std::vector<uint32_t>>
-        data_ready_semaphore_ids;               // [sender][local_idle]: each idle core signals its own sender-side sem
-    std::vector<uint32_t> start_semaphore_ids;  // One per sender: sender signals idle core to start
+        data_ready_semaphore_ids;  // [sender][local_idle]: each idle core signals its own sender-side sem
+    std::vector<std::vector<uint32_t>>
+        credits_semaphore_ids;  // [sender][local_idle]: sender increments idle's copy each time it
+                                // frees one row in the per-idle 16-slot ring on receive_buf
 };
 
 struct CombineProgramFactory {

@@ -157,6 +157,9 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     auto max_dispatch_buffer_token_size = dispatched_shape[-2];
 
     auto subdevice_cores = corerange_to_cores(worker_core_range_set);
+    // Per-idle ring depth on the sender's receive_buf — also the initial value of the credits
+    // semaphore handed to each idle core (TILE_LAYOUT only).
+    constexpr uint32_t SLOTS_PER_IDLE = 16;
     // Maximum worker cores: one per fabric link.
     constexpr uint32_t MAX_WORKER_CORES = 4;
     uint32_t effective_num_links = std::min(num_links, MAX_WORKER_CORES);
@@ -305,14 +308,21 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         "expert_region_offsets");
 
     if (is_tile_layout) {
-        // c_18: receive buffer for idle-core untilized data written back via NOC (TILE_LAYOUT only)
-        detail::create_tensor_cb(
-            program,
-            sender_core_grid,
-            output_tensor,
-            /*buffering_factor=*/read_batch_size,
-            /*cb_id=*/tt::CBIndex::c_18,
-            "untilized_output");
+        // c_18: per-sender receive buffer.  Partitioned into k_s 16-row regions, one per idle
+        // core in this sender's group.  Idle i writes to slot j in its region at offset
+        //   c_18_base + i * SLOTS_PER_IDLE * aligned_output_page_size + j * aligned_output_page_size
+        // Size depends on k_s, so allocate per sender on its single-core CRS.
+        for (uint32_t s = 0; s < num_cores; s++) {
+            uint32_t k_s = static_cast<uint32_t>(sender_idle_groups[s].size());
+            CoreRangeSet single_sender_crs({CoreRange(sender_cores[s])});
+            detail::create_tensor_cb(
+                program,
+                single_sender_crs,
+                output_tensor,
+                /*buffering_factor=*/k_s * SLOTS_PER_IDLE,
+                /*cb_id=*/tt::CBIndex::c_18,
+                "receive_buf_sender_" + std::to_string(s));
+        }
     } else {
         // c_0 on sender cores: dispatched_buffer rows for ROW_MAJOR DMA reads
         detail::create_tensor_cb(
@@ -528,7 +538,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     // TILE_LAYOUT semaphores for sender <-> idle core handshake
     uint32_t counter_ready_semaphore_id = 0;
     std::vector<std::vector<uint32_t>> data_ready_semaphore_ids(num_cores);
-    std::vector<uint32_t> start_semaphore_ids;
+    std::vector<std::vector<uint32_t>> credits_semaphore_ids(num_cores);
     if (is_tile_layout) {
         // counter_ready semaphore: created only on sender + idle cores so get_semaphore() returns
         // the same L1 offset on both sides (sender writes to idle's copy, idle waits on its own)
@@ -541,19 +551,29 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         }
         CoreRangeSet sender_and_idle_grid(sender_and_idle_ranges);
         counter_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, sender_and_idle_grid, 0);
-        // One start semaphore per sender, and one data_ready semaphore per (sender, idle) pair.
-        // Each idle core signals its OWN dedicated sender-side sem so there is no contention
-        // between idle cores in the same group — the sender waits on each idle's sem individually.
-        // Per-pair sems are scoped to just the (sender, idle) pair, not the full sender+idle grid,
-        // so they don't burn one of the 16 per-core semaphore slots on every other core.
+        // Per (sender, idle) pair:
+        //   data_ready (init 0, scoped to {sender, idle}): idle ++ after each row write;
+        //                  sender atomically dec(-1) per row consumed.  Count = rows in flight
+        //                  in idle's ring.  Pair-scoped so sender can use get_semaphore(id)
+        //                  for fast local waits AND idle can NOC-inc to sender's copy.
+        //   credits    (init SLOTS_PER_IDLE = 16, scoped to {idle only}): sender ++ idle's L1
+        //                  via NOC each time it frees a row slot.  Allocated on idle-only CRS
+        //                  so it does not consume a sem slot on sender (which is at the 16/
+        //                  core limit for senders with k_s≈7); sender still derives the L1
+        //                  offset via the uniform `get_semaphore(id)` formula and addresses
+        //                  it remotely.
+        // Per-pair sems are scoped tightly so they don't burn one of the 16 per-core slots
+        // on cores that don't need them.
         for (uint32_t s = 0; s < num_cores; s++) {
             uint32_t k_s = static_cast<uint32_t>(sender_idle_groups[s].size());
             for (uint32_t c = 0; c < k_s; c++) {
                 CoreRangeSet pair_grid(
                     std::set<CoreRange>{CoreRange(sender_cores[s]), CoreRange(sender_idle_groups[s][c])});
+                CoreRangeSet idle_only_grid(std::set<CoreRange>{CoreRange(sender_idle_groups[s][c])});
                 data_ready_semaphore_ids[s].push_back(tt::tt_metal::CreateSemaphore(program, pair_grid, 0));
+                credits_semaphore_ids[s].push_back(
+                    tt::tt_metal::CreateSemaphore(program, idle_only_grid, SLOTS_PER_IDLE));
             }
-            start_semaphore_ids.push_back(tt::tt_metal::CreateSemaphore(program, sender_and_idle_grid, 0));
         }
     }
 
@@ -905,7 +925,8 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
                 zi_runtime_args.push_back(sender_noc_coords[s].first);
                 zi_runtime_args.push_back(sender_noc_coords[s].second);
                 zi_runtime_args.push_back(data_ready_semaphore_ids[s][local_core_id]);
-                zi_runtime_args.push_back(start_semaphore_ids[s]);
+                zi_runtime_args.push_back(credits_semaphore_ids[s][local_core_id]);
+                zi_runtime_args.push_back(local_core_id);
             }
 
             tt::tt_metal::SetRuntimeArgs(program, zero_init_kernel_id, zero_init_cores_vec[idle_idx], zi_runtime_args);
@@ -944,12 +965,13 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             reader_runtime_args.push_back(mcast_cfg.mcast_start_y);
             reader_runtime_args.push_back(mcast_cfg.mcast_end_x);
             reader_runtime_args.push_back(mcast_cfg.mcast_end_y);
-            reader_runtime_args.push_back(start_semaphore_ids[core_idx]);
-            // Pass each idle core's dedicated data_ready_sem id followed by its NOC coords.
-            // The kernel reconstructs a parallel array of per-idle data_ready_sem pointers.
+            // Per idle core: (data_ready_sem_id, credits_sem_id, idle_noc_x, idle_noc_y).
+            // The kernel reconstructs parallel arrays of per-idle sem pointers / NOC addrs.
             const auto& per_sender_data_ready = data_ready_semaphore_ids[core_idx];
+            const auto& per_sender_credits = credits_semaphore_ids[core_idx];
             for (uint32_t c = 0; c < mcast_cfg.idle_noc_coords.size(); c++) {
                 reader_runtime_args.push_back(per_sender_data_ready[c]);
+                reader_runtime_args.push_back(per_sender_credits[c]);
                 reader_runtime_args.push_back(mcast_cfg.idle_noc_coords[c].first);
                 reader_runtime_args.push_back(mcast_cfg.idle_noc_coords[c].second);
             }
@@ -1046,7 +1068,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
          .zero_init_barrier_semaphore_id = zero_init_barrier_semaphore_id,
          .counter_ready_semaphore_id = counter_ready_semaphore_id,
          .data_ready_semaphore_ids = std::move(data_ready_semaphore_ids),
-         .start_semaphore_ids = std::move(start_semaphore_ids)}};
+         .credits_semaphore_ids = std::move(credits_semaphore_ids)}};
 }
 
 void CombineProgramFactory::override_runtime_arguments(
