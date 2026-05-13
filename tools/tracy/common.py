@@ -44,6 +44,24 @@ TRACY_CSVEXPROT_TOOL = "tracy-csvexport"
 LD_LIBRARY_PATH = TT_METAL_HOME / "build/_deps/capstone-build"
 
 
+def resolve_tracy_tool_path(bin_folder: Path, tool_name: str) -> Path | None:
+    """
+    Find tracy-capture or tracy-csvexport. Prefer ``bin_folder`` (e.g. build/bin), then fall back
+    to legacy CMake output dirs (build/capture, build/csvexport) when tools were not routed to
+    a single bin directory.
+    """
+    bin_folder = Path(bin_folder)
+    candidates = [bin_folder / tool_name, TT_METAL_HOME / "build/bin" / tool_name]
+    if tool_name == TRACY_CAPTURE_TOOL:
+        candidates.append(TT_METAL_HOME / "build/capture" / tool_name)
+    elif tool_name == TRACY_CSVEXPROT_TOOL:
+        candidates.append(TT_METAL_HOME / "build/csvexport" / tool_name)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def generate_logs_folder(outFolder):
     return Path(outFolder) / ".logs"
 

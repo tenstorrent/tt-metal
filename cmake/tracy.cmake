@@ -60,6 +60,7 @@ get_directory_property(_parent_compile_opts COMPILE_OPTIONS)
 add_compile_options(-Wno-error)
 add_subdirectory(${TRACY_HOME}/csvexport)
 add_subdirectory(${TRACY_HOME}/capture)
+
 set_property(
     DIRECTORY
     PROPERTY
