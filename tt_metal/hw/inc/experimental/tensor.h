@@ -43,6 +43,29 @@ struct noc_traits_t<TensorAccessor<DSpecT>> {
     }
 };
 
+// Bounds-check for TensorAccessor: assert the transaction stays inside one page
+// (interleaved — adjacent page_ids live in different banks) or inside the bytes left
+// in the shard containing args.page_id (sharded — pages within a shard are contiguous,
+// but starting mid-shard leaves only a partial shard of room).
+template <typename DSpecT, typename Args>
+FORCE_INLINE std::enable_if_t<
+    std::is_same_v<Args, typename noc_traits_t<TensorAccessor<DSpecT>>::src_args_type> ||
+    std::is_same_v<Args, typename noc_traits_t<TensorAccessor<DSpecT>>::dst_args_type>>
+noc_traits_check_bounds(const TensorAccessor<DSpecT>& endpoint, const Args& args, uint32_t size_bytes) {
+    if constexpr (DSpecT::is_interleaved) {
+        ASSERT(args.offset_bytes + size_bytes <= endpoint.get_aligned_page_size());
+    } else {
+        // Surface page_id check at the trait call (also asserted in get_bank_and_offset).
+        ASSERT(args.page_id < endpoint.dspec().tensor_volume());
+        const uint32_t shard_volume = endpoint.dspec().shard_volume();
+        const uint32_t page_size_b = endpoint.get_aligned_page_size();
+        const uint32_t page_in_shard =
+            static_cast<uint32_t>(endpoint.get_bank_and_offset(args.page_id).bank_page_offset % shard_volume);
+        const uint32_t bytes_left_in_shard = (shard_volume - page_in_shard) * page_size_b;
+        ASSERT(args.offset_bytes + size_bytes <= bytes_left_in_shard);
+    }
+}
+
 template <typename Accessor>
 struct noc_traits_t<PageView<Accessor>> {
     struct src_args_type {
@@ -74,6 +97,26 @@ struct noc_traits_t<PageView<Accessor>> {
         }
     }
 };
+
+// Bounds-check for PageView: same logic as TensorAccessor, delegating layout query
+// to the underlying accessor.
+template <typename Accessor, typename Args>
+FORCE_INLINE std::enable_if_t<
+    std::is_same_v<Args, typename noc_traits_t<PageView<Accessor>>::src_args_type> ||
+    std::is_same_v<Args, typename noc_traits_t<PageView<Accessor>>::dst_args_type>>
+noc_traits_check_bounds(const PageView<Accessor>& endpoint, const Args& args, uint32_t size_bytes) {
+    if constexpr (Accessor::DSpec::is_interleaved) {
+        ASSERT(args.offset_bytes + size_bytes <= endpoint.accessor.get_aligned_page_size());
+    } else {
+        ASSERT(args.page_id < endpoint.accessor.dspec().tensor_volume());
+        const uint32_t shard_volume = endpoint.accessor.dspec().shard_volume();
+        const uint32_t page_size_b = endpoint.accessor.get_aligned_page_size();
+        const uint32_t page_in_shard =
+            static_cast<uint32_t>(endpoint.accessor.get_bank_and_offset(args.page_id).bank_page_offset % shard_volume);
+        const uint32_t bytes_left_in_shard = (shard_volume - page_in_shard) * page_size_b;
+        ASSERT(args.offset_bytes + size_bytes <= bytes_left_in_shard);
+    }
+}
 
 template <typename Accessor>
 struct noc_traits_t<ShardView<Accessor>> {
