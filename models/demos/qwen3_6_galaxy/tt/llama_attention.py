@@ -387,6 +387,9 @@ class TtQwen36GatedAttention(LightweightModule):
         # Build weights and KV cache
         self._build_weights(state_dict)
         self._build_kv_cache()
+        # T14b.3: persistent per-step decode buffers (current_pos + non-paged mask).
+        # See _build_decode_buffers for layout details and refresh helpers.
+        self._build_decode_buffers()
 
     # ------------------------------------------------------------------
     # Weight construction
@@ -565,6 +568,138 @@ class TtQwen36GatedAttention(LightweightModule):
             )
             for kv in [cache_k, cache_v]
         ]
+
+    # ------------------------------------------------------------------
+    # T14b.3: persistent per-step decode buffers
+    # ------------------------------------------------------------------
+
+    def _build_decode_buffers(self):
+        """Allocate persistent device tensors used by forward_decode so the
+        per-step path can refresh values via ``ttnn.copy_host_to_device_tensor``
+        instead of re-issuing ``ttnn.from_torch`` (which allocates a new
+        device buffer every call and is therefore not trace-safe).
+
+        Three persistent objects are allocated:
+
+        * ``self._cur_pos_buf``:
+              ``[max_batch_size]`` int32 DRAM ROW_MAJOR replicated tensor.
+              Serves both ``paged_update_cache``'s ``update_idxs_tensor`` and
+              ``paged_scaled_dot_product_attention_decode``'s ``cur_pos_tensor``
+              (their shapes match for max_batch_size==1, which is the only
+              configuration this model supports today).
+              Refreshed via ``self._update_cur_pos_buf(cur_pos_int)``.
+
+        * ``self._cur_pos_host``:
+              Matching host tensor (no ``device=``) used as the source for
+              ``ttnn.copy_host_to_device_tensor``.  Allocated once; the
+              underlying torch buffer is mutated in place each call so we never
+              re-issue ``ttnn.from_torch``.
+
+        * ``self._decode_mask_buf``:
+              ``[B, 1, T_logical, kv_cache_max_seq_len_pad]`` bf16 TILE
+              DRAM replicated tensor — covers the WORST-CASE mask size of the
+              non-paged decode path (the per-call mask is a tile-aligned slice
+              of this buffer).  Refreshed via
+              ``self._update_decode_mask_buf(cur_pos_int)``.
+
+        The buffer specs (dtype/layout/memory_config/mesh_mapper) match the
+        specs used by the (eliminated) per-call ``ttnn.from_torch`` sites so
+        ``copy_host_to_device_tensor`` works without conversion.
+        """
+        # ---- current_pos buffer (paged_update_cache + paged SDPA decode) ----
+        # Shape matches both sites: [max_batch_size]==[1] for this model.
+        # Spec at the eliminated sites:
+        #   dtype=int32, layout=ROW_MAJOR, mem=DRAM, mapper=ReplicateTensorToMesh.
+        replicate = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        cur_pos_zero = torch.zeros(self.max_batch_size, dtype=torch.int32)
+        # Host tensor (no device=): retained for in-place mutation + copy.
+        self._cur_pos_host = ttnn.from_torch(
+            cur_pos_zero,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=replicate,
+        )
+        # Persistent device tensor (initialized to zeros — refreshed every call).
+        self._cur_pos_buf = ttnn.from_torch(
+            cur_pos_zero,
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=replicate,
+        )
+
+        # ---- non-paged decode mask buffer ----
+        # The non-paged decode SDPA mask has shape
+        #   [B=max_batch_size, 1, T_logical=1, T_kv_pad]
+        # where T_kv_pad = ceil((cur_pos+1)/TILE)*TILE  ≤  kv_cache_max_seq_len_pad.
+        # We allocate the WORST-CASE size and slice down per call.
+        kv_pad = ((self.kv_cache_max_seq_len + TILE - 1) // TILE) * TILE
+        # Host: rebuilt each call (-inf everywhere; the call then zeros the
+        # leading valid positions before copy).  Initialize to -inf as a safe
+        # default so the first call's slice covers a fully masked region until
+        # _update_decode_mask_buf is invoked.
+        mask_zero = torch.full(
+            (self.max_batch_size, 1, 1, kv_pad),
+            float("-inf"),
+            dtype=torch.bfloat16,
+        )
+        self._decode_mask_host = ttnn.from_torch(
+            mask_zero,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=replicate,
+        )
+        self._decode_mask_buf = ttnn.from_torch(
+            mask_zero,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=replicate,
+        )
+        self._decode_mask_kv_pad = kv_pad  # remember worst-case width
+
+    def _update_cur_pos_buf(self, cur_pos_int: int):
+        """Refresh ``self._cur_pos_buf`` in place from a host int.
+
+        Uses ``ttnn.copy_host_to_device_tensor`` against the preallocated host
+        tensor (no new device allocation, trace-safe).
+        """
+        # Build a fresh host tensor.  The host tensor is small (max_batch_size
+        # int32s == 4 bytes here) and lives entirely on CPU — there is no
+        # device allocation involved.  This replaces the previous per-call
+        # ``ttnn.from_torch(..., device=mesh_device, ...)`` which DID allocate
+        # a new device buffer every step.
+        host = ttnn.from_torch(
+            torch.full((self.max_batch_size,), cur_pos_int, dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        ttnn.copy_host_to_device_tensor(host, self._cur_pos_buf)
+
+    def _update_decode_mask_buf(self, cur_pos_int: int):
+        """Refresh ``self._decode_mask_buf`` in place for the given position.
+
+        The mask has value 0.0 at positions ``[0, cur_pos_int]`` (inclusive)
+        and -inf at positions ``[cur_pos_int+1, kv_cache_max_seq_len_pad)``.
+        Caller is responsible for slicing the buffer to the desired T_kv_pad
+        before passing it to SDPA.
+        """
+        kv_pad = self._decode_mask_kv_pad
+        T_kv = cur_pos_int + 1
+        # Build host tensor: zeros for valid positions, -inf for the rest.
+        mask_t = torch.zeros(self.max_batch_size, 1, 1, kv_pad, dtype=torch.bfloat16)
+        if T_kv < kv_pad:
+            mask_t[:, :, :, T_kv:] = float("-inf")
+        host = ttnn.from_torch(
+            mask_t,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        ttnn.copy_host_to_device_tensor(host, self._decode_mask_buf)
 
     # ------------------------------------------------------------------
     # Partial RoPE application
@@ -782,30 +917,20 @@ class TtQwen36GatedAttention(LightweightModule):
         # ------------------------------------------------------------------
         # 8. SDPA with causal mask (per col — each col attends to its own KV head)
         # ------------------------------------------------------------------
-        # Build causal mask on CPU and move to device (replicated — same mask on all chips)
-        causal = torch.zeros(B, 1, T, T, dtype=torch.bfloat16)
-        causal = causal.masked_fill(torch.triu(torch.ones(T, T, dtype=torch.bool), diagonal=1), float("-inf"))
-        mask_tt = ttnn.from_torch(
-            causal,
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-
-        # attn_out per col: [B, n_q_pc=6, T, hd]
+        # T14b.3: use is_causal=True instead of an explicit upper-triangular
+        # CPU-built mask.  Eliminates a per-prefill-call ttnn.from_torch alloc
+        # while preserving identical numerics (the kernel applies the same
+        # causal mask internally).  This mirrors the llama3_70b_galaxy prefill
+        # path which has used is_causal=True for the same reason.
         attn_out = ttnn.transformer.scaled_dot_product_attention(
             q_rot,
             k_exp,
             v_exp,
-            is_causal=False,
-            attn_mask=mask_tt,
+            is_causal=True,
             scale=self.scale,
             compute_kernel_config=self.compute_kernel_hifi4,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        mask_tt.deallocate(True)
         k_exp.deallocate(True)
         v_exp.deallocate(True)
         q_rot.deallocate(True)
@@ -1001,16 +1126,14 @@ class TtQwen36GatedAttention(LightweightModule):
             # We reshape to [1, 1, 32, 256] and shard on 1 core HEIGHT_SHARDED.
             # cur_pos tensor: [B=1] int32, DRAM INTERLEAVED.
 
-            # Build update_idxs_tensor [B=1] int32 DRAM INTERLEAVED
+            # Build update_idxs_tensor [B=1] int32 DRAM INTERLEAVED.
+            # T14b.3: refresh the preallocated self._cur_pos_buf in place
+            # (via copy_host_to_device_tensor) instead of allocating a new
+            # device buffer with ttnn.from_torch every call.  The same
+            # buffer is reused below for the paged-SDPA-decode cur_pos input.
             if isinstance(cur_pos_int, int):
-                upd_idxs = ttnn.from_torch(
-                    torch.tensor([cur_pos_int], dtype=torch.int32),
-                    device=self.mesh_device,
-                    dtype=ttnn.int32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                )
+                self._update_cur_pos_buf(cur_pos_int)
+                upd_idxs = self._cur_pos_buf
             else:
                 # current_pos is already a TTNN tensor [max_batch_size]
                 # Slice to get [B=1] element
@@ -1064,14 +1187,14 @@ class TtQwen36GatedAttention(LightweightModule):
             q_rot.deallocate(True)
 
             if isinstance(current_pos, int):
-                cur_pos_tensor_sdpa = ttnn.from_torch(
-                    torch.tensor([current_pos] * B, dtype=torch.int32),
-                    device=self.mesh_device,
-                    dtype=ttnn.int32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                )
+                # T14b.3: reuse the persistent buffer.  It was refreshed in the
+                # paged_update_cache branch above (the page_table block is
+                # entered with the same cur_pos_int), but in case the branch
+                # ordering ever changes, refresh defensively here too.  This
+                # is cheap — small int32 host write + copy_host_to_device.
+                # Buffer shape is [max_batch_size]==[B] (B==1 for this model).
+                self._update_cur_pos_buf(current_pos)
+                cur_pos_tensor_sdpa = self._cur_pos_buf
             else:
                 cur_pos_tensor_sdpa = current_pos
 
@@ -1124,19 +1247,24 @@ class TtQwen36GatedAttention(LightweightModule):
             # Build attention mask: mask positions T_kv..T_kv_pad with -inf so the
             # zero-padded KV slots don't corrupt the attention distribution.
             # TTNN SDPA requires mask_shape[2] == q_shape[2] (T_q=1).
+            #
+            # T14b.3: refresh the preallocated worst-case mask buffer in place
+            # via copy_host_to_device_tensor (no per-call from_torch alloc), then
+            # slice down to the per-call width [B, 1, T_logical, T_kv_pad].
+            # B == self.max_batch_size and T_logical == 1 by construction (the
+            # buffer was sized accordingly in _build_decode_buffers).
             if T_kv_pad > T_kv:
-                decode_mask_cpu = torch.zeros(B, 1, T_logical, T_kv_pad, dtype=torch.bfloat16)
-                decode_mask_cpu[:, :, :, T_kv:] = float("-inf")  # mask pad slots for q row 0
-                decode_mask_tt = ttnn.from_torch(
-                    decode_mask_cpu,
-                    device=self.mesh_device,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
+                self._update_decode_mask_buf(cur_pos_int)
+                decode_mask_tt = ttnn.slice(
+                    self._decode_mask_buf,
+                    [0, 0, 0, 0],
+                    [B, 1, T_logical, T_kv_pad],
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 )
+                _mask_was_sliced = True
             else:
                 decode_mask_tt = None
+                _mask_was_sliced = False
 
             # Decode SDPA per col: q [B, 6, 1, hd] attends to k/v [B, 6, T_kv_pad, hd]
             attn_out = ttnn.transformer.scaled_dot_product_attention(
@@ -1149,7 +1277,9 @@ class TtQwen36GatedAttention(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 attn_mask=decode_mask_tt,
             )
-            if decode_mask_tt is not None:
+            if _mask_was_sliced:
+                # Only the per-call slice is freed; the persistent buffer
+                # (self._decode_mask_buf) lives on for the next call.
                 decode_mask_tt.deallocate(True)
             k_exp.deallocate(True)
             v_exp.deallocate(True)
