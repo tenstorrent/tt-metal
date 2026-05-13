@@ -785,6 +785,17 @@ def main() -> None:
     # --- TTNN (DiT): device may already be open after TTNN Qwen3 caption embedding (handler path) ---
     _configure_ttnn_runtime(no_ttnn_strict=args.no_ttnn_strict)
     import ttnn
+    from models.demos.ace_step_v1_5.ttnn_impl.dit_sampling_ttnn import (
+        TtnnMomentumBufferApg,
+        adg_guidance_velocity_ttnn,
+        apg_guidance_velocity_ttnn,
+        bf16_row_from_numpy_bc,
+        concat_duplicate_batch,
+        euler_subtract_v_dt,
+        fp32_tile_to_row_bf16,
+        slice_batch_btc,
+        typecast_bf16_any_to_fp32_tile,
+    )
     from models.demos.ace_step_v1_5.ttnn_impl.full_pipeline import AceStepV15TTNNPipeline
     from models.demos.ace_step_v1_5.ttnn_impl.oobleck_vae_decoder import TtOobleckVaeDecoder
 
@@ -803,6 +814,10 @@ def main() -> None:
     act_dtype = getattr(ttnn, "bfloat16", None)
     if act_dtype is None:
         raise RuntimeError("TTNN DiT needs ttnn.bfloat16; build may be incomplete.")
+
+    def _as_host_numpy_f32(t: torch.Tensor) -> np.ndarray:
+        """TTNN staging: never call ``.numpy()`` on tensors that may still require grad."""
+        return t.detach().to(dtype=torch.float32).cpu().contiguous().numpy()
 
     cfg_lo = float(args.cfg_interval_start)
     cfg_hi = float(args.cfg_interval_end)
@@ -854,7 +869,7 @@ def main() -> None:
         cfg_lo = float(args.cfg_interval_start)
         cfg_hi = float(args.cfg_interval_end)
 
-        frames_i = int(frames_i_prep)
+        frames_i = int(frames)
         c_lat = 64
 
         # ``ttnn.rand`` is uniform in [from,to] (default [0,1]); ACE-Step uses standard-normal latents.
