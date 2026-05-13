@@ -73,8 +73,10 @@ void kernel_main() {
 
         cb_push_back(cb_untilize_id, read_batch_size);
 
-        // Tell zero_init_writer that a batch has been pushed onto cb_untilize_id and is ready to send.
-        push_scalar_signal(cb_stop_signal_id, 0x00000000);
+        // Tell zero_init_writer that a batch is ready and carry the per-batch token count
+        // (forwarded from reader_untilize via cb_signal_id) so zero_init_writer knows how many
+        // metadata + untilize rows to consume this iteration.
+        push_scalar_signal(cb_stop_signal_id, val);
     }
     pack_untilize_uninit(cb_untilize_id);
 

@@ -57,7 +57,10 @@ void kernel_main() {
     //  15: num_idle_cores                        - size of the owning sender's idle group (k_s)
     //  16: aligned_output_page_size              - aligned page size of output tensor (bytes per untilized row)
     //  17: aligned_experts_tok_counter_page_size - aligned page size of expert_token_counts tensor
-    //  18+: TensorAccessorArgs for dispatched_buffer
+    //  18: cb_metadata_batch_id                  - CB this kernel pushes per-batch metadata pages into
+    //                                              (consumed by zero_init_writer on the same core)
+    //  19: aligned_dispatched_metadata_page_size - aligned page size of dispatched_metadata tensor
+    //  20+: TensorAccessorArgs for dispatched_buffer, then TensorAccessorArgs for dispatched_metadata
     constexpr uint32_t cb_experts_tok_counter_id = get_compile_time_arg_val(0);
     constexpr uint32_t experts_tok_counter_pages = get_compile_time_arg_val(1);
     constexpr uint32_t experts_per_chip = get_compile_time_arg_val(2);
@@ -76,7 +79,11 @@ void kernel_main() {
     constexpr uint32_t num_idle_cores = get_compile_time_arg_val(15);
     constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(16);
     constexpr uint32_t aligned_experts_tok_counter_page_size = get_compile_time_arg_val(17);
-    constexpr auto dispatched_buffer_args = TensorAccessorArgs<18>();
+    constexpr uint32_t cb_metadata_batch_id = get_compile_time_arg_val(18);
+    constexpr uint32_t aligned_dispatched_metadata_page_size = get_compile_time_arg_val(19);
+    constexpr auto dispatched_buffer_args = TensorAccessorArgs<20>();
+    constexpr auto dispatched_metadata_args =
+        TensorAccessorArgs<dispatched_buffer_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t tiles_per_batch = hidden_size / tile_width;
 
@@ -86,6 +93,9 @@ void kernel_main() {
     //   1: dispatched_buffer_addr
     //   2: expert_start_idx
     //   3: expert_end_idx
+    //   4: dispatched_metadata_addr    - DRAM base of the dispatched_metadata tensor; this kernel
+    //                                    reads it locally so the sender no longer has to unicast
+    //                                    per-batch metadata to this core
     // (sender NOC coords, data_ready and start semaphores are now consumed by the
     //  zero_init_writer kernel on the same core — they no longer belong here.)
     uint32_t rt_idx = 0;
@@ -93,6 +103,7 @@ void kernel_main() {
     uint32_t dispatched_buffer_addr = get_arg_val<uint32_t>(rt_idx++);
     uint32_t expert_start_idx = get_arg_val<uint32_t>(rt_idx++);
     uint32_t expert_end_idx = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t dispatched_metadata_addr = get_arg_val<uint32_t>(rt_idx++);
 
     // ===== Step 1: Wait for the owning sender to multicast expert token counts + receive_buf_addr =====
     // Note: don't reset counter_ready_sem — zero_init_writer on this same core also waits on it
@@ -122,11 +133,17 @@ void kernel_main() {
     // ===== Step 3: For each assigned batch: trigger compute to untilize and read tiles =====
     const auto dispatched_buffer_addr_gen =
         TensorAccessor(dispatched_buffer_args, dispatched_buffer_addr, aligned_dispatched_buffer_page_size);
+    const auto dispatched_metadata_addr_gen =
+        TensorAccessor(dispatched_metadata_args, dispatched_metadata_addr, aligned_dispatched_metadata_page_size);
     uint32_t buffer_base = get_write_ptr(cb_dispatched_buffer_id);
 
     // Dynamic dispatch buffer: experts are packed contiguously, each occupying
     // ceil(local_expert_counts[e] / tile_height) tile rows. Compute the per-expert
-    // tile-row offset as a running prefix sum over the local counts.
+    // tile-row offset as a running prefix sum over the local counts.  The metadata
+    // tensor is laid out with the same tile-aligned per-expert stride (host computes
+    // expert_region_offsets from cumsum of ceil(count, tile_h)*tile_h), so we can
+    // reuse `start_token = (start_page_tiled / tiles_per_batch) * tile_height` below
+    // as the per-expert metadata start page.
     uint32_t start_page_tiled = 0;
     for (uint32_t e = 0; e < expert_start_idx; e++) {
         start_page_tiled += ((local_expert_counts[e] + tile_height - 1) / tile_height) * tiles_per_batch;
@@ -136,6 +153,8 @@ void kernel_main() {
         uint32_t expert_tokens = local_expert_counts[local_expert];
         // Clamp to the dispatch buffer capacity to mirror reader_dispatch's overflow guard.
         // start_page_tiled is in tiles; convert via tile_height to compare with the row-count cap.
+        // start_token doubles as this expert's metadata start page since dispatch lays the
+        // metadata out with tile-aligned per-expert stride (same as expert_region_offsets).
         uint32_t start_token = (start_page_tiled / tiles_per_batch) * tile_height;
         if (start_token >= max_dispatch_buffer_token_size) {
             expert_tokens = 0;
@@ -155,15 +174,37 @@ void kernel_main() {
         // owning sender can predict which idle core handles each batch (batch_idx % k).
         for (uint32_t batch_idx = core_id; batch_idx < actual_batches; batch_idx += num_idle_cores) {
             uint32_t batch_tile_start = start_page_tiled + batch_idx * tiles_per_batch;
+            uint32_t batch_token_start = batch_idx * read_batch_size;
+            uint32_t batch_count = ((batch_token_start + read_batch_size) <= expert_tokens)
+                                       ? read_batch_size
+                                       : (expert_tokens - batch_token_start);
 
-            // 1. Signal compute to start untilizing this batch
+            // 1. Signal compute to start untilizing this batch and tell zero_init_writer the
+            //    batch_count.  Compute forwards `val` from cb_signal_id into cb_stop_signal_id,
+            //    so the same uint32 reaches zero_init_writer on the same core.
             cb_reserve_back(cb_signal_id, 1);
             volatile tt_l1_ptr uint32_t* signal_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_signal_id));
-            signal_ptr[0] = 0x00000000;
+            signal_ptr[0] = batch_count;
             cb_push_back(cb_signal_id, 1);
 
-            // 2. Reading tiles for this batch
+            // 2. Read this batch's metadata pages from DRAM into the local metadata batch CB.
+            //    zero_init_writer pops the same `batch_count` pages and decides the per-batch
+            //    path (all-local vs non-local) locally — sender no longer writes to c_9.
+            //    Per-expert metadata stride is tile-aligned, hence reusing start_token.
+            uint32_t metadata_batch_start = start_token + batch_token_start;
+            cb_reserve_back(cb_metadata_batch_id, batch_count);
+            uint32_t metadata_base = get_write_ptr(cb_metadata_batch_id);
+            for (uint32_t t = 0; t < batch_count; t++) {
+                noc_async_read_page(
+                    metadata_batch_start + t,
+                    dispatched_metadata_addr_gen,
+                    metadata_base + t * aligned_dispatched_metadata_page_size);
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_metadata_batch_id, batch_count);
+
+            // 3. Reading tiles for this batch
             constexpr uint32_t tiles_per_batch_per_cb = tiles_per_batch / cb_factor;
             for (uint32_t cnt = 0; cnt < cb_factor; cnt++) {
                 uint32_t batch_tile = batch_tile_start + cnt * tiles_per_batch_per_cb;
@@ -180,7 +221,9 @@ void kernel_main() {
             // Steps 3-7 (wait for untilize, wait for sender's send signal, NOC-write to
             // sender, signal sender, pop untilize CB) now run on zero_init_writer.
         }
-        // Advance to the next expert's region in the packed dispatch buffer.
+        // Advance to the next expert's region.  Buffer and metadata both use the same
+        // tile-aligned per-expert stride, so start_page_tiled (and start_token derived from
+        // it) tracks both for the next iteration.
         start_page_tiled += ((expert_tokens + tile_height - 1) / tile_height) * tiles_per_batch;
     }
 
