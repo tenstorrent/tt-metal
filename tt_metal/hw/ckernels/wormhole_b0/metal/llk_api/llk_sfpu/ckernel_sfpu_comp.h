@@ -35,8 +35,9 @@ sfpi_inline vInt sfpu_sign_mag_to_twos_comp(vInt value) {
 
 #endif  // SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
 
+// NOTE: When APPROXIMATION_MODE is true, NaN inputs are not handled for (ltz/gtz/lez/gez).
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
-inline void calculate_comp(uint exponent_size_8) {
+inline void calculate_comp() {
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
         vInt bits = reinterpret<vInt>(v);
@@ -88,9 +89,12 @@ inline void calculate_comp(uint exponent_size_8) {
             }
 
             // NaN fix-up: abs_bits > 0x7F800000 means NaN; use saved abs_bits (from original v).
-            vInt nan_check = abs_bits - 0x7F800000;
-            v_if(nan_check > 0) { v = vConst0; }
-            v_endif;
+            // Skipped in APPROXIMATION_MODE (assumes inputs are never NaN).
+            if constexpr (!APPROXIMATION_MODE) {
+                vInt nan_check = abs_bits - 0x7F800000;
+                v_if(nan_check > 0) { v = vConst0; }
+                v_endif;
+            }
         }
 
         dst_reg[0] = v;
