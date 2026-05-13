@@ -46,13 +46,19 @@ def _devstral_kv_cache_alloc_len(configuration) -> int:
 
 class TtMinistralAttention(Attention):
     """
-    Ministral3 attention: same TT path as :class:`Attention`, plus post-RoPE Q scaling.
+        Ministral3 attention: same TT path as :class:`Attention`, plus post-RoPE Q scaling.
 
-    Parameters
-    ----------
-    llama_4_scaling_beta, original_max_position_embeddings
-        From HF ``config.rope_parameters`` (e.g. ``llama_4_scaling_beta``, ``original_max_position_embeddings``).
-        If either is ``None``, scaling is a no-op (not numerically equal to HF).
+    Long prefill Llama‑4 scaling: ``reshape(scale, (B,1,S,1))`` can exceed tensix L1 circular-buffer
+    budgets when ``S`` is ~100k+. Apply scaling along the sequence dimension in bounded chunks instead.
+
+    Base attention's prefill KV L1 shard path (``interleaved_to_sharded`` scaled by ``seq_len``) is disabled
+    via ``min_kv_prefill_shard_seqlen``: at very long sequence lengths TT otherwise requests enormous L1 KV tiles.
+
+        Parameters
+        ----------
+        llama_4_scaling_beta, original_max_position_embeddings
+            From HF ``config.rope_parameters`` (e.g. ``llama_4_scaling_beta``, ``original_max_position_embeddings``).
+            If either is ``None``, scaling is a no-op (not numerically equal to HF).
     """
 
     def __init__(
@@ -65,6 +71,15 @@ class TtMinistralAttention(Attention):
         self.llama_4_scaling_beta = llama_4_scaling_beta
         self.original_max_position_embeddings = original_max_position_embeddings
         super().__init__(*args, **kwargs)
+
+        # Tokens per Llama‑4 scale chunk on prefill; keeps reshape/mul footprints under typical L1 limits.
+        self._llama4_prefill_q_scale_chunk_tokens = 2048
+
+        # Base Attention prefill shards K/V for fill_cache via ``interleaved_to_sharded`` +
+        # ``ModelArgs.get_attn_kv_prefill_mem_config(seq_len)``. That shard sizing grows ~O(seq_len);
+        # at ~100k–250k+ tokens TT requests hundreds of MiB of L1 and aborts (bank_manager.cpp).
+        # Keep K/V interleaved in DRAM for Ministral3 prefill fill_cache paths used by Devstral demos.
+        self.min_kv_prefill_shard_seqlen = 2**62
 
         _decode_rope = self.rotary_embedding_decode
         _prefill_rope = self.rotary_embedding_prefill
@@ -173,24 +188,51 @@ class TtMinistralAttention(Attention):
         if len(sh) != 4:
             return q_heads
         batch_dim, seq_dim = sh[0], sh[2]
+        nh, hd = int(sh[1]), int(sh[3])
         shp = tuple(pos_tt.shape)
+        pos_2d = None
         if len(shp) == 2 and shp[0] == batch_dim and shp[1] == seq_dim:
-            scale_f = self._llama4_scale_factor_from_positions_ttnn(pos_tt)
+            pos_2d = pos_tt
         elif len(shp) == 1 and shp[0] == seq_dim and batch_dim == 1:
-            scale_f = self._llama4_scale_factor_from_positions_ttnn(ttnn.reshape(pos_tt, (1, seq_dim)))
+            pos_2d = ttnn.reshape(pos_tt, (1, seq_dim))
         else:
             return q_heads
 
-        scale_4d = ttnn.reshape(scale_f, (batch_dim, 1, seq_dim, 1))
-        scale_tt = ttnn.typecast(scale_4d, ttnn.bfloat16)
+        chunk_lim = max(512, int(self._llama4_prefill_q_scale_chunk_tokens))
+        if seq_dim <= chunk_lim:
+            return self._llama4_mul_q_prefill_scaled(q_heads, batch_dim, seq_dim, pos_2d, q_heads.dtype)
 
-        q_bf16 = q_heads if q_heads.dtype == ttnn.bfloat16 else ttnn.typecast(q_heads, dtype=ttnn.bfloat16)
+        parts: list = []
+        for cs in range(0, seq_dim, chunk_lim):
+            ce = min(cs + chunk_lim, seq_dim)
+            sub = ce - cs
+            q_c = ttnn.slice(q_heads, (0, 0, cs, 0), (batch_dim, nh, ce, hd))
+            pos_c = ttnn.slice(pos_2d, (0, cs), (batch_dim, ce))
+            parts.append(self._llama4_mul_q_prefill_scaled(q_c, batch_dim, sub, pos_c, q_heads.dtype))
+        merged = ttnn.concat(parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for p in parts:
+            ttnn.deallocate(p)
+        return merged
+
+    def _llama4_mul_q_prefill_scaled(
+        self,
+        q_part,
+        batch_dim: int,
+        sub_seq: int,
+        pos_2d_part,
+        out_dtype,
+    ):
+        """``q_part`` [:,:,sub_seq,...], ``pos_2d_part`` [B, sub_seq]; returns scaled q dtype ``out_dtype``."""
+        scale_f = self._llama4_scale_factor_from_positions_ttnn(pos_2d_part)
+        scale_4d = ttnn.reshape(scale_f, (batch_dim, 1, sub_seq, 1))
+        scale_tt = ttnn.typecast(scale_4d, ttnn.bfloat16)
+        q_bf16 = q_part if q_part.dtype == ttnn.bfloat16 else ttnn.typecast(q_part, dtype=ttnn.bfloat16)
         out = ttnn.mul(q_bf16, scale_tt, dtype=ttnn.bfloat16)
-        if q_heads.dtype != ttnn.bfloat16:
-            out = ttnn.typecast(out, dtype=q_heads.dtype)
         ttnn.deallocate(scale_tt)
-        if q_bf16 is not q_heads:
+        if q_bf16 is not q_part:
             ttnn.deallocate(q_bf16)
+        if out_dtype != ttnn.bfloat16:
+            out = ttnn.typecast(out, dtype=out_dtype)
         return out
 
     def forward_prefill(
