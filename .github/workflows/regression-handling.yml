@@ -48,7 +48,7 @@ jobs:
           fetch-depth: 0
 
       - name: Run regression handling
-        uses: tenstorrent/tt-auto-triage/.github/actions/regression-handling@main
+        uses: tenstorrent/tt-auto-triage/.github/actions/regression-handling@ebanerjee/renaming-auto-triage
         with:
           workflow-name: ${{ inputs.workflow_name }}
           job-name: ${{ inputs.job_name }}
