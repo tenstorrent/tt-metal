@@ -10,9 +10,14 @@ import ttnn
 
 
 def default_compute_kernel_config(mesh_device, *, math_fidelity=None, fp32_dest_acc_en: bool = True):
-    """Conservative high-accuracy matmul/linear settings for Kokoro blocks."""
+    """Conservative high-accuracy matmul/linear settings for Kokoro blocks.
+
+    Defaults to ``HiFi3`` on Wormhole because TTNN's runtime warns (see
+    ``compute_kernel_config.cpp:65``) that ``HiFi4`` with fp32 accumulation can be LESS accurate on
+    Wormhole due to a HW bug. Callers may still pass ``math_fidelity=HiFi4`` explicitly if they want it.
+    """
     if math_fidelity is None:
-        math_fidelity = ttnn.MathFidelity.HiFi4
+        math_fidelity = ttnn.MathFidelity.HiFi3
     return ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
         math_fidelity=math_fidelity,

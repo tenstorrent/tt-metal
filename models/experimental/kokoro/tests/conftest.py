@@ -25,3 +25,15 @@ def mesh_device(request):
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, l1_small_size=24576)
     yield mesh_device
     ttnn.close_mesh_device(mesh_device)
+
+
+@pytest.fixture(scope="function")
+def device():
+    """Single-device alias for tests that open a ``ttnn.Device`` directly (predictor, text encoder).
+
+    Mirrors the root-conftest ``device`` fixture so kokoro tests run under
+    ``--confcutdir=models/experimental/kokoro`` without pulling in the rest of the repo's pytest setup.
+    """
+    dev = ttnn.open_device(device_id=0, l1_small_size=24576)
+    yield dev
+    ttnn.close_device(dev)
