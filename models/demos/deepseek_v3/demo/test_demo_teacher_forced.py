@@ -219,7 +219,8 @@ def test_demo_teacher_forcing_accuracy(
         force_recalculate=force_recalculate_weight_config,
         stop_at_eos=False,
         sample_on_device=True,
-        sampling_temperature=1.0,
+        sampling_temperature=0.0,
+        sampling_top_k=1,
         sampling_top_p=1.0,
     )
 
