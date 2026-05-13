@@ -28,6 +28,19 @@ import torch
 import ttnn
 
 
+def _vocoder_hf_gather_index(input_ids: ttnn.Tensor, *, batch: int, seq: int, pad_id: int) -> int:
+    """HF ``_get_dur_output_lengths`` index: ``clamp((input_ids != pad).sum(-1), 0, seq - 1)`` for row 0.
+
+    ``from_device`` may yield a 1-D tensor (length ``batch * seq``); ``ids_t[0]`` would then be a
+    single id and the count would be wrong (``t_audio`` stuck near 1 and ~320 output samples).
+    """
+    ids_t = ttnn.to_torch(ttnn.from_device(input_ids)).to(torch.long).reshape(batch, -1)
+    if ids_t.shape[1] > seq:
+        ids_t = ids_t[:, :seq]
+    count = int((ids_t[0] != pad_id).sum().item())
+    return max(0, min(count, seq - 1))
+
+
 def _core_grid(device: ttnn.Device) -> ttnn.CoreGrid:
     grid = device.compute_with_storage_grid_size()
     return ttnn.CoreGrid(y=grid.y, x=grid.x)
@@ -86,13 +99,20 @@ class TTSeamlessM4Tv2CodeHifiGan:
         groups: int,
         dilation: int = 1,
     ) -> Tuple[ttnn.Tensor, int]:
+        # ``ttnn.conv1d`` reshapes activations for the conv2d path; TILE NLC (e.g. from ``embedding``)
+        # can hit "reshape between two shapes with different volumes". Host ROW_MAJOR weights are fine.
+        x_in = x_nlc
+        rm_buf: Optional[ttnn.Tensor] = None
+        if x_nlc.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            rm_buf = ttnn.to_layout(x_nlc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x_in = rm_buf
         conv_config = ttnn.Conv1dConfig(
             weights_dtype=ttnn.bfloat16,
             shard_layout=None,
             deallocate_activation=False,
         )
         out, out_len = ttnn.conv1d(
-            input_tensor=x_nlc,
+            input_tensor=x_in,
             weight_tensor=weight,
             in_channels=in_channels,
             out_channels=out_channels,
@@ -110,6 +130,8 @@ class TTSeamlessM4Tv2CodeHifiGan:
             dtype=ttnn.bfloat16,
             return_output_dim=True,
         )
+        if rm_buf is not None:
+            ttnn.deallocate(rm_buf)
         out_len = int(out_len)
         if ttnn.is_sharded(out):
             out = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
@@ -207,7 +229,8 @@ class TTSeamlessM4Tv2CodeHifiGan:
         log_dur = self._linear(h, dp.proj.weight, dp.proj.bias)  # [B, T_units, 1]
         ttnn.deallocate(h)
         log_dur_2d = ttnn.squeeze(log_dur, -1)  # [B, T_units]
-        ttnn.deallocate(log_dur)
+        # Caller deallocates the returned tensor after ``expm1``; do not ``deallocate(log_dur)`` here
+        # in case ``squeeze`` aliases ``log_dur``.
         return log_dur_2d
 
     def _resblock(self, x_nlc: ttnn.Tensor, rb: Any, *, batch: int, tlen: int, channels: int) -> ttnn.Tensor:
@@ -362,7 +385,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
 
         # ---------- embeddings (all on device) ----------
         ue = self.p.unit_embedding.weight
-        use = ttnn.embedding(input_ids, weight=ue, layout=ttnn.TILE_LAYOUT)  # [B, T_units, E_unit]
+        use = ttnn.embedding(input_ids, weight=ue, layout=ttnn.TILE_LAYOUT)  # [B, T_units, E_unit] (TILE-padded)
 
         sp = self.p.speaker_embedding.weight
         la = self.p.language_embedding.weight
@@ -371,6 +394,13 @@ class TTSeamlessM4Tv2CodeHifiGan:
 
         # ---------- duration prediction (device) ----------
         dp = self.p.dur_predictor
+        e_unit = int(dp.conv1.in_channels)
+        # Drop TILE padding on the time / channel axes so ``seq`` matches ``cumsum_*`` and
+        # ``use_BEC @ H`` is ``[B,E,T] @ [B,T,t_audio]`` (otherwise last dim can be e.g. 106 vs T=7).
+        use_trim = ttnn.slice(use, [0, 0, 0], [batch, seq, e_unit], (1, 1, 1))
+        # Do not deallocate ``use`` here — ``slice`` may alias the parent embedding buffer;
+        # freeing would invalidate ``use_trim`` / ``permute(use)`` / ``matmul`` inputs.
+        use = use_trim
         log_dur = self._dur_predictor_dev(use, batch=batch, seq=seq, dp=dp)  # [B, T_units] bf16
 
         # HF: dur_out = clamp(round(expm1(log_dur)), min=1).long()
@@ -388,9 +418,16 @@ class TTSeamlessM4Tv2CodeHifiGan:
         cumsum_prev = ttnn.subtract(cumsum_inc, dur_f32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(dur_f32)
 
-        # HiFi-GAN ``input_length`` must match HF's repeat-interleave length (sum of durations).
-        # One scalar read for Python ``range`` / tensor shapes only (B=1).
-        t_audio = int(ttnn.to_torch(ttnn.from_device(cumsum_inc)).reshape(batch, seq)[0, -1].item())
+        # HiFi-GAN ``input_length`` must match HF's ``repeat_interleave`` length: total duration
+        # through the index chosen by ``_get_dur_output_lengths`` — ``cumsum.gather(1, idx)`` where
+        # ``idx = clamp((input_ids != pad).sum(1), 0, T-1)``. Reading ``cumsum[:, -1]`` is wrong on
+        # TILE-padded tensors (the last *storage* column is often padding), which yielded ``t_audio``
+        # near 1 and essentially silent HiFi-GAN output.
+        cumsum_pre_seq = ttnn.slice(cumsum_inc, [0, 0], [batch, seq], (1, 1))
+        cs_t = ttnn.to_torch(ttnn.from_device(cumsum_pre_seq)).float()
+        pad_id = int(self.cfg.t2u_pad_token_id)
+        idx = _vocoder_hf_gather_index(input_ids, batch=batch, seq=seq, pad_id=pad_id)
+        t_audio = int(cs_t[0, idx].item())
         if t_audio < 1:
             raise RuntimeError(f"Computed t_audio={t_audio}; expected positive duration sum.")
 
@@ -407,13 +444,11 @@ class TTSeamlessM4Tv2CodeHifiGan:
         c_b = ttnn.reshape(cumsum_inc, (batch, seq, 1))
         cp_b = ttnn.reshape(cumsum_prev, (batch, seq, 1))
         f_b = ttnn.reshape(frame_idx, (1, 1, t_audio))
-        ttnn.deallocate(frame_idx)
 
         lower = ttnn.ge(f_b, cp_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         upper = ttnn.lt(f_b, c_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(c_b)
-        ttnn.deallocate(cp_b)
-        ttnn.deallocate(f_b)
+        # Do not deallocate ``c_b`` / ``cp_b`` / ``f_b`` / ``frame_idx`` — reshapes may alias
+        # ``cumsum_*`` or ``frame_idx``; freeing them would corrupt ``cumsum_inc`` / ``cumsum_prev``.
         H_mask = ttnn.logical_and(lower, upper, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(lower)
         ttnn.deallocate(upper)
@@ -422,32 +457,39 @@ class TTSeamlessM4Tv2CodeHifiGan:
 
         # use: [B, T_units, E_unit] -> [B, E_unit, T_units]; expand to [B, E_unit, t_audio].
         use_BEC = ttnn.permute(use, (0, 2, 1))
-        ttnn.deallocate(use)
+        # Do not deallocate ``use`` here — ``permute`` may return a view; wait until after matmul/concat.
         expanded_BCT = ttnn.matmul(
             use_BEC,
             H,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self._compute,
         )
-        ttnn.deallocate(use_BEC)
-        ttnn.deallocate(H)
+        # Matmul may return a tensor that aliases an input buffer; do not free ``use_BEC`` / ``H``
+        # until after ``concat`` has read ``expanded_BCT``.
 
         # ---------- broadcast lang/spk to ``t_audio`` (device) ----------
         lang_dim = int(lang_e.shape[-1])
         spk_dim = int(sp_e.shape[-1])
         lang_BC1 = ttnn.reshape(lang_e, (batch, lang_dim, 1))
         spk_BC1 = ttnn.reshape(sp_e, (batch, spk_dim, 1))
-        ttnn.deallocate(lang_e)
-        ttnn.deallocate(sp_e)
+        # Do not deallocate ``lang_e`` / ``sp_e`` here — ``reshape`` may alias them; freeing would
+        # invalidate ``lang_BC1`` / ``spk_BC1`` before ``repeat``.
         lang_BCT = ttnn.repeat(lang_BC1, [1, 1, t_audio])
         spk_BCT = ttnn.repeat(spk_BC1, [1, 1, t_audio])
-        ttnn.deallocate(lang_BC1)
-        ttnn.deallocate(spk_BC1)
+        # When ``t_audio == 1``, ``ttnn.repeat`` is a no-op on the last axis; the implementation may
+        # return a new tensor handle that still aliases ``lang_BC1`` / ``spk_BC1`` storage. Do not
+        # free those inputs before ``concat`` in that case.
+        if t_audio > 1:
+            ttnn.deallocate(lang_BC1)
+            ttnn.deallocate(spk_BC1)
 
         merged_BCT = ttnn.concat([lang_BCT, expanded_BCT, spk_BCT], dim=1)
         ttnn.deallocate(lang_BCT)
         ttnn.deallocate(expanded_BCT)
         ttnn.deallocate(spk_BCT)
+        ttnn.deallocate(use_BEC)
+        ttnn.deallocate(use)
+        ttnn.deallocate(H)
         merged_NLC = ttnn.permute(merged_BCT, (0, 2, 1))
         ttnn.deallocate(merged_BCT)
 
@@ -548,37 +590,25 @@ class TTSeamlessM4Tv2CodeHifiGan:
         """
         pad_id = int(self.cfg.t2u_pad_token_id)
 
-        # not_pad: [B, T_units] -> sum -> [B]
-        not_pad = ttnn.ne(input_ids, pad_id, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        not_pad_f32 = ttnn.typecast(not_pad, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(not_pad)
-        unit_lengths = ttnn.sum(not_pad_f32, dim=1)  # [B]
-        ttnn.deallocate(not_pad_f32)
-        # HF clamps to [0, T_units - 1] before gather.
-        unit_lengths = ttnn.minimum(unit_lengths, float(seq - 1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        # Gather column ``unit_lengths[b]`` from row ``b`` of ``cumsum_inc``.
-        # one_hot[b, i] = 1 iff i == unit_lengths[b]   then  out[b] = sum_i cumsum[b,i] * one_hot[b,i]
-        col_idx = ttnn.arange(
-            start=0,
-            end=seq,
-            step=1,
-            dtype=ttnn.float32,
+        # HF ``_get_dur_output_lengths``: ``unit_lens = cumsum.gather(1, idx)`` with
+        # ``idx = clamp((input_ids != pad).sum(1), 0, seq - 1)``. Same scalar as ``_forward_one``'s
+        # ``t_audio`` (logical ``seq`` columns, then host index ``idx`` — avoids TILE slice edge cases).
+        if batch != 1:
+            raise NotImplementedError(
+                "_compute_output_lengths_dev: HF gather index is computed per row; only B==1 is wired."
+            )
+        cum_pre = ttnn.slice(cumsum_inc, [0, 0], [batch, seq], (1, 1))
+        cs_t = ttnn.to_torch(ttnn.from_device(cum_pre)).float()
+        idx = _vocoder_hf_gather_index(input_ids, batch=batch, seq=seq, pad_id=pad_id)
+        u = float(cs_t[0, idx].item())
+        unit_lens = ttnn.full(
+            (batch,),
+            u,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
             device=self.device,
-        )  # [T_units]
-        ul_2d = ttnn.reshape(unit_lengths, (batch, 1))
-        ci_2d = ttnn.reshape(col_idx, (1, seq))
-        ttnn.deallocate(col_idx)
-        oh_bool = ttnn.eq(ci_2d, ul_2d, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(ci_2d)
-        ttnn.deallocate(ul_2d)
-        ttnn.deallocate(unit_lengths)
-        oh = ttnn.typecast(oh_bool, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(oh_bool)
-        gathered = ttnn.multiply(cumsum_inc, oh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(oh)
-        unit_lens = ttnn.sum(gathered, dim=1)  # [B]
-        ttnn.deallocate(gathered)
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
         # _get_output_hifigan_lengths: integer pipeline of conv / transpose-conv length formulas.
         x = unit_lens
