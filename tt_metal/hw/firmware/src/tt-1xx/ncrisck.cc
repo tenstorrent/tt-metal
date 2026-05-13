@@ -82,7 +82,6 @@ uint32_t _start() {
         ASSERT(ncrisc_noc_nonposted_writes_sent(NOC_INDEX), DebugAssertNCriscNOCNonpostedWritesSentTripped);
         ASSERT(ncrisc_noc_nonposted_atomics_flushed(NOC_INDEX), DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped);
         ASSERT(ncrisc_noc_posted_writes_sent(NOC_INDEX), DebugAssertNCriscNOCPostedWritesSentTripped);
-        // while(!ncrisc_noc_posted_writes_sent(NOC_INDEX)) {}
         WAYPOINT("NKFD");
     }
 #endif
