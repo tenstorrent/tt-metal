@@ -69,6 +69,167 @@ def parse_placement_from_traced(tensor_placement: Optional[Dict]) -> Optional[tt
     return None
 
 
+
+def setup_sub_device_manager(device, master_json_path=None):
+    """Auto-detect and load sub-device manager from master JSON configs.
+
+    Scans master configs for sub_core_grids patterns. If found, creates
+    a 2-sub-device layout: SubDevice(0) = prefetcher cores (column 0),
+    SubDevice(1) = worker cores (from traced sub_core_grids).
+
+    Returns the manager_id or None if no sub-devices needed.
+    """
+    import json, re as _re_sd
+
+    master_path = master_json_path or os.environ.get("TTNN_MASTER_JSON_PATH", "")
+    print(f"setup_sub_device_manager: master_path={master_path}, exists={os.path.isfile(master_path) if master_path else False}")
+    if not master_path or not os.path.isfile(master_path):
+        return None
+
+    try:
+        with open(master_path) as f:
+            master = json.load(f)
+    except Exception:
+        return None
+
+    # Find the largest sub_core_grids pattern in master configs
+    best_scg = None
+    best_core_count = 0
+    for op_data in master.get("operations", {}).values():
+        for cfg in op_data.get("configurations", []):
+            scg = cfg.get("arguments", {}).get("sub_core_grids", {})
+            if isinstance(scg, dict) and scg.get("type") == "CoreRangeSet":
+                val = str(scg.get("value", ""))
+                ranges = _re_sd.findall(r"\[(\d+)-(\d+)\s*-\s*(\d+)-(\d+)\]", val)
+                core_count = sum((int(ex)-int(sx)+1) * (int(ey)-int(sy)+1) for sx, sy, ex, ey in ranges)
+                if core_count > best_core_count:
+                    best_core_count = core_count
+                    best_scg = ranges
+
+    # Also check for sub_device_id/subdevice_id — if any config uses it, we need sub-devices
+    has_sub_device_id = False
+    for op_data in master.get("operations", {}).values():
+        for cfg in op_data.get("configurations", []):
+            args = cfg.get("arguments", {})
+            sdid = args.get("sub_device_id") or args.get("subdevice_id")
+            if sdid and isinstance(sdid, dict) and "SubDeviceId" in str(sdid.get("value", "")):
+                has_sub_device_id = True
+                break
+        if has_sub_device_id:
+            break
+
+    if not best_scg and not has_sub_device_id:
+        return None
+
+    try:
+        # Build worker cores from the traced sub_core_grids
+        # Build worker cores from traced sub_core_grids OR from compute grid analysis
+        # Also scan program_config compute_with_storage_grid_size for max grid
+        max_x, max_y = 6, 9  # default
+        for op_data in master.get("operations", {}).values():
+            for cfg in op_data.get("configurations", []):
+                pc = cfg.get("arguments", {}).get("program_config") or {}
+                if not isinstance(pc, dict):
+                    continue
+                cwsg = pc.get("compute_with_storage_grid_size", {})
+                if isinstance(cwsg, dict):
+                    gx = cwsg.get("x", 0)
+                    gy = cwsg.get("y", 0)
+                    if gx - 1 > max_x:
+                        max_x = gx - 1
+                    # hop_cores may extend Y range
+                    for hc in pc.get("hop_cores", []):
+                        hy = hc.get("end", {}).get("y", 0)
+                        if hy > max_y:
+                            max_y = hy
+
+        # Use the standard Galaxy prefetcher layout:
+        # Sender/prefetcher: columns 0 and 4
+        # Worker: columns 1-3 and 5-6, all rows
+        worker_cores = ttnn.CoreRangeSet({
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+        })
+        prefetcher_cores = ttnn.CoreRangeSet({
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 9)),
+            ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 9)),
+        })
+
+        prefetcher_sub_device = ttnn.SubDevice([prefetcher_cores])
+        worker_sub_device = ttnn.SubDevice([worker_cores])
+
+        manager = device.create_sub_device_manager([prefetcher_sub_device, worker_sub_device], 0)
+        device.load_sub_device_manager(manager)
+        device.set_sub_device_stall_group([ttnn.SubDeviceId(0), ttnn.SubDeviceId(1)])
+
+        # Create global circular buffer for prefetcher pattern
+        global_cb = None
+        try:
+            all_sender_cores = [
+                ttnn.CoreCoord(0, 9), ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 4), ttnn.CoreCoord(0, 5),
+                ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 9), ttnn.CoreCoord(4, 1), ttnn.CoreCoord(4, 7),
+                ttnn.CoreCoord(4, 6), ttnn.CoreCoord(4, 2), ttnn.CoreCoord(4, 4), ttnn.CoreCoord(4, 5),
+            ]
+            all_receiver_cores_list = [
+                (1, 9), (2, 9), (1, 0), (2, 0), (1, 4), (2, 4), (1, 5), (2, 5),
+                (5, 0), (6, 0), (5, 9), (6, 9), (5, 1), (6, 1), (5, 7), (6, 7),
+                (5, 6), (6, 6), (5, 2), (6, 2), (5, 4), (6, 4), (5, 5), (6, 5),
+            ]
+            num_reader_cores = 12
+            num_gcb_receivers = 2
+            all_receiver_cores = [
+                ttnn.CoreRangeSet([ttnn.CoreRange(
+                    ttnn.CoreCoord(*all_receiver_cores_list[idx]),
+                    ttnn.CoreCoord(*all_receiver_cores_list[idx + 1]),
+                )])
+                for idx in range(0, num_reader_cores * num_gcb_receivers, 2)
+            ]
+            dummy_sender_cores = [
+                ttnn.CoreCoord(0, 1), ttnn.CoreCoord(0, 2), ttnn.CoreCoord(0, 3),
+                ttnn.CoreCoord(0, 6), ttnn.CoreCoord(0, 7), ttnn.CoreCoord(0, 8),
+                ttnn.CoreCoord(4, 3), ttnn.CoreCoord(4, 8),
+            ]
+            dummy_receiver_cores = [
+                ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0)),
+                                   ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(3, 1))]),
+                ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(3, 2))]),
+                ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 3), ttnn.CoreCoord(3, 3)),
+                                   ttnn.CoreRange(ttnn.CoreCoord(3, 4), ttnn.CoreCoord(3, 4))]),
+                ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(3, 5), ttnn.CoreCoord(3, 5)),
+                                   ttnn.CoreRange(ttnn.CoreCoord(1, 6), ttnn.CoreCoord(3, 6))]),
+                ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 7), ttnn.CoreCoord(3, 7))]),
+                ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 8), ttnn.CoreCoord(3, 8)),
+                                   ttnn.CoreRange(ttnn.CoreCoord(3, 9), ttnn.CoreCoord(3, 9))]),
+                ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(5, 3), ttnn.CoreCoord(6, 3))]),
+                ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(5, 8), ttnn.CoreCoord(6, 8))]),
+            ]
+            sender_cores = list(all_sender_cores) + dummy_sender_cores
+            receiver_cores = list(all_receiver_cores) + dummy_receiver_cores
+            sender_receiver_mapping = list(zip(sender_cores, receiver_cores))
+            global_cb_size = 728 * 1088
+            global_cb = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, global_cb_size)
+        except Exception as e:
+            print(f"Warning: Failed to create global circular buffer: {e}")
+            global_cb = None
+
+        return manager, global_cb
+    except Exception as e:
+        import traceback
+        print(f"Warning: Failed to setup sub-device manager: {e}")
+        traceback.print_exc()
+        return None
+
+
+def teardown_sub_device_manager(device, manager_id):
+    """Clean up sub-device manager."""
+    if manager_id is not None:
+        try:
+            device.clear_loaded_sub_device_manager()
+            device.remove_sub_device_manager(manager_id)
+        except Exception:
+            pass
+
+
 def get_mesh_shape_from_machine_info(machine_info: Optional[Dict]) -> Optional[Tuple[int, int]]:
     """
     Extract mesh device shape from traced machine_info.
@@ -144,6 +305,25 @@ def create_mesh_device(
     # was active when traced. Default to ROW; switch to COL only if any of the
     # op's master shard_specs requires y=9 cores. Both cases: cores with x=7 fall
     # outside COL but inside ROW — those configs need ROW.
+    # Check if sub-devices are needed (affects num_command_queues)
+    _needs_sub_device = False
+    try:
+        import json as _json_sd
+        _mj = os.environ.get("TTNN_MASTER_JSON_PATH", "")
+        if _mj and os.path.isfile(_mj):
+            with open(_mj) as _f_sd:
+                _md = _json_sd.load(_f_sd)
+            for _od in _md.get("operations", {}).values():
+                for _cd in _od.get("configurations", []):
+                    _a = _cd.get("arguments", {})
+                    if _a.get("sub_device_id") or _a.get("subdevice_id"):
+                        _needs_sub_device = True
+                        break
+                if _needs_sub_device:
+                    break
+    except Exception:
+        pass
+
     needs_col = False
     needs_row_only = False
     try:
@@ -217,6 +397,7 @@ def create_mesh_device(
                 mesh_shape=ttnn.MeshShape(*mesh_shape),
                 l1_small_size=l1_small_size,
                 dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.ETH),
+                **(dict(num_command_queues=1) if _needs_sub_device else {}),
             )
         except Exception:
             pass
@@ -229,6 +410,7 @@ def create_mesh_device(
                 mesh_shape=ttnn.MeshShape(*mesh_shape),
                 l1_small_size=l1_small_size,
                 dispatch_core_config=ttnn.DispatchCoreConfig(axis=_override_axis),
+                **(dict(num_command_queues=1) if _needs_sub_device else {}),
             )
         except Exception:
             pass
@@ -241,6 +423,7 @@ def create_mesh_device(
             mesh_shape=ttnn.MeshShape(*mesh_shape),
             l1_small_size=l1_small_size,
             dispatch_core_config=ttnn.DispatchCoreConfig(axis=use_axis),
+            **(dict(num_command_queues=1) if _needs_sub_device else {}),
         )
     except Exception:
         pass
@@ -249,6 +432,7 @@ def create_mesh_device(
         mesh_shape=ttnn.MeshShape(*mesh_shape),
         l1_small_size=l1_small_size,
         dispatch_core_config=ttnn.DispatchCoreConfig(),
+        **(dict(num_command_queues=1) if _needs_sub_device else {}),
     )
 
 

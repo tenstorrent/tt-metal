@@ -371,6 +371,25 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
                 kwargs["out_block_h"] = int(cfg["out_block_h"])
             if cfg.get("out_block_w") is not None:
                 kwargs["out_block_w"] = int(cfg["out_block_w"])
+            if cfg.get("gather_in0") is not None:
+                kwargs["gather_in0"] = bool(cfg["gather_in0"])
+            if cfg.get("num_global_cb_receivers") is not None:
+                kwargs["num_global_cb_receivers"] = int(cfg["num_global_cb_receivers"])
+            if cfg.get("untilize_out") is not None:
+                kwargs["untilize_out"] = bool(cfg["untilize_out"])
+            # hop_cores: list of CoreRange dicts -> list of ttnn.CoreCoord pairs
+            hop_cores = cfg.get("hop_cores")
+            if hop_cores and isinstance(hop_cores, list):
+                import ttnn as _ttnn_hc
+                parsed_hop = []
+                for hc in hop_cores:
+                    if isinstance(hc, dict) and "start" in hc and "end" in hc:
+                        parsed_hop.append(_ttnn_hc.CoreRange(
+                            _ttnn_hc.CoreCoord(hc["start"]["x"], hc["start"]["y"]),
+                            _ttnn_hc.CoreCoord(hc["end"]["x"], hc["end"]["y"]),
+                        ))
+                if parsed_hop:
+                    kwargs["hop_cores"] = _ttnn_hc.CoreRangeSet(set(parsed_hop))
             return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(**kwargs)
 
         if type_name == "MatmulMultiCoreReuseProgramConfig":

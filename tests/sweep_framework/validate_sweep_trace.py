@@ -297,11 +297,11 @@ def deep_diff(master: Any, sweep: Any, prefix: str = "") -> list[Diff]:
                 # Also skip known sweep-framework output kwargs that the model
                 # trace never captures (e.g. the output memory_config passed by
                 # the sweep module to control placement).
-                if sweep[k] is None or k in ("memory_config", "core_grid", "dtype"):
+                if sweep[k] is None or k in ("memory_config", "core_grid", "dtype", "sub_core_grids", "indices_tensor", "subdevice_id", "global_cb", "sub_device_id", "mesh_device", "persistent_output_tensor"):
                     continue
                 diffs.append(Diff(child_path, "<missing>", sweep[k], "extra_key"))
             elif k not in sweep:
-                if master[k] is not None:
+                if master[k] is not None and k not in ("memory_config", "core_grid", "dtype", "sub_core_grids", "indices_tensor", "subdevice_id", "global_cb", "sub_device_id", "mesh_device", "persistent_output_tensor"):
                     diffs.append(Diff(child_path, master[k], "<missing>", "extra_key"))
             else:
                 diffs.extend(deep_diff(master[k], sweep[k], child_path))

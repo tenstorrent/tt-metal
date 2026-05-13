@@ -10,6 +10,8 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    setup_sub_device_manager,
+    teardown_sub_device_manager,
     get_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
@@ -51,19 +53,29 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+_GLOBAL_CB = None
+
 def mesh_device_fixture():
     """
     Override default device fixture.
     Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
     """
+    global _GLOBAL_CB
     mesh_shape = get_mesh_shape()
 
     if mesh_shape:
         # Create mesh device based on env var
         try:
             device = create_mesh_device(mesh_shape)
+            result = setup_sub_device_manager(device)
+            sub_device_mgr = None
+            if isinstance(result, tuple):
+                sub_device_mgr, _GLOBAL_CB = result
+            else:
+                sub_device_mgr = result
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
+            teardown_sub_device_manager(device, sub_device_mgr)
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
@@ -105,7 +117,15 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     # Keep all traced params including program_config — they are required for
     # correct matmul behavior with sharded memory configs.
-    op_kwargs = build_op_kwargs(kwargs)
+    op_kwargs = build_op_kwargs(kwargs, exclude={"global_cb"})
+
+    # Inject global_cb from fixture when config requires it
+    gcb_raw = kwargs.get("global_cb")
+    if gcb_raw is not None and gcb_raw != "__ABSENT__" and isinstance(gcb_raw, dict):
+        if _GLOBAL_CB is not None:
+            op_kwargs["global_cb"] = _GLOBAL_CB
+    elif "global_cb" in op_kwargs and not hasattr(op_kwargs.get("global_cb"), "address"):
+        del op_kwargs["global_cb"]
 
     # build_op_kwargs filters memory_config (infrastructure key), but matmul
     # accepts it as an op kwarg.  Re-inject from the traced kwargs when present.

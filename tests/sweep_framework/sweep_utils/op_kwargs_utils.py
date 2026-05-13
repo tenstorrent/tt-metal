@@ -45,6 +45,11 @@ _INFRA_KEYS = frozenset(
         "input_hash",
         "tag",
         "__absent_keys__",
+            "mesh_device",
+        "global_cb",
+        "persistent_output_tensor",
+        "indices_tensor",
+        "sub_core_grids",
     }
 )
 
@@ -161,6 +166,19 @@ def _is_layout_dict(value: Any) -> bool:
 def _is_unary_op_dict(value: Any) -> bool:
     """Check if a value looks like a UnaryOpType dict {type: 'UnaryOpType', repr: 'UnaryOpType.SILU'}."""
     return isinstance(value, dict) and value.get("type") == "UnaryOpType"
+
+
+def _parse_sub_device_id(value):
+    """Parse a SubDeviceId dict to ttnn.SubDeviceId."""
+    import re
+    import ttnn
+    if not isinstance(value, dict):
+        return None
+    val_str = str(value.get("value", value.get("repr", "")))
+    m = re.search(r"SubDeviceId\((\d+)\)", val_str)
+    if m:
+        return ttnn.SubDeviceId(int(m.group(1)))
+    return None
 
 
 def _parse_unary_op(value: Any) -> Any:
@@ -328,6 +346,13 @@ def build_op_kwargs(
         if list_parsed is not value:
             op_kwargs[key] = list_parsed
             continue
+        # Parse SubDeviceId dicts
+        if isinstance(value, dict) and (value.get("type") == "SubDeviceId" or "SubDeviceId" in str(value.get("value", ""))):
+            parsed_sdid = _parse_sub_device_id(value)
+            if parsed_sdid is not None:
+                op_kwargs[key] = parsed_sdid
+                continue
+
         # Parse dict values into ttnn objects
         parsed = parse_dict_value(key, value)
         if parsed is not None:

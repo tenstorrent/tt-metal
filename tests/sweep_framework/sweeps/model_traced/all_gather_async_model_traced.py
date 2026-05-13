@@ -295,6 +295,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     # Check if this is a model_traced vector (has input_a_memory_config instead of buffer_type)
     is_model_traced = "input_a_memory_config" in test_vector
 
+
     if is_model_traced:
         # Model traced vectors are pre-validated by the tracer.
         # Do NOT check device count here — vector generation may run on a
@@ -397,7 +398,7 @@ def run(
     chunks_per_sync=None,
     num_workers_per_link=None,
     num_buffers_per_channel=None,
-    subdevice_id=None,
+    subdevice_id=None,  # May be dict from master trace
     use_broadcast=None,
     *,
     device,  # unused
@@ -414,6 +415,7 @@ def run(
     if not persistent_output_buffer_was_provided:
         persistent_output_buffer = None
 
+
     # Check if this is a model_traced run (V2 format has input_a_shape)
     is_model_traced = input_a_shape is not None
 
@@ -424,7 +426,7 @@ def run(
 
         # The loader remaps dim -> arg2 via _NAMED_TO_POSITIONAL_REMAP
         if dim is None:
-            dim = kwargs.get("arg2")
+            dim = kwargs.get("arg1", kwargs.get("arg2"))
 
         input_shape = input_a_shape
         input_dtype = input_a_dtype

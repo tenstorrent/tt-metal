@@ -12,6 +12,8 @@ from tests.sweep_framework.master_config_loader_v2 import (
     dict_to_memory_config,
 )
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    setup_sub_device_manager,
+    teardown_sub_device_manager,
     create_mesh_device,
     create_tensor_on_mesh,
     get_model_traced_mesh_shape,
@@ -56,11 +58,21 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+_GLOBAL_CB = None
+
 def mesh_device_fixture():
+    global _GLOBAL_CB
     mesh_shape = get_model_traced_mesh_shape()
     device = create_mesh_device(mesh_shape)
+    result = setup_sub_device_manager(device)
+    sub_device_mgr = None
+    if isinstance(result, tuple):
+        sub_device_mgr, _GLOBAL_CB = result
+    else:
+        sub_device_mgr = result
     device_name = ttnn.get_arch_name()
     yield (device, device_name)
+    teardown_sub_device_manager(device, sub_device_mgr)
     ttnn.close_mesh_device(device)
 
 
@@ -276,7 +288,7 @@ def run(
     # Use build_op_kwargs to parse dict values for op kwargs (compute_kernel_config, etc.).
     # Exclude program_config (handled above), activation (used for golden too),
     # and output_tile (a Tile object that can't be auto-parsed from dict).
-    parsed_op_kwargs = build_op_kwargs(kwargs, exclude={"output_tile"})
+    parsed_op_kwargs = build_op_kwargs(kwargs, exclude={"output_tile", "global_cb"})
 
     # Parse master's output_tile (a Tile object that build_op_kwargs can't auto-
     # parse). Format: {"type": "Tile", "value": "Tile with shape: [32, 32]"}.
@@ -411,7 +423,7 @@ def run(
                 try:
                     ttnn_a = ttnn.to_memory_config(ttnn_a, input_a_memory_config)
                 except Exception:
-                    pass  # leave in DRAM-interleaved if the conversion fails
+                    pass
         except Exception:
             ttnn_a = ttnn.from_torch(
                 torch_a,
@@ -450,13 +462,8 @@ def run(
                 try:
                     ttnn_b = ttnn.to_memory_config(ttnn_b, weight_memory_config)
                 except Exception:
-                    # Leave weight in DRAM-interleaved if the kernel rejects
-                    # the master shard layout (e.g. shard_spec incompatible
-                    # with current dispatch grid). The trace will show DRAM
-                    # rather than crash the sweep.
                     pass
         else:
-            # Regular single-device tensor
             ttnn_b = ttnn.from_torch(
                 torch_b,
                 dtype=input_b_dtype,
@@ -465,7 +472,6 @@ def run(
                 memory_config=weight_memory_config,
             )
     else:
-        # Host storage
         ttnn_b = ttnn.from_torch(torch_b, dtype=input_b_dtype, layout=input_b_layout)
 
     # Run TTNN op
@@ -565,6 +571,19 @@ def run(
             linear_kwargs["output_tile"] = _output_tile
 
         linear_kwargs.update(parsed_op_kwargs)
+
+        # Inject global_cb from fixture when config requires it.
+        # global_cb requires DRAM_SHARDED weight (not interleaved).
+        gcb_raw = kwargs.get("global_cb")
+        if gcb_raw is not None and gcb_raw != "__ABSENT__" and _GLOBAL_CB is not None:
+            _w_mc = ttnn_b.memory_config() if hasattr(ttnn_b, "memory_config") else None
+            _w_sharded = _w_mc is not None and _w_mc.is_sharded()
+            if _w_sharded:
+                linear_kwargs["global_cb"] = _GLOBAL_CB
+            else:
+                _pc = linear_kwargs.get("program_config")
+                if _pc is not None and hasattr(_pc, "num_global_cb_receivers"):
+                    _pc.num_global_cb_receivers = 1
 
         # Master traced ttnn.linear with two call forms: 26 cfgs used the kwarg
         # `input_tensor_b=` (vectors carry input_tensor_b_shape), 3 cfgs used
