@@ -6,6 +6,7 @@
 #pragma once
 
 #include "ckernel.h"
+#include "sfpi.h"
 
 namespace ckernel::sfpu {
 

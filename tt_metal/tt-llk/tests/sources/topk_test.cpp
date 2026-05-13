@@ -222,17 +222,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "ckernel_sfpu.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_transpose_dest.h"
 
 using namespace ckernel;
 
-// Define DST_SYNC_MODE and DST_ACCUM_MODE so LLK SFPU params helpers compile in this TU.
-// This must be done BEFORE including the TopK LLK API header.
-#define DST_SYNC_MODE  dest_sync
-#define DST_ACCUM_MODE is_fp32_dest_acc_en
-#include "llk_math_unary_sfpu_api.h"
-#undef DST_SYNC_MODE
-#undef DST_ACCUM_MODE
+#include "llk_sfpu/ckernel_sfpu_topk.h"
+#include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -337,8 +333,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 if (first_iteration)
                 {
                     // same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_local_sort from metal.
-                    _llk_math_eltwise_unary_sfpu_params_(
-                        ckernel::sfpu::calculate_bitonic_topk_phases_steps<APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT>,
+                    SFPU_CALL(
+                        dest_sync,
+                        is_fp32_dest_acc_en,
+                        calculate_bitonic_topk_phases_steps,
+                        (APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT),
                         dst_index,
                         vector_mode,
                         TOPK_SORT_DIRECTION,
@@ -350,8 +349,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 else
                 {
                     // Same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_rebuild from metal.
-                    _llk_math_eltwise_unary_sfpu_params_(
-                        ckernel::sfpu::calculate_bitonic_topk_rebuild<APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT>,
+                    SFPU_CALL(
+                        dest_sync,
+                        is_fp32_dest_acc_en,
+                        calculate_bitonic_topk_rebuild,
+                        (APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT),
                         dst_index,
                         vector_mode,
                         TOPK_SORT_DIRECTION,
@@ -362,8 +364,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
 
                 // Always a second operation.
-                _llk_math_eltwise_unary_sfpu_params_(
-                    ckernel::sfpu::calculate_bitonic_topk_merge<APPROX, is_fp32_dest_acc_en, TOPK_SORT_DIRECTION, TOPK_STABLE_SORT>,
+                SFPU_CALL(
+                    dest_sync,
+                    is_fp32_dest_acc_en,
+                    calculate_bitonic_topk_merge,
+                    (APPROX, is_fp32_dest_acc_en, TOPK_SORT_DIRECTION, TOPK_STABLE_SORT),
                     dst_index,
                     vector_mode,
                     current_iteration,
@@ -373,8 +378,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 if (last_iteration)
                 {
                     // Same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_rebuild from metal.
-                    _llk_math_eltwise_unary_sfpu_params_(
-                        ckernel::sfpu::calculate_bitonic_topk_rebuild<APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT>,
+                    SFPU_CALL(
+                        dest_sync,
+                        is_fp32_dest_acc_en,
+                        calculate_bitonic_topk_rebuild,
+                        (APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT),
                         dst_index,
                         vector_mode,
                         TOPK_SORT_DIRECTION,

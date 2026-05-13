@@ -7,7 +7,7 @@
 #include "api/compute/common_globals.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #ifdef TRISC_MATH
-#include "sfpu/ckernel_sfpu_rsub_int32.h"
+#include "ckernel_sfpu_rsub_int32.h"
 #endif
 
 namespace ckernel {
