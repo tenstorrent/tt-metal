@@ -130,15 +130,15 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/untilize.h
     inc/api/compute/welford.h
     inc/api/compute/xlogy.h
-    inc/experimental/lock.h
-    inc/experimental/noc.h
-    inc/experimental/circular_buffer.h
-    inc/experimental/dataflow_buffer.h
+    inc/api/lock.h
+    inc/api/dataflow/noc.h
+    inc/api/dataflow/endpoints.h
+    inc/api/dataflow/circular_buffer.h
+    inc/api/dataflow/dataflow_buffer.h
     inc/experimental/kernel_args.h
-    inc/experimental/noc_semaphore.h
-    inc/experimental/endpoints.h
-    inc/experimental/core_local_mem.h
-    inc/experimental/tensor.h
+    inc/api/dataflow/noc_semaphore.h
+    inc/api/core_local_mem.h
+    inc/api/tensor/noc_traits.h
     inc/hostdev/dev_msgs.h
     inc/hostdev/device_print_common.h
     inc/hostdev/device_print_structures.h

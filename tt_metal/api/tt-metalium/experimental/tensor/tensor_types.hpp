@@ -65,6 +65,13 @@ bool is_block_float(DataType dtype);
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
 tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataformat);
 
+/**
+ * Returns tile size of given data type in bytes.
+ *
+ * Equivalent to tt::tile_size(datatype_to_dataformat_converter(dtype)).
+ */
+uint32_t tile_size(DataType dtype);
+
 struct NdShardSpec {
     Shape shard_shape;
     CoreRangeSet grid;

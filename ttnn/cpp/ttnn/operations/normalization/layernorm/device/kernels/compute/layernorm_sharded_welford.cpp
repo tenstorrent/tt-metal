@@ -13,7 +13,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 /**
  * @brief This kernel computes layernorm for sharded tensors using
@@ -141,27 +141,27 @@ void kernel_main() {
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t cb_reciprocals = tt::CBIndex::c_25;  // LUT of pre-computed reciprocals for Welford's algorithm
 
-    experimental::CircularBuffer cb_gamma_obj(cb_gamma);
-    experimental::CircularBuffer cb_beta_obj(cb_beta);
-    experimental::CircularBuffer cb_xmm_obj(cb_xmm);
-    experimental::CircularBuffer cb_ex_partial_obj(cb_ex_partial);
-    experimental::CircularBuffer cb_ex_obj(cb_ex);
-    experimental::CircularBuffer cb_ex_external_obj(cb_ex_external);
-    experimental::CircularBuffer cb_ex_global_obj(cb_ex_global);
-    experimental::CircularBuffer cb_transpose_obj(cb_transpose);
-    experimental::CircularBuffer cb_fusion_obj(cb_fusion);
-    experimental::CircularBuffer cb_out_obj(cb_out);
+    CircularBuffer cb_gamma_obj(cb_gamma);
+    CircularBuffer cb_beta_obj(cb_beta);
+    CircularBuffer cb_xmm_obj(cb_xmm);
+    CircularBuffer cb_ex_partial_obj(cb_ex_partial);
+    CircularBuffer cb_ex_obj(cb_ex);
+    CircularBuffer cb_ex_external_obj(cb_ex_external);
+    CircularBuffer cb_ex_global_obj(cb_ex_global);
+    CircularBuffer cb_transpose_obj(cb_transpose);
+    CircularBuffer cb_fusion_obj(cb_fusion);
+    CircularBuffer cb_out_obj(cb_out);
 
     constexpr uint32_t cb_im = (do_gamma | do_beta) ? cb_x : cb_out;
-    experimental::CircularBuffer cb_im_obj(cb_im);
+    CircularBuffer cb_im_obj(cb_im);
     constexpr uint32_t cb_outgamma = do_beta ? cb_fusion : cb_out;
-    experimental::CircularBuffer cb_outgamma_obj(cb_outgamma);
+    CircularBuffer cb_outgamma_obj(cb_outgamma);
 #ifdef FUSE_PRE_ADD
     constexpr uint32_t cb_in = cb_x;
 #else
     constexpr uint32_t cb_in = cb_in0;
 #endif
-    experimental::CircularBuffer cb_in_obj(cb_in);
+    CircularBuffer cb_in_obj(cb_in);
 
     // ---------------------------------------------------------------------------
     // Derived quantities

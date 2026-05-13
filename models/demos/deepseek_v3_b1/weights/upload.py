@@ -17,21 +17,37 @@ WeightTensor = ttnn.Tensor | OverlappedTensor
 
 
 class Uploadable(Protocol):
-    def backing_tensors(self) -> list[ttnn.Tensor]:
+    def backing_tensors(self, *, skip_fields: tuple[str, ...] | set[str] | None = None) -> list[ttnn.Tensor]:
         ...
 
-    def with_device_tensors(self, tensor_map: TensorMap):
+    def with_device_tensors(self, tensor_map: TensorMap, *, allow_unmapped: bool = False):
         ...
+
+
+def _tensor_is_on_device(t: ttnn.Tensor) -> bool:
+    return ttnn.is_tensor_storage_on_device(t)
 
 
 class UploadableMixin:
-    """Typed helper for extracting and rebuilding weight dataclasses."""
+    """Typed helper for extracting and rebuilding weight dataclasses.
 
-    def backing_tensors(self) -> list[ttnn.Tensor]:
+    Tensors that are already on device are skipped by ``backing_tensors``
+    (they don't need to be uploaded again) and passed through unchanged
+    by ``with_device_tensors`` regardless of whether they appear in the
+    rebuild ``tensor_map``.  This lets callers stage some tensors to the
+    device early (e.g. attn/shared L1 lockstep weights for the SRAM hot
+    expert trim) and still hand the same dataclass to ``two_phase_upload``
+    later for the remaining host-staged tensors.
+    """
+
+    def backing_tensors(self, *, skip_fields: tuple[str, ...] | set[str] | None = None) -> list[ttnn.Tensor]:
+        skip = set(skip_fields) if skip_fields else set()
         out: list[ttnn.Tensor] = []
         seen_ids: set[TensorKey] = set()
         hints = get_type_hints(type(self))
         for field in fields(self):
+            if field.name in skip:
+                continue
             annotation = hints[field.name]
             value = getattr(self, field.name)
             kind, allows_none = _classify_annotation(annotation)
@@ -40,8 +56,12 @@ class UploadableMixin:
                     continue
                 raise TypeError(f"Field {type(self).__name__}.{field.name} is None but annotation is non-optional")
             if kind == "tensor":
+                if _tensor_is_on_device(value):
+                    continue
                 _append_unique_tensor(out, seen_ids, value, field.name)
             elif kind == "overlapped":
+                if _tensor_is_on_device(value.fused_tensor):
+                    continue
                 _append_unique_tensor(out, seen_ids, value.fused_tensor, field.name)
             elif kind == "tensor_list":
                 if not isinstance(value, list):
@@ -49,12 +69,16 @@ class UploadableMixin:
                         f"Field {type(self).__name__}.{field.name} must be list[ttnn.Tensor], got {type(value)}"
                     )
                 for tensor in value:
+                    if _tensor_is_on_device(tensor):
+                        continue
                     _append_unique_tensor(out, seen_ids, tensor, field.name)
+            elif kind == "passthrough":
+                continue
             else:
                 raise TypeError(f"Unsupported field annotation in {type(self).__name__}.{field.name}: {annotation}")
         return out
 
-    def with_device_tensors(self, tensor_map: TensorMap):
+    def with_device_tensors(self, tensor_map: TensorMap, *, allow_unmapped: bool = False):
         hints = get_type_hints(type(self))
         rebuilt_fields: dict[str, object] = {}
         for field in fields(self):
@@ -67,9 +91,21 @@ class UploadableMixin:
                     continue
                 raise TypeError(f"Field {type(self).__name__}.{field.name} is None but annotation is non-optional")
             if kind == "tensor":
-                rebuilt_fields[field.name] = tensor_map[tensor_identity_key(value)]
+                rebuilt_fields[field.name] = _resolve_tensor(
+                    value, tensor_map, allow_unmapped, type(self).__name__, field.name
+                )
             elif kind == "overlapped":
-                fused_tensor = tensor_map[tensor_identity_key(value.fused_tensor)]
+                if _tensor_is_on_device(value.fused_tensor):
+                    rebuilt_fields[field.name] = value
+                    continue
+                key = tensor_identity_key(value.fused_tensor)
+                if key in tensor_map:
+                    fused_tensor = tensor_map[key]
+                elif allow_unmapped:
+                    rebuilt_fields[field.name] = value
+                    continue
+                else:
+                    raise KeyError(f"Field {type(self).__name__}.{field.name}: fused tensor not found in upload map")
                 rebuilt_fields[field.name] = OverlappedTensor(
                     fused_tensor=fused_tensor,
                     tensor_shape=value.tensor_shape,
@@ -85,10 +121,31 @@ class UploadableMixin:
                     raise TypeError(
                         f"Field {type(self).__name__}.{field.name} must be list[ttnn.Tensor], got {type(value)}"
                     )
-                rebuilt_fields[field.name] = [tensor_map[tensor_identity_key(tensor)] for tensor in value]
+                rebuilt_fields[field.name] = [
+                    _resolve_tensor(t, tensor_map, allow_unmapped, type(self).__name__, field.name) for t in value
+                ]
+            elif kind == "passthrough":
+                rebuilt_fields[field.name] = value
             else:
                 raise TypeError(f"Unsupported field annotation in {type(self).__name__}.{field.name}: {annotation}")
         return type(self)(**rebuilt_fields)
+
+
+def _resolve_tensor(
+    value: ttnn.Tensor,
+    tensor_map: TensorMap,
+    allow_unmapped: bool,
+    type_name: str,
+    field_name: str,
+) -> ttnn.Tensor:
+    if _tensor_is_on_device(value):
+        return value
+    key = tensor_identity_key(value)
+    if key in tensor_map:
+        return tensor_map[key]
+    if allow_unmapped:
+        return value
+    raise KeyError(f"Field {type_name}.{field_name}: tensor not found in upload map")
 
 
 def _classify_annotation(annotation: object) -> tuple[str, bool]:
@@ -98,6 +155,8 @@ def _classify_annotation(annotation: object) -> tuple[str, bool]:
             return "tensor", False
         if annotation is OverlappedTensor:
             return "overlapped", False
+        if isinstance(annotation, type) and getattr(annotation, "__upload_passthrough__", False):
+            return "passthrough", False
         raise TypeError(f"Unsupported field annotation: {annotation}")
 
     if origin is list:
@@ -205,8 +264,46 @@ def _upload_tensors(device: ttnn.MeshDevice, host_tensors: list[ttnn.Tensor]) ->
 
 
 def two_phase_upload(device: ttnn.MeshDevice, host_weights: Uploadable):
-    """Upload an Uploadable host weight struct and return device-backed copy."""
+    """Upload an Uploadable host weight struct and return device-backed copy.
+
+    Tensors that are already on device (e.g. ones uploaded earlier by
+    :func:`eager_upload_l1_lockstep`) are passed through unchanged.
+    """
     host_tensors = host_weights.backing_tensors()
     device_tensors = _upload_tensors(device, host_tensors)
     host_to_device: TensorMap = {tensor_identity_key(host): dev for host, dev in zip(host_tensors, device_tensors)}
     return host_weights.with_device_tensors(host_to_device)
+
+
+def eager_upload_l1_lockstep(
+    device: ttnn.MeshDevice,
+    host_weights: Uploadable,
+    *,
+    skip_fields: tuple[str, ...] | set[str] | None = None,
+):
+    """Upload only the L1-lockstep host tensors and return ``host_weights``
+    with those fields swapped to device-resident tensors.
+
+    Used to give the SRAM hot expert trim real allocator addresses for the
+    attention L1 weights *before* it runs, so the trim sees the "attn first,
+    SRAM below" allocation order its per-core invariant
+    ``attn[c] + sram[c] <= cap`` relies on.
+
+    ``skip_fields`` lets the caller exclude specific dataclass fields from
+    the eager upload -- typically the shared expert weights, which live on
+    the same SRAM cores but should *not* count against the SRAM cap (they
+    get uploaded later by :func:`two_phase_upload` and land below the SRAM
+    band in the ``worker_l1_size - cap`` reserve).
+
+    DRAM tensors and per-core L1 passthrough fields (e.g. SRAM compressed
+    expert slots) are left untouched and stay host-staged for the caller's
+    later :func:`two_phase_upload` call.  Already-on-device tensors are
+    skipped silently.
+    """
+    host_tensors = host_weights.backing_tensors(skip_fields=skip_fields)
+    l1_lockstep = [t for t in host_tensors if t.memory_config().buffer_type == ttnn.BufferType.L1]
+    if not l1_lockstep:
+        return host_weights
+    device_tensors = _upload_tensors(device, l1_lockstep)
+    tensor_map: TensorMap = {tensor_identity_key(host): dev for host, dev in zip(l1_lockstep, device_tensors)}
+    return host_weights.with_device_tensors(tensor_map, allow_unmapped=True)
