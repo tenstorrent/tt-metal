@@ -98,52 +98,36 @@ def pack_uint8(torch_tensor):
 
 
 def float_to_bfp8_block(block):
-    def bfloat16_bits(value):
+    def bfloat16_to_binary(value):
         float_value = struct.unpack("<I", struct.pack("<f", value))[0]
-        return (float_value & 0xFFFF0000) >> 16
+        bfloat16_value = (float_value & 0xFFFF0000) >> 16
+        return f"{(bfloat16_value >> 8) & 0xFF:08b}{bfloat16_value & 0xFF:08b}"
 
-    n = len(block)
-    signs = [0] * n
-    exponents = [0] * n
-    # Keep FULL 8-bit normalized mantissa (implicit 1 + 7 explicit, 128..255
-    # for normals; or just the 7 explicit bits for denormals where there's
-    # no implicit 1). Old code did `binary_str[9:-1]` + `"1" + …` which both
-    # dropped the bf16 LSB AND forced implicit 1 even for denormals; the
-    # combination produced 7-bit values 64..127 that were then truncated.
-    # The new shape mirrors ttsim PACR src/tensix.cpp:3010-3013 and rounds
-    # to nearest via `(m + (1<<shift)) >> (shift+1)` below.
-    mantissas_full = [0] * n
-    max_exponent = 0
+    exponents = []
+    mantissas = []
+    signs = []
+    max_exponent = -float("inf")
 
-    for i, value in enumerate(block):
-        bits = bfloat16_bits(value)
-        signs[i] = (bits >> 15) & 1
-        exp = (bits >> 7) & 0xFF
-        mant_explicit = bits & 0x7F
-        exponents[i] = exp
-        if exp != 0:
-            mantissas_full[i] = mant_explicit | 0x80  # implicit 1
-        else:
-            mantissas_full[i] = mant_explicit  # denormal: no implicit 1
-        if exp > max_exponent:
-            max_exponent = exp
+    for value in block:
+        binary_str = bfloat16_to_binary(value)
+        sign = binary_str[0]
+        signs.append(int(sign, 2))
+        exponent = int(binary_str[1:9], 2)
+        mantissa = binary_str[9:-1]  # remove last
+        mantissa = "1" + mantissa  ## add 1
+        exponents.append(exponent)
+        mantissas.append(mantissa)
+        max_exponent = max(max_exponent, exponent)
 
     shared_exponent = max_exponent
 
+    mantissas_explicit = [int(mantissa, 2) for mantissa in mantissas]
+
     bfp8_mantissas = []
-    for i in range(n):
-        delta = shared_exponent - exponents[i]
-        # Per ttsim PACR src/tensix.cpp:3032 for dst=8: shift=delta, then
-        # m = (m + (1<<shift)) >> (shift+1).  For delta > 16 the value is
-        # too small to represent in this block → 0.
-        if delta > 16:
-            mantissa = 0
-        else:
-            mantissa = (mantissas_full[i] + (1 << delta)) >> (delta + 1)
-            if mantissa > 127:
-                mantissa = 127  # saturate per ttsim:3035-3036 (max_m - 1)
-        if mantissa:
-            mantissa = (signs[i] << 7) | mantissa
+    for i in range(len(block)):
+        exponent_delta = shared_exponent - exponents[i]
+        mantissa = mantissas_explicit[i] >> exponent_delta
+        mantissa = (signs[i] << 7) | mantissa
         bfp8_mantissas.append(mantissa)
 
     return shared_exponent, bfp8_mantissas
@@ -218,21 +202,8 @@ def float_to_bfp4_block(block):
     bfp4_mantissas = [0] * n
     for i in range(n):
         if mantissas[i]:
-            # Round-to-nearest at total_shift = 21 + delta (mirrors the fix
-            # landed in bfp4b_to_float16b). Hardware path: ttsim PACR
-            # src/tensix.cpp:3032 with dst_element_size_bits=4 →
-            # shift = delta + 4 in fp16-shape; expressed in fp32-shape here
-            # as total_shift = delta + 21 (the +21 strips fp32 explicit
-            # mantissa bits down to the 3-bit BFP4 mantissa).
-            delta = shared_exponent - exponents[i]
-            total_shift = 21 + delta
-            if total_shift > 0:
-                shifted = (mantissas[i] + (1 << (total_shift - 1))) >> total_shift
-            else:
-                shifted = mantissas[i]
-            if shifted > 7:
-                shifted = 7  # saturate per ttsim:3035-3036 (max_m - 1)
-            bfp4_mantissas[i] = (signs[i] << 3) | (shifted & 0x7)
+            shifted = mantissas[i] >> (shared_exponent - exponents[i])
+            bfp4_mantissas[i] = (signs[i] << 3) | ((shifted >> 21) & 0x7)
 
     return shared_exponent, bfp4_mantissas
 
