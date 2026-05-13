@@ -142,9 +142,12 @@ class TTNNDotsOCRAttention(TTNNModule):
                 fp32_dest_acc_en=False,
                 packer_l1_acc=True,
             )
-            # Decode SDPA feeds token logits directly; LoFi is fast but can
-            # perturb generation into invalid text. Keep HiFi2 for decode
-            # quality while retaining the faster approximate softmax path.
+            # Decode SDPA: HiFi2 (was LoFi in commit d1b17d1a3c6 -- swapped back
+            # because LoFi at the per-token batch=1 K/V cache reads produces
+            # off-by-many-tokens argmax errors visible as garbled output. The
+            # earlier "validation" run that approved LoFi was confounded by the
+            # broken DRAM-sharded LM head also in that commit, so the LoFi delta
+            # was masked. Keep at HiFi2 until a clean A/B confirms it's safe.)
             self.sdpa.decode_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
                 math_approx_mode=True,

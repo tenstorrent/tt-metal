@@ -269,7 +269,17 @@ class PipelineConfig:
 
 
 def _create_paged_kv_cache(model_config, device, batch_size: int = 1):
-    """Create a paged attention KV cache for dots.ocr."""
+    """Create a paged attention KV cache for dots.ocr.
+
+    Cache dtype is left at default ``bfloat16``. ``bfloat8_b`` was tried
+    twice in isolation -- both runs produced visibly corrupted text
+    (``EX丝滿º衔task放...``). The K/V values for dots.ocr decode SDPA
+    are sensitive to per-element quantization in a way that is not
+    captured by simple per-tile statistics; the BFP8 shared exponent
+    appears to be too coarse for the long-horizon attention scores in
+    this model. Do not flip back to ``bfloat8_b`` without a per-layer
+    Q/K/V max-error sweep.
+    """
     head_dim = getattr(
         model_config,
         "head_dim",
@@ -419,6 +429,15 @@ class TTNNDotsOCRPipeline(TTNNModule):
         final_norm._unique_name = "model.norm"
 
         # AllReduced gives full vocab on each device for argmax.
+        # NOTE: ``TTNNDotsOCRDRAMShardedLMHead`` (DRAM-width-sharded, N-parallel,
+        # 12-bank weight read) was attempted in this branch as a decode
+        # bandwidth win but produced corrupted argmax output -- left in
+        # ``modules/linear.py`` for future investigation. Possible causes:
+        # all_gather ordering on the K-replicated input, BFP8 output
+        # precision on a 152K-class vocab, or fp32_dest_acc_en interaction
+        # with the DRAM-sharded kernel's auto-chosen subblock factors. Until
+        # one of those is isolated and fixed, the K-parallel + reduce_scatter
+        # + all_gather path stays the production lm_head.
         lm_head = TTNNLinearLLamaIColShardedWAllReduced.from_torch(hf_model.lm_head)
         lm_head._unique_name = "lm_head"
 
@@ -876,6 +895,51 @@ class TTNNDotsOCRPipeline(TTNNModule):
                     return generated_single[: idx + 1]
             return generated_single
 
+        # 1-deep pipelined readback: issue iter N+1's trace replay before
+        # resolving iter N's token. Removes the per-token sync wall caused
+        # by ``ttnn.to_torch`` blocking until the d2h copy of the previous
+        # token completes. Safe because:
+        #   * ``decode_step`` already does an on-device
+        #     ``ttnn.copy(token_id_tt, _decode_token_buffer)`` before
+        #     issuing the d2h, so the next trace replay's input is set
+        #     without needing a host roundtrip.
+        #   * In steady-state non-DP single-stream decode the
+        #     ``prev_token_id`` arg to ``decode_step`` is unused (gated on
+        #     ``not _decode_token_buffer_has_next or _batch_input_mapper``).
+        #   * tt-metal serializes a queued d2h copy of ``token_id_tt``
+        #     before the next trace replay's write to that same buffer, so
+        #     the host snapshot captures the correct token even though
+        #     the device tensor is reused.
+        # EOS still early-exits; worst case we executed exactly 1 extra
+        # decode iteration past the EOS token before discarding it.
+        if max_new_tokens > 1 and self._batch_input_mapper is None:
+            prev_snapshot: Optional[ttnn.Tensor] = None
+            for _ in range(max_new_tokens - 1):
+                cur_snapshot = self.decode_step(current_token, read_from_device=False)
+                if not isinstance(cur_snapshot, ttnn.Tensor):
+                    raise RuntimeError("decode_step must return a TTNN snapshot in pipelined readback")
+                if prev_snapshot is not None:
+                    prev_torch = ttnn.to_torch(
+                        prev_snapshot,
+                        mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
+                    )
+                    next_token = int(prev_torch.reshape(-1)[0].item())
+                    ttnn.deallocate(prev_snapshot)
+                    generated_single.append(next_token)
+                    if next_token in self.config.eos_token_ids:
+                        ttnn.deallocate(cur_snapshot)
+                        return generated_single
+                prev_snapshot = cur_snapshot
+            if prev_snapshot is not None:
+                prev_torch = ttnn.to_torch(
+                    prev_snapshot,
+                    mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
+                )
+                next_token = int(prev_torch.reshape(-1)[0].item())
+                ttnn.deallocate(prev_snapshot)
+                generated_single.append(next_token)
+            return generated_single
+
         for _ in range(max_new_tokens - 1):
             next_tok = self.decode_step(current_token)
             if isinstance(next_tok, list):
@@ -883,7 +947,6 @@ class TTNNDotsOCRPipeline(TTNNModule):
             next_token = next_tok
             generated_single.append(next_token)
 
-            # Check EOS
             if next_token in self.config.eos_token_ids:
                 break
 
