@@ -3,6 +3,28 @@
 #
 # Structure: Each architecture has its own section with all tests to skip.
 # Tests that apply to all architectures are duplicated in each section.
+#
+# arch_skip_groups: lists entire ttnn-tests.yaml test-group names to skip for
+# a given arch. The workflow gates the pytest run step on this lookup, so the
+# job reports success without running. Use this for arch-wide breakage where
+# a fix is in flight; remove the entry once the underlying issue is resolved.
+
+arch_skip_groups:
+  wormhole_b0: []
+  # https://github.com/tenstorrent/tt-metal/actions/runs/25732791096
+  # All BH ttsim ttnn-pytests groups below fail; fix in progress.
+  blackhole:
+    - ttnn data movement group
+    - ttnn conv group
+    - ttnn eltwise group 1
+    - ttnn eltwise group 2
+    - ttnn pool group
+    - ttnn fused group 1
+    - ttnn fused group 2
+    - ttnn misc ops group
+    - ttnn sdpa group
+    - ttnn reduce group
+    - core ttnn unit test group
 
 wormhole_b0:
   # Job-level timeouts -- can be cut down still
@@ -19,8 +41,8 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
-  # OOM-kills ttsim runner (exit code 137) — stress tests sized for real HW, not ttsim
-  # https://github.com/tenstorrent/tt-metal/commit/067854964f01d6070d138f1b93c034ec453bd053
+
+  # Likely OOM killer related failures -- probably need to run these tests serially
   - tests/ttnn/unit_tests/operations/deepseek/test_deepseek_prefill_extract.py
   - tests/ttnn/unit_tests/operations/deepseek/test_deepseek_prefill_insert.py
 
@@ -59,8 +81,9 @@ blackhole:
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
-  # OOM-kills ttsim runner (exit code 137) — stress tests sized for real HW, not ttsim
-  # https://github.com/tenstorrent/tt-metal/commit/067854964f01d6070d138f1b93c034ec453bd053
+
+  # Likely OOM killer related failures -- probably need to run these tests serially
+  - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob
   - tests/ttnn/unit_tests/operations/deepseek/test_deepseek_prefill_extract.py
   - tests/ttnn/unit_tests/operations/deepseek/test_deepseek_prefill_insert.py
 

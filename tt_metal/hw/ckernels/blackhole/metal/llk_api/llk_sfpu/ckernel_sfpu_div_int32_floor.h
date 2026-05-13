@@ -52,7 +52,7 @@ sfpi_inline void calculate_div_int32_body(
     // the mantissa so that we extract the top 22 bits of the result.
     sfpi::vFloat q_f = a_f * inv_b_f + vConstFloatPrgm0;
     sfpi::vInt sign = a_orig ^ b_orig;
-    sfpi::vUInt q = sfpi::exman9(q_f);
+    sfpi::vUInt q = sfpi::exman(q_f);
 
     // Compute qb = q * b.  This tells us how close our approximation `q` is to
     // the target `a`.  We split into 23-bit chunks.
@@ -60,10 +60,7 @@ sfpi_inline void calculate_div_int32_body(
     // 22 bits, so we can compute qb = (q1<<10 + 0) * (b1<<22 + b0)
     //                               = (q1<<10) * b0
 
-    // Despite the name, SFPMUL24 multiplies two 23-bit integers, giving the
-    // low or high 23 bits of the product (last argument: 0=lo, 1=hi).  Inputs
-    // do not need to be masked as this is done internally.
-    sfpi::vInt qb = __builtin_rvtt_sfpmul24(q.get(), b.get(), 0);
+    sfpi::vInt qb = sfpi::fractional_mul(q, b);
 
     q <<= 10;
     qb <<= 10;
@@ -78,9 +75,9 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vInt correction = sfpi::float_to_uint16(correction_f, sfpi::RoundMode::NearestEven);
 
     // Compute tmp = correction * b.
-    b1 = __builtin_rvtt_sfpmul24(correction.get(), b1.get(), 0);
-    sfpi::vInt tmp_hi = __builtin_rvtt_sfpmul24(correction.get(), b.get(), 1);
-    sfpi::vInt tmp_lo = __builtin_rvtt_sfpmul24(correction.get(), b.get(), 0);
+    b1 = sfpi::fractional_mul(correction, b1);
+    sfpi::vInt tmp_hi = sfpi::fractional_mul(correction, b, sfpi::FractionalHalf::High);
+    sfpi::vInt tmp_lo = sfpi::fractional_mul(correction, b);
     tmp_hi += b1;
     tmp_hi <<= 23;
     sfpi::vInt tmp = tmp_lo + tmp_hi;

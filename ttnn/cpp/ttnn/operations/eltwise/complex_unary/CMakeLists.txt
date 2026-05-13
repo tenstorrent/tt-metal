@@ -1,15 +1,12 @@
+include(sources.cmake)
+
 add_library(ttnn_op_eltwise_complex_unary ${LIB_TYPE})
 add_library(TTNN::Ops::Eltwise::Complex::Unary ALIAS ttnn_op_eltwise_complex_unary)
 
 tt_reuse_precompile_headers(ttnn_op_eltwise_complex_unary TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_complex_unary)
 
-target_sources(
-    ttnn_op_eltwise_complex_unary
-    PRIVATE
-        complex_unary.cpp
-        device/complex_unary_op.cpp
-)
+target_sources(ttnn_op_eltwise_complex_unary PRIVATE ${TTNN_OP_ELTWISE_COMPLEX_UNARY_SRCS})
 
 target_include_directories(ttnn_op_eltwise_complex_unary PRIVATE ${FixmeOpIncDirs})
 target_link_libraries(

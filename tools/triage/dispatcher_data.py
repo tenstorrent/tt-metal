@@ -81,6 +81,9 @@ class DispatcherCoreData:
     # Inspector/control-plane-sourced block type for this core. Used by callers to reason about
     # active-vs-idle ETH without re-consulting the cluster descriptor.
     block_type: BlockType | None = None
+    # Hint surfaced when find_kernel fails — explains the most likely cause (program cache off,
+    # or workload destroyed despite cache being on) so callers can append it to "PC not in range" style errors.
+    kernel_lookup_warning: str | None = None
 
 
 class DispatcherData:
@@ -92,6 +95,7 @@ class DispatcherData:
         metal_device_id_mapping: MetalDeviceIdMapping,
     ):
         self.inspector_data = inspector_data
+        self.metal_device_id_mapping = metal_device_id_mapping
         self.programs = inspector_data.getPrograms().programs
         self.kernels = {kernel.watcherKernelId: kernel for program in self.programs for kernel in program.kernels}
         self.use_rpc_kernel_find = True
@@ -264,6 +268,20 @@ class DispatcherData:
             )
         return self._build_env_cache[device_unique_id]
 
+    def _kernel_missing_hint_for_device(self, metal_device_id: int) -> str | None:
+        mesh_devices = self.inspector_data.getMeshDevices().meshDevices
+        containing = [md for md in mesh_devices if metal_device_id in md.devices]
+        disabled = [md.meshId for md in containing if not md.programCacheEnabled]
+        if disabled:
+            return (
+                f"Program cache is disabled on MeshDevice(s) {disabled} containing this device. "
+                f"Enable program cache to see the callstack."
+            )
+        return (
+            "No host-side live program owns the kernel on this device —"
+            " the program should remain alive on host while its kernel is running."
+        )
+
     def find_kernel(self, watcher_kernel_id):
         # Try to get kernel from RPC inspector data first, then fallback to cached kernels
         # RPC kernel find won't work if we are not connected to RPC, but are reading serialized data or logs
@@ -403,10 +421,13 @@ class DispatcherData:
             raise
         except Exception:
             pass
+        kernel_lookup_warning: str | None = None
         try:
             kernel = self.find_kernel(watcher_kernel_id)
         except Exception:
-            pass
+            if watcher_kernel_id != -1 and self.metal_device_id_mapping.has_unique_id(location._device.unique_id):
+                metal_device_id = self.metal_device_id_mapping.get_metal_device_id(location._device.unique_id)
+                kernel_lookup_warning = self._kernel_missing_hint_for_device(metal_device_id)
         try:
             previous_kernel = self.find_kernel(watcher_previous_kernel_id)
         except Exception:
@@ -639,6 +660,7 @@ class DispatcherData:
             subordinate_sync=subordinate_sync,
             watcher_enabled=watcher_enabled,
             block_type=block_type,
+            kernel_lookup_warning=kernel_lookup_warning,
         )
 
 

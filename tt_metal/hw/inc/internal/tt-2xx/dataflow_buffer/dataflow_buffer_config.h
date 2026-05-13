@@ -26,7 +26,7 @@ constexpr uint8_t NUM_TENSIX_TILE_COUNTERS_FOR_DM = 16;
 constexpr uint8_t TC_TENSIX_POOL_START = NUM_TENSIX_TILE_COUNTERS_FOR_DM;  // = 16
 constexpr uint8_t NUM_REMAPPER_PAIRINGS = 64;
 constexpr uint8_t NUM_TXN_IDS = 4;
-constexpr uint8_t MAX_NUM_TILE_COUNTERS_TO_RR = 4;
+constexpr uint8_t MAX_NUM_TILE_COUNTERS_TO_RR = 6;
 
 constexpr uint16_t TENSIX_RISC_OFFSET = 8; // First 8 represent DMs
 
@@ -66,7 +66,7 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
     | dfb_initializer_per_risc_t | risc 0
     | dfb_initializer_per_risc_t | risc 1
     ...
-    (36 + (44 * 12)) * 16 = 8336 bytes
+    (36 + (62 * 12)) * 16 = 12480 bytes
 */
 struct dfb_txn_id_descriptor_t {
     uint8_t txn_ids[dfb::NUM_TXN_IDS];
@@ -90,17 +90,18 @@ struct dfb_initializer_t {  // 36 bytes
     dfb_txn_id_descriptor_t producer_txn_descriptor;
     dfb_txn_id_descriptor_t consumer_txn_descriptor;
     uint8_t num_producers;
-    uint8_t padding[3];
+    uint8_t implicit_sync_configured; // 0: init state, 1: configured
+    uint8_t padding[2];
 } __attribute__((packed));
 
-struct dfb_initializer_per_risc_t {  // 44 bytes
+struct dfb_initializer_per_risc_t {  // 62 bytes
     uint32_t base_addr[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
     uint32_t limit[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
     uint32_t consumer_tcs;  // used to program remapper, for a L:R mapping contains all the TCs on the consumer side
                             // (R). TC can be value between 0 and 31 (5 bits, max of 4 TCs)
     dfb::PackedTileCounter packed_tile_counter[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
     struct {
-        uint8_t num_tcs_to_rr : 4;   // 0..8, number of TCs to round-robin (max 4 but keeping space)
+        uint8_t num_tcs_to_rr : 4;   // 0..15, number of TCs to round-robin (max 6 for 6 user-programmable DM cores)
         uint8_t tc_init_done : 1;
         uint8_t broadcast_tc : 1;    // DM-DM ALL: producer posts to all TCs instead of round-robin
         uint8_t reserved : 2;
@@ -128,5 +129,5 @@ struct dfb_initializer_intra_tensix_t {  // 24 bytes
 } __attribute__((packed));
 
 static_assert(sizeof(dfb_initializer_t) == 36, "dfb_initializer_t size is incorrect");
-static_assert(sizeof(dfb_initializer_per_risc_t) == 44, "dfb_initializer_per_risc_t size is incorrect");
+static_assert(sizeof(dfb_initializer_per_risc_t) == 62, "dfb_initializer_per_risc_t size is incorrect");
 static_assert(sizeof(dfb_initializer_intra_tensix_t) == 24, "dfb_initializer_intra_tensix_t size is incorrect");

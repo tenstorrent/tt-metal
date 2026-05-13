@@ -72,8 +72,8 @@ void kernel_main() {
         const uint32_t light_global_row = seq_idx * Ht + light_row_in_seq;
         const uint32_t heavy_global_row = seq_idx * Ht + heavy_row_in_seq;
 
-        write_row(light_global_row);
         write_row(heavy_global_row);
+        write_row(light_global_row);
     }
 #else
     const uint32_t end_row = start_row + num_rows_to_process;

@@ -29,6 +29,7 @@ LLK_COMMON_CHANGED=false
 LLK_SFPI_CHANGED=false
 LLK_QUASAR_CHANGED=false
 LLK_TESTS_CHANGED=false
+LLK_UNIT_TESTS_CHANGED=false
 LLK_PERF_CHANGED=false
 LLK_CI_CHANGED=false
 
@@ -74,11 +75,22 @@ while IFS= read -r FILE; do
         tt_metal/tt-llk/tests/**)
             LLK_TESTS_CHANGED=true
             ;;
-        .github/workflows/llk-*.yaml|.github/scripts/llk-*.sh)
+        .github/workflows/llk-*.yaml|.github/scripts/llk-*.sh|tests/pipeline_reorg/llk_unit_tests.yaml)
             LLK_CI_CHANGED=true
             ;;
         tt_metal/**/*.@(h|hpp|c|cpp|cc|py))
             TTMETALIUM_CHANGED=true
+            ANY_CODE_CHANGED=true
+            ;;
+        # LLK unit-test sources (built into the unit_tests_llk gtest binary). Mirror the
+        # llk-tests-changed pattern but for the in-tree gtest unit tests rather than the
+        # LLK engine submodule's pytest suite. Must come before the generic
+        # tests/tt_metal/**/*.{h,hpp,c,cpp,py} catch-all so the narrower flag is set; we
+        # also raise the broader TTMETALIUM_TESTS_CHANGED here so existing test gates
+        # (e.g. metalium-smoke-tests) keep firing for these changes.
+        tests/tt_metal/tt_metal/llk/**)
+            LLK_UNIT_TESTS_CHANGED=true
+            TTMETALIUM_TESTS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
         ttnn/**/*.@(h|hpp|c|cpp|py))
@@ -185,6 +197,7 @@ declare -A changes=(
     [llk-sfpi-changed]=$LLK_SFPI_CHANGED
     [llk-quasar-changed]=$LLK_QUASAR_CHANGED
     [llk-tests-changed]=$LLK_TESTS_CHANGED
+    [llk-unit-tests-changed]=$LLK_UNIT_TESTS_CHANGED
     [llk-perf-changed]=$LLK_PERF_CHANGED
     [llk-ci-changed]=$LLK_CI_CHANGED
 )
