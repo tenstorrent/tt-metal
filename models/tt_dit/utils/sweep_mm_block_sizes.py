@@ -191,12 +191,13 @@ FP32_DEST_ACC_EN = True
 #               are excluded because they're either dispatch-overhead-dominated
 #               (tiny) or low-pipelining (huge); divisors are added to give a
 #               "1 block per core" option even when it's odd (e.g. 5, 15).
-# - K block:    even sizes in [K_BLOCK_MIN, K_BLOCK_MAX]  union  divisors of
-#               K_per_device (AGMM) / K_tiles (non-AGMM). Divisors are included
-#               at any size since dividing K cleanly never adds padding and may
-#               help amortize fabric/dispatch overhead.
+# - K block:    divisors of K_per_device (AGMM) / K_tiles (non-AGMM) at >=
+#               K_BLOCK_MIN. K_block MUST divide K_per_device for AGMM (the ring
+#               all-gather delivers K_per_device tiles in K_block-sized chunks);
+#               non-divisor candidates would leave a partial chunk on the last
+#               ring iteration. No upper cap — large divisors don't add padding.
 MN_BLOCK_MIN, MN_BLOCK_MAX = 4, 16
-K_BLOCK_MIN, K_BLOCK_MAX = 4, 16
+K_BLOCK_MIN = 4
 
 # L1 budget for pre-filtering block combos (KB).
 # BH L1 usable ~1464 KB; conservative threshold accounts for kernel/firmware overhead.
@@ -244,14 +245,18 @@ def get_mn_block_candidates(per_core_tiles):
 
 
 def get_k_block_candidates(K_per_device):
-    """Even sizes in [K_BLOCK_MIN, K_BLOCK_MAX] union all divisors of K_per_device (>= K_BLOCK_MIN).
+    """Divisors of K_per_device, capped at K_BLOCK_MIN floor.
 
-    Divisors are added at any size: dividing K cleanly never implies padding, and
-    larger K_blocks may amortize fabric/dispatch overhead.
+    HARD constraint for AGMM: K_block must evenly divide K_per_device. The ring
+    all-gather delivers K_per_device tiles per device per ring iteration, in
+    K_block-sized chunks — any K_block that doesn't divide K_per_device leaves
+    a partial chunk on the last iteration, which the algorithm doesn't support.
+
+    So we restrict to divisors only. K_BLOCK_MIN excludes tiny sizes that are
+    dispatch-overhead-bound; there's no upper cap because dividing K cleanly
+    never adds padding even at larger block sizes.
     """
-    evens = set(range(K_BLOCK_MIN, K_BLOCK_MAX + 1, 2))
-    divisors = set(d for d in range(K_BLOCK_MIN, K_per_device + 1) if K_per_device % d == 0)
-    return sorted(evens | divisors)
+    return sorted(d for d in range(K_BLOCK_MIN, K_per_device + 1) if K_per_device % d == 0)
 
 
 def get_per_core_dims(shape, cluster_size):
