@@ -33,7 +33,7 @@ ttnn::Tensor rotary_embedding(
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
     TT_FATAL(
-        cos_cache.padded_shape() == sin_cache.padded_shape(),
+        cos_cache.logical_shape() == sin_cache.logical_shape(),
         "Cosine and Sine cache dimensions must match. Cos cache dimensions: {}, Sin cache dimensions: {}.",
         cos_cache.padded_shape(),
         sin_cache.padded_shape());
