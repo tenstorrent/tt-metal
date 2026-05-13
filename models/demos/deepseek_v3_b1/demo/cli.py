@@ -141,6 +141,13 @@ def create_parser() -> argparse.ArgumentParser:
             "this is omitted, defaults to deepseek."
         ),
     )
+    parser.add_argument(
+        "--enable-speculative-decode",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable speculative decode; use --no-enable-speculative-decode for base decode",
+    )
+
     return parser
 
 
@@ -167,6 +174,7 @@ def run_demo(
     top_k: int = 1,
     top_p: float = 1.0,
     temperature: float = 0.6,
+    enable_speculative_decode: bool = True,
     enable_sram_hot_experts: bool = False,
     sram_hot_experts_ceiling: int = 64,
 ) -> None:
@@ -174,7 +182,7 @@ def run_demo(
     iterations = max_new_tokens
     logger.info(f"Starting DeepSeek V3 B1 demo (iterations={iterations})")
 
-    with open_mesh_device() as mesh_device:
+    with open_mesh_device(enable_speculative_decode=enable_speculative_decode) as mesh_device:
         model_pipeline = ModelPipeline(
             mesh_device=mesh_device,
             weights_mode=weights_mode,
@@ -190,6 +198,7 @@ def run_demo(
             top_k=top_k,
             top_p=top_p,
             temperature=temperature,
+            enable_speculative_decode=enable_speculative_decode,
             enable_sram_hot_experts=enable_sram_hot_experts,
             sram_hot_experts_ceiling=sram_hot_experts_ceiling,
         )
@@ -284,6 +293,7 @@ def main(argv: list[str] | None = None) -> int:
         top_k=args.top_k,
         top_p=args.top_p,
         temperature=args.temperature,
+        enable_speculative_decode=args.enable_speculative_decode,
         enable_sram_hot_experts=args.enable_sram_hot_experts,
         sram_hot_experts_ceiling=args.sram_hot_experts_ceiling,
     )
