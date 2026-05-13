@@ -160,9 +160,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // D counter stays at 0 (set by _llk_math_eltwise_unary_sfpu_init_) and
     // ADDR_MOD_7 has dest.incr=0, so the full offset is in dest_reg_addr.
     // Tile positioning uses dest_section_base (via _set_dst_write_addr_),
-    // intra-tile slice offsets use SfpuDestSlice/SfpuSrcsSlice.
-    const SfpuSrcsSlice srcs {static_cast<int>(PARAM_SRCS_YDIM)};
-    const SfpuDestSlice dest {static_cast<int>(PARAM_SRCS_YDIM)};
+    const SfpuSlice<SfpuReg::SrcS> srcs {static_cast<int>(PARAM_SRCS_YDIM)};
+    const SfpuSlice<SfpuReg::Dest> dest {static_cast<int>(PARAM_SRCS_YDIM)};
     const int num_sfpu_iterations = PARAM_SRCS_YDIM >> 1; // SFP_ROWS == 2
     for (std::uint32_t i = 0; i < num_tiles; ++i)
     {

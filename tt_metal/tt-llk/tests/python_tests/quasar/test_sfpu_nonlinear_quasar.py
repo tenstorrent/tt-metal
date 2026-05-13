@@ -20,8 +20,8 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator_v2 import StimuliSpec, generate_stimuli_v2
 from helpers.stimuli_generator import prepare_inputs_for_operation
+from helpers.stimuli_generator_v2 import StimuliSpec, generate_stimuli_v2
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,

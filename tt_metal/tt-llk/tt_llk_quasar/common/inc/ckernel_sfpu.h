@@ -11,6 +11,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
+#include "csfpu_common.h"
 #include "llk_defs.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_exp.h"
@@ -25,6 +26,18 @@ namespace ckernel
 {
 using namespace ckernel::math;
 using namespace ckernel::trisc;
+
+// On Quasar the SFPU is programmable by two threads:
+//   - The math TRISC (TRISC 1, ckernel::math::TRISC_ID)
+//   - The isolated SFPU TRISC (TRISC 3, ckernel::isolate_sfpu::TRISC_ID)
+// We need to select the SFPU TRISC_ID at compile time from the LLK_TRISC_* flag.
+#if defined(LLK_TRISC_MATH)
+constexpr static std::uint32_t SFPU_TRISC_ID = ckernel::math::TRISC_ID;
+#elif defined(LLK_TRISC_ISOLATE_SFPU)
+constexpr static std::uint32_t SFPU_TRISC_ID = ckernel::isolate_sfpu::TRISC_ID;
+#else
+constexpr static std::uint32_t SFPU_TRISC_ID = ckernel::isolate_sfpu::TRISC_ID;
+#endif
 
 /**
  * @brief Programs SFPU addrmods
@@ -49,7 +62,7 @@ inline void _sfpu_configure_addrmod_()
  */
 inline void _llk_math_sfpu_start_(const std::uint32_t tile_index)
 {
-    _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_index);
+    _set_dst_write_addr_<SFPU_TRISC_ID, DstTileShape::Tile32x32>(tile_index);
     TTI_STALLWAIT(p_stall::STALL_SFPU, 0, 0, p_stall::MATH);
 }
 

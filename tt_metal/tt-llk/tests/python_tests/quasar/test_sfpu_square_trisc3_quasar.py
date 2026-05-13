@@ -21,12 +21,12 @@ from helpers.llk_params import (
 )
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator_v2 import generate_stimuli_v2
 from helpers.stimuli_generator import (
     apply_log_uniform_magnitudes,
     compute_safe_input_magnitude_range,
     format_elem_max,
 )
+from helpers.stimuli_generator_v2 import generate_stimuli_v2
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,

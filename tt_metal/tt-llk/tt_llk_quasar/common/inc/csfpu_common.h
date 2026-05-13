@@ -16,31 +16,50 @@ constexpr static std::uint32_t TRISC_ID = 3;
 constexpr static unsigned int SFPU_DEST_BASE_ADDR = 0x0;
 constexpr static unsigned int SFPU_SRCS_BASE_ADDR = 0x400;
 
-// Provides array-like access to SFPU SrcS slice base addresses.
-// Stride between slices = ydim (8 for 16-bit, 4 for 32-bit).
-// Usage: SfpuSrcsSlice srcs{PARAM_SRCS_YDIM}; srcs[0] = input0, srcs[1] = input1, srcs[2] = output, etc.
-struct SfpuSrcsSlice
+// Identifies which SFPU-addressable register file an operand lives in.
+// Used as a compile-time tag for SfpuSlice<REG>
+enum class SfpuReg : std::uint8_t
 {
-    const int ydim;
-
-    int operator[](int slice_idx) const
-    {
-        return SFPU_SRCS_BASE_ADDR + slice_idx * ydim;
-    }
+    Dest, // SFPU dest region (base = SFPU_DEST_BASE_ADDR == 0)
+    SrcS, // SrcS source register (base = SFPU_SRCS_BASE_ADDR)
 };
 
-// Provides array-like access to SFPU Dest slice base addresses within a single tile.
-// Tile positioning is handled separately by _set_dst_write_addr_ (dest_section_base);
-// this struct only computes the intra-tile slice offset.
-// Stride between slices = ydim (8 for 16-bit, 4 for 32-bit).
-// Usage: SfpuDestSlice dest{PARAM_SRCS_YDIM}; dest[slice] = offset within tile.
-struct SfpuDestSlice
+// SfpuSlice<REG> — array-like accessor for SFPU register-file slice base
+// addresses inside a single tile, parametrized by which physical register
+// the operand lives in (Dest or SrcS).
+//
+// The meaning of `slot` differs between the two register identities:
+//
+//   SfpuSlice<SfpuReg::SrcS>:
+//     `slot` is the HW-fixed SrcS slot index, set by the unpack/pack
+//     engines: in0 = 0, in1 = 1, out = 2.
+//
+//   SfpuSlice<SfpuReg::Dest>:
+//     `slot` is the intra-tile slice index (0, 1, ..., SLICE_COUNT - 1).
+//     Tile positioning is handled separately by _set_dst_write_addr_,
+//     which programs the dest_section_base; this helper only computes
+//     the per-slice offset *within* the tile, so the full Dest address
+//     used by the SFPU is
+//         dest_section_base + SfpuSlice<SfpuReg::Dest>{ydim}[slice].
+//
+// Usage:
+//   const SfpuSlice<SfpuReg::SrcS> srcs{ydim}; // srcs[0]=in0, srcs[1]=in1, srcs[2]=out
+//   const SfpuSlice<SfpuReg::Dest> dest{ydim}; // dest[slice]=intra-tile offset
+template <SfpuReg REG>
+struct SfpuSlice
 {
     const int ydim;
 
-    int operator[](int slice_idx) const
+    constexpr int operator[](int slot) const
     {
-        return SFPU_DEST_BASE_ADDR + slice_idx * ydim;
+        if constexpr (REG == SfpuReg::Dest)
+        {
+            return SFPU_DEST_BASE_ADDR + slot * ydim;
+        }
+        else
+        {
+            return SFPU_SRCS_BASE_ADDR + slot * ydim;
+        }
     }
 };
 
