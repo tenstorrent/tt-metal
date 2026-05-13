@@ -452,6 +452,232 @@ def parse_ops_log(subdir, expected_ops=None):
 
 
 # ============================================================================
+# SHARED WORKER HELPERS
+# ============================================================================
+
+
+def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_grid):
+    """Allocate tensors + return a run_op(m_blk, k_blk, n_blk, sb_h, sb_w, sync=True) closure.
+
+    AGMM path: sharded input, dummy bias/addcmul (when use_addcmul), CCL semaphores,
+    persistent output buffer.
+    Non-AGMM path: replicated input/weight/bias; minimal_matmul or minimal_matmul_split
+    based on use_case.
+    """
+    compute_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=uc_cfg.get("math_approx_mode", False),
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    fused_activation = uc_cfg.get("fused_activation", None)
+    chunks = uc_cfg.get("chunks", 1)
+    scalar = uc_cfg.get("scalar", None)
+    mesh_shape = tuple(mesh_device.shape)
+
+    def _matmul_config(m_blk, k_blk, n_blk, sb_h, sb_w):
+        return ttnn.MinimalMatmulConfig(
+            M_block_size=m_blk,
+            K_block_size=k_blk,
+            N_block_size=n_blk,
+            subblock_h=sb_h,
+            subblock_w=sb_w,
+            compute_with_storage_grid_size=core_grid,
+        )
+
+    if is_agmm:
+        sp_axis = cfg["sp_axis"]
+        tp_axis = cfg["tp_axis"]
+        sp_size = cfg["mesh_shape"][sp_axis]
+        full_M = M * sp_size
+
+        tt_input = ttnn.from_torch(
+            torch.randn((full_M, K), dtype=torch.float32),
+            dtype=dtype,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=[sp_axis, tp_axis]),
+        )
+        tt_weight = ttnn.from_torch(
+            torch.randn((K, N), dtype=torch.float32),
+            dtype=dtype,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        tt_bias = ttnn.from_torch(
+            torch.randn((1, N), dtype=torch.float32),
+            dtype=dtype,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+        )
+
+        # CCL infrastructure (matches model's CCLManager)
+        full_grid = mesh_device.compute_with_storage_grid_size()
+        ccl_cores = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_grid.x - 1, full_grid.y - 1))}
+        )
+        ccl_semaphore_handles = [
+            ttnn.create_global_semaphore(mesh_device, ccl_cores, 0),
+            ttnn.create_global_semaphore(mesh_device, ccl_cores, 0),
+        ]
+        persistent_output_buffer = ttnn.from_torch(
+            torch.empty((M, K), dtype=torch.float32),
+            layout=ttnn.TILE_LAYOUT,
+            dtype=dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            device=mesh_device,
+        )
+
+        addcmul_tensor1 = None
+        addcmul_tensor2 = None
+        if uc_cfg.get("use_addcmul", False):
+            addcmul_tensor1 = ttnn.from_torch(
+                torch.randn((M, N), dtype=torch.float32),
+                dtype=dtype,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=[None, None]),
+            )
+            addcmul_tensor2 = ttnn.from_torch(
+                torch.randn((M, N), dtype=torch.float32),
+                dtype=dtype,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=[None, None]),
+            )
+
+        def run_op(m_blk, k_blk, n_blk, sb_h, sb_w, sync=True):
+            ttnn.experimental.all_gather_minimal_matmul_async(
+                tt_input,
+                tt_weight,
+                bias_tensor=tt_bias,
+                fused_activation=fused_activation,
+                compute_kernel_config=compute_config,
+                config=_matmul_config(m_blk, k_blk, n_blk, sb_h, sb_w),
+                persistent_output_buffer=persistent_output_buffer,
+                multi_device_global_semaphore=ccl_semaphore_handles,
+                num_links=cfg["num_links"],
+                topology=cfg["topology"],
+                cluster_axis=cfg["cluster_axis"],
+                barrier_semaphore=None,
+                force_transpose=True,
+                num_workers_per_link=cfg["num_workers_per_link"],
+                num_buffers_per_channel=48,
+                scalar=scalar,
+                addcmul_input_tensor1=addcmul_tensor1,
+                addcmul_input_tensor2=addcmul_tensor2,
+                chunks=chunks,
+            )
+            if sync:
+                ttnn.synchronize_device(mesh_device)
+
+        return run_op
+
+    # Non-AGMM
+    use_matmul_split = uc_cfg.get("use_matmul_split", False)
+    tt_input = ttnn.from_torch(
+        torch.randn((M, K), dtype=torch.float32),
+        dtype=dtype,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    tt_weight = ttnn.from_torch(
+        torch.randn((K, N), dtype=torch.float32),
+        dtype=dtype,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    tt_bias = ttnn.from_torch(
+        torch.randn((1, N), dtype=torch.float32),
+        dtype=dtype,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    def run_op(m_blk, k_blk, n_blk, sb_h, sb_w, sync=True):
+        cfg_obj = _matmul_config(m_blk, k_blk, n_blk, sb_h, sb_w)
+        if use_matmul_split:
+            ttnn.experimental.minimal_matmul_split(
+                tt_input,
+                tt_weight,
+                chunks=chunks,
+                dim=-1,
+                bias_tensor=tt_bias,
+                fused_activation=fused_activation,
+                compute_kernel_config=compute_config,
+                config=cfg_obj,
+            )
+        else:
+            ttnn.experimental.minimal_matmul(
+                input_tensor=tt_input,
+                weight_tensor=tt_weight,
+                bias_tensor=tt_bias,
+                config=cfg_obj,
+                fused_activation=fused_activation,
+                compute_kernel_config=compute_config,
+            )
+        if sync:
+            ttnn.synchronize_device(mesh_device)
+
+    return run_op
+
+
+def _execute_sweep(mesh_device, run_op, combos, log_skip_label):
+    """Warmup (compile + filter OOMs) + trace-based measurement.
+
+    combos: list of (m_blk, k_blk, n_blk, sb_h, sb_w) tuples.
+    log_skip_label: callable combo -> string for warmup skip messages.
+    Returns the list of combos that survived warmup.
+    """
+    # Warmup: build programs, skip OOM. No per-iter sync; one sync at the end.
+    valid_combos = []
+    for c in combos:
+        try:
+            run_op(*c, sync=False)
+            valid_combos.append(c)
+        except Exception as e:
+            logger.warning(f"Skipping {log_skip_label(c)}: {e}")
+    ttnn.synchronize_device(mesh_device)
+
+    if not valid_combos:
+        return valid_combos
+
+    skipped = len(combos) - len(valid_combos)
+    if skipped:
+        logger.info(f"Warmup done: {len(valid_combos)} valid, {skipped} skipped (L1 OOM)")
+    else:
+        logger.info(f"Warmup done: all {len(valid_combos)} combos valid")
+
+    # Capture one trace per valid combo (programs already compiled by warmup).
+    # Trace execution synchronizes devices before dispatch, eliminating host
+    # dispatch skew that can stall fabric transfers.
+    trace_ids = []
+    for c in valid_combos:
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        run_op(*c, sync=False)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        trace_ids.append(trace_id)
+    ttnn.synchronize_device(mesh_device)
+
+    # Only trace executions appear between signposts
+    signpost("start")
+    for trace_id in trace_ids:
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+    signpost("stop")
+
+    for trace_id in trace_ids:
+        ttnn.release_trace(mesh_device, trace_id)
+
+    return valid_combos
+
+
+# ============================================================================
 # WORKER TEST — profiled in subprocess by device profiler
 # ============================================================================
 
@@ -513,248 +739,29 @@ def test_mm_sweep_worker(device_config, shape, m_block):
 
     parent_mesh, mesh_device = open_mesh(cfg, trace_region_size=4194304 if is_agmm else None)  # 4MB for trace region
     try:
-        mesh_shape = tuple(mesh_device.shape)
-        core_grid = ttnn.CoreCoord(cgx, cgy)
-        dtype = ttnn.bfloat16
+        run_op = _build_op_runner(cfg, mesh_device, M, K, N, ttnn.bfloat16, is_agmm, uc_cfg, ttnn.CoreCoord(cgx, cgy))
 
-        compute_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=uc_cfg.get("math_approx_mode", False),
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+        # Expand kn_combos to full (m, k, n, sb_h, sb_w) tuples
+        combos = [
+            (m_block, k_blk, n_blk, *_subblock_for(m_block, k_blk, n_blk, _explicit_subblocks))
+            for k_blk, n_blk in kn_combos
+        ]
+
+        valid_combos = _execute_sweep(
+            mesh_device,
+            run_op,
+            combos,
+            log_skip_label=lambda c: f"K_block={c[1]} N_block={c[2]}",
         )
-
-        fused_activation = uc_cfg.get("fused_activation", None)
-        chunks = uc_cfg.get("chunks", 1)
-        scalar = uc_cfg.get("scalar", None)
-
-        if is_agmm:
-            # ----- AGMM path: sharded input + CCL infrastructure -----
-            sp_axis = cfg["sp_axis"]
-            tp_axis = cfg["tp_axis"]
-            sp_size = cfg["mesh_shape"][sp_axis]
-
-            # M is per-device; create full tensor for mesh sharding
-            full_M = M * sp_size
-            shard_dims = [sp_axis, tp_axis]
-            tt_input = ttnn.from_torch(
-                torch.randn((full_M, K), dtype=torch.float32),
-                dtype=dtype,
-                device=mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dims),
-            )
-            tt_weight = ttnn.from_torch(
-                torch.randn((K, N), dtype=torch.float32),
-                dtype=dtype,
-                device=mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-            )
-            tt_bias = ttnn.from_torch(
-                torch.randn((1, N), dtype=torch.float32),
-                dtype=dtype,
-                device=mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-            )
-
-            # Use full compute grid for semaphores (matching model's CCLManager)
-            full_grid = mesh_device.compute_with_storage_grid_size()
-            ccl_cores = ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_grid.x - 1, full_grid.y - 1))}
-            )
-
-            # Create 2 semaphores (matching model's CCLManager ag_ping_pong pattern)
-            ccl_semaphore_handles = [
-                ttnn.create_global_semaphore(mesh_device, ccl_cores, 0),
-                ttnn.create_global_semaphore(mesh_device, ccl_cores, 0),
-            ]
-
-            # 4D buffer without mesh_mapper (matching model's CCLManager)
-            persistent_output_buffer = ttnn.from_torch(
-                torch.empty((M, K), dtype=torch.float32),
-                layout=ttnn.TILE_LAYOUT,
-                dtype=dtype,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                device=mesh_device,
-            )
-
-            # Allocate dummy addcmul tensors if needed (to_out use case)
-            addcmul_tensor1 = None
-            addcmul_tensor2 = None
-            if uc_cfg.get("use_addcmul", False):
-                addcmul_tensor1 = ttnn.from_torch(
-                    torch.randn((M, N), dtype=torch.float32),
-                    dtype=dtype,
-                    device=mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=[None, None]),
-                )
-                addcmul_tensor2 = ttnn.from_torch(
-                    torch.randn((M, N), dtype=torch.float32),
-                    dtype=dtype,
-                    device=mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=[None, None]),
-                )
-
-            def run_op(k_blk, n_blk, sync=True):
-                sb_h, sb_w = _subblock_for(m_block, k_blk, n_blk, _explicit_subblocks)
-                matmul_config = ttnn.MinimalMatmulConfig(
-                    M_block_size=m_block,
-                    K_block_size=k_blk,
-                    N_block_size=n_blk,
-                    subblock_h=sb_h,
-                    subblock_w=sb_w,
-                    compute_with_storage_grid_size=core_grid,
-                )
-                ttnn.experimental.all_gather_minimal_matmul_async(
-                    tt_input,
-                    tt_weight,
-                    bias_tensor=tt_bias,
-                    fused_activation=fused_activation,
-                    compute_kernel_config=compute_config,
-                    config=matmul_config,
-                    persistent_output_buffer=persistent_output_buffer,
-                    multi_device_global_semaphore=ccl_semaphore_handles,
-                    num_links=cfg["num_links"],
-                    topology=cfg["topology"],
-                    cluster_axis=cfg["cluster_axis"],
-                    barrier_semaphore=None,
-                    force_transpose=True,
-                    num_workers_per_link=cfg["num_workers_per_link"],
-                    num_buffers_per_channel=48,
-                    scalar=scalar,
-                    addcmul_input_tensor1=addcmul_tensor1,
-                    addcmul_input_tensor2=addcmul_tensor2,
-                    chunks=chunks,
-                )
-                if sync:
-                    ttnn.synchronize_device(mesh_device)
-
-        else:
-            # ----- Non-AGMM path: replicated tensors + minimal_matmul -----
-            use_matmul_split = uc_cfg.get("use_matmul_split", False)
-
-            tt_input = ttnn.from_torch(
-                torch.randn((M, K), dtype=torch.float32),
-                dtype=dtype,
-                device=mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            )
-            tt_weight = ttnn.from_torch(
-                torch.randn((K, N), dtype=torch.float32),
-                dtype=dtype,
-                device=mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            )
-            tt_bias = ttnn.from_torch(
-                torch.randn((1, N), dtype=torch.float32),
-                dtype=dtype,
-                device=mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            )
-
-            if use_matmul_split:
-
-                def run_op(k_blk, n_blk):
-                    sb_h, sb_w = _subblock_for(m_block, k_blk, n_blk, _explicit_subblocks)
-                    matmul_config = ttnn.MinimalMatmulConfig(
-                        M_block_size=m_block,
-                        K_block_size=k_blk,
-                        N_block_size=n_blk,
-                        subblock_h=sb_h,
-                        subblock_w=sb_w,
-                        compute_with_storage_grid_size=core_grid,
-                    )
-                    ttnn.experimental.minimal_matmul_split(
-                        tt_input,
-                        tt_weight,
-                        chunks=chunks,
-                        dim=-1,
-                        bias_tensor=tt_bias,
-                        fused_activation=fused_activation,
-                        compute_kernel_config=compute_config,
-                        config=matmul_config,
-                    )
-                    ttnn.synchronize_device(mesh_device)
-
-            else:
-
-                def run_op(k_blk, n_blk):
-                    sb_h, sb_w = _subblock_for(m_block, k_blk, n_blk, _explicit_subblocks)
-                    matmul_config = ttnn.MinimalMatmulConfig(
-                        M_block_size=m_block,
-                        K_block_size=k_blk,
-                        N_block_size=n_blk,
-                        subblock_h=sb_h,
-                        subblock_w=sb_w,
-                        compute_with_storage_grid_size=core_grid,
-                    )
-                    ttnn.experimental.minimal_matmul(
-                        input_tensor=tt_input,
-                        weight_tensor=tt_weight,
-                        bias_tensor=tt_bias,
-                        config=matmul_config,
-                        fused_activation=fused_activation,
-                        compute_kernel_config=compute_config,
-                    )
-                    ttnn.synchronize_device(mesh_device)
-
-        # Warmup: compile all programs, skip combos that OOM
-        valid_combos = []
-        for k_blk, n_blk in kn_combos:
-            try:
-                run_op(k_blk, n_blk)
-                valid_combos.append((k_blk, n_blk))
-            except Exception as e:
-                logger.warning(f"Skipping K_block={k_blk} N_block={n_blk}: {e}")
 
         if not valid_combos:
             pytest.skip("All K/N combos failed during warmup")
 
-        skipped = len(kn_combos) - len(valid_combos)
-        if skipped:
-            logger.info(f"Warmup done: {len(valid_combos)} valid, {skipped} skipped (L1 OOM)")
-        else:
-            logger.info(f"Warmup done: all {len(valid_combos)} combos valid")
-
-        # Write valid combos file so orchestrator knows which ran
+        # Write valid (k, n) pairs file so orchestrator knows which ran
         combos_file = os.environ.get("MM_SWEEP_VALID_COMBOS_FILE")
         if combos_file:
             with open(combos_file, "w") as f:
-                json.dump(valid_combos, f)
-
-        # Measured run — only valid combos
-        if is_agmm:
-            # Capture a trace per combo (ops already compiled from warmup).
-            # Trace execution synchronizes all devices before dispatching,
-            # eliminating host dispatch skew that can stall fabric transfers.
-            trace_ids = []
-            for k_blk, n_blk in valid_combos:
-                trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-                run_op(k_blk, n_blk, sync=False)
-                ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-                ttnn.synchronize_device(mesh_device)
-                trace_ids.append(trace_id)
-
-            # Only trace executions appear between signposts
-            signpost("start")
-            for trace_id in trace_ids:
-                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-                ttnn.synchronize_device(mesh_device)
-            signpost("stop")
-
-            for trace_id in trace_ids:
-                ttnn.release_trace(mesh_device, trace_id)
-        else:
-            signpost("start")
-            for k_blk, n_blk in valid_combos:
-                run_op(k_blk, n_blk)
-            signpost("stop")
+                json.dump([(c[1], c[2]) for c in valid_combos], f)
 
         logger.info(f"Worker done: {len(valid_combos)} combos measured")
 
@@ -793,214 +800,27 @@ def test_mm_subblock_sweep_worker(device_config, shape):
         f"blocks=({m_block},{k_block},{n_block}), {len(sb_combos)} subblock combos"
     )
 
-    parent_mesh, mesh_device = open_mesh(cfg)
+    parent_mesh, mesh_device = open_mesh(cfg, trace_region_size=4194304)  # 4MB for trace region
     try:
-        mesh_shape = tuple(mesh_device.shape)
-        core_grid = ttnn.CoreCoord(cgx, cgy)
-        dtype = ttnn.bfloat16
+        run_op = _build_op_runner(cfg, mesh_device, M, K, N, ttnn.bfloat16, is_agmm, uc_cfg, ttnn.CoreCoord(cgx, cgy))
 
-        compute_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=uc_cfg.get("math_approx_mode", False),
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+        combos = [(m_block, k_block, n_block, sb_h, sb_w) for sb_h, sb_w in sb_combos]
+
+        valid_combos = _execute_sweep(
+            mesh_device,
+            run_op,
+            combos,
+            log_skip_label=lambda c: f"subblock ({c[3]},{c[4]})",
         )
-
-        fused_activation = uc_cfg.get("fused_activation", None)
-        chunks = uc_cfg.get("chunks", 1)
-        scalar = uc_cfg.get("scalar", None)
-
-        if is_agmm:
-            sp_axis = cfg["sp_axis"]
-            tp_axis = cfg["tp_axis"]
-            sp_size = cfg["mesh_shape"][sp_axis]
-
-            full_M = M * sp_size
-            shard_dims = [sp_axis, tp_axis]
-            tt_input = ttnn.from_torch(
-                torch.randn((full_M, K), dtype=torch.float32),
-                dtype=dtype,
-                device=mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dims),
-            )
-            tt_weight = ttnn.from_torch(
-                torch.randn((K, N), dtype=torch.float32),
-                dtype=dtype,
-                device=mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-            )
-            tt_bias = ttnn.from_torch(
-                torch.randn((1, N), dtype=torch.float32),
-                dtype=dtype,
-                device=mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-            )
-
-            # Use full compute grid for semaphores (matching model's CCLManager)
-            full_grid = mesh_device.compute_with_storage_grid_size()
-            ccl_cores = ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_grid.x - 1, full_grid.y - 1))}
-            )
-
-            # Create 2 semaphores (matching model's CCLManager ag_ping_pong pattern)
-            ccl_semaphore_handles = [
-                ttnn.create_global_semaphore(mesh_device, ccl_cores, 0),
-                ttnn.create_global_semaphore(mesh_device, ccl_cores, 0),
-            ]
-
-            # 4D buffer without mesh_mapper (matching model's CCLManager)
-            persistent_output_buffer = ttnn.from_torch(
-                torch.empty((M, K), dtype=torch.float32),
-                layout=ttnn.TILE_LAYOUT,
-                dtype=dtype,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                device=mesh_device,
-            )
-
-            addcmul_tensor1 = None
-            addcmul_tensor2 = None
-            if uc_cfg.get("use_addcmul", False):
-                addcmul_tensor1 = ttnn.from_torch(
-                    torch.randn((M, N), dtype=torch.float32),
-                    dtype=dtype,
-                    device=mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=[None, None]),
-                )
-                addcmul_tensor2 = ttnn.from_torch(
-                    torch.randn((M, N), dtype=torch.float32),
-                    dtype=dtype,
-                    device=mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=[None, None]),
-                )
-
-            def run_op(sb_h, sb_w):
-                matmul_config = ttnn.MinimalMatmulConfig(
-                    M_block_size=m_block,
-                    K_block_size=k_block,
-                    N_block_size=n_block,
-                    subblock_h=sb_h,
-                    subblock_w=sb_w,
-                    compute_with_storage_grid_size=core_grid,
-                )
-                ttnn.experimental.all_gather_minimal_matmul_async(
-                    tt_input,
-                    tt_weight,
-                    bias_tensor=tt_bias,
-                    fused_activation=fused_activation,
-                    compute_kernel_config=compute_config,
-                    config=matmul_config,
-                    persistent_output_buffer=persistent_output_buffer,
-                    multi_device_global_semaphore=ccl_semaphore_handles,
-                    num_links=cfg["num_links"],
-                    topology=cfg["topology"],
-                    cluster_axis=cfg["cluster_axis"],
-                    barrier_semaphore=None,
-                    force_transpose=True,
-                    num_workers_per_link=cfg["num_workers_per_link"],
-                    num_buffers_per_channel=48,
-                    scalar=scalar,
-                    addcmul_input_tensor1=addcmul_tensor1,
-                    addcmul_input_tensor2=addcmul_tensor2,
-                    chunks=chunks,
-                )
-                ttnn.synchronize_device(mesh_device)
-
-        else:
-            use_matmul_split = uc_cfg.get("use_matmul_split", False)
-
-            tt_input = ttnn.from_torch(
-                torch.randn((M, K), dtype=torch.float32),
-                dtype=dtype,
-                device=mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            )
-            tt_weight = ttnn.from_torch(
-                torch.randn((K, N), dtype=torch.float32),
-                dtype=dtype,
-                device=mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            )
-            tt_bias = ttnn.from_torch(
-                torch.randn((1, N), dtype=torch.float32),
-                dtype=dtype,
-                device=mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            )
-
-            if use_matmul_split:
-
-                def run_op(sb_h, sb_w):
-                    matmul_config = ttnn.MinimalMatmulConfig(
-                        M_block_size=m_block,
-                        K_block_size=k_block,
-                        N_block_size=n_block,
-                        subblock_h=sb_h,
-                        subblock_w=sb_w,
-                        compute_with_storage_grid_size=core_grid,
-                    )
-                    ttnn.experimental.minimal_matmul_split(
-                        tt_input,
-                        tt_weight,
-                        chunks=chunks,
-                        dim=-1,
-                        bias_tensor=tt_bias,
-                        fused_activation=fused_activation,
-                        compute_kernel_config=compute_config,
-                        config=matmul_config,
-                    )
-                    ttnn.synchronize_device(mesh_device)
-
-            else:
-
-                def run_op(sb_h, sb_w):
-                    matmul_config = ttnn.MinimalMatmulConfig(
-                        M_block_size=m_block,
-                        K_block_size=k_block,
-                        N_block_size=n_block,
-                        subblock_h=sb_h,
-                        subblock_w=sb_w,
-                        compute_with_storage_grid_size=core_grid,
-                    )
-                    ttnn.experimental.minimal_matmul(
-                        input_tensor=tt_input,
-                        weight_tensor=tt_weight,
-                        bias_tensor=tt_bias,
-                        config=matmul_config,
-                        fused_activation=fused_activation,
-                        compute_kernel_config=compute_config,
-                    )
-                    ttnn.synchronize_device(mesh_device)
-
-        # Warmup — skip combos that OOM
-        valid_combos = []
-        for sb_h, sb_w in sb_combos:
-            try:
-                run_op(sb_h, sb_w)
-                valid_combos.append((sb_h, sb_w))
-            except Exception as e:
-                logger.warning(f"Skipping subblock ({sb_h},{sb_w}): {e}")
 
         if not valid_combos:
             pytest.skip("All subblock combos failed during warmup")
 
-        logger.info(f"Subblock warmup done: {len(valid_combos)}/{len(sb_combos)} valid")
-
+        # Write valid (sb_h, sb_w) pairs file so orchestrator knows which ran
         combos_file = os.environ.get("MM_SWEEP_VALID_COMBOS_FILE")
         if combos_file:
             with open(combos_file, "w") as f:
-                json.dump(valid_combos, f)
-
-        signpost("start")
-        for sb_h, sb_w in valid_combos:
-            run_op(sb_h, sb_w)
-        signpost("stop")
+                json.dump([(c[3], c[4]) for c in valid_combos], f)
 
         logger.info(f"Subblock worker done: {len(valid_combos)} combos measured")
 
