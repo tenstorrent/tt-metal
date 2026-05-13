@@ -8,12 +8,12 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal
 
 pytestmark = pytest.mark.use_module_device
 
 
-def run_relational_test(device, h, w, ttnn_function, pcc=0.9999):
+def run_relational_test(device, h, w, ttnn_function):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
@@ -30,10 +30,11 @@ def run_relational_test(device, h, w, ttnn_function, pcc=0.9999):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    # Cast bool→float because comp_equal uses subtraction which doesn't support bool tensors
+    assert_equal(torch_output_tensor.float(), output_tensor.float())
 
 
-def run_relational_z_test(device, h, w, ttnn_function, pcc=0.9999):
+def run_relational_z_test(device, h, w, ttnn_function):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
@@ -46,7 +47,7 @@ def run_relational_z_test(device, h, w, ttnn_function, pcc=0.9999):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    assert_equal(torch_output_tensor.float(), output_tensor.float())
 
 
 @pytest.mark.parametrize("h", [64])
@@ -121,7 +122,7 @@ def test_ne(device, h, w):
     run_relational_test(device, h, w, ttnn.ne)
 
 
-def run_relational_test_with_scalar(device, h, w, scalar, ttnn_function, pcc=0.9999):
+def run_relational_test_with_scalar(device, h, w, scalar, ttnn_function):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
@@ -136,7 +137,7 @@ def run_relational_test_with_scalar(device, h, w, scalar, ttnn_function, pcc=0.9
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    assert_equal(torch_output_tensor.float(), output_tensor.float())
 
 
 @pytest.mark.parametrize("scalar", [3])
@@ -236,7 +237,7 @@ def test_expand_and_broadcast(device, h, w):
     tt_output = ttnn.lt(a, b)
     tt_output = ttnn.to_torch(tt_output)
 
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    assert_equal(torch_output.float(), tt_output.float())
 
 
 @pytest.mark.parametrize("h", [500])
@@ -252,7 +253,7 @@ def test_expand_and_broadcast_reversed(device, h, w):
     output = ttnn.lt(input_tensor_b, input_tensor_a)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, 0.9999)
+    assert_equal(torch_output.float(), output.float())
 
 
 @pytest.mark.parametrize("atol", [1e-8, 1e-10])
@@ -276,7 +277,7 @@ def test_isclose(device, h, w, atol, rtol):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_equal(torch_output_tensor.float(), output_tensor.float())
 
 
 @pytest.mark.parametrize(
