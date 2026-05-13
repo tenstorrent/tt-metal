@@ -118,7 +118,51 @@ if [[ "$SIM_MODE" == false ]]; then
     exec 9>"$LOCK_FILE"
 
     echo "SAFE_PYTEST: Waiting for device lock..."
-    flock 9
+
+    # Find the PID holding an flock on a given path. Tries lslocks first
+    # (fast, works in the global namespace); falls back to scanning /proc/*/fd
+    # for processes with the lockfile open and an active FLOCK in fdinfo
+    # (works inside PID namespaces where lslocks reports holder pid 0).
+    _find_lock_holder() {
+        local lock_path="$1" pid
+        pid=$(lslocks --noheadings --raw --output PID,PATH 2>/dev/null \
+            | awk -v p="$lock_path" '$2==p && $1!="0" {print $1; exit}')
+        if [[ -n "$pid" ]]; then echo "$pid"; return 0; fi
+        local pid_dir fd_link fd_num target
+        for pid_dir in /proc/[0-9]*; do
+            for fd_link in "$pid_dir"/fd/*; do
+                [ -L "$fd_link" ] || continue
+                target=$(readlink "$fd_link" 2>/dev/null) || continue
+                [ "$target" = "$lock_path" ] || continue
+                fd_num=${fd_link##*/}
+                if grep -q '^lock:.*FLOCK' "$pid_dir/fdinfo/$fd_num" 2>/dev/null; then
+                    echo "${pid_dir##*/}"
+                    return 0
+                fi
+            done
+        done
+        return 1
+    }
+
+    LOCK_WAIT_INTERVAL=20
+    LOCK_WAIT_TOTAL=0
+    while ! flock -w "$LOCK_WAIT_INTERVAL" 9; do
+        LOCK_WAIT_TOTAL=$((LOCK_WAIT_TOTAL + LOCK_WAIT_INTERVAL))
+        TS="[$(date '+%Y-%m-%d %H:%M:%S')]"
+        HOLDER_PID=$(_find_lock_holder "$LOCK_FILE")
+        if [[ -n "$HOLDER_PID" && -d /proc/$HOLDER_PID ]]; then
+            HOLDER_CMD=$(tr '\0' ' ' < /proc/$HOLDER_PID/cmdline 2>/dev/null | cut -c1-200)
+            HOLDER_PPID=$(awk '{print $4}' /proc/$HOLDER_PID/stat 2>/dev/null)
+            if [[ -n "$HOLDER_PPID" && "$HOLDER_PPID" -gt 1 && -d /proc/$HOLDER_PPID ]]; then
+                HOLDER_PARENT_CMD=$(tr '\0' ' ' < /proc/$HOLDER_PPID/cmdline 2>/dev/null | cut -c1-150)
+                echo "$TS SAFE_PYTEST: waiting for device (${LOCK_WAIT_TOTAL}s) — holder pid=$HOLDER_PID cmd=\"$HOLDER_CMD\" parent pid=$HOLDER_PPID cmd=\"$HOLDER_PARENT_CMD\""
+            else
+                echo "$TS SAFE_PYTEST: waiting for device (${LOCK_WAIT_TOTAL}s) — holder pid=$HOLDER_PID cmd=\"$HOLDER_CMD\""
+            fi
+        else
+            echo "$TS SAFE_PYTEST: waiting for device (${LOCK_WAIT_TOTAL}s) — holder unknown"
+        fi
+    done
     TT_TIMING_LOCK_ACQUIRED_MS=$(date +%s%3N)
     echo "SAFE_PYTEST: Device lock acquired"
 
