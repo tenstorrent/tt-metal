@@ -62,13 +62,11 @@ jobs:
           allocationName: ci-${{ github.run_id }}-metal
           namespace: ttop-ci
           spec: |
-            allocationType: MGD
+            allocationType: Count
+            count: 4
             matchLabels:
               exabox.tenstorrent.com/purpose: ci-metal
-            topologyKeys:
-              - exabox.tenstorrent.com/quad
-            mgd: |-
-              ${{ steps.mgd.outputs.mgd }}
+              exabox.tenstorrent.com/superpod: A29
 
       - name: Get Allocation data
         uses: ./.github/actions/ttop-get-allocation-data
