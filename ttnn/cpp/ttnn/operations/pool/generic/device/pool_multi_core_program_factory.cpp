@@ -457,10 +457,14 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
 
     if (config_tensor_in_dram) {
         // DRAM-backed reader indices buffer: the CB is purely local scratch; the kernel
-        // reads from DRAM via TensorAccessor and the CB is sized to the worst-case
-        // payload that fits a single page.
+        // reads from DRAM via TensorAccessor and the CB is sized to the actual buffer
+        // page size (see PR #43193) to keep the L1 footprint tight. The worst-case
+        // value above is only used as an upper-bound check.
         add_local_cb(
-            in_reader_indices_cb_id, max_reader_indices_size, in_reader_indices_cb_npages, tt::DataFormat::UInt16);
+            in_reader_indices_cb_id,
+            actual_reader_indices_buffer_page_size,
+            in_reader_indices_cb_npages,
+            tt::DataFormat::UInt16);
     } else {
         add_sharded_cb(
             in_reader_indices_cb_id,

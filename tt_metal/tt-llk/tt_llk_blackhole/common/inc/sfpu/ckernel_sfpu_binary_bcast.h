@@ -210,6 +210,12 @@ inline void _build_lane_mask_col0_()
     TTI_SFPLOADI(LREG_MASK, sfpi::SFPLOADI_MOD0_UPPER, 0x3F80);
     TTI_SFPLOADI(LREG_MASK, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
     TTI_SFPENCC(0, 0, 0, 0);
+
+    // Restore LREG11 to its hardware default value of -1.0f.
+    // 0xBF800000 = -1.0f.
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0xBF80);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
+    TTI_SFPCONFIG(ALL_INSTANCES_MASK, SFPCONFIG_TARGET_LREG11, SFPCONFIG_MOD_SET_LREG11);
 }
 
 // Record the mask + stage1 (ROR by 1) + stage2 (ROR by 2) portion of the

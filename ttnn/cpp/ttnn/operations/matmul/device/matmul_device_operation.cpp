@@ -287,6 +287,37 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         }
     }
 
+    // matmul_multicore_reuse_mcast_1d (both program- and descriptor-based) targets a single
+    // bounding-box rectangle for the in0/in1 multicast and expects the sub-device's worker
+    // cores to form one contiguous row-major rectangle. Reject non-rectangular sub-device
+    // grids early with a clear message.
+    if (std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
+            chosen_program_config) &&
+        attributes.sub_device_id.has_value()) {
+        const auto& program_config_1d =
+            std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config);
+        if (!program_config_1d.gather_in0) {
+            auto* device = input_tensor_a.device();
+            auto sub_device_cores =
+                device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, attributes.sub_device_id.value());
+            auto bbox = sub_device_cores.bounding_box();
+            TT_FATAL(
+                sub_device_cores.num_cores() == bbox.size(),
+                "matmul_multicore_reuse_mcast_1d only supports rectangular sub-device worker grids. "
+                "Got sub-device worker cores: {} (bounding box: {})",
+                sub_device_cores,
+                bbox);
+            TT_FATAL(
+                bbox.start_coord.x + program_config_1d.compute_with_storage_grid_size.x - 1 <= bbox.end_coord.x &&
+                    bbox.start_coord.y + program_config_1d.compute_with_storage_grid_size.y - 1 <= bbox.end_coord.y,
+                "matmul_multicore_reuse_mcast_1d compute_with_storage_grid_size {} anchored at sub-device start {} "
+                "extends past the sub-device's worker bounding box {}",
+                program_config_1d.compute_with_storage_grid_size,
+                bbox.start_coord,
+                bbox);
+        }
+    }
+
     if (std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
             chosen_program_config) &&
         attributes.global_cb.has_value() && input_tensor_b.is_sharded() && input_tensor_b.buffer()->is_dram()) {

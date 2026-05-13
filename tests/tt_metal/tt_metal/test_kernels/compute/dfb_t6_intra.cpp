@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
     const uint32_t entries_per_neo = get_compile_time_arg_val(0);
     const uint32_t words_per_entry = get_compile_time_arg_val(1);
 
-    experimental::DataflowBuffer dfb(0);
+    DataflowBuffer dfb(0);
 
 #ifdef UCK_CHLKC_UNPACK
     uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();

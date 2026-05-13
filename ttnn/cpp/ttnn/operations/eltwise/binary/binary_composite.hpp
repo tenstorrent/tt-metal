@@ -14,6 +14,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/types.hpp"
+#include <tt-metalium/sub_device_types.hpp>
 
 namespace ttnn {
 
@@ -69,7 +70,8 @@ Tensor div(
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 Tensor div(
     const Tensor& input,
@@ -82,7 +84,8 @@ Tensor div(
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 Tensor bias_gelu(
     const Tensor& input_tensor_a_arg,
@@ -93,7 +96,8 @@ Tensor bias_gelu(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 Tensor bias_gelu(
     const ttnn::Tensor& input_tensor_a,
@@ -104,29 +108,22 @@ Tensor bias_gelu(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-
-Tensor bias_gelu(
-    const Tensor& input_tensor_a,
-    float scalar,
-    const std::optional<const DataType>& output_dtype = std::nullopt,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<Tensor>& output = std::nullopt,
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {});
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 Tensor fmod(
     const Tensor& input_a,
     const Tensor& input_b,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 Tensor fmod(
     const Tensor& input,
     float scalar,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 Tensor remainder(
     const Tensor& input_a,
@@ -137,7 +134,8 @@ Tensor remainder(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 Tensor remainder(
     const Tensor& input,
@@ -148,7 +146,8 @@ Tensor remainder(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 Tensor lcm(
     const Tensor& input_tensor_a,

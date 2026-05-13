@@ -137,7 +137,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(0);
+            _llk_math_eltwise_unary_sfpu_start_(0);
             // For MATH_ISOLATE, we need to properly handle data valid flags
             // The unpack thread sets valid flags, and we need to clear them
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
@@ -180,7 +180,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
 
                     // Start SFPU operation
-                    _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(0);
+                    _llk_math_eltwise_unary_sfpu_start_(0);
 
                     // Call the SFPU SDPA reduce function
                     const std::uint32_t block_height = BLOCK_RT_DIM;

@@ -4,10 +4,10 @@
 
 #include <cstdint>
 #include "api/debug/dprint.h"
-#include "experimental/noc.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/endpoints.h"
-#include "experimental/noc_semaphore.h"
+#include "api/dataflow/noc.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc_semaphore.h"
 
 void kernel_main() {
     const uint32_t dram_src_address = get_arg_val<uint32_t>(0);
@@ -16,10 +16,10 @@ void kernel_main() {
     const uint32_t dram_src_bank_id = get_arg_val<uint32_t>(3);
     const uint32_t signal_value = get_arg_val<uint32_t>(4);
 
-    experimental::Noc noc;
-    experimental::CoreLocalMem<std::uint32_t> l1_buffer(l1_dst_address);
-    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> src_dram;
-    experimental::Semaphore semaphore(get_compile_time_arg_val(0));
+    Noc noc;
+    CoreLocalMem<std::uint32_t> l1_buffer(l1_dst_address);
+    AllocatorBank<AllocatorBankType::DRAM> src_dram;
+    Semaphore semaphore(get_compile_time_arg_val(0));
 
     semaphore.wait(signal_value);
 

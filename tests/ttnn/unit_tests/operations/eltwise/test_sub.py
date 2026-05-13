@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_ulp
 
 
 @pytest.mark.parametrize("s", [3])
@@ -23,7 +23,7 @@ def test_sub_scalar(device, s, h, w):
     output_tensor = input_tensor - s
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("s", [3])
@@ -40,7 +40,7 @@ def test_rsub_scalar(device, s, h, w):
     output_tensor = ttnn.add(output_tensor, s)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("scalar_input_tensor_b", [0.5])
@@ -54,7 +54,7 @@ def test_sub_scalar_and_alpha(device, scalar_input_tensor_b, h, w):
     output_tensor = ttnn.sub(input_tensor, scalar_input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("h", [32])
@@ -69,7 +69,7 @@ def test_sub(device, h, w):
     output = ttnn.sub(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, 0.9999)
+    assert_with_ulp(torch_output_tensor, output, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("h", [32])
@@ -84,7 +84,7 @@ def test_rsub(device, h, w):
     output = ttnn.rsub(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, 0.9999)
+    assert_with_ulp(torch_output_tensor, output, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("n", [2])
@@ -102,7 +102,7 @@ def test_sub_4D(device, n, c, h, w):
     output = ttnn.sub(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, 0.9999)
+    assert_with_ulp(torch_output_tensor, output, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("n", [2])
@@ -120,4 +120,4 @@ def test_rsub_4D(device, n, c, h, w):
     output = ttnn.rsub(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, 0.9999)
+    assert_with_ulp(torch_output_tensor, output, ulp_threshold=1)

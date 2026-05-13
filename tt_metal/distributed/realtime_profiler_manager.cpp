@@ -294,7 +294,8 @@ RealtimeProfilerManager::DeviceState::DeviceState(DeviceState&& o) noexcept :
     sync_host_ts_addr(o.sync_host_ts_addr),
     sync_response_received(o.sync_response_received.load(std::memory_order_relaxed)),
     sync_host_time_before(o.sync_host_time_before),
-    last_finish_sync_at(o.last_finish_sync_at) {}
+    last_finish_sync_at(o.last_finish_sync_at),
+    pending_first_unthrottled_finish_sync(o.pending_first_unthrottled_finish_sync) {}
 
 RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevice>& mesh_device) {
     // HAL offsets are the same for all devices (same arch).
@@ -744,6 +745,10 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
         }
     });
 
+    for (auto& dev_state : devices_) {
+        dev_state.pending_first_unthrottled_finish_sync = true;
+    }
+
     // Background receiver thread that polls all device sockets round-robin.
     stop_.store(false);
     receiver_thread_ = std::thread([this]() {
@@ -1101,8 +1106,9 @@ void RealtimeProfilerManager::trigger_sync_check() {
     device_indices_to_sync.reserve(devices_.size());
     for (size_t i = 0; i < devices_.size(); i++) {
         const auto& dev_state = devices_[i];
-        if (!dev_state.last_finish_sync_at.has_value() ||
-            throttle_now - *dev_state.last_finish_sync_at >= kRtProfilerMinSyncInterval) {
+        const bool interval_elapsed = !dev_state.last_finish_sync_at.has_value() ||
+                                      throttle_now - *dev_state.last_finish_sync_at >= kRtProfilerMinSyncInterval;
+        if (interval_elapsed || dev_state.pending_first_unthrottled_finish_sync) {
             device_indices_to_sync.push_back(i);
         }
     }
@@ -1203,6 +1209,7 @@ void RealtimeProfilerManager::trigger_sync_check() {
                     dev_state.chip_id, dev_state.sync_host_time_before, device_time, dev_state.sync_frequency);
                 tracy_handler_->PushSyncCheckMarker(dev_state.chip_id, device_time, dev_state.sync_frequency);
                 dev_state.last_finish_sync_at = std::chrono::steady_clock::now();
+                dev_state.pending_first_unthrottled_finish_sync = false;
                 got_sync = true;
             } else {
                 uint64_t start_time = (static_cast<uint64_t>(rp[0]) << 32) | rp[1];
