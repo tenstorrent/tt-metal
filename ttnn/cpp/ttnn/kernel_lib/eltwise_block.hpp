@@ -127,7 +127,7 @@ struct BlockCopyTile : CopyTileTag {
     // into reconfig (Reconfig == None) we keep the simple `copy_tile_init`.
     static ALWI void init() { copy_tile_init(Cb); }
 
-    ALWI void wait_per_tile(uint32_t /*i*/) const {
+    ALWI void wait_per_tile(uint32_t /*i*/, uint32_t /*block_size*/) const {
         if constexpr (Policy == CopyTilePolicy::WaitAndPop || Policy == CopyTilePolicy::WaitNoPop) {
             cb_wait_front(Cb, BlockSize);
         }
@@ -146,7 +146,7 @@ struct BlockCopyTile : CopyTileTag {
 
     static constexpr uint32_t lane_width = to_u32(BaseDst) + BlockSize;
 
-    ALWI void pop_per_tile(uint32_t /*i*/) const {
+    ALWI void pop_per_tile(uint32_t /*i*/, uint32_t /*block_size*/) const {
         if constexpr (Policy == CopyTilePolicy::WaitAndPop || Policy == CopyTilePolicy::NoWaitPop) {
             cb_pop_front(Cb, BlockSize);
         }
@@ -243,7 +243,7 @@ struct BlockBinaryFpu : BinaryFpuTag {
     static constexpr uint32_t b_wait_count =
         (BIndex == CbIndexMode::FirstTile) ? (BWaitTiles == 0 ? 1u : BWaitTiles) : BlockSize;
 
-    ALWI void wait_per_tile(uint32_t /*i*/) const {
+    ALWI void wait_per_tile(uint32_t /*i*/, uint32_t /*block_size*/) const {
         if constexpr (APolicy == CopyTilePolicy::WaitAndPop || APolicy == CopyTilePolicy::WaitNoPop) {
             cb_wait_front(CbA, a_wait_count);
         }
@@ -288,7 +288,7 @@ struct BlockBinaryFpu : BinaryFpuTag {
 
     static constexpr uint32_t lane_width = to_u32(BaseDst) + BlockSize;
 
-    ALWI void pop_per_tile(uint32_t /*i*/) const {
+    ALWI void pop_per_tile(uint32_t /*i*/, uint32_t /*block_size*/) const {
         if constexpr (APolicy == CopyTilePolicy::WaitAndPop || APolicy == CopyTilePolicy::NoWaitPop) {
             cb_pop_front(CbA, a_wait_count);
         }
@@ -339,7 +339,7 @@ struct BlockPackTile : PackTileTag {
         // Pack reconfig fold-driven via `emit_pre_element_transitions`.
     }
 
-    ALWI void reserve_per_tile(uint32_t /*i*/) const {
+    ALWI void reserve_per_tile(uint32_t /*i*/, uint32_t /*block_size*/) const {
         if constexpr (
             Policy == PackTilePolicy::PerTileReserveAndPush || Policy == PackTilePolicy::PerTileReserveNoPush) {
             cb_reserve_back(Cb, BlockSize);
@@ -359,7 +359,7 @@ struct BlockPackTile : PackTileTag {
 
     static constexpr uint32_t lane_width = to_u32(BaseDst) + BlockSize;
 
-    ALWI void push_per_tile(uint32_t /*i*/) const {
+    ALWI void push_per_tile(uint32_t /*i*/, uint32_t /*block_size*/) const {
         if constexpr (Policy == PackTilePolicy::PerTileReserveAndPush) {
             cb_push_back(Cb, BlockSize);
         }

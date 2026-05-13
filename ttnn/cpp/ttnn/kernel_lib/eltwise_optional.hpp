@@ -96,14 +96,14 @@ struct OptionalChainElement<false, Inner>
 
     static constexpr uint32_t lane_width = 1;
     static ALWI void init() {}
-    ALWI void wait_per_tile(uint32_t) const {}
+    ALWI void wait_per_tile(uint32_t, uint32_t) const {}
     ALWI void wait_upfront(uint32_t) const {}
     ALWI void exec(uint32_t, uint32_t) const {}
-    ALWI void pop_per_tile(uint32_t) const {}
+    ALWI void pop_per_tile(uint32_t, uint32_t) const {}
     ALWI void pop_upfront_end(uint32_t) const {}
-    ALWI void reserve_per_tile(uint32_t) const {}
+    ALWI void reserve_per_tile(uint32_t, uint32_t) const {}
     ALWI void reserve_upfront(uint32_t) const {}
-    ALWI void push_per_tile(uint32_t) const {}
+    ALWI void push_per_tile(uint32_t, uint32_t) const {}
     ALWI void push_at_end(uint32_t) const {}
 };
 
