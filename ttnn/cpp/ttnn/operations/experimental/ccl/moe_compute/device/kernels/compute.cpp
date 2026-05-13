@@ -106,12 +106,17 @@ void kernel_main() {
     // CB Aliases
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_3;  // reuse cb_r2c_w0_w1
 
+    // Pre-computed shard lookup tables — avoids runtime div/mod in inner loops.
+    // ring_core_id is a runtime arg, but Nt/Ht/num_cores are compile-time.
+    constexpr auto shard_tiles_lut = moe_ring::make_shard_lut<Nt, num_cores>();
+    constexpr auto w2_shard_tiles_lut = moe_ring::make_w2_shard_lut<Ht, Nt, num_cores>();
+
     // Constants for MoE — derived from compile-time shape args
     constexpr uint32_t num_w0_w1_tiles_h = Ht;
     constexpr uint32_t num_w2_tiles_h = Nt;
 
-    const uint32_t num_w0_w1_tiles_w = moe_ring::shard_tiles(Nt, ring_core_id, num_cores);
-    const uint32_t num_w2_tiles_w = moe_ring::w2_shard_tiles(Ht, ring_core_id, Nt, num_cores);
+    const uint32_t num_w0_w1_tiles_w = shard_tiles_lut[ring_core_id];
+    const uint32_t num_w2_tiles_w = w2_shard_tiles_lut[ring_core_id];
 
     const uint32_t num_in2_tiles = num_w2_tiles_w;
     const uint32_t num_mm2_tiles = num_w2_tiles_w;
@@ -323,7 +328,7 @@ void kernel_main() {
             cb_reserve_back(cb_c2s_out, num_w0_w1_tiles_h);
             for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
                 uint32_t dm1_step = 0;
-                uint32_t dm1_tiles_remaining = moe_ring::shard_tiles(Nt, ring_core_id, num_cores);
+                uint32_t dm1_tiles_remaining = shard_tiles_lut[ring_core_id];
                 cb_wait_front(cb_w2c_rdy, 1);
 
                 uint32_t in2_offset = 0, in2_index = 0;
@@ -357,8 +362,8 @@ void kernel_main() {
                         if (dm1_tiles_remaining == 0) {
                             cb_pop_front(cb_w2c_rdy, 1);
                             cb_wait_front(cb_w2c_rdy, 1);
-                            dm1_tiles_remaining = moe_ring::shard_tiles(
-                                Nt, (ring_core_id + num_cores - (++dm1_step)) % num_cores, num_cores);
+                            dm1_tiles_remaining =
+                                shard_tiles_lut[(ring_core_id + num_cores - (++dm1_step)) % num_cores];
                             in2_offset += tiles_per_step;
                             in2_index = in2_offset;
                         }

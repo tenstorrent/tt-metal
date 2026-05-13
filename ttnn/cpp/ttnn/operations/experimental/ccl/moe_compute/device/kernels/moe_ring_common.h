@@ -73,4 +73,28 @@ constexpr uint32_t compute_w2_tile_offset(uint32_t core_id, uint32_t Ht, uint32_
     return offset;
 }
 
+template <uint32_t N>
+struct ShardLUT {
+    uint32_t data[N];
+    constexpr uint32_t operator[](uint32_t i) const { return data[i]; }
+};
+
+template <uint32_t n_tiles, uint32_t n_cores>
+constexpr ShardLUT<n_cores> make_shard_lut() {
+    ShardLUT<n_cores> lut{};
+    for (uint32_t c = 0; c < n_cores; ++c) {
+        lut.data[c] = shard_tiles(n_tiles, c, n_cores);
+    }
+    return lut;
+}
+
+template <uint32_t Ht, uint32_t Nt, uint32_t n_cores>
+constexpr ShardLUT<n_cores> make_w2_shard_lut() {
+    ShardLUT<n_cores> lut{};
+    for (uint32_t c = 0; c < n_cores; ++c) {
+        lut.data[c] = w2_shard_tiles(Ht, c, Nt, n_cores);
+    }
+    return lut;
+}
+
 }  // namespace moe_ring
