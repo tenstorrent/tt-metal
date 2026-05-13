@@ -217,33 +217,49 @@ def print_segments(label: str, r: dict, max_segs: int = 6) -> None:
 # ---------------------------------------------------------------------------
 # Section: speaker similarity (optional, requires --ref)
 # ---------------------------------------------------------------------------
-def speaker_similarity_via_reference(*paths: str) -> Optional[list[float]]:
-    """Cosine similarity of each path vs paths[0] using our reference's ECAPA
-    speaker encoder (the one that conditions the TTS model). The first path is
-    treated as the target reference; remaining are compared against it.
+def speaker_similarity_via_reference(
+    *paths: str,
+    encoder_fn=None,
+    sample_rate: int = 24000,
+) -> Optional[list[float]]:
+    """Cosine similarity of each path vs ``paths[0]`` under a speaker encoder.
 
-    Returns: list of cosine-sim values for paths[1:], or None on import failure.
+    Args:
+        paths: audio file paths; the first is the reference, the rest are scored
+            against it.
+        encoder_fn: callable ``(waveform_1d: torch.FloatTensor) -> torch.Tensor``
+            returning a speaker embedding. If ``None`` (default), uses the
+            qwen3-tts ECAPA encoder — the one that conditions the model — so the
+            CLI tool works out-of-the-box for qwen3-tts. For other TTS models,
+            inject the model's own encoder via this argument.
+        sample_rate: audio sample rate the encoder expects (Hz). Default 24000
+            matches the qwen3-tts encoder.
+
+    Returns:
+        Cosine-sim values for paths[1:], or ``None`` if the qwen3 default
+        encoder fails to import / load.
     """
-    try:
-        sys.path.insert(0, "/local/ttuser/ssinghal/tt-metal")
-        from huggingface_hub import snapshot_download
-        from safetensors.torch import load_file
+    if encoder_fn is None:
+        try:
+            sys.path.insert(0, "/local/ttuser/ssinghal/tt-metal")
+            from huggingface_hub import snapshot_download
+            from safetensors.torch import load_file
 
-        from models.demos.qwen3_tts.demo.demo_pure_reference_tts import extract_speaker_embedding_reference
-    except Exception as e:
-        print(f"  (speaker-sim disabled: {e})")
-        return None
+            from models.demos.qwen3_tts.demo.demo_pure_reference_tts import extract_speaker_embedding_reference
+        except Exception as e:
+            print(f"  (speaker-sim disabled: {e})")
+            return None
 
-    mp = Path(snapshot_download("Qwen/Qwen3-TTS-12Hz-1.7B-Base", allow_patterns=["*.safetensors"]))
-    sd = {}
-    for f in mp.glob("*.safetensors"):
-        sd.update(load_file(f))
+        mp = Path(snapshot_download("Qwen/Qwen3-TTS-12Hz-1.7B-Base", allow_patterns=["*.safetensors"]))
+        sd = {}
+        for f in mp.glob("*.safetensors"):
+            sd.update(load_file(f))
+        encoder_fn = lambda wav: extract_speaker_embedding_reference(wav, sd)  # noqa: E731
 
     embeds = []
     for p in paths:
-        a, sr = load_audio(p, 24000)
-        # speaker_encoder upstream resamples internally if needed; just hand it the float32 waveform.
-        emb = extract_speaker_embedding_reference(torch.from_numpy(a).float(), sd)
+        a, _ = load_audio(p, sample_rate)
+        emb = encoder_fn(torch.from_numpy(a).float())
         embeds.append(emb.flatten().detach().cpu().float())
 
     target = embeds[0]
