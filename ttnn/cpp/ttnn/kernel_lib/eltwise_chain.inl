@@ -839,36 +839,13 @@ struct chain_is_hoist_safe<EltwiseChain<Es...>>
 
 namespace detail {
 
-// Per-element wait dispatch (only CB-readers do anything).
-template <class E>
-ALWI void elem_wait_per_tile(const E& e, uint32_t i) {
-    if constexpr (is_cb_reader_op_v<E>) e.wait_per_tile(i);
-}
-template <class E>
-ALWI void elem_wait_upfront(const E& e, uint32_t n) {
-    if constexpr (is_cb_reader_op_v<E>) e.wait_upfront(n);
-}
-template <class E>
-ALWI void elem_pop_per_tile(const E& e, uint32_t i) {
-    if constexpr (is_cb_reader_op_v<E>) e.pop_per_tile(i);
-}
+// End-of-outer-loop lifecycle dispatch. Fire AFTER the outer loop ends for upfront-policy
+// elements (policy-gated internally — no-op for per-tile-policy elements). The per-tile
+// wait / pop / reserve / push pieces live INSIDE the apply_compute / apply_pack body
+// (single element-owned lifecycle per outer iter).
 template <class E>
 ALWI void elem_pop_upfront_end(const E& e, uint32_t n) {
     if constexpr (is_cb_reader_op_v<E>) e.pop_upfront_end(n);
-}
-
-// Per-element pack dispatch.
-template <class E>
-ALWI void elem_reserve_per_tile(const E& e, uint32_t i) {
-    if constexpr (is_cb_writer_op_v<E>) e.reserve_per_tile(i);
-}
-template <class E>
-ALWI void elem_reserve_upfront(const E& e, uint32_t n) {
-    if constexpr (is_cb_writer_op_v<E>) e.reserve_upfront(n);
-}
-template <class E>
-ALWI void elem_push_per_tile(const E& e, uint32_t i) {
-    if constexpr (is_cb_writer_op_v<E>) e.push_per_tile(i);
 }
 template <class E>
 ALWI void elem_push_at_end(const E& e, uint32_t n) {
@@ -921,37 +898,6 @@ ALWI void emit_pre_element_transitions() {
     }
 }
 
-// Compute-phase exec (everything except Pack*).
-// Runs between `tile_regs_acquire()` and `tile_regs_commit()`.
-// For FPU-clash patterns each element's init() runs immediately before its exec —
-// this matches production kernels (`copy_tile_init; copy_tile; sfpu_init; sfpu_tile;
-// binary_dest_reuse_init; binary_dest_reuse_tiles`) and avoids state-clobbering when
-// multiple chain elements reconfigure the unpacker.
-//
-// Single dispatch contract (§4.5): every element exposes `void exec(uint32_t) const`.
-// CRTP bases (UnaryOp / BinaryOp / TernaryOp / QuaternaryOp) forward to `exec_impl()`;
-// runtime-param ops override `exec(uint32_t)` directly. No static-vs-member fork.
-//
-// `EmitInit`: when true, the per-tile path re-fires `E::init()` before exec (clash
-// chains). When false, the chain hoisted init() to boot — per-tile path skips it.
-template <bool EmitInit, class E>
-ALWI void elem_compute_exec(const E& e, uint32_t i) {
-    if constexpr (is_pack_tile_op_v<E>) {
-        // Pack runs in the pack phase, not compute. Skip here.
-        (void)e; (void)i;
-    } else {
-        if constexpr (EmitInit) E::init();
-        e.exec(i);
-    }
-}
-
-// Pack-phase exec (Pack* only).
-// Runs between `tile_regs_wait()` and `tile_regs_release()`.
-template <class E>
-ALWI void elem_pack_exec(const E& e, uint32_t i) {
-    if constexpr (is_pack_tile_op_v<E>) e.exec(i);
-}
-
 // Pack-phase init (Pack* only — F-PERF-4: hoisted to boot, not per-tile).
 // Note: post-commit-2 the pack reconfig is fold-driven via `emit_pre_element_transitions`,
 // so this is effectively a no-op for PackTile / PackTileBlock. Retained for symmetry
@@ -961,24 +907,105 @@ ALWI void elem_pack_init() {
     if constexpr (is_pack_tile_op_v<E>) E::init();
 }
 
-// Index-list expander: runs `emit_pre_element_transitions<E_I, I, Es...>()` then
-// `elem_compute_exec<EmitInit>(elts[I], i)` for each I in [0, sizeof...(Es)).
+// =============================================================================
+// Three-phase per-element apply: compute_body / pop / pack
 //
-// `EmitInit` and `EmitTransitions` are independent gates:
-//   - EmitTransitions=true: per-tile pre-element reconfig + fp32 transitions
-//     (used by FPU-clash chains where the FPU op overwrites unpacker state)
-//   - EmitTransitions=false: transitions already hoisted to boot — skip
-//   - EmitInit=true: per-tile init() (FPU-clash chains)
-//   - EmitInit=false: init() already hoisted to boot — skip
-template <bool EmitInit, bool EmitTransitions, std::size_t... Is, class... Es>
-ALWI void compute_phase_for_each(std::index_sequence<Is...>, uint32_t i, Es&... elts) {
-    auto run_one = [&](auto idx, auto& elem) {
-        constexpr std::size_t II = decltype(idx)::value;
-        using ElemT = std::remove_reference_t<decltype(elem)>;
-        if constexpr (EmitTransitions) {
-            emit_pre_element_transitions<ElemT, II, Es...>();
+// The chain pipeline makes three element-iterating calls per outer iter, with the
+// commit / wait_regs / release barriers between them:
+//
+//   tile_regs_acquire();
+//   apply_compute_body_phase(...);     // wait + init? + for(j) exec
+//   tile_regs_commit();                // math done; unpacker has consumed input CB tiles
+//   apply_pop_phase(...);              // pop_per_tile (pop early — §11 free CB slot ASAP)
+//   tile_regs_wait();                  // pack waits for math
+//   apply_pack_phase(...);             // reserve + for(j) pack_exec + push
+//   tile_regs_release();
+//
+// After the outer loop ends, upfront-policy lifecycle fires:
+//   elem_pop_upfront_end(...) and elem_push_at_end(...).
+//
+// BlockSize == 1 today; commit 7 (auto-block) raises it. exec(i_outer * BlockSize + j)
+// passes the absolute tile index — identical to today's exec(i) at BlockSize=1.
+// =============================================================================
+
+template <bool EmitInit, std::size_t I, class ElemT, class... Es>
+ALWI void elem_apply_compute_body(const ElemT& elem, uint32_t i_outer, uint32_t block_size, uint32_t n_tiles) {
+    if constexpr (is_pack_tile_op_v<ElemT>) {
+        // Pack runs in pack phase, not compute. Skip.
+        (void)elem; (void)i_outer; (void)block_size; (void)n_tiles;
+    } else if constexpr (is_cb_reader_op_v<ElemT>) {
+        // wait late — inside outer iter, policy-guarded (no-op for non-wait policies)
+        elem.wait_per_tile(i_outer);
+        elem.wait_upfront(n_tiles);
+        if constexpr (EmitInit) {
+            emit_pre_element_transitions<ElemT, I, Es...>();
+            ElemT::init();
         }
-        elem_compute_exec<EmitInit>(elem, i);
+        for (uint32_t j = 0; j < block_size; ++j) {
+            elem.exec(i_outer * block_size + j);
+        }
+    } else if constexpr (is_dest_only_op_v<ElemT>) {
+        // SFPU / Fill / Rand — no CB wait/pop; init + inner exec only.
+        if constexpr (EmitInit) {
+            emit_pre_element_transitions<ElemT, I, Es...>();
+            ElemT::init();
+        }
+        for (uint32_t j = 0; j < block_size; ++j) {
+            elem.exec(i_outer * block_size + j);
+        }
+    }
+}
+
+template <class ElemT>
+ALWI void elem_apply_pop(const ElemT& elem, uint32_t i_outer) {
+    // pop_per_tile runs between tile_regs_commit() and tile_regs_wait() — earliest
+    // valid pop position (math done, unpacker has consumed). Frees the CB slot for
+    // the upstream producer ASAP (§11 "pop early"). Policy-guarded — no-op for
+    // upfront / no-pop policies (which fire elem_pop_upfront_end after outer loop).
+    if constexpr (is_cb_reader_op_v<ElemT>) {
+        elem.pop_per_tile(i_outer);
+    } else {
+        (void)elem; (void)i_outer;
+    }
+}
+
+template <std::size_t I, class ElemT, class... Es>
+ALWI void elem_apply_pack(const ElemT& elem, uint32_t i_outer, uint32_t block_size, uint32_t n_tiles) {
+    if constexpr (is_pack_tile_op_v<ElemT>) {
+        // reserve late — inside outer iter, policy-guarded
+        elem.reserve_per_tile(i_outer);
+        elem.reserve_upfront(n_tiles);
+        for (uint32_t j = 0; j < block_size; ++j) {
+            elem.exec(i_outer * block_size + j);
+        }
+        // push early — policy-guarded; upfront push fires at end-of-chain
+        elem.push_per_tile(i_outer);
+    } else {
+        (void)elem; (void)i_outer; (void)block_size; (void)n_tiles;
+    }
+}
+
+template <bool EmitInit, std::size_t... Is, class... Es>
+ALWI void apply_compute_body_phase(std::index_sequence<Is...>, uint32_t i_outer, uint32_t block_size, uint32_t n_tiles, Es&... elts) {
+    auto run_one = [&](auto idx_const, auto& elem) {
+        constexpr std::size_t II = decltype(idx_const)::value;
+        using ElemT = std::remove_reference_t<decltype(elem)>;
+        elem_apply_compute_body<EmitInit, II, ElemT, Es...>(elem, i_outer, block_size, n_tiles);
+    };
+    (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
+}
+
+template <class... Es>
+ALWI void apply_pop_phase(uint32_t i_outer, Es&... elts) {
+    (elem_apply_pop(elts, i_outer), ...);
+}
+
+template <std::size_t... Is, class... Es>
+ALWI void apply_pack_phase(std::index_sequence<Is...>, uint32_t i_outer, uint32_t block_size, uint32_t n_tiles, Es&... elts) {
+    auto run_one = [&](auto idx_const, auto& elem) {
+        constexpr std::size_t II = decltype(idx_const)::value;
+        using ElemT = std::remove_reference_t<decltype(elem)>;
+        elem_apply_pack<II, ElemT, Es...>(elem, i_outer, block_size, n_tiles);
     };
     (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
 }
@@ -1032,9 +1059,6 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
                   "eltwise_chain: two PackTile elements collide on (cb, dst_slot). "
                   "Pack writes must target distinct (cb, dst) tuples.");
 
-    // ---- Detect upfront-block path (auto-detected via per-element `is_upfront`) ----
-    constexpr bool block_path = ((Es::is_upfront) || ...);
-
     // ---- Hoist gate (item 7 + lessons §3.4) ----
     //
     // Hoist all per-element init() to chain entry only when both:
@@ -1046,6 +1070,13 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
     // The trait `chain_is_hoist_safe_v` folds both conditions.
     constexpr bool emit_init_per_tile = !chain_is_hoist_safe_v<Chain>;
 
+    // ---- Inner DEST-batch block size (commit 7 / item 2 placeholder) ----
+    // BlockSize == 1 today; the auto-block work (item 2 of eltwise_helper_proposal.md)
+    // changes this to DEST_AUTO_LIMIT / max_lane_width. The chain's structural shape
+    // is already block-aware — the inner `for (j = 0; j < block_size; ++j)` lives in
+    // apply_compute_phase / apply_pack_phase.
+    constexpr uint32_t block_size = 1;
+
     using IdxSeq = std::make_index_sequence<sizeof...(Es)>;
 
     // ---- F-PERF-4: hoist pack init out of per-tile loop ----
@@ -1053,73 +1084,33 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
     (detail::elem_pack_init<Es>(), ...);
 
     if constexpr (!emit_init_per_tile) {
-        // Non-clash chain: hoist all per-element transitions + init() to boot.
-        // The per-tile loop emits only the lifecycle + exec.
+        // Hoist-safe chain: emit all per-element transitions + init() once at boot.
+        // The per-outer-iter path emits only the lifecycle + exec.
         detail::hoisted_init_for_each(IdxSeq{}, elts...);
     }
 
-    // Pack lifecycle ordering: reserve emitted as late as possible (right before
-    // pack_exec) and push emitted as early as possible (right after pack_exec) so
-    // the downstream consumer sees pushed tiles before this iteration releases
-    // DEST. The per-tile reserve/push helpers are policy-guarded internally
-    // (no-op for non-PerTile policies), so emitting them inside the pack window
-    // is safe in both block and per-tile paths.
-    if constexpr (block_path) {
-        // Upfront block path: wait/reserve `n_tiles` worth of CB tiles, run the
-        // per-tile loop, pop/push at end. Element types with block-size multipliers
-        // (e.g. BlockCopyTile<Cb, BlockSize>) scale `n_tiles` internally.
-        //
-        // Wait-late amendment (item 6 / lessons §11): `cb_wait_front(cb, N)` and
-        // `cb_reserve_back(cb, N)` are cumulative-count idempotent — emitting them
-        // inside the loop blocks once on iter 0 and short-circuits thereafter,
-        // recovering producer/consumer overlap. Pop/push-at-end stay outside the
-        // loop (consumer needs the whole block visible until release).
-        //
-        // Mixed-policy chains (e.g. CopyTile WaitUpfrontPopAtEnd + PackTile
-        // PerTileReserveAndPush — the softmax phase 2b pattern) need per-tile
-        // reserve/push for the streaming output even though the input drove
-        // block_path=true. Per-tile lifecycle ops are policy-guarded internally
-        // (no-op on upfront elements), so emitting them every iter is correct.
-        for (uint32_t i = 0; i < n_tiles; ++i) {
-            // wait late — inside loop, late as possible before unpack reads
-            (detail::elem_wait_upfront(elts, n_tiles), ...);
-            (detail::elem_wait_per_tile(elts, i), ...);
-
-            tile_regs_acquire();
-            // Compute-phase: emit pre-element transitions (when init is per-tile)
-            // and per-element exec.
-            detail::compute_phase_for_each<emit_init_per_tile, emit_init_per_tile>(IdxSeq{}, i, elts...);
-            tile_regs_commit();
-            tile_regs_wait();
-            // reserve late — inside loop, right before pack
-            (detail::elem_reserve_per_tile(elts, i), ...);
-            (detail::elem_reserve_upfront(elts, n_tiles), ...);
-            (detail::elem_pack_exec(elts, i), ...);
-            (detail::elem_push_per_tile(elts, i), ...);
-            tile_regs_release();
-
-            (detail::elem_pop_per_tile(elts, i), ...);
-        }
-
-        (detail::elem_pop_upfront_end(elts, n_tiles), ...);
-        (detail::elem_push_at_end(elts, n_tiles), ...);
-    } else {
-        // Per-tile path (default — PerTile policies).
-        for (uint32_t i = 0; i < n_tiles; ++i) {
-            (detail::elem_wait_per_tile(elts, i), ...);
-
-            tile_regs_acquire();
-            detail::compute_phase_for_each<emit_init_per_tile, emit_init_per_tile>(IdxSeq{}, i, elts...);
-            tile_regs_commit();
-            tile_regs_wait();
-            (detail::elem_reserve_per_tile(elts, i), ...);
-            (detail::elem_pack_exec(elts, i), ...);
-            (detail::elem_push_per_tile(elts, i), ...);
-            tile_regs_release();
-
-            (detail::elem_pop_per_tile(elts, i), ...);
-        }
+    // Single outer loop — block_path and per-tile path collapse to one shape because
+    // every element owns its full wait/init/exec slice in apply_compute_body_phase
+    // (policy-guarded internally). Upfront wait/reserve fire inside the loop body
+    // (cumulative-count idempotent — wait-late per §11); upfront pop/push fire after
+    // the loop ends.
+    //
+    // Per-tile pop runs between tile_regs_commit() and tile_regs_wait() — earliest
+    // valid pop position (math done, unpacker has consumed input CB tiles). Frees CB
+    // slots for the upstream producer as early as possible (§11 "pop early").
+    for (uint32_t i_outer = 0; i_outer < n_tiles; ++i_outer) {
+        tile_regs_acquire();
+        detail::apply_compute_body_phase<emit_init_per_tile>(IdxSeq{}, i_outer, block_size, n_tiles, elts...);
+        tile_regs_commit();
+        detail::apply_pop_phase(i_outer, elts...);
+        tile_regs_wait();
+        detail::apply_pack_phase(IdxSeq{}, i_outer, block_size, n_tiles, elts...);
+        tile_regs_release();
     }
+
+    // End-of-chain upfront-policy lifecycle (policy-gated no-op for non-upfront elts).
+    (detail::elem_pop_upfront_end(elts, n_tiles), ...);
+    (detail::elem_push_at_end(elts, n_tiles), ...);
 }
 
 // =============================================================================
