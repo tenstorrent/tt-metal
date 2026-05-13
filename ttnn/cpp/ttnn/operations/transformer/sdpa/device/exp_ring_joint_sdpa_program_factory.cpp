@@ -810,6 +810,21 @@ tt::tt_metal::ProgramDescriptor ExpRingJointSDPAProgramFactory::create_descripto
         }}},
     });
 
+    // cb_reduced_sum: separate output CB for matmul_reduce. matmul_block requires
+    // in_cb != out_cb (see ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp), so the
+    // M=Sq_chunk_t row-sum reduction lands here instead of overwriting cb_prev_sum
+    // in-place. compute_common.hpp's matmul_reduce wrapper re-points alias_prev_sum to
+    // this CB after the call; downstream rescale / recip / mul consume it.
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = statistics_tiles * stats_tile_size,
+        .core_ranges = sdpa_grid_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_23),
+            .data_format = stats_df,
+            .page_size = stats_tile_size,
+        }}},
+    });
+
     // cb_exp_max_diff
     desc.cbs.push_back(CBDescriptor{
         .total_size = statistics_tiles * stats_tile_size,

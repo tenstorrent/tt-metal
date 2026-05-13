@@ -124,15 +124,15 @@ A helper that asks the caller to do `cb_wait_front(cb_in0, 1)` *before* invoking
 
 Half-sync fp16 has 8 DEST slots; full-sync has 16; fp32-DEST mode halves both. Use `DEST_AUTO_LIMIT` from `ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp` (constexpr, derived from `get_dest_limit()` / `DST_ACCUM_MODE`) anywhere a helper bounds DEST slot indices, batch sizes, or chain widths. A literal `8` in an enum or `static_assert` ships a helper that silently miscompiles the moment the kernel runs in a different DEST mode. `DEST_AUTO_LIMIT` is already used across `binary_op_helpers.inl`, `sfpu_helpers.hpp`, `untilize_helpers.inl` — match that convention.
 
-### Helper API takes `uint32_t` cb id; `experimental::CircularBuffer` supported internally
+### Helper API takes `uint32_t` cb id; `CircularBuffer` supported internally
 
-Public helper signatures take **only** the raw `uint32_t` cb id — never an `experimental::CircularBuffer` reference, never a templated CB-type wrapper. The single `uint32_t` parameter is the helper's contract with the caller.
+Public helper signatures take **only** the raw `uint32_t` cb id — never an `CircularBuffer` reference, never a templated CB-type wrapper. The single `uint32_t` parameter is the helper's contract with the caller.
 
-Internally, the helper is free to use `experimental::CircularBuffer` machinery — e.g. constructing an `experimental::CircularBuffer` from the id to query metadata, drive iterator-based access, or invoke features only the experimental type exposes. That is an implementation detail, not part of the API.
+Internally, the helper is free to use `CircularBuffer` machinery — e.g. constructing an `CircularBuffer` from the id to query metadata, drive iterator-based access, or invoke features only the experimental type exposes. That is an implementation detail, not part of the API.
 
-Reason: kernels mid-transition to `experimental::CircularBuffer` and legacy kernels on the bare uint id share one API surface. The id is what every kernel already has; constructing the experimental wrapper inside the helper is cheap. Lifting the type into the signature forces every caller to construct one (or maintain two helper variants), and the surface drifts as some helpers take the wrapper and others don't.
+Reason: kernels mid-transition to `CircularBuffer` and legacy kernels on the bare uint id share one API surface. The id is what every kernel already has; constructing the experimental wrapper inside the helper is cheap. Lifting the type into the signature forces every caller to construct one (or maintain two helper variants), and the surface drifts as some helpers take the wrapper and others don't.
 
-Where the helper queries CB metadata (page size, num pages, dtype), prefer compile-time `static_assert` paths when the metadata is reachable through the `experimental::CircularBuffer` constructed from the id, falling back to runtime reads when it is not. `if constexpr` selects between paths.
+Where the helper queries CB metadata (page size, num pages, dtype), prefer compile-time `static_assert` paths when the metadata is reachable through the `CircularBuffer` constructed from the id, falling back to runtime reads when it is not. `if constexpr` selects between paths.
 
 ### Reconfig is a first-class helper capability
 

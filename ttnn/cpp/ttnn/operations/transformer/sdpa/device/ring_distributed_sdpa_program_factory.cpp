@@ -439,6 +439,8 @@ ProgramDescriptor RingDistributedSdpaDeviceOperation::RingDistributedSdpaProgram
     cb_ids.sum_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     cb_ids.sum_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     cb_ids.exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    // matmul_block helper requires in_cb != out_cb; row-sum reduction lands here.
+    cb_ids.reduced_sum = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     cb_ids.out = allocate_tile_cb(out0_t, out_tile_size, out_df);
 
     const auto reader_cb_compile_time_args = cb_ids.reader_compile_time_args();

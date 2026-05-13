@@ -89,6 +89,8 @@ void kernel_main() {
     constexpr uint32_t cb_sum_A = get_compile_time_arg_val(cb_arg_offset + 15);
     constexpr uint32_t cb_sum_B = get_compile_time_arg_val(cb_arg_offset + 16);
     constexpr uint32_t cb_exp_max_diff = get_compile_time_arg_val(cb_arg_offset + 17);
+    // matmul_reduce's separate output CB (matmul_block requires in_cb != out_cb).
+    constexpr uint32_t cb_reduced_sum = get_compile_time_arg_val(cb_arg_offset + 18);
     uint32_t chunked_q_chunk_offset = 0;
     mm_init(cb_q_in, cb_k_in, cb_out);
 
@@ -245,6 +247,7 @@ void kernel_main() {
                 cb_max_B,
                 cb_sum_A,
                 cb_sum_B,
+                cb_reduced_sum,
                 cb_exp_max_diff,
                 cb_out,
                 lw_mask,
