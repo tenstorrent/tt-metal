@@ -60,7 +60,7 @@ void kernel_main() {
     const uint32_t src1_tile_bytes = get_tile_size(cb_res);
     constexpr auto res_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     const auto src_b = TensorAccessor(res_args, res_addr);
-    experimental::CircularBuffer cb_res_buf(cb_res);
+    CircularBuffer cb_res_buf(cb_res);
 #endif
 
     // Generate constant tiles for reduce scalar
