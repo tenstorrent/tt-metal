@@ -922,8 +922,21 @@ def _modulated_rms_norm(
     scale: "ttnn.Tensor",
     shift: "ttnn.Tensor",
     eps: float,
+    pre_added: bool = False,
 ) -> "ttnn.Tensor":
-    """Fused: ((x · rsqrt(mean(x²)+ε)) · (1+scale)) + shift in one kernel."""
+    """Fused: ((x · rsqrt(mean(x²)+ε)) · (1+scale)) + shift in one kernel.
+
+    If pre_added=True, `scale` is already (1+scale) — skip the add. Used by
+    the bs1 fast path where modulations are precomputed at init.
+    """
+    if pre_added:
+        return ttnn.rms_norm(
+            x,
+            weight=scale,
+            bias=shift,
+            epsilon=eps,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
     scale_plus_one = ttnn.add(scale, 1.0)
     out = ttnn.rms_norm(
         x,
@@ -996,6 +1009,16 @@ def ada_rms_norm_no_gate_ttnn(
     return out
 
 
+def ada_rms_norm_no_gate_precomputed_ttnn(
+    x: "ttnn.Tensor",
+    scale_plus_one: "ttnn.Tensor",
+    shift: "ttnn.Tensor",
+    eps: float,
+) -> "ttnn.Tensor":
+    """Final-norm adaRMS using precomputed (1+scale, shift) — gate is discarded."""
+    return _modulated_rms_norm(x, scale_plus_one, shift, eps, pre_added=True)
+
+
 class AdaRMSGemmaBlockTTNN:
     """PI0.5 action-expert block (TTNN): one fused 6*W modulation Dense + adaRMS + gated residuals."""
 
@@ -1041,42 +1064,52 @@ class AdaRMSGemmaBlockTTNN:
         position_ids: Optional["ttnn.Tensor"] = None,
         past_key_value: Optional[Tuple["ttnn.Tensor", "ttnn.Tensor"]] = None,
         use_cache: bool = False,
+        precomputed_mod: Optional[Tuple["ttnn.Tensor", ...]] = None,
     ) -> Tuple["ttnn.Tensor", Optional[Tuple["ttnn.Tensor", "ttnn.Tensor"]]]:
-        # Single fused modulation Dense: (B, W) -> (B, 6*W)
-        mod = ttnn.linear(
-            adarms_cond,
-            self.mod_weight,
-            bias=self.mod_bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            core_grid=self.core_grid,
-            compute_kernel_config=self.mod_compute_kernel_config,
-        )
-        sa, ta, ga, sf, tf, gf = _split_modulation_6(mod)
-        ttnn.deallocate(mod)
+        # Fast path: 6 modulation tensors precomputed at init (sa already = 1+scale_a).
+        if precomputed_mod is not None:
+            sa1, ta, ga, sf1, tf, gf = precomputed_mod
+            mod_owned = False
+        else:
+            mod = ttnn.linear(
+                adarms_cond,
+                self.mod_weight,
+                bias=self.mod_bias,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                core_grid=self.core_grid,
+                compute_kernel_config=self.mod_compute_kernel_config,
+            )
+            sa1, ta, ga, sf1, tf, gf = _split_modulation_6(mod)
+            ttnn.deallocate(mod)
+            mod_owned = True
 
         # ---- Attention sublayer ----
-        normed = _modulated_rms_norm(hidden_states, sa, ta, self.config.rms_norm_eps)
-        ttnn.deallocate(sa)
-        ttnn.deallocate(ta)
+        normed = _modulated_rms_norm(hidden_states, sa1, ta, self.config.rms_norm_eps, pre_added=not mod_owned)
+        if mod_owned:
+            ttnn.deallocate(sa1)
+            ttnn.deallocate(ta)
         attn_output, new_cache = self.attention.forward(
             normed, cos, sin, attention_mask, position_ids, past_key_value, use_cache
         )
         ttnn.deallocate(normed)
         gated_attn = ttnn.mul(attn_output, ga)
         ttnn.deallocate(attn_output)
-        ttnn.deallocate(ga)
+        if mod_owned:
+            ttnn.deallocate(ga)
         hidden_states = ttnn.add(hidden_states, gated_attn)
         ttnn.deallocate(gated_attn)
 
         # ---- FFW sublayer ----
-        normed = _modulated_rms_norm(hidden_states, sf, tf, self.config.rms_norm_eps)
-        ttnn.deallocate(sf)
-        ttnn.deallocate(tf)
+        normed = _modulated_rms_norm(hidden_states, sf1, tf, self.config.rms_norm_eps, pre_added=not mod_owned)
+        if mod_owned:
+            ttnn.deallocate(sf1)
+            ttnn.deallocate(tf)
         mlp_output = self.mlp.forward(normed)
         ttnn.deallocate(normed)
         gated_mlp = ttnn.mul(mlp_output, gf)
         ttnn.deallocate(mlp_output)
-        ttnn.deallocate(gf)
+        if mod_owned:
+            ttnn.deallocate(gf)
         hidden_states = ttnn.add(hidden_states, gated_mlp)
         ttnn.deallocate(gated_mlp)
 

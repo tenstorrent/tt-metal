@@ -71,6 +71,7 @@ class Pi0_5ModelTTNN:
         self._init_components()
         self._precompute_bs1_timestep_tensors()
         self._precompute_bs1_adarms_cond()
+        self._precompute_bs1_modulations()
 
     def _precompute_bs1_timestep_tensors(self) -> None:
         num_steps = self.denoise_config.num_steps
@@ -101,6 +102,75 @@ class Pi0_5ModelTTNN:
         for i in range(num_steps):
             cond = self.suffix_embedding.embed_adarms_cond(self._timestep_per_step_bs1[i])
             self._adarms_cond_per_step_bs1.append(cond)
+
+    def _precompute_bs1_modulations(self) -> None:
+        """
+        OPTIMIZATION (TIER A): adarms_cond is deterministic per step, so the
+        per-block fused modulation Dense (W -> 6*W) and the final-norm Dense
+        (W -> 3*W) all produce constant outputs. Precompute them at init and
+        reuse across every inference call.
+
+        Saves per inference:
+          - 18 layers × 10 steps = 180 modulation matmuls  (~8 ms)
+          - 360 (1→32) row tilizes that fed those matmuls   (~3 ms)
+          - 360 scale_plus_one adds inside _modulated_rms_norm (we also
+            pre-add the +1 here)
+        """
+        import ttnn as _ttnn
+        from models.experimental.pi0_5.tt.ttnn_gemma import _split_modulation_6
+
+        num_steps = self.denoise_config.num_steps
+        blocks = self.backbone.expert_blocks
+        # [step][layer] -> (sa1, ta, ga, sf1, tf, gf)
+        self._block_mods_per_step: List[List[tuple]] = []
+        # [step] -> (sf1_final, tf_final)
+        self._final_mod_per_step: List[tuple] = []
+
+        for step_idx in range(num_steps):
+            cond = self._adarms_cond_per_step_bs1[step_idx]
+
+            per_layer: List[tuple] = []
+            for block in blocks:
+                mod = _ttnn.linear(
+                    cond,
+                    block.mod_weight,
+                    bias=block.mod_bias,
+                    memory_config=_ttnn.DRAM_MEMORY_CONFIG,
+                    core_grid=block.core_grid,
+                    compute_kernel_config=block.mod_compute_kernel_config,
+                )
+                sa, ta, ga, sf, tf, gf = _split_modulation_6(mod)
+                # Pre-add 1 to the scale tensors so rms_norm uses them directly.
+                sa1 = _ttnn.add(sa, 1.0, memory_config=_ttnn.DRAM_MEMORY_CONFIG)
+                sf1 = _ttnn.add(sf, 1.0, memory_config=_ttnn.DRAM_MEMORY_CONFIG)
+                _ttnn.deallocate(sa)
+                _ttnn.deallocate(sf)
+                _ttnn.deallocate(mod)
+                per_layer.append((sa1, ta, ga, sf1, tf, gf))
+            self._block_mods_per_step.append(per_layer)
+
+            # Final norm: separate Dense weight (3*W).
+            mod_w = self.backbone.expert_final_norm_mod_weight
+            mod_b = self.backbone.expert_final_norm_mod_bias
+            mod = _ttnn.linear(
+                cond,
+                mod_w,
+                bias=mod_b,
+                memory_config=_ttnn.DRAM_MEMORY_CONFIG,
+                core_grid=self.backbone.core_grid,
+            )
+            B = mod.shape[0]
+            width3 = mod.shape[-1]
+            width = width3 // 3
+            mod3 = _ttnn.reshape(mod, (B, 1, width3))
+            _ttnn.deallocate(mod)
+            scale = mod3[:, :, 0:width]
+            shift = mod3[:, :, width : 2 * width]
+            # gate is discarded for final norm (no_gate variant).
+            scale1 = _ttnn.add(scale, 1.0, memory_config=_ttnn.DRAM_MEMORY_CONFIG)
+            _ttnn.deallocate(scale)
+            _ttnn.deallocate(mod3)
+            self._final_mod_per_step.append((scale1, shift))
 
     def _init_components(self):
         suffix_config = SuffixConfig(
@@ -201,16 +271,22 @@ class Pi0_5ModelTTNN:
                 # per step); only the action embedding depends on x_t.
                 suffix_embs = self.suffix_embedding.embed_actions(x_t_ttnn)
                 adarms_cond = self._adarms_cond_per_step_bs1[i]
+                precomputed_block_mods = self._block_mods_per_step[i]
+                precomputed_final_mod = self._final_mod_per_step[i]
             else:
                 assert timesteps_ttnn is not None
                 t_tensor = ttnn.slice(timesteps_ttnn, [0, i], [batch_size, i + 1])
                 t_tensor = ttnn.reshape(t_tensor, (batch_size,))
                 suffix_embs, _, _, adarms_cond = self.embed_suffix(state, x_t_ttnn, t_tensor)
+                precomputed_block_mods = None
+                precomputed_final_mod = None
 
             expert_output, _ = self.backbone.forward_expert(
                 suffix_embs,
                 adarms_cond=adarms_cond,
                 past_key_values=prefix_kv_cache,
+                precomputed_block_mods=precomputed_block_mods,
+                precomputed_final_mod=precomputed_final_mod,
             )
             ttnn.deallocate(suffix_embs)
 

@@ -482,6 +482,7 @@ from models.experimental.pi0_5.tt.ttnn_common import tensor_1d_to_2d_ttnn
 from models.experimental.pi0_5.tt.ttnn_gemma import (
     AdaRMSGemmaBlockTTNN,
     ada_rms_norm_no_gate_ttnn,
+    ada_rms_norm_no_gate_precomputed_ttnn,
 )
 
 
@@ -592,11 +593,14 @@ class Pi0_5PaliGemmaBackboneTTNN(PaliGemmaBackboneTTNN):
         position_ids: Optional["ttnn.Tensor"] = None,
         past_key_values: Optional[List[Tuple["ttnn.Tensor", "ttnn.Tensor"]]] = None,
         use_cache: bool = False,
+        precomputed_block_mods: Optional[List[Tuple["ttnn.Tensor", ...]]] = None,
+        precomputed_final_mod: Optional[Tuple["ttnn.Tensor", "ttnn.Tensor"]] = None,
     ) -> Tuple["ttnn.Tensor", Optional[List[Tuple["ttnn.Tensor", "ttnn.Tensor"]]]]:
         new_cache = [] if use_cache else None
 
         for i, block in enumerate(self.expert_blocks):
             past_kv = past_key_values[i] if past_key_values else None
+            block_mod = precomputed_block_mods[i] if precomputed_block_mods is not None else None
             hidden_states, new_kv = block.forward(
                 hidden_states,
                 None,
@@ -606,16 +610,23 @@ class Pi0_5PaliGemmaBackboneTTNN(PaliGemmaBackboneTTNN):
                 position_ids,
                 past_kv,
                 use_cache,
+                precomputed_mod=block_mod,
             )
             if use_cache:
                 new_cache.append(new_kv)
 
-        hidden_states = ada_rms_norm_no_gate_ttnn(
-            hidden_states,
-            adarms_cond,
-            self.expert_final_norm_mod_weight,
-            self.expert_final_norm_mod_bias,
-            self.config.expert_config.rms_norm_eps,
-            self.core_grid,
-        )
+        if precomputed_final_mod is not None:
+            sf1, tf = precomputed_final_mod
+            hidden_states = ada_rms_norm_no_gate_precomputed_ttnn(
+                hidden_states, sf1, tf, self.config.expert_config.rms_norm_eps
+            )
+        else:
+            hidden_states = ada_rms_norm_no_gate_ttnn(
+                hidden_states,
+                adarms_cond,
+                self.expert_final_norm_mod_weight,
+                self.expert_final_norm_mod_bias,
+                self.config.expert_config.rms_norm_eps,
+                self.core_grid,
+            )
         return hidden_states, new_cache
