@@ -14,8 +14,16 @@ On every Tensix core of the chip, run a textbook three-kernel pipeline:
 reader (NOC1 / RISCV1) ──CB_in──▶  compute (3 TRISCs) ──CB_out──▶  writer (NOC0 / RISCV0)
    noc_async_read_tile              copy_tile                       noc_async_write_tile
    from interleaved DRAM            + N × TTI_NOP                   + noc_async_write_barrier
-                                    (DeviceZoneScopedMainN("MATH"))
+                                    profiler zones:
+                                      DeviceZoneScopedMainN("MATH-KERNEL")  (outer, 1 per program)
+                                      DeviceZoneScopedN     ("MATH")        (inner, 1 per tile)
+                                      DeviceTimestampedData ("TILE_IDX", i) (per-tile loop index)
 ```
+
+The inner `MATH` zone opens **after** `cb_wait_front` and `cb_reserve_back`, so
+its start cycle marks the moment data is available to the tensix and there is
+output-CB space to write into — i.e. the earliest point at which math can
+actually begin.
 
 Pages are interleaved across all DRAM banks; work is split across all
 worker cores via `split_work_to_cores`. The same `MeshWorkload` is enqueued
@@ -71,19 +79,30 @@ ls $TT_METAL_HOME/generated/profiler/.logs/profile_log_device.csv
 $TT_METAL_HOME/tools/tracy/process_device_log.py
 ```
 
-Filter the rows for zone name `MATH`. For each (core, TRISC) pair, the
-sequence of `MATH_begin` / `MATH_end` cycles gives one pair per program-run.
-The op-to-op latency for program `n+1` on a given core is:
+There are two granularities of zone in the CSV:
 
-```
-op_to_op_latency_cycles = MATH_begin[n+1] - MATH_end[n]
-```
+* `MATH-KERNEL` — one per (core, TRISC, program-run). Wraps the entire
+  kernel invocation. Backed by `DeviceZoneScopedMainN` (a guaranteed L1
+  slot), so it survives buffer pressure and is the most reliable zone to
+  use for op-to-op latency at program granularity:
 
+  ```
+  op_to_op_latency_cycles = MATH-KERNEL_begin[n+1] - MATH-KERNEL_end[n]
+  ```
+
+* `MATH` — one per tile per program-run, paired with a
+  `TILE_IDX` timestamped-data entry that records the tile index. Use
+  these if you want a finer-grained view (e.g. excluding kernel setup
+  from the first-tile measurement, or comparing per-tile MATH duration
+  across iterations to confirm the NOP delay is the dominant term).
+
+For each (core, TRISC) row, sort by cycle and pair `_begin` / `_end`.
 Convert cycles to microseconds with the device clock frequency that
 `get_tt_npu_clock` reports (the test logs `Clock` for convenience).
 
-Use the `MATH` row of the CSV for "math TRISC" semantics, or the `PACK`
-row if you want "data committed to L1 ready for the writer" semantics.
+Use the `MATH` TRISC row of the CSV for "math TRISC" semantics, or the
+`PACK` TRISC row if you want "data committed to L1 ready for the writer"
+semantics.
 
 ## Files
 
@@ -92,5 +111,6 @@ test_op_to_op_latency.cpp          host program
 kernels/
   reader_interleaved.cpp           NOC1 reader, TensorAccessor + noc_async_read_tile
   writer_interleaved.cpp           NOC0 writer, noc_async_write_tile + barrier
-  compute_copy_with_nops.cpp       copy_tile + N×TTI_NOP, wrapped in DeviceZoneScopedMainN("MATH")
+  compute_copy_with_nops.cpp       copy_tile + N×TTI_NOP; outer MATH-KERNEL zone +
+                                   per-tile MATH zone + TILE_IDX timestamped data
 ```

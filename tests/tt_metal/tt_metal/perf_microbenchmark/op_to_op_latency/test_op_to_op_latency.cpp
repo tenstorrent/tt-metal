@@ -68,10 +68,15 @@ using namespace tt::tt_metal;
 namespace {
 
 // Defaults:
-//   num_pages_per_core = 2 matches Almeet's "each core gets 2 pages" suggestion
-//   num_nops_per_tile  = 0 keeps the math zone short for now; Step 4 will tune
-//                        this up to ~10us once we have profiler markers
-//                        in place to actually measure the kernel runtime.
+//   num_pages_per_core = 2 (each core processes 2 interleaved DRAM pages, so
+//                        every Tensix sees ≥ 2 per-tile MATH-zone entries
+//                        and we still touch every DRAM bank in a chip-wide
+//                        interleaved layout).
+//   num_nops_per_tile  = 0 keeps the math zone short by default; tune this
+//                        up via --compute-nops until the per-tile MATH zone
+//                        in profile_log_device.csv is comfortably > 10us
+//                        (the target program runtime for op-to-op latency
+//                        measurement to be meaningful vs dispatch noise).
 //   num_programs       = 8 enqueues back-to-back per measurement run; gives
 //                        seven (N-1) op-to-op gaps to look at later.
 //   warmup             = true runs one untimed enqueue first to absorb
