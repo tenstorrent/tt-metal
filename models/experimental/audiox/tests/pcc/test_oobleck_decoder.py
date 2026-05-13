@@ -8,6 +8,8 @@ import torch
 
 from models.experimental.audiox.reference.oobleck import (
     DecoderBlock,
+    EncoderBlock,
+    OobleckEncoder,
     OobleckDecoder,
     ResidualUnit,
     SnakeBeta,
@@ -40,6 +42,14 @@ def test_decoder_block_upsamples_by_stride():
     assert y.shape == (1, 4, 12 * 4)
 
 
+def test_encoder_block_downsamples_by_stride():
+    block = EncoderBlock(in_channels=4, out_channels=8, stride=4).eval()
+    x = torch.randn(1, 4, 48)
+    with torch.no_grad():
+        y = block(x)
+    assert y.shape == (1, 8, 12)
+
+
 @pytest.mark.parametrize(
     "latent_dim, channels, c_mults, strides, t_latent",
     [
@@ -65,6 +75,29 @@ def test_oobleck_decoder_shape(latent_dim, channels, c_mults, strides, t_latent)
     assert y.shape == (1, 2, t_latent * prod(strides))
 
 
+@pytest.mark.parametrize(
+    "in_channels, latent_dim, channels, c_mults, strides, t_audio",
+    [
+        (2, 4, 8, (1, 2, 4), (2, 2, 2), 64),
+        (2, 64, 16, (1, 2, 4, 8, 16), (2, 4, 4, 8, 8), 2048),
+    ],
+)
+def test_oobleck_encoder_shape(in_channels, latent_dim, channels, c_mults, strides, t_audio):
+    encoder = OobleckEncoder(
+        in_channels=in_channels,
+        channels=channels,
+        latent_dim=latent_dim,
+        c_mults=c_mults,
+        strides=strides,
+    ).eval()
+
+    x = torch.randn(1, in_channels, t_audio)
+    with torch.no_grad():
+        y = encoder(x)
+
+    assert y.shape == (1, latent_dim, t_audio // prod(strides))
+
+
 def test_oobleck_decoder_param_names_match_upstream_convention():
     # Upstream uses dac.WNConv1d (= weight_norm(Conv1d)) so the checkpoint
     # ships separate weight_g/weight_v tensors. Our reference must produce
@@ -75,5 +108,15 @@ def test_oobleck_decoder_param_names_match_upstream_convention():
     assert "in_conv.weight_v" in names
     assert "out_conv.weight_g" in names
     assert "blocks.0.upsample.weight_g" in names
+    assert "blocks.0.res1.conv1.weight_g" in names
+    assert "blocks.0.res1.act1.alpha" in names
+
+
+def test_oobleck_encoder_param_names_match_upstream_convention():
+    encoder = OobleckEncoder(in_channels=2, channels=8, latent_dim=4, c_mults=(1, 2), strides=(2, 2))
+    names = set(dict(encoder.named_parameters()).keys())
+    assert "in_conv.weight_g" in names
+    assert "out_conv.weight_g" in names
+    assert "blocks.0.downsample.weight_g" in names
     assert "blocks.0.res1.conv1.weight_g" in names
     assert "blocks.0.res1.act1.alpha" in names

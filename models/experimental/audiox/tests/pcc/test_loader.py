@@ -11,13 +11,15 @@ import torch.nn as nn
 from torch.nn.utils import weight_norm
 
 from models.experimental.audiox.reference.dit import DiffusionTransformer
-from models.experimental.audiox.reference.oobleck import OobleckDecoder
+from models.experimental.audiox.reference.oobleck import OobleckDecoder, OobleckEncoder
 from models.experimental.audiox.utils.loader import (
+    _resolve_oobleck_encoder_block_key,
     _resolve_oobleck_decoder_block_key,
     load_into,
     remap_conditioner_state_dict,
     remap_dit_state_dict,
     remap_oobleck_decoder_state_dict,
+    remap_oobleck_encoder_state_dict,
 )
 
 
@@ -89,9 +91,42 @@ class _UpstreamOobleckDecoder(nn.Module):
         self.layers = nn.Sequential(*layers)
 
 
+class _UpstreamEncoderBlock(nn.Module):
+    def __init__(self, in_c, out_c, stride):
+        super().__init__()
+        self.layers = nn.Sequential(
+            _UpstreamResidualUnit(in_c, dilation=1),
+            _UpstreamResidualUnit(in_c, dilation=3),
+            _UpstreamResidualUnit(in_c, dilation=9),
+            _UpstreamSnake(in_c),
+            _wn_conv(in_c, out_c, 2 * stride, stride=stride, padding=(stride + 1) // 2),
+        )
+
+
+class _UpstreamOobleckEncoder(nn.Module):
+    def __init__(self, in_channels, latent_dim, channels, c_mults, strides):
+        super().__init__()
+        c_mults_ext = [1] + list(c_mults)
+        depth = len(c_mults_ext)
+        layers = [_wn_conv(in_channels, c_mults_ext[0] * channels, 7, padding=3)]
+        for i in range(depth - 1):
+            layers.append(
+                _UpstreamEncoderBlock(
+                    c_mults_ext[i] * channels,
+                    c_mults_ext[i + 1] * channels,
+                    strides[i],
+                )
+            )
+        layers.append(_UpstreamSnake(c_mults_ext[-1] * channels))
+        layers.append(_wn_conv(c_mults_ext[-1] * channels, latent_dim, 3, padding=1))
+        self.layers = nn.Sequential(*layers)
+
+
 def test_resolve_oobleck_block_key_in_conv():
     assert _resolve_oobleck_decoder_block_key("layers.0.weight_g", n_blocks=3) == "in_conv.weight_g"
     assert _resolve_oobleck_decoder_block_key("layers.0.bias", n_blocks=3) == "in_conv.bias"
+    assert _resolve_oobleck_encoder_block_key("layers.0.weight_g", n_blocks=3) == "in_conv.weight_g"
+    assert _resolve_oobleck_encoder_block_key("layers.0.bias", n_blocks=3) == "in_conv.bias"
 
 
 def test_resolve_oobleck_block_key_decoder_block():
@@ -106,13 +141,24 @@ def test_resolve_oobleck_block_key_decoder_block():
     assert (
         _resolve_oobleck_decoder_block_key("layers.3.layers.4.layers.0.alpha", n_blocks=3) == "blocks.2.res3.act1.alpha"
     )
+    assert (
+        _resolve_oobleck_encoder_block_key("layers.1.layers.0.layers.1.weight_g", n_blocks=3)
+        == "blocks.0.res1.conv1.weight_g"
+    )
+    assert _resolve_oobleck_encoder_block_key("layers.2.layers.3.alpha", n_blocks=3) == "blocks.1.act.alpha"
+    assert (
+        _resolve_oobleck_encoder_block_key("layers.3.layers.4.weight_g", n_blocks=3) == "blocks.2.downsample.weight_g"
+    )
 
 
 def test_resolve_oobleck_block_key_tail():
     assert _resolve_oobleck_decoder_block_key("layers.4.alpha", n_blocks=3) == "out_act.alpha"
     assert _resolve_oobleck_decoder_block_key("layers.5.weight_g", n_blocks=3) == "out_conv.weight_g"
+    assert _resolve_oobleck_encoder_block_key("layers.4.alpha", n_blocks=3) == "out_act.alpha"
+    assert _resolve_oobleck_encoder_block_key("layers.5.weight_g", n_blocks=3) == "out_conv.weight_g"
     # Tanh / Identity tail has no params, but a stray key would be dropped.
     assert _resolve_oobleck_decoder_block_key("layers.6.something", n_blocks=3) is None
+    assert _resolve_oobleck_encoder_block_key("layers.6.something", n_blocks=3) is None
 
 
 def test_oobleck_decoder_remap_round_trip_loads_into_our_decoder():
@@ -128,6 +174,32 @@ def test_oobleck_decoder_remap_round_trip_loads_into_our_decoder():
 
     remapped = remap_oobleck_decoder_state_dict(upstream.state_dict(), prefix="", n_blocks=len(c_mults))
     missing, unexpected = load_into(ours, remapped, label="oobleck")
+    assert missing == [] and unexpected == []
+
+
+def test_oobleck_encoder_remap_round_trip_loads_into_our_encoder():
+    c_mults = (1, 2, 4)
+    strides = (2, 2, 2)
+    latent_dim = 4
+    channels = 8
+
+    upstream = _UpstreamOobleckEncoder(
+        in_channels=2,
+        latent_dim=latent_dim,
+        channels=channels,
+        c_mults=c_mults,
+        strides=strides,
+    )
+    ours = OobleckEncoder(
+        in_channels=2,
+        channels=channels,
+        latent_dim=latent_dim,
+        c_mults=c_mults,
+        strides=strides,
+    )
+
+    remapped = remap_oobleck_encoder_state_dict(upstream.state_dict(), prefix="", n_blocks=len(c_mults))
+    missing, unexpected = load_into(ours, remapped, label="oobleck_encoder")
     assert missing == [] and unexpected == []
 
 
