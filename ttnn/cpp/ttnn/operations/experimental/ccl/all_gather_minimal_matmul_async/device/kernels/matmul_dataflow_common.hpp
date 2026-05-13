@@ -79,6 +79,7 @@ void compute_actual_k_block(
     uint32_t my_rank,
     uint32_t k_blocks_per_device,
     uint32_t k_tiles_per_block,
+    uint32_t k_tiles_per_device,
     uint32_t num_devices,
     bool is_forward,
     bool is_first_n_block,
@@ -100,6 +101,7 @@ void compute_actual_k_block(
     uint32_t my_rank,
     uint32_t k_blocks_per_device,
     uint32_t k_tiles_per_block,
+    uint32_t k_tiles_per_device,
     uint32_t num_devices,
     bool is_forward,
     uint32_t num_targets_fwd_rt,
@@ -111,12 +113,17 @@ void compute_actual_k_block(
     // Then for each device_iter, read k_blocks_per_device blocks from each direction.
     // Ring: left half from forward device, right half from backward device (bidirectional half-block).
     // Linear: full block from one direction (k_left=K_block_tiles, k_right=0), relayed hop-by-hop.
+    //
+    // K-tile address = device_rank * k_tiles_per_device + device_k_block_iter * k_tiles_per_block.
+    // k_tiles_per_device is the *actual* K-tile span per device (not k_blocks_per_device *
+    // k_tiles_per_block, which over-counts by k_tiles_per_block - K_block_tail_tiles when the
+    // last block per device is a tail block).
     uint32_t actual_k_block_iter = is_forward ? k_block_iter : (total_k_block_count - 1 - k_block_iter);
     uint32_t device_iter = actual_k_block_iter / k_blocks_per_device;
     uint32_t device_k_block_iter = actual_k_block_iter % k_blocks_per_device;
     if (device_iter == 0) {
         // Local
-        k_left_start_tile = (my_rank * k_blocks_per_device + device_k_block_iter) * k_tiles_per_block;
+        k_left_start_tile = my_rank * k_tiles_per_device + device_k_block_iter * k_tiles_per_block;
         k_right_start_tile = k_left_start_tile + k_left_tiles;
     } else {
         if constexpr (IsLinear) {
@@ -129,7 +136,7 @@ void compute_actual_k_block(
             } else {
                 actual_device_rank = my_rank - (device_iter - num_targets_fwd_rt);  // guaranteed >= 0
             }
-            k_left_start_tile = (actual_device_rank * k_blocks_per_device + device_k_block_iter) * k_tiles_per_block;
+            k_left_start_tile = actual_device_rank * k_tiles_per_device + device_k_block_iter * k_tiles_per_block;
             k_right_start_tile = k_left_start_tile;  // unused: k_right_tiles == 0 for Linear
         } else {
             // Ring: use modular arithmetic for wrap-around.
@@ -138,7 +145,7 @@ void compute_actual_k_block(
             if ((uint32_t)actual_device_rank >= num_devices) {
                 actual_device_rank = actual_device_rank - num_devices;
             }
-            k_left_start_tile = (actual_device_rank * k_blocks_per_device + device_k_block_iter) * k_tiles_per_block;
+            k_left_start_tile = actual_device_rank * k_tiles_per_device + device_k_block_iter * k_tiles_per_block;
 
             // Backward rank (origin of right half)
             actual_device_rank = my_rank - device_iter;
@@ -146,7 +153,7 @@ void compute_actual_k_block(
                 actual_device_rank = num_devices + actual_device_rank;
             }
             k_right_start_tile =
-                (actual_device_rank * k_blocks_per_device + device_k_block_iter) * k_tiles_per_block + k_left_tiles;
+                actual_device_rank * k_tiles_per_device + device_k_block_iter * k_tiles_per_block + k_left_tiles;
         }
     }
 #ifdef IS_IN0

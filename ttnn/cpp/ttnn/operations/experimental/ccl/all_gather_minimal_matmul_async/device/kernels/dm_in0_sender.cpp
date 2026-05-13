@@ -42,15 +42,17 @@ constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(22)
 constexpr bool is_linear = (topology == Topology::Linear);
 constexpr uint32_t N_chunks = get_compile_time_arg_val(23);
 constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(24);
+constexpr uint32_t K_tiles_per_device = get_compile_time_arg_val(25);
+constexpr uint32_t K_block_tail_tiles = get_compile_time_arg_val(26);
 
 #ifdef USE_MUX
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(25);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(26);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(27);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(28);
-constexpr uint32_t num_mux_clients = get_compile_time_arg_val(29);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(27);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(28);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(29);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(30);
+constexpr uint32_t num_mux_clients = get_compile_time_arg_val(31);
 
-constexpr uint32_t mux_arg_count = 30;
+constexpr uint32_t mux_arg_count = 32;
 
 constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info_forward =
     ccl_routing_utils::get_line_unicast_route_info_from_args<mux_arg_count>();
@@ -61,7 +63,7 @@ constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info_backwa
 
 constexpr uint32_t ct_arg_count = mux_arg_count + 2 * ccl_routing_utils::num_line_unicast_args;
 #else
-constexpr uint32_t ct_arg_count = 25;
+constexpr uint32_t ct_arg_count = 27;
 #endif
 
 namespace detail {
@@ -167,11 +169,13 @@ void kernel_main() {
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
     const TensorShape2D out0_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
 
-    constexpr uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
+    // K_blocks_per_device uses div_up semantics: when K_block_tiles does not evenly divide
+    // K_tiles_per_device, the last block per device is a "tail" block of K_block_tail_tiles
+    // (< K_block_tiles). When it divides cleanly, K_block_tail_tiles == K_block_tiles.
+    constexpr uint32_t K_blocks_per_device = (K_tiles_per_device + K_block_tiles - 1) / K_block_tiles;
+    constexpr uint32_t K_num_blocks = K_blocks_per_device * num_devices;
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
-    constexpr uint32_t K_blocks_per_device = K_num_blocks / num_devices;
-    constexpr uint32_t padded_K_tiles_per_device = padded_K_tiles / num_devices;
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_id_out = tt::CBIndex::c_2;
@@ -325,12 +329,20 @@ void kernel_main() {
                 uint32_t k_block_left_tile = 0;
                 uint32_t k_block_right_tile = 0;
                 uint32_t actual_k_block = k_forward ? k_block_iter : (K_num_blocks - 1 - k_block_iter);
+                uint32_t device_k_block_iter = actual_k_block % K_blocks_per_device;
+                bool is_tail_k_block = (device_k_block_iter == K_blocks_per_device - 1);
+                uint32_t current_K_block_tiles = is_tail_k_block ? K_block_tail_tiles : K_block_tiles;
                 bool k_block_odd = (actual_k_block % K_blocks_per_device) & 1;
                 uint32_t k_left_tiles, k_right_tiles;
                 if constexpr (is_linear) {
-                    k_left_tiles = K_block_tiles;
-                    k_right_tiles = 0;
+                    // Linear: full block from one direction. Tail block has current_K_block_tiles
+                    // valid tiles + (K_block_tiles - current_K_block_tiles) zero-fill tiles to
+                    // preserve the K_block_tiles L1 row stride in the CB layout.
+                    k_left_tiles = current_K_block_tiles;
+                    k_right_tiles = K_block_tiles - current_K_block_tiles;
                 } else {
+                    // Ring: bidirectional half-block. Requires K_block_tiles | K_tiles_per_device
+                    // (no tail support yet — enforced upstream for Ring).
                     k_left_tiles = k_block_odd ? (K_block_tiles - (K_block_tiles / 2)) : (K_block_tiles / 2);
                     k_right_tiles = k_block_odd ? (K_block_tiles / 2) : (K_block_tiles - k_left_tiles);
                 }
@@ -343,6 +355,7 @@ void kernel_main() {
                     my_rank,
                     K_blocks_per_device,
                     K_block_tiles,
+                    K_tiles_per_device,
                     num_devices,
                     k_forward,
                     n_block_iter == 0,
@@ -356,6 +369,14 @@ void kernel_main() {
                     k_left_tiles,
                     k_block_left_tile,
                     k_block_right_tile);
+                if constexpr (is_linear) {
+                    // For Linear tail, the right half is pure zero-fill padding (no real tiles).
+                    // Point past the logical K end so read_in0_block_sync's `j < logical_d1` check
+                    // triggers fill_zeros_async for every right-half tile.
+                    if (is_tail_k_block) {
+                        k_block_right_tile = K_tiles;
+                    }
+                }
                 if (is_injector_core) {
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
                         in0_reader,
@@ -364,9 +385,9 @@ void kernel_main() {
                         in0_tile_size,
 #ifdef READ_FROM_LOCAL_INPUT
                         in3_reader,
-                        my_rank * padded_K_tiles_per_device,
-                        ((my_rank + 1) * padded_K_tiles_per_device) - 1,
-                        padded_K_tiles_per_device,
+                        my_rank * K_tiles_per_device,
+                        ((my_rank + 1) * K_tiles_per_device) - 1,
+                        K_tiles_per_device,
 #endif
                         m_tile,
                         m_tile_end,
@@ -448,7 +469,7 @@ void kernel_main() {
                                     k_right_tiles,
                                     num_tiles_to_write_per_packet,
                                     in0_start_address,
-                                    padded_K_tiles,
+                                    K_tiles,
                                     in0_reader,
                                     mux_connection_handle_forward,
                                     pkt_hdrs_backward,
@@ -470,7 +491,7 @@ void kernel_main() {
                                     k_right_tiles,
                                     num_tiles_to_write_per_packet,
                                     in0_start_address,
-                                    padded_K_tiles,
+                                    K_tiles,
                                     in0_reader,
                                     mux_connection_handle_backward,
                                     pkt_hdrs_forward,

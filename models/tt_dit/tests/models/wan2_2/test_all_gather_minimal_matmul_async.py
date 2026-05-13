@@ -774,3 +774,92 @@ def test_linear_addcmul_gate(
         for i in range(submesh.get_num_devices()):
             assert check_result[0][c][i]["pcc"] > 0.999_500
             assert check_result[0][c][i]["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis, core_grid_x, core_grid_y, cluster_axis",
+    [
+        [
+            (4, 8),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(4096),
+                "trace_region_size": 90112,
+            },
+            ttnn.Topology.Linear,
+            4,
+            2,
+            1,
+            0,
+            8,
+            8,
+            0,
+        ],
+    ],
+    ids=["wh4x8links4_linear"],
+    indirect=["mesh_device", "device_params"],
+)
+# K=5120 → K_tiles_per_device = 40 (on a 4-device cluster axis).
+# K_block values chosen so they do NOT evenly divide 40, exercising the tail-block path:
+#   K_block=6  →  7 blocks/device, tail = 40 - 6*6 = 4
+#   K_block=9  →  5 blocks/device, tail = 40 - 4*9 = 4
+#   K_block=7  →  6 blocks/device, tail = 40 - 5*7 = 5
+@pytest.mark.parametrize(
+    "M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [
+        (3072, 5120, 3840, 8, 6, 8, 2, 2),
+        (3072, 5120, 1280, 8, 9, 8, 2, 2),
+        (3072, 5120, 3840, 8, 7, 8, 2, 2),
+    ],
+    ids=["kblk6_tail4", "kblk9_tail4", "kblk7_tail5"],
+)
+def test_linear_k_tail(
+    mesh_device,
+    M,
+    K,
+    N,
+    M_block_size,
+    K_block_size,
+    N_block_size,
+    subblock_h,
+    subblock_w,
+    topology,
+    core_grid_x,
+    core_grid_y,
+    num_workers_per_link,
+    num_links,
+    sp_axis,
+    tp_axis,
+    cluster_axis,
+):
+    """Linear-only tests where K_block_size does not evenly divide K_tiles_per_device.
+
+    Exercises the tail-block code path: each device's last K-block has fewer real tiles
+    than K_block_size, with the remainder zero-padded in L1 to preserve the K_block_size
+    row stride. Ring still requires divisibility and would reject these configs.
+    """
+    submesh = _create_cluster_submesh(mesh_device, cluster_axis)
+    check_result = run_test_linear(
+        submesh,
+        M,
+        K,
+        N,
+        M_block_size,
+        K_block_size,
+        N_block_size,
+        subblock_h,
+        subblock_w,
+        topology,
+        core_grid=ttnn.CoreCoord(core_grid_x, core_grid_y),
+        num_workers_per_link=num_workers_per_link,
+        num_links=num_links,
+        force_transpose=True,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        use_bias=True,
+        cluster_axis=cluster_axis,
+    )
+    for c in range(1):
+        for i in range(submesh.get_num_devices()):
+            assert check_result[0][c][i]["pcc"] > 0.999_500
+            assert check_result[0][c][i]["relative_rmse"] < 0.02

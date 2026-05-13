@@ -311,10 +311,17 @@ all_gather_minimal_matmul_async_factory_helper(
     uint32_t padded_N_tiles = tt::round_up(N_tiles, in1_parallel_axis_cores);
     uint32_t padded_K_tiles = tt::round_up(K_tiles, K_block_tiles);
 
+    // K is sharded equally across devices (validated upstream: K_tiles % ring_size == 0).
+    // Within a device, K_per_device tiles are processed in K_blocks_per_device blocks (div_up).
+    // The last block per device may be a "tail" block of K_block_tail_tiles < K_block_tiles
+    // when K_block_tiles does not divide K_tiles_per_device; otherwise tail == K_block_tiles.
+    uint32_t K_tiles_per_device = K_tiles / ring_size;
+    uint32_t K_blocks_per_device = tt::div_up(K_tiles_per_device, K_block_tiles);
+    uint32_t K_block_tail_tiles = K_tiles_per_device - (K_blocks_per_device - 1) * K_block_tiles;
+    uint32_t K_blocks = K_blocks_per_device * ring_size;
+
     uint32_t M_tiles_per_core = padded_M_tiles / in0_parallel_axis_cores;
     uint32_t N_tiles_per_core = padded_N_tiles / in1_parallel_axis_cores;
-
-    uint32_t K_blocks = padded_K_tiles / K_block_tiles;
 
     uint32_t M_blocks_per_core = tt::div_up(M_tiles_per_core, M_block_tiles);
     uint32_t N_blocks_per_core = tt::div_up(N_tiles_per_core, N_block_tiles);
@@ -483,6 +490,9 @@ all_gather_minimal_matmul_async_factory_helper(
     log_debug(tt::LogOp, "padded_N_tiles: {}", padded_N_tiles);
     log_debug(tt::LogOp, "M_block_tiles: {}", M_block_tiles);
     log_debug(tt::LogOp, "K_block_tiles: {}", K_block_tiles);
+    log_debug(tt::LogOp, "K_tiles_per_device: {}", K_tiles_per_device);
+    log_debug(tt::LogOp, "K_blocks_per_device: {}", K_blocks_per_device);
+    log_debug(tt::LogOp, "K_block_tail_tiles: {}", K_block_tail_tiles);
     log_debug(tt::LogOp, "N_block_tiles: {}", N_block_tiles);
     log_debug(tt::LogOp, "subblock_h: {}", subblock_h);
     log_debug(tt::LogOp, "subblock_w: {}", subblock_w);
@@ -562,6 +572,8 @@ all_gather_minimal_matmul_async_factory_helper(
         static_cast<uint32_t>(topology),
         N_chunks,           // N_chunks
         N_tiles_per_chunk,  // N_tiles_per_chunk
+        K_tiles_per_device,
+        K_block_tail_tiles,
     };
     append_accessors(
         in0_sender_compile_time_args,
@@ -608,6 +620,8 @@ all_gather_minimal_matmul_async_factory_helper(
         static_cast<uint32_t>(topology),
         N_chunks,           // N_chunks
         N_tiles_per_chunk,  // N_tiles_per_chunk
+        K_tiles_per_device,
+        K_block_tail_tiles,
     };
     append_accessors(
         in0_receiver_no_fabric_compile_time_args,
@@ -655,6 +669,8 @@ all_gather_minimal_matmul_async_factory_helper(
         static_cast<uint32_t>(topology),
         N_chunks,           // N_chunks
         N_tiles_per_chunk,  // N_tiles_per_chunk
+        K_tiles_per_device,
+        K_block_tail_tiles,
     };
     fabric_mux_connection_ct_args(
         num_workers_per_link,
@@ -708,6 +724,8 @@ all_gather_minimal_matmul_async_factory_helper(
         N_tiles_per_chunk,                // N_tiles_per_chunk
         num_targets_forward,              // num_targets_forward_direction
         static_cast<uint32_t>(topology),  // topology
+        K_tiles_per_device,
+        K_block_tail_tiles,
     };
     append_accessors(
         in1_sender_compile_time_args,
@@ -749,6 +767,8 @@ all_gather_minimal_matmul_async_factory_helper(
         N_tiles_per_chunk,                // N_tiles_per_chunk
         num_targets_forward,              // num_targets_forward_direction
         static_cast<uint32_t>(topology),  // topology
+        K_tiles_per_device,
+        K_block_tail_tiles,
     };
     append_accessors(
         in1_receiver_compile_time_args,

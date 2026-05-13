@@ -34,6 +34,8 @@ void kernel_main() {
     constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(20);
     constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(21));
     constexpr bool is_linear = (topology == Topology::Linear);
+    constexpr uint32_t K_tiles_per_device = get_compile_time_arg_val(22);
+    constexpr uint32_t K_block_tail_tiles = get_compile_time_arg_val(23);
 
     // Load common runtime args (same for all cores, updated in override_runtime_arguments)
     uint32_t cargidx = 0;
@@ -66,7 +68,7 @@ void kernel_main() {
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
-    constexpr auto in1_args = TensorAccessorArgs<22>();
+    constexpr auto in1_args = TensorAccessorArgs<24>();
     const auto in1_reader = TensorAccessor(in1_args, in1_addr);
 
     // Always create tuple of output accessors (size = N_chunks) - addresses from common args
@@ -105,10 +107,13 @@ void kernel_main() {
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
     const TensorShape2D out0_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
 
-    constexpr uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
+    // K_blocks_per_device uses div_up semantics: when K_block_tiles does not evenly divide
+    // K_tiles_per_device, the last block per device is a "tail" block of K_block_tail_tiles
+    // (< K_block_tiles). When it divides cleanly, K_block_tail_tiles == K_block_tiles.
+    constexpr uint32_t K_blocks_per_device = (K_tiles_per_device + K_block_tiles - 1) / K_block_tiles;
+    constexpr uint32_t K_num_blocks = K_blocks_per_device * num_devices;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
-    constexpr uint32_t K_blocks_per_device = K_num_blocks / num_devices;
 
     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
     constexpr uint32_t cb_id_out = tt::CBIndex::c_2;
@@ -192,12 +197,19 @@ void kernel_main() {
                     uint32_t k_block_left_tile = 0;
                     uint32_t k_block_right_tile = 0;
                     uint32_t actual_k_block = k_forward ? k_block_iter : (K_num_blocks - 1 - k_block_iter);
+                    uint32_t device_k_block_iter = actual_k_block % K_blocks_per_device;
+                    bool is_tail_k_block = (device_k_block_iter == K_blocks_per_device - 1);
+                    uint32_t current_K_block_tiles = is_tail_k_block ? K_block_tail_tiles : K_block_tiles;
                     bool k_block_odd = (actual_k_block % K_blocks_per_device) & 1;
                     uint32_t k_left_tiles, k_right_tiles;
                     if constexpr (is_linear) {
-                        k_left_tiles = K_block_tiles;
-                        k_right_tiles = 0;
+                        // Linear: full block from one direction. Tail block has current_K_block_tiles
+                        // valid tiles + (K_block_tiles - current_K_block_tiles) zero-fill tiles to
+                        // preserve the K_block_tiles L1 row stride in the CB layout.
+                        k_left_tiles = current_K_block_tiles;
+                        k_right_tiles = K_block_tiles - current_K_block_tiles;
                     } else {
+                        // Ring: bidirectional half-block. Requires K_block_tiles | K_tiles_per_device.
                         k_left_tiles = k_block_odd ? (K_block_tiles - (K_block_tiles / 2)) : (K_block_tiles / 2);
                         k_right_tiles = k_block_odd ? (K_block_tiles / 2) : (K_block_tiles - k_left_tiles);
                     }
@@ -207,12 +219,21 @@ void kernel_main() {
                         my_rank,
                         K_blocks_per_device,
                         K_block_tiles,
+                        K_tiles_per_device,
                         num_devices,
                         k_forward,
                         num_targets_forward_direction,
                         k_left_tiles,
                         k_block_left_tile,
                         k_block_right_tile);
+                    if constexpr (is_linear) {
+                        // For Linear tail, the right half is pure zero-fill padding. Point past the
+                        // logical K end so read_in1_block_sync's `i < logical_d0` check triggers
+                        // fill_zeros_async for every right-half tile (in1's K dim is d0).
+                        if (is_tail_k_block) {
+                            k_block_right_tile = K_tiles;
+                        }
+                    }
                     read_in1_block_sync<K_block_tiles, N_block_tiles>(
                         in1_reader,
                         in1_shape,
