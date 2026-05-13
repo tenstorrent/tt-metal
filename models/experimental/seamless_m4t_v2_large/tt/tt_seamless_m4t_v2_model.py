@@ -963,6 +963,19 @@ class TTSeamlessM4Tv2Model:
         ttnn.deallocate(t2u_mask_4d)
         ttnn.deallocate(char_ids_tt)
 
+        # T2U linear may return ``[B, 1, unit_seq, V]`` (extra broadcast dim). Drop it before
+        # ``argmax`` / vocoder so unit ids are ``[B, unit_seq]`` and the vocoder does not read
+        # ``shape[1] == 1`` as the temporal length.
+        _ls0 = tuple(t2u_logits_tt.shape)
+        if len(_ls0) == 4 and int(_ls0[1]) == 1:
+            _sq = ttnn.reshape(
+                t2u_logits_tt,
+                (_ls0[0], _ls0[2], _ls0[3]),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(t2u_logits_tt)
+            t2u_logits_tt = _sq
+
         # T2U logits are sliced to logical ``unit_seq`` (see ``tt_text_to_unit.py`` end of forward),
         # while ``padding_tt`` stays at the tile-padded length. Slice ``padding_tt`` to the logical
         # ``unit_seq`` so the eq + logical_or below operate on matching shapes.
@@ -990,52 +1003,56 @@ class TTSeamlessM4Tv2Model:
         # Preserve a copy for the ``unit_sequences`` output before vocoder remapping.
         output_unit_ids_tt = ttnn.clone(unit_ids_argmax, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # Build replace_mask: positions where the predicted unit is the T2U EOS, OR the T2U
-        # padding mask says "not real". ``padding_tt`` is 1 at real positions and 0 at pads.
-        eos_eq = ttnn.eq(unit_ids_argmax, int(self.t2u_eos_token_id))
+        # HF ``replace_mask = (unit_ids == t2u_eos) | (~padding_mask)`` with ``padding_mask`` = 1
+        # at valid positions (``modeling_seamless_m4t_v2.py`` ~3577). Building that mask on device
+        # with ``ttnn.logical_or`` across TILE bf16 padding vs ROW unit ids has produced wrong
+        # booleans in the middle of the span, spuriously filling ``vocoder_input`` with T2U pads,
+        # shrinking ``(input_ids != pad).sum()`` and thus HiFi-GAN ``t_audio``. Match HF on host.
         if padding_tt.dtype != ttnn.bfloat16:
             pad_bf = ttnn.typecast(padding_tt, ttnn.bfloat16)
+            ttnn.deallocate(padding_tt)
         else:
             pad_bf = padding_tt
-        invalid_pad = ttnn.eq(pad_bf, 0.0)
-        if pad_bf is not padding_tt:
+        if pad_bf.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            pad_rm = ttnn.to_layout(pad_bf, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(pad_bf)
-        ttnn.deallocate(padding_tt)
-        replace_mask = ttnn.logical_or(eos_eq, invalid_pad)
-        ttnn.deallocate(eos_eq)
-        ttnn.deallocate(invalid_pad)
+            pad_bf = pad_rm
 
-        # HF order (``modeling_seamless_m4t_v2.py`` ~3577-3584):
+        b_m = int(unit_ids_argmax.shape[0])
+        s_m = int(unit_ids_argmax.shape[1])
+        if int(pad_bf.shape[1]) != s_m:
+            pad_sl = ttnn.slice(pad_bf, [0, 0], [b_m, s_m], (1, 1))
+            ttnn.deallocate(pad_bf)
+            pad_bf = pad_sl
+
+        # HF order (``modeling_seamless_m4t_v2.py`` ~3577-3584), applied on host below:
         #   1. ``unit_ids = unit_ids.masked_fill(replace_mask, t2u_pad_token_id)``
         #   2. ``unit_ids = where(unit_ids == t2u_pad_token_id, unit_ids, unit_ids - vocoder_offset)``
-        # Doing ``subtract`` first (on every position, including padding) was producing uint32
-        # underflow at EOS / padding positions and feeding garbage indices to the vocoder's
-        # unit embedding. The duration predictor then saw mostly-invalid units and predicted
-        # ``t_audio == 1`` → ~320-sample (0.25 s) audio.
-        replace_mask_u = ttnn.typecast(replace_mask, ttnn.uint32)
-        ttnn.deallocate(replace_mask)
-        pad_full = ttnn.full(
-            list(unit_ids_argmax.shape),
-            float(self.t2u_pad_token_id),
+        # ``ttnn.where`` on uint32 TILE (required by the ternary op) does not match PyTorch
+        # ``masked_fill`` / ``where`` for this remapping — it produced bogus indices (e.g. large
+        # ``0xFFFF…`` values) and wrong HiFi-GAN lengths. HF-equivalent remap on host for the
+        # small ``[B, S]`` unit grid (batch 1 in practice), then push back once as ``uint32`` ROW.
+        import torch as _torch
+
+        unit_host = ttnn.to_torch(ttnn.from_device(unit_ids_argmax)).to(_torch.long)
+        pad_host = ttnn.to_torch(ttnn.from_device(pad_bf)).to(_torch.float32)
+        ttnn.deallocate(unit_ids_argmax)
+        ttnn.deallocate(pad_bf)
+
+        rm_host = (unit_host == int(self.t2u_eos_token_id)) | (pad_host < 0.5)
+
+        pad_id = int(self.t2u_pad_token_id)
+        off = int(self.vocoder_offset)
+        u = unit_host.clone()
+        u[rm_host] = pad_id
+        voc = _torch.where(u == pad_id, u, u - off).to(_torch.int32)
+        vocoder_input = ttnn.from_torch(
+            voc,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        # Step 1: masked_fill — replace EOS/invalid positions with the T2U pad token.
-        replaced = ttnn.where(replace_mask_u, pad_full, unit_ids_argmax)
-        ttnn.deallocate(replace_mask_u)
-        ttnn.deallocate(unit_ids_argmax)
-        # Step 2: only subtract ``vocoder_offset`` at positions that are *not* the T2U pad token.
-        is_pad_bool = ttnn.eq(replaced, int(self.t2u_pad_token_id))
-        is_pad_u = ttnn.typecast(is_pad_bool, ttnn.uint32)
-        ttnn.deallocate(is_pad_bool)
-        shifted = ttnn.subtract(replaced, int(self.vocoder_offset), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        vocoder_input = ttnn.where(is_pad_u, replaced, shifted)
-        ttnn.deallocate(is_pad_u)
-        ttnn.deallocate(replaced)
-        ttnn.deallocate(shifted)
-        ttnn.deallocate(pad_full)
 
         # Vocoder language + speaker tensors built on device.
         voc_id = int(gc.vocoder_lang_code_to_id[tgt_lang])
