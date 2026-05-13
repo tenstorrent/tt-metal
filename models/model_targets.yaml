@@ -380,18 +380,6 @@ targets:
             accuracy: {}
             owner_id: U053W15B6JF # Djordje Ivanovic
             team: models
-  llama3.3-70b-dp:
-    aliases: ["llama3.3-70b-dp"]
-    skus:
-      wh_llmbox_perf:
-        entries:
-          - batch_size: 1
-            seq_len: null
-            status: TODO
-            perf: {}
-            accuracy: {}
-            owner_id: U03PUAKE719 # Miguel Tairum Cruz
-            team: models
   llama3.3-70b-dp-galaxy:
     aliases: ["llama3.3-70b-dp-galaxy"]
     skus:
