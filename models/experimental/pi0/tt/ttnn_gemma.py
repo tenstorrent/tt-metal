@@ -528,7 +528,9 @@ class GemmaMLPTTNN:
         self.config = config
         self.device = device
 
-        # Convert weights to TTNN as BF8_B for 2x DRAM bandwidth savings
+        # Convert weights to TTNN as BF8_B for 2x DRAM bandwidth savings.
+        # Tried promoting expert weights to L1 — matmul kernel already stages
+        # weights through L1 efficiently, no measurable win.
         def to_ttnn(w):
             if isinstance(w, torch.Tensor):
                 return ttnn.from_torch(
