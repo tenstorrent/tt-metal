@@ -252,11 +252,8 @@ struct CopyTile : CopyTileTag {
     static constexpr uint32_t       reconfig_srcb_cb = NO_PREV_CB;
     static constexpr uint32_t       reconfig_pack_cb = NO_PREV_CB;
 
-    /// Runtime tile index — set by user only when IndexMode == Pinned / Absolute.
-    uint32_t cb_tile_idx = 0;
-
     constexpr CopyTile() noexcept = default;
-    constexpr explicit CopyTile(uint32_t cb_tile_idx_) noexcept : cb_tile_idx(cb_tile_idx_) {}
+    constexpr explicit CopyTile(uint32_t cb_tile_idx) noexcept : cb_tile_idx_(cb_tile_idx) {}
 
     // ---- chain pipeline hooks ----
     static ALWI void init() {
@@ -289,7 +286,7 @@ struct CopyTile : CopyTileTag {
         const uint32_t in_idx = [&]() -> uint32_t {
             if constexpr (IndexMode == CbIndexMode::FirstTile) return 0;
             else if constexpr (IndexMode == CbIndexMode::BlockIter) return i;
-            else return cb_tile_idx;  // Pinned / Absolute
+            else return cb_tile_idx_;  // Pinned / Absolute
         }();
         copy_tile(Cb, in_idx, to_u32(DstSlot));
     }
@@ -306,6 +303,11 @@ struct CopyTile : CopyTileTag {
             cb_pop_front(Cb, n);
         }
     }
+
+private:
+    /// Pipeline-driven tile index — set by user via ctor only when IndexMode == Pinned / Absolute.
+    /// Not exposed as a public field; pipeline reads through exec().
+    uint32_t cb_tile_idx_ = 0;
 };
 
 // =============================================================================
@@ -348,11 +350,8 @@ struct PackTile : PackTileTag {
     static constexpr uint32_t          reconfig_pack_cb    =
         (Reconfig == PackTileReconfig::Output || Reconfig == PackTileReconfig::OutputConditional) ? Cb : NO_PREV_CB;
 
-    /// Runtime output-tile index for Pinned / Absolute modes.
-    uint32_t output_tile_idx = 0;
-
     constexpr PackTile() noexcept = default;
-    constexpr explicit PackTile(uint32_t output_tile_idx_) noexcept : output_tile_idx(output_tile_idx_) {}
+    constexpr explicit PackTile(uint32_t output_tile_idx) noexcept : output_tile_idx_(output_tile_idx) {}
 
     static ALWI void init() {
         // Pack reconfig is fold-driven (compile-time-elided when prev_pack_cb == Cb).
@@ -378,7 +377,7 @@ struct PackTile : PackTileTag {
         const uint32_t out_idx = [&]() -> uint32_t {
             if constexpr (IndexMode == PackTileIndexMode::FirstTile) return 0;
             else if constexpr (IndexMode == PackTileIndexMode::BlockIter) return i;
-            else return output_tile_idx;  // Pinned / Absolute
+            else return output_tile_idx_;  // Pinned / Absolute
         }();
         pack_tile(to_u32(DstSlot), Cb, out_idx);
     }
@@ -395,6 +394,10 @@ struct PackTile : PackTileTag {
             cb_push_back(Cb, n);
         }
     }
+
+private:
+    /// Pipeline-driven runtime output-tile index for Pinned / Absolute modes — ctor-only.
+    uint32_t output_tile_idx_ = 0;
 };
 
 // =============================================================================
@@ -520,13 +523,9 @@ struct BinaryFpu : BinaryFpuTag {
         ((DfReconfig == BinaryDataFormatReconfig::Output || DfReconfig == BinaryDataFormatReconfig::InputAndOutput)
          && CbOut != 0) ? CbOut : NO_PREV_CB;
 
-    /// Runtime indices for Pinned / Absolute modes.
-    uint32_t a_tile_idx = 0;
-    uint32_t b_tile_idx = 0;
-
     constexpr BinaryFpu() noexcept = default;
-    constexpr BinaryFpu(uint32_t a_tile_idx_, uint32_t b_tile_idx_) noexcept
-        : a_tile_idx(a_tile_idx_), b_tile_idx(b_tile_idx_) {}
+    constexpr BinaryFpu(uint32_t a_tile_idx, uint32_t b_tile_idx) noexcept
+        : a_tile_idx_(a_tile_idx), b_tile_idx_(b_tile_idx) {}
 
     // ---- init / reconfig ----
     // F-PERF-3: srca / srcb / pack reconfig are now fold-driven (compile-time-elided
@@ -581,12 +580,12 @@ struct BinaryFpu : BinaryFpuTag {
         const uint32_t a_idx = [&]() -> uint32_t {
             if constexpr      (AIndex == CbIndexMode::FirstTile)  return 0;
             else if constexpr (AIndex == CbIndexMode::BlockIter)  return i;
-            else                                                  return a_tile_idx;  // Pinned / Absolute
+            else                                                  return a_tile_idx_;  // Pinned / Absolute
         }();
         const uint32_t b_idx = [&]() -> uint32_t {
             if constexpr      (BIndex == CbIndexMode::FirstTile)  return 0;
             else if constexpr (BIndex == CbIndexMode::BlockIter)  return i;
-            else                                                  return b_tile_idx;  // Pinned / Absolute
+            else                                                  return b_tile_idx_;  // Pinned / Absolute
         }();
         if constexpr (Bcast == BroadcastDim::None) {
             if constexpr      (Op == BinaryFpuOp::Add) add_tiles(CbA, CbB, a_idx, b_idx, to_u32(DstSlot));
@@ -615,6 +614,11 @@ struct BinaryFpu : BinaryFpuTag {
         if constexpr (APolicy == CopyTilePolicy::WaitUpfrontPopAtEnd) cb_pop_front(CbA, n);
         if constexpr (!same_cb && BPolicy == CopyTilePolicy::WaitUpfrontPopAtEnd) cb_pop_front(CbB, n);
     }
+
+private:
+    /// Pipeline-driven runtime indices for Pinned / Absolute modes — ctor-only.
+    uint32_t a_tile_idx_ = 0;
+    uint32_t b_tile_idx_ = 0;
 };
 
 // =============================================================================
@@ -655,10 +659,8 @@ struct DestReuseBinary : DestReuseBinaryTag {
         (Reconfig == DestReuseReconfig::Input && ReuseType == DestReuseType::DEST_TO_SRCA) ? Cb : NO_PREV_CB;
     static constexpr uint32_t       reconfig_pack_cb  = NO_PREV_CB;
 
-    uint32_t cb_tile_idx = 0;
-
     constexpr DestReuseBinary() noexcept = default;
-    constexpr explicit DestReuseBinary(uint32_t cb_tile_idx_) noexcept : cb_tile_idx(cb_tile_idx_) {}
+    constexpr explicit DestReuseBinary(uint32_t cb_tile_idx) noexcept : cb_tile_idx_(cb_tile_idx) {}
 
     // F-PERF-3: srca / srcb reconfig is fold-driven; init() programs only the per-op
     // LLK shape.
@@ -690,7 +692,7 @@ struct DestReuseBinary : DestReuseBinaryTag {
         const uint32_t in_idx = [&]() -> uint32_t {
             if constexpr (IndexMode == CbIndexMode::FirstTile) return 0;
             else if constexpr (IndexMode == CbIndexMode::BlockIter) return i;
-            else return cb_tile_idx;
+            else return cb_tile_idx_;
         }();
         binary_dest_reuse_tiles<et, reuse>(Cb, in_idx, to_u32(DstIn));
     }
@@ -702,6 +704,10 @@ struct DestReuseBinary : DestReuseBinaryTag {
     ALWI void pop_upfront_end(uint32_t n) const {
         if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) cb_pop_front(Cb, n);
     }
+
+private:
+    /// Pipeline-driven runtime index for Pinned / Absolute modes — ctor-only.
+    uint32_t cb_tile_idx_ = 0;
 };
 
 // =============================================================================
