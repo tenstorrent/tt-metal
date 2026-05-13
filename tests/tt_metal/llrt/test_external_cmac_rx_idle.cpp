@@ -203,6 +203,60 @@ int main() {
         log_info(tt::LogTest, "Q(c) seeded L1@0x30000 with 64B marker pattern");
     }
 
+    // Phase I — exercise host-initiated READ if the environment opts in.
+    // Set TT_METAL_CMAC_TEST_READ_INIT=1 (or N for N concurrent reads, <=16).
+    // Drives smoke_mlx with --rx-echo-read to get synthetic READ_RESPs back.
+    const uint32_t read_init_count = env_uint("TT_METAL_CMAC_TEST_READ_INIT", 0);
+    constexpr uint32_t kLandingL1Base = 0x50000u;
+    constexpr uint32_t kReadInitLen = 128u;  // bytes per response payload
+    if (read_init_count > 0) {
+        // Pre-zero the landing area so we can verify the echo wrote there.
+        std::vector<uint32_t> zeros(read_init_count * kReadInitLen / 4u, 0u);
+        cluster.write_core(chip_id, virtual_core, std::span<uint32_t>(zeros), kLandingL1Base);
+        log_info(tt::LogTest, "Phase I: zeroed {} B at L1@0x{:X}", zeros.size() * 4u, kLandingL1Base);
+
+        // Compose landing MR base NoC addr — same encoding as P7 above.
+        const uint64_t landing_noc = (static_cast<uint64_t>(virtual_core.x) << 36) |
+                                     (static_cast<uint64_t>(virtual_core.y) << 42) |
+                                     static_cast<uint64_t>(kLandingL1Base);
+
+        log_info(
+            tt::LogTest,
+            "Phase I: posting {} READs (length={} each, landing=0x{:08X}_{:08X})",
+            read_init_count,
+            kReadInitLen,
+            static_cast<uint32_t>(landing_noc >> 32),
+            static_cast<uint32_t>(landing_noc));
+
+        std::vector<uint32_t> seqs;
+        seqs.reserve(read_init_count);
+        for (uint32_t i = 0; i < read_init_count; ++i) {
+            auto s = sender.post_send_read(
+                /*local_mr_noc=*/landing_noc,
+                /*local_offset=*/i * kReadInitLen,
+                /*remote_rkey=*/0x00000001u,  // hardcoded MR slot 0
+                /*remote_offset=*/0,
+                /*length=*/static_cast<uint16_t>(kReadInitLen),
+                /*cookie=*/i);
+            if (!s) {
+                log_warning(tt::LogTest, "post_send_read({}) ring-full at i={}", read_init_count, i);
+                break;
+            }
+            seqs.push_back(*s);
+        }
+        sender.flush_pending();
+        log_info(
+            tt::LogTest,
+            "Phase I: {} READs posted (seqs {}..{})",
+            seqs.size(),
+            seqs.empty() ? 0u : seqs.front(),
+            seqs.empty() ? 0u : seqs.back());
+
+        // Don't wait_completion here — the cq_head bump happens when smoke_mlx
+        // echoes back. The test's sleep window IS the wait. Verification of
+        // landing happens after the window.
+    }
+
     // FW dbg counter base — same offset as soak.
     constexpr uint32_t kDbgAddr = 0x8400 + 0x40;
     auto read_dbg = [&]() -> std::vector<uint32_t> {
@@ -318,8 +372,12 @@ int main() {
         auto rcb_w = cluster.read_core(chip_id, virtual_core, 0x8400u, 32u);
         log_info(
             tt::LogTest,
-            "  fw_rcb_acked_idx:      {} (Phase R: rcb[2] — highest cumulative ack_seq observed)",
-            rcb_w[2]);
+            "  fw_rcb: producer={} consumer={} acked={} cq_head={} mode={}",
+            rcb_w[0],
+            rcb_w[1],
+            rcb_w[2],
+            rcb_w[4],
+            rcb_w[7]);
     }
 
     // P6 sanity: read first 48 B of TX_BUF1 (= READ_RESP staging area).
@@ -370,6 +428,50 @@ int main() {
     if (cmac_total > 0) {
         double admit_rate = 100.0 * static_cast<double>(fw_seen) / static_cast<double>(cmac_total);
         log_info(tt::LogTest, "  fw_admit_pct:          {:.2f}% (fw_rx_frames / cmac_pkt_end_total)", admit_rate);
+    }
+
+    // Phase I diag — number of READ_REQs emitted, READ_RESPs landed/orphaned.
+    log_info(
+        tt::LogTest,
+        "  fw_dbg_tx_fire_count:  T0={} T1={} (diag: CMAC fires in dma_pull pipeline)",
+        dbg_t0[4],
+        dbg_t1[4]);
+    log_info(tt::LogTest, "  fw_dbg_last_flags:     0x{:04X} (diag: last flags_a seen at TX fire)", dbg_t1[3]);
+    log_info(
+        tt::LogTest,
+        "  fw_dbg_read_req_tx:    T0={} T1={} (Phase I: initiator READ_REQs emitted)",
+        dbg_t0[5],
+        dbg_t1[5]);
+    log_info(
+        tt::LogTest, "  fw_dbg_read_resp_rx:   {} (Phase I: READ_RESPs landed in local MR)", d(dbg_t0[6], dbg_t1[6]));
+    log_info(
+        tt::LogTest,
+        "  fw_dbg_read_resp_orph: {} (Phase I: READ_RESPs with no matching correlation entry)",
+        d(dbg_t0[7], dbg_t1[7]));
+
+    // Phase I verification — readback landing area and check the synthetic
+    // pattern smoke_mlx emitted ((i ^ tag) & 0xFF).
+    if (read_init_count > 0) {
+        auto land = cluster.read_core(chip_id, virtual_core, kLandingL1Base, read_init_count * kReadInitLen);
+        // Each READ used tag = seq & 0xFFFF. Reconstruct expected.
+        // seqs go consecutively, and post_send_read uses next_seq_ which started
+        // at... we don't have visibility. Just check that the first 16 bytes
+        // of slot 0 are NON-ZERO (we pre-zeroed), as a smoke check.
+        uint32_t nonzero = 0;
+        for (size_t i = 0; i < std::min<size_t>(16, land.size()); ++i) {
+            if (land[i] != 0) {
+                nonzero++;
+            }
+        }
+        log_info(
+            tt::LogTest,
+            "  Phase I landing L1@0x{:05X} first16w: {:08x} {:08x} {:08x} {:08x} (nonzero_words={}/16)",
+            kLandingL1Base,
+            land[0],
+            land[1],
+            land[2],
+            land[3],
+            nonzero);
     }
 
     tt::tt_metal::CloseDevice(device);

@@ -159,6 +159,34 @@ public:
     // descriptor (with OWNED_BY_FW set last), then bumps producer_idx.
     std::optional<uint32_t> post_send(std::span<const uint8_t> buf, uint32_t cookie = 0);
 
+    // Phase I (2026-05-13): host-initiated one-sided READ.
+    //
+    // Issues a TT-RDMA READ_REQ (opcode 0x20) for `length` bytes from
+    // [remote_offset, remote_offset+length) of the remote MR identified by
+    // `remote_rkey`. On the matching READ_RESP, FW NoC-writes the response
+    // payload into [local_offset, local_offset+length) of `local_mr_noc`
+    // (a full 64-bit NoC-encoded address — local L1, remote-chip, or host
+    // hugepage — same form host registers via register_mr_slot or that the
+    // hardcoded MR slot 0 carries).
+    //
+    // Completion: cq_head bumps to the returned seq# only AFTER the payload
+    // has landed at the local MR. wait_completion(seq) works as for SEND/
+    // WRITE, just with longer latency (one wire round-trip).
+    //
+    // Returns assigned seq# on success, std::nullopt if the ring is full.
+    // DMA-pull mode (enable_fw_dma_pull) is required; legacy mode-1 staging
+    // doesn't include the correlation metadata.
+    //
+    // tag = seq & (READ_CORR_N - 1 = 31). Caller must keep fewer than 32
+    // READs outstanding at once or correlation entries collide silently.
+    std::optional<uint32_t> post_send_read(
+        uint64_t local_mr_noc_addr,
+        uint32_t local_offset,
+        uint32_t remote_rkey,
+        uint64_t remote_offset,
+        uint16_t length,
+        uint32_t cookie = 0);
+
     // Returns the latest completed seq# (= rcb.cq_head). Pure read, no PCIe write.
     uint32_t poll_completion();
 
@@ -294,6 +322,7 @@ private:
     static constexpr uint32_t kPendingMax = 64;  // = kWqeRingN; can't accumulate more
     std::array<uint32_t, kPendingMax> pending_slot_{};
     std::array<uint16_t, kPendingMax> pending_size_{};
+    std::array<uint16_t, kPendingMax> pending_flags_{};  // Phase I: extra flag bits beyond OWNED
     uint32_t pending_count_{0};
     // Empirically optimal on the WH↔CX-5 rig (2026-05-09): drain_every=32
     // yields ~1.94 Gbps, well above 16 (~1.88) and 64 (collapses — ring fills
@@ -362,6 +391,7 @@ private:
     static constexpr uint16_t kWqeFlagLastBurst = 0x0002;
     static constexpr uint16_t kWqeFlagReqCompl = 0x0004;
     static constexpr uint16_t kWqeFlagDiagSingle = 0x0008;
+    static constexpr uint16_t kWqeFlagReadReq = 0x0010;  // Phase I: host READ initiator
 
     // RCB field offsets (8 × u32 starting at kWqeRcbAddr).
     static constexpr uint32_t kRcbProducerOff = 0x00;     // host writes

@@ -698,6 +698,7 @@ std::optional<uint32_t> ExternalIfaceSender::post_send(std::span<const uint8_t> 
     //    + drain happen once per drain_every_ posts in flush_pending().
     pending_slot_[pending_count_] = slot;
     pending_size_[pending_count_] = static_cast<uint16_t>(buf.size());
+    pending_flags_[pending_count_] = 0;  // ordinary SEND/WRITE — no extra flags
     pending_count_++;
     last_pending_payload_off_ = payload_o;
 
@@ -709,6 +710,104 @@ std::optional<uint32_t> ExternalIfaceSender::post_send(std::span<const uint8_t> 
     if (pending_count_ >= drain_every_) {
         flush_pending();
     }
+    return seq;
+}
+
+// ---------------------------------------------------------------------------
+// Phase I: post_send_read — host-initiated one-sided RDMA READ.
+// ---------------------------------------------------------------------------
+std::optional<uint32_t> ExternalIfaceSender::post_send_read(
+    uint64_t local_mr_noc_addr,
+    uint32_t local_offset,
+    uint32_t remote_rkey,
+    uint64_t remote_offset,
+    uint16_t length,
+    uint32_t cookie) {
+    if (!dma_pull_enabled_) {
+        return std::nullopt;  // legacy mode-1 doesn't carry correlation metadata
+    }
+
+    // Wire frame layout we stage in the hugepage slot (256 B total):
+    //   +0x00..+0x1F : 32 B RDMA v1 READ_REQ header
+    //                   opcode=0x20, version_flags=0x01, tag=seq&0xFFFF,
+    //                   length=requested_bytes, seq, rkey, remote_offset,
+    //                   imm=0, hdr_crc=0
+    //   +0x20..+0x2F : 16 B FW correlation metadata
+    //                   local_mr_noc_addr (8 B), local_offset (4 B), length (4 B)
+    //   +0x30..+0xFF : 208 B zero padding to a safe wire size (>= Ethernet min)
+    constexpr uint32_t kReadReqWireBytes = 256;
+    static_assert(kReadReqWireBytes <= kWqePayloadStride, "READ_REQ wire size must fit in WQE payload stride");
+
+    // Ring-full check (same as post_send).
+    if (reliability_enabled_) {
+        if ((producer_local_ - acked_idx_cached_) >= (kWqeRingN - drain_every_)) {
+            acked_idx_cached_ = read_word(chip_id_, virtual_core_, kWqeRcbAddr + kRcbAckedIdxOff);
+        }
+        if ((producer_local_ - acked_idx_cached_) >= kWqeRingN) {
+            return std::nullopt;
+        }
+    } else {
+        if ((producer_local_ - cons_cached_) >= (kWqeRingN - drain_every_)) {
+            cons_cached_ = read_word(chip_id_, virtual_core_, kWqeRcbAddr + kRcbConsumerOff);
+        }
+        if ((producer_local_ - cons_cached_) >= kWqeRingN) {
+            return std::nullopt;
+        }
+    }
+
+    const uint32_t slot = producer_local_ & (kWqeRingN - 1);
+    const uint32_t desc_addr = kWqeDescTableAddr + slot * kWqeDescStride;
+    const uint32_t seq = next_seq_;
+    const uint32_t payload_o = slot * kWqePayloadStride;
+
+    // Build the frame in a stack buffer, then memcpy to hugepage.
+    uint8_t frame[kReadReqWireBytes];
+    std::memset(frame, 0, sizeof(frame));
+
+    // 32 B RDMA header
+    frame[0] = 0x20;  // opcode READ_REQ
+    frame[1] = 0x01;  // version_flags
+    uint16_t tag = static_cast<uint16_t>(seq & 0xFFFFu);
+    std::memcpy(frame + 2, &tag, 2);
+    uint32_t plen32 = static_cast<uint32_t>(length);
+    std::memcpy(frame + 4, &plen32, 4);          // length = bytes-requested
+    std::memcpy(frame + 8, &seq, 4);             // seq
+    std::memcpy(frame + 12, &remote_rkey, 4);    // rkey
+    std::memcpy(frame + 16, &remote_offset, 8);  // remote_offset (u64 LE)
+    // imm @ +24 and hdr_crc @ +28 are already zero from memset.
+
+    // 16 B correlation metadata at +32..+47
+    std::memcpy(frame + 32, &local_mr_noc_addr, 8);
+    std::memcpy(frame + 40, &local_offset, 4);
+    uint32_t length32 = static_cast<uint32_t>(length);
+    std::memcpy(frame + 44, &length32, 4);
+
+    // Stage in hugepage slot
+    std::memcpy(static_cast<uint8_t*>(host_payload_buf_) + slot * kWqePayloadStride, frame, kReadReqWireBytes);
+
+    // Pre-owned descriptor
+    {
+        uint32_t desc[4];
+        desc[0] = kReadReqWireBytes & 0xFFFFu;  // size, flags=0 (OWNED set in flush)
+        desc[1] = seq;
+        desc[2] = payload_o;
+        desc[3] = cookie;
+        cluster().write_core(desc, sizeof(desc), tt_cxy_pair(chip_id_, virtual_core_), desc_addr);
+    }
+
+    // Track + auto-flush. Important: set the READ_REQ flag so FW records
+    // correlation and defers cq_head bump until READ_RESP lands.
+    pending_slot_[pending_count_] = slot;
+    pending_size_[pending_count_] = kReadReqWireBytes;
+    pending_flags_[pending_count_] = kWqeFlagReadReq;
+    pending_count_++;
+    last_pending_payload_off_ = payload_o;
+    producer_local_++;
+    next_seq_++;
+    if (pending_count_ >= drain_every_) {
+        flush_pending();
+    }
+
     return seq;
 }
 
@@ -751,8 +850,9 @@ void ExternalIfaceSender::flush_pending() {
         for (uint32_t i = 0; i < pending_count_; ++i) {
             const uint32_t slot = pending_slot_[i];
             const uint32_t desc_addr = kWqeDescTableAddr + slot * kWqeDescStride;
+            const uint16_t flags = static_cast<uint16_t>(kWqeFlagOwnedByFw | pending_flags_[i]);
             const uint32_t word0_owned =
-                (static_cast<uint32_t>(pending_size_[i]) & 0xFFFFu) | (static_cast<uint32_t>(kWqeFlagOwnedByFw) << 16);
+                (static_cast<uint32_t>(pending_size_[i]) & 0xFFFFu) | (static_cast<uint32_t>(flags) << 16);
             write_word_block(chip_id_, virtual_core_, desc_addr + 0x00, word0_owned);
         }
     }

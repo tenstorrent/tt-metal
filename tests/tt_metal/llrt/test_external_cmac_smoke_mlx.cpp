@@ -98,6 +98,7 @@ struct AppArgs {
     bool tx_probe_write_imm = false;  // Q(b): opcode 0x11
     bool tx_probe_send_imm = false;   // Q(b): opcode 0x02
     bool tx_probe_ack = false;        // Phase R: opcode 0x40 (standalone ACK)
+    bool rx_echo_read = false;        // Phase I: respond to incoming opcode 0x20 with READ_RESP (0x21)
     // P6: emit opcode 0x20 (READ_REQ). `length` field carries BYTES REQUESTED;
     // payload is empty on wire. Cannot combine with --tx-probe-write.
     bool tx_probe_read = false;
@@ -146,6 +147,8 @@ bool parse_app_args(int argc, char** argv, AppArgs& out) {
             out.tx_probe_send_imm = true;
         } else if (!std::strcmp(a, "--tx-probe-ack")) {
             out.tx_probe_ack = true;
+        } else if (!std::strcmp(a, "--rx-echo-read")) {
+            out.rx_echo_read = true;
         } else if (!std::strcmp(a, "--tx-probe-rkey") && i + 1 < argc) {
             out.tx_probe_rkey = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 0));
         } else if (!std::strcmp(a, "--tx-probe-remote") && i + 1 < argc) {
@@ -431,6 +434,57 @@ int send_ack_frame(
     std::memset(p + 12, 0, 12);          // rkey + remote_offset
     std::memcpy(p + 24, &ack_flags, 4);  // imm carries flags
     std::memset(p + 28, 0, 4);           // hdr_crc
+
+    return rte_eth_tx_burst(port_id, kTxQueue, &m, 1) == 1 ? 1 : (rte_pktmbuf_free(m), 0);
+}
+
+// Phase I: build + TX a READ_RESP (opcode 0x21) in response to a READ_REQ
+// (opcode 0x20). Echoes the request's tag, sets length to the request's
+// `length` field (which is bytes-requested), fills payload with a
+// deterministic pattern (byte i = (i ^ tag) & 0xFF) so the host can verify
+// landing correctness.
+int send_read_resp(
+    uint16_t port_id,
+    struct rte_mempool* mbuf_pool,
+    const struct rte_ether_addr& src_mac,
+    const struct rte_ether_addr& dst_mac,
+    uint16_t ethertype,
+    uint16_t tag,
+    uint32_t length,
+    uint32_t req_seq) {
+    // Wire frame = 14 B L2 + 32 B RDMA hdr + length B payload, rounded up to
+    // a reasonable minimum. Cap at the mbuf body size minus L2.
+    const uint32_t wire_payload = 32u + length;
+    const uint32_t wire_min = 64u;  // Ethernet min
+    const uint32_t wire_size = (wire_payload < wire_min) ? wire_min : wire_payload;
+
+    struct rte_mbuf* m = rte_pktmbuf_alloc(mbuf_pool);
+    if (m == nullptr) {
+        return 0;
+    }
+    uint8_t* buf = reinterpret_cast<uint8_t*>(rte_pktmbuf_append(m, sizeof(rte_ether_hdr) + wire_size));
+    if (buf == nullptr) {
+        rte_pktmbuf_free(m);
+        return 0;
+    }
+    std::memset(buf, 0, sizeof(rte_ether_hdr) + wire_size);
+
+    struct rte_ether_hdr* eh = reinterpret_cast<struct rte_ether_hdr*>(buf);
+    eh->dst_addr = dst_mac;
+    eh->src_addr = src_mac;
+    eh->ether_type = rte_cpu_to_be_16(ethertype);
+
+    uint8_t* p = buf + sizeof(*eh);
+    p[0] = 0x21;                      // opcode READ_RESP
+    p[1] = 0x01;                      // version_flags
+    std::memcpy(p + 2, &tag, 2);      // tag (echoed)
+    std::memcpy(p + 4, &length, 4);   // length (bytes that follow)
+    std::memcpy(p + 8, &req_seq, 4);  // seq (echo)
+    // bytes +12..+31: rkey/remote_off/imm/hdr_crc all already zero
+    // Payload: deterministic pattern.
+    for (uint32_t i = 0; i < length; ++i) {
+        p[32 + i] = static_cast<uint8_t>((i ^ tag) & 0xFFu);
+    }
 
     return rte_eth_tx_burst(port_id, kTxQueue, &m, 1) == 1 ? 1 : (rte_pktmbuf_free(m), 0);
 }
@@ -934,6 +988,35 @@ int main(int argc, char** argv) {
             }
 
             if (match) {
+                // Phase I: if rx_echo_read is on and this is a READ_REQ
+                // (opcode 0x20 at the first byte after the wire L2 hdr),
+                // craft a READ_RESP and TX it back. The WH FW that issued
+                // the READ_REQ will get the response, look up the correlation
+                // entry by tag, and NoC-write the payload to the host's
+                // landing MR.
+                if (args.rx_echo_read && m->pkt_len >= sizeof(rte_ether_hdr) + 32) {
+                    const uint8_t* p = rte_pktmbuf_mtod(m, const uint8_t*);
+                    const uint8_t* rdma = p + sizeof(rte_ether_hdr);
+                    if (rdma[0] == 0x20) {
+                        uint16_t req_tag;
+                        std::memcpy(&req_tag, rdma + 2, 2);
+                        uint32_t req_length;
+                        std::memcpy(&req_length, rdma + 4, 4);
+                        uint32_t req_seq;
+                        std::memcpy(&req_seq, rdma + 8, 4);
+                        // Cap response payload at 4080 B (WH FW's req_len cap).
+                        if (req_length > 4080u) {
+                            req_length = 4080u;
+                        }
+                        // Reply destination: the sender of the request.
+                        const struct rte_ether_hdr* eh = reinterpret_cast<const struct rte_ether_hdr*>(p);
+                        struct rte_ether_addr dst_mac = eh->src_addr;
+                        struct rte_ether_addr nic_mac;
+                        rte_eth_macaddr_get(args.port_id, &nic_mac);
+                        send_read_resp(
+                            args.port_id, mbuf_pool, nic_mac, dst_mac, args.ether_type, req_tag, req_length, req_seq);
+                    }
+                }
                 // Phase 2: extract seq# from the host's payload. Wire layout:
                 //   [wire L2 hdr: 14B from CMAC prepend][host fake L2 hdr: 14B]
                 //   [u32 seq @ offset 28][...]
