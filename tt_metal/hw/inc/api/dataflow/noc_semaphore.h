@@ -5,14 +5,10 @@
 #pragma once
 
 #include "dev_mem_map.h"
-#include "experimental/noc.h"
-
-namespace experimental {
+#include "api/dataflow/noc.h"
 
 /**
- * @brief Experimental semaphore synchronization primitive for programmable cores.
- *
- * @note This API is experimental and subject to change.
+ * @brief Semaphore synchronization primitive for programmable cores.
  *
  * The Semaphore class provides a simple interface for semaphore-based synchronization
  * between programmable cores. It allows incrementing and decrementing the semaphore value,
@@ -197,5 +193,3 @@ private:
 #endif
     }
 };
-
-}  // namespace experimental

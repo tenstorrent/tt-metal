@@ -5,14 +5,12 @@
 #pragma once
 
 #if !defined(COMPILE_FOR_TRISC)
-#include "experimental/noc.h"
+#include "api/dataflow/noc.h"
 #endif
-#include "experimental/lock.h"
+#include "api/lock.h"
 #include "tools/profiler/noc_debugging_metadata.hpp"
 #include "tools/profiler/noc_debugging_profiler.hpp"
 #include "internal/debug/sanitize.h"
-
-namespace experimental {
 
 /**
  * @brief Provides a safe pointer to a structure of type T in the core's local memory
@@ -199,5 +197,3 @@ struct noc_traits_t<CoreLocalMem<T, AddressType>> {
     }
 };
 #endif  // !defined(COMPILE_FOR_TRISC)
-
-}  // namespace experimental
