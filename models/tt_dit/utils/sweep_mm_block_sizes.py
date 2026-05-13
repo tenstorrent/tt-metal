@@ -35,6 +35,7 @@ import os
 import pytest
 import torch
 from loguru import logger
+from tracy import signpost
 
 import ttnn
 
@@ -262,6 +263,13 @@ def estimate_l1_kb(m_blk, k_blk, n_blk, use_case="plain"):
     return kb
 
 
+def _subblock_for(m_block, k_blk, n_blk, explicit_subblocks):
+    """Pick subblock from explicit override if available, else fall back to pick_subblock."""
+    if explicit_subblocks and (k_blk, n_blk) in explicit_subblocks:
+        return explicit_subblocks[(k_blk, n_blk)]
+    return pick_subblock(m_block, n_blk)
+
+
 def pick_subblock(m_block, n_block, max_dest_volume=4):
     """Pick best valid (sb_h, sb_w) where sb_h|m_block, sb_w|n_block, sb_h*sb_w <= max_dest_volume."""
     best = (1, 1)
@@ -330,7 +338,13 @@ def create_fabric_router_config(max_payload_size):
 
 
 def open_mesh(cfg, trace_region_size=None):
-    """Open a mesh device with the given resolved config."""
+    """Open the parent mesh and create a cluster-axis submesh.
+
+    Returns (parent_mesh, cluster_submesh). The submesh is sized 1xN (or Nx1)
+    along cluster_axis so the op runs on a single ring rather than replicating
+    compute across the non-cluster axis. Workers should use the submesh; pass
+    the parent to close_mesh() for cleanup.
+    """
     fabric_kwargs = [
         cfg["fabric_config"],
         ttnn.FabricReliabilityMode.STRICT_INIT,
@@ -347,12 +361,21 @@ def open_mesh(cfg, trace_region_size=None):
     device_kwargs = {}
     if trace_region_size is not None:
         device_kwargs["trace_region_size"] = trace_region_size
-    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(rows, cols), **device_kwargs)
+    parent_mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(rows, cols), **device_kwargs)
+
+    cluster_axis = cfg["cluster_axis"]
+    submesh_shape = [1, 1]
+    submesh_shape[cluster_axis] = cfg["mesh_shape"][cluster_axis]
+    cluster_submesh = parent_mesh.create_submesh(ttnn.MeshShape(tuple(submesh_shape)))
+
+    return parent_mesh, cluster_submesh
 
 
-def close_mesh(mesh_device):
-    """Close mesh device and reset fabric."""
-    ttnn.close_mesh_device(mesh_device)
+def close_mesh(parent_mesh):
+    """Close submeshes then the parent mesh, and reset fabric."""
+    for submesh in parent_mesh.get_submeshes():
+        ttnn.close_mesh_device(submesh)
+    ttnn.close_mesh_device(parent_mesh)
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
@@ -488,8 +511,9 @@ def test_mm_sweep_worker(device_config, shape, m_block):
             f"m_block={m_block}, {len(kn_combos)} K/N combos (batch [{batch_start}:{batch_end}])"
         )
 
-    mesh_device = open_mesh(cfg, trace_region_size=4194304 if is_agmm else None)  # 4MB for trace region
+    parent_mesh, mesh_device = open_mesh(cfg, trace_region_size=4194304 if is_agmm else None)  # 4MB for trace region
     try:
+        mesh_shape = tuple(mesh_device.shape)
         core_grid = ttnn.CoreCoord(cgx, cgy)
         dtype = ttnn.bfloat16
 
@@ -519,7 +543,7 @@ def test_mm_sweep_worker(device_config, shape, m_block):
                 dtype=dtype,
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dims),
             )
             tt_weight = ttnn.from_torch(
                 torch.randn((K, N), dtype=torch.float32),
@@ -564,25 +588,18 @@ def test_mm_sweep_worker(device_config, shape, m_block):
                     dtype=dtype,
                     device=mesh_device,
                     layout=ttnn.TILE_LAYOUT,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(
-                        mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, None]
-                    ),
+                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=[None, None]),
                 )
                 addcmul_tensor2 = ttnn.from_torch(
                     torch.randn((M, N), dtype=torch.float32),
                     dtype=dtype,
                     device=mesh_device,
                     layout=ttnn.TILE_LAYOUT,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(
-                        mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, None]
-                    ),
+                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=[None, None]),
                 )
 
             def run_op(k_blk, n_blk, sync=True):
-                if _explicit_subblocks and (k_blk, n_blk) in _explicit_subblocks:
-                    sb_h, sb_w = _explicit_subblocks[(k_blk, n_blk)]
-                else:
-                    sb_h, sb_w = pick_subblock(m_block, n_blk)
+                sb_h, sb_w = _subblock_for(m_block, k_blk, n_blk, _explicit_subblocks)
                 matmul_config = ttnn.MinimalMatmulConfig(
                     M_block_size=m_block,
                     K_block_size=k_blk,
@@ -644,10 +661,7 @@ def test_mm_sweep_worker(device_config, shape, m_block):
             if use_matmul_split:
 
                 def run_op(k_blk, n_blk):
-                    if _explicit_subblocks and (k_blk, n_blk) in _explicit_subblocks:
-                        sb_h, sb_w = _explicit_subblocks[(k_blk, n_blk)]
-                    else:
-                        sb_h, sb_w = pick_subblock(m_block, n_blk)
+                    sb_h, sb_w = _subblock_for(m_block, k_blk, n_blk, _explicit_subblocks)
                     matmul_config = ttnn.MinimalMatmulConfig(
                         M_block_size=m_block,
                         K_block_size=k_blk,
@@ -671,10 +685,7 @@ def test_mm_sweep_worker(device_config, shape, m_block):
             else:
 
                 def run_op(k_blk, n_blk):
-                    if _explicit_subblocks and (k_blk, n_blk) in _explicit_subblocks:
-                        sb_h, sb_w = _explicit_subblocks[(k_blk, n_blk)]
-                    else:
-                        sb_h, sb_w = pick_subblock(m_block, n_blk)
+                    sb_h, sb_w = _subblock_for(m_block, k_blk, n_blk, _explicit_subblocks)
                     matmul_config = ttnn.MinimalMatmulConfig(
                         M_block_size=m_block,
                         K_block_size=k_blk,
@@ -718,8 +729,6 @@ def test_mm_sweep_worker(device_config, shape, m_block):
                 json.dump(valid_combos, f)
 
         # Measured run — only valid combos
-        from tracy import signpost
-
         if is_agmm:
             # Capture a trace per combo (ops already compiled from warmup).
             # Trace execution synchronizes all devices before dispatching,
@@ -727,7 +736,7 @@ def test_mm_sweep_worker(device_config, shape, m_block):
             trace_ids = []
             for k_blk, n_blk in valid_combos:
                 trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-                run_op(k_blk, n_blk)
+                run_op(k_blk, n_blk, sync=False)
                 ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
                 ttnn.synchronize_device(mesh_device)
                 trace_ids.append(trace_id)
@@ -750,7 +759,7 @@ def test_mm_sweep_worker(device_config, shape, m_block):
         logger.info(f"Worker done: {len(valid_combos)} combos measured")
 
     finally:
-        close_mesh(mesh_device)
+        close_mesh(parent_mesh)
 
 
 # ============================================================================
@@ -784,8 +793,9 @@ def test_mm_subblock_sweep_worker(device_config, shape):
         f"blocks=({m_block},{k_block},{n_block}), {len(sb_combos)} subblock combos"
     )
 
-    mesh_device = open_mesh(cfg)
+    parent_mesh, mesh_device = open_mesh(cfg)
     try:
+        mesh_shape = tuple(mesh_device.shape)
         core_grid = ttnn.CoreCoord(cgx, cgy)
         dtype = ttnn.bfloat16
 
@@ -813,7 +823,7 @@ def test_mm_subblock_sweep_worker(device_config, shape):
                 dtype=dtype,
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dims),
             )
             tt_weight = ttnn.from_torch(
                 torch.randn((K, N), dtype=torch.float32),
@@ -857,18 +867,14 @@ def test_mm_subblock_sweep_worker(device_config, shape):
                     dtype=dtype,
                     device=mesh_device,
                     layout=ttnn.TILE_LAYOUT,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(
-                        mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, None]
-                    ),
+                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=[None, None]),
                 )
                 addcmul_tensor2 = ttnn.from_torch(
                     torch.randn((M, N), dtype=torch.float32),
                     dtype=dtype,
                     device=mesh_device,
                     layout=ttnn.TILE_LAYOUT,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(
-                        mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, None]
-                    ),
+                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=[None, None]),
                 )
 
             def run_op(sb_h, sb_w):
@@ -991,8 +997,6 @@ def test_mm_subblock_sweep_worker(device_config, shape):
             with open(combos_file, "w") as f:
                 json.dump(valid_combos, f)
 
-        from tracy import signpost
-
         signpost("start")
         for sb_h, sb_w in valid_combos:
             run_op(sb_h, sb_w)
@@ -1001,7 +1005,7 @@ def test_mm_subblock_sweep_worker(device_config, shape):
         logger.info(f"Subblock worker done: {len(valid_combos)} combos measured")
 
     finally:
-        close_mesh(mesh_device)
+        close_mesh(parent_mesh)
 
 
 # ============================================================================
@@ -1142,11 +1146,7 @@ def test_mm_sweep(device_config, shape):
                 logger.warning(f"  M_block={m_block}{batch_suffix}: FAILED - {err_msg}")
                 # Record failures for this batch
                 for k_blk, n_blk in batch_combos:
-                    sb_h, sb_w = (
-                        explicit_sb[(k_blk, n_blk)]
-                        if explicit_sb and (k_blk, n_blk) in explicit_sb
-                        else pick_subblock(m_block, n_blk)
-                    )
+                    sb_h, sb_w = _subblock_for(m_block, k_blk, n_blk, explicit_sb)
                     append_csv_row(
                         CSV_FILE,
                         [
@@ -1179,11 +1179,7 @@ def test_mm_sweep(device_config, shape):
             logger.info(f"  M_block={m_block}: {skipped} combos skipped (runtime L1 OOM)")
 
         for i, (k_blk, n_blk) in enumerate(m_block_valid_combos):
-            sb_h, sb_w = (
-                explicit_sb[(k_blk, n_blk)]
-                if explicit_sb and (k_blk, n_blk) in explicit_sb
-                else pick_subblock(m_block, n_blk)
-            )
+            sb_h, sb_w = _subblock_for(m_block, k_blk, n_blk, explicit_sb)
             if i < len(m_block_durations):
                 duration_ns = m_block_durations[i]
                 status = "OK"
