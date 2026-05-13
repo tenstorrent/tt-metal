@@ -29,9 +29,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from operation_runtime_map import OperationRuntimeMap
-from running_ops_aggregation import (
-    run as get_running_ops_aggregation,
+from operation_provider import (
+    run as get_operation_provider,
+    OperationRuntimeMap,
     RunningOperationAggregation,
 )
 from triage import (
@@ -46,7 +46,7 @@ from ttexalens.context import Context
 
 
 script_config = ScriptConfig(
-    depends=["running_ops_aggregation", "dump_op_mesh"],
+    depends=["operation_provider", "dump_op_mesh"],
     priority=ScriptPriority.HIGH,
 )
 
@@ -89,7 +89,7 @@ def run(args, context: Context):
         log_check(False, f"Op-id window suppressed: --op-window={window} (must be > 0).")
         return None
 
-    bundle = get_running_ops_aggregation(args, context)
+    bundle = get_operation_provider(args, context)
     aggregations = bundle.aggregations
     runtime_id_to_operation = bundle.runtime_id_to_operation
 

@@ -5,17 +5,23 @@
 
 """
 Usage:
-    running_ops_aggregation [--include-done]
+    operation_provider [--include-done]
 
 Options:
     --include-done   Show all cores including ones with Go Message = DONE.
                      By default, DONE cores are filtered out.
 
 Description:
-    Data provider that scans every dispatcher core, filters DONE/idle cores
-    (unless --include-done is set), looks up each running mailbox host_assigned_id
-    in the Inspector runtime map, and produces a `RunningOpsAggregation` (the
-    per-host_assigned_id `RunningOperationAggregation` dict + the runtime map).
+    Data provider for the running-ops view chain. Builds two things:
+
+      1. An `OperationRuntimeMap` — Inspector runtime_id → OperationInfo
+         (name, parameters, trace_id). The mailbox holds the raw runtime_id
+         for both fast and slow dispatch (see tt_metal/impl/program/dispatch.cpp
+         and tt_metal/tt_metal.cpp).
+      2. A per-`host_assigned_id` aggregation: scans every dispatcher core,
+         filters DONE/idle cores (unless --include-done), looks each running
+         host_assigned_id up in the runtime map, and accumulates per-op
+         device/core sets.
 
     Cached with @triage_singleton so dump_running_operations, dump_op_window,
     and dump_op_mesh share a single iteration over the dispatcher cores.
@@ -29,11 +35,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from dispatcher_data import run as get_dispatcher_data, DispatcherData, DispatcherCoreData
-from operation_runtime_map import (
-    run as get_operation_runtime_map,
-    OperationRuntimeMap,
-    OperationInfo,
-)
+from inspector_data import run as get_inspector_data, InspectorData
 from run_checks import (
     run as get_run_checks,
     RunChecks,
@@ -54,13 +56,44 @@ from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 script_config = ScriptConfig(
     data_provider=True,
-    depends=["run_checks", "dispatcher_data", "operation_runtime_map"],
+    depends=["run_checks", "dispatcher_data", "inspector_data"],
     priority=ScriptPriority.HIGH,
 )
 
 
 # Core filtering — matches the historical block list from dump_running_operations.
 BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth", "dram"]
+
+# Matches the sentinel in rpc.capnp (kNoTraceId). Capnp has no null for primitives.
+_NO_TRACE_ID = 0xFFFFFFFF
+
+
+@dataclass
+class OperationInfo:
+    name: str
+    parameters: str
+    trace_id: int | None
+
+    @staticmethod
+    def empty() -> "OperationInfo":
+        return OperationInfo(name="", parameters="", trace_id=None)
+
+
+class OperationRuntimeMap:
+    """Resolves dispatcher `host_assigned_id` values to Inspector-recorded op info."""
+
+    def __init__(self, runtime_id_map: dict[int, OperationInfo]):
+        self._map = runtime_id_map
+
+    def __len__(self) -> int:
+        return len(self._map)
+
+    def items(self):
+        return self._map.items()
+
+    def lookup(self, host_assigned_id: int) -> OperationInfo | None:
+        """Resolve host_assigned_id to its Inspector entry, or None if not found."""
+        return self._map.get(host_assigned_id)
 
 
 def _format_core_location(device_label: str | None, location: OnChipCoordinate | None) -> str:
@@ -95,13 +128,7 @@ class RunningOperationAggregation:
         self.core_locations: set[str] = set()
         self.device_labels: set[str] = set()
 
-    def add_core(
-        self,
-        device_label: str,
-        location: OnChipCoordinate,
-        risc_name: str,
-        dispatcher_core_data: DispatcherCoreData,
-    ) -> None:
+    def add_core(self, device_label: str, location: OnChipCoordinate) -> None:
         self.core_locations.add(_format_core_location(device_label, location))
         self.device_labels.add(device_label)
 
@@ -112,6 +139,25 @@ class RunningOpsAggregation:
 
     aggregations: dict[int, "RunningOperationAggregation"]
     runtime_id_to_operation: OperationRuntimeMap
+
+
+def _build_runtime_id_map(inspector_data: InspectorData) -> OperationRuntimeMap:
+    runtime_id_map: dict[int, OperationInfo] = {}
+    try:
+        runtime_entries_result = inspector_data.getMeshWorkloadRuntimeEntries()
+        for entry in runtime_entries_result.runtimeEntries:
+            raw_trace_id = int(entry.traceId)
+            trace_id = None if raw_trace_id == _NO_TRACE_ID else raw_trace_id
+            runtime_id_map[int(entry.runtimeId)] = OperationInfo(
+                name=entry.operationName,
+                parameters=entry.operationParameters,
+                trace_id=trace_id,
+            )
+        log_check(True, f"Built runtime_id map with {len(runtime_id_map)} operation(s)")
+    except Exception as e:
+        log_check(False, f"Failed to build runtime_id to operation map: {e}")
+        log_check(False, "Operation names and parameters will not be available")
+    return OperationRuntimeMap(runtime_id_map)
 
 
 def _collect_dispatcher_data(
@@ -147,12 +193,14 @@ def _collect_dispatcher_data(
 
 @triage_singleton
 def run(args, context: Context) -> RunningOpsAggregation:
-    """Build the running-ops aggregation. Cached per (args, context)."""
+    """Build the running-ops aggregation + the runtime map. Cached per (args, context)."""
     show_all_cores: bool = args["--include-done"]
 
+    inspector_data = get_inspector_data(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
     run_checks: RunChecks = get_run_checks(args, context)
-    runtime_id_to_operation = get_operation_runtime_map(args, context)
+
+    runtime_id_to_operation = _build_runtime_id_map(inspector_data)
 
     collected_results = run_checks.run_per_core_check(
         lambda location, risc_name: _collect_dispatcher_data(dispatcher_data, location, risc_name, show_all_cores),
@@ -181,7 +229,7 @@ def run(args, context: Context) -> RunningOpsAggregation:
             op_info = runtime_id_to_operation.lookup(dispatcher_core_data.host_assigned_id) or OperationInfo.empty()
 
             # Slow dispatch (HOST) overwrites a single launch slot in the mailbox, so the
-            # "previous" entry is stale/invalid there. Orthogonal to op-id encoding.
+            # "previous" entry is stale/invalid there.
             if dispatch_mode == "HOST":
                 prev_runtime_id = None
                 prev_op_info = OperationInfo.empty()
@@ -208,8 +256,6 @@ def run(args, context: Context) -> RunningOpsAggregation:
             aggregation.add_core(
                 device_description_serializer(check_result.device_description),
                 check_result.location,
-                check_result.risc_name,
-                dispatcher_core_data,
             )
         except Exception as e:
             log_check(False, f"Failed to aggregate one core's running-op data: {e}")

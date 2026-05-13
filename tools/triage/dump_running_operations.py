@@ -24,11 +24,11 @@ Description:
     Companion scripts:
       - `dump_op_window` — context table of ops with id near the currently-running set.
       - `dump_op_mesh` — 2D mesh-grid view of running ops, sourced from Inspector's system mesh.
-      All share the same aggregation via `running_ops_aggregation` (use `--include-done`
+      All share the same aggregation via `operation_provider` (use `--include-done`
       on the triage CLI to surface DONE cores in every consumer).
 
     Data sources:
-      - `running_ops_aggregation` (per-core dispatcher data + Inspector runtime map).
+      - `operation_provider` (per-core dispatcher data + Inspector runtime map).
 
 Owner:
     onenezicTT
@@ -37,8 +37,8 @@ Owner:
 from dataclasses import dataclass
 
 from operation_param_parser import ParameterParser
-from running_ops_aggregation import (
-    run as get_running_ops_aggregation,
+from operation_provider import (
+    run as get_operation_provider,
     RunningOperationAggregation,
 )
 from triage import (
@@ -52,7 +52,7 @@ from ttexalens.context import Context
 
 
 script_config = ScriptConfig(
-    depends=["running_ops_aggregation", "dump_op_window"],
+    depends=["operation_provider", "dump_op_window"],
     priority=ScriptPriority.HIGH,
 )
 
@@ -119,7 +119,7 @@ def run(args, context: Context):
     """Pure renderer: read aggregations from the data provider, emit summaries."""
     full_cores: bool = args["--full-cores"]
 
-    bundle = get_running_ops_aggregation(args, context)
+    bundle = get_operation_provider(args, context)
     if not bundle.aggregations:
         return None
 

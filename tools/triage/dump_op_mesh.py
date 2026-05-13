@@ -39,18 +39,17 @@ Owner:
 
 from __future__ import annotations
 
-from collections import Counter
 from dataclasses import make_dataclass
 
 from inspector_data import run as get_inspector_data
 from metal_device_id_mapping import run as get_metal_device_id_mapping
-from running_ops_aggregation import run as get_running_ops_aggregation, RunningOperationAggregation
+from operation_provider import run as get_operation_provider, RunningOperationAggregation
 from triage import ScriptConfig, ScriptPriority, log_check, run_script, triage_field
 from ttexalens.context import Context
 
 
 script_config = ScriptConfig(
-    depends=["running_ops_aggregation", "metal_device_id_mapping", "inspector_data"],
+    depends=["operation_provider", "metal_device_id_mapping", "inspector_data"],
     priority=ScriptPriority.HIGH,
 )
 
@@ -87,17 +86,10 @@ def _leading_edge_op_id(aggregations: dict[int, RunningOperationAggregation]) ->
 
 def _ubb_prefix(cd, chip_id: int) -> str:
     # `get_tray_id` returns None for non-UBB boards by contract — use that as the predicate.
-    try:
-        tray = cd.get_tray_id(chip_id)
-    except Exception:
-        return ""
+    tray = cd.get_tray_id(chip_id)
     if tray is None:
         return ""
-    try:
-        asic = cd.get_asic_location(chip_id)
-    except Exception:
-        return ""
-    return f"T{tray}:N{asic}"
+    return f"T{tray}:N{cd.get_asic_location(chip_id)}"
 
 
 def _op_line(agg: RunningOperationAggregation, leading_edge: int | None) -> str:
@@ -156,7 +148,7 @@ def run(args, context: Context):
 
     cd = context.cluster_descriptor
     metal_id_mapping = get_metal_device_id_mapping(args, context)
-    bundle = get_running_ops_aggregation(args, context)
+    bundle = get_operation_provider(args, context)
     label_to_ops = _build_label_to_ops(bundle.aggregations)
     leading_edge = _leading_edge_op_id(bundle.aggregations)
 
