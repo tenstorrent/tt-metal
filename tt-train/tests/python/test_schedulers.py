@@ -13,10 +13,18 @@ Each scheduler has two test classes:
   - TestXStateDict        — get_state_dict / set_state_dict round-trip.
 """
 
+import math
+
 import pytest
 import torch
 import ttml
-from ttml.common.schedulers import CosineAnnealingScheduler, LambdaScheduler, LinearScheduler, StepScheduler
+from ttml.common.schedulers import (
+    CosineAnnealingScheduler,
+    LambdaScheduler,
+    LinearScheduler,
+    SequentialScheduler,
+    StepScheduler,
+)
 
 
 BASE_LR = 0.1
@@ -578,6 +586,384 @@ class TestLambdaSchedulerStateDict:
             lrs_a.append(sched_a.get_current_lr())
             lrs_b.append(sched_b.get_current_lr())
         assert lrs_a == pytest.approx(lrs_b, abs=1e-8)
+
+
+# ---------------------------------------------------------------------------
+# SequentialScheduler
+# ---------------------------------------------------------------------------
+#
+# NOTE: ``SequentialScheduler`` follows the C++ ttml semantics where each
+# ``milestones[i]`` is the *number of steps* allocated to child ``i``
+
+CHILD0_STEPS = 10  # warmup length
+CHILD1_STEPS = 20  # decay length
+
+
+def _make_sequential(base_lr=BASE_LR):
+    """Linear warmup (0.0 -> 1.0 over CHILD0_STEPS) then Linear decay
+    (1.0 -> 0.1 over CHILD1_STEPS), chained via SequentialScheduler."""
+    opt = _make_opt(base_lr)
+    children = [
+        LinearScheduler(opt, start_factor=0.0, end_factor=1.0, total_steps=CHILD0_STEPS),
+        LinearScheduler(opt, start_factor=1.0, end_factor=0.1, total_steps=CHILD1_STEPS),
+    ]
+    return opt, SequentialScheduler(opt, children, milestones=[CHILD0_STEPS, CHILD1_STEPS])
+
+
+class TestSequentialSchedulerBehavior:
+    def test_warmup_then_decay_trajectory(self):
+        """Closed-form check of the warmup-then-decay LR trajectory."""
+        opt, sched = _make_sequential()  # noqa: F841
+        for i in range(1, CHILD0_STEPS + 1):
+            _step(opt, sched)
+            expected = BASE_LR * (i / CHILD0_STEPS)
+            assert sched.get_current_lr() == pytest.approx(expected, abs=1e-7), f"warmup step {i}"
+        for j in range(1, CHILD1_STEPS + 1):
+            _step(opt, sched)
+            expected = BASE_LR * (1.0 + (0.1 - 1.0) * j / CHILD1_STEPS)
+            assert sched.get_current_lr() == pytest.approx(expected, abs=1e-7), f"decay step {j}"
+
+    def test_linear_warmup_then_cosine_decay(self):
+        """Common training schedule: linear warmup -> cosine annealing decay.
+
+        - Warmup: ``warmup_steps`` linear steps from 0 to BASE_LR.
+        - Decay:  ``decay_steps`` cosine-annealing steps from BASE_LR down to
+                  ``eta_min`` (where ``cos(pi) = -1`` lands the final LR exactly
+                  at ``eta_min``).
+        - Beyond the chain: ``step()`` becomes a no-op and the LR stays put.
+        """
+        warmup_steps = 5
+        decay_steps = 20
+        eta_min = 1e-4
+
+        opt = _make_opt()  # opt.lr = BASE_LR at construction
+        children = [
+            LinearScheduler(opt, start_factor=0.0, end_factor=1.0, total_steps=warmup_steps),
+            CosineAnnealingScheduler(opt, T_max=decay_steps, eta_min=eta_min),
+        ]
+        sched = SequentialScheduler(opt, children, milestones=[warmup_steps, decay_steps])
+
+        # Warmup phase.
+        for i in range(1, warmup_steps + 1):
+            _step(opt, sched)
+            expected = BASE_LR * (i / warmup_steps)
+            assert sched.get_current_lr() == pytest.approx(expected, abs=1e-7), f"warmup step {i}"
+        # End of warmup hands off cleanly at exactly BASE_LR.
+        assert opt.get_lr() == pytest.approx(BASE_LR, abs=1e-7)
+
+        # Decay phase: cosine annealing from BASE_LR -> eta_min.
+        for j in range(1, decay_steps + 1):
+            _step(opt, sched)
+            expected = eta_min + 0.5 * (BASE_LR - eta_min) * (1.0 + math.cos(math.pi * j / decay_steps))
+            assert sched.get_current_lr() == pytest.approx(expected, abs=1e-7), f"decay step {j}"
+        # cos(pi) = -1 so the final LR is exactly ``eta_min``.
+        assert opt.get_lr() == pytest.approx(eta_min, abs=1e-7)
+
+        # Past the end of the chain: step() is a no-op and the LR is held.
+        for _ in range(3):
+            sched.step()
+            assert opt.get_lr() == pytest.approx(eta_min, abs=1e-7)
+
+    def test_step_is_noop_after_all_schedulers_exhausted(self):
+        opt, sched = _make_sequential()  # noqa: F841
+        total = CHILD0_STEPS + CHILD1_STEPS
+        for _ in range(total):
+            sched.step()
+        # All children exhausted; further steps must be no-ops.
+        final_lr = opt.get_lr()
+        for _ in range(5):
+            sched.step()
+            assert opt.get_lr() == final_lr
+
+    def test_get_last_lr_delegates_to_active_child(self):
+        opt, sched = _make_sequential()  # noqa: F841
+        sched.step()  # one step of warmup
+        assert sched.get_last_lr() == pytest.approx(BASE_LR * (1 / CHILD0_STEPS), abs=1e-7)
+
+    def test_get_last_lr_returns_stored_value_after_exhaustion(self):
+        opt, sched = _make_sequential()  # noqa: F841
+        for _ in range(CHILD0_STEPS + CHILD1_STEPS):
+            sched.step()
+        # End of decay: lr = base_lr * 0.1
+        assert sched.get_last_lr() == pytest.approx(BASE_LR * 0.1, abs=1e-7)
+        sched.step()  # no-op
+        assert sched.get_last_lr() == pytest.approx(BASE_LR * 0.1, abs=1e-7)
+
+    def test_requires_at_least_one_scheduler(self):
+        opt = _make_opt()
+        with pytest.raises(ValueError):
+            SequentialScheduler(opt, [], [])
+
+    def test_milestones_length_must_match_schedulers(self):
+        opt = _make_opt()
+        child = LinearScheduler(opt, 0.0, 1.0, 5)
+        with pytest.raises(ValueError):
+            SequentialScheduler(opt, [child], [5, 10])
+
+    def test_none_scheduler_rejected(self):
+        opt = _make_opt()
+        with pytest.raises(ValueError):
+            SequentialScheduler(opt, [None], [5])
+
+
+class TestSequentialSchedulerStateDict:
+    def test_roundtrip_continues_correctly(self):
+        # Round-trip across the whole warmup+decay schedule.
+        resumed, reference = _roundtrip(_make_sequential, n_steps=CHILD0_STEPS + CHILD1_STEPS)
+        assert resumed == pytest.approx(reference, abs=1e-7)
+
+    def test_state_dict_contains_top_level_keys(self):
+        opt, sched = _make_sequential()  # noqa: F841
+        for _ in range(5):
+            _step(opt, sched)
+        state = sched.get_state_dict()
+        assert "m_current_step_in_scheduler" in state
+        assert "m_current_scheduler_index" in state
+        assert "m_last_lr" in state
+
+    def test_state_dict_contains_per_child_keys(self):
+        opt, sched = _make_sequential()  # noqa: F841
+        state = sched.get_state_dict()
+        # Every wrapped child saves its full state under the per-index prefix
+        # ``scheduler_{i}/`` -- this is the behavior that fixes the C++ design
+        # bug where only the currently-active child was saved.
+        for child_idx in (0, 1):
+            prefix = f"scheduler_{child_idx}/"
+            assert f"{prefix}m_last_step" in state
+            assert f"{prefix}m_last_lr" in state
+            assert f"{prefix}m_start_factor" in state
+            assert f"{prefix}m_end_factor" in state
+            assert f"{prefix}m_total_steps" in state
+
+    def test_state_dict_persists_all_child_step_counts(self):
+        """Even after child 0 is spent, its m_last_step is still saved."""
+        opt, sched = _make_sequential()  # noqa: F841
+        for _ in range(CHILD0_STEPS + 5):  # run all of child 0 + 5 steps of child 1
+            sched.step()
+        state = sched.get_state_dict()
+        assert state["m_current_scheduler_index"] == 1
+        assert state["m_current_step_in_scheduler"] == 5
+        # Child 0 finished its full schedule and its end state is preserved.
+        assert state["scheduler_0/m_last_step"] == CHILD0_STEPS
+        # Child 1 has taken 5 steps so far.
+        assert state["scheduler_1/m_last_step"] == 5
+
+    def test_set_state_dict_restores_all_children_hyperparameters(self):
+        """Destination chain built with WRONG hyperparameters has all of them
+        overwritten by the round trip."""
+        src_opt, src = _make_sequential()  # noqa: F841
+        for _ in range(CHILD0_STEPS + 5):
+            _step(src_opt, src)
+        state = src.get_state_dict()
+
+        # Destination has wrong hyperparameters in BOTH children.
+        dst_opt = _make_opt()
+        dst_children = [
+            LinearScheduler(dst_opt, start_factor=0.5, end_factor=0.5, total_steps=999),
+            LinearScheduler(dst_opt, start_factor=0.5, end_factor=0.5, total_steps=999),
+        ]
+        dst = SequentialScheduler(dst_opt, dst_children, milestones=[CHILD0_STEPS, CHILD1_STEPS])
+        dst.set_state_dict(state)
+
+        assert dst._schedulers[0]._start_factor == pytest.approx(0.0, abs=1e-12)
+        assert dst._schedulers[0]._end_factor == pytest.approx(1.0, abs=1e-12)
+        assert dst._schedulers[0]._total_steps == CHILD0_STEPS
+        assert dst._schedulers[1]._start_factor == pytest.approx(1.0, abs=1e-12)
+        assert dst._schedulers[1]._end_factor == pytest.approx(0.1, abs=1e-12)
+        assert dst._schedulers[1]._total_steps == CHILD1_STEPS
+
+        # And the per-child step counters are restored.
+        assert dst._schedulers[0]._last_step == CHILD0_STEPS
+        assert dst._schedulers[1]._last_step == 5
+
+    def test_restore_before_first_step_is_noop(self):
+        opt_a, sched_a = _make_sequential()  # noqa: F841
+        opt_b, sched_b = _make_sequential()  # noqa: F841
+        sched_b.set_state_dict(sched_a.get_state_dict())
+        lrs_a, lrs_b = [], []
+        for _ in range(CHILD0_STEPS + CHILD1_STEPS):
+            _step(opt_a, sched_a)
+            _step(opt_b, sched_b)
+            lrs_a.append(sched_a.get_current_lr())
+            lrs_b.append(sched_b.get_current_lr())
+        assert lrs_a == pytest.approx(lrs_b, abs=1e-8)
+
+    # ------------------------------------------------------------------
+    # State-dict round trips through a Linear-warmup -> Cosine-decay chain.
+    # These exercise the case where the active child at save-time can be
+    # either child (warmup or decay), and where the chain has been fully
+    # exhausted past the cosine phase.
+    # ------------------------------------------------------------------
+
+    def _make_warmup_cosine(self, warmup_steps=5, decay_steps=20, eta_min=1e-4):
+        opt = _make_opt()
+        children = [
+            LinearScheduler(opt, start_factor=0.0, end_factor=1.0, total_steps=warmup_steps),
+            CosineAnnealingScheduler(opt, T_max=decay_steps, eta_min=eta_min),
+        ]
+        return opt, SequentialScheduler(opt, children, milestones=[warmup_steps, decay_steps])
+
+    def test_roundtrip_during_warmup_then_resumes_through_cosine_decay(self):
+        """Save mid-warmup, restore into a chain with wrong cosine hyperparams,
+        and verify the resumed run produces the same trajectory through the
+        full warmup and cosine decay."""
+        warmup_steps = 5
+        decay_steps = 20
+        eta_min = 1e-4
+
+        src_opt, src = self._make_warmup_cosine(warmup_steps, decay_steps, eta_min)
+
+        # Save mid-warmup (active scheduler = child 0 = Linear).
+        mid_warmup = 3
+        for _ in range(mid_warmup):
+            _step(src_opt, src)
+        state = src.get_state_dict()
+
+        # Sanity-check what was saved.
+        assert state["m_current_scheduler_index"] == 0
+        assert state["m_current_step_in_scheduler"] == mid_warmup
+        assert state["scheduler_0/m_last_step"] == mid_warmup
+        # Child 1 (cosine) hasn't been stepped yet but its hyperparameters are still saved.
+        assert state["scheduler_1/m_last_step"] == 0
+        assert state["scheduler_1/m_T_max"] == decay_steps
+        assert state["scheduler_1/m_eta_min"] == pytest.approx(eta_min, abs=1e-12)
+
+        # Destination: cosine child has deliberately WRONG hyperparameters
+        # that must be overwritten by the round trip.
+        dst_opt = _make_opt()
+        dst_children = [
+            LinearScheduler(dst_opt, start_factor=0.0, end_factor=1.0, total_steps=warmup_steps),
+            CosineAnnealingScheduler(dst_opt, T_max=999, eta_min=0.5),
+        ]
+        dst = SequentialScheduler(dst_opt, dst_children, milestones=[warmup_steps, decay_steps])
+        dst.set_state_dict(state)
+
+        # Cosine hyperparameters were restored even though we haven't entered the decay phase yet.
+        assert dst._schedulers[1]._T_max == decay_steps
+        assert dst._schedulers[1]._eta_min == pytest.approx(eta_min, abs=1e-12)
+
+        # Resume both src and dst through end of warmup + full cosine decay;
+        # every step's LR must match.
+        remaining = (warmup_steps - mid_warmup) + decay_steps
+        for k in range(remaining):
+            _step(src_opt, src)
+            _step(dst_opt, dst)
+            assert dst.get_current_lr() == pytest.approx(src.get_current_lr(), abs=1e-7), f"step {k}"
+
+        # Both chains are now exhausted; final LR is eta_min on both sides.
+        assert src.get_last_lr() == pytest.approx(eta_min, abs=1e-7)
+        assert dst.get_last_lr() == pytest.approx(eta_min, abs=1e-7)
+
+    def test_roundtrip_mid_cosine_decay_then_resumes_to_eta_min(self):
+        """Save MIDWAY through the cosine decay phase (active child = cosine,
+        warmup child is "spent"). Verify the resumed run finishes the decay
+        with the same per-step trajectory as the source."""
+        warmup_steps = 5
+        decay_steps = 20
+        eta_min = 1e-4
+        cosine_steps_done = 8  # save after this many cosine steps
+
+        src_opt, src = self._make_warmup_cosine(warmup_steps, decay_steps, eta_min)
+
+        # Step through all of warmup + ``cosine_steps_done`` of cosine decay.
+        for _ in range(warmup_steps + cosine_steps_done):
+            _step(src_opt, src)
+        state = src.get_state_dict()
+
+        # Sanity-check what was saved: active child is the cosine scheduler.
+        assert state["m_current_scheduler_index"] == 1
+        assert state["m_current_step_in_scheduler"] == cosine_steps_done
+        # Warmup child finished its full schedule and was preserved.
+        assert state["scheduler_0/m_last_step"] == warmup_steps
+        assert state["scheduler_0/m_total_steps"] == warmup_steps
+        # Cosine child is partway through; its per-step state and hyperparameters were saved.
+        assert state["scheduler_1/m_last_step"] == cosine_steps_done
+        assert state["scheduler_1/m_T_max"] == decay_steps
+        assert state["scheduler_1/m_eta_min"] == pytest.approx(eta_min, abs=1e-12)
+
+        # Destination: BOTH children built with deliberately WRONG hyperparams.
+        dst_opt = _make_opt()
+        dst_children = [
+            LinearScheduler(dst_opt, start_factor=0.5, end_factor=0.5, total_steps=999),
+            CosineAnnealingScheduler(dst_opt, T_max=999, eta_min=0.5),
+        ]
+        dst = SequentialScheduler(dst_opt, dst_children, milestones=[warmup_steps, decay_steps])
+        dst.set_state_dict(state)
+
+        # Cosine hyperparameters and per-step counter restored.
+        assert dst._schedulers[1]._T_max == decay_steps
+        assert dst._schedulers[1]._eta_min == pytest.approx(eta_min, abs=1e-12)
+        assert dst._schedulers[1]._last_step == cosine_steps_done
+        # Warmup child's restored end-of-schedule state.
+        assert dst._schedulers[0]._last_step == warmup_steps
+        assert dst._schedulers[0]._total_steps == warmup_steps
+
+        # Resume both src and dst through the remainder of cosine decay; every
+        # step's LR must match.
+        remaining = decay_steps - cosine_steps_done
+        for k in range(remaining):
+            _step(src_opt, src)
+            _step(dst_opt, dst)
+            assert dst.get_current_lr() == pytest.approx(src.get_current_lr(), abs=1e-7), f"step {k}"
+
+        # Both chains land at exactly eta_min at the end of decay.
+        assert src.get_last_lr() == pytest.approx(eta_min, abs=1e-7)
+        assert dst.get_last_lr() == pytest.approx(eta_min, abs=1e-7)
+
+    def test_roundtrip_after_cosine_phase_preserves_exhausted_state(self):
+        """Save AFTER the cosine annealing phase (chain fully exhausted) and
+        verify the destination chain is also "spent" with all child state
+        preserved."""
+        warmup_steps = 5
+        decay_steps = 20
+        eta_min = 1e-4
+        total_steps = warmup_steps + decay_steps
+
+        src_opt, src = self._make_warmup_cosine(warmup_steps, decay_steps, eta_min)
+        for _ in range(total_steps):
+            _step(src_opt, src)
+
+        # Chain is exhausted: index advanced past the last child, step-in-
+        # scheduler reset to 0, last_lr is eta_min.
+        state = src.get_state_dict()
+        assert state["m_current_scheduler_index"] == 2
+        assert state["m_current_step_in_scheduler"] == 0
+        assert state["m_last_lr"] == pytest.approx(eta_min, abs=1e-7)
+        # Both children's end-of-schedule states were saved.
+        assert state["scheduler_0/m_last_step"] == warmup_steps
+        assert state["scheduler_1/m_last_step"] == decay_steps
+
+        # Destination: BOTH children constructed with wrong hyperparameters.
+        dst_opt = _make_opt()
+        dst_children = [
+            LinearScheduler(dst_opt, start_factor=0.5, end_factor=0.5, total_steps=999),
+            CosineAnnealingScheduler(dst_opt, T_max=999, eta_min=0.5),
+        ]
+        dst = SequentialScheduler(dst_opt, dst_children, milestones=[warmup_steps, decay_steps])
+        dst.set_state_dict(state)
+
+        # Top-level: dst is exhausted too.
+        assert dst._current_scheduler_index == 2
+        assert dst._current_step_in_scheduler == 0
+        assert dst.get_last_lr() == pytest.approx(eta_min, abs=1e-7)
+
+        # Linear child's full state preserved.
+        assert dst._schedulers[0]._start_factor == pytest.approx(0.0, abs=1e-12)
+        assert dst._schedulers[0]._end_factor == pytest.approx(1.0, abs=1e-12)
+        assert dst._schedulers[0]._total_steps == warmup_steps
+        assert dst._schedulers[0]._last_step == warmup_steps
+
+        # Cosine child's full state preserved (despite dst constructing it with
+        # wildly different hyperparameters).
+        assert dst._schedulers[1]._T_max == decay_steps
+        assert dst._schedulers[1]._eta_min == pytest.approx(eta_min, abs=1e-12)
+        assert dst._schedulers[1]._last_step == decay_steps
+
+        # Further step() calls on dst are no-ops; get_last_lr() stays put.
+        final_lr = dst.get_last_lr()
+        for _ in range(3):
+            dst.step()
+            assert dst.get_last_lr() == pytest.approx(final_lr, abs=1e-12)
 
 
 if __name__ == "__main__":
