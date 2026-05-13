@@ -1,0 +1,1 @@
+{"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/atan_mean/test_atan_mean.py::test_atan_mean_correctness","params":"single_tile_32x32","mode":"--dev","notes":"first-shot pass on (1,1,32,32) — sfpu_atan + reduce<AVG,REDUCE_ROW> matmul path","ts":"2026-05-13T07:39:20+00:00"}
