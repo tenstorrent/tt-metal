@@ -11,10 +11,11 @@
 // decision: it waits for compute to push a batch onto cb_untilize_id, then walks the
 // batch's metadata one row at a time.  Local rows (dst_chip == this chip) are written
 // straight to the output tensor in DRAM with no sender involvement.  Non-local rows
-// run a tight per-row handshake with the sender — wait its GO (start_sem), write this
-// single row into receive_buf at the next compact slot, barrier, then inc data_ready
-// so the sender can read it back and fabric-forward to its destination chip before we
-// move to the next row.  The loop exits when compute pushes ROUTE_INFO_SENTINEL on
+// run a credit-based per-row handshake against the sender's receive_buf: we hold a
+// k_s-way slice of receive_buf (SLOTS_PER_IDLE deep), consume one credit, write the
+// row to the next slot in our ring, barrier, then inc data_ready so the sender can
+// read and fabric-forward that row.  The sender ++ credits_sem on this core when it
+// frees a slot.  The loop exits when compute pushes ROUTE_INFO_SENTINEL on
 // cb_stop_signal_id.
 //
 
@@ -107,23 +108,29 @@ void kernel_main() {
     //   counter_ready_semaphore_id   - sem the sender increments once after its counter multicast
     //   sender_noc_x / sender_noc_y  - NOC coords of the owning sender core
     //   data_ready_semaphore_id      - sender-side sem dedicated to THIS idle core (one per
-    //                                  (sender, idle) pair); this kernel increments it once
-    //                                  per non-local row after the row has landed in the
-    //                                  sender's receive_buf.  Local rows do not touch it.
-    //                                  Because every idle core has its own sem, there is no
-    //                                  contention with peers in the same group.
-    //   start_semaphore_id           - local sem the sender increments once per non-local row
-    //                                  to hand the next compact receive_buf slot to this idle
+    //                                  (sender, idle) pair); this kernel ++ once per non-local
+    //                                  row after the row has landed in receive_buf.  Sender
+    //                                  atomically dec(-1) per row consumed.
+    //   credits_semaphore_id         - local sem (init SLOTS_PER_IDLE) the sender increments
+    //                                  each time it frees a row slot in our ring on its
+    //                                  receive_buf.  This kernel maintains a local credit
+    //                                  counter; when it hits 0 we wait for credits to come
+    //                                  back, atomically suck the value, and dec(-N).
+    //   core_id                      - this idle's local index (0..k_s-1) inside the sender's
+    //                                  group; used to pick our k_s-way slice of receive_buf.
+    constexpr uint32_t SLOTS_PER_IDLE = 16;
     uint32_t counter_ready_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t sender_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t sender_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t data_ready_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t start_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t credits_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t core_id = get_arg_val<uint32_t>(rt_args_idx++);
 
     uint64_t sender_data_ready_noc_addr =
         get_noc_addr(sender_noc_x, sender_noc_y, get_semaphore(data_ready_semaphore_id));
-    volatile tt_l1_ptr uint32_t* start_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(start_semaphore_id));
+    uint32_t credits_sem_l1 = get_semaphore(credits_semaphore_id);
+    volatile tt_l1_ptr uint32_t* credits_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(credits_sem_l1);
+    uint64_t self_credits_noc_addr = get_noc_addr(my_x[noc_index], my_y[noc_index], credits_sem_l1);
 
     // Wait on the same counter_ready sem reader_untilize waits on (neither kernel resets it,
     // so both see the single increment from the sender's multicast).  Then read the sender's
@@ -137,16 +144,22 @@ void kernel_main() {
     const volatile tt_l1_ptr uint32_t* trailer =
         reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(counter_cb_base + counter_data_total_size);
     uint32_t sender_receive_buf_l1_offset = trailer[0];
-    uint64_t sender_receive_buf_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, sender_receive_buf_l1_offset);
+    // Our k_s-way slice in the sender's receive_buf starts at core_id * SLOTS_PER_IDLE rows
+    // in.  All non-local row writes for this batch (and every future batch routed through
+    // this (sender, idle) pair) cycle through slots 0..SLOTS_PER_IDLE-1 within that slice.
+    uint32_t our_slice_l1_offset = sender_receive_buf_l1_offset + core_id * SLOTS_PER_IDLE * aligned_output_page_size;
+    uint64_t our_slice_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, our_slice_l1_offset);
 
-    // Per-row routing: every batch goes through the same flow regardless of where the rows
-    // land.  Local-destined rows are written straight to the output tensor in DRAM here.
-    // Non-local-destined rows are packed contiguously into the sender's receive_buf in the
-    // order they appear in the batch's metadata, one row per non-local slot.  The sender's
-    // routing loop reads them back from receive_buf at the same compact offsets and forwards
-    // each row to its remote chip via fabric.  start_sem hands ownership of receive_buf from
-    // sender → idle for the upcoming batch; data_ready hands it back idle → sender once
-    // every local DRAM write and non-local receive_buf write for the batch is in flight.
+    uint32_t local_credits = SLOTS_PER_IDLE;
+    uint32_t write_slot = 0;
+
+    // Per-row routing: each batch processes its rows one at a time.  Local-destined rows are
+    // written straight to the output tensor in DRAM.  Non-local-destined rows are written
+    // into our k_s-way slice of the sender's receive_buf at the next write_slot position
+    // (mod SLOTS_PER_IDLE).  Credit-based flow control keeps us from outrunning the sender:
+    // we hold a local credit counter (init SLOTS_PER_IDLE) that drops by one per non-local
+    // write, and the sender ++ our credits_sem each time it frees a slot.  data_ready on
+    // the sender is ++ once per non-local row written.
     while (true) {
         cb_wait_front(cb_stop_signal_id, 1);
         volatile tt_l1_ptr uint32_t* stop_signal_ptr =
@@ -167,11 +180,13 @@ void kernel_main() {
         uint32_t metadata_read_ptr = get_read_ptr(cb_metadata_batch_id);
 
         // Per-row processing.  Local rows are written straight to the output tensor with no
-        // sender involvement.  Non-local rows do a tight per-row handshake with the sender:
-        // wait its GO (start_sem), write this single row into its receive_buf at the next
-        // compact slot, barrier, then inc data_ready so it can read and fabric-forward this
-        // row before we move to the next one.
-        uint32_t nonlocal_idx = 0;
+        // sender involvement.  Non-local rows use credit-based flow control: we hold a local
+        // credit counter (initialized to SLOTS_PER_IDLE), one credit per free slot in our
+        // ring on the sender's receive_buf.  Before each non-local row we consume a credit
+        // (waiting and atomically sucking from credits_sem if we're empty), write the row
+        // into our slice at write_slot, barrier, then ++ data_ready so the sender can read
+        // and fabric-forward that row.  Sender ++ credits_sem each time it consumes a row,
+        // releasing the slot for reuse.
         for (uint32_t t = 0; t < batch_count; t++) {
             const volatile tt_l1_ptr uint32_t* metadata = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(
                 metadata_read_ptr + t * aligned_dispatched_metadata_page_size);
@@ -185,10 +200,15 @@ void kernel_main() {
                 noc_async_write_page(output_page_idx, output_addr_gen, untilize_row_addr);
                 noc_async_writes_flushed();
             } else {
-                noc_semaphore_wait(start_sem_ptr, 1);
-                noc_semaphore_set(start_sem_ptr, 0);
+                if (local_credits == 0) {
+                    noc_semaphore_wait_min(credits_sem_ptr, 1);
+                    uint32_t n = *credits_sem_ptr;
+                    noc_semaphore_inc(self_credits_noc_addr, (uint32_t)(-(int32_t)n));
+                    noc_async_atomic_barrier();
+                    local_credits += n;
+                }
 
-                uint64_t dst_addr = sender_receive_buf_noc_addr + nonlocal_idx * aligned_output_page_size;
+                uint64_t dst_addr = our_slice_noc_addr + write_slot * aligned_output_page_size;
                 uint32_t off = 0;
                 while (off < aligned_output_page_size) {
                     uint32_t chunk = (aligned_output_page_size - off > (uint32_t)NOC_MAX_BURST_SIZE)
@@ -201,7 +221,9 @@ void kernel_main() {
 
                 noc_semaphore_inc(sender_data_ready_noc_addr, 1);
                 noc_async_atomic_barrier();
-                nonlocal_idx++;
+
+                write_slot = (write_slot + 1) % SLOTS_PER_IDLE;
+                local_credits--;
             }
         }
         // Make sure any local writes that hit only the writes-flushed path complete before
