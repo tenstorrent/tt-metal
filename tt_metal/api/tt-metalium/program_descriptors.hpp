@@ -58,22 +58,9 @@ struct TileDescriptor {
 
 struct CBFormatDescriptor {
     uint8_t buffer_index = 0;
-    // Legacy field: prefer setting data_type instead.
-    // If data_type is set, data_format is ignored — use effective_data_format() to read the resolved value.
     tt::DataFormat data_format = tt::DataFormat::Float32;
-    // New field for progressive migration away from tt::DataFormat.
-    // When set, effective_data_format() derives data_format from this value.
-    std::optional<tt::tt_metal::DataType> data_type = std::nullopt;
     uint32_t page_size = 0;
     std::optional<TileDescriptor> tile;
-
-    // Returns the resolved data format: converts data_type if set, otherwise returns data_format directly.
-    tt::DataFormat effective_data_format() const {
-        if (data_type.has_value()) {
-            return datatype_to_dataformat_converter(*data_type);
-        }
-        return data_format;
-    }
 };
 
 struct CBDescriptor {
