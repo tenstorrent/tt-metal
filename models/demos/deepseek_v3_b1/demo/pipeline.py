@@ -235,7 +235,9 @@ def create_single_pod_spec_decode_pipeline_configuration(
             embedding_weights=weight_provider.load_embedding(device),
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
-            spec_weights=weight_provider.load_spec(device),
+            spec_weights=weight_provider.load_spec(device)
+            if enable_speculative_decode
+            else weight_provider.load_lm_head(device),
         )
 
     def stage_14(device: ttnn.MeshDevice) -> StageKind:
