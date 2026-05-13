@@ -1734,6 +1734,9 @@ TEST_P(DFBImplicitSyncParamFixture, MultiCoreDMTest2Core_1Sx4A) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
+    // The ALL-pattern DFBs in this mix are DM strided -> DM ALL, which can't use the
+    // remapper with implicit sync today. Skip until that combination is supported.
+    DFB_SKIP_DM_DM_ALL_IMPLICIT_SYNC;
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
         .num_entries = 16,
