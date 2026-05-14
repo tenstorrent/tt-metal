@@ -3192,6 +3192,11 @@ bool Device::phase5b_erisc_health_check(
                     // is in the quiesce set, set fabric_channels_not_ready_for_traffic_ so FIX AA
                     // can GTEST_SKIP the AllGather test (rather than hanging for 5s).
                     bool any_peer_in_quiesce_set = false;
+                    // FIX BD (AUDIT): Log ALL stuck channels' peer resolution for full
+                    // diagnostic visibility — the original FIX BC only logged the first
+                    // match and broke out of the loop.
+                    uint32_t deadlock_chan_count = 0;
+                    std::string deadlock_details;
                     if (!quiescing_device_ids_.empty()) {
                         for (const auto& u : truly_unhealthy) {
                             try {
@@ -3199,27 +3204,39 @@ bool Device::phase5b_erisc_health_check(
                                     soc_desc_p5.get_eth_core_for_channel(u.eth_chan_id, CoordSystem::LOGICAL);
                                 const auto [peer_chip_id, peer_core] =
                                     this->get_connected_ethernet_core(eth_lc);
-                                if (quiescing_device_ids_.count(peer_chip_id) > 0) {
-                                    log_warning(
-                                        tt::LogMetal,
-                                        "wait_for_fabric_workers_ready: Device {} Phase 5b "
-                                        "FIX BC (#42429): chan {} stuck at "
-                                        "REMOTE_HANDSHAKE_COMPLETE but peer chip {} IS in "
-                                        "quiescing_device_ids_ — simultaneous-handshake deadlock "
-                                        "(freshly launched, NOT a cross-batch artifact). "
-                                        "Setting fabric_channels_not_ready_for_traffic_.",
-                                        this->id(),
+                                const bool peer_quiescing = quiescing_device_ids_.count(peer_chip_id) > 0;
+                                if (peer_quiescing) {
+                                    any_peer_in_quiesce_set = true;
+                                    deadlock_chan_count++;
+                                    deadlock_details += fmt::format(
+                                        "  chan={} peer_chip={} (IN quiesce set)\n",
                                         u.eth_chan_id,
                                         peer_chip_id);
-                                    any_peer_in_quiesce_set = true;
-                                    break;
+                                } else {
+                                    deadlock_details += fmt::format(
+                                        "  chan={} peer_chip={} (NOT in quiesce set)\n",
+                                        u.eth_chan_id,
+                                        peer_chip_id);
                                 }
                             } catch (...) {
-                                // Cannot resolve peer — skip this channel.
+                                deadlock_details += fmt::format(
+                                    "  chan={} peer_chip=UNRESOLVABLE\n",
+                                    u.eth_chan_id);
                             }
                         }
                     }
                     if (any_peer_in_quiesce_set) {
+                        log_warning(
+                            tt::LogMetal,
+                            "wait_for_fabric_workers_ready: Device {} Phase 5b "
+                            "FIX BC (#42429): simultaneous-handshake deadlock detected — "
+                            "{}/{} stuck channel(s) have peer in quiescing_device_ids_. "
+                            "Setting fabric_channels_not_ready_for_traffic_=true. "
+                            "Channel details:\n{}",
+                            this->id(),
+                            deadlock_chan_count,
+                            truly_unhealthy.size(),
+                            deadlock_details);
                         fabric_channels_not_ready_for_traffic_ = true;
                         return true;
                     }
