@@ -389,30 +389,14 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                     const auto& sub_device_ids = device->get_sub_device_ids();
                     TT_FATAL(
                         !sub_device_ids.empty(), "gather_in0 matmul requires at least one sub-device id on the device");
-                    const tt::tt_metal::SubDeviceId effective_sub_device_id =
-                        sub_device_id.value_or(sub_device_ids.at(0));
-                    const tt::tt_metal::CoreRangeSet tensix_workers =
-                        device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, effective_sub_device_id);
-                    const tt::tt_metal::CoreRangeSet& worker_cores = input_tensor_a.shard_spec().value().grid;
-                    TT_FATAL(
-                        tensix_workers.contains(worker_cores),
-                        "gather_in0: input A shard grid {} must lie within effective sub-device TENSIX worker cores {} "
-                        "(explicit sub_device_id={})",
-                        worker_cores,
-                        tensix_workers,
-                        sub_device_id.has_value());
                     if (!program_config.hop_cores.empty()) {
+                        const tt::tt_metal::CoreRangeSet& worker_cores = input_tensor_a.shard_spec().value().grid;
                         TT_FATAL(
                             !program_config.hop_cores.intersects(worker_cores),
                             "hop_cores must not overlap gather worker cores (input A shard grid). hop_cores={}, "
                             "workers={}",
                             program_config.hop_cores,
                             worker_cores);
-                        TT_FATAL(
-                            tensix_workers.contains(program_config.hop_cores),
-                            "gather_in0: hop_cores {} must lie within effective sub-device TENSIX worker cores {}",
-                            program_config.hop_cores,
-                            tensix_workers);
                     }
                     check_output_shard_grid_within_extent(
                         output_mem_config,
