@@ -94,12 +94,10 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
     auto all_max_val = ttnn_fixed::distributed::all_gather(local_max, 3, cluster_axis);
     auto global_max = ttnn::max(all_max_val, 3, /* keepdim */ true);
 
-    // Step 3: fused (logits - global_max).exp() — single binary_ng kernel, BF16 in/out.
-    // Output is BF16 (NOT FP32): see comment on fused_subtract_exp() — FP32 output_dtype
-    // hangs binary_ng on this COL_B-broadcast / multi-device combo. The downstream
-    // ttnn::sum(..., precise()) accumulates in FP32 in DST anyway, so dropping the
-    // upcast here costs no real precision and saves a 2x-bigger FP32 intermediate.
-    auto local_exp = fused_subtract_exp(logits->get_value(), global_max);
+    // Step 3: (logits - global_max).exp() — TEMPORARILY UNFUSED for diagnostic check.
+    // TODO: revert to fused_subtract_exp() once diagnostic is done.
+    auto shifted = ttnn::subtract(logits->get_value(), global_max);
+    auto local_exp = ttnn::exp(shifted);
     auto local_sum = ttnn::sum(local_exp, 3, /* keepdim */ true, std::nullopt, core::ComputeKernelConfig::precise());
     auto global_sum = ttnn_fixed::distributed::all_reduce(local_sum, cluster_axis);
 
