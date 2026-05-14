@@ -100,7 +100,7 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat in, const uint log_base
     return result;
 }
 
-template <bool HAS_BASE_SCALING>
+template <bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat calculate_log_f32_body(sfpi::vFloat a, const uint log_base_scale_factor) {
     sfpi::vFloat three_quarters = 0.75f;
     sfpi::vInt e = sfpi::reinterpret<sfpi::vInt>(a) - sfpi::reinterpret<sfpi::vInt>(three_quarters);
@@ -116,19 +116,29 @@ sfpi_inline sfpi::vFloat calculate_log_f32_body(sfpi::vFloat a, const uint log_b
     m -= sfpi::vConst1;
 
     v_if(a >= 0.0f) {
+        sfpi::vFloat r;
         sfpi::vFloat s = m * m;
-        sfpi::vFloat r = -0x1.92cp-5f;
-        r = r * m + 0x1.b84p-4f;
-        r = r * m + -0x1.0c4p-3f;
-        r = r * m + 0x1.274p-3f;
-        r = r * m + -0x1.55p-3f;
-        r = r * m + 0x1.998p-3f;
-        sfpi::vInt abs_e = sfpi::abs(e);
-        r = r * m + sfpi::vConstFloatPrgm1;
-        sfpi::vFloat e_float = sfpi::int32_to_float(abs_e, sfpi::RoundMode::NearestEven);
-        r = r * m + sfpi::vConstFloatPrgm2;
-        sfpi::vFloat neg_half = -0.5f;
-        r = __builtin_rvtt_sfpmad(r.get(), m.get(), neg_half.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        sfpi::vFloat e_float;
+        if constexpr (is_fp32_dest_acc_en) {
+            r = -0x1.92cp-5f;
+            r = r * m + 0x1.b84p-4f;
+            r = r * m + -0x1.0c4p-3f;
+            r = r * m + 0x1.274p-3f;
+            r = r * m + -0x1.55p-3f;
+            r = r * m + 0x1.998p-3f;
+            sfpi::vInt abs_e = sfpi::abs(e);
+            r = r * m + sfpi::vConstFloatPrgm1;
+            e_float = sfpi::int32_to_float(abs_e, sfpi::RoundMode::NearestEven);
+            r = r * m + sfpi::vConstFloatPrgm2;
+            sfpi::vFloat neg_half = -0.5f;
+            r = __builtin_rvtt_sfpmad(r.get(), m.get(), neg_half.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        } else {
+            sfpi::vInt abs_e = sfpi::abs(e);
+            sfpi::vFloat neg_quarter = -0.25f;
+            r = neg_quarter * m + sfpi::vConstFloatPrgm1;
+            e_float = sfpi::int32_to_float(abs_e, sfpi::RoundMode::NearestEven);
+            r = r * m + sfpi::vConstFloatPrgm2;
+        }
 
         // if a==0, then a=inf; does nothing if a==nan or inf
         a = sfpi::addexp(a, -1);
@@ -162,9 +172,11 @@ inline void calculate_log(uint log_base_scale_factor) {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat result;
         if constexpr (!is_fp32_dest_acc_en) {
-            result = calculate_log_body<FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en>(in, log_base_scale_factor);
+            // result = calculate_log_body<FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en>(in,
+            // log_base_scale_factor);
+            result = calculate_log_f32_body<HAS_BASE_SCALING, is_fp32_dest_acc_en>(in, log_base_scale_factor);
         } else {
-            result = calculate_log_f32_body<HAS_BASE_SCALING>(in, log_base_scale_factor);
+            result = calculate_log_f32_body<HAS_BASE_SCALING, is_fp32_dest_acc_en>(in, log_base_scale_factor);
         }
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
