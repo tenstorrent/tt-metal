@@ -43,11 +43,20 @@ void kernel_main() {
     // block_size = K_block_tiles * M_block (compile-time), so K_block_tiles = block_size / M_block
     constexpr uint32_t K_block_tiles = block_size / M_block;
 
+    constexpr uint32_t sync_cb = tt::CBIndex::c_3;
+    bool first_block = true;
+
     for (uint32_t m_sub = 0; m_sub < num_m_blocks; m_sub++) {
         uint32_t M_start = m_sub * M_block;
         uint32_t current_M_block = (M_block < Mpc - M_start) ? M_block : (Mpc - M_start);
 
         for (uint32_t n_sub = 0; n_sub < num_n_blocks; n_sub++) {
+            if (!first_block) {
+                cb_wait_front(sync_cb, 1);
+                cb_pop_front(sync_cb, 1);
+            }
+            first_block = false;
+
             uint32_t row_base = n_sub * M_block;
             uint32_t N_start = n_sub * M_block;
             uint32_t current_N = (M_block < Mpc - N_start) ? M_block : (Mpc - N_start);

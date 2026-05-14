@@ -65,6 +65,9 @@ void kernel_main() {
     constexpr uint32_t num_blocks = num_tiles / block_size;
     constexpr uint32_t N_block = M_block;
 
+    constexpr uint32_t sync_cb = tt::CBIndex::c_3;
+    bool first_block = true;
+
     for (uint32_t m_sub = 0; m_sub < num_m_blocks; m_sub++) {
         uint32_t M_start = m_sub * M_block;
         uint32_t current_M_block = (M_block < Mpc - M_start) ? M_block : (Mpc - M_start);
@@ -73,6 +76,12 @@ void kernel_main() {
             uint32_t N_start = n_sub * N_block;
             uint32_t current_N = (N_block < Mpc - N_start) ? N_block : (Mpc - N_start);
             uint32_t block_tiles = current_M_block * current_N;
+
+            if (!first_block) {
+                cb_wait_front(sync_cb, 1);
+                cb_pop_front(sync_cb, 1);
+            }
+            first_block = false;
 
             // --- Receive K-blocks via multicast ---
             for (uint32_t blk = 0; blk < num_blocks; blk++) {

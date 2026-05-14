@@ -133,6 +133,8 @@ GramPolynomialProgramFactory::cached_program_t GramPolynomialProgramFactory::cre
             // c_7: staging for transpose (mb tiles BF16, batched per-column)
             create_circular_buffer(program, range, (uint32_t)tt::CBIndex::c_7, out_tile_format, out_tile_sz, M_block);
         }
+        // c_3: 2-tile sync CB — compute signals both DM RISCs after reduce
+        create_circular_buffer(program, range, (uint32_t)tt::CBIndex::c_3, out_tile_format, out_tile_sz, 2);
         create_circular_buffer(program, range, (uint32_t)tt::CBIndex::c_5, out_tile_format, out_tile_sz, c5_tiles);
         create_circular_buffer(program, range, (uint32_t)tt::CBIndex::c_6, out_tile_format, out_tile_sz, M_block);
     };
@@ -364,7 +366,7 @@ GramPolynomialProgramFactory::cached_program_t GramPolynomialProgramFactory::cre
             .compile_args = make_recv_write_ct(row_sender_sem2, row_receiver_sem2),
             .defines = upper_recv_defines});
 
-    // Col lower receivers (interior, x>0, y≥x): plain receiver
+    // Col lower receivers (interior, x>0, y≥x): plain receiver, sync after reduce
     const KernelHandle col_lower_recv_kid = CreateKernel(
         program,
         receiver_path,
@@ -372,15 +374,16 @@ GramPolynomialProgramFactory::cached_program_t GramPolynomialProgramFactory::cre
         DataMovementConfig{
             .processor = risc_1,
             .noc = noc_1,
-            .compile_args = {
-                recv_tiles,
-                tile_sz,
-                col_sender_sem,
-                col_receiver_sem,
-                (uint32_t)tt::CBIndex::c_1,
-                block_sz,
-                num_m_blocks,
-                num_n_blocks}});
+            .compile_args =
+                {recv_tiles,
+                 tile_sz,
+                 col_sender_sem,
+                 col_receiver_sem,
+                 (uint32_t)tt::CBIndex::c_1,
+                 block_sz,
+                 num_m_blocks,
+                 num_n_blocks},
+        });
 
     // Col lower receivers (edge, x=0, y>0): REDUCE_SEND to upper core (y, 0)
     const KernelHandle col_lower_recv_edge_kid = CreateKernel(
@@ -407,7 +410,7 @@ GramPolynomialProgramFactory::cached_program_t GramPolynomialProgramFactory::cre
                  num_n_blocks},
             .defines = {{"REDUCE_SEND", "1"}}});
 
-    // Col upper receivers (y<x, y>0): plain receiver
+    // Col upper receivers (y<x, y>0): plain receiver, waits for compute reduce before next block
     const KernelHandle col_upper_recv_kid = CreateKernel(
         program,
         receiver_path,
@@ -415,15 +418,16 @@ GramPolynomialProgramFactory::cached_program_t GramPolynomialProgramFactory::cre
         DataMovementConfig{
             .processor = risc_1,
             .noc = noc_1,
-            .compile_args = {
-                recv_tiles,
-                tile_sz,
-                col_sender_sem2,
-                col_receiver_sem2,
-                (uint32_t)tt::CBIndex::c_1,
-                block_sz,
-                num_m_blocks,
-                num_n_blocks}});
+            .compile_args =
+                {recv_tiles,
+                 tile_sz,
+                 col_sender_sem2,
+                 col_receiver_sem2,
+                 (uint32_t)tt::CBIndex::c_1,
+                 block_sz,
+                 num_m_blocks,
+                 num_n_blocks},
+        });
 
     // === Diagonal helper kernels (x=grid_dim column) ===
     // Helper row receiver: REDUCE_RECV on RISCV_0 (receives diagonal's partial)
@@ -447,7 +451,7 @@ GramPolynomialProgramFactory::cached_program_t GramPolynomialProgramFactory::cre
                  num_m_blocks,
                  M_block,
                  num_n_blocks},
-            .defines = {{"REDUCE_RECV", "1"}}});
+            .defines = {{"REDUCE_RECV", "1"}, {"WAIT_REDUCE_DONE", "1"}}});
 
     // Helper DRAM reader: reads odd K-columns, writes combined output (c_6) to DRAM
     std::vector<uint32_t> ct_dram = {
@@ -488,7 +492,8 @@ GramPolynomialProgramFactory::cached_program_t GramPolynomialProgramFactory::cre
                  subblock_h,
                  N_block,
                  num_n_blocks,
-                 std::bit_cast<uint32_t>(attrs.c != 0.0f ? attrs.b / attrs.c : 0.0f)},
+                 std::bit_cast<uint32_t>(attrs.c != 0.0f ? attrs.b / attrs.c : 0.0f),
+                 std::bit_cast<uint32_t>(attrs.c)},
             .defines = defines};
     };
 

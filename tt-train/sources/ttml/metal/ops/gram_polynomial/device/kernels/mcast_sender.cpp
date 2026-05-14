@@ -85,8 +85,18 @@ void kernel_main() {
 
     uint32_t recv_cb_base = get_write_ptr(cb_id);
 
+    constexpr uint32_t sync_cb = tt::CBIndex::c_3;
+    bool first_block = true;
+
     for (uint32_t m_sub = 0; m_sub < num_m_blocks; m_sub++) {
         for (uint32_t n_sub = 0; n_sub < num_n_blocks; n_sub++) {
+            // Wait for compute to finish previous block's reduce before pushing new K-blocks
+            if (!first_block) {
+                cb_wait_front(sync_cb, 1);
+                cb_pop_front(sync_cb, 1);
+            }
+            first_block = false;
+
             // Row sender (c_0): reads rows m_sub*M_block+m; col sender (c_1): reads rows n_sub*N_block+n
             uint32_t row_base = (cb_id == 0) ? m_sub * rows_per_block : n_sub * rows_per_block;
 
