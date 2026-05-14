@@ -1981,6 +1981,7 @@ void fabric_mux_connection_rt_args(
         termination_master_virtual_core,
         worker_rt_args,
         termination_master_semaphore_id);
+}
 
 namespace {  // anonymous namespace for internal helpers
 
