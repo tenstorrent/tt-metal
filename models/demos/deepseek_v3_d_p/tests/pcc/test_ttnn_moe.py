@@ -141,8 +141,18 @@ def test_ttnn_moe(
     and run forward(x) end-to-end. Validation compares intermediates directly.
     """
 
-    mesh_device.disable_and_clear_program_cache()  # temporary disabling program cache; because cached all gather semaphores at wrong place cause this test case to OOM
-    # pytest  models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ttnn_moe[blackhole-linear-8-1600-7168-2048-64-8-2-GateComputeMode.HOST_ALL-True]
+    # Scoped: only the linear-8 / 64-expert / HOST_ALL / pcc-check case OOMs without this.
+    # Cached all-gather semaphores get placed at the wrong offset for that specific config.
+    # Test ID matched: test_ttnn_moe[blackhole-linear-8-1600-7168-2048-64-8-2-GateComputeMode.HOST_ALL-True]
+    n_sp_devices_pre, n_tp_devices_pre = mesh_device.shape
+    if (
+        n_sp_devices_pre == 8
+        and n_tp_devices_pre == 1
+        and num_routed_experts == 64
+        and gate_fallback_mode == GateComputeMode.HOST_ALL
+        and run_pcc_check
+    ):
+        mesh_device.disable_and_clear_program_cache()
 
     profiler.clear()
     profiler.start("test_ttnn_moe")
