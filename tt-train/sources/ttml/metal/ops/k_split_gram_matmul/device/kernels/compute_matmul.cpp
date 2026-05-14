@@ -83,7 +83,7 @@ void matmul_blocks(
     }
 }
 
-// Pack c_2 → c_5 in row-major order for DM to send to reduction partner.
+// Pack in_cb → out_cb in row-major order for DM to send to reduction partner.
 // REDUCE_SENDER_TRANSPOSE: transpose tile content + swap indices so receiver can add directly.
 // REDUCE_SENDER: identity copy with FP32 → BF16 format conversion.
 void pack_subblock_pernsb(
