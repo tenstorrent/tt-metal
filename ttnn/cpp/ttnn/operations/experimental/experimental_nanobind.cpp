@@ -48,6 +48,7 @@
 #include "ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/ccl_experimental_nanobind.hpp"
+#include "ttnn/operations/experimental/chunked_gated_delta/chunked_gated_delta_nanobind.hpp"
 #include "ttnn/operations/experimental/plusone/plusone_nanobind.hpp"
 #include "ttnn/operations/experimental/dropout/dropout_nanobind.hpp"
 #include "ttnn/operations/experimental/bcast_to/bcast_to_nanobind.hpp"
@@ -138,6 +139,7 @@ void py_module(nb::module_& mod) {
     deepseek_prefill::detail::bind_post_combine_reduce(mod);
     deepseek_prefill::moe_grouped_topk::detail::bind_moe_grouped_topk(mod);
 
+    chunked_gated_delta::detail::bind_experimental_chunked_gated_delta_operation(mod);
     plusone::detail::bind_experimental_plusone_operation(mod);
     dropout::detail::bind_experimental_dropout_operation(mod);
     reshape::detail::bind_view(mod);

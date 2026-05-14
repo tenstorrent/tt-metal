@@ -185,6 +185,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/extract/extract_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/insert/insert_nanobind.cpp
+    cpp/ttnn/operations/experimental/chunked_gated_delta/chunked_gated_delta_nanobind.cpp
     cpp/ttnn/operations/experimental/plusone/plusone_nanobind.cpp
     cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp
     cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp
