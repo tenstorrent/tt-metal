@@ -423,7 +423,7 @@
     bh_p150:
       timeout: 15
       tier: 2
-    bh_llmbox:
+    bh_loudbox:
       timeout: 15
       tier: 2
     bh_quietbox_2:
