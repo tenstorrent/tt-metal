@@ -10,6 +10,10 @@ from helpers.utils import passed_test, tolerances
 from .fused_operation import FusedOperation
 from .fuser_config import FuserConfig
 
+DEFAULT_BASE_ATOL = 0.05
+DEFAULT_BASE_RTOL = 0.05
+DEFAULT_BASE_PCC = 0.99
+
 
 class FusedGolden:
     def __init__(self, verbose: bool = True):
@@ -92,11 +96,13 @@ class FusedGolden:
         max_input_atol = max((s.acc_atol for s in sources), default=0.0)
 
         base_tol = tolerances.get(operation.output.data_format)
-        base_rtol = base_tol.rtol if base_tol else 0.05
-        base_atol = base_tol.atol if base_tol else 0.05
+        base_rtol = base_tol.rtol if base_tol else DEFAULT_BASE_RTOL
+        base_atol = base_tol.atol if base_tol else DEFAULT_BASE_ATOL
 
         min_input_pcc = min((s.acc_pcc for s in sources), default=1.0)
-        base_pcc = FusedGolden._FORMAT_PCC.get(operation.output.data_format, 0.99)
+        base_pcc = FusedGolden._FORMAT_PCC.get(
+            operation.output.data_format, DEFAULT_BASE_PCC
+        )
 
         operation.output.acc_rtol = (1 + max_input_rtol) * (1 + base_rtol) - 1
         operation.output.acc_atol = max_input_atol * (1 + base_rtol) + base_atol
