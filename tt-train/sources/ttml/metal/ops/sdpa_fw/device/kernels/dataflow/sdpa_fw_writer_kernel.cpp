@@ -49,17 +49,18 @@ void kernel_main() {
     generate_matmul_row_reduce_tile(cb_matmul_reduce);            // tile for matmul row reduce
 
 #if defined(CAUSAL_MASK) || defined(BALANCED_PARALLELISM)
-    // Generate two mask tiles ONCE - both stay permanently fronted in cb_attn_mask:
-    //   tile[0] = causal-diagonal mask (1.0 on/below diagonal, 0.0 above) - applied on the
-    //             diagonal tile of every row.
-    //   tile[1] = all-zeros mask, transformed by the mask pipeline to all -1e9 - applied on
-    //             K tiles that lie strictly past the diagonal inside the diagonal chunk
-    //             when Sk_chunk_t > 1. For Sk_chunk_t == 1 this tile is generated but
-    //             never read (cheap one-time fill, ~2 KB extra L1).
+    // F10: emit *pre-transformed* mask tiles so the compute kernel can stamp them directly
+    // onto QK^T scores via the packer's L1-accumulate path (TTNN's
+    // `apply_causal_mask_lightweight` pattern). The mask values are added in FP32 in L1 by
+    // the packer's read-modify-write — score never leaves FP32, no DST→SRC truncation.
+    //
+    //   tile[0] = causal-diagonal: 0.0 on/below diagonal (kept), -1e9 above (masked).
+    //             Applied on the diagonal K tile of every row.
+    //   tile[1] = all -1e9: applied on K tiles strictly past the diagonal inside the
+    //             diagonal chunk when Sk_chunk_t > 1.
     constexpr uint32_t cb_attn_mask = tt::CBIndex::c_3;
-    generate_causal_mask_tile(cb_attn_mask);
-    constexpr uint16_t bf16_zero = 0u;
-    generate_tile_with_bfloat16_value(cb_attn_mask, bf16_zero);
+    generate_pretransformed_causal_mask_tile(cb_attn_mask);
+    generate_tile_with_bfloat16_value(cb_attn_mask, BF16_NEG_LARGE_BITS);
 #endif
 
     const uint32_t tiles_per_head = vWt;

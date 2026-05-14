@@ -84,8 +84,11 @@ void kernel_main() {
         for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
             const uint32_t h_start = k_chunk * Sk_chunk_t;
             const uint32_t key_start_idx = key_offset + h_start * qWt;
-            read_tiles_by_row(
-                cb_key, key_address_generator, key_start_idx, Sk_chunk_t * qWt, tile_bytes, Sk_chunk_t * qWt);
+            // F10: lay K out col-major in cb_key (feat outer, seq inner) so `matmul_block`
+            // with transpose=1 can step in1_idx by +Sk_chunk_t per feature, walking the
+            // contraction direction contiguously. K source in DRAM is (Sk_chunk_t × qWt)
+            // row-major; the helper writes tile (n, feat) at CB pos feat*Sk_chunk_t + n.
+            read_tile_block_transposed(cb_key, key_address_generator, key_start_idx, Sk_chunk_t, qWt, tile_bytes);
             const uint32_t value_start_idx = value_offset + h_start * vWt;
             read_tiles_by_row(
                 cb_value, value_address_generator, value_start_idx, Sk_chunk_t * vWt, tile_bytes, Sk_chunk_t * vWt);
@@ -150,8 +153,8 @@ void kernel_main() {
         for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
             const uint32_t h_start = k_chunk * Sk_chunk_t;
             const uint32_t key_start_idx = key_offset + h_start * qWt;
-            read_tiles_by_row(
-                cb_key, key_address_generator, key_start_idx, Sk_chunk_t * qWt, tile_bytes, Sk_chunk_t * qWt);
+            // F10: lay K col-major in cb_key (see balanced path above for rationale).
+            read_tile_block_transposed(cb_key, key_address_generator, key_start_idx, Sk_chunk_t, qWt, tile_bytes);
 
 #ifdef USE_ATTN_MASK
             // Pre-stage all Sk_chunk_t mask tiles for this chunk in one DMA + one push.
