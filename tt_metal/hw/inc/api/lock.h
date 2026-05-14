@@ -4,8 +4,6 @@
 
 #pragma once
 
-namespace experimental {
-
 /**
  * @brief RAII style wrapper for a scoped lock
  *
@@ -25,5 +23,3 @@ public:
 private:
     ReleaseFunc release_func_;
 };
-
-}  // namespace experimental

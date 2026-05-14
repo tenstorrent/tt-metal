@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/transpose_wh.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t NHtWt = get_arg_val<uint32_t>(0);
@@ -19,8 +19,8 @@ void kernel_main() {
 
     transpose_wh_init(cb_id_in, cb_id_out);
 
-    experimental::CircularBuffer cb_in(cb_id_in);
-    experimental::CircularBuffer cb_out(cb_id_out);
+    CircularBuffer cb_in(cb_id_in);
+    CircularBuffer cb_out(cb_id_out);
 
     // transpose a row-major block:
     // - uses reader_unary_transpose_wh

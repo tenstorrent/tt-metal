@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 FORCE_INLINE uint32_t u32_min(uint32_t a, uint32_t b) { return (a < b) ? a : b; }
 
@@ -22,7 +22,7 @@ void kernel_main() {
     constexpr uint32_t elements_per_tensor_row = get_compile_time_arg_val(4);
     constexpr uint32_t bytes_per_output_subblock = get_compile_time_arg_val(5);
 
-    experimental::CircularBuffer cb_in1(cb_id_in1);
+    CircularBuffer cb_in1(cb_id_in1);
 
     constexpr auto dst_args = TensorAccessorArgs<6>();
     const auto accessor_dst = TensorAccessor(dst_args, dst_addr);

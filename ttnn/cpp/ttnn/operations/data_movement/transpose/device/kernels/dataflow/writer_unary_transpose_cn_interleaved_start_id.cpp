@@ -3,9 +3,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -21,8 +21,8 @@ void kernel_main() {
 
     const auto s = TensorAccessor(dst_args, dst_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb(cb_id_out);
+    Noc noc;
+    CircularBuffer cb(cb_id_out);
 
     uint32_t end_id = start_id + num_pages;
     for (uint32_t i = start_id; i < end_id; ++i) {

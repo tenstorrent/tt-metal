@@ -5,12 +5,12 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/noc_semaphore.h"
-#include "experimental/tensor.h"
-#include "experimental/endpoints.h"
-#include "experimental/core_local_mem.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/tensor/noc_traits.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 #include "groupnorm_zero_fill.hpp"
 #include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/groupnorm_constants.hpp"
 
@@ -190,9 +190,9 @@ void kernel_main() {
         noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(12 + num_mcast_cores));
     }
 
-    experimental::Noc noc;
-    experimental::Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
-    experimental::Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
+    Noc noc;
+    Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
+    Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
     reduce_sender_sem.set(VALID);
 
     constexpr uint32_t cb_ex_partial_id = tt::CBIndex::c_8;
@@ -207,16 +207,16 @@ void kernel_main() {
     constexpr uint32_t cb_x_id = tt::CBIndex::c_24;
     constexpr uint32_t cb_reread_out_id = tt::CBIndex::c_23;
 
-    experimental::CircularBuffer cb_ex_partial(cb_ex_partial_id);
-    experimental::CircularBuffer cb_ex2_partial(cb_ex2_partial_id);
-    experimental::CircularBuffer cb_ex(cb_ex_id);
-    experimental::CircularBuffer cb_ex2(cb_ex2_id);
-    experimental::CircularBuffer cb_ex_external(cb_ex_external_id);
-    experimental::CircularBuffer cb_in0(cb_in0_id);
-    experimental::CircularBuffer cb_repack(cb_repack_id);
-    experimental::CircularBuffer cb_repack_out(cb_repack_out_id);
-    experimental::CircularBuffer cb_out0(cb_out0_id);
-    experimental::CircularBuffer cb_reread_out(cb_reread_out_id);
+    CircularBuffer cb_ex_partial(cb_ex_partial_id);
+    CircularBuffer cb_ex2_partial(cb_ex2_partial_id);
+    CircularBuffer cb_ex(cb_ex_id);
+    CircularBuffer cb_ex2(cb_ex2_id);
+    CircularBuffer cb_ex_external(cb_ex_external_id);
+    CircularBuffer cb_in0(cb_in0_id);
+    CircularBuffer cb_repack(cb_repack_id);
+    CircularBuffer cb_repack_out(cb_repack_out_id);
+    CircularBuffer cb_out0(cb_out0_id);
+    CircularBuffer cb_reread_out(cb_reread_out_id);
 
     constexpr uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial_id);
     const DataFormat out_data_format = get_dataformat(cb_out0_id);
@@ -225,12 +225,12 @@ void kernel_main() {
 #if defined(READER_REPACK) and defined(TILIZE_IN)
     uint32_t in0_l1_read_addr = cb_in0.get_read_ptr();
     uint32_t src_addr_in0 = in0_l1_read_addr;
-    experimental::UnicastEndpoint self_ep;
+    UnicastEndpoint self_ep;
     for (uint32_t m = 0; m < per_core_M; ++m) {
         cb_repack.reserve_back(per_core_N);
         uint32_t l1_write_addr_repack = cb_repack.get_write_ptr();
         for (uint32_t i = 0; i < tile_height; ++i) {
-            noc.async_read(self_ep, experimental::CoreLocalMem<uint32_t>(l1_write_addr_repack), per_core_N_bytes, {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0}, {});
+            noc.async_read(self_ep, CoreLocalMem<uint32_t>(l1_write_addr_repack), per_core_N_bytes, {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0}, {});
             src_addr_in0 += per_core_N_bytes;
             l1_write_addr_repack += per_core_N_bytes_with_stride;
         }
@@ -334,7 +334,7 @@ void kernel_main() {
                             for (uint32_t nt = 0; nt < block_w; nt++) {
                                 noc.async_read(
                                     src_a,
-                                    experimental::CoreLocalMem<uint32_t>(l1_write_addr),
+                                    CoreLocalMem<uint32_t>(l1_write_addr),
                                     src0_tile_bytes,
                                     {.page_id = start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
                                         index_b_offset + index_g_offset},
@@ -361,8 +361,8 @@ void kernel_main() {
                             // slots tile exactly).
                             uint32_t l1_read_addr_ex_par =
                                 cur_read_iteration== 0 ? cb_ex_partial.get_read_ptr() : cb_ex2_partial.get_read_ptr();
-                            experimental::UnicastEndpoint remote_ep;
-                            noc.async_read(remote_ep, experimental::CoreLocalMem<uint32_t>(l1_write_addr_external), num_bytes_read, {.noc_x = noc_coord_x[0], .noc_y = noc_coord_y[0], .addr = l1_read_addr_ex_par}, {});
+                            UnicastEndpoint remote_ep;
+                            noc.async_read(remote_ep, CoreLocalMem<uint32_t>(l1_write_addr_external), num_bytes_read, {.noc_x = noc_coord_x[0], .noc_y = noc_coord_y[0], .addr = l1_read_addr_ex_par}, {});
                             l1_write_addr_external += cb_ex_external_slot_pitch_bytes;
                             noc.async_read_barrier();
 
@@ -373,8 +373,8 @@ void kernel_main() {
 
                                 // read data from other cores
                                 for (uint32_t i = 0; i < num_mcast_cores - 1; ++i) {
-                                    experimental::UnicastEndpoint remote_ep;
-                                    noc.async_read(remote_ep, experimental::CoreLocalMem<uint32_t>(l1_write_addr_external), num_bytes_read, {.noc_x = noc_coord_x[i + 1], .noc_y = noc_coord_y[i + 1], .addr = l1_read_addr_ex_par}, {});
+                                    UnicastEndpoint remote_ep;
+                                    noc.async_read(remote_ep, CoreLocalMem<uint32_t>(l1_write_addr_external), num_bytes_read, {.noc_x = noc_coord_x[i + 1], .noc_y = noc_coord_y[i + 1], .addr = l1_read_addr_ex_par}, {});
                                     l1_write_addr_external += cb_ex_external_slot_pitch_bytes;
                                     noc.async_read_barrier();
                                 }
@@ -431,7 +431,7 @@ void kernel_main() {
                                 for (uint32_t nt = 0; nt < block_w_curr; nt++) {
                                     noc.async_read(
                                         dst_a,
-                                        experimental::CoreLocalMem<uint32_t>(l1_write_addr),
+                                        CoreLocalMem<uint32_t>(l1_write_addr),
                                         single_tile_size_bytes,
                                         {.page_id = out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
                                             index_b_offset + index_g_offset},
@@ -457,9 +457,9 @@ void kernel_main() {
                                 l1_read_addr_ex = cb_ex2.get_read_ptr();
                             }
 
-                            experimental::MulticastEndpoint mcast_dst;
+                            MulticastEndpoint mcast_dst;
                             noc.async_write_multicast(
-                                experimental::CoreLocalMem<uint32_t>(l1_read_addr_ex),
+                                CoreLocalMem<uint32_t>(l1_read_addr_ex),
                                 mcast_dst,
                                 num_bytes_read,
                                 num_mcast_cores_mid_group,
@@ -476,9 +476,9 @@ void kernel_main() {
                                 false);
 
                             if (has_mcast_first_group) {
-                                experimental::MulticastEndpoint mcast_first_dst;
+                                MulticastEndpoint mcast_first_dst;
                                 noc.async_write_multicast(
-                                    experimental::CoreLocalMem<uint32_t>(l1_read_addr_ex),
+                                    CoreLocalMem<uint32_t>(l1_read_addr_ex),
                                     mcast_first_dst,
                                     num_bytes_read,
                                     num_mcast_cores_first_group,
@@ -496,9 +496,9 @@ void kernel_main() {
                             }
 
                             if (has_mcast_last_group) {
-                                experimental::MulticastEndpoint mcast_last_dst;
+                                MulticastEndpoint mcast_last_dst;
                                 noc.async_write_multicast(
-                                    experimental::CoreLocalMem<uint32_t>(l1_read_addr_ex),
+                                    CoreLocalMem<uint32_t>(l1_read_addr_ex),
                                     mcast_last_dst,
                                     num_bytes_read,
                                     num_mcast_cores_last_group,
@@ -563,9 +563,9 @@ void kernel_main() {
         cb_repack_out.wait_front(per_core_N);
         uint32_t in0_l1_read_addr = cb_repack_out.get_read_ptr();
         uint32_t src_addr_in0 = in0_l1_read_addr;
-        experimental::UnicastEndpoint self_ep;
+        UnicastEndpoint self_ep;
         for (uint32_t i = 0; i < tile_height; ++i) {
-            noc.async_read(self_ep, experimental::CoreLocalMem<uint32_t>(l1_write_addr_repack), per_core_N_bytes, {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0}, {});
+            noc.async_read(self_ep, CoreLocalMem<uint32_t>(l1_write_addr_repack), per_core_N_bytes, {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0}, {});
             src_addr_in0 += per_core_N_bytes_with_stride;
             l1_write_addr_repack += per_core_N_bytes;
         }

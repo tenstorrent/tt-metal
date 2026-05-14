@@ -12,9 +12,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
 
 void kernel_main() {
     // RUNTIME ARGS
@@ -61,15 +61,15 @@ void kernel_main() {
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
     constexpr uint32_t out_block_size_bytes = out_block_num_tiles * out_single_tile_size_bytes;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in1(cb_id_in1);
-    experimental::CircularBuffer cb_out(cb_id_out);
+    Noc noc;
+    CircularBuffer cb_in1(cb_id_in1);
+    CircularBuffer cb_out(cb_id_out);
     // DRAM read setup
-    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_bank;
+    AllocatorBank<AllocatorBankType::DRAM> dram_bank;
     // Output reshard setup - build NOC address for remote output storage core
-    experimental::UnicastEndpoint remote;
+    UnicastEndpoint remote;
 #ifdef FUSE_BIAS
-    experimental::CircularBuffer cb_in3(cb_id_in3);
+    CircularBuffer cb_in3(cb_id_in3);
 #endif
 
     // Process each batch
@@ -124,7 +124,7 @@ void kernel_main() {
         // NOC write output to remote output storage core (CB6)
         uint32_t out_batch_offset = batch * out_tensor_stride_batch_bytes;
         noc.async_write(
-            experimental::use<experimental::CircularBuffer::AddrSelector::READ_PTR>(cb_out),
+            use<CircularBuffer::AddrSelector::READ_PTR>(cb_out),
             remote,
             out_block_size_bytes,
             {.offset_bytes = 0},

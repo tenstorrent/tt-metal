@@ -264,7 +264,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
-#include "llk_pack.h"
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -284,11 +284,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Configure packer hardware
         _llk_pack_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * num_faces);
 
-#ifdef ARCH_BLACKHOLE
-        _llk_pack_init_<false, false>(FACE_R_DIM, TILE_C_DIM, num_faces);
-#else
-        _llk_pack_init_<false, false>(formats.pack_dst, FACE_R_DIM, num_faces);
-#endif
+        _llk_pack_init_wrapper_<false /* untilize */, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces);
         // Initialize destination for packing
         _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
 

@@ -11,7 +11,7 @@
  * It should only be included by tilize_helpers.hpp.
  */
 #include "ttnn/cpp/ttnn/kernel_lib/cb_helpers_compute.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 // JIT generates chlkc_descriptors.h (not per-variable files), included via chlkc_list.h.
 // The arrays are available in scope but guarded by TRISC type:
@@ -187,9 +187,9 @@ ALWI void tilize(
     }
     PACK(ASSERT(get_cb_num_pages(output_cb) >= block_width_tiles));
 
-    // Construct experimental::CircularBuffer objects for sync operations
-    experimental::CircularBuffer in_cb(input_cb);
-    experimental::CircularBuffer out_cb(output_cb);
+    // Construct CircularBuffer objects for sync operations
+    CircularBuffer in_cb(input_cb);
+    CircularBuffer out_cb(output_cb);
 
     // Upfront wait (when requested)
     if constexpr (wait_mode == tilize_config::WaitMode::WaitUpfront) {
