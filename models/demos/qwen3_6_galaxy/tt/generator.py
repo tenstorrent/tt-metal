@@ -123,9 +123,25 @@ class Qwen36Generator:
     """
 
     # When True, attempt trace capture for ``enable_trace=True`` callers.
-    # Currently False because the forward path contains host-writes that the
-    # TTNN trace machinery forbids (see module docstring).  Flip to True after
-    # the forward path is refactored to be host-write-free.
+    # T14b series eliminated host-write blockers across the forward path:
+    #   T14b.1  output_as_ttnn moves the final logits gather outside trace
+    #   T14b.2  persistent input_ids device buffer (llama_model._embed)
+    #   T14b.3  persistent decode mask + current_pos buffers (llama_attention)
+    #   T14b.4  on-device shard/gather around DistributedNorm (llama_decoder)
+    #   T14b.5  persistent zero pad for DeltaNet conv_state=None (qwen36_deltanet)
+    #   T14b.7  persistent decode cos/sin buffers + on-device prefill slice
+    #           (llama_rope) — eliminates the per-call ttnn.from_torch in
+    #           get_cos_sin_for_{prefill,decode}.
+    #
+    # The remaining suspected blocker is in the chunked-prefill DeltaNet
+    # kernel — per-call ttnn.ones / ttnn.zeros / ttnn.tril / ttnn.triu
+    # allocations for the chunked-attention masks plus S-state zeros init
+    # in chunk_gated_delta_rule_ttnn (models/experimental/.../
+    # ttnn_delta_rule_ops.py lines ~989..1046, 1072..1195). These are
+    # device-only ops (no host data) so they MAY actually be trace-safe;
+    # T14b.6 retry exercises this empirically. If trace capture still
+    # warns and hangs, T14b.8 will pre-allocate them once per DeltaNet
+    # instance (chunk_size is fixed) and thread them through.
     _TRACE_SUPPORTED: bool = False
 
     def __init__(self, model, mesh_device, args):

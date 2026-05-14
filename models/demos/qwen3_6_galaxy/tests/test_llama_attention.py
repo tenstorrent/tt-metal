@@ -347,8 +347,8 @@ def test_gated_attention_layer3_decode_step_pcc_on_8x4(mesh_8x4):
 
     x_dec_tt.deallocate(True)
     out_dec_tt.deallocate(True)
-    cos_dec.deallocate(True)
-    sin_dec.deallocate(True)
+    # T14b.7: cos_dec/sin_dec are the persistent _cos_decode_buf/_sin_decode_buf
+    # owned by the rope_setup — do NOT deallocate.
 
 
 # ---------------------------------------------------------------------------

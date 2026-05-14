@@ -310,8 +310,9 @@ def test_decode_position_advances(mesh_8x4):
         # ConcatMeshToTensor(dim=0) → [32, 1, 1, rotary_dim]; take first device [0]
         cos_h = ttnn.to_torch(cos_tt, mesh_composer=ttnn.ConcatMeshToTensor(mesh_8x4, dim=0))
         sin_h = ttnn.to_torch(sin_tt, mesh_composer=ttnn.ConcatMeshToTensor(mesh_8x4, dim=0))
-        cos_tt.deallocate(True)
-        sin_tt.deallocate(True)
+        # T14b.7: get_cos_sin_for_decode now returns the persistent
+        # _cos_decode_buf / _sin_decode_buf. Do NOT deallocate them — the next
+        # call refreshes the same buffers via copy_host_to_device_tensor.
         # Shape: [32, 1, 1, rotary_dim] → take [0, 0, 0, :] → [rotary_dim]
         return cos_h[0, 0, 0, :].float(), sin_h[0, 0, 0, :].float()
 

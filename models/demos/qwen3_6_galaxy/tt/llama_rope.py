@@ -127,6 +127,31 @@ class Qwen36RopeSetup(LightweightModule):
         self._cos_table_cpu = cos_4d  # [1, 1, max_seq_len, rotary_dim] float32
         self._sin_table_cpu = sin_4d
 
+        # ------------------------------------------------------------------
+        # T14b.7: persistent device buffers for the per-step decode slice.
+        # Pre-allocated once so get_cos_sin_for_decode can refresh values via
+        # ttnn.copy_host_to_device_tensor (trace-safe) instead of issuing a
+        # fresh ttnn.from_torch with device= every call (which is forbidden
+        # inside a captured trace).
+        # ------------------------------------------------------------------
+        decode_init = torch.zeros(1, 1, 1, self.rotary_dim, dtype=torch.bfloat16)
+        self._cos_decode_buf = ttnn.from_torch(
+            decode_init,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=datatype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        self._sin_decode_buf = ttnn.from_torch(
+            decode_init,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=datatype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -134,10 +159,16 @@ class Qwen36RopeSetup(LightweightModule):
     def get_cos_sin_for_decode(self, cur_pos: int):
         """Return cos/sin for a single decode step at position cur_pos.
 
+        T14b.7: refreshes the persistent device buffers via
+        ``ttnn.copy_host_to_device_tensor`` (trace-capture-safe; the buffer
+        addresses stay fixed across decode calls so a captured trace can
+        replay reads from them after each refresh).
+
         Returns
         -------
         (cos_tt, sin_tt) : each TTNN tensor of shape [1, 1, 1, rotary_dim]
-            Replicated across all mesh devices.
+            Replicated across all mesh devices. These are the persistent
+            buffers — callers must NOT deallocate them.
         """
         assert 0 <= cur_pos < self.max_seq_len, f"cur_pos={cur_pos} out of range [0, {self.max_seq_len})"
 
@@ -145,26 +176,36 @@ class Qwen36RopeSetup(LightweightModule):
         cos_slice = self._cos_table_cpu[:, :, cur_pos : cur_pos + 1, :]  # [1,1,1,64]
         sin_slice = self._sin_table_cpu[:, :, cur_pos : cur_pos + 1, :]
 
-        cos_tt = ttnn.from_torch(
+        # Build HOST tensors (no device=) and copy into the persistent device
+        # buffers in-place.  ttnn.from_torch without device= is a host-only
+        # allocation and is allowed inside trace capture; the device write
+        # happens via copy_host_to_device_tensor, which targets pre-existing
+        # buffers and is also trace-safe.
+        cos_host = ttnn.from_torch(
             cos_slice,
-            device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=self.datatype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        sin_tt = ttnn.from_torch(
+        sin_host = ttnn.from_torch(
             sin_slice,
-            device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=self.datatype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        return cos_tt, sin_tt
+        ttnn.copy_host_to_device_tensor(cos_host, self._cos_decode_buf)
+        ttnn.copy_host_to_device_tensor(sin_host, self._sin_decode_buf)
+        return self._cos_decode_buf, self._sin_decode_buf
 
     def get_cos_sin_for_prefill(self, seq_len: int):
         """Return cos/sin for prefill over positions [0, seq_len).
+
+        T14b.7: returns on-device slices of the pre-uploaded full-length
+        tables (``self.cos_table_tt`` / ``self.sin_table_tt`` are built once
+        at __init__).  Trace-capture-safe — the slice op is recorded with
+        literal indices, which is valid for fixed-seq_len trace replay
+        (the only safe shape regime for prefill trace anyway, per the
+        SDPA-program-config constraint documented in the optimization skill).
 
         Returns
         -------
@@ -173,25 +214,17 @@ class Qwen36RopeSetup(LightweightModule):
         """
         assert 0 < seq_len <= self.max_seq_len, f"seq_len={seq_len} out of range (0, {self.max_seq_len}]"
 
-        # Slice from CPU table: [1, 1, max_seq_len, rd] → [1, 1, seq_len, rd]
-        cos_slice = self._cos_table_cpu[:, :, :seq_len, :]
-        sin_slice = self._sin_table_cpu[:, :, :seq_len, :]
-
-        cos_tt = ttnn.from_torch(
-            cos_slice,
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=self.datatype,
+        cos_tt = ttnn.slice(
+            self.cos_table_tt,
+            [0, 0, 0, 0],
+            [1, 1, seq_len, self.rotary_dim],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        sin_tt = ttnn.from_torch(
-            sin_slice,
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=self.datatype,
+        sin_tt = ttnn.slice(
+            self.sin_table_tt,
+            [0, 0, 0, 0],
+            [1, 1, seq_len, self.rotary_dim],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         return cos_tt, sin_tt
 

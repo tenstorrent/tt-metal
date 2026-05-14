@@ -328,6 +328,8 @@ def test_generator_api_smoke_64layer_paris(mesh_8x4):
 
 
 @pytest.mark.hardware
+# T14b.6: trial flipped _TRACE_SUPPORTED=True but hit remaining host-write
+# blockers (RoPE + DeltaNet chunk path); see generator.py docstring.
 @pytest.mark.skip(reason=_TRACE_BLOCKED_REASON)
 def test_prefill_trace_parity_4layer(mesh_8x4):
     """Trace-on prefill matches trace-off prefill (PCC >= 0.9999).
@@ -395,6 +397,8 @@ def test_prefill_trace_parity_4layer(mesh_8x4):
 
 
 @pytest.mark.hardware
+# T14b.6: trial flipped _TRACE_SUPPORTED=True but hit remaining host-write
+# blockers (RoPE + DeltaNet chunk path); see generator.py docstring.
 @pytest.mark.skip(reason=_TRACE_BLOCKED_REASON)
 def test_decode_trace_parity_4layer(mesh_8x4):
     """Trace-on decode matches trace-off decode (per-step PCC >= 0.9999, argmax identical).
@@ -515,6 +519,8 @@ def test_decode_trace_parity_4layer(mesh_8x4):
 
 
 @pytest.mark.hardware
+# T14b.6: trial flipped _TRACE_SUPPORTED=True but hit remaining host-write
+# blockers (RoPE + DeltaNet chunk path); see generator.py docstring.
 @pytest.mark.skip(reason=_TRACE_BLOCKED_REASON)
 def test_decode_trace_speedup_4layer(mesh_8x4):
     """Decode trace path runs without error; print no-trace vs trace timing for 20 steps.
@@ -607,6 +613,8 @@ def test_decode_trace_speedup_4layer(mesh_8x4):
 
 
 @pytest.mark.hardware
+# T14b.6: trial flipped _TRACE_SUPPORTED=True but hit remaining host-write
+# blockers (RoPE + DeltaNet chunk path); see generator.py docstring.
 @pytest.mark.skip(reason=_TRACE_BLOCKED_REASON)
 def test_full_64layer_trace_paris(mesh_8x4):
     """Full 64-layer Qwen3.6-27B with trace-on decode generates ' Paris' (token 11751).
