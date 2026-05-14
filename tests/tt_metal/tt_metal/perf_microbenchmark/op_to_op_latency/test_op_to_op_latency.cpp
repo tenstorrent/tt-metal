@@ -13,13 +13,17 @@
 // This benchmark does the textbook reader -> CB -> compute -> CB -> writer
 // pipeline on every Tensix core, with interleaved DRAM in/out, then runs the
 // same MeshWorkload back-to-back N times in either Fast-Dispatch or Trace
-// mode. The compute kernel wraps its per-tile body in
-// DeviceZoneScopedMainN("MATH"), so a profiler-enabled build dumps
-// MATH_begin/MATH_end timestamps per TRISC per program-run per core into
+// mode. The compute kernel emits per-tile DeviceZoneScopedN("MATH") zones
+// (plus TILE_IDX data) so a profiler-enabled build dumps timestamps into
 // generated/profiler/.logs/profile_log_device.csv.
 //
-// To get op-to-op latency:
-//   op_to_op_latency_per_core = MATH_begin[program N+1] - MATH_end[program N]
+// For **program-level** op-to-op (between host enqueues), use
+// `--use-realtime-profiler` (ProgramRealtimeRecord gaps), not nested
+// DeviceZoneScopedMainN in user TRISC code (see compute kernel comments).
+//
+// CSV / in-kernel timing: use per-tile MATH zones on the MATH TRISC row,
+// or TRISC-KERNEL zones emitted by firmware (trisck.cc) for whole-kernel
+// envelope on each TRISC.
 //
 // CLI:
 //   --num-pages-per-core N  pages of interleaved DRAM per core (default 2)
@@ -28,8 +32,15 @@
 //   --num-programs N        back-to-back enqueues per measurement (default 8)
 //   --use-trace             capture once + replay (default: FD mode)
 //   --use-device-profiler   call ReadMeshDeviceProfilerResults after Finish
-//                           (requires --enable-profiler build + env var
-//                            TT_METAL_DEVICE_PROFILER=1)
+//                           (requires Tracy-enabled build — default unless
+//                            build_metal.sh --disable-profiler; plus env var
+//                            TT_METAL_DEVICE_PROFILER=1 before process start)
+//   --use-realtime-profiler register ProgramRealtimeProfilerCallback for the
+//                           timed portion only (FD: N enqueues + Finish; trace:
+//                           replay + Finish). Logs per-chip op-to-op gaps
+//                           (next start - previous end, ns). Inactive on some
+//                           dispatch setups; see
+//                           tech_reports/real_time_profiler/getting-started.md
 //   --no-warmup             skip the warmup enqueue
 //   --trace-region-size N   trace buffer size, bytes (default 1 MiB)
 //   --device-id N           device under test (default 0)
@@ -39,8 +50,12 @@
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
+#include <map>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <tt-logger/tt-logger.hpp>
@@ -57,6 +72,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/experimental/realtime_profiler.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include "impl/context/metal_context.hpp"
 
@@ -94,6 +110,7 @@ struct BenchmarkConfig {
     bool warmup = true;
     bool use_trace = false;
     bool use_device_profiler = false;
+    bool use_realtime_profiler = false;
     size_t trace_region_size = 1ull << 20;  // 1 MiB
 };
 
@@ -114,8 +131,137 @@ BenchmarkConfig parse_args(const std::vector<std::string>& args) {
     if (test_args::has_command_option(args, "--use-device-profiler")) {
         cfg.use_device_profiler = true;
     }
+    if (test_args::has_command_option(args, "--use-realtime-profiler")) {
+        cfg.use_realtime_profiler = true;
+    }
     return cfg;
 }
+
+// Real-time profiler callbacks run on a worker thread; collect records here
+// and analyse after UnregisterProgramRealtimeProfilerCallback.
+void log_realtime_op_to_op_gaps(const std::vector<tt::tt_metal::experimental::ProgramRealtimeRecord>& records) {
+    if (records.size() < 2) {
+        log_info(LogTest, "Real-time profiler: got {} record(s); need >= 2 to compute op-to-op gaps.", records.size());
+        return;
+    }
+    std::map<uint32_t, std::vector<tt::tt_metal::experimental::ProgramRealtimeRecord>> by_chip;
+    for (const auto& r : records) {
+        by_chip[r.chip_id].push_back(r);
+    }
+    for (auto& [chip_id, chip_records] : by_chip) {
+        std::sort(chip_records.begin(), chip_records.end(), [](const auto& a, const auto& b) {
+            return a.start_timestamp < b.start_timestamp;
+        });
+        double sum_gap_ns = 0.0;
+        uint32_t gap_count = 0;
+        double min_gap_ns = 0.0;
+        double max_gap_ns = 0.0;
+        for (size_t i = 1; i < chip_records.size(); ++i) {
+            const auto& prev = chip_records[i - 1];
+            const auto& cur = chip_records[i];
+            if (cur.start_timestamp < prev.end_timestamp) {
+                log_warning(
+                    LogTest,
+                    "Real-time profiler chip {}: record {} start {} < prev end {} (skip gap)",
+                    chip_id,
+                    i,
+                    cur.start_timestamp,
+                    prev.end_timestamp);
+                continue;
+            }
+            const uint64_t gap_cycles = cur.start_timestamp - prev.end_timestamp;
+            const double freq = (cur.frequency > 0.0) ? cur.frequency : prev.frequency;
+            if (freq <= 0.0) {
+                continue;
+            }
+            const double gap_ns = static_cast<double>(gap_cycles) / freq;
+            if (gap_count == 0) {
+                min_gap_ns = max_gap_ns = gap_ns;
+            } else {
+                min_gap_ns = std::min(min_gap_ns, gap_ns);
+                max_gap_ns = std::max(max_gap_ns, gap_ns);
+            }
+            sum_gap_ns += gap_ns;
+            ++gap_count;
+        }
+        if (gap_count > 0) {
+            log_info(
+                LogTest,
+                "Real-time profiler chip {}: {} op-to-op gap(s) — min {:.2f} ns, max {:.2f} ns, mean {:.2f} ns "
+                "(next program start − previous program end)",
+                chip_id,
+                gap_count,
+                min_gap_ns,
+                max_gap_ns,
+                sum_gap_ns / gap_count);
+        }
+    }
+}
+
+struct RealtimeProfilerSession {
+    std::mutex mutex;
+    std::vector<tt::tt_metal::experimental::ProgramRealtimeRecord> records;
+    std::optional<tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle> handle;
+
+    void register_callback() {
+        handle = tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback(
+            [this](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
+                std::lock_guard<std::mutex> lock(mutex);
+                records.push_back(record);
+            });
+    }
+
+    void unregister_and_drain() {
+        if (handle.has_value()) {
+            tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback(*handle);
+            handle.reset();
+        }
+    }
+
+    std::vector<tt::tt_metal::experimental::ProgramRealtimeRecord> copy_records() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return records;
+    }
+};
+
+// Registers RT profiler callback after warmup; on destruction quiesces, waits for
+// D2H records, unregisters, then logs per-chip op-to-op gaps (Mo's metric:
+// next start - previous end). Must outlive the timed enqueue burst only.
+struct RealtimeProfilerDrainGuard {
+    distributed::MeshDevice* mesh = nullptr;
+    std::unique_ptr<RealtimeProfilerSession> session;
+
+    RealtimeProfilerDrainGuard(distributed::MeshDevice* mesh_in, bool use_realtime_profiler, bool profiler_active) :
+        mesh(mesh_in) {
+        if (!use_realtime_profiler) {
+            return;
+        }
+        if (!profiler_active) {
+            log_warning(
+                LogTest,
+                "Real-time profiler: --use-realtime-profiler set but IsProgramRealtimeProfilerActive() is false; "
+                "skipping (ETH dispatch / remote chip / resources — see "
+                "tech_reports/real_time_profiler/getting-started.md).");
+            return;
+        }
+        session = std::make_unique<RealtimeProfilerSession>();
+        session->register_callback();
+        log_info(LogTest, "Real-time profiler: callback registered for timed section.");
+    }
+
+    RealtimeProfilerDrainGuard(const RealtimeProfilerDrainGuard&) = delete;
+    RealtimeProfilerDrainGuard& operator=(const RealtimeProfilerDrainGuard&) = delete;
+
+    ~RealtimeProfilerDrainGuard() {
+        if (!session) {
+            return;
+        }
+        mesh->quiesce_devices();
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        session->unregister_and_drain();
+        log_realtime_op_to_op_gaps(session->copy_records());
+    }
+};
 
 // Build the reader -> compute -> writer program covering every Tensix core,
 // with the per-core tile slice assigned via runtime args.
@@ -230,7 +376,7 @@ int main(int argc, char** argv) {
         log_info(
             LogTest,
             "op_to_op_latency: device_id={}, pages_per_core={}, compute_nops={}, num_programs={}, warmup={}, "
-            "use_trace={}, use_device_profiler={}, trace_region_size={}",
+            "use_trace={}, use_device_profiler={}, use_realtime_profiler={}, trace_region_size={}",
             cfg.device_id,
             cfg.num_pages_per_core,
             cfg.num_nops_per_tile,
@@ -238,12 +384,13 @@ int main(int argc, char** argv) {
             cfg.warmup,
             cfg.use_trace,
             cfg.use_device_profiler,
+            cfg.use_realtime_profiler,
             cfg.trace_region_size);
         TT_FATAL(cfg.num_programs >= 1, "--num-programs must be >= 1");
 
         // If the user asked for a CSV dump, make sure the runtime profiler is
-        // actually enabled (--enable-profiler build + TT_METAL_DEVICE_PROFILER=1
-        // env var). Without this check, the CSV would just be empty and the
+        // actually enabled (Tracy-enabled build + TT_METAL_DEVICE_PROFILER=1
+        // env var before process start). Without this check, the CSV would just be empty and the
         // failure mode would be silent. Pattern mirrors test_dram_offchip.cpp.
         if (cfg.use_device_profiler) {
             const bool profiler_runtime_enabled =
@@ -251,8 +398,10 @@ int main(int argc, char** argv) {
             TT_FATAL(
                 profiler_runtime_enabled,
                 "--use-device-profiler requires the device profiler to be enabled at runtime. "
-                "Build with `./build_metal.sh --enable-profiler` and set TT_METAL_DEVICE_PROFILER=1 "
-                "(e.g. `TT_METAL_DEVICE_PROFILER=1 ./test_op_to_op_latency --use-device-profiler ...`).");
+                "Use a Tracy-enabled build (default: omit `build_metal.sh --disable-profiler`) and "
+                "export TT_METAL_DEVICE_PROFILER=1 before starting the process "
+                "(e.g. `TT_METAL_DEVICE_PROFILER=1 ./test_op_to_op_latency --use-device-profiler ...`). "
+                "If kernels were JIT-cached without profiler, clear ~/.cache/tt-metal-cache and re-run.");
         }
 
         // trace_region_size = 0 would disable trace capture entirely (legacy
@@ -292,6 +441,12 @@ int main(int argc, char** argv) {
         Program program =
             build_program(mesh_device, cfg, input_buffer, output_buffer, total_num_tiles, single_tile_size_bytes);
 
+        // Real-time profiler: D2H pages use the program's host runtime id as start_id.
+        // The receiver drops id==0 (non-GO housekeeping); Program defaults runtime_id to 0
+        // (program_impl.hpp), so without this line every record is filtered and callbacks
+        // never fire (RealtimeProfilerManager::process_one_page).
+        program.set_runtime_id(1);
+
         distributed::MeshWorkload workload;
         const distributed::MeshCoordinateRange device_range(mesh_device->shape());
         workload.add_program(device_range, std::move(program));
@@ -303,6 +458,8 @@ int main(int argc, char** argv) {
             distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
             distributed::Finish(cq);
         }
+
+        const bool rt_profiler_active = tt::tt_metal::experimental::IsProgramRealtimeProfilerActive();
 
         constexpr uint8_t kCqId = 0;
         long long elapsed_us = 0;
@@ -324,24 +481,30 @@ int main(int argc, char** argv) {
             mesh_device->end_mesh_trace(kCqId, tid);
             distributed::Finish(cq);  // make sure capture is fully committed before timing
 
-            const auto t_begin = std::chrono::steady_clock::now();
-            mesh_device->replay_mesh_trace(kCqId, tid, /*blocking=*/false);
-            distributed::Finish(cq);
-            const auto t_end = std::chrono::steady_clock::now();
-            elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_begin).count();
+            {
+                RealtimeProfilerDrainGuard rt_guard(mesh_device.get(), cfg.use_realtime_profiler, rt_profiler_active);
+                const auto t_begin = std::chrono::steady_clock::now();
+                mesh_device->replay_mesh_trace(kCqId, tid, /*blocking=*/false);
+                distributed::Finish(cq);
+                const auto t_end = std::chrono::steady_clock::now();
+                elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_begin).count();
+            }
 
             mesh_device->release_mesh_trace(tid);
             mode_label = "Trace replay";
         } else {
-            // Step 2: enqueue the same MeshWorkload back-to-back num_programs
-            // times under one Finish.
-            const auto t_begin = std::chrono::steady_clock::now();
-            for (uint32_t i = 0; i < cfg.num_programs; ++i) {
-                distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+            {
+                RealtimeProfilerDrainGuard rt_guard(mesh_device.get(), cfg.use_realtime_profiler, rt_profiler_active);
+                // Step 2: enqueue the same MeshWorkload back-to-back num_programs
+                // times under one Finish.
+                const auto t_begin = std::chrono::steady_clock::now();
+                for (uint32_t i = 0; i < cfg.num_programs; ++i) {
+                    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+                }
+                distributed::Finish(cq);
+                const auto t_end = std::chrono::steady_clock::now();
+                elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_begin).count();
             }
-            distributed::Finish(cq);
-            const auto t_end = std::chrono::steady_clock::now();
-            elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_begin).count();
             mode_label = "FD back-to-back";
         }
 
@@ -355,17 +518,19 @@ int main(int argc, char** argv) {
             avg_us_per_program);
 
         // Step 4: flush device profiler buffers to
-        // generated/profiler/.logs/profile_log_device.csv. Filter the rows
-        // for zone "MATH" and compute MATH_begin[N+1] - MATH_end[N] per core
-        // to get the on-chip op-to-op latency. tools/tracy/process_device_log.py
-        // can post-process the CSV.
+        // generated/profiler/.logs/profile_log_device.csv. For in-kernel timing,
+        // filter per-tile `MATH` rows (MATH TRISC) or firmware `TRISC-KERNEL`
+        // rows. Program-level op-to-op between host enqueues is from
+        // `--use-realtime-profiler`, not from nesting DeviceZoneScopedMainN in
+        // user TRISC kernels. tools/tracy/process_device_log.py can post-process
+        // the CSV.
         if (cfg.use_device_profiler) {
             tt::tt_metal::ReadMeshDeviceProfilerResults(*mesh_device);
             log_info(
                 LogTest,
                 "Device profiler results dumped. Inspect "
                 "$TT_METAL_HOME/generated/profiler/.logs/profile_log_device.csv "
-                "and look for the 'MATH' zone to compute op-to-op latency.");
+                "(per-tile MATH / TRISC-KERNEL zones; program gaps: --use-realtime-profiler).");
         }
 
         std::vector<uint32_t> output_data;

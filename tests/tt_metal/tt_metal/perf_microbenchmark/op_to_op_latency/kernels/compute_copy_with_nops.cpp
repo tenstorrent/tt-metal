@@ -32,28 +32,25 @@
 //
 // Profiling layout (per-core, per-TRISC, per-program-run):
 //
-//   * One outer `MATH-KERNEL` zone wraps the whole kernel invocation.
-//     This uses DeviceZoneScopedMainN, which writes to a fixed
-//     "guaranteed" L1 slot, so it survives buffer pressure and gives a
-//     single guaranteed pair of start/end cycles per program-run.
+//   * Do **not** use DeviceZoneScopedMainN here: user `kernel_main` runs
+//     inside firmware `DeviceZoneScopedMainChildN("TRISC-KERNEL")`
+//     (tt_metal/hw/firmware/src/tt-1xx/trisck.cc). MainN uses guaranteed
+//     slot index 0 whose destructor calls finish_profiler() while the
+//     parent TRISC-KERNEL zone is still open, which breaks host-side
+//     start/end pairing (TT_FATAL: marker IDs do not match).
 //
-//   * One inner `MATH` zone per per-tile iteration. This uses
-//     DeviceZoneScopedN, which appends to the rolling marker buffer,
-//     so each iteration produces a distinct entry in the CSV (the
-//     `Main` variant would overwrite the fixed slot every iteration
-//     and only the last tile's timestamps would survive).
+//   * One `MATH` zone per tile via DeviceZoneScopedN (rolling buffer).
 //
-//   * Alongside each `MATH` zone, `DeviceTimestampedData("TILE_IDX", i)`
-//     records the runtime loop index `i`. Post-processing can match
-//     each MATH zone in profile_log_device.csv to its tile index, so
-//     "first iteration" vs "last iteration" is easily disambiguated.
+//   * `DeviceTimestampedData("TILE_IDX", i)` next to each MATH zone for
+//     iteration index in profile_log_device.csv.
 //
-// Op-to-op latency for program N+1 on a given core is then:
-//   op_to_op_latency = MATH_KERNEL_begin[N+1] - MATH_KERNEL_end[N]
-// (or use the per-tile MATH zones if you need finer-grained breakdown).
+// Program-level op-to-op (between enqueued programs): use the host
+// `--use-realtime-profiler` path (ProgramRealtimeRecord), not an extra
+// outer kernel zone here.
 //
-// All profiler macros are no-ops when the binary is not built with
-// --enable-profiler; no #ifdef gating is required on our side.
+// All profiler macros are no-ops when kernels are not JIT-built with
+// PROFILE_KERNEL (see TT_METAL_DEVICE_PROFILER=1 in rtoptions); no #ifdef
+// gating is required on our side.
 
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
@@ -67,8 +64,6 @@ void kernel_main() {
     constexpr uint32_t num_nops_per_tile = get_compile_time_arg_val(2);
 
     const uint32_t n_tiles = get_arg_val<uint32_t>(0);
-
-    DeviceZoneScopedMainN("MATH-KERNEL");
 
     unary_op_init_common(cb_in, cb_out);
     copy_tile_init(cb_in);
