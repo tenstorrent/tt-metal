@@ -169,11 +169,14 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
         "variable_matmul: offsets_tensor and offsets_role must both be set or both be unset.");
     if (role_active) {
         TT_FATAL(
-            operation_attributes.offsets_role == OffsetsRole::OutputRow,
-            "variable_matmul: only OffsetsRole::OutputRow is currently supported.");
-        TT_FATAL(
-            tensor_args.output_tensor.has_value(),
-            "variable_matmul: OffsetsRole::OutputRow requires a caller-provided output_tensor.");
+            operation_attributes.offsets_role == OffsetsRole::OutputRow ||
+                operation_attributes.offsets_role == OffsetsRole::InputRow,
+            "variable_matmul: only OffsetsRole::OutputRow and OffsetsRole::InputRow are currently supported.");
+        if (operation_attributes.offsets_role == OffsetsRole::OutputRow) {
+            TT_FATAL(
+                tensor_args.output_tensor.has_value(),
+                "variable_matmul: OffsetsRole::OutputRow requires a caller-provided output_tensor.");
+        }
         const auto& off = tensor_args.offsets_tensor.value();
         TT_FATAL(off.dtype() == ttnn::DataType::UINT32, "variable_matmul: offsets_tensor must be UINT32.");
         TT_FATAL(off.layout() == ttnn::Layout::ROW_MAJOR, "variable_matmul: offsets_tensor must be ROW_MAJOR.");

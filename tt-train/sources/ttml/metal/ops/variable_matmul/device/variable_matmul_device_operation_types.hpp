@@ -39,6 +39,12 @@ struct VariableMatmulConfig {
 enum class OffsetsRole : uint32_t {
     None = 0,
     OutputRow = 1,
+    // Reads BOTH offsets[start_index] and offsets[start_index+1]. The kernel processes
+    // M-rows [offsets[start_index], offsets[start_index+1]) of the input tensor, treating
+    // it as a parent buffer. Overrides in0_row_offset_tiles + effective_M_tiles and the
+    // derived per-core M_start_tile / M_end_tile / M_blocks_per_core values used by both
+    // dataflow and compute kernels.
+    InputRow = 2,
 };
 
 struct VariableMatmulParams {
@@ -82,9 +88,12 @@ struct VariableMatmulParams {
     uint32_t in1_k_offset_tiles = 0;
     uint32_t out_row_offset_tiles = 0;
 
-    // On-device offsets (EP). When role == OutputRow and offsets_tensor is set in
-    // tensor_args, in1_sender_out reads offsets[offsets_start_index] and uses
-    // (value / TILE_HEIGHT) as out_row_offset_tiles, overriding the scalar above.
+    // On-device offsets (EP). When set, dataflow kernels read the offsets tensor at
+    // runtime and override the matching host-supplied values:
+    //   OutputRow: offsets[start] overrides out_row_offset_tiles.
+    //   InputRow:  offsets[start..start+2] overrides in0_row_offset_tiles + effective_M
+    //              (matmul-M) + per-core M_start/M_end/M_blocks_per_core (dm_in0_sender
+    //              publishes the latter via cb_ctrl so compute can override RT args).
     OffsetsRole offsets_role = OffsetsRole::None;
     uint32_t offsets_start_index = 0;
 };

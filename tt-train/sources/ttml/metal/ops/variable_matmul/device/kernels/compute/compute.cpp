@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/bcast.h"
+#include "api/compute/cb_api.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
@@ -351,16 +352,30 @@ void kernel_main() {
     constexpr bool transpose_a = static_cast<bool>(get_compile_time_arg_val(9));
 
     uint32_t argidx = 0;
-    const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
+    // OFFSETS_ROLE=InputRow overrides M_start/M_end/M_blocks_per_core via cb_ctrl below.
+    uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
+    uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     // Variable-M: actual M_blocks_per_core from runtime args
-    const uint32_t M_blocks_per_core = get_arg_val<uint32_t>(argidx++);
+    uint32_t M_blocks_per_core = get_arg_val<uint32_t>(argidx++);
     // Variable-K: K extent comes from runtime; K_num_blocks derived using K_block_tiles (CTA).
     const uint32_t K_tiles = get_arg_val<uint32_t>(argidx++);
     const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
     const uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
+
+#if defined(OFFSETS_ROLE) && OFFSETS_ROLE == 2
+    // InputRow: dm_in0_sender publishes per-core (M_start, M_end, M_blocks_per_core) on
+    // cb_ctrl after reading on-device offsets. Override RT-arg-derived M values here.
+    {
+        constexpr uint32_t cb_ctrl_id = tt::CBIndex::c_8;
+        cb_wait_front(cb_ctrl_id, 1U);
+        M_start_tile = read_tile_value(cb_ctrl_id, 0U, 0U);
+        M_end_tile = read_tile_value(cb_ctrl_id, 0U, 1U);
+        M_blocks_per_core = read_tile_value(cb_ctrl_id, 0U, 2U);
+        cb_pop_front(cb_ctrl_id, 1U);
+    }
+#endif
 
 #ifdef FUSE_TERNARY
     const uint32_t fused_ternary_scalar_uint = get_arg_val<uint32_t>(argidx++);
