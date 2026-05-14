@@ -265,30 +265,17 @@ for entry in "${test_entries[@]}"; do
     fi
 
     resolved_name="$(sanitize_name "$filter")"
-    matched_tests="$("$binary" --gtest_list_tests --gtest_filter="$filter" 2>/dev/null | grep -v -e '^\s*$' -e '^Running main' || true)"
-    if [[ -n "$matched_tests" ]]; then
-        full_name=""
-        suite=""
-        while IFS= read -r line; do
-            if [[ "$line" == *. ]]; then
-                suite="$line"
-            else
-                # Drop gtest's "# GetParam() = ..." suffix from parameterized tests
-                test="$(echo "$line" | sed 's/[[:space:]]*# GetParam().*//' | xargs)"
-                if [[ -n "$full_name" ]]; then
-                    full_name="${full_name}__${test}"
-                else
-                    full_name="${suite}${test}"
-                fi
-            fi
-        done <<< "$matched_tests"
-        resolved_name="$(sanitize_name "$full_name")"
-    fi
 
     gtest_log_args=()
     logger_env=()
     if [[ -n "$LOG_DIR" ]]; then
         log_base="$LOG_DIR/${config}_${group}_${resolved_name}"
+        count=${log_base_counts["$log_base"]:-0}
+        count=$((count + 1))
+        log_base_counts["$log_base"]=$count
+        if [[ $count -gt 1 ]]; then
+            log_base="${log_base}_${count}"
+        fi
         gtest_log_args+=("--gtest_output=json:${log_base}.json")
         logger_env=(env "TT_METAL_LOGGER_FILE=${log_base}.log")
         echo "  TT_METAL_LOGGER_FILE=${log_base}.log"
