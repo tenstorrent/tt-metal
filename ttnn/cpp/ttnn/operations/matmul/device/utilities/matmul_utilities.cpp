@@ -264,7 +264,7 @@ tt::tt_metal::Tile get_matmul_tile(const Tensor& input_tensor, bool transpose) {
     return tt::tt_metal::Tile({curr_tile.get_width(), curr_tile.get_height()}, !transpose_was_set);
 }
 
-void validate_matmul_multicore_reuse_optimized_split_work_to_cores_parity(
+void validate_matmul_reuse_work_split(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const ttnn::Shape& a_shape_padded,
@@ -277,9 +277,9 @@ void validate_matmul_multicore_reuse_optimized_split_work_to_cores_parity(
     const uint32_t B = ttnn::get_batch_size(a_shape_padded);
     const uint32_t Mt = get_M_dim(a_shape_padded, in0_tile, false);
     const uint32_t Nt = get_N_dim(b_shape_padded, in1_tile);
-    const uint32_t per_core_M_u = static_cast<uint32_t>(program_config.per_core_M);
-    const uint32_t per_core_N_u = static_cast<uint32_t>(program_config.per_core_N);
-    const uint32_t num_output_blocks_total = (B * Mt / per_core_M_u) * (Nt / per_core_N_u);
+    const uint32_t per_core_M = program_config.per_core_M;
+    const uint32_t per_core_N = program_config.per_core_N;
+    const uint32_t num_output_blocks_total = (B * Mt / per_core_M) * (Nt / per_core_N);
     TT_FATAL(
         num_output_blocks_total > 0,
         "Matmul reuse-optimized produced zero output blocks (B={} Mt={} Nt={} per_core_M={} per_core_N={}); see "
@@ -287,8 +287,8 @@ void validate_matmul_multicore_reuse_optimized_split_work_to_cores_parity(
         B,
         Mt,
         Nt,
-        per_core_M_u,
-        per_core_N_u);
+        per_core_M,
+        per_core_N);
 
     std::optional<tt::tt_metal::ShardSpec> shard_spec = std::nullopt;
     if (input_tensor_a.is_sharded()) {

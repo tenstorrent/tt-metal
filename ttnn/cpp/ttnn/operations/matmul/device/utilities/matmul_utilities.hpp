@@ -14,7 +14,6 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/matmul/shared_with_host/activation_type.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
-#include "tt-metalium/sub_device_types.hpp"
 
 namespace ttnn::operations::matmul::utilities {
 
@@ -330,7 +329,7 @@ inline ActivationParams get_activation_params(const ttnn::operations::unary::Una
     return result;
 }
 
-void validate_matmul_multicore_reuse_optimized_split_work_to_cores_parity(
+void validate_matmul_reuse_work_split(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const ttnn::Shape& a_shape_padded,
