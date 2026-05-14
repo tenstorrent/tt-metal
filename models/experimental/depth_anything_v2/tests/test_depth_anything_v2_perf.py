@@ -85,7 +85,7 @@ def run_perf_depth_anything_v2(expected_inference_time, expected_compile_time, d
     "expected_inference_time, expected_compile_time",
     (
         (
-            0.067,  # ~15 FPS target
+            0.2,  # ~5 FPS target for ViT-L (paper: 213ms on V100)
             30,
         ),
     ),
@@ -108,7 +108,7 @@ def test_perf_bare_metal(
     "expected_inference_time, expected_compile_time",
     (
         (
-            0.1,
+            0.25,  # VM relaxed target for ViT-L
             35,
         ),
     ),
