@@ -99,6 +99,7 @@ const bool TILIZE = true;
 #ifdef LLK_TRISC_MATH
 
 #include "llk_lib_math_wrappers.h"
+#include "llk_lib_unpack_wrappers.h"
 
 using namespace ckernel;
 
@@ -235,7 +236,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     LLK_ASSERT(
                         (tile_index < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                         "Block tile index exceeds maximum destination tiles");
-                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::pack_exec_mode_v<UNTILIZE>>(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index));
+                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>>(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index));
                 }
             }
             PROFILER_SYNC();
@@ -255,7 +256,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     LLK_ASSERT(
                         (tile_index < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                         "Block tile index exceeds maximum destination tiles");
-                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::pack_exec_mode_v<UNTILIZE>>(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index));
+                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>>(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index));
                 }
                 _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 remaining_tiles -= num_tiles;

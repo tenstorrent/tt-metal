@@ -97,7 +97,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Pack the single result tile from destination register to output buffer
     _llk_packer_wait_for_math_done_();
-    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::pack_exec_mode_v<UNTILIZE>>(0, L1_ADDRESS(params.buffer_Res[0]));
+    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>>(0, L1_ADDRESS(params.buffer_Res[0]));
     _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 }
 

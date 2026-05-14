@@ -170,11 +170,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
 
     _llk_packer_wait_for_math_done_();
-    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::pack_exec_mode_v<UNTILIZE>>(operand_A_dst_index, L1_ADDRESS(buffer_A_tilized));
+    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>>(operand_A_dst_index, L1_ADDRESS(buffer_A_tilized));
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
     _llk_packer_wait_for_math_done_();
-    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::pack_exec_mode_v<UNTILIZE>>(operand_B_dst_index, L1_ADDRESS(buffer_B_tilized));
+    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>>(operand_B_dst_index, L1_ADDRESS(buffer_B_tilized));
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>(); // Packer will execute _llk_pack_dest_section_done_ function which ensures the write
                                                                             // to L1 is fully is complete.
     t6_semaphore_post<>(semaphore::PACK_DONE); // The packer signals to the unpacker that it has finished writing to L1 by posting (incrementing) the semaphore.
