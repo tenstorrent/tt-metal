@@ -329,6 +329,21 @@ static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_ch_live_check_
 constexpr std::array<bool, NUM_SENDER_CHANNELS> sender_ch_live_check_skip =
     take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, bool>(sender_ch_live_check_skip_all_);
 
+static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_ch_wait_static_connection_all_ = {
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_0_WAIT_STATIC_CONNECTION")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_1_WAIT_STATIC_CONNECTION")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_2_WAIT_STATIC_CONNECTION")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_3_WAIT_STATIC_CONNECTION")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_4_WAIT_STATIC_CONNECTION")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_5_WAIT_STATIC_CONNECTION")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_6_WAIT_STATIC_CONNECTION")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_7_WAIT_STATIC_CONNECTION")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_8_WAIT_STATIC_CONNECTION")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_9_WAIT_STATIC_CONNECTION")),
+};
+constexpr std::array<bool, NUM_SENDER_CHANNELS> sender_ch_wait_static_connection =
+    take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, bool>(sender_ch_wait_static_connection_all_);
+
 // A channel is a "traffic injection channel" if it is a sender channel that is adding *new*
 // traffic to this dimension/ring. Examples include channels service worker traffic and
 // sender channels that receive traffic from a "turn" (e.g. an EAST channel receiving traffic from NORTH)
