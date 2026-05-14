@@ -91,7 +91,8 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
         nb::arg("optional_rs_output_tensor") = nb::none(),
         nb::arg("fused_ternary_scalar") = nb::none(),
         nb::arg("addcmul_input_tensor1") = nb::none(),
-        nb::arg("addcmul_input_tensor2") = nb::none());
+        nb::arg("addcmul_input_tensor2") = nb::none(),
+        nb::arg("dtype") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ccl
