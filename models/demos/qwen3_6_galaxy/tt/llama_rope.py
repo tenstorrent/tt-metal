@@ -128,6 +128,33 @@ class Qwen36RopeSetup(LightweightModule):
         self._sin_table_cpu = sin_4d
 
         # ------------------------------------------------------------------
+        # T14b.9: 2D cos/sin matrices for on-device embedding lookup.
+        # ttnn.embedding requires a 2-D weight [vocab_size, embedding_dim],
+        # so we store cos/sin as [max_seq_len, rotary_dim] ROW_MAJOR
+        # replicated. The trace-friendly decode RoPE path uses these via
+        # ``get_rm_rot_mats(rope_idxs)`` — purely on-device, no host writes.
+        # Matches the llama3_70b_galaxy pattern (llama_rope.py:63-76).
+        # ------------------------------------------------------------------
+        cos_2d = cos_table.squeeze(0)  # [max_seq_len, rotary_dim]
+        sin_2d = sin_table.squeeze(0)
+        self.cos_matrix = ttnn.from_torch(
+            cos_2d,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=datatype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        self.sin_matrix = ttnn.from_torch(
+            sin_2d,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=datatype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+        # ------------------------------------------------------------------
         # T14b.7: persistent device buffers for the per-step decode slice.
         # Pre-allocated once so get_cos_sin_for_decode can refresh values via
         # ttnn.copy_host_to_device_tensor (trace-safe) instead of issuing a
@@ -227,6 +254,78 @@ class Qwen36RopeSetup(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         return cos_tt, sin_tt
+
+    # ------------------------------------------------------------------
+    # T14b.9 — trace-friendly decode RoPE (pure device)
+    # ------------------------------------------------------------------
+
+    def get_rm_rot_idxs(self, position_idxs: torch.Tensor, on_host: bool = False) -> ttnn.Tensor:
+        """Build the ``rot_idxs`` lookup tensor for a decode batch.
+
+        Parameters
+        ----------
+        position_idxs : torch.Tensor
+            ``[1]`` int64 CPU tensor holding the current position for the
+            single user in the batch (qwen3.6 max_batch_size = 1).
+        on_host : bool
+            When True, returns a HOST ttnn tensor that the caller will push
+            to device via ``ttnn.copy_host_to_device_tensor``. When False
+            (eager path), the tensor is uploaded to device immediately.
+
+        Returns
+        -------
+        ttnn.Tensor of shape ``[1, 1]`` uint32, replicated across the mesh.
+            The leading dim must be 1 because ``ttnn.embedding`` interprets
+            the last index dim as the batch axis for the embedding lookup;
+            for max_batch_size=1 the single position lives at ``[0, 0]``.
+        """
+        assert isinstance(position_idxs, torch.Tensor), "position_idxs must be a torch tensor"
+        assert position_idxs.numel() == 1, f"qwen3.6 max_batch_size=1; got {tuple(position_idxs.shape)}"
+        # Reshape to [1, 1] — required by ttnn.embedding's [batch, n_idxs] convention.
+        position_idxs = position_idxs.view(1, 1).to(torch.uint32)
+
+        rot_idxs = ttnn.from_torch(
+            position_idxs,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=None if on_host else self.mesh_device,
+            memory_config=None if on_host else ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        return rot_idxs
+
+    def get_rm_rot_mats(self, rot_idxs: ttnn.Tensor):
+        """Gather cos/sin for a decode position via on-device ``ttnn.embedding``.
+
+        Parameters
+        ----------
+        rot_idxs : ttnn.Tensor
+            ``[1, 1]`` uint32 device tensor produced by ``get_rm_rot_idxs``.
+
+        Returns
+        -------
+        (cos_tt, sin_tt) : each ``[1, 1, 1, rotary_dim]`` device tensors,
+            replicated across the mesh. Trace-safe: pure device ops, no
+            host writes — the cos/sin tables are pre-uploaded in
+            ``self.cos_matrix`` / ``self.sin_matrix`` once at __init__.
+        """
+        cos = ttnn.embedding(
+            rot_idxs,
+            self.cos_matrix,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1, 1, rotary_dim]
+        sin = ttnn.embedding(
+            rot_idxs,
+            self.sin_matrix,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # Unsqueeze to [1, 1, 1, rotary_dim] to match apply_partial_rope's expected
+        # cos/sin shape (4-D, broadcast over heads).
+        cos = ttnn.unsqueeze_to_4D(cos)
+        sin = ttnn.unsqueeze_to_4D(sin)
+        return cos, sin
 
     def apply_partial_rope(
         self,

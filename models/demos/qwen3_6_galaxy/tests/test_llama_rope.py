@@ -345,3 +345,52 @@ def test_decode_position_advances(mesh_8x4):
         f"diff(sin0,sin1)={diff_sin_01:.3f}, "
         f"diff(sin0,sin63)={diff_sin_0_63:.3f}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Test 5 (T14b.9): get_rm_rot_mats parity with get_cos_sin_for_decode
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.hardware
+def test_get_rm_rot_mats_matches_get_cos_sin_for_decode(mesh_8x4):
+    """The trace-friendly RoPE path (get_rm_rot_idxs + get_rm_rot_mats) must
+    produce the same cos/sin as the eager path (get_cos_sin_for_decode).
+
+    Both ultimately read the same precomputed table — embedding lookup vs
+    persistent-buffer copy — so PCC should be ~1.0.
+    """
+    import ttnn
+    from models.demos.qwen3_6_galaxy.tt.llama_rope import Qwen36RopeSetup
+    from models.demos.qwen3_6_galaxy.tt.qwen36_model_config import TtQwen36ModelArgs
+
+    args = TtQwen36ModelArgs(mesh_8x4)
+    rope = Qwen36RopeSetup(mesh_8x4, args, batch_size=_BATCH_SIZE, max_seq_len=_MAX_SEQ_LEN)
+
+    def _gather(t):
+        h = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_8x4, dim=0))
+        # h shape: [32, 1, 1, rotary_dim] (eager path persistent buf)
+        # or       [32, 1, rotary_dim]    (trace path: embedding output unsqueezed to 4D)
+        # Take device 0's copy, flatten leading dims, last dim = rotary_dim.
+        return h[0].reshape(-1)[: rope.rotary_dim].float()
+
+    for cur_pos in (0, 1, 5, 63, 1024):
+        if cur_pos >= _MAX_SEQ_LEN:
+            continue
+        cos_eager, sin_eager = rope.get_cos_sin_for_decode(cur_pos)
+        cos_eager_h = _gather(cos_eager)
+        sin_eager_h = _gather(sin_eager)
+
+        rot_idxs = rope.get_rm_rot_idxs(torch.tensor([cur_pos], dtype=torch.int64))
+        cos_trace, sin_trace = rope.get_rm_rot_mats(rot_idxs)
+        cos_trace_h = _gather(cos_trace)
+        sin_trace_h = _gather(sin_trace)
+        cos_trace.deallocate(True)
+        sin_trace.deallocate(True)
+        rot_idxs.deallocate(True)
+
+        cos_diff = (cos_eager_h - cos_trace_h).abs().max().item()
+        sin_diff = (sin_eager_h - sin_trace_h).abs().max().item()
+        print(f"[T14b.9-rope] cur_pos={cur_pos:>5d}  cos_max_diff={cos_diff:.2e}  sin_max_diff={sin_diff:.2e}")
+        assert cos_diff < 1e-2, f"cos mismatch at cur_pos={cur_pos}: max_diff={cos_diff:.4e}"
+        assert sin_diff < 1e-2, f"sin mismatch at cur_pos={cur_pos}: max_diff={sin_diff:.4e}"
