@@ -22,6 +22,8 @@ Owner:
 
 from dataclasses import dataclass
 
+from tt_umd import ClusterDescriptor
+
 from triage import ScriptConfig, triage_field, run_script
 from ttexalens.context import Context
 from ttexalens.device import Device
@@ -46,20 +48,20 @@ class DeviceInfoRow:
     postcode: str = triage_field("Postcode")
 
 
-def _tray_or_board_label(cd, chip_id: int) -> str:
+def _tray_or_board_label(cd: ClusterDescriptor, chip_id: int) -> str:
     tray = cd.get_tray_id(chip_id)
     if tray is not None:
         return f"Tray {tray}"
     return f"Board {cd.get_board_id_for_chip(chip_id):#x}"
 
 
-def _bus_id_label(cd, chip_id: int) -> str:
+def _bus_id_label(cd: ClusterDescriptor, chip_id: int) -> str:
     if not cd.is_chip_mmio_capable(chip_id):
         return ""
     return f"{cd.get_bus_id(chip_id):#04x}"
 
 
-def get_device_info(device: Device, cd, pci_bdfs: dict) -> DeviceInfoRow:
+def get_device_info(device: Device, cd: ClusterDescriptor, pci_bdfs: dict) -> DeviceInfoRow:
     fw = device.firmware_version
     chip_id = device.id
 
