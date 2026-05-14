@@ -42,7 +42,7 @@ void kernel_main() {
         cb_wait_front(cb_input, 1);
 
         tile_regs_acquire();
-        tile_regs_wait();
+
         copy_tile(cb_grad_out, 0, 0);
         copy_tile(cb_input, 0, 1);
         copy_tile(cb_input, 0, 2);  // tile[2] = x
@@ -101,8 +101,11 @@ void kernel_main() {
         // tile[0] = grad * (cdf_term + x * pdf_term)
         mul_binary_tile(0, 1, 0);
 
-        pack_tile(0, cb_grad_in);
         tile_regs_commit();
+        tile_regs_wait();
+
+        pack_tile(0, cb_grad_in);
+
         tile_regs_release();
 
         cb_pop_front(cb_grad_out, 1);

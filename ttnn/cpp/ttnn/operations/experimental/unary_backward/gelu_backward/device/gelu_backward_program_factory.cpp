@@ -145,24 +145,15 @@ tt::tt_metal::ProgramDescriptor GeluBackwardProgramFactory::create_descriptor(
         } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
+            TT_THROW("Core not in specified core ranges");
         }
 
-        reader_desc.runtime_args.emplace_back(
-            core,
-            KernelDescriptor::CoreRuntimeArgs{
-                src0_buffer->address(),
-                src1_buffer->address(),
-                num_tiles_per_core,
-                num_tiles_written,
-                0u,
-                0u,
-                num_cores_y});
+        reader_desc.emplace_runtime_args(
+            core, {src0_buffer, src1_buffer, num_tiles_per_core, num_tiles_written, 0u, 0u, num_cores_y});
 
-        compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{num_tiles_per_core});
+        compute_desc.emplace_runtime_args(core, {num_tiles_per_core});
 
-        writer_desc.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{dst_buffer->address(), num_tiles_per_core, num_tiles_written});
+        writer_desc.emplace_runtime_args(core, {dst_buffer, num_tiles_per_core, num_tiles_written});
 
         num_tiles_written += num_tiles_per_core;
     }
