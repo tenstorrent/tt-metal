@@ -18,14 +18,16 @@ from models.demos.wormhole.bark.tt.bark_model import _finalize_coarse_output
 
 MODEL_ID = "suno/bark-small"
 
-SEMANTIC_VOCAB_SIZE = 10_000
-SEMANTIC_PAD_TOKEN = 10_000
-TEXT_ENCODING_OFFSET = 10_048  # noqa  #cycode_secret_false_positive Bark vocab index, not a secret
-SEMANTIC_INFER_TOKEN = 129_599  # noqa  #cycode_secret_false_positive Bark vocab index, not a secret
-COARSE_SEMANTIC_PAD_TOKEN = 12_048  # noqa  #cycode_secret_false_positive Bark vocab index, not a secret
-COARSE_INFER_TOKEN = 12_050  # noqa  #cycode_secret_false_positive Bark vocab index, not a secret
-CODEBOOK_SIZE = 1024
-N_COARSE_CODEBOOKS = 2
+from models.demos.wormhole.bark.tt.bark_constants import (
+    CODEBOOK_SIZE,
+    COARSE_INFER_TOKEN,
+    COARSE_SEMANTIC_PAD_TOKEN,
+    N_COARSE_CODEBOOKS,
+    SEMANTIC_INFER_TOKEN,
+    SEMANTIC_PAD_TOKEN,
+    SEMANTIC_VOCAB_SIZE,
+    TEXT_ENCODING_OFFSET,
+)
 
 
 @pytest.fixture(scope="module")

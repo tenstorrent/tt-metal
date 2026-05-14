@@ -67,6 +67,22 @@ def preprocess_linear_weight(weight_tensor, device):
     return tt_weight
 
 
+def preprocess_bias_weight(bias_tensor, device):
+    """Convert a 1D bias tensor to TTNN format [1, 1, 1, H].
+
+    Unlike preprocess_linear_weight (which transposes 2D weights),
+    biases must NOT be transposed — they are broadcast along the last dim.
+    """
+    bias = bias_tensor.detach().float()
+    if bias.dim() == 1:
+        bias = bias.unsqueeze(0).unsqueeze(0).unsqueeze(0)  # [1, 1, 1, H]
+    elif bias.dim() == 2:
+        # Already [1, H] from .unsqueeze(0) — just add batch dims
+        bias = bias.unsqueeze(0).unsqueeze(0)  # [1, 1, 1, H]
+    tt_bias = ttnn.from_torch(bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    return tt_bias
+
+
 def preprocess_layernorm_weight(weight_tensor, device):
     """Convert LayerNorm weight/bias to TTNN tensor."""
     w = weight_tensor.detach().float()
@@ -96,14 +112,14 @@ class TtBarkMLP:
         # Preprocess weights
         self.in_proj_weight = preprocess_linear_weight(parameters["in_proj"]["weight"], device)
         self.in_proj_bias = (
-            preprocess_linear_weight(parameters["in_proj"]["bias"].unsqueeze(0), device)
+            preprocess_bias_weight(parameters["in_proj"]["bias"], device)
             if config.bias and "bias" in parameters["in_proj"]
             else None
         )
 
         self.out_proj_weight = preprocess_linear_weight(parameters["out_proj"]["weight"], device)
         self.out_proj_bias = (
-            preprocess_linear_weight(parameters["out_proj"]["bias"].unsqueeze(0), device)
+            preprocess_bias_weight(parameters["out_proj"]["bias"], device)
             if config.bias and "bias" in parameters["out_proj"]
             else None
         )
@@ -191,18 +207,10 @@ class TtBarkAttention:
             packer_l1_acc=True,
         )
 
-        # SDPA Program Config for core grid utilization
-        grid_size = config.grid_size if config.grid_size else self.device.compute_with_storage_grid_size()
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(grid_size.x, grid_size.y),
-            q_chunk_size=128,
-            k_chunk_size=128,
-        )
-
         # QKV projection: hidden -> 3*hidden
         self.att_proj_weight = preprocess_linear_weight(parameters["att_proj"]["weight"], device)
         self.att_proj_bias = (
-            preprocess_linear_weight(parameters["att_proj"]["bias"].unsqueeze(0), device)
+            preprocess_bias_weight(parameters["att_proj"]["bias"], device)
             if "bias" in parameters["att_proj"] and parameters["att_proj"]["bias"] is not None
             else None
         )
@@ -210,7 +218,7 @@ class TtBarkAttention:
         # Output projection: hidden -> hidden
         self.out_proj_weight = preprocess_linear_weight(parameters["out_proj"]["weight"], device)
         self.out_proj_bias = (
-            preprocess_linear_weight(parameters["out_proj"]["bias"].unsqueeze(0), device)
+            preprocess_bias_weight(parameters["out_proj"]["bias"], device)
             if "bias" in parameters["out_proj"] and parameters["out_proj"]["bias"] is not None
             else None
         )
@@ -479,9 +487,11 @@ class TtBarkGPT:
         self.config = config
         self.is_causal = is_causal
 
-        # Embedding layers — use CPU nn.Embedding to avoid NCRISC kernel
-        # compilation bug in ttnn 0.67.0rc5 (embedding NCRISC template fails).
-        # CPU→device transfer for embeddings is ~0.1ms, negligible vs transformer.
+        # Embedding layers -- use CPU nn.Embedding to avoid NCRISC kernel
+        # compilation bug in ttnn (embedding NCRISC template fails).
+        # TODO(Ashutosh0x): Switch to ttnn.embedding once NCRISC bug is resolved.
+        #   Tracking: https://github.com/tenstorrent/tt-metal/issues/32069
+        # CPU->device transfer for embeddings is ~0.1ms, negligible vs transformer.
         self.input_embeds = torch.nn.Embedding.from_pretrained(
             parameters["input_embeds_layer"]["weight"].detach().float()
         )
@@ -606,7 +616,11 @@ class TtBarkGPT:
         # Final layer norm
         prev_hidden = tt_hidden
         tt_hidden = ttnn.layer_norm(
-            tt_hidden, epsilon=1e-5, weight=self.ln_f_weight, bias=self.ln_f_bias, memory_config=memory_config
+            tt_hidden,
+            epsilon=self.config.layer_norm_epsilon,
+            weight=self.ln_f_weight,
+            bias=self.ln_f_bias,
+            memory_config=memory_config,
         )
         ttnn.deallocate(prev_hidden)
 

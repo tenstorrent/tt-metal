@@ -72,7 +72,10 @@ def _split_sentence(sentence: str, max_chars: int) -> list:
 
     for part in parts:
         if len(current) + len(part) + 2 <= max_chars:
-            current = f"{current}, {part}".strip(", ")
+            if current:
+                current = f"{current}, {part}"
+            else:
+                current = part
         else:
             if current:
                 chunks.append(current)
@@ -120,12 +123,11 @@ def crossfade_segments(segments: list, crossfade_ms: int = 50, sample_rate: int 
             fade_out = np.linspace(1.0, 0.0, crossfade_samples, dtype=np.float32)
             fade_in = np.linspace(0.0, 1.0, crossfade_samples, dtype=np.float32)
 
-            result[-crossfade_samples:] *= fade_out
-            seg[:crossfade_samples] *= fade_in
-            result[-crossfade_samples:] += seg[:crossfade_samples]
-            result = np.concatenate([result, seg[crossfade_samples:]])
+            # Non-destructive blending -- avoids in-place mutation
+            blended = result[-crossfade_samples:] * fade_out + seg[:crossfade_samples] * fade_in
+            result = np.concatenate([result[:-crossfade_samples], blended, seg[crossfade_samples:]])
         else:
-            silence = np.zeros(int(0.05 * sample_rate), dtype=np.float32)
+            silence = np.zeros(crossfade_samples if crossfade_samples > 0 else int(0.05 * sample_rate), dtype=np.float32)
             result = np.concatenate([result, silence, seg])
 
     return result
@@ -162,10 +164,12 @@ def generate_long_text_audio(
             print(f"  Chunk [{i + 1}/{len(chunks)}]: '{display}'")
 
         audio = bark_model.generate(chunk, verbose=False)
-        # Ensure float32 for crossfade math
-        audio_f32 = np.asarray(audio, dtype=np.float32)
-        if np.abs(audio_f32).max() > 1.0:
-            audio_f32 = audio_f32 / 32768.0  # Handle int16 input
+        # Ensure float32 for crossfade math; scale integer PCM inputs by dtype max
+        audio_array = np.asarray(audio)
+        if np.issubdtype(audio_array.dtype, np.integer):
+            audio_f32 = audio_array.astype(np.float32) / np.iinfo(audio_array.dtype).max
+        else:
+            audio_f32 = audio_array.astype(np.float32)
         audio_segments.append(audio_f32)
 
     final = crossfade_segments(audio_segments, crossfade_ms=crossfade_ms)

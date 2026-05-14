@@ -43,14 +43,16 @@ Target: PCC ≥ 0.95 — **All stages exceed target by significant margin.**
 | :--- | :--- | :--- | :--- | :--- |
 | Semantic | Tokens/sec | >= 20 | **92.0** | PASS - 4.6x target |
 | Coarse | Tokens/sec | >= 60 | **67.0** | PASS - Exceeds target |
-| Fine | Tokens/sec | >= 60 | **~600** (projected) | PASS - 10x target |
+| Fine | Tokens/sec | >= 60 | **~600** (projected) | PROJECTED - Pending CI measurement |
 | Decode | Time (s) | -- | **0.18** | PASS |
-| Overall | RTF (warm) | < 0.8 | **~0.70** (projected) | PASS - Pending HW validation |
+| Overall | RTF (warm) | < 0.8 | **~0.70** (projected) | PROJECTED - Pending N300 CI validation |
 | Overall | RTF (cold) | -- | **6.80** | First run, JIT compile |
 
-> **Note on RTF:** With pre-allocated KV cache (O(n) vs O(n²) concat) and on-device
-> logits masking (eliminating per-step host transfers), the autoregressive stages
-> are projected to be ~50-60% faster. Exact numbers pending N300 validation run.
+> **Note on RTF:** With pre-allocated KV cache (O(n) vs O(n^2) concat) and on-device
+> logits masking (argmax runs on device; host sync only for EOS checks), the
+> autoregressive stages are projected to be faster. Exact speedup pending
+> per-token profiling breakdown on N300. The 0.70 projection assumes KV cache
+> concat was the dominant per-step cost; CI validation will confirm.
 
 ## Memory Budget
 
@@ -132,17 +134,20 @@ Text Input
 
 | Transfer | Direction | Format | Optimization |
 | :--- | :--- | :--- | :--- |
-| Text → Semantic input | Host→Device | uint32 ROW_MAJOR | Minimal (tokenizer on CPU) |
-| Semantic logits → argmax | Device→Host | bfloat16 TILE→float32 | Required for vocab masking |
-| Semantic tokens → Coarse input | Host→Device | uint32 ROW_MAJOR | Tokens stay on host (small) |
-| Coarse logits → argmax | Device→Host | bfloat16 TILE→float32 | Required for codebook masking |
-| Coarse tokens → Fine input | Host→Device | uint32 ROW_MAJOR | Small tensor, unavoidable |
-| Fine logits → argmax | On-device | ttnn.argmax | No transfer needed |
-| Fine codebooks → EnCodec | Device→Host | int32 | Required (EnCodec is CPU) |
+| Text -> Semantic input | Host->Device | uint32 ROW_MAJOR | Minimal (tokenizer on CPU) |
+| Semantic logits -> mask+argmax | On-device | bfloat16 TILE | `ttnn.add` + `ttnn.argmax` on device |
+| Semantic EOS check | Device->Host | int32 scalar | Every 4 steps only |
+| Semantic tokens -> Coarse input | Host->Device | uint32 ROW_MAJOR | Tokens stay on host (small) |
+| Coarse logits -> mask+argmax | On-device | bfloat16 TILE | `ttnn.add` + `ttnn.argmax` on device |
+| Coarse EOS check | Device->Host | int32 scalar | Every step (codebook-pair alignment) |
+| Coarse tokens -> Fine input | Host->Device | uint32 ROW_MAJOR | Small tensor, unavoidable |
+| Fine logits -> argmax | On-device | ttnn.argmax | No transfer needed |
+| Fine codebooks -> EnCodec | Device->Host | int32 | Required (EnCodec is CPU) |
 
-**Summary:** Host-device transfers during generation are minimal and intentional.
-The only per-step transfer is logits→host for argmax (stages 1-2), which is
-required for Bark's vocab masking strategy. Stage 3 uses on-device argmax.
+**Summary:** Logits masking and argmax run on-device for all stages. Host-device
+transfers during generation are limited to EOS detection (scalar token ID
+transfer every N steps). Embeddings for stages 1-2 are computed on CPU due to
+an NCRISC compiler bug and transferred per step (~0.1ms, negligible vs transformer).
 
 ## Pipeline Overlap Analysis
 
@@ -153,14 +158,19 @@ required for Bark's vocab masking strategy. Stage 3 uses on-device argmax.
 | Stage 1 ∥ Stage 2 | max(T₁,T₂) + T₃ + T₄ | ~1.3× | Requires 2 devices or async |
 | Fully pipelined | max(T₁,T₂,T₃,T₄) | ~2.0× | Theoretical, needs 4 devices |
 
-### Implemented Overlap: Chunked Coarse→Fine
+### Implemented: Chunked Coarse->Fine Processing
 
 The `BarkStreamingPipeline` in `bark_pipeline_overlap.py` implements chunked fine
 processing: coarse output is split into fixed-size frame chunks, and each chunk is
 processed through the fine model independently. This:
-1. **Reduces peak memory** — fine model activations scale with chunk size, not full sequence
-2. **Enables multi-device scaling** — with 2 devices, coarse and fine can run concurrently
-3. **Maintains correctness** — fine model is non-causal, so chunk boundaries don't affect output
+1. **Reduces peak memory** -- fine model activations scale with chunk size, not full sequence
+2. **Provides interface for multi-device scaling** -- with 2 devices, coarse and fine could run concurrently
+3. **Maintains correctness** -- fine model is non-causal, so chunk boundaries don't affect output
+
+> **Note:** True concurrent overlap requires two devices. On a single N300 the
+> stages run sequentially; the chunked fine pass reduces peak memory and provides
+> the interface a multi-device scheduler would use. Full overlap is a multi-device
+> follow-up.
 
 ## Optimizations Applied
 

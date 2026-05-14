@@ -12,24 +12,27 @@ Usage:
     audio = model.generate("Hello, this is Bark speaking!")
 """
 
+import logging
 import time
 
 import numpy as np
 import torch
 
 import ttnn
+from models.demos.wormhole.bark.tt.bark_constants import (
+    CODEBOOK_SIZE,
+    COARSE_INFER_TOKEN,
+    COARSE_SEMANTIC_PAD_TOKEN,
+    N_COARSE_CODEBOOKS,
+    SEMANTIC_INFER_TOKEN,
+    SEMANTIC_PAD_TOKEN,
+    SEMANTIC_VOCAB_SIZE,
+    TEXT_ENCODING_OFFSET,
+)
 from models.demos.wormhole.bark.tt.bark_fine import TtBarkFineModel, preprocess_fine_model_parameters
 from models.demos.wormhole.bark.tt.bark_gpt import BarkConfig, TtBarkGPT, preprocess_model_parameters
 
-# ----- Bark upstream token constants (from HF BarkSemanticGenerationConfig / BarkCoarseGenerationConfig) -----
-SEMANTIC_VOCAB_SIZE = 10_000
-SEMANTIC_PAD_TOKEN = 10_000  # EOS for semantic stage
-TEXT_ENCODING_OFFSET = 10_048  # noqa  #cycode_secret_false_positive Bark vocab index, not a secret
-SEMANTIC_INFER_TOKEN = 129_599  # noqa  #cycode_secret_false_positive Bark vocab index, not a secret
-COARSE_SEMANTIC_PAD_TOKEN = 12_048  # noqa  #cycode_secret_false_positive Bark vocab index, not a secret
-COARSE_INFER_TOKEN = 12_050  # noqa  #cycode_secret_false_positive Bark vocab index, not a secret
-CODEBOOK_SIZE = 1024
-N_COARSE_CODEBOOKS = 2
+logger = logging.getLogger(__name__)
 
 
 def _finalize_coarse_output(generated_tokens: list[torch.Tensor]) -> torch.Tensor:
@@ -527,9 +530,10 @@ class TtBarkModel:
         semantic_tokens = self.generate_semantic_tokens(text, voice_preset)
         timings["semantic"] = time.time() - t0
         if verbose:
+            sem_elapsed = max(timings['semantic'], 1e-6)
             print(
                 f"Stage 1 (Semantic): {semantic_tokens.shape[1]} tokens in {timings['semantic']:.2f}s "
-                f"({semantic_tokens.shape[1] / timings['semantic']:.1f} tok/s)"
+                f"({semantic_tokens.shape[1] / sem_elapsed:.1f} tok/s)"
             )
 
         # Stage 2: Semantic -> Coarse
@@ -537,9 +541,10 @@ class TtBarkModel:
         coarse_tokens = self.generate_coarse_tokens(semantic_tokens)
         timings["coarse"] = time.time() - t0
         if verbose:
+            coarse_elapsed = max(timings['coarse'], 1e-6)
             print(
                 f"Stage 2 (Coarse): {coarse_tokens.shape[1]} tokens in {timings['coarse']:.2f}s "
-                f"({coarse_tokens.shape[1] / timings['coarse']:.1f} tok/s)"
+                f"({coarse_tokens.shape[1] / coarse_elapsed:.1f} tok/s)"
             )
 
         # Stage 3: Coarse -> Fine

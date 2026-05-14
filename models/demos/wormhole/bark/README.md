@@ -79,7 +79,7 @@ The implementation uses TTNN ops for all transformer computation:
 - **On-Device Logits Masking**: Pre-created suppression masks applied via `ttnn.add` + `ttnn.argmax` on device. Host sync only for EOS detection (every 4 steps semantic, every step coarse for codebook-pair alignment).
 - **Stage 3 Persistent Tokens**: The fine acoustics stage maintains all 8 codebooks on-device, with on-device `ttnn.argmax` for codebook prediction.
 - **Compute Grid Tuning**: Configured to utilize the available compute grid on Wormhole (8×7 on N300, 8×8 on N150).
-- **Chunked Coarse→Fine Pipeline**: Fine model processes coarse tokens in chunks, reducing peak memory and enabling future multi-device overlap.
+- **Chunked Coarse->Fine Processing**: Fine model processes coarse tokens in configurable chunks (default 100 frames), reducing peak memory. True concurrent overlap requires two devices; on single N300 the stages run sequentially. Full multi-device overlap is a follow-up.
 - **Intermediate Tensor Cleanup**: Transposed key tensors, pre-norm hidden states, and KV cache are explicitly deallocated to minimize L1/DRAM pressure.
 - **Operator Fusion**: MLP projections via `ttnn.linear`, GELU_NEW activation decomposed on-device (`x * 0.5 * (1 + tanh(√(2/π) * (x + 0.044715x³)))`).
 
@@ -87,7 +87,7 @@ The implementation uses TTNN ops for all transformer computation:
 - `ttnn.linear` — Projections and fused MLP transformations
 - `ttnn.transformer.scaled_dot_product_attention` — On-device attention
 - `ttnn.layer_norm` — Pre-norm in each block + final norm
-- `ttnn.embedding` — On-device lookups for tokens and positions
+- `ttnn.embedding` — On-device lookups (used for fine stage; semantic/coarse use CPU nn.Embedding due to NCRISC compiler bug, see [#32069](https://github.com/tenstorrent/tt-metal/issues/32069))
 - `ttnn.add` / `ttnn.slice` / `ttnn.reshape` — Tensor manipulation
 - `ttnn.deallocate` — Explicit memory management
 
@@ -96,8 +96,8 @@ The implementation uses TTNN ops for all transformer computation:
 |--------|--------|--------|
 | Semantic tokens/sec | >= 20 | PASS - 92.0 tok/s (4.6x target) |
 | Coarse tokens/sec | >= 60 | PASS - 67.0 tok/s |
-| Fine tokens/sec | >= 60 | PASS - ~600 tok/s (projected) |
-| RTF | < 0.8 | PASS - ~0.70 (projected, pending N300 validation) |
+| Fine tokens/sec | >= 60 | PROJECTED - ~600 tok/s (pending CI) |
+| RTF | < 0.8 | PROJECTED - ~0.70 (pending N300 CI validation) |
 | PCC vs PyTorch | >= 0.95 | PASS - All stages > 0.999 |
 
 ## Dependencies
