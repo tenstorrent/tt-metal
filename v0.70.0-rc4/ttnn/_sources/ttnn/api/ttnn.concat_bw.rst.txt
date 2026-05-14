@@ -1,0 +1,8 @@
+﻿ttnn.concat\_bw
+===============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.concat_bw:
+
+.. autooperation:: ttnn.concat_bw

@@ -1,0 +1,8 @@
+﻿ttnn.fill\_cache
+================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.fill_cache:
+
+.. autooperation:: ttnn.fill_cache
