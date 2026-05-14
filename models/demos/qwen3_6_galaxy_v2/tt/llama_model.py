@@ -9,14 +9,15 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.sampling.generator import SamplingGenerator
-from models.demos.llama3_70b_galaxy.tt.distributed_norm import DistributedNorm
-from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
-from models.demos.llama3_70b_galaxy.tt.llama_common import copy_host_to_device, get_prefill_rot_mat
-from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
-from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
-from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
-from models.demos.llama3_70b_galaxy.tt.lm_head import LMHead
-from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
+from models.demos.qwen3_6_galaxy_v2.tt.distributed_norm import DistributedNorm
+from models.demos.qwen3_6_galaxy_v2.tt.llama_ccl import TT_CCL
+from models.demos.qwen3_6_galaxy_v2.tt.llama_common import copy_host_to_device, get_prefill_rot_mat
+from models.demos.qwen3_6_galaxy_v2.tt.llama_decoder import TtTransformerBlock
+from models.demos.qwen3_6_galaxy_v2.tt.llama_embedding import TtLlamaEmbedding
+from models.demos.qwen3_6_galaxy_v2.tt.llama_rope import TtLlamaRotarySetup
+from models.demos.qwen3_6_galaxy_v2.tt.lm_head import LMHead
+from models.demos.qwen3_6_galaxy_v2.tt.load_checkpoints import standardize_hf_keys_qwen36
+from models.demos.qwen3_6_galaxy_v2.tt.prefetcher_common import TtLlamaPrefetcherSetup
 
 
 class TtTransformer(LightweightModule):
@@ -36,6 +37,11 @@ class TtTransformer(LightweightModule):
     ):
         super().__init__()
         self.args = args
+        # qwen3.6-27B (Galaxy V2) marker — gates DeltaNet dispatch, partial RoPE,
+        # zero-centered norm, and the no-prefetcher decode/prefill paths. Falls
+        # back to ``False`` so the 70B / qwen3-32B / olmo regression surface is
+        # unaffected (olmo precedent: ``is_olmo`` gating, branch ``origin/ssinghal/olmo-3-32b``).
+        self.is_qwen36 = getattr(args, "is_qwen36", False)
         self.vocab_size = args.vocab_size
         assert self.vocab_size > 0
         self.n_layers = args.n_layers
@@ -44,6 +50,16 @@ class TtTransformer(LightweightModule):
         self.model_config = args.get_model_config()
         self.grid_size = self.args.max_grid_size
         self.enable_prefetcher_performance_mode = enable_prefetcher_performance_mode
+        # --- Weight ingestion (qwen3.6 only) -----------------------------
+        # Defensive: ``args.load_state_dict()`` already runs
+        # ``standardize_hf_keys`` → ``convert_hf_to_meta``, but a caller may
+        # pass a raw HF state_dict directly (e.g. via
+        # ``AutoModelForCausalLM.from_pretrained(...).state_dict()``). When
+        # is_qwen36 is set AND we still see the ``model.language_model.*``
+        # prefix, run the qwen3.6 standardization pass so downstream
+        # constructors find canonical ``layers.{i}.attention.*`` keys.
+        if self.is_qwen36 and state_dict is not None and any(k.startswith("model.language_model.") for k in state_dict):
+            state_dict = standardize_hf_keys_qwen36(state_dict)
         state_dict_prefix = args.get_state_dict_prefix("", None)
         self.allocate_prefill_buffers = allocate_prefill_buffers
         self.paged_attention_config = paged_attention_config
@@ -57,6 +73,10 @@ class TtTransformer(LightweightModule):
             dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
         )
 
+        # qwen3.6 partial-RoPE: pass ``args=`` so TtLlamaRotarySetup takes the
+        # ``is_qwen36`` branch (builds cos/sin at ``args.rope_dim=64``). 70B /
+        # qwen3-32B / olmo set ``is_qwen36=False`` and the constructor ignores
+        # ``args`` for that path.
         self.rope_setup = TtLlamaRotarySetup(
             mesh_device,
             args.max_batch_size,
@@ -65,6 +85,7 @@ class TtTransformer(LightweightModule):
             args.rope_theta,
             args.use_scaled_rope,
             args.rope_scaling_factor,
+            args=args if self.is_qwen36 else None,
         )
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
@@ -95,6 +116,21 @@ class TtTransformer(LightweightModule):
             )
             for i in tqdm(range(self.n_layers))
         ]
+        # --- Thread RoPE setup onto full_attention layers (qwen3.6 only) ---
+        # The qwen3.6 ``TtLlamaAttention._forward_prefill_qwen36`` /
+        # ``_forward_decode_qwen36`` paths read ``self.rope_setup`` to apply
+        # partial RoPE; the V2-decoder's ``TtTransformerBlock`` doesn't pass
+        # one through, so wire it here. DeltaNet (linear_attention) layers do
+        # NOT use RoPE and are intentionally skipped. For 70B / qwen3-32B /
+        # olmo (is_qwen36=False) the attention path constructs its own RoPE
+        # internally — no threading needed.
+        if self.is_qwen36:
+            self._thread_rope_setup()
+
+        # qwen3.6 final norm is zero-centered (Qwen3NextRMSNorm: w' = w + 1).
+        # 70B / qwen3-32B / olmo set ``zero_centered_norm=False`` (or absent)
+        # and the DistributedNorm default keeps the regression behavior.
+        zero_centered_final_norm = getattr(args, "zero_centered_norm", False)
         self.norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
@@ -111,6 +147,7 @@ class TtTransformer(LightweightModule):
             args,
             tt_ccl=self.tt_ccl,
             ccl_topology=self.model_config["CCL_TOPOLOGY"],
+            zero_centered=zero_centered_final_norm,
         )
 
         state_dict_prefix = args.get_state_dict_prefix("", None)
@@ -129,11 +166,13 @@ class TtTransformer(LightweightModule):
             # First initialization of prefill CCLs and prefetcher. It needs to be after initialization of layers, norm and lm_head since those switch modes as well
             # This initialization is required to avoid race condition due to all buffers and semaphores not being allocated at initialization
             self.switch_mode("prefill")
-            if not self.args.is_qwen:
+            # qwen3 / qwen3.6 already do prefill setup via switch_mode; only the
+            # 70B / olmo paths need this extra call.
+            if not self.args.is_qwen and not self.is_qwen36:
                 self.setup_prefill()
             self.is_prefill_setup = True
 
-        if mode == "decode" and self.args.use_prefetcher:
+        if mode == "decode" and getattr(self.args, "use_prefetcher", False) and self.prefetcher_setup is not None:
             self.tt_tensors = self.prefetcher_setup.get_input_tensors()
         self.tt_rot_mats_prefill = None
 
@@ -149,6 +188,27 @@ class TtTransformer(LightweightModule):
             device=self.mesh_device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
+
+    def _thread_rope_setup(self):
+        """Thread ``self.rope_setup`` onto each full_attention layer's attention.
+
+        The qwen3.6 ``TtLlamaAttention`` (is_qwen36=True) forward paths read
+        ``self.rope_setup`` to apply partial RoPE; ``TtTransformerBlock``
+        doesn't pass it through its constructor, so we wire it after the
+        per-layer loop. DeltaNet (``is_linear_attention_layer=True``) layers
+        do NOT use RoPE and are intentionally skipped.
+
+        Safe to call only when ``self.is_qwen36`` is True. For 70B /
+        qwen3-32B / olmo the attention block constructs its own RoPE
+        internally — no threading needed.
+        """
+        for layer in self.layers:
+            # DeltaNet layers expose ``is_linear_attention_layer=True`` on
+            # the parent ``TtTransformerBlock``; the full_attention branch
+            # sets it to False (or omits it on non-qwen36 paths).
+            if getattr(layer, "is_linear_attention_layer", False):
+                continue
+            layer.attention.rope_setup = self.rope_setup
 
     def get_or_create_prefill_rot_mats(self):
         """
@@ -166,6 +226,37 @@ class TtTransformer(LightweightModule):
         return self.tt_rot_mats_prefill
 
     def setup_prefill(self, mesh_sub_device_manager_id_prefill=None):
+        # qwen3.6 / olmo precedent: when use_prefetcher=False, skip the
+        # prefetcher entirely and use a single all-cores sub-device.
+        use_prefetcher = getattr(self.args, "use_prefetcher", True)
+        if not use_prefetcher:
+            self.prefetcher_setup = None
+            worker_sub_device_id = ttnn.SubDeviceId(0)
+            if mesh_sub_device_manager_id_prefill is None:
+                grid_size = self.mesh_device.compute_with_storage_grid_size()
+                all_core_range_set = ttnn.CoreRangeSet(
+                    [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))]
+                )
+                all_sub_device = ttnn.SubDevice([all_core_range_set])
+                sub_device_manager = self.mesh_device.create_sub_device_manager([all_sub_device], 0)
+                self.mesh_device.load_sub_device_manager(sub_device_manager)
+                self.mesh_sub_device_manager_id_prefill = sub_device_manager
+                self.tt_ccl = TT_CCL(
+                    self.mesh_device,
+                    self.args,
+                    worker_sub_device_id=worker_sub_device_id,
+                    mode="prefill",
+                    allocate_prefill_buffers=self.allocate_prefill_buffers,
+                    is_qwen=True if self.args.is_qwen else False,
+                    is_qwen36=self.is_qwen36,
+                )
+            else:
+                self.mesh_device.load_sub_device_manager(mesh_sub_device_manager_id_prefill)
+                self.tt_ccl = self.tt_ccl_prefill
+            self.mesh_device.set_sub_device_stall_group([worker_sub_device_id])
+            self._worker_sub_device_id = worker_sub_device_id
+            return
+
         self.prefetcher_setup = TtLlamaPrefetcherSetup(
             self.mesh_device,
             n_tensors=0,
@@ -190,6 +281,40 @@ class TtTransformer(LightweightModule):
             self.tt_ccl = self.tt_ccl_prefill
 
     def setup_decode(self, mesh_sub_device_manager_id_decode=None):
+        # qwen3.6 / olmo precedent: when use_prefetcher=False, skip the
+        # prefetcher and run on a single all-cores sub-device.
+        use_prefetcher = getattr(self.args, "use_prefetcher", True)
+        if not use_prefetcher:
+            self.prefetcher_setup = None
+            worker_sub_device_id = ttnn.SubDeviceId(0)
+            if mesh_sub_device_manager_id_decode is None:
+                grid_size = self.mesh_device.compute_with_storage_grid_size()
+                all_core_range_set = ttnn.CoreRangeSet(
+                    [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))]
+                )
+                all_sub_device = ttnn.SubDevice([all_core_range_set])
+                sub_device_manager = self.mesh_device.create_sub_device_manager([all_sub_device], 0)
+                self.mesh_device.load_sub_device_manager(sub_device_manager)
+                self.mesh_sub_device_manager_id_decode = sub_device_manager
+                self.tt_ccl = TT_CCL(
+                    self.mesh_device,
+                    self.args,
+                    worker_sub_device_id=worker_sub_device_id,
+                    is_qwen=True if self.args.is_qwen else False,
+                    is_qwen36=self.is_qwen36,
+                )
+                self.sampling = SamplingGenerator(
+                    args=self.args,
+                    mesh_device=self.mesh_device,
+                    tt_ccl=self.tt_ccl,
+                )
+            else:
+                self.mesh_device.load_sub_device_manager(mesh_sub_device_manager_id_decode)
+                self.tt_ccl = self.tt_ccl_decode
+            self.mesh_device.set_sub_device_stall_group([worker_sub_device_id])
+            self._worker_sub_device_id = worker_sub_device_id
+            return
+
         self.prefetcher_setup = TtLlamaPrefetcherSetup(
             self.mesh_device,
             n_tensors=5 if self.args.use_prefetcher else 0,
