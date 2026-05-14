@@ -27,6 +27,8 @@
 #include "llk_pack_tile_api.h"
 #if defined(ARCH_BLACKHOLE)
 #include "experimental/llk_pack_fast_tilize_api.h"
+#elif defined(ARCH_WORMHOLE)
+#include "llk_pack_fast_tilize_api.h"
 #endif
 #endif
 
