@@ -73,11 +73,17 @@ class DistributedNorm(LightweightModule):
         #     core_grid=ttnn.CoreGrid(y=1, x=1),
         #     strategy=ttnn.ShardStrategy.WIDTH,
         # )
+        # V2-decode-64L: use HiFi4 + fp32 dest accumulation to mirror v1's
+        # DistributedNorm (models/demos/qwen3_6_galaxy/tt/distributed_norm.py
+        # line ~138).  The default (HiFi2 + bf16 dest) accumulates the
+        # sum-of-squares in bf16, losing precision on small-magnitude
+        # activations; with 128 norm calls per single decode pass at 64L the
+        # noise compounds and drops logits PCC from 0.9996 (4L) → 0.16 (64L).
         self.ln_cfg = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
         )
 
     def _bake_zero_centered_offset(self):

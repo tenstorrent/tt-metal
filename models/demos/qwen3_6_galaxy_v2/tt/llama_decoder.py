@@ -203,9 +203,14 @@ class TtTransformerBlock(LightweightModule):
         Output: ttnn.Tensor [B, 1, T=1, H/4=1280] DRAM, col-sharded.
         """
         mlp = self.feed_forward
-        compute_kernel = (
-            self.args.compute_kernel_config_lofi if mlp.four_bit_mlp else self.args.compute_kernel_config_hifi2_fp16
-        )
+        # V2-decode: mirror v1 ``TtLlamaMLP.forward`` and use HiFi4 + fp32 dest
+        # accumulation throughout (the previous hifi2_fp16 had
+        # fp32_dest_acc_en=False which accumulates the K-dim dot product in
+        # bf16).  Empirically this did NOT fix the 64L compounding regression,
+        # but it brings the decode MLP into structural parity with v1 and
+        # matches our prefill MLP's effective HiFi4 path — kept as the safe
+        # default to remove one variable from future bisection.
+        compute_kernel = self.args.compute_kernel_config_hifi4
         # 1. gate_proj (w1) and up_proj (w3): [B, 1, T, H/4] × [H/4, hidden_per_tp]
         w1_out = ttnn.linear(
             ff_in_sharded,
@@ -264,7 +269,7 @@ class TtTransformerBlock(LightweightModule):
         w2_out = ttnn.linear(
             ff_gathered,
             mlp.w2_interleaved,
-            compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+            compute_kernel_config=compute_kernel,  # HiFi4 (see comment above)
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

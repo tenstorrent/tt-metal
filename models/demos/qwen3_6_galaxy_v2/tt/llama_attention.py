@@ -1675,6 +1675,15 @@ class TtLlamaAttention(LightweightModule):
             attn_out_1bnd.deallocate(True)
         else:
             # Non-paged: slice KV cache up to current_pos, GQA-expand, SDPA with explicit mask.
+            # V2-decode-64L: tile-padding rows ``T_kv..T_kv_pad`` contain zeros (cache
+            # was zero-initialized). Without a mask, ``is_causal=False`` SDPA softmax
+            # treats those zero-key positions as score=0 and gives them ``exp(0)/Z``
+            # of the probability mass — diluting the real attention by ~31/(Z_real+31).
+            # With 16 full-attention layers in 64L decode, the dilution compounds and
+            # drops logits PCC from 0.9996 (4L, 1 full-attn) → 0.16 (64L, 16 full-attn).
+            # v1's ``_forward_decode_qwen36`` builds an explicit mask with ``-inf`` on
+            # positions ``T_kv..T_kv_pad`` (see qwen3_6_galaxy/tt/llama_attention.py
+            # lines 1267–1299).  Mirror that here.
             T_kv = (current_pos if isinstance(current_pos, int) else 0) + 1
             T_kv_pad = ((T_kv + _QWEN36_TILE - 1) // _QWEN36_TILE) * _QWEN36_TILE
             k_cached = ttnn.slice(
@@ -1688,6 +1697,21 @@ class TtLlamaAttention(LightweightModule):
             v_exp = ttnn.repeat_interleave(v_cached, gqa_pc, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             k_cached.deallocate(True)
             v_cached.deallocate(True)
+            # Build decode mask for the tile-padded suffix [T_kv:T_kv_pad].
+            decode_mask_tt = None
+            if T_kv_pad > T_kv:
+                import torch as _torch_for_mask
+
+                mask_host = _torch_for_mask.zeros(B, 1, T, T_kv_pad, dtype=_torch_for_mask.bfloat16)
+                mask_host[:, :, :, T_kv:] = float("-inf")
+                decode_mask_tt = ttnn.from_torch(
+                    mask_host,
+                    device=self.mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
             attn_out = ttnn.transformer.scaled_dot_product_attention(
                 q_rot,
                 k_exp,
@@ -1696,7 +1720,10 @@ class TtLlamaAttention(LightweightModule):
                 scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                attn_mask=decode_mask_tt,
             )
+            if decode_mask_tt is not None:
+                decode_mask_tt.deallocate(True)
             k_exp.deallocate(True)
             v_exp.deallocate(True)
             q_rot.deallocate(True)
