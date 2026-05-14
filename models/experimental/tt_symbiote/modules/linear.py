@@ -874,18 +874,28 @@ def _dram_matmul_program_config_for(k: int, n: int, num_cores: int = 8):
 
 
 class TTNNDotsOCRDRAMShardedLMHead(TTNNModule):
-    """LM head with DRAM-width-sharded weight chunks (N-parallel split).
+    """LM head with DRAM-width-sharded weight chunks.
 
-    Per-device weight is split into ``num_chunks`` slices along N. Each slice
-    is laid out ``WIDTH_SHARDED`` across the 12 DRAM banks of that device.
-    Forward path:
-        1. all_gather input on dim=-1 (K-sharded → replicated) -- one CCL.
-        2. interleaved_to_sharded(input) once -- L1 width-sharded.
+    Mesh layout: dim 0 = DP axis (replicate weight), dim -1 = TP axis (shard
+    weight along N). Vocab is padded to a multiple of ``chunk_align * num_tp``
+    so the per-TP-device slice stays cleanly chunkable.
+
+    Forward path (per chip):
+        1. (TP only) all_gather input on dim=-1 (K-sharded → replicated).
+        2. interleaved_to_sharded(input) once -- L1 width-sharded across 8 cores.
         3. For each weight chunk: ttnn.matmul with
            MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig, output is
            L1 width-sharded; sharded_to_interleaved(output) for concat.
-        4. concat across chunks, all_gather across mesh on N -- one CCL.
-        5. Return [B, M, vocab_padded] interleaved DRAM/L1 ready for argmax.
+        4. concat across chunks → ``[B, M, size_per_device]`` per chip.
+        5. (TP only) all_gather across mesh on N -- one CCL.
+        6. Slice off vocab padding, return ``[B, M, vocab]``.
+
+    Previous correctness bug (now fixed): weight loader used
+    ``shard_tensor_to_mesh_mapper(dim=-1)`` which always sharded across the
+    first mesh axis, so on T3K mesh (8,1) (DP=8, TP=1) every chip got 1/8 of
+    the vocab. ``_tp_requires_ccl`` is False for that mesh, so no all_gather
+    ran and argmax saw a tiny garbage slice. Fix: use ``_tp_mesh_mapper`` so
+    the DP axis is **replicated** and only the TP axis is sharded.
     """
 
     MAX_COLUMNS_PER_CHUNK = 12288  # see top-of-block notes
@@ -927,8 +937,20 @@ class TTNNDotsOCRDRAMShardedLMHead(TTNNModule):
 
     def move_weights_to_device_impl(self):
         device = self.device
-        num_devices = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
         tile = ttnn.TILE_SIZE
+
+        # Mesh layout: dim 0 is the DP axis (replicate weight across), dim -1
+        # is the TP axis (shard weight across N). ``T3K + DOTS_OCR_PARALLELISM=DP``
+        # gives mesh_shape=(8, 1) → num_tp=1, num_dp=8: vocab is **replicated**
+        # on every chip. If we instead used ``shard_tensor_to_mesh_mapper(dim=-1)``
+        # (which shards along the FIRST mesh axis), each chip would only see
+        # 1/8 of the vocab logits, ``_tp_requires_ccl`` would be False so the
+        # final all_gather would be skipped, and argmax would silently pick a
+        # garbage token from the local 1/8 slice. That was the corruption
+        # observed previously when this class was wired in.
+        mesh_shape = list(device.shape) if hasattr(device, "shape") else [1, 1]
+        num_tp = int(mesh_shape[-1]) if mesh_shape else 1
+        self._num_tp = num_tp
 
         # Alignment constraints for the DRAM-sharded matmul kernel:
         #   * weight is WIDTH_SHARDED across ``dram_cores`` DRAM banks per
@@ -953,10 +975,10 @@ class TTNNDotsOCRDRAMShardedLMHead(TTNNModule):
         # That guarantees the residual last chunk is also a multiple of
         # ``chunk_align`` (since (size_per_device - k*base_chunk) stays
         # in the lattice if both terms do).
-        per_dev_align = chunk_align * num_devices
-        padded_vocab = math.ceil(self.out_features / per_dev_align) * per_dev_align
+        per_tp_align = chunk_align * num_tp
+        padded_vocab = math.ceil(self.out_features / per_tp_align) * per_tp_align
         self._padded_vocab = padded_vocab
-        size_per_device = padded_vocab // num_devices
+        size_per_device = padded_vocab // num_tp
         self._size_per_device = size_per_device
 
         weight_torch = self._weight_torch  # [out, in]
@@ -992,23 +1014,28 @@ class TTNNDotsOCRDRAMShardedLMHead(TTNNModule):
             ), f"chunk_n={cn} not aligned to lcm(tile*dram_cores, tile*compute_cores)={chunk_align}"
         self._chunk_n_cols_per_device = chunk_sizes
 
+        # Use ``_tp_mesh_mapper`` so weight is replicated across the DP axis
+        # and sharded across the TP axis. The "combined" tensor we build
+        # per chunk has width ``num_tp * chunk_n`` (one slice per TP-axis
+        # device) — in DP-only mode (num_tp=1) that is just the per-chip
+        # weight, which is then auto-replicated across the DP axis.
+        is_multi_device = hasattr(device, "get_num_devices") and int(device.get_num_devices()) > 1
+        weight_mapper = _tp_mesh_mapper(device, dim=-1) if is_multi_device else None
+
         self.tt_weight_chunks = []
         for chunk_idx, chunk_n in enumerate(chunk_sizes):
-            # Build per-mesh tensor of shape [hidden, num_devices*chunk_n] so
-            # that ShardTensorToMesh(dim=-1) gives every device a [hidden, chunk_n]
-            # slice (mirrors tt_transformers/tt/lm_head.py weight loading).
-            device_splits = []
-            for d in range(num_devices):
-                start = d * size_per_device + sum(chunk_sizes[:chunk_idx])
+            tp_splits = []
+            for tp_idx in range(num_tp):
+                start = tp_idx * size_per_device + sum(chunk_sizes[:chunk_idx])
                 end = start + chunk_n
-                device_splits.append(weight_t[:, start:end])
-            combined = torch.cat(device_splits, dim=-1)  # [hidden, num_devices*chunk_n]
+                tp_splits.append(weight_t[:, start:end])
+            combined = torch.cat(tp_splits, dim=-1)  # [hidden, num_tp*chunk_n]
 
             mem_cfg = _dram_sharded_mem_config_2d(device, k=int(combined.shape[0]), n=chunk_n)
             tt_chunk = ttnn.as_tensor(
                 combined,
                 device=device,
-                mesh_mapper=(ttnn.shard_tensor_to_mesh_mapper(device, dim=-1) if num_devices > 1 else None),
+                mesh_mapper=weight_mapper,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat8_b,
                 memory_config=mem_cfg,
@@ -1027,16 +1054,16 @@ class TTNNDotsOCRDRAMShardedLMHead(TTNNModule):
                     dim=0,
                 )
             for chunk_idx, chunk_n in enumerate(chunk_sizes):
-                device_splits = []
-                for d in range(num_devices):
-                    start = d * size_per_device + sum(chunk_sizes[:chunk_idx])
+                tp_splits = []
+                for tp_idx in range(num_tp):
+                    start = tp_idx * size_per_device + sum(chunk_sizes[:chunk_idx])
                     end = start + chunk_n
-                    device_splits.append(bias_torch[start:end])
-                combined_b = torch.cat(device_splits, dim=-1).unsqueeze(0)  # [1, num_devices*chunk_n]
+                    tp_splits.append(bias_torch[start:end])
+                combined_b = torch.cat(tp_splits, dim=-1).unsqueeze(0)  # [1, num_tp*chunk_n]
                 tt_b = ttnn.as_tensor(
                     combined_b,
                     device=device,
-                    mesh_mapper=(ttnn.shard_tensor_to_mesh_mapper(device, dim=-1) if num_devices > 1 else None),
+                    mesh_mapper=weight_mapper,
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.bfloat8_b,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
