@@ -64,11 +64,18 @@ class LMHead(LightweightModule):
             )
             memory_config_prefill = ttnn.DRAM_MEMORY_CONFIG
         else:
-            memory_config = (
+            # Qwen3-32B / Qwen3.6 / olmo: small-model branch.  When dim==2048
+            # the lm-head is interleaved DRAM; otherwise it is DRAM-sharded
+            # along K to match the 8-bank ring matmul.  Decode and prefill
+            # share the same memcfg here (the 70B branch above splits them
+            # because that path uses a dedicated lm_head DRAM sharding).
+            shared_mc = (
                 ttnn.DRAM_MEMORY_CONFIG
                 if args.dim == 2048
                 else args.create_dram_sharded_mem_config(k=args.dim // 4, n=self.padded_vocab_size // 8)
             )
+            memory_config_decode = shared_mc
+            memory_config_prefill = shared_mc
 
         for i in range(num_splits):
             index = i * self.padded_vocab_size // num_splits

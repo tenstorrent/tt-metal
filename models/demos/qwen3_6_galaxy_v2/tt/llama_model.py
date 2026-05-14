@@ -20,6 +20,29 @@ from models.demos.qwen3_6_galaxy_v2.tt.load_checkpoints import standardize_hf_ke
 from models.demos.qwen3_6_galaxy_v2.tt.prefetcher_common import TtLlamaPrefetcherSetup
 
 
+class _NoOpPrefetcherSetup:
+    """Drop-in stub for ``TtLlamaPrefetcherSetup`` when ``use_prefetcher=False``.
+
+    Upstream ``TtLlamaMLP.__init__`` / ``TtLlamaAttention.__init__`` unconditionally
+    invoke ``self.prefetch(prefetcher_setup, tt_ccl)`` in decode mode, which calls
+    ``prefetcher_setup.insert_tensor(...)``.  qwen3.6 / olmo run with the prefetcher
+    disabled (``use_prefetcher=False``) and previously passed ``None``, tripping an
+    ``AttributeError`` at construction.  This stub accepts the insert calls as
+    no-ops; ``USE_PREFETCHER`` is False in model_config, so the prefetcher-path
+    forward branches never read the (unset) ``global_circular_buffer`` /
+    ``worker_sub_device_id`` attributes.
+    """
+
+    def insert_tensor(self, *_args, **_kwargs):
+        return None
+
+    def get_input_tensors(self):
+        return []
+
+    def create_global_cb(self):
+        return None
+
+
 class TtTransformer(LightweightModule):
     def __init__(
         self,
@@ -242,7 +265,7 @@ class TtTransformer(LightweightModule):
         # prefetcher entirely and use a single all-cores sub-device.
         use_prefetcher = getattr(self.args, "use_prefetcher", True)
         if not use_prefetcher:
-            self.prefetcher_setup = None
+            self.prefetcher_setup = _NoOpPrefetcherSetup()
             worker_sub_device_id = ttnn.SubDeviceId(0)
             if mesh_sub_device_manager_id_prefill is None:
                 grid_size = self.mesh_device.compute_with_storage_grid_size()
@@ -297,7 +320,7 @@ class TtTransformer(LightweightModule):
         # prefetcher and run on a single all-cores sub-device.
         use_prefetcher = getattr(self.args, "use_prefetcher", True)
         if not use_prefetcher:
-            self.prefetcher_setup = None
+            self.prefetcher_setup = _NoOpPrefetcherSetup()
             worker_sub_device_id = ttnn.SubDeviceId(0)
             if mesh_sub_device_manager_id_decode is None:
                 grid_size = self.mesh_device.compute_with_storage_grid_size()

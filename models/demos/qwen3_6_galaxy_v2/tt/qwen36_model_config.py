@@ -125,7 +125,7 @@ class TtQwen36ModelArgs(TtModelArgs):
         self.mrope_section = [11, 11, 10]  # text-mode collapses but kept
         self.rope_scaling_factor = 1.0
         self.orig_context_len = 262144
-        self.intermediate_dim = 13_824  # SwiGLU intermediate
+        self.intermediate_dim = 17_408  # SwiGLU intermediate (Qwen3.6-27B HF config.intermediate_size)
         self.vocab_size = 248_320
         self.padded_vocab_size = 248_832
         self.norm_eps = 1e-6
@@ -155,7 +155,7 @@ class TtQwen36ModelArgs(TtModelArgs):
         self.dim_tp_factor = 4
         self.intermediate_dim_tp_factor = 8
         self.dim_per_tp = self.dim // self.dim_tp_factor  # 1280
-        self.intermediate_dim_per_tp = self.intermediate_dim // self.intermediate_dim_tp_factor  # 1728
+        self.intermediate_dim_per_tp = self.intermediate_dim // self.intermediate_dim_tp_factor  # 2176
 
         # Base-class compatibility aliases used by some shared helpers.
         self.hidden_dim = self.intermediate_dim  # alias for parent code paths
@@ -164,11 +164,11 @@ class TtQwen36ModelArgs(TtModelArgs):
         self.is_multichip = True
 
         # Padded per-tp widths chosen so width % (24-core ring * tile_size == 768) == 0.
-        # 1728 → pad to 3 * 768 = 2304  (intermediate per col, ring-aligned)
+        # 2176 → pad to 5 * 768 = 3840  (intermediate per col, ring-aligned)
         # 1280 → pad to 2 * 768 = 1536  (dim per col, ring-aligned)
         # 3584 → pad to 5 * 768 = 3840  (per-col QKVG width, ring-aligned)
         self.dim_padded_24_cores = 6144  # = 4 cols × 1536
-        self.intermediate_dim_per_tp_padded_24_cores = 2304
+        self.intermediate_dim_per_tp_padded_24_cores = 3840
         self.qkvg_per_col_padded_24_cores = 3840  # 56-channel QKVG padded for ring matmul
 
         # n_heads alias (matches base TtModelArgs convention used by helpers).
@@ -531,18 +531,20 @@ class TtQwen36ModelArgs(TtModelArgs):
 
         # ------------------------------------------------------------------
         # Decode FF1/FF3/FF2 ring
-        # K = dim_per_tp = 1280, N = intermediate_per_tp_padded = 2304
+        # K = dim_per_tp = 1280, N = intermediate_per_tp_padded = 3840
         # ------------------------------------------------------------------
-        ff_n_padded = self.intermediate_dim_per_tp_padded_24_cores  # 2304
+        ff_n_padded = self.intermediate_dim_per_tp_padded_24_cores  # 3840
+        ff_k_native = self.intermediate_dim_per_tp  # 2176 (native, used as W2's K)
         # W1W3 / W2 DRAM-sharded weight memcfgs (read by llama_mlp.py at
-        # weight upload time).  K and N use padded widths so the 24-core
-        # ring matmul gets tile-aligned shards.
+        # weight upload time).  K must be the *native* per-device tensor
+        # height; only the N dim is padded (the ring matmul tolerates the
+        # extra zero-padded output columns).  Matches qwen3-32B precedent.
         self.model_config["W1W3_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
             k=self.dim_per_tp,  # 1280
-            n=ff_n_padded,  # 2304
+            n=ff_n_padded,  # 3840
         )
         self.model_config["W2_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
-            k=ff_n_padded,  # 2304
+            k=ff_k_native,  # 2176 (must equal physical tensor height per-device)
             n=wo_n_padded,  # 1536
         )
         self.model_config["FF1_3_TG_RING_PROGCFG"] = self.matmul_1d_ring_config(
@@ -1032,8 +1034,41 @@ class TtQwen36ModelArgs(TtModelArgs):
         # llama_decoder / llama_attention / llama_embedding read tensors
         # via this prefix at construction; for is_qwen36 we must match
         # the standardized layout, NOT the raw HF layout.
+        #
+        # The upstream 70B path also maps class names (TtLlamaMLP/Attention)
+        # to the meta module names used in load_checkpoints' rename pass
+        # (feed_forward / attention). Mirror that here so TtLlamaMLP's
+        # `{prefix}.w1.weight` lookup resolves to `layers.{i}.feed_forward.w1.weight`.
+        module_map = {
+            "TtLlamaMLP": "feed_forward",
+            "TtLlamaAttention": "attention",
+            "TtTransformerBlock": "",
+            "": "",
+        }
+        # Allow direct meta names (e.g. "feed_forward") and unknown module names
+        # (e.g. the qwen3.6-specific TtQwen36DeltaAttention which sets its own
+        # state_dict_prefix internally) to fall through unchanged.
+        mapped = module_map.get(module_name, module_name)
         if layer_num is None:
             # Top-level weights (tok_embeddings.weight, norm.weight,
             # output.weight, etc.) — no prefix, no leading dot.
-            return module_name
-        return f"layers.{layer_num}.{module_name}"
+            return mapped
+        return f"layers.{layer_num}.{mapped}"
+
+    def create_dram_sharded_mem_config(self, k, n):
+        """BH-aware DRAM-sharded memory config for width-sharded weights.
+
+        Upstream ``TtModelArgs.create_dram_sharded_mem_config`` hardcodes
+        ``dram_cores = 12`` (WH dram grid). On Blackhole Galaxy the DRAM grid
+        is 8x1; using 12 shards trips ``num_shards <= num_cores`` at weight
+        upload. Pull the actual DRAM grid width from ``self.dram_weight_grid``
+        (set in ``__init__`` from ``mesh_device.dram_grid_size()``).
+        """
+        dram_cores = self.dram_weight_grid.bounding_box().grid_size().x
+        padded_size = math.ceil(n / (self.tile_size * dram_cores)) * (self.tile_size * dram_cores)
+        shard_spec = ttnn.ShardSpec(
+            self.dram_weight_grid,
+            (k, padded_size // dram_cores),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)

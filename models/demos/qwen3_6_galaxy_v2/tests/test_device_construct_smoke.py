@@ -105,12 +105,17 @@ def test_qwen36_v2_transformer_constructs_1_layer_on_device(bh_glx_mesh):
     print(f"[smoke]   sub_core_grids={args.sub_core_grids}")
 
     print("[smoke] constructing TtTransformer...")
+    # Upstream TtLlamaMLP / TtLlamaAttention build their tensor-cache file paths
+    # via `weight_cache_path / "<name>"` (no None-guard), so we must pass a real
+    # path. Use the same cache the model_args reports for bf8 weights.
+    weight_cache_path = args.weight_cache_path(ttnn.bfloat8_b)
+    weight_cache_path.mkdir(parents=True, exist_ok=True)
     model = TtTransformer(
         args=args,
         dtype=ttnn.bfloat8_b,
         mesh_device=bh_glx_mesh,
         state_dict=state_dict,
-        weight_cache_path=None,
+        weight_cache_path=weight_cache_path,
         paged_attention_config=None,
         use_paged_kv_cache=False,
     )

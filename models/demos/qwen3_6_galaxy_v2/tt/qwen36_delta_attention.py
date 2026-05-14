@@ -359,9 +359,11 @@ class TtQwen36DeltaAttention(LightweightModule):
         self.dt_bias = self._to_device(dt_bias_3d, row_shard_3d, layout=ttnn.TILE_LAYOUT)
 
         # -- Norm weight (replicated, standard RMSNorm — Bug5 fix from v1) --
+        # NB: ROW_MAJOR_LAYOUT requires bfloat16 (bfloat8_b requires TILE). The
+        # norm weight is tiny (single head_dim vector); dtype has no perf impact.
         norm_w = self._resolve_weight(sd, "linear_attn.norm.weight", "norm.weight")
         norm_w_4d = norm_w.reshape(1, 1, self.head_dim // 32, 32)
-        self.norm_weight = self._to_device(norm_w_4d, replicate, layout=ttnn.ROW_MAJOR_LAYOUT)
+        self.norm_weight = self._to_device(norm_w_4d, replicate, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         # -- Output projection: [H, n_v*hd] → shard input dim across rows --
         out_proj_w = self._resolve_weight(sd, "linear_attn.out_proj.weight", "out_proj.weight")
