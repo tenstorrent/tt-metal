@@ -213,10 +213,10 @@ def create_decoder_golden_tensors(
 
     golden_total_qnope_heads = total_kv_heads
     golden_total_qrope_heads = total_kv_heads
-    # For dense layers, prepare_dense_layer_weights folds ffn_norm into mlp.gate_proj/up_proj
-    # in state_dict. The golden therefore reads folded weights and must skip gamma in the
-    # MoE rmsnorm. MoE layers leave shared/routed weights unfolded — gamma is applied there.
-    golden_moe_rmsnorm_gamma = ffn_norm.to(torch.bfloat16).float() if is_moe else None
+    # Both dense and MoE layers now leave state_dict unfolded — ffn_norm is folded into
+    # gate/up weights inside the per-cache preprocess (prepare.py), so the golden reads
+    # unfolded weights from state_dict and must apply gamma via the rmsnorm path.
+    golden_moe_rmsnorm_gamma = ffn_norm.to(torch.bfloat16).float()
 
     def _sd_key(suffix):
         return f"model.layers.{layer_idx}.{suffix}"

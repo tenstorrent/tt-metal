@@ -961,15 +961,11 @@ class AttentionBlock:
         # Reuses rmsnorm1 output CB ID since the input core no longer runs rmsnorm1 after the deferral
         # (disjoint grids: input core vs dkv cores rows 8-9).
         dkv_rmsnorm_output_cb = rmsnorm_output_cb
-        # CB-overlay views for the deferred-norm dkv path:
-        #   * dkv_rmsnorm_input_view_cb: alternate view of `matmul_input_cb`'s L1 region as
-        #     32x32 tiles (7 pages) so RMSNorm reads the mcast bytes in its native LLK layout.
-        #   * dkv_matmul_in0_view_cb: alternate view of `dkv_rmsnorm_output_cb`'s L1 region as
-        #     1x32 tiles (224 pages) so dkv_matmul reads the rmsnorm output in its native layout.
-        # Same L1 bytes, different CB front/back pointers. Manual cb_push/pop in the kernel
-        # keeps the views in sync.
-        dkv_rmsnorm_input_view_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)
-        dkv_matmul_in0_view_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
+        # Note: the earlier design had CB-overlay views (`dkv_rmsnorm_input_view_cb`,
+        # `dkv_matmul_in0_view_cb`) exposing `matmul_input_cb` / `dkv_rmsnorm_output_cb`'s L1
+        # under different tile shapes for a dkv-side RMSNorm. The current kernel skips that
+        # pre-RMSNorm pass on the dkv path -- dkv_matmul reads `matmul_input_cb` directly with
+        # a fused CUSTOM_SFPU 1/RMS scalar -- so the view CBs are not allocated.
         # Output CB for the front-half RMSNorm on the input core (RMSInverse).
         # Holds a single 1x32 scalar tile = 1/RMS of the raw input. Not consumed yet.
         raw_input_rms_inv_output_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
@@ -2175,44 +2171,6 @@ class AttentionBlock:
             )
         ]
         # input_running_offset += matmul_input_cb_descriptor.total_size  # +14336 B
-
-        # CB-overlay views for the deferred-norm dkv path.
-        # Both views share L1 backing with existing CBs, but expose the same bytes through
-        # different page-size / tile-shape lenses on dkv_matmul_weights_core_grid. This lets
-        # the rmsnorm op work in 32x32-tile land while dkv_matmul keeps its native 1x32 layout.
-        # The kernel manually issues cb_push/cb_pop on the views to handshake between consumers.
-        dkv_rmsnorm_input_view_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            dkv_rmsnorm_input_view_cb,
-            ref_input_tensor,
-            address_offset=input_running_offset,  # same L1 region as matmul_input_cb
-            total_size=num_tiles * cb_page_size,
-            core_ranges=dkv_matmul_weights_core_grid,
-        )
-        dkv_rmsnorm_input_view_cb_descriptor.format_descriptors = [
-            ttnn.CBFormatDescriptor(
-                buffer_index=dkv_rmsnorm_input_view_cb,
-                data_format=data_format,
-                page_size=cb_page_size,  # 32x32 tile = 2048 B for bf16
-                tile=tile_descriptor,
-            )
-        ]
-
-        dkv_matmul_in0_view_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            dkv_matmul_in0_view_cb,
-            ref_sdpa_kv_cache_buffer,
-            address_offset=sdpa_kv_cache_running_offset_mcast_core
-            - rmsnorm_output_cb_descriptor.total_size,  # same L1 region as rmsnorm_output_cb (which we already advanced past)
-            total_size=dkv_matmul_k_num_tiles * matmul_input_page_size,
-            core_ranges=dkv_matmul_weights_core_grid,
-        )
-        dkv_matmul_in0_view_cb_descriptor.format_descriptors = [
-            ttnn.CBFormatDescriptor(
-                buffer_index=dkv_matmul_in0_view_cb,
-                data_format=data_format,
-                page_size=matmul_input_page_size,  # 1x32 tile = 64 B for bf16
-                tile=matmul_input_tile_descriptor,
-            )
-        ]
 
         # CB: Matmul output buffer (single tile) — overlap with sdpa_out_interm L1 buffer
         # at offset 0 B. This CB is consumed before SDPA runs.
@@ -3530,8 +3488,6 @@ class AttentionBlock:
             fused_matmul_weights_cb_descriptor,
             matmul_output_cb_descriptor,
             matmul_input_cb_descriptor,
-            dkv_rmsnorm_input_view_cb_descriptor,
-            dkv_matmul_in0_view_cb_descriptor,
             raw_input_rms_inv_output_cb_descriptor,
             raw_input_rms_inv_dst_cb_descriptor,
             rmsnorm2_input_cb_descriptor,
