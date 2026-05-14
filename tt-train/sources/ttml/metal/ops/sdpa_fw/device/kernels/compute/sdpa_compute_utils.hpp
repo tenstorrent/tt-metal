@@ -231,6 +231,17 @@ void apply_exp_inplace_and_find_exp_sum(uint32_t cb_attention_weights, uint32_t 
 // and V is the corresponding Sk_chunk_t × Wt block. The K-dimension reduction (over Sk_chunk_t)
 // is accumulated inside the matmul DST register across an inner loop. For Sk_chunk_t == 1 the
 // inner loop runs once and indexing collapses to the legacy single-tile-row form.
+//
+// F10 step 2: each output block of `block_size` feat tiles is produced by one matmul_block call
+// per K step (ct_dim=block_size, rt_dim=1, kt_dim=Sk_chunk_t). V is row-major in cb_value
+// (seq outer, feat inner), so the `block_size` V tiles consumed per K step at a fixed seq are
+// already contiguous in the CB — no transpose read needed (contrast with QK^T where K must be
+// col-major). The matmul_block MOP walks them contiguously starting at in1_idx = k*Wt+tile_idx.
+//
+// `block_size` here is the caller's choice. `matmul_block` writes ct_dim output tiles into
+// DST and needs no scratch register, so callers can pass up to `dst_size` (4 for fp32_acc,
+// 8 for bf16_acc) — distinct from the SFPU block_size used elsewhere that needs `+1` for
+// `unary_bcast` scratch and is therefore capped at `dst_size - 1`.
 template <uint32_t Sk_chunk_t = 1U>
 void matmul_qk_by_v(
     uint32_t Wt, uint32_t block_size, uint32_t cb_attention_weights, uint32_t cb_value, uint32_t cb_cur_mm_out) {
@@ -240,21 +251,31 @@ void matmul_qk_by_v(
 
     // matmul maps: in0(attention_weights)→SrcB, in1(value)→SrcA
     reconfig_data_format(cb_value, cb_attention_weights);
-    mm_init_short(cb_attention_weights, cb_value, /* transpose */ 0);
     pack_reconfig_data_format(cb_cur_mm_out);
+    mm_block_init_short(
+        cb_attention_weights,
+        cb_value,
+        /* transpose */ 0,
+        /* ct_dim */ block_size,
+        /* rt_dim */ 1,
+        /* kt_dim */ Sk_chunk_t);
+
     for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx += block_size) {
         tile_regs_acquire();
-        // Reduce over the K-chunk: each (k_in_chunk) contributes attn_weights[k] @ V[k, :]
-        // to the same DST registers. For Sk_chunk_t == 1 this is the original 1-tile matmul.
+        // K-reduction: at each k step, matmul_block writes ct_dim=block_size output tiles into
+        // DST[0..block_size-1], accumulating across k steps. For Sk_chunk_t==1 the loop runs
+        // once and behavior matches the legacy single-step matmul.
         for (uint32_t k_in_chunk = 0; k_in_chunk < Sk_chunk_t; ++k_in_chunk) {
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                matmul_tiles(
-                    cb_attention_weights,
-                    cb_value,
-                    /* in0 (A) tile_idx */ k_in_chunk,
-                    /* in1 (B) tile_idx */ k_in_chunk * Wt + tile_idx + block_idx,
-                    /* dst */ block_idx);
-            }
+            matmul_block(
+                cb_attention_weights,
+                cb_value,
+                /* in0 (A) tile_idx */ k_in_chunk,
+                /* in1 (B) tile_idx */ k_in_chunk * Wt + tile_idx,
+                /* dst_idx */ 0,
+                /* transpose */ 0,
+                /* ct_dim */ block_size,
+                /* rt_dim */ 1,
+                /* kt_dim */ Sk_chunk_t);
         }
         tile_regs_commit();
         tile_regs_wait();

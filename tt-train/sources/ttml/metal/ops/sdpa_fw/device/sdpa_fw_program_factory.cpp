@@ -350,10 +350,22 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         num_rows_per_core_group_2 = std::get<5>(work_split);
     }
 
-    // With fp32_dest_acc_en=true, DST has only 4 registers (indices 0-3).
-    // update_cur_mm_out and final normalization use DST[0..block_size-1] for data tiles
-    // plus DST[block_size] for the unary_bcast operand, so we need block_size + 1 <= 4.
-    const uint32_t block_size = get_block_size(vWt, 3U);
+    // DST register budget. fp32_dest_acc_en=true → 4 slots (FP32 accumulator);
+    // fp32_dest_acc_en=false → 8 slots (BF16). Mirrors TTNN's `dst_size` convention in
+    // `ttnn/cpp/.../sdpa_program_factory.cpp:362`. Two derived granularities follow:
+    //
+    //   * `block_size`     (cap = dst_size - 1) — for SFPU ops (`update_cur_mm_out`,
+    //     final normalization) that load `block_size` data tiles plus a 1-tile scratch
+    //     for `unary_bcast<COL>`. Needs `block_size + 1 <= dst_size`.
+    //   * `pv_block_size`  (cap = dst_size)     — for `matmul_block` in PV. The MOP writes
+    //     `ct_dim` output tiles directly, no scratch needed; can use the full DST budget.
+    //
+    // Both are clamped to divisors of `vWt` by `get_block_size`, so the matmul outer loop
+    // and the SFPU outer loop each tile `vWt` evenly without remainder handling.
+    constexpr bool fp32_dest_acc_en = true;
+    const uint32_t dst_size = fp32_dest_acc_en ? 4U : 8U;
+    const uint32_t block_size = get_block_size(vWt, dst_size - 1U);
+    const uint32_t pv_block_size = get_block_size(vWt, dst_size);
 
     // Multi-tile K/V chunking factor (F9). Compute kernel processes Sk_chunk_t K and V
     // tiles per inner-loop iteration; reader pre-stages chunk-sized K/V blocks in L1.
@@ -571,7 +583,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
         std::vector<uint32_t> compute_args = {
             max_pairs_per_core,  // num_pairs (or max_pairs if some cores have fewer)
-            block_size,          // per_core_block_size (derived from vWt)
+            block_size,          // SFPU per-core block size (cap = dst_size - 1, needs scratch)
             qWt,                 // num tile in inner dim in query/key (d_qk/TILE_W)
             vWt,                 // num tile in inner dim in value (d_v/TILE_W)
             St,                  // num_seq_len / TILE_H
@@ -579,6 +591,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             minus_one,           // used to transform mask from 1/0 to 0/-1
             custom_inf,          // used to transform mask from 0/-1 to 0/-1e9F
             Sk_chunk_t,          // multi-tile K/V chunking factor (F9)
+            pv_block_size,       // PV matmul_block ct_dim (cap = dst_size, no scratch)
         };
 
         kernels.compute_group_1 = tt::tt_metal::CreateKernel(
@@ -598,7 +611,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         // Group 1 compile-time arguments
         std::vector<uint32_t> compute_group_1_args = {
             num_rows_per_core_group_1,  // per_core_block_cnt
-            block_size,                 // per_core_block_size (derived from vWt)
+            block_size,                 // SFPU per-core block size (cap = dst_size - 1, needs scratch)
             qWt,                        // num tile in inner dim in query/key (d_qk/TILE_W)
             vWt,                        // num tile in inner dim in value (d_v/TILE_W)
             St,                         // num_seq_len / TILE_H
@@ -606,6 +619,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             minus_one,                  // used to transform mask from 1/0 to 0/-1
             custom_inf,                 // used to transform mask from 0/-1 to 0/-1e9F
             Sk_chunk_t,                 // multi-tile K/V chunking factor (F9)
+            pv_block_size,              // PV matmul_block ct_dim (cap = dst_size, no scratch)
         };
 
         kernels.compute_group_1 = tt::tt_metal::CreateKernel(
@@ -624,7 +638,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         if (!core_group_2.ranges().empty()) {
             std::vector<uint32_t> compute_group_2_args = {
                 num_rows_per_core_group_2,  // per_core_block_cnt
-                block_size,                 // per_core_block_size (derived from vWt)
+                block_size,                 // SFPU per-core block size (cap = dst_size - 1, needs scratch)
                 qWt,                        // num tile in inner dim in query/key (d_qk/TILE_W)
                 vWt,                        // num tile in inner dim in value (d_v/TILE_W)
                 St,                         // num_seq_len / TILE_H
@@ -632,6 +646,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
                 minus_one,                  // used to transform mask from 1/0 to 0/-1
                 custom_inf,                 // used to transform mask from 0/-1 to 0/-1e9F
                 Sk_chunk_t,                 // multi-tile K/V chunking factor (F9)
+                pv_block_size,              // PV matmul_block ct_dim (cap = dst_size, no scratch)
             };
 
             kernels.compute_group_2 = tt::tt_metal::CreateKernel(
