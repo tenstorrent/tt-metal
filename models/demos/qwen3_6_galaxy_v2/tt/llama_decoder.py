@@ -4,9 +4,29 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.demos.llama3_70b_galaxy.tt.distributed_norm import DistributedNorm
-from models.demos.llama3_70b_galaxy.tt.llama_attention import TtLlamaAttention
 from models.demos.llama3_70b_galaxy.tt.llama_mlp import TtLlamaMLP
+from models.demos.qwen3_6_galaxy_v2.tt.distributed_norm import DistributedNorm
+from models.demos.qwen3_6_galaxy_v2.tt.llama_attention import TtLlamaAttention
+
+
+def _extract_layer_dn_weights(state_dict, layer_num):
+    """Slice the per-layer DeltaNet weights out of the full state_dict.
+
+    Returns a flat dict with the ``linear_attn.*`` prefix preserved — the
+    DeltaNet ``_resolve_weight`` helper accepts that form directly.
+
+    Looks for keys of the form ``layers.{layer_num}.linear_attn.<rest>``
+    (as emitted by ``load_checkpoints.map_hf_to_meta_keys``) and rewrites
+    them to ``linear_attn.<rest>``.
+    """
+    if state_dict is None:
+        return {}
+    prefix = f"layers.{layer_num}.linear_attn."
+    out = {}
+    for k, v in state_dict.items():
+        if k.startswith(prefix):
+            out["linear_attn." + k[len(prefix) :]] = v
+    return out
 
 
 class TtTransformerBlock(LightweightModule):
@@ -49,19 +69,49 @@ class TtTransformerBlock(LightweightModule):
         self.tt_ccl = tt_ccl
         self.unfuse_res_add = args.unfuse_res_add
 
-        self.attention = TtLlamaAttention(
-            mesh_device=mesh_device,
-            state_dict=state_dict,
-            weight_cache_path=weight_cache_path,
-            layer_num=layer_num,
-            dtype=dtype,
-            transformation_mats=transformation_mats,
-            configuration=args,
-            paged_attention_config=paged_attention_config,
-            use_paged_kv_cache=use_paged_kv_cache,
-            prefetcher_setup=prefetcher_setup,
-            tt_ccl=tt_ccl,
+        # --- Hybrid attention dispatch (qwen3.6 only) ---------------------
+        # For Qwen3.6-27B, args.linear_attention_pattern is a per-layer list
+        # of ``"linear_attention"`` / ``"full_attention"`` strings loaded
+        # from HF ``config.layer_types``. Linear layers use the DeltaNet
+        # (Gated DeltaNet) block; full-attention layers use the standard
+        # gated/QK-norm attention path. For 70B / qwen3-32B / olmo, the
+        # ``is_qwen36`` flag is False (or absent) and we instantiate
+        # TtLlamaAttention unconditionally — preserving the 70B regression
+        # surface.
+        self.is_qwen36 = getattr(args, "is_qwen36", False)
+        pattern = getattr(args, "linear_attention_pattern", None)
+        self.is_linear_attention_layer = bool(
+            self.is_qwen36 and pattern is not None and pattern[layer_num] == "linear_attention"
         )
+
+        if self.is_linear_attention_layer:
+            # Late import: keeps the 70B import surface decoupled from the
+            # qwen36-specific DeltaNet module.
+            from models.demos.qwen3_6_galaxy_v2.tt.qwen36_delta_attention import TtQwen36DeltaAttention
+
+            dn_weights = _extract_layer_dn_weights(state_dict, layer_num)
+            self.attention = TtQwen36DeltaAttention(
+                mesh_device=mesh_device,
+                args=args,
+                layer_num=layer_num,
+                weights_dict=dn_weights,
+                tt_ccl=tt_ccl,
+                dtype=dtype,
+            )
+        else:
+            self.attention = TtLlamaAttention(
+                mesh_device=mesh_device,
+                state_dict=state_dict,
+                weight_cache_path=weight_cache_path,
+                layer_num=layer_num,
+                dtype=dtype,
+                transformation_mats=transformation_mats,
+                configuration=args,
+                paged_attention_config=paged_attention_config,
+                use_paged_kv_cache=use_paged_kv_cache,
+                prefetcher_setup=prefetcher_setup,
+                tt_ccl=tt_ccl,
+            )
         self.feed_forward = TtLlamaMLP(
             mesh_device=mesh_device,
             args=args,
@@ -73,6 +123,10 @@ class TtTransformerBlock(LightweightModule):
             prefetcher_setup=prefetcher_setup,
             tt_ccl=tt_ccl,
         )
+        # Norm zero-centering (Qwen3NextRMSNorm: output = (1 + w) * normalize(x))
+        # is enabled for qwen3.6; default False keeps 70B / qwen3-32B / olmo
+        # paths unaffected.
+        zero_centered = getattr(args, "zero_centered_norm", False)
         self.attention_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
@@ -90,6 +144,7 @@ class TtTransformerBlock(LightweightModule):
             args,
             tt_ccl=tt_ccl,
             ccl_topology=self.model_config["CCL_TOPOLOGY"],
+            zero_centered=zero_centered,
         )
         self.ff_norm = DistributedNorm(
             RMSNorm(
@@ -108,12 +163,19 @@ class TtTransformerBlock(LightweightModule):
             args,
             tt_ccl=tt_ccl,
             ccl_topology=self.model_config["CCL_TOPOLOGY"],
+            zero_centered=zero_centered,
         )
 
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
         self.tt_ccl = tt_ccl
-        self.attention.prefetch(prefetcher_setup, tt_ccl)
+        # DeltaNet layers don't expose a prefetch() hook — they don't use the
+        # weight prefetcher. Only call prefetch() on attention blocks that
+        # support it (e.g. TtLlamaAttention on the full_attention layers).
+        if hasattr(self.attention, "prefetch"):
+            self.attention.prefetch(prefetcher_setup, tt_ccl)
+        else:
+            self.attention.tt_ccl = tt_ccl
         self.feed_forward.prefetch(prefetcher_setup, tt_ccl)
         self.attention_norm.tt_ccl = tt_ccl
         self.ff_norm.tt_ccl = tt_ccl
