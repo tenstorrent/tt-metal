@@ -354,7 +354,8 @@ class DeepseekGenerator(WarmupForwardMixin):
         )
 
         if sample_on_device:
-            self._sample_tokens_device(decode_logits, enable_trace=enable_trace)
+            # Warmup already compiles this path when tracing; avoid double precompile.
+            self._sample_tokens_device(decode_logits, enable_trace=enable_trace, skip_precompile=True)
         else:
             self._sample_on_host(decode_logits)
 
@@ -894,6 +895,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         logits: ttnn.Tensor,
         enable_trace: bool = False,
         user_slots: list[int] | None = None,
+        skip_precompile: bool = False,
     ) -> ttnn.Tensor:
         sampling_batch_size = self.sampling_generator.tt_sampling.max_batch_size
         sampling_logits = logits
@@ -939,7 +941,9 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.sampling_generator.seed_manager.get_new_values(user_slots)
         self.sampling_generator.enable_internal_trace = enable_trace
         try:
-            tt_out = self.sampling_generator.sample(sampling_logits, enable_trace=enable_trace)
+            tt_out = self.sampling_generator.sample(
+                sampling_logits, enable_trace=enable_trace, skip_precompile=skip_precompile
+            )
         finally:
             if sampling_logits is not logits:
                 if sampling_logits is not self._sampling_trace_logits_device:
@@ -2224,7 +2228,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                         self.ccl.reset_sem_counters()
                         if self.sample_on_device:
                             pred_tokens_device = self._sample_tokens_device(
-                                decode_logits, enable_trace=self.enable_trace
+                                decode_logits, enable_trace=self.enable_trace, skip_precompile=True
                             )
                             pred_tokens = self._tokens_from_device(
                                 pred_tokens_device, self.mesh_device, batch_size_per_row=self.batch_size_per_row
@@ -3113,7 +3117,10 @@ class DeepseekGenerator(WarmupForwardMixin):
                         enable_trace=enable_trace,
                     )
 
-                    sampled_tokens = self._sample_tokens_device(prefill_logits, user_slots=[user_id])
+                    # Warmup precompile happens at this flow; skip sampling-module precompile.
+                    sampled_tokens = self._sample_tokens_device(
+                        prefill_logits, user_slots=[user_id], skip_precompile=True
+                    )
                     try:
                         if sampled_tokens is not None:
                             ttnn.deallocate(sampled_tokens)
