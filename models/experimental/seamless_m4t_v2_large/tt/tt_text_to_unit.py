@@ -438,6 +438,8 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
         )
 
     def _layer_norm(self, x: ttnn.Tensor, *, weight: ttnn.Tensor, bias: ttnn.Tensor) -> ttnn.Tensor:
+        if ttnn.is_sharded(x):
+            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
         return ttnn.layer_norm(
             x,
             weight=weight,
@@ -691,6 +693,8 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         )
 
     def _layer_norm(self, x: ttnn.Tensor, *, weight: ttnn.Tensor, bias: ttnn.Tensor) -> ttnn.Tensor:
+        if ttnn.is_sharded(x):
+            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
         return ttnn.layer_norm(
             x,
             weight=weight,
