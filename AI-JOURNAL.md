@@ -1,5 +1,102 @@
 
 ---
+## INVESTIGATION STATUS — 2026-05-14T01:42Z
+
+### Problem Statement
+AllGather tests on the T3K (8-device Wormhole ring) hang or are skipped due to fabric
+initialization failures during `quiesce_and_restart_fabric_workers` / teardown sequences.
+Root cause is a family of race conditions between UMD relay firmware reboots and the
+host-side ETH channel state machine.
+
+---
+
+### Fixes Applied (chronological)
+
+| Commit | Label | What it fixes |
+|--------|-------|---------------|
+| (early) | FIX G | `wait_for_fabric_router_sync` skipping dead-relay devices |
+| (early) | FIX H | Short-circuit relay probe for subsequent non-MMIO devices |
+| (early) | FIX I | Skip MMIO dead-peer devices in fabric router sync |
+| (early) | FIX J | Transitive relay dependency tracking |
+| (early) | FIX N | MMIO Device 0 router sync timeout |
+| (early) | FIX P | Phase ordering: quiesce non-MMIO before MMIO |
+| (early) | FIX W | Phase 5b all-0x0 clean-return extended to MMIO devices |
+| (early) | FIX Z | `relay_path_broken` guard in `read_completion_queue_event` |
+| (early) | FIX AC | Two-phase ETH reset (hard PCIe reset before fabric re-init) |
+| (early) | FIX AI | `assert_risc_reset` without deassert leaves ETH channels dead |
+| (early) | FIX AI-2 | Paired deassert for FIX AI |
+| (early) | FIX AE | Mark relay broken for non-MMIO chips on teardown |
+| (early) | FIX AK | Don't mark `relay_path_broken` for Phase 5b healthcheck misses |
+| (early) | FIX AN | FIX AK was wrongly setting `fabric_channels_not_ready_for_traffic_` on partial-mesh teardown |
+| (early) | FIX AP | `master_router_chan` stuck → `fabric_relay_path_broken_` |
+| (early) | FIX AR | Deassert force-reset channels before Phase 3 L1 overwrite |
+| (early) | FIX AS | Poll for UMD canary after FIX AR deassert (extended 2000ms for RHC channels) |
+| (early) | FIX AU-2 | Non-MMIO relay-broken device: attempt TERMINATE write before teardown |
+| (early) | FIX EV | `EventSynchronize` infinite spin on dead-relay device |
+| (early) | FIX LT9 | Rate-based ERISC progress detection to break hang loops |
+| (early) | FIX M | Base-UMD relay channels transitioned via launch_msg (skips soft reset) |
+| (early) | FIX PF | Heartbeat-based bypass in `reset_cores` skips 500ms cascade |
+| (early) | FIX P25-CLEAN | Skip Phase 3 quiesce launch for already-TERMINATED out-of-mesh channels |
+| dc1a3590ddd | FIX P25-CLEAN-V2 | Gate P25-CLEAN skip on peer not in quiesce set |
+| 65a6dc459c9 | FIX QH-1/QH-2 | Phase 5b health check excludes P25-CLEAN channels; extends timeout for stale base-UMD |
+| 4a4726bb757 | FIX FX | Use persistent `fixm_init` flag for Phase 5/5b timeout extension (survives FIX RZ2 clear) |
+| 5ff5b395f52 | FIX AK-3 | Don't set `relay_path_broken` when all stuck channels at REMOTE_HANDSHAKE_COMPLETE (cross-batch timing artifact) |
+| 395fc1b0465 | FIX AR-2 | Extend FIX AS UMD-canary poll timeout specifically for RHC force-reset channels |
+| e1b75a24f5e | FIX AT | Extend Phase 5b timeout to MMIO devices with base-UMD channels (was non-MMIO only) |
+| dee3b4fa89d | AUDIT | Logging/recovery gaps: AUDIT-L1, AUDIT-L5, AUDIT-R2; analyze script counters |
+| 46beb90f3f0 | FIX AU | FIX AS readiness check: accept active EDM states (0xA0–0xA4…) not just UMD canary/TERMINATED |
+| 188a4cefafd | FIX AV | Phase 3 FIX-3 gate: accept active EDM states for force-reset channels (they rebooted past UMD into RHC) |
+
+---
+
+### Current Hypotheses Being Tested (Cycle 20, run 25836104988)
+
+**Primary hypothesis (FIX AV):**
+After FIX AR deasserts force-reset channels, some ERISCs reboot fast enough to pass through
+UMD base state (0x49706550) and reach REMOTE_HANDSHAKE_COMPLETE (0xA1B1C1D1) before Phase 3
+reads their status. FIX-3 (`device.cpp:2530`) was rejecting RHC as an invalid pre-launch
+state for force-reset channels and marking them dead. FIX AV widens `status_ok` to accept
+the full active EDM state range (0xA0B0C0D0–0xA4B4C4D4) for force-reset channels only.
+
+**If FIX AV holds:**
+Channels will proceed through Phase 3 → Phase 5 → READY_FOR_TRAFFIC without the false-dead
+cascade. Global deadline should not be reached. AllGather should complete.
+
+**Remaining uncertainty:**
+Whether there are additional race windows between Phase 3 launch_msg write and the ERISC
+re-reading it at RHC. If the ERISC at RHC is mid-handshake with its peer, a launch_msg
+overwrite could corrupt the handshake. This has not been observed but is a theoretical risk.
+
+---
+
+### Known Pre-existing Unrelated Failures
+
+- `MeshDeviceFixture.Top32RmDevPipelineCompletes` — fails with trisc0 JIT build error in
+  DeepSeek v3 Blackhole kernel (`llk_unpack_A_top32_rm_api.h`). Confirmed unrelated to branch
+  changes. Ignore in CI output.
+
+---
+
+## Cycle 18 — 2026-05-14
+
+### Root cause
+FIX AS false-positive dead marking: after Phase 2.5 force-reset + FIX AR deassert, channels that
+reboot fast enough to reach REMOTE_HANDSHAKE_COMPLETE (0xA1B1C1D1) before the 2000ms poll window
+closes were incorrectly inserted into pending_quiesce_newly_dead_eth_chans_. They had successfully
+reloaded EDM firmware but FIX AS only accepted UMD canary (0x49706550) or TERMINATED (0xA4B4C4D4).
+
+### Fix (FIX AU)
+Both FIX AS poll locations in device.cpp: accept any active EDM state
+(0xA0B0C0D0–0xA4B4C4D4) as "ERISC has reloaded" in addition to UMD canary and TERMINATED.
+Applied to both the inline FIX AS in quiesce_and_restart_fabric_workers and the
+launch_eth_cores_for_quiesce FIX AS.
+
+### Cascade
+Device 2 (MMIO) Phase 5b: 2001ms timeout for falsely-dead channels.
+Device 4 relay path broken from Phase 2.5. Second fabric session: 16 channels
+still at TERMINATE-pending when global deadline hit.
+
+---
 ## [AUDIT 2026-05-14] Testing/Logging/Recovery Gap Audit
 
 ### Logging Gaps Found & Fixed
@@ -1980,3 +2077,22 @@ companion, not the transient flag.
 ### Audit Report
 Saved to `/workspace/group/research/audit-2026-05-11-14.md`
 
+
+---
+## Cycle 19 — 2026-05-14
+
+### Root cause
+FIX-3 false-positive dead marking in Phase 3 of launch_eth_cores_for_quiesce (device.cpp ~2530):
+after FIX AR deasserts force-reset channels, some ERISCs reboot fast enough to pass through UMD
+base state and reach REMOTE_HANDSHAKE_COMPLETE (0xA1B1C1D1) before Phase 3 reads them. FIX-3
+checks status and rejects any state that's not terminated_val or umd_relay_canary for
+force-reset channels — marks them dead and skips write_launch_msg_to_core. But .bss init is
+done at RHC, so launch_msg writes are safe.
+
+Cascade: 4 channels on Device 1 (chans 6-9) marked dead → 16 channels total pending TERMINATE
+at global deadline → global deadline expired.
+
+### Fix (FIX AV)
+In status_ok check for force-reset channels: also accept any active EDM state
+(0xA0B0C0D0–0xA4B4C4D4) as valid for write_launch_msg. Non-force-reset channels at active
+EDM states are still rejected (correctly — they have genuinely stale firmware).
