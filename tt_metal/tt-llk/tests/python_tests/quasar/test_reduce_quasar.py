@@ -221,7 +221,7 @@ def test_reduce_quasar(
 
 # 2x-packed FP4 register-format variants for the reduce-GAPOOL pipeline. L1 stays MxFp4;
 # the unpacker produces MxFp4_2x_A/B in src registers. GAPOOL is one of the op_mmul-gated
-# instructions (alongside MVMUL/MVMULDI per tt_instruction_issue.sv), so the FP4-2x
+# instructions (alongside MVMUL/MVMULDI per tt_instruction_issue.sv), so the FP4-2xIn this file the existing reduce test uses formats as the InputOutputFormat argument name, but the new GAPOOL 2x test uses format, which shadows Python’s built-in format() and is inconsistent with the rest of the file. Renaming the parameter (e.g., to formats or io_format) will avoid shadowing and make the tests easier to read/grep.
 # sub-datum expansion in the SrcA format-mux fires correctly for Sum/Average pool types.
 # Max pool uses GMPOOL which is NOT in the op_mmul list and is therefore excluded.
 #
@@ -247,7 +247,7 @@ REDUCE_QSR_MXFP4_2X_FORMATS = [
 
 @pytest.mark.quasar
 @parametrize(
-    format=REDUCE_QSR_MXFP4_2X_FORMATS,
+    formats=REDUCE_QSR_MXFP4_2X_FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     reduce_dim=[ReduceDimension.Column],
     pool_type=[ReducePool.Sum, ReducePool.Average],
@@ -255,7 +255,7 @@ REDUCE_QSR_MXFP4_2X_FORMATS = [
     dest_sync_mode=[DestSync.Half, DestSync.Full],
 )
 def test_reduce_quasar_mxfp4_2x_gapool(
-    format,
+    formats,
     dest_acc,
     reduce_dim,
     pool_type,
@@ -265,9 +265,9 @@ def test_reduce_quasar_mxfp4_2x_gapool(
     input_dimensions = [64, 64]
 
     src_A, tile_cnt, _, _ = generate_stimuli_v2(
-        stimuli_format_A=format.input_format,
+        stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
-        stimuli_format_B=format.input_format,
+        stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
     )
 
@@ -282,18 +282,18 @@ def test_reduce_quasar_mxfp4_2x_gapool(
     golden_tensor = generate_golden(
         src_A,
         src_B,
-        format.output_format,
+        formats.output_format,
         reduce_dim,
         math_fidelity,
         tile_cnt,
-        input_format=format.input_format,
+        input_format=formats.input_format,
     )
 
     mathop = mathop_mapping[reduce_dim]
 
     configuration = TestConfig(
         "sources/quasar/reduce_quasar_test.cpp",
-        format,
+        formats,
         templates=[
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop, pool_type=pool_type),
@@ -309,10 +309,10 @@ def test_reduce_quasar_mxfp4_2x_gapool(
         ],
         variant_stimuli=StimuliConfig(
             src_A,
-            format.input_format,
+            formats.input_format,
             src_B,
-            format.input_format,
-            format.output_format,
+            formats.input_format,
+            formats.output_format,
             tile_count_A=tile_cnt,
             tile_count_B=1,
             tile_count_res=tile_cnt,
@@ -328,12 +328,12 @@ def test_reduce_quasar_mxfp4_2x_gapool(
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[format.output_format])
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
     test_passed = passed_test(
         golden_tensor,
         res_tensor,
-        format.output_format,
+        formats.output_format,
         print_errors=False,
     )
 
