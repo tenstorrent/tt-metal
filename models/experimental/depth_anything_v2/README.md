@@ -173,7 +173,7 @@ Depth Map (B, 1, 518, 518)
 | LayerScale fusion | DINOv2 uses learned per-channel scaling (λ) in attention and FFN. Fusing λ into weights at preprocessing avoids extra multiply ops and precision loss. |
 | Explicit GELU | Hardware-fused `ttnn.gelu` uses a polynomial approximation that diverges for extreme inputs. Explicit `x * 0.5 * (1 + erf(x / √2))` via ttnn ops matches PyTorch exactly. |
 | HiFi4 + FP32 accum | `WormholeComputeKernelConfig(math_fidelity=MathFidelity.HiFi4, fp32_dest_acc_en=True)` prevents bfloat16 intermediate rounding in matmul accumulations. |
-| CPU bilinear interpolate | ttnn only supports nearest-neighbor upsampling. For non-integer scale factors (e.g., 148→518 ≈ 3.5×), nearest-neighbor introduces severe spatial aliasing. CPU round-trip via `F.interpolate(bilinear, align_corners=True)` is the exact HF behavior. |
+| CPU bilinear interpolate | ttnn only supports nearest-neighbor upsampling. For non-integer scale factors (e.g., 19→37 in deepest fusion layer, and 296→518 in the head), CPU round-trip via `F.interpolate(bilinear, align_corners=True)` is used. Integer 2x upsamples (37→74, 74→148, 148→296) use on-device `ttnn.upsample` nearest-neighbor to eliminate host-device transfer overhead and maximize FPS. |
 | Pre-activation residuals | DPT fusion uses ReLU→Conv→ReLU→Conv+skip (pre-act), not Conv→ReLU→Conv+skip (post-act). Matching this exactly is critical for spatial coherence. |
 
 ### Future Optimizations

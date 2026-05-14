@@ -306,11 +306,26 @@ class TtDPTFusionStage:
         return ttnn.add(residual, x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     # ------------------------------------------------------------------
+    def _device_upsample_2x(self, x):
+        """On-device nearest-neighbor 2x upsample (no CPU round-trip).
+
+        Used for exact integer 2x scale factors in fusion stages where
+        nearest-neighbor is sufficient.  Keeps all data on device,
+        eliminating the host-device transfer overhead that limits FPS.
+        """
+        _, _, h, w = x.shape
+        x = ttnn_upsample(x, scale_factor=2)
+        return x, h * 2, w * 2
+
+    # ------------------------------------------------------------------
     def _bilinear_upsample(self, x, target_h=None, target_w=None, scale=2):
         """Bilinear upsample via CPU round-trip (matching HF F.interpolate).
 
         HF fusion uses mode='bilinear', align_corners=True for size-targeted,
         and align_corners=True with scale_factor=2 for the final layer.
+
+        Only used for non-integer scale factors (e.g. 19->37) and the final
+        head output (->518x518) where bilinear quality is critical.
         """
         import torch
         import torch.nn.functional as F
@@ -430,9 +445,14 @@ class TtDPTFusionStage:
                 # First layer (deepest) — no residual
                 hidden_state = self._pre_act_residual_block(hidden_state, fusion_params.residual_layer2)
                 if target_h is not None:
-                    hidden_state, _, _ = self._bilinear_upsample(hidden_state, target_h, target_w)
+                    # Non-integer scale (19->37): must use CPU bilinear
+                    cur_h, cur_w = hidden_state.shape[2], hidden_state.shape[3]
+                    if target_h == cur_h * 2 and target_w == cur_w * 2:
+                        hidden_state, _, _ = self._device_upsample_2x(hidden_state)
+                    else:
+                        hidden_state, _, _ = self._bilinear_upsample(hidden_state, target_h, target_w)
                 else:
-                    hidden_state, _, _ = self._bilinear_upsample(hidden_state, scale=2)
+                    hidden_state, _, _ = self._device_upsample_2x(hidden_state)
                 hidden_state = self._projection_1x1(hidden_state, fusion_params.projection)
                 fused = hidden_state
             else:
@@ -444,7 +464,11 @@ class TtDPTFusionStage:
                 fh, fw = fused.shape[2], fused.shape[3]
                 nh, nw = new_feature.shape[2], new_feature.shape[3]
                 if fh != nh or fw != nw:
-                    new_feature, _, _ = self._bilinear_upsample(new_feature, target_h=fh, target_w=fw)
+                    # Check if exact 2x (on-device) or non-integer (CPU)
+                    if fh == nh * 2 and fw == nw * 2:
+                        new_feature, _, _ = self._device_upsample_2x(new_feature)
+                    else:
+                        new_feature, _, _ = self._bilinear_upsample(new_feature, target_h=fh, target_w=fw)
 
                 # residual_layer1(new_feature) + fused
                 res1_out = self._pre_act_residual_block(new_feature, fusion_params.residual_layer1)
@@ -455,11 +479,15 @@ class TtDPTFusionStage:
                 # residual_layer2
                 fused = self._pre_act_residual_block(fused, fusion_params.residual_layer2)
 
-                # Upsample to next level
+                # Upsample to next level: use on-device 2x when possible
                 if target_h is not None:
-                    fused, _, _ = self._bilinear_upsample(fused, target_h, target_w)
+                    cur_h, cur_w = fused.shape[2], fused.shape[3]
+                    if target_h == cur_h * 2 and target_w == cur_w * 2:
+                        fused, _, _ = self._device_upsample_2x(fused)
+                    else:
+                        fused, _, _ = self._bilinear_upsample(fused, target_h, target_w)
                 else:
-                    fused, _, _ = self._bilinear_upsample(fused, scale=2)
+                    fused, _, _ = self._device_upsample_2x(fused)
 
                 # 1x1 projection
                 fused = self._projection_1x1(fused, fusion_params.projection)
