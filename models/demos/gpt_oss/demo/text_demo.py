@@ -27,7 +27,7 @@ from loguru import logger
 
 import ttnn
 from models.common.sampling import SamplingParams
-from models.common.utility_functions import is_blackhole, run_for_wormhole_b0_or_blackhole
+from models.common.utility_functions import is_blackhole
 from models.demos.gpt_oss.tests.test_factory import TestFactory, parametrize_mesh_with_fabric
 
 # Import GPT-OSS components using our refactored patterns
