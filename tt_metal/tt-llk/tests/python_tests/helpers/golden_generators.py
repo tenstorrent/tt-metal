@@ -2189,7 +2189,6 @@ class EltwiseBinaryGolden(FidelityMasking):
         acc_to_dest=False,
         tile_shape=None,
         num_tiles_per_accumulation=1,
-        dest_acc_fp32=False,
     ):
         if tile_shape is None:
             tile_shape = construct_tile_shape()
@@ -2252,18 +2251,12 @@ class EltwiseBinaryGolden(FidelityMasking):
 
             result = torch.cat(accumulated)
         else:
-            # dest_acc_fp32=True (mirrors kernel-side dest_acc=Yes): the kernel's
-            # DST register holds FP32, so the math result is preserved at FP32
-            # precision before the output-quantization step (vs bfloat16-
-            # truncating in DST when dest_acc=No). Promote operands to fp32 so
-            # the add/sub doesn't silently truncate the intermediate sum.
             result = self._compute_eltwise(
                 op,
                 t1,
                 t2,
                 math_format_for_fidelity,
                 math_fidelity,
-                keep_float32=dest_acc_fp32,
             )
 
         # Step 3: Quantize output to match what hardware packs back into L1.

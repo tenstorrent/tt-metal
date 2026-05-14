@@ -511,7 +511,6 @@ def test_eltwise_binary_bfp4_b(
         formats.output_format,
         math_fidelity,
         input_format=formats.input_format,
-        dest_acc_fp32=(dest_acc == DestAccumulation.Yes),
     )
 
     configuration = TestConfig(
