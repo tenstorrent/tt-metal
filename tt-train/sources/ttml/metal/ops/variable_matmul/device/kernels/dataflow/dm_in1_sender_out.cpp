@@ -110,8 +110,8 @@ void kernel_main() {
     }
     // Variable-K: matmul-K extent from runtime; padded_K and K_num_blocks derived using
     // K_block_tiles (CTA). One cached program services any K value.
-    const uint32_t K_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 6);
-    const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
+    // OFFSETS_ROLE=InputK/WeightK overrides K_tiles from on-device offsets[start..start+2].
+    uint32_t K_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 6);
 
 #ifdef OFFSETS_ROLE
     // EP path: read offsets from a 1-D UINT32 ROW_MAJOR device tensor.
@@ -119,10 +119,13 @@ void kernel_main() {
     //   InputRow  (2): offsets[start..start+2] -> M_tiles + per-core M_start/M_end/
     //                  M_blocks_per_core. dm_in0_sender publishes the per-core M values
     //                  via cb_ctrl; this kernel re-derives them locally.
-    //   WeightK   (4): offsets[start] -> in1_k_offset_tiles (parent-K start on the weight).
+    //   InputK    (3): offsets[start..start+2] -> K_tiles only (in0 side owns the offset);
+    //                  no cb_ctrl write (dm_in0_sender publishes for compute).
+    //   WeightK   (4): offsets[start..start+2] -> in1_k_offset_tiles + K_tiles. Publishes
+    //                  K_tiles on cb_ctrl[3].
     {
         constexpr uint32_t kRole = OFFSETS_ROLE;
-        static_assert(kRole == 1U || kRole == 2U || kRole == 4U, "Unsupported OFFSETS_ROLE value.");
+        static_assert(kRole == 1U || kRole == 2U || kRole == 3U || kRole == 4U, "Unsupported OFFSETS_ROLE value.");
         const uint32_t offsets_addr = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 7);
         const uint32_t offsets_start_index = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 8);
         constexpr uint32_t offsets_args_cta_offset =
@@ -137,15 +140,23 @@ void kernel_main() {
         noc_async_read(get_noc_addr(0, offsets_acc), offsets_l1_addr, kPageBytes);
         noc_async_read_barrier();
         volatile tt_l1_ptr uint32_t* offsets_stage = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(offsets_l1_addr);
-#if OFFSETS_ROLE == 1
-        out_row_offset_tiles = offsets_stage[offsets_start_index] / 32U;
-#elif OFFSETS_ROLE == 2
+#if OFFSETS_ROLE == 1 || OFFSETS_ROLE == 2
         {
             const uint32_t in0_idx = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 9);
             const uint32_t row_start = offsets_stage[offsets_start_index];
             const uint32_t row_end = offsets_stage[offsets_start_index + 1U];
             const uint32_t actual_eff_M = (row_end - row_start) / 32U;
-            M_tiles = actual_eff_M;
+            // Empty-expert (actual=0) → M_blocks_per_core=0 (loop skipped). Still clamp
+            // M_tiles to >=1 for shape construction (TensorShape2D asserts d0>0).
+            M_tiles = actual_eff_M > 0U ? actual_eff_M : 1U;
+#if OFFSETS_ROLE == 1
+            // OutputRow + this kernel is the writer (transpose_core_grid) → override
+            // out_row_offset_tiles. dm_in0_sender publishes M values to cb_ctrl; we re-derive
+            // them locally here (both kernels read the same offsets).
+            if constexpr (is_output_writer) {
+                out_row_offset_tiles = row_start / 32U;
+            }
+#endif
             constexpr uint32_t kAxisCores = IN0_AXIS_CORES;
             const uint32_t per_core = (actual_eff_M + kAxisCores - 1U) / kAxisCores;
             // Uniform M_blocks_per_core across cores — matches dm_in0_sender; bounds checks
@@ -154,11 +165,29 @@ void kernel_main() {
             M_end_tile = per_core * (in0_idx + 1U);
             M_blocks_per_core = (per_core + M_block_tiles - 1U) / M_block_tiles;
         }
+#elif OFFSETS_ROLE == 3
+        {
+            const uint32_t row_start = offsets_stage[offsets_start_index];
+            const uint32_t row_end = offsets_stage[offsets_start_index + 1U];
+            K_tiles = (row_end - row_start) / 32U;
+        }
 #elif OFFSETS_ROLE == 4
-        in1_k_offset_tiles = offsets_stage[offsets_start_index] / 32U;
+        {
+            const uint32_t row_start = offsets_stage[offsets_start_index];
+            const uint32_t row_end = offsets_stage[offsets_start_index + 1U];
+            in1_k_offset_tiles = row_start / 32U;
+            K_tiles = (row_end - row_start) / 32U;
+            // Publish K_tiles to compute via cb_ctrl[3].
+            cb_reserve_back(tt::CBIndex::c_8, 1U);
+            volatile tt_l1_ptr uint32_t* ctrl_l1 =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(tt::CBIndex::c_8));
+            ctrl_l1[3] = K_tiles;
+            cb_push_back(tt::CBIndex::c_8, 1U);
+        }
 #endif
     }
 #endif  // OFFSETS_ROLE
+    const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
 
     // Storage layout: without transpose_b the weight is stored as [K, N]; with it, as [N, K].
     const TensorShape2D in1_shape = transpose_b ? TensorShape2D(N_tiles, K_tiles, padded_N_tiles, padded_K_tiles)

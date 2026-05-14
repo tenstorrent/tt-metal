@@ -233,14 +233,18 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
             in0_transposed_cb_id, program, core_grid, in0_tile_size, in0_cb_num_tiles, in0_data_format);
     }
 
-    // Control CB used by InputRow only: dm_in0_sender publishes per-core (M_start, M_end,
-    // M_blocks_per_core) — derived at runtime from the on-device offsets — and compute
-    // cb_wait_fronts on it before overriding its RT-arg-derived M values.
+    // Control CB used by OutputRow / InputRow / InputK / WeightK: a dm kernel publishes
+    // (M values for OutputRow/InputRow, K_tiles for InputK/WeightK) — derived from on-device
+    // offsets — and compute cb_wait_fronts on it before overriding its RT-arg-derived values.
+    // 4×uint32 page so both layouts (M values at [0..2], K at [3]) share one CB.
     constexpr uint32_t cb_ctrl_id = tt::CBIndex::c_8;
     constexpr uint32_t cb_ctrl_bytes = 16U;
-    const bool input_row_active_for_cb =
-        tensor_args.offsets_tensor.has_value() && operation_attributes.offsets_role == OffsetsRole::InputRow;
-    if (input_row_active_for_cb) {
+    const bool cb_ctrl_active =
+        tensor_args.offsets_tensor.has_value() && (operation_attributes.offsets_role == OffsetsRole::OutputRow ||
+                                                   operation_attributes.offsets_role == OffsetsRole::InputRow ||
+                                                   operation_attributes.offsets_role == OffsetsRole::InputK ||
+                                                   operation_attributes.offsets_role == OffsetsRole::WeightK);
+    if (cb_ctrl_active) {
         tt::tt_metal::CircularBufferConfig cb_ctrl_cfg =
             tt::tt_metal::CircularBufferConfig(cb_ctrl_bytes, {{cb_ctrl_id, tt::DataFormat::UInt32}})
                 .set_page_size(cb_ctrl_id, cb_ctrl_bytes);
@@ -262,12 +266,15 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     const bool input_k_active = offsets_active && operation_attributes.offsets_role == OffsetsRole::InputK;
     const bool weight_k_active = offsets_active && operation_attributes.offsets_role == OffsetsRole::WeightK;
     // Which kernel(s) need the offsets accessor + RT args + OFFSETS_ROLE define:
-    //   in0 side (dm_in0_sender): InputRow (override M/in0_row_offset) or InputK (override in0_k_offset).
-    //   in1 side (dm_in1_sender_out): OutputRow (override out_row_offset), InputRow (override M),
-    //                                 WeightK (override in1_k_offset).
-    //   compute: InputRow only (override RT-arg M values via cb_ctrl).
-    const bool in0_needs_offsets = input_row_active || input_k_active;
-    const bool in1_needs_offsets = output_row_active || input_row_active || weight_k_active;
+    //   in0 side (dm_in0_sender):    OutputRow (M+out_row when writer), InputRow (M+offset),
+    //                                InputK (K+offset), WeightK (K override).
+    //   in1 side (dm_in1_sender_out): OutputRow (M+out_row when writer), InputRow (M),
+    //                                 InputK (K override), WeightK (K+offset).
+    //   compute: any role — override via cb_ctrl.
+    const bool in0_needs_offsets = output_row_active || input_row_active || input_k_active || weight_k_active;
+    const bool in1_needs_offsets = output_row_active || input_row_active || input_k_active || weight_k_active;
+    const bool compute_needs_offsets_define =
+        output_row_active || input_row_active || input_k_active || weight_k_active;
     std::map<std::string, std::string> in0_defines = defines;
     std::map<std::string, std::string> in1_defines = defines;
     std::map<std::string, std::string> compute_offsets_defines;  // merged into compute_defines below
@@ -279,14 +286,14 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         if (in1_needs_offsets) {
             in1_defines["OFFSETS_ROLE"] = role_str;
         }
-        if (input_row_active) {
+        if (compute_needs_offsets_define) {
             compute_offsets_defines["OFFSETS_ROLE"] = role_str;
         }
     }
-    // CT args used by the InputRow per-core M computation. Compile-time constants so the
-    // kernel can specialize.
+    // CT args used by OutputRow/InputRow per-core M computation. Compile-time constants so
+    // the kernel can specialize.
     const uint32_t in0_axis_cores_ct = transpose_core_grid ? grid_size.x : grid_size.y;
-    if (input_row_active) {
+    if (output_row_active || input_row_active) {
         in0_defines["IN0_AXIS_CORES"] = std::to_string(in0_axis_cores_ct);
         in1_defines["IN0_AXIS_CORES"] = std::to_string(in0_axis_cores_ct);
         compute_offsets_defines["IN0_AXIS_CORES"] = std::to_string(in0_axis_cores_ct);
@@ -630,14 +637,13 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         };
 
         // On-device offsets RT args for dm_in0_sender:
-        //   InputRow: (offsets_addr, offsets_start_index, in0_idx) — kernel reads M range
-        //             and derives per-core M from in0_idx.
-        //   InputK:   (offsets_addr, offsets_start_index)         — kernel overrides only
-        //             in0_k_offset_tiles.
+        //   OutputRow / InputRow: (offsets_addr, offsets_start_index, in0_idx) — kernel reads
+        //                         the M range and derives per-core M from in0_idx.
+        //   InputK / WeightK:     (offsets_addr, offsets_start_index)         — K-range only.
         if (in0_needs_offsets) {
             in0_args.push_back(tensor_args.offsets_tensor.value().buffer()->address());
             in0_args.push_back(operation_attributes.offsets_start_index);
-            if (input_row_active) {
+            if (output_row_active || input_row_active) {
                 in0_args.push_back(in0_idx);
             }
         }
@@ -693,12 +699,12 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         };
 
         // On-device offsets RT args for dm_in1_sender_out:
-        //   OutputRow / WeightK: (offsets_addr, offsets_start_index).
-        //   InputRow:            also append in0_idx (kernel derives per-core M).
+        //   InputK / WeightK:     (offsets_addr, offsets_start_index)         — K-range only.
+        //   OutputRow / InputRow: also append in0_idx (kernel derives per-core M).
         if (in1_needs_offsets) {
             in1_args.push_back(tensor_args.offsets_tensor.value().buffer()->address());
             in1_args.push_back(operation_attributes.offsets_start_index);
-            if (input_row_active) {
+            if (output_row_active || input_row_active) {
                 in1_args.push_back(in0_idx);
             }
         }
