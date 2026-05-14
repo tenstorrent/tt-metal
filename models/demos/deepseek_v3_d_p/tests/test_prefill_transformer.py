@@ -43,6 +43,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     create_kv_chunk_address_table,
     init_kvpe_cache,
 )
+from models.demos.deepseek_v3_d_p.utils.pcc_plot_utils import generate_pcc_plots, write_pcc_summary
 from models.demos.deepseek_v3_d_p.utils.test_utils import save_intermediate_output
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     ABC_1K_PATH,
@@ -1097,6 +1098,32 @@ def test_prefill_transformer_from_trace(
         filename=f"pcc_results{gate_suffix}.png",
         annotation=first_token_annotation,
     )
+
+    # --- CI PCC summary (Mermaid charts + markdown table for $GITHUB_STEP_SUMMARY) ---
+    output_pcc = {}
+    kvpe_kv_pcc = {}
+    kvpe_pe_pcc = {}
+    for label, pcc in pcc_results:
+        if "_kv" in label:
+            kvpe_kv_pcc[label] = pcc
+        elif "_pe" in label:
+            kvpe_pe_pcc[label] = pcc
+        else:
+            output_pcc[label] = pcc
+
+    summary_result = {
+        "pcc": (output_pcc, kvpe_kv_pcc, kvpe_pe_pcc),
+        "num_layers": num_layers,
+        "isl_total": isl_total,
+        "weight_type": "pretrained",
+        "input_source": trace_dir.name,
+        "mesh_shape": mesh_shape,
+        "n_routed_experts": n_routed_experts,
+        "capacity_factor": capacity_factor,
+        "threshold": TRACE_PCC_THRESHOLD,
+    }
+    write_pcc_summary(summary_result, threshold=TRACE_PCC_THRESHOLD)
+    generate_pcc_plots(summary_result, output_dir=str(trace_dir))
 
     DeepSeekV3Config.NUM_ROUTED_EXPERTS = orig_num_routed_experts
 

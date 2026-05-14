@@ -128,6 +128,16 @@ jobs:
             ${{ matrix.test-group.cmd }}
           } 2>&1 | tee "$LOG_FILE"
           exit ${PIPESTATUS[0]}
+          ${{ matrix.test-group.cmd }}
+      - name: Publish PCC summary
+        if: ${{ !cancelled() }}
+        run: |
+          PCC_DIR="/tmp/pcc_summaries"
+          if [ -d "$PCC_DIR" ]; then
+            for f in "$PCC_DIR"/pcc_summary_*.md; do
+              [ -f "$f" ] && cat "$f" >> "$GITHUB_STEP_SUMMARY"
+            done
+          fi
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
