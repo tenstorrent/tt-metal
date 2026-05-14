@@ -3,7 +3,6 @@
 
 #include "prod_all_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::prim {
@@ -34,8 +33,6 @@ void ProdAllDeviceOperation::validate_on_program_cache_miss(
             "Prod_all expects logical rank >= 1 at device entry, got {}",
             prod_all_logical_rank);
     }
-
-    validate_reduce_op_tensor(tensor_args.input, "Prod_all", "input");
 }
 
 ProdAllDeviceOperation::spec_return_value_t ProdAllDeviceOperation::compute_output_specs(

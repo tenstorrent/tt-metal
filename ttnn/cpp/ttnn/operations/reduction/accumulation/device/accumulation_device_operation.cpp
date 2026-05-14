@@ -58,7 +58,6 @@ void AccumulationDeviceOperation::validate_on_program_cache_miss(
     ReduceOpDeviceGridValidationOptions acc_grid_opts;
     acc_grid_opts.shard_grid_contained_in_device_grid = &out_memory_config;
     acc_grid_opts.memory_config_label = "output";
-    validate_reduce_op_tensor(input_tensor, "Accumulation", "input");
     validate_reduce_op_tensor(
         input_tensor, "Accumulation", "output", &acc_grid_opts, compute_output_specs(attributes, tensor_args));
     if (optional_out.has_value()) {

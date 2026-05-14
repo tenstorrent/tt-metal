@@ -10,7 +10,6 @@
 
 #include "ttnn/operations/reduction/moe/device/moe_device_operation_types.hpp"
 #include "ttnn/operations/reduction/moe/device/moe_program_factory.hpp"
-#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
 using namespace tt::tt_metal;
 
@@ -91,12 +90,6 @@ void MoeDeviceOperation::validate_on_program_cache_miss(
             fixed_dim_negative,
             fixed_dim_normalized,
             logical_rank);
-    }
-    validate_reduce_op_tensor(input_tensor, "MoE", "input");
-    validate_reduce_op_tensor(expert_mask_tensor, "MoE", "expert_mask");
-    validate_reduce_op_tensor(topk_mask_tensor, "MoE", "topk_mask");
-    if (tensor_args.preallocated_output.has_value()) {
-        validate_reduce_op_tensor(tensor_args.preallocated_output.value(), "MoE", "preallocated_output");
     }
     TT_FATAL(
         is_row_broadcastable_mask(expert_logical_shape, input_logical_shape[-1]),
