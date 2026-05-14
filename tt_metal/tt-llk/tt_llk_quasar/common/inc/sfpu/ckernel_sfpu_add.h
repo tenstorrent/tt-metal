@@ -18,7 +18,7 @@ inline void _calculate_add_(const DataFormat fmt, const int iterations, const in
 {
     LLK_ASSERT(fmt == DataFormat::Int32 || fmt == DataFormat::Float16_b, "Only Int32 and Float16_b are currently supported for SFPU add on Quasar");
 
-    const bool is_int = (fmt == DataFormat::Int32);
+    const bool is_int    = (fmt == DataFormat::Int32);
     const auto instr_mod = is_int ? p_sfpu::sfpmem::INT32 : p_sfpu::sfpmem::DEFAULT; // There is a quasar bug with implied fmts + upk to dest, so we need use
                                                                                      // use explicit types for int SFPULOAD/STORE TEN-4674
 
@@ -50,6 +50,13 @@ inline void _calculate_add_(const DataFormat fmt, const int iterations, const in
             TT_SFPSTORE(p_sfpu::LREG2, instr_mod, ADDR_MOD_7, 0, out_offset_idx + (d << 1));
         }
     }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, int INSTRUCTION_MODE = 0, bool SIGN_MAGNITUDE_FORMAT = false>
+inline void _add_int_(const int iterations, const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
+{
+    static_assert(!SIGN_MAGNITUDE_FORMAT, "Quasar uses 2's complement natively; sign-magnitude not supported");
+    _calculate_add_(DataFormat::Int32, iterations, dst_index_in0, dst_index_in1, dst_index_out);
 }
 
 } // namespace sfpu

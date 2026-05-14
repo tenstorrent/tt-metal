@@ -59,6 +59,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_binary_sfpu.h"
 #include "params.h"
 #include "sfpu/ckernel_sfpu_add.h"
+#if defined(SFPU_INT_OP_MUL)
+#include "sfpu/ckernel_sfpu_mul_int32.h"
+#endif
+#if defined(SFPU_INT_OP_GT) || defined(SFPU_INT_OP_LT) || defined(SFPU_INT_OP_LE) || defined(SFPU_INT_OP_GE)
+#include "sfpu/ckernel_sfpu_binary_comp.h"
+#endif
 
 using namespace ckernel;
 using namespace ckernel::math;
@@ -78,7 +84,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_eltwise_sfpu_init_();
 
-    constexpr int tile_stride = NUM_FACES * FACE_R_DIM; // 4 faces * 16 rows per tile
+    constexpr int tile_stride = NUM_FACES * FACE_R_DIM;
     const int in0_offset      = params.SRC0_TILE_IDX * tile_stride;
     const int in1_offset      = params.SRC1_TILE_IDX * tile_stride;
     const int out_offset      = params.DST_TILE_IDX * tile_stride;
@@ -87,9 +93,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     for (std::uint32_t face = 0; face < NUM_FACES; face++)
     {
+#if defined(SFPU_INT_OP_MUL)
+        _mul_int32_<false>(num_sfpu_iterations, in0_offset, in1_offset, out_offset);
+#elif defined(SFPU_INT_OP_GT)
+        calculate_binary_comp_int32<false, 8, SfpuType::gt>(num_sfpu_iterations, in0_offset, in1_offset, out_offset);
+#elif defined(SFPU_INT_OP_LT)
+        calculate_binary_comp_int32<false, 8, SfpuType::lt>(num_sfpu_iterations, in0_offset, in1_offset, out_offset);
+#elif defined(SFPU_INT_OP_LE)
+        calculate_binary_comp_int32<false, 8, SfpuType::le>(num_sfpu_iterations, in0_offset, in1_offset, out_offset);
+#elif defined(SFPU_INT_OP_GE)
+        calculate_binary_comp_int32<false, 8, SfpuType::ge>(num_sfpu_iterations, in0_offset, in1_offset, out_offset);
+#else
         _calculate_add_(src_format, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
+#endif
         _llk_math_eltwise_sfpu_inc_dst_face_addr_();
     }
+
 
     _llk_math_eltwise_sfpu_done_();
 
