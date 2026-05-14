@@ -592,9 +592,16 @@ def fully_shard(
         if shard_dim == "auto":
             chosen = _auto_shard_dim(param_tensor, axis_index)
         else:
+            rank = param_tensor.get_rank()
             chosen = int(shard_dim)
             if chosen < 0:
-                chosen = param_tensor.get_rank() + chosen
+                chosen = rank + chosen
+            if not 0 <= chosen < rank:
+                raise RuntimeError(
+                    f"Invalid shard_dim {shard_dim!r} for parameter {rel_name!r} "
+                    f"(rank {rank}): normalized dim {chosen} is out of range "
+                    f"[0, {rank})."
+                )
 
         shape = list(param_tensor.shape())
         if chosen is None:

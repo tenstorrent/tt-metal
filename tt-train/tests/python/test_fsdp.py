@@ -62,7 +62,6 @@ FSDP_AXIS_SIZE = 2
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 _MGD_FOR_SHAPE = {
     (1, 2): os.path.join(_REPO_ROOT, "configs", "mgd", "bh_galaxy_1_2_line_line.textproto"),
-    (1, 4): os.path.join(_REPO_ROOT, "configs", "mgd", "bh_galaxy_1_4_ring_ring.textproto"),
 }
 
 
@@ -432,7 +431,7 @@ class TestFSDPEquivalence:
     With identical replicated inputs the reduce-scatter mean inside
     ``backward_post`` collapses to the per-device full grad sliced to
     the local shard, so the gathered FSDP grad equals the full reference
-    grad (modulo bf16 + CCL reduction-order rounding noise).
+    grad.
     """
 
     @pytest.fixture(autouse=True)
