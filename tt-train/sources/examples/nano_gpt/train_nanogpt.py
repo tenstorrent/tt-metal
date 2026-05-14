@@ -1067,39 +1067,20 @@ def instantiate_model_from_config(
     lazy_init: bool,
     *,
     use_tp: bool = False,
-    track_memory: bool = False,
-    defer_materialize: bool = False,
 ) -> Model:
-    """Create model; optionally defer Python :class:`~ttml.modules.parameter.Parameter` allocation.
+    """Create the model; deferred Python parameter allocation when ``lazy_init=True``.
 
-    When ``lazy_init`` is True, uses ``with ttml.lazy_init():`` then
-    :func:`ttml.materialize_module` so the same ``ttml.init.*`` factories run
-    after device open and ``set_seed`` (same numerical init as eager construction).
-
-    When ``defer_materialize`` is True (only meaningful with ``lazy_init=True``),
-    the ``materialize_module`` call is **skipped**: the returned model still
-    holds :class:`~ttml.modules.parameter.TensorMetadata` for every parameter.
-    The caller is responsible for invoking :func:`ttml.materialize_module`
-    later — typically after :func:`ttml.fsdp.fully_shard` has rewritten the
-    metadata's mapper to include the FSDP shard placement, so weights are
-    allocated already-sharded (avoiding the full-tensor host roundtrip and
-    the transient full-DRAM allocation that the eager FSDP path requires).
-
-    When ``track_memory`` is True and ``lazy_init`` is True, records device memory
-    snapshots after the lazy context (metadata-only, minimal weight DRAM) and after
-    materialization (weights allocated). Requires an active capture (e.g. ``--track-memory``).
+    With ``lazy_init=True`` the returned model still holds
+    :class:`~ttml.modules.parameter.TensorMetadata` for every parameter — the
+    caller must invoke :func:`ttml.materialize_module` once it's finished any
+    pre-materialize transformations on the model (e.g. ``ttml.fsdp.fully_shard``,
+    which rewrites each lazy param's mapper to include the FSDP shard so
+    materialize allocates weights already-sharded). With ``lazy_init=False``
+    parameters are allocated eagerly, exactly as on the non-lazy path.
     """
     if lazy_init:
         with ttml.lazy_init():
-            model = create_model_from_config(model_config, use_tp=use_tp)
-        if track_memory:
-            MemoryUsageTracker.snapshot("LAZY_INIT_AFTER_CONTEXT")
-        if defer_materialize:
-            return model
-        ttml.materialize_module(model)
-        if track_memory:
-            MemoryUsageTracker.snapshot("LAZY_INIT_AFTER_MATERIALIZE")
-        return model
+            return create_model_from_config(model_config, use_tp=use_tp)
     return create_model_from_config(model_config, use_tp=use_tp)
 
 
@@ -1616,11 +1597,8 @@ def main():
                 tokenizer = loaded_tokenizer
                 seq_len = model_config.max_sequence_length
                 print(f"   - Resumed from step {start_step}")
-                print(
-                    f"   - Model: {model_config.num_blocks} layers, {model_config.embedding_dim} embd, {model_config.num_heads} heads"
-                )
-                total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
-                print(f"   - Total parameters: {total_params:,}")
+                # ``Model: ...`` and ``Total parameters: ...`` are printed
+                # uniformly in the post-create / post-FSDP block below.
             except Exception as e:
                 print(f"Error loading checkpoint: {e}")
                 print("Starting fresh training instead...")
@@ -1643,40 +1621,24 @@ def main():
             if training_config.lazy_parameter_init:
                 print("    lazy_parameter_init: True (ttml.lazy_init + materialize_module)")
 
-            # Create model. Pass use_tp so Llama configures ColumnParallelLinear
-            # against the "tp" axis of the active mesh (no-op for non-Llama and
-            # an error for non-Llama with TP).
+            # Create model. With ``lazy_parameter_init`` the model comes back
+            # with TensorMetadata-backed parameters — no device storage yet.
+            # We materialize a few lines below, AFTER ``fully_shard`` has had a
+            # chance to rewrite each lazy param's mapper to include the FSDP
+            # shard placement, so materialize allocates weights already-sharded
+            # (the only path that scales to ~70B-param models on a 32-device
+            # mesh; the eager FSDP host-roundtrip OOMs at that size).
             #
-            # When lazy_parameter_init *and* FSDP are both on, defer the
-            # materialize step until after ``fully_shard`` has rewritten each
-            # lazy parameter's mapper to include the FSDP shard placement.
-            # The materialize call below then allocates weights already
-            # FSDP-sharded — never holding the full-tensor copy in DRAM, which
-            # is the only way Llama-70B fits on a 32-device galaxy.
-            defer_materialize = bool(training_config.lazy_parameter_init) and bool(device_config.enable_fsdp)
+            # ``use_tp`` configures ColumnParallelLinear against the active
+            # mesh's ``"tp"`` axis (no-op for non-Llama, errors out for
+            # non-Llama with TP).
             model = instantiate_model_from_config(
                 model_config,
                 lazy_init=training_config.lazy_parameter_init,
                 use_tp=device_config.enable_tp,
-                track_memory=args.track_memory,
-                defer_materialize=defer_materialize,
             )
-            if args.print_summary and not defer_materialize:
-                summary(model)
 
-            # Count parameters. Skip the read when materialization is deferred —
-            # ``model.parameters()`` is empty until ``materialize_module`` runs
-            # (lazy params aren't registered with the C++ ``ModuleBase`` yet).
-            print(
-                f"   - Model: {model_config.num_blocks} layers, {model_config.embedding_dim} embd, {model_config.num_heads} heads"
-            )
-            if not defer_materialize:
-                total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
-                print(f"   - Total parameters: {total_params:,}")
-            else:
-                print("   - (Parameter count deferred until after FSDP wrap + materialize.)")
-
-        # Compute FLOPs per token for throughput reporting (all model types)
+        # Compute FLOPs per token (uses ``model.config``, available pre-materialize)
         flops_per_token = 0
         flops_fn = FLOPS_REGISTRY.get(model_config.model_type)
         if flops_fn is not None:
@@ -1685,40 +1647,40 @@ def main():
         if flops_per_token > 0:
             print(f"   - FLOPs per token: {flops_per_token:,} ({flops_per_token/1e9:.2f}G)")
 
-        # Memory snapshot after model creation
-        if args.track_memory:
-            MemoryUsageTracker.snapshot("MODEL_CREATION")
-
     # Wrap model with FSDP BEFORE optimizer creation so optimizer state is
     # allocated against the (already sharded) parameter shapes. Driven by
     # device_config.enable_fsdp (YAML), matching how enable_ddp/enable_tp work.
     #
-    # Lazy + FSDP path: ``fully_shard`` detects the lazy
-    # :class:`~ttml.modules.parameter.TensorMetadata` parameters and rewrites
-    # each one's mapper to include ``Shard{shard_dim}`` on the FSDP axis.
-    # Then the deferred ``materialize_module`` below allocates every weight
-    # already FSDP-sharded — never holding the full unsharded weight in DRAM.
+    # Works on both eager (host roundtrip) and lazy (mapper rewrite —
+    # materialize below allocates weights already FSDP-sharded) parameters.
     if device_config.enable_fsdp and not inference_only:
         print("\n   Applying FSDP sharding on 'fsdp' mesh axis...")
         for block in model.blocks:
             ttml.fsdp.fully_shard(block)
         ttml.fsdp.fully_shard(model)
         print(f"   - FSDP applied: {len(list(model.blocks))} blocks + root module")
-        if args.track_memory:
-            MemoryUsageTracker.snapshot("MODEL_SHARDING")
 
-    # Lazy + FSDP path: now that fully_shard has rewritten every lazy
-    # parameter's mapper, materialize allocates them already FSDP-sharded.
-    # Eager / non-lazy paths: materialize_module is a no-op (no lazy slots).
-    if not inference_only and training_config.lazy_parameter_init and device_config.enable_fsdp:
-        print("\n   Materializing lazy parameters (already FSDP-sharded)...")
+    # Materialize any still-lazy parameters. No-op when the model was built
+    # eagerly. Run AFTER FSDP so the lazy + FSDP path gets already-sharded
+    # weights at allocation time.
+    if not inference_only and training_config.lazy_parameter_init:
+        print("\n   Materializing parameters...")
         ttml.materialize_module(model)
-        if args.track_memory:
-            MemoryUsageTracker.snapshot("LAZY_INIT_AFTER_MATERIALIZE")
+
+    # Single MODEL_CREATION snapshot covering create + (optional) FSDP wrap +
+    # materialize. Keeps the memory-analysis logs uniform across eager / lazy
+    # / FSDP paths so downstream visualization scripts don't need to special-
+    # case lazy / sharding stages.
+    if not inference_only:
         if args.print_summary:
             summary(model)
         total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
-        print(f"   - Total parameters (post-FSDP, per shard): {total_params:,}")
+        print(
+            f"   - Model: {model_config.num_blocks} layers, {model_config.embedding_dim} embd, {model_config.num_heads} heads"
+        )
+        print(f"   - Total parameters: {total_params:,}")
+        if args.track_memory:
+            MemoryUsageTracker.snapshot("MODEL_CREATION")
 
     # Check if we're in inference mode
     if args.prompt:
