@@ -68,7 +68,7 @@ sfpi_inline sfpi::vFloat softplus_exp_negative(sfpi::vFloat x) {
 #endif
 
     // Scale by 2^k via exponent manipulation
-    sfpi::vInt p_exp = sfpi::exexp_nodebias(poly);
+    sfpi::vInt p_exp = sfpi::exexp(poly, sfpi::ExponentMode::NoDebias);
     sfpi::vInt new_exp = p_exp + k_int;
 
     // FTZ: if exponent underflows, result is 0

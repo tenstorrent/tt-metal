@@ -14,6 +14,7 @@ target_link_libraries(
         test_common_libs
         yaml-cpp::yaml-cpp
         protobuf::libprotobuf
+        kissat::kissat
 )
 
 target_include_directories(

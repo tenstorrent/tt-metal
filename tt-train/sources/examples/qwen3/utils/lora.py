@@ -109,13 +109,6 @@ class LoRAColumnParallelLinear(AbstractModuleBase):
         x_b = ttml.ops.distributed.broadcast(x, self.shard_dim)
         bias_t = self.base_layer.col_bias.tensor if self.base_layer.col_bias is not None else None
         base_out = ttml.ops.linear.linear(x_b, self.base_layer.weight.tensor, bias_t)
-        if self.base_layer.gather_output:
-            base_out = ttml.ops.distributed.all_gather(
-                base_out,
-                3,
-                self.shard_dim,
-                ttml.ops.distributed.GradOutputType.REPLICATED,
-            )
         h = ttml.ops.linear.linear(x_b, self.lora_A.tensor, None)
         lora_out = ttml.ops.linear.linear(h, self.lora_B.tensor, None)
         if self.scaling != 1.0:

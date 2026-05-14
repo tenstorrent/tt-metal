@@ -34,12 +34,6 @@ inline void llk_math_matmul_init(
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, uint32_t num_faces = 4 /*not used*/>
 inline void llk_math_matmul(const uint dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1) {
     static_assert(num_faces == 4, "num_faces other than 4 is not supported in llk_math_matmul");
-    LLK_ASSERT(
-        (ckernel::math::get_dest_max_matmul_tiles(dst_index, ct_dim, rt_dim) <
-         get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
-        "llk_math_matmul: computed matmul dest tile range exceeds available dest register "
-        "capacity. Uncomment the DEVICE_PRINT block below and enable DEVICE_PRINT support to inspect "
-        "the calculated and max dest tile values.");
 
     // DEVICE_PRINT("llk_math_matmul: calculated dest tiles = {}, max dest tiles = {} (dst_index={}, ct_dim={},
     // rt_dim={})\n",
@@ -48,6 +42,13 @@ inline void llk_math_matmul(const uint dst_index, const std::uint32_t ct_dim = 1
     //     dst_index,
     //     ct_dim,
     //     rt_dim);
+
+    LLK_ASSERT(
+        (ckernel::math::get_dest_max_matmul_tiles(dst_index, ct_dim, rt_dim) <
+         get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
+        "llk_math_matmul: computed matmul dest tile range exceeds available dest register "
+        "capacity. Uncomment the DEVICE_PRINT block above and enable DEVICE_PRINT support to inspect "
+        "the calculated and max dest tile values.");
 
     _llk_math_matmul_<math_fidelity, THROTTLE_LEVEL>(dst_index, ct_dim, rt_dim);
 }

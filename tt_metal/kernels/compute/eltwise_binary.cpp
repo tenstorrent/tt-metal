@@ -10,9 +10,9 @@
 #include "api/compute/tile_move_copy.h"
 
 #ifdef ARCH_QUASAR
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #else
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #endif
 
 void kernel_main() {
@@ -26,10 +26,10 @@ void kernel_main() {
         constexpr uint32_t dfb_in1_id = get_compile_time_arg_val(1);
         constexpr uint32_t dfb_in2_id = get_compile_time_arg_val(2);
         constexpr uint32_t dfb_out_id = get_compile_time_arg_val(3);
-        experimental::DataflowBuffer dfb_in0(dfb_in0_id);
-        experimental::DataflowBuffer dfb_in1(dfb_in1_id);
-        experimental::DataflowBuffer dfb_in2(dfb_in2_id);
-        experimental::DataflowBuffer dfb_out(dfb_out_id);
+        DataflowBuffer dfb_in0(dfb_in0_id);
+        DataflowBuffer dfb_in1(dfb_in1_id);
+        DataflowBuffer dfb_in2(dfb_in2_id);
+        DataflowBuffer dfb_out(dfb_out_id);
         binary_op_init_common(dfb_in0.get_id(), dfb_in1.get_id(), dfb_out.get_id());
         #if not defined ELTWISE_DEST_REUSE_TYPE
             #ifdef FULL_INIT
