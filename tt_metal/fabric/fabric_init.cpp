@@ -222,7 +222,7 @@ FabricCoresHealth configure_fabric_cores(
                     try {
                         const auto& hal_bo = tt::tt_metal::MetalContext::instance().hal();
                         const auto aeth_idx_bo = hal_bo.get_programmable_core_type_index(
-                            HalProgrammableCoreType::ACTIVE_ETH);
+                            tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
                         const auto& jit_cfg_bo = hal_bo.get_jit_build_config(aeth_idx_bo, 0, 0);
                         if (jit_cfg_bo.fw_launch_addr_value != 0) {
                             cluster.write_core_immediate(
