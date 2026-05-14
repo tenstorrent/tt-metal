@@ -1025,5 +1025,15 @@ class TtQwen36ModelArgs(TtModelArgs):
         return self.model_config["CCL_TOPOLOGY"]
 
     def get_state_dict_prefix(self, module_name, layer_num):
-        # Qwen3.6 HF keys: `model.language_model.layers.{i}.<module>.weight`
-        return f"model.language_model.layers.{layer_num}.{module_name}"
+        # standardize_hf_keys_qwen36() converts raw HF keys
+        # (model.language_model.layers.{i}.<m>.weight) to the meta-style
+        # internal layout the 70B/qwen3-32B/olmo tree consumes
+        # (layers.{i}.<m>.weight; top-level keys carry no prefix).
+        # llama_decoder / llama_attention / llama_embedding read tensors
+        # via this prefix at construction; for is_qwen36 we must match
+        # the standardized layout, NOT the raw HF layout.
+        if layer_num is None:
+            # Top-level weights (tok_embeddings.weight, norm.weight,
+            # output.weight, etc.) — no prefix, no leading dot.
+            return module_name
+        return f"layers.{layer_num}.{module_name}"

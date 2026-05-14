@@ -59,7 +59,19 @@ class TtTransformer(LightweightModule):
         # prefix, run the qwen3.6 standardization pass so downstream
         # constructors find canonical ``layers.{i}.attention.*`` keys.
         if self.is_qwen36 and state_dict is not None and any(k.startswith("model.language_model.") for k in state_dict):
+            from models.demos.qwen3_6_galaxy_v2.tt.load_checkpoints import convert_hf_to_meta
+
+            # Two passes: standardize_hf_keys_qwen36 strips the
+            # model.language_model.* prefix to model.* and ignores
+            # vision/MTP keys; convert_hf_to_meta then runs
+            # map_hf_to_meta_keys (HF -> meta name rename, e.g.
+            # model.embed_tokens.weight -> tok_embeddings.weight,
+            # model.layers.{i}.input_layernorm.weight ->
+            # layers.{i}.attention_norm.weight). The QKV reverse-
+            # permute is intentionally skipped for is_qwen36 (V2-4 reads
+            # un-permuted HF QKVG layout directly).
             state_dict = standardize_hf_keys_qwen36(state_dict)
+            state_dict = convert_hf_to_meta(state_dict, args.head_dim, is_qwen36=True)
         state_dict_prefix = args.get_state_dict_prefix("", None)
         self.allocate_prefill_buffers = allocate_prefill_buffers
         self.paged_attention_config = paged_attention_config
@@ -1011,7 +1023,12 @@ class TtTransformer(LightweightModule):
         return lm_head_output
 
     def __del__(self):
-        self.tt_ccl.close()
+        # Guard against __del__ firing when __init__ raised before
+        # self.tt_ccl was set (otherwise AttributeError hides the real
+        # construction error).
+        tt_ccl = getattr(self, "tt_ccl", None)
+        if tt_ccl is not None:
+            tt_ccl.close()
 
         # clear global saved addresses
         global global_tt_tensor_address
