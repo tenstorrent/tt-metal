@@ -389,19 +389,13 @@ class FpuMathSchema(BaseModel):
         if self.operation in (FpuOperationEnum.Matmul, FpuOperationEnum.MatmulNoMop):
             return (src_a[0], src_b[1])
 
-        elif self.operation == FpuOperationEnum.Datacopy:
-            return src_a
-
-        elif self.operation == FpuOperationEnum.Reduce:
-            return src_a
-
         elif self.operation in (
+            FpuOperationEnum.Datacopy,
+            FpuOperationEnum.Reduce,
             FpuOperationEnum.ReduceBlockMax,
             FpuOperationEnum.ReduceBlockMaxRuntime,
+            FpuOperationEnum.SubBcastColCustom,
         ):
-            return src_a
-
-        elif self.operation == FpuOperationEnum.SubBcastColCustom:
             return src_a
 
         elif self.operation.is_eltwise():
