@@ -5,7 +5,7 @@
 
 """
 Usage:
-    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--disable-elf-cache] [--triage-summary-path=<path>]
+    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--disable-elf-cache] [--triage-summary-path=<path>] [--llm-output=<path>]
 
 Options:
     --remote-exalens                 Connect to remote exalens server.
@@ -25,6 +25,7 @@ Options:
     --disable-progress               Disable progress bars. [default: False]
     --disable-elf-cache              Re-parse ELF files on every access instead of caching. [default: False]
     --triage-summary-path=<path>     Write a triage summary file to the given path (used by CI for hang reports).
+    --llm-output=<path>              Write a compact text report with CSV-formatted tables to <path>. Easier and cheaper for LLMs (and grep/CI) to consume than the Rich-table console output.
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
@@ -76,7 +77,6 @@ import importlib
 import importlib.metadata as importlib_metadata
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, TimeRemainingColumn, BarColumn, TextColumn
-from rich.table import Table
 import sys
 from ttexalens.context import Context
 from ttexalens.device import Device
@@ -617,13 +617,42 @@ def log_warning_risc(risc_name: str, location: OnChipCoordinate, message: str) -
     log_warning_location(location, f"{risc_name}: {message}")
 
 
+_output_serializer: Any = None
+
+
+def get_output_serializer() -> Any:
+    """Return the active serializer, defaulting to a Rich-console one on first use."""
+    global _output_serializer
+    if _output_serializer is None:
+        from serializers import RichSerializer
+
+        _output_serializer = RichSerializer(console, utils, get_verbose_level)
+    return _output_serializer
+
+
+def set_output_serializer(serializer: Any) -> None:
+    global _output_serializer
+    _output_serializer = serializer
+
+
+def init_output_serializer(args: ScriptArguments) -> None:
+    """Build the active serializer based on CLI args.
+
+    Default: `RichSerializer`. If `--llm-output=<path>` is set, fan out to both
+    Rich and `CsvSerializer` so the console view is preserved while a
+    machine-readable file is also written.
+    """
+    from serializers import CsvSerializer, MultiSerializer, RichSerializer
+
+    rich = RichSerializer(console, utils, get_verbose_level)
+    llm_output_path = args["--llm-output"]
+    if llm_output_path:
+        set_output_serializer(MultiSerializer([rich, CsvSerializer(llm_output_path, get_verbose_level)]))
+    else:
+        set_output_serializer(rich)
+
+
 def serialize_result(script: TriageScript | None, result, execution_time: str = ""):
-    from dataclasses import fields, is_dataclass
-
-    if script is not None:
-        print()
-        utils.INFO(f"{script.name}{execution_time}:")
-
     global FAILURE_CHECKS, FAILURE_CHECKS_LOCK, WARNING_CHECKS, WARNING_CHECKS_LOCK
     with FAILURE_CHECKS_LOCK:
         failures = FAILURE_CHECKS
@@ -631,87 +660,17 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
     with WARNING_CHECKS_LOCK:
         warnings = WARNING_CHECKS
         WARNING_CHECKS = []
-    if result is None:
-        if len(failures) > 0 or script.failed:
-            utils.ERROR("  fail")
-            for failure in failures:
-                utils.ERROR(f"    {failure}")
-            if script.failed:
-                utils.ERROR(f"    {script.failure_message}")
 
-                import textwrap
-
-                docstring_indented = textwrap.indent(script.documentation.strip(), "    ")
-                utils.ERROR(f"  Script help:\n{docstring_indented}")
-        else:
-            utils.INFO("  pass")
-            for warning in warnings:
-                utils.WARN(f"    {warning}")
-        return
-
-    for failure in failures:
-        utils.ERROR(f"  {failure}")
-
-    for warning in warnings:
-        utils.WARN(f"  {warning}")
-
-    if isinstance(result, list) and len(result) == 0:
-        utils.ERROR("  No results found.")
-
-    if not (is_dataclass(result) or (isinstance(result, list) and all(is_dataclass(item) for item in result))):
-        utils.INFO(f"  {result}")
-    else:
-        if not isinstance(result, list):
-            result = [result]
-
-        def generate_header(table: Table, obj, flds):
-            for field in flds:
-                metadata = field.metadata
-                # Skip field if it requires higher verbosity level
-                if metadata.get("verbose", 0) > _verbose_level:
-                    continue
-                if "dont_serialize" in metadata and metadata["dont_serialize"]:
-                    continue
-                elif "recurse" in metadata and metadata["recurse"]:
-                    value = getattr(obj, field.name)
-                    assert is_dataclass(value)
-                    generate_header(table, value, fields(value))
-                elif "serialized_name" in metadata:
-                    justify = metadata.get("justify", "left")
-                    table.add_column(metadata.get("serialized_name", field.name), justify=justify)
-
-        def generate_row(row: list[str], obj, flds):
-            for field in flds:
-                metadata = field.metadata
-                # Skip field if it requires higher verbosity level
-                if metadata.get("verbose", 0) > _verbose_level:
-                    continue
-                if "dont_serialize" in metadata and metadata["dont_serialize"]:
-                    continue
-                elif "recurse" in metadata and metadata["recurse"]:
-                    value = getattr(obj, field.name)
-                    assert is_dataclass(value)
-                    generate_row(row, value, fields(value))
-                elif "additional_fields" in metadata:
-                    assert all(hasattr(obj, additional_field) for additional_field in metadata["additional_fields"])
-                    all_values = [getattr(obj, field.name)]
-                    all_values.extend(
-                        [getattr(obj, additional_field) for additional_field in metadata["additional_fields"]]
-                    )
-                    assert "serializer" in metadata, "Serializer must be provided for combined field."
-                    row.append(metadata["serializer"](all_values))
-                elif "serializer" in metadata:
-                    row.append(metadata["serializer"](getattr(obj, field.name)))
-
-        table = Table()
-
-        # Create table header
-        generate_header(table, result[0], fields(result[0]))
-        for item in result:
-            row: list[str] = []
-            generate_row(row, item, fields(item))
-            table.add_row(*row)
-        console.print(table)
+    get_output_serializer().emit(
+        script_name=script.name if script is not None else None,
+        execution_time=execution_time,
+        result=result,
+        failures=failures,
+        warnings=warnings,
+        script_failed=script.failed if script is not None else False,
+        failure_message=script.failure_message if script is not None else None,
+        documentation=script.documentation if script is not None else None,
+    )
 
 
 def _enforce_dependencies(args: ScriptArguments) -> None:
@@ -887,6 +846,8 @@ def run_script(
             all_scripts.setdefault(path, script)
         args = parse_arguments(all_scripts, script_path, argv)
 
+    init_output_serializer(args)
+
     # Initialize context if not provided
     if context is None:
         _enforce_dependencies(args)
@@ -907,6 +868,7 @@ def run_script(
     serialize_result(script, result)
 
     if force_exit:
+        get_output_serializer().close()
         # Remove nanobind leak check to avoid false positives on exit
         os._exit(0)
 
@@ -960,6 +922,8 @@ def main():
 
     # Parse common command line arguments
     args = parse_arguments(scripts)
+
+    init_output_serializer(args)
 
     # Enforce debugger dependencies, then initialize
     _enforce_dependencies(args)
@@ -1035,6 +999,8 @@ def main():
     from elfs_cache import run as get_elfs_cache
 
     get_elfs_cache(args, context).log_stats()
+
+    get_output_serializer().close()
 
     # Remove nanobind leak check to avoid false positives on exit
     os._exit(0)
