@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable
 
 
@@ -24,6 +24,14 @@ class TensorMetadata:
 
     Do not use empty `ttml.autograd.Tensor` as a stand-in; keep allocation in
     `init_fn` until `materialize()` runs.
+
+    ``mapper`` (optional ``ttnn.CppTensorToMesh``): the distribution plan used
+    when ``materialize`` runs. Downstream consumers — notably
+    ``ttml.fsdp.fully_shard`` — can introspect the existing sharding via
+    ``mapper.config().placements`` and build a new combined mapper without
+    round-tripping the not-yet-allocated tensor through host. ``None`` means
+    "no explicit mapper; treat as fully replicated" (default replicate mapper
+    is installed by :func:`ttml.materialize_module`).
     """
 
     shape: tuple[int, ...]
@@ -35,6 +43,25 @@ class TensorMetadata:
         """Allocate the autograd tensor using optional mapper override."""
         mapper = self.mapper if mapper_override is None else mapper_override
         return self.init_fn(self.shape, mapper)
+
+
+def replace_lazy_mapper(parameter: "Parameter", new_mapper: Any) -> None:
+    """Replace a lazy ``parameter``'s mapper.
+
+    Used by :func:`ttml.fsdp.fully_shard` to install an FSDP shard placement on
+    a lazy parameter without materializing. Errors if ``parameter`` has already
+    been materialized — by then the in-memory tensor has the old mapper baked in
+    and a host roundtrip is the only way to redistribute (use the eager FSDP
+    code path instead).
+    """
+    inner = parameter.peek_tensor()
+    if not isinstance(inner, TensorMetadata):
+        raise RuntimeError(
+            "replace_lazy_mapper called on a materialized Parameter; only lazy "
+            "parameters can have their mapper rewritten without a host roundtrip."
+        )
+    new_meta = replace(inner, mapper=new_mapper)
+    object.__setattr__(parameter, "tensor", new_meta)
 
 
 class Parameter:

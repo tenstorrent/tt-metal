@@ -539,6 +539,17 @@ void py_module(nb::module_& mod) {
         .def("is_local", &MeshDeviceView::is_local, nb::arg("coord"));
 
     auto py_tensor_to_mesh = static_cast<nb::class_<TensorToMesh>>(mod.attr("CppTensorToMesh"));
+    py_tensor_to_mesh.def(
+        "config",
+        &TensorToMesh::config,
+        nb::rv_policy::reference_internal,
+        R"doc(
+            Returns the MeshMapperConfig used to construct this mapper.
+
+            Use ``mapper.config().placements`` to introspect how the mapper
+            distributes a tensor across each mesh axis (e.g. to decide a
+            non-conflicting shard dim when layering FSDP on top of TP).
+        )doc");
 
     auto py_mesh_to_tensor = static_cast<nb::class_<MeshToTensor>>(mod.attr("CppMeshToTensor"));
 
