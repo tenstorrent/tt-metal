@@ -968,6 +968,226 @@ TEST_F(VariableMatmulTest, OnDeviceOffsets_WeightK_TransposeA) {
     EXPECT_LT(err, 2.0F) << "WeightK transpose_a max_abs_error: " << err;
 }
 
+// Debug repro for moe_ffn pattern: input M_parent > actual_eff_M (from offsets),
+// output_tensor pre-zeroed. The OutputRow override should bound writes to actual
+// rows, leaving the rest of parent_out at its pre-zero value.
+TEST_F(VariableMatmulTest, OnDeviceOffsets_OutputRow_ActualLessThanParent) {
+    const uint32_t M_input = 128, K = 128, N = 64, M_parent_out = 256;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input = create_random_device_tensor(M_input, K, device);
+    auto weight = create_random_device_tensor(K, N, device);
+    // Pre-zero the parent output — moe_ffn does this for y / dX_via_*.
+    auto parent_out = ttml::core::zeros(ttnn::Shape({1U, 1U, M_parent_out, N}), device, ttnn::DataType::BFLOAT16);
+
+    // Offsets {0, 32, 96, 192}. start_index=1 -> range [32, 96) = 64 rows = 2 tiles.
+    // input is 128 rows (4 tiles); actual_eff_M = 2 tiles < M_input/32 = 4.
+    std::vector<uint32_t> offsets_host = {0U, 32U, 96U, 192U};
+    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
+
+    ttml::metal::variable_matmul(
+        input,
+        weight,
+        kConfig,
+        std::nullopt,
+        0U,
+        0U,
+        0U,
+        0U,
+        parent_out,
+        0U,
+        offsets,
+        ttml::metal::OffsetsRole::OutputRow,
+        1U);
+
+    auto written = ttml::core::to_vector<float>(parent_out);
+
+    // Pad rows BEYOND the [32, 96) write range must remain zero.
+    float pad_err = 0.0F;
+    for (uint32_t m = 0; m < M_parent_out; ++m) {
+        if (m >= 32 && m < 96)
+            continue;
+        for (uint32_t n = 0; n < N; ++n) {
+            pad_err = std::max(pad_err, std::abs(written[m * N + n]));
+        }
+    }
+    EXPECT_LT(pad_err, 1e-3F) << "OutputRow leaked into pad rows: max_abs=" << pad_err;
+
+    // Written rows should match matmul of input[0:64] @ weight.
+    auto input_slice = ttnn::slice(
+        input,
+        ttnn::SmallVector<uint32_t>{0U, 0U, 0U, 0U},
+        ttnn::SmallVector<uint32_t>{1U, 1U, 64U, K},
+        ttnn::SmallVector<uint32_t>{1U, 1U, 1U, 1U});
+    auto ref = ttnn::matmul(input_slice, weight, false, false);
+    auto ref_vec = ttml::core::to_vector<float>(ref);
+    float written_err = 0.0F;
+    for (uint32_t m = 0; m < 64U; ++m) {
+        for (uint32_t n = 0; n < N; ++n) {
+            written_err = std::max(written_err, std::abs(written[(m + 32) * N + n] - ref_vec[m * N + n]));
+        }
+    }
+    EXPECT_LT(written_err, 2.0F) << "OutputRow written rows err: " << written_err;
+}
+
+// Multiple OutputRow calls with different offsets_start_index to the SAME parent_out
+// (moe_ffn down_proj pattern). Each call writes a per-expert range; pad/slack rows
+// between/after expert ranges must stay zero.
+TEST_F(VariableMatmulTest, OnDeviceOffsets_OutputRow_MultiExpert) {
+    const uint32_t M_input = 128, K = 128, N = 64;
+    const uint32_t T_cap = 256;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input = create_random_device_tensor(M_input, K, device);
+    auto weight = create_random_device_tensor(K, N, device);
+    auto parent_out = ttml::core::zeros(ttnn::Shape({1U, 1U, T_cap, N}), device, ttnn::DataType::BFLOAT16);
+
+    // offsets = {0, 32, 96, 128}. Three experts:
+    //   e=0: actual=1 tile, writes [0:32]
+    //   e=1: actual=2 tiles, writes [32:96]
+    //   e=2: actual=1 tile, writes [96:128]
+    // Pad/slack rows: [128:256) must remain zero.
+    std::vector<uint32_t> offsets_host = {0U, 32U, 96U, 128U};
+    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
+
+    for (uint32_t e = 0; e < 3U; ++e) {
+        ttml::metal::variable_matmul(
+            input,
+            weight,
+            kConfig,
+            std::nullopt,
+            0U,
+            0U,
+            0U,
+            0U,
+            parent_out,
+            0U,
+            offsets,
+            ttml::metal::OffsetsRole::OutputRow,
+            e);
+    }
+
+    auto written = ttml::core::to_vector<float>(parent_out);
+
+    // Trailing slack [128:256] must stay zero.
+    float slack_err = 0.0F;
+    for (uint32_t m = 128; m < T_cap; ++m) {
+        for (uint32_t n = 0; n < N; ++n) {
+            slack_err = std::max(slack_err, std::abs(written[m * N + n]));
+        }
+    }
+    EXPECT_LT(slack_err, 1e-3F) << "OutputRow multi-expert leaked into slack rows: max_abs=" << slack_err;
+}
+
+// moe_ffn fwd gate_proj pattern: pre-zero output_tensor [upper*32, I], InputRow
+// reads a sub-range of grouped, matmul writes to rows [0:actual*32] of output.
+// Rows [actual*32 : upper*32] must remain zero (from pre-zero).
+TEST_F(VariableMatmulTest, OnDeviceOffsets_InputRow_PreZeroOutput_PadRowsStayZero) {
+    const uint32_t H_grouped = 128;  // 4 tiles
+    const uint32_t K = 64;
+    const uint32_t I = 64;
+    constexpr uint32_t upper_M_tiles = 4U;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto grouped = create_random_device_tensor(H_grouped, K, device);
+    auto w_gate = create_random_device_tensor(I, K, device);  // [I, K] used as [K, I] under transpose_b
+    auto gate_proj = ttml::core::zeros(ttnn::Shape({1U, 1U, upper_M_tiles * 32U, I}), device, ttnn::DataType::BFLOAT16);
+
+    // offsets = {0, 32, 64, 128}. start_index=1 -> range [32, 64) = 32 rows = 1 tile.
+    // actual = 1 < upper = 4. Pad rows [32:128] of gate_proj must stay zero.
+    std::vector<uint32_t> offsets_host = {0U, 32U, 64U, 128U};
+    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
+
+    auto cfg = kConfig;
+    cfg.transpose_b = true;
+    ttml::metal::variable_matmul(
+        grouped,
+        w_gate,
+        cfg,
+        std::nullopt,
+        0U,
+        /*effective_M_tiles=*/upper_M_tiles,
+        0U,
+        0U,
+        gate_proj,
+        0U,
+        offsets,
+        ttml::metal::OffsetsRole::InputRow,
+        1U);
+
+    auto written = ttml::core::to_vector<float>(gate_proj);
+
+    // Rows [32, 128) of gate_proj must stay zero.
+    float pad_err = 0.0F;
+    for (uint32_t m = 32; m < upper_M_tiles * 32U; ++m) {
+        for (uint32_t n = 0; n < I; ++n) {
+            pad_err = std::max(pad_err, std::abs(written[m * I + n]));
+        }
+    }
+    EXPECT_LT(pad_err, 1e-3F) << "InputRow w/ pre-zero output_tensor leaked into pad rows: max_abs=" << pad_err;
+}
+
+// moe-ffn fwd pattern with zero-input pad rows: grouped has counts<padded so trailing
+// rows within an expert's range are zero. Matmul output for those rows should be zero.
+// Mirrors expert 2 in MoeFfnSwigluBackwardTest (counts={32,16,48}): per-expert padded
+// range is 64 rows but only first 48 have real data; rows 48..63 of the per-expert
+// matmul output should be exactly zero (silu(0)*0 in fwd, propagating to dgrouped pad).
+TEST_F(VariableMatmulTest, OnDeviceOffsets_InputRow_ZeroPadRowsProduceZeroOutput) {
+    const uint32_t H_grouped = 128;
+    const uint32_t K = 64;
+    const uint32_t I = 64;
+    constexpr uint32_t upper_M_tiles = 4U;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    // Build grouped with zero pad rows [112:128] (mimics expert 2's pad in the bwd test).
+    auto grouped_h = xt::xarray<float>::from_shape({1U, 1U, H_grouped, K});
+    for (uint32_t m = 0; m < H_grouped; ++m) {
+        for (uint32_t k = 0; k < K; ++k) {
+            grouped_h(0, 0, m, k) = (m < 112U) ? 0.5F : 0.0F;
+        }
+    }
+    auto grouped = ttml::core::from_xtensor(grouped_h, device);
+    auto w_gate = create_random_device_tensor(I, K, device);
+    auto gate_proj = ttml::core::zeros(ttnn::Shape({1U, 1U, upper_M_tiles * 32U, I}), device, ttnn::DataType::BFLOAT16);
+
+    // offsets = {0, 32, 64, 128}. start_index=2 -> range [64, 128) = 64 rows = 2 tiles.
+    // grouped[64:112] = 0.5 (real), grouped[112:128] = 0 (pad).
+    std::vector<uint32_t> offsets_host = {0U, 32U, 64U, 128U};
+    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
+
+    auto cfg = kConfig;
+    cfg.transpose_b = true;
+    ttml::metal::variable_matmul(
+        grouped,
+        w_gate,
+        cfg,
+        std::nullopt,
+        0U,
+        upper_M_tiles,
+        0U,
+        0U,
+        gate_proj,
+        0U,
+        offsets,
+        ttml::metal::OffsetsRole::InputRow,
+        2U);
+
+    auto out = ttml::core::to_vector<float>(gate_proj);
+
+    // Rows [48:64] of gate_proj come from grouped[112:128]=0. Output must be 0.
+    float zero_input_err = 0.0F;
+    for (uint32_t m = 48; m < 64U; ++m) {
+        for (uint32_t n = 0; n < I; ++n) {
+            zero_input_err = std::max(zero_input_err, std::abs(out[m * I + n]));
+        }
+    }
+    EXPECT_LT(zero_input_err, 1e-3F) << "InputRow zero-input rows produced non-zero output: max_abs=" << zero_input_err;
+}
+
 TEST_F(VariableMatmulTest, WriteAtOffset_NoTranspose) {
     const uint32_t M_e = 128, K = 128, N = 256, M_parent = 512;
     auto* device = &ttml::autograd::ctx().get_device();
