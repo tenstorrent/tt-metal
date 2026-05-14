@@ -68,6 +68,7 @@ class Attention(Module):
         k_chunk_size: int | None = None,
         q_chunk_size: int | None = None,
         sdpa_chunk_size_overrides: dict | None = None,
+        per_head_norm: bool = False,
         is_fsdp: bool = False,
     ) -> None:
         super().__init__()
@@ -79,6 +80,10 @@ class Attention(Module):
         self.parallel_config = parallel_config
         self.padding_config = padding_config
         self.use_spatial_weights_for_prompt = use_spatial_weights_for_prompt
+        # per_head_norm forwards through to DistributedRMSNorm: True = per-head RMS (head_dim
+        # divisor, no AG of stats), False = global RMS across the full padded_inner_dim (the
+        # original Wan-style behavior). Defaults False so existing callers are unchanged.
+        self.per_head_norm = per_head_norm
 
         self.padded_heads = padding_config.target_heads if padding_config is not None else heads
         self.n_local_heads = self.padded_heads // self.parallel_config.tensor_parallel.factor
@@ -505,7 +510,7 @@ class Attention(Module):
             rope_cos=spatial_cos,
             rope_sin=spatial_sin,
             trans_mat=spatial_trans_mat,
-            per_head_norm=True,
+            per_head_norm=self.per_head_norm,
         )
         k = self.norm_k(
             ttnn.unsqueeze(k_flat, 0),
@@ -513,7 +518,7 @@ class Attention(Module):
             rope_cos=spatial_cos,
             rope_sin=spatial_sin,
             trans_mat=spatial_trans_mat,
-            per_head_norm=True,
+            per_head_norm=self.per_head_norm,
         )
         v = _split_heads(v_flat)
 
@@ -531,7 +536,7 @@ class Attention(Module):
                 rope_cos=prompt_cos,
                 rope_sin=prompt_sin,
                 trans_mat=prompt_trans_mat,
-                per_head_norm=True,
+                per_head_norm=self.per_head_norm,
             )
             add_k = self.norm_added_k(
                 ttnn.unsqueeze(add_k_flat, 0),
@@ -539,7 +544,7 @@ class Attention(Module):
                 rope_cos=prompt_cos,
                 rope_sin=prompt_sin,
                 trans_mat=prompt_trans_mat,
-                per_head_norm=True,
+                per_head_norm=self.per_head_norm,
             )
             add_v = _split_heads(add_v_flat)
 
