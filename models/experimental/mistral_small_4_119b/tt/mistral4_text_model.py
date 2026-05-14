@@ -303,9 +303,20 @@ class TtMistral4TextModel:
         x = ttnn.reshape(x, [1, 1, 1, HIDDEN_SIZE])
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
 
-        for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
-            x = layer.forward_decode(x, cos_tt, sin_tt, kv_cache, current_pos)
+        # One upload for all 36 layers instead of one per layer.
+        cur_pos_tensor = ttnn.as_tensor(
+            torch.tensor([current_pos], dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
 
+        for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
+            x = layer.forward_decode(x, cos_tt, sin_tt, kv_cache, current_pos, cur_pos_tensor)
+
+        ttnn.deallocate(cur_pos_tensor)
         ttnn.deallocate(cos_tt)
         ttnn.deallocate(sin_tt)
 
@@ -348,9 +359,19 @@ class TtMistral4TextModel:
         x = ttnn.reshape(x, [1, 1, 1, HIDDEN_SIZE])
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
 
-        for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
-            x = layer.forward_decode(x, cos_tt, sin_tt, kv_cache, current_pos)
+        cur_pos_tensor = ttnn.as_tensor(
+            torch.tensor([current_pos], dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
 
+        for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
+            x = layer.forward_decode(x, cos_tt, sin_tt, kv_cache, current_pos, cur_pos_tensor)
+
+        ttnn.deallocate(cur_pos_tensor)
         ttnn.deallocate(cos_tt)
         ttnn.deallocate(sin_tt)
 
