@@ -1,0 +1,26 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "api/dataflow/dataflow_api.h"
+
+void kernel_main() {
+    uint32_t dst_addr = get_arg_val<uint32_t>(0);
+    uint32_t Mt = get_arg_val<uint32_t>(1);
+    uint32_t Nt = get_arg_val<uint32_t>(2);
+
+    constexpr uint32_t cb_out = 16;
+
+    constexpr auto s_args = TensorAccessorArgs<0>();
+    const auto s = TensorAccessor(s_args, dst_addr);
+
+    for (uint32_t m = 0; m < Mt; m++) {
+        for (uint32_t n = 0; n < Nt; n++) {
+            cb_wait_front(cb_out, 1);
+            uint32_t l1_addr = get_read_ptr(cb_out);
+            noc_async_write_tile(m * Nt + n, s, l1_addr);
+            noc_async_write_barrier();
+            cb_pop_front(cb_out, 1);
+        }
+    }
+}
