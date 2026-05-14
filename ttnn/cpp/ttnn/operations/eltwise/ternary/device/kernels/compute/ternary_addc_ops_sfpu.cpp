@@ -27,12 +27,12 @@ struct TernarySfpuOpScalar : compute_kernel_lib::FillTileTag {
     uint32_t scalar;
     constexpr explicit TernarySfpuOpScalar(uint32_t s) noexcept : scalar(s) {}
     static ALWI void init() { TERNARY_SFPU_OP_INIT(); }
-    ALWI void exec(uint32_t /*i*/) const {
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
         TERNARY_SFPU_OP_FUNC(
-            compute_kernel_lib::to_u32(In0),
-            compute_kernel_lib::to_u32(In1),
-            compute_kernel_lib::to_u32(In2),
-            compute_kernel_lib::to_u32(Out),
+            compute_kernel_lib::to_u32(In0) + slot_offset,
+            compute_kernel_lib::to_u32(In1) + slot_offset,
+            compute_kernel_lib::to_u32(In2) + slot_offset,
+            compute_kernel_lib::to_u32(Out) + slot_offset,
             scalar);
     }
 };

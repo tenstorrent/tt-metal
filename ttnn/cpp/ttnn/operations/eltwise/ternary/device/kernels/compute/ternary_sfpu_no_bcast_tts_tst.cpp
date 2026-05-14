@@ -22,7 +22,13 @@ template <
     compute_kernel_lib::Dst Out = compute_kernel_lib::Dst::D0>
 struct TernarySfpuOp : compute_kernel_lib::TernaryOp<TernarySfpuOp<In0, In1, In2, Out>, In0, In1, In2, Out> {
     static ALWI void init() { TERNARY_SFPU_OP_INIT(); }
-    static ALWI void call(uint32_t i0, uint32_t i1, uint32_t i2, uint32_t o) { TERNARY_SFPU_OP_FUNC(i0, i1, i2, o); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        TERNARY_SFPU_OP_FUNC(
+            compute_kernel_lib::to_u32(In0) + slot_offset,
+            compute_kernel_lib::to_u32(In1) + slot_offset,
+            compute_kernel_lib::to_u32(In2) + slot_offset,
+            compute_kernel_lib::to_u32(Out) + slot_offset);
+    }
 };
 
 // Wraps the host-defined FILL_LLK macro (fill_tile / fill_tile_int<Int32> / fill_tile_uint<UInt32>).
@@ -32,13 +38,13 @@ struct FillLlk : compute_kernel_lib::FillTileTag {
     uint32_t value;
     constexpr explicit FillLlk(uint32_t v) noexcept : value(v) {}
     static ALWI void init() { fill_tile_init(); }
-    ALWI void exec(uint32_t /*i*/) const {
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
 #ifdef FILL_WITH_VALUE_FLOAT
         const auto scalar_val = reinterpret_cast<const float*>(&value);
-        FILL_LLK(compute_kernel_lib::to_u32(DstSlot), *scalar_val);
+        FILL_LLK(compute_kernel_lib::to_u32(DstSlot) + slot_offset, *scalar_val);
 #endif
 #ifdef FILL_WITH_VALUE_INT
-        FILL_LLK(compute_kernel_lib::to_u32(DstSlot), value);
+        FILL_LLK(compute_kernel_lib::to_u32(DstSlot) + slot_offset, value);
 #endif
     }
 };

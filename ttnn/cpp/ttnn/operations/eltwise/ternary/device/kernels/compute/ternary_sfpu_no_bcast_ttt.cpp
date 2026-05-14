@@ -21,7 +21,13 @@ template <
     compute_kernel_lib::Dst Out = compute_kernel_lib::Dst::D0>
 struct TernarySfpuOp : compute_kernel_lib::TernaryOp<TernarySfpuOp<In0, In1, In2, Out>, In0, In1, In2, Out> {
     static ALWI void init() { TERNARY_SFPU_OP_INIT(); }
-    static ALWI void call(uint32_t i0, uint32_t i1, uint32_t i2, uint32_t o) { TERNARY_SFPU_OP_FUNC(i0, i1, i2, o); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        TERNARY_SFPU_OP_FUNC(
+            compute_kernel_lib::to_u32(In0) + slot_offset,
+            compute_kernel_lib::to_u32(In1) + slot_offset,
+            compute_kernel_lib::to_u32(In2) + slot_offset,
+            compute_kernel_lib::to_u32(Out) + slot_offset);
+    }
 };
 
 }  // namespace

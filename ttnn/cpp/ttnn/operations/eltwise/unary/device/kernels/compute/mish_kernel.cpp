@@ -22,7 +22,7 @@ inline void run_mish(uint32_t num_tiles) {
     cklib::eltwise_chain(
         num_tiles,
         cklib::CopyTile<cb_input, cklib::Dst::D0, cklib::CopyTilePolicy::WaitNoPop>{},
-        cklib::Exp<approx, approx, cklib::Dst::D0>{},
+        cklib::Exp<approx, cklib::Approx::Exact, cklib::Dst::D0>{},
         cklib::Log1p<approx, cklib::Dst::D0>{},
         cklib::Tanh<cklib::Dst::D0>{},
         cklib::CopyTile<cb_input, cklib::Dst::D1, cklib::CopyTilePolicy::NoWaitPop>{},
@@ -33,7 +33,7 @@ inline void run_mish(uint32_t num_tiles) {
     cklib::eltwise_chain(
         num_tiles,
         cklib::CopyTile<cb_input, cklib::Dst::D0, cklib::CopyTilePolicy::WaitNoPop>{},
-        cklib::Exp<approx, approx, cklib::Dst::D0>{},
+        cklib::Exp<approx, cklib::Approx::Exact, cklib::Dst::D0>{},
         cklib::Log1p<approx, cklib::Dst::D0>{},
         cklib::Tanh<cklib::Dst::D0>{},
         cklib::DestReuseBinary<

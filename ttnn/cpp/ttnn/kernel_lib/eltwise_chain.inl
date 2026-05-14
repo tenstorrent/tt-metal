@@ -814,14 +814,30 @@ struct chain_loads_share_cb<EltwiseChain<Es...>>
 // chain_lane_width — N-element fold (item 2). Max of per-element `lane_width`. Drives
 // auto-block: chain BlockSize = DEST_AUTO_LIMIT / chain_lane_width when AutoBlock::On.
 // Each element writes to DEST[dst_slot + j * chain_lane_width] for lane j in [0, BlockSize).
+//
+// SFINAE fallback: elements that don't expose a `lane_width` member (caller-defined
+// chain elements that inherit directly from `CopyTileTag` / `PackTileTag` / `DestOnlyTag`
+// without inheriting from `UnaryOp`/`BinaryOp`/`TernaryOp`/`QuaternaryOp` bases) default
+// to 1. Multiple-inheritance ambiguity (e.g. `OptionalChainElement<true, FillScalar>`)
+// is sidestepped by reading via this detector instead of `Es::lane_width` directly.
 namespace detail {
+template <class, class = void>
+struct elem_lane_width : std::integral_constant<uint32_t, 1> {};
+
+template <class E>
+struct elem_lane_width<E, std::void_t<decltype(E::lane_width)>>
+    : std::integral_constant<uint32_t, E::lane_width> {};
+
+template <class E>
+constexpr uint32_t elem_lane_width_v = elem_lane_width<E>::value;
+
 template <class... Es>
 constexpr uint32_t chain_lane_width_impl_v = []() {
     if constexpr (sizeof...(Es) == 0) {
         return uint32_t{1};
     } else {
         uint32_t w = 1;
-        ((w = (Es::lane_width > w ? Es::lane_width : w)), ...);
+        ((w = (elem_lane_width_v<Es> > w ? elem_lane_width_v<Es> : w)), ...);
         return w;
     }
 }();
@@ -932,15 +948,24 @@ template <class... Es> struct chain_pack_writes_collide<EltwiseChain<Es...>>
 //   1. No element with `clashes_with_fpu == true` outside the CopyTile family
 //      (BinaryFpu / DestReuseBinary / UnaryBcast reprogram unpack MOP per iter).
 //   2. All CopyTile elements share a single srca CB (or ≤1 CopyTile in chain).
-// SFPU ops program SFPU/SFPI state, not unpack MOP — they are always hoist-safe
-// as a group; the chain-shape gate covers the elements that DO touch unpack.
+//
+// **Disabled (always false).** The previous predicate assumed SFPU ops were always
+// hoist-safe as a group, but multiple distinct SFPU `*_tile_init` calls done up front
+// leave only the LAST init's MOP programmed — so subsequent execs reuse the wrong
+// SFPU state. Symptoms seen on this branch:
+//   - mish_kernel.cpp FP32 path: Exp/Log1p/Tanh chain produced tanh-saturated output
+//     (last init clobbered). PCC dropped to 0.988 vs golden.
+//   - logit_kernel.cpp stage-2 chain (Rsub → DivBinary → Log): 21 bfloat16 logit
+//     tests with ATOL deltas of 9-12 (expected 0.04).
+//
+// Until the predicate is rewritten to detect SFPU-init heterogeneity (e.g. fingerprint
+// init member types and require ≤ 1 unique), force per-tile init for every chain. The
+// per-tile init cost is small relative to the SFPU op cost; correctness > micro-perf.
 template <class Chain>
 struct chain_is_hoist_safe : std::false_type {};
 
 template <class... Es>
-struct chain_is_hoist_safe<EltwiseChain<Es...>>
-    : std::bool_constant<!chain_has_non_copy_tile_fpu_clash_v<EltwiseChain<Es...>> &&
-                         chain_loads_share_cb_v<EltwiseChain<Es...>>> {};
+struct chain_is_hoist_safe<EltwiseChain<Es...>> : std::false_type {};
 
 // =============================================================================
 // 10. Chain pipeline — per-iteration emit

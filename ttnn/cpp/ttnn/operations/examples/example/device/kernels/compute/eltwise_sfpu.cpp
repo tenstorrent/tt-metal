@@ -11,7 +11,7 @@
 namespace {
 struct SfpuOpChain : compute_kernel_lib::DestOnlyTag {
     static ALWI void init() {}
-    ALWI void exec(uint32_t /*i*/) const {
+    ALWI void exec(uint32_t /*i*/, uint32_t /*slot_offset*/) const {
 #ifdef SFPU_OP_CHAIN_0
         SFPU_OP_CHAIN_0
 #endif

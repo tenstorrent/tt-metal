@@ -18,8 +18,8 @@ struct Dropout : compute_kernel_lib::UnaryOp<Dropout<Slot>, Slot> {
 
     static ALWI void init() { /* dropout_kernel_init handles seed; no separate per-op init */ }
     static ALWI void call(uint32_t /*idst*/) {}
-    ALWI void exec(uint32_t /*i*/) const {
-        dropout_tile(compute_kernel_lib::to_u32(Slot), int_probability, int_scale_factor);
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
+        dropout_tile(compute_kernel_lib::to_u32(Slot) + slot_offset, int_probability, int_scale_factor);
     }
 };
 

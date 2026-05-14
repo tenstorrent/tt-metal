@@ -19,7 +19,12 @@ template <
     compute_kernel_lib::Dst Out = compute_kernel_lib::Dst::D0>
 struct LogSigmoidBinary : compute_kernel_lib::BinaryOp<LogSigmoidBinary<In0, In1, Out>, In0, In1, Out> {
     static ALWI void init() { logsigmoid_tile_init(); }
-    static ALWI void call(uint32_t i0, uint32_t i1, uint32_t o) { logsigmoid_tile(i0, i1, o); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        logsigmoid_tile(
+            compute_kernel_lib::to_u32(In0) + slot_offset,
+            compute_kernel_lib::to_u32(In1) + slot_offset,
+            compute_kernel_lib::to_u32(Out) + slot_offset);
+    }
 };
 
 }  // namespace

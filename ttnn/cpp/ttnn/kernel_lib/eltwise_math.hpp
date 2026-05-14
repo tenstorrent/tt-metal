@@ -26,12 +26,17 @@
 namespace compute_kernel_lib {
 
 // ---- Exp ----
+// The second `fast` template parameter is kept for ABI compatibility but is NOT
+// routed into the LLK template args. The LLK `exp_tile_init` second arg is
+// `uint32_t scale` (default 0x3F800000 = 1.0f) and `exp_tile` second arg is
+// `bool scale_en` (default false). Previously this helper silently coerced
+// `fast == Approx::Fast` (a bool) into both slots, programming scale=0u/1u and
+// enabling scale, producing wildly wrong values in fast-approx mode (mish ATOL ~40).
+// Now: only `approx` is forwarded; scale / clamping / scale_en stay at LLK defaults.
 template <Approx approx = Approx::Exact, Approx fast = Approx::Fast, Dst Slot = Dst::D0>
 struct Exp : UnaryOp<Exp<approx, fast, Slot>, Slot> {
-    static ALWI void init() { exp_tile_init<approx == Approx::Fast, fast == Approx::Fast>(); }
-    static ALWI void exec_impl(uint32_t slot_offset) {
-        exp_tile<approx == Approx::Fast, fast == Approx::Fast>(to_u32(Slot) + slot_offset);
-    }
+    static ALWI void init() { exp_tile_init<approx == Approx::Fast>(); }
+    static ALWI void exec_impl(uint32_t slot_offset) { exp_tile<approx == Approx::Fast>(to_u32(Slot) + slot_offset); }
 };
 
 // ---- Log ----

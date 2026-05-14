@@ -18,7 +18,9 @@ namespace {
 template <compute_kernel_lib::Dst Slot = compute_kernel_lib::Dst::D0>
 struct GeluDerivative : compute_kernel_lib::UnaryOp<GeluDerivative<Slot>, Slot> {
     static ALWI void init() { gelu_derivative_tile_init<false>(); }
-    static ALWI void call(uint32_t idst) { gelu_derivative_tile<false>(idst); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        gelu_derivative_tile<false>(compute_kernel_lib::to_u32(Slot) + slot_offset);
+    }
 };
 
 }  // namespace

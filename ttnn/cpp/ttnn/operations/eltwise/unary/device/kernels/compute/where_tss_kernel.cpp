@@ -23,7 +23,7 @@ namespace {
 // Wraps the host-defined SFPU_OP_CHAIN_0 (where(D0, D1, D2) → D0).
 struct WhereSfpu : compute_kernel_lib::DestOnlyTag {
     static ALWI void init() {}
-    ALWI void exec(uint32_t /*i*/) const { SFPU_OP_CHAIN_0; }
+    ALWI void exec(uint32_t /*i*/, uint32_t /*slot_offset*/) const { SFPU_OP_CHAIN_0; }
 };
 
 }  // namespace
