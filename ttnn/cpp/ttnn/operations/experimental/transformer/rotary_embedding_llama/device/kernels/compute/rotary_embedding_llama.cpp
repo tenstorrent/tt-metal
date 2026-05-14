@@ -78,6 +78,59 @@ void kernel_main() {
                 cb_push_back(rotated_in_interm_cb, Wt);
                 cb_wait_front(rotated_in_interm_cb, Wt);
 
+#if RELOAD_IMPL == 1
+                // RELOAD_IMPL == 1: sin/cos CBs are waited and popped per seq_tile, so
+                // sin_cos_row_cnt stays at 0 and the per-iter B index reduces to `j`. That
+                // matches a pure BlockIter walk → migratable to eltwise_chain.
+                // RELOAD_IMPL == 0 keeps the raw block because B walks `j + sin_cos_row_cnt*Wt`
+                // (BlockIter + runtime offset), and the chain has no BlockIter-plus-base mode.
+
+                // sin_interim = rotated * sin   (eltwise mul over Wt tiles)
+                compute_kernel_lib::eltwise_chain(
+                    Wt,
+                    compute_kernel_lib::BinaryFpu<
+                        rotated_in_interm_cb,
+                        sin_cb,
+                        sin_interm_cb,
+                        compute_kernel_lib::BinaryFpuOp::Mul,
+                        compute_kernel_lib::BroadcastDim::None,
+                        compute_kernel_lib::BinaryDataFormatReconfig::None,
+                        compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
+                        compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
+                        compute_kernel_lib::CbIndexMode::BlockIter,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::CbIndexMode::BlockIter>{},
+                    compute_kernel_lib::PackTile<
+                        sin_interm_cb,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::PackTilePolicy::NoReserveNoPush,
+                        compute_kernel_lib::PackTileIndexMode::BlockIter>{});
+                cb_push_back(sin_interm_cb, Wt);
+                cb_pop_front(rotated_in_interm_cb, Wt);
+
+                // cos_interim = x * cos   (eltwise mul over Wt tiles)
+                compute_kernel_lib::eltwise_chain(
+                    Wt,
+                    compute_kernel_lib::BinaryFpu<
+                        in_cb,
+                        cos_cb,
+                        cos_interm_cb,
+                        compute_kernel_lib::BinaryFpuOp::Mul,
+                        compute_kernel_lib::BroadcastDim::None,
+                        compute_kernel_lib::BinaryDataFormatReconfig::None,
+                        compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
+                        compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
+                        compute_kernel_lib::CbIndexMode::BlockIter,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::CbIndexMode::BlockIter>{},
+                    compute_kernel_lib::PackTile<
+                        cos_interm_cb,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::PackTilePolicy::NoReserveNoPush,
+                        compute_kernel_lib::PackTileIndexMode::BlockIter>{});
+                cb_push_back(cos_interm_cb, Wt);
+                cb_pop_front(in_cb, Wt);  // Done with input
+#else
                 mul_tiles_init(rotated_in_interm_cb, sin_cb);
                 ACQ();
                 for (uint32_t j = 0; j < Wt; ++j) {
@@ -98,6 +151,7 @@ void kernel_main() {
                 REL();
                 cb_push_back(cos_interm_cb, Wt);
                 cb_pop_front(in_cb, Wt);  // Done with input
+#endif
 #if RELOAD_IMPL == 1
                 cb_pop_front(sin_cb, Wt);
                 cb_pop_front(cos_cb, Wt);
