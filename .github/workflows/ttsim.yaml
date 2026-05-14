@@ -21,7 +21,7 @@ on:
       ttsim-version:
         required: false
         type: string
-        default: "v1.5.8"
+        default: "v1.6.0"
       job-timeout:
         required: false
         type: number
@@ -318,6 +318,9 @@ jobs:
           - arch: blackhole
             build_suffix: release_bh
             soc_desc: blackhole_140_arch.yaml
+          - arch: quasar
+            build_suffix: release_qsr
+            soc_desc: quasar_32_arch.yaml
     container:
       image: ${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
       volumes:
@@ -364,13 +367,11 @@ jobs:
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: C++ tests
-        timeout-minutes: 5
+        timeout-minutes: 10
         run: |
           if [[ "${{ matrix.arch }}" == "quasar" ]]; then
-            # ToDo: Re-enable this test once tt-sim supports NOC
-            # GH issue for tt-sim NOC support: https://github.com/tenstorrent/ttsim/issues/24
-            # ./build/test/tt_metal/test_single_dm_l1_write
-            :
+            ./build/test/tt_metal/test_quasar_compute_kernels
+            ./build/test/tt_metal/test_quasar_semaphores
           else
             ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.IdleEthTestNocStreamRegs"
             ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDispatchFixture.IdleEthDRAMLoopbackSingleCore"
