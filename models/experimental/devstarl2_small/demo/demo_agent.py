@@ -11,28 +11,10 @@ from typing import Any, Dict, List, Optional
 
 import torch
 from transformers import Mistral3ForConditionalGeneration, MistralCommonBackend
-from transformers.integrations.finegrained_fp8 import Fp8Dequantize
+from models.experimental.devstarl2_small.devstral_utils.fp8_dequantize_compat import apply_fp8_dequantize_compat
 
 
-_ORIGINAL_DEQUANTIZE_ONE = Fp8Dequantize._dequantize_one
-
-
-def _dequantize_one_compat(self, quantized: torch.Tensor, scales: torch.Tensor) -> torch.Tensor:
-    # Devstral-Small-2 checkpoints can expose scalar FP8 scales for dense linears.
-    # Some HF conversion paths expect a 2D scale tensor and fail on scalar scales.
-    if scales.ndim == 0:
-        fp4_dtype = getattr(torch, "float4_e2m1fn_x2", None)
-        if quantized.dtype == torch.int8 or (fp4_dtype is not None and quantized.dtype == fp4_dtype):
-            quantized_fp32 = self._unpack_fp4(quantized)
-        else:
-            quantized_fp32 = quantized.to(torch.float32)
-        out_dtype = scales.dtype if scales.dtype.is_floating_point and scales.element_size() >= 2 else torch.bfloat16
-        scale = scales.to(torch.float32)
-        return (quantized_fp32 * scale).to(out_dtype)
-    return _ORIGINAL_DEQUANTIZE_ONE(self, quantized, scales)
-
-
-Fp8Dequantize._dequantize_one = _dequantize_one_compat
+apply_fp8_dequantize_compat()
 
 DEFAULT_MODEL = "mistralai/Devstral-Small-2-24B-Instruct-2512"
 DEFAULT_SYSTEM_PROMPT = (

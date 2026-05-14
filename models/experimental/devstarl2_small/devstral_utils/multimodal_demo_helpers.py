@@ -8,7 +8,6 @@ import os
 
 import torch
 import torch.nn.functional as F
-from transformers.integrations.finegrained_fp8 import Fp8Dequantize
 from transformers.models.mistral3.modeling_mistral3 import Mistral3Model
 
 import ttnn
@@ -26,31 +25,6 @@ DEFAULT_MODEL_ID = "mistralai/Devstral-Small-2-24B-Instruct-2512"
 # HF / model-card style 256K-token context (Devstral long context). Default TT allocation on Blackhole only;
 # Wormhole single-chip DRAM typically cannot hold full preallocated KV at this length.
 DEVSTRAL_DEMO_BLACKHOLE_DEFAULT_MAX_SEQ_LEN = 256_000
-
-_ORIGINAL_FP8_DEQUANTIZE_ONE = Fp8Dequantize._dequantize_one
-_FP8_PATCH_APPLIED = False
-
-
-def _dequantize_one_compat(self, quantized: torch.Tensor, scales: torch.Tensor) -> torch.Tensor:
-    if scales.ndim == 0:
-        fp4_dtype = getattr(torch, "float4_e2m1fn_x2", None)
-        if quantized.dtype == torch.int8 or (fp4_dtype is not None and quantized.dtype == fp4_dtype):
-            quantized_fp32 = self._unpack_fp4(quantized)
-        else:
-            quantized_fp32 = quantized.to(torch.float32)
-        out_dtype = scales.dtype if scales.dtype.is_floating_point and scales.element_size() >= 2 else torch.bfloat16
-        scale = scales.to(torch.float32)
-        return (quantized_fp32 * scale).to(out_dtype)
-    return _ORIGINAL_FP8_DEQUANTIZE_ONE(self, quantized, scales)
-
-
-def apply_fp8_dequantize_compat() -> None:
-    """Idempotent patch for FP4/FP8 dequant used when loading Devstral checkpoints."""
-    global _FP8_PATCH_APPLIED
-    if _FP8_PATCH_APPLIED:
-        return
-    Fp8Dequantize._dequantize_one = _dequantize_one_compat
-    _FP8_PATCH_APPLIED = True
 
 
 def text_model_root(multimodal_inner: Mistral3Model):
