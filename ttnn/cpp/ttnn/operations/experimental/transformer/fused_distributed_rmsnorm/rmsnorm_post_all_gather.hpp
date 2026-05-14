@@ -22,6 +22,7 @@ ttnn::Tensor wan_fused_rmsnorm_post_allgather(
     const std::optional<const ttnn::Tensor>& rope_sin = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    const std::optional<const DataType>& dtype = std::nullopt);
+    const std::optional<const DataType>& dtype = std::nullopt,
+    bool per_head_norm = false);
 
 }  // namespace ttnn::experimental

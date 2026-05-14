@@ -202,7 +202,19 @@ class DistributedRMSNorm(Module):
         rope_sin=None,
         trans_mat=None,
         dtype=None,
+        per_head_norm: bool = False,
     ) -> ttnn.Tensor:
+        """
+        Args:
+            per_head_norm: if True, normalize each head independently with divisor `head_dim`
+                instead of the global `embedding_dim`. Requires num_heads_per_device > 1.
+                The pre-AG kernel emits per-head stat tiles (num_heads_per_device tiles per row);
+                the AG step is SKIPPED because each device's per-head stats are already local
+                (heads are not split across TP). The post-AG kernel then applies per-head RMS.
+
+                When False (default), behavior is unchanged: global RMS across the full
+                `embedding_dim` per row (same as before — used by WAN, Flux2 double block, etc.).
+        """
         expected_dim = self.embedding_dim // self.mesh_width
         if x.shape[-1] != expected_dim:
             msg = (
@@ -247,6 +259,7 @@ class DistributedRMSNorm(Module):
             rope_cos=rope_cos,
             rope_sin=rope_sin,
             dtype=dtype,
+            per_head_norm=per_head_norm,
         )
 
 
