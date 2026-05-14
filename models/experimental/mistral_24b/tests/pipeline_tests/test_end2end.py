@@ -231,79 +231,39 @@ def setup_vision_model_args(weights, max_seq_len, batch_size, mesh_device, optim
     return model_args, instruct
 
 
-SYSTEM_PROMPT = """You are mistralai/Mistral-Small-3.1-24B-Instruct-2503, a Large Language Model (LLM) created by Mistral AI, a French startup headquartered in Paris.
-You power an AI assistant called Le Chat.
-Your knowledge base was last updated on 2023-10-01.
-The current date is 2026-05-07.
-
-When you're not sure about some information, you say that you don't have the information and don't make up anything.
-If the user's question is not clear, ambiguous, or does not provide enough context for you to accurately answer the question, you do not try to answer it right away and you rather ask the user to clarify their request (e.g. "What are some good restaurants around me?" => "Where are you?" or "When is the next flight to Tokyo" => "Where do you travel from?").
-You are always very attentive to dates, in particular you try to resolve dates (e.g. "yesterday" is {yesterday}) and when asked about information at specific dates, you discard information that is at another date.
-You follow these instructions in all languages, and always respond to the user in the language they use or request.
-Next sections describe the capabilities that you have.
-
-# WEB BROWSING INSTRUCTIONS
-
-You cannot perform any web search or access internet to open URLs, links etc. If it seems like the user is expecting you to do so, you clarify the situation and ask the user to copy paste the text directly in the chat.
-
-# MULTI-MODAL INSTRUCTIONS
-
-You have the ability to read images, but you cannot generate images. You cannot read nor transcribe audio files or videos."""
-
-
 def setup_vision_prompts_and_tokenizer(model_args, instruct):
     """Setup multimodal prompts and tokenizer for vision-enabled model."""
-
-    image_url = "https://huggingface.co/datasets/patrickvonplaten/random_img/resolve/main/europe.png"
-
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
         {
             "role": "user",
             "content": [
                 {
-                    "type": "text",
-                    "text": (
-                        "Which of the depicted countries has the best food? Which the second and third and fourth? "
-                        "Name the country, its color on the map and one its city that is visible on the map, but is "
-                        "not the capital. Make absolutely sure to only name a city that can be seen on the map."
-                    ),
+                    "type": "image",
+                    "image": "https://img.freepik.com/premium-photo/girl-hugging-dog-with-girl-hugging-her_737761-2565.jpg",
                 },
-                {"type": "image", "image": image_url},
+                {
+                    "type": "text",
+                    "text": "Is there a cat in this image? If not, what animal do you see in the image? Describe the image in detail in 600 words.",
+                },
             ],
-        },
+        }
     ]
 
     tokenizer = model_args.tokenizer
-
     return messages, tokenizer
 
 
 def process_vision_info(messages):
-    """Extract images from messages.
-
-    Supports content as a plain string (e.g. system message) or as a list of dicts
-    where each item has a `type` field of "image" (with `image`) or "image_url"
-    (with `image_url.url`).
-    """
-
+    """Extract images (already opened) from messages."""
     image_inputs = []
     video_inputs = None  # Not used
 
     for msg in messages:
         content = msg.get("content", [])
-        if not isinstance(content, list):
-            continue
         for item in content:
-            if not isinstance(item, dict):
-                continue
-            item_type = item.get("type")
-            if item_type == "image" and "image" in item:
+            if item.get("type") == "image":
                 image_inputs.append(item["image"])
-            elif item_type == "image_url":
-                url = item.get("image_url", {})
-                if isinstance(url, dict) and "url" in url:
-                    image_inputs.append(url["url"])
+
     return image_inputs, video_inputs
 
 
