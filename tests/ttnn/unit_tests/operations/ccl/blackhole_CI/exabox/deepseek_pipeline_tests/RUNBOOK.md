@@ -13,7 +13,7 @@ ranks on a 4-host BH Galaxy single pod.
 | Path | Role |
 |---|---|
 | `test_passthrough_pipeline.py` | Local fork of `models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py::test_passthrough_pipeline_block` with two upstream-bug workarounds (see §6). |
-| `conftest.py` | Folder-local override of `mesh_device` to thread `fabric_router_config` / `worker_l1_size` through `set_fabric` (the parent `exabox/conftest.py` doesn't). |
+| `conftest.py` | Folder-local `deepseek_pipeline_mesh_device` fixture that threads `fabric_router_config` / `worker_l1_size` through `set_fabric` (the parent `exabox/conftest.py`'s `mesh_device` doesn't). Deliberately *not* named `mesh_device` so it doesn't shadow the parent/root fixtures when running adjacent tests locally. |
 | `scripts/bootstrap_pipeline_dir.sh` | Generates `TT_VISIBLE_DEVICES` rank-binding via the deepseek `generate_blitz_decode_pipeline_configs.py` probe + a Rev C slicer-correction post-step. |
 | `scripts/run_pipeline_smoke.sh` | Reset-chips-aware runner. Auto-bootstraps if needed, then `tt-run`s the local test. |
 | `scripts/_hosts.sh` | Parses the caller-set `HOSTS` env var (no default — fails fast if unset). |
@@ -245,9 +245,12 @@ thread TID:<old_pid>`.
 
 ### 9.3 `TypeError: open_mesh_device() got an unexpected keyword argument 'fabric_router_config'`
 
-The folder-local `conftest.py` got dropped or pytest is collecting under
-the parent `exabox/conftest.py`'s `mesh_device` fixture. Verify
-`conftest.py` exists in this folder.
+The test is resolving against the parent `exabox/conftest.py`'s
+`mesh_device` instead of the folder-local
+`deepseek_pipeline_mesh_device`. Verify the test's
+`@pytest.mark.parametrize` and function signature both reference
+`deepseek_pipeline_mesh_device`, and that `conftest.py` exists in this
+folder.
 
 ### 9.4 `TT_FATAL: Mismatch in socket FIFO size during handshake.`
 (at `tt_metal/distributed/mesh_socket_utils.cpp:153`)

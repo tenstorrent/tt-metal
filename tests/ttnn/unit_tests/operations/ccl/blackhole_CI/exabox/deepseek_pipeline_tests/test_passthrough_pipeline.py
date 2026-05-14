@@ -80,7 +80,7 @@ def _build_pipeline_config(weight_provider, num_procs):
     return PipelineConfiguration(factories)
 
 
-@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+@pytest.mark.parametrize("deepseek_pipeline_mesh_device", [(4, 2)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -91,11 +91,11 @@ def _build_pipeline_config(weight_provider, num_procs):
     ],
     indirect=True,
 )
-def test_passthrough_pipeline_block(mesh_device):
+def test_passthrough_pipeline_block(deepseek_pipeline_mesh_device):
     if not is_slow_dispatch():
         pytest.skip("Pipeline framework requires TT_METAL_SLOW_DISPATCH_MODE=1")
 
-    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+    ttnn.enable_asynchronous_slow_dispatch(deepseek_pipeline_mesh_device)
 
     num_procs = int(ttnn.distributed_context_get_size())
 
@@ -113,7 +113,7 @@ def test_passthrough_pipeline_block(mesh_device):
     stages_metadata = {i: StageMetadata(rank=i, mesh_id=i) for i in range(num_procs)}
 
     pipeline = config.build_pipeline(
-        mesh_device,
+        deepseek_pipeline_mesh_device,
         stages_metadata=stages_metadata,
         pipeline_config=pipeline_config,
     )
