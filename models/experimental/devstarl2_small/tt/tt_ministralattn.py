@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import math
 
-import torch
 import ttnn
 
 from models.tt_transformers.tt.attention import Attention
@@ -108,24 +107,15 @@ class TtMinistralAttention(Attention):
 
         kv_slots = _devstral_kv_cache_alloc_len(configuration)
 
-        cache_k = torch.zeros((self.batch_size_per_device_group, self.n_local_kv_heads, kv_slots, self.head_dim))
-        cache_v = torch.zeros((self.batch_size_per_device_group, self.n_local_kv_heads, kv_slots, self.head_dim))
-
         self.layer_past = [
-            ttnn.as_tensor(
-                k_or_v,
+            ttnn.zeros(
+                (self.batch_size_per_device_group, self.n_local_kv_heads, kv_slots, self.head_dim),
                 dtype=self.kv_cache_dtype,
                 layout=self.args.get_attn_weights_layout(),
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                cache_file_name=(
-                    f"{weight_cache_path}/kvcache_{k_or_v.shape}"
-                    if weight_cache_path and not configuration.dummy_weights
-                    else None
-                ),
             )
-            for k_or_v in [cache_k, cache_v]
+            for _ in range(2)
         ]
         self._kv_alloc_seq_len = kv_slots
 
