@@ -63,8 +63,10 @@ struct ResolvedCbBinding {
     uint32_t address_offset = 0;
 };
 
-// All resolved bindings for one cached program. Non-empty only when the factory
-// declared at least one buffer arg via KernelDescriptor::emplace_runtime_args().
+// All resolved bindings for one cached program. Non-empty when the factory
+// declared at least one buffer arg via KernelDescriptor::emplace_runtime_args(),
+// OR when CB bindings are present and resolve_cb_bindings_unconditionally=true
+// (declarative MeshDescriptor path).
 struct ResolvedBindings {
     std::vector<ResolvedRtArgBinding> rt_args;
     std::vector<ResolvedCbBinding> cbs;

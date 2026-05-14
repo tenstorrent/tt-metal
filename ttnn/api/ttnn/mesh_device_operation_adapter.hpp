@@ -398,7 +398,8 @@ public:
             // Zero-sized for ops on contract (1).
             [[no_unique_address]] mesh_descriptor_t mesh_descriptor{};
             // Resolved buffer bindings for the fast cache-hit path.
-            // Non-empty when the factory used emplace_runtime_args() with Buffer* args.
+            // Non-empty when the factory used emplace_runtime_args() with Buffer* args,
+            // or (for contract 2) when the descriptor declared any CB with .buffer set.
             tt::tt_metal::ResolvedBindings resolved_bindings;
         };
         using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
@@ -569,8 +570,8 @@ public:
                     // The declarative MeshDescriptor path (contract 2) does not
                     // support a rebuild — re-running create_mesh_descriptor would
                     // re-allocate workload resources (GlobalSemaphores, barriers).
-                    // Declarative factories MUST use emplace_runtime_args() so the
-                    // fast path above handles cache hits.
+                    // Declarative factories use CB `.buffer` bindings or
+                    // emplace_runtime_args() so the fast path above handles cache hits.
                     const ttnn::MeshCoordinate mesh_coord = coordinate_range.start_coord();
                     const std::optional<ttnn::MeshCoordinate> mesh_dispatch_coordinate(mesh_coord);
                     auto desc = invoke_per_coord(attrs, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
