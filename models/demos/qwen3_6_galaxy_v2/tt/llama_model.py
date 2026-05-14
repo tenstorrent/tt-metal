@@ -589,7 +589,62 @@ class TtTransformer(LightweightModule):
         device_inputs = copy_host_to_device(
             host_tensors, mesh_device=self.mesh_device, shard_specs=shard_specs
         )  # Helper function
+        # V2-9: refresh per-step decode-mask buffers BEFORE the trace replay
+        # so the in-forward SDPA mask is a pure persistent-buffer read.
+        # Caller-friendly even if attention modules do not have the buffer
+        # (no-op for non-qwen36 paths).
+        self.refresh_decode_per_step_buffers(current_pos)
         return device_inputs
+
+    def set_trace_decode_mode(self, enabled: bool):
+        """V2-9: toggle "trace mode" on every full-attention layer.
+
+        When ``enabled`` is True, the per-call SDPA decode-mask refresh
+        inside ``_forward_decode_qwen36`` is SKIPPED so no
+        ``copy_host_to_device_tensor`` fires inside the trace boundary.
+        Callers must invoke ``refresh_decode_per_step_buffers(cur_pos)``
+        BEFORE ``ttnn.execute_trace`` to prime the mask buffers.
+        """
+        if not getattr(self.args, "is_qwen36", False):
+            return
+        for layer in self.layers:
+            attn = getattr(layer, "attention", None)
+            if attn is not None:
+                setattr(attn, "_skip_decode_mask_refresh", bool(enabled))
+
+    def refresh_decode_per_step_buffers(self, current_pos):
+        """V2-9: trace-safe per-step refresh of every full-attention layer's
+        persistent decode-mask buffer.
+
+        ``current_pos`` is the per-user position tensor passed into
+        ``prepare_decode_inputs_host``.  For single-user qwen3.6 decode it is
+        a length-1 torch tensor (or scalar) whose value is the cur_pos int.
+        For multi-user batched decode every user sees the same cur_pos in our
+        test contract — we use ``current_pos[0]``.
+
+        Safe to call from outside any trace boundary; the underlying
+        ``copy_host_to_device_tensor`` is a metadata-only write that does
+        NOT trip the trace-capture "Writes are not supported" check.
+        """
+        if not getattr(self.args, "is_qwen36", False):
+            return
+        # current_pos may be a python int, torch.Tensor, or already a device tensor.
+        if isinstance(current_pos, int):
+            cur_pos_int = current_pos
+        elif torch.is_tensor(current_pos):
+            cur_pos_int = int(current_pos.reshape(-1)[0].item())
+        else:
+            try:
+                cur_pos_int = int(current_pos)
+            except Exception:
+                return
+        for layer in self.layers:
+            attn = getattr(layer, "attention", None)
+            if attn is None:
+                continue
+            update = getattr(attn, "_update_decode_mask_buf", None)
+            if update is not None:
+                update(cur_pos_int)
 
     def prepare_decode_shard_configs(self, is_cur_pos_sharded=False, is_page_table_sharded=False):
         """

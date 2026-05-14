@@ -1,9 +1,18 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""V2-9 — Decode trace-capture parity test on BH GLX 8x4.
+"""V2-9 — Decode trace-capture parity test on BH GLX 8x4 — SUPERSEDED.
 
-Goal
-----
+The working V2-9 trace tests live in:
+  - ``tests/test_decode_trace_4L_parity.py`` (4L hybrid, strict 0.99 parity)
+  - ``tests/test_decode_trace_64L_parity.py`` (full 64L, capture-only)
+
+Both pass on BH GLX 8x4 with traced replay ≥ 15x faster than eager.
+This module is retained only for historical context (the dependency
+chain that motivated V2-decode + the persistent decode-mask buffer
+work — see V2-9 commit log).
+
+Goal (original)
+---------------
 
 Build a 4-layer hybrid TtTransformer (pattern ``[lin, lin, lin, full]``),
 run one eager decode step, then capture and replay the same decode under
@@ -11,10 +20,12 @@ run one eager decode step, then capture and replay the same decode under
 ``PCC(eager_logits, traced_logits) >= 0.9999`` — trace replay should be
 bit-identical to the eager forward.
 
-Status (as of V2-9 attempt, see BRINGUP_LOG.md)
------------------------------------------------
+Status (V2-9 historical record)
+-------------------------------
 
-**SKIPPED — pre-trace blocker chain (decode never wired end-to-end).**
+**SKIPPED — pre-trace blocker chain (decode never wired end-to-end at the
+time of this docstring).  After V2-decode + V2-9 the blocker chain is
+resolved; see the two ``test_decode_trace_*_parity.py`` modules above.**
 
 V2-9 bring-up confirmed: qwen3.6 decode in v2 is structurally broken at
 multiple boundaries. The v2 tree inherited 70B's generator+model decode

@@ -569,6 +569,35 @@ class TtLlamaAttention(LightweightModule):
                 # Bind sentinels so the 70B-style attribute names still resolve.
                 self.q_norm = None
                 self.k_norm = None
+                # V2-9: persistent decode-mask device buffer so the SDPA mask
+                # never re-allocates inside the trace boundary.
+                # Shape: ``[max_batch_size, 1, 1, kv_pad]`` where kv_pad is the
+                # worst-case tile-aligned KV length.  We slice this down to
+                # the per-call ``T_kv_pad`` width on each decode step.
+                # Refresh happens via ``_update_decode_mask_buf`` (called from
+                # the model's ``prepare_inputs_decode`` BEFORE trace replay),
+                # using the preallocated host tensor + ``copy_host_to_device_tensor``.
+                self._decode_mask_kv_pad = ((self.max_seq_len + _QWEN36_TILE - 1) // _QWEN36_TILE) * _QWEN36_TILE
+                _mask_init = torch.full(
+                    (self.max_batch_size, 1, 1, self._decode_mask_kv_pad),
+                    float("-inf"),
+                    dtype=torch.bfloat16,
+                )
+                _replicate = ttnn.ReplicateTensorToMesh(self.mesh_device)
+                self._decode_mask_host = ttnn.from_torch(
+                    _mask_init,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=_replicate,
+                )
+                self._decode_mask_buf = ttnn.from_torch(
+                    _mask_init,
+                    device=self.mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=_replicate,
+                )
                 return
 
             # Memory configurations for QK norm
@@ -699,6 +728,36 @@ class TtLlamaAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
+
+    def _update_decode_mask_buf(self, cur_pos_int: int):
+        """V2-9: refresh ``self._decode_mask_buf`` in place for position ``cur_pos_int``.
+
+        Builds a host-side bf16 tensor with zeros at valid KV positions
+        [0, cur_pos_int+1) and -inf at padding positions [cur_pos_int+1, kv_pad),
+        then copies into the persistent device buffer via
+        ``ttnn.copy_host_to_device_tensor`` (trace-safe metadata write — does
+        NOT allocate or trigger a host-write op inside the trace boundary).
+
+        Must be called OUTSIDE the trace boundary (e.g. from
+        ``TtTransformer.prepare_inputs_decode``).  The buffer is then sliced
+        down to the per-call ``[B, 1, 1, T_kv_pad]`` width inside the forward.
+        """
+        if not getattr(self, "is_qwen36", False):
+            return
+        if not hasattr(self, "_decode_mask_buf"):
+            return
+        kv_pad = self._decode_mask_kv_pad
+        T_kv = cur_pos_int + 1
+        mask_t = torch.zeros(self.max_batch_size, 1, 1, kv_pad, dtype=torch.bfloat16)
+        if T_kv < kv_pad:
+            mask_t[:, :, :, T_kv:] = float("-inf")
+        host = ttnn.from_torch(
+            mask_t,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        ttnn.copy_host_to_device_tensor(host, self._decode_mask_buf)
 
     def init_kv_cache(self, configuration, weight_cache_path):
         """
@@ -1698,20 +1757,52 @@ class TtLlamaAttention(LightweightModule):
             k_cached.deallocate(True)
             v_cached.deallocate(True)
             # Build decode mask for the tile-padded suffix [T_kv:T_kv_pad].
+            # V2-9: slice the persistent ``_decode_mask_buf`` (allocated at
+            # ``__init__`` time, refreshed OUTSIDE the trace boundary via
+            # ``TtTransformer.refresh_decode_per_step_buffers`` or
+            # ``_update_decode_mask_buf``).  ``copy_host_to_device_tensor``
+            # IS a host write under trace capture (hits
+            # ``enqueue_write_mesh_buffer`` → ``TT_FATAL`` in fd_mesh_command_queue.cpp:476);
+            # the slice itself is a pure device op so it is trace-safe.
+            #
+            # For the eager-only path (when no caller has primed the buffer)
+            # we still refresh inline — that path is NOT executed inside a
+            # trace boundary so the host write is allowed.
             decode_mask_tt = None
             if T_kv_pad > T_kv:
-                import torch as _torch_for_mask
+                if hasattr(self, "_decode_mask_buf"):
+                    # If a caller (Generator / test) has refreshed the buffer
+                    # for the current cur_pos before begin_trace_capture, the
+                    # inline refresh below is a no-op metadata-write that
+                    # CANNOT happen inside a trace boundary — refresh only when
+                    # ``current_pos`` is a Python int (the eager forward path).
+                    # Tests that capture a trace must call
+                    # ``model.refresh_decode_per_step_buffers(cur_pos)`` (or
+                    # equivalent) BEFORE ``begin_trace_capture``.
+                    if isinstance(current_pos, int) and not getattr(self, "_skip_decode_mask_refresh", False):
+                        self._update_decode_mask_buf(current_pos)
+                    decode_mask_tt = ttnn.slice(
+                        self._decode_mask_buf,
+                        [0, 0, 0, 0],
+                        [B, 1, T, T_kv_pad],
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                else:
+                    # Fallback to the v1 in-forward build for any path that
+                    # bypassed ``_build_decode_buffers`` (should not happen
+                    # for qwen3.6 v2; kept for safety).
+                    import torch as _torch_for_mask
 
-                mask_host = _torch_for_mask.zeros(B, 1, T, T_kv_pad, dtype=_torch_for_mask.bfloat16)
-                mask_host[:, :, :, T_kv:] = float("-inf")
-                decode_mask_tt = ttnn.from_torch(
-                    mask_host,
-                    device=self.mesh_device,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                )
+                    mask_host = _torch_for_mask.zeros(B, 1, T, T_kv_pad, dtype=_torch_for_mask.bfloat16)
+                    mask_host[:, :, :, T_kv:] = float("-inf")
+                    decode_mask_tt = ttnn.from_torch(
+                        mask_host,
+                        device=self.mesh_device,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                    )
             attn_out = ttnn.transformer.scaled_dot_product_attention(
                 q_rot,
                 k_exp,
@@ -1723,6 +1814,12 @@ class TtLlamaAttention(LightweightModule):
                 attn_mask=decode_mask_tt,
             )
             if decode_mask_tt is not None:
+                # V2-9: ``ttnn.slice`` of a persistent DRAM tensor produces a
+                # NEW tensor (separate allocation, copied data) — safe to
+                # deallocate.  The fallback ``from_torch`` path also produces
+                # a fresh tensor.  Either way the persistent
+                # ``_decode_mask_buf`` is untouched (its lifetime is bound to
+                # ``self``, not this slice).
                 decode_mask_tt.deallocate(True)
             k_exp.deallocate(True)
             v_exp.deallocate(True)
