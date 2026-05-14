@@ -30,8 +30,7 @@ inline __attribute__((always_inline)) void risc_context_switch([[maybe_unused]] 
     if (!skip_sync) {
         ncrisc_noc_full_sync<1>();
     }
-    service_eth_msg();
-    update_boot_results_eth_link_status_check();
+    aerisc_context_switch();
 
     // Not harmful to initialize the counters again
     ncrisc_noc_counters_init<1>();

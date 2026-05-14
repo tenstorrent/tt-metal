@@ -18,6 +18,9 @@
 
 #ifdef TRISC_MATH
 #include "llk_math_common_api.h"
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
+#include "llk_math_debug.h"
+#endif
 #include "llk_math_matmul_api.h"
 #include "llk_math_unary_datacopy_api.h"
 #include "llk_math_unary_sfpu_api.h"
@@ -978,6 +981,7 @@ ALWI void unary_min_tile(uint32_t idst, uint32_t param0) {
  */
 ALWI void unary_min_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_min_init())); }
 
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 ALWI uint32_t get_compute_special_value_flags() {
     uint32_t ret_val = 0;
     MATH((ret_val = llk_math_get_compute_special_value_flags()));
@@ -986,21 +990,18 @@ ALWI uint32_t get_compute_special_value_flags() {
 
 ALWI uint32_t get_compute_special_value_flags_fpu(uint32_t special_value_flags_reg) {
     uint32_t ret_val = 0;
-    MATH((ret_val = llk_math_get_compute_special_value_flags_fpu(special_value_flags_reg)));
+    MATH((ret_val = llk_math_extract_compute_special_value_flags<true /* isFpu */>(special_value_flags_reg)));
     return ret_val;
 }
 
 ALWI uint32_t get_compute_special_value_flags_sfpu(uint32_t special_value_flags_reg) {
     uint32_t ret_val = 0;
-    MATH((ret_val = llk_math_get_compute_special_value_flags_sfpu(special_value_flags_reg)));
+    MATH((ret_val = llk_math_extract_compute_special_value_flags<false /* isFpu */>(special_value_flags_reg)));
     return ret_val;
 }
 
 ALWI void clear_compute_special_value_flags() { MATH((llk_math_clear_compute_special_value_flags())); }
-
-ALWI void store_compute_special_value_flags_to_l1(uint32_t l1_addr) {
-    MATH((llk_math_store_compute_special_value_flags_to_l1(l1_addr)));
-}
+#endif
 
 #endif
 
