@@ -20,6 +20,19 @@ The standalone function :func:`run_ttnn_denoise_loop` is exported for reuse by
 other scripts (e.g. the prompt-to-wav demo). For PyTorch VAE decode (e.g.
 ``--torch-vae`` in the demo), import :func:`decode_with_vae` from
 ``torch_ref.e2e_model``.
+
+Performance profiling (Tracy / device profiler):
+
+    TTNN_OP_PROFILER=1 is set when running ``python -m tracy -p -r -v -m pytest ...``
+    (see ``tools/tracy``). Signposts label stages in the Tracy timeline and op CSV.
+
+    For kernel-level CSV rows from the device, also set ``TT_METAL_DEVICE_PROFILER=1``.
+    After the denoising loop and again after VAE decode, ``ttnn.synchronize_device`` and
+    ``ttnn.ReadDeviceProfiler`` run when either env var is set so buffered device profiler data is
+    flushed at stage boundaries (DiT vs VAE show up cleanly in reports).
+
+Optional: set ``ACE_STEP_TRACY_EACH_DENOISE_STEP=1`` to emit one Tracy signpost per Euler step
+(use shorter ``infer_steps`` if the report becomes too dense).
 """
 
 from __future__ import annotations
@@ -49,6 +62,32 @@ from .dit_sampling_ttnn import (
 from .full_pipeline import AceStepV15TTNNPipeline
 from .oobleck_vae_decoder import TtOobleckVaeDecoder
 from .qwen3_embedding_encoder import TtQwen3EmbeddingEncoder
+
+
+def _ace_step_prof_signpost(header: str, message: Optional[str] = None) -> None:
+    """Emit a Tracy signpost when the repo ``tracy`` package is available (editable install)."""
+    try:
+        from tracy import signpost as _signpost  # type: ignore[import-untyped]
+    except ImportError:
+        return
+    try:
+        if message is None:
+            _signpost(header)
+        else:
+            _signpost(header, message)
+    except Exception:
+        pass
+
+
+def _ace_step_flush_device_profiler(device) -> None:
+    """Sync and drain device profiler buffers when Tracy / device profiling is enabled."""
+    if os.environ.get("TTNN_OP_PROFILER") != "1" and os.environ.get("TT_METAL_DEVICE_PROFILER") != "1":
+        return
+    try:
+        ttnn.synchronize_device(device)
+        ttnn.ReadDeviceProfiler(device)
+    except Exception:
+        pass
 
 
 @dataclass
@@ -240,6 +279,7 @@ def run_ttnn_denoise_loop(
             ctx_tt_pipe = bf16_row_from_numpy_bc(to_numpy_f32(ctx_lat), device=device, dram=mem)
 
     momentum_ttnn = TtnnMomentumBufferApg() if do_cfg and not use_adg else None
+    _trace_each_step = os.environ.get("ACE_STEP_TRACY_EACH_DENOISE_STEP", "").lower() in ("1", "true", "yes")
 
     def _diffusion_iterate(*, step_idx: int, t_curr_f: float, euler_dt: float) -> None:
         nonlocal xt_tt
@@ -320,13 +360,19 @@ def run_ttnn_denoise_loop(
             progress_fn(step_idx, num_steps, t_curr_f, float(euler_dt))
 
     for step_idx in range(num_steps - 1):
+        if _trace_each_step:
+            _ace_step_prof_signpost("Denoise Step", f"step {step_idx}/{num_steps}")
         t_curr_f = float(t_schedule[step_idx])
         t_next_f = float(t_schedule[step_idx + 1])
         dt = t_curr_f - t_next_f
         _diffusion_iterate(step_idx=step_idx, t_curr_f=t_curr_f, euler_dt=dt)
 
+    if _trace_each_step:
+        _ace_step_prof_signpost("Denoise Step", f"step {num_steps - 1}/{num_steps}")
     t_curr_final = float(t_schedule[-1])
     _diffusion_iterate(step_idx=num_steps - 1, t_curr_f=t_curr_final, euler_dt=t_curr_final)
+
+    _ace_step_flush_device_profiler(device)
 
     try:
         ttnn.deallocate(enc_tt_pipe)
@@ -591,7 +637,10 @@ class AceStepE2EModel:
             raise RuntimeError("Cached context latents were not initialized.")
         do_cfg = self.config.guidance_scale > 1.0 + 1e-6
 
+        _ace_step_prof_signpost("ACE-Step E2E", "Start text encoding")
         text_hs_tt, attn_mask_np = self.encode_text(prompt)
+
+        _ace_step_prof_signpost("ACE-Step E2E", "Start condition encoding")
         enc_hs_tt_one, enc_mask_np, null_emb_tt = self._condition_encoder.forward(text_hs_tt, attn_mask_np)
         try:
             ttnn.deallocate(text_hs_tt)
@@ -624,6 +673,7 @@ class AceStepE2EModel:
         enc_row = np.asarray(enc_mask_np, dtype=np.float32).reshape(1, -1)
         enc_attn_1d_bk = np.concatenate([enc_row, enc_row], axis=0) if do_cfg else enc_row
 
+        _ace_step_prof_signpost("ACE-Step E2E", "Start DiT preparation (SDPA mask)")
         b_mask = 2 if do_cfg else 1
         xt_dummy = ttnn.zeros(
             (b_mask, int(self.frames), 64),
@@ -673,9 +723,14 @@ class AceStepE2EModel:
         else:
             loop_kw["enc_mask"] = None
 
+        _ace_step_prof_signpost("ACE-Step E2E", "Start denoising loop")
         pred_latents = run_ttnn_denoise_loop(**loop_kw)
+        _ace_step_flush_device_profiler(self.device)
         try:
+            _ace_step_prof_signpost("ACE-Step E2E", "Start VAE decode")
             wav = self.decode_vae(pred_latents, return_waveform_ttnn=return_waveform_ttnn)
+            _ace_step_flush_device_profiler(self.device)
+            _ace_step_prof_signpost("ACE-Step E2E", "Generation complete")
         finally:
             try:
                 ttnn.deallocate(pred_latents)
