@@ -111,6 +111,36 @@ void kernel_main() {
     const uint32_t K_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 6);
     const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
 
+#ifdef OFFSETS_ROLE
+    // EP path: read offsets[start_index] from a 1-D UINT32 ROW_MAJOR device tensor and
+    // use the value (in tiles) as the write-at-offset row. Only OutputRow (1) is wired
+    // here; other roles need different overrides in different kernels.
+    {
+        constexpr uint32_t kRole = OFFSETS_ROLE;
+        static_assert(kRole == 1U, "Only OffsetsRole::OutputRow is currently implemented.");
+        const uint32_t offsets_addr = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 7);
+        const uint32_t offsets_start_index = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 8);
+        // The offsets TensorAccessorArgs were appended right after the output accessor.
+        // No FUSE_BIAS / FUSE_TERNARY in variable_matmul, so its CTA offset is the slot
+        // right after the (N_chunks=1) output accessor.
+        constexpr uint32_t offsets_args_cta_offset =
+            tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
+        constexpr auto offsets_args = TensorAccessorArgs<offsets_args_cta_offset>();
+        const auto offsets_acc = TensorAccessor(offsets_args, offsets_addr);
+
+        // Use the in1 CB's L1 write pointer as scratch for the offsets read.
+        // The CB hasn't been used yet at this point (we're at kernel startup), so we
+        // can safely repurpose its L1 space for a tiny staging area. The real in1
+        // tile reads happen later inside the K-loop and won't conflict.
+        constexpr uint32_t kPageBytes = decltype(offsets_args)::AlignedPageSize;
+        uint32_t offsets_l1_addr = get_write_ptr(tt::CBIndex::c_1);
+        noc_async_read(get_noc_addr(0, offsets_acc), offsets_l1_addr, kPageBytes);
+        noc_async_read_barrier();
+        volatile tt_l1_ptr uint32_t* offsets_stage = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(offsets_l1_addr);
+        out_row_offset_tiles = offsets_stage[offsets_start_index] / 32U;
+    }
+#endif  // OFFSETS_ROLE
+
     // Storage layout: without transpose_b the weight is stored as [K, N]; with it, as [N, K].
     const TensorShape2D in1_shape = transpose_b ? TensorShape2D(N_tiles, K_tiles, padded_N_tiles, padded_K_tiles)
                                                 : TensorShape2D(K_tiles, N_tiles, padded_K_tiles, padded_N_tiles);

@@ -18,7 +18,10 @@ ttnn::Tensor variable_matmul(
     uint32_t in0_k_offset_tiles,
     uint32_t in1_k_offset_tiles,
     std::optional<ttnn::Tensor> output_tensor,
-    uint32_t out_row_offset_tiles) {
+    uint32_t out_row_offset_tiles,
+    std::optional<ttnn::Tensor> offsets_tensor,
+    OffsetsRole offsets_role,
+    uint32_t offsets_start_index) {
     return ttnn::prim::ttml_variable_matmul(
         input_tensor,
         weight_tensor,
@@ -29,7 +32,10 @@ ttnn::Tensor variable_matmul(
         in0_k_offset_tiles,
         in1_k_offset_tiles,
         output_tensor,
-        out_row_offset_tiles);
+        out_row_offset_tiles,
+        offsets_tensor,
+        offsets_role,
+        offsets_start_index);
 }
 
 }  // namespace ttml::metal

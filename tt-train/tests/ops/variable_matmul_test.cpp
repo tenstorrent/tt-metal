@@ -764,6 +764,63 @@ TEST_F(VariableMatmulTest, WriteAtOffset_TransposeB) {
 }
 
 // Write-at-offset: caller provides parent output; matmul writes into a row-range.
+// EP path: kernel reads the write-at-offset row from a device-side offsets tensor at
+// runtime instead of a host-supplied scalar. Shape (M=128 > N=64) ensures
+// transpose_core_grid=true so dm_in1_sender_out is the output writer.
+TEST_F(VariableMatmulTest, OnDeviceOffsets_OutputRow) {
+    const uint32_t M_e = 128, K = 128, N = 64, M_parent = 512;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input = create_random_device_tensor(M_e, K, device);
+    auto weight = create_random_device_tensor(K, N, device);
+    auto parent_out = create_random_device_tensor(M_parent, N, device);
+    auto parent_orig_vec = ttml::core::to_vector<float>(parent_out);
+
+    // Offsets [0, 128, 256, 384] (in rows). start_index=1 -> row 128 -> tile 4.
+    std::vector<uint32_t> offsets_host = {0U, 128U, 256U, 384U};
+    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
+
+    ttml::metal::variable_matmul(
+        input,
+        weight,
+        kConfig,
+        std::nullopt,
+        /*in0_row_offset_tiles=*/0,
+        /*effective_M_tiles=*/0,
+        /*in0_k_offset_tiles=*/0,
+        /*in1_k_offset_tiles=*/0,
+        /*output_tensor=*/parent_out,
+        /*out_row_offset_tiles=*/0,  // overridden by device-side read
+        /*offsets_tensor=*/offsets,
+        /*offsets_role=*/ttml::metal::OffsetsRole::OutputRow,
+        /*offsets_start_index=*/1U);
+
+    auto ref_chunk = ttnn::matmul(input, weight, false, false);
+    auto ref_chunk_vec = ttml::core::to_vector<float>(ref_chunk);
+    auto written_vec = ttml::core::to_vector<float>(parent_out);
+
+    // Verify rows [128, 256) match the matmul result.
+    float written_err = 0.0F;
+    for (uint32_t m = 128; m < 256; ++m) {
+        for (uint32_t n = 0; n < N; ++n) {
+            written_err = std::max(written_err, std::abs(written_vec[m * N + n] - ref_chunk_vec[(m - 128) * N + n]));
+        }
+    }
+    EXPECT_LT(written_err, 2.0F) << "OutputRow on-device offsets err: " << written_err;
+
+    // Verify untouched rows preserved.
+    float untouched_err = 0.0F;
+    for (uint32_t m = 0; m < M_parent; ++m) {
+        if (m >= 128 && m < 256)
+            continue;
+        for (uint32_t n = 0; n < N; ++n) {
+            untouched_err = std::max(untouched_err, std::abs(written_vec[m * N + n] - parent_orig_vec[m * N + n]));
+        }
+    }
+    EXPECT_LT(untouched_err, 1e-3F) << "OutputRow on-device offsets touched wrong rows: " << untouched_err;
+}
+
 TEST_F(VariableMatmulTest, WriteAtOffset_NoTranspose) {
     const uint32_t M_e = 128, K = 128, N = 256, M_parent = 512;
     auto* device = &ttml::autograd::ctx().get_device();

@@ -236,6 +236,16 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     // ----- Defines (empty — no FUSE_BIAS, FUSE_TERNARY, FUSE_AG) -----
     std::map<std::string, std::string> defines;
 
+    // On-device offsets (EP). When active, in1_sender_out reads
+    // offsets_tensor[offsets_start_index] at startup and uses it as the
+    // write-at-offset row (overriding the scalar out_row_offset_tiles).
+    const bool offsets_active =
+        operation_attributes.offsets_role != OffsetsRole::None && tensor_args.offsets_tensor.has_value();
+    std::map<std::string, std::string> in1_defines = defines;
+    if (offsets_active) {
+        in1_defines["OFFSETS_ROLE"] = std::to_string(static_cast<uint32_t>(operation_attributes.offsets_role));
+    }
+
     // ----- Kernel compile-time args -----
     // Layout matches original minimal_matmul exactly (22 args for in0, 21 for in1) so TensorAccessor
     // offsets remain correct. Indices 0, 1, 9 are unused by kernels (kept for arg layout compat).
@@ -356,13 +366,20 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         static_cast<uint32_t>(tensor_args.output_tensor.has_value()),  // 23: use_out_offset
     };
     append_accessors(in1_sender_compile_time_args, weight_tensor, output_tensor);
+    if (offsets_active) {
+        tt::tt_metal::TensorAccessorArgs(*tensor_args.offsets_tensor.value().buffer())
+            .append_to(in1_sender_compile_time_args);
+    }
 
     auto in1_sender_kernels_id = CreateKernel(
         program,
         "tt-train/sources/ttml/metal/ops/variable_matmul/device/kernels/dataflow/dm_in1_sender_out.cpp",
         in1_sender_cores,
         tt::tt_metal::DataMovementConfig{
-            .processor = in1_risc, .noc = in1_noc, .compile_args = in1_sender_compile_time_args, .defines = defines});
+            .processor = in1_risc,
+            .noc = in1_noc,
+            .compile_args = in1_sender_compile_time_args,
+            .defines = in1_defines});
 
     // in1 receiver compile-time args
     std::vector<uint32_t> in1_receiver_compile_time_args = {
@@ -393,13 +410,20 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         static_cast<uint32_t>(tensor_args.output_tensor.has_value()),                      // 23: use_out_offset
     };
     append_accessors(in1_receiver_compile_time_args, weight_tensor, output_tensor);
+    if (offsets_active) {
+        tt::tt_metal::TensorAccessorArgs(*tensor_args.offsets_tensor.value().buffer())
+            .append_to(in1_receiver_compile_time_args);
+    }
 
     auto in1_receiver_kernels_id = CreateKernel(
         program,
         "tt-train/sources/ttml/metal/ops/variable_matmul/device/kernels/dataflow/dm_in1_sender_out.cpp",
         in1_receiver_cores,
         tt::tt_metal::DataMovementConfig{
-            .processor = in1_risc, .noc = in1_noc, .compile_args = in1_receiver_compile_time_args, .defines = defines});
+            .processor = in1_risc,
+            .noc = in1_noc,
+            .compile_args = in1_receiver_compile_time_args,
+            .defines = in1_defines});
 
     // ----- Compute kernel -----
     std::vector<uint32_t> compute_compile_time_args = {
@@ -589,6 +613,12 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
             K_tiles,
         };
 
+        // On-device offsets RT args (appended at positions 20, 21).
+        if (offsets_active) {
+            in1_args.push_back(tensor_args.offsets_tensor.value().buffer()->address());
+            in1_args.push_back(operation_attributes.offsets_start_index);
+        }
+
         if (in0_idx == 0) {
             SetRuntimeArgs(program, in1_sender_kernels_id, core, in1_args);
         } else {
@@ -713,6 +743,13 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
     constexpr uint32_t IN0_DEFER_WRITE_K_BLOCK_IDX = 12;
     constexpr uint32_t IN1_DEFER_WRITE_K_BLOCK_IDX = 11;
 
+    // On-device offsets RT-arg indices (in1 only; appended after K_tiles).
+    const bool offsets_active =
+        operation_attributes.offsets_role != OffsetsRole::None && tensor_args.offsets_tensor.has_value();
+    const uint32_t offsets_addr = offsets_active ? tensor_args.offsets_tensor.value().buffer()->address() : 0U;
+    constexpr uint32_t IN1_OFFSETS_ADDR_IDX = 20;
+    constexpr uint32_t IN1_OFFSETS_START_IDX_IDX = 21;
+
     for (uint32_t i = 0; i < sv.num_cores; ++i) {
         CoreCoord core = sv.cores.at(i);
         uint32_t in0_idx = sv.transpose_core_grid ? core.x : core.y;
@@ -773,6 +810,10 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
             args[IN1_OUT_ROW_OFFSET_IDX] = operation_attributes.out_row_offset_tiles;
             args[IN1_K_TILES_IDX] = K_tiles_rt;
             args[IN1_DEFER_WRITE_K_BLOCK_IDX] = defer_write_k_block;
+            if (offsets_active) {
+                args[IN1_OFFSETS_ADDR_IDX] = offsets_addr;
+                args[IN1_OFFSETS_START_IDX_IDX] = operation_attributes.offsets_start_index;
+            }
         } else {
             auto& args = in1_receiver_rt[core.x][core.y];
             args[IN1_M_START_IDX] = M_start_tile;
@@ -786,6 +827,10 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
             args[IN1_OUT_ROW_OFFSET_IDX] = operation_attributes.out_row_offset_tiles;
             args[IN1_K_TILES_IDX] = K_tiles_rt;
             args[IN1_DEFER_WRITE_K_BLOCK_IDX] = defer_write_k_block;
+            if (offsets_active) {
+                args[IN1_OFFSETS_ADDR_IDX] = offsets_addr;
+                args[IN1_OFFSETS_START_IDX_IDX] = operation_attributes.offsets_start_index;
+            }
         }
 
         // Update compute args
