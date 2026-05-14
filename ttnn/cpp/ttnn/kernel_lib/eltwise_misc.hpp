@@ -71,4 +71,17 @@ struct Mask : BinaryOp<Mask<DF, DataSlot>, DataSlot, static_cast<Dst>(to_u32(Dat
     }
 };
 
+// MaskPosInf — same LLK contract as Mask (data at DataSlot, mask at DataSlot+1) but
+// masks each element with +inf instead of 0. Shares mask_tile_init.
+template <Dst DataSlot = Dst::D0>
+struct MaskPosInf : BinaryOp<MaskPosInf<DataSlot>, DataSlot, static_cast<Dst>(to_u32(DataSlot) + 1), DataSlot> {
+    static_assert(
+        to_u32(DataSlot) + 1 < DEST_AUTO_LIMIT,
+        "MaskPosInf: DataSlot + 1 exceeds DEST_AUTO_LIMIT (mask tile lives at DataSlot + 1).");
+    static ALWI void init() { mask_tile_init(); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        mask_posinf_tile(to_u32(DataSlot) + slot_offset, to_u32(DataSlot) + 1 + slot_offset);
+    }
+};
+
 }  // namespace compute_kernel_lib

@@ -101,4 +101,18 @@ struct Rpow : UnaryOp<Rpow<Slot>, Slot> {
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { rpow_tile(to_u32(Slot) + slot_offset, base); }
 };
 
+// ---- PowerIterative — positive-integer exponent via iterative multiply. ----
+// Distinct LLK from Power: power_iterative_tile uses an iterative loop; faster for
+// small integer exponents. Only supports positive integer scalars.
+template <Dst Slot = Dst::D0>
+struct PowerIterative : UnaryOp<PowerIterative<Slot>, Slot> {
+    uint32_t exponent;
+    constexpr explicit PowerIterative(uint32_t e) noexcept : exponent(e) {}
+    constexpr PowerIterative() noexcept : exponent(0) {}
+    static ALWI void init() { power_iterative_tile_init(); }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
+        power_iterative_tile(to_u32(Slot) + slot_offset, exponent);
+    }
+};
+
 }  // namespace compute_kernel_lib

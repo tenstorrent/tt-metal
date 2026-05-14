@@ -17,6 +17,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/binary_max_min.h"
 
 namespace compute_kernel_lib {
 
@@ -49,6 +50,23 @@ struct DivBinary : BinaryOp<DivBinary<In0, In1, Out>, In0, In1, Out> {
     static ALWI void init() { div_binary_tile_init(); }
     static ALWI void exec_impl(uint32_t slot_offset) {
         div_binary_tile(to_u32(In0) + slot_offset, to_u32(In1) + slot_offset, to_u32(Out) + slot_offset);
+    }
+};
+
+// binary_max_tile / binary_min_tile — SFPU two-DEST max/min into third DEST slot.
+template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
+struct BinaryMax : BinaryOp<BinaryMax<In0, In1, Out>, In0, In1, Out> {
+    static ALWI void init() { binary_max_tile_init(); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        binary_max_tile(to_u32(In0) + slot_offset, to_u32(In1) + slot_offset, to_u32(Out) + slot_offset);
+    }
+};
+
+template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
+struct BinaryMin : BinaryOp<BinaryMin<In0, In1, Out>, In0, In1, Out> {
+    static ALWI void init() { binary_min_tile_init(); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        binary_min_tile(to_u32(In0) + slot_offset, to_u32(In1) + slot_offset, to_u32(Out) + slot_offset);
     }
 };
 
