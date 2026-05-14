@@ -75,6 +75,7 @@ struct CBDescriptor {
 
     // TODO: Investigate avoiding storing pointers here
     Buffer* buffer = nullptr;
+    const MeshTensor* tensor = nullptr;
     uint32_t address_offset = 0;
     const experimental::GlobalCircularBuffer* global_circular_buffer = nullptr;
 };

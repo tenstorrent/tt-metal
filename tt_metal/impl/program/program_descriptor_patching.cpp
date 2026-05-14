@@ -12,6 +12,8 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt_stl/assert.hpp>
 
 #include <algorithm>
@@ -124,13 +126,20 @@ ResolvedBindings resolve_bindings(
     {
         auto program_cbs = program.circular_buffers();
         for (uint32_t ci = 0; ci < static_cast<uint32_t>(desc.cbs.size()); ++ci) {
-            if (desc.cbs[ci].buffer) {
-                auto it = std::find(tensor_buffers.begin(), tensor_buffers.end(), desc.cbs[ci].buffer);
+            const auto& cb_desc = desc.cbs[ci];
+            TT_FATAL(
+                !(cb_desc.buffer && cb_desc.tensor),
+                "CBDescriptor cannot specify both buffer and tensor as the globally-allocated backing storage");
+
+            Buffer* cb_buffer = cb_desc.buffer;
+            if (!cb_buffer && cb_desc.tensor) {
+                cb_buffer = cb_desc.tensor->mesh_buffer().get_reference_buffer();
+            }
+            if (cb_buffer) {
+                auto it = std::find(tensor_buffers.begin(), tensor_buffers.end(), cb_buffer);
                 if (it != tensor_buffers.end()) {
                     result.cbs.push_back(
-                        {program_cbs[ci]->id(),
-                         static_cast<uint32_t>(it - tensor_buffers.begin()),
-                         desc.cbs[ci].address_offset});
+                        {program_cbs[ci]->id(), static_cast<uint32_t>(it - tensor_buffers.begin()), cb_desc.address_offset});
                 }
                 // else: stable, non-tensor buffer; pegged at create time, no patching needed.
             }
