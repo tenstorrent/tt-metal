@@ -211,9 +211,9 @@ def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
             is_balanced=True,
             q_dtype=ttnn.bfloat16,
             kv_dtype=ttnn.bfloat8_b,
-            q_chunk_sizes=[160],
+            q_chunk_sizes=[128, 160, 256],
             # k=160 -> Sk_chunk_t=5; k=256 straddles (3200%256=128); k=320 -> Sk_chunk_t=10 with kt-sub=2.
-            k_chunk_sizes=[160, 256, 320],
+            k_chunk_sizes=[224, 320, 512, 544],
             seq_len=3200,
         )
     )
