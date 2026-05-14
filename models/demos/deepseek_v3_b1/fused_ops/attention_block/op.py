@@ -2086,6 +2086,10 @@ class AttentionBlock:
 
         # Keep broadcast writer backing address explicit for this fused path.
         input_cb_l1_addr = ttnn.get_cb_address(in_cb_descriptor)
+        print(
+            f"[ATTN DEBUG] rmsnorm_input_cb (input_cb) L1 addr=0x{input_cb_l1_addr:x}, "
+            f"input_tensor buffer_addr=0x{int(ref_input_tensor.buffer_address()):x}"
+        )
         bcast_config.set_writer_tensor_address_override(input_cb_l1_addr)
 
         # Metadata sits immediately after the activation data in the input CB's backing
@@ -2109,6 +2113,11 @@ class AttentionBlock:
         # This op builds device-invariant descriptor templates from reference tensors;
         # use sender device metadata as the canonical broadcast descriptor reference.
         bcast_pkt_cb_descriptor = bcast_config.get_cb_descriptor(sender_mesh_coord)
+        bcast_pkt_cb_addr = ttnn.get_cb_address(bcast_pkt_cb_descriptor)
+        print(
+            f"[ATTN DEBUG] bcast_pkt_cb (bcast_data_cb_id) L1 addr=0x{bcast_pkt_cb_addr:x}, "
+            f"input_cb={input_cb}, bcast_pkt_cb={bcast_pkt_cb}"
+        )
 
         # CB: RMSNorm output buffer
         rmsnorm_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(

@@ -647,6 +647,7 @@ def test_decoder(
         is_moe=True,
         validate_debug_tensors=validate_standalone_mla or validate_standalone_moe,
         torch_input=torch_input,
+        entry_column=sender_col,
     )
 
     logger.info("Creating golden reference tensors...")
@@ -847,7 +848,7 @@ def test_decoder(
         # Forward + multi-exit MoE
         forward_sockets=forward_sockets,
         forward_staging_tensor=forward_staging_tensor,
-        exit_column=reduce_exit_column,
+        exit_column=sender_col,
         reduce_exit_column=reduce_exit_column,
     )
     for i in range(num_iters):
@@ -1163,6 +1164,7 @@ def test_decoder(
 @pytest.mark.parametrize("num_internal_iterations", [1])
 @pytest.mark.parametrize("slot_id, num_slots", [(0, 2), (1, 2)])
 @pytest.mark.requires_grid_size((13, 10))
+@pytest.mark.timeout(120000)
 @requires_hybrid_allocator
 def test_decoder_mlp(
     bh_2d_mesh_device,
@@ -1216,6 +1218,7 @@ def test_decoder_mlp(
         metadata=DeepseekMetadata(position_id=position_id, slot_id=slot_id),
         num_slots=num_slots,
         is_moe=False,
+        entry_column=sender_col,
     )
 
     logger.info("Creating golden reference tensors...")
@@ -1347,13 +1350,47 @@ def test_decoder_mlp(
         # Forward + multi-exit MoE
         forward_sockets=forward_sockets,
         forward_staging_tensor=forward_staging_tensor,
-        exit_column=reduce_exit_column,
+        exit_column=sender_col,
         reduce_exit_column=reduce_exit_column,
     )
+    # Debug: dump L1 addresses for input tensor, residual tensor, and staging tensor
+    for dev_idx in range(num_devices):
+        input_dev = ttnn.get_device_tensors(d["input_tensor_mesh"])[dev_idx]
+        residual_dev = ttnn.get_device_tensors(d["ttnn_residual_mcast_src"])[dev_idx]
+        staging_dev = ttnn.get_device_tensors(forward_staging_tensor)[dev_idx]
+        logger.info(
+            f"[ADDR DEBUG] dev={dev_idx}: input_tensor addr=0x{input_dev.buffer_address():x}, "
+            f"residual addr=0x{residual_dev.buffer_address():x}, "
+            f"staging addr=0x{staging_dev.buffer_address():x}"
+        )
+    # Debug: check input tensor data is non-zero before execution
+    input_pre = ttnn.to_torch(d["input_tensor_mesh"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    for dev_idx in range(num_devices):
+        dev_data = input_pre[dev_idx]
+        logger.info(
+            f"[DATA DEBUG] dev={dev_idx} input_tensor before exec: any_nonzero={dev_data.any().item()}, "
+            f"first_vals={dev_data.flatten()[:4].tolist()}"
+        )
+
     logger.info("Running decoder block...")
     for i in range(num_iters):
         moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.execute(*decoder_program_context)
     ttnn.synchronize_device(submesh)
+
+    # Debug: check input tensor data after execution
+    input_post = ttnn.to_torch(d["input_tensor_mesh"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    residual_post = ttnn.to_torch(d["ttnn_residual_mcast_src"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    for dev_idx in range(num_devices):
+        inp_data = input_post[dev_idx]
+        res_data = residual_post[dev_idx]
+        logger.info(
+            f"[DATA DEBUG] dev={dev_idx} input_tensor after exec: any_nonzero={inp_data.any().item()}, "
+            f"first_vals={inp_data.flatten()[:4].tolist()}"
+        )
+        logger.info(
+            f"[DATA DEBUG] dev={dev_idx} residual after exec: any_nonzero={res_data.any().item()}, "
+            f"first_vals={res_data.flatten()[:4].tolist()}"
+        )
 
     # ========================================================================
     # Extract decoder MLP output. With reduce-to-all, every exit-column device
@@ -1458,6 +1495,16 @@ def test_decoder_mlp(
             expected_rope = golden_new_kv[..., KNOPE_DIM:]
             compare_nope = compare_kv_cache[..., :KNOPE_DIM]
             compare_rope = compare_kv_cache[..., KNOPE_DIM:]
+
+            logger.info(
+                f"[KV DEBUG] dev={device_idx} SP={sp_group} local_seq_len={local_seq_len} "
+                f"compare_nope: any_nonzero={compare_nope.any().item()}, abs_max={compare_nope.abs().max().item():.6f}, "
+                f"first_vals={compare_nope.flatten()[:4].tolist()}"
+            )
+            logger.info(
+                f"[KV DEBUG] dev={device_idx} SP={sp_group} expected_nope: abs_max={expected_nope.abs().max().item():.6f}, "
+                f"first_vals={expected_nope.flatten()[:4].tolist()}"
+            )
 
             nope_passing, nope_pcc = comp_pcc(compare_nope, expected_nope, 0.98)
             logger.info(f"Device {device_idx} (SP={sp_group}) KV Cache NOPE PCC: {nope_pcc}")

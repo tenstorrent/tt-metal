@@ -306,6 +306,7 @@ class DecoderBlock:
             forward_staging_tensor=forward_staging_tensor,
             exit_column=exit_column,
             reduce_exit_column=reduce_exit_column,
+            forward_dest_tensor=input_tensor_mesh,
         )
         print(
             "DecoderBlock.get_program_context: Built MoeOp context, now building descriptors and merging with AttentionBlock context"
@@ -316,6 +317,16 @@ class DecoderBlock:
         print(
             "DecoderBlock.get_program_context: Built MoeOp descriptors, now preparing IO tensors and merging program descriptors"
         )
+
+        if moe_ctx.routed_ctx.enable_forward and hasattr(moe_ctx.routed_ctx, "bcast_pkt_cb_descriptor"):
+            fwd_cb_desc = moe_ctx.routed_ctx.bcast_pkt_cb_descriptor
+            fwd_cb_addr = ttnn.get_cb_address(fwd_cb_desc)
+            decoder_cbs.append(fwd_cb_desc)
+            print(
+                f"DecoderBlock.get_program_context: Appended Forward staging CB descriptor "
+                f"(cb={moe_ctx.routed_ctx.bcast_pkt_cb}, addr=0x{fwd_cb_addr:x}) "
+                f"to decoder_cbs so MLA reconfig configures it before Forward runs"
+            )
 
         io_tensors = []
         cb_metadata = record_cb_metadata(decoder_cbs)

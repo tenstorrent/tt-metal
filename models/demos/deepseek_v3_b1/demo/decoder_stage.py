@@ -64,6 +64,7 @@ def create_decoder_block_tensors(
     is_moe: bool = True,
     validate_debug_tensors: bool = False,
     torch_input=None,
+    entry_column=None,
 ):
     """Create all tensors required by DecoderBlock.op().
 
@@ -284,7 +285,9 @@ def create_decoder_block_tensors(
     device_tensors = []
     for row in range(mesh_rows):
         for col in range(mesh_cols):
-            if row == sender_row and col == sender_col:
+            if entry_column is not None and col == entry_column:
+                device_tensors.append(padded_input)
+            elif entry_column is None and row == sender_row and col == sender_col:
                 device_tensors.append(padded_input)
             else:
                 device_tensors.append(zero_input)

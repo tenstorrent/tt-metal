@@ -4629,9 +4629,17 @@ class MoeOp:
 
         sender_core_physical = routed_ctx.device.worker_core_from_logical_core(routed_ctx.sender_core)
 
-        residual_per_device = ttnn.get_device_tensors(ctx.shared_residual_mcast_src_tensor)
-        residual_device = residual_per_device[chip_id]
-        tensor_address = int(residual_device.buffer_address())
+        dest_tensor = (
+            self.forward_dest_tensor if self.forward_dest_tensor is not None else ctx.shared_residual_mcast_src_tensor
+        )
+        dest_per_device = ttnn.get_device_tensors(dest_tensor)
+        dest_device = dest_per_device[chip_id]
+        tensor_address = int(dest_device.buffer_address())
+        print(
+            f"[FWD DEST DEBUG] chip_id={chip_id} col={col} is_entry={is_entry_col} "
+            f"forward_dest_tensor={'override' if self.forward_dest_tensor is not None else 'residual'} "
+            f"tensor_address=0x{tensor_address:x}"
+        )
 
         cross_col_sem_addr = self.sem_addrs[MoeSem.FORWARD_CROSS_COL_SYNC]
         socket_page_size = fp["payload_size_bytes"] + self._forward_metadata_size_bytes
@@ -4661,8 +4669,12 @@ class MoeOp:
 
             partner_col = 1 - col
             partner_chip_id = row * ctx.mesh_cols + partner_col
-            partner_residual = residual_per_device[partner_chip_id]
-            partner_tensor_addr = int(partner_residual.buffer_address())
+            partner_dest = dest_per_device[partner_chip_id]
+            partner_tensor_addr = int(partner_dest.buffer_address())
+            print(
+                f"[FWD DEST DEBUG] chip_id={chip_id} entry col sends to partner_chip_id={partner_chip_id} "
+                f"partner_tensor_addr=0x{partner_tensor_addr:x}"
+            )
             partner_coord = ttnn.MeshCoordinate(row, partner_col)
             partner_sender_core_phys = routed_ctx.device.worker_core_from_logical_core(routed_ctx.sender_core)
 
@@ -4903,8 +4915,10 @@ class MoeOp:
         metadata_l1_addr=0,
         exit_column=None,
         reduce_exit_column=None,
+        forward_dest_tensor=None,
     ):
         """Setup both routed and shared expert contexts, then overlap CBs with SDPA buffers."""
+        self.forward_dest_tensor = forward_dest_tensor
         self.noc_mode = noc_mode
         self.is_torus = is_torus
         self.downstream_sockets = downstream_sockets
@@ -5194,17 +5208,17 @@ class MoeOp:
             io_tensors += [ctx.sdpa_out_interm_buffer]
         if ctx.reconfig_moe_cbs:
             io_tensors += [self.reconfig_tensor]
-        if ctx.enable_reduce_to_all:
-            io_tensors += [
-                ctx.reduce_intermediate_tensors,
-                ctx.reduce_output_tensor,
-            ]
         if ctx.bcast_input_tensor is not None:
             io_tensors += [ctx.bcast_input_tensor]
         if ctx.bcast_intermediate_tensor is not None:
             io_tensors += [ctx.bcast_intermediate_tensor]
         if ctx.routed_ctx.forward_staging_tensor is not None:
             io_tensors += [ctx.routed_ctx.forward_staging_tensor]
+        if ctx.enable_reduce_to_all:
+            io_tensors += [
+                ctx.reduce_intermediate_tensors,
+                ctx.reduce_output_tensor,
+            ]
         return io_tensors
 
     def _build_kernel_defines(self):
