@@ -186,78 +186,113 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor)
 
     TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATA, 0x3c02);
 
-#pragma GCC unroll 8
-    for (std::uint32_t i = 0; i < ITERATIONS; i++)
+    // Number of instructions in one iteration of the loop body. Used by
+    // TTI_REPLAY/record and TTI_REPLAY/replay below; MUST match exactly the count of
+    // TTI_ instructions emitted between the TTI_REPLAY/record call and the
+    // replay loop, or the replay buffer will misalign.
+    //
+    //   Base body:                                                15
+    //     SFPLOAD, SFPMAD, SFPLOADI(255), SFPSWAP,
+    //     SFPEXEXP, SFPEXMAN8, SFPSHFT, SFPEXMAN9, SFPCAST,
+    //     SFPMAD poly1, SFPGT mask, SFPMAD poly2,
+    //     SFPAND, SFPSETEXP, SFPSTORE.
+    //   + SCALE_EN ? 1 : 0                  (SFPMULI scale)
+    //   + is_fp32_dest_acc_en ? 0 : 1       (SFP_STOCH_RND fp32→bf16)
+    constexpr int BODY_LEN = 15 + (SCALE_EN ? 1 : 0) + (is_fp32_dest_acc_en ? 0 : 1);
+
+    // Record the loop body into replay buffer slot 0 the first time
+    // through. Subsequent iterations replay the recorded sequence, which
+    // shrinks the unrolled kernel binary from ~ITERATIONS*BODY_LEN
+    // instructions down to BODY_LEN + (ITERATIONS - 1) replays.
+    //
+    // Per-element runtime is unchanged: the recorded instructions execute
+    // exactly as if they had been issued inline, and dst_reg is advanced
+    // by ADDR_MOD_6 inside the body so each replay walks to the next
+    // element correctly.
+    //
+    // The accurate path (APPROXIMATION_MODE=false) does not otherwise use
+    // the replay buffer, so slot 0 is free here. Callers that mix this
+    // function with other replay-buffer clients should ensure they don't
+    // require slot 0 to survive across the call.
+    TTI_REPLAY(0, BODY_LEN, 1, 1); // record
+
+    // val = sfpi::dst_reg[0]
+    TTI_SFPLOAD(p_sfpu::LREG0, input_type, ADDR_MOD_7, 0);
+
+    if constexpr (SCALE_EN)
     {
-        // val = sfpi::dst_reg[0]
-        TTI_SFPLOAD(p_sfpu::LREG0, input_type, ADDR_MOD_7, 0);
+        // Multiply LREG0 by the BF16 scale immediate in-place.
+        TTI_SFPMULI(exp_base_scale_factor, p_sfpu::LREG0, 0);
+    }
 
-        if constexpr (SCALE_EN)
-        {
-            // Multiply LREG0 by the BF16 scale immediate in-place.
-            TTI_SFPMULI(exp_base_scale_factor, p_sfpu::LREG0, 0);
-        }
+    // xlog2 = val * (1/ln2) + 127.0f, into LREG3 (preserved past int-part work).
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG5, p_sfpu::LREG3, 0);
 
-        // xlog2 = val * (1/ln2) + 127.0f, into LREG3 (preserved past int-part work).
-        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG5, p_sfpu::LREG3, 0);
+    // LREG1 = 255.0f. Slots into the SFPMAD's 2-cycle latency window.
+    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
 
-        // LREG1 = 255.0f. Slots into the SFPMAD's 2-cycle latency window.
-        TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
+    // Upper clamp. SFPSWAP (mode VEC_MIN_MAX = "max into lreg_dest"):
+    //   LREG1 = max(255, xlog2), LREG3 = min(255, xlog2).
+    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
 
-        // Upper clamp. SFPSWAP (mode VEC_MIN_MAX = "max into lreg_dest"):
-        //   LREG1 = max(255, xlog2), LREG3 = min(255, xlog2).
-        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    // _float_to_int32_for_exp_21f_: shift mantissa left by exp-bias bits.
+    // Reads xlog2 from LREG3, leaves int_part in LREG0 (LREG0 freed of val).
+    TTI_SFPEXEXP(0, p_sfpu::LREG3, p_sfpu::LREG1, 0); // LREG1 = exexp(xlog2)
+    TTI_SFPEXMAN(0, p_sfpu::LREG3, p_sfpu::LREG0, 0); // LREG0 = exman8(xlog2)
+    TTI_SFPSHFT(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);  // LREG0 <<= LREG1   (int_part)
 
-        // _float_to_int32_for_exp_21f_: shift mantissa left by exp-bias bits.
-        // Reads xlog2 from LREG3, leaves int_part in LREG0 (LREG0 freed of val).
-        TTI_SFPEXEXP(0, p_sfpu::LREG3, p_sfpu::LREG1, 0); // LREG1 = exexp(xlog2)
-        TTI_SFPEXMAN(0, p_sfpu::LREG3, p_sfpu::LREG0, 0); // LREG0 = exman8(xlog2)
-        TTI_SFPSHFT(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);  // LREG0 <<= LREG1   (int_part)
+    // Extract fractional part (sfpi::exman9 with PAD9). LREG0 still holds
+    // the integer-part-as-float-encoding which feeds SETEXP later.
+    TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPEXMAN_MOD1_PAD9);
 
-        // Extract fractional part (sfpi::exman9 with PAD9). LREG0 still holds
-        // the integer-part-as-float-encoding which feeds SETEXP later.
-        TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPEXMAN_MOD1_PAD9);
+    // frac = int32_to_float(fractional_part, RoundMode::NearestEven)
+    constexpr unsigned SFPCAST_MOD1_SM32_TO_FP32_RNE = 0;
+    TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, SFPCAST_MOD1_SM32_TO_FP32_RNE);
 
-        // frac = int32_to_float(fractional_part, RoundMode::NearestEven)
-        constexpr unsigned SFPCAST_MOD1_SM32_TO_FP32_RNE = 0;
-        TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, SFPCAST_MOD1_SM32_TO_FP32_RNE);
+    // Polynomial refinement of 2^x_f on [0, 1] in Horner form:
+    //   frac = c0 + frac * (c1 + frac * c2)
+    //        = 1.0017248 + frac * (7.84e-08 + frac * 4.79e-15)
+    TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG6, p_sfpu::LREG2, 0);
 
-        // Polynomial refinement of 2^x_f on [0, 1] in Horner form:
-        //   frac = c0 + frac * (c1 + frac * c2)
-        //        = 1.0017248 + frac * (7.84e-08 + frac * 4.79e-15)
-        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG6, p_sfpu::LREG2, 0);
+    // Negative-input handling: instead of clamping xlog2 with a max(0, ·)
+    // SFPSWAP, we build a mask with (SFPGT) and mask negative value using
+    // (SFPAND) below.
+    // This avoids SFPLOADI + SFPSWAP and introduced instructions
+    // can be interleaved with SFPMAD to hide their latency.
+    constexpr unsigned SFPGT_MOD1_SET_VD = 8;
+    TTI_SFPGT(0, p_sfpu::LCONST_0, p_sfpu::LREG3, SFPGT_MOD1_SET_VD);
 
-        // Negative-input handling: instead of clamping xlog2 with a max(0, ·)
-        // SFPSWAP, we build a mask with (SFPGT) and mask negative value using
-        // (SFPAND) below.
-        // This avoids SFPLOADI + SFPSWAP and introduced instructions
-        // can be interleaved with SFPMAD to hide their latency.
-        constexpr unsigned SFPGT_MOD1_SET_VD = 8;
-        TTI_SFPGT(0, p_sfpu::LCONST_0, p_sfpu::LREG3, SFPGT_MOD1_SET_VD);
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG7, p_sfpu::LREG1, 0);
 
-        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG7, p_sfpu::LREG1, 0);
+    // Apply the mask to the integer part *before* SETEXP: for lanes with
+    // xlog2 <= 0 the mask is 0, zeroing the int_part. The subsequent
+    // SETEXP then produces a bf16 subnormal that flushes to 0, matching
+    // the scalar max(xlog2, 0) behavior on finite inputs.
+    constexpr unsigned SFPAND_MOD1_USE_VB = 1;
+    TTI_SFPAND(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG0, SFPAND_MOD1_USE_VB);
 
-        // Apply the mask to the integer part *before* SETEXP: for lanes with
-        // xlog2 <= 0 the mask is 0, zeroing the int_part. The subsequent
-        // SETEXP then produces a bf16 subnormal that flushes to 0, matching
-        // the scalar max(xlog2, 0) behavior on finite inputs.
-        constexpr unsigned SFPAND_MOD1_USE_VB = 1;
-        TTI_SFPAND(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG0, SFPAND_MOD1_USE_VB);
+    // y = setexp(frac, masked_int_part) — recombine 2^x_i * 2^x_f.
+    constexpr unsigned SFPSETEXP_MOD1_ARG_EXPONENT = 2;
+    TTI_SFPSETEXP(0, p_sfpu::LREG1, p_sfpu::LREG0, SFPSETEXP_MOD1_ARG_EXPONENT);
 
-        // y = setexp(frac, masked_int_part) — recombine 2^x_i * 2^x_f.
-        constexpr unsigned SFPSETEXP_MOD1_ARG_EXPONENT = 2;
-        TTI_SFPSETEXP(0, p_sfpu::LREG1, p_sfpu::LREG0, SFPSETEXP_MOD1_ARG_EXPONENT);
+    if constexpr (!is_fp32_dest_acc_en)
+    {
+        // Round float32 -> bfloat16 using round-to-nearest-even before
+        // SFPSTORE truncates. Avoids ULP loss on values like 9*9 = 80.8.
+        TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+    }
 
-        if constexpr (!is_fp32_dest_acc_en)
-        {
-            // Round float32 -> bfloat16 using round-to-nearest-even before
-            // SFPSTORE truncates. Avoids ULP loss on values like 9*9 = 80.8.
-            TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
-        }
+    // sfpi::dst_reg[0] = y; sfpi::dst_reg++;
+    // (ADDR_MOD_6 increments dest by 2 on store.)
+    TTI_SFPSTORE(p_sfpu::LREG0, input_type, ADDR_MOD_6, 0);
 
-        // sfpi::dst_reg[0] = y; sfpi::dst_reg++;
-        // (ADDR_MOD_6 increments dest by 2 on store.)
-        TTI_SFPSTORE(p_sfpu::LREG0, input_type, ADDR_MOD_6, 0);
+#pragma GCC unroll 8
+    for (std::uint32_t i = 1; i < ITERATIONS; i++)
+    {
+        // Replay the recorded body for the remaining ITERATIONS - 1 elements.
+        // Each replay is one REPLAY-equivalent issue; the body executes as
+        // if it had been issued inline, dst_reg advancing via ADDR_MOD_6.
+        TTI_REPLAY(0, BODY_LEN, 1, 0);
     }
 }
 
