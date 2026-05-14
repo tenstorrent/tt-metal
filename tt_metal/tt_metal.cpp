@@ -1534,6 +1534,13 @@ void UpdateDynamicCircularBufferAddress(
     circular_buffer->assign_global_address();
 }
 
+void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const MeshTensor& tensor) {
+    auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
+    TT_FATAL(!circular_buffer->is_global_circular_buffer(), "CircularBuffer must not be a GlobalCircularBuffer!");
+    circular_buffer->config().set_globally_allocated_address(tensor);
+    circular_buffer->assign_global_address();
+}
+
 void UpdateDynamicCircularBufferAddressAndTotalSize(
     Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size) {
     auto circular_buffer = program.impl().get_circular_buffer(cb_handle);

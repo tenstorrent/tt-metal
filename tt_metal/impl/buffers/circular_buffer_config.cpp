@@ -282,6 +282,12 @@ const CircularBufferConfig::Builder& CircularBufferConfig::Builder::set_data_for
     return *this;
 }
 
+const CircularBufferConfig::Builder& CircularBufferConfig::Builder::set_data_type(
+    tt::tt_metal::DataType data_type) const {
+    parent_.data_formats_[buffer_index_] = datatype_to_dataformat_converter(data_type);
+    return *this;
+}
+
 const CircularBufferConfig::Builder& CircularBufferConfig::Builder::set_total_size(uint32_t total_size) const {
     parent_.set_total_size(total_size);
     return *this;
