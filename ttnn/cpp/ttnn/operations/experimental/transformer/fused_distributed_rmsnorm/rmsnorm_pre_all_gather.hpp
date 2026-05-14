@@ -15,6 +15,7 @@ ttnn::Tensor wan_fused_rmsnorm_pre_allgather(
     const ttnn::Tensor& input_tensor,
     DataType dtype = DataType::BFLOAT16,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    uint32_t num_heads = 1);
 
 }  // namespace ttnn::experimental

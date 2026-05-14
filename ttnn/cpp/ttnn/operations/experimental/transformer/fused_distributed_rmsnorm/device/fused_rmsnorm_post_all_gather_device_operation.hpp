@@ -50,5 +50,6 @@ Tensor fused_rmsnorm_post_all_gather(
     const std::optional<const Tensor>& rope_sin,
     const MemoryConfig& memory_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    const std::optional<DataType>& dtype);
+    const std::optional<DataType>& dtype,
+    bool per_head_norm = false);
 }  // namespace ttnn::prim
