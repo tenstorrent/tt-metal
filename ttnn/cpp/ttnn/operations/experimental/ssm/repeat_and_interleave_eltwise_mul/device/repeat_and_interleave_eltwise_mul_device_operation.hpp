@@ -7,6 +7,7 @@
 #include <optional>
 #include <variant>
 
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "repeat_and_interleave_eltwise_mul_program_factory.hpp"
 
@@ -26,8 +27,6 @@ struct RepeatAndInterleaveEltwiseMulDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
-
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::experimental::prim
