@@ -571,7 +571,7 @@ run_quad_deepseekv3_module_tests() {
     ((fail += ec)) || true
     _test_run_summary_append_junit_rows "deepseekv3_module_quad" "${junit_path}" "${ec}"
 
-        if [[ $fail -ne 0 ]]; then
+    if [[ $fail -ne 0 ]]; then
         exit 1
     fi
 }
