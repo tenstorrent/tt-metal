@@ -418,22 +418,27 @@ public:
             tt::tt_metal::distributed::MeshWorkload mesh_workload;
             std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
+            // prepare_resources runs ONCE per workload, before any per-coord program build.
+            // This is the hook for mesh-wide resource allocation (GlobalSemaphores, config tensors)
+            // and mesh-level synchronization (Synchronize barrier). The returned resources are
+            // shared across all per-coord create_descriptor() calls and stored in shared_variables
+            // for the cache-hit slow path.
+            resource_t workload_resources{};
+            if constexpr (has_prepare_resources) {
+                workload_resources = DescriptorFactory::prepare_resources(attrs, tensor_args, tensor_return_value);
+            }
+
             const auto build_and_add_program =
                 [&](const ttnn::MeshCoordinateRange& device_range,
                     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-                    resource_t resources{};
-                    if constexpr (has_prepare_resources) {
-                        resources = DescriptorFactory::prepare_resources(attrs, tensor_args, tensor_return_value);
-                    }
-
                     auto desc = invoke_create_descriptor(
-                        attrs, tensor_args, tensor_return_value, resources, mesh_dispatch_coordinate);
+                        attrs, tensor_args, tensor_return_value, workload_resources, mesh_dispatch_coordinate);
                     tt::tt_metal::Program program{desc};
-                    auto tensor_buffers = collect_tensor_buffers(tensor_args, tensor_return_value, resources);
+                    auto tensor_buffers = collect_tensor_buffers(tensor_args, tensor_return_value, workload_resources);
                     auto resolved = tt::tt_metal::resolve_bindings(program, desc, tensor_buffers);
                     mesh_workload.add_program(device_range, std::move(program));
-                    shared_variables[device_range] = shared_variables_t{
-                        .resources = std::move(resources), .resolved_bindings = std::move(resolved)};
+                    shared_variables[device_range] =
+                        shared_variables_t{.resources = workload_resources, .resolved_bindings = std::move(resolved)};
                 };
 
             if constexpr (create_descriptor_uses_mesh_dispatch_coordinate()) {
