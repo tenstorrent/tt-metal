@@ -2592,16 +2592,19 @@ void Device::launch_eth_cores_for_quiesce() {
 // non-MMIO devices can enter their handshake simultaneously, causing the
 // SENDER↔SENDER deadlock at STARTED that FIX AE attempted (but failed) to fix.
 void Device::wait_for_eth_cores_launched(uint32_t timeout_ms) {
-    // Skip for MMIO devices (their ETH channels are directly PCIe-accessible and
-    // always fast; no ordering concern with non-MMIO peers in Pass 1c).
-    // Skip for non-MMIO devices with a broken relay path (launch was skipped too).
-    if (this->is_mmio_capable() || fabric_relay_path_broken_.load()) {
+    // FIX BE (#43012): MMIO devices can have ETH links to other MMIO devices (e.g. Device 1
+    // chan7 <-> Device 3 chan7 on T3000).  If both MMIO devices are launched simultaneously in
+    // Pass 1b both sides reach REMOTE_HANDSHAKE_COMPLETE and deadlock (neither advances to
+    // LOCAL_HANDSHAKE_COMPLETE).  We must poll MMIO ETH cores for STARTED too, so that Pass 1b
+    // sequences MMIO launches one-at-a-time just like Pass 1c does for non-MMIO devices.
+    // ReadFromDeviceL1 works fine for MMIO devices via direct PCIe access — no relay needed.
+    //
+    // Skip only for non-MMIO devices with a broken relay path (launch was skipped too).
+    if (fabric_relay_path_broken_.load()) {
         log_info(
             tt::LogMetal,
-            "wait_for_eth_cores_launched: Device {} — skipping (mmio={}, relay_broken={}).",
-            this->id(),
-            this->is_mmio_capable(),
-            static_cast<bool>(fabric_relay_path_broken_));
+            "wait_for_eth_cores_launched: Device {} — skipping (relay_broken=true).",
+            this->id());
         return;
     }
     if (!fabric_program_) {

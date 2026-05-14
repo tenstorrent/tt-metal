@@ -1727,14 +1727,29 @@ void MeshDeviceImpl::quiesce_internal() {
     }
     log_info(tt::LogMetal, "quiesce_internal: Pass 1a complete — starting Pass 1b (MMIO ETH launch)");
 
-    // Pass 1b: ETH write_launch_msg for MMIO devices (fast, direct PCIe).
-    // MMIO ERISCs start and reach STARTED before non-MMIO peers begin handshake initiation.
+    // Pass 1b: ETH write_launch_msg for MMIO devices, one device at a time.
+    //
+    // FIX BE (#43012): MMIO devices have ETH links to other MMIO devices (e.g. Device 1 chan7
+    // <-> Device 3 chan7 on T3000).  Launching all MMIO devices simultaneously caused both sides
+    // of an MMIO-MMIO ETH link to reach REMOTE_HANDSHAKE_COMPLETE concurrently — a mutual
+    // deadlock where neither side advances to LOCAL_HANDSHAKE_COMPLETE.  FIX BC detected this
+    // correctly and set fabric_channels_not_ready_for_traffic_=true, causing GTEST_SKIP via
+    // FIX AA, but the test was still skipped (counted as a CI failure).
+    //
+    // Fix: sequence MMIO launches exactly like Pass 1c sequences non-MMIO — launch one device,
+    // wait until its ETH cores reach STARTED (written their handshake signal), then launch the
+    // next.  When the next device's ERISCs start executing, they read the already-written signal
+    // and advance immediately past REMOTE_HANDSHAKE_COMPLETE, breaking the deadlock.
+    //
+    // wait_for_eth_cores_launched() now supports MMIO devices (PCIe direct-read, no relay).
     for (auto* idev : get_fabric_quiesce_restart_order(get_devices())) {
         auto* dev = dynamic_cast<Device*>(idev);
         if (dev && dev->is_mmio_capable()) {
             log_info(tt::LogMetal, "quiesce_internal: Pass 1b — Device {} (MMIO) launch_eth_cores_for_quiesce", dev->id());
             dev->launch_eth_cores_for_quiesce();
-            log_info(tt::LogMetal, "quiesce_internal: Pass 1b — Device {} done", dev->id());
+            log_info(tt::LogMetal, "quiesce_internal: Pass 1b — Device {} done, waiting for STARTED before next MMIO device", dev->id());
+            dev->wait_for_eth_cores_launched();
+            log_info(tt::LogMetal, "quiesce_internal: Pass 1b — Device {} ETH STARTED confirmed", dev->id());
         }
     }
     log_info(tt::LogMetal, "quiesce_internal: Pass 1b complete — starting Pass 1c (non-MMIO ETH launch)");
