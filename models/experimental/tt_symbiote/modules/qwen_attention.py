@@ -19,7 +19,7 @@ import torch.nn.functional as F
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule, tree_map
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
-from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig, trace_enabled
+from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig, trace_disabled
 from models.experimental.tt_symbiote.modules.attention import (
     TTNNPagedAttentionKVCache,
     PagedAttentionConfig,
@@ -1020,7 +1020,7 @@ class TTNNQwen3FullAttention(TTNNModule):
         return ttnn_output, None
 
 
-@trace_enabled
+@trace_disabled
 class TTNNQwen3LinearAttention(TTNNModule):
     """TTNN-accelerated Linear Attention (DeltaNet/Mamba-style) for Qwen3.5-35B-A3B.
 
