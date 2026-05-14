@@ -19,7 +19,18 @@ import torch
 import torch.nn as nn
 import ttnn
 
-from models.experimental.kokoro.tt.ttnn_sinegen import KokoroTtnnSineGen, sinegen_fp32_matmul_cfg
+from models.experimental.kokoro.tt.ttnn_sinegen import KokoroTtnnSineGen
+
+
+def _merge_linear_compute_cfg(device):
+    """Match :func:`ttnn_kokoro_generator._compute_cfg` — HiFi4 + fp32 dest aligns this Linear with PyTorch."""
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
 
 
 class SourceModuleHnNSF:
@@ -45,14 +56,6 @@ class SourceModuleHnNSF:
             self._torch_sin_gen = None
             self._ttnn_sg = KokoroTtnnSineGen(device, parameters)
 
-        vt = float(parameters["voiced_threshold"])
-        self._voiced_threshold = ttnn.from_torch(
-            torch.tensor([[[vt]]], dtype=torch.float32),
-            dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
         sine_amp_over_3 = self.sine_amp / 3.0
         self._sine_amp_over_3 = ttnn.from_torch(
             torch.tensor([[[sine_amp_over_3]]], dtype=torch.float32),
@@ -63,7 +66,7 @@ class SourceModuleHnNSF:
         )
         self._linear_weight = parameters["linear_weight"]
         self._linear_bias = parameters["linear_bias"]
-        self._compute_cfg = sinegen_fp32_matmul_cfg(device)
+        self._compute_cfg = _merge_linear_compute_cfg(device)
 
     def __call__(self, f0: ttnn.Tensor, *, deterministic: bool = False) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """
@@ -104,11 +107,7 @@ class SourceModuleHnNSF:
                 memory_config=l1,
             )
         else:
-            uv_gt = ttnn.gt(f0_l1, self._voiced_threshold, memory_config=l1)
-            uv = ttnn.typecast(uv_gt, ttnn.float32, memory_config=l1)
-            ttnn.deallocate(uv_gt)
-
-            sine_wavs_tt, _, _ = self._ttnn_sg(f0_l1, deterministic=deterministic)
+            sine_wavs_tt, uv, _ = self._ttnn_sg(f0_l1, deterministic=deterministic)
 
         pre = ttnn.linear(
             sine_wavs_tt,

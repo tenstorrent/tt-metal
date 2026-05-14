@@ -11,6 +11,9 @@ import torch
 import torch.nn as nn
 import ttnn
 
+# Used by generator AdaIN / conv1d when time length grows (full-utterance demos).
+ADAIN_LONG_SEQ_DRAM_THRESHOLD = 96
+
 
 def _compute_cfg(device):
     # HiFi4 here matches PyTorch CPU more closely for the AdainResBlk encode/decode conv1d stacks,
@@ -25,10 +28,12 @@ def _compute_cfg(device):
 
 
 class _TtConv1d:
+    """Conv1d via conv2d; same DRAM + prepare + height-slice pattern as generator noise/dilated convs."""
+
     def __init__(self, device, weight_rm: ttnn.Tensor, bias_rm: Optional[ttnn.Tensor]):
         self.device = device
-        self.weight = weight_rm
-        self.bias = bias_rm
+        self.weight_rm = weight_rm
+        self.bias_rm = bias_rm
         self.out_channels = int(weight_rm.shape[0])
         self.in_channels = int(weight_rm.shape[1])
         self.kernel_size = int(weight_rm.shape[2])
@@ -48,16 +53,80 @@ class _TtConv1d:
             enable_activation_reuse=False,
             full_inner_dim=False,
         )
+        self.compute_cfg = _compute_cfg(device)
+        self._prep_key: Optional[tuple[int, int]] = None
+        self.dram_slice_config = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=16)
+        self.weight_prepared = self.weight_rm
+        self.bias_prepared: Optional[ttnn.Tensor] = self.bias_rm
 
     def __call__(self, x: ttnn.Tensor, batch_size: int, input_length: int) -> ttnn.Tensor:
-        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        l1 = ttnn.L1_MEMORY_CONFIG
+        x = ttnn.to_memory_config(x, dram)
         if x.dtype != ttnn.float32:
-            x = ttnn.typecast(x, ttnn.float32)
-        x = ttnn.permute(x, [0, 2, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
-        x = ttnn.reshape(x, [batch_size, 1, input_length, self.in_channels], memory_config=ttnn.L1_MEMORY_CONFIG)
-        result, _, [self.weight, self.bias] = ttnn.conv2d(
-            input_tensor=x,
-            weight_tensor=self.weight,
+            x = ttnn.typecast(x, ttnn.float32, memory_config=dram)
+        x = ttnn.permute(x, [0, 2, 1], memory_config=dram)
+        x = ttnn.reshape(x, [batch_size, 1, input_length, self.in_channels], memory_config=dram)
+        x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        x_rm = ttnn.to_memory_config(x_rm, dram)
+
+        key = (batch_size, input_length)
+        has_bias = self.bias_rm is not None
+        if self._prep_key != key:
+            num_sl = max(2, min(512, max(16, (int(input_length) + 3) // 4)))
+            self.dram_slice_config = ttnn.Conv2dSliceConfig(
+                slice_type=ttnn.Conv2dDRAMSliceHeight,
+                num_slices=num_sl,
+            )
+            self.weight_prepared = ttnn.prepare_conv_weights(
+                weight_tensor=self.weight_rm,
+                input_memory_config=x_rm.memory_config(),
+                input_layout=x_rm.layout,
+                weights_format="OIHW",
+                in_channels=self.in_channels,
+                out_channels=self.out_channels,
+                batch_size=batch_size,
+                input_height=input_length,
+                input_width=1,
+                kernel_size=(self.kernel_size, 1),
+                stride=(1, 1),
+                padding=(self.padding, 0),
+                dilation=(1, 1),
+                has_bias=has_bias,
+                groups=1,
+                device=self.device,
+                input_dtype=x_rm.dtype,
+                conv_config=self.conv_config,
+                compute_config=self.compute_cfg,
+                slice_config=self.dram_slice_config,
+            )
+            if has_bias:
+                self.bias_prepared = ttnn.prepare_conv_bias(
+                    bias_tensor=self.bias_rm,
+                    input_memory_config=x_rm.memory_config(),
+                    input_layout=x_rm.layout,
+                    in_channels=self.in_channels,
+                    out_channels=self.out_channels,
+                    batch_size=batch_size,
+                    input_height=input_length,
+                    input_width=1,
+                    kernel_size=(self.kernel_size, 1),
+                    stride=(1, 1),
+                    padding=(self.padding, 0),
+                    dilation=(1, 1),
+                    groups=1,
+                    device=self.device,
+                    input_dtype=x_rm.dtype,
+                    conv_config=self.conv_config,
+                    compute_config=self.compute_cfg,
+                )
+            else:
+                self.bias_prepared = None
+            self._prep_key = key
+
+        result, _, wpair = ttnn.conv2d(
+            input_tensor=x_rm,
+            weight_tensor=self.weight_prepared,
             device=self.device,
             in_channels=self.in_channels,
             out_channels=self.out_channels,
@@ -67,16 +136,23 @@ class _TtConv1d:
             kernel_size=(self.kernel_size, 1),
             stride=(1, 1),
             padding=(self.padding, 0),
-            bias_tensor=self.bias,
+            dilation=(1, 1),
+            bias_tensor=self.bias_prepared,
             conv_config=self.conv_config,
+            compute_config=self.compute_cfg,
+            slice_config=self.dram_slice_config,
             return_weights_and_bias=True,
             return_output_dim=True,
         )
-        result = ttnn.reshape(
-            result, [batch_size, input_length, self.out_channels], memory_config=ttnn.L1_MEMORY_CONFIG
-        )
-        result = ttnn.permute(result, [0, 2, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
-        return ttnn.to_memory_config(result, ttnn.L1_MEMORY_CONFIG)
+        self.weight_prepared = wpair[0]
+        if has_bias and len(wpair) > 1:
+            self.bias_prepared = wpair[1]
+        result = ttnn.reshape(result, [batch_size, input_length, self.out_channels], memory_config=dram)
+        result = ttnn.permute(result, [0, 2, 1], memory_config=dram)
+        result = ttnn.to_layout(result, ttnn.TILE_LAYOUT)
+        if input_length > ADAIN_LONG_SEQ_DRAM_THRESHOLD:
+            return ttnn.to_memory_config(result, dram)
+        return ttnn.to_memory_config(result, l1)
 
 
 class _TtDepthwiseConvTransposePool:
@@ -144,24 +220,27 @@ def _adain_instance_norm(
     style_lin: ttnn.Tensor,
     num_features: int,
     eps: float,
+    *,
+    memory_config: Optional[ttnn.MemoryConfig] = None,
 ) -> ttnn.Tensor:
+    mc = memory_config if memory_config is not None else ttnn.L1_MEMORY_CONFIG
     mean = ttnn.mean(x, dim=2, keepdim=True)
-    xc = ttnn.subtract(x, mean, memory_config=ttnn.L1_MEMORY_CONFIG)
-    var = ttnn.mean(ttnn.multiply(xc, xc, memory_config=ttnn.L1_MEMORY_CONFIG), dim=2, keepdim=True)
-    denom = ttnn.sqrt(ttnn.add(var, eps, memory_config=ttnn.L1_MEMORY_CONFIG))
+    xc = ttnn.subtract(x, mean, memory_config=mc)
+    var = ttnn.mean(ttnn.multiply(xc, xc, memory_config=mc), dim=2, keepdim=True)
+    denom = ttnn.sqrt(ttnn.add(var, eps, memory_config=mc))
     inv = ttnn.reciprocal(denom)
-    x_norm = ttnn.multiply(xc, inv, memory_config=ttnn.L1_MEMORY_CONFIG)
-    x_norm = ttnn.multiply(x_norm, inst_weight_1c1, memory_config=ttnn.L1_MEMORY_CONFIG)
-    x_norm = ttnn.add(x_norm, inst_bias_1c1, memory_config=ttnn.L1_MEMORY_CONFIG)
+    x_norm = ttnn.multiply(xc, inv, memory_config=mc)
+    x_norm = ttnn.multiply(x_norm, inst_weight_1c1, memory_config=mc)
+    x_norm = ttnn.add(x_norm, inst_bias_1c1, memory_config=mc)
     bsz = int(x.shape[0])
     gamma = style_lin[:, :num_features]
     beta = style_lin[:, num_features:]
     gamma = ttnn.reshape(gamma, [bsz, num_features, 1])
     beta = ttnn.reshape(beta, [bsz, num_features, 1])
     one = ttnn.ones_like(gamma)
-    g1 = ttnn.add(one, gamma, memory_config=ttnn.L1_MEMORY_CONFIG)
-    x_norm = ttnn.multiply(g1, x_norm, memory_config=ttnn.L1_MEMORY_CONFIG)
-    return ttnn.add(x_norm, beta, memory_config=ttnn.L1_MEMORY_CONFIG)
+    g1 = ttnn.add(one, gamma, memory_config=mc)
+    x_norm = ttnn.multiply(g1, x_norm, memory_config=mc)
+    return ttnn.add(x_norm, beta, memory_config=mc)
 
 
 class AdainResBlk1d:
