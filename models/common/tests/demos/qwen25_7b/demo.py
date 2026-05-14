@@ -38,7 +38,7 @@ from transformers import AutoConfig, AutoTokenizer
 import ttnn
 from models.common.models.executor import run_perf_benchmark, run_teacher_forcing
 from models.common.models.qwen25_7b.executor import EagerQwenExecutor, TracedQwenExecutor
-from models.common.models.qwen25_7b.model import Qwen25_7BTTT
+from models.common.models.qwen25_7b.model import Qwen25_7B
 from models.common.tests.demos.cleanup_utils import cleanup_model_case
 from models.tt_transformers.tt.common import encode_prompt_hf
 
@@ -142,7 +142,7 @@ def get_device_name(mesh_device):
 
 
 def lazy_weight_cache_dir_for_demo(mesh_device: ttnn.MeshDevice, hf_model_id: str) -> Path:
-    """Disk root for ``Qwen25_7BTTT`` ``LazyWeight`` caches in this e2e demo.
+    """Disk root for ``Qwen25_7B`` ``LazyWeight`` caches in this e2e demo.
 
     Matches ``models/tt_transformers/tt/model_config.py`` (HF checkpoint branch):
     if ``TT_CACHE_PATH`` is set, use ``<TT_CACHE_PATH>/<device_name>``; otherwise
@@ -303,7 +303,7 @@ def create_model(
     max_batch_size: int = 32,
     perf_decode_tuning: bool | None = None,
 ):
-    """Build ``Qwen25_7BTTT`` in executor (paged KV) mode.
+    """Build ``Qwen25_7B`` in executor (paged KV) mode.
 
     ``max_batch_size`` must match the workload: decode DRAM matmul CB usage scales with
     tile-padded batch rows, so batch-1 perf tests should pass ``max_batch_size=1`` even when
@@ -337,7 +337,7 @@ def create_model(
         perf_decode_tuning = optimizations == "performance"
 
     try:
-        model = Qwen25_7BTTT.from_pretrained(
+        model = Qwen25_7B.from_pretrained(
             mesh_device,
             hf_model,
             max_batch_size=max_batch_size,
