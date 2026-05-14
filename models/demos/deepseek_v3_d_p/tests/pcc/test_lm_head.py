@@ -50,6 +50,7 @@ def random_weights(config, emb_dim: int, vocab_size: int, dtype: torch.dtype):
     return config, weights
 
 
+@pytest.mark.parametrize("mode", ["column", "row"], ids=["col", "row"])
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
 @pytest.mark.parametrize(
     "batch_seq_len, emb_dim, vocab_size, run_full_pcc_check",
@@ -87,6 +88,16 @@ def random_weights(config, emb_dim: int, vocab_size: int, dtype: torch.dtype):
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="linear"),
             id="2x4-linear",
         ),
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -101,6 +112,7 @@ def test_lm_head(
     num_links: int,
     topology: ttnn.Topology,
     is_balanced: bool,
+    mode: str,
 ):
     """
     Test TtLMHead PCC against torch.nn.Linear reference.
@@ -143,7 +155,7 @@ def test_lm_head(
         logger.debug(f"Torch output shape: {torch_output.shape}")
 
     # Create TTNN LM head model
-    logger.debug("Creating TtLMHead")
+    logger.debug(f"Creating TtLMHead (mode={mode})")
     tt_model = TtLMHead(
         mesh_device=mesh_device,
         emb_dim=emb_dim,
@@ -154,6 +166,7 @@ def test_lm_head(
         activations_dtype=ttnn_activations_dtype,
         weights_dtype=ttnn_weights_dtype,
         is_balanced=is_balanced,
+        mode=mode,
     )
 
     tt_input = ttnn.from_torch(

@@ -9,14 +9,25 @@ Projects hidden states to vocabulary logits:
     Input:  [dispatch_group_size, seq_len, emb_dim]
     Output: [dispatch_group_size, TILE_SIZE, vocab_size]
 
-Weight Sharding (across mesh columns):
-    - weight: Sharded on output dimension (-1) across mesh columns
-      Shape: [emb_dim, vocab_size]
-      mesh_mapper dims=(None, -1)
+Two TP strategies are supported via the `mode` parameter:
+
+- mode="column" (default, current behavior):
+    Weight sharded on output (vocab) dim across mesh columns.
+    Per-device weight: [emb_dim, vocab_size / tp_factor]
+    mesh_mapper dims=(None, -1)
+    Forward: all_gather(x, dim=emb) -> matmul -> output is TP-sharded on vocab.
+    Host-side concat reassembles the full vocab.
+
+- mode="row":
+    Weight sharded on input (emb) dim across mesh columns.
+    Per-device weight: [emb_dim / tp_factor, vocab_size]
+    mesh_mapper dims=(None, -2)
+    Forward: matmul (partial sum) -> all_reduce(across TP) -> output is replicated.
+    No host-side concat needed.
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 import torch
 from loguru import logger
@@ -25,6 +36,8 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.mla.utils import global_to_local_token_id
+
+LMHeadMode = Literal["column", "row"]
 
 COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -46,12 +59,25 @@ class TtLMHead(LightweightModule):
     """
 
     @staticmethod
-    def check_cache_complete(cache_path: Path) -> bool:
-        """Check if LM head weight cache files exist."""
+    def _weight_shard_dims(mode: LMHeadMode) -> tuple:
+        """TP sharding dims for the transposed [emb, vocab] weight, by mode."""
+        # column: shard vocab (last dim) across TP; row: shard emb (second-to-last) across TP.
+        return (None, -1) if mode == "column" else (None, -2)
+
+    @staticmethod
+    def _cache_file_basename(mode: LMHeadMode) -> str:
+        """Cache filename stem. Column keeps the historical name so existing caches still load;
+        row gets a suffix so the two modes don't collide."""
+        return "lm_head_weight" if mode == "column" else "lm_head_weight_row"
+
+    @staticmethod
+    def check_cache_complete(cache_path: Path, mode: LMHeadMode = "column") -> bool:
+        """Check if LM head weight cache files exist for the requested mode."""
         from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
 
-        if not pattern_exists("lm_head_weight*.tensorbin", "LMHead"):
-            logger.debug("TTNN cache missing: lm_head_weight")
+        pattern = f"{TtLMHead._cache_file_basename(mode)}*.tensorbin"
+        if not pattern_exists(pattern, "LMHead"):
+            logger.debug(f"TTNN cache missing: {pattern}")
             return False
         return True
 
@@ -64,6 +90,7 @@ class TtLMHead(LightweightModule):
         dtype: ttnn.DataType,
         cache_path: Path | None,
         device: ttnn.MeshDevice | None = None,
+        mode: LMHeadMode = "column",
     ) -> ttnn.Tensor | None:
         """
         Shared logic for converting LM head weight to ttnn with caching.
@@ -77,6 +104,7 @@ class TtLMHead(LightweightModule):
             dtype: Data type
             cache_path: Cache directory path
             device: None for cache-only, mesh_device for cache+load
+            mode: Determines weight sharding dims.
 
         Returns:
             ttnn.Tensor if device is not None, else None
@@ -95,10 +123,10 @@ class TtLMHead(LightweightModule):
         mesh_mapper = ttnn.ShardTensor2dMesh(
             mesh_device,
             mesh_shape=mesh_device.shape,
-            dims=(None, -1),  # Shard vocab_size across TP axis (columns)
+            dims=TtLMHead._weight_shard_dims(mode),
         )
 
-        cache_file_name = str(cache_path / "lm_head_weight") if cache_path else None
+        cache_file_name = str(cache_path / TtLMHead._cache_file_basename(mode)) if cache_path else None
 
         tt_weight = ttnn.as_tensor(
             torch_weight,
@@ -127,10 +155,11 @@ class TtLMHead(LightweightModule):
         mesh_device: ttnn.MeshDevice,
         cache_path: Path,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        mode: LMHeadMode = "column",
     ):
         """Build TTNN cache for LM head weight without device copy."""
         TtLMHead._convert_and_cache_weight(
-            torch_weight, emb_dim, vocab_size, mesh_device, dtype, cache_path, device=None
+            torch_weight, emb_dim, vocab_size, mesh_device, dtype, cache_path, device=None, mode=mode
         )
 
     def __init__(
@@ -146,6 +175,7 @@ class TtLMHead(LightweightModule):
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_HIFI2,
         is_balanced: bool = False,
         weight_cache_path: Optional[Path] = None,
+        mode: LMHeadMode = "column",
     ):
         """
         Initialize TtLMHead module.
@@ -164,8 +194,11 @@ class TtLMHead(LightweightModule):
             is_balanced: If True, uses zigzag token mapping. If False (default),
                          uses sequential mapping. Should match TtMLA's is_balanced.
             weight_cache_path: Optional path to weight cache directory
+            mode: Weights parallelism strategy - "column" (all_gather emb, output TP-sharded on
+                  vocab) or "row" (matmul partials + all_reduce, output TP-replicated).
         """
         super().__init__()
+        assert mode in ("column", "row"), f"mode must be 'column' or 'row', got {mode!r}"
         self.mesh_device = mesh_device
         self.emb_dim = emb_dim
         self.vocab_size = vocab_size
@@ -178,6 +211,7 @@ class TtLMHead(LightweightModule):
         self.compute_kernel_config = compute_kernel_config
         self.is_balanced = is_balanced
         self.weight_cache_path = weight_cache_path
+        self.mode = mode
 
         logger.debug(f"Initializing TtLMHead with emb_dim={emb_dim}, vocab_size={vocab_size}")
         logger.debug(f"Mesh shape: {mesh_device.shape}, num_devices={self.num_devices}")
@@ -197,11 +231,15 @@ class TtLMHead(LightweightModule):
                 self.weights_dtype,
                 self.weight_cache_path,
                 device=self.mesh_device,
+                mode=self.mode,
             )
         else:
             logger.debug("Creating random sharded weight")
             self.weight = self._create_random_sharded_weight(
-                shape=(emb_dim, vocab_size), dims=(None, -1), name="lm_head_weight", dtype=self.weights_dtype
+                shape=(emb_dim, vocab_size),
+                dims=self._weight_shard_dims(self.mode),
+                name="lm_head_weight",
+                dtype=self.weights_dtype,
             )
 
     def _to_sharded_ttnn(self, torch_weight: torch.Tensor, dims: tuple, name: str, dtype: ttnn.DataType) -> ttnn.Tensor:
@@ -265,7 +303,9 @@ class TtLMHead(LightweightModule):
             torch_weight: [vocab_size, emb_dim] in HF format
 
         Returns:
-            Sharded ttnn tensor: each TP device gets [emb_dim, vocab_size / tp_factor]
+            Sharded ttnn tensor. Per-device shape depends on mode:
+            - column: [emb_dim, vocab_size / tp_factor]
+            - row:    [emb_dim / tp_factor, vocab_size]
         """
         tt_weight = self._convert_and_cache_weight(
             torch_weight,
@@ -275,6 +315,7 @@ class TtLMHead(LightweightModule):
             self.weights_dtype,
             self.weight_cache_path,
             device=self.mesh_device,
+            mode=self.mode,
         )
         logger.debug(f"Created sharded LM head weight: {tt_weight.shape}")
         return tt_weight
@@ -289,7 +330,9 @@ class TtLMHead(LightweightModule):
 
         Returns:
             tuple[ttnn.Tensor, tuple[int, int]]:
-                - Logits tensor [dispatch_group_size, TILE_SIZE, vocab_size/tp]
+                - Logits tensor. Per-device shape:
+                    column mode: [dispatch_group_size, TILE_SIZE, vocab_size/tp]
+                    row mode:    [dispatch_group_size, TILE_SIZE, vocab_size] (TP-replicated)
                 - (device_id, token_offset): which SP device holds the target token
                   and the index within the tile
         """
@@ -315,48 +358,74 @@ class TtLMHead(LightweightModule):
         x = ttnn.narrow(x, dim=-2, start=tile_start, length=ttnn.TILE_SIZE)
         logger.debug(f"[TtLMHead.forward] After narrow ({local_token_id=} {tile_start=}): {x.shape=} {token_offset=}")
 
-        # ========================================
-        # Step 1: All-gather x to get full emb_dim (replicated across TP axis)
-        # ========================================
-        # Input x is sharded: (dispatch_group_size/axis0, seq_len_per_chip, emb_dim/axis1)
-        # Both shared_expert and dispatch need full emb_dim, so all-gather first
-        # Only needed if there are multiple devices in TP axis (axis 1)
-        if self.mesh_device.shape[1] > 1:
-            x_full = ttnn.all_gather(
-                x,
-                dim=-1,  # Gather along emb_dim
-                cluster_axis=1,  # Gather across axis 1 (TP axis)
-                num_links=self.num_links,
-                topology=self.topology,
-            )
+        tp_size = self.mesh_device.shape[1]
+
+        if self.mode == "column":
+            # ========================================
+            # Column-parallel: all_gather emb -> matmul (output TP-sharded on vocab)
+            # ========================================
+            if tp_size > 1:
+                x_full = ttnn.all_gather(
+                    x,
+                    dim=-1,  # Gather along emb_dim
+                    cluster_axis=1,  # Gather across axis 1 (TP axis)
+                    num_links=self.num_links,
+                    topology=self.topology,
+                )
+            else:
+                x_full = x  # No TP sharding, x already has full emb_dim
+            logger.debug(f"[TtLMHead.forward] x_full (after all_gather) shape: {x_full.shape}")
+
+            output = ttnn.matmul(x_full, self.weight, compute_kernel_config=self.compute_kernel_config)
+            logger.debug(f"[TtLMHead.forward] output (after matmul) shape: {output.shape}")
+            # output: [1, 1, TILE, vocab/tp], SP-fractured, TP-sharded on vocab.
         else:
-            x_full = x  # No TP sharding, x already has full emb_dim
-        logger.debug(f"[TtLMHead.forward] x_full (after all_gather) shape: {x_full.shape}")
+            # ========================================
+            # Row-parallel: matmul (partial sum) -> all_reduce (TP-replicated full vocab)
+            # ========================================
+            partial = ttnn.matmul(x, self.weight, compute_kernel_config=self.compute_kernel_config)
+            logger.debug(f"[TtLMHead.forward] partial (after matmul) shape: {partial.shape}")
+            # partial: [1, 1, TILE, vocab] partial sum on each TP rank.
 
-        # ========================================
-        # Step 2: Local matmul with sharded weight
-        # ========================================
-        output = ttnn.matmul(x_full, self.weight, compute_kernel_config=self.compute_kernel_config)
-        logger.debug(f"[TtLMHead.forward] output (after matmul) shape: {output.shape}")
+            if tp_size > 1:
+                output = ttnn.experimental.all_reduce_async(
+                    partial,
+                    cluster_axis=1,
+                    mesh_device=self.mesh_device,
+                    num_links=self.num_links,
+                    math_op=ttnn.ReduceType.Sum,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    topology=self.topology,
+                )
+            else:
+                output = partial
+            logger.debug(f"[TtLMHead.forward] output (after all_reduce) shape: {output.shape}")
+            # output: [1, 1, TILE, vocab], SP-fractured, TP-replicated.
 
-        # output is logits [1,1, TILE_SIZE, vocab_size/tp]
-        # fractured over SP; TP-sharded on vocab dim
-        # the last logit/token is on device_id at token_offset within the tile
+        # The target token is on SP rank device_id at row token_offset within the tile.
         return output, (device_id, token_offset)
 
     def logit_to_host(self, tt_logit: ttnn.Tensor) -> torch.Tensor:
         ttnn.synchronize_device(self.mesh_device)  # ensure all computation is done before copying to host
-        tt_logit_host = ttnn.to_torch(
-            tt_logit,
-            mesh_composer=ttnn.create_mesh_composer(
+        if self.mode == "column":
+            # SP fracture on torch dim 0, TP concat on vocab (-1) to reassemble full vocab.
+            composer = ttnn.create_mesh_composer(
                 self.mesh_device,
                 config=ttnn.MeshComposerConfig(
-                    dims=(0, -1),  # SP fractured on dim 0, TP concat on vocab dim
+                    dims=(0, -1),
                     mesh_shape_override=ttnn.MeshShape(self.mesh_device.shape[0], self.mesh_device.shape[1]),
                 ),
-            ),
-        ).to(torch.bfloat16)
-        return tt_logit_host
+            )
+        else:
+            # Row mode: output is TP-replicated, so only take one TP slice per SP row.
+            composer = ttnn.create_mesh_composer(
+                self.mesh_device,
+                config=ttnn.MeshComposerConfig(
+                    dims=(0, 1),
+                    mesh_shape_override=ttnn.MeshShape(self.mesh_device.shape[0], 1),
+                ),
+            )
+        return ttnn.to_torch(tt_logit, mesh_composer=composer).to(torch.bfloat16)
 
     def select_first_token(self, logit_host: torch.Tensor, device_id: int, token_offset: int) -> torch.Tensor:
         return logit_host[device_id, 0, token_offset, :].unsqueeze(0).unsqueeze(0)
