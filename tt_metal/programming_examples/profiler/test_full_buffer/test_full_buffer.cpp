@@ -59,7 +59,7 @@ void RunFillUpAllBuffers(
 
     workload.add_program(device_range, std::move(program));
     if (fast_dispatch) {
-        for (int i = 0; i < DRAM_MARKER_COUNT / FULL_L1_MARKER_COUNT; i++) {
+        for (uint32_t i = 0; i < DRAM_MARKER_COUNT / FULL_L1_MARKER_COUNT; i++) {
             // Enqueue the same mesh workload multiple times to generate profiler traffic
             distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
         }
