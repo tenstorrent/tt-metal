@@ -91,6 +91,7 @@ target_link_libraries(
     PRIVATE
         tt_metal
         test_common_libs
+        TTNN::CPP
 )
 if(ENABLE_DISTRIBUTED)
     target_link_libraries(distributed_unit_tests PRIVATE OpenMPI::MPI)
