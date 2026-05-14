@@ -72,10 +72,15 @@ def merge_vision_tokens_ttnn(
     )
     input_embeds = ttnn.reshape(input_embeds, (-1, H))
     zeros = ttnn.zeros_like(input_embeds)
+    target_dtype = input_embeds.dtype
+    if image_embeds.dtype != target_dtype:
+        image_embeds = ttnn.typecast(image_embeds, target_dtype)
     input_embeds = ttnn.scatter(input_embeds, 0, mask_indices_tt, image_embeds)
     input_embeds = ttnn.reshape(input_embeds, (B, S, H))
     if deepstack_visual_embeds is not None:
         for i in range(len(deepstack_visual_embeds)):
+            if deepstack_visual_embeds[i].dtype != target_dtype:
+                deepstack_visual_embeds[i] = ttnn.typecast(deepstack_visual_embeds[i], target_dtype)
             deepstack_visual_embeds[i] = ttnn.scatter(zeros, 0, mask_indices_tt, deepstack_visual_embeds[i])
             deepstack_visual_embeds[i] = ttnn.reshape(deepstack_visual_embeds[i], (B, S, H))
     return input_embeds, deepstack_visual_embeds
@@ -118,6 +123,11 @@ def merge_vision_tokens_single_user_ttnn(
         mask_indices, device=model_args.mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
     )
 
+    # Ensure dtype matches input_embeds before scatter to avoid silent precision loss
+    target_dtype = input_embeds.dtype
+    if image_embeds.dtype != target_dtype:
+        image_embeds = ttnn.typecast(image_embeds, target_dtype)
+
     # Scatter image embeddings into text embeddings at image token positions
     zeros = ttnn.zeros_like(input_embeds)
     input_embeds = ttnn.scatter(input_embeds, 0, mask_indices_tt, image_embeds)
@@ -125,6 +135,8 @@ def merge_vision_tokens_single_user_ttnn(
     # Process deepstack visual embeddings if provided
     if deepstack_visual_embeds is not None:
         for i in range(len(deepstack_visual_embeds)):
+            if deepstack_visual_embeds[i].dtype != target_dtype:
+                deepstack_visual_embeds[i] = ttnn.typecast(deepstack_visual_embeds[i], target_dtype)
             deepstack_visual_embeds[i] = ttnn.scatter(zeros, 0, mask_indices_tt, deepstack_visual_embeds[i])
 
     return input_embeds, deepstack_visual_embeds

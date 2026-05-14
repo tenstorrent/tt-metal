@@ -274,7 +274,7 @@ def test_demo(
         pytest.skip("TG only supports batch 1 and 32")
 
     logger.info(f"mesh_device: {mesh_device}")
-    use_tt_vision = True
+    use_tt_vision = os.environ.get("USE_TT_VISION", "1") != "0"
     enable_trace = True  # Use tracing for better perf
     print_to_file = False  # Enable this flag to print the output of all users to a file
 
@@ -384,7 +384,29 @@ def test_demo(
         vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
         visual_model = DropInVisionTransformer(reference_model.visual, vision_model_args, debug=False)  # show PCC
     else:
-        visual_model = reference_model.visual
+        # CPU vision wrapper: runs reference model on CPU and returns TTNN tensors
+        class _CPUVisionWrapper:
+            def __init__(self, hf_visual, mesh_device):
+                self.hf_visual = hf_visual
+                self.mesh_device = mesh_device
+
+            def forward_single_user(self, pixel_values, grid_thw):
+                if grid_thw.dim() == 1:
+                    grid_thw = grid_thw.unsqueeze(0)
+                with torch.no_grad():
+                    image_embeds_pt, deepstack_pt = self.hf_visual(pixel_values, grid_thw)
+                to_tt = lambda t: ttnn.from_torch(
+                    t.float().to(torch.bfloat16),
+                    device=self.mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device)
+                    if self.mesh_device.get_num_devices() > 1
+                    else None,
+                )
+                return to_tt(image_embeds_pt), [to_tt(d) for d in deepstack_pt]
+
+        visual_model = _CPUVisionWrapper(reference_model.visual, mesh_device)
     processor = AutoProcessor.from_pretrained(ref_model_name)
     num_tokens_generated_decode = []
     num_image_tokens = []
@@ -575,7 +597,8 @@ def test_demo(
 
         # Start decoding
         iteration = 0
-        argmax_on_device = sampling_params["temperature"] == 0
+        supports_on_device_sampling = getattr(generator.model, "_supports_on_device_sampling", False)
+        argmax_on_device = sampling_params["temperature"] == 0 and supports_on_device_sampling
         if argmax_on_device:
             device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
         else:
@@ -919,6 +942,8 @@ def load_inputs(input_file, batch_size):
 def load_expected_text(model_name):
     if "Qwen3-VL-32B" in model_name:
         input_file = "models/demos/qwen3_vl/demo/sample_prompts/expected_text_32B.txt"
+    elif "Qwen3-VL-2B" in model_name:
+        input_file = "models/demos/qwen3_vl/demo/sample_prompts/expected_text_2B.txt"
     else:
         raise ValueError(f"Model {model_name} not supported")
 

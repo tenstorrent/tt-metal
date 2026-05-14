@@ -1,0 +1,1 @@
+PLACEHOLDER: Run `MESH_DEVICE=N150 HF_MODEL=Qwen/Qwen3-VL-2B-Instruct pytest models/demos/qwen3_vl/demo/demo.py -k 'ci-only-bert-score'` with the HuggingFace reference model to generate the expected text and replace this file.

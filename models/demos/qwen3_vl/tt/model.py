@@ -303,13 +303,20 @@ class DropInVisionTransformer(torch.nn.Module):
             # --- Postprocessing ---
             # 1. Extract the relevant output part and adjust shape (matching test logic)
             out_hidden_size = self.model_args.hf_config.vision_config.out_hidden_size
-            # Output shape from TT is [1, B=1, S, H_out_padded], slice H and squeeze B, batch dims
-            final_output = ttnn.reshape(tt_out[:, 0:1, :, :out_hidden_size], (-1, out_hidden_size))
+            # Use named slice reference + typecast to prevent DRAM buffer aliasing:
+            # reshape() is a zero-copy view; if the unnamed slice temp is GC'd immediately,
+            # the allocator reuses the buffer while our view still points to it.
+            _sliced_out = tt_out[:, 0:1, :, :out_hidden_size]
+            final_output = ttnn.typecast(ttnn.reshape(_sliced_out, (-1, out_hidden_size)), ttnn.bfloat16)
+            ttnn.deallocate(_sliced_out)
             ttnn.deallocate(tt_out)
-            deepstack_visual_embeds_output = [
-                ttnn.reshape(deepstack_visual_embeds[i][:, 0:1, :, :out_hidden_size], (-1, out_hidden_size))
-                for i in range(len(deepstack_visual_embeds))
-            ]
+            deepstack_visual_embeds_output = []
+            for i in range(len(deepstack_visual_embeds)):
+                _sliced_ds = deepstack_visual_embeds[i][:, 0:1, :, :out_hidden_size]
+                deepstack_visual_embeds_output.append(
+                    ttnn.typecast(ttnn.reshape(_sliced_ds, (-1, out_hidden_size)), ttnn.bfloat16)
+                )
+                ttnn.deallocate(_sliced_ds)
             [ttnn.deallocate(deepstack_visual_embeds[i]) for i in range(len(deepstack_visual_embeds))]
 
             if self.debug:
@@ -320,13 +327,17 @@ class DropInVisionTransformer(torch.nn.Module):
 
             # 2. Convert the output to the desired tensor sharding format
             # TODO: Modify this once we implement TP+DP to use just convert to desired output sharding
+            # On single device, mesh_partition returns the input tensor itself (same buffer).
+            # Deallocating the original after that would invalidate the returned tensor.
             final_output_sharded = ttnn.mesh_partition(final_output, 1)
-            ttnn.deallocate(final_output)
+            if self.model_args.num_devices > 1:
+                ttnn.deallocate(final_output)
             deepstack_visual_embeds_sharded = [
                 ttnn.mesh_partition(deepstack_visual_embeds_output[i], 1)
                 for i in range(len(deepstack_visual_embeds_output))
             ]
-            [ttnn.deallocate(deepstack_visual_embeds_output[i]) for i in range(len(deepstack_visual_embeds_output))]
+            if self.model_args.num_devices > 1:
+                [ttnn.deallocate(deepstack_visual_embeds_output[i]) for i in range(len(deepstack_visual_embeds_output))]
 
             # 3. Aggregate in batched users list
             final_outputs.append(final_output_sharded)
@@ -427,13 +438,21 @@ class DropInVisionTransformer(torch.nn.Module):
 
         # Postprocessing - extract relevant output and adjust shape
         out_hidden_size = self.model_args.hf_config.vision_config.out_hidden_size
-        final_output = ttnn.reshape(tt_out[:, 0:1, :, :out_hidden_size], (-1, out_hidden_size))
+        # Keep named reference to slice to prevent GC from freeing the buffer before reshape is done.
+        # reshape() creates a view that shares the buffer; if the slice temporary is GC'd first,
+        # the DRAM allocator may reuse the buffer while we still hold the view reference.
+        _sliced_out = tt_out[:, 0:1, :, :out_hidden_size]
+        final_output = ttnn.typecast(ttnn.reshape(_sliced_out, (-1, out_hidden_size)), ttnn.bfloat16)
+        ttnn.deallocate(_sliced_out)
         ttnn.deallocate(tt_out)
 
-        deepstack_visual_embeds_output = [
-            ttnn.reshape(deepstack_visual_embeds[i][:, 0:1, :, :out_hidden_size], (-1, out_hidden_size))
-            for i in range(len(deepstack_visual_embeds))
-        ]
+        deepstack_visual_embeds_output = []
+        for i in range(len(deepstack_visual_embeds)):
+            _sliced_ds = deepstack_visual_embeds[i][:, 0:1, :, :out_hidden_size]
+            deepstack_visual_embeds_output.append(
+                ttnn.typecast(ttnn.reshape(_sliced_ds, (-1, out_hidden_size)), ttnn.bfloat16)
+            )
+            ttnn.deallocate(_sliced_ds)
         [ttnn.deallocate(deepstack_visual_embeds[i]) for i in range(len(deepstack_visual_embeds))]
 
         if self.debug:
@@ -443,14 +462,18 @@ class DropInVisionTransformer(torch.nn.Module):
             logger.info(f"DropInVisionTransformer: PCC to reference model: {pcc}")
 
         # Convert the output to the desired tensor sharding format
+        # On single device, mesh_partition returns the input tensor itself (same buffer).
+        # Deallocating the original after that would invalidate the returned tensor.
         final_output_sharded = ttnn.mesh_partition(final_output, 1)
-        ttnn.deallocate(final_output)
+        if self.model_args.num_devices > 1:
+            ttnn.deallocate(final_output)
 
         deepstack_visual_embeds_sharded = [
             ttnn.mesh_partition(deepstack_visual_embeds_output[i], 1)
             for i in range(len(deepstack_visual_embeds_output))
         ]
-        [ttnn.deallocate(deepstack_visual_embeds_output[i]) for i in range(len(deepstack_visual_embeds_output))]
+        if self.model_args.num_devices > 1:
+            [ttnn.deallocate(deepstack_visual_embeds_output[i]) for i in range(len(deepstack_visual_embeds_output))]
 
         return final_output_sharded, deepstack_visual_embeds_sharded
 

@@ -4,11 +4,11 @@
         "content": [
             {
                 "type": "image",
-                "image": "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg"
+                "image": "https://cdn.arstechnica.net/wp-content/uploads/2021/02/Screenshot-1079.png"
             },
             {
                 "type": "image",
-                "image": "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg"
+                "image": "https://cdn.arstechnica.net/wp-content/uploads/2021/02/Screenshot-1079.png"
             },
             {"type": "text", "text": "Identify the differences between these images."}
         ]
