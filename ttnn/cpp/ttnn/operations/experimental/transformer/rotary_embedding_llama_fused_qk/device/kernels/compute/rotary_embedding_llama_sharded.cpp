@@ -97,7 +97,7 @@ void kernel_main() {
         // Migrated: streaming BinaryFpu + PackTile. All CBs involved are
         // constexpr; lifecycle is caller-managed (cb_wait_front above,
         // pop/push below) so the chain runs NoWaitNoPop / NoReserveNoPush.
-        compute_kernel_lib::eltwise_chain(
+        compute_kernel_lib::eltwise_chain<compute_kernel_lib::AutoBlock::On>(
             Wt,
             compute_kernel_lib::BinaryFpu<
                 rotated_in_interm_cb,
@@ -126,7 +126,7 @@ void kernel_main() {
         // is caller-managed (cb_wait/reserve above, pop/push below) → NoWaitNoPop /
         // NoReserveNoPush.
         if (is_q) {
-            compute_kernel_lib::eltwise_chain(
+            compute_kernel_lib::eltwise_chain<compute_kernel_lib::AutoBlock::On>(
                 Wt,
                 compute_kernel_lib::BinaryFpu<
                     q_in_cb,
@@ -146,7 +146,7 @@ void kernel_main() {
                     compute_kernel_lib::PackTilePolicy::NoReserveNoPush,
                     compute_kernel_lib::PackTileIndexMode::BlockIter>{});
         } else {
-            compute_kernel_lib::eltwise_chain(
+            compute_kernel_lib::eltwise_chain<compute_kernel_lib::AutoBlock::On>(
                 Wt,
                 compute_kernel_lib::BinaryFpu<
                     k_in_cb,
@@ -177,7 +177,7 @@ void kernel_main() {
         // `is_q`, so the call branches per arm. Inputs were waited above and popped below;
         // the pack CB is reserved earlier in the ht-loop and pushed below.
         if (is_q) {
-            compute_kernel_lib::eltwise_chain(
+            compute_kernel_lib::eltwise_chain<compute_kernel_lib::AutoBlock::On>(
                 Wt,
                 compute_kernel_lib::BinaryFpu<
                     cos_interm_cb,
@@ -197,7 +197,7 @@ void kernel_main() {
                     compute_kernel_lib::PackTilePolicy::NoReserveNoPush,
                     compute_kernel_lib::PackTileIndexMode::BlockIter>{});
         } else {
-            compute_kernel_lib::eltwise_chain(
+            compute_kernel_lib::eltwise_chain<compute_kernel_lib::AutoBlock::On>(
                 Wt,
                 compute_kernel_lib::BinaryFpu<
                     cos_interm_cb,
