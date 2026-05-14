@@ -53,14 +53,13 @@ template <
     bool unpack_to_dest = false>
 inline void llk_unpack_A_init(
     const std::uint32_t transpose_of_faces = 0,
-    [[maybe_unused]] const std::uint32_t within_face_16x16_transpose = 0,
+    const std::uint32_t within_face_16x16_transpose = 0,
     const std::uint32_t operand = 0) {
+    const std::uint32_t operand_id = get_operand_id(operand);
     if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) {
-        const std::uint32_t operand_id = get_operand_id(operand);
-
         static_assert(unpack_to_dest == false, "unpack_to_dest is not yet supported on Quasar");
         static_assert(acc_to_dest == false, "acc_to_dest is not yet supported on Quasar");
-        static_assert(BType == BroadcastType::NONE, "Only BroadcastType::NONE is supported on Quasar right now");
+        static_assert(BType == BroadcastType::NONE, "On Quasar, only BroadcastType::NONE is supported for dest reuse");
 
         // For Quasar, the unp_sel field is ignored if binary_reuse_dest != EltwiseBinaryReuseDestType::NONE
         _llk_unpack_unary_operand_init_<
@@ -69,11 +68,14 @@ inline void llk_unpack_A_init(
             false /* IS_32b_DEST_EN */,
             binary_reuse_dest>(operand_id);
     } else {
-        constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
         if constexpr (BType == BroadcastType::NONE) {
-            const std::uint32_t operand_id = get_operand_id(operand);
+            constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_A;
+            LLK_ASSERT(
+                transpose_of_faces == within_face_16x16_transpose,
+                "Quasar unpack unary supports only full transpose (transpose_of_faces and within_face_16x16_transpose "
+                "must match)");
             const std::uint32_t num_faces = get_operand_num_faces(operand_id);
-            if (transpose_of_faces != 0) {
+            if (transpose_of_faces && within_face_16x16_transpose) {
                 _llk_unpack_unary_operand_init_<unp_sel, true, DST_ACCUM_MODE, binary_reuse_dest>(
                     operand_id, 1, num_faces);
             } else {
@@ -81,8 +83,8 @@ inline void llk_unpack_A_init(
                     operand_id, 1, num_faces);
             }
         } else {
+            constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
             constexpr bool is_fp32_dest_acc_en = unpack_to_dest ? false : DST_ACCUM_MODE;
-            const std::uint32_t operand_id = get_operand_id(operand);
             _llk_unpack_unary_broadcast_operands_init_<unp_sel, BType, unpack_to_dest, is_fp32_dest_acc_en>(
                 operand_id, 1);
         }
@@ -155,4 +157,4 @@ inline void llk_unpack_A_block(
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
-inline void llk_unpack_A_uninit(const std::uint32_t /*operand*/) {}
+inline void llk_unpack_A_uninit(const std::uint32_t operand) {}

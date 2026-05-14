@@ -27,7 +27,7 @@ inline TileShape llk_math_eltwise_unary_broadcast_tile_shape(const std::uint32_t
  * @brief Initialize eltwise unary datacopy operations
  *
  * @tparam type sets which src register to copy from, values = <A2D, B2D>
- * @tparam is_fp32_dest_acc_en set if math destination register is set to Float32/Int32 mode
+ * @tparam EN_32BIT_DEST set if math destination register is set to Float32/Int32 mode
  * @tparam src_b_bcast_type Broadcast mode; non-NONE uses unary-broadcast math init when type is B2D
  * @tparam is_int_fpu_en Same template slot as Blackhole; unused on Quasar (Quasar _llk init has no equivalent).
  * @tparam tilize Same template slot as Blackhole; unused on Quasar.
@@ -35,7 +35,7 @@ inline TileShape llk_math_eltwise_unary_broadcast_tile_shape(const std::uint32_t
  */
 template <
     DataCopyType type,
-    bool is_fp32_dest_acc_en,
+    bool EN_32BIT_DEST,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     [[maybe_unused]] bool is_int_fpu_en = false,
     [[maybe_unused]] bool tilize = false>
@@ -46,12 +46,12 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand = 0
     const std::uint32_t num_rows = num_faces * face_r_dim;
 
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
-        _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en>(
+        _llk_math_eltwise_unary_datacopy_init_<type, EN_32BIT_DEST>(
             num_rows /*num_rows_per_matrix*/, 1 /*num_matrices*/);
     } else {
         static_assert(type == DataCopyType::B2D);
         const TileShape tile_shape = llk_math_eltwise_unary_broadcast_tile_shape(operand);
-        _llk_math_eltwise_unary_broadcast_init_<src_b_bcast_type, false, is_fp32_dest_acc_en>(tile_shape);
+        _llk_math_eltwise_unary_broadcast_init_<src_b_bcast_type, false, EN_32BIT_DEST>(tile_shape);
     }
 }
 
@@ -59,7 +59,7 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand = 0
  * @brief Performs an eltwise unary datacopy for a single tile.
  *
  * @tparam type sets which src register to copy from, values = <A2D, B2D>
- * @tparam is_fp32_dest_acc_en set if math destination register is set to Float32/Int32 mode
+ * @tparam EN_32BIT_DEST set if math destination register is set to Float32/Int32 mode
  * @tparam src_b_bcast_type Broadcast mode; non-NONE with unpack_to_dest false uses unary-broadcast math
  * @tparam unpack_to_dest when true, unpack-to-dest path; plain datacopy otherwise
  * @param dst_index Tile index into the destination register.
@@ -68,7 +68,7 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand = 0
 
 template <
     DataCopyType type = DataCopyType::A2D,
-    bool is_fp32_dest_acc_en = false,
+    bool EN_32BIT_DEST = false,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool unpack_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy(const std::uint32_t dst_index, const std::uint32_t operand = 0) {
@@ -79,7 +79,7 @@ inline void llk_math_eltwise_unary_datacopy(const std::uint32_t dst_index, const
     if constexpr (src_b_bcast_type != BroadcastType::NONE && !unpack_to_dest) {
         static_assert(type == DataCopyType::B2D, "Unary broadcast math path requires DataCopyType::B2D");
         const TileShape tile_shape = llk_math_eltwise_unary_broadcast_tile_shape(operand);
-        _llk_math_eltwise_unary_broadcast_<src_b_bcast_type, false, is_fp32_dest_acc_en>(dst_index, tile_shape);
+        _llk_math_eltwise_unary_broadcast_<src_b_bcast_type, false, EN_32BIT_DEST>(dst_index, tile_shape);
     } else {
         _llk_math_eltwise_unary_datacopy_(num_faces * face_r_dim, dst_index);
     }
@@ -89,7 +89,7 @@ inline void llk_math_eltwise_unary_datacopy(const std::uint32_t dst_index, const
  * @brief Performs an eltwise unary datacopy for a block of tiles.
  *
  * @tparam type sets which src register to copy from, values = <A2D, B2D>
- * @tparam is_fp32_dest_acc_en set if math destination register is set to Float32/Int32 mode
+ * @tparam EN_32BIT_DEST set if math destination register is set to Float32/Int32 mode
  * @tparam src_b_bcast_type Broadcast mode; non-NONE with unpack_to_dest false uses unary-broadcast math per tile
  * @tparam unpack_to_dest when true, unpack-to-dest path; plain datacopy otherwise
  * @param start_dst_index Starting tile index in the destination register.
@@ -98,14 +98,13 @@ inline void llk_math_eltwise_unary_datacopy(const std::uint32_t dst_index, const
  */
 template <
     DataCopyType type = DataCopyType::A2D,
-    bool is_fp32_dest_acc_en = false,
+    bool EN_32BIT_DEST = false,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool unpack_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy_block(
     const std::uint32_t start_dst_index, const std::uint32_t ntiles, const std::uint32_t operand = 0) {
     for (std::uint32_t dst_index = start_dst_index; dst_index < start_dst_index + ntiles; dst_index++) {
-        llk_math_eltwise_unary_datacopy<type, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest>(
-            dst_index, operand);
+        llk_math_eltwise_unary_datacopy<type, EN_32BIT_DEST, src_b_bcast_type, unpack_to_dest>(dst_index, operand);
     }
 }
 

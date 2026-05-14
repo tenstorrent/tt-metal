@@ -59,9 +59,12 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
 #else
     UNPACK((llk_unpack_hw_configure(icb)));
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
-    UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(
-        false, false /*transpose within 16x16 face*/, icb)));
-    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::B2D, false, bcast_type>(icb)));
+    UNPACK((llk_unpack_A_init<
+            bcast_type,
+            false /*acc_to_dest*/,
+            EltwiseBinaryReuseDestType::NONE,
+            false /*unpack_to_dest*/>(false /*transpose_of_faces*/, false /*within_face_16x16_transpose*/, icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::B2D, false /*EN_32BIT_DEST*/, bcast_type>(icb)));
 #endif
     MATH((llk_math_pack_sync_init()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
