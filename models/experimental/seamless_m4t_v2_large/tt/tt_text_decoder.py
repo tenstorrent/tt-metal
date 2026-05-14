@@ -255,7 +255,8 @@ class TTSeamlessM4Tv2Decoder:
             compute_kernel_config=self._linear_ln_compute_cfg,
         )
         ttnn.deallocate(x_sharded)
-        normed = ttnn.to_memory_config(normed_sharded, ttnn.DRAM_MEMORY_CONFIG)
+        # L1 interleaved activations for the following linears (vs DRAM interleaved ``in0`` on Matmul).
+        normed = ttnn.sharded_to_interleaved(normed_sharded, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
         ttnn.deallocate(normed_sharded)
         return normed
 
