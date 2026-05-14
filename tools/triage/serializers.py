@@ -178,6 +178,18 @@ class RichSerializer(OutputSerializer):
         pass
 
 
+def _strip_rich_markup(s: str) -> str:
+    """Strip Rich markup tags (e.g. `[warning]...[/]`) from a string.
+
+    Log helpers in utils.py wrap messages in Rich tags for console rendering,
+    and some scripts embed inline markup in their messages. The Rich console
+    renders these away; a plain-text file must do the equivalent stripping.
+    """
+    from rich.text import Text
+
+    return Text.from_markup(s).plain
+
+
 class CsvSerializer(OutputSerializer):
     """
     Writes a report with one section per script.
@@ -215,20 +227,20 @@ class CsvSerializer(OutputSerializer):
             if len(failures) > 0 or script_failed:
                 f.write("  fail\n")
                 for failure in failures:
-                    f.write(f"    {failure}\n")
+                    f.write(f"    {_strip_rich_markup(failure)}\n")
                 if script_failed and failure_message:
-                    f.write(f"    {failure_message}\n")
+                    f.write(f"    {_strip_rich_markup(failure_message)}\n")
             else:
                 f.write("  pass\n")
                 for warning in warnings:
-                    f.write(f"    {warning}\n")
+                    f.write(f"    {_strip_rich_markup(warning)}\n")
             f.flush()
             return
 
         for failure in failures:
-            f.write(f"  {failure}\n")
+            f.write(f"  {_strip_rich_markup(failure)}\n")
         for warning in warnings:
-            f.write(f"  {warning}\n")
+            f.write(f"  {_strip_rich_markup(warning)}\n")
 
         if isinstance(result, list) and len(result) == 0:
             f.write("  No results found.\n")
