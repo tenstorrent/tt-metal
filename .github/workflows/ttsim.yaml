@@ -305,7 +305,7 @@ jobs:
 
   ttsim-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.job-timeout }}
     name: "TTSim C++ tests - ${{ matrix.arch }}"
     strategy:
@@ -315,15 +315,12 @@ jobs:
           - arch: wormhole_b0
             build_suffix: release_wh
             soc_desc: wormhole_b0_80_arch.yaml
-            runner: ubuntu-latest
           - arch: blackhole
             build_suffix: release_bh
             soc_desc: blackhole_140_arch.yaml
-            runner: ubuntu-latest
           - arch: quasar
             build_suffix: release_qsr
             soc_desc: quasar_32_arch.yaml
-            runner: tt-ubuntu-2204-xlarge-stable
     container:
       image: ${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
       volumes:
