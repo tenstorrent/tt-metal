@@ -68,6 +68,7 @@ class MoEModelConfig:
     activation_types: tuple = (MoEActivationFunction.SILU,)
     num_layers: int = 5
     num_iterations: int = 3
+    output_height_shard_dim: int = 4
     marks: tuple = ()
 
 
@@ -112,7 +113,7 @@ _MODELS_1x16 = [
     MoEModelConfig("mistral_large_3",     N=4096, hidden_size=7168, selected_experts_k=4, num_layers=3, num_iterations=2,
                    marks=(pytest.mark.xfail(reason="L1 overflow: N=4096 A2A buffer (12*12*2048=288KB) exceeds Wormhole L1 budget by ~21KB"),)),
     MoEModelConfig("ling_1t",             N=2048, hidden_size=8192, selected_experts_k=8, num_layers=3, num_iterations=2,
-                   marks=(pytest.mark.xfail(reason="selective_reduce_combine mux kernel L1 overlap: mux end=0x5ab70 > tensor start=0x43f40; needs combine L1 layout fix"),)),
+                   output_height_shard_dim=2),
 ]
 
 _MODELS_1x8 = [
@@ -149,7 +150,7 @@ def _run_model_test(
         num_iterations=num_iterations,
         N=model_cfg.N,
         hidden_size=model_cfg.hidden_size,
-        output_height_shard_dim=4,
+        output_height_shard_dim=model_cfg.output_height_shard_dim,
         output_width_shard_dim=auto_output_width_shard_dim(model_cfg.hidden_size),
         dtype=ttnn.bfloat16,
         enable_trace=enable_trace,
