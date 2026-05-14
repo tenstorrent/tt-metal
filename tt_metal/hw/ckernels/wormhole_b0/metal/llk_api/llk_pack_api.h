@@ -90,7 +90,8 @@ template <
     bool untilize = false,
     bool zero_output = false,
     bool tilize = false /*unused*/,
-    bool skip_addrmod_config = false>
+    bool skip_addrmod_config = false,
+    bool skip_packer_strides = false>
 inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t num_tiles = 1) {
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
@@ -103,7 +104,7 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
             pack_src_format[output_id], pack_dst_format[output_id], face_r_dim));
     }
 
-    _llk_pack_init_<untilize, zero_output, tilize, skip_addrmod_config>(
+    _llk_pack_init_<untilize, zero_output, tilize, skip_addrmod_config, skip_packer_strides>(
         pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
 }
 
