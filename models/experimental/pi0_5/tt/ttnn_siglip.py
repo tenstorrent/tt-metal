@@ -28,7 +28,7 @@ import tt_lib.fallback_ops as fallback_ops  # For position embedding interpolati
 
 from models.experimental.pi0_5.common.configs import SigLIPConfig
 from models.experimental.pi0_5.tt.ttnn_common import sdpa_prefill_chunk_sizes, tensor_1d_to_2d_ttnn
-from models.experimental.pi0_5.tt.ttnn_gemma import build_matmul_pcfg
+from models.experimental.pi0_5.tt.ttnn_gemma import build_matmul_pcfg, build_sharded_norm_pcfg, _RMS_NORM_COMPUTE_CONFIG
 
 
 # ============================================================================
@@ -717,6 +717,57 @@ class SigLIPBlockTTNN:
         self.attention = SigLIPAttentionTTNN(config, weights, device)
         self.mlp = SigLIPMLPTTNN(config, weights, device)
 
+        # Sharded LayerNorm config (ViT-BH §5.3). SigLIP hidden=1152 → 36 tiles.
+        # M is built lazily on first call since it depends on (batch, seq_len).
+        self._ln_sharded_pcfg = None
+        self._ln_sharded_memcfg = None
+        self._ln_sharded_m_padded = 0
+
+    def _get_sharded_ln(self, b: int, m_padded: int):
+        key = (b, m_padded)
+        if self._ln_sharded_pcfg is None or self._ln_sharded_m_padded != key:
+            total_m_tiles = (b * m_padded) // 32
+            hidden_tiles = self.config.hidden_size // 32  # 1152/32 = 36
+            cfg = build_sharded_norm_pcfg(
+                total_m_tiles, hidden_tiles, max_grid_x=12, max_grid_y=min(8, max(1, total_m_tiles))
+            )
+            if cfg is not None:
+                pc, memcfg_factory, _grid = cfg
+                self._ln_sharded_pcfg = pc
+                self._ln_sharded_memcfg = memcfg_factory(b, m_padded, m_padded, self.config.hidden_size)
+                self._ln_sharded_m_padded = key
+            else:
+                self._ln_sharded_pcfg = None
+                self._ln_sharded_memcfg = None
+        return self._ln_sharded_pcfg, self._ln_sharded_memcfg
+
+    def _sharded_layer_norm(self, x, weight, bias):
+        b = x.shape[0]
+        m_padded = x.shape[1]
+        sh_pc, sh_mc = self._get_sharded_ln(b, m_padded)
+        if sh_pc is None:
+            return ttnn.layer_norm(
+                x,
+                weight=weight,
+                bias=bias,
+                epsilon=self.config.layer_norm_eps,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+        x_sh = ttnn.to_memory_config(x, sh_mc)
+        out = ttnn.layer_norm(
+            x_sh,
+            weight=weight,
+            bias=bias,
+            epsilon=self.config.layer_norm_eps,
+            program_config=sh_pc,
+            memory_config=sh_mc,
+            compute_kernel_config=_RMS_NORM_COMPUTE_CONFIG,
+        )
+        if x_sh is not x:
+            ttnn.deallocate(x_sh)
+        out = ttnn.sharded_to_interleaved(out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        return out
+
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         """
         Forward pass using native TTNN operations.
@@ -727,14 +778,8 @@ class SigLIPBlockTTNN:
         Returns:
             TTNN tensor (batch_size, seq_len, hidden_size)
         """
-        # Pre-attention LayerNorm
-        normed = ttnn.layer_norm(
-            hidden_states,
-            weight=self.ln1_weight,
-            bias=self.ln1_bias,
-            epsilon=self.config.layer_norm_eps,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        # Pre-attention LayerNorm (sharded if available)
+        normed = self._sharded_layer_norm(hidden_states, self.ln1_weight, self.ln1_bias)
 
         # Native TTNN attention with padded head dim workaround
         attn_output = self.attention.forward(normed)
@@ -744,14 +789,8 @@ class SigLIPBlockTTNN:
         hidden_states = ttnn.add(hidden_states, attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_output)
 
-        # Pre-MLP LayerNorm
-        normed = ttnn.layer_norm(
-            hidden_states,
-            weight=self.ln2_weight,
-            bias=self.ln2_bias,
-            epsilon=self.config.layer_norm_eps,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        # Pre-MLP LayerNorm (sharded if available)
+        normed = self._sharded_layer_norm(hidden_states, self.ln2_weight, self.ln2_bias)
 
         # MLP with residual - use L1 for intermediate computation
         mlp_output = self.mlp.forward(normed)

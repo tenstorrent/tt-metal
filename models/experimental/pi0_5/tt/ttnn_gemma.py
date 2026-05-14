@@ -42,6 +42,8 @@ def rms_norm_ttnn(
     x: ttnn.Tensor,
     weight: ttnn.Tensor,
     eps: float = 1e-6,
+    sharded_pcfg=None,
+    sharded_memcfg=None,
 ) -> ttnn.Tensor:
     """
     OPTIMIZED: RMSNorm using ttnn.rms_norm fused operation.
@@ -53,10 +55,28 @@ def rms_norm_ttnn(
         x: TTNN tensor (batch_size, seq_len, hidden_dim)
         weight: TTNN weight tensor with +1 offset already applied (1, hidden_dim)
         eps: Epsilon for numerical stability
+        sharded_pcfg / sharded_memcfg: optional sharded RMSNorm path (ViT-BH
+            pattern, see _modulated_rms_norm). If both provided, input is moved
+            into the block-sharded layout and rms_norm runs on the configured
+            grid. Returns a block-sharded tensor — caller must convert back to
+            interleaved if downstream consumer needs it.
 
     Returns:
         Normalized TTNN tensor (bfloat16)
     """
+    if sharded_pcfg is not None and sharded_memcfg is not None:
+        x_sh = ttnn.to_memory_config(x, sharded_memcfg)
+        out = ttnn.rms_norm(
+            x_sh,
+            weight=weight,
+            epsilon=eps,
+            program_config=sharded_pcfg,
+            memory_config=sharded_memcfg,
+            compute_kernel_config=_RMS_NORM_COMPUTE_CONFIG,
+        )
+        if x_sh is not x:
+            ttnn.deallocate(x_sh)
+        return out
     return ttnn.rms_norm(
         x,
         weight=weight,
@@ -857,6 +877,27 @@ class GemmaBlockTTNN:
         self.attention = GemmaAttentionTTNN(config, weights, layer_idx, device, cos_meta, sin_meta)
         self.mlp = GemmaMLPTTNN(config, weights, device)
 
+        # Lazy sharded RMSNorm config (ViT-BH pattern). VLM hidden=2048
+        # (hidden_tiles=64), M_padded is set by caller (prefix tile-aligned).
+        self._rms_norm_sharded_pcfg = None
+        self._rms_norm_sharded_memcfg = None
+        self._rms_norm_sharded_m_padded = 0
+
+    def _get_sharded_norm(self, m_padded: int):
+        if self._rms_norm_sharded_pcfg is None or self._rms_norm_sharded_m_padded != m_padded:
+            m_tiles = m_padded // 32
+            hidden_tiles = self.config.width // 32
+            norm_cfg = build_sharded_norm_pcfg(m_tiles, hidden_tiles, max_grid_x=8, max_grid_y=min(8, max(1, m_tiles)))
+            if norm_cfg is not None:
+                pc, memcfg_factory, _grid = norm_cfg
+                self._rms_norm_sharded_pcfg = pc
+                self._rms_norm_sharded_memcfg = memcfg_factory(1, m_padded, m_padded, self.config.width)
+                self._rms_norm_sharded_m_padded = m_padded
+            else:
+                self._rms_norm_sharded_pcfg = None
+                self._rms_norm_sharded_memcfg = None
+        return self._rms_norm_sharded_pcfg, self._rms_norm_sharded_memcfg
+
     def forward(
         self,
         hidden_states: ttnn.Tensor,
@@ -866,6 +907,7 @@ class GemmaBlockTTNN:
         position_ids: Optional[ttnn.Tensor] = None,
         past_key_value: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
         use_cache: bool = False,
+        keep_padded: bool = False,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         """
         Forward pass using TTNN operations.
@@ -881,12 +923,19 @@ class GemmaBlockTTNN:
         Returns:
             Tuple of (output, optional_cache)
         """
-        # Pre-attention norm
+        m_padded = hidden_states.shape[1] if len(hidden_states.shape) == 3 else hidden_states.shape[2]
+        sh_pc, sh_mc = self._get_sharded_norm(m_padded)
+
+        # Pre-attention norm (sharded if available)
         normed = rms_norm_ttnn(
             hidden_states,
             self.input_layernorm_weight,
             self.config.rms_norm_eps,
+            sharded_pcfg=sh_pc,
+            sharded_memcfg=sh_mc,
         )
+        if sh_pc is not None:
+            normed = ttnn.sharded_to_interleaved(normed, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Attention with residual
         attn_output, new_cache = self.attention.forward(
@@ -897,16 +946,21 @@ class GemmaBlockTTNN:
             position_ids,
             past_key_value,
             use_cache,
+            keep_padded=keep_padded,
         )
         hidden_states = ttnn.add(hidden_states, attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_output)
 
-        # Pre-MLP norm
+        # Pre-MLP norm (sharded if available)
         normed = rms_norm_ttnn(
             hidden_states,
             self.post_attention_layernorm_weight,
             self.config.rms_norm_eps,
+            sharded_pcfg=sh_pc,
+            sharded_memcfg=sh_mc,
         )
+        if sh_pc is not None:
+            normed = ttnn.sharded_to_interleaved(normed, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # MLP with residual
         mlp_output = self.mlp.forward(normed)
@@ -933,18 +987,135 @@ import ttnn
 from models.experimental.pi0_5.common.configs import GemmaConfig
 
 
+_sharded_norm_cache: Dict[tuple, tuple] = {}
+
+
+def build_sharded_norm_pcfg(
+    m_tiles: int,
+    hidden_tiles: int,
+    *,
+    max_grid_x: int = 8,
+    max_grid_y: int = 8,
+) -> Optional[tuple]:
+    """Build (program_config, sharded_memory_config_factory, grid) for sharded
+    RMS/LayerNorm using the LayerNormShardedMultiCoreProgramConfig pattern.
+
+    Returns None if no clean grid divides both dims.
+
+    For the pi0.5 expert (M_tiles=2, hidden_tiles=32) this picks (8, 2) →
+    16 cores instead of the default 2-core interleaved path. For VLM
+    (M_tiles=16, hidden_tiles=64) this picks (8, 8) → 64 cores.
+    """
+    key = (m_tiles, hidden_tiles, max_grid_x, max_grid_y)
+    if key in _sharded_norm_cache:
+        return _sharded_norm_cache[key]
+
+    # grid_y must divide M_tiles; grid_x must divide hidden_tiles.
+    cand_y = [y for y in range(min(max_grid_y, m_tiles), 0, -1) if m_tiles % y == 0]
+    cand_x = [x for x in range(min(max_grid_x, hidden_tiles), 0, -1) if hidden_tiles % x == 0]
+    if not cand_y or not cand_x:
+        _sharded_norm_cache[key] = None
+        return None
+
+    best = None
+    best_cores = 0
+    for gy in cand_y:
+        for gx in cand_x:
+            cores = gx * gy
+            # Prefer high core count; tie-break on grid_x (sharded LN parallelizes
+            # along W primarily — wider grid helps small-M shapes).
+            if cores > best_cores or (cores == best_cores and gx > best[0]):
+                best = (gx, gy)
+                best_cores = cores
+    if best is None:
+        _sharded_norm_cache[key] = None
+        return None
+
+    gx, gy = best
+    block_h = m_tiles // gy
+    block_w = hidden_tiles // gx
+    subblock_w = block_w  # full-width per-core subblock (typical for sharded LN)
+
+    pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(gx, gy),
+        subblock_w=subblock_w,
+        block_h=block_h,
+        block_w=block_w,
+        inplace=False,
+    )
+
+    def make_memcfg(b: int, m_logical: int, m_physical: int, hidden: int):
+        # Block-sharded across the chosen grid.
+        return ttnn.create_sharded_memory_config(
+            (b, 1, m_physical, hidden),
+            core_grid=ttnn.CoreGrid(y=gy, x=gx),
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+
+    grid = ttnn.CoreGrid(y=gy, x=gx)
+    result = (pc, make_memcfg, grid)
+    _sharded_norm_cache[key] = result
+    return result
+
+
+# Shared compute-kernel config for sharded RMS/LayerNorm. packer_l1_acc=True is
+# a Blackhole feature (matches ViT-BH ln_compute_config from
+# tech_reports/ViT-TTNN/vit_bh.md §2.2) — reduces CB pressure by letting the
+# packer accumulate into L1 directly.
+_RMS_NORM_COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_approx_mode=True,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+)
+
+
 def _modulated_rms_norm(
     x: "ttnn.Tensor",
     scale: "ttnn.Tensor",
     shift: "ttnn.Tensor",
     eps: float,
     pre_added: bool = False,
+    sharded_pcfg: Optional["ttnn.LayerNormShardedMultiCoreProgramConfig"] = None,
+    sharded_memcfg: Optional["ttnn.MemoryConfig"] = None,
 ) -> "ttnn.Tensor":
     """Fused: ((x · rsqrt(mean(x²)+ε)) · (1+scale)) + shift in one kernel.
 
     If pre_added=True, `scale` is already (1+scale) — skip the add. Used by
     the bs1 fast path where modulations are precomputed at init.
+
+    If sharded_pcfg + sharded_memcfg are provided, runs the sharded multi-core
+    path: convert input to block-sharded layout, run rms_norm with the sharded
+    program config + packer_l1_acc compute kernel, return the block-sharded
+    result (caller is responsible for converting back if downstream consumer
+    needs interleaved). For pi0.5 expert (M_tiles=2) this lifts LN from 2-core
+    to 16-core execution.
     """
+    if sharded_pcfg is not None and sharded_memcfg is not None:
+        # Move input into the matching block-sharded layout.
+        x_sh = ttnn.to_memory_config(x, sharded_memcfg)
+        if not pre_added:
+            scale_plus_one = ttnn.add(scale, 1.0)
+            weight = scale_plus_one
+        else:
+            scale_plus_one = None
+            weight = scale
+        out = ttnn.rms_norm(
+            x_sh,
+            weight=weight,
+            bias=shift,
+            epsilon=eps,
+            program_config=sharded_pcfg,
+            memory_config=sharded_memcfg,
+            compute_kernel_config=_RMS_NORM_COMPUTE_CONFIG,
+        )
+        if scale_plus_one is not None:
+            ttnn.deallocate(scale_plus_one)
+        if x_sh is not x:
+            ttnn.deallocate(x_sh)
+        return out
+
     if pre_added:
         return ttnn.rms_norm(
             x,
@@ -1070,6 +1241,16 @@ class AdaRMSGemmaBlockTTNN:
             packer_l1_acc=True,
         )
 
+        # Sharded RMSNorm config (ViT-BH pattern, tech_reports/ViT-TTNN/vit_bh.md §5.3).
+        # Expert suffix M_padded = 64 (action_horizon=50 padded to 64), hidden = 1024.
+        # → m_tiles=2, hidden_tiles=32 → grid (8,2)=16 cores instead of the
+        # default 2-core (M_tiles=2) interleaved path. Built lazily on first
+        # forward() call since the M dimension is set by the caller (suffix
+        # embedding) and may vary with action_horizon.
+        self._rms_norm_sharded_pcfg = None
+        self._rms_norm_sharded_memcfg = None
+        self._rms_norm_sharded_m_padded = 0
+
     def forward(
         self,
         hidden_states: "ttnn.Tensor",
@@ -1100,11 +1281,41 @@ class AdaRMSGemmaBlockTTNN:
             ttnn.deallocate(mod)
             mod_owned = True
 
+        # Lazy build of the sharded RMSNorm config keyed on actual M.
+        m_padded = hidden_states.shape[1] if len(hidden_states.shape) == 3 else hidden_states.shape[2]
+        if self._rms_norm_sharded_pcfg is None or self._rms_norm_sharded_m_padded != m_padded:
+            m_tiles = m_padded // 32
+            hidden_tiles = self.config.width // 32
+            norm_cfg = build_sharded_norm_pcfg(m_tiles, hidden_tiles, max_grid_x=8, max_grid_y=max(1, m_tiles))
+            if norm_cfg is not None:
+                pc, memcfg_factory, _grid = norm_cfg
+                self._rms_norm_sharded_pcfg = pc
+                self._rms_norm_sharded_memcfg = memcfg_factory(1, m_padded, m_padded, self.config.width)
+                self._rms_norm_sharded_m_padded = m_padded
+            else:
+                self._rms_norm_sharded_pcfg = None
+                self._rms_norm_sharded_memcfg = None
+
+        sh_pc = self._rms_norm_sharded_pcfg
+        sh_mc = self._rms_norm_sharded_memcfg
+
         # ---- Attention sublayer ----
-        normed = _modulated_rms_norm(hidden_states, sa1, ta, self.config.rms_norm_eps, pre_added=not mod_owned)
+        normed = _modulated_rms_norm(
+            hidden_states,
+            sa1,
+            ta,
+            self.config.rms_norm_eps,
+            pre_added=not mod_owned,
+            sharded_pcfg=sh_pc,
+            sharded_memcfg=sh_mc,
+        )
         if mod_owned:
             ttnn.deallocate(sa1)
             ttnn.deallocate(ta)
+        # Convert back to interleaved L1 for the existing attention path
+        # (QKV matmul uses 1D width-shard with mcast_in0 over interleaved input).
+        if sh_pc is not None:
+            normed = ttnn.sharded_to_interleaved(normed, memory_config=ttnn.L1_MEMORY_CONFIG)
         attn_output, new_cache = self.attention.forward(
             normed, cos, sin, attention_mask, position_ids, past_key_value, use_cache, keep_padded=keep_padded
         )
@@ -1117,7 +1328,17 @@ class AdaRMSGemmaBlockTTNN:
         ttnn.deallocate(gated_attn)
 
         # ---- FFW sublayer ----
-        normed = _modulated_rms_norm(hidden_states, sf1, tf, self.config.rms_norm_eps, pre_added=not mod_owned)
+        normed = _modulated_rms_norm(
+            hidden_states,
+            sf1,
+            tf,
+            self.config.rms_norm_eps,
+            pre_added=not mod_owned,
+            sharded_pcfg=sh_pc,
+            sharded_memcfg=sh_mc,
+        )
+        if sh_pc is not None:
+            normed = ttnn.sharded_to_interleaved(normed, memory_config=ttnn.L1_MEMORY_CONFIG)
         if mod_owned:
             ttnn.deallocate(sf1)
             ttnn.deallocate(tf)
