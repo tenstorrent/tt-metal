@@ -82,6 +82,30 @@ def _tighten_wo_prefill_prog_cfg(cfg):
     )
 
 
+def _widen_qkv_prefill_in0_block_w(cfg, in0_block_w: int = 2):
+    """Increase in0_block_w for QKV prefill matmul on Devstral-2-123B.
+
+    The shared config defaults to in0_block_w=1 for seq_len<=128. For K=12288 that means
+    384 inner-loop iterations per core; doubling to 2 halves the loop overhead. Only touches
+    MatmulMultiCoreReuseMultiCastProgramConfig (seq_len<=128 path); MinimalMatmulConfig
+    (seq_len>128) is returned unchanged.
+    """
+    mc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig
+    if not isinstance(cfg, mc):
+        return cfg
+    return mc(
+        compute_with_storage_grid_size=cfg.compute_with_storage_grid_size,
+        in0_block_w=in0_block_w,
+        out_subblock_h=cfg.out_subblock_h,
+        out_subblock_w=cfg.out_subblock_w,
+        per_core_M=cfg.per_core_M,
+        per_core_N=cfg.per_core_N,
+        transpose_mcast=cfg.transpose_mcast,
+        fused_activation=cfg.fused_activation,
+        fuse_batch=cfg.fuse_batch,
+    )
+
+
 def _multi_device_dram_weight_tilize(mesh_device, configuration) -> bool:
     return configuration is not None and devstral2_large_multi_device_dram_mitigation(mesh_device, configuration)
 
@@ -126,15 +150,29 @@ class TtDevstral2LargeAttention(_TtMinistralAttentionBase):
         # Without this patch, prefill WO keeps TTNN defaults: out_block_h=per_core_M (often 1),
         # out_block_w=per_core_N (~48) → L1 CB clash on wide multi-device (BH or WH T3K).
         if devstral2_large_multi_device_dram_mitigation(mesh_device, getattr(self, "args", None)):
-            _orig_get_attn_wo = self.args.get_attn_wo_program_config
+            _base_get_attn_wo = self.args.get_attn_wo_program_config
 
             def _get_attn_wo_wide_prefill(mode, seq_len=1, prefetcher=None):
-                cfg = _orig_get_attn_wo(mode, seq_len, prefetcher)
+                cfg = _base_get_attn_wo(mode, seq_len, prefetcher)
                 if mode != Mode.PREFILL:
                     return cfg
                 return _tighten_wo_prefill_prog_cfg(cfg)
 
             self.args.get_attn_wo_program_config = _get_attn_wo_wide_prefill  # type: ignore[method-assign]
+
+        # Widen in0_block_w for QKV prefill: shared config defaults to 1 (K=12288 → 384 loop
+        # iterations). in0_block_w=2 halves that, improving compute pipeline utilization.
+        # Bind the real ModelArgs method before reassignment; use a distinct closure cell name so
+        # we never recurse if this block is edited alongside other get_* patches.
+        _base_get_attn_qkv = self.args.get_attn_qkv_program_config
+
+        def _get_attn_qkv_wide_prefill(mode, seq_len=1, prefetcher=None):
+            cfg = _base_get_attn_qkv(mode, seq_len, prefetcher)
+            if mode != Mode.PREFILL:
+                return cfg
+            return _widen_qkv_prefill_in0_block_w(cfg)
+
+        self.args.get_attn_qkv_program_config = _get_attn_qkv_wide_prefill  # type: ignore[method-assign]
 
 
 TtDevstral2LargeAttention.__name__ = "Attention"

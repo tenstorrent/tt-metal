@@ -134,6 +134,7 @@ class ModelOptimizations:
                 or base_model_name.startswith("Phi-3-mini")
                 or base_model_name.startswith("phi-4")
                 or base_model_name.startswith("Meta-Llama-3")
+                or base_model_name.startswith("Devstral-2-123B")
             ):
                 if model_name.startswith("phi-4"):
                     logger.info(

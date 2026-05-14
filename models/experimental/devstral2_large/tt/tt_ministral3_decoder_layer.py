@@ -196,6 +196,8 @@ class TtMinistral3DecoderLayer(LightweightModule):
 
         attn_norm_config = self.args.get_norm_config("attn", mode, self.prefetcher)
         attn_in = self.input_layernorm(x, mode, norm_config=attn_norm_config)
+        if mode == Mode.PREFILL:
+            attn_in = ttnn.to_memory_config(attn_in, ttnn.L1_MEMORY_CONFIG)
 
         if batch_size > 1:
             attn_in = ttnn.reshape(attn_in, [batch_size, 1, attn_in.shape[-2] // batch_size, -1])
@@ -258,6 +260,8 @@ class TtMinistral3DecoderLayer(LightweightModule):
 
         ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
         hidden_states = self.post_attention_layernorm(hidden_states, mode, norm_config=ff_norm_config)
+        if mode == Mode.PREFILL:
+            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
 
         if TG and mode == Mode.DECODE:
             hidden_states = ttnn.to_memory_config(hidden_states, memory_config=self.args.get_mlp_act_mem_config(mode))
