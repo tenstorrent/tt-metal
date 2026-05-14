@@ -32,7 +32,7 @@
 // For standard mode: num_rows_per_core = rows to process
 // For balanced mode: num_rows_per_core = num_pairs (each pair = 2 rows)
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
-constexpr uint32_t block_size = get_compile_time_arg_val(1);       // size of block (derived from vWt)
+constexpr uint32_t block_size = get_compile_time_arg_val(1);       // SFPU block size (cap = dst_size - 1)
 constexpr uint32_t qWt = get_compile_time_arg_val(2);              // num tile in inner dim in query/key (d_qk/TILE_W)
 constexpr uint32_t vWt = get_compile_time_arg_val(3);              // num tile in inner dim in value (d_v/TILE_W)
 constexpr uint32_t Ht = get_compile_time_arg_val(4);               // num_seq_len / TILE_H
@@ -41,6 +41,7 @@ constexpr uint32_t minus_one_bits = get_compile_time_arg_val(6);   // used to tr
 constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(7);  // used to transform mask from 0/-1 to 0/-1e9F
 [[maybe_unused]] constexpr uint32_t Sk_chunk_t =
     get_compile_time_arg_val(8);  // F9 multi-tile K/V chunking factor (1 = legacy single-tile inner loop)
+constexpr uint32_t pv_block_size = get_compile_time_arg_val(9);  // PV matmul_block ct_dim (cap = dst_size)
 constexpr uint32_t pairs_per_seq = Ht / 2;
 
 constexpr uint32_t cb_query = tt::CBIndex::c_0;
@@ -236,7 +237,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         apply_exp_inplace_and_find_exp_sum<scaler_bits, Sk_chunk_t>(
             cb_attention_weights, alias_cb_cur_max, alias_cb_cur_sum_exp);
 
-        matmul_qk_by_v<Sk_chunk_t>(vWt, block_size, cb_attention_weights, cb_value, alias_cb_cur_mm_out);
+        matmul_qk_by_v<Sk_chunk_t>(vWt, pv_block_size, cb_attention_weights, cb_value, alias_cb_cur_mm_out);
         cb_pop_front(cb_attention_weights, Sk_chunk_t);
         cb_pop_front(cb_value, Sk_chunk_t * vWt);
 
