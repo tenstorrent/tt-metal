@@ -193,6 +193,11 @@ fi
 # zero overhead for passing tests. On sim there is no hang detection because
 # wall-clock timeouts are meaningless at kHz clock speeds.
 rm -f "$TRIAGE_LOG"
+# Also clear any stale triage JSON from a previous run. Downstream consumers
+# (hooks, CI) treat the JSON's presence as the hang signal — leaving a stale
+# file around causes false-positive "hang detected" classification on the
+# next ordinary test failure.
+rm -f "$TRIAGE_JSON"
 MISSING_TTEXALENS=false
 if [[ "$SIM_MODE" == false ]]; then
     export TT_METAL_OPERATION_TIMEOUT_SECONDS="$DISPATCH_TIMEOUT"
@@ -376,5 +381,10 @@ fi
 
 rm -f "$DIRTY_FLAG"
 rm -f "$TRIAGE_LOG"
-echo "SAFE_PYTEST_RESULT: FAIL (exit code: $EXIT_CODE)"
+# Note: $EXIT_CODE here is pytest's internal exit code (e.g. 1 = test failure,
+# 2 = collection error / user interrupt). The wrapper's own exit code is
+# always 1 for this branch — exit 2 is reserved for real dispatch-timeout
+# hangs (handled above). The label keeps both visible to readers and to
+# hooks parsing this output.
+echo "SAFE_PYTEST_RESULT: FAIL (pytest exit code: $EXIT_CODE; wrapper exit: 1)"
 exit 1

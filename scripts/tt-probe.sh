@@ -143,6 +143,11 @@ fi
 # inspection (same location run_safe_pytest.sh uses), plus a text log for the
 # stderr dump. Grep targets are documented in CLAUDE.md § "Hang triage".
 rm -f "$TRIAGE_LOG"
+# Also clear any stale triage JSON from a previous run. Downstream consumers
+# (hooks, CI) treat the JSON's presence as the hang signal — leaving a stale
+# file around causes false-positive "hang detected" classification on the
+# next ordinary probe failure.
+rm -f "$TRIAGE_JSON"
 MISSING_TTEXALENS=false
 if [[ "$SIM_MODE" == true ]]; then
     export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="echo HANG > ${TRIAGE_LOG}"
@@ -293,9 +298,13 @@ fi
 rm -f "$TRIAGE_LOG"
 
 # --- Result ---
+# Reserve wrapper exit 2 for the HANG case above. For any other non-zero
+# Python exit, normalize the wrapper exit to 1 so that downstream consumers
+# (hooks, CI) can rely on `wrapper-exit == 2 → hang`.
 if [[ $EXIT_CODE -eq 0 ]]; then
     echo "TT_PROBE_RESULT: PASS"
+    exit 0
 else
-    echo "TT_PROBE_RESULT: FAIL (exit $EXIT_CODE, probe: ${PROBE_REL})"
+    echo "TT_PROBE_RESULT: FAIL (python exit code: $EXIT_CODE; wrapper exit: 1, probe: ${PROBE_REL})"
+    exit 1
 fi
-exit $EXIT_CODE
