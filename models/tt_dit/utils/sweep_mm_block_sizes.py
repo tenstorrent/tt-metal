@@ -187,18 +187,11 @@ MAX_BLOCK = 64
 FP32_DEST_ACC_EN = True
 
 # Block-size candidate methodology:
-# - M/N block:  even sizes in [MN_BLOCK_MIN, MN_BLOCK_MAX]  union  divisors of
-#               per-core tile count in that same range. Floor at 2 (1 is usually
-#               dispatch-overhead-bound); cap at 16 because larger blocks reduce
-#               pipelining. Divisors are added to give a "1 block per core"
-#               option even when it's odd (e.g. 5, 15).
-# - K block:    divisors of K_per_device (AGMM) / K_tiles (non-AGMM) at >=
-#               K_BLOCK_MIN. K_block MUST divide K_per_device for AGMM (the ring
-#               all-gather delivers K_per_device tiles in K_block-sized chunks);
-#               non-divisor candidates would leave a partial chunk on the last
-#               ring iteration. No upper cap — large divisors don't add padding.
-MN_BLOCK_MIN, MN_BLOCK_MAX = 2, 16
-K_BLOCK_MIN = 2
+# Full sweep — all integers in [1, 16] for M/N/K blocks, capped at the per-core /
+# per-device dimension. Linear AGMM supports K-tail blocks; Ring AGMM rejects
+# non-divisor K_block at runtime (the warmup exception handler drops those).
+MN_BLOCK_MIN, MN_BLOCK_MAX = 1, 16
+K_BLOCK_MIN, K_BLOCK_MAX = 1, 16
 
 # L1 budget for pre-filtering block combos (KB).
 # BH L1 usable ~1464 KB; conservative threshold accounts for kernel/firmware overhead.
@@ -233,31 +226,13 @@ CSV_COLUMNS = [
 
 
 def get_mn_block_candidates(per_core_tiles):
-    """Even sizes in [MN_BLOCK_MIN, MN_BLOCK_MAX] union divisors of per-core tiles in that range.
-
-    Sized to a single core's M or N work, so that "1 block per core" appears as a
-    candidate even when it's odd (e.g. 5, 15). Caps at MN_BLOCK_MAX because larger
-    blocks reduce pipelining; floors at MN_BLOCK_MIN because tiny blocks are
-    dispatch-bound.
-    """
-    evens = set(range(MN_BLOCK_MIN, MN_BLOCK_MAX + 1, 2))
-    divisors = set(d for d in range(MN_BLOCK_MIN, MN_BLOCK_MAX + 1) if per_core_tiles % d == 0)
-    return sorted(evens | divisors)
+    """Full sweep: all integers in [MN_BLOCK_MIN, MN_BLOCK_MAX], capped at per_core_tiles."""
+    return [b for b in range(MN_BLOCK_MIN, MN_BLOCK_MAX + 1) if b <= per_core_tiles]
 
 
 def get_k_block_candidates(K_per_device):
-    """Divisors of K_per_device, capped at K_BLOCK_MIN floor.
-
-    HARD constraint for AGMM: K_block must evenly divide K_per_device. The ring
-    all-gather delivers K_per_device tiles per device per ring iteration, in
-    K_block-sized chunks — any K_block that doesn't divide K_per_device leaves
-    a partial chunk on the last iteration, which the algorithm doesn't support.
-
-    So we restrict to divisors only. K_BLOCK_MIN excludes tiny sizes that are
-    dispatch-overhead-bound; there's no upper cap because dividing K cleanly
-    never adds padding even at larger block sizes.
-    """
-    return sorted(d for d in range(K_BLOCK_MIN, K_per_device + 1) if K_per_device % d == 0)
+    """Full sweep: all integers in [K_BLOCK_MIN, K_BLOCK_MAX], capped at K_per_device."""
+    return [k for k in range(K_BLOCK_MIN, K_BLOCK_MAX + 1) if k <= K_per_device]
 
 
 def get_per_core_dims(shape, cluster_size):
