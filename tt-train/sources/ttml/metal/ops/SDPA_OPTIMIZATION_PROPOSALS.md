@@ -1044,6 +1044,61 @@ if constexpr (!uniform_dataformat) {
 >
 > **Test coverage**: 18/18 `*SDPAForwardTest*` pass at `Sk_chunk_t=4` (including
 > `NIGHTLY_SDPAForwardTest_Batch_12Heads_6Group` at B=16, S=1024 with arbitrary mask).
+>
+> **Known overhead — diagonal-chunk padding (causal / balanced modes):**
+> The kernel rounds `num_kv_tiles_to_process` **up** to a multiple of `Sk_chunk_t`
+> (`sdpa_fw_compute_kernel.cpp:87`) so the inner loop has a uniform, branchless
+> shape and can use `matmul_block` with a fixed `ct_dim`. As a consequence, the
+> diagonal chunk always processes a full `Sk_chunk_t` K tiles even when only
+> `(q_row_tile % Sk_chunk_t) + 1` of them are below-or-on the causal diagonal.
+> The remaining "post-diagonal" tiles get the all-(−1e9) mask stamped onto them
+> via the F10-step-1 packer-L1-accumulate path (`cb_attn_mask[1]`,
+> `sdpa_fw_compute_kernel.cpp:168-191`), so they contribute zero (or
+> negligibly) to softmax and PV, but still cost FMA cycles for QK^T, PV, and
+> exp.
+>
+> Wasted positions per row in the diagonal chunk follow the pattern
+> `Sk_chunk_t − 1 − (q_row_tile % Sk_chunk_t)`:
+>
+> | `q_row_tile % Sk_chunk_t` | wasted positions |
+> |---:|:---|
+> | 0 | `Sk_chunk_t − 1` |
+> | 1 | `Sk_chunk_t − 2` |
+> | … | … |
+> | `Sk_chunk_t − 1` | 0 |
+>
+> So `Sk_chunk_t − 1` out of every `Sk_chunk_t` consecutive Q rows incur some
+> overhead. Average wasted tiles per row in the diagonal chunk =
+> `(Sk_chunk_t − 1) / 2` = 1.5 for `Sk_chunk_t = 4`.
+>
+> Aggregated over all rows, the wasted share is bounded by
+> `(Sk_chunk_t − 1) / (Ht + 1)` of the **total causal lower-triangle work**.
+> For TinyLlama `Ht = 64, Sk_chunk_t = 4`: `96 wasted / 8704 processed ≈ 1.1 %`
+> of QK^T + PV + softmax FMAs go to padding, plus a small per-row cost from
+> the `pack_tile<true>` L1-acc mask loop running on the post-diagonal tiles.
+>
+> Translating that to wall-clock (TinyLlama, post-F9+F10 baseline ≈ 1654
+> ms/step):
+> - The chunk-loop body (QK^T + softmax + PV + reader DMA) is ~90 % of FW
+>   kernel MATH cycles. Online correction and per-row tail (recip, normalize,
+>   final pack) do **not** scale with the wasted ct_dim slots.
+> - So padding is **~1 % of FW kernel wall-clock**.
+> - FW SDPA is roughly 55–60 % of full training step time on TinyLlama
+>   (back-solved from F9's measured +9.1 % step-time gain vs. its known
+>   ~50 % online-correction share).
+> - Net **~0.5–0.7 % of training step time** ≈ 8–12 ms per 1654 ms step.
+>
+> Not zero, but well below the `exp_tile` cost (~55 % of MATH wall-clock per
+> the post-F9+F10 profile) — so the trade-off stays a `document, don't
+> optimize` item until the higher-impact items above it are addressed.
+>
+> **Why we accepted this trade-off:** removing the padding would require either
+> (a) a tail-chunk code path with dynamic `ct_dim` (breaks `matmul_block` MOP
+> reuse and the F10 step-1 mask idiom which assumes uniform `Sk_chunk_t` slots
+> in `cb_attention_weights`), or (b) per-row variable `Sk_chunk_t` (requires
+> re-init of `mm_block_init_short` mid-row). Both add a second code path for a
+> ~1 % aggregate win. Revisit only if a profiler trace shows the diagonal-chunk
+> mask path on the MATH critical path.
 
 | | |
 |---|---|
