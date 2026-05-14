@@ -18,19 +18,26 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
 #include <tt_stl/assert.hpp>
 
-#include "device_fixture.hpp"
 #include "multi_device_fixture.hpp"
 
 namespace tt::tt_metal {
@@ -59,6 +66,13 @@ std::shared_ptr<Buffer> MakeDramBuffer(IDevice* device, uint32_t size = 2048) {
 std::shared_ptr<Buffer> MakeL1Buffer(IDevice* device, uint32_t size = 2048) {
     InterleavedBufferConfig cfg{.device = device, .size = size, .page_size = size, .buffer_type = BufferType::L1};
     return CreateBuffer(cfg);
+}
+
+MeshTensor MakeSingleTileL1MeshTensor(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    auto tensor_layout = TensorLayout(
+        DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
+    auto spec = TensorSpec(Shape{32, 32}, tensor_layout);
+    return MeshTensor::allocate_on_device(*mesh_device, spec, TensorTopology());
 }
 
 // ============================================================================
@@ -256,6 +270,104 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CommonBuffer_IsCommo
     EXPECT_EQ(b.arg_idx, 1u);  // buf_a is at index 1 in common args
     EXPECT_EQ(b.tensor_buffer_idx, 0u);
     EXPECT_TRUE(b.is_common);
+}
+
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_PerCoreMeshTensorArg_CorrectTuples) {
+    auto tensor = MakeSingleTileL1MeshTensor(get_mesh_device());
+    Buffer* tensor_buffer = tensor.mesh_buffer().get_reference_buffer();
+    ASSERT_NE(tensor_buffer, nullptr);
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    kd.emplace_runtime_args({0, 0}, {std::cref(tensor), 42u});
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+
+    Program program{desc};
+    ResolvedBindings resolved = resolve_bindings(program, desc, std::vector<Buffer*>{tensor_buffer});
+
+    ASSERT_EQ(resolved.rt_args.size(), 1u);
+    const auto& b = resolved.rt_args[0];
+    EXPECT_EQ(b.kernel_idx, 0u);
+    EXPECT_EQ(b.core, CoreCoord(0, 0));
+    EXPECT_EQ(b.arg_idx, 0u);
+    EXPECT_EQ(b.tensor_buffer_idx, 0u);
+    EXPECT_FALSE(b.is_common);
+}
+
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CommonMeshTensorArg_IsCommonTrue) {
+    auto tensor = MakeSingleTileL1MeshTensor(get_mesh_device());
+    Buffer* tensor_buffer = tensor.mesh_buffer().get_reference_buffer();
+    ASSERT_NE(tensor_buffer, nullptr);
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    kd.emplace_common_runtime_args({7u, std::cref(tensor)});
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+
+    Program program{desc};
+    ResolvedBindings resolved = resolve_bindings(program, desc, std::vector<Buffer*>{tensor_buffer});
+
+    ASSERT_EQ(resolved.rt_args.size(), 1u);
+    const auto& b = resolved.rt_args[0];
+    EXPECT_EQ(b.kernel_idx, 0u);
+    EXPECT_EQ(b.arg_idx, 1u);
+    EXPECT_EQ(b.tensor_buffer_idx, 0u);
+    EXPECT_TRUE(b.is_common);
+}
+
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CbTensor_ResolvesToTensorBufferSlot) {
+    auto tensor = MakeSingleTileL1MeshTensor(get_mesh_device());
+    Buffer* tensor_buffer = tensor.mesh_buffer().get_reference_buffer();
+    ASSERT_NE(tensor_buffer, nullptr);
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    // Add at least one runtime binding so resolve_bindings processes CB descriptors.
+    kd.emplace_runtime_args({0, 0}, {std::cref(tensor)});
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 2048,
+        .core_ranges = CoreRangeSet{CoreRange{{0, 0}}},
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = 0,
+            .data_format = DataType::BFLOAT16,
+            .page_size = 2048,
+        }}},
+        .tensor = &tensor,
+    });
+
+    Program program{desc};
+    ResolvedBindings resolved = resolve_bindings(program, desc, std::vector<Buffer*>{tensor_buffer});
+
+    ASSERT_EQ(resolved.rt_args.size(), 1u);
+    ASSERT_EQ(resolved.cbs.size(), 1u);
+    EXPECT_EQ(resolved.cbs[0].tensor_buffer_idx, 0u);
+    EXPECT_EQ(resolved.cbs[0].address_offset, 0u);
+}
+
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ProgramConstruction_CbWithBothBufferAndTensor_Throws) {
+    auto tensor = MakeSingleTileL1MeshTensor(get_mesh_device());
+    Buffer* tensor_buffer = tensor.mesh_buffer().get_reference_buffer();
+    ASSERT_NE(tensor_buffer, nullptr);
+
+    ProgramDescriptor desc;
+    desc.kernels = {MakeBlankReaderKernel({0, 0})};
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 2048,
+        .core_ranges = CoreRangeSet{CoreRange{{0, 0}}},
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = 0,
+            .data_format = tt::DataFormat::Float16_b,
+            .page_size = 2048,
+        }}},
+        .buffer = tensor_buffer,
+        .tensor = &tensor,
+    });
+
+    EXPECT_ANY_THROW((void)Program{desc});
 }
 
 // Descriptor with only uint32_t args → ResolvedBindings is empty.
