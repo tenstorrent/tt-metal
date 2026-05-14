@@ -341,7 +341,7 @@
 - name: GPT-OSS 20B unit tests
   cmd: |
     uv pip install -r models/demos/gpt_oss/requirements.txt
-    export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=openai/gpt-oss-20b
+    export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-20b
     pytest --timeout 600 models/demos/gpt_oss/tests/unit/
   model: gpt-oss-20b
   skus:
@@ -362,15 +362,7 @@
 - name: GPT-OSS 120B unit tests
   cmd: |
     uv pip install -r models/demos/gpt_oss/requirements.txt
-    # HF_HUB_OFFLINE=0 lets the test fetch config.json on runners whose host
-    # /mnt/MLPerf lacks gpt-oss-120b cached (e.g. wh_galaxy without the
-    # MLPerf-mount job hook). HF_HUB_CACHE + HF_HOME are redirected to the
-    # per-job writable workspace so HF can land its metadata writes
-    # (refs/main, .no_exist markers, xet logs) without hitting the :ro
-    # /mnt/MLPerf mount on SKUs whose cache IS pre-populated there. TT
-    # weights still load from /mnt/MLPerf/huggingface/tt_cache via
-    # TT_CACHE_PATH below.
-    export HF_HUB_OFFLINE=0 HF_HUB_CACHE=/work/.cache/huggingface/hub HF_HOME=/work/.cache/huggingface HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/
+    export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-120b
     pytest --timeout 1500 models/demos/gpt_oss/tests/unit
   model: gpt-oss-120b
   skus:
