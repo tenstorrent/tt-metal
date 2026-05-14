@@ -37,6 +37,14 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
+namespace {
+
+bool is_high_idle_eth_logical_channel(const tt::tt_metal::CoreCoord& logical_eth) {
+    return logical_eth.y >= 8 && logical_eth.y <= 11;
+}
+
+}  // namespace
+
 namespace tt::tt_metal {
 
 RiscFirmwareInitializer::RiscFirmwareInitializer(
@@ -1202,7 +1210,17 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             hal_.get_dev_addr(llrt::get_core_type(device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
         initialize_firmware(
             device_id, HalProgrammableCoreType::IDLE_ETH, virtual_core, launch_msg.view(), go_msg.view());
-        not_done_cores.insert(virtual_core);
+        if (cluster_.arch() == ARCH::BLACKHOLE && is_high_idle_eth_logical_channel(eth_core)) {
+            log_warning(
+                tt::LogMetal,
+                "Device {}: Skipping RUN_MSG_INIT wait for idle ethernet core logical {} (virtual {}); "
+                "Blackhole high logical channel (y in [8,11]) — init may still be in progress on this lane.",
+                device_id,
+                eth_core.str(),
+                virtual_core.str());
+        } else {
+            not_done_cores.insert(virtual_core);
+        }
     }
 
     std::unordered_set<CoreCoord> dram_not_done_cores;

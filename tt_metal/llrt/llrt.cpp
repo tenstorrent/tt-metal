@@ -25,6 +25,7 @@
 #include "hal_types.hpp"
 #include "llrt.hpp"
 #include <umd/device/driver_atomics.hpp>
+#include <umd/device/types/arch.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <llrt/tt_cluster.hpp>
 
@@ -529,6 +530,20 @@ void return_to_base_firmware_and_wait_for_heartbeat(
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
             if (elapsed > timeout_ms) {
                 print_aerisc_training_status(device_id, virtual_core);
+                const CoreCoord logical_eth = logical_core_from_ethernet_core(device_id, virtual_core);
+                const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+                if (cluster.arch() == tt::ARCH::BLACKHOLE && logical_eth.y >= 8 && logical_eth.y <= 11) {
+                    log_warning(
+                        tt::LogMetal,
+                        "Device {}: Timed out ({} ms) waiting for active ethernet core virtual {} (logical {}) "
+                        "to show heartbeat again; skipping fatal exit for Blackhole high logical ethernet channel "
+                        "(y in [8,11]). Minimum tt-firmware version is 18.10.0",
+                        device_id,
+                        timeout_ms,
+                        virtual_core.str(),
+                        logical_eth.str());
+                    return;
+                }
                 TT_THROW(
                     "Device {}: Timed out while waiting for active ethernet core {} to become active again. "
                     "Try resetting the board. Minimum tt-firmware version is 18.10.0",
