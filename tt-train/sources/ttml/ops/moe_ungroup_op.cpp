@@ -46,8 +46,8 @@ autograd::TensorPtr moe_ungroup_op(
         // metal::moe_group as a pure gather. dummy_scores is irrelevant
         // (we discard the resulting grouped_scores side-output); zeros are
         // a safe filler.
-        auto dummy_scores = ttnn::full(
-            metadata.logical_shape(), 0.0F, ttnn::DataType::BFLOAT16, ttnn::Layout::ROW_MAJOR, std::ref(*dev));
+        auto dummy_scores =
+            ttnn::zeros(metadata.logical_shape(), ttnn::DataType::BFLOAT16, ttnn::Layout::ROW_MAJOR, std::ref(*dev));
         auto [grad_grouped, _gs, _ks, _cnt, _off, _plan] =
             ttml::metal::moe_group(d_ungrouped, metadata, dummy_scores, local_expert_ids, e_local, k);
         // grad_grouped is [1, 1, T_cap, H]  TILE  bf16
