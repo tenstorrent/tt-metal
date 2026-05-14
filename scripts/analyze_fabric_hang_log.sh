@@ -906,6 +906,12 @@ FIX_BH_TIMEOUT=$(grep -cE 'FIX BH.*ERISC did not exit ROM phase' "$CLEAN" 2>/dev
 # This is distinct from FIX BH timeout (ROM boot didn't complete) — here PCIe reset itself threw.
 # Log: "FIX RR — PCIe-direct soft reset FAILED"
 FIX_BH_DEGRADE=$(grep -cE 'FIX RR.*PCIe-direct soft reset FAILED' "$CLEAN" 2>/dev/null; :)
+# FIX BH (#42429 — EARLY DEADLOCK EXIT): Phase 5b simultaneous-handshake deadlock detected
+# during the polling loop (not after 24s timeout). Fires when ALL pending channels are at
+# REMOTE_HANDSHAKE_COMPLETE, master_chan is among them, and a peer chip is in quiescing_device_ids_.
+# Saves ~24s per hang by breaking immediately; FIX BC classifies and force-resets as normal.
+# Log: "wait_for_fabric_workers_ready: Device N Phase 5b FIX BH (#42429): early simultaneous-handshake deadlock exit"
+FIX_BH_EARLY_DEADLOCK=$(grep -cE 'FIX BH \(#42429\).*early simultaneous-handshake deadlock exit' "$CLEAN" 2>/dev/null; :)
 # FIX BO (#42429): Phase 5 kSyncTimeoutMs extended 10s→120s when stale base-UMD channels present.
 # Without FIX BO: cluster with N base-UMD channels × 10s each → "Fabric health check failed" TT_THROW.
 # Log: "wait_for_fabric_workers_ready: Device N FIX BO — stale base-UMD channels detected, extending Phase 5..."
@@ -1628,6 +1634,11 @@ if [ "${FIX_BH_SUCCESS:-0}" -gt 0 ] || [ "${FIX_BH_TIMEOUT:-0}" -gt 0 ]; then
         echo "     DEGRADE: PCIe-direct soft reset FAILED on ${FIX_BH_DEGRADE} channel(s) — pre-dead channel stays dead."
     fi
 fi
+if [ "${FIX_BH_EARLY_DEADLOCK:-0}" -gt 0 ]; then
+    echo "  => [FIX BH EARLY-DEADLOCK] Phase 5b simultaneous-handshake deadlock detected early on ${FIX_BH_EARLY_DEADLOCK} device(s)."
+    echo "     All pending channels at REMOTE_HANDSHAKE_COMPLETE; broke out of 24s poll immediately."
+    echo "     FIX BC will classify and force-reset — ~24s Phase 5b wait eliminated."
+fi
 if [ "${FIX_BO_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX BO] Phase 5 kSyncTimeoutMs extended 10s→120s on ${FIX_BO_FIRES} device(s) — stale base-UMD channels detected."
 fi
@@ -2144,6 +2155,7 @@ echo "  FIX_BG_FIRES:              ${FIX_BG_FIRES:-0}  (host-pre-launch 0xdeadb0
 echo "  FIX_BH_SUCCESS:            ${FIX_BH_SUCCESS:-0}  (ERISC booted from ROM after FIX RR deassert)"
 echo "  FIX_BH_TIMEOUT:            ${FIX_BH_TIMEOUT:-0}  (ERISC stuck in ROM phase after FIX RR deassert — channel dead)"
 echo "  FIX_BH_DEGRADE:            ${FIX_BH_DEGRADE:-0}  (PCIe-direct soft reset FAILED — pre-dead channel stays dead)"
+echo "  FIX_BH_EARLY_DEADLOCK:     ${FIX_BH_EARLY_DEADLOCK:-0}  (Phase 5b early deadlock exit — all pending at RHS_COMPLETE, ~24s saved)"
 echo "  FIX_BO_FIRES:              ${FIX_BO_FIRES:-0}  (Phase 5 kSyncTimeoutMs extended 10s→120s for stale base-UMD channels)"
 echo "  FIX_BP_FIRES:              ${FIX_BP_FIRES:-0}  (fabric_context null guard — teardown ordering race recovered)"
 echo "  FIX_BF_MMIO_MASTER:        ${FIX_BF_MMIO_MASTER:-0}  (master chans selected with MMIO peer — FIX BD/BF)"

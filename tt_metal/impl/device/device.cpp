@@ -2969,6 +2969,85 @@ bool Device::phase5b_erisc_health_check(
         if (pending.empty()) {
             break;
         }
+
+        // FIX BH (#42429): Early-exit for simultaneous-handshake deadlock detected during the
+        // polling loop (not just after the 24 s deadline).
+        //
+        // Root cause: when FIX BE sequenced MMIO Pass 1b launches before non-MMIO Pass 1c, it
+        // prevented MMIO↔MMIO deadlocks.  However, an MMIO device (launched in Pass 1b) can
+        // still deadlock with a non-MMIO device (launched in Pass 1c): by the time the non-MMIO
+        // device starts in Pass 1c, the MMIO device's ERISC firmware is already running and both
+        // sides simultaneously reach REMOTE_HANDSHAKE_COMPLETE (0xa1b1c1d1).  On Wormhole,
+        // ARCH_WORMHOLE disables the termination-signal check inside the ERISC handshake loop
+        // (see fabric_router_eth_handshake.hpp), so the deadlocked ERISCs are immune to the
+        // host's TERMINATE write.  They will never advance past REMOTE_HANDSHAKE_COMPLETE until
+        // hardware-reset.  Polling for 24 s wastes CI time; FIX BC fires identically after the
+        // break — there is no reason to wait for the deadline.
+        //
+        // Detection: after each polling round, if ALL pending channels are at
+        // REMOTE_HANDSHAKE_COMPLETE, the master_chan is among them, and at least one peer chip
+        // is in quiescing_device_ids_ — it is a confirmed simultaneous-handshake deadlock.
+        // In that case: populate `unhealthy` from the still-pending channels (their status is
+        // already REMOTE_HANDSHAKE_COMPLETE) and break.  FIX BC at line ~3188 will fire
+        // immediately from the unhealthy vector, skipping the 24 s wait entirely.
+        if (!quiescing_device_ids_.empty()) {
+            const bool all_pending_rhs_complete = std::all_of(
+                still_pending_statuses.begin(), still_pending_statuses.end(), [](const auto& p) {
+                    return p.second ==
+                           static_cast<uint32_t>(tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE);
+                });
+            if (all_pending_rhs_complete) {
+                const bool master_chan_pending = std::any_of(
+                    still_pending_statuses.begin(), still_pending_statuses.end(), [&](const auto& p) {
+                        return p.first == static_cast<uint32_t>(master_router_chan);
+                    });
+                if (master_chan_pending) {
+                    // Resolve each pending channel's peer — if any peer is in quiescing_device_ids_
+                    // this is a confirmed simultaneous-handshake deadlock.
+                    bool any_peer_in_quiesce = false;
+                    for (const auto& [cid, _status] : still_pending_statuses) {
+                        try {
+                            const CoreCoord eth_lc =
+                                soc_desc_p5.get_eth_core_for_channel(cid, CoordSystem::LOGICAL);
+                            const auto [peer_chip_id, peer_core] = this->get_connected_ethernet_core(eth_lc);
+                            if (quiescing_device_ids_.count(peer_chip_id) > 0) {
+                                any_peer_in_quiesce = true;
+                                break;
+                            }
+                        } catch (...) {
+                            // Could not resolve — continue to next channel.
+                        }
+                    }
+                    if (any_peer_in_quiesce) {
+                        // Confirmed deadlock — populate unhealthy and break immediately.
+                        // FIX BC (post-loop) will detect all_remote_handshake_complete and fire.
+                        const auto early_elapsed =
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - hc_start)
+                                .count();
+                        log_warning(
+                            tt::LogMetal,
+                            "wait_for_fabric_workers_ready: Device {} Phase 5b "
+                            "FIX BH (#42429): early simultaneous-handshake deadlock exit — "
+                            "all {} pending channel(s) at REMOTE_HANDSHAKE_COMPLETE with "
+                            "peer in quiescing_device_ids_. Exiting poll at {}ms (saves ~{}ms). "
+                            "FIX BC will classify.",
+                            this->id(),
+                            still_pending_statuses.size(),
+                            early_elapsed,
+                            kHealthCheckTimeoutMs - early_elapsed);
+                        for (const auto& idx : pending) {
+                            const auto& ch = chans[idx];
+                            unhealthy.push_back(
+                                {ch.eth_chan_id,
+                                 static_cast<uint32_t>(tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE)});
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
         const auto hc_elapsed =
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - hc_start).count();
         // Log every kHCIntermediateLogMs to observe actual time-to-healthy
