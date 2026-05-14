@@ -69,7 +69,7 @@ jobs:
         platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
         build-wheel: true
         tracy: true
-        ref: ${{ format('refs/tags/{0}', inputs.tag-version) }}
+        wheel-ref: ${{ format('refs/tags/{0}', inputs.tag-version) }}
         fetch-depth: 0
         skip-tt-train: false
         enable-lto: false
@@ -85,7 +85,7 @@ jobs:
         platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
         build-wheel: true
         tracy: false
-        ref: ${{ format('refs/tags/{0}', inputs.tag-version) }}
+        wheel-ref: ${{ format('refs/tags/{0}', inputs.tag-version) }}
         fetch-depth: 0
         skip-tt-train: false
         enable-lto: false
