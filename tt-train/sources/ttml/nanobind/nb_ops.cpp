@@ -384,16 +384,11 @@ void py_module(nb::module_& m) {
         py_rmsnorm.def(
             "rmsnorm_bw",
             [](const autograd::TensorPtr& input,
-                const autograd::TensorPtr& gamma,
-                const autograd::TensorPtr& rms,
-                const autograd::TensorPtr& dL_dout,
-                uint32_t max_num_cores) -> std::tuple<autograd::TensorPtr, autograd::TensorPtr> {
+               const autograd::TensorPtr& gamma,
+               const autograd::TensorPtr& rms,
+               const autograd::TensorPtr& dL_dout) -> std::tuple<autograd::TensorPtr, autograd::TensorPtr> {
                 auto grads = ttml::metal::rmsnorm_bw(
-                    input->get_value(),
-                    gamma->get_value(),
-                    rms->get_value(),
-                    dL_dout->get_value(),
-                    max_num_cores);
+                    input->get_value(), gamma->get_value(), rms->get_value(), dL_dout->get_value());
                 if (grads.size() != 2U) {
                     throw std::runtime_error("rmsnorm_bw: unexpected number of tensors from metal rmsnorm_bw");
                 }
@@ -407,8 +402,7 @@ void py_module(nb::module_& m) {
             nb::arg("input"),
             nb::arg("gamma"),
             nb::arg("rms"),
-            nb::arg("dL_dout"),
-            nb::arg("max_num_cores") = 0U);
+            nb::arg("dL_dout"));
     }
 
     m.def(

@@ -135,12 +135,10 @@ ttml::metal::ops::rmsnorm_bw::device::RMSNormBackwardDeviceOperation::tensor_ret
     const ttnn::Tensor& dL_dout_tensor,
     float epsilon,
     const std::optional<ttnn::Tensor>& preallocated_da,
-    const std::optional<ttnn::Tensor>& preallocated_dgamma_components,
-    uint32_t max_num_cores) {
+    const std::optional<ttnn::Tensor>& preallocated_dgamma_components) {
     using OperationType = ttml::metal::ops::rmsnorm_bw::device::RMSNormBackwardDeviceOperation;
 
-    auto operation_attributes =
-        OperationType::operation_attributes_t{.epsilon = epsilon, .max_num_cores = max_num_cores};
+    auto operation_attributes = OperationType::operation_attributes_t{.epsilon = epsilon};
     auto tensor_args = OperationType::tensor_args_t{
         .input = input_tensor,
         .gamma = gamma_tensor,

@@ -244,7 +244,7 @@ def _run_kernel_bw_only(bw_kernel: str = "metal") -> None:
                 x_t, g_t, dL_t, rms_t = _metal_rmsnorm_bw_tensors_from_numpy(x_np, g_np, d_np, rms_np)
 
                 def run_step() -> None:
-                    d_in, d_gamma = ttml.ops.rmsnorm.rmsnorm_bw(x_t, g_t, rms_t, dL_t, 0)
+                    d_in, d_gamma = ttml.ops.rmsnorm.rmsnorm_bw(x_t, g_t, rms_t, dL_t)
 
             elif bw_kernel == "ttl":
                 assert ttl_mod is not None

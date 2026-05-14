@@ -39,7 +39,6 @@ ttml::metal::ops::rmsnorm_bw::device::RMSNormBackwardDeviceOperation::tensor_ret
     const ttnn::Tensor& dL_dout_tensor,
     float epsilon = 1e-6F,
     const std::optional<ttnn::Tensor>& preallocated_da = std::nullopt,
-    const std::optional<ttnn::Tensor>& preallocated_dgamma_components = std::nullopt,
-    uint32_t max_num_cores = 0U);
+    const std::optional<ttnn::Tensor>& preallocated_dgamma_components = std::nullopt);
 
 }  // namespace ttnn::prim
