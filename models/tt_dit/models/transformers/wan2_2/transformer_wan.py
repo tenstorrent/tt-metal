@@ -281,11 +281,12 @@ class WanTransformer3DModel(Module):
         self.cached_rope_features = {}
         self.output_dtype = output_dtype
 
-        assert model_type in ["t2v", "i2v"], "model_type must be either t2v or i2v"
+        assert model_type in ["t2v", "i2v", "s2v"], "model_type must be one of t2v / i2v / s2v"
         if model_type == "i2v":
             in_channels = 36
         else:
-            assert in_channels == 16, "in_channels must be 16 for t2v"
+            # t2v and s2v both use the standard 16-channel noisy-latent input.
+            assert in_channels == 16, f"in_channels must be 16 for {model_type}"
 
         self.patch_size = patch_size
         self.dim = dim
