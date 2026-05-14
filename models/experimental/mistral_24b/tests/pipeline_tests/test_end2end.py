@@ -99,7 +99,7 @@ def display_chat(logger, conversation):
             logger.info(f"🤖 Assistant: {message}")
 
 
-# Greedy on-device decode (Phase C harness): avoids full-logits readback + host argmax in the decode loop.
+# Greedy on-device decode avoids full-logits readback + host argmax in the decode loop.
 DECODE_GREEDY_SAMPLING = SamplingParams(
     temperature=0.0,
     top_k=1,
@@ -446,7 +446,7 @@ def run_generation_exactly_like_test_end2end(
             break
 
         all_outputs[0].append(token_id)
-        current_pos = current_pos + 1
+        current_pos += 1
 
     loop_end = time.perf_counter()
 
@@ -618,6 +618,8 @@ def test_e2e_vision_text_pipeline(
             ),
         )
 
+    # Run generation exactly like test_end2end.py
+    logger.info("Running generation exactly like test_end2end.py...")
     results = run_generation_exactly_like_test_end2end(
         vision_model, text_model, processed_inputs, model_args, page_table, paged_attention_config, max_gen_len=1024 * 4
     )

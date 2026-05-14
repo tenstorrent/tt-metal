@@ -150,8 +150,7 @@ class RMSNorm(LightweightModule):
         )
 
         if in_sharded and not out_sharded:
-            x = ttnn.sharded_to_interleaved(x)
-            return x
+            ttnn.sharded_to_interleaved(x)
         else:
             return x
 
@@ -170,6 +169,7 @@ class RMSNorm(LightweightModule):
             output = ttnn.to_memory_config(output, memory_config)
 
         ttnn.deallocate(xnorm)
+        ttnn.deallocate(weight)
 
         return output
 

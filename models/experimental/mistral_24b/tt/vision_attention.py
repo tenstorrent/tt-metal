@@ -196,22 +196,6 @@ class TtMistralImageAttention(LightweightModule):
             cos, sin = position_embeddings
             q_heads_1QSD, k_heads_1KSD = apply_rotary_pos_emb_vision_tt(q_heads_1QSD, k_heads_1KSD, cos, sin)
         ttnn.deallocate(xqkv_fused)
-
-        # # Move Q/K/V from DRAM-interleaved into L1-interleaved immediately before SDPA.
-        # # The SDPA op (sdpa_device_operation.cpp:45) requires inputs to be non-sharded
-        # # ("DRAM/L1 interleaved"), so we stay interleaved here and only relocate the
-        # # backing buffer to L1 to cut DRAM read traffic into the kernel. Keep BF16 dtype
-        # # so numerical behavior matches the prior DRAM path exactly.
-        # q_heads_1QSD_dram = q_heads_1QSD
-        # k_heads_1KSD_dram = k_heads_1KSD
-        # v_heads_1VSD_dram = v_heads_1VSD
-        # q_heads_1QSD = ttnn.to_memory_config(q_heads_1QSD_dram, ttnn.L1_MEMORY_CONFIG)
-        # k_heads_1KSD = ttnn.to_memory_config(k_heads_1KSD_dram, ttnn.L1_MEMORY_CONFIG)
-        # v_heads_1VSD = ttnn.to_memory_config(v_heads_1VSD_dram, ttnn.L1_MEMORY_CONFIG)
-        # ttnn.deallocate(q_heads_1QSD_dram)
-        # ttnn.deallocate(k_heads_1KSD_dram)
-        # ttnn.deallocate(v_heads_1VSD_dram)
-
         # TODO: get this from model_config
         sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8), q_chunk_size=128, k_chunk_size=128, exp_approx_mode=False
