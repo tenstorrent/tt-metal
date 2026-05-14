@@ -96,7 +96,7 @@ class TTSeamlessM4Tv2Encoder:
             bias=bias,
             activation=activation,
             core_grid=_core_grid(self.device),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self._linear_ln_compute_cfg,
         )
 
@@ -176,7 +176,7 @@ class TTSeamlessM4Tv2Encoder:
         m_tiles: int,
         n_tiles: int,
     ) -> ttnn.Tensor:
-        """Width-sharded LN: reshard -> sharded LN -> reshard back to DRAM."""
+        """Width-sharded LN: reshard -> sharded LN -> L1 interleaved (feeds linears without DRAM ``in0``)."""
         sharded_mem_config, sharded_pc = self._build_ln_sharded_config(m_tiles, n_tiles)
 
         x_sharded = ttnn.to_memory_config(x, sharded_mem_config)
@@ -190,7 +190,7 @@ class TTSeamlessM4Tv2Encoder:
             compute_kernel_config=self._layernorm_compute_cfg,
         )
         ttnn.deallocate(x_sharded)
-        normed = ttnn.to_memory_config(normed_sharded, ttnn.DRAM_MEMORY_CONFIG)
+        normed = ttnn.sharded_to_interleaved(normed_sharded, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
         ttnn.deallocate(normed_sharded)
         return normed
 
@@ -224,7 +224,7 @@ class TTSeamlessM4Tv2Encoder:
             num_heads=num_heads,
             num_kv_heads=num_heads,
             transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(qkv_4d)
 
@@ -238,7 +238,7 @@ class TTSeamlessM4Tv2Encoder:
             scale=1.0 / math.sqrt(head_dim),
             program_config=sdpa_cfg,
             compute_kernel_config=self._sdpa_compute_cfg,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(q)
         ttnn.deallocate(k)
@@ -248,7 +248,7 @@ class TTSeamlessM4Tv2Encoder:
         # back into ``[B, 1, S, hidden]``. We then drop the singleton batch-1
         # axis so the residual ``ttnn.add`` consumes the same 3-D layout as
         # the rest of the encoder.
-        merged_4d = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        merged_4d = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
         merged = ttnn.reshape(merged_4d, (batch, seq_q, hidden_size))
         ttnn.deallocate(merged_4d)

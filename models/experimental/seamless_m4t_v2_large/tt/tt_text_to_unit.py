@@ -433,18 +433,17 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
             bias=bias,
             activation=activation,
             core_grid=_core_grid(self.device),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self._linear_ln_compute_cfg,
         )
 
     def _layer_norm(self, x: ttnn.Tensor, *, weight: ttnn.Tensor, bias: ttnn.Tensor) -> ttnn.Tensor:
-        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         return ttnn.layer_norm(
             x,
             weight=weight,
             bias=bias,
             epsilon=self.layer_norm_eps,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self._linear_ln_compute_cfg,
         )
 
@@ -481,11 +480,7 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
         kh = self._heads(k, batch, seq, num_heads, head_dim)
         vh = self._heads(v, batch, seq, num_heads, head_dim)
 
-        qh = ttnn.to_memory_config(qh, ttnn.DRAM_MEMORY_CONFIG)
-        kh = ttnn.to_memory_config(kh, ttnn.DRAM_MEMORY_CONFIG)
-        vh = ttnn.to_memory_config(vh, ttnn.DRAM_MEMORY_CONFIG)
-
-        qh = ttnn.multiply(qh, 1.0 / math.sqrt(head_dim), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        qh = ttnn.multiply(qh, 1.0 / math.sqrt(head_dim), memory_config=ttnn.L1_MEMORY_CONFIG)
 
         attn_out = ttnn.transformer.scaled_dot_product_attention(
             qh,
@@ -496,7 +491,7 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
             scale=1.0,
             program_config=sdpa_cfg,
             compute_kernel_config=self._sdpa_compute_cfg,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(qh)
         ttnn.deallocate(kh)
@@ -691,18 +686,17 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             bias=bias,
             activation=activation,
             core_grid=_core_grid(self.device),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self._linear_ln_compute_cfg,
         )
 
     def _layer_norm(self, x: ttnn.Tensor, *, weight: ttnn.Tensor, bias: ttnn.Tensor) -> ttnn.Tensor:
-        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         return ttnn.layer_norm(
             x,
             weight=weight,
             bias=bias,
             epsilon=self.layer_norm_eps,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self._linear_ln_compute_cfg,
         )
 
@@ -739,11 +733,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         kh = self._heads(k, batch, seq, num_heads, head_dim)
         vh = self._heads(v, batch, seq, num_heads, head_dim)
 
-        qh = ttnn.to_memory_config(qh, ttnn.DRAM_MEMORY_CONFIG)
-        kh = ttnn.to_memory_config(kh, ttnn.DRAM_MEMORY_CONFIG)
-        vh = ttnn.to_memory_config(vh, ttnn.DRAM_MEMORY_CONFIG)
-
-        qh = ttnn.multiply(qh, 1.0 / math.sqrt(head_dim), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        qh = ttnn.multiply(qh, 1.0 / math.sqrt(head_dim), memory_config=ttnn.L1_MEMORY_CONFIG)
 
         attn_out = ttnn.transformer.scaled_dot_product_attention(
             qh,
@@ -754,7 +744,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             scale=1.0,
             program_config=sdpa_cfg,
             compute_kernel_config=self._sdpa_compute_cfg,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(qh)
         ttnn.deallocate(kh)
