@@ -665,6 +665,82 @@ def _gdn_full_fused(
 # ---------------------------------------------------------------------------
 
 
+def _retile_l1(t):
+    """Force re-tile via ROW_MAJOR round-trip, keeping the tensor L1-interleaved.
+
+    ttnn.reshape changes logical shape but doesn't re-tile data when the tile
+    structure changes (e.g. [B,H,D] -> [B*H,1,D]). Round-tripping through
+    ROW_MAJOR forces correct tile padding/layout for raw tile-index access.
+    """
+    L1 = ttnn.L1_MEMORY_CONFIG
+    t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, memory_config=L1)
+    return ttnn.to_layout(t, ttnn.TILE_LAYOUT, memory_config=L1)
+
+
+def gdn_recurrence_fused_native_inplace(
+    q_raw,  # (B, Nk_TP, Dk)   L2-normed Q, pre-scale, pre-repeat-interleave
+    k_raw,  # (B, Nk_TP, Dk)   L2-normed K
+    v_raw,  # (B, Nv_TP, Dv)
+    g_raw,  # (1, B, Nv_TP)   g_pre = neg_exp_A * softplus(a + dt_bias)
+    beta_raw,  # (1, B, Nv_TP)   sigmoid(b)
+    scale_tile,  # (1, 1, 1)        Q scale, e.g. self.scale_tt
+    state,  # (num_pairs, Dk, Dv)
+    output,  # (num_pairs, 1, Dv)
+    num_cores,
+    Nv_TP,
+    Nk_TP,
+    repeat_factor,
+):
+    """GDN recurrence on "native" (un-retiled, pre-scale, pre-repeat) inputs.
+
+    Step A (current): runs the full retile + repeat_interleave + scale + transpose
+    prep chain internally, then calls `gdn_recurrence_fused_inplace`. Behavior is
+    identical to the caller doing the prep externally — this entry point exists so
+    that Step B can swap the implementation to use a new reader that does sub-tile
+    reads, eliminating the retile chain entirely on the fused path.
+
+    The composite fallback (used when GDN_DISABLE_FUSED=1 or when the fused kernel
+    raises) always goes through the retile prep — composite ttnn ops can't operate
+    on the native shapes.
+    """
+    L1 = ttnn.L1_MEMORY_CONFIG
+    B = q_raw.shape[0]
+    Dk = q_raw.shape[-1]
+    Dv = v_raw.shape[-1]
+    num_pairs = B * Nv_TP
+
+    # Repeat-interleave Q and K from Nk_TP heads to Nv_TP heads.
+    q_exp = ttnn.repeat_interleave(q_raw, repeat_factor, dim=1, memory_config=L1)
+    k_exp = ttnn.repeat_interleave(k_raw, repeat_factor, dim=1, memory_config=L1)
+
+    # Apply Q scale.
+    q_ns = ttnn.multiply(q_exp, scale_tile, memory_config=L1)
+    ttnn.deallocate(q_exp)
+
+    # Retile to (num_pairs, 1, D) for the per-pair tile-index kernel reader.
+    q_fused = _retile_l1(ttnn.reshape(q_ns, (num_pairs, 1, Dk), memory_config=L1))
+    ttnn.deallocate(q_ns)
+
+    k_row = _retile_l1(ttnn.reshape(k_exp, (num_pairs, 1, Dk), memory_config=L1))
+    k_col = ttnn.transpose(k_row, -2, -1, memory_config=L1)
+    ttnn.deallocate(k_exp)
+
+    v_fused = _retile_l1(ttnn.reshape(v_raw, (num_pairs, 1, Dv), memory_config=L1))
+    g_fused = _retile_l1(ttnn.reshape(g_raw, (num_pairs, 1, 1), memory_config=L1))
+    beta_fused = _retile_l1(ttnn.reshape(beta_raw, (num_pairs, 1, 1), memory_config=L1))
+
+    gdn_recurrence_fused_inplace(
+        q_fused, k_row, k_col, v_fused, g_fused, beta_fused, state, output, num_cores=num_cores
+    )
+
+    ttnn.deallocate(q_fused)
+    ttnn.deallocate(k_row)
+    ttnn.deallocate(k_col)
+    ttnn.deallocate(v_fused)
+    ttnn.deallocate(g_fused)
+    ttnn.deallocate(beta_fused)
+
+
 def gdn_recurrence_fused_inplace(q, k_row, k_col, v, g, beta, state, output, num_cores=10):
     """Compute GDN recurrence and write result to output tensor.
 

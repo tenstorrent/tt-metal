@@ -24,7 +24,7 @@ from models.demos.qwen35_27b.tt.chunk_delta_rule_ops import create_chunk_masks
 from models.demos.qwen35_27b.tt.gdn_kernel.gdn_kernel_op import (
     gdn_full_fused_inplace,
     gdn_prefill_fused,
-    gdn_recurrence_fused_inplace,
+    gdn_recurrence_fused_native_inplace,
 )
 from models.demos.qwen35_27b.tt.model_config import create_prefill_matmul_program_config
 from models.tt_transformers.tt.ccl import tt_all_reduce
@@ -468,16 +468,6 @@ class TtGatedDeltaNet(LightweightModule):
         k_normed = _l2_norm_dev(k_h, memory_config=L1)
         ttnn.deallocate(k_h)
 
-        # Expand to Nv_TP heads and apply scale to Q
-        repeat_factor = Nv_TP // Nk_TP
-        q_exp = ttnn.repeat_interleave(q_normed, repeat_factor, dim=1, memory_config=L1)
-        ttnn.deallocate(q_normed)
-        q_ns = ttnn.multiply(q_exp, self.scale, memory_config=L1)
-        ttnn.deallocate(q_exp)
-
-        k_exp = ttnn.repeat_interleave(k_normed, repeat_factor, dim=1, memory_config=L1)
-        ttnn.deallocate(k_normed)
-
         # ---- Decay and beta ----
         beta_tt = ttnn.sigmoid(b_tt, memory_config=L1)
         ttnn.deallocate(b_tt)
@@ -486,46 +476,44 @@ class TtGatedDeltaNet(LightweightModule):
         g_pre = ttnn.multiply(self.neg_exp_A, sp, memory_config=L1)
         ttnn.deallocate(sp)
 
-        # ---- Reshape for fused kernel [num_pairs, ...] ----
-        # All six inputs are born in L1 — no DRAM round-trip at the kernel boundary.
+        # ---- Fused DeltaNet recurrence (native-input entry point) ----
+        # Step A plumbing: the dispatcher absorbs repeat_interleave/scale/retile/transpose
+        # internally and calls the existing fused kernel. Step B will swap to a new
+        # reader that does sub-tile reads, eliminating the retile chain entirely.
         num_pairs = B * Nv_TP
+        repeat_factor = Nv_TP // Nk_TP
 
-        q_fused = _retile(ttnn.reshape(q_ns, (num_pairs, 1, Dk), memory_config=L1), memory_config=L1)
-        ttnn.deallocate(q_ns)
-
-        k_row = _retile(ttnn.reshape(k_exp, (num_pairs, 1, Dk), memory_config=L1), memory_config=L1)
-        k_col = ttnn.transpose(k_row, -2, -1, memory_config=L1)
-        ttnn.deallocate(k_exp)
-
-        v_fused = _retile(ttnn.reshape(v_h, (num_pairs, 1, Dv), memory_config=L1), memory_config=L1)
-        ttnn.deallocate(v_h)
-
-        g_fused = _retile(ttnn.reshape(g_pre, (num_pairs, 1, 1), memory_config=L1), memory_config=L1)
-        ttnn.deallocate(g_pre)
-        beta_fused = _retile(ttnn.reshape(beta_tt, (num_pairs, 1, 1), memory_config=L1), memory_config=L1)
-        ttnn.deallocate(beta_tt)
-
-        # ---- Fused DeltaNet recurrence ----
         if self.rec_output is None:
-            self.rec_output = _unshard(ttnn.zeros_like(q_fused))
+            # L1-resident so the kernel/composite writeback is L1↔L1 and the
+            # downstream reshape + rms_norm read from L1 too.
+            self.rec_output = ttnn.from_torch(
+                torch.zeros(num_pairs, 1, Dv, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
 
-        gdn_recurrence_fused_inplace(
-            q_fused,
-            k_row,
-            k_col,
-            v_fused,
-            g_fused,
-            beta_fused,
+        gdn_recurrence_fused_native_inplace(
+            q_normed,
+            k_normed,
+            v_h,
+            g_pre,
+            beta_tt,
+            self.scale_tt,
             self.rec_states,
             self.rec_output,
             num_cores=min(96, num_pairs),
+            Nv_TP=Nv_TP,
+            Nk_TP=Nk_TP,
+            repeat_factor=repeat_factor,
         )
-        ttnn.deallocate(q_fused)
-        ttnn.deallocate(k_row)
-        ttnn.deallocate(k_col)
-        ttnn.deallocate(v_fused)
-        ttnn.deallocate(g_fused)
-        ttnn.deallocate(beta_fused)
+        ttnn.deallocate(q_normed)
+        ttnn.deallocate(k_normed)
+        ttnn.deallocate(v_h)
+        ttnn.deallocate(g_pre)
+        ttnn.deallocate(beta_tt)
 
         # ---- Post-processing ----
         # DIAG: log recurrence output before norm
