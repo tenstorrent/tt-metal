@@ -613,6 +613,26 @@ def pytest_runtest_setup(item):
     """Start the server on the first test, or restart between tests if requested."""
     global _exalens_server, _reset_simulator_pending
 
+    # Per-test deterministic seeding (2026-05-14 BFP investigation: Step 2).
+    # Many stimuli generators in helpers/stimuli_generator{,_v2}.py default
+    # StimuliSpec.seed=None and fall through to the global torch RNG. Under
+    # pytest-xdist --dist=worksteal --forked, the same test can land on
+    # different workers across runs; each worker's torch RNG is seeded from
+    # /dev/urandom at import, so the unseeded test sees different stimuli
+    # run-to-run. Seed every test from its nodeid so the suite is
+    # bit-deterministic regardless of xdist scheduling or worker birth.
+    import hashlib
+    import random as _random
+
+    import numpy as _np
+    import torch as _torch
+
+    _digest = hashlib.sha256(item.nodeid.encode("utf-8")).digest()
+    _seed = int.from_bytes(_digest[:4], "little")
+    _torch.manual_seed(_seed)
+    _np.random.seed(_seed & 0x7FFFFFFF)
+    _random.seed(_seed)
+
     if _exalens_server is None:
         return
 
