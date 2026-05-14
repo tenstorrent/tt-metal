@@ -28,16 +28,11 @@ if TYPE_CHECKING:
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
 class Attention(Module):
-    # Non-ring SDPA chunk sizes — unchanged.
+    # SDPA chunk sizes keyed by (is_blackhole, sp_factor, tp_factor). Resolution priority for
+    # non-ring: caller overrides > class map > constructor args > class default.
     sdpa_chunk_size_map: dict[tuple, tuple[int, int]] = {}
     default_sdpa_chunk_size: tuple[int, int] = (128, 512)
 
-    # Ring SDPA chunk sizes per (is_blackhole, sp_factor, tp_factor).
-    # The (True, 4, 8) entry is Flux2's actual config on Blackhole Galaxy (mesh (4, 8) with
-    # sp_axis=0, tp_axis=1 → sp_factor=4, tp_factor=8). Q-chunk 128 / K-chunk 512 matches
-    # the pre-Step-1 non-ring default and is measurably faster than the (256, 256) fallback
-    # for Flux2's Q/K shapes.
-    # Other entries are Wan-tuned (carried from attention_opt.py / attention_wan.py).
     ring_sdpa_chunk_size_map: dict[tuple, tuple[int, int]] = {
         (False, 2, 4): (256, 256),
         (False, 8, 4): (256, 256),
@@ -80,9 +75,8 @@ class Attention(Module):
         self.parallel_config = parallel_config
         self.padding_config = padding_config
         self.use_spatial_weights_for_prompt = use_spatial_weights_for_prompt
-        # per_head_norm forwards through to DistributedRMSNorm: True = per-head RMS (head_dim
-        # divisor, no AG of stats), False = global RMS across the full padded_inner_dim (the
-        # original Wan-style behavior). Defaults False so existing callers are unchanged.
+        # True = per-head RMS (head_dim divisor, stats stay local); False = global RMS over
+        # padded_inner_dim (AG of stats).
         self.per_head_norm = per_head_norm
 
         self.padded_heads = padding_config.target_heads if padding_config is not None else heads
@@ -96,10 +90,10 @@ class Attention(Module):
 
         common_args = dict(mesh_device=mesh_device, ccl_manager=ccl_manager, fsdp_mesh_axis=fsdp_mesh_axis)
 
-        self.sdpa_worker_grid = (
-            self.mesh_device.compute_with_storage_grid_size().x,
-            self.mesh_device.compute_with_storage_grid_size().y - 1,
-        )
+        full_grid = self.mesh_device.compute_with_storage_grid_size()
+
+        # Reserve last row for CCL.
+        self.sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
 
         chunk_lookup = {**self.sdpa_chunk_size_map, **(sdpa_chunk_size_overrides or {})}
         resolved_q_chunk, resolved_k_chunk = chunk_lookup.get(
@@ -121,12 +115,6 @@ class Attention(Module):
             exp_approx_mode=False,  # NOTE: False is more correct
         )
 
-        # Step 1: Ring SDPA worker grid uses the row-major orientation (reserves last ROW
-        # for CCL — same as the non-ring grid). Item 1.1 was perf-neutral for Flux2 either
-        # way; keeping it consistent with the non-ring path.
-        # Ring chunk sizes come from `ring_sdpa_chunk_size_map`; the Flux2 (Blackhole, sp=4,
-        # tp=8) entry is (128, 512). See class-level comment for rationale.
-        full_grid = self.mesh_device.compute_with_storage_grid_size()
         self.ring_sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
         ring_chunk_size = self.ring_sdpa_chunk_size_map.get(
             (
@@ -140,24 +128,14 @@ class Attention(Module):
             compute_with_storage_grid_size=self.ring_sdpa_worker_grid,
             q_chunk_size=ring_chunk_size[0],
             k_chunk_size=ring_chunk_size[1],
-            exp_approx_mode=False,
+            exp_approx_mode=False,  # NOTE: False is more correct
         )
-
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
         )
-
-        self.rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
-
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -166,34 +144,13 @@ class Attention(Module):
             packer_l1_acc=True,
         )
 
-        self.dummy_joint_input = ttnn.zeros(
-            [1, self.n_local_heads, 0, head_dim],
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-        )
-
-        # Step 3 (kernel-fixed): rotation matrix consumed by the fused RoPE step inside
-        # `wan_fused_rmsnorm_post_allgather` when called with per_head_norm=True.
-        self.trans_mat = ttnn.from_torch(
-            get_rot_transformation_mat(),
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-        )
-
-        # Step 2 (Item 2.1 — RESTORED): chunks=3 → to_qkv emits [q_flat, k_flat, v_flat]
-        # directly via `minimal_matmul_split`. Item 2.1 diagnostic showed `minimal_matmul` +
-        # `ttnn.chunk` is *slower* than the chunked kernel for our shapes; chunks=3 is a win.
+        # chunks=3 splits QKV inside minimal_matmul_split (faster than matmul + ttnn.chunk).
         self.to_qkv = ColParallelLinear(
             query_dim, 3 * padded_inner_dim, bias=proj_bias, mesh_axis=tp_axis, chunks=3, **common_args
         )
 
-        # Step 3 (kernel-fixed): DistributedRMSNorm with per_head_norm=True. Operates on the
-        # pre-head-split tensor [1, B, N, n_local_heads*head_dim] per device and fuses
-        # head-split + per-head RMS + RoPE inside a single kernel pair. The kernel was patched
-        # to support per-head normalization (divisor = head_dim, no AG of stats since per-head
-        # stats are local to each device); legacy global-RMS callers (WAN) are unaffected.
+        # Fuses head-split + RMSNorm + RoPE. Weight is tiled per-head → [padded_inner_dim] in
+        # _prepare_torch_state.
         self.norm_q = DistributedRMSNorm(
             embedding_dim=padded_inner_dim,
             norm_eps=eps,
@@ -221,7 +178,6 @@ class Attention(Module):
             self.norm_added_k = UnregisteredModule(self.norm_k)
             self.to_add_out = UnregisteredModule(self.to_out) if self.to_out is not None else None
         elif added_kv_proj_dim > 0:
-            # Step 2: chunks=3 matches to_qkv. Same `minimal_matmul_split` win.
             self.add_qkv_proj = ColParallelLinear(
                 added_kv_proj_dim, 3 * padded_inner_dim, bias=proj_bias, mesh_axis=tp_axis, chunks=3, **common_args
             )
@@ -256,6 +212,21 @@ class Attention(Module):
             Parameter(total_shape=[self.padded_heads, 1, 1], device=mesh_device, mesh_axes=[tp_axis, None, None])
             if context_head_scaling and self.add_qkv_proj is not None
             else None
+        )
+
+        # Empty joint input for ring SDPA when there is no prompt stream.
+        self.dummy_joint_input = ttnn.zeros(
+            [1, self.n_local_heads, 0, self.head_dim],
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+        )
+
+        self.trans_mat = ttnn.from_torch(
+            get_rot_transformation_mat(),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -301,9 +272,7 @@ class Attention(Module):
                 factors = torch.nn.functional.pad(factors, pad)
             state["context_head_factors"] = factors.reshape([-1, 1, 1])
 
-        # Step 3 (kernel-fixed): DistributedRMSNorm expects weight [padded_inner_dim];
-        # HuggingFace stores [head_dim]. Tile the per-head weight padded_heads times so the
-        # post-AG kernel reads the same per-head scale for every head's slice.
+        # HF stores per-head weight [head_dim]; DistributedRMSNorm expects [padded_inner_dim].
         for key in ["norm_q.weight", "norm_k.weight", "norm_added_q.weight", "norm_added_k.weight"]:
             if key in state and state[key].shape[0] == self.head_dim:
                 state[key] = state[key].repeat(self.padded_heads)
@@ -357,10 +326,9 @@ class Attention(Module):
     ) -> ttnn.Tensor:
         """Fused projection + addcmul: output = residual + proj(x) * gate.
 
-        For Ring topology (parallel_config provided with tp>1):
-            Uses all_gather_minimal_matmul_async to fuse all-gather(x) + matmul + addcmul.
-        For Linear topology or tp=1:
-            Gathers x if K-dim mismatch, then uses dit_minimal_matmul_addcmul_fused.
+        Ring (parallel_config, tp>1): all_gather_minimal_matmul_async fuses AG+matmul+addcmul.
+        Linear (parallel_config=None): gathers x on tp_axis if K-dim mismatches, then
+        dit_minimal_matmul_addcmul_fused.
         """
         if (
             to_out_module.fsdp_mesh_axis is not None
@@ -462,16 +430,11 @@ class Attention(Module):
         addcmul_prompt_residual: ttnn.Tensor | None = None,
         addcmul_prompt_gate: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
-        """Forward pass with optional fused to_out + addcmul (residual gate).
+        """Forward with optional fused to_out + addcmul.
 
-        Args:
-            spatial: Tensor with shape [batch_size, spatial_sequence_length / sp_factor, query_dim].
-            prompt: Tensor with shape [batch_size, prompt_sequence_length, query_dim].
-            spatial_rope: Tuple of two tensors with shape [spatial_sequence_length / sp_factor, head_dim].
-            prompt_rope: Tuple of two tensors with shape [prompt_sequence_length, head_dim].
-            addcmul_spatial_residual: if provided with gate, fuses to_out + gate * result + residual.
-            addcmul_spatial_gate: gate tensor for spatial fused addcmul.
-            addcmul_prompt_residual / addcmul_prompt_gate: same for prompt stream.
+        Ring callers pass spatial/prompt fractured on TP (fused AG+matmul inside);
+        Linear callers must all-gather first. addcmul_*_residual+gate fuse the
+        out projection's residual+gate when both are provided.
         """
         assert len(spatial.shape) == 3
         if prompt is not None:
@@ -483,46 +446,39 @@ class Attention(Module):
 
         tp_axis = self.parallel_config.tensor_parallel.mesh_axis
 
-        # Input arrives pre-gathered (full query_dim) from the transformer block.
         is_ring = self.ccl_manager.topology == ttnn.Topology.Ring
 
-        local_heads = self.n_local_heads
-
-        def _split_heads(x_flat: ttnn.Tensor) -> ttnn.Tensor:
-            # [B, N, H_local*head_dim] → [B, H_local, N, head_dim]. Used for V only after Step 3
-            # (Q/K head-split is now fused inside DistributedRMSNorm).
+        def _split_heads(x: ttnn.Tensor) -> ttnn.Tensor:
+            # V only — Q/K head-split is fused inside DistributedRMSNorm.
             out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
-                ttnn.unsqueeze(x_flat, 0), num_heads=local_heads, num_kv_heads=0, transpose_k_heads=False
+                ttnn.unsqueeze(x, 0), num_heads=self.n_local_heads, num_kv_heads=0, transpose_k_heads=False
             )
             return out
 
-        # Step 3 (kernel-fixed): DistributedRMSNorm with per_head_norm=True fuses head-split +
-        # per-head RMS + RoPE into a single kernel pair. V still goes through nlp_create_qkv_heads
-        # (no normalization or RoPE on V).
         spatial_cos = spatial_rope[0].reshape([1, 1, *spatial_rope[0].shape]) if spatial_rope is not None else None
         spatial_sin = spatial_rope[1].reshape([1, 1, *spatial_rope[1].shape]) if spatial_rope is not None else None
-        spatial_trans_mat = self.trans_mat if spatial_rope is not None else None
+        trans_mat = self.trans_mat if spatial_rope is not None else None
 
         q_flat, k_flat, v_flat = self.to_qkv(spatial, compute_kernel_config=self.mm_compute_kernel_config)
         q = self.norm_q(
             ttnn.unsqueeze(q_flat, 0),
-            num_heads_per_device=local_heads,
+            num_heads_per_device=self.n_local_heads,
             rope_cos=spatial_cos,
             rope_sin=spatial_sin,
-            trans_mat=spatial_trans_mat,
+            trans_mat=trans_mat,
             per_head_norm=self.per_head_norm,
         )
         k = self.norm_k(
             ttnn.unsqueeze(k_flat, 0),
-            num_heads_per_device=local_heads,
+            num_heads_per_device=self.n_local_heads,
             rope_cos=spatial_cos,
             rope_sin=spatial_sin,
-            trans_mat=spatial_trans_mat,
+            trans_mat=trans_mat,
             per_head_norm=self.per_head_norm,
         )
         v = _split_heads(v_flat)
 
-        if self.add_qkv_proj is not None:
+        if self.add_qkv_proj is not None and prompt is not None:
             prompt_cos = prompt_rope[0].reshape([1, 1, *prompt_rope[0].shape]) if prompt_rope is not None else None
             prompt_sin = prompt_rope[1].reshape([1, 1, *prompt_rope[1].shape]) if prompt_rope is not None else None
             prompt_trans_mat = self.trans_mat if prompt_rope is not None else None
@@ -532,7 +488,7 @@ class Attention(Module):
             )
             add_q = self.norm_added_q(
                 ttnn.unsqueeze(add_q_flat, 0),
-                num_heads_per_device=local_heads,
+                num_heads_per_device=self.n_local_heads,
                 rope_cos=prompt_cos,
                 rope_sin=prompt_sin,
                 trans_mat=prompt_trans_mat,
@@ -540,7 +496,7 @@ class Attention(Module):
             )
             add_k = self.norm_added_k(
                 ttnn.unsqueeze(add_k_flat, 0),
-                num_heads_per_device=local_heads,
+                num_heads_per_device=self.n_local_heads,
                 rope_cos=prompt_cos,
                 rope_sin=prompt_sin,
                 trans_mat=prompt_trans_mat,
@@ -554,9 +510,6 @@ class Attention(Module):
             add_q = add_k = add_v = self.dummy_joint_input
 
         if self.parallel_config.sequence_parallel.factor > 1:
-            # Step 1 (Item 1.1 diagnostic — REVERTED): row-major Ring SDPA CCL — offset on the
-            # bottom row (same as the non-ring path), no `use_column_major_ccl`. Keeps the
-            # adaptive chunk sizes from Item 1.2 via `ring_sdpa_program_config`.
             spatial, prompt, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 q,
                 k,
@@ -612,7 +565,6 @@ class Attention(Module):
         prompt = self._project_out(
             prompt, self.to_add_out, addcmul_prompt_residual, addcmul_prompt_gate, is_ring, tp_axis
         )
-
         return spatial, prompt
 
     @classmethod
@@ -629,11 +581,3 @@ class Attention(Module):
             length=x.shape[-2], sp_factor=sp_factor, k_chunk_size=k_chunk_size
         )
         return torch.nn.functional.pad(x, (0, 0, 0, padding_len))
-
-
-def _apply_rope(x: ttnn.Tensor, freqs_cis: tuple[ttnn.Tensor, ttnn.Tensor]) -> ttnn.Tensor:
-    cos, sin = freqs_cis
-    cos = cos.reshape([1, 1, *cos.shape])
-    sin = sin.reshape([1, 1, *sin.shape])
-
-    return x * cos + ttnn.alt_complex_rotate90(x) * sin
