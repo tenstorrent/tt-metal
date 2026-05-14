@@ -11,22 +11,21 @@ CQ1 overlaps host-to-device input transfer and device-to-host output read.
 Events synchronize the two queues to avoid data hazards.
 """
 
+import time
+
 import pytest
 import torch
-import time
 from loguru import logger
 from transformers import AutoModelForDepthEstimation
 
 import ttnn
-from models.experimental.depth_anything_v2.tt.model_def import (
-    TtDepthAnythingV2, custom_preprocessor
-)
+from models.experimental.depth_anything_v2.tt.model_def import TtDepthAnythingV2, custom_preprocessor
 from models.perf.perf_utils import prep_perf_report
 
-MODEL_ID    = "depth-anything/Depth-Anything-V2-Large-hf"
-NUM_WARMUP  = 50
+MODEL_ID = "depth-anything/Depth-Anything-V2-Large-hf"
+NUM_WARMUP = 50
 NUM_MEASURE = 200
-TARGET_FPS  = 15.0
+TARGET_FPS = 15.0
 
 
 def run_trace_2cq(device, tt_model, num_warmup, num_measure):
@@ -34,15 +33,13 @@ def run_trace_2cq(device, tt_model, num_warmup, num_measure):
 
     # ── Persistent DRAM input buffer ────────────────────────────────────
     pixel_values = torch.randn(1, 3, 518, 518)
-    tt_inputs_host = ttnn.from_torch(
-        pixel_values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
-    )
+    tt_inputs_host = ttnn.from_torch(pixel_values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     sharded_dram_cfg = ttnn.DRAM_MEMORY_CONFIG
     tt_image_dram = tt_inputs_host.to(device, sharded_dram_cfg)
 
     # Bootstrap events so the first loop iteration has something to wait on
     first_op_event = ttnn.record_event(device, 0)
-    read_event     = ttnn.record_event(device, 1)
+    read_event = ttnn.record_event(device, 1)
 
     # ── JIT compile pass (CQ0 compute, CQ1 write) ──────────────────────
     ttnn.wait_for_event(1, first_op_event)
@@ -50,10 +47,10 @@ def run_trace_2cq(device, tt_model, num_warmup, num_measure):
     write_event = ttnn.record_event(device, 1)
     ttnn.wait_for_event(0, write_event)
 
-    model_input    = ttnn.to_memory_config(tt_image_dram, ttnn.L1_MEMORY_CONFIG)
+    model_input = ttnn.to_memory_config(tt_image_dram, ttnn.L1_MEMORY_CONFIG)
     first_op_event = ttnn.record_event(device, 0)
-    output         = tt_model(model_input)
-    output_dram    = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
+    output = tt_model(model_input)
+    output_dram = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
     ttnn.record_event(device, 0)
 
     # ── Capture trace ───────────────────────────────────────────────────
@@ -62,18 +59,17 @@ def run_trace_2cq(device, tt_model, num_warmup, num_measure):
     write_event = ttnn.record_event(device, 1)
     ttnn.wait_for_event(0, write_event)
 
-    model_input    = ttnn.to_memory_config(tt_image_dram, ttnn.L1_MEMORY_CONFIG)
+    model_input = ttnn.to_memory_config(tt_image_dram, ttnn.L1_MEMORY_CONFIG)
     first_op_event = ttnn.record_event(device, 0)
 
-    spec             = model_input.spec
+    spec = model_input.spec
     input_trace_addr = model_input.buffer_address()
     output.deallocate(force=True)
 
     trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-    output   = tt_model(model_input)
+    output = tt_model(model_input)
     input_l1 = ttnn.allocate_tensor_on_device(spec, device)
-    assert input_trace_addr == input_l1.buffer_address(), \
-        "L1 address mismatch — trace will use wrong buffer"
+    assert input_trace_addr == input_l1.buffer_address(), "L1 address mismatch — trace will use wrong buffer"
     ttnn.end_trace_capture(device, trace_id, cq_id=0)
     output_dram = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
 
@@ -90,7 +86,7 @@ def run_trace_2cq(device, tt_model, num_warmup, num_measure):
         ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
         ttnn.wait_for_event(0, read_event)
 
-        output_dram   = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
+        output_dram = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
         last_op_event = ttnn.record_event(device, 0)
 
         # CQ1: write next input + read current output (overlapped)
@@ -117,7 +113,7 @@ def run_trace_2cq(device, tt_model, num_warmup, num_measure):
         ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
         ttnn.wait_for_event(0, read_event)
 
-        output_dram   = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
+        output_dram = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
         last_op_event = ttnn.record_event(device, 0)
 
         ttnn.wait_for_event(1, first_op_event)
@@ -148,16 +144,14 @@ def test_depth_anything_v2_trace_2cq(device):
     to measure peak throughput with zero dispatch and minimal data transfer
     overhead.  Target: >= 15 FPS.
     """
-    torch_model = AutoModelForDepthEstimation.from_pretrained(
-        MODEL_ID, trust_remote_code=True
-    )
+    torch_model = AutoModelForDepthEstimation.from_pretrained(MODEL_ID, trust_remote_code=True)
     torch_model.eval()
 
     parameters = custom_preprocessor(torch_model, "depth_anything_v2")
-    tt_model   = TtDepthAnythingV2(torch_model.config, parameters, device)
+    tt_model = TtDepthAnythingV2(torch_model.config, parameters, device)
 
     avg_time = run_trace_2cq(device, tt_model, NUM_WARMUP, NUM_MEASURE)
-    fps      = 1.0 / avg_time
+    fps = 1.0 / avg_time
 
     logger.info(f"avg inference time : {avg_time * 1000:.1f} ms")
     logger.info(f"FPS                : {fps:.1f}")
@@ -173,6 +167,6 @@ def test_depth_anything_v2_trace_2cq(device):
         inference_time_cpu=0,
     )
 
-    assert fps >= TARGET_FPS, \
-        f"FPS {fps:.1f} below target {TARGET_FPS}. " \
-        f"avg={avg_time * 1000:.1f}ms, expected<{1000 / TARGET_FPS:.0f}ms"
+    assert fps >= TARGET_FPS, (
+        f"FPS {fps:.1f} below target {TARGET_FPS}. " f"avg={avg_time * 1000:.1f}ms, expected<{1000 / TARGET_FPS:.0f}ms"
+    )

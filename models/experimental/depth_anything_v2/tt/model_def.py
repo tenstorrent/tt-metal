@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import ttnn
 
+import ttnn
 
 # ============================================================================
 # Helpers
@@ -319,13 +319,17 @@ class TtDPTFusionStage:
 
         if target_h is not None and target_w is not None:
             x_cpu = F.interpolate(
-                x_cpu, size=(target_h, target_w),
-                mode="bilinear", align_corners=True,
+                x_cpu,
+                size=(target_h, target_w),
+                mode="bilinear",
+                align_corners=True,
             )
         else:
             x_cpu = F.interpolate(
-                x_cpu, scale_factor=scale,
-                mode="bilinear", align_corners=True,
+                x_cpu,
+                scale_factor=scale,
+                mode="bilinear",
+                align_corners=True,
             )
 
         out_h, out_w = x_cpu.shape[2], x_cpu.shape[3]
@@ -424,13 +428,9 @@ class TtDPTFusionStage:
 
             if fused is None:
                 # First layer (deepest) — no residual
-                hidden_state = self._pre_act_residual_block(
-                    hidden_state, fusion_params.residual_layer2
-                )
+                hidden_state = self._pre_act_residual_block(hidden_state, fusion_params.residual_layer2)
                 if target_h is not None:
-                    hidden_state, _, _ = self._bilinear_upsample(
-                        hidden_state, target_h, target_w
-                    )
+                    hidden_state, _, _ = self._bilinear_upsample(hidden_state, target_h, target_w)
                 else:
                     hidden_state, _, _ = self._bilinear_upsample(hidden_state, scale=2)
                 hidden_state = self._projection_1x1(hidden_state, fusion_params.projection)
@@ -444,14 +444,10 @@ class TtDPTFusionStage:
                 fh, fw = fused.shape[2], fused.shape[3]
                 nh, nw = new_feature.shape[2], new_feature.shape[3]
                 if fh != nh or fw != nw:
-                    new_feature, _, _ = self._bilinear_upsample(
-                        new_feature, target_h=fh, target_w=fw
-                    )
+                    new_feature, _, _ = self._bilinear_upsample(new_feature, target_h=fh, target_w=fw)
 
                 # residual_layer1(new_feature) + fused
-                res1_out = self._pre_act_residual_block(
-                    new_feature, fusion_params.residual_layer1
-                )
+                res1_out = self._pre_act_residual_block(new_feature, fusion_params.residual_layer1)
                 fused = _dram_tile(fused)
                 res1_out = _dram_tile(res1_out)
                 fused = ttnn.add(fused, res1_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -518,8 +514,9 @@ class TtDPTHead:
         # This is only 1 tensor at (B, 128, H, W) so the cost is acceptable.
         import torch
         import torch.nn.functional as F
+
         target_h = patch_height * self.patch_size  # 518
-        target_w = patch_width * self.patch_size   # 518
+        target_w = patch_width * self.patch_size  # 518
         x_cpu = ttnn.to_torch(x).float()
         x_cpu = F.interpolate(
             x_cpu,
@@ -593,8 +590,8 @@ def vit_patch_embeddings(config, pixel_values, parameters, device):
     patch_count = img_h // patch_size  # 37
 
     # ---- 1. Convert input to NHWC for ttnn.conv2d ----------------------
-    x = ttnn.transpose(pixel_values, -2, -1)   # (B, C, H, W) -> (B, C, W, H)
-    x = ttnn.transpose(x, -3, -1)              # (B, C, W, H) -> (B, H, W, C)
+    x = ttnn.transpose(pixel_values, -2, -1)  # (B, C, H, W) -> (B, C, W, H)
+    x = ttnn.transpose(x, -3, -1)  # (B, C, W, H) -> (B, H, W, C)
     x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
     # Weight: (out_ch, in_ch, kH, kW) -- native Conv2d format
@@ -754,7 +751,7 @@ def vit_layer(hidden_states, parameters, config, attention_mask=None):
         key,
         value,
         is_causal=False,
-        scale=1.0 / (head_size ** 0.5),
+        scale=1.0 / (head_size**0.5),
         attn_mask=attention_mask,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         compute_kernel_config=pconfigs["compute_kernel_config"],
@@ -791,7 +788,8 @@ def vit_layer(hidden_states, parameters, config, attention_mask=None):
     # ---- Residual 1 ----------------------------------------------------
     # DINOv2 LayerScale is fused into output_dense weight/bias at preprocessing.
     hidden_states = ttnn.add(
-        attn_out, hidden_states,
+        attn_out,
+        hidden_states,
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
     )
@@ -845,7 +843,8 @@ def vit_layer(hidden_states, parameters, config, attention_mask=None):
     # ---- Residual 2 ----------------------------------------------------
     # DINOv2 LayerScale is fused into FC2 weight/bias at preprocessing.
     hidden_states = ttnn.add(
-        mlp_out, hidden_states,
+        mlp_out,
+        hidden_states,
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
     )
@@ -953,9 +952,10 @@ class TtDepthAnythingV2:
         # Real tokens: position 0 (CLS), positions 32-1400 (patches)
         # Padding tokens: positions 1-31, 1401-1567  -> set to -inf
         import torch
+
         mask_np = torch.zeros(1, 1, seqL, seqL)
-        mask_np[:, :, :, 1:32] = float("-inf")         # CLS padding keys
-        mask_np[:, :, :, 1401:seqL] = float("-inf")    # patch padding keys
+        mask_np[:, :, :, 1:32] = float("-inf")  # CLS padding keys
+        mask_np[:, :, :, 1401:seqL] = float("-inf")  # patch padding keys
         attention_mask = ttnn.from_torch(mask_np, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
 
         # ---- 2. ViT-Large encoder (24 layers) --------------------------
@@ -989,7 +989,7 @@ class TtDepthAnythingV2:
 
         # ---- 5. Head ---------------------------------------------------
         patch_height = 518 // 14  # 37
-        patch_width = 518 // 14   # 37
+        patch_width = 518 // 14  # 37
         output = self.head(fused, patch_height=patch_height, patch_width=patch_width)
 
         return ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
@@ -1029,10 +1029,10 @@ def get_model_config(batch_size, device):
     seqL_padded = 1568
 
     # Tile counts
-    seqL_t = seqL_padded // TILE_HEIGHT         # 49 tiles
-    dim_t = 1024 // TILE_HEIGHT                  # 32 tiles
-    dim_t__x = dim_t // grid_x                   # 4 tiles per core (width)
-    seqL_t__y = seqL_t // grid_y                 # 7 tiles per core (height)
+    seqL_t = seqL_padded // TILE_HEIGHT  # 49 tiles
+    dim_t = 1024 // TILE_HEIGHT  # 32 tiles
+    dim_t__x = dim_t // grid_x  # 4 tiles per core (width)
+    seqL_t__y = seqL_t // grid_y  # 7 tiles per core (height)
     # head_num = 16, head_size = dim_t // head_num = 2 tiles per head (used by SDPA internally)
 
     # MLP intermediate dimension: 4096
@@ -1043,19 +1043,19 @@ def get_model_config(batch_size, device):
         # LayerNorm (used for both LN1 and LN2 in each encoder layer)
         "layernorm_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(grid_x, grid_y),
-            subblock_w=dim_t__x,        # 4
-            block_h=seqL_t__y,           # 7
-            block_w=dim_t__x,            # 4
+            subblock_w=dim_t__x,  # 4
+            block_h=seqL_t__y,  # 7
+            block_w=dim_t__x,  # 4
             inplace=False,
         ),
         # Fused QKV matmul: (seqL, 1024) × (1024, 3072) → (seqL, 3072)
         "qkv_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(grid_x, grid_y),
-            in0_block_w=dim_t__x,        # 4
+            in0_block_w=dim_t__x,  # 4
             out_subblock_h=1,
-            out_subblock_w=dim_t__x,      # 4
-            per_core_M=seqL_t__y,         # 7
-            per_core_N=3 * dim_t__x,      # 12
+            out_subblock_w=dim_t__x,  # 4
+            per_core_M=seqL_t__y,  # 7
+            per_core_N=3 * dim_t__x,  # 12
             transpose_mcast=False,
             fused_activation=None,
         ),
@@ -1064,29 +1064,29 @@ def get_model_config(batch_size, device):
         # SDPA processes attention in chunks, never materializing the full map.
         "sdpa_program_config": ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(grid_x, grid_y),
-            q_chunk_size=32,   # process 32 seq tiles at a time (1024 tokens)
-            k_chunk_size=32,   # same for keys
+            q_chunk_size=32,  # process 32 seq tiles at a time (1024 tokens)
+            k_chunk_size=32,  # same for keys
             exp_approx_mode=False,  # exact exp for accuracy
         ),
         # Output dense: (seqL, 1024) × (1024, 1024) → (seqL, 1024)
         "output_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(grid_x, grid_y),
-            in0_block_w=dim_t__x,         # 4
+            in0_block_w=dim_t__x,  # 4
             out_subblock_h=1,
-            out_subblock_w=dim_t__x,       # 4
-            per_core_M=seqL_t__y,          # 7
-            per_core_N=dim_t__x,           # 4
+            out_subblock_w=dim_t__x,  # 4
+            per_core_M=seqL_t__y,  # 7
+            per_core_N=dim_t__x,  # 4
             transpose_mcast=False,
             fused_activation=None,
         ),
         # MLP FC1 with fused GELU: (seqL, 1024) × (1024, 4096)
         "ff1_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(grid_x, grid_y),
-            in0_block_w=dim_t__x,          # 4
+            in0_block_w=dim_t__x,  # 4
             out_subblock_h=1,
             out_subblock_w=mlp_dim_t__x // 2,  # 8
-            per_core_M=seqL_t__y,           # 7
-            per_core_N=mlp_dim_t__x,        # 16
+            per_core_M=seqL_t__y,  # 7
+            per_core_N=mlp_dim_t__x,  # 16
             transpose_mcast=False,
             fused_activation=None,  # GELU applied explicitly after FC1 for numerical accuracy
         ),
@@ -1094,11 +1094,11 @@ def get_model_config(batch_size, device):
         # in0_block_w=4 (not 16) to fit in L1 with bfloat16 weights
         "ff2_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(grid_x, grid_y),
-            in0_block_w=dim_t__x,              # 4 (reduced from 16 to fit L1)
+            in0_block_w=dim_t__x,  # 4 (reduced from 16 to fit L1)
             out_subblock_h=1,
-            out_subblock_w=dim_t__x,        # 4
-            per_core_M=seqL_t__y,           # 7
-            per_core_N=dim_t__x,            # 4
+            out_subblock_w=dim_t__x,  # 4
+            per_core_M=seqL_t__y,  # 7
+            per_core_N=dim_t__x,  # 4
             transpose_mcast=False,
             fused_activation=None,
         ),
@@ -1195,12 +1195,17 @@ def custom_preprocessor(torch_model, name):
             # Must rearrange: CLS pos -> slot 0 (pad 31 zeros to fill 32),
             # then patch positions -> slots 32-1400, then pad to 1408.
             "position_embeddings": _rm(
-                torch.cat([
-                    torch_model.backbone.embeddings.position_embeddings[:, :1, :],  # CLS pos (1, 1, 1024)
-                    torch.zeros(1, 31, 1024),  # pad CLS region to 32 tokens
-                    torch_model.backbone.embeddings.position_embeddings[:, 1:, :],  # patch positions (1, 1369, 1024)
-                    torch.zeros(1, 1568 - 32 - 1369, 1024),  # pad to seqL_padded=1568
-                ], dim=1)
+                torch.cat(
+                    [
+                        torch_model.backbone.embeddings.position_embeddings[:, :1, :],  # CLS pos (1, 1, 1024)
+                        torch.zeros(1, 31, 1024),  # pad CLS region to 32 tokens
+                        torch_model.backbone.embeddings.position_embeddings[
+                            :, 1:, :
+                        ],  # patch positions (1, 1369, 1024)
+                        torch.zeros(1, 1568 - 32 - 1369, 1024),  # pad to seqL_padded=1568
+                    ],
+                    dim=1,
+                )
             ),
         },
         "encoder": {"layer": []},

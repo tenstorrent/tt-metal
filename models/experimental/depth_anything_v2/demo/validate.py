@@ -28,8 +28,9 @@ except ImportError:
         return r, 0.0
 
 
-import ttnn
 from PIL import Image
+
+import ttnn
 
 # --------------------------------------------------------------------------
 # Config

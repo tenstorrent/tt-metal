@@ -7,8 +7,8 @@ import torch
 from transformers import AutoModelForDepthEstimation
 
 import ttnn
-from models.experimental.depth_anything_v2.tt.model_def import TtDepthAnythingV2, custom_preprocessor
 from models.common.utility_functions import comp_pcc
+from models.experimental.depth_anything_v2.tt.model_def import TtDepthAnythingV2, custom_preprocessor
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)

@@ -8,8 +8,8 @@ from loguru import logger
 from transformers import AutoModelForDepthEstimation
 
 import ttnn
-from models.experimental.depth_anything_v2.tt.model_def import TtDepthAnythingV2, custom_preprocessor
 from models.common.utility_functions import profiler
+from models.experimental.depth_anything_v2.tt.model_def import TtDepthAnythingV2, custom_preprocessor
 from models.perf.perf_utils import prep_perf_report
 
 # Device l1_small_size needed for conv2d ops
