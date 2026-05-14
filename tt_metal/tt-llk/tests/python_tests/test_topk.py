@@ -27,6 +27,7 @@ import sys
 
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
@@ -289,8 +290,11 @@ def test_topk_sfpu(
     stable_sort: bool,
 ):
 
-    if input_dimensions == [32, 1024]:
-        # For 32x1024 input, we have observed some discrepancies in the topk values between hardware and golden.
+    if (
+        input_dimensions == [32, 1024]
+        and get_chip_architecture() == ChipArchitecture.BLACKHOLE
+    ):
+        # For 32x1024 input on blackhole arch, we have observed some discrepancies in the topk values between hardware and golden.
         # TODO: Fix issue #1344 on tt-llk.
         pytest.skip(
             "Skipping test for 32x1024 input on blackhole arch due to observed discrepancies."
