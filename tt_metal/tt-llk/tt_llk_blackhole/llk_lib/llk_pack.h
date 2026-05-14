@@ -68,7 +68,6 @@ inline void _llk_pack_configure_addrmod_()
             .set(ADDR_MOD_2);
     }
 }
-
 template <bool untilize = false, bool zero_output = false, bool tilize = false>
 inline void _llk_pack_mop_config_(
     const std::uint32_t face_r_dim = FACE_R_DIM,
@@ -431,5 +430,3 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
 
     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); // reset z counters
 }
-
-#include "llk_pack_untilize.h"
