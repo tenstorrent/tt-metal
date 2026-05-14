@@ -553,9 +553,9 @@ bool matmul_multi_core_multi_dram_in0_mcast_in1_mcast(const std::shared_ptr<dist
 
     log_debug(LogTest, "Gathering data back from dram and checking against golden");
 
-    for (int i = 0; i < M; i++) {
+    for (uint32_t i = 0; i < M; i++) {
         auto row = tt_metal::get_row_slice(golden, M, i, M * 32, N * 32);
-        for (int j = 0; j < N; j++) {
+        for (uint32_t j = 0; j < N; j++) {
             auto golden_tile = tt_metal::get_col_slice(row, N, j, 32, N * 32);
             int tile_id = (i * N) + j;
             int dram_bank = tile_id % device->num_dram_channels();

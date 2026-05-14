@@ -63,23 +63,23 @@ namespace tt::tt_metal {
 using std::vector;
 
 struct CBConfig {
-    uint32_t cb_id;
-    uint32_t num_pages;
-    uint32_t page_size;
-    tt::DataFormat data_format;
+    uint32_t cb_id = 0;
+    uint32_t num_pages = 0;
+    uint32_t page_size = 0;
+    tt::DataFormat data_format = tt::DataFormat::Float16_b;
 };
 
 struct DummyProgramConfig {
-    CoreRangeSet cr_set;
-    CBConfig cb_config;
-    uint32_t num_cbs;
-    uint32_t num_sems;
+    CoreRangeSet cr_set = {};
+    CBConfig cb_config = {};
+    uint32_t num_cbs = 0;
+    uint32_t num_sems = 0;
 };
 
 struct DummyProgramMultiCBConfig {
-    CoreRangeSet cr_set;
-    std::vector<CBConfig> cb_config_vector;
-    uint32_t num_sems;
+    CoreRangeSet cr_set = {};
+    std::vector<CBConfig> cb_config_vector = {};
+    uint32_t num_sems = 0;
 };
 
 struct IncrementKernelsSet {
@@ -825,7 +825,7 @@ bool verify_rt_args(
         addr,
         incr_val);
 
-    for (int i = 0; i < expected_rt_args.size(); i++) {
+    for (size_t i = 0; i < expected_rt_args.size(); i++) {
         uint32_t expected_val = expected_rt_args[i] + incr_val;
         log_debug(
             tt::LogTest,
@@ -942,7 +942,7 @@ bool test_increment_runtime_args_sanity(
 
     // Call SetRuntimeArgs. Set for core ranges that are running the kernel
     // zip the kernel_id and cr set from program_config
-    for (int i = 0; i < program_configs.size(); ++i) {
+    for (size_t i = 0; i < program_configs.size(); ++i) {
         const auto& cr_set = program_configs[i].cr_set;
         const auto& kernel_id = configured_kernels.kernel_handles[i];
 
@@ -1050,7 +1050,7 @@ void test_basic_dispatch_functions(const std::shared_ptr<distributed::MeshDevice
     // Alternate write patterns
     std::vector<uint32_t> src_data_1(k_DataSize / sizeof(uint32_t));
     std::vector<uint32_t> src_data_2(k_DataSize / sizeof(uint32_t));
-    for (int i = 0; i < k_DataSize / sizeof(uint32_t); ++i) {
+    for (size_t i = 0; i < k_DataSize / sizeof(uint32_t); ++i) {
         src_data_1[i] = (device->id() + rand()) * 0xdeadbeef;
         src_data_2[i] = (device->id() + rand()) * 0xabcd1234;
     }
@@ -1063,8 +1063,8 @@ void test_basic_dispatch_functions(const std::shared_ptr<distributed::MeshDevice
 
     auto& cq = mesh_device->mesh_command_queue(cq_id);
 
-    for (int iteration = 0; iteration < k_Iterations; ++iteration) {
-        for (int i = 0; i < k_LoopPerDev; ++i) {
+    for (uint32_t iteration = 0; iteration < k_Iterations; ++iteration) {
+        for (uint32_t i = 0; i < k_LoopPerDev; ++i) {
             EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
                 mesh_device, cq, dummy_program_config, 24, 12, 15, k_LoopPerDev, false));
 
@@ -1082,15 +1082,15 @@ void test_basic_dispatch_functions(const std::shared_ptr<distributed::MeshDevice
     }
 
     // non blocking fast data movement APIs
-    for (int iteration = 0; iteration < k_Iterations; ++iteration) {
-        for (int i = 0; i < k_LoopPerDev; ++i) {
+    for (uint32_t iteration = 0; iteration < k_Iterations; ++iteration) {
+        for (uint32_t i = 0; i < k_LoopPerDev; ++i) {
             distributed::EnqueueWriteMeshBuffer(cq, buffer, src_data_1, false);
         }
     }
 
     std::vector<uint32_t> dst_data;
-    for (int iteration = 0; iteration < k_Iterations; ++iteration) {
-        for (int i = 0; i < k_LoopPerDev; ++i) {
+    for (uint32_t iteration = 0; iteration < k_Iterations; ++iteration) {
+        for (uint32_t i = 0; i < k_LoopPerDev; ++i) {
             distributed::ReadShard(cq, dst_data, buffer, distributed::MeshCoordinate{0, 0}, true);
         }
     }

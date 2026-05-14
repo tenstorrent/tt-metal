@@ -700,7 +700,7 @@ class DispatchPackedWriteLargeTestFixture : public DispatchPackedWriteTestFixtur
         // Track payload size for this command
         uint32_t cumulative_payload_bytes = 0;
 
-        for (int i = 0; i < max_transactions && remaining_bytes > 0; i++) {
+        for (uint32_t i = 0; i < max_transactions && remaining_bytes > 0; i++) {
             // Generate a random transfer size
             // We're first converting the max payload allowed by the packed large format into alignment units
             // get_random_size will clamp the size to remaining_bytes
@@ -872,7 +872,7 @@ class DispatchPackedWriteLargeUnicastTestFixture : public DispatchPackedWriteTes
 
         uint32_t cumulative_payload_bytes = 0;
 
-        for (int i = 0; i < max_transactions && remaining_bytes > 0; i++) {
+        for (uint32_t i = 0; i < max_transactions && remaining_bytes > 0; i++) {
             uint32_t max_allowed = dispatch_buffer_page_size_ * max_pages_per_transaction / l1_alignment;
             uint32_t xfer_size_bytes =
                 payload_generator_->get_random_size(max_allowed, bytes_per_16B_unit, remaining_bytes);
@@ -1127,9 +1127,9 @@ public:
         const uint32_t l1_buf_base = memmap.dispatch_buffer_base();
 
         const auto& soc_desc = tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->device_->id());
-        TT_FATAL(raw.size() + l1_buf_base <= soc_desc.worker_l1_size, "SD command buffer too large for L1");
+        TT_FATAL(raw.size() + l1_buf_base <= static_cast<size_t>(soc_desc.worker_l1_size), "SD command buffer too large for L1");
         TT_FATAL(
-            Common::SD_DISPATCH_BUFFER_SIZE_BYTES + l1_buf_base <= soc_desc.worker_l1_size,
+            Common::SD_DISPATCH_BUFFER_SIZE_BYTES + l1_buf_base <= static_cast<uint32_t>(soc_desc.worker_l1_size),
             "SD dispatch buffer too large for L1");
 
         const CoreCoord phys_spoof = this->device_->worker_core_from_logical_core(Common::sd_spoof_prefetch_core);

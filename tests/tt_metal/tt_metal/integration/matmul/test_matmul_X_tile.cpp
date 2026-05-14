@@ -188,7 +188,7 @@ static void verify_matmul_tile_output(
     std::vector<uint32_t> golden_packed(golden_tilized_single.size());
     uint16_t math_fid_mask = 0xFFFF;
     set_math_fid_masks(math_fid_mask, cfg.math_fidelity);
-    for (auto i = 0; i < golden_tilized.size(); i++) {
+    for (size_t i = 0; i < golden_tilized.size(); i++) {
         golden_tilized_single[i] = std::bit_cast<bfloat16>(
             static_cast<uint16_t>(std::bit_cast<uint16_t>(golden_tilized_single[i]) & math_fid_mask));
         if (cfg.fp32_dest_acc_en) {

@@ -581,9 +581,9 @@ bool matmul_multi_core_multi_dram(
     // Keeping this old code because took me too long to decipher. Matmul
     // owner can refactor at a later time
     auto result_iter = result.begin();
-    for (int i = 0; i < M; i++) {
+    for (uint32_t i = 0; i < M; i++) {
         auto row = tt_metal::get_row_slice(golden, M, i, M * 32, N * 32);
-        for (int j = 0; j < N; j++) {
+        for (uint32_t j = 0; j < N; j++) {
             auto golden_tile = tt_metal::get_col_slice(row, N, j, 32, N * 32);
             std::vector<uint32_t> result_vec;
             result_vec.insert(result_vec.end(), result_iter, result_iter + 512);

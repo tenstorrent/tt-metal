@@ -192,7 +192,7 @@ TEST_F(MetalContextTest, MaxContexts) {
     auto mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1).value();
     std::vector<std::unique_ptr<MetalEnv>> envs;
     envs.reserve(MAX_CONTEXT_COUNT);
-    for (int i = 0; i < MAX_CONTEXT_COUNT - 1; ++i) {
+    for (size_t i = 0; i < MAX_CONTEXT_COUNT - 1; ++i) {
         envs.push_back(std::make_unique<MetalEnv>(MetalEnvDescriptor(mock_cluster_desc_path)));
         context_ids.push_back(MetalContext::create_instance(*envs.back()));
     }

@@ -542,7 +542,7 @@ public:
         std::unordered_map<CoreCoord, std::vector<uint32_t>> results;
         auto num_words_per_core = op.size_bytes / sizeof(uint32_t);
 
-        for (auto i = 0; i < op.buffer_page_mapping.all_cores.size(); i++) {
+        for (size_t i = 0; i < op.buffer_page_mapping.all_cores.size(); i++) {
             const auto& core = op.buffer_page_mapping.all_cores[i];
             const auto& page_indices = op.buffer_page_mapping.core_host_page_indices[i];
             std::vector<uint32_t> core_data;

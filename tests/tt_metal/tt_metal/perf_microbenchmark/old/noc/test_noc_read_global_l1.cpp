@@ -126,8 +126,8 @@ int main(int argc, char** argv) {
 
         SHAPE shape = {1, 1, shape_Nt * 32, 32};
         std::vector<tt::deprecated::Tensor<bfloat16>> tensors;
-        for (int r = 0; r < num_cores_r; ++r) {
-            for (int c = 0; c < num_cores_c; ++c) {
+        for (uint32_t r = 0; r < num_cores_r; ++r) {
+            for (uint32_t c = 0; c < num_cores_c; ++c) {
                 auto tensor = tt::deprecated::initialize_tensor<bfloat16>(
                     shape,
                     tt::deprecated::Initialize::RANDOM,
@@ -146,8 +146,8 @@ int main(int argc, char** argv) {
         }
 
         if (print_tensor) {
-            for (int r = 0; r < num_cores_r; ++r) {
-                for (int c = 0; c < num_cores_c; ++c) {
+            for (uint32_t r = 0; r < num_cores_r; ++r) {
+                for (uint32_t c = 0; c < num_cores_c; ++c) {
                     print_vec_of_bfloat16(
                         tensors[(r * num_cores_c) + c].get_values(),
                         1,
@@ -163,8 +163,8 @@ int main(int argc, char** argv) {
         }
 
         std::vector<std::vector<uint32_t>> packed_tensors;
-        for (int r = 0; r < num_cores_r; ++r) {
-            for (int c = 0; c < num_cores_c; ++c) {
+        for (uint32_t r = 0; r < num_cores_r; ++r) {
+            for (uint32_t c = 0; c < num_cores_c; ++c) {
                 auto activations = pack_bfloat16_vec_into_uint32_vec(tensors[(r * num_cores_c) + c].get_values());
                 packed_tensors.push_back(activations);
                 if (single_read || one_buffer_share) {
@@ -215,8 +215,8 @@ int main(int argc, char** argv) {
         }
 
         l1_buffers.reserve(l1_buffers_size);
-        for (int r = 0; r < num_cores_r; ++r) {
-            for (int c = 0; c < num_cores_c; ++c) {
+        for (uint32_t r = 0; r < num_cores_r; ++r) {
+            for (uint32_t c = 0; c < num_cores_c; ++c) {
                 tt_metal::distributed::ReplicatedBufferConfig replicated_config{.size = total_tiles_size_bytes};
                 tt_metal::distributed::DeviceLocalBufferConfig local_config{
                     .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::L1};
@@ -239,8 +239,8 @@ int main(int argc, char** argv) {
         }
 
         // validation
-        for (int r = 0; r < num_cores_r; ++r) {
-            for (int c = 0; c < num_cores_c; ++c) {
+        for (uint32_t r = 0; r < num_cores_r; ++r) {
+            for (uint32_t c = 0; c < num_cores_c; ++c) {
                 std::vector<uint32_t> result_vec;
                 tt::tt_metal::distributed::ReadShard(
                     device->mesh_command_queue(0),
@@ -287,8 +287,8 @@ int main(int argc, char** argv) {
                 .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
         auto num_blocks = Nt / cb_n;
-        for (int r = 0; r < num_cores_r; ++r) {
-            for (int c = 0; c < num_cores_c; ++c) {
+        for (uint32_t r = 0; r < num_cores_r; ++r) {
+            for (uint32_t c = 0; c < num_cores_c; ++c) {
                 CoreCoord core = {(size_t)c, (size_t)r};
 
                 int l1_buffers_idx = (single_read || one_buffer_share) ? (0) : ((r * num_cores_c) + c);
@@ -324,8 +324,8 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         if (validation) {
             log_info(LogTest, "Validation");
-            for (int r = 0; r < num_cores_r; ++r) {
-                for (int c = 0; c < num_cores_c; ++c) {
+            for (uint32_t r = 0; r < num_cores_r; ++r) {
+                for (uint32_t c = 0; c < num_cores_c; ++c) {
                     std::vector<uint32_t> result_vec;
                     CoreCoord core = {(size_t)c, (size_t)r};
                     tt_metal::detail::ReadFromDeviceL1(

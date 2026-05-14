@@ -101,7 +101,7 @@ struct EndpointProgressState {
     uint64_t packets_processed = 0;
     uint64_t packets_expected = 0;
 
-    EndpointHungState hung;
+    EndpointHungState hung = {};
 };
 
 struct HungEndpointRecord {

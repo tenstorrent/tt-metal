@@ -574,14 +574,14 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
                     if (it != params.end() && std::holds_alternative<std::vector<uint32_t>>(it->second)) {
                         const auto& num_links_vec = std::get<std::vector<uint32_t>>(it->second);
                         for (const auto& num_links : num_links_vec) {
-                            if (num_links == stoi(filter_value.value())) {
+                            if (num_links == static_cast<uint32_t>(stoi(filter_value.value()))) {
                                 return true;
                             }
                         }
                     }
                 }
             }
-            return test_config.fabric_setup.num_links == stoi(filter_value.value());
+            return test_config.fabric_setup.num_links == static_cast<uint32_t>(stoi(filter_value.value()));
         }
         if (filter_type.value() == "ntype") {
             if (fine_grained) {
@@ -686,7 +686,7 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
                     if (it != params.end() && std::holds_alternative<std::vector<uint32_t>>(it->second)) {
                         const auto& num_packets_vec = std::get<std::vector<uint32_t>>(it->second);
                         for (const auto& num_packets : num_packets_vec) {
-                            if (num_packets == stoi(filter_value.value())) {
+                            if (num_packets == static_cast<uint32_t>(stoi(filter_value.value()))) {
                                 return true;
                             }
                         }
@@ -732,7 +732,7 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
                     if (it != params.end() && std::holds_alternative<std::vector<uint32_t>>(it->second)) {
                         const auto& size_vec = std::get<std::vector<uint32_t>>(it->second);
                         for (const auto& size : size_vec) {
-                            if (size == stoi(filter_value.value())) {
+                            if (size == static_cast<uint32_t>(stoi(filter_value.value()))) {
                                 return true;
                             }
                         }

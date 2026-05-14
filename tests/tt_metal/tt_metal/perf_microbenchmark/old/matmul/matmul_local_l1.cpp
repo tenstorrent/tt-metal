@@ -241,10 +241,10 @@ int main(int argc, char** argv) {
         }
 
         log_info(LogTest, "Slicing input tensors and copying them to L1");
-        for (int r = 0; r < num_cores_r; r++) {
+        for (uint32_t r = 0; r < num_cores_r; r++) {
             std::vector<bfloat16> activation_slice =
                 get_row_slice(tensor.get_values(), num_cores_r, r, Mt * 32, Kt * 32);
-            for (int c = 0; c < num_cores_c; c++) {
+            for (uint32_t c = 0; c < num_cores_c; c++) {
                 std::vector<bfloat16> weights_slice = get_col_slice(identity, num_cores_c, c, Kt * 32, Nt * 32);
 
                 CoreCoord core = {(std::size_t)c, (std::size_t)r};
@@ -343,9 +343,9 @@ int main(int argc, char** argv) {
         auto golden = select_columns(tensor.get_values(), Mt, Kt, Nt);
         if (validation) {
             log_info(LogTest, "Validation");
-            for (int r = 0; r < num_cores_r; ++r) {
+            for (uint32_t r = 0; r < num_cores_r; ++r) {
                 auto golden_row = get_row_slice(golden, num_cores_r, r, Mt * 32, Nt * 32);
-                for (int c = 0; c < num_cores_c; ++c) {
+                for (uint32_t c = 0; c < num_cores_c; ++c) {
                     auto per_core_golden = get_col_slice(golden_row, num_cores_c, c, per_core_Mt * 32, Nt * 32);
 
                     CoreCoord core = {(size_t)c, (size_t)r};

@@ -71,9 +71,9 @@ struct BandwidthResult {
     uint64_t cycles{};
     double bandwidth_GB_s{};
     double packets_per_second{};
-    std::optional<double> telemetry_bw_GB_s_min;
-    std::optional<double> telemetry_bw_GB_s_avg;
-    std::optional<double> telemetry_bw_GB_s_max;
+    std::optional<double> telemetry_bw_GB_s_min = std::nullopt;
+    std::optional<double> telemetry_bw_GB_s_avg = std::nullopt;
+    std::optional<double> telemetry_bw_GB_s_max = std::nullopt;
 };
 
 struct BandwidthResultSummary {
@@ -89,13 +89,13 @@ struct BandwidthResultSummary {
     std::vector<double> cycles_vector;
     std::vector<double> bandwidth_vector_GB_s;
     std::vector<double> packets_per_second_vector;
-    std::vector<double> statistics_vector;  // Stores the calculated statistics for each test
+    std::vector<double> statistics_vector = {};  // Stores the calculated statistics for each test
     uint32_t max_packet_size{};             // Max packet size for router (always set explicitly)
 
     // Optional fields for database upload CSV
-    std::optional<std::string> file_name;
-    std::optional<std::string> machine_type;
-    std::optional<std::string> test_ts;
+    std::optional<std::string> file_name = std::nullopt;
+    std::optional<std::string> machine_type = std::nullopt;
+    std::optional<std::string> test_ts = std::nullopt;
 };
 
 // Golden CSV comparison structures

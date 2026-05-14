@@ -64,7 +64,7 @@ static std::vector<uint32_t> generate_copy_block_stimulus(
 
     if (test_config.fp32_dest_acc_en) {
         auto src_vec_float = generate_uniform_random_vector<float>(-100, 100, dram_buffer_size / sizeof(float), 0);
-        for (auto i = 0; i < src_vec.size(); i++) {
+        for (size_t i = 0; i < src_vec.size(); i++) {
             std::memcpy(&src_vec[i], &src_vec_float[i], sizeof(float));
             src_vec[i] &= 0xFFFFE000;
         }
