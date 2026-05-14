@@ -17,6 +17,11 @@ struct FusedRmsnormPostAllGatherParams {
     tt::tt_metal::MemoryConfig memory_config;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
     std::optional<tt::tt_metal::DataType> dtype;
+    // When true, the input `stats` tensor is expected to contain `num_heads` per-head
+    // sum-of-squares tiles per row (not the AllGather-aggregated single-row sum), and the
+    // kernel applies an independent per-head RMS using divisor `head_dim` for each head.
+    // Default false preserves the original global-RMS behavior (used by WAN, etc.).
+    bool per_head_norm = false;
 };
 
 struct FusedRmsnormPostAllGatherInputs {

@@ -182,7 +182,8 @@ Tensor fused_rmsnorm_post_all_gather(
     const std::optional<const Tensor>& rope_sin,
     const MemoryConfig& memory_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    const std::optional<DataType>& dtype) {
+    const std::optional<DataType>& dtype,
+    bool per_head_norm) {
     using OperationType = ttnn::experimental::prim::FusedRMSNormPostAllGatherDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -191,6 +192,7 @@ Tensor fused_rmsnorm_post_all_gather(
         .memory_config = memory_config,
         .compute_kernel_config = compute_kernel_config,
         .dtype = dtype,
+        .per_head_norm = per_head_norm,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .input_tensor = input_tensor,
