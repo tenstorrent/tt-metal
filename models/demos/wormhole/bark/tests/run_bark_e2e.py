@@ -72,6 +72,10 @@ def run_single(model, text: str, output_key: str, verbose: bool = True):
     t0 = time.time()
     fine_tokens = model.generate_fine_tokens(coarse_tokens)
     timings["fine_time"] = time.time() - t0
+    # Fine generates 6 new codebooks × coarse_seq_len tokens
+    coarse_seq_len = timings["coarse_tokens"] // 2
+    timings["fine_tokens"] = 6 * coarse_seq_len
+    timings["fine_tps"] = timings["fine_tokens"] / max(timings["fine_time"], 1e-6)
 
     # Stage 4: Decode audio
     t0 = time.time()
@@ -97,7 +101,10 @@ def run_single(model, text: str, output_key: str, verbose: bool = True):
             f"  Coarse:   {timings['coarse_tokens']} tokens in {timings['coarse_time']:.2f}s "
             f"({timings['coarse_tps']:.1f} tok/s)"
         )
-        print(f"  Fine:     {timings['fine_time']:.2f}s")
+        print(
+            f"  Fine:     {timings['fine_tokens']} tokens in {timings['fine_time']:.2f}s "
+            f"({timings['fine_tps']:.1f} tok/s)"
+        )
         print(f"  Decode:   {timings['decode_time']:.2f}s")
         print(f"  Audio:    {timings['audio_duration']:.2f}s @ 24kHz")
         print(f"  RTF:      {timings['rtf']:.3f}")

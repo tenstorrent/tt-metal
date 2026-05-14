@@ -20,6 +20,8 @@ import math
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from models.common.utility_functions import nearest_32
+
 import torch
 
 import ttnn
@@ -157,7 +159,7 @@ class TtBarkAttention:
     """Multi-head self-attention for Bark.
 
     Supports both causal (stages 1-2) and non-causal (stage 3) attention.
-    Now fully on-device with optional KV caching support.
+    Uses pre-allocated KV cache with write-in-place updates (O(n) vs O(n²) concat).
 
     Architecture:
         Q, K, V = att_proj(hidden_states).split(3)
@@ -173,6 +175,11 @@ class TtBarkAttention:
         self.head_dim = config.hidden_size // config.num_heads
         self.embed_dim = config.hidden_size
         self.scale = 1.0 / (self.head_dim**0.5)
+        self.max_seq_len = config.block_size  # 1024
+
+        # Pre-allocated KV cache tensors (lazy-init on first use)
+        self._kv_cache_k = None
+        self._kv_cache_v = None
 
         assert self.embed_dim % self.num_heads == 0, "hidden_size must be divisible by num_heads"
 
@@ -255,19 +262,42 @@ class TtBarkAttention:
         value = ttnn.transpose(value, 1, 2)
 
         if layer_past is not None:
-            past_key, past_value = layer_past
-            # Update KV cache — always use DRAM to prevent L1 overflow
-            # during long autoregressive sequences (KV grows linearly)
-            kv_mem = ttnn.DRAM_MEMORY_CONFIG
-            new_key = ttnn.concat([past_key, key], dim=-2, memory_config=kv_mem)
-            new_value = ttnn.concat([past_value, value], dim=-2, memory_config=kv_mem)
+            kv_cache_k, kv_cache_v, cache_len = layer_past
+            # Write-in-place: update pre-allocated cache at current position
+            ttnn.kv_cache.update_cache_for_token_(kv_cache_k, key, cache_len)
+            ttnn.kv_cache.update_cache_for_token_(kv_cache_v, value, cache_len)
             ttnn.deallocate(key)
             ttnn.deallocate(value)
-            ttnn.deallocate(past_key)
-            ttnn.deallocate(past_value)
-            key, value = new_key, new_value
+            # Slice valid region from pre-allocated cache
+            valid_len = nearest_32(cache_len + 1)
+            key = kv_cache_k[:, :, :valid_len, : self.head_dim]
+            value = kv_cache_v[:, :, :valid_len, : self.head_dim]
 
-        layer_present = (key, value) if use_cache else None
+        if use_cache:
+            if layer_past is not None:
+                kv_cache_k, kv_cache_v, cache_len = layer_past
+                layer_present = (kv_cache_k, kv_cache_v, cache_len + 1)
+            else:
+                # First call (prefill): initialize pre-allocated KV cache
+                B = query.shape[0]
+                if self._kv_cache_k is None:
+                    torch_k_cache = torch.zeros(B, self.num_heads, self.max_seq_len, self.head_dim)
+                    torch_v_cache = torch.zeros(B, self.num_heads, self.max_seq_len, self.head_dim)
+                    self._kv_cache_k = ttnn.from_torch(
+                        torch_k_cache, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                        device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    self._kv_cache_v = ttnn.from_torch(
+                        torch_v_cache, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                        device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                # Fill cache with prefill KV
+                ttnn.kv_cache.fill_cache_for_user_(self._kv_cache_k, key, 0)
+                ttnn.kv_cache.fill_cache_for_user_(self._kv_cache_v, value, 0)
+                prefill_len = key.shape[-2]
+                layer_present = (self._kv_cache_k, self._kv_cache_v, prefill_len)
+        else:
+            layer_present = None
 
         # Fully on-device SDPA with mode selection:
         # - Prefill mode (seq_q>=32): use chunked SDPA on device
@@ -488,6 +518,20 @@ class TtBarkGPT:
             packer_l1_acc=True,
         )
 
+    def reset_kv_cache(self):
+        """Reset KV cache state for a new generation.
+
+        The pre-allocated cache tensors are reused (no reallocation needed);
+        only the cache_len tracking in layer_past tuples is reset by the
+        caller passing layer_past=None on the next prefill call.
+
+        Call this to reset the lazy-initialized cache tensors if batch size
+        changes between generations.
+        """
+        for block in self.blocks:
+            block.attn._kv_cache_k = None
+            block.attn._kv_cache_v = None
+
     def __call__(
         self,
         input_ids: Optional[torch.Tensor] = None,
@@ -501,13 +545,13 @@ class TtBarkGPT:
         Args:
             input_ids: [batch, seq_len] token indices
             inputs_embeds: [batch, seq_len, hidden] pre-computed embeddings
-            layer_past: List of (past_key, past_value) tuples for each layer
+            layer_past: List of (k_cache, v_cache, cache_len) tuples per layer
             use_cache: Whether to return the new KV cache
             memory_config: Memory configuration for activations
 
         Returns:
             logits: [batch, seq_len, vocab_size]
-            layer_present: List of updated (key, value) tuples
+            layer_present: List of updated (k_cache, v_cache, cache_len) tuples
         """
         if inputs_embeds is None and input_ids is not None:
             # CPU embedding lookup (avoids NCRISC kernel bug in ttnn 0.67.0rc5)
@@ -524,7 +568,8 @@ class TtBarkGPT:
             seq_len = tok_ids.shape[-1]
 
             if layer_past is not None:
-                past_len = layer_past[0][0].shape[-2]
+                # layer_past items are (k_cache, v_cache, cache_len) tuples
+                past_len = layer_past[0][2]  # cache_len from first layer
                 position_ids = torch.arange(past_len, past_len + seq_len, dtype=torch.long)
             else:
                 position_ids = torch.arange(0, seq_len, dtype=torch.long)

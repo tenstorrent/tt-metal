@@ -155,6 +155,31 @@ class TtBarkModel:
         # Clean up full model reference
         del hf_model
 
+        # --- Pre-create on-device logits masks for host-free decode ---
+        # Semantic mask: suppress vocab indices > SEMANTIC_PAD_TOKEN
+        sem_vocab = self.semantic_model.config.output_vocab_size
+        sem_mask = torch.zeros(1, 1, 1, sem_vocab, dtype=torch.bfloat16)
+        sem_mask[:, :, :, SEMANTIC_PAD_TOKEN + 1 :] = -1e9  # bfloat16-safe -inf
+        self.tt_semantic_mask = ttnn.from_torch(
+            sem_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+            device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Coarse masks: two alternating codebook masks (even/odd step)
+        coarse_vocab = self.coarse_model.config.output_vocab_size
+        self.tt_coarse_masks = []
+        for cb_idx in range(N_COARSE_CODEBOOKS):
+            mask = torch.full((1, 1, 1, coarse_vocab), -1e9, dtype=torch.bfloat16)
+            allowed_start = SEMANTIC_VOCAB_SIZE + cb_idx * CODEBOOK_SIZE
+            allowed_end = allowed_start + CODEBOOK_SIZE
+            mask[:, :, :, allowed_start:allowed_end] = 0.0
+            mask[:, :, :, COARSE_SEMANTIC_PAD_TOKEN] = 0.0  # always allow EOS
+            tt_mask = ttnn.from_torch(
+                mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self.tt_coarse_masks.append(tt_mask)
+
     def generate_semantic_tokens(self, text: str, voice_preset=None) -> torch.Tensor:
         """Stage 1: Generate semantic tokens using optimized TTNN model with KV caching.
 
@@ -201,16 +226,18 @@ class TtBarkModel:
             gen_mem = ttnn.DRAM_MEMORY_CONFIG
             logits, layer_past = self.semantic_model(input_ids=input_ids, use_cache=True, memory_config=gen_mem)
 
-            # --- Unified autoregressive loop with logits suppression on host ---
+            # --- On-device autoregressive loop with batched EOS check ---
             max_new_tokens = getattr(self.semantic_generation_config, "max_new_tokens", None) or 768
             generated_tokens = []
             next_token_torch = None
             tt_next_token = None
+            eos_check_interval = 4  # Only transfer to host every N steps
 
             for step in range(max_new_tokens):
                 if step == 0:
-                    # Use prefill logits
-                    logits_torch = ttnn.to_torch(logits).squeeze(0)
+                    # Apply mask on-device to prefill logits
+                    # logits shape: [1, 1, seq, vocab] — slice last position
+                    logits_last = logits[:, :, -1:, :]
                     ttnn.deallocate(logits)
                 else:
                     logits, layer_past = self.semantic_model(
@@ -220,44 +247,50 @@ class TtBarkModel:
                         memory_config=gen_mem,
                     )
                     ttnn.deallocate(tt_next_token)
-                    logits_torch = ttnn.to_torch(logits).squeeze(0)
-                    ttnn.deallocate(logits)
+                    logits_last = logits
+                    # logits is already [1, 1, 1, vocab] for decode
 
-                last_logits = logits_torch[:, -1, :]
-                # Allow EOS at SEMANTIC_PAD_TOKEN (10000); suppress everything above it
-                last_logits[:, SEMANTIC_PAD_TOKEN + 1 :] = -float("inf")
-                next_token_torch = torch.argmax(last_logits, dim=-1)  # [1]
-
-                # EOS check BEFORE appending — EOS itself is never included in output
-                if next_token_torch.item() == SEMANTIC_PAD_TOKEN:
-                    break
-
-                generated_tokens.append(next_token_torch.unsqueeze(-1))
-                tt_next_token = ttnn.from_torch(
-                    next_token_torch.unsqueeze(0).to(torch.int32),
-                    dtype=ttnn.uint32,
-                    device=self.device,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                # On-device masking + argmax
+                masked_logits = ttnn.add(
+                    logits_last, self.tt_semantic_mask,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
+                if logits_last is not logits or step > 0:
+                    ttnn.deallocate(logits_last)
+                tt_next_token = ttnn.argmax(
+                    masked_logits, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                ttnn.deallocate(masked_logits)
+
+                # Batched EOS check: only pull to host periodically
+                if step % eos_check_interval == 0 or step < 2:
+                    next_token_torch = ttnn.to_torch(tt_next_token).flatten()
+                    token_val = next_token_torch[0].item()
+                    if token_val == SEMANTIC_PAD_TOKEN:
+                        ttnn.deallocate(tt_next_token)
+                        tt_next_token = None
+                        break
+
+                generated_tokens.append(tt_next_token)
+                # Re-shape for next model input: [1, 1] uint32
+                tt_next_token = ttnn.reshape(tt_next_token, [1, 1])
 
             if tt_next_token is not None:
                 ttnn.deallocate(tt_next_token)
 
-            # Deallocate KV cache tensors to free device memory
-            if layer_past is not None:
-                for past_k, past_v in layer_past:
-                    try:
-                        ttnn.deallocate(past_k)
-                    except Exception:
-                        pass
-                    try:
-                        ttnn.deallocate(past_v)
-                    except Exception:
-                        pass
+            # KV cache is pre-allocated and reused; no per-generation deallocation needed.
+            # The cache tensors persist in the attention layers for future calls.
 
         if not generated_tokens:
             return torch.empty((1, 0), dtype=torch.long)
-        return torch.cat(generated_tokens, dim=-1)
+
+        # Collect tokens from device to host
+        host_tokens = []
+        for tt_tok in generated_tokens:
+            tok_val = ttnn.to_torch(tt_tok).flatten()[0].item()
+            ttnn.deallocate(tt_tok)
+            host_tokens.append(torch.tensor([[tok_val]], dtype=torch.long))
+        return torch.cat(host_tokens, dim=-1)
 
     def generate_coarse_tokens(self, semantic_tokens: torch.Tensor) -> torch.Tensor:
         """Stage 2: Generate coarse EnCodec tokens using optimized TTNN model with KV caching.
@@ -300,7 +333,7 @@ class TtBarkModel:
 
             for step in range(max_new_tokens):
                 if step == 0:
-                    logits_torch = ttnn.to_torch(logits).squeeze(0)
+                    logits_last = logits[:, :, -1:, :]
                     ttnn.deallocate(logits)
                 else:
                     logits, layer_past = self.coarse_model(
@@ -310,54 +343,42 @@ class TtBarkModel:
                         memory_config=gen_mem,
                     )
                     ttnn.deallocate(tt_next_token)
-                    logits_torch = ttnn.to_torch(logits).squeeze(0)
-                    ttnn.deallocate(logits)
+                    logits_last = logits
 
-                last_logits = logits_torch[:, -1, :]  # [1, vocab]
-
-                # Alternating codebook suppression — critical for correct coarse generation
+                # On-device alternating codebook mask + argmax
                 codebook_idx = step % N_COARSE_CODEBOOKS
-                allowed_start = SEMANTIC_VOCAB_SIZE + codebook_idx * CODEBOOK_SIZE
-                allowed_end = allowed_start + CODEBOOK_SIZE
-                mask = torch.full_like(last_logits, -float("inf"))
-                mask[:, allowed_start:allowed_end] = 0.0
-                mask[:, COARSE_SEMANTIC_PAD_TOKEN] = 0.0  # always allow EOS
-                next_token_torch = torch.argmax(last_logits + mask, dim=-1)
+                masked_logits = ttnn.add(
+                    logits_last, self.tt_coarse_masks[codebook_idx],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                if logits_last is not logits or step > 0:
+                    ttnn.deallocate(logits_last)
+                tt_next_token = ttnn.argmax(
+                    masked_logits, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                ttnn.deallocate(masked_logits)
 
-                # EOS check — must only stop on full codebook pairs to prevent
-                # odd-length output that would crash Stage 3 reshape.
-                if next_token_torch.item() == COARSE_SEMANTIC_PAD_TOKEN:
-                    # EOS can fire on either parity. We handle both:
-                    # - step % 2 == 1: codebook 1 just completed a pair → safe to stop
-                    # - step % 2 == 0: codebook 0 of a new pair → need to pad codebook 1
+                # Transfer to host for EOS check every step
+                # (coarse EOS requires codebook-pair alignment logic)
+                next_token_torch = ttnn.to_torch(tt_next_token).flatten()
+                token_val = next_token_torch[0].item()
+
+                if token_val == COARSE_SEMANTIC_PAD_TOKEN:
+                    # EOS — handle incomplete codebook pairs
                     if len(generated_tokens) > 0 and len(generated_tokens) % N_COARSE_CODEBOOKS != 0:
-                        # Incomplete pair — pad with a silence token for the missing codebook
                         pad_token = torch.tensor([[SEMANTIC_VOCAB_SIZE + CODEBOOK_SIZE]], dtype=torch.long)
                         generated_tokens.append(pad_token)
+                    ttnn.deallocate(tt_next_token)
+                    tt_next_token = None
                     break
 
-                generated_tokens.append(next_token_torch.unsqueeze(-1))
-                tt_next_token = ttnn.from_torch(
-                    next_token_torch.unsqueeze(0).to(torch.int32),
-                    dtype=ttnn.uint32,
-                    device=self.device,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                )
+                generated_tokens.append(torch.tensor([[token_val]], dtype=torch.long))
+                tt_next_token = ttnn.reshape(tt_next_token, [1, 1])
 
             if tt_next_token is not None:
                 ttnn.deallocate(tt_next_token)
 
-            # Deallocate KV cache tensors to free device memory
-            if layer_past is not None:
-                for past_k, past_v in layer_past:
-                    try:
-                        ttnn.deallocate(past_k)
-                    except Exception:
-                        pass
-                    try:
-                        ttnn.deallocate(past_v)
-                    except Exception:
-                        pass
+            # KV cache is pre-allocated and reused; no per-generation deallocation needed.
 
         if not generated_tokens:
             print("WARNING: Coarse generation produced no tokens. Returning silence.")
@@ -480,6 +501,7 @@ class TtBarkModel:
         text: str,
         voice_preset=None,
         verbose: bool = True,
+        use_overlap: bool = False,
     ) -> np.ndarray:
         """Full text-to-audio pipeline.
 
@@ -487,10 +509,17 @@ class TtBarkModel:
             text: Input text string
             voice_preset: Optional voice preset dict
             verbose: Print timing info
+            use_overlap: Use chunked coarse→fine pipeline overlap
 
         Returns:
             audio: numpy array of 24kHz mono audio waveform
         """
+        if use_overlap:
+            from models.demos.wormhole.bark.tt.bark_pipeline_overlap import BarkStreamingPipeline
+
+            pipeline = BarkStreamingPipeline(self)
+            return pipeline.generate_streamed(text, verbose=verbose)
+
         timings = {}
 
         # Stage 1: Text -> Semantic
@@ -518,8 +547,13 @@ class TtBarkModel:
         fine_tokens = self.generate_fine_tokens(coarse_tokens)
         timings["fine"] = time.time() - t0
         if verbose:
+            # Fine generates 6 new codebooks × seq_len tokens
+            coarse_seq_len = coarse_tokens.shape[1] // 2 if coarse_tokens.shape[1] > 0 else 0
+            fine_new_tokens = 6 * coarse_seq_len
+            fine_tps = fine_new_tokens / timings['fine'] if timings['fine'] > 0 else 0
             print(
-                f"Stage 3 (Fine): {fine_tokens.shape[1]}x{fine_tokens.shape[2]} codebooks " f"in {timings['fine']:.2f}s"
+                f"Stage 3 (Fine): {fine_tokens.shape[1]}x{fine_tokens.shape[2]} codebooks "
+                f"in {timings['fine']:.2f}s ({fine_tps:.1f} tok/s)"
             )
 
         # Stage 4: Decode audio
