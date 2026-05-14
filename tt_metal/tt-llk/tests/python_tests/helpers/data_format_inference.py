@@ -541,13 +541,28 @@ def data_formats(
         unpacking_to_dest: Whether unpacking targets the destination register (default: False)
         chip_arch: The chip architecture (Wormhole or Blackhole). If None, will be detected automatically.
         disable_format_inference: When True, disables automatic data format inference and conversions, ensuring input formats are the same in dest.
-                                  Used for testing specific math kernels with explicit format requirements.
+                                  Used for testing specific math kernels with explicit format requirements. Incompatible with `register_format_hint`
+                                  (which is an inference-time directive); passing both raises ValueError.
         input_format_B: Optional input data format for src_B if different from src_A, used for testing specific scenarios with different A and B formats.
+        unpacking_to_srcs: Whether the unpacker target is SrcS (default: False)
+        register_format_hint: Optional opt-in for a SrcA/SrcB-only register format (e.g. MxFp4_2x_A / MxFp4_2x_B). When set, the inferred
+                              unpack_A_dst / unpack_B_dst become the hint instead of the default (e.g. for MxFp4 input, Float16_b). Honored
+                              by the inference path only; must be paired with `disable_format_inference=False`. Currently valid only when
+                              `input_format == DataFormat.MxFp4` and the requested hint is family-compatible with `output_format` (2x_A pairs
+                              with Float16/Float32, 2x_B with Float16_b/Float32).
     Returns:
         A list of FormatConfig objects of length num_iterations
     """
 
     if disable_format_inference:
+        if register_format_hint is not None:
+            raise ValueError(
+                f"register_format_hint={register_format_hint.name} cannot be used with "
+                "disable_format_inference=True. The hint is honored by the inference path; "
+                "disabling inference would silently ignore it. Either drop the hint, or "
+                "set disable_format_inference=False so inference picks up the hint."
+            )
+
         # MX formats can't exist in registers, so "keep formats the same in dest"
         # is meaningless for them. Delegate to the inference path, which produces
         # the only valid config (unpack_dst=Float16_b, math=Float16_b, etc.).
