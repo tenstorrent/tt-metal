@@ -113,6 +113,9 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
         lower = line.lower()
 
         if "starting tt-smi reset" in lower:
+            if capturing and current_block:
+                all_resets.append(current_block)
+
             current_block = []
             capturing = True
 

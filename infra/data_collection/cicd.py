@@ -64,6 +64,7 @@ def create_cicd_json_for_data_analysis(
     print("CHECK:", 72824250364 in github_job_id_to_smi_resets)
     print("AVAILABLE KEYS:", list(github_job_id_to_smi_resets.keys())[:10])
     jobs = []
+    tt_smi_resets = []
 
     for raw_job in raw_jobs:
         github_job_id = int(raw_job["github_job_id"])
@@ -98,6 +99,11 @@ def create_cicd_json_for_data_analysis(
 
         reset_data = github_job_id_to_smi_resets.get(github_job_id)
 
+        if reset_data:
+            for attempt in reset_data:
+                attempt["github_job_id"] = github_job_id
+                tt_smi_resets.append(TtSmiReset(**attempt))
+
         if github_job_id in [72824250364, 72824250365, 72824250368]:
             logger.info(f"RESET DATA FOR {github_job_id}: {reset_data}")
             assert reset_data is not None, f"Missing reset_data for {github_job_id}"
@@ -107,13 +113,13 @@ def create_cicd_json_for_data_analysis(
             tt_smi_version=github_job_id_to_smi_versions.get(github_job_id),
             tests=tests,
             steps=steps,
-            tt_smi_reset=[TtSmiReset(**attempt) for attempt in reset_data] if reset_data else None,
         )
         jobs.append(job)
 
     pipeline = pydantic_models.Pipeline(
         **raw_pipeline,
         jobs=jobs,
+        tt_smi_resets=tt_smi_resets,
     )
 
     return pipeline

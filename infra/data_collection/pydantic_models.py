@@ -60,10 +60,11 @@ class JobStatus(str, Enum):
     timed_out = "timed_out"
     action_required = "action_required"
 
+
 class TtSmiReset(BaseModel):
+    github_job_id: int
+    attempt: int
     final_status: Optional[str] = None
-    num_reset_attempts: Optional[int] = None
-    num_attempts: Optional[int] = None
     total_reset_time_sec: Optional[float] = None
     error_summary: Optional[str] = None
 
@@ -115,9 +116,6 @@ class Job(BaseModel):
     job_label: Optional[str] = Field(None, description="GitHub CI runner label for the job.")
     tt_smi_version: Optional[str] = Field(
         None, description="Version of the tt-smi tool in order to check consistency across CI fleets."
-    )
-    tt_smi_reset: Optional[List[TtSmiReset]] = Field(
-    None, description="TT-SMI reset information parsed from job logs."
     )
 
     # Model validator to check the unique combination constraint
@@ -186,6 +184,7 @@ class Pipeline(BaseModel):
     git_author: str = Field(description="Author of the Git commit.")
     orchestrator: Optional[str] = Field(None, description="CI/CD pipeline orchestration platform.")
     jobs: List[Job] = []
+    tt_smi_resets: List[TtSmiReset] = []
 
     # Model validator to check the unique combination constraint
     @model_validator(mode="before")
