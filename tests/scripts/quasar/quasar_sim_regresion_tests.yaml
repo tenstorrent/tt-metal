@@ -24,5 +24,22 @@ unit_tests_legacy:
   - filter: "*MultiDmAddTwoInts*"
     config: 2x3
 
+  - filter: "*Bmm"
+    config: 1x3
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
 #  - filter: "*SingleDmL1Write*"
 #    config: 1x3
+
+unit_tests_llk:
+  - filter: "*SingleCoreSingleMeshDeviceSfpuParameterizedFixture*TensixSfpuCompute/10"
+    config: 1x3
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+unit_tests_api:
+  - filter: "*TensixSingleCoreDirectDramReaderDatacopyWriter"
+    config: 1x3
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
