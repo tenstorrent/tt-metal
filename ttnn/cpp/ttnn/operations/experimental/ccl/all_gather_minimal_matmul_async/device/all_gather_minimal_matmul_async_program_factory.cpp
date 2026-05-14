@@ -336,11 +336,10 @@ all_gather_minimal_matmul_async_factory_helper(
     uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
     uint32_t in2_block_num_tiles = N_block_tiles;
 
-    const uint32_t double_buffer_factor = 2;
-    uint32_t in0_cb_num_tiles = in0_block_num_tiles * double_buffer_factor;
-    uint32_t in1_cb_num_tiles = in1_block_num_tiles * double_buffer_factor;
-    // TODO: consider not double buffering the output
-    uint32_t out_cb_num_tiles = out_block_num_tiles * double_buffer_factor;
+    // EXPERIMENT: depth-4 in0_cb, single-buffer out_cb
+    uint32_t in0_cb_num_tiles = in0_block_num_tiles * 4;  // depth-4
+    uint32_t in1_cb_num_tiles = in1_block_num_tiles * 2;  // depth-2
+    uint32_t out_cb_num_tiles = out_block_num_tiles;      // single
     uint32_t interm_cb_num_tiles = out_block_num_tiles;  // not double buffered
     uint32_t in2_cb_num_tiles = in2_block_num_tiles;     // not double buffered
 
