@@ -157,6 +157,7 @@ void compute_actual_k_block(
         }
     }
 #ifdef IS_IN0
+#ifndef AGMM_NO_FABRIC
     if (device_iter > 0 && is_first_n_block) {
         // When we are not reading from local, and we are in the first forward pass through n, wait for data to arrive
         if (is_injector_core) {
@@ -187,7 +188,8 @@ void compute_actual_k_block(
             }
         }
     }
-#endif
+#endif  // !AGMM_NO_FABRIC
+#endif  // IS_IN0
 }
 
 #ifdef USE_MUX

@@ -154,8 +154,10 @@ void kernel_main() {
         parse_mux_connection_args<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes>(
             argidx, in0_core_order_index, forward_in0_core_order_index);
 
+#ifndef AGMM_NO_FABRIC
     auto* mux_connection_handle_backward = mux_backward.build_and_connect(fabric_mux_status_address);
     auto* mux_connection_handle_forward = mux_forward.build_and_connect(fabric_mux_status_address);
+#endif
 #endif
 
 #ifdef FUSE_BIAS
@@ -247,6 +249,7 @@ void kernel_main() {
         safe_get_noc_addr(out_ready_sem_injector_noc0_x, out_ready_sem_injector_noc0_y, out_ready_sem_forward, 0);
 
 #ifdef USE_MUX
+#ifndef AGMM_NO_FABRIC
     auto pkt_hdrs_backward = allocate_and_init_packet_headers(
         detail::valid_targets(1),
         unicast_route_info_backward,
@@ -256,6 +259,7 @@ void kernel_main() {
 
     auto pkt_hdrs_forward = allocate_and_init_packet_headers(
         detail::valid_targets(0), unicast_route_info_forward, in0_reader, num_tiles_to_write_per_packet, in3_tile_size);
+#endif
 #endif
 
     /**
@@ -426,6 +430,7 @@ void kernel_main() {
                     noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
                 }
 #ifdef USE_MUX
+#ifndef AGMM_NO_FABRIC
                 if (n_block_iter == 0) {
                     DeviceZoneScopedN("send");
                     bool forward_slice = false;
@@ -504,7 +509,8 @@ void kernel_main() {
                         }
                     }
                 }
-#endif
+#endif  // !AGMM_NO_FABRIC
+#endif  // USE_MUX
             }
 #ifdef FUSE_BIAS
             if constexpr (!is_output_writer) {
@@ -594,6 +600,7 @@ void kernel_main() {
     noc_async_atomic_barrier();
 
 #ifdef USE_MUX
+#ifndef AGMM_NO_FABRIC
     if (mux_backward.connection_valid) {
         close_mux(
             mux_connection_handle_backward,
@@ -618,7 +625,8 @@ void kernel_main() {
             mux_forward.termination_master_noc_x,
             mux_forward.termination_master_noc_y);
     }
-#endif
+#endif  // !AGMM_NO_FABRIC
+#endif  // USE_MUX
 
     noc_async_write_barrier();
 

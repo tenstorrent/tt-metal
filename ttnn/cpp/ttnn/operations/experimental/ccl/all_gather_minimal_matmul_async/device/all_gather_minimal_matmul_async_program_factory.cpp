@@ -11,6 +11,8 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include <algorithm>
+#include <cstdlib>
+#include <string>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tuple>
 #include <utility>
@@ -221,8 +223,8 @@ all_gather_minimal_matmul_async_factory_helper(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    // Intermediate CB dataformat: bf16 even with fp32 dest acc (saves L1 for deeper in0_cb).
-    auto intermediate_data_format = tt::DataFormat::Float16_b;
+    // Intermediate CB dataformat is the same datatype as DST register.
+    auto intermediate_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     auto intermediate_tile_size = tt::tile_size(intermediate_data_format);
 
     /**
@@ -336,24 +338,26 @@ all_gather_minimal_matmul_async_factory_helper(
     uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
     uint32_t in2_block_num_tiles = N_block_tiles;
 
-    // Adaptive CB depth: maximize in0_cb depth subject to L1 budget. Deep in0_cb hides
-    // the chain mcast pipeline build-up (~100us at depth 2).
-    const uint32_t L1_BUDGET_BYTES = 1400 * 1024;                                  // conservative
-    uint32_t fixed_bytes = out_block_num_tiles * out_tile_size                     // out (single)
-                           + out_block_num_tiles * intermediate_tile_size          // intermediate (single)
-                           + (use_bias ? in2_block_num_tiles * in2_tile_size : 0)  // bias (single)
-                           + in1_block_num_tiles * in1_tile_size * 3;              // in1 (target depth 3)
-    uint32_t in0_block_bytes = in0_block_num_tiles * in0_tile_size;
+    // Adaptive CB depth: maximize in0_cb depth (it hides chain mcast pipeline build-up,
+    // ~100us at depth 2), then opportunistically bump in1_cb. Budget is conservative
+    // (some L1 is reserved for kernels/firmware).
+    const uint32_t L1_BUDGET_BYTES = 1300 * 1024;
+    const uint32_t base_fixed_bytes = out_block_num_tiles * out_tile_size                      // out (single)
+                                      + out_block_num_tiles * intermediate_tile_size           // intermediate (single)
+                                      + (use_bias ? in2_block_num_tiles * in2_tile_size : 0);  // bias (single)
+    const uint32_t in0_block_bytes = in0_block_num_tiles * in0_tile_size;
+    const uint32_t in1_block_bytes = in1_block_num_tiles * in1_tile_size;
+    // Start with in1 depth-2 (safe). Maximize in0_cb depth.
+    uint32_t in1_depth = 2;
+    uint32_t fixed_with_in1 = base_fixed_bytes + in1_block_bytes * in1_depth;
     uint32_t in0_depth = 2;
-    uint32_t in1_depth = 3;
-    if (fixed_bytes + 2 * in0_block_bytes > L1_BUDGET_BYTES) {
-        // Doesn't fit with in1 depth 3 — back off to depth 2.
-        fixed_bytes -= in1_block_num_tiles * in1_tile_size;
-        in1_depth = 2;
-    }
-    if (fixed_bytes < L1_BUDGET_BYTES) {
-        in0_depth = std::min(8u, (L1_BUDGET_BYTES - fixed_bytes) / std::max(1u, in0_block_bytes));
+    if (fixed_with_in1 + 2 * in0_block_bytes <= L1_BUDGET_BYTES) {
+        in0_depth = std::min(8u, (L1_BUDGET_BYTES - fixed_with_in1) / std::max(1u, in0_block_bytes));
         in0_depth = std::max(2u, in0_depth);
+    }
+    // Opportunistically bump in1 to depth 3 if there's room left.
+    if (fixed_with_in1 + in0_depth * in0_block_bytes + in1_block_bytes <= L1_BUDGET_BYTES) {
+        in1_depth = 3;
     }
     uint32_t in0_cb_num_tiles = in0_block_num_tiles * in0_depth;
     uint32_t in1_cb_num_tiles = in1_block_num_tiles * in1_depth;
@@ -528,6 +532,14 @@ all_gather_minimal_matmul_async_factory_helper(
     std::map<std::string, std::string> in0_defines;
     std::map<std::string, std::string> in0_injector_defines;
     std::map<std::string, std::string> in0_fabric_defines;
+    // AGMM_NO_FABRIC env var: when set to "1", skip all fabric transactions (payloads,
+    // semaphores, mux setup/teardown) and any waits for remote-device semaphores.
+    // Used to measure best-case timing if fabric were free.
+    const char* no_fabric_env = std::getenv("AGMM_NO_FABRIC");
+    const bool agmm_no_fabric = (no_fabric_env != nullptr && std::string(no_fabric_env) == "1");
+    if (agmm_no_fabric) {
+        defines["AGMM_NO_FABRIC"] = "1";
+    }
     if (use_bias) {
         defines["FUSE_BIAS"] = "1";
     }
@@ -839,16 +851,19 @@ all_gather_minimal_matmul_async_factory_helper(
             .compile_args = compute_compile_time_args,
             .defines = compute_defines});
 
-    // mux kernel
-    auto mux_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-        mux_core_range_set,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_1_default,
-            .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
-            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+    // mux kernel — skip entirely under AGMM_NO_FABRIC (workers don't connect/terminate)
+    [[maybe_unused]] tt::tt_metal::KernelHandle mux_kernel_id = 0;
+    if (!agmm_no_fabric) {
+        mux_kernel_id = tt::tt_metal::CreateKernel(
+            program,
+            "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+            mux_core_range_set,
+            tt::tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt::tt_metal::NOC::RISCV_1_default,
+                .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
+                .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+    }
 
     /**
      * The receiver writer cores defer their writes in order to reduce NOC congestion.
@@ -866,28 +881,30 @@ all_gather_minimal_matmul_async_factory_helper(
     // for requests that the receiver will never issue, leading to deadlock. Keep the original uniform
     // div_up-based ranges for M and N.
 
-    for (uint32_t mux_id = 0; mux_id < num_mux_cores; ++mux_id) {
-        uint32_t dir = mux_id % 2;  // 2 being the number of directions
-        if (mux_connection_valid(dir)) {
-            uint32_t link = mux_id / 2;  // 2 is the num directions
-            uint32_t mux_x_index = (num_workers_per_link * (link + 1)) - (1 - dir);
-            if (mux_x_index >= full_grid_size.x) {
-                mux_x_index = mux_x_index - full_grid_size.x;
-            }
-            auto mux_logical_core = CoreCoord(mux_x_index, full_grid_size.y - 1);
+    if (!agmm_no_fabric) {
+        for (uint32_t mux_id = 0; mux_id < num_mux_cores; ++mux_id) {
+            uint32_t dir = mux_id % 2;  // 2 being the number of directions
+            if (mux_connection_valid(dir)) {
+                uint32_t link = mux_id / 2;  // 2 is the num directions
+                uint32_t mux_x_index = (num_workers_per_link * (link + 1)) - (1 - dir);
+                if (mux_x_index >= full_grid_size.x) {
+                    mux_x_index = mux_x_index - full_grid_size.x;
+                }
+                auto mux_logical_core = CoreCoord(mux_x_index, full_grid_size.y - 1);
 
-            std::vector<uint32_t> mux_rt_args = {};
-            const auto src_node_id = device->get_fabric_node_id(sender_device_coord);
-            if (dir) {  // forward
-                const auto dst_node_id = device->get_fabric_node_id(backward_coord.value());
-                mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                    src_node_id, dst_node_id, link, program, {mux_logical_core});
-            } else {
-                const auto dst_node_id = device->get_fabric_node_id(forward_coord.value());
-                mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                    src_node_id, dst_node_id, link, program, {mux_logical_core});
+                std::vector<uint32_t> mux_rt_args = {};
+                const auto src_node_id = device->get_fabric_node_id(sender_device_coord);
+                if (dir) {  // forward
+                    const auto dst_node_id = device->get_fabric_node_id(backward_coord.value());
+                    mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
+                        src_node_id, dst_node_id, link, program, {mux_logical_core});
+                } else {
+                    const auto dst_node_id = device->get_fabric_node_id(forward_coord.value());
+                    mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
+                        src_node_id, dst_node_id, link, program, {mux_logical_core});
+                }
+                tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
             }
-            tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
         }
     }
 
