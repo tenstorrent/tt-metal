@@ -1076,6 +1076,8 @@ class TTNNQwen3LinearAttention(TTNNModule):
         self._in_proj_a_weight_tt = None  # device tensor [hidden_size, num_v_heads], replicated
         self._in_proj_b_weight_tt = None  # device tensor [hidden_size, num_v_heads], replicated
         self._norm_weight_tt = None  # device tensor [1, head_v_dim], replicated
+        self._conv1d_weight_slices_tt = []  # K device tensors [1, 1, conv_dim], replicated
+        self._conv1d_bias_tt = None  # device tensor [1, 1, conv_dim], replicated
 
         # DeltaNet kernel parameters (kept on PyTorch)
         self.conv1d = None  # PyTorch Conv1d for causal convolution (weight/bias accessed by causal_conv1d_fn/update)
@@ -1260,6 +1262,12 @@ class TTNNQwen3LinearAttention(TTNNModule):
         if self._norm_weight_tt is not None:
             ttnn.deallocate(self._norm_weight_tt)
             self._norm_weight_tt = None
+        for w_tt in self._conv1d_weight_slices_tt:
+            ttnn.deallocate(w_tt)
+        self._conv1d_weight_slices_tt = []
+        if self._conv1d_bias_tt is not None:
+            ttnn.deallocate(self._conv1d_bias_tt)
+            self._conv1d_bias_tt = None
 
     def move_weights_to_device_impl(self):
         """Move weights to device: upload in_proj_a/b, norm weight, and optional GDN buffers."""
@@ -1293,6 +1301,35 @@ class TTNNQwen3LinearAttention(TTNNModule):
         if self.norm is not None and self._norm_weight_tt is None:
             norm_weight = self.norm.weight.detach().to(torch.bfloat16)
             self._norm_weight_tt = upload_replicated(norm_weight.unsqueeze(0), self.device)
+
+        # Upload depthwise conv1d weight slices for TTNN prefill path.
+        # weight [conv_dim, 1, K] → K slices of [1, 1, conv_dim] replicated.
+        if self.conv1d is not None and not self._conv1d_weight_slices_tt:
+            K = self.conv_kernel_size
+            mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
+            # weight[conv_dim, 1, K].squeeze(1).T → [K, conv_dim]; each row is one weight slice
+            w_kc = self.conv1d.weight.squeeze(1).T.detach().to(torch.bfloat16)  # [K, conv_dim]
+            self._conv1d_weight_slices_tt = [
+                ttnn.from_torch(
+                    w_kc[j : j + 1, :].unsqueeze(0),  # [1, 1, conv_dim]
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    mesh_mapper=mesh_mapper,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                for j in range(K)
+            ]
+            if self.conv1d.bias is not None:
+                bias = self.conv1d.bias.detach().to(torch.bfloat16)  # [conv_dim]
+                self._conv1d_bias_tt = ttnn.from_torch(
+                    bias.unsqueeze(0).unsqueeze(0),  # [1, 1, conv_dim]
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    mesh_mapper=mesh_mapper,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
 
         # GDN kernel path: pre-allocate decode buffers.
         if (
@@ -2111,6 +2148,37 @@ class TTNNQwen3LinearAttention(TTNNModule):
                     activation=self.activation,
                     seq_idx=None,
                 )
+            elif self._conv1d_weight_slices_tt:
+                # TTNN depthwise causal conv1d.
+                # mixed_qkv is already on CPU in BCT [1, conv_dim, seq_len] (transposed at line above).
+                # ttnn.pad doesn't support on-device front-padding for tile layout, so we pad on CPU
+                # before uploading — this is cheap (K-1 = 3 zeros) vs the actual convolution.
+                K = self.conv_kernel_size
+                C = int(mixed_qkv.shape[1])  # conv_dim
+                T = int(mixed_qkv.shape[2])  # seq_len
+                # Permute BCT → BTC on CPU, left-pad the T dim by K-1 zeros.
+                x_btc = mixed_qkv.permute(0, 2, 1).to(torch.bfloat16)  # [1, T, C]
+                x_padded = F.pad(x_btc, (0, 0, K - 1, 0))  # [1, T+K-1, C]
+                mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
+                x_tt = ttnn.from_torch(
+                    x_padded,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    mesh_mapper=mesh_mapper,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                # Accumulate K shifted multiply-add terms (standard cross-correlation).
+                out_tt = None
+                for j in range(K):
+                    x_j = ttnn.slice(x_tt, [0, j, 0], [1, j + T, C])
+                    term = ttnn.mul(x_j, self._conv1d_weight_slices_tt[j], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    out_tt = term if out_tt is None else ttnn.add(out_tt, term, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                if self._conv1d_bias_tt is not None:
+                    out_tt = ttnn.add(out_tt, self._conv1d_bias_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                out_tt = ttnn.silu(out_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                # Download as BTC [1, T, C], transpose back to BCT [1, C, T].
+                mixed_qkv = self._to_pytorch_replicated(out_tt).transpose(1, 2).contiguous()
             else:
                 mixed_qkv = F.silu(self.conv1d(mixed_qkv)[:, :, :seq_len])
 
