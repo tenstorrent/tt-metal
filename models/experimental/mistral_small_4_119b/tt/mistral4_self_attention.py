@@ -513,6 +513,7 @@ class TtMistral4Attention(LightweightModule):
         sin: ttnn.Tensor,
         kv_cache: tuple,
         current_pos: int,
+        cur_pos_tensor: ttnn.Tensor = None,
     ) -> ttnn.Tensor:
         """
         Single-token decode step.
@@ -618,14 +619,17 @@ class TtMistral4Attention(LightweightModule):
         q_decode = ttnn.transpose(q_full, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(q_full)
 
-        cur_pos_tensor = ttnn.as_tensor(
-            torch.tensor([current_pos], dtype=torch.int32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
+        _free_pos_tensor = False
+        if cur_pos_tensor is None:
+            cur_pos_tensor = ttnn.as_tensor(
+                torch.tensor([current_pos], dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            _free_pos_tensor = True
 
         attn_out = ttnn.transformer.scaled_dot_product_attention_decode(
             q_decode,
@@ -636,7 +640,8 @@ class TtMistral4Attention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1, B=1, NH=N_HEADS, V_HEAD_DIM]
         ttnn.deallocate(q_decode)
-        ttnn.deallocate(cur_pos_tensor)
+        if _free_pos_tensor:
+            ttnn.deallocate(cur_pos_tensor)
 
         # [1, 1, N_HEADS, V_HEAD_DIM] → transpose(1,2) → [1, N_HEADS, 1, V_HEAD_DIM]
         # → reshape → [1, 1, 1, N_HEADS * V_HEAD_DIM] for o_proj
