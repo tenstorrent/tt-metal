@@ -214,13 +214,15 @@ void kernel_main() {
         }
 
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
-            // Set state for the data writes (full-burst size; remainder re-sets below)
-            noc_async_write_one_packet_set_state</*posted=*/true>(
-                neighbor_base_addr,
-                a2a_full_packets > 0 ? a2a_full_packet_size : a2a_remainder_size,
-                /*noc=*/1,
-                vchannel);
-
+            if constexpr (a2a_full_packets == 0 || a2a_remainder_tiles == 0) {
+                // Set only once here if there is only 1 type of packet: either all full with none partial, or none full
+                // with one partial
+                noc_async_write_one_packet_set_state</*posted=*/true>(
+                    neighbor_base_addr,
+                    a2a_full_packets > 0 ? a2a_full_packet_size : a2a_remainder_size,
+                    /*noc=*/1,
+                    vchannel);
+            }
             // Set state for the semaphore write
             noc_inline_dw_write_set_state</*posted=*/true, /*set_val=*/false>(
                 neighbor_semaphore_noc_addr, /*val=*/0, /*be=*/0xF, /*cmd_buf=*/write_at_cmd_buf, /*noc=*/1, vchannel);
@@ -233,6 +235,12 @@ void kernel_main() {
             // Ring synchronization: all cores participate regardless of whether they had CB work
             for (uint32_t i = 0; i < Cfg::num_a2a_iters; ++i) {
                 for (uint32_t step = 0; step < num_a2a_steps_per_iter; ++step) {
+                    if constexpr (a2a_full_packets > 0 && a2a_remainder_tiles > 0) {
+                        // Resetting required as both full and partial packets exist
+                        noc_async_write_one_packet_set_state</*posted=*/true>(
+                            neighbor_base_addr, a2a_full_packet_size, /*noc=*/1, vchannel);
+                    }
+
                     // Wait for current data to be ready in cb_s2c_in2
                     while ((*my_semaphore_ptr) < semaphore_value) {
                     };
@@ -247,20 +255,21 @@ void kernel_main() {
                     const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[(step == num_cores - 1) ? 0 : (step + 1)];
 
                     uint32_t pkt_offset = 0;
+                    // Rely on compiler to remove loop if no full packet exists
                     for (uint32_t pkt = 0; pkt < a2a_full_packets; ++pkt) {
                         noc_async_write_one_packet_with_state</*posted=*/true>(
                             local_src_addr + pkt_offset, neighbor_dst_addr + pkt_offset);
                         pkt_offset += a2a_full_packet_size;
                     }
                     if constexpr (a2a_remainder_tiles > 0) {
-                        noc_async_write_one_packet_set_state</*posted=*/true>(
-                            neighbor_base_addr, a2a_remainder_size, /*noc=*/1, vchannel);
+                        if constexpr (a2a_full_packets > 0) {
+                            // Reset here if full packets exist, otherwise, it was already set once at the top and no
+                            // reset required
+                            noc_async_write_one_packet_set_state</*posted=*/true>(
+                                neighbor_base_addr, a2a_remainder_size, /*noc=*/1, vchannel);
+                        }
                         noc_async_write_one_packet_with_state</*posted=*/true>(
                             local_src_addr + pkt_offset, neighbor_dst_addr + pkt_offset);
-                        if constexpr (a2a_full_packets > 0) {
-                            noc_async_write_one_packet_set_state</*posted=*/true>(
-                                neighbor_base_addr, a2a_full_packet_size, /*noc=*/1, vchannel);
-                        }
                     }
 
                     // Signal neighbor that data is ready (increment their semaphore value)
