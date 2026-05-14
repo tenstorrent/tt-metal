@@ -79,7 +79,18 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
             uint32_t input_cbs = 2 * input_cb_num_blocks * kb * mb * tile_sz;
             // c_2: matmul intermediate accumulator (FP32), mb × mb tiles
             uint32_t intermed_cb = mb * mb * intermed_tile_sz;
-            // c_5: output/reduce CB, mb × mb tiles
+            // c_5: output/reduce CB, mb × mb tiles (BF16).
+            //
+            // Precision/L1 tradeoff (currently BF16):
+            //   The lower-triangle partial is packed to BF16 before being NOC-written to the upper
+            //   partner. This is the dominant truncation step for off-diagonal precision. Promoting
+            //   c_5 to FP32 would roughly halve off-diagonal error (diagonal stays BF16-limited by
+            //   the final c_6/DRAM output). However at typical mb=13 it adds ~338 KB to L1 — pushes
+            //   over the per-core budget and forces mb→12, roughly doubling (m_sub, n_sub) iterations.
+            //
+            // Future optimization possibility: stream c_5 row-by-row (size mb instead of mb²) — sender packs+sends
+            //   one row at a time, receiver consumes incrementally. Frees ~mb²−mb tiles of L1, which
+            //   could absorb FP32 c_5 (still smaller than today's BF16 mb²) and improves sender/receiver pipelining.
             uint32_t output_cb = mb * mb * out_tile_sz;
             // c_6: combined output after reduction, mb tiles
             uint32_t combined_cb = mb * out_tile_sz;

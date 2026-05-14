@@ -2,12 +2,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Multicast sender — runs on RISCV_0 (row senders) or RISCV_1 (col senders).
-// Reads input tiles from DRAM and multicasts to receiver cores.
-// Row senders (c_0): RISCV_0/NOC_0, read M_block rows indexed by m_sub.
-// Col senders (c_1): RISCV_1/NOC_1, read N_block rows indexed by n_sub.
-// Even K-columns → lower/diag, odd K-columns → upper. One handshake per K-block batch.
-// Pushes own-parity blocks to local CB before multicast (critical for avoiding deadlock).
+// Multicast sender — reads input tiles from DRAM and multicasts to receiver cores.
+// See k_split_gram_matmul.hpp for the algorithm overview.
+//
+// Placement:
+//   * Row senders (CB c_0): cores at x=0, run on RISCV_0/NOC_0. Read Mpc rows of X
+//     indexed by m_sub and multicast along their row (y-direction).
+//   * Col senders (CB c_1): cores at y=0, run on RISCV_1/NOC_1. Read Mpc rows of X
+//     indexed by n_sub and multicast down their column (x-direction).
+//
+// K-column parity interleaving: blocks alternate even/odd.
+//   * Even K-blocks (blk%2 == 0) → multicast to lower triangle + diagonal.
+//   * Odd  K-blocks (blk%2 == 1) → multicast to upper triangle.
+//   The sender itself "keeps" one parity locally (its own compute path) and discards
+//   the other from its CB after the multicast. `injector_keeps_odd` runtime arg picks.
+//
+// Loopback: sender at the corner of a multicast group needs loopback-src to also receive
+// its own data; others use plain multicast. `lower_loopback` runtime arg picks.
+//
+// SENDER_REDUCE_SEND variant: applies to corner (0, 0) which is both a sender AND
+// reduces with the diagonal helper. After the K-loop it NOC-writes its compute partial
+// from c_out to the helper's reduce_cb and signals via reduce_sem.
 
 #include <stdint.h>
 

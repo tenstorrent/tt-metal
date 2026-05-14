@@ -2,11 +2,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Matmul compute kernel — runs on TRISC (all 3 TRISC processors).
-// Computes M_block x N_block output blocks for the Mpc×Mpc gram matmul.
-// Output streamed per (m_sub, n_sub) block:
-//   REDUCE_SENDER/TRANSPOSE: matmul → c_2, pack c_2 → c_5 (row-major), DM sends c_5 to partner
-//   REDUCE_ACCUMULATOR: matmul → c_2, add own c_2(FP32) + partner's c_5(BF16) → c_6
+// Matmul compute kernel. Computes M_block × N_block output blocks for
+// the Mpc × Mpc gram matmul. See k_split_gram_matmul.hpp for the algorithm overview.
+//
+// Iteration structure: outer (m_sub, n_sub) loop over the Mpc × Mpc output, inner K-loop
+// accumulates K_block_tiles tiles per pass into c_2 (FP32 intermediate). After each
+// (m_sub, n_sub) block, the output is packed/sent/reduced per the core's role:
+//
+//   REDUCE_SENDER / REDUCE_SENDER_TRANSPOSE:
+//     matmul → c_2, then pack c_2 → c_5 (row-major; TRANSPOSE variant transposes tile
+//     content + swaps indices so receiver can add directly). DM writer NOC-sends c_5
+//     to reduction partner.
+//   REDUCE_ACCUMULATOR:
+//     matmul → c_2, then add own c_2 (FP32) + partner's c_5 (BF16) → c_6. DM writer
+//     writes c_6 to DRAM. If MIRROR_OUTPUT is defined, also stage-add+transpose into c_4
+//     for the lower-triangle mirror tile (see add_transpose_block).
+//
+// Helper functions:
+//   matmul_blocks       — K-loop matmul over a subblock grid.
+//   pack_subblock_pernsb — c_2 → c_5 (REDUCE_SENDER variants).
+//   add_reduce_block    — c_2 + c_5 → c_6 (REDUCE_ACCUMULATOR).
+//   add_transpose_block — c_2 + c_5 → c_4 via c_7 staging (MIRROR_OUTPUT).
 
 #include "api/compute/cb_api.h"
 #include "api/compute/compute_kernel_api.h"
