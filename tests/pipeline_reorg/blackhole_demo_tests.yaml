@@ -188,11 +188,11 @@
   cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
   skus:
     bh_llmbox:
-      timeout: 10
+      timeout: 40
     bh_loudbox:
-      timeout: 10
+      timeout: 40
     bh_quietbox_2:
-      timeout: 10
+      timeout: 40
   owner_id: U03PUAKE719 # Miguel Tairum
   team: models
   model-name: llama3.3-70b

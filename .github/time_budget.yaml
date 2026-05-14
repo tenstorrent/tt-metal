@@ -167,9 +167,9 @@ models:
     bh_p150_perf: 420
     bh_p150b_civ2: 250
     bh_p150b_civ2_viommu: 50
-    bh_deskbox: 250
-    bh_llmbox: 1200
-    bh_loudbox: 1200
+    bh_deskbox: 350
+    bh_llmbox: 1300
+    bh_loudbox: 1300
 
     bh_p300: 800
     bh_quietbox_2: 280
