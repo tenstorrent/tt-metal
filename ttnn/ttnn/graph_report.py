@@ -28,14 +28,28 @@ from typing import Union
 
 from loguru import logger
 
-from .stack_trace_source import (
-    CREATE_INDEX_STACK_TRACES_SOURCE_FILE_SQL,
-    CREATE_SOURCE_FILES_TABLE_SQL,
-    CREATE_STACK_TRACES_TABLE_WITH_SOURCE_SQL,
-    get_source_file_id,
-    normalize_source_path_from_stack_trace,
-    read_source_file,
-)
+# Support both `import ttnn.graph_report` (package) and standalone
+# `import graph_report` from tests that put ttnn/ttnn on sys.path to skip
+# loading the C++-backed ttnn/__init__.py. Branch on __package__ so real
+# import failures inside stack_trace_source surface instead of being masked.
+if __package__:
+    from .stack_trace_source import (
+        CREATE_INDEX_STACK_TRACES_SOURCE_FILE_SQL,
+        CREATE_SOURCE_FILES_TABLE_SQL,
+        CREATE_STACK_TRACES_TABLE_WITH_SOURCE_SQL,
+        get_source_file_id,
+        normalize_source_path_from_stack_trace,
+        read_source_file,
+    )
+else:
+    from stack_trace_source import (
+        CREATE_INDEX_STACK_TRACES_SOURCE_FILE_SQL,
+        CREATE_SOURCE_FILES_TABLE_SQL,
+        CREATE_STACK_TRACES_TABLE_WITH_SOURCE_SQL,
+        get_source_file_id,
+        normalize_source_path_from_stack_trace,
+        read_source_file,
+    )
 
 SUPPORTED_REPORT_VERSION = 1
 DATABASE_SCHEMA_VERSION = "2.1"
