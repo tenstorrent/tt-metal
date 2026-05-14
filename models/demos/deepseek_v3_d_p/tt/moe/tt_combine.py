@@ -163,6 +163,14 @@ class TtCombineModule(LightweightModule):
             # storage attached. torch.save then pickles the entire storage, blowing the file
             # up by 4× (one per dispatch group). clone() forces a separate allocation.
             meta_col = meta_host[col : col + 1].clone()
+            # Remap metadata field [0] (linearized_mesh_coord) from Galaxy GLOBAL coord
+            # to within-dispatch-group chip ID for replay on a standalone N-chip mesh.
+            # On Galaxy 8x4 with row-major mesh: coord = row * num_dispatch_groups + col.
+            # Within-group chip ID = row = coord // num_dispatch_groups.
+            # The combine kernel expects src_chip ∈ [0, dispatch_group_size), so without
+            # this remap the kernel hangs trying to fabric-write to non-existent chips.
+            if self.num_dispatch_groups > 1:
+                meta_col[..., 0] //= self.num_dispatch_groups
             expert_lo = col * experts_per_col
             expert_hi = (col + 1) * experts_per_col
             counts_col = counts_host[col : col + 1, :, expert_lo:expert_hi].clone()
