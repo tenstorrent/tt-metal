@@ -482,6 +482,15 @@ def test_gpt_oss_demo(
             pytest.skip(
                 f"Batch size {batch_size} exceeds the 1xN mesh cap (32). Use a multi-row mesh for larger batches."
             )
+        if batch_size > 8 and mesh_shape[1] > 1:
+            # batch32 was validated on 1x1 only. On 1xN (N>1) the TP all-reduces
+            # during prefill accumulate enough Ethernet latency to hit the hardware
+            # timeout, and the page table (64 blocks shared across 32 users) leaves
+            # no room for decode after a 128-token prefill.
+            pytest.skip(
+                f"Batch size {batch_size} > 8 not supported on 1xN mesh with N>1 (got {mesh_shape}). "
+                "Use 1x1 for high-batch low-latency decode, or a multi-row mesh with row sharding."
+            )
         if max_seq_len > 64 * 1024:
             pytest.skip(f"Long context demo with >64k tokens skipped for mesh shape {mesh_shape} due to OOM.")
     if long_context_mode:
