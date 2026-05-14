@@ -256,7 +256,7 @@ std::vector<uint32_t> generate_core_starting_indices(
 
 static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_impl_new(
     const Tensor& input,
-    Pool2D::MultiCore::Resources& resources,
+    Pool2D::MultiCore::MeshDescriptor& resources,
     uint32_t reader_indices_size,
     std::vector<Tensor>& outputs,
     Pool2DType pool_type,
@@ -293,7 +293,7 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
 
     TT_FATAL(
         resources.reader_indices_device.has_value(),
-        "Pool2D::MultiCore::prepare_resources must populate reader_indices_device before create_descriptor");
+        "Pool2D::MultiCore::create_mesh_descriptor must populate reader_indices_device before building programs");
     const Tensor& reader_indices = *resources.reader_indices_device;
 
     const tt::tt_metal::DeviceStorage& reader_indices_storage = reader_indices.device_storage();
@@ -645,9 +645,9 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
     uint32_t config_cb_id = INVALID_CB_ID;
     tt::tt_metal::Buffer* config_buffer = nullptr;
     if (!one_scalar_per_core) {
-        // The scalar config tensor was uploaded once in prepare_resources and is
-        // re-used here. resources.scalar_config_device must be populated whenever
-        // !one_scalar_per_core (avg-pool with non-trivial scalar layout).
+        // The scalar config tensor was uploaded once in create_mesh_descriptor
+        // and is re-used here. resources.scalar_config_device must be populated
+        // whenever !one_scalar_per_core (avg-pool with non-trivial scalar layout).
         TT_FATAL(
             resources.scalar_config_device.has_value(),
             "scalar_config_device must be populated when !one_scalar_per_core");
@@ -972,10 +972,11 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
 }
 
 namespace {
-// Common preamble shared between prepare_resources() and create_descriptor():
-// pulls per-op fields out of the SlidingWindowConfig and computes the parallel
-// config / output shape pieces we need in both phases.  Lives in an anonymous
-// namespace because it's purely a local helper for this factory.
+// Common preamble shared between the resource-allocation phase and the
+// per-coord program build of create_mesh_descriptor(): pulls per-op fields out
+// of the SlidingWindowConfig and computes the parallel config / output shape
+// pieces we need in both phases.  Lives in an anonymous namespace because it's
+// purely a local helper for this factory.
 struct PoolSetup {
     sliding_window::ParallelConfig parallel_config;
     bool is_block_sharded;
@@ -1027,14 +1028,18 @@ PoolSetup compute_pool_setup(const Pool2D::operation_attributes_t& op_attr, cons
 }
 }  // namespace
 
-Pool2D::MultiCore::Resources Pool2D::MultiCore::prepare_resources(
-    const operation_attributes_t& op_attr, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
+Pool2D::MultiCore::MeshDescriptor Pool2D::MultiCore::create_mesh_descriptor(
+    const operation_attributes_t& op_attr,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensors,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     const auto& input = tensor_args.input_tensor_;
     const auto& sliding_window_config = op_attr.sliding_window_config_;
     PoolSetup setup = compute_pool_setup(op_attr, input);
 
     // Build the per-core sliding-window halo lookup table on host, then upload it.
-    // The resulting Tensor's buffer must outlive the program, so it lives in Resources.
+    // The resulting Tensor's buffer must outlive the program, so it lives on the
+    // MeshDescriptor (held by the program cache).
     std::vector<uint32_t> op_trace_metadata =
         ttnn::operations::sliding_window::generate_op_trace_metadata(sliding_window_config);
     std::vector<sliding_window::ShardBoundary> shard_boundaries =
@@ -1051,8 +1056,8 @@ Pool2D::MultiCore::Resources Pool2D::MultiCore::prepare_resources(
         input.device(),
         op_attr.config_tensor_in_dram);
 
-    Resources resources;
-    resources.reader_indices_device = std::move(reader_indices_on_device);
+    MeshDescriptor mesh_descriptor;
+    mesh_descriptor.reader_indices_device = std::move(reader_indices_on_device);
 
     // For avg-pool, decide whether a single bf16 scalar per core is sufficient.  When it isn't
     // (ceil_mode w/ ceil_pad, or !count_include_pad with non-zero padding, both with no
@@ -1108,36 +1113,20 @@ Pool2D::MultiCore::Resources Pool2D::MultiCore::prepare_resources(
         const MemoryConfig l1_small_memory_config{
             TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, config_shard_spec};
 
-        resources.scalar_config_device = config_tensor.to_device(
+        mesh_descriptor.scalar_config_device = config_tensor.to_device(
             input.device(), op_attr.config_tensor_in_dram ? DRAM_MEMORY_CONFIG : l1_small_memory_config);
     }
 
-    return resources;
-}
-
-tt::tt_metal::ProgramDescriptor Pool2D::MultiCore::create_descriptor(
-    const operation_attributes_t& op_attr,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensors,
-    Resources& resources) {
-    const auto& input = tensor_args.input_tensor_;
+    // Single-device op: the kernel program is structurally identical for every
+    // coord in `tensor_coords` (Pool2D doesn't depend on cluster position).
+    // Build the per-coord ProgramDescriptor ONCE and copy it into each
+    // coord-range entry to avoid redundant work on multi-coord workloads.
     const auto& pool_type = op_attr.pool_type_;
     const auto& compute_kernel_config = op_attr.compute_kernel_config_;
     const auto& output_layout = op_attr.output_layout_;
     bool count_include_pad = op_attr.count_include_pad_;
     std::optional<int32_t> divisor_override = op_attr.divisor_override_;
     bool return_indices = op_attr.return_indices_;
-
-    PoolSetup setup = compute_pool_setup(op_attr, input);
-
-    // Re-derive the top-left indices to recover top_left_indices[0].size(); this is a host
-    // computation that produces the same value across cache miss/hit, so it's safe to repeat.
-    std::vector<uint32_t> op_trace_metadata =
-        ttnn::operations::sliding_window::generate_op_trace_metadata(op_attr.sliding_window_config_);
-    std::vector<sliding_window::ShardBoundary> shard_boundaries =
-        ttnn::operations::sliding_window::generate_shard_boundaries(op_attr.sliding_window_config_);
-    std::vector<std::vector<uint16_t>> top_left_indices =
-        sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, setup.stride_w);
 
     std::vector<uint32_t> core_starting_indices;
     if (return_indices) {
@@ -1148,9 +1137,9 @@ tt::tt_metal::ProgramDescriptor Pool2D::MultiCore::create_descriptor(
             generate_core_starting_indices(op_trace_metadata, shard_boundaries, shard_scheme, num_cores_x, ncores);
     }
 
-    return pool2d_multi_core_sharded_with_halo_v2_impl_new(
+    tt::tt_metal::ProgramDescriptor desc = pool2d_multi_core_sharded_with_halo_v2_impl_new(
         tensor_args.input_tensor_,
-        resources,
+        mesh_descriptor,
         top_left_indices[0].size(),
         output_tensors,
         pool_type,
@@ -1183,6 +1172,15 @@ tt::tt_metal::ProgramDescriptor Pool2D::MultiCore::create_descriptor(
         op_attr.memory_used,
         output_layout,
         op_attr.config_tensor_in_dram);
+    auto ranges = tensor_coords.ranges();
+    mesh_descriptor.programs.reserve(ranges.size());
+    for (size_t i = 0; i + 1 < ranges.size(); ++i) {
+        mesh_descriptor.programs.emplace_back(ranges[i], desc);
+    }
+    if (!ranges.empty()) {
+        mesh_descriptor.programs.emplace_back(ranges.back(), std::move(desc));
+    }
+    return mesh_descriptor;
 }
 
 }  // namespace ttnn::operations::pool

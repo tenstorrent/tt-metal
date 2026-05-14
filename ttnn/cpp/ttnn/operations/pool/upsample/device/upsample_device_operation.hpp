@@ -11,10 +11,13 @@
 #include "ttnn/operations/core/core.hpp"
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/distributed/types.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include "ttnn/operations/pool/upsample/device/upsample_device_operation_types.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include <utility>
+#include <vector>
 
 namespace ttnn::prim {
 
@@ -29,24 +32,22 @@ struct UpsampleMultiCoreInterleavedProgramFactory {
 };
 
 struct UpsampleMultiCoreShardedProgramFactory {
-    // Persistent device-side state owned across cache hits.
-    // The config tensor encodes per-core halo lookup data; its buffer lifetime
-    // must outlive program execution, so the framework holds it in
-    // shared_variables and re-passes it into each create_descriptor call.
+    // Workload-scoped state held in the cached AdaptedCachedMeshWorkload's
+    // shared_variables map. The config tensor encodes per-core halo lookup
+    // data; its buffer lifetime must outlive program execution, and lives in
+    // the MeshDescriptor for the lifetime of the cache entry.
     // Tensor's default ctor is explicit, so wrap in optional to satisfy the
-    // framework's `resource_t{}` value-init.
-    struct Resources {
+    // framework's `mesh_descriptor_t{}` value-init.
+    struct MeshDescriptor {
         std::optional<Tensor> config_tensor_device;
+        std::vector<std::pair<ttnn::MeshCoordinateRange, tt::tt_metal::ProgramDescriptor>> programs;
     };
 
-    static Resources prepare_resources(
-        const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor);
-
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static MeshDescriptor create_mesh_descriptor(
         const UpsampleParams& operation_attributes,
         const Tensor& input_tensor,
         Tensor& output_tensor,
-        Resources& resources);
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 
 struct UpsampleNearestFloatProgramFactory {

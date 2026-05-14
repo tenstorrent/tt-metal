@@ -24,7 +24,10 @@
 namespace tt::tt_metal {
 
 ResolvedBindings resolve_bindings(
-    Program& program, const ProgramDescriptor& desc, std::span<Buffer* const> tensor_buffers) {
+    Program& program,
+    const ProgramDescriptor& desc,
+    std::span<Buffer* const> tensor_buffers,
+    bool resolve_cb_bindings_unconditionally) {
     ResolvedBindings result;
 
     // If the same Buffer* appears in tensor_buffers more than once (e.g. matmul(X, X),
@@ -97,15 +100,22 @@ ResolvedBindings resolve_bindings(
         }
     }
 
-    // Only resolve CB bindings when the factory actually opted into the fast path
-    // by declaring at least one runtime-arg buffer binding, whether via
-    // emplace_runtime_args() or emplace_common_runtime_args()
-    // (i.e. when !result.rt_args.empty()).
-    // Without this guard, sharded operations that use the old API (passing
-    // buffer->address() as uint32_t) would have non-empty resolved_bindings
-    // due to CB entries alone, causing the adapter to take the fast path and
-    // skip the full runtime-arg rebuild on cache hits.
-    if (!result.rt_args.empty()) {
+    // Resolve CB bindings when either (a) the factory opted into the fast path
+    // by declaring at least one runtime-arg buffer binding (whether via
+    // emplace_runtime_args or emplace_common_runtime_args), or (b) the caller
+    // explicitly asked for unconditional CB resolution.
+    //
+    // (a) is the contract-1 invariant: sharded ops that mix old-style
+    // runtime_args (raw uint32 addresses) with new-style `.buffer = ...` CBs
+    // must skip the fast path entirely so the slow-path rebuild can refresh
+    // both runtime_args and CBs on cache hits.  CB-only fast-path patching
+    // would leave runtime_args pointing at stale addresses.
+    //
+    // (b) is the contract-2 (declarative MeshDescriptor) opt-in: those ops
+    // have no slow-path rebuild — rebuilding would re-allocate workload-scoped
+    // resources — so the fast path must patch CBs even when there are no
+    // runtime-arg bindings to declare the opt-in.
+    if (!result.rt_args.empty() || resolve_cb_bindings_unconditionally) {
         auto program_cbs = program.circular_buffers();
         for (uint32_t ci = 0; ci < static_cast<uint32_t>(desc.cbs.size()); ++ci) {
             if (desc.cbs[ci].buffer) {
