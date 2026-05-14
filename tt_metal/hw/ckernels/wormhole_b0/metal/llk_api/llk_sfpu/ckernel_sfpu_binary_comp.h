@@ -185,15 +185,12 @@ inline void calculate_binary_comp_fp32(const uint dst_index_in0, const uint dst_
     }
 }
 
-// Int32 binary comparisons.
-// Compute LT(X, Y) or GE(X, Y) directly; gt/le swap operands first:
+// Int32 relational comparisons. Normalize to LT(A, B) or GE(A, B):
 //   lt(A,B) = LT(A,B)           gt(A,B) = LT(B,A)
 //   ge(A,B) = GE(A,B)           le(A,B) = GE(B,A)
-// SFPSETSGN builds the adjusted subtrahend without a constant load:
-//   LT: D = B with sign bit cleared, then D = A - D
-//   GE: D = B with sign bit set,     then D = A - D
-// The xor/or/xor fold combines sign(A), sign(B), and sign(D); the final shift extracts
-// the boolean result as 0 or 1.
+// Force B's top bit to 0 for LT or 1 for GE, subtract from A, then fold the
+// original sign relationship with the subtraction result. The final shift
+// converts the selected top bit to 0 or 1.
 template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
 inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     static_assert(
@@ -229,14 +226,11 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
     }
 }
 
-// UInt32 and UInt16 binary comparisons.
-// UInt32 computes LT(X, Y) or GE(X, Y) directly; gt/le swap operands first:
+// UInt32/UInt16 relational comparisons. Normalize to LT(A, B) or GE(A, B):
 //   lt(A,B) = LT(A,B)           gt(A,B) = LT(B,A)
 //   ge(A,B) = GE(A,B)           le(A,B) = GE(B,A)
-// Like int32, UInt32 uses SFPSETSGN to form B with either a cleared or set MSB before
-// subtracting, then folds the original MSB relationship with the subtract result.
-// UInt16 stays simpler: A - B cannot overflow int32, so its sign bit gives LT directly
-// and SFPNOT turns LT into GE when needed.
+// UInt32 uses the same subtract/fold structure as Int32. For UInt16, A - B
+// cannot overflow int32; the sign bit gives LT, and SFPNOT turns LT into GE.
 template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP, DataFormat DATA_FORMAT>
 inline void calculate_binary_comp_uint(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     static_assert(
