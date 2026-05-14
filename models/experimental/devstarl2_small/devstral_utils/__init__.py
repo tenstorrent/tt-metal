@@ -4,11 +4,11 @@
 
 """Shared helpers for Devstral-2 / Ministral3 TT demos (mesh, prefill padding, LM head, FP8 shim)."""
 
+from models.experimental.devstarl2_small.devstral_utils.fp8_dequantize_compat import apply_fp8_dequantize_compat
 from models.experimental.devstarl2_small.devstral_utils.multimodal_demo_helpers import (
     DEFAULT_MODEL_ID,
     DEVSTRAL_DEMO_BLACKHOLE_DEFAULT_MAX_SEQ_LEN,
     apply_devstral_hf_trust_patches,
-    apply_fp8_dequantize_compat,
     cpu_lm_head_logits_last_token,
     default_devstral_demo_max_seq_len,
     demo_lm_head_max_columns_per_device,
