@@ -1380,6 +1380,24 @@ FIX_AQ2_FIRES=$(grep -cE 'FIX AQ-2.*Skipping ETH connection' "$CLEAN" 2>/dev/nul
 # FIX AQ-3 (#42429): ROM postcode family (0x4970xxxx) detection in terminate_stale_erisc_routers.
 # Log: "(#42429 FIX AQ-3)"
 FIX_AQ3_FIRES=$(grep -cE 'FIX AQ-3' "$CLEAN" 2>/dev/null; :)
+# FIX PD (GAP-50): fw_launch_addr clear after Phase 2.5 force-reset.
+# Log: "FIX PD (GAP-B)" (failure path — MMIO device PCIe write failed)
+FIX_PD_FIRES=$(grep -cE 'FIX PD' "$CLEAN" 2>/dev/null; :)
+# FIX AU-2 (#42429): Best-effort TERMINATE write on broken relay non-MMIO device.
+# Log: "FIX AU-2 (#42429)"
+FIX_AU2_FIRES=$(grep -cE 'FIX AU-2' "$CLEAN" 2>/dev/null; :)
+# FIX AR-2 (#42429): Extended timeout for RHC channels in FIX AS.
+# Log: "FIX AR-2: ... RHC channel"
+FIX_AR2_FIRES=$(grep -cE 'FIX AR-2' "$CLEAN" 2>/dev/null; :)
+# AUDIT-L1: sysmem_manager reset skipped due to broken relay.
+# Log: "AUDIT-L1"
+AUDIT_L1_FIRES=$(grep -cE 'AUDIT-L1' "$CLEAN" 2>/dev/null; :)
+# AUDIT-L5: FIX AK-3 guard suppressed FIX AP (all channels at REMOTE_HANDSHAKE_COMPLETE).
+# Log: "AUDIT-L5"
+AUDIT_L5_FIRES=$(grep -cE 'AUDIT-L5' "$CLEAN" 2>/dev/null; :)
+# AUDIT-R2: All active channels dead after Phase 3 configure_fabric_cores — early return.
+# Log: "AUDIT-R2"
+AUDIT_R2_FIRES=$(grep -cE 'AUDIT-R2' "$CLEAN" 2>/dev/null; :)
 
 if [[ "${HAS_DISPATCH_CASCADE:-0}" -gt 0 ]]; then
     DIAGNOSIS="500ms dispatch cascade (FIX PA/PB/PC pattern): ${HAS_DISPATCH_CASCADE} Timeout(500ms)
@@ -2125,6 +2143,12 @@ echo "  FIX_RZ4_FIRES:             ${FIX_RZ4_FIRES:-0}  (transient channels_not_
 echo "  FIX_AY_C_FIRES:            ${FIX_AY_C_FIRES:-0}  (per-pair MMIO relay readiness guard in teardown)"
 echo "  FIX_AQ2_FIRES:             ${FIX_AQ2_FIRES:-0}  (UMD topology skip for unreachable device)"
 echo "  FIX_AQ3_FIRES:             ${FIX_AQ3_FIRES:-0}  (ROM postcode family 0x4970xxxx detection)"
+echo "  FIX_PD_FIRES:              ${FIX_PD_FIRES:-0}  (fw_launch_addr clear after Phase 2.5 force-reset)"
+echo "  FIX_AU2_FIRES:             ${FIX_AU2_FIRES:-0}  (best-effort TERMINATE on broken relay non-MMIO)"
+echo "  FIX_AR2_FIRES:             ${FIX_AR2_FIRES:-0}  (extended timeout for RHC channels in FIX AS)"
+echo "  AUDIT_L1_FIRES:            ${AUDIT_L1_FIRES:-0}  (sysmem_manager reset skipped — relay broken)"
+echo "  AUDIT_L5_FIRES:            ${AUDIT_L5_FIRES:-0}  (FIX AK-3 guard: all chans at RHC, AP suppressed)"
+echo "  AUDIT_R2_FIRES:            ${AUDIT_R2_FIRES:-0}  (all channels dead — Phase 3 early return)"
 echo ""
 if [ "${FIX_TH3_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX TH3] fabric_router_sync_timeout extended from 10s to 120s (12x) (${FIX_TH3_FIRES} occurrence(s))."
@@ -2373,6 +2397,28 @@ fi
 if [ "${FIX_AQ3_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX AQ-3] ROM postcode family (0x4970xxxx) detected in terminate_stale_erisc_routers (${FIX_AQ3_FIRES} occurrence(s))."
     echo "     Extended detection beyond 0x49705180 to cover all intermediate ROM boot states."
+fi
+if [ "${FIX_PD_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX PD] fw_launch_addr clear attempted ${FIX_PD_FIRES} time(s) after Phase 2.5 force-reset."
+    echo "     GAP-B failures (MMIO PCIe write should not fail) indicate HAL/hardware bugs."
+fi
+if [ "${FIX_AU2_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX AU-2] Best-effort TERMINATE write on ${FIX_AU2_FIRES} broken-relay non-MMIO device(s)."
+fi
+if [ "${FIX_AR2_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX AR-2] Extended UMD-canary poll timeout (2000ms) for ${FIX_AR2_FIRES} RHC channel(s)."
+fi
+if [ "${AUDIT_L1_FIRES:-0}" -gt 0 ]; then
+    echo "  => [AUDIT-L1] sysmem_manager reset skipped ${AUDIT_L1_FIRES} time(s) — relay path broken."
+    echo "     Host-side CQ state may be stale; next dispatch on these devices may see incorrect fences."
+fi
+if [ "${AUDIT_L5_FIRES:-0}" -gt 0 ]; then
+    echo "  => [AUDIT-L5] FIX AK-3 guard suppressed FIX AP ${AUDIT_L5_FIRES} time(s) — all stuck channels"
+    echo "     at REMOTE_HANDSHAKE_COMPLETE (cross-batch timing artifact, NOT genuine relay failure)."
+fi
+if [ "${AUDIT_R2_FIRES:-0}" -gt 0 ]; then
+    echo "  => [AUDIT-R2] Phase 3 early return: ALL channels dead after configure_fabric_cores ${AUDIT_R2_FIRES} time(s)."
+    echo "     No viable ETH channels remain; skipped WriteRuntimeArgs/ConfigureDevice/launch_msg."
 fi
 
 # ─── FIX TF (test_tt_fabric degraded skip) ───

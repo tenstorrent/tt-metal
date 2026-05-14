@@ -1,5 +1,182 @@
 
 ---
+## [AUDIT 2026-05-14] Testing/Logging/Recovery Gap Audit
+
+### Logging Gaps Found & Fixed
+
+- **AUDIT-L1** (`device.cpp:~200`): `sysmem_manager_->reset()` skip when `fabric_relay_path_broken_=true`
+  had NO log output. Added `log_warning` so CI analysis can detect stale host-side CQ state.
+- **AUDIT-L5** (`device.cpp:~3153`): When FIX AK-3 guard suppresses FIX AP (all unhealthy channels at
+  `REMOTE_HANDSHAKE_COMPLETE` — cross-batch timing artifact), the decision was silent. Added `log_info`
+  so CI analysis can distinguish timing artifact from genuine relay failure.
+
+### Recovery Gaps Found & Fixed
+
+- **AUDIT-R2** (`device.cpp:~1511`): When ALL active channels die during Phase 3 `configure_fabric_cores`,
+  code continued to `WriteRuntimeArgsToDevice`, `ConfigureDeviceWithProgram`, and `l1_barrier` — all
+  pointless on a device with zero viable channels. Added early-return guard with `log_warning`.
+
+### Analyze Script Updates
+
+- Added counters: `FIX_PD_FIRES`, `FIX_AU2_FIRES`, `FIX_AR2_FIRES`, `AUDIT_L1_FIRES`, `AUDIT_L5_FIRES`, `AUDIT_R2_FIRES`
+- Added narrative blocks for all 6 new counters.
+
+### Testing Gaps (Deferred)
+
+- FIX PD, AU-2, AR-2 require UMD mocking or hardware state simulation — not feasible in current harness.
+- 56+ existing gap tests provide indirect coverage.
+
+---
+## 2026-05-11 — Cycle 17 (run 25676273582, tt-metal-ci-vm-t3k-03) — FAILED
+
+Root cause: MMIO devices (0, 1, 2, 3) did NOT get `fabric_stale_base_umd_channels_=true`
+during configure_fabric even though they had 6+ base-UMD channels from previous session.
+FIX RZ had `!this->is_mmio_capable()` guard that excluded MMIO devices.
+Result: Phase 5b used 2000ms timeout instead of 24000ms.
+Device 0 chan 1 timed out at 2001ms → stuck at 0x3f803f80 (intermediate EDM state).
+Device 2 chan 1 timed out similarly → stuck at 0x40004000.
+AllGather test ran on unhealthy channels → hung 3min later at dispatch relay write.
+
+Fix (FIX AT): Remove `!this->is_mmio_capable()` guard from `fabric_stale_base_umd_channels_=true`
+assignment. Keep `fabric_base_umd_fixm_init_=true` (AllGather block guard) as non-MMIO only.
+MMIO devices can relay via PCIe so AllGather should not be blocked.
+
+---
+## 2026-05-11 — Cycle 16: FIX AR-2 — extend FIX AS timeout for RHC force-reset channels (#42429)
+
+**Test**: `MultiCQFabricMeshDevice2x4Fixture.AsyncExecutionWorksCQ0`
+**Log**: `/workspace/group/logs/t3k_cycle_16.txt`
+**Commit**: `395fc1b0465`
+**Files**: `tt_metal/impl/device/device.cpp`, `tt_metal/impl/device/device_impl.hpp`
+
+### Failure mode
+
+Second quiesce (teardown) on Device 1, channels 6/7 and Device 4, channels 0/1.
+Phase 5b: 24s timeout fires, FIX AK-3 non-fatal (all channels at REMOTE_HANDSHAKE_COMPLETE).
+Second quiesce: channels still at RHC → Phase 2.5 sends TERMINATE, waits 2000ms, force-resets.
+FIX AS polls 500ms for UMD canary. Channels still at 0x0 → marked `newly_dead`.
+FIX AT fires: `fabric_relay_path_broken_ = true` → cascade to 16 channels force-reset.
+
+### Root cause
+
+Channels at RHC when force-reset had *active* EDM firmware running at reset time.
+A hard RISC reset of an actively-running ERISC takes >500ms to settle into UMD relay
+firmware (the full .bss init + polling loop entry). FIX AS's 500ms window was calibrated
+for quiesced ERISCs (already in UMD polling loop = very fast reboot). Active EDM firmware
+needs ~2000ms to fully restart from cold after assert_risc_reset.
+
+### Fix (FIX AR-2)
+
+New member `phase25_force_reset_rhc_chans_` in `device_impl.hpp` tracks which Phase 2.5
+force-reset channels were running active EDM firmware (RHC/LHC/STARTED) at reset time.
+
+In both FIX AS paths (inline in `quiesce_and_restart_fabric_workers` and deferred in
+`launch_eth_cores_for_quiesce`):
+- After the deassert loop, check if any deasserted channel is in `phase25_force_reset_rhc_chans_`
+- Use `kForceResetPollTimeoutMs = has_rhc_chans ? 2000U : 500U` instead of constexpr 500
+- Emit FIX AR-2 log_warning when extended timeout activates
+
+Member cleared at quiesce entry; consumed via `std::move` in `launch_eth_cores_for_quiesce`.
+
+---
+## 2026-05-11 — Cycle 15 GTEST_SKIP false-positive: FIX AK-3 (#42429)
+
+**Test**: `MultiCQFabricMeshDevice2x4Fixture.AsyncExecutionWorksCQ0`
+**Run**: https://github.com/tenstorrent/tt-metal/actions/runs/25670802285
+**Commit**: `5ff5b395f52`
+**File**: `tt_metal/impl/device/device.cpp`
+
+### Failure mode
+
+`quiesce_devices()` ran pre-AllGather on non-MMIO devices (4, 7). Phase 5b health check
+found all channels on Device 4 (chan=0, chan=1) and Device 7 (chan=0, chan=1) stuck at
+`REMOTE_HANDSHAKE_COMPLETE` (0xa1b1c1d1). FIX QH-2's 24s timeout elapsed. The
+`all_handshake_incomplete` block fired. Inside it, FIX AP detected `master_router_chan=1`
+in the stuck list and set `fabric_relay_path_broken_ = true`. FIX AA then saw
+`relay_path_broken` on Device 4 (non-MMIO) and issued `GTEST_SKIP()`.
+
+### Root cause
+
+FIX AP was correct for its original Cycle 6 use case (channels stuck at STARTED/0x0,
+i.e., firmware never launched → true relay failure). But `REMOTE_HANDSHAKE_COMPLETE`
+means EDM firmware IS running on both sides; the stall is a cross-batch quiesce ordering
+timing artifact (peer device quiescing in a different batch). FIX AK's comment inside the
+same block explicitly states "We must NOT set fabric_relay_path_broken_ here". FIX AP was
+contradicting FIX AK in this specific case.
+
+### FIX AK-3
+
+In `phase5b_erisc_health_check`, inside the `all_handshake_incomplete` block, after
+computing `master_chan_stuck`, added:
+
+```cpp
+const bool all_remote_handshake_complete = std::all_of(
+    truly_unhealthy.begin(), truly_unhealthy.end(), [](const UnhealthyChannel& u) {
+        return u.actual_status == static_cast<uint32_t>(EDMSt::REMOTE_HANDSHAKE_COMPLETE);
+    });
+if (master_chan_stuck && !all_remote_handshake_complete) {
+    fabric_relay_path_broken_ = true;
+    log_error(...);
+}
+```
+
+The `log_warning` ("Non-fatal") still fires unconditionally. FIX AP still fires for
+0x0/STARTED channels (firmware not launched = genuine relay failure).
+
+**Lines changed**: `device.cpp` lines 3051–3071 (10 insertions, 1 deletion).
+
+---
+## 2026-05-11 — Cycle 12 AllGather hang: FIX QH-1 + FIX QH-2
+
+**Test**: `MultiCQFabricMeshDevice2x4Fixture.AsyncExecutionWorksCQ0`
+**Run**: https://github.com/tenstorrent/tt-metal/actions/runs/25667170089
+**Commit**: `65a6dc459c9`
+**Files**:
+- `tt_metal/impl/device/device_impl.hpp` — new member `phase25_p25_clean_for_health_check_`
+- `tt_metal/impl/device/device.cpp` — FIX QH-1 + FIX QH-2 in three locations
+
+### Root cause
+`wait_for_fabric_workers_ready` Phase 5b threw on Device 1 (MMIO) with 6 channels not at READY_FOR_TRAFFIC:
+
+1. **chan14/15 (TERMINATED)**: These were P25-CLEAN skipped by `launch_eth_cores_for_quiesce` because they were already TERMINATED before quiesce and their peer was not in the quiesce set. After quiesce restart they naturally remained TERMINATED. Phase 5b was incorrectly counting them as `truly_unhealthy` and ultimately TT_THROW-ing.
+
+2. **chan6/7/8/9 (REMOTE_HANDSHAKE_COMPLETE = 0xa1b1c1d1)**: Stuck partway through the ETH handshake after 2001ms. When `fabric_stale_base_umd_channels_=true` (FIX M fired — base-UMD to fabric firmware transition via launch_msg), the handshake takes longer than the 2000ms Phase 5b timeout.
+
+### FIX QH-1: P25-CLEAN channel exclusion
+- Added `phase25_p25_clean_for_health_check_` member (unordered_set<uint32_t>)
+- Populated in both code paths before `phase25_already_clean_chans_` is cleared:
+  - Inline path in `quiesce_and_restart_fabric_workers` (~line 1952)
+  - Deferred path in `launch_eth_cores_for_quiesce` (~line 2064)
+- Cleared at quiesce cycle entry for safety
+- Consumed at the start of `phase5b_erisc_health_check` — P25-CLEAN channels excluded from the `chans[]` polling list
+
+### FIX QH-2: Phase 5b timeout extension for stale base-UMD
+- `kHealthCheckTimeoutMs` changed from `constexpr 2000` to `const` dynamic: 24000ms when `is_fabric_stale_base_umd_channels()`, 2000ms otherwise (12x multiplier matching FIX TH3 / FIX BO)
+- Also: `constexpr kDiagBudgetMs` → `const` (depends on runtime kHealthCheckTimeoutMs)
+
+### Key concern
+Fix QH-2 only helps if `fabric_stale_base_umd_channels_` is set on Device 1 before Phase 5b runs. If chan6/7/8/9 are stuck for a different reason (peer device in an unexpected state), extending the timeout just delays the throw. However, the FIX AK path (all stuck at/below REMOTE_HANDSHAKE_COMPLETE → non-fatal, partial mesh) should catch them if they still haven't advanced after 24s.
+
+---
+## 2026-05-11 — Cycle 11 build fix: gap78/79/80 API corrections
+
+**Files**: `tests/tt_metal/distributed/test_gap78_*.cpp`, `test_gap79_*.cpp`, `test_gap80_*.cpp`
+
+**Build errors**:
+- `MeshShape` has no member `to_mesh_coordinate_range`
+- `MeshDevice` has no member `execute`
+- `MeshDevice` has no member `finish`
+
+**Root cause**: The three tests were written against non-existent APIs that were never part of MeshShape or MeshDevice.
+
+**Correct APIs** (verified from test_gap52 and distributed.hpp/mesh_workload.hpp):
+- `MeshCoordinateRange(mesh->shape())` — MeshCoordinateRange has an explicit constructor from MeshShape
+- `EnqueueMeshWorkload(mesh->mesh_command_queue(0), workload, false)` — declared in `tt-metalium/distributed.hpp` and `mesh_workload.hpp`
+- `Finish(mesh->mesh_command_queue(0))` — declared in `tt-metalium/distributed.hpp`
+
+**Commit**: `25ffd9f85aa` — FIX BUILD: update gap78/79/80 to use current MeshDevice/MeshShape API
+
+---
 ## 2026-05-11 — Cycle 9 failure: FIX P25-CLEAN-V2 (#42429): P25-CLEAN too aggressive; channels terminated by peer quiesce not re-launched
 
 **Files**: `tt_metal/impl/device/device.cpp`, `tt_metal/impl/device/device_impl.hpp`, `tt_metal/distributed/mesh_device.cpp`
@@ -25,7 +202,7 @@ Result: channels 8/9/14/15 never get quiesce firmware re-launched. Channels 0/1 
 
 **Key constraint preserved**: non-participating channels (whose peers are outside the quiesce set) are still skipped in Phase 3 — no regression from Cycle 8 fix.
 
-**Commit**: TBD — appended after commit
+**Commit**: `dc1a3590ddd` — FIX P25-CLEAN-V2 (#42429): gate P25-CLEAN skip on peer not in quiesce set
 
 ---
 ## 2026-05-11 — Audit Cycle: Testing and Diagnostic Logging Gap Audit
@@ -1668,3 +1845,138 @@ FIX TV in run_launch_phase provides the same defense on the next session's init 
 
 - FIX XX/XZ/BH tests require UMD mocking or hardware state simulation — not feasible in current test harness
 - 0x49705530 intermediate ROM postcode is adequately covered by INVALID_EDMSTATUS counter
+
+---
+## Cycle 10 — 2026-05-11T11:05Z — BUILD FAILURE
+
+### Run: 25665653683 — FAILED (build, not test)
+Runner: tt-ubuntu-2204-large-stable-z86dq-runner-bqfmv
+
+### Root cause
+`MeshDeviceConfig` constructor signature changed upstream. Old sig was:
+```cpp
+MeshDeviceConfig(MeshShape, FabricConfig)  // no longer exists
+```
+Current sig is:
+```cpp
+MeshDeviceConfig(optional<MeshShape>, optional<MeshCoordinate> offset = nullopt, vector<ChipId> = {})
+```
+
+Tests gap78, gap79, gap80 were using the old sig with `FabricConfig::FABRIC_1D` as 2nd arg.
+
+### Fix (commit 14ba6605b32)
+- Added `#include <tt-metalium/experimental/fabric/fabric.hpp>` to each file
+- Added `tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);` before each `MeshDevice::create()` call
+- Removed `FabricConfig` argument from `MeshDeviceConfig(shape)` calls
+- 6 call sites total: 2 per file × 3 files
+
+### Next run: 25666310756
+
+---
+## 2026-05-11 — Cycle 13: FIX FX — Persistent fixm_init flag for Phase 5/5b timeout extension
+
+**Commit**: `4a4726bb757`
+**Files**:
+- `tt_metal/distributed/mesh_device.cpp` — FIX FX-1: lines 1563–1592
+- `tt_metal/impl/device/device.cpp` — FIX FX-2: lines 2640–2660 (phase5b) and 3362–3388 (kSyncTimeoutMs)
+
+### Cycle 13 failure
+
+Phase 5b timeout (QH-2) and Phase 5 sync timeout (BO) both use `fabric_stale_base_umd_channels_`
+to decide whether to extend their timeouts to 24000ms/120000ms respectively. But
+`fabric_stale_base_umd_channels_` is CLEARED by FIX RZ2 during ring-sync in mesh init. By the
+time the AllGather pre-quiesce runs `wait_for_fabric_workers_ready_for_quiesce()`, the flag is
+already cleared → FIX BO does NOT propagate extended timeout to MMIO devices → Phase 5 and
+Phase 5b both use default 2001ms/2000ms → channels stuck at REMOTE_HANDSHAKE_COMPLETE time
+out → `relay_path_broken=true` → AllGather skipped.
+
+### Root cause chain
+
+1. `configure_fabric` (FIX M): sets `fabric_stale_base_umd_channels_=true` AND `fabric_base_umd_fixm_init_=true` for non-MMIO devices with base-UMD channels
+2. Mesh init ring-sync: FIX RZ2 clears `fabric_stale_base_umd_channels_` after healthy channels confirmed
+3. `fabric_base_umd_fixm_init_` is NOT cleared by FIX RZ2 (comment: "must NOT clear this")
+4. AllGather pre-quiesce calls `wait_for_fabric_workers_ready_for_quiesce()`:
+   - FIX BO checks `any_stale_base_umd` using `is_fabric_stale_base_umd_channels()` → returns false (cleared) → no propagation
+   - Phase 5 kSyncTimeoutMs = 10000 (not extended) → times out at 10s on stuck channels
+   - Phase 5b QH-2 checks `is_fabric_stale_base_umd_channels()` → false → 2000ms timeout
+   - Phase 5b fails → relay_path_broken → AllGather skipped
+
+### Fix FX-1: mesh_device.cpp `wait_for_fabric_workers_ready_for_quiesce`
+
+Changed `is_fabric_stale_base_umd_channels()` → `is_fabric_base_umd_fixm_init()` in the
+`any_stale_base_umd` lambda. The persistent companion flag survives FIX RZ2 and correctly
+identifies that FIX M ran during configure_fabric. Added log_info when propagation fires.
+
+### Fix FX-2: device.cpp `phase5b_erisc_health_check` + `kSyncTimeoutMs`
+
+Both locations now use `stale_base_umd || fixm_init` as the condition. This ensures extended
+timeouts fire even on devices where FIX RZ2 already cleared the transient stale flag.
+- `phase5b_erisc_health_check`: `stale_umd` local bool ORs the two flags; kHealthCheckTimeoutMs and log use it
+- `wait_for_fabric_workers_ready` Phase 5: `kSyncTimeoutMs` ternary and log both use the OR
+
+### Key insight
+
+`fabric_base_umd_fixm_init_` is the authoritative persistent record that FIX M ran for this
+device during `configure_fabric`. It is set once and never cleared (unlike `fabric_stale_base_umd_channels_`
+which is a transient "right now there are stale channels" flag cleared after ring-sync). Any
+timeout logic that needs to know "did FIX M ever run on any device?" must check the persistent
+companion, not the transient flag.
+
+---
+
+## [AUDIT 2026-05-11T12:00Z] Testing-Gap Audit Results
+
+### Gaps found
+- **Analyze script**: Missing counters for FIX FX, FIX QH-1/QH-2, FIX FQ-1/2/5, FIX P25-CLEAN-V2, FIX BW, FIX BX (8 labels total)
+- **Testing**: No dedicated tests for FIX FX, QH, FQ, P25-CLEAN-V2, BW, BX — all require hardware state simulation
+- **Diagnostic logging**: No gaps found — all recent FIX labels have proper log messages
+
+### Fixes applied
+- `09805ec2e10` — analyze script: FIX FX/QH/FQ counters + timeline + narrative
+- `88862b29881` — analyze script: P25-CLEAN-V2/BW/BX counters + timeline + narrative
+
+### Remaining gaps
+- Testing for 6 FIX labels deferred (require UMD mock or hardware state simulation)
+- Many older FIX labels (AI, AF, BE, D2, etc.) only in source comments — no log messages, no counters needed
+
+### Next recommended actions
+1. UMD mock layer for hardware-independent testing of relay/ROM-boot/channel-state FIX paths
+2. Synthetic log CI smoke test for analyze_fabric_hang_log.sh counter completeness
+3. Automated counter-vs-source completeness check script
+
+## Cycle 14 — Build Failure (2026-05-11)
+
+**Run**: 25670178690 — FAILED (build error, test never ran)
+
+**Root cause**: FIX FX-1 in cycle 13 introduced `tt::LogMesh` log type in
+`mesh_device.cpp:1580` but `LogMesh` is not defined in tt-logger's
+`TT_LOGGER_TYPES` macro. Compiler error: `no member named 'LogMesh' in namespace 'tt'`.
+
+**Fix BLD-1** (commit `fff74f207fb`): Replace `tt::LogMesh` → `tt::LogMetal`.
+`LogMetal` is the standard type used throughout mesh_device.cpp.
+
+**Cycle 15 run**: 25670802285
+
+---
+
+## 2026-05-11 14:xx — Audit #4: Analyze Script Counters + Gap Assessment
+
+**Trigger**: Scheduled branch audit
+
+### Findings
+
+1. **analyze_fabric_hang_log.sh**: 17 FIX labels had log output but no counters in the script.
+   Added counters for: VC2, VC3, NZ, PE, QD, RR-NM, TB, BQ, BU, BT, EXT2, RZ3, RZ4, AY-C, AQ-2, AQ-3.
+   Updated timeline/phases grep + added narrative blocks.
+   **Commit**: d7c963828e4
+
+2. **Diagnostic logging**: All critical recovery paths (BT, RR-NM, AY-C, AQ-3, PE, QD, XX, XZ, SC)
+   have adequate logging. No gaps found.
+
+3. **Testing gaps**: 7 critical FIX labels (XX, XY, XZ, BH, RR-NM, BT, AY-C) lack direct unit tests.
+   These require a firmware-level mock seam in FabricFirmwareInitializer — non-trivial infrastructure
+   investment deferred until hang is resolved. 56 existing gap tests provide indirect coverage.
+
+### Audit Report
+Saved to `/workspace/group/research/audit-2026-05-11-14.md`
+

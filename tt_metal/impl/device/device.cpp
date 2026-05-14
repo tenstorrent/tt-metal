@@ -201,6 +201,13 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
         for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
             this->sysmem_manager_->reset(cq_id);
         }
+    } else {
+        log_warning(
+            tt::LogMetal,
+            "configure_command_queue_programs: Device {} skipping sysmem_manager_.reset() — "
+            "relay path broken (fabric_relay_path_broken_=true). Host-side CQ state may be stale; "
+            "next dispatch on this device may see incorrect fence values. (AUDIT-L1 #42429)",
+            this->id_);
     }
 
     // Reset host-side command queue pointers for all channels controlled by this mmio device
@@ -1501,6 +1508,19 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
             "channels: [{}] — write_launch_msg will be skipped for these",
             this->id(),
             newly_dead_str);
+        // AUDIT-R2: If ALL active channels died during configure_fabric_cores, there are no
+        // viable ETH channels left. Skip the remaining Phase 3 work (WriteRuntimeArgs,
+        // ConfigureDevice, l1_barrier, write_launch_msg loop) to avoid pointless relay I/O.
+        if (quiesce_health.newly_dead_channels.size() >= active_channels.size()) {
+            log_warning(
+                tt::LogMetal,
+                "quiesce_and_restart_fabric_workers: Device {} Phase 3 AUDIT-R2: ALL {} active "
+                "channel(s) newly dead after configure_fabric_cores — skipping WriteRuntimeArgs, "
+                "ConfigureDevice, and launch_msg loop (no viable channels). (#42429)",
+                this->id(),
+                active_channels.size());
+            return;
+        }
     }
     detail::WriteRuntimeArgsToDevice(this, *fabric_program_, using_fast_dispatch_);
     detail::ConfigureDeviceWithProgram(this, *fabric_program_, using_fast_dispatch_);
@@ -3143,6 +3163,21 @@ bool Device::phase5b_erisc_health_check(
                         this->id(),
                         master_router_chan,
                         details);
+                }
+                if (master_chan_stuck && all_remote_handshake_complete) {
+                    // AUDIT-L5: FIX AK-3 guard suppressed FIX AP — all unhealthy channels are
+                    // at REMOTE_HANDSHAKE_COMPLETE (cross-batch quiesce timing artifact).
+                    // Log this decision so CI analysis can distinguish timing-artifact from
+                    // genuine relay failure.
+                    log_info(
+                        tt::LogMetal,
+                        "wait_for_fabric_workers_ready: Device {} Phase 5b AUDIT-L5: "
+                        "master chan {} stuck but FIX AK-3 guard active — all {} unhealthy "
+                        "channel(s) at REMOTE_HANDSHAKE_COMPLETE (cross-batch timing artifact). "
+                        "NOT setting fabric_relay_path_broken_. (#42429)",
+                        this->id(),
+                        master_router_chan,
+                        truly_unhealthy.size());
                 }
                 log_warning(
                     tt::LogMetal,
