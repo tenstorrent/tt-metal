@@ -162,11 +162,12 @@ class TtMistral4DecoderLayer(LightweightModule):
         sin: ttnn.Tensor,
         kv_cache: tuple,
         current_pos: int,
+        cur_pos_tensor: ttnn.Tensor = None,
     ) -> ttnn.Tensor:
         """Decode one token, updating the KV cache at current_pos."""
         residual = x
         normed = _rms_norm(x, self.input_norm_w, self.compute_kernel_config)
-        attn_out = self.attn.forward_decode(normed, cos, sin, kv_cache, current_pos)
+        attn_out = self.attn.forward_decode(normed, cos, sin, kv_cache, current_pos, cur_pos_tensor)
         ttnn.deallocate(normed)
         x = ttnn.add(residual, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
