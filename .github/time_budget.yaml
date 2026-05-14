@@ -111,7 +111,7 @@ scaleout:
     wh_galaxy: 100
     bh_galaxy: 60
     bh_sp1: 90
-    bh_sp4: 150
+    bh_sp4: 50
     bh_deskbox: 80
     bh_llmbox: 80
     bh_loudbox: 80
