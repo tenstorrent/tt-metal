@@ -87,6 +87,7 @@ class Flux2SingleTransformerBlock(Module):
             parallel_config=parallel_config,
             padding_config=padding_config,
             use_spatial_weights_for_prompt=True,
+            per_head_norm=True,
             is_fsdp=is_fsdp,
         )
 
