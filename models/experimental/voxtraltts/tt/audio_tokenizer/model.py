@@ -146,6 +146,7 @@ class VoxtralTTAudioTokenizer:
                 stride=strides[1],
                 in_channels=tokenizer_cfg.dim,
                 out_channels=tokenizer_cfg.dim,
+                output_channel_splits=16,
                 weight_dtype=dtype,
                 activations_dtype=dtype,
                 output_dtype=dtype,
@@ -165,6 +166,7 @@ class VoxtralTTAudioTokenizer:
                 stride=strides[2],
                 in_channels=tokenizer_cfg.dim,
                 out_channels=tokenizer_cfg.dim,
+                output_channel_splits=16,
                 weight_dtype=dtype,
                 activations_dtype=dtype,
                 output_dtype=dtype,
@@ -212,6 +214,7 @@ class VoxtralTTAudioTokenizer:
                 stride=strides[3],
                 in_channels=tokenizer_cfg.dim,
                 out_channels=tokenizer_cfg.dim,
+                output_channel_splits=16,
                 weight_dtype=dtype,
                 activations_dtype=dtype,
                 output_dtype=dtype,
@@ -354,16 +357,16 @@ class VoxtralTTAudioTokenizer:
         nl = max(int(tokenizer_cfg.acoustic_codebook_size), 2)
         sc = 2.0 / (nl - 1)
         self._acoustic_fsq_scale_tt = ttnn.from_torch(
-            torch.full((1, 1, 1), sc, dtype=torch.bfloat16),
+            torch.full((1, 1, 1), sc, dtype=torch.float32),
             device=mesh_device,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self._acoustic_fsq_one_tt = ttnn.from_torch(
-            torch.full((1, 1, 1), 1.0, dtype=torch.bfloat16),
+            torch.full((1, 1, 1), 1.0, dtype=torch.float32),
             device=mesh_device,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -443,7 +446,25 @@ class VoxtralTTAudioTokenizer:
                 "decode_full_forward requires the full decoder stack; missing weights for: " + ", ".join(missing)
             )
 
-        x = self.decoder_blocks_0_forward(latent_b1tc)
+        b, _, input_t, input_c = (int(latent_b1tc.shape[i]) for i in range(4))
+        min_decode_t = 32
+        stack_input = latent_b1tc
+        padded_stack_input = None
+        if input_t < min_decode_t:
+            pad = ttnn.from_torch(
+                torch.zeros((b, 1, min_decode_t - input_t, input_c), dtype=torch.bfloat16),
+                device=self.mesh_device,
+                dtype=self._dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            stack_input = ttnn.concat([latent_b1tc, pad], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(pad)
+            padded_stack_input = stack_input
+
+        x = self.decoder_blocks_0_forward(stack_input)
+        if padded_stack_input is not None:
+            ttnn.deallocate(padded_stack_input)
         m = self._decoder_sliding_window_attn_mask_tt(int(x.shape[2]))
         x = self.decoder_blocks_1_forward(x, attn_mask=m)
         ttnn.deallocate(m)
@@ -455,10 +476,25 @@ class VoxtralTTAudioTokenizer:
         m = self._decoder_sliding_window_attn_mask_tt(int(x.shape[2]))
         x = self.decoder_blocks_5_forward(x, attn_mask=m)
         ttnn.deallocate(m)
+        # Flush the async command queue so L1 tensors produced by the preceding
+        # transformer (SDPA output etc.) are physically freed before decoder_blocks_6's
+        # conv1d compiles its program and runs the static-CB / L1-buffer clash check.
+        # Pattern follows tt_transformers/generator.py. Same fence is needed after
+        # decoder_blocks_7 for symmetry on very long sequences.
+        ttnn.synchronize_device(self.mesh_device)
         x = self.decoder_blocks_6_forward(x)
         m = self._decoder_sliding_window_attn_mask_tt(int(x.shape[2]))
         x = self.decoder_blocks_7_forward(x, attn_mask=m)
         ttnn.deallocate(m)
+        if input_t < min_decode_t:
+            upsample = 1
+            for stride in parse_csv_ints(self.cfg.decoder_convs_strides_str)[1:]:
+                upsample *= int(stride)
+            target_t = input_t * upsample
+            if int(x.shape[2]) > target_t:
+                trimmed = ttnn.slice(x, [0, 0, 0, 0], [int(x.shape[0]), 1, target_t, int(x.shape[3])])
+                ttnn.deallocate(x)
+                x = trimmed
         return x
 
     def output_proj_forward(self, hidden_b1td: ttnn.Tensor) -> ttnn.Tensor:
@@ -535,14 +571,16 @@ class VoxtralTTAudioTokenizer:
         sem_bts = self.semantic_codebook_quantizer.decode_semantic_embeddings(sem_bt_tile)
         ttnn.deallocate(sem_bt_tile)
 
-        ac_bf = ttnn.typecast(ac_cb, ttnn.bfloat16)
+        ac_f32 = ttnn.typecast(ac_cb, ttnn.float32)
         ttnn.deallocate(ac_cb)
-        ac_scaled = ttnn.multiply(ac_bf, self._acoustic_fsq_scale_tt)
-        ttnn.deallocate(ac_bf)
+        ac_scaled = ttnn.multiply(ac_f32, self._acoustic_fsq_scale_tt)
+        ttnn.deallocate(ac_f32)
         ac_fsq = ttnn.subtract(ac_scaled, self._acoustic_fsq_one_tt)
         ttnn.deallocate(ac_scaled)
-        ac_bt36 = ttnn.permute(ac_fsq, (0, 2, 1))
+        ac_fsq_bf16 = ttnn.typecast(ac_fsq, ttnn.bfloat16)
         ttnn.deallocate(ac_fsq)
+        ac_bt36 = ttnn.permute(ac_fsq_bf16, (0, 2, 1))
+        ttnn.deallocate(ac_fsq_bf16)
 
         sem_bt_rm = ttnn.to_layout(sem_bts, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(sem_bts)
@@ -666,5 +704,11 @@ class VoxtralTTAudioTokenizer:
 
     def pretransform_decode_torch(self, mel_b1tc: ttnn.Tensor) -> torch.Tensor:
         """``[B,1,T,C_mel]`` TT mel → ``[B,1,T*C_mel]`` float32 host tensor."""
-        wav_tt = self.pretransform_decode_tt(mel_b1tc)
-        return ttnn.to_torch(wav_tt).float()
+        if len(mel_b1tc.shape) != 4 or int(mel_b1tc.shape[1]) != 1:
+            raise ValueError(f"Expected [B,1,T,C_mel] mel, got {tuple(mel_b1tc.shape)}")
+        b, _, t, c_mel = (int(mel_b1tc.shape[i]) for i in range(4))
+        # The waveform "pretransform" is only a flattening reshape.  Do the
+        # final view on host after copying the TT mel out; a TT-side reshape of
+        # [1,1,20000,240] -> [1,1,4800000] creates an oversized L1 CB on P150.
+        mel_host = ttnn.to_torch(mel_b1tc).float()
+        return mel_host.reshape(b, 1, t * c_mel)
