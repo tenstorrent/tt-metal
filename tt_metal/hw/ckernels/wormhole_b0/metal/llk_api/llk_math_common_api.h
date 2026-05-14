@@ -9,10 +9,8 @@
 #include "ckernel_template.h"
 #include "cmath_common.h"
 #include "llk_defs.h"
-#include "llk_io.h"
 #include "llk_math_common.h"
 #include "llk_operands.h"
-#include "llk_param_structs.h"
 #include "api/debug/waypoint.h"
 
 // Need to revisit why we even need this
@@ -46,10 +44,6 @@ template <bool is_fp32_dest_acc_en>
 inline void llk_math_pack_sync_init() {
     _llk_math_pack_sync_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
 }
-
-inline void llk_math_debug_dump(std::uint8_t* data, std::uint32_t byte_size) { _llk_math_debug_dump_(data, byte_size); }
-
-inline void llk_math_debug_dump_seek(std::uint8_t offset) { _llk_math_debug_dump_seek_(offset); }
 
 template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void llk_math_reconfig_data_format_srca(const std::uint32_t srca_new_operand) {
@@ -113,25 +107,4 @@ inline void llk_math_reconfig_data_format_srcb(
     if ((unpack_dst_format[old_srcb_operand_id] != unpack_dst_format[new_srcb_operand_id])) {
         llk_math_reconfig_data_format_srcb<is_fp32_dest_acc_en, to_from_int8>(srcb_new_operand);
     }
-}
-
-inline std::uint32_t llk_math_get_compute_special_value_flags() { return _llk_math_get_compute_special_value_flags_(); }
-
-inline std::uint32_t llk_math_get_compute_special_value_flags_fpu(std::uint32_t special_value_flags_reg) {
-    constexpr std::uint32_t special_value_flags_fpu_mask = 0x7;
-    constexpr std::uint32_t special_value_flags_fpu_shift = 4;
-    return (special_value_flags_reg & special_value_flags_fpu_mask) >> special_value_flags_fpu_shift;
-}
-
-inline std::uint32_t llk_math_get_compute_special_value_flags_sfpu(std::uint32_t special_value_flags_reg) {
-    constexpr std::uint32_t special_value_flags_sfpu_mask = 0xf;
-    constexpr std::uint32_t special_value_flags_sfpu_shift = 0;
-    return (special_value_flags_reg & special_value_flags_sfpu_mask) >> special_value_flags_sfpu_shift;
-}
-
-inline void llk_math_clear_compute_special_value_flags() { _llk_math_clear_compute_special_value_flags_(); }
-
-inline void llk_math_store_compute_special_value_flags_to_l1(std::uint32_t l1_addr) {
-    volatile tt_l1_ptr std::uint32_t* l1_addr_ptr = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(l1_addr);
-    l1_addr_ptr[0] = _llk_math_get_compute_special_value_flags_();
 }

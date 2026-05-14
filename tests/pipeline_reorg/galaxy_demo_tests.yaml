@@ -11,7 +11,9 @@
 # For max allowed timeout refer to .github/time_budget.yaml
 
 - name: Galaxy SentenceBert demo tests
-  cmd: pytest models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py --timeout=1500
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
+    pytest models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py --timeout=1500
   model: sentence_bert
   skus:
     wh_galaxy_perf:
