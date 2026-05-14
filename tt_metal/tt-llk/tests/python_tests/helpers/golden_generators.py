@@ -2162,17 +2162,6 @@ class EltwiseBinaryGolden(FidelityMasking):
                 else:
                     result += phase_result
         else:
-            # Elwadd / Elwsub: hardware at MATH_FIDELITY < HiFi4 still truncates
-            # operand mantissas before the add (the FPU's input lanes are
-            # bit-width-limited by the fidelity register), so the golden must
-            # mirror that. Without this, golden does a full-precision bfloat16
-            # add while ttsim/silicon does a mantissa-truncated add — the
-            # divergence shows up especially on Bfp4_b scalar broadcast where
-            # every block sees the same operand pair and the drift accumulates
-            # the same direction in every block instead of averaging out.
-            # Iter 0's mask matches a single-pass add (no partial-product
-            # reduction the way Elwmul iterates).
-            t1, t2 = self._apply_fidelity_masking(math_format_for_fidelity, t1, t2, 0)
             result = self.ops[op](t1, t2)
 
         return result
