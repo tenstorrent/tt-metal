@@ -15,8 +15,7 @@ inline void _llk_math_eltwise_unary_sfpu_params_(
 {
     _llk_math_eltwise_sfpu_start_(dst_index);
 
-    auto invoke_sfpu = [&]() { std::forward<Callable>(sfpu_func)(std::forward<Args>(args)...); };
-    _llk_math_eltwise_sfpu_apply_vector_mode_(invoke_sfpu, vector_mode);
+    _llk_math_eltwise_sfpu_apply_vector_mode_(std::forward<Callable>(sfpu_func), vector_mode, std::forward<Args>(args)...);
 
     _llk_math_eltwise_sfpu_done_();
 }

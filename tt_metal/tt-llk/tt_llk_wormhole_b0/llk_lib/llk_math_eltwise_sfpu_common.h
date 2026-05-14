@@ -46,8 +46,8 @@ inline void _llk_math_eltwise_sfpu_assert_dst_index_(std::uint32_t dst_index, [[
     LLK_ASSERT((dst_index < get_dest_max_tiles<Dst, Accum, DstTileShape::Tile32x32>()), message);
 }
 
-template <typename Callable>
-inline void _llk_math_eltwise_sfpu_apply_vector_mode_(Callable&& sfpu_func, int vector_mode)
+template <typename Callable, typename... Args>
+inline __attribute__((always_inline)) void _llk_math_eltwise_sfpu_apply_vector_mode_(Callable&& sfpu_func, int vector_mode, Args&&... args)
 {
     VectorMode mode = static_cast<VectorMode>(vector_mode);
 
@@ -57,7 +57,7 @@ inline void _llk_math_eltwise_sfpu_apply_vector_mode_(Callable&& sfpu_func, int 
 #pragma GCC unroll 0
         for (int face = 0; face < 2; face++)
         {
-            std::forward<Callable>(sfpu_func)();
+            std::forward<Callable>(sfpu_func)(std::forward<Args>(args)...);
             _llk_math_eltwise_sfpu_inc_dst_face_addr_();
         }
         // Skip the next 2 faces
@@ -70,7 +70,7 @@ inline void _llk_math_eltwise_sfpu_apply_vector_mode_(Callable&& sfpu_func, int 
 #pragma GCC unroll 0
         for (int face = 0; face < 2; face++)
         {
-            std::forward<Callable>(sfpu_func)();
+            std::forward<Callable>(sfpu_func)(std::forward<Args>(args)...);
             _llk_math_eltwise_sfpu_inc_dst_face_addr_();
             _llk_math_eltwise_sfpu_inc_dst_face_addr_();
         }
@@ -81,12 +81,12 @@ inline void _llk_math_eltwise_sfpu_apply_vector_mode_(Callable&& sfpu_func, int 
 #pragma GCC unroll 0
         for (int face = 0; face < 4; face++)
         {
-            std::forward<Callable>(sfpu_func)();
+            std::forward<Callable>(sfpu_func)(std::forward<Args>(args)...);
             _llk_math_eltwise_sfpu_inc_dst_face_addr_();
         }
     }
     else
     {
-        std::forward<Callable>(sfpu_func)();
+        std::forward<Callable>(sfpu_func)(std::forward<Args>(args)...);
     }
 }
