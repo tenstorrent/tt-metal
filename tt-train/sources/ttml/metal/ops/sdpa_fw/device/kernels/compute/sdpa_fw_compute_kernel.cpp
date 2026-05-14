@@ -28,6 +28,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_wh.h"
 #include "sdpa_compute_utils.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
 // For standard mode: num_rows_per_core = rows to process
 // For balanced mode: num_rows_per_core = num_pairs (each pair = 2 rows)
@@ -128,44 +129,48 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         // read-modify-write: read FP32 score from L1, add the DST tile (mask) in FP32, write
         // back FP32. Score stays at full FP32 precision the whole time — no DST→SRC conversion
         // truncation to TF32.
-        mm_block_init_short(
-            cb_query,
-            cb_key,
-            /* transpose */ 1,
-            /* ct_dim */ Sk_chunk_t,
-            /* rt_dim */ 1,
-            /* kt_dim */ qWt);
-        tile_regs_acquire();
         {
-            // One matmul_block call does ONE K-step (1 Q tile × ct_dim K tiles → ct_dim
-            // accumulated outputs). Iterate qWt times to contract the full feature dim.
-            uint32_t q_idx = 0;
-            uint32_t k_idx = 0;
-            for (uint32_t feat = 0; feat < qWt; ++feat) {
-                matmul_block(
-                    cb_query,
-                    cb_key,
-                    /* in0 (Q) tile_idx */ q_idx,
-                    /* in1 (K) tile_idx */ k_idx,
-                    /* dst_idx */ 0,
-                    /* transpose */ 1,
-                    /* ct_dim */ Sk_chunk_t,
-                    /* rt_dim */ 1,
-                    /* kt_dim */ qWt);
-                q_idx += 1U;
-                k_idx += Sk_chunk_t;
+            DeviceZoneScopedN("fw-qk-mm");
+            mm_block_init_short(
+                cb_query,
+                cb_key,
+                /* transpose */ 1,
+                /* ct_dim */ Sk_chunk_t,
+                /* rt_dim */ 1,
+                /* kt_dim */ qWt);
+            tile_regs_acquire();
+            {
+                // One matmul_block call does ONE K-step (1 Q tile × ct_dim K tiles → ct_dim
+                // accumulated outputs). Iterate qWt times to contract the full feature dim.
+                uint32_t q_idx = 0;
+                uint32_t k_idx = 0;
+                for (uint32_t feat = 0; feat < qWt; ++feat) {
+                    matmul_block(
+                        cb_query,
+                        cb_key,
+                        /* in0 (Q) tile_idx */ q_idx,
+                        /* in1 (K) tile_idx */ k_idx,
+                        /* dst_idx */ 0,
+                        /* transpose */ 1,
+                        /* ct_dim */ Sk_chunk_t,
+                        /* rt_dim */ 1,
+                        /* kt_dim */ qWt);
+                    q_idx += 1U;
+                    k_idx += Sk_chunk_t;
+                }
             }
+            tile_regs_commit();
+            tile_regs_wait();
+            cb_reserve_back(cb_attention_weights, Sk_chunk_t);
+            for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
+                pack_tile(n, cb_attention_weights);
+            }
+            cb_push_back(cb_attention_weights, Sk_chunk_t);
+            tile_regs_release();
         }
-        tile_regs_commit();
-        tile_regs_wait();
-        cb_reserve_back(cb_attention_weights, Sk_chunk_t);
-        for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
-            pack_tile(n, cb_attention_weights);
-        }
-        cb_push_back(cb_attention_weights, Sk_chunk_t);
-        tile_regs_release();
 
         if (k_chunk == diag_chunk) {
+            DeviceZoneScopedN("fw-mask");
             // Re-enter reserved state on the same L1 slots (single-buffered CB wraps back).
             cb_wait_front(cb_attention_weights, Sk_chunk_t);
             cb_pop_front(cb_attention_weights, Sk_chunk_t);
@@ -226,7 +231,9 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         // Done with this chunk's K block.
         cb_pop_front(cb_key, Sk_chunk_t * qWt);
 
-        // Online softmax step over this chunk (max, exp, partial sum) and PV matmul.
+        // Online softmax step over this chunk (max, exp, partial sum). Sub-zones live inside
+        // the helper functions: `fw-sm-max`, `fw-sm-sub`, `fw-sm-exp`, `fw-sm-pack-scores`,
+        // `fw-sm-pack-sum`.
         update_cur_row_max_value<PoolType::MAX, ReduceDim::REDUCE_ROW, Sk_chunk_t>(
             cb_attention_weights,
             cb_reduction_scaler,
@@ -237,12 +244,16 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         apply_exp_inplace_and_find_exp_sum<scaler_bits, Sk_chunk_t>(
             cb_attention_weights, alias_cb_cur_max, alias_cb_cur_sum_exp);
 
-        matmul_qk_by_v<Sk_chunk_t>(vWt, pv_block_size, cb_attention_weights, cb_value, alias_cb_cur_mm_out);
-        cb_pop_front(cb_attention_weights, Sk_chunk_t);
-        cb_pop_front(cb_value, Sk_chunk_t * vWt);
+        {
+            DeviceZoneScopedN("fw-pv-mm");
+            matmul_qk_by_v<Sk_chunk_t>(vWt, pv_block_size, cb_attention_weights, cb_value, alias_cb_cur_mm_out);
+            cb_pop_front(cb_attention_weights, Sk_chunk_t);
+            cb_pop_front(cb_value, Sk_chunk_t * vWt);
+        }
 
         // Online correction against the previous chunk's running stats.
         if (k_chunk > 0) {
+            DeviceZoneScopedN("fw-online");
             update_exp_max_diff<scaler_bits>(alias_cb_prev_max, alias_cb_cur_max, cb_exp_max_diff);
             cb_pop_front(alias_cb_prev_max, onetile);
 
@@ -261,6 +272,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
     }
 
     // Finalize output
+    DeviceZoneScopedN("fw-final");
     cb_wait_front(alias_cb_prev_mm_out, vWt);
 
     row_reduce_tile_inplace<cb_reduction_scaler, cb_matmul_reduce>(alias_cb_prev_sum_exp);
@@ -314,6 +326,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
 }
 
 void kernel_main() {
+    DeviceZoneScopedN("sdpa-fw-compute");
     // Runtime args
     // For standard mode: arg0 = start_row
     // For balanced mode: arg0 = start_pair_idx, arg1 = num_pairs

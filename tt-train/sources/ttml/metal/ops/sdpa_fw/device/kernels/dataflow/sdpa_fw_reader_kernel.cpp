@@ -8,9 +8,11 @@
 #include <cstring>
 
 #include "api/dataflow/dataflow_api.h"
+#include "tools/profiler/kernel_profiler.hpp"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 void kernel_main() {
+    DeviceZoneScopedN("sdpa-fw-reader");
     uint32_t runtime_args_counter = 0;
     uint32_t query_address = get_arg_val<uint32_t>(runtime_args_counter++);        // query buffer address
     uint32_t key_address = get_arg_val<uint32_t>(runtime_args_counter++);          // key buffer address

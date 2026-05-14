@@ -19,6 +19,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 constexpr uint32_t onetile = 1U;
 
@@ -131,6 +132,7 @@ void update_cur_row_max_value(
     uint32_t cb_cur_max,
     uint32_t cb_prev_max,
     bool do_eltwise_max = false) {
+    DeviceZoneScopedN("fw-sm-max");
     cb_wait_front(cb_attention_weights, Sk_chunk_t);
 
     constexpr uint32_t reduce_dst_idx = 0;
@@ -189,10 +191,18 @@ void apply_exp_inplace_and_find_exp_sum(uint32_t cb_attention_weights, uint32_t 
     exp_tile_init</* approx */ false, scaler_fp32>();
 
     tile_regs_acquire();
-    for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
-        sub_tiles_bcast_cols(
-            cb_attention_weights, cb_cur_max, /* in0 tile_idx */ n, /* in1 tile_idx */ 0, /* dst_reg_idx */ n);
-        exp_tile</* approx */ false, /* scale_en */ true>(n, (int)VectorMode::RC, scaler_bf16);
+    {
+        DeviceZoneScopedN("fw-sm-sub");
+        for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
+            sub_tiles_bcast_cols(
+                cb_attention_weights, cb_cur_max, /* in0 tile_idx */ n, /* in1 tile_idx */ 0, /* dst_reg_idx */ n);
+        }
+    }
+    {
+        DeviceZoneScopedN("fw-sm-exp");
+        for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
+            exp_tile</* approx */ false, /* scale_en */ true>(n, (int)VectorMode::RC, scaler_bf16);
+        }
     }
     tile_regs_commit();
 
@@ -202,28 +212,34 @@ void apply_exp_inplace_and_find_exp_sum(uint32_t cb_attention_weights, uint32_t 
     cb_reserve_back(cb_attention_weights, Sk_chunk_t);
     cb_reserve_back(cb_cur_exp_sum, onetile);
 
-    tile_regs_wait();
-    // Write the Sk_chunk_t exp tiles back to cb_attention_weights at offsets 0..Sk_chunk_t-1.
-    pack_reconfig_data_format(cb_attention_weights);
-    pack_reconfig_l1_acc(false);
-    for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
-        pack_tile(n, cb_attention_weights);
-    }
-    cb_push_back(cb_attention_weights, Sk_chunk_t);
-
-    // Build the chunk's partial sum directly in cb_cur_exp_sum[0]:
-    //   - first exp tile: overwrite slot 0 (L1-acc off);
-    //   - subsequent tiles: L1-accumulate onto slot 0.
-    pack_reconfig_data_format(cb_cur_exp_sum);
-    pack_tile</* out_of_order */ true>(/* dst */ 0, cb_cur_exp_sum, /* offset */ 0);
-    if constexpr (Sk_chunk_t > 1U) {
-        pack_reconfig_l1_acc(true);
-        for (uint32_t n = 1U; n < Sk_chunk_t; ++n) {
-            pack_tile</* out_of_order */ true>(/* dst */ n, cb_cur_exp_sum, /* offset */ 0);
-        }
+    {
+        DeviceZoneScopedN("fw-sm-pack-scores");
+        tile_regs_wait();
+        // Write the Sk_chunk_t exp tiles back to cb_attention_weights at offsets 0..Sk_chunk_t-1.
+        pack_reconfig_data_format(cb_attention_weights);
         pack_reconfig_l1_acc(false);
+        for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
+            pack_tile(n, cb_attention_weights);
+        }
+        cb_push_back(cb_attention_weights, Sk_chunk_t);
     }
-    cb_push_back(cb_cur_exp_sum, onetile);
+
+    {
+        DeviceZoneScopedN("fw-sm-pack-sum");
+        // Build the chunk's partial sum directly in cb_cur_exp_sum[0]:
+        //   - first exp tile: overwrite slot 0 (L1-acc off);
+        //   - subsequent tiles: L1-accumulate onto slot 0.
+        pack_reconfig_data_format(cb_cur_exp_sum);
+        pack_tile</* out_of_order */ true>(/* dst */ 0, cb_cur_exp_sum, /* offset */ 0);
+        if constexpr (Sk_chunk_t > 1U) {
+            pack_reconfig_l1_acc(true);
+            for (uint32_t n = 1U; n < Sk_chunk_t; ++n) {
+                pack_tile</* out_of_order */ true>(/* dst */ n, cb_cur_exp_sum, /* offset */ 0);
+            }
+            pack_reconfig_l1_acc(false);
+        }
+        cb_push_back(cb_cur_exp_sum, onetile);
+    }
     tile_regs_release();
 }
 

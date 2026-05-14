@@ -966,3 +966,111 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_DifferentVDim_MultiBatch) {
         .test_name = "DifferentVDim_MultiBatch"};
     run_sdpa_test(config);
 }
+
+// ============================================================================
+// Profiling tests (NIGHTLY_ - opt-in via gtest_filter).
+//
+// These call the kernel twice (warmup + timed) with no reference comparison so
+// `run_profiler.sh` can capture clean device-zone CSV with minimal noise. They
+// intentionally use Q_NH=1 and the smallest viable batch so each core handles
+// at most ONE Q row tile, which keeps the zone count below the 125-per-RISC
+// budget even at TinyLlama-equivalent sequence length.
+//
+// See sources/ttml/metal/ops/SDPA_PROFILING_HOWTO.md for details.
+// ============================================================================
+void run_sdpa_profile_test(const SDPATestConfig& config) {
+    using namespace ttml;
+
+    ASSERT_GT(config.num_query_heads, 0U) << "num_query_heads must be greater than zero";
+    ASSERT_GT(config.num_key_heads, 0U) << "num_key_heads must be greater than zero";
+    const uint32_t effective_value_dim = config.value_dim > 0 ? config.value_dim : config.key_value_dim;
+
+    const uint32_t head_dim_q = config.query_dim / config.num_query_heads;
+    const uint32_t head_dim_kv = config.key_value_dim / config.num_key_heads;
+    const uint32_t head_dim_v = effective_value_dim / config.num_key_heads;
+
+    auto& rng = ttml::autograd::ctx().get_generator();
+    uint32_t seed = rng();
+
+    const std::array<std::size_t, 4> query_shape{
+        config.batch_size, config.num_query_heads, config.sequence_length, head_dim_q};
+    const std::array<std::size_t, 4> kv_shape{
+        config.batch_size, config.num_key_heads, config.sequence_length, head_dim_kv};
+    const std::array<std::size_t, 4> value_shape{
+        config.batch_size, config.num_key_heads, config.sequence_length, head_dim_v};
+
+    xt::xarray<float> query_tensor = ttml::test_utils::make_uniform_xarray<float>(query_shape, -1.0F, 1.0F, seed);
+    xt::xarray<float> key_tensor = ttml::test_utils::make_uniform_xarray<float>(kv_shape, -1.0F, 1.0F, seed);
+    xt::xarray<float> value_tensor = ttml::test_utils::make_uniform_xarray<float>(value_shape, -1.0F, 1.0F, seed);
+
+    auto query = core::from_xtensor(query_tensor, &autograd::ctx().get_device());
+    auto key = core::from_xtensor(key_tensor, &autograd::ctx().get_device());
+    auto value = core::from_xtensor(value_tensor, &autograd::ctx().get_device());
+
+    std::optional<ttnn::Tensor> kernel_mask = std::nullopt;
+    if (config.mask_type == ttml::metal::AttentionMaskType::Arbitrary) {
+        xt::xarray<float> attn_mask_tensor = generate_mask(query_tensor);
+        kernel_mask = core::from_xtensor(attn_mask_tensor, &autograd::ctx().get_device());
+    }
+
+    const bool return_intermediates = false;
+
+    // Warmup: first launch pays for JIT-compile / device init overhead.
+    {
+        auto warmup = ttml::metal::sdpa_fw(
+            query, key, value, config.mask_type, kernel_mask, config.dropout_prob, return_intermediates);
+        (void)warmup;
+    }
+
+    // Timed run: this is the launch the profiler captures.
+    {
+        auto result = ttml::metal::sdpa_fw(
+            query, key, value, config.mask_type, kernel_mask, config.dropout_prob, return_intermediates);
+        (void)result;
+    }
+}
+
+TEST_F(SDPAForwardTest, NIGHTLY_ProfileSDPA_FW_TinyLlama_Row) {
+    // TinyLlama-equivalent PER-ROW workload: same Ht/D/Sk_chunk_t as full TinyLlama,
+    // but Q_NH=1 so only Ht=64 rows total → ≤1 row per core on WH (64 cores).
+    // Per-row zone footprint: up to 16 chunks × 5 inner zones + 1 final ≈ 81 (≤125).
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 2048U,
+        .query_dim = 64U,      // 1 head × 64 head_dim
+        .key_value_dim = 64U,  // 1 head × 64 head_dim
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "ProfileSDPA_FW_TinyLlama_Row"};
+    run_sdpa_profile_test(config);
+}
+
+TEST_F(SDPAForwardTest, NIGHTLY_ProfileSDPA_FW_Medium) {
+    // Medium shape: Ht=16, up to 4 chunks per row. ~21 zones per row.
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 512U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "ProfileSDPA_FW_Medium"};
+    run_sdpa_profile_test(config);
+}
+
+TEST_F(SDPAForwardTest, NIGHTLY_ProfileSDPA_FW_Small) {
+    // Small shape: Ht=4, up to 1 chunk per row. ~6 zones per row. Useful as a
+    // sanity-check baseline (one chunk → no online-correction → no PV-chunk overhead).
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "ProfileSDPA_FW_Small"};
+    run_sdpa_profile_test(config);
+}
