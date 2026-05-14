@@ -26,18 +26,21 @@
 namespace tt::tt_metal {
 
 class DebugToolsMeshFixture : public MeshDispatchFixture {
-   protected:
-       bool watcher_previous_enabled{};
+public:
+    using MeshDispatchFixture::TearDownTestSuite;
 
-       void TearDown() override { MeshDispatchFixture::TearDown(); }
+protected:
+    bool watcher_previous_enabled{};
 
-       template <typename T>
-       void RunTestOnDevice(
-           const std::function<void(T*, std::shared_ptr<distributed::MeshDevice>)>& run_function,
-           const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-           auto run_function_no_args = [this, run_function, mesh_device]() { run_function(static_cast<T*>(this), mesh_device); };
-           MeshDispatchFixture::RunTestOnDevice(run_function_no_args, mesh_device);
-       }
+    void TearDown() override { MeshDispatchFixture::TearDown(); }
+
+    template <typename T>
+    void RunTestOnDevice(
+        const std::function<void(T*, std::shared_ptr<distributed::MeshDevice>)>& run_function,
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        auto run_function_no_args = [this, run_function, mesh_device]() { run_function(static_cast<T*>(this), mesh_device); };
+        MeshDispatchFixture::RunTestOnDevice(run_function_no_args, mesh_device);
+    }
 };
 
 // A version of MeshDispatchFixture with DPrint enabled on all cores.
