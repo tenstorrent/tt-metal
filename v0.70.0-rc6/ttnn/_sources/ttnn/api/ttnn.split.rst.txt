@@ -1,0 +1,8 @@
+﻿ttnn.split
+==========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.split:
+
+.. autooperation:: ttnn.split
