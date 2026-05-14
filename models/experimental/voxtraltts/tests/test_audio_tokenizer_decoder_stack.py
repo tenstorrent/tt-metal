@@ -32,6 +32,7 @@ def _latent_ncl_to_tt_b1tc(device, latent_ncl_bf16: torch.Tensor) -> ttnn.Tensor
 @pytest.mark.parametrize(
     "time_len,pcc",
     [
+        (4, 0.99),
         (64, 0.99),
         (128, 0.98),
     ],

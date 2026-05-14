@@ -25,12 +25,28 @@ _PCC_TARGET = 0.99
 @pytest.mark.parametrize(
     "time_len,pcc",
     [
+        (4, _PCC_TARGET),
         (32, _PCC_TARGET),
         (64, _PCC_TARGET),
+        pytest.param(
+            96,
+            _PCC_TARGET,
+            marks=pytest.mark.timeout(3600),
+            id="medium_decode_96",
+        ),
+        pytest.param(
+            160,
+            _PCC_TARGET,
+            marks=pytest.mark.timeout(3600),
+            id="chunked_decode_160",
+        ),
     ],
 )
 def test_audio_tokenizer_full_decode_pcc(device, reset_seeds, time_len, pcc):
-    """Random valid codes → waveform PCC ≥ target vs bf16 CPU golden."""
+    """Random valid codes → waveform PCC ≥ target vs bf16 CPU golden.
+
+    ``time_len=160`` exercises the chunked decoder transpose/output projection paths.
+    """
     model_name = resolve_voxtral_model_name_or_skip()
     try:
         full = _load_safetensors_state_dict(model_name)

@@ -245,13 +245,21 @@ class VoxtralCPUReference:
             inputs_embeds[audio_mask] = voice_embedding
         return input_ids, inputs_embeds
 
+    def _split_stacked_codes(self, stacked_T37: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Raw stacked model codes ``[T, 37]`` → unshifted tokenizer codes ``[T', 37]`` and ``[1, 37, T']``."""
+        eoa = (stacked_T37[:, 0] == self.end_audio_id).nonzero(as_tuple=False)
+        cutting_point = int(eoa[0].item()) if len(eoa) else stacked_T37.shape[0]
+        audio_tokens = stacked_T37[:cutting_point] - 2  # un-shift special-token offset
+        if audio_tokens.numel() == 0:
+            z = torch.zeros(1, 37, 0, dtype=torch.long, device=stacked_T37.device)
+            return audio_tokens, z
+        codes_b37t = audio_tokens.T.unsqueeze(0).long()
+        return audio_tokens, codes_b37t
+
     def _decode_audio_codes(self, codes: torch.Tensor) -> torch.Tensor:
-        eoa = (codes[:, 0] == self.end_audio_id).nonzero(as_tuple=False)
-        cutting_point = int(eoa[0].item()) if len(eoa) else codes.shape[0]
-        audio_tokens = codes[:cutting_point] - 2  # un-shift special-token offset
+        audio_tokens, codes_b37t = self._split_stacked_codes(codes)
         if audio_tokens.numel() == 0:
             return torch.tensor([], dtype=torch.float32)
-        codes_b37t = audio_tokens.T.unsqueeze(0)  # [1, 37, T]
         audio_values = audio_tokenizer_decode_reference(
             codes_b37t, self._audio_tokenizer_state_dict, self.config.audio_tokenizer_args
         )
@@ -280,7 +288,10 @@ class VoxtralCPUReference:
         ref_audio: str | None = None,
         max_tokens: int = 2500,
         seed: int = 0,
-    ) -> torch.Tensor:
+        *,
+        tt_acoustic: Any | None = None,
+        return_tokenizer_codes: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         if ref_audio is not None:
             raise NotImplementedError(
                 "CPU reference currently supports preset voice embeddings, not ref-audio cloning."
@@ -304,7 +315,12 @@ class VoxtralCPUReference:
 
         cfg_alpha = torch.tensor(self._acoustic_cfg_alpha, device=hidden.device, dtype=hidden.dtype)
         for _ in range(max_tokens):
-            audio_codes = self.acoustic_transformer(hidden, cfg_alpha).to(torch.long)
+            if tt_acoustic is not None:
+                hc = hidden.detach().to(dtype=torch.bfloat16)
+                ca = cfg_alpha.to(device=hc.device, dtype=hc.dtype)
+                audio_codes = tt_acoustic.acoustic_codes_forward(hc, ca).to(torch.long)
+            else:
+                audio_codes = self.acoustic_transformer(hidden, cfg_alpha).to(torch.long)
             generated_codes.append(audio_codes[0].detach().cpu())
             if int(audio_codes[0, 0].item()) == self.end_audio_id:
                 break
@@ -321,5 +337,12 @@ class VoxtralCPUReference:
             past_key_values = outputs.past_key_values
 
         if not generated_codes:
-            return torch.tensor([], dtype=torch.float32)
-        return self._decode_audio_codes(torch.stack(generated_codes, dim=0).to(self.device))
+            empty = torch.tensor([], dtype=torch.float32)
+            empty_codes = torch.zeros(1, 37, 0, dtype=torch.long)
+            return (empty, empty_codes) if return_tokenizer_codes else empty
+        stacked = torch.stack(generated_codes, dim=0).to(self.device)
+        wav = self._decode_audio_codes(stacked)
+        if return_tokenizer_codes:
+            _, codes_b37t = self._split_stacked_codes(stacked)
+            return wav, codes_b37t.cpu()
+        return wav
