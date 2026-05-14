@@ -156,7 +156,9 @@ class Phi3VRunner:
             local_files_only=True,
         )
         self.reference_model.eval()
-        self.processor = AutoProcessor.from_pretrained(self.hf_model, trust_remote_code=True, local_files_only=True)
+        self.processor = AutoProcessor.from_pretrained(
+            self.hf_model, trust_remote_code=True, local_files_only=True, num_crops=16
+        )
 
         self.generator = Generator(
             [self.model], [self.model_args], self.mesh_device, tokenizer=self.model_args.tokenizer
@@ -214,11 +216,6 @@ class Phi3VRunner:
                         img = img.convert("RGB")
                     else:
                         img = img.convert("RGB")
-                    max_pixels = 512
-                    if max(img.size) > max_pixels:
-                        ratio = max_pixels / max(img.size)
-                        new_size = (int(img.width * ratio), int(img.height * ratio))
-                        img = img.resize(new_size, Image.LANCZOS)
                     images.append(img)
                     text_parts.append(f"<|image_{len(images)}|>")
                 elif item["type"] == "text":

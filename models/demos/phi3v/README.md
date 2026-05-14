@@ -62,10 +62,10 @@ HF_MODEL=microsoft/Phi-3.5-vision-instruct \
 | Max sequence length | 4096 |
 | Paged attention block size | 32 |
 | Paged attention max blocks | 1024 |
-| Image max dimension | 512 px |
+| Vision num_crops | 16 |
 | Mesh shape | 1x1 |
 
-Images are resized so the longest edge is at most 512 px before being passed to the vision encoder. This keeps the embedding sequence length within the 4096-token limit (Phi-3.5-vision uses multi-crop tiling, and larger images can exceed the limit).
+The processor uses `num_crops=16` (matching the reference implementation for single-image tasks). Phi-3.5-vision tiles input images into up to 16 crops of 336x336 pixels, producing ~1900-2600 vision tokens per image, well within the 4096-token sequence limit.
 
 ### Benchmark Results (100 samples each)
 
@@ -76,17 +76,17 @@ Images are resized so the longest edge is at most 512 px before being passed to 
 | MMBench | Accuracy | 96.0 | 81.9 | +14.1 |
 | MathVista | Accuracy | 41.0 | 43.9 | -2.9 |
 | AI2D | Accuracy | 88.0 | 78.1 | +9.9 |
-| ChartQA | Relaxed Acc | 66.0 | 81.8 | -15.8 |
-| TextVQA | VQA Acc | 60.7 | 72.0 | -11.3 |
+| ChartQA | Relaxed Acc | 69.0 | 81.8 | -12.8 |
+| TextVQA | VQA Acc | 74.3 | 72.0 | +2.3 |
 | POPE | Accuracy | 88.0 | 86.1 | +1.9 |
 
 Reference scores are from the [Phi-3.5-vision model card](https://huggingface.co/microsoft/Phi-3.5-vision-instruct) (full dataset evaluation).
 
 ### Notes on Results
 
-- **ScienceQA, MathVista, POPE** — within 3 points of reference, confirming the inference pipeline is correct.
+- **ScienceQA, MathVista, TextVQA, POPE** — within 3 points of reference or better, confirming the inference pipeline is correct.
 - **MMBench, AI2D** — above reference on the 100-sample subset; may vary with full dataset.
-- **ChartQA, TextVQA** — gap is primarily due to the 512 px image cap. These benchmarks require reading fine text in charts and natural images, which is degraded by downscaling.
+- **ChartQA** — 12.8-point gap. ChartQA requires precise reading of small numbers and labels in charts; the bfp8 weight quantization and 100-sample subset may contribute to the gap.
 - **MMMU** — the model tends to output numeric answers instead of MCQ option letters (A/B/C/D) for complex academic questions. This is a prompting/output-format issue, not a model accuracy problem.
 
 ### Available Benchmarks
