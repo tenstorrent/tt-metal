@@ -7,6 +7,7 @@ import shutil
 import signal
 import subprocess
 import time
+from pathlib import Path
 from typing import Optional
 
 import pytest
@@ -285,7 +286,7 @@ class ExalensServer:
         """
         try:
             result = subprocess.run(
-                ["pgrep", "-f", f"tt-exalens.*--port={self._port}"],
+                ["pgrep", "-f", "tt-exalens"],
                 capture_output=True,
                 text=True,
             )
@@ -296,6 +297,7 @@ class ExalensServer:
             return
 
         my_pid = os.getpid()
+        port_arg = f"--port={self._port}"
         stale_pids = []
         for line in result.stdout.strip().splitlines():
             try:
@@ -303,6 +305,12 @@ class ExalensServer:
             except ValueError:
                 continue
             if pid == my_pid:
+                continue
+            try:
+                cmdline_args = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\x00")
+                if port_arg.encode() not in cmdline_args:
+                    continue
+            except OSError:
                 continue
             stale_pids.append(pid)
 
