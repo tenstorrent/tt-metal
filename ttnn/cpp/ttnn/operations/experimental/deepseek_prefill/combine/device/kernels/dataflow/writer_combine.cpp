@@ -210,12 +210,6 @@ void kernel_main() {
                        << ENDL();
 
 #ifdef DEST_CHIP_ID
-        // Debug guard: distance is bounded by max manhattan distance across the mesh.
-        // Garbage values (stale-cache reads from CB-slot reuse) tend to be huge integers;
-        // stall here so triage can identify the bad-distance hang location.
-        if (distance == 0 || distance > 8) {
-            while (true);
-        }
         fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
         fabric_send_noc_unicast<fabric_max_packet_size>(
             output_addr_gen,
