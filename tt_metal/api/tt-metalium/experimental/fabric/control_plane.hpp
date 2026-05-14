@@ -42,12 +42,6 @@ class PhysicalSystemDescriptor;
 
 }  // namespace tt::tt_metal
 
-namespace tt::umd {
-
-class Cluster;
-
-}  // namespace tt::umd
-
 namespace tt::tt_fabric {
 
 class TopologyMapper;
