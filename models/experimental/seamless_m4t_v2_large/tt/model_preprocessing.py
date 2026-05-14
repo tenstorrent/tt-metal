@@ -74,6 +74,22 @@ def _embedding_weight(emb: torch.nn.Embedding, *, device: ttnn.Device) -> ttnn.T
     )
 
 
+def _vocoder_embedding_weight_row_major(emb: torch.nn.Embedding, *, device: ttnn.Device) -> ttnn.Tensor:
+    """ROW_MAJOR embedding table for [`TTSeamlessM4Tv2CodeHifiGan`] (matches text decoder / T2U Stage 10).
+
+    ``ttnn.embedding`` still returns TILE_LAYOUT activations when ``layout=ttnn.TILE_LAYOUT`` is passed;
+    TILE-stored tables can add a trailing untilize on lookup. Call sites unchanged in ``tt_code_hifigan``.
+    """
+    w = emb.weight.detach().to(torch.bfloat16).contiguous()
+    return ttnn.from_torch(
+        w,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
 def _ln_to_device(param: torch.Tensor, *, device: ttnn.Device) -> ttnn.Tensor:
     x = param.detach().reshape(1, 1, -1).contiguous()
     return ttnn.from_torch(
@@ -834,12 +850,14 @@ def create_code_hifigan_parameters(vocoder, *, device: ttnn.Device) -> dict:
         resblock_layers.append(make_parameter_dict({"convs1": c1, "convs2": c2}))
 
     out = {
-        "unit_embedding": make_parameter_dict({"weight": _embedding_weight(vocoder.unit_embedding, device=device)}),
+        "unit_embedding": make_parameter_dict(
+            {"weight": _vocoder_embedding_weight_row_major(vocoder.unit_embedding, device=device)}
+        ),
         "speaker_embedding": make_parameter_dict(
-            {"weight": _embedding_weight(vocoder.speaker_embedding, device=device)}
+            {"weight": _vocoder_embedding_weight_row_major(vocoder.speaker_embedding, device=device)}
         ),
         "language_embedding": make_parameter_dict(
-            {"weight": _embedding_weight(vocoder.language_embedding, device=device)}
+            {"weight": _vocoder_embedding_weight_row_major(vocoder.language_embedding, device=device)}
         ),
         "dur_predictor": make_parameter_dict(dur_predictor),
         "hifi_gan": make_parameter_dict(
