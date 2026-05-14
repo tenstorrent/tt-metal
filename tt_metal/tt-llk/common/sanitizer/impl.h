@@ -11,6 +11,7 @@
 #include <string>
 
 #include "llk_assert.h"
+#include "sanitizer/error.h"
 #include "sanitizer/output.h"
 #include "sanitizer/types.h"
 
@@ -98,6 +99,244 @@ static inline void thread_context_pop_impl(ThreadOutputContext& context)
     {
         context.current = UnwindContext::UNKNOWN;
     }
+}
+
+template <typename T>
+TT_ALWAYS_INLINE void operand_error_assert(
+    const State<T> expected,
+    const State<T> actual,
+    ct_string message,
+    const UnwindContext update,
+    const UnwindContext current)
+{
+//     if (expected.assert_cond(actual))
+//     {
+//         return;
+//     }
+
+    const ct_string kernel         = CTSTR(KERNEL_NAME);
+    const ct_string update_header  = CTSTR("Last relevant operand state update");
+    const ct_string current_header = CTSTR("Current operand state");
+    const ct_string unknown        = CTSTR("<unknown>");
+    const ct_string file           = CTSTR("<file>");
+    const ct_string line           = CTSTR("<line>");
+
+    const bool update_known  = update.pc != UINTPTR_MAX;
+    const bool current_known = current.pc != UINTPTR_MAX;
+
+    DEVICE_PRINT("DJUBRE!!!");
+
+    LLK_SAN_ERROR_MSG(
+        "┌─[ llk::san ]─[ error ]──────\n"
+        "│  {}\n"
+        "│\n"
+        "│\n"
+        "│  ┌[ Current Kernel ]─\n"
+        "│  └── {}\n"
+        "│\n"
+        "│  ┌[ {} ]─\n"
+        "│  ├── Compute API ─┬ {:#x}\n"
+        "│  │                └ {}:{}\n"
+        "│  └── Callsite ────┬ {:#x}\n"
+        "│                   └ {}:{}\n"
+        "│\n"
+        "│  ┌[ {} ]─\n"
+        "│  ├── Compute API ─┬ {:#x}\n"
+        "│  │                └ {}:{}\n"
+        "│  └── Callsite ────┬ {:#x}\n"
+        "│                   └ {}:{}\n"
+        "└─────────────────────────────",
+        message,
+        kernel,
+        update_header,
+        update.pc,
+        update_known ? file : unknown,
+        update_known ? line : unknown,
+        update.ra,
+        update_known ? file : unknown,
+        update_known ? line : unknown,
+        current_header,
+        current.pc,
+        current_known ? file : unknown,
+        current_known ? line : unknown,
+        current.ra,
+        current_known ? file : unknown,
+        current_known ? line : unknown);
+
+
+
+    // if (!expected.is_known() && !actual.is_known())
+    // {
+    //     LLK_SAN_ERROR_MSG(
+    //         "┌─[ llk::san ]─[ error ]──────\n"
+    //         "│  {}\n"
+    //         "│\n"
+    //         "│  Configure / Reconfigure: {}\n"
+    //         "│  Init / Execute / Uninit: {}\n"
+    //         "│\n"
+    //         "│  ┌[ Current Kernel ]─\n"
+    //         "│  └── {}\n"
+    //         "│\n"
+    //         "│  ┌[ {} ]─\n"
+    //         "│  ├── Compute API ─┬ {:#x}\n"
+    //         "│  │                └ {}:{}\n"
+    //         "│  └── Callsite ────┬ {:#x}\n"
+    //         "│                   └ {}:{}\n"
+    //         "│\n"
+    //         "│  ┌[ {} ]─\n"
+    //         "│  ├── Compute API ─┬ {:#x}\n"
+    //         "│  │                └ {}:{}\n"
+    //         "│  └── Callsite ────┬ {:#x}\n"
+    //         "│                   └ {}:{}\n"
+    //         "└─────────────────────────────",
+    //         message,
+    //         expected_label,
+    //         actual_label,
+    //         kernel,
+    //         update_header,
+    //         update.pc,
+    //         update_known ? file : unknown,
+    //         update_known ? line : unknown,
+    //         update.ra,
+    //         update_known ? file : unknown,
+    //         update_known ? line : unknown,
+    //         current_header,
+    //         current.pc,
+    //         current_known ? file : unknown,
+    //         current_known ? line : unknown,
+    //         current.ra,
+    //         current_known ? file : unknown,
+    //         current_known ? line : unknown);
+    // }
+    // else if (!expected.is_known() && actual.is_known())
+    // {
+    //     LLK_SAN_ERROR_MSG(
+    //         "┌─[ llk::san ]─[ error ]──────\n"
+    //         "│  {}\n"
+    //         "│\n"
+    //         "│  Configure / Reconfigure: {}\n"
+    //         "│  Init / Execute / Uninit: {}\n"
+    //         "│\n"
+    //         "│  ┌[ Current Kernel ]─\n"
+    //         "│  └── {}\n"
+    //         "│\n"
+    //         "│  ┌[ {} ]─\n"
+    //         "│  ├── Compute API ─┬ {:#x}\n"
+    //         "│  │                └ {}:{}\n"
+    //         "│  └── Callsite ────┬ {:#x}\n"
+    //         "│                   └ {}:{}\n"
+    //         "│\n"
+    //         "│  ┌[ {} ]─\n"
+    //         "│  ├── Compute API ─┬ {:#x}\n"
+    //         "│  │                └ {}:{}\n"
+    //         "│  └── Callsite ────┬ {:#x}\n"
+    //         "│                   └ {}:{}\n"
+    //         "└─────────────────────────────",
+    //         message,
+    //         expected_label,
+    //         actual.get_underlying(),
+    //         kernel,
+    //         update_header,
+    //         update.pc,
+    //         update_known ? file : unknown,
+    //         update_known ? line : unknown,
+    //         update.ra,
+    //         update_known ? file : unknown,
+    //         update_known ? line : unknown,
+    //         current_header,
+    //         current.pc,
+    //         current_known ? file : unknown,
+    //         current_known ? line : unknown,
+    //         current.ra,
+    //         current_known ? file : unknown,
+    //         current_known ? line : unknown);
+    // }
+    // else if (expected.is_known() && !actual.is_known())
+    // {
+    //     LLK_SAN_ERROR_MSG(
+    //         "┌─[ llk::san ]─[ error ]──────\n"
+    //         "│  {}\n"
+    //         "│\n"
+    //         "│  Configure / Reconfigure: {}\n"
+    //         "│  Init / Execute / Uninit: {}\n"
+    //         "│\n"
+    //         "│  ┌[ Current Kernel ]─\n"
+    //         "│  └── {}\n"
+    //         "│\n"
+    //         "│  ┌[ {} ]─\n"
+    //         "│  ├── Compute API ─┬ {:#x}\n"
+    //         "│  │                └ {}:{}\n"
+    //         "│  └── Callsite ────┬ {:#x}\n"
+    //         "│                   └ {}:{}\n"
+    //         "│\n"
+    //         "│  ┌[ {} ]─\n"
+    //         "│  ├── Compute API ─┬ {:#x}\n"
+    //         "│  │                └ {}:{}\n"
+    //         "│  └── Callsite ────┬ {:#x}\n"
+    //         "│                   └ {}:{}\n"
+    //         "└─────────────────────────────",
+    //         message,
+    //         expected.get_underlying(),
+    //         actual_label,
+    //         kernel,
+    //         update_header,
+    //         update.pc,
+    //         update_known ? file : unknown,
+    //         update_known ? line : unknown,
+    //         update.ra,
+    //         update_known ? file : unknown,
+    //         update_known ? line : unknown,
+    //         current_header,
+    //         current.pc,
+    //         current_known ? file : unknown,
+    //         current_known ? line : unknown,
+    //         current.ra,
+    //         current_known ? file : unknown,
+    //         current_known ? line : unknown);
+    // }
+    // else
+    // {
+    //     LLK_SAN_ERROR_MSG(
+    //         "┌─[ llk::san ]─[ error ]──────\n"
+    //         "│  {}\n"
+    //         "│\n"
+    //         "│  Configure / Reconfigure: {}\n"
+    //         "│  Init / Execute / Uninit: {}\n"
+    //         "│\n"
+    //         "│  ┌[ Current Kernel ]─\n"
+    //         "│  └── {}\n"
+    //         "│\n"
+    //         "│  ┌[ {} ]─\n"
+    //         "│  ├── Compute API ─┬ {:#x}\n"
+    //         "│  │                └ {}:{}\n"
+    //         "│  └── Callsite ────┬ {:#x}\n"
+    //         "│                   └ {}:{}\n"
+    //         "│\n"
+    //         "│  ┌[ {} ]─\n"
+    //         "│  ├── Compute API ─┬ {:#x}\n"
+    //         "│  │                └ {}:{}\n"
+    //         "│  └── Callsite ────┬ {:#x}\n"
+    //         "│                   └ {}:{}\n"
+    //         "└─────────────────────────────",
+    //         message,
+    //         expected.get_underlying(),
+    //         actual.get_underlying(),
+    //         kernel,
+    //         update_header,
+    //         update.pc,
+    //         update_known ? file : unknown,
+    //         update_known ? line : unknown,
+    //         update.ra,
+    //         update_known ? file : unknown,
+    //         update_known ? line : unknown,
+    //         current_header,
+    //         current.pc,
+    //         current_known ? file : unknown,
+    //         current_known ? line : unknown,
+    //         current.ra,
+    //         current_known ? file : unknown,
+    //         current_known ? line : unknown);
+    // }
 }
 
 // Goes in LLK_LIB in HWConfigure and HWReconfig
@@ -199,7 +438,7 @@ static inline void pack_operand_configure_impl(
 // Goes in LLK_LIB in Init, Execute and Uninit
 // No state set, just check that non x arguments match the stored ones
 static inline void unpack_operand_check_impl(
-    const ThreadOutputContext& context,
+    const UnpackOutputContext& context,
     UnpackOperandState& state,
     State<bool> dest_acc_en,
     State<std::uint32_t> src_fmt_A,
@@ -213,56 +452,31 @@ static inline void unpack_operand_check_impl(
 {
     if (!thread_silent_get_impl(context))
     {
-        const auto pc = context.current.pc;
-        if(state.dest_width_32.assert_cond(dest_acc_en) == false)
-        {
-            if(state.dest_width_32.is_known()){
-                if (state.dest_width_32.get_underlying())
-                {
-                    LLK_SAN_ERROR_MSG("{:#x} : DEST register is CONFIGURED for 32bit access, but {} called LLK with 16bit access", pc, pc);
-                }
-                else
-                {
-                    LLK_SAN_ERROR_MSG("{:#x} : DEST register is CONFIGURED for 16bit access, but {} called LLK with 32bit access", pc, pc);
-                }
-            } else {
-                LLK_SAN_ERROR_MSG("{:#x} : DEST register width is UNKNOWN, potential missing/partial CONFIGURE", pc);
-            }
-        }
+        const UnwindContext current = context.current;
 
-        if(state.src_a.input_format.assert_cond(src_fmt_A) == false)
-        {
-            DataFormat format = static_cast<DataFormat>(src_fmt_A.get_underlying());
-            if(state.src_a.input_format.is_known()){
-                DataFormat state_format = static_cast<DataFormat>(state.src_a.input_format.get_underlying());
-                LLK_SAN_ERROR_MSG("{:#x} : L1 format for unpacking to SRCA is CONFIGURED as {}, but {} called LLK with {}", pc, state_format, pc, format);
-            } else {
-                LLK_SAN_ERROR_MSG(
-                    "{:#x} : L1 format for unpacking to SRCA is UNKNOWN, but {} called LLK with {}, potential missing/partial CONFIGURE", pc, pc, format);
-            }
-        }
-
-        LLK_SAN_ERROR_ASSERT(state.src_a.input_format.assert_cond(src_fmt_A), "{:#x} : src_fmt_A doesn't match state.src_a.input_format", pc);
-        LLK_SAN_ERROR_ASSERT(state.src_b.input_format.assert_cond(src_fmt_B), "{:#x} : src_fmt_B doesn't match state.src_b.input_format", pc);
-        LLK_SAN_ERROR_ASSERT(state.src_a.output_format.assert_cond(dst_fmt_A), "{:#x} : dst_fmt_A doesn't match state.src_a.output_format", pc);
-        LLK_SAN_ERROR_ASSERT(state.src_b.output_format.assert_cond(dst_fmt_B), "{:#x} : dst_fmt_B doesn't match state.src_b.output_format", pc);
-        LLK_SAN_ERROR_ASSERT(state.src_a.face_height.assert_cond(face_height_A), "{:#x} : face_height_A doesn't match state.src_a.face_height", pc);
-        LLK_SAN_ERROR_ASSERT(state.src_b.face_height.assert_cond(face_height_B), "{:#x} : face_height_B doesn't match state.src_b.face_height", pc);
-        LLK_SAN_ERROR_ASSERT(state.src_a.num_faces.assert_cond(num_faces_A), "{:#x} : num_faces_A doesn't match state.src_a.num_faces", pc);
-        LLK_SAN_ERROR_ASSERT(state.src_b.num_faces.assert_cond(num_faces_B), "{:#x} : num_faces_B doesn't match state.src_b.num_faces", pc);
+        operand_error_assert(state.dest_width_32, dest_acc_en, CTSTR("configured vs provided DEST ACCUMULATION are missmatched"), context.configure_a, current);
+        operand_error_assert(state.src_a.input_format, src_fmt_A, CTSTR("configured vs provided UNPACK A L1 FORMAT are missmatched"), context.configure_a, current);
+        operand_error_assert(state.src_b.input_format, src_fmt_B, CTSTR("configured vs provided UNPACK B L1 FORMAT are missmatched"), context.configure_b, current);
+        operand_error_assert(state.src_a.output_format, dst_fmt_A, CTSTR("configured vs provided SRC A FORMAT are missmatched"), context.configure_a, current);
+        operand_error_assert(state.src_b.output_format, dst_fmt_B, CTSTR("configured vs provided SRC B FORMAT are missmatched"), context.configure_b, current);
+        operand_error_assert(state.src_b.face_height, face_height_B, CTSTR("configured vs provided UNPACK A L1 FACE HEIGHT are missmatched"), context.configure_b, current);
+        operand_error_assert(state.src_a.face_height, face_height_A, CTSTR("configured vs provided UNPACK B L1 FACE HEIGHT are missmatched"), context.configure_a, current);
+        operand_error_assert(state.src_a.num_faces, num_faces_A, CTSTR("configured vs provided UNPACK A L1 NUM FACES are missmatched"), context.configure_a, current);
+        operand_error_assert(state.src_b.num_faces, num_faces_B, CTSTR("configured vs provided UNPACK B L1 NUM FACES are missmatched"), context.configure_b, current);
     }
 }
 
 // No state set, just check that non x arguments match the stored ones
 static inline void math_operand_check_impl(
-    const ThreadOutputContext& context, MathOperandState& state, State<std::uint32_t> math_fmt_A, State<std::uint32_t> math_fmt_B)
+    const MathOutputContext& context, MathOperandState& state, State<std::uint32_t> math_fmt_A, State<std::uint32_t> math_fmt_B)
 {
     if (!thread_silent_get_impl(context))
     {
-        const auto pc = context.current.pc;
-        LLK_SAN_PEDANTIC_PANIC(!state.is_configured, "{:#x} : executing init/execute/uninit before hwconfigure", pc);
-        LLK_SAN_ERROR_ASSERT(state.src_a.input_format.assert_cond(math_fmt_A), "{:#x} : math_fmt_A doesn't match state.src_a.input_format", pc);
-        LLK_SAN_ERROR_ASSERT(state.src_b.input_format.assert_cond(math_fmt_B), "{:#x} : math_fmt_B doesn't match state.src_b.input_format", pc);
+        const UnwindContext current = context.current;
+        LLK_SAN_PEDANTIC_PANIC(!state.is_configured, "{:#x} : executing init/execute/uninit before hwconfigure", current.pc);
+
+        operand_error_assert(state.src_a.input_format, math_fmt_A, CTSTR("math_fmt_A doesn't match state.src_a.input_format"), context.configure_fpu, current);
+        operand_error_assert(state.src_b.input_format, math_fmt_B, CTSTR("math_fmt_B doesn't match state.src_b.input_format"), context.configure_sfpu, current);
     }
 }
 
@@ -281,16 +495,19 @@ static inline void pack_operand_check_impl(
 {
     if (!thread_silent_get_impl(context))
     {
-        const auto pc = context.configure_pack.pc;
-        LLK_SAN_PEDANTIC_PANIC(!state.is_configured, "{:#x} : executing init/execute/uninit before hwconfigure", pc);
-        LLK_SAN_ERROR_ASSERT(state.dest_width_32.assert_cond(dest_acc_en), "{:#x} : dest_acc_en doesn't match state.dest_width_32", pc);
-        LLK_SAN_ERROR_ASSERT(state.input_format.assert_cond(src_fmt), "{:#x} : src_fmt doesn't match state.input_format", pc);
-        LLK_SAN_ERROR_ASSERT(state.output_format.assert_cond(dst_fmt), "{:#x} : dst_fmt doesn't match state.output_format", pc);
-        // sstanisic fixme: LLK_SAN_ERROR_ASSERT(state.face_height.assert_cond(face_height), "{:#x} : face_height doesn't match state.face_height", pc);
-        LLK_SAN_ERROR_ASSERT(state.tile_width.assert_cond(tile_width), "{:#x} : tile_width doesn't match state.tile_width", pc);
-        LLK_SAN_ERROR_ASSERT(state.num_faces.assert_cond(num_faces), "{:#x} : num_faces doesn't match state.num_faces", pc);
-        LLK_SAN_ERROR_ASSERT(state.partial_face.assert_cond(partial_face), "{:#x} : partial_face doesn't match state.partial_face", pc);
-        LLK_SAN_ERROR_ASSERT(state.narrow_tile.assert_cond(narrow_tile), "{:#x} : narrow_tile doesn't match state.narrow_tile", pc);
+        const UnwindContext current = context.current;
+        LLK_SAN_PEDANTIC_PANIC(!state.is_configured, "{:#x} : executing init/execute/uninit before hwconfigure", current.pc);
+
+        DEVICE_PRINT("HELLO??");
+
+        operand_error_assert(state.dest_width_32, dest_acc_en, CTSTR("dest_acc_en doesn't match state.dest_width_32"), context.configure_pack, current);
+        operand_error_assert(state.input_format, src_fmt, CTSTR("src_fmt doesn't match state.input_format"), context.configure_pack, current);
+        operand_error_assert(state.output_format, dst_fmt, CTSTR("dst_fmt doesn't match state.output_format"), context.configure_pack, current);
+        // sstanisic fixme: face_height check
+        operand_error_assert(state.tile_width, tile_width, CTSTR("tile_width doesn't match state.tile_width"), context.configure_pack, current);
+        operand_error_assert(state.num_faces, num_faces, CTSTR("num_faces doesn't match state.num_faces"), context.configure_pack, current);
+        operand_error_assert(state.partial_face, partial_face, CTSTR("partial_face doesn't match state.partial_face"), context.configure_pack, current);
+        operand_error_assert(state.narrow_tile, narrow_tile, CTSTR("narrow_tile doesn't match state.narrow_tile"), context.configure_pack, current);
     }
 }
 

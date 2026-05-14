@@ -21,41 +21,6 @@ namespace llk::san
 // per thread state
 extern SanitizerState* const sanitizer;
 
-// Goes in ComputeAPI
-// State set only
-// sstanisic todo: implement support_backtrace_impl
-// static inline void support_backtrace(std::string function_name)
-// {
-//     support_backtrace_impl(function_name);
-// }
-
-// Goes in LLK_API
-// State set only
-// sstanisic todo: implement support_globals_impl
-// static inline void support_globals(bool dst_acc_mode, DstSync dst_sync, bool approx, std::int32_t math_fidelity)
-// {
-//     support_globals_impl(dst_acc_mode, dst_sync, approx, math_fidelity);
-// }
-
-// State set only
-// sstanisic todo: implement support_operand_impl
-// template <llk_san_operand operand>
-// static inline void llk_san_support_operand(
-//     std::int32_t src_fmt,
-//     std::int32_t dst_fmt,
-//     std::int32_t num_faces,
-//     std::int32_t partial_face,
-//     std::int32_t face_r_dim,
-//     std::int32_t narrow_tile,
-//     std::int32_t tile_r_dim,
-//     std::int32_t tile_c_dim,
-//     std::int32_t tile_size,
-//     std::int32_t page_size)
-// {
-//     support_operand_impl<operand>(
-//         src_fmt, dst_fmt, num_faces, partial_face, face_r_dim, narrow_tile, tile_r_dim, tile_c_dim, tile_size, page_size);
-// }
-
 static inline void thread_init()
 {
     thread_init_impl(*sanitizer);
@@ -178,7 +143,7 @@ static inline void unpack_operand_check(
     State<std::uint32_t> num_faces_B)
 {
     unpack_operand_check_impl(
-        thread_context_get(),
+        sanitizer->context.unpack,
         sanitizer->operand.unpack,
         dst_acc_en,
         src_fmt_A,
@@ -194,7 +159,7 @@ static inline void unpack_operand_check(
 // No state set, just check that non x arguments match the stored ones
 static inline void math_operand_check(State<std::uint32_t> math_fmt_A, State<std::uint32_t> math_fmt_B)
 {
-    math_operand_check_impl(thread_context_get(), sanitizer->operand.math, math_fmt_A, math_fmt_B);
+    math_operand_check_impl(sanitizer->context.math, sanitizer->operand.math, math_fmt_A, math_fmt_B);
 }
 
 // No state set, just check that non x arguments match the stored ones
@@ -243,7 +208,7 @@ void operation_uninit()
 class FunctionZone
 {
 public:
-    FunctionZone([[maybe_unused]] const ct_string function_name)
+    FunctionZone()
     {
         thread_context_push();
     }
@@ -271,10 +236,7 @@ public:
 } // namespace llk::san
 
 #define LLK_SAN_FUNCTION(function)         \
-    llk::san::FunctionZone _function_zone_ \
-    {                                      \
-        CTSTR(function)                    \
-    }
+    llk::san::FunctionZone _function_zone_;
 
 #define LLK_SAN_SILENT_ZONE() [[maybe_unused]] llk::san::SilentZone _silent_zone_
 

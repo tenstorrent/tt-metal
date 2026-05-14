@@ -169,13 +169,16 @@ public:
 
     inline __attribute__((always_inline)) zone_scoped()
     {
+        ckernel::fence_compiler();
         if (!is_buffer_full())
         {
             is_opened = true;
             write_entry(EntryType::ZONE_START, id16);
             ++open_zone_cnt;
         }
+        ckernel::fence_compiler();
     }
+
 
     ~zone_scoped()
     {
