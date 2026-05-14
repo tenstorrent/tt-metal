@@ -2683,7 +2683,7 @@ void
         std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids,
         volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     auto establish_static_connection_from_receiver_side = [&](auto& interface, size_t sender_channel_idx) {
-        if (!sender_ch_live_check_skip[sender_channel_idx]) {
+        if (!sender_ch_wait_static_connection[sender_channel_idx]) {
             return;
         }
         uint32_t count = 0;
