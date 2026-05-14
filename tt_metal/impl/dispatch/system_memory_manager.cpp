@@ -725,7 +725,7 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
     const uint32_t prefetch_q_base =
         ctx.dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
     const uint32_t prefetch_q_entries = ctx.dispatch_mem_map().prefetch_q_entries();
-    const uint32_t entry_size = sizeof(DispatchSettings::prefetch_q_entry_type);
+    const uint32_t entry_size = ctx.dispatch_mem_map().prefetch_q_entry_size_bytes();
     const uint32_t prefetch_q_limit = prefetch_q_base + prefetch_q_entries * entry_size;
 
     // Computes the number of entries firmware consumed between fences updates.
@@ -787,9 +787,9 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
             uint32_t next_slot = (old_fences + entry_size >= prefetch_q_limit)
                                      ? prefetch_q_base
                                      : old_fences + entry_size;
-            DispatchSettings::prefetch_q_entry_type slot_val = 0;
+            uint32_t slot_val = 0;
             ctx.get_cluster().read_core(
-                &slot_val, sizeof(DispatchSettings::prefetch_q_entry_type), this->prefetcher_cores[cq_id], next_slot);
+                &slot_val, entry_size, this->prefetcher_cores[cq_id], next_slot);
             if (slot_val == 0) {
                 // Slot is clear.  Re-read the fence to close the TOCTOU window: if firmware
                 // was mid-consume (cleared slot but not yet updated fence), the re-read will
