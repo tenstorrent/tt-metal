@@ -27,9 +27,13 @@ def _btd_to_tt_b1td(device, x_btd: torch.Tensor) -> ttnn.Tensor:
 
 
 @torch.no_grad()
-@pytest.mark.parametrize("time_len", [16, 32])
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("time_len", [16, 32, 2048])
 def test_audio_tokenizer_output_proj_pcc(device, reset_seeds, time_len):
-    """``output_proj`` causal conv vs ``output_proj_mel_ncl_reference_bf16`` (checkpoint weights)."""
+    """``output_proj`` causal conv vs CPU golden.
+
+    ``time_len=2048`` exercises the TT chunked long-sequence path added for P150 L1 pressure.
+    """
     model_name = resolve_voxtral_model_name_or_skip()
     try:
         full = _load_safetensors_state_dict(model_name)
