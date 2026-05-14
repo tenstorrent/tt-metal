@@ -258,29 +258,6 @@ void log_router_sync_timeout_diagnostics(
 
 }
 
-[[noreturn]] void report_router_sync_timeout_and_throw(
-    Device* dev,
-    chan_id_t master_chan,
-    const tt::umd::CoreCoord& master_core,
-    uint32_t master_raw_status,
-    uint32_t expected_status,
-    uint32_t router_sync_address,
-    uint32_t timeout_ms,
-    tt::tt_fabric::ControlPlane& control_plane,
-    Cluster& cluster) {
-    log_router_sync_timeout_diagnostics(
-        dev, master_chan, master_core, master_raw_status, expected_status,
-        router_sync_address, timeout_ms, control_plane, cluster);
-    TT_THROW(
-        "Fabric Router Sync: Timeout after {} ms on Device {}: expected status 0x{:08x}. "
-        "Master chan={} got 0x{:08x}. See error log above for per-core status breakdown.",
-        timeout_ms,
-        dev->id(),
-        expected_status,
-        master_chan,
-        master_raw_status);
-}
-
 }  // namespace
 
 // Thread-local compile seam — default-constructed (empty std::function) in all threads.
