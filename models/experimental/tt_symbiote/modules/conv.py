@@ -5,6 +5,7 @@
 """Linear layer implementations for TTNN."""
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 
 import ttnn
@@ -13,6 +14,7 @@ from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.modules.activation import TTNNReLU
 from models.experimental.tt_symbiote.modules.tensor import TTNNPermute, TTNNReshape
 from models.experimental.tt_symbiote.core.run_config import trace_enabled
+from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
 
 def fold_batch_norm2d_into_conv2d(weight, bias, scale, shift, running_mean, running_var, eps):
@@ -764,3 +766,127 @@ class TTNNConv2dNHWCInputMultipleOf16(TTNNConv2dNHWC):
         )
         new_conv._fallback_torch_layer = NHWCConvPytorch(conv)
         return new_conv
+
+
+class TTNNConv1d(TTNNModule):
+    """Depthwise 1D convolution (groups == in_channels) via TTNN element-wise ops.
+
+    Avoids ``ttnn.conv2d`` (which needs L1_SMALL scratch) by decomposing into k
+    shifted element-wise multiplies:
+        output[:, t, c] = bias[c] + sum_{j=0}^{k-1} weight[c, j] * padded_input[:, t+j, c]
+
+    Input / output convention matches ``nn.Conv1d``: ``[B, C, T]`` (BCT).
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._kernel_size = None
+        self._padding = None
+        self._weight_tt_slices = []  # k TTNN tensors, each [1, 1, C]
+        self._bias_tt = None  # [1, 1, C] or None
+        self._weight_torch = None  # [k, C] host tensor, cleared after move-to-device
+        self._bias_torch = None  # [C] host tensor, cleared after move-to-device
+
+    @classmethod
+    def from_torch(cls, conv1d: nn.Conv1d, slice_config=None):
+        new = cls()
+        new._fallback_torch_layer = conv1d
+        k = conv1d.kernel_size[0] if isinstance(conv1d.kernel_size, tuple) else conv1d.kernel_size
+        pad = conv1d.padding[0] if isinstance(conv1d.padding, tuple) else conv1d.padding
+        new._kernel_size = k
+        new._padding = pad
+        # weight: [C, 1, k] (depthwise) → squeeze dim-1 → [C, k] → transpose → [k, C]
+        new._weight_torch = conv1d.weight.squeeze(1).T.detach().clone().to(torch.bfloat16)
+        if conv1d.bias is not None:
+            new._bias_torch = conv1d.bias.detach().clone().to(torch.bfloat16)
+        return new
+
+    def preprocess_weights_impl(self):
+        pass  # weights staged as torch tensors; moved in move_weights_to_device_impl
+
+    def move_weights_to_device_impl(self):
+        if self._weight_torch is None:
+            return
+        k = self._kernel_size
+        mesh_mapper = (
+            ttnn.ReplicateTensorToMesh(self.device)
+            if hasattr(self.device, "get_num_devices") and self.device.get_num_devices() > 1
+            else None
+        )
+        # Store k separate [1, 1, C] slices so forward can broadcast against [B, T, C]
+        self._weight_tt_slices = [
+            ttnn.from_torch(
+                self._weight_torch[j : j + 1, :].unsqueeze(0),  # [1, 1, C]
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                mesh_mapper=mesh_mapper,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            for j in range(k)
+        ]
+        if self._bias_torch is not None:
+            self._bias_tt = ttnn.from_torch(
+                self._bias_torch.unsqueeze(0).unsqueeze(0),  # [1, 1, C]
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                mesh_mapper=mesh_mapper,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        self._weight_torch = None
+        self._bias_torch = None
+
+    def deallocate_weights_impl(self):
+        for w_tt in self._weight_tt_slices:
+            ttnn.deallocate(w_tt)
+        self._weight_tt_slices = []
+        if self._bias_tt is not None:
+            ttnn.deallocate(self._bias_tt)
+            self._bias_tt = None
+
+    def forward(self, input_tensor):
+        """``input_tensor``: ``[B, C, T]`` torch or ttnn tensor. Returns ``[B, C, T]`` ttnn tensor."""
+        if isinstance(input_tensor, TorchTTNNTensor):
+            input_tensor = input_tensor.ttnn_tensor if input_tensor.ttnn_tensor is not None else input_tensor.elem
+
+        dev = self.device
+        mesh_mapper = (
+            ttnn.ReplicateTensorToMesh(dev)
+            if dev is not None and hasattr(dev, "get_num_devices") and dev.get_num_devices() > 1
+            else None
+        )
+
+        k = self._kernel_size
+        pad = self._padding
+
+        if isinstance(input_tensor, torch.Tensor):
+            # Transpose to [B, T, C], left-pad T by `pad` zeros, then upload once
+            x = input_tensor.permute(0, 2, 1).to(torch.bfloat16)  # [B, T, C]
+            B, T, C = x.shape
+            # F.pad fills from last dim: (C_l, C_r, T_l, T_r) → pad T on left
+            x_padded = F.pad(x, (0, 0, pad, 0))  # [B, T+pad, C]
+            x_tt = ttnn.from_torch(
+                x_padded,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=dev,
+                mesh_mapper=mesh_mapper,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            B, C, T = input_tensor.shape[:3]
+            x_tt = ttnn.permute(input_tensor, (0, 2, 1))  # [B, T, C]
+            x_tt = ttnn.pad(x_tt, padding=((0, 0), (pad, 0), (0, 0)), value=0.0)
+
+        # Accumulate k shifts: out[:, t, c] += x_tt[:, t+j, c] * weight_slice_j[c]
+        out = None
+        for j in range(k):
+            x_j = ttnn.slice(x_tt, [0, j, 0], [B, j + T, C])
+            contrib = ttnn.mul(x_j, self._weight_tt_slices[j], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            out = contrib if out is None else ttnn.add(out, contrib, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        if self._bias_tt is not None:
+            out = ttnn.add(out, self._bias_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        return ttnn.permute(out, (0, 2, 1))  # [B, C, T]

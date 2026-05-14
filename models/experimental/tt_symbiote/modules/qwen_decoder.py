@@ -101,6 +101,9 @@ class TTNNQwen3MoeDecoderLayer(nn.Module):
         # devices and weights still get configured normally.
         instance._fallback_torch_layer = torch_layer
         instance.layer_type = getattr(torch_layer, "layer_type", "full_attention")
+        # Default 0 means layer-0-conservative behaviour (block-1 torch path) until
+        # the caller sets the correct index via ``assign_layer_indices``.
+        instance._layer_idx = 0
         # Honour the same env-var pattern the other ports expose.
         instance._use_torch_residual = os.environ.get("TT_QWEN_CPU_DECODER_RESIDUAL_ADD", "0").lower() in (
             "1",
@@ -110,6 +113,20 @@ class TTNNQwen3MoeDecoderLayer(nn.Module):
         if instance._use_torch_residual:
             print("[DEBUG] TT_QWEN_CPU_DECODER_RESIDUAL_ADD=1: using torch + for residual adds")
         return instance
+
+    @classmethod
+    def assign_layer_indices(cls, layers):
+        """Set per-layer indices after ``register_module_replacement_dict``.
+
+        Call this once after the second-pass registration so that only layer 0
+        keeps the conservative ``force_torch`` on the block-1 residual add.
+        Layers 1+ can use the ``ttnn.add`` fast path because their block-1
+        residual comes from the previous decoder layer's TTNN output (not from
+        the embedding, whose per-device buffer alignment cannot be guaranteed).
+        """
+        for i, layer in enumerate(layers):
+            if isinstance(layer, cls):
+                layer._layer_idx = i
 
     # ------------------------------------------------------------------
     # Helpers
@@ -285,7 +302,12 @@ class TTNNQwen3MoeDecoderLayer(nn.Module):
 
         if _dbg:
             print(f"[RESIDUAL] layer={self._layer_idx} shape={per_dev_a} -> FAST PATH (ttnn.add)")
-        out_ttnn = ttnn.add(a, b)
+        # Use L1 for the add output during decode (seq-len == 1) since this
+        # module is a plain nn.Module (not @trace_enabled) and decode tensors
+        # are small enough to fit in L1. Prefill uses DRAM.
+        is_decode = len(per_dev_a) >= 2 and int(per_dev_a[-2]) == 1
+        add_mem_cfg = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
+        out_ttnn = ttnn.add(a, b, memory_config=add_mem_cfg)
         out_wrapped = TorchTTNNTensor(out_ttnn)
         # Both configs are equivalent here; pick either one to propagate so
         # the next layer's residual lookup also takes the fast path.
@@ -351,15 +373,14 @@ class TTNNQwen3MoeDecoderLayer(nn.Module):
                 **kwargs,
             )
 
-        # Block-1 residual always goes through torch + regardless of layer.
-        # The TTNN embedding output's per-device columns are not guaranteed to
-        # be physically aligned with the attention output's columns even when
-        # both carry the same distributed config, so ttnn.add silently produces
-        # wrong values. This matches the "TT_QWEN_CPU_EMBEDDING=1" baseline
-        # (which also lets block-1 bail to torch+) and is empirically correct.
-        # Block-2 (post-attn residual + MoE output) is safe for the fast path
-        # because both operands come from the same TTNN execution path.
-        hidden_states = self._residual_add(residual, hidden_states, force_torch=True)
+        # Block-1 residual: force torch only on layer 0 where the incoming
+        # residual is the embedding output whose per-device buffer alignment
+        # cannot be guaranteed to match the attention output. For layers 1+
+        # the residual is the previous decoder layer's block-2 ttnn.add output
+        # (same column-sharded layout), so ttnn.add is safe.
+        # Call ``assign_layer_indices`` after registration to enable this fast
+        # path; without it every layer defaults to _layer_idx=0 (conservative).
+        hidden_states = self._residual_add(residual, hidden_states, force_torch=(self._layer_idx == 0))
 
         # ------- block 2: norm -> MoE -> residual add -------
         residual = hidden_states

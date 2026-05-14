@@ -313,6 +313,12 @@ def test_qwen3_6_35b_a3b(mesh_device, use_paged_attention, max_new_tokens):
         else {}
     )
     # modules3 = register_module_replacement_dict(model, nn_to_ttnn2, model_config=None)
+
+    # Assign layer indices so block-1 residual fast path fires on layers 1–N.
+    # Layer 0's residual comes from the embedding whose buffer alignment cannot
+    # be guaranteed; the default _layer_idx=0 keeps the safe torch+ path there.
+    if nn_to_ttnn_second_pass:
+        TTNNQwen3MoeDecoderLayer.assign_layer_indices(model.model.layers)
     set_device(model, mesh_device)
     all_modules = {**modules1, **modules2}
 
