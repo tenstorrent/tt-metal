@@ -71,7 +71,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
             weight,
             bias=bias,
             core_grid=_core_grid(self.device),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self._compute,
         )
 
@@ -128,8 +128,6 @@ class TTSeamlessM4Tv2SpeechEncoder:
         if ttnn.is_sharded(out):
             out = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
         out = ttnn.reshape(out, (batch, out_len, out_channels))
-        if ttnn.is_sharded(out):
-            out = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
         return out, out_len
 
     @staticmethod
