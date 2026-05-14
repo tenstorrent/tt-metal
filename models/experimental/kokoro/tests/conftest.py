@@ -28,6 +28,14 @@ def mesh_device(request):
 
 
 @pytest.fixture(scope="function")
+def mesh_device_long_prompt():
+    """Same L1 carve-out as ``demo/ttnn_kokoro_full_demo.py`` for long-utterance vocoder paths."""
+    mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 1), l1_small_size=98304)
+    yield mesh_device
+    ttnn.close_mesh_device(mesh_device)
+
+
+@pytest.fixture(scope="function")
 def device():
     """Single-device alias for tests that open a ``ttnn.Device`` directly (predictor, text encoder).
 

@@ -5,8 +5,9 @@
 End-to-end PCC: full TTNN ``KokoroDecoderTt`` vs PyTorch ``Decoder`` (``disable_complex=True``).
 
 ``KokoroGenerator`` harmonic path is toggled via ``use_torch_sinegen`` on ``preprocess_kokoro_decoder_tt_parameters``.
-Deterministic waveform PCC vs full PyTorch is ~0.80 on Wormhole B0 with device ``KokoroTtnnSineGen`` and higher with
-PyTorch ``SineGen`` on CPU. See ``test_kokoro_pcc_sinegen_comparison_report.py`` (``pytest -s``) for a one-shot table.
+Deterministic waveform PCC vs full PyTorch is ~0.80 with device ``KokoroTtnnSineGen`` and ~0.90 with PyTorch ``SineGen``
+on CPU (harmonic path only); ``test_source_module_hn_nsf_pcc`` har_source is ~0.997 vs PyTorch at short ``time_len``.
+See ``test_kokoro_pcc_sinegen_comparison_report.py`` (``pytest -s``) for a one-shot table.
 
     pytest models/experimental/kokoro/tests/test_kokoro_istftnet_tt_e2e_pcc.py --confcutdir=models/experimental/kokoro -v
 """
@@ -15,18 +16,14 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from unittest import mock
 
 import pytest
-import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
 ttnn = pytest.importorskip("ttnn")
 
-from models.common.utility_functions import comp_pcc
-from models.experimental.kokoro.reference.kokoro_istftnet import load_decoder_from_huggingface
-from models.experimental.kokoro.tt import KokoroDecoderTt, preprocess_kokoro_decoder_tt_parameters
+from models.experimental.kokoro.tests.kokoro_generator_pcc_inputs import run_decoder_tt_e2e_waveform_pcc_value
 
 
 @pytest.fixture
@@ -39,87 +36,13 @@ def ttnn_device():
 @pytest.mark.parametrize("use_torch_sinegen,min_pcc", [(False, 0.79), (True, 0.90)])
 def test_kokoro_decoder_tt_e2e_waveform_pcc(ttnn_device, use_torch_sinegen: bool, min_pcc: float):
     """Full decoder on TTNN vs PyTorch reference waveform (deterministic ``m_source``)."""
-    dec_ref = load_decoder_from_huggingface(device="cpu", disable_complex=True).decoder
-    dec_tt = load_decoder_from_huggingface(device="cpu", disable_complex=True).decoder
-
-    batch, time_asr = 1, 8
-    tf = 2 * time_asr
-    torch.manual_seed(42)
-    dim_in = dec_ref.asr_res[0].in_channels
-    asr = torch.randn(batch, dim_in, time_asr, dtype=torch.float32)
-    f0_curve = torch.randn(batch, tf, dtype=torch.float32) * 100.0 + 120.0
-    n = torch.randn(batch, tf, dtype=torch.float32)
-    s = torch.randn(batch, 128, dtype=torch.float32)
-
-    def zeros_rand(*args, **kwargs):
-        kwargs = {k: v for k, v in kwargs.items() if k != "generator"}
-        return torch.zeros(*args, **kwargs)
-
-    def zeros_randn(*args, **kwargs):
-        kwargs = {k: v for k, v in kwargs.items() if k != "generator"}
-        return torch.zeros(*args, **kwargs)
-
-    def zeros_randn_like(t, **kwargs):
-        return torch.zeros_like(t)
-
-    with (
-        mock.patch("torch.rand", side_effect=zeros_rand),
-        mock.patch("torch.randn", side_effect=zeros_randn),
-        mock.patch("torch.randn_like", side_effect=zeros_randn_like),
-    ):
-        with torch.no_grad():
-            y_ref = dec_ref(asr, f0_curve, n, s)
-
-    params = preprocess_kokoro_decoder_tt_parameters(
-        dec_tt,
+    p = run_decoder_tt_e2e_waveform_pcc_value(
         ttnn_device,
-        f0_coarse_time=tf,
-        disable_complex=True,
+        time_asr=8,
         use_torch_sinegen=use_torch_sinegen,
+        seed=42,
     )
-    tt_dec = KokoroDecoderTt(ttnn_device, params)
-    l1 = ttnn.L1_MEMORY_CONFIG
-
-    asr_tt = ttnn.from_torch(
-        asr,
-        dtype=ttnn.float32,
-        layout=ttnn.TILE_LAYOUT,
-        device=ttnn_device,
-        memory_config=l1,
-    )
-    f0_tt = ttnn.from_torch(
-        f0_curve.unsqueeze(-1),
-        dtype=ttnn.float32,
-        layout=ttnn.TILE_LAYOUT,
-        device=ttnn_device,
-        memory_config=l1,
-    )
-    n_tt = ttnn.from_torch(
-        n.unsqueeze(-1),
-        dtype=ttnn.float32,
-        layout=ttnn.TILE_LAYOUT,
-        device=ttnn_device,
-        memory_config=l1,
-    )
-    s_tt = ttnn.from_torch(
-        s,
-        dtype=ttnn.float32,
-        layout=ttnn.TILE_LAYOUT,
-        device=ttnn_device,
-        memory_config=l1,
-    )
-
-    with (
-        mock.patch("torch.rand", side_effect=zeros_rand),
-        mock.patch("torch.randn", side_effect=zeros_randn),
-        mock.patch("torch.randn_like", side_effect=zeros_randn_like),
-    ):
-        y_tt = tt_dec(asr_tt, f0_tt, n_tt, s_tt, deterministic=True)
-
-    y_hat = ttnn.to_torch(y_tt).reshape(y_ref.shape)
-    assert y_hat.shape == y_ref.shape
-    assert torch.isfinite(y_hat).all()
-    ok, p = comp_pcc(y_ref, y_hat, pcc=min_pcc)
+    ok = p >= min_pcc
     tag = "torch_cpu_sinegen" if use_torch_sinegen else "ttnn_device_sinegen"
     print(f"decoder_tt e2e PCC mode={tag} pcc={p:.6f} pass={ok} (min {min_pcc})")
     assert ok, f"E2E waveform PCC {p} mode={tag} expected >= {min_pcc}"
