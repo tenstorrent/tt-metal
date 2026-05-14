@@ -8,7 +8,7 @@
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_wh.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "internal/mod_div_lib.h"
 
 #ifdef FUSE_BIAS
@@ -44,8 +44,8 @@
  */
 template <uint32_t in0_block_num_tiles, uint32_t block_size = 4>
 FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_cb_id, uint32_t in0_cb_id) {
-    experimental::CircularBuffer in0_transpose_cb(in0_transpose_cb_id);
-    experimental::CircularBuffer in0_cb(in0_cb_id);
+    CircularBuffer in0_transpose_cb(in0_transpose_cb_id);
+    CircularBuffer in0_cb(in0_cb_id);
     constexpr uint32_t num_blocks = in0_block_num_tiles / block_size;
     constexpr uint32_t last_block_size = in0_block_num_tiles % block_size;
     // Lets do 2 passes: One loop until last and one last for the left overs
@@ -95,7 +95,7 @@ FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t out_subblock_w,
     uint32_t out_subblock_h,
     uint32_t in0_block_w) {
-    experimental::CircularBuffer mm_partials_cb(mm_partials_cb_id);
+    CircularBuffer mm_partials_cb(mm_partials_cb_id);
     // Reconfigure input
     copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
     mm_partials_cb.wait_front(out_subblock_num_tiles);
@@ -117,8 +117,8 @@ inline void reblock_and_untilize(
     uint32_t out_subblock_h,
     uint32_t interm_cb_id,
     uint32_t out_cb_id) {
-    experimental::CircularBuffer interm_cb(interm_cb_id);
-    experimental::CircularBuffer out_cb(out_cb_id);
+    CircularBuffer interm_cb(interm_cb_id);
+    CircularBuffer out_cb(out_cb_id);
     uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
     interm_cb.wait_front(num_tiles_in_row_of_subblocks);
 
@@ -192,11 +192,11 @@ void kernel_main() {
     // as input for the matmul call.
     constexpr uint32_t in0_transpose_cb_id = get_named_compile_time_arg_val("cb_in0");
 
-    experimental::CircularBuffer in0_cb(in0_cb_id);
-    experimental::CircularBuffer in1_cb(in1_cb_id);
-    experimental::CircularBuffer out_cb(out_cb_id);
-    experimental::CircularBuffer mm_partials_cb(mm_partials_cb_id);
-    experimental::CircularBuffer untilize_mode_out_cb(untilize_mode_out_cb_id);
+    CircularBuffer in0_cb(in0_cb_id);
+    CircularBuffer in1_cb(in1_cb_id);
+    CircularBuffer out_cb(out_cb_id);
+    CircularBuffer mm_partials_cb(mm_partials_cb_id);
+    CircularBuffer untilize_mode_out_cb(untilize_mode_out_cb_id);
 
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_cb_id = get_named_compile_time_arg_val("cb_bias");
@@ -204,11 +204,11 @@ void kernel_main() {
     constexpr uint32_t mm_out_cb_id = mm_partials_cb_id;
     // true: row-0 broadcast ([N] / [...,1,N]); false: elementwise add_tiles (bias has multiple M rows).
     constexpr bool row_broadcast_bias = (bool)get_compile_time_arg_val(18);
-    experimental::CircularBuffer bias_cb(bias_cb_id);
+    CircularBuffer bias_cb(bias_cb_id);
 #else
     constexpr uint32_t mm_out_cb_id = untilize_mode_out_cb_id;
 #endif
-    experimental::CircularBuffer mm_out_cb(mm_out_cb_id);
+    CircularBuffer mm_out_cb(mm_out_cb_id);
 
 #ifdef SFPU_ACTIVATION
     constexpr KernelActivation activation_type =

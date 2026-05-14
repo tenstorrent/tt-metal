@@ -24,10 +24,20 @@ DispatchMemMap::DispatchMemMap(
     const tt::llrt::RunTimeOptions& rtoptions) :
     settings(DispatchSettings(
         num_hw_cqs,
+
         core_type,
+
         is_galaxy_cluster,
+
         rtoptions.get_dram_backed_cq(),
-        hal.get_alignment(HalMemType::L1))),
+
+        hal.get_alignment(HalMemType::L1),
+        // Prefetch queue entry width: each entry encodes the prefetch command size with the MSB reserved as a
+        // stall flag. Both 2-byte (15 size bits) and 4-byte (31 size bits) widths cover today's
+        // prefetch_max_cmd_size on every arch. We prefer 4 bytes because sub-32-bit reads/writes have been
+        // observed to fail on Quasar, and using one width everywhere keeps host/kernel code simple. WH ETH
+        // stays at 2 bytes because of tighter memory constraints.
+        (hal.get_arch() == tt::ARCH::WORMHOLE_B0 && core_type == CoreType::ETH) ? 2u : 4u)),
     host_alignment_(hal.get_alignment(HalMemType::HOST)),
     l1_alignment_(hal.get_alignment(HalMemType::L1)),
     noc_overlay_start_addr_(hal.get_noc_overlay_start_addr()),
@@ -156,6 +166,8 @@ DispatchMemMap::DispatchMemMap(
 }
 
 uint32_t DispatchMemMap::prefetch_q_entries() const { return settings.prefetch_q_entries_; }
+
+uint32_t DispatchMemMap::prefetch_q_entry_size_bytes() const { return settings.prefetch_q_entry_size_bytes_; }
 
 uint32_t DispatchMemMap::prefetch_q_size() const { return settings.prefetch_q_size_; }
 

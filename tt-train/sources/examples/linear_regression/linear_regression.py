@@ -35,6 +35,9 @@ from sklearn.metrics import mean_squared_error, r2_score
 import ttnn  # noqa: E402
 import ttml  # noqa: E402
 
+# Available device memory calculation
+from ttml.common.utils import get_available_device_memory_in_bytes
+
 # Memory tracking utilities
 MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
 
@@ -109,6 +112,9 @@ def train_ttml_linear_regression(
 
     total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
     print(f"   - Total parameters: {total_params:,}")
+
+    available_dram = get_available_device_memory_in_bytes()
+    print(f"   - Available Device Memory: {available_dram/(1024*1024):,.2f} MB")
 
     # Memory snapshot after model creation
     if track_memory:
