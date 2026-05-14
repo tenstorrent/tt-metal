@@ -111,19 +111,13 @@ class Attention(Module):
             exp_approx_mode=False,  # NOTE: False is more correct
         )
 
-        # Step 1: Ring SDPA gets its own worker grid (reserves last COLUMN for CCL, not last row)
-        # and adaptive chunk sizes from `ring_sdpa_chunk_size_map`. Matches attention_opt.py /
-        # attention_wan.py. The non-ring SDPA setup above is unchanged.
+        # Step 1 (Item 1.1 — REVERTED, perf-neutral): Ring SDPA worker grid stays in the
+        # row-major orientation (reserves last ROW for CCL — same as the non-ring grid).
+        # Step 1 (Item 1.2 diagnostic — REVERTED): hardcode the pre-Step-1 chunk sizes
+        # (q=128, k=512), bypassing `ring_sdpa_chunk_size_map`. Perf is good at this point.
         full_grid = self.mesh_device.compute_with_storage_grid_size()
-        self.ring_sdpa_worker_grid = (full_grid.x - 1, full_grid.y)
-        ring_chunk_size = self.ring_sdpa_chunk_size_map.get(
-            (
-                is_blackhole(),
-                parallel_config.sequence_parallel.factor,
-                parallel_config.tensor_parallel.factor,
-            ),
-            self.default_ring_sdpa_chunk_size,
-        )
+        self.ring_sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
+        ring_chunk_size = (128, 512)  # was: self.ring_sdpa_chunk_size_map.get(...)
         self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.ring_sdpa_worker_grid,
             q_chunk_size=ring_chunk_size[0],
@@ -170,9 +164,9 @@ class Attention(Module):
             layout=ttnn.TILE_LAYOUT,
         )
 
-        # Step 2: chunks=3 → to_qkv returns [q_flat, k_flat, v_flat] directly (each
-        # [B, N, n_local_heads*head_dim]) via minimal_matmul_split / fused AGMM-with-chunks.
-        # Replaces the previous single-output matmul + split_query_key_value_and_split_heads.
+        # Step 2 (Item 2.1 — RESTORED): chunks=3 → to_qkv emits [q_flat, k_flat, v_flat]
+        # directly via `minimal_matmul_split`. Item 2.1 diagnostic showed `minimal_matmul` +
+        # `ttnn.chunk` is *slower* than the chunked kernel for our shapes; chunks=3 is a win.
         self.to_qkv = ColParallelLinear(
             query_dim, 3 * padded_inner_dim, bias=proj_bias, mesh_axis=tp_axis, chunks=3, **common_args
         )
@@ -209,7 +203,7 @@ class Attention(Module):
             self.norm_added_k = UnregisteredModule(self.norm_k)
             self.to_add_out = UnregisteredModule(self.to_out) if self.to_out is not None else None
         elif added_kv_proj_dim > 0:
-            # Step 2: chunks=3 same as to_qkv (separate-weights prompt path).
+            # Step 2: chunks=3 matches to_qkv. Same `minimal_matmul_split` win.
             self.add_qkv_proj = ColParallelLinear(
                 added_kv_proj_dim, 3 * padded_inner_dim, bias=proj_bias, mesh_axis=tp_axis, chunks=3, **common_args
             )
@@ -542,8 +536,9 @@ class Attention(Module):
             add_q = add_k = add_v = self.dummy_joint_input
 
         if self.parallel_config.sequence_parallel.factor > 1:
-            # Step 1: use ring_sdpa_program_config (column-major worker grid + adaptive chunks)
-            # with right-column CCL offset and use_column_major_ccl=True. Matches attention_opt.py.
+            # Step 1 (Item 1.1 diagnostic — REVERTED): row-major Ring SDPA CCL — offset on the
+            # bottom row (same as the non-ring path), no `use_column_major_ccl`. Keeps the
+            # adaptive chunk sizes from Item 1.2 via `ring_sdpa_program_config`.
             spatial, prompt, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 q,
                 k,
@@ -570,8 +565,7 @@ class Attention(Module):
                 mesh_device=self.mesh_device,
                 topology=self.ccl_manager.topology,
                 subdevice_id=self.ccl_manager.ccl_sub_device_id,
-                ccl_core_grid_offset=(self.ring_sdpa_worker_grid[0], 0),
-                use_column_major_ccl=True,
+                ccl_core_grid_offset=(0, self.ring_sdpa_worker_grid[1]),
             )
         else:
             assert (
