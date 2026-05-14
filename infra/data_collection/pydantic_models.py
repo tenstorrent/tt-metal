@@ -63,7 +63,7 @@ class JobStatus(str, Enum):
 class TtSmiReset(BaseModel):
     final_status: Optional[str] = None
     num_reset_attempts: Optional[int] = None
-    num_reset_retries: Optional[int] = None
+    num_attempts: Optional[int] = None
     total_reset_time_sec: Optional[float] = None
     error_summary: Optional[str] = None
 
@@ -116,7 +116,7 @@ class Job(BaseModel):
     tt_smi_version: Optional[str] = Field(
         None, description="Version of the tt-smi tool in order to check consistency across CI fleets."
     )
-    tt_smi_reset: Optional[TtSmiReset] = Field(
+    tt_smi_reset: Optional[List[TtSmiReset]] = Field(
     None, description="TT-SMI reset information parsed from job logs."
     )
 

@@ -107,7 +107,7 @@ def create_cicd_json_for_data_analysis(
             tt_smi_version=github_job_id_to_smi_versions.get(github_job_id),
             tests=tests,
             steps=steps,
-            tt_smi_reset=TtSmiReset(**reset_data) if reset_data else None,
+            tt_smi_reset=[TtSmiReset(**attempt) for attempt in reset_data] if reset_data else None,
         )
         jobs.append(job)
 

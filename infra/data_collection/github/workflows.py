@@ -15,7 +15,7 @@ from infra.data_collection import junit_xml_utils, pydantic_models
 
 
 smi_pattern = re.compile(r'.*"tt_smi":\s*"([a-zA-Z0-9\-\.]+)"')
-tt_smi_reset_pattern = re.compile(r'"tt_smi_reset":\s*({.*})')
+tt_smi_reset_pattern = re.compile(r'"tt_smi_reset":\s*(\[.*\])')
 # Define a regex pattern to match timestamps in ISO 8601 format (e.g., 2025-03-26T19:18:31.7521333Z)
 timestamp_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z")
 
@@ -37,6 +37,7 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
     def parse_ts(line):
         try:
             line = line.strip()
+
             if not timestamp_pattern.match(line):
                 return None
 
@@ -48,36 +49,56 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
                 ts = f"{base}.{frac[:6]}"
 
             return datetime.fromisoformat(ts)
-        except:
+
+        except Exception:
             return None
 
     def strip_ansi(text):
-        return re.sub(r'\x1B[@-_][0-?]*[ -/]*[@-~]', '', text)
+        return re.sub(r"\x1B[@-_][0-?]*[ -/]*[@-~]", "", text)
 
-    def split_attempts(lines):
-        attempts = []
-        current_block = []
-        current_ts = None
+    def extract_error_summary(reset_lines):
+        root_causes = []
+        final_errors = []
 
-        for line in lines:
-            ts = parse_ts(line)
-            if ts:
-                current_ts = ts
+        for line in reset_lines:
+            l = line.strip()
+            lower = l.lower()
 
-            if "===== START of output =====" in line:
-                current_block = []
-                continue
+            if any(
+                x in lower
+                for x in [
+                    "error accessing board",
+                    "re-initializing",
+                    "could not open chip",
+                    "ioctl",
+                    "enodev",
+                ]
+            ):
+                if l not in root_causes:
+                    root_causes.append(l)
 
-            if "===== END of output =====" in line:
-                if current_block and current_ts:
-                    attempts.append((current_block, current_ts))
-                current_block = []
-                continue
+            if any(
+                x in lower
+                for x in [
+                    "unable to reset board",
+                    "runner will now shutdown",
+                    "operation was canceled",
+                ]
+            ):
+                if l not in final_errors:
+                    final_errors.append(l)
 
-            if current_block is not None:
-                current_block.append(line)
+        summary_parts = []
 
-        return attempts
+        if root_causes:
+            summary_parts.append("Root cause:")
+            summary_parts.extend(root_causes[:4])
+
+        if final_errors:
+            summary_parts.append("Final outcome:")
+            summary_parts.extend(final_errors[:3])
+
+        return "\n".join(summary_parts) if summary_parts else None
 
     with open(log_file, "r") as f:
         log = strip_ansi(f.read())
@@ -92,8 +113,6 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
         lower = line.lower()
 
         if "starting tt-smi reset" in lower:
-            if current_block:
-                all_resets.append(current_block)
             current_block = []
             capturing = True
 
@@ -108,96 +127,46 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
             current_block = []
             capturing = False
 
-    # pick latest attempt
     if not all_resets:
-        return {
-            "final_status": "UNKNOWN",
-            "num_reset_attempts": None,
-            "num_reset_retries": None,
-            "total_reset_time_sec": None,
-            "error_summary": "No tt-smi reset found",
-        }
+        return [
+            {
+                "attempt": 1,
+                "final_status": "UNKNOWN",
+                "total_reset_time_sec": None,
+                "error_summary": "No tt-smi reset found",
+            }
+        ]
 
-    reset_lines = all_resets[-1]  
+    attempt_results = []
 
-    joined = "\n".join(reset_lines).lower()
+    for idx, reset_lines in enumerate(all_resets, start=1):
 
-    if "tt-smi reset was successful" in joined:
-        ts_list = [parse_ts(l) for l in reset_lines if parse_ts(l)]
+        joined = "\n".join(reset_lines).lower()
+
+        ts_list = [parse_ts(line) for line in reset_lines if parse_ts(line)]
 
         duration = None
+
         if len(ts_list) >= 2:
             duration = (ts_list[-1] - ts_list[0]).total_seconds()
+
         elif len(ts_list) == 1:
             duration = 0
 
-        return {
-            "final_status": "SUCCESS",
-            "num_reset_attempts": 1,
-            "num_reset_retries": 0,
-            "total_reset_time_sec": duration,
-            "error_summary": None,
-        }
+        success = "tt-smi reset was successful" in joined
 
-    attempts = split_attempts(reset_lines)
+        error_summary = None if success else extract_error_summary(reset_lines)
 
-    total_time = 0
+        attempt_results.append(
+            {
+                "attempt": idx,
+                "final_status": "SUCCESS" if success else "FAILURE",
+                "total_reset_time_sec": duration,
+                "error_summary": error_summary,
+            }
+        )
 
-    for i in range(len(attempts)):
-        _, ts = attempts[i]
-
-        if i < len(attempts) - 1:
-            next_ts = attempts[i + 1][1]
-            duration = (next_ts - ts).total_seconds()
-        else:
-            duration = 5
-
-        total_time += duration
-
-    root_causes = []
-    final_errors = []
-
-    for line in reset_lines:
-        l = line.strip()
-        lower = l.lower()
-
-        if any(x in lower for x in [
-            "error accessing board",
-            "re-initializing",
-            "could not open chip",
-            "ioctl",
-            "enodev"
-        ]):
-            if l not in root_causes:
-                root_causes.append(l)
-
-        if any(x in lower for x in [
-            "unable to reset board",
-            "runner will now shutdown",
-            "operation was canceled"
-        ]):
-            if l not in final_errors:
-                final_errors.append(l)
-
-    summary_parts = []
-
-    if root_causes:
-        summary_parts.append("Root cause:")
-        summary_parts.extend(root_causes[:4])
-
-    if final_errors:
-        summary_parts.append("Final outcome:")
-        summary_parts.extend(final_errors[:3])
-
-    error_summary = "\n".join(summary_parts) if summary_parts else None
-
-    return {
-        "final_status": "FAILURE",
-        "num_reset_attempts": len(attempts),
-        "num_reset_retries": len(attempts) - 1,
-        "total_reset_time_sec": total_time,
-        "error_summary": error_summary,
-    }
+    return attempt_results
 
 def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id: int):
     logs_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
