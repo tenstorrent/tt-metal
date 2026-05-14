@@ -25,25 +25,6 @@
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 #include <tt_stl/small_vector.hpp>
 
-namespace {
-namespace CMAKE_UNIQUE_NAMESPACE {
-// Matches ttnn::operations::data_movement::squeeze_shape_to_ND (leading dims folded into [0]).
-// Used to keep shard_shape rank in sync with logical shape when a view only reduces rank via that fold.
-// If no squeeze is necessary, return the shape without change.
-tt::tt_metal::Shape squeeze_shape_for_view(const tt::tt_metal::Shape& shape, const uint32_t n) {
-    if (shape.rank() <= n) {
-        return shape;
-    }
-    ttsl::SmallVector<uint32_t> squeezed_shape(n);
-    std::copy(shape.view().rbegin(), shape.view().rbegin() + n, squeezed_shape.rbegin());
-    const auto rank_diff_end = shape.rank() - n + 1;
-    squeezed_shape[0] = std::accumulate(shape.cbegin(), shape.cbegin() + rank_diff_end, 1, std::multiplies<uint32_t>());
-
-    return tt::tt_metal::Shape(std::move(squeezed_shape));
-}
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-}  // namespace
-
 namespace tt::tt_metal {
 
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
