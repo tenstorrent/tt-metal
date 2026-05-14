@@ -123,25 +123,31 @@ class Qwen36Generator:
     """
 
     # When True, attempt trace capture for ``enable_trace=True`` callers.
-    # T14b series eliminated host-write blockers across the forward path:
-    #   T14b.1  output_as_ttnn moves the final logits gather outside trace
-    #   T14b.2  persistent input_ids device buffer (llama_model._embed)
-    #   T14b.3  persistent decode mask + current_pos buffers (llama_attention)
-    #   T14b.4  on-device shard/gather around DistributedNorm (llama_decoder)
-    #   T14b.5  persistent zero pad for DeltaNet conv_state=None (qwen36_deltanet)
-    #   T14b.7  persistent decode cos/sin buffers + on-device prefill slice
-    #           (llama_rope) — eliminates the per-call ttnn.from_torch in
-    #           get_cos_sin_for_{prefill,decode}.
+    # T14b.1..T14b.5 + T14b.7 collapsed every per-call ttnn.from_torch in
+    # the forward path into ``copy_host_to_device_tensor`` writes against
+    # pre-allocated persistent buffers (input_ids, current_pos, decode
+    # mask, conv_state pad, cos/sin). However the T14b.6 retry on real
+    # hardware confirmed those copies STILL trip the
     #
-    # The remaining suspected blocker is in the chunked-prefill DeltaNet
-    # kernel — per-call ttnn.ones / ttnn.zeros / ttnn.tril / ttnn.triu
-    # allocations for the chunked-attention masks plus S-state zeros init
-    # in chunk_gated_delta_rule_ttnn (models/experimental/.../
-    # ttnn_delta_rule_ops.py lines ~989..1046, 1072..1195). These are
-    # device-only ops (no host data) so they MAY actually be trace-safe;
-    # T14b.6 retry exercises this empirically. If trace capture still
-    # warns and hangs, T14b.8 will pre-allocate them once per DeltaNet
-    # instance (chunk_size is fixed) and thread them through.
+    #   TT_FATAL: Writes are not supported during trace capture.
+    #   (tt_metal/distributed/fd_mesh_command_queue.cpp:600
+    #    write_shard_to_device)
+    #
+    # assertion because they run INSIDE ``model.forward_{prefill,decode}``,
+    # which is itself inside the ``begin_trace_capture..end_trace_capture``
+    # window. The trace-safe pattern (see superpowers optimization skill
+    # and the Molmo2-8B Generator) requires the host→device copies to
+    # happen in the Generator BEFORE ``ttnn.execute_trace`` runs — i.e.
+    #
+    #     ttnn.copy_host_to_device_tensor(host_in, self._input_buf)
+    #     ttnn.execute_trace(self.device, self._tid, ...)
+    #
+    # not embedded inside the captured ``model.forward`` body.
+    #
+    # Enabling trace therefore needs a Generator/model refactor — hoist
+    # every persistent-buffer refresh out of ``model.forward_*`` into the
+    # Generator pre-trace boundary so the captured forward becomes purely
+    # device-side. This is tracked separately from the T14b series.
     _TRACE_SUPPORTED: bool = False
 
     def __init__(self, model, mesh_device, args):
