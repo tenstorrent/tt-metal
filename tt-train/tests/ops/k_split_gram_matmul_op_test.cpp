@@ -25,10 +25,11 @@ protected:
 
 namespace {
 
-// Diagonal tiles G[i,i] = sum(X[i,k]^2) scale linearly with K
-// absolute error is inherently high on diagonal for this operation in BF16
 constexpr float kRtol = 1e-2f;
-constexpr float kAtol = 15.0f;
+// Diagonal G[i,i] = Σ X[i,k]^2 grows ~linearly with K (e.g. ~1365 for K=4096),
+// so BF16 absolute error is much larger on the diagonal than off-diagonal.
+constexpr float kDiagAtol = 15.0f;
+constexpr float kOffDiagAtol = 0.5f;
 
 ttnn::Tensor make_random_tensor(uint32_t M, uint32_t N, uint32_t seed = 42) {
     auto* device = &ttml::autograd::ctx().get_device();
@@ -98,7 +99,8 @@ TEST_P(KSplitGramMatmulVerifyTest, Tile) {
     auto in_vec = input.to_vector<float>();
     auto out_vec = output.to_vector<float>();
     uint32_t W = output.logical_shape()[-1];
-    check_tile(in_vec, out_vec, c.K, W, c.tile_r, c.tile_c, kRtol, kAtol, c.name);
+    float atol = (c.tile_r == c.tile_c) ? kDiagAtol : kOffDiagAtol;
+    check_tile(in_vec, out_vec, c.K, W, c.tile_r, c.tile_c, kRtol, atol, c.name);
 }
 
 static std::string CaseName(const ::testing::TestParamInfo<VerifyCase>& info) {
@@ -128,7 +130,7 @@ TEST_F(KSplitGramMatmulTest, VerificationMirror) {
     uint32_t K = input.logical_shape()[-1];
     uint32_t W = output.logical_shape()[-1];
 
-    check_tile(in_vec, out_vec, K, W, 2, 4, kRtol, kAtol, "Upper G[2,4]");
+    check_tile(in_vec, out_vec, K, W, 2, 4, kRtol, kOffDiagAtol, "Upper G[2,4]");
 
     // Mirror: G[4,2] should equal G[2,4]^T
     auto ref_upper = compute_gram_tile(in_vec, K, 2, 4);
@@ -138,7 +140,7 @@ TEST_F(KSplitGramMatmulTest, VerificationMirror) {
         for (uint32_t j = 0; j < 32; j++) ref_mirror[i * 32 + j] = ref_upper[j * 32 + i];
     auto ref_xt = xt::adapt(ref_mirror, {32u, 32u});
     auto dev_xt = xt::adapt(dev_mirror, {32u, 32u});
-    EXPECT_TRUE(xt::allclose(ref_xt, dev_xt, kRtol, kAtol)) << "Mirror exceeded tolerance";
+    EXPECT_TRUE(xt::allclose(ref_xt, dev_xt, kRtol, kOffDiagAtol)) << "Mirror exceeded tolerance";
 }
 
 TEST_F(KSplitGramMatmulTest, PreallocatedOutput) {
@@ -161,7 +163,7 @@ TEST_F(KSplitGramMatmulTest, PreallocatedOutput) {
     uint32_t K = input.logical_shape()[-1];
     uint32_t W = output.logical_shape()[-1];
 
-    check_tile(in_vec, out_vec, K, W, 2, 15, kRtol, kAtol, "Preallocated G[2,15]");
+    check_tile(in_vec, out_vec, K, W, 2, 15, kRtol, kOffDiagAtol, "Preallocated G[2,15]");
 }
 
 TEST_F(KSplitGramMatmulTest, SmokeAllShapes) {
