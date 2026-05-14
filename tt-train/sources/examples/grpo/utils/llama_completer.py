@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 from dataclasses import dataclass
@@ -20,8 +21,19 @@ from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig, load_from_saf
 from huggingface_hub import snapshot_download
 from transformers import AutoTokenizer
 
+from ttml.common.profiler_utils import profiler_marker
 from ttml.trainers.grpo_trainer import GRPOCompleter
 from .llama_overrides import LlamaCompositeKV
+
+
+@contextlib.contextmanager
+def py_zone(name: str, color: int = 0):
+    """Open a Tracy host zone for the duration of the with-block."""
+    ttnn.start_tracy_zone(__file__, name, 0, color)
+    try:
+        yield
+    finally:
+        ttnn.stop_tracy_zone(name, color)
 
 
 TILE_SIZE = 32
@@ -457,38 +469,46 @@ class LlamaGRPOCompleter(GRPOCompleter):
             return arr
 
         for i in range(tokens_to_complete):
-            if kv_cache.get_cache_position() == 0:
-                processed = 0
-                new_tokens = prompt_tokens_np.shape[1]
-                token_tensor = self._tokens_to_tensor(prompt_tokens_np, B)
-            else:
-                processed = N - 1
-                new_tokens = 1
-                token_tensor = ttnn.pad(
-                    last_token_column,
-                    [(0, 0), (0, 0), (0, 0), (0, TILE_SIZE - 1)],
-                    ctx._pad_token,
-                )
-                token_tensor = ttml.autograd.Tensor(token_tensor, False)
+            with py_zone(f"[step {i:04d}]"):
+                with py_zone("[step] token_tensor_build"):
+                    if kv_cache.get_cache_position() == 0:
+                        processed = 0
+                        new_tokens = prompt_tokens_np.shape[1]
+                        token_tensor = self._tokens_to_tensor(prompt_tokens_np, B)
+                    else:
+                        processed = N - 1
+                        new_tokens = 1
+                        token_tensor = ttnn.pad(
+                            last_token_column,
+                            [(0, 0), (0, 0), (0, 0), (0, TILE_SIZE - 1)],
+                            ctx._pad_token,
+                        )
+                        token_tensor = ttml.autograd.Tensor(token_tensor, False)
 
-            mask = self._create_causal_mask(processed, new_tokens, pad_lengths, B)
-            logits = self._model(token_tensor, mask, kv_cache=kv_cache, new_tokens=new_tokens)
+                with py_zone("[step] mask_build"):
+                    mask = self._create_causal_mask(processed, new_tokens, pad_lengths, B)
 
-            next_token_tensor = ttml.ops.sample.sample_op(
-                logits, ctx.temperature, np.random.randint(low=1e7), logits_mask_tensor
-            )
+                with py_zone("[step] model"):
+                    logits = self._model(token_tensor, mask, kv_cache=kv_cache, new_tokens=new_tokens)
 
-            last_token_column = ttnn.slice(
-                next_token_tensor.get_value(),
-                [0, 0, new_tokens - 1, 0],
-                [B_local, 1, new_tokens, 1],
-            )
+                with py_zone("[step] sample"):
+                    next_token_tensor = ttml.ops.sample.sample_op(
+                        logits, ctx.temperature, np.random.randint(low=1e7), logits_mask_tensor
+                    )
 
-            generated_columns.append(last_token_column)
-            chunk_columns.append(last_token_column)
-            N += 1
+                with py_zone("[step] gather_last_col"):
+                    last_token_column = ttnn.slice(
+                        next_token_tensor.get_value(),
+                        [0, 0, new_tokens - 1, 0],
+                        [B_local, 1, new_tokens, 1],
+                    )
 
-            deallocate_tensors([token_tensor, mask, logits, next_token_tensor])
+                generated_columns.append(last_token_column)
+                chunk_columns.append(last_token_column)
+                N += 1
+
+                with py_zone("[step] dealloc"):
+                    deallocate_tensors([token_tensor, mask, logits, next_token_tensor])
 
             if (i + 1) % CHUNK == 0:
                 if pending_event is not None:
@@ -508,6 +528,14 @@ class LlamaGRPOCompleter(GRPOCompleter):
         deallocate_tensors(generated_columns)
         deallocate_tensors([logits_mask_tensor])
         kv_cache.reset()
+
+        # Trigger one device-side profiler dump so cpp_device_perf_report.csv
+        # gets written. tt-metal's teardown only reads dispatch cores, never
+        # compute cores -- without this, no CSV is produced and tracy -r's
+        # post-processor fails. The trailing profiler-internal post-noop is
+        # tolerated by the patched _enrich_ops_from_perf_csv (warning only).
+        # No-op when the device profiler is disabled.
+        profiler_marker(None, "completion_done", dump_results=True)
 
         completions: List[List[int]] = []
         for i in range(B):
