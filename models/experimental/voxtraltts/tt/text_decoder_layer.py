@@ -4,6 +4,7 @@
 from pathlib import Path
 
 import ttnn
+import torch
 from models.tt_transformers.tt.decoder import TransformerBlock
 
 
@@ -30,6 +31,31 @@ def remap_voxtral_text_state_dict(state_dict: dict[str, object]) -> dict[str, ob
             new_key = "layers." + new_key[len("model.layers.") :]
         remapped[new_key] = value
     return remapped
+
+
+def permute_voxtral_text_qk_for_hf_rope(
+    state_dict: dict[str, object],
+    *,
+    num_heads: int,
+    num_kv_heads: int,
+    head_dim: int,
+    hidden_size: int,
+) -> dict[str, object]:
+    """Convert raw Voxtral Q/K projection weights to the HF-RoPE layout used by tt_transformers."""
+
+    def _permute(weight: torch.Tensor, heads: int) -> torch.Tensor:
+        attn_in = head_dim * heads
+        return weight.view(heads, attn_in // heads // 2, 2, hidden_size).transpose(1, 2).reshape(attn_in, hidden_size)
+
+    permuted: dict[str, object] = {}
+    for key, value in state_dict.items():
+        if isinstance(value, torch.Tensor) and key.startswith("layers.") and key.endswith(".attention.wq.weight"):
+            permuted[key] = _permute(value, num_heads)
+        elif isinstance(value, torch.Tensor) and key.startswith("layers.") and key.endswith(".attention.wk.weight"):
+            permuted[key] = _permute(value, num_kv_heads)
+        else:
+            permuted[key] = value
+    return permuted
 
 
 class VoxtralTTTextDecoderLayer:
