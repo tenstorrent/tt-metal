@@ -12,8 +12,7 @@
 
 namespace tt::tt_metal {
 class Tensor;
-struct MemoryConfig;
-}  // namespace tt::tt_metal
+}
 namespace ttnn::prim {
 
 struct ReduceOpDeviceGridValidationOptions {

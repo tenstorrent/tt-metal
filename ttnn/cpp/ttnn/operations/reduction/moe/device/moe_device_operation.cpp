@@ -10,6 +10,7 @@
 
 #include "ttnn/operations/reduction/moe/device/moe_device_operation_types.hpp"
 #include "ttnn/operations/reduction/moe/device/moe_program_factory.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
 using namespace tt::tt_metal;
 
