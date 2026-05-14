@@ -120,6 +120,24 @@ class TtGatedDeltaNet(LightweightModule):
 
         self.tw = self._load_weights(state_dict, layer_num, mesh_device, weight_cache_path)
 
+        # Various method calls:
+        #   * reset_state{,_inplace}
+        #   * _init_prefill_states
+        #   * _forward_decode_fused
+        #   * forward_prefill
+        #   * _precompute_constants
+        # in GDN instantiate ttnn tensors on device (zeros via ttnn.zeros or
+        # scalar tiles via ttnn.full), all sharing the same dtype/layout/device/
+        # memory_config. This class attribute stashes the common kwargs so each
+        # call site can spread it as **self._default_tensor_kwargs and avoid
+        # repeating the same four-key dict.
+        self._default_tensor_kwargs = dict(
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
         # Mutable state buffers (conv + recurrence)
         self.conv_states = None
         self.rec_states = None
@@ -154,18 +172,11 @@ class TtGatedDeltaNet(LightweightModule):
             self.neg_exp_A = ttnn.neg(exp_A)
             ttnn.deallocate(exp_A)
 
-        # Precompute scalar tiles for full fused kernel
-        mesh = self.mesh_device
-
+        # Precompute scalar tiles for full fused kernel — same dtype/layout/
+        # device/memory_config as the zero buffers, just a non-zero fill value.
+        # ttnn.full allocates on device directly (no host roundtrip).
         def _scalar_to_mesh(val):
-            t = torch.full((1, 1, 1), val, dtype=torch.bfloat16)
-            return ttnn.from_torch(
-                t,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
-            )
+            return ttnn.full((1, 1, 1), fill_value=val, **self._default_tensor_kwargs)
 
         self.scale_tt = _scalar_to_mesh(self.scale)
         self.rms_scale_tt = _scalar_to_mesh(_math.sqrt(self.Dv))
@@ -173,22 +184,14 @@ class TtGatedDeltaNet(LightweightModule):
 
     def reset_state(self):
         """Reset conv and recurrence states to zero (creates new tensors)."""
-        B = self.batch_size
-        mesh = self.mesh_device
-
-        def _to_mesh(t):
-            return ttnn.from_torch(
-                t,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
-            )
+        # B = batch size, Nv_TP = local V-head count per TP shard,
+        # Dk / Dv = key / value head dim, qkv_dim_tp = combined Q+K+V projection width per TP shard.
+        B, Nv_TP, Dk, Dv, qkv_dim_tp = self.batch_size, self.Nv_TP, self.Dk, self.Dv, self.qkv_dim_tp
 
         self.conv_states = [
-            _to_mesh(torch.zeros(1, B, self.qkv_dim_tp, dtype=torch.bfloat16)) for _ in range(self.conv_kernel_size)
+            ttnn.zeros((1, B, qkv_dim_tp), **self._default_tensor_kwargs) for _ in range(self.conv_kernel_size)
         ]
-        self.rec_states = _to_mesh(torch.zeros(B * self.Nv_TP, self.Dk, self.Dv, dtype=torch.bfloat16))
+        self.rec_states = ttnn.zeros((B * Nv_TP, Dk, Dv), **self._default_tensor_kwargs)
         self.rec_output = None  # Will be allocated on first forward
 
     def reset_state_inplace(self):
@@ -197,24 +200,16 @@ class TtGatedDeltaNet(LightweightModule):
             self.reset_state()
             return
 
-        B = self.batch_size
-        mesh = self.mesh_device
+        # B = batch size, Nv_TP = local V-head count per TP shard,
+        # Dk / Dv = key / value head dim, qkv_dim_tp = combined Q+K+V projection width per TP shard.
+        B, Nv_TP, Dk, Dv, qkv_dim_tp = self.batch_size, self.Nv_TP, self.Dk, self.Dv, self.qkv_dim_tp
 
-        def _to_mesh(t):
-            return ttnn.from_torch(
-                t,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
-            )
-
-        zeros_conv = _to_mesh(torch.zeros(1, B, self.qkv_dim_tp, dtype=torch.bfloat16))
+        zeros_conv = ttnn.zeros((1, B, qkv_dim_tp), **self._default_tensor_kwargs)
         for cs in self.conv_states:
             ttnn.copy(zeros_conv, cs)
         ttnn.deallocate(zeros_conv)
 
-        zeros_rec = _to_mesh(torch.zeros(B * self.Nv_TP, self.Dk, self.Dv, dtype=torch.bfloat16))
+        zeros_rec = ttnn.zeros((B * Nv_TP, Dk, Dv), **self._default_tensor_kwargs)
         ttnn.copy(zeros_rec, self.rec_states)
         ttnn.deallocate(zeros_rec)
 
@@ -325,13 +320,7 @@ class TtGatedDeltaNet(LightweightModule):
 
         # ---- Pre-allocate output buffer [num_pairs, 1, Dv] ----
         if self.fused_output is None:
-            self.fused_output = ttnn.from_torch(
-                torch.zeros(num_pairs, 1, Dv, dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
+            self.fused_output = ttnn.zeros((num_pairs, 1, Dv), **self._default_tensor_kwargs)
 
         # ---- Full fused kernel: L2 norm + gates + recurrence (1 dispatch) ----
         # conv_out [1, B, qkv_dim_tp] passed directly — reader extracts Q/K/V
@@ -569,29 +558,21 @@ class TtGatedDeltaNet(LightweightModule):
 
     def _init_prefill_states(self):
         """Create B=1 conv/rec states for prefill (separate from B=32 decode states)."""
-        mesh = self.mesh_device
-
-        def _to_mesh(t):
-            return ttnn.from_torch(
-                t,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
-            )
+        # Nv_TP = local V-head count per TP shard, Dk / Dv = key / value head dim,
+        # qkv_dim_tp = combined Q+K+V projection width per TP shard. (Prefill uses B=1.)
+        Nv_TP, Dk, Dv, qkv_dim_tp = self.Nv_TP, self.Dk, self.Dv, self.qkv_dim_tp
 
         self._prefill_conv_states = [
-            _to_mesh(torch.zeros(1, 1, self.qkv_dim_tp, dtype=torch.bfloat16)) for _ in range(self.conv_kernel_size)
+            ttnn.zeros((1, 1, qkv_dim_tp), **self._default_tensor_kwargs) for _ in range(self.conv_kernel_size)
         ]
-        self._prefill_rec_states = _to_mesh(torch.zeros(1 * self.Nv_TP, self.Dk, self.Dv, dtype=torch.bfloat16))
-        self._prefill_rec_states_f32 = ttnn.from_torch(
-            torch.zeros(1 * self.Nv_TP, self.Dk, self.Dv, dtype=torch.float32),
-            dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        self._prefill_rec_states = ttnn.zeros((1 * Nv_TP, Dk, Dv), **self._default_tensor_kwargs)
+
+        # self._default_tensor_kwargs instantiated with dtype=ttnn.bfloat16
+        # need to override with ttnn.float32 here
+        self._prefill_rec_states_f32 = ttnn.zeros(
+            (1 * Nv_TP, Dk, Dv), **{**self._default_tensor_kwargs, "dtype": ttnn.float32}
         )
-        self._prefill_fused_output = _to_mesh(torch.zeros(1 * self.Nv_TP, 1, self.Dv, dtype=torch.bfloat16))
+        self._prefill_fused_output = ttnn.zeros((1 * Nv_TP, 1, Dv), **self._default_tensor_kwargs)
 
     def replicate_prefill_state_to_batch(self):
         """Copy B=1 prefill GDN states to all B=32 decode slots.
@@ -913,14 +894,7 @@ class TtGatedDeltaNet(LightweightModule):
                 pad_rows.append(s)
             conv_pad = ttnn.concat(pad_rows, dim=2)  # [1, 1, K-1, qkv_dim_tp]
         else:
-            pad_shape = [1, 1, K - 1, qkv_dim_tp]
-            conv_pad = ttnn.from_torch(
-                torch.zeros(pad_shape, dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
+            conv_pad = ttnn.zeros((1, 1, K - 1, qkv_dim_tp), **self._default_tensor_kwargs)
         padded = ttnn.concat([conv_pad, qkv_all], dim=2)  # [1, 1, seq_len + K-1, qkv_dim_tp]
         ttnn.deallocate(conv_pad)
 
@@ -995,13 +969,7 @@ class TtGatedDeltaNet(LightweightModule):
         if use_seq_major:
             from models.demos.qwen35_27b.tt.gdn_kernel.gdn_kernel_op import gdn_prefill_fused_seq_major
 
-            prefill_output = ttnn.from_torch(
-                torch.zeros(1, 1, seq_len, num_pairs * Dv, dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
-            )
+            prefill_output = ttnn.zeros((1, 1, seq_len, num_pairs * Dv), **self._default_tensor_kwargs)
 
             gdn_prefill_fused_seq_major(
                 conv_out_3d,
@@ -1029,13 +997,7 @@ class TtGatedDeltaNet(LightweightModule):
             # RMSNorm + reshape + permute + reshape are all folded into the kernel.
             out_f = prefill_output
         else:
-            prefill_output = ttnn.from_torch(
-                torch.zeros(num_pairs * seq_len, 1, Dv, dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
-            )
+            prefill_output = ttnn.zeros((num_pairs * seq_len, 1, Dv), **self._default_tensor_kwargs)
 
             gdn_prefill_fused(
                 conv_out_3d,
