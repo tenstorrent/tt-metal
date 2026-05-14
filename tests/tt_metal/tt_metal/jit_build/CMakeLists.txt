@@ -14,6 +14,7 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/test_utils
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
         ${CMAKE_CURRENT_SOURCE_DIR}/..
+        "$<TARGET_PROPERTY:capnp,INTERFACE_INCLUDE_DIRECTORIES>"
 )
 
 set_target_properties(

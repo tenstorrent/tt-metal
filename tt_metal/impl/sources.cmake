@@ -64,6 +64,8 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/jit_compile_rpc_client.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/jit_compile_service.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/jit_compile_server_controller.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/jit_broker_rpc_client.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/jit_broker_service.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/remote_compile_coordinator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/tt_metal_profiler.cpp

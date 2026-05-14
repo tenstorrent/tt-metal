@@ -6,6 +6,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <unordered_set>
 #include <utility>
 
 #include <tt_stl/assert.hpp>
@@ -28,11 +29,20 @@ std::unordered_map<uint64_t, jit_server::UploadFirmwareRequest> RemoteCompileCoo
 RemoteCompileCoordinator::RemoteCompileCoordinator(
     std::vector<std::string> endpoints, ChipId device_build_id, uint64_t build_key) :
     endpoints_(std::move(endpoints)),
+    dispatch_mode_(DispatchMode::STATIC_HASH),
+    device_build_id_(device_build_id),
+    build_key_(build_key) {
+    TT_FATAL(!endpoints_.empty(), "RemoteCompileCoordinator requires at least one endpoint");
+}
+
+RemoteCompileCoordinator::RemoteCompileCoordinator(
+    std::string broker_endpoint, ChipId device_build_id, uint64_t build_key) :
+    broker_endpoint_(std::move(broker_endpoint)),
+    dispatch_mode_(DispatchMode::BROKER),
     device_build_id_(device_build_id),
     build_key_(build_key),
-    sessions_(endpoints_.size()),
-    pending_by_endpoint_(endpoints_.size()) {
-    TT_FATAL(!endpoints_.empty(), "RemoteCompileCoordinator requires at least one endpoint");
+    broker_session_(std::make_unique<jit_server::JitBrokerRpcSession>(broker_endpoint_)) {
+    TT_FATAL(!broker_endpoint_.empty(), "RemoteCompileCoordinator broker endpoint must not be empty");
 }
 
 RemoteCompileCoordinator::~RemoteCompileCoordinator() = default;
@@ -60,16 +70,9 @@ void RemoteCompileCoordinator::submit(
         return;
     }
 
-    // This kernel is new — assign endpoint and pipeline the send.
-    const std::size_t ep_idx = kernel_hash % endpoints_.size();
-
     try {
         auto descriptor = make_descriptor();
-        ensure_session(ep_idx);
-        ensure_firmware_uploaded(ep_idx);
-
-        sessions_[ep_idx]->send(descriptor.request);
-        pending_by_endpoint_[ep_idx].push_back({std::move(descriptor), std::move(new_promise)});
+        ready_to_dispatch_.push_back({std::move(descriptor), std::move(new_promise)});
     } catch (...) {
         {
             std::lock_guard lock(s_dedup_mutex_);
@@ -81,24 +84,35 @@ void RemoteCompileCoordinator::submit(
 }
 
 void RemoteCompileCoordinator::finish() {
-    // Phase 1: Collect responses per endpoint, write ELFs and markers, fulfill dedup promises.
-    for (std::size_t ep_idx = 0; ep_idx < pending_by_endpoint_.size(); ++ep_idx) {
-        auto& pending = pending_by_endpoint_[ep_idx];
+    if (!ready_to_dispatch_.empty()) {
+        try {
+            if (dispatch_mode_ == DispatchMode::BROKER) {
+                dispatch_via_broker();
+            } else {
+                dispatch_static_hash();
+            }
+        } catch (...) {
+            fail_unfinished_dispatch(std::current_exception());
+            throw;
+        }
+    }
+
+    for (auto& [endpoint, pending] : pending_by_endpoint_) {
         if (pending.empty()) {
             continue;
         }
 
         try {
             TT_FATAL(
-                sessions_[ep_idx] != nullptr,
+                sessions_by_endpoint_.contains(endpoint) && sessions_by_endpoint_[endpoint] != nullptr,
                 "Internal error: missing transport session for endpoint {}",
-                endpoints_[ep_idx]);
+                endpoint);
 
-            auto responses = sessions_[ep_idx]->wait_all();
+            auto responses = sessions_by_endpoint_[endpoint]->wait_all();
             TT_FATAL(
                 responses.size() == pending.size(),
                 "Response count mismatch for endpoint {}: expected {} got {}",
-                endpoints_[ep_idx],
+                endpoint,
                 pending.size(),
                 responses.size());
 
@@ -109,7 +123,7 @@ void RemoteCompileCoordinator::finish() {
                     resp.success,
                     "Remote JIT compile failed for kernel {} (endpoint {}): {}",
                     pend.descriptor.request.kernel_name,
-                    endpoints_[ep_idx],
+                    endpoint,
                     resp.error_message);
                 TT_FATAL(
                     resp.elf_blobs.size() == pend.descriptor.expected_elf_paths.size(),
@@ -126,34 +140,101 @@ void RemoteCompileCoordinator::finish() {
                 pend.dedup_promise.reset();
             }
         } catch (...) {
-            auto ex = std::current_exception();
-            std::lock_guard lock(s_dedup_mutex_);
-            for (auto& pend : pending) {
-                if (pend.dedup_promise) {
-                    s_dedup_cache_.erase(pend.descriptor.kernel_hash);
-                    pend.dedup_promise->set_exception(ex);
-                }
-            }
+            fail_unfinished_dispatch(std::current_exception());
             throw;
         }
     }
 
-    // Phase 2: Wait for any dedup'd kernels fulfilled by other coordinator instances.
     for (auto& future : submitted_) {
         future.get();
     }
 
-    // Clear per-batch state.
     submitted_.clear();
-    for (auto& v : pending_by_endpoint_) {
-        v.clear();
+    ready_to_dispatch_.clear();
+    pending_by_endpoint_.clear();
+}
+
+void RemoteCompileCoordinator::fail_unfinished_dispatch(const std::exception_ptr& ex) {
+    std::lock_guard lock(s_dedup_mutex_);
+    auto reject = [&](PendingKernel& pending) {
+        if (!pending.dedup_promise) {
+            return;
+        }
+        s_dedup_cache_.erase(pending.descriptor.kernel_hash);
+        try {
+            pending.dedup_promise->set_exception(ex);
+        } catch (const std::future_error& ex) {
+            // Promise already fulfilled/rejected by another path.
+            (void)ex;
+        }
+        pending.dedup_promise.reset();
+    };
+
+    for (auto& pending : ready_to_dispatch_) {
+        reject(pending);
+    }
+    for (auto& [endpoint, pending] : pending_by_endpoint_) {
+        (void)endpoint;
+        for (auto& item : pending) {
+            reject(item);
+        }
     }
 }
 
-void RemoteCompileCoordinator::ensure_session(std::size_t endpoint_index) {
-    if (!sessions_[endpoint_index]) {
-        sessions_[endpoint_index] = std::make_unique<jit_server::JitCompileRpcSession>(endpoints_[endpoint_index]);
+void RemoteCompileCoordinator::dispatch_static_hash() {
+    for (auto& pending : ready_to_dispatch_) {
+        const std::string& endpoint = endpoints_[pending.descriptor.kernel_hash % endpoints_.size()];
+        ensure_firmware_uploaded_static(endpoint);
+        ensure_session(endpoint).send(pending.descriptor.request);
+        pending_by_endpoint_[endpoint].push_back(std::move(pending));
     }
+    ready_to_dispatch_.clear();
+}
+
+void RemoteCompileCoordinator::dispatch_via_broker() {
+    TT_FATAL(broker_session_ != nullptr, "Internal error: broker session not initialized");
+    jit_server::BrokerAssignRequest request;
+    request.build_key = build_key_;
+    request.kernel_keys.reserve(ready_to_dispatch_.size());
+    for (const auto& pending : ready_to_dispatch_) {
+        request.kernel_keys.push_back(pending.descriptor.request.kernel_name);
+    }
+
+    auto response = broker_session_->assign(request);
+    TT_FATAL(
+        response.assignments.size() == ready_to_dispatch_.size(),
+        "Broker assignments mismatch: expected {} got {}",
+        ready_to_dispatch_.size(),
+        response.assignments.size());
+
+    std::unordered_set<std::string> needs_firmware;
+    for (std::size_t i = 0; i < ready_to_dispatch_.size(); ++i) {
+        auto& pending = ready_to_dispatch_[i];
+        const auto& assignment = response.assignments[i];
+        pending.descriptor.request.handle = assignment.handle;
+        if (assignment.firmware_state == jit_server::FirmwareState::ABSENT) {
+            needs_firmware.insert(assignment.server_endpoint);
+        }
+    }
+
+    ensure_firmware_uploaded_via_broker(needs_firmware);
+
+    for (std::size_t i = 0; i < ready_to_dispatch_.size(); ++i) {
+        auto& pending = ready_to_dispatch_[i];
+        const auto& endpoint = response.assignments[i].server_endpoint;
+        ensure_session(endpoint).send(pending.descriptor.request);
+        pending_by_endpoint_[endpoint].push_back(std::move(pending));
+    }
+    ready_to_dispatch_.clear();
+}
+
+jit_server::JitCompileRpcSession& RemoteCompileCoordinator::ensure_session(const std::string& endpoint) {
+    auto it = sessions_by_endpoint_.find(endpoint);
+    if (it == sessions_by_endpoint_.end()) {
+        it =
+            sessions_by_endpoint_.emplace(endpoint, std::make_unique<jit_server::JitCompileRpcSession>(endpoint)).first;
+    }
+    return *it->second;
 }
 
 const jit_server::UploadFirmwareRequest& RemoteCompileCoordinator::get_firmware_request() {
@@ -181,8 +262,8 @@ const jit_server::UploadFirmwareRequest& RemoteCompileCoordinator::get_firmware_
     return it->second;
 }
 
-void RemoteCompileCoordinator::ensure_firmware_uploaded(std::size_t endpoint_index) {
-    const std::string gate_key = endpoints_[endpoint_index] + ":" + std::to_string(build_key_);
+void RemoteCompileCoordinator::ensure_firmware_uploaded_static(const std::string& endpoint) {
+    const std::string gate_key = endpoint + ":" + std::to_string(build_key_);
 
     std::shared_future<void> existing_future;
     std::shared_ptr<std::promise<void>> gate_promise;
@@ -205,13 +286,9 @@ void RemoteCompileCoordinator::ensure_firmware_uploaded(std::size_t endpoint_ind
 
     try {
         const auto& fw_request = get_firmware_request();
-        ensure_session(endpoint_index);
-        auto response = sessions_[endpoint_index]->upload_firmware(fw_request);
-        TT_FATAL(
-            response.success,
-            "Firmware upload failed for endpoint {}: {}",
-            endpoints_[endpoint_index],
-            response.error_message);
+        auto& session = ensure_session(endpoint);
+        auto response = session.upload_firmware(fw_request);
+        TT_FATAL(response.success, "Firmware upload failed for endpoint {}: {}", endpoint, response.error_message);
         gate_promise->set_value();
     } catch (...) {
         {
@@ -220,6 +297,36 @@ void RemoteCompileCoordinator::ensure_firmware_uploaded(std::size_t endpoint_ind
         }
         gate_promise->set_exception(std::current_exception());
         throw;
+    }
+}
+
+void RemoteCompileCoordinator::ensure_firmware_uploaded_via_broker(const std::unordered_set<std::string>& endpoints) {
+    TT_FATAL(broker_session_ != nullptr, "Internal error: broker session not initialized");
+    if (endpoints.empty()) {
+        return;
+    }
+
+    const auto& fw_request = get_firmware_request();
+    for (const auto& endpoint : endpoints) {
+        const auto action = broker_session_->claim_firmware_upload(build_key_, endpoint);
+        if (action == jit_server::FirmwareUploadAction::SKIP_ALREADY_PRESENT) {
+            continue;
+        }
+        if (action == jit_server::FirmwareUploadAction::WAIT_FOR_OTHER) {
+            broker_session_->wait_firmware_ready(build_key_, endpoint);
+            continue;
+        }
+
+        TT_FATAL(action == jit_server::FirmwareUploadAction::YOU_UPLOAD, "Unexpected firmware upload action");
+        try {
+            auto& session = ensure_session(endpoint);
+            auto response = session.upload_firmware(fw_request);
+            TT_FATAL(response.success, "Firmware upload failed for endpoint {}: {}", endpoint, response.error_message);
+            broker_session_->release_firmware_upload(build_key_, endpoint, true);
+        } catch (...) {
+            broker_session_->release_firmware_upload(build_key_, endpoint, false);
+            throw;
+        }
     }
 }
 

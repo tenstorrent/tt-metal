@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -17,6 +18,7 @@
 #include <tt-logger/tt-logger.hpp>
 
 #include "impl/jit_server/jit_compile_server_controller.hpp"
+#include "impl/jit_server/jit_broker_rpc_client.hpp"
 #include "impl/jit_server/types.hpp"
 #include "jit_build/depend.hpp"
 #include "jit_build/jit_build_utils.hpp"
@@ -76,7 +78,12 @@ constexpr const char* kEndpointEnv = "TT_METAL_JIT_SERVER_ENDPOINT";
 constexpr const char* kDefaultEndpoint = "localhost:9876";
 constexpr const char* kServerCacheRootEnv = "TT_METAL_JIT_SERVER_CACHE_ROOT";
 constexpr const char* kDefaultServerCacheRoot = "/tmp/tt-metal-cache/";
+constexpr const char* kBrokerEndpointEnv = "TT_METAL_JIT_BROKER_ENDPOINT";
+constexpr const char* kServerAddressEnv = "TT_METAL_JIT_SERVER_ADDRESS";
 std::string g_server_cache_root = kDefaultServerCacheRoot;
+std::string g_server_advertise_address;
+std::string g_broker_endpoint;
+std::unique_ptr<tt::tt_metal::jit_server::JitBrokerRpcClient> g_broker_client;
 
 // Reject paths that could escape the cache root: absolute paths, ".." components, or
 // empty strings.  Throws on violation.
@@ -118,6 +125,56 @@ void handle_signal(int /*signal*/) { g_keep_running.store(false); }
 
 std::string firmware_cache_dir(std::uint64_t build_key, const std::string& target_name) {
     return (fs::path(g_server_cache_root) / std::to_string(build_key) / "firmware" / target_name).string() + "/";
+}
+
+std::optional<std::uint64_t> parse_build_key(const fs::path& build_key_path) {
+    const std::string key_text = build_key_path.filename().string();
+    if (key_text.empty()) {
+        return std::nullopt;
+    }
+    try {
+        return static_cast<std::uint64_t>(std::stoull(key_text));
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+void collect_server_cache_state(
+    std::vector<tt::tt_metal::jit_server::KernelKey>& kernel_keys, std::vector<std::uint64_t>& firmware_build_keys) {
+    kernel_keys.clear();
+    firmware_build_keys.clear();
+    if (!fs::exists(g_server_cache_root)) {
+        return;
+    }
+
+    for (const auto& build_key_entry : fs::directory_iterator(g_server_cache_root)) {
+        if (!build_key_entry.is_directory()) {
+            continue;
+        }
+        const auto build_key = parse_build_key(build_key_entry.path());
+        if (!build_key.has_value()) {
+            continue;
+        }
+
+        const fs::path kernels_root = build_key_entry.path() / "kernels";
+        if (fs::exists(kernels_root) && fs::is_directory(kernels_root)) {
+            for (const auto& kernel_entry : fs::directory_iterator(kernels_root)) {
+                if (!kernel_entry.is_directory()) {
+                    continue;
+                }
+                tt::tt_metal::jit_server::KernelKey key;
+                key.build_key = *build_key;
+                key.kernel_name = kernel_entry.path().filename().string();
+                kernel_keys.push_back(std::move(key));
+            }
+        }
+
+        const fs::path firmware_root = build_key_entry.path() / "firmware";
+        if (fs::exists(firmware_root) && fs::is_directory(firmware_root) &&
+            fs::directory_iterator(firmware_root) != fs::directory_iterator()) {
+            firmware_build_keys.push_back(*build_key);
+        }
+    }
 }
 
 // Resolve firmware path from the server cache populated by uploadFirmware RPC.
@@ -260,7 +317,8 @@ void build_target(
     const std::string& gpp,
     const tt::tt_metal::jit_server::TargetRecipe& target,
     const std::string& out_dir,
-    tt::tt_metal::jit_server::CompileResponse& response) {
+    tt::tt_metal::jit_server::CompileResponse& response,
+    bool& was_real_compile) {
     if (target.srcs.size() != target.objs.size()) {
         throw std::runtime_error("srcs and objs must have the same size for target " + target.target_name);
     }
@@ -284,6 +342,9 @@ void build_target(
     const size_t recompiled = std::count(compiled.begin(), compiled.end(), true);
     const size_t cache_hit = num_objs - recompiled;
     bool needs_link = need_link(out_dir, target.target_name);
+    if (recompiled > 0 || needs_link) {
+        was_real_compile = true;
+    }
 
     log_info(
         tt::LogMetal,
@@ -337,6 +398,7 @@ void build_target(
 
 tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::jit_server::CompileRequest& request) {
     tt::tt_metal::jit_server::CompileResponse response;
+    bool was_real_compile = false;
     auto request_start = std::chrono::steady_clock::now();
     int outstanding = g_outstanding_compiles.fetch_add(1) + 1;
 
@@ -386,7 +448,7 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
                     resolve_uploaded_firmware_path(request.build_key, resolved_target).string();
             }
             std::string out_dir = target_cache_dir(request.build_key, request.kernel_name, target.target_name);
-            build_target(request.gpp, resolved_target, out_dir, response);
+            build_target(request.gpp, resolved_target, out_dir, response, was_real_compile);
         }
 
         response.success = true;
@@ -399,6 +461,16 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
         response.success = false;
         response.error_message = e.what();
         log_warning(tt::LogMetal, "FAIL {}: {}", request.kernel_name, response.error_message);
+    }
+    if (g_broker_client != nullptr) {
+        try {
+            g_broker_client->release(
+                request.handle,
+                tt::tt_metal::jit_server::KernelKey{request.build_key, request.kernel_name},
+                was_real_compile);
+        } catch (const std::exception& e) {
+            log_warning(tt::LogMetal, "broker release FAIL {}: {}", request.kernel_name, e.what());
+        }
     }
     g_outstanding_compiles.fetch_sub(1);
     return response;
@@ -461,6 +533,10 @@ tt::tt_metal::jit_server::UploadFirmwareResponse upload_firmware_callback(
 int main() {
     const char* endpoint_env = std::getenv(kEndpointEnv);
     const std::string endpoint = endpoint_env != nullptr ? endpoint_env : kDefaultEndpoint;
+    const char* broker_endpoint_env = std::getenv(kBrokerEndpointEnv);
+    g_broker_endpoint = broker_endpoint_env != nullptr ? broker_endpoint_env : "";
+    const char* server_address_env = std::getenv(kServerAddressEnv);
+    g_server_advertise_address = server_address_env != nullptr ? server_address_env : endpoint;
     const char* cache_root_env = std::getenv(kServerCacheRootEnv);
     g_server_cache_root = normalize_cache_root(cache_root_env != nullptr ? cache_root_env : kDefaultServerCacheRoot);
 
@@ -471,11 +547,27 @@ int main() {
     server.start(endpoint);
     log_info(tt::LogMetal, "JIT compile server listening on {}", endpoint);
     log_info(tt::LogMetal, "JIT compile server cache root: {}", g_server_cache_root);
+    if (!g_broker_endpoint.empty()) {
+        log_info(tt::LogMetal, "JIT compile server broker endpoint: {}", g_broker_endpoint);
+        std::vector<tt::tt_metal::jit_server::KernelKey> kernel_keys;
+        std::vector<std::uint64_t> firmware_build_keys;
+        collect_server_cache_state(kernel_keys, firmware_build_keys);
+        tt::tt_metal::jit_server::JitBrokerRpcSession broker_session(g_broker_endpoint);
+        broker_session.register_server(g_server_advertise_address);
+        broker_session.report_cache_state(g_server_advertise_address, kernel_keys, firmware_build_keys);
+        g_broker_client = std::make_unique<tt::tt_metal::jit_server::JitBrokerRpcClient>(g_broker_endpoint);
+        log_info(
+            tt::LogMetal,
+            "JIT compile server reported cache catalog to broker: kernels={} firmware_build_keys={}",
+            kernel_keys.size(),
+            firmware_build_keys.size());
+    }
 
     while (g_keep_running.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
     }
 
     server.stop();
+    g_broker_client.reset();
     return 0;
 }

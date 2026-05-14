@@ -1,0 +1,1 @@
+set(JIT_COMPILE_BROKER_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/jit_compile_broker.cpp)

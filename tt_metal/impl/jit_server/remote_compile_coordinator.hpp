@@ -12,8 +12,10 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
+#include "impl/jit_server/jit_broker_rpc_client.hpp"
 #include "impl/jit_server/jit_compile_rpc_client.hpp"
 #include "impl/jit_server/types.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -42,6 +44,7 @@ struct KernelCompileDescriptor {
 class RemoteCompileCoordinator {
 public:
     RemoteCompileCoordinator(std::vector<std::string> endpoints, ChipId device_build_id, uint64_t build_key);
+    RemoteCompileCoordinator(std::string broker_endpoint, ChipId device_build_id, uint64_t build_key);
     ~RemoteCompileCoordinator();
 
     RemoteCompileCoordinator(const RemoteCompileCoordinator&) = delete;
@@ -58,13 +61,24 @@ public:
     void finish();
 
 private:
+    enum class DispatchMode : std::uint8_t {
+        STATIC_HASH = 0,
+        BROKER = 1,
+    };
+
+    void dispatch_static_hash();
+    void dispatch_via_broker();
+    void fail_unfinished_dispatch(const std::exception_ptr& ex);
     const jit_server::UploadFirmwareRequest& get_firmware_request();
-    void ensure_firmware_uploaded(std::size_t endpoint_index);
-    void ensure_session(std::size_t endpoint_index);
+    void ensure_firmware_uploaded_static(const std::string& endpoint);
+    void ensure_firmware_uploaded_via_broker(const std::unordered_set<std::string>& endpoints);
+    jit_server::JitCompileRpcSession& ensure_session(const std::string& endpoint);
     void write_elf_blob(const std::string& path, const jit_server::ElfBlob& blob);
 
     // -- Configuration (immutable after construction) --
     std::vector<std::string> endpoints_;
+    std::string broker_endpoint_;
+    DispatchMode dispatch_mode_ = DispatchMode::STATIC_HASH;
     ChipId device_build_id_;
     uint64_t build_key_;
 
@@ -75,8 +89,10 @@ private:
         KernelCompileDescriptor descriptor;
         std::shared_ptr<std::promise<void>> dedup_promise;
     };
-    std::vector<std::unique_ptr<jit_server::JitCompileRpcSession>> sessions_;
-    std::vector<std::vector<PendingKernel>> pending_by_endpoint_;
+    std::unordered_map<std::string, std::unique_ptr<jit_server::JitCompileRpcSession>> sessions_by_endpoint_;
+    std::unordered_map<std::string, std::vector<PendingKernel>> pending_by_endpoint_;
+    std::vector<PendingKernel> ready_to_dispatch_;
+    std::unique_ptr<jit_server::JitBrokerRpcSession> broker_session_;
 
     std::vector<std::shared_future<void>> submitted_;
 

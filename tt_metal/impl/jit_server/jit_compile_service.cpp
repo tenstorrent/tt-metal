@@ -212,6 +212,7 @@ kj::Promise<void> JitCompileService::compile(CompileContext context) {
     request.build_key = reader.getBuildKey();
     request.kernel_name = reader.getKernelName().cStr();
     request.gpp = reader.getGpp().cStr();
+    request.handle = reader.getHandle();
     for (auto target : reader.getTargets()) {
         TargetRecipe t;
         t.target_name = target.getTargetName().cStr();

@@ -2014,12 +2014,19 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         // Remote path: prep and submit are sequential.  Parallelism is on compilation which happens on the remote
         // server.
         // TODO: precompiled kernel is not supported in remote mode
-        auto endpoints = jit_server::JitCompileRpcClient::endpoints_from_env();
-        TT_FATAL(
-            !endpoints.empty(),
-            "TT_METAL_JIT_SERVER_ENABLE is set but no compile-server endpoints are configured. "
-            "Set TT_METAL_JIT_SERVER_ENDPOINTS or TT_METAL_JIT_SERVER_ENDPOINT.");
-        RemoteCompileCoordinator coordinator(std::move(endpoints), device->build_id(), build_env.build_key());
+        const std::string broker_endpoint = jit_server::JitBrokerRpcClient::endpoint_from_env();
+        const bool use_broker_dispatch = !broker_endpoint.empty();
+        std::optional<RemoteCompileCoordinator> coordinator;
+        if (use_broker_dispatch) {
+            coordinator.emplace(broker_endpoint, device->build_id(), build_env.build_key());
+        } else {
+            auto endpoints = jit_server::JitCompileRpcClient::endpoints_from_env();
+            TT_FATAL(
+                !endpoints.empty(),
+                "TT_METAL_JIT_SERVER_ENABLE is set but no compile-server endpoints are configured. "
+                "Set TT_METAL_JIT_SERVER_ENDPOINTS or TT_METAL_JIT_SERVER_ENDPOINT.");
+            coordinator.emplace(std::move(endpoints), device->build_id(), build_env.build_key());
+        }
 
         std::vector<std::pair<std::shared_ptr<Kernel>, JitBuildOptions>> submitted_kernels;
 
@@ -2027,7 +2034,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
             for (auto& [id, kernel] : kernels) {
                 validate_kernel_placement(force_slow_dispatch, kernel);
                 auto [build_options, kernel_hash] = prep_kernel(kernel);
-                coordinator.submit(kernel_hash, [&]() {
+                coordinator->submit(kernel_hash, [&]() {
                     generate_kernel_source_files(device, build_options, kernel);
                     return build_kernel_descriptor(device, kernel, build_options, kernel_hash);
                 });
@@ -2035,7 +2042,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
             }
         }
 
-        coordinator.finish();
+        coordinator->finish();
 
         const std::string binary_root = build_env.build_env.get_out_kernel_root_path();
         for (const auto& [kernel, build_options] : submitted_kernels) {

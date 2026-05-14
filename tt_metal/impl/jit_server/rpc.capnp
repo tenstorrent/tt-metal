@@ -44,6 +44,8 @@ struct CompileRequest {
 
     # Generated files to write before compiling (shared by all targets).
     generatedFiles @4 :List(GeneratedFile);
+    # Broker-assigned request handle used for release accounting.
+    handle @5 :UInt64;
 }
 
 struct ElfBlob {

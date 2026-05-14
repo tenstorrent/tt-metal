@@ -23,6 +23,7 @@ struct CompileRequest {
     std::string gpp;
     std::vector<TargetRecipe> targets;
     std::vector<GeneratedFile> generated_files;
+    std::uint64_t handle = 0;
 };
 
 struct ElfBlob {

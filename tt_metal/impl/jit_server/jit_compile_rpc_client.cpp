@@ -81,6 +81,7 @@ void fill_compile_request(rpc::CompileRequest::Builder& builder, const CompileRe
     builder.setBuildKey(request.build_key);
     builder.setKernelName(request.kernel_name);
     builder.setGpp(request.gpp);
+    builder.setHandle(request.handle);
 
     auto targets = builder.initTargets(request.targets.size());
     for (std::size_t i = 0; i < request.targets.size(); ++i) {

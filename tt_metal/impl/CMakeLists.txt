@@ -22,6 +22,7 @@ list(APPEND IMPL_SRC ${GENERATED_HEADERS})
 # Generate Inspector Cap'n Proto headers and RPC server implementation
 set(INSPECTOR_RPC_CAPNP ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/rpc.capnp)
 set(JIT_COMPILE_RPC_CAPNP ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/rpc.capnp)
+set(JIT_BROKER_RPC_CAPNP ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/broker.capnp)
 set(CAPNPC_OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/impl/)
 file(MAKE_DIRECTORY ${CAPNPC_OUTPUT_DIR})
 
@@ -29,6 +30,8 @@ capnp_generate_cpp(INSPECTOR_RPC_CAPNP_SOURCES INSPECTOR_RPC_CAPNP_HEADER ${INSP
 list(APPEND IMPL_SRC ${INSPECTOR_RPC_CAPNP_SOURCES})
 capnp_generate_cpp(JIT_COMPILE_RPC_CAPNP_SOURCES JIT_COMPILE_RPC_CAPNP_HEADER ${JIT_COMPILE_RPC_CAPNP})
 list(APPEND IMPL_SRC ${JIT_COMPILE_RPC_CAPNP_SOURCES})
+capnp_generate_cpp(JIT_BROKER_RPC_CAPNP_SOURCES JIT_BROKER_RPC_CAPNP_HEADER ${JIT_BROKER_RPC_CAPNP})
+list(APPEND IMPL_SRC ${JIT_BROKER_RPC_CAPNP_SOURCES})
 
 # Generate Inspector RPC callbacks server implementation
 set(INSPECTOR_RPC_GENERATED_HEADER ${CMAKE_CURRENT_BINARY_DIR}/impl/debug/inspector/rpc_server_generated.hpp)
@@ -53,6 +56,7 @@ set_source_files_properties(
     ${INSPECTOR_RPC_GENERATED_HEADER}
     ${INSPECTOR_RPC_CAPNP_SOURCES}
     ${JIT_COMPILE_RPC_CAPNP_SOURCES}
+    ${JIT_BROKER_RPC_CAPNP_SOURCES}
     PROPERTIES
         SKIP_LINTING
             TRUE
@@ -66,6 +70,7 @@ if(TARGET all_generated_files)
             ${INSPECTOR_RPC_CAPNP_HEADER}
             ${INSPECTOR_RPC_GENERATED_HEADER}
             ${JIT_COMPILE_RPC_CAPNP_HEADER}
+            ${JIT_BROKER_RPC_CAPNP_HEADER}
     )
     add_dependencies(all_generated_files capnp_generated_files)
 endif()
