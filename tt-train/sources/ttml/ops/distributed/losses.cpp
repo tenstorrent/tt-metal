@@ -95,7 +95,7 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
 
     // // Step 3: fused (logits - global_max).exp() into FP32 — single binary_ng kernel,
     // // no intermediate [B,1,S,V/tp_size] FP32 tensor.
-    // auto local_exp = fused_subtract_exp_fp32(logits->get_value(), global_max);
+    auto local_exp = fused_subtract_exp_fp32(logits->get_value(), global_max);
     // auto local_sum = ttnn::sum(local_exp, 3, /* keepdim */ true, std::nullopt, core::ComputeKernelConfig::precise());
     // auto global_sum = ttnn_fixed::distributed::all_reduce(local_sum, cluster_axis);
 
