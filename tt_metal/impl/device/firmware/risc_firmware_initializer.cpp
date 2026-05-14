@@ -197,6 +197,7 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
     teardown_simulator_ethernet_cores();
 
     if (!cluster_.is_mock_or_emulated()) {
+        terminate_active_ethernet_cores_on_all_chips();
         for (tt::ChipId device_id : all_devices) {
             assert_cores(device_id);
             cluster_.l1_barrier(device_id);
