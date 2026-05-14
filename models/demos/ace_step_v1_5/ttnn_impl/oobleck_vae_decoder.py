@@ -8,10 +8,15 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from pathlib import Path
 from typing import Any
 
 from .vae.decoder import TtOobleckDecoder
+
+# TTNN conv_transpose2d width-sharded kernels assert on activation×weight geometry; very short
+# latent sequences (common on the last overlap-add tile) trigger TT_FATAL mismatches.
+_DEFAULT_MIN_DECODER_LATENT_WINDOW = 32
 
 
 def _pick_safetensors_file(vae_dir: Path) -> Path:
@@ -157,6 +162,35 @@ class TtOobleckVaeDecoder:
                 parts.append(self.decode_tiled(slab, chunk_size=chunk_size, overlap=overlap))
             return ttnn.concat(parts, dim=0) if hasattr(ttnn, "concat") else ttnn.concatenate(parts, dim=0)
 
+        min_win = int(
+            os.environ.get(
+                "ACE_STEP_VAE_MIN_DECODER_LATENT_WINDOW",
+                str(_DEFAULT_MIN_DECODER_LATENT_WINDOW),
+            )
+        )
+        audio_up = math.prod(int(u) for u in dec.upsampling_ratios)
+
+        def _crop_audio_tail(wav_tt, pad_lat_frames: int):
+            if pad_lat_frames <= 0:
+                return wav_tt
+            ta = int(wav_tt.shape[1])
+            drop = pad_lat_frames * audio_up
+            end_i = max(0, ta - drop)
+            bw = int(wav_tt.shape[0])
+            ca = int(wav_tt.shape[2])
+            return ttnn.slice(wav_tt, (0, 0, 0), (bw, end_i, ca))
+
+        initial_pad_lat = max(0, min_win - latent_frames)
+        if initial_pad_lat > 0:
+            pad_zeros = ttnn.zeros(
+                (batch, initial_pad_lat, c_lat),
+                dtype=latents_btc.dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=latents_btc.device(),
+            )
+            latents_btc = ttnn.concat([latents_btc, pad_zeros], dim=1)
+            latent_frames = int(latents_btc.shape[1])
+
         chunk_size = int(chunk_size)
         overlap = int(overlap)
         if chunk_size < 8:
@@ -170,7 +204,8 @@ class TtOobleckVaeDecoder:
         overlap = effective_overlap
 
         if latent_frames <= chunk_size:
-            return dec(latents_btc)
+            wav_one = dec(latents_btc)
+            return _crop_audio_tail(wav_one, initial_pad_lat)
 
         stride = chunk_size - 2 * overlap
         if stride <= 0:
@@ -187,6 +222,13 @@ class TtOobleckVaeDecoder:
             core_end = min(core_start + stride, latent_frames)
             win_start = max(0, core_start - overlap)
             win_end = min(latent_frames, core_end + overlap)
+            win_len = win_end - win_start
+            if win_len < min_win:
+                deficit = min_win - win_len
+                win_start = max(0, win_start - deficit)
+                win_len = win_end - win_start
+                if win_len < min_win:
+                    win_end = min(latent_frames, win_start + min_win)
 
             latent_chunk = ttnn.slice(latents_btc, (0, win_start, 0), (1, win_end, c_lat))
             wav = dec(latent_chunk)
@@ -214,5 +256,7 @@ class TtOobleckVaeDecoder:
             cores.append(audio_core)
 
         if len(cores) == 1:
-            return cores[0]
-        return ttnn.concat(cores, dim=1) if hasattr(ttnn, "concat") else ttnn.concatenate(cores, dim=1)
+            merged = cores[0]
+        else:
+            merged = ttnn.concat(cores, dim=1) if hasattr(ttnn, "concat") else ttnn.concatenate(cores, dim=1)
+        return _crop_audio_tail(merged, initial_pad_lat)
