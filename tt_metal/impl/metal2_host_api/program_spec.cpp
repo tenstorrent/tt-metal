@@ -704,12 +704,12 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     }
 
     // Compute kernels cannot have any semaphore bindings.
-    // (This may later change for Quasar.)
+    // (There's no use case for ever wanting this, so best just forbid it.)
     for (const auto& kernel : spec.kernels) {
         TT_FATAL(
             !kernel.is_compute_kernel() || kernel.semaphore_bindings.empty(),
             "KernelSpec '{}' has semaphore bindings. "
-            "Semaphore bindings are not currently supported for compute kernels.",
+            "Semaphore bindings are not supported for compute kernels.",
             kernel.unique_id);
     }
 
