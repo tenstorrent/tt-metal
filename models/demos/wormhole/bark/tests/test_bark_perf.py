@@ -98,10 +98,7 @@ def test_perf_bark(
 
     # RTF target — this is the primary bounty requirement
     # Using a generous margin for CI variability; target is < 0.8
-    assert rtf < 1.5, (
-        f"RTF {rtf:.2f} is too high — expected < 1.5 "
-        f"(bounty target: < 0.8, allowing CI margin)"
-    )
+    assert rtf < 1.5, f"RTF {rtf:.2f} is too high — expected < 1.5 " f"(bounty target: < 0.8, allowing CI margin)"
 
     logger.info(f"Performance test PASSED: RTF={rtf:.2f}, inference={inference_time:.2f}s")
 

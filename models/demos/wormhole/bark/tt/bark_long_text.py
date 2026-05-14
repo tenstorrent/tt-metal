@@ -127,7 +127,9 @@ def crossfade_segments(segments: list, crossfade_ms: int = 50, sample_rate: int 
             blended = result[-crossfade_samples:] * fade_out + seg[:crossfade_samples] * fade_in
             result = np.concatenate([result[:-crossfade_samples], blended, seg[crossfade_samples:]])
         else:
-            silence = np.zeros(crossfade_samples if crossfade_samples > 0 else int(0.05 * sample_rate), dtype=np.float32)
+            silence = np.zeros(
+                crossfade_samples if crossfade_samples > 0 else int(0.05 * sample_rate), dtype=np.float32
+            )
             result = np.concatenate([result, silence, seg])
 
     return result

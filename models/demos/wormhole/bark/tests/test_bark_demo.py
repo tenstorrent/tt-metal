@@ -40,8 +40,6 @@ def test_demo(device, text, min_audio_duration):
     assert isinstance(audio, np.ndarray), f"Expected numpy array, got {type(audio)}"
 
     duration = len(audio) / 24000
-    assert duration >= min_audio_duration, (
-        f"Audio too short: {duration:.2f}s (expected >= {min_audio_duration}s)"
-    )
+    assert duration >= min_audio_duration, f"Audio too short: {duration:.2f}s (expected >= {min_audio_duration}s)"
     assert np.isfinite(audio).all(), "Audio contains NaN/Inf"
     assert np.max(np.abs(audio)) > 0.001, "Audio is silent"

@@ -20,11 +20,10 @@ import math
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from models.common.utility_functions import nearest_32
-
 import torch
 
 import ttnn
+from models.common.utility_functions import nearest_32
 
 
 @dataclass
@@ -292,12 +291,18 @@ class TtBarkAttention:
                     torch_k_cache = torch.zeros(B, self.num_heads, self.max_seq_len, self.head_dim)
                     torch_v_cache = torch.zeros(B, self.num_heads, self.max_seq_len, self.head_dim)
                     self._kv_cache_k = ttnn.from_torch(
-                        torch_k_cache, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-                        device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        torch_k_cache,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=self.device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     )
                     self._kv_cache_v = ttnn.from_torch(
-                        torch_v_cache, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-                        device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        torch_v_cache,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=self.device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     )
                 # Fill cache with prefill KV
                 ttnn.kv_cache.fill_cache_for_user_(self._kv_cache_k, key, 0)

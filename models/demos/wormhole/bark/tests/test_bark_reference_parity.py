@@ -19,9 +19,9 @@ from models.demos.wormhole.bark.tt.bark_model import _finalize_coarse_output
 MODEL_ID = "suno/bark-small"
 
 from models.demos.wormhole.bark.tt.bark_constants import (
-    CODEBOOK_SIZE,
     COARSE_INFER_TOKEN,
     COARSE_SEMANTIC_PAD_TOKEN,
+    CODEBOOK_SIZE,
     N_COARSE_CODEBOOKS,
     SEMANTIC_INFER_TOKEN,
     SEMANTIC_PAD_TOKEN,

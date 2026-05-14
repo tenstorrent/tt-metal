@@ -129,10 +129,16 @@ class BarkStreamingPipeline:
             # Pipeline overlap analysis
             estimates = self.estimate_pipeline_latency(timings)
             print(f"\nPipeline overlap analysis:")
-            print(f"  Sequential (current):    {estimates['sequential']:.2f}s  (RTF {estimates['sequential'] / max(audio_dur, 1e-6):.3f})")
-            print(f"  Stage 1||2 overlap:      {estimates['overlap_s1_s2']:.2f}s  (RTF {estimates['overlap_s1_s2'] / max(audio_dur, 1e-6):.3f})")
+            print(
+                f"  Sequential (current):    {estimates['sequential']:.2f}s  (RTF {estimates['sequential'] / max(audio_dur, 1e-6):.3f})"
+            )
+            print(
+                f"  Stage 1||2 overlap:      {estimates['overlap_s1_s2']:.2f}s  (RTF {estimates['overlap_s1_s2'] / max(audio_dur, 1e-6):.3f})"
+            )
             print(f"  Chunked fine reduction:  {estimates['chunked_benefit_pct']:.1f}% memory reduction")
-            print(f"  Theoretical min:         {estimates['theoretical_min']:.2f}s  (RTF {estimates['theoretical_min'] / max(audio_dur, 1e-6):.3f})")
+            print(
+                f"  Theoretical min:         {estimates['theoretical_min']:.2f}s  (RTF {estimates['theoretical_min'] / max(audio_dur, 1e-6):.3f})"
+            )
 
         return audio
 

@@ -16,13 +16,13 @@ import time
 
 import numpy as np
 import torch
+from loguru import logger
 
 import ttnn
-from loguru import logger
 from models.demos.wormhole.bark.tt.bark_constants import (
-    CODEBOOK_SIZE,
     COARSE_INFER_TOKEN,
     COARSE_SEMANTIC_PAD_TOKEN,
+    CODEBOOK_SIZE,
     N_COARSE_CODEBOOKS,
     SEMANTIC_INFER_TOKEN,
     SEMANTIC_PAD_TOKEN,
@@ -31,7 +31,6 @@ from models.demos.wormhole.bark.tt.bark_constants import (
 )
 from models.demos.wormhole.bark.tt.bark_fine import TtBarkFineModel, preprocess_fine_model_parameters
 from models.demos.wormhole.bark.tt.bark_gpt import BarkConfig, TtBarkGPT, preprocess_model_parameters
-
 
 
 def sample_top_k(logits_tt, k=50, temperature=1.0, device=None):
@@ -215,8 +214,11 @@ class TtBarkModel:
         sem_mask = torch.zeros(1, 1, 1, sem_vocab, dtype=torch.bfloat16)
         sem_mask[:, :, :, SEMANTIC_PAD_TOKEN + 1 :] = -1e9  # bfloat16-safe -inf
         self.tt_semantic_mask = ttnn.from_torch(
-            sem_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-            device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            sem_mask,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         # Coarse masks: two alternating codebook masks (even/odd step)
@@ -229,8 +231,11 @@ class TtBarkModel:
             mask[:, :, :, allowed_start:allowed_end] = 0.0
             mask[:, :, :, COARSE_SEMANTIC_PAD_TOKEN] = 0.0  # always allow EOS
             tt_mask = ttnn.from_torch(
-                mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-                device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mask,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             self.tt_coarse_masks.append(tt_mask)
 
@@ -308,7 +313,8 @@ class TtBarkModel:
 
                 # On-device masking
                 masked_logits = ttnn.add(
-                    logits_last, self.tt_semantic_mask,
+                    logits_last,
+                    self.tt_semantic_mask,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
                 if logits_last is not logits or step > 0:
@@ -329,7 +335,9 @@ class TtBarkModel:
                     )
                 else:
                     tt_next_token = ttnn.argmax(
-                        masked_logits, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        masked_logits,
+                        dim=-1,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     )
                     ttnn.deallocate(masked_logits)
 
@@ -423,7 +431,8 @@ class TtBarkModel:
                 # On-device alternating codebook mask
                 codebook_idx = step % N_COARSE_CODEBOOKS
                 masked_logits = ttnn.add(
-                    logits_last, self.tt_coarse_masks[codebook_idx],
+                    logits_last,
+                    self.tt_coarse_masks[codebook_idx],
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
                 if logits_last is not logits or step > 0:
@@ -435,7 +444,9 @@ class TtBarkModel:
                     ttnn.deallocate(masked_logits)
                 else:
                     tt_next_token = ttnn.argmax(
-                        masked_logits, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        masked_logits,
+                        dim=-1,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     )
                     ttnn.deallocate(masked_logits)
                     token_val = ttnn.to_torch(tt_next_token).flatten()[0].item()
@@ -621,7 +632,7 @@ class TtBarkModel:
         semantic_tokens = self.generate_semantic_tokens(text, voice_preset)
         timings["semantic"] = time.time() - t0
         if verbose:
-            sem_elapsed = max(timings['semantic'], 1e-6)
+            sem_elapsed = max(timings["semantic"], 1e-6)
             print(
                 f"Stage 1 (Semantic): {semantic_tokens.shape[1]} tokens in {timings['semantic']:.2f}s "
                 f"({semantic_tokens.shape[1] / sem_elapsed:.1f} tok/s)"
@@ -632,7 +643,7 @@ class TtBarkModel:
         coarse_tokens = self.generate_coarse_tokens(semantic_tokens)
         timings["coarse"] = time.time() - t0
         if verbose:
-            coarse_elapsed = max(timings['coarse'], 1e-6)
+            coarse_elapsed = max(timings["coarse"], 1e-6)
             print(
                 f"Stage 2 (Coarse): {coarse_tokens.shape[1]} tokens in {timings['coarse']:.2f}s "
                 f"({coarse_tokens.shape[1] / coarse_elapsed:.1f} tok/s)"
@@ -646,7 +657,7 @@ class TtBarkModel:
             # Fine generates 6 new codebooks × seq_len tokens
             coarse_seq_len = coarse_tokens.shape[1] // 2 if coarse_tokens.shape[1] > 0 else 0
             fine_new_tokens = 6 * coarse_seq_len
-            fine_tps = fine_new_tokens / timings['fine'] if timings['fine'] > 0 else 0
+            fine_tps = fine_new_tokens / timings["fine"] if timings["fine"] > 0 else 0
             print(
                 f"Stage 3 (Fine): {fine_tokens.shape[1]}x{fine_tokens.shape[2]} codebooks "
                 f"in {timings['fine']:.2f}s ({fine_tps:.1f} tok/s)"
@@ -663,13 +674,16 @@ class TtBarkModel:
             print(f"Stage 4 (Decode): {duration:.2f}s audio in {timings['decode']:.2f}s")
             print(f"Total: {total:.2f}s | Audio: {duration:.2f}s | RTF: {rtf:.2f}")
             # Per-stage breakdown for profiling
-            print(f"  Breakdown: sem={timings['semantic']:.3f}s "
-                  f"coarse={timings['coarse']:.3f}s "
-                  f"fine={timings['fine']:.3f}s "
-                  f"decode={timings['decode']:.3f}s")
+            print(
+                f"  Breakdown: sem={timings['semantic']:.3f}s "
+                f"coarse={timings['coarse']:.3f}s "
+                f"fine={timings['fine']:.3f}s "
+                f"decode={timings['decode']:.3f}s"
+            )
             if self.sampling_config.get("use_sampling"):
-                print(f"  Sampling: top_k={self.sampling_config['top_k']}, "
-                      f"temp={self.sampling_config['temperature']}")
+                print(
+                    f"  Sampling: top_k={self.sampling_config['top_k']}, " f"temp={self.sampling_config['temperature']}"
+                )
 
         # Reset sampling to greedy if it was set via generate() args
         if top_k > 0:

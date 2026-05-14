@@ -39,8 +39,14 @@ def save_audio(audio: np.ndarray, sample_rate: int = 24000):
         logger.warning("scipy not installed; skipping WAV save. Install with: pip install scipy")
 
 
-def run_demo(text: str = None, output_file: str = None, verbose: bool = True,
-             top_k: int = 0, temperature: float = 1.0, device=None):
+def run_demo(
+    text: str = None,
+    output_file: str = None,
+    verbose: bool = True,
+    top_k: int = 0,
+    temperature: float = 1.0,
+    device=None,
+):
     """Run the Bark demo pipeline.
 
     When called from CLI, manages its own device lifecycle.
@@ -109,10 +115,8 @@ def main():
     parser.add_argument("--text", type=str, default=None, help="Text to synthesize")
     parser.add_argument("--output", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--quiet", action="store_true", help="Suppress verbose output")
-    parser.add_argument("--top-k", type=int, default=0,
-                        help="Top-k sampling (0=greedy, 50=natural variety)")
-    parser.add_argument("--temperature", type=float, default=1.0,
-                        help="Sampling temperature (default: 1.0)")
+    parser.add_argument("--top-k", type=int, default=0, help="Top-k sampling (0=greedy, 50=natural variety)")
+    parser.add_argument("--temperature", type=float, default=1.0, help="Sampling temperature (default: 1.0)")
     args = parser.parse_args()
 
     run_demo(
