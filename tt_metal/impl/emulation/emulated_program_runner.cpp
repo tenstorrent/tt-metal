@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "emulated_program_runner.hpp"
+#include "emule_live_ranges.hpp"
 
 #include <dlfcn.h>
 #include <unistd.h>
@@ -134,6 +135,13 @@ thread_local uint32_t __emule_sem_l1_range_end = 0;
 // noc_async_read_barrier, checked at cb_push_back.
 thread_local uint32_t __emule_pending_noc_reads = 0;
 
+// Per-kernel-thread out-of-bounds-tensor sanitizer state. Populated below
+// when emule_strict_tensor_enabled() returns true; otherwise the pointer is
+// left null and the inline check in __emule_local_l1_to_ptr is a no-op.
+thread_local uint32_t __emule_l1_unreserved_base = 0;
+thread_local const uint64_t* __emule_l1_tensor_ranges = nullptr;
+thread_local uint32_t __emule_l1_tensor_ranges_count = 0;
+
 // Core map for cross-core NOC address resolution (shared across all threads).
 thread_local std::unordered_map<uint64_t, tt_emule::Core*>* __emule_core_map = nullptr;
 
@@ -199,6 +207,20 @@ extern "C" uint8_t* __emule_local_l1_ptr(uint32_t offset) {
 static bool emule_strict_noc_enabled() {
     static const bool enabled = []() {
         const char* v = std::getenv("TT_EMULE_STRICT_NOC");
+        return v != nullptr && v[0] != '\0' && v[0] != '0';
+    }();
+    return enabled;
+}
+
+// TT_EMULE_STRICT_TENSOR: when set, populate the live-tensor-range thread_locals
+// before each kernel launch so __emule_local_l1_to_ptr aborts on accesses that
+// land at-or-above l1_unreserved_base but inside no allocated L1 buffer.
+// Off by default — many existing tests/kernels touch L1 regions (CB pages,
+// device-side scratch) that aren't yet registered as live ranges and would
+// false-positive.
+static bool emule_strict_tensor_enabled() {
+    static const bool enabled = []() {
+        const char* v = std::getenv("TT_EMULE_STRICT_TENSOR");
         return v != nullptr && v[0] != '\0' && v[0] != '0';
     }();
     return enabled;
@@ -1499,19 +1521,29 @@ static std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>> build_per_thr
     return per_thread_dfbs;
 }
 
+// Per-program snapshot for the L1 OOB-tensor sanitizer. Held alive on the
+// stack of execute_program_emulated for the duration of launch_cores, threaded
+// through into each kernel thread's thread_local pointers.
+struct EmuleOobTensorState {
+    uint32_t l1_unreserved_base = 0;
+    const uint64_t* tensor_ranges = nullptr;
+    uint32_t tensor_ranges_count = 0;
+};
+
 // ---------------------------------------------------------------------------
 // launch_cores: Spawn concurrent threads per core, each runs its kernels.
 // ---------------------------------------------------------------------------
 static void launch_cores(
     std::vector<CoreSetup>& core_setups,
     uint8_t* dram_data,
-    std::unordered_map<uint64_t, tt_emule::Core*>* core_map_ptr) {
+    std::unordered_map<uint64_t, tt_emule::Core*>* core_map_ptr,
+    const EmuleOobTensorState& oob_state) {
     std::vector<std::thread> core_threads;
     std::vector<std::exception_ptr> core_exceptions(core_setups.size());
 
     for (size_t core_idx = 0; core_idx < core_setups.size(); ++core_idx) {
         core_threads.emplace_back(
-            [&cs = core_setups[core_idx], dram_data, core_map_ptr, &core_ep = core_exceptions[core_idx]]() {
+            [&cs = core_setups[core_idx], dram_data, core_map_ptr, oob_state, &core_ep = core_exceptions[core_idx]]() {
                 try {
                     auto* core = cs.core;
                     uint8_t* l1_data = core->l1_data();
@@ -1558,6 +1590,7 @@ static void launch_cores(
                                               sem_size,
                                               kidx,
                                               single_kernel_on_core,
+                                              oob_state,
                                               &kep = kernel_exceptions[kidx]]() {
                             (void)kidx;
                             auto& ki = *ki_ptr;
@@ -1581,6 +1614,9 @@ static void launch_cores(
                             __emule_sem_l1_range_start = sem_base;
                             __emule_sem_l1_range_end = sem_base + sem_size;
                             __emule_pending_noc_reads = 0;
+                            __emule_l1_unreserved_base = oob_state.l1_unreserved_base;
+                            __emule_l1_tensor_ranges = oob_state.tensor_ranges;
+                            __emule_l1_tensor_ranges_count = oob_state.tensor_ranges_count;
 
                             __emule_neo_id = ki.is_tensix ? ki.processor_id : 0;
                             __emule_trisc_id = 0;
@@ -1641,6 +1677,9 @@ static void launch_cores(
                             __emule_sem_l1_range_start = 0;
                             __emule_sem_l1_range_end = 0;
                             __emule_pending_noc_reads = 0;
+                            __emule_l1_unreserved_base = 0;
+                            __emule_l1_tensor_ranges = nullptr;
+                            __emule_l1_tensor_ranges_count = 0;
                         });
                     }
 
@@ -1761,7 +1800,28 @@ void execute_program_emulated(IDevice* device, Program& program) {
 
     // Phase 3: Launch all cores concurrently
     uint8_t* dram_data = dram_core ? dram_core->l1_data() : nullptr;
-    launch_cores(core_setups, dram_data, core_map_ptr);
+
+    // Snapshot live L1 tensor ranges and the allocator's unreserved base for
+    // the OOB-tensor sanitizer (TT_EMULE_STRICT_TENSOR). When disabled, leave
+    // ranges null so the inline check in __emule_local_l1_to_ptr is a no-op.
+    EmuleOobTensorState oob_state;
+    std::vector<uint64_t> live_ranges_snapshot;
+    if (emule_strict_tensor_enabled()) {
+        live_ranges_snapshot = tt::tt_metal::emule::LiveL1Ranges::snapshot(device_id);
+        oob_state.l1_unreserved_base = static_cast<uint32_t>(
+            device->allocator()->get_base_allocator_addr(HalMemType::L1));
+        // Always pass a non-null pointer so the inline check fires even when
+        // no tensors are allocated — kernels touching the user region with
+        // nothing live IS OOB. data() on an empty vector may be null, so use
+        // a sentinel.
+        static const uint64_t kEmptyRange = 0;
+        oob_state.tensor_ranges = live_ranges_snapshot.empty()
+            ? &kEmptyRange
+            : live_ranges_snapshot.data();
+        oob_state.tensor_ranges_count = static_cast<uint32_t>(live_ranges_snapshot.size());
+    }
+
+    launch_cores(core_setups, dram_data, core_map_ptr, oob_state);
 
     // Phase 4: Host-side dirty-CB sanitizer — final whole-program sweep. The
     // per-kernel kernel-side check inside launch_cores only fires for cores

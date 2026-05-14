@@ -31,6 +31,10 @@
 #include "tt_align.hpp"
 #include <tt-metalium/allocator.hpp>
 
+#ifdef TT_METAL_USE_EMULE
+#include "impl/emulation/emule_live_ranges.hpp"
+#endif
+
 namespace tt::tt_metal {
 namespace {
 
@@ -428,6 +432,15 @@ void Buffer::allocate_impl() {
         // Requires updating all use cases of buffer address to accept a u64 to remove
         TT_ASSERT(address_ <= std::numeric_limits<uint32_t>::max());
 
+#ifdef TT_METAL_USE_EMULE
+        if (buffer_type_ == BufferType::L1 || buffer_type_ == BufferType::L1_SMALL) {
+            tt::tt_metal::emule::LiveL1Ranges::add(
+                device_->id(),
+                static_cast<uint32_t>(address_),
+                static_cast<uint32_t>(address_ + size_));
+        }
+#endif
+
 #if defined(TRACY_ENABLE)
         if (tt::tt_metal::MetalContext::instance(extract_context_id(device_))
                 .rtoptions()
@@ -471,6 +484,12 @@ void Buffer::deallocate_impl() {
             }
 #endif
             validate_sub_device_manager_id(sub_device_manager_id_, device_);
+#ifdef TT_METAL_USE_EMULE
+            if (buffer_type_ == BufferType::L1 || buffer_type_ == BufferType::L1_SMALL) {
+                tt::tt_metal::emule::LiveL1Ranges::remove(
+                    device_->id(), static_cast<uint32_t>(address_));
+            }
+#endif
             allocator_->deallocate_buffer(this);
         }
 
