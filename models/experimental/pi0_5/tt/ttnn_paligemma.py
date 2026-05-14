@@ -336,6 +336,7 @@ class PaliGemmaBackboneTTNN:
         position_ids: Optional[ttnn.Tensor] = None,
         past_key_values: Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]] = None,
         use_cache: bool = False,
+        keep_padded: bool = False,
     ) -> Tuple[ttnn.Tensor, Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]]]:
         """
         Forward pass through VLM backbone using TTNN.
@@ -346,6 +347,8 @@ class PaliGemmaBackboneTTNN:
             position_ids: Position indices (TTNN tensor)
             past_key_values: Cached KV from previous forward
             use_cache: Whether to return updated cache
+            keep_padded: When True, skip post-RoPE slice in each VLM block's
+                attention (valid only when prefix seq_len is tile-aligned).
 
         Returns:
             Tuple of (output, optional_new_cache)
@@ -362,6 +365,7 @@ class PaliGemmaBackboneTTNN:
                 position_ids,
                 past_kv,
                 use_cache,
+                keep_padded=keep_padded,
             )
             if use_cache:
                 new_cache.append(new_kv)

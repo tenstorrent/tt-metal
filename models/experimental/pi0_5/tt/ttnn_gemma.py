@@ -861,6 +861,7 @@ class GemmaBlockTTNN:
         position_ids: Optional[ttnn.Tensor] = None,
         past_key_value: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
         use_cache: bool = False,
+        keep_padded: bool = False,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         """
         Forward pass using TTNN operations.
@@ -872,6 +873,8 @@ class GemmaBlockTTNN:
             position_ids: Position indices
             past_key_value: Cached KV
             use_cache: Whether to return cache
+            keep_padded: When True, skip the post-RoPE slice in attention
+                (valid when input seq_len is already tile-aligned).
 
         Returns:
             Tuple of (output, optional_cache)
@@ -892,6 +895,7 @@ class GemmaBlockTTNN:
             position_ids,
             past_key_value,
             use_cache,
+            keep_padded=keep_padded,
         )
         hidden_states = ttnn.add(hidden_states, attn_output)
         ttnn.deallocate(attn_output)

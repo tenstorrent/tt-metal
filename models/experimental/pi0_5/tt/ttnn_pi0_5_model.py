@@ -59,7 +59,16 @@ class Pi0_5ModelTTNN:
         # Initial noise tensor; resampled fresh on each sample_actions call to
         # match lerobot/openpi reference behavior (see sample_actions below).
         # Allocated once and reused as a destination buffer.
-        x_t_torch = torch.randn(1, config.action_horizon, config.action_dim)
+        #
+        # HOST-PAD: action_horizon (50) is not tile-aligned; we pad to 64 at
+        # the host so the device tensor has logical=physical=64 from the
+        # start. This eliminates a per-call ttnn.pad inside sample_actions and
+        # keeps every downstream linear/matmul on tile-aligned shapes. The 14
+        # phantom rows are zero-valued and masked out of SDPA via the prebuilt
+        # attention mask.
+        self._action_horizon_padded = ((config.action_horizon + 31) // 32) * 32
+        x_t_torch = torch.zeros(1, self._action_horizon_padded, config.action_dim, dtype=torch.float32)
+        x_t_torch[:, : config.action_horizon, :] = torch.randn(1, config.action_horizon, config.action_dim)
         self.x_t_ttnn = ttnn.from_torch(
             x_t_torch,
             dtype=ttnn.bfloat16,
@@ -263,7 +272,11 @@ class Pi0_5ModelTTNN:
         # the concatenated prefix here before the VLM stack runs.
         if prefix_embs.layout != ttnn.TILE_LAYOUT:
             prefix_embs = ttnn.to_layout(prefix_embs, ttnn.TILE_LAYOUT)
-        _, prefix_kv_cache = self.backbone.forward_vlm(prefix_embs, use_cache=True)
+        # If prefix seq_len is already tile-aligned, skip the per-block post-RoPE
+        # slice in VLM attention (eliminates UntilizeWithUnpadding × 36 in prefill).
+        vlm_seq_len = prefix_embs.shape[1]
+        vlm_keep_padded = (vlm_seq_len % 32) == 0
+        _, prefix_kv_cache = self.backbone.forward_vlm(prefix_embs, use_cache=True, keep_padded=vlm_keep_padded)
 
         # OPTIMIZATION (keep_padded): lift the prefix kv-cache to logical=physical
         # by zeroing the implicit tile padding. This eliminates the 360
@@ -316,9 +329,15 @@ class Pi0_5ModelTTNN:
         # Tests that need deterministic noise can set `self.resample_noise = False`
         # and pre-populate `self.x_t_ttnn` (see tests/perf/test_denoise_step_accuracy.py).
         if getattr(self, "resample_noise", True):
-            fresh_noise = torch.randn(1, self.config.action_horizon, self.config.action_dim)
+            # Host-pad noise to tile-aligned action_horizon so the device
+            # tensor has logical=physical=64 directly — eliminates the
+            # per-call ttnn.pad that previously lifted x_t inside the loop.
+            ah = self.config.action_horizon
+            ah_padded = self._action_horizon_padded
+            noise_padded = torch.zeros(1, ah_padded, self.config.action_dim, dtype=torch.float32)
+            noise_padded[:, :ah, :] = torch.randn(1, ah, self.config.action_dim)
             x_t_ttnn = ttnn.from_torch(
-                fresh_noise,
+                noise_padded,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
@@ -327,22 +346,6 @@ class Pi0_5ModelTTNN:
         else:
             x_t_ttnn = self.x_t_ttnn
         fast_path = batch_size == 1
-
-        # OPTIMIZATION (keep_padded): lift x_t LOGICAL shape from action_horizon
-        # to the next tile-aligned size (50 → 64) with zeros in the new rows.
-        # ttnn.pad changes the logical shape (fill_implicit_tile_padding only
-        # zeros the implicit padding region — see fill_pad_device_operation.cpp
-        # :22-26). The 14 phantom rows are masked out of SDPA by the prebuilt
-        # attn mask, so they're benign mathematically.
-        if keep_padded_expert:
-            ah = self.config.action_horizon
-            ah_padded = ((ah + 31) // 32) * 32
-            if ah_padded > ah:
-                x_t_ttnn = ttnn.pad(
-                    x_t_ttnn,
-                    padding=((0, 0), (0, ah_padded - ah), (0, 0)),
-                    value=0.0,
-                )
 
         for i in range(num_steps):
             t = timesteps[i]
