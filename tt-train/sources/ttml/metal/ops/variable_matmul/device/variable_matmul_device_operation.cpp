@@ -161,18 +161,19 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
             "variable_matmul out_row_offset_tiles > 0 requires a caller-provided output tensor");
     }
 
-    // On-device offsets validation (minimal scope: OutputRow only).
+    // On-device offsets validation.
     const bool has_offsets = tensor_args.offsets_tensor.has_value();
     const bool role_active = operation_attributes.offsets_role != OffsetsRole::None;
     TT_FATAL(
         has_offsets == role_active,
         "variable_matmul: offsets_tensor and offsets_role must both be set or both be unset.");
     if (role_active) {
+        const auto role = operation_attributes.offsets_role;
         TT_FATAL(
-            operation_attributes.offsets_role == OffsetsRole::OutputRow ||
-                operation_attributes.offsets_role == OffsetsRole::InputRow,
-            "variable_matmul: only OffsetsRole::OutputRow and OffsetsRole::InputRow are currently supported.");
-        if (operation_attributes.offsets_role == OffsetsRole::OutputRow) {
+            role == OffsetsRole::OutputRow || role == OffsetsRole::InputRow || role == OffsetsRole::InputK ||
+                role == OffsetsRole::WeightK,
+            "variable_matmul: unsupported OffsetsRole value.");
+        if (role == OffsetsRole::OutputRow) {
             TT_FATAL(
                 tensor_args.output_tensor.has_value(),
                 "variable_matmul: OffsetsRole::OutputRow requires a caller-provided output_tensor.");
