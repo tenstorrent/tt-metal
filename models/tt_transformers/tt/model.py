@@ -88,6 +88,19 @@ class Transformer(LightweightModule):
 
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
+        # Device tensors used to build dynamic slice params for prefill RoPE slicing.
+        # Keeps chunk_start_idx-driven slicing inside the traced graph.
+        self._tt_seq_len_buffer = ttnn.from_torch(
+            torch.tensor([1, 1, self.args.max_seq_len, self.args.head_dim], dtype=torch.int32),
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        self._tt_slice_start_zeros_4 = ttnn.from_torch(
+            torch.tensor([0, 0, 0, 0], dtype=torch.int32),
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
         self.layers = [
             TransformerBlock(
                 args=args,
@@ -729,6 +742,35 @@ class Transformer(LightweightModule):
         ttnn.plus_one(current_pos, skip_negative_entries=True)
         ttnn.plus_one(rot_mat_idxs)
 
+    def _slice_prefill_rot_mats(self, rot_mats, chunk_start_idx):
+        """Slices full prefill RoPE mats on device to [chunk_start_idx, max_seq_len)."""
+        if rot_mats is None or chunk_start_idx is None or not isinstance(chunk_start_idx, ttnn.Tensor):
+            return rot_mats
+
+        full_rot_cos, full_rot_sin = rot_mats[0], rot_mats[1]
+        if full_rot_cos.shape[2] != self.args.max_seq_len:
+            # Already sliced in input prep path; leave as-is.
+            return rot_mats
+
+        z = self._tt_slice_start_zeros_4
+        tt_slice_starts = ttnn.concat([z[0:2], chunk_start_idx, z[3:4]], dim=0)
+
+        rot_cos_slice = ttnn.slice(
+            input_tensor=full_rot_cos,
+            starts=tt_slice_starts,
+            ends=self._tt_seq_len_buffer,
+            slice_dim=2,
+            num_devices=self.args.num_devices,
+        )
+        rot_sin_slice = ttnn.slice(
+            input_tensor=full_rot_sin,
+            starts=tt_slice_starts,
+            ends=self._tt_seq_len_buffer,
+            slice_dim=2,
+            num_devices=self.args.num_devices,
+        )
+        return (rot_cos_slice, rot_sin_slice)
+
     def ttnn_decode_forward(
         self,
         x,
@@ -832,6 +874,13 @@ class Transformer(LightweightModule):
             # Run prefetcher if it is enabled
             if self.prefetcher is not None:
                 self.prefetcher.run()
+
+        if mode == Mode.PREFILL:
+            # For traced prefill, keep RoPE slicing in-graph and driven by the
+            # on-device chunk_start_idx input.
+            rot_mats_global = self._slice_prefill_rot_mats(rot_mats_global, chunk_start_idx)
+            if rot_mats_local is not None:
+                rot_mats_local = self._slice_prefill_rot_mats(rot_mats_local, chunk_start_idx)
 
         if page_tables_per_layer is not None and len(page_tables_per_layer) != len(self.layers):
             raise ValueError(
