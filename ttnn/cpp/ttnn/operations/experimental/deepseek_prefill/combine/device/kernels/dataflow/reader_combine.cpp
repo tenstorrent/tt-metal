@@ -284,101 +284,56 @@ void kernel_main() {
         TensorAccessor(dispatched_buffer_args, dispatched_buffer_addr, aligned_dispatched_buffer_page_size);
 #endif
 
-    // Read expert region offsets directly from the host-provided tensor.
-    // Layout matches expert_token_counts: this device's experts_per_chip slice lives at
-    // [mesh_col, mesh_row, experts_per_chip] within a flat [num_routed_experts] page.
-    const auto expert_region_offsets_addr_gen = TensorAccessor(expert_region_offsets_args, expert_region_offsets_addr);
-    cb_reserve_back(cb_expert_region_offsets_id, expert_region_offsets_pages);
-    uint32_t region_offsets_base_addr = get_write_ptr(cb_expert_region_offsets_id);
-    for (uint32_t i = 0; i < expert_region_offsets_pages; i++) {
-        noc_async_read_page(
-            i, expert_region_offsets_addr_gen, region_offsets_base_addr + i * aligned_expert_region_offsets_page_size);
-    }
-    noc_async_read_barrier();
-    volatile tt_l1_ptr uint32_t* expert_region_offsets_l1 =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(region_offsets_base_addr) + offset;
-
-    // Process each expert in assigned range
-    for (uint32_t local_expert = expert_start_idx; local_expert < expert_end_idx; local_expert++) {
-        uint32_t start_page = expert_region_offsets_l1[local_expert];
-        uint32_t expert_tokens = experts_tok_counter_l1[local_expert];
-        // Clamp to the dispatch buffer capacity to mirror reader_dispatch's overflow guard:
-        // dispatch silently drops tokens beyond max_dispatch_buffer_token_size, so reading
-        // past it would pull stale/zero-init data and risk out-of-bounds DRAM access.
-        if (start_page >= max_dispatch_buffer_token_size) {
-            expert_tokens = 0;
-        } else if (start_page + expert_tokens > max_dispatch_buffer_token_size) {
-            expert_tokens = max_dispatch_buffer_token_size - start_page;
-        }
-        uint32_t end_page = start_page + expert_tokens;
-        uint32_t num_batches = (expert_tokens + read_batch_size - 1) / read_batch_size;
-
-        DPRINT_COMBINE << "Expert=" << local_expert << " tokens=" << expert_tokens << ENDL();
-
 #if IS_TILE_LAYOUT
-#else
-        // Prefetch first batch
-        uint32_t first_batch_end = (start_page + read_batch_size < end_page) ? start_page + read_batch_size : end_page;
-        uint32_t first_batch_count = first_batch_end - start_page;
-        if (first_batch_count > 0) {
-            for (uint32_t t = 0; t < first_batch_count; t++) {
-                noc_async_read_page(
-                    start_page + t, dispatched_buffer_addr_gen, buffer_base + t * aligned_dispatched_buffer_page_size);
-                noc_async_read_page(
-                    start_page + t,
-                    dispatched_metadata_addr_gen,
-                    metadata_base + t * aligned_dispatched_metadata_page_size);
-            }
-            noc_async_read_barrier();
+    // Round-robin polling loop — sender polls all idle core CBs without blocking on any
+    // single one.  Each idle core writes routing metadata + row data for every non-local row,
+    // then sends ROUTE_INFO_SENTINEL when all its batches are complete.  Sender exits when
+    // every idle core has signalled done, eliminating head-of-line blocking between cores.
+    {
+        uint32_t idle_done_count = 0;
+        bool idle_finished[num_idle_cores_group];
+        for (uint32_t c = 0; c < num_idle_cores_group; c++) {
+            idle_finished[c] = false;
         }
-#endif
 
-        for (uint32_t B = 0; B < num_batches; B++) {
-            uint32_t batch_start = start_page + B * read_batch_size;
-            uint32_t batch_end = (batch_start + read_batch_size < end_page) ? batch_start + read_batch_size : end_page;
-            uint32_t batch_count = batch_end - batch_start;
-
-#if IS_TILE_LAYOUT
-            uint32_t current_idle_core = B % num_idle_cores_group;
-
-            // Read this batch's metadata; we only use it to drive the per-row routing decisions
-            // below (idle reads the same metadata independently from DRAM for its own writes).
-            for (uint32_t t = 0; t < batch_count; t++) {
-                noc_async_read_page(
-                    batch_start + t,
-                    dispatched_metadata_addr_gen,
-                    metadata_base + t * aligned_dispatched_metadata_page_size);
-            }
-            noc_async_read_barrier();
-
-            // Credit-based per-row handshake.  For each non-local row in this batch we wait
-            // for idle to land one row in receive_buf (data_ready++), atomically consume
-            // exactly one (inc(-1)), read it from the current ring slot for this idle, then
-            // free the slot by ++ credits on idle's L1.  Local rows aren't visible to this
-            // loop and never touch the semaphores or receive_buf.
-            for (uint32_t t = 0; t < batch_count; t++) {
-                volatile tt_l1_ptr uint32_t* metadata = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                    metadata_base + t * aligned_dispatched_metadata_page_size);
-                auto dst_chip = metadata[0];
-                if (dst_chip == linearized_mesh_coord) {
+        while (idle_done_count < num_idle_cores_group) {
+            for (uint32_t c = 0; c < num_idle_cores_group; c++) {
+                if (idle_finished[c]) {
                     continue;
                 }
 
-                noc_semaphore_wait_min(data_ready_sem_ptrs[current_idle_core], 1);
-                noc_semaphore_inc(self_data_ready_noc_addrs[current_idle_core], (uint32_t)-1);
-                noc_async_atomic_barrier();
+                // Non-blocking check: data_ready lives in sender L1, read directly without NOC.
+                if (*data_ready_sem_ptrs[c] == 0) {
+                    continue;
+                }
 
-                // Read routing values from the idle core's metadata ring slot (c_19).
-                // These landed in sender L1 via NOC write from zero_init_writer — no DRAM read.
-                uint32_t slot = read_slots[current_idle_core];
+                {
+                    DeviceZoneScopedN("combine-reader-waiting-for-idle-core-data");
+                    noc_semaphore_inc(self_data_ready_noc_addrs[c], (uint32_t)-1);
+                    noc_async_atomic_barrier();
+                }
+
+                uint32_t slot = read_slots[c];
                 volatile tt_l1_ptr uint32_t* ring_meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                    metadata_buf_base +
-                    (current_idle_core * SLOTS_PER_IDLE + slot) * aligned_dispatched_metadata_page_size);
-                auto dst_token_idx = ring_meta[1];
-                auto dst_topk_indice = ring_meta[2];
+                    metadata_buf_base + (c * SLOTS_PER_IDLE + slot) * aligned_dispatched_metadata_page_size);
+                uint32_t dst_chip = ring_meta[0];
+                read_slots[c] = (slot + 1) % SLOTS_PER_IDLE;
+
+                if (dst_chip == ROUTE_INFO_SENTINEL) {
+                    idle_finished[c] = true;
+                    idle_done_count++;
+                    {
+                        DeviceZoneScopedN("combine-reader-incrmenting-credit-semaphore");
+                        noc_semaphore_inc(idle_credits_noc_addrs[c], 1);
+                        noc_async_atomic_barrier();
+                    }
+                    continue;
+                }
+
+                uint32_t dst_token_idx = ring_meta[1];
+                uint32_t dst_topk_indice = ring_meta[2];
                 uint32_t output_page_idx = dst_token_idx * num_experts_per_tok + dst_topk_indice;
-                uint32_t buffer_scratch_addr =
-                    untilize_base + (current_idle_core * SLOTS_PER_IDLE + slot) * aligned_output_page_size;
+                uint32_t buffer_scratch_addr = untilize_base + (c * SLOTS_PER_IDLE + slot) * aligned_output_page_size;
 
                 if constexpr (is_1d_topology<topology>()) {
                     uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
@@ -401,20 +356,64 @@ void kernel_main() {
                     cb_push_back(cb_output_for_writer_id, 1);
                 }
 
-                read_slots[current_idle_core] = (slot + 1) % SLOTS_PER_IDLE;
-                // Slot consumed — credit idle so it can reuse this slot in the ring.
-                noc_semaphore_inc(idle_credits_noc_addrs[current_idle_core], 1);
-                noc_async_atomic_barrier();
+                {
+                    DeviceZoneScopedN("combine-reader-incrmenting-credit-semaphore");
+                    noc_semaphore_inc(idle_credits_noc_addrs[c], 1);
+                    noc_async_atomic_barrier();
+                }
             }
+        }
+    }
 #else
-            // ROW_MAJOR: no idle offload — this core does both the local writes and the
-            // non-local routing inline.
+    // ROW_MAJOR: read expert region offsets and process expert by expert, batch by batch.
+    const auto expert_region_offsets_addr_gen = TensorAccessor(expert_region_offsets_args, expert_region_offsets_addr);
+    cb_reserve_back(cb_expert_region_offsets_id, expert_region_offsets_pages);
+    uint32_t region_offsets_base_addr = get_write_ptr(cb_expert_region_offsets_id);
+    for (uint32_t i = 0; i < expert_region_offsets_pages; i++) {
+        noc_async_read_page(
+            i, expert_region_offsets_addr_gen, region_offsets_base_addr + i * aligned_expert_region_offsets_page_size);
+    }
+    noc_async_read_barrier();
+    volatile tt_l1_ptr uint32_t* expert_region_offsets_l1 =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(region_offsets_base_addr) + offset;
+
+    for (uint32_t local_expert = expert_start_idx; local_expert < expert_end_idx; local_expert++) {
+        uint32_t start_page = expert_region_offsets_l1[local_expert];
+        uint32_t expert_tokens = experts_tok_counter_l1[local_expert];
+        if (start_page >= max_dispatch_buffer_token_size) {
+            expert_tokens = 0;
+        } else if (start_page + expert_tokens > max_dispatch_buffer_token_size) {
+            expert_tokens = max_dispatch_buffer_token_size - start_page;
+        }
+        uint32_t end_page = start_page + expert_tokens;
+        uint32_t num_batches = (expert_tokens + read_batch_size - 1) / read_batch_size;
+
+        DPRINT_COMBINE << "Expert=" << local_expert << " tokens=" << expert_tokens << ENDL();
+
+        uint32_t first_batch_end = (start_page + read_batch_size < end_page) ? start_page + read_batch_size : end_page;
+        uint32_t first_batch_count = first_batch_end - start_page;
+        if (first_batch_count > 0) {
+            for (uint32_t t = 0; t < first_batch_count; t++) {
+                noc_async_read_page(
+                    start_page + t, dispatched_buffer_addr_gen, buffer_base + t * aligned_dispatched_buffer_page_size);
+                noc_async_read_page(
+                    start_page + t,
+                    dispatched_metadata_addr_gen,
+                    metadata_base + t * aligned_dispatched_metadata_page_size);
+            }
+            noc_async_read_barrier();
+        }
+
+        for (uint32_t B = 0; B < num_batches; B++) {
+            uint32_t batch_start = start_page + B * read_batch_size;
+            uint32_t batch_end = (batch_start + read_batch_size < end_page) ? batch_start + read_batch_size : end_page;
+            uint32_t batch_count = batch_end - batch_start;
+
             bool batch_did_local_write = false;
             for (uint32_t t = 0; t < batch_count; t++) {
                 uint32_t buffer_scratch_addr = buffer_base + t * aligned_dispatched_buffer_page_size;
-                uint32_t metadata_scratch_addr = metadata_base + t * aligned_dispatched_metadata_page_size;
-                volatile tt_l1_ptr uint32_t* metadata =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_scratch_addr);
+                volatile tt_l1_ptr uint32_t* metadata = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    metadata_base + t * aligned_dispatched_metadata_page_size);
 
                 auto dst_chip = metadata[0];
                 auto dst_token_idx = metadata[1];
@@ -450,7 +449,6 @@ void kernel_main() {
                 }
             }
 
-            // Issue next batch reads BEFORE write barrier to overlap DMA reads with NOC writes
             uint32_t next_batch_start = batch_start + read_batch_size;
             bool has_next_batch = (next_batch_start < end_page);
             if (has_next_batch) {
@@ -476,9 +474,9 @@ void kernel_main() {
             if (has_next_batch) {
                 noc_async_read_barrier();
             }
-#endif
         }
     }
+#endif
 
     // Push sentinel to signal writer that all dispatches are done
     cb_reserve_back(cb_route_info_id, 1);
