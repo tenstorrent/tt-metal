@@ -348,7 +348,7 @@ def prepare_gpt_oss_generator_args(
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 6 * 32},  # 6 blocks/user × 32 users = 192
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
             True,  # enable_decode_trace
-            True,  # enable_prefill_trace
+            False,  # enable_prefill_trace — disabled: prefill trace replay deadlocks Ethernet fabric on 1xN after ~29 users
             False,  # warmup_prefill
             False,  # users_row_sharded
             False,  # long_context_mode
