@@ -57,8 +57,11 @@
 #include "../../../unified_kernels/gated_reduce.hpp"
 #include "../../../unified_kernels/residual_add.hpp"
 #include "../../../unified_kernels/persistent_loop.hpp"
-#ifdef ENABLE_REDUCE_TO_ONE
-#include "../../../unified_kernels/reduce_to_one_b1.hpp"
+#ifdef ENABLE_REDUCE_TO_ALL
+#include "../../../unified_kernels/reduce_to_all_b1.hpp"
+#endif
+#ifdef ENABLE_FORWARD
+#include "../../../unified_kernels/forward.hpp"
 #endif
 
 #include "../../../metadata/metadata.hpp"
@@ -524,6 +527,7 @@ void kernel_main() {
     // ========================================================================o
     // All CCLs are placed after other ops setup due to appended fabric rtas
     // ========================================================================
+#ifndef ENABLE_FORWARD
     // CCL Broadcast CTArgs type alias
     using BcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
         get_named_compile_time_arg_val("bcast_data_cb_id"),
@@ -555,6 +559,7 @@ void kernel_main() {
         };
         per_core_rta_arg_idx += offset_fabric_args;
     }
+#endif  // !ENABLE_FORWARD
 
     using SdpaReduceWorkerCTArgs = deepseek_b1_ops::SdpaReduceWorker::ReaderCTArgs<
         get_named_compile_time_arg_val("sdpa_cb_local_l"),
@@ -928,6 +933,7 @@ void kernel_main() {
     // ========================================================================o
     // All CCLs are placed after other ops setup due to appended fabric rtas
     // ========================================================================
+#ifndef ENABLE_FORWARD
     // CCL Broadcast CTArgs type alias
     using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
         get_named_compile_time_arg_val("bcast_data_cb_id"),
@@ -945,6 +951,7 @@ void kernel_main() {
             get_common_arg_val<uint32_t>(4),  // socket_num_pages
         };
     }
+#endif  // !ENABLE_FORWARD
 
     using SdpaReduceWorkerCTArgs = deepseek_b1_ops::SdpaReduceWorker::WriterCTArgs<
         get_named_compile_time_arg_val("sdpa_cb_local_l"),
@@ -1324,9 +1331,11 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather3_dst_num_tiles"),
     };
 
+#ifndef ENABLE_FORWARD
     // CCL Broadcast CTArgs (no-op for TRISC)
     using BcastCTArgs = deepseek_b1_ops::Broadcast::ComputeCTArgs;
     deepseek_b1_ops::Broadcast::ComputeArgs bcast_args{};
+#endif  // !ENABLE_FORWARD
 
     using SdpaReduceWorkerCTArgs = deepseek_b1_ops::SdpaReduceWorker::ComputeCTArgs<
         get_named_compile_time_arg_val("sdpa_cb_local_l"),
@@ -1501,21 +1510,23 @@ void kernel_main() {
             using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
             deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm_args{};
 
-#ifdef ENABLE_REDUCE_TO_ONE
-            // ReduceToOneB1 (reader — receives data from fabric via semaphore waits)
-            using ReduceToOneCTArgs = deepseek_b1_ops::ReduceToOneB1::ReaderCTArgs<
-                get_named_compile_time_arg_val("reduce_device_role"),
+#ifdef ENABLE_REDUCE_TO_ALL
+            // ReduceToAllB1 (reader — FC BWD forwarding or worker receive R1/R2/R3)
+            using ReduceToAllCTArgs = deepseek_b1_ops::ReduceToAllB1::ReaderCTArgs<
                 get_named_compile_time_arg_val("reduce_num_tiles"),
                 get_named_compile_time_arg_val("reduce_local_cb"),
                 get_named_compile_time_arg_val("reduce_received_cb"),
-                get_named_compile_time_arg_val("is_reduce_fabric_core")>;
+                get_named_compile_time_arg_val("is_reduce_fabric_core"),
+                get_named_compile_time_arg_val("reduce_slots_per_direction"),
+                get_named_compile_time_arg_val("reduce_slot_size_bytes"),
+                get_named_compile_time_arg_val("reduce_packet_cb"),
+                get_named_compile_time_arg_val("reduce_payload_size_bytes"),
+                get_named_compile_time_arg_val("reduce_r2_buffer_offset"),
+                get_named_compile_time_arg_val("reduce_ncrisc_buffer_offset"),
+                get_named_compile_time_arg_val("reduce_is_exit_column"),
+                1>;
 
-            // Reader runtime args (common RT args at configurable base)
-            deepseek_b1_ops::ReduceToOneB1::ReaderArgs reduce_rt_args{
-                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("reduce_ncrisc_common_rt_arg_base") + 0),
-                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("reduce_ncrisc_common_rt_arg_base") + 1),
-                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("reduce_ncrisc_common_rt_arg_base") + 2),
-            };
+            deepseek_b1_ops::ReduceToAllB1::ReaderArgs reduce_rt_args{};
 #endif
         } routed;
 
@@ -1581,6 +1592,23 @@ void kernel_main() {
             deepseek_b1_ops::Mcast::DMArgs output_mcast_args{.sender = {}, .receiver = {}};
         } shared;
     } moe;
+
+#ifdef ENABLE_REDUCE_TO_ALL
+    // Populate NCRISC reduce runtime args
+    if constexpr (Moe::Routed::ReduceToAllCTArgs::is_fabric_core == 1) {
+        DPRINT << "[NCRISC FC DEBUG] per_core_rta_arg_idx=" << (uint32_t)per_core_rta_arg_idx << "\n";
+        for (uint32_t i = 0; i < 8; i++) {
+            DPRINT << "[NCRISC FC DEBUG] get_arg_val(" << i << ")=" << get_arg_val<uint32_t>(i) << "\n";
+        }
+    }
+    if constexpr (Moe::Routed::ReduceToAllCTArgs::is_fabric_core == 0) {
+        moe.routed.reduce_rt_args = {
+            get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("reduce_ncrisc_common_rt_arg_base") + 0),
+            get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("reduce_ncrisc_common_rt_arg_base") + 1),
+            get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("reduce_ncrisc_common_rt_arg_base") + 2),
+        };
+    }
+#endif
 
 #elif defined(COMPILE_FOR_BRISC)
 
@@ -1762,31 +1790,41 @@ void kernel_main() {
             using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
             deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm_args{};
 
-#ifdef ENABLE_REDUCE_TO_ONE
-            // ReduceToOneB1 (writer — sends data via fabric or NOC)
-            using ReduceToOneCTArgs = deepseek_b1_ops::ReduceToOneB1::WriterCTArgs<
-                get_named_compile_time_arg_val("reduce_device_role"),
+#ifdef ENABLE_REDUCE_TO_ALL
+            // ReduceToAllB1 (writer — FC FWD+R3 forwarding or worker R1/R2/R3 via FC)
+            using ReduceToAllCTArgs = deepseek_b1_ops::ReduceToAllB1::WriterCTArgs<
                 get_named_compile_time_arg_val("reduce_num_tiles"),
                 get_named_compile_time_arg_val("reduce_payload_size_bytes"),
                 get_named_compile_time_arg_val("reduce_local_cb"),
                 get_named_compile_time_arg_val("reduce_scratch_cb"),
                 get_named_compile_time_arg_val("reduce_packet_cb"),
-                get_named_compile_time_arg_val("reduce_num_hops"),
-                get_named_compile_time_arg_val("reduce_dst_fabric_node_chip_id"),
-                get_named_compile_time_arg_val("reduce_dst_fabric_node_mesh_id"),
+                get_named_compile_time_arg_val("reduce_slot_size_bytes"),
+                get_named_compile_time_arg_val("is_reduce_fabric_core"),
+                get_named_compile_time_arg_val("reduce_fwd_dst_chip_id"),
+                get_named_compile_time_arg_val("reduce_fwd_dst_mesh_id"),
+                get_named_compile_time_arg_val("reduce_bwd_dst_chip_id"),
+                get_named_compile_time_arg_val("reduce_bwd_dst_mesh_id"),
+                get_named_compile_time_arg_val("reduce_r3_dst_chip_id"),
+                get_named_compile_time_arg_val("reduce_r3_dst_mesh_id"),
+                get_named_compile_time_arg_val("reduce_reload_cb"),
+                get_named_compile_time_arg_val("reduce_compute_tile_size"),
+                get_named_compile_time_arg_val("reduce_slots_per_direction"),
+                get_named_compile_time_arg_val("reduce_r2_buffer_offset"),
+                get_named_compile_time_arg_val("reduce_ncrisc_buffer_offset"),
+                get_named_compile_time_arg_val("reduce_r3_buffer_offset"),
+                get_named_compile_time_arg_val("reduce_socket_page_size"),
+                get_named_compile_time_arg_val("reduce_total_num_workers"),
+                get_named_compile_time_arg_val("reduce_persistent_fabric_signal_enable"),
+                get_named_compile_time_arg_val("reduce_is_exit_column"),
+                1,  // useRawSemAddrs
+                0,  // isReduceToAll
                 get_named_compile_time_arg_val("reduce_output_core_noc_x"),
                 get_named_compile_time_arg_val("reduce_output_core_noc_y"),
-                get_named_compile_time_arg_val("reduce_num_workers"),
-                get_named_compile_time_arg_val("is_reduce_fabric_core"),
-                get_named_compile_time_arg_val("reduce_enable_downstream_socket"),
-                get_named_compile_time_arg_val("reduce_brisc_fabric_rt_arg_base"),
-                get_named_compile_time_arg_val("reduce_total_num_workers"),
-                get_named_compile_time_arg_val("reduce_agg_output_size_bytes"),
-                get_named_compile_time_arg_val("reduce_persistent_fabric_rt_arg_base"),
-                get_named_compile_time_arg_val("reduce_persistent_fabric_signal_enable"),
+                get_named_compile_time_arg_val("reduce_mesh_rows"),
+                get_named_compile_time_arg_val("reduce_my_row"),
                 get_named_compile_time_arg_val("reduce_forward_metadata_size_bytes")>;
 
-            deepseek_b1_ops::ReduceToOneB1::WorkerWriterArgs reduce_rt_args{};
+            deepseek_b1_ops::ReduceToAllB1::WorkerWriterArgs reduce_rt_args{};
             // Populated below after struct initialization
 #endif
         } routed;
@@ -1903,30 +1941,48 @@ void kernel_main() {
         } shared;
     } moe;
 
-#ifdef ENABLE_REDUCE_TO_ONE
+#ifdef ENABLE_REDUCE_TO_ALL
     // Populate BRISC reduce runtime args (must be outside struct initializer)
     constexpr size_t reduce_brisc_arg_start = get_named_compile_time_arg_val("reduce_brisc_rt_arg_base");
+    if constexpr (Core::is_reduce_fabric_core) {
+        DPRINT << "[BRISC FC DEBUG] reduce_brisc_arg_start=" << (uint32_t)reduce_brisc_arg_start << "\n";
+        for (uint32_t i = 0; i < 8; i++) {
+            DPRINT << "[BRISC FC DEBUG] get_arg_val(" << i << ")=" << get_arg_val<uint32_t>(i) << "\n";
+        }
+    }
     if constexpr (Core::is_reduce_worker_core) {
-        moe.routed.reduce_rt_args = deepseek_b1_ops::ReduceToOneB1::WorkerWriterArgs{
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 0),   // fabric_core_noc_x
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 1),   // fabric_core_noc_y
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 2),   // my_slot_idx
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 3),   // worker_sem_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 4),   // dst_l1_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 5),   // dst_sem_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 6),   // output_base_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 7),   // shard_idx
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 8),   // socket_config_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 9),   // metadata_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 10),  // agg_sem_l1_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 11),  // agg_core_noc_x
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 12),  // agg_core_noc_y
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 13),  // persistent_enable
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 14),  // persistent_dst_noc_x
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 15),  // persistent_dst_noc_y
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 16),  // persistent_dst_mesh_id
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 17),  // persistent_dst_chip_id
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 18),  // persistent_dst_sem_addr
+        moe.routed.reduce_rt_args = deepseek_b1_ops::ReduceToAllB1::WorkerWriterArgs{
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 0),   // fc_noc_x
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 1),   // fc_noc_y
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 2),   // is_type_a
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 3),   // r1_slot_offset
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 4),   // r1_slot_bit
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 5),   // r1_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 6),   // r2_slot_offset
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 7),   // r2_slot_bit
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 8),   // r2_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 9),   // r1_dst_l1_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 10),  // r1_dst_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 11),  // r2_dst_l1_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 12),  // r2_dst_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 13),  // r3_dst_l1_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 14),  // r3_dst_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 15),  // output_base_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 16),  // r3_slot_offset
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 17),  // r3_slot_bit
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 18),  // r3_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 19),  // socket_config_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 20),  // metadata_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 21),  // agg_sem_l1_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 22),  // agg_core_noc_x
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 23),  // agg_core_noc_y
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 24),  // persistent_enable
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 25),  // persistent_dst_noc_x
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 26),  // persistent_dst_noc_y
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 27),  // persistent_dst_mesh_id
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 28),  // persistent_dst_chip_id
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 29),  // persistent_dst_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 30),  // shard_idx
         };
     }
 #endif
@@ -2064,19 +2120,19 @@ void kernel_main() {
                 get_common_arg_val<float>(get_named_compile_time_arg_val("moe_rmsnorm_trisc_common_rt_arg_base") + 1),
             };
 
-#ifdef ENABLE_REDUCE_TO_ONE
-            // ReduceToOneB1 (compute — performs reduction)
-            using ReduceToOneCTArgs = deepseek_b1_ops::ReduceToOneB1::ComputeCTArgs<
-                get_named_compile_time_arg_val("reduce_device_role"),
+#ifdef ENABLE_REDUCE_TO_ALL
+            // ReduceToAllB1 (compute — 3-round add_tiles)
+            using ReduceToAllCTArgs = deepseek_b1_ops::ReduceToAllB1::ComputeCTArgs<
                 get_named_compile_time_arg_val("reduce_num_tiles"),
                 get_named_compile_time_arg_val("reduce_local_cb"),
                 get_named_compile_time_arg_val("reduce_received_cb"),
-                get_named_compile_time_arg_val("reduce_output_cb"),
                 get_named_compile_time_arg_val("reduce_scratch_cb"),
-                get_named_compile_time_arg_val("is_reduce_fabric_core")>;
+                get_named_compile_time_arg_val("reduce_reload_cb"),
+                get_named_compile_time_arg_val("is_reduce_fabric_core"),
+                get_named_compile_time_arg_val("reduce_is_exit_column")>;
 
             // Compute has no runtime args
-            deepseek_b1_ops::ReduceToOneB1::ComputeArgs reduce_rt_args{};
+            deepseek_b1_ops::ReduceToAllB1::ComputeArgs reduce_rt_args{};
 #endif
         } routed;
 
@@ -2230,12 +2286,14 @@ void kernel_main() {
     using FlashMLAOp = deepseek_b1_ops::FlashMLADecode::Op<FlashMLACTArgs, Core::is_mla_core>;
 
     auto mla_body = [&]() __attribute__((always_inline)) {
+#ifndef ENABLE_FORWARD
         // ========================================================================
         // CCL Broadcast (optional, skip if single-device mode)
         // ========================================================================
         if constexpr (!Core::skip_ccl) {
             {
                 DeviceZoneScopedN("CCL_BROADCAST");
+                // DPRINT << "start of CCL_BROADCAST op\n";
                 deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
                 bcast.open_connections(bcast_args);
 #if defined(COMPILE_FOR_NCRISC)
@@ -2250,6 +2308,7 @@ void kernel_main() {
                 }
 #endif
                 bcast.run(bcast_args);
+                // DPRINT << "end ofCCL_BROADCAST op\n";
             }
         }
 
@@ -2263,11 +2322,87 @@ void kernel_main() {
             cb_push_back(rmsnorm_input_cb, rmsnorm_num_tiles);
         }
 #endif
+#endif  // !ENABLE_FORWARD
+
+#ifdef ENABLE_FORWARD
+        // ========================================================================
+        // Forward — read from per-device socket on entry-column devices,
+        // forward via fabric to partner devices on the other column.
+        // Replaces the single-socket CCL Broadcast with a multi-socket entry pattern.
+        // ========================================================================
+#if defined(COMPILE_FOR_BRISC)
+        if constexpr (persistent_mode != 0) {
+            constexpr bool is_forward_entry = get_named_compile_time_arg_val("forward_is_entry_column") == 1;
+            if constexpr (is_forward_entry && Core::is_input_core) {
+                auto next_iter_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(persistent_next_iter_sem_addr);
+                noc_semaphore_wait(next_iter_sem, 1);
+                noc_semaphore_set(next_iter_sem, 0);
+            }
+        }
+#endif
+        {
+            DeviceZoneScopedN("FORWARD");
+            // DPRINT << "start of FORWARD op\n";
+#if defined(COMPILE_FOR_BRISC)
+            using FwdCTArgs = deepseek_b1_ops::Forward::ReaderCTArgs<
+                get_named_compile_time_arg_val("bcast_data_cb_id"),
+                get_named_compile_time_arg_val("forward_num_pages"),
+                get_named_compile_time_arg_val("forward_is_entry_column")>;
+            deepseek_b1_ops::Forward::ReaderArgs fwd_args{
+                get_common_arg_val<uint32_t>(2),  // socket_config_addr
+                get_common_arg_val<uint32_t>(3),  // socket_page_size
+                get_common_arg_val<uint32_t>(4),  // socket_num_pages
+            };
+            deepseek_b1_ops::Forward::Op<FwdCTArgs, Core::is_input_core> fwd_op;
+            fwd_op(fwd_args);
+#elif defined(COMPILE_FOR_NCRISC)
+            using FwdCTArgs = deepseek_b1_ops::Forward::WriterCTArgs<
+                get_named_compile_time_arg_val("bcast_data_cb_id"),
+                get_named_compile_time_arg_val("forward_num_pages"),
+                get_named_compile_time_arg_val("forward_page_size"),
+                get_named_compile_time_arg_val("forward_is_entry_column"),
+                get_named_compile_time_arg_val("forward_fabric_max_payload"),
+                get_named_compile_time_arg_val("forward_num_fabric_packets"),
+                get_named_compile_time_arg_val("forward_cross_column_payload")>;
+            constexpr uint32_t fwd_ncrisc_base = get_named_compile_time_arg_val("forward_ncrisc_common_rt_arg_base");
+            deepseek_b1_ops::Forward::WriterArgs fwd_args{
+                get_common_arg_val<uint32_t>(fwd_ncrisc_base + 0),  // tensor_address
+                get_common_arg_val<uint32_t>(fwd_ncrisc_base + 1),  // my_noc_x
+                get_common_arg_val<uint32_t>(fwd_ncrisc_base + 2),  // my_noc_y
+                get_common_arg_val<uint32_t>(fwd_ncrisc_base + 3),  // cross_col_sem_addr
+                get_common_arg_val<uint32_t>(fwd_ncrisc_base + 4),  // partner_tensor_addr
+                get_common_arg_val<uint32_t>(fwd_ncrisc_base + 5),  // partner_noc_x
+                get_common_arg_val<uint32_t>(fwd_ncrisc_base + 6),  // partner_noc_y
+                get_common_arg_val<uint32_t>(fwd_ncrisc_base + 7),  // partner_chip_id
+                get_common_arg_val<uint32_t>(fwd_ncrisc_base + 8),  // partner_mesh_id
+                per_core_rta_arg_idx,                               // fabric_arg_offset
+            };
+            deepseek_b1_ops::Forward::Op<FwdCTArgs, Core::is_input_core> fwd_op;
+            fwd_op(fwd_args);
+#else
+            deepseek_b1_ops::Forward::Op<deepseek_b1_ops::Forward::ComputeCTArgs, Core::is_input_core> fwd_op;
+            deepseek_b1_ops::Forward::ComputeArgs fwd_args{};
+            fwd_op(fwd_args);
+#endif
+            // DPRINT << "end ofFORWARD op\n";
+        }
+        // After forward, push the rmsnorm_input_cb so downstream RMSNorm can read.
+#if defined(COMPILE_FOR_NCRISC)
+        if constexpr (Core::is_input_core) {
+            constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
+            constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
+            cb_reserve_back(rmsnorm_input_cb, rmsnorm_num_tiles);
+            cb_push_back(rmsnorm_input_cb, rmsnorm_num_tiles);
+        }
+#endif
+#endif  // ENABLE_FORWARD
 
         // This first mcast is also used to synchronize downstream ccls, so must always run.
         {
             DeviceZoneScopedN("METADATA_BROADCAST");
+            // DPRINT << "start of METADATA_BROADCAST op\n";
             mcast_metadata(mcast_metadata_args);
+            // DPRINT << "end of METADATA_BROADCAST op\n";
         }
 
         if constexpr (!Core::is_input_core) {
@@ -2299,13 +2434,17 @@ void kernel_main() {
         // ====================================================================
         {
             DeviceZoneScopedN("RMSNORM");
+            // DPRINT << "start of RMSNORM op\n";
             deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, false> rmsnorm;
             rmsnorm(rmsnorm_args);
+            // DPRINT << "end of RMSNORM op\n";
         }
 
         {
             DeviceZoneScopedN("MCAST");
+            // DPRINT << "start of MCAST op\n";
             mcast(mcast_args);
+            // DPRINT << "end of MCAST op\n";
         }
         if constexpr (Core::is_input_core) {
             volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
@@ -2329,8 +2468,10 @@ void kernel_main() {
             // ====================================================================
             {
                 DeviceZoneScopedN("MATMUL");
+                // DPRINT << "start of MATMUL op\n";
                 deepseek_b1_ops::KNSlicedMatmul::Op<MatmulCTArgs, Core::is_matmul_core, false, false> matmul;
                 matmul(matmul_args);
+                // DPRINT << "end of MATMUL op\n";
             }
 
             // ====================================================================
@@ -2338,9 +2479,11 @@ void kernel_main() {
             // ====================================================================
             {
                 DeviceZoneScopedN("GATHER");
+                // DPRINT << "start of GATHER_REDUCE op\n";
                 deepseek_b1_ops::GatherReduce::Op<Core::is_matmul_core, Core::is_input_core, Core::is_input_core, true>
                     gather_reduce;
                 gather_reduce(gather_reduce_args);
+                // DPRINT << "end of GATHER_REDUCE op\n";
             }
 
             // ====================================================================
@@ -2348,8 +2491,10 @@ void kernel_main() {
             // ====================================================================
             {
                 DeviceZoneScopedN("RMSNORM2");
+                // DPRINT << "start of RMSNORM2 op\n";
                 deepseek_b1_ops::RMSNorm::Op<RMSNorm2CTArgs, Core::is_input_core, true> rmsnorm2;
                 rmsnorm2(rmsnorm2_args);
+                // DPRINT << "end ofRMSNORM2 op\n";
             }
 
             // ====================================================================
@@ -2357,10 +2502,12 @@ void kernel_main() {
             // ====================================================================
             {
                 DeviceZoneScopedN("MCAST2");
+                // DPRINT << "start of MCAST2 op\n";
                 deepseek_b1_ops::Mcast::
                     Op<McastCTArgs, Core::is_input_core, Core::is_matmul2_core, Core::is_matmul2_core, true>
                         mcast2;
                 mcast2(mcast2_args);
+                // DPRINT << "end ofMCAST2 op\n";
             }
 
             // ====================================================================
@@ -2368,8 +2515,10 @@ void kernel_main() {
             // ====================================================================
             {
                 DeviceZoneScopedN("MATMUL2");
+                // DPRINT << "start of MATMUL2 op\n";
                 deepseek_b1_ops::Matmul::Op<Matmul2CTArgs, Core::is_matmul2_core, true, false> matmul2;
                 matmul2(matmul2_args);
+                // DPRINT << "end ofMATMUL2 op\n";
             }
 
             {
@@ -2381,8 +2530,10 @@ void kernel_main() {
                 // ================================================================
                 {
                     DeviceZoneScopedN("QNOPE/MATMUL3");
+                    // DPRINT << "start of QNOPE_MATMUL3 op\n";
                     deepseek_b1_ops::Matmul::Op<Matmul3CTArgs, Core::is_qnope_core, true, false, true> matmul3;
                     matmul3(matmul3_args);
+                    // DPRINT << "end ofQNOPE_MATMUL3 op\n";
                 }
 
                 // ================================================================
@@ -2390,9 +2541,11 @@ void kernel_main() {
                 // ================================================================
                 {
                     DeviceZoneScopedN("QROPE");
+                    // DPRINT << "start of QROPE op\n";
                     deepseek_b1_ops::Rope::Op<QRopeCTArgs, Core::is_qrope_core> rope;
                     rope.set_global_pos(qrope_args, cur_pos);
                     rope(qrope_args);
+                    // DPRINT << "end ofQROPE op\n";
                 }
 
                 // ================================================================
@@ -2400,6 +2553,7 @@ void kernel_main() {
                 // ================================================================
                 {
                     DeviceZoneScopedN("CREATE_Q_HEADS");
+                    // DPRINT << "start of CREATE_Q_HEADS op\n";
                     constexpr bool is_create_q_heads_sender = Core::is_qnope_core || Core::is_qrope_core;
 #if defined(COMPILE_FOR_NCRISC)
                     deepseek_b1_ops::CreateQHeads::Op<
@@ -2423,6 +2577,7 @@ void kernel_main() {
                         create_q_heads_receiver;
                     create_q_heads_receiver(create_q_heads_receiver_args);
 #endif
+                    // DPRINT << "end ofCREATE_Q_HEADS op\n";
                 }
             }
 
@@ -2441,9 +2596,10 @@ void kernel_main() {
                 // ================================================================
                 {
                     DeviceZoneScopedN("DKV_MATMUL");
-                    // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
+                    // DPRINT << "start of DKV_MATMUL op\n";
                     deepseek_b1_ops::Matmul::Op<DKV_MatmulCTArgs, Core::is_dkv_matmul_core, false, false> dkv_matmul;
                     dkv_matmul(dkv_matmul_args);
+                    // DPRINT << "end ofDKV_MATMUL op\n";
                 }
 
                 // ================================================================
@@ -2452,9 +2608,11 @@ void kernel_main() {
                 // ================================================================
                 {
                     DeviceZoneScopedN("DKV_GATHER");
+                    // DPRINT << "start of DKV_GATHER op\n";
                     deepseek_b1_ops::Gather::Op<Core::is_knope_core, Core::is_kv_rmsnorm_core, true, false, true>
                         dkv_gather;
                     dkv_gather(dkv_gather_args);
+                    // DPRINT << "end ofDKV_GATHER op\n";
                 }
 
                 // ================================================================
@@ -2462,8 +2620,10 @@ void kernel_main() {
                 // ================================================================
                 {
                     DeviceZoneScopedN("KV_RMSNORM");
+                    // DPRINT << "start of KV_RMSNORM op\n";
                     deepseek_b1_ops::RMSNorm::Op<KV_RMSNormCTArgs, Core::is_kv_rmsnorm_core, true> kv_rmsnorm;
                     kv_rmsnorm(kv_rmsnorm_args);
+                    // DPRINT << "end ofKV_RMSNORM op\n";
                 }
 
                 // ================================================================
@@ -2471,9 +2631,11 @@ void kernel_main() {
                 // ================================================================
                 {
                     DeviceZoneScopedN("K_ROPE");
+                    // DPRINT << "start of K_ROPE op\n";
                     deepseek_b1_ops::Rope::Op<K_RopeCTArgs, Core::is_krope_core> krope;
                     krope.set_global_pos(krope_args, cur_pos);
                     krope(krope_args);
+                    // DPRINT << "end ofK_ROPE op\n";
                 }
 
                 // ================================================================
@@ -2482,12 +2644,16 @@ void kernel_main() {
                 // ================================================================
                 {
                     DeviceZoneScopedN("KV_CACHE_UPDATE");
+                    // DPRINT << "start of KV_CACHE_UPDATE op\n";
                     kv_cache_update(kv_cache_update_args);
+                    // DPRINT << "end ofKV_CACHE_UPDATE op\n";
                 }
             }
             {
                 DeviceZoneScopedN("KV_CACHE_SIGNAL_READY");
+                // DPRINT << "start of KV_CACHE_SIGNAL_READY op\n";
                 kv_cache_update.signal_cache_ready(kv_cache_update_args);
+                // DPRINT << "end ofKV_CACHE_SIGNAL_READY op\n";
             }
 
             // ====================================================================
@@ -2495,9 +2661,11 @@ void kernel_main() {
             // ====================================================================
             {
                 DeviceZoneScopedN("FLASH_MLA");
+                // DPRINT << "start of FLASH_MLA op\n";
                 FlashMLAOp flash_mla;
                 flash_mla.set_pos_and_slot(flash_mla_args, local_cur_pos, metadata_ptr->slot_id);
                 flash_mla(flash_mla_args);
+                // DPRINT << "end ofFLASH_MLA op\n";
             }
         } else {
             // This device has no sequence data (e.g. SP2/SP3 with seq_len = 2047 and per_device_chunk_size = 1024).
@@ -2515,11 +2683,14 @@ void kernel_main() {
         {
             DeviceZoneScopedN("POST_SDPA");
             if constexpr (Core::is_sdpa_worker_core) {
+                // DPRINT << "start of SDPA_REDUCE_WORKER op\n";
                 deepseek_b1_ops::SdpaReduceWorker::Op<SdpaReduceWorkerCTArgs> sdpa_reduce_worker;
                 sdpa_reduce_worker.set_global_pos(sdpa_reduce_worker_args, cur_pos);
                 sdpa_reduce_worker(sdpa_reduce_worker_args);
+                // DPRINT << "end ofSDPA_REDUCE_WORKER op\n";
             }
             if constexpr (Core::is_sdpa_forwarder_core) {
+                // DPRINT << "start of SDPA_REDUCE_FORWARDER op\n";
                 deepseek_b1_ops::SdpaReduceForwarder::Op<SdpaReduceForwarderCTArgs> sdpa_reduce_forwarder;
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
                 volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
@@ -2536,6 +2707,7 @@ void kernel_main() {
                 noc_semaphore_inc(ccl_sync_sem_noc_addr, 1);
                 noc_async_atomic_barrier();
 #endif
+                // DPRINT << "end ofSDPA_REDUCE_FORWARDER op\n";
             }
 #if defined(COMPILE_FOR_NCRISC)
             if constexpr (Core::is_matmul4_core) {
@@ -2556,8 +2728,10 @@ void kernel_main() {
         // ========================================================================
         {
             DeviceZoneScopedN("MATMUL4");
+            // DPRINT << "start of MATMUL4 op\n";
             deepseek_b1_ops::Matmul::Op<Matmul4CTArgs, Core::is_matmul4_core, true, false> matmul4;
             matmul4(matmul4_args);
+            // DPRINT << "end ofMATMUL4 op\n";
         }
 
         // ========================================================================
@@ -2566,8 +2740,10 @@ void kernel_main() {
         // ========================================================================
         {
             DeviceZoneScopedN("GATHER2");
+            // DPRINT << "start of GATHER2 op\n";
             deepseek_b1_ops::Gather::Op<Core::is_matmul4_core, Core::is_gather_receiver_core, true, true> gather2;
             gather2(gather2_args);
+            // DPRINT << "end ofGATHER2 op\n";
         }
 
         // ========================================================================
@@ -2581,7 +2757,9 @@ void kernel_main() {
                 mcast3;
         {
             DeviceZoneScopedN("MCAST3");
+            // DPRINT << "start of MCAST3 op\n";
             mcast3(mcast3_args);
+            // DPRINT << "end ofMCAST3 op\n";
         }
 
         // ========================================================================
@@ -2590,8 +2768,10 @@ void kernel_main() {
         // ========================================================================
         {
             DeviceZoneScopedN("MATMUL5");
+            // DPRINT << "start of MATMUL5 op\n";
             deepseek_b1_ops::KNSlicedMatmul::Op<Matmul5CTArgs, Core::is_matmul5_core, true, false> matmul5;
             matmul5(matmul5_args);
+            // DPRINT << "end ofMATMUL5 op\n";
         }
 
         // ========================================================================
@@ -2600,10 +2780,12 @@ void kernel_main() {
         // ========================================================================
         if constexpr (!Core::is_allreduce_sender_core) {
             DeviceZoneScopedN("GATHER3");
+            // DPRINT << "start of GATHER3 op\n";
             deepseek_b1_ops::GatherReduce::
                 Op<Core::is_matmul5_core, Core::is_allreduce_sender_core, Core::is_allreduce_sender_core, true, true>
                     gather3;
             gather3(gather3_args);
+            // DPRINT << "end ofGATHER3 op\n";
         }
 
         // ========================================================================
@@ -2615,6 +2797,7 @@ void kernel_main() {
         // ========================================================================
         if constexpr (Core::is_allreduce_sender_core) {
             DeviceZoneScopedN("CCL_SENDER_WRITER");
+            // DPRINT << "start of CCL_SENDER_WRITER op\n";
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
             PacketHeaderPool::reset();
             volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
@@ -2632,6 +2815,7 @@ void kernel_main() {
             // gather3 must run on ALL RISCs (TRISC does the reduce that feeds local_data_cb).
             {
                 DeviceZoneScopedN("GATHER3");
+                // DPRINT << "start of GATHER3_SENDER op\n";
                 deepseek_b1_ops::GatherReduce::Op<
                     Core::is_matmul5_core,
                     Core::is_allreduce_sender_core,
@@ -2640,14 +2824,19 @@ void kernel_main() {
                     true>
                     gather3;
                 gather3(gather3_args);
+                // DPRINT << "end ofGATHER3_SENDER op\n";
             }
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+            // DPRINT << "start of CCL_WRITER op\n";
             ccl_writer(ccl_sender_args);
-            // All-Gather: transport sender (BRISC=fwd, NCRISC=bwd)
+            // DPRINT << "end ofCCL_WRITER op\n";
+            //  All-Gather: transport sender (BRISC=fwd, NCRISC=bwd)
             {
                 DeviceZoneScopedN("ALLGATHER_TRANSPORT");
+                // DPRINT << "start of ALLGATHER_TRANSPORT op\n";
                 allgather_sender(allgather_transport_args);
-                // R2 active waits for the other risc to finish, so it's safe to reset the semaphore here.
+                // DPRINT << "end of ALLGATHER_TRANSPORT op\n";
+                //  R2 active waits for the other risc to finish, so it's safe to reset the semaphore here.
                 if constexpr (AllGatherTransportCT::r2_active) {
                     noc_semaphore_set(ccl_sync_sem, 0);
                 }
@@ -2659,10 +2848,12 @@ void kernel_main() {
             noc_semaphore_inc(ccl_sync_sem_noc_addr, 1);
             noc_async_atomic_barrier();
 #endif
+            // DPRINT << "end of CCL_SENDER_WRITER op\n";
         }
 
         if constexpr (Core::is_allreduce_receiver_core) {
             DeviceZoneScopedN("CCL_RECEIVER");
+            // DPRINT << "start of CCL_RECEIVER op\n";
 #if defined(COMPILE_FOR_NCRISC)
             // TP4 outer-dim: NOC-copy the correct [1, per_device_out_w] slice of the
             // input tensor into the residual CB (2 tiles of 32x32) before AllReduce.
@@ -2682,23 +2873,30 @@ void kernel_main() {
                 cb_push_back(residual_cb, residual_num_tiles);
             }
 
+            // DPRINT << "start of CCL_READER op\n";
             deepseek_b1_ops::AllReduce::Reader<AllReduceReaderCTArgs> ccl_reader;
             ccl_reader(ccl_receiver_args);
+            // DPRINT << "end of CCL_READER op\n";
 
             // All-Gather: gather controller — reads [1, per_device_out_w] from
             // ccl_output_cb and distributes across row ring into output tensor.
             {
                 DeviceZoneScopedN("ALLGATHER_GATHER");
+                // DPRINT << "start of ALLGATHER_GATHER op\n";
                 constexpr uint32_t out_cb = get_named_compile_time_arg_val("output_cb_id");
                 constexpr uint32_t out_num_tiles = get_named_compile_time_arg_val("output_num_tiles");
                 cb_wait_front(out_cb, out_num_tiles);
                 allgather_gather_args.local_input_addr = get_read_ptr(out_cb);
                 all_gather_completion_state = AllGatherController::start(allgather_gather_args);
+                // DPRINT << "end of ALLGATHER_GATHER op\n";
             }
 #elif defined(COMPILE_FOR_TRISC)
+            // DPRINT << "start of CCL_COMPUTE op\n";
             deepseek_b1_ops::AllReduce::Compute<AllReduceComputeCTArgs> ccl_compute;
             ccl_compute(ccl_compute_args);
+            // DPRINT << "end ofCCL_COMPUTE op\n";
 #endif
+            // DPRINT << "end ofCCL_RECEIVER op\n";
         }
     };
 
@@ -2706,7 +2904,9 @@ void kernel_main() {
         // 0. Residual Mcast: Broadcast input as residual to mcast receiver cores (pop_src=false)
         {
             DeviceZoneScopedN("RESIDUAL_MCAST");
+            // DPRINT << "start of RESIDUAL_MCAST op\n";
             residual_mcast(moe.routed.residual_mcast_args);
+            // DPRINT << "end ofRESIDUAL_MCAST op\n";
         }
         if constexpr (Core::is_reduce_fabric_core) {
             volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
@@ -2718,26 +2918,32 @@ void kernel_main() {
         // 0b. RMSNorm: normalize input on sender core (residual_mcast_src → rmsnorm_output)
         {
             DeviceZoneScopedN("RMSNORM");
+            // DPRINT << "start of MOE_RMSNORM op\n";
             deepseek_b1_ops::RMSNorm::Op<
                 Moe::Routed::RMSNormCTArgs,
                 Core::is_sender_core,
                 false>  // pop_input=false: tensor-backed CB, keep for next iteration
                 rmsnorm;
             rmsnorm(moe.routed.rmsnorm_args);
+            // DPRINT << "end ofMOE_RMSNORM op\n";
         }
 
         // 1. RMSNorm Mcast: Broadcast normalized input from sender core to all receiver cores
         {
             DeviceZoneScopedN("MCAST");
+            // DPRINT << "start of MOE_MCAST op\n";
             moe_mcast(moe.routed.mcast_args);
+            // DPRINT << "end ofMOE_MCAST op\n";
         }
 
 #ifdef ENABLE_ROUTING
         // 2. Matmul + Activation: Routing matmul on gate_mm cores
         {
             DeviceZoneScopedN("MATMUL");
+            // DPRINT << "start of MOE_GATE_MATMUL op\n";
             deepseek_b1_ops::Matmul::Op<Moe::Routed::GateMMCTArgs, Core::Routed::is_gate_mm_core, false, false> gate_mm;
             gate_mm(moe.routed.gate_mm_args);
+            // DPRINT << "end of MOE_GATE_MATMUL op\n";
         }
 #endif  // ENABLE_ROUTING
 
@@ -2746,6 +2952,7 @@ void kernel_main() {
         //     and up_proj (step 7, which pops it). So we only pop here on non-gate_proj cores.
         {
             DeviceZoneScopedN("SHARED_GU_MATMUL");
+            // DPRINT << "start of SHARED_GU_MATMUL op\n";
             deepseek_b1_ops::KNSlicedMatmul::Op<
                 Moe::Shared::GUMatmulCTArgs,
                 Core::Shared::is_compute_core,
@@ -2753,12 +2960,14 @@ void kernel_main() {
                 false>                             // pop_weights
                 shared_gu_matmul;
             shared_gu_matmul(moe.shared.gu_matmul_args);
+            // DPRINT << "end of SHARED_GU_MATMUL op\n";
         }
 
         // 5c. Shared Expert: Gate Gather (A) — 64 gate cores send to sender core
         //     Uses MoeGather (sender=BRISC) to avoid NOC contention with DRAM matmul (NCRISC)
         {
             DeviceZoneScopedN("SHARED_GATE_GATHER");
+            // DPRINT << "start of SHARED_GATE_GATHER op\n";
             deepseek_b1_ops::MoeGather::Op<
                 Core::Shared::is_gate_compute_core,
                 Core::Shared::is_gated_reduce_core,
@@ -2766,27 +2975,31 @@ void kernel_main() {
                 true>  // UsePerCoreSenderIdx
                 shared_gate_gather;
             shared_gate_gather(moe.shared.ag_args);
+            // DPRINT << "end of SHARED_GATE_GATHER op\n";
         }
 
 #ifdef ENABLE_ROUTING
         // 3. Gather: Collect matmul outputs from compute cores to sender core
         {
             DeviceZoneScopedN("GATHER");
+            // DPRINT << "start of MOE_GATHER op\n";
             deepseek_b1_ops::MoeGather::Op<Core::Routed::is_gate_mm_core, Core::is_sender_core, true> gather;
             gather(moe.routed.gather_args);
+            // DPRINT << "end of MOE_GATHER op\n";
         }
         // 4. Gate: Top-K expert selection (on sender core only)
         {
             DeviceZoneScopedN("GATE");
+            // DPRINT << "start of MOE_GATE op\n";
             deepseek_b1_ops::DeepseekMoeGate::Op<Moe::Routed::GateCTArgs, Core::is_sender_core> gate;
             gate();
+            // DPRINT << "end of MOE_GATE op\n";
         }
 
         // 5. Mcast Index: Broadcast expert indices to gate_proj cores only
-        // Uses dedicated mcast with IsReceiverCore=is_gate_proj_core so only gate_proj
-        // cores push to CB 10. Other grid cores just drain the semaphore (no CB ops).
         {
             DeviceZoneScopedN("MCAST_INDEX");
+            // DPRINT << "start of MCAST_INDEX op\n";
             deepseek_b1_ops::Mcast::Op<
                 Moe::Routed::McastCTArgs,
                 Core::is_sender_core,
@@ -2796,11 +3009,13 @@ void kernel_main() {
                 /*ReceiverOnBrisc=*/true>
                 index_mcast;
             index_mcast(moe.routed.index_mcast_args);
+            // DPRINT << "end of MCAST_INDEX op\n";
         }
 
         // 5b. Mcast Expert Scale: Broadcast expert scale to gate_proj cores
         {
             DeviceZoneScopedN("MCAST_EXPERT_SCALE");
+            // DPRINT << "start of MCAST_EXPERT_SCALE op\n";
             deepseek_b1_ops::Mcast::Op<
                 Moe::Routed::McastCTArgs,
                 Core::is_sender_core,
@@ -2810,12 +3025,14 @@ void kernel_main() {
                 /*ReceiverOnBrisc=*/true>
                 expert_scale_mcast;
             expert_scale_mcast(moe.routed.expert_scale_mcast_args);
+            // DPRINT << "end of MCAST_EXPERT_SCALE op\n";
         }
 #endif  // ENABLE_ROUTING
 
         // 5d. Shared Expert: Up Gather (B) — 64 up cores send to sender core
         {
             DeviceZoneScopedN("SHARED_UP_GATHER");
+            // DPRINT << "start of SHARED_UP_GATHER op\n";
             deepseek_b1_ops::MoeGather::Op<
                 Core::Shared::is_up_compute_core,
                 Core::Shared::is_gated_reduce_core,
@@ -2823,48 +3040,58 @@ void kernel_main() {
                 true>  // UsePerCoreSenderIdx
                 shared_up_gather;
             shared_up_gather(moe.shared.bg_args);
+            // DPRINT << "end of SHARED_UP_GATHER op\n";
         }
 
         // 5e. Shared Expert: Gated Reduce — SiLU(sum(gate)) * sum(up)
         //     Runs on sender core after receiving both gathers
         {
             DeviceZoneScopedN("SHARED_GATED_REDUCE");
+            // DPRINT << "start of SHARED_GATED_REDUCE op\n";
             deepseek_b1_ops::GatedReduce::Op<Moe::Shared::GatedReduceCTArgs, Core::Shared::is_gated_reduce_core>
                 gated_reduce;
             gated_reduce(moe.shared.gated_reduce_args);
+            // DPRINT << "end of SHARED_GATED_REDUCE op\n";
         }
 
         // 6. gate_proj: DRAM Streaming Matmul + SiLU (PopIn0=false, keep input for up_proj)
         {
             DeviceZoneScopedN("GATE_PROJ");
+            // DPRINT << "start of GATE_PROJ op\n";
             constexpr uint32_t gate_proj_cb_in1_addr = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
             deepseek_b1_ops::DRAMStreamingMatmul::
                 Op<Moe::Routed::GateProjCTArgs, Core::Routed::is_gate_proj_core, false, true, gate_proj_cb_in1_addr>
                     gate_proj_mm;
             gate_proj_mm();
+            // DPRINT << "end of GATE_PROJ op\n";
         }
 
         // 7. up_proj: DRAM Streaming Matmul (PopIn0=true, ResetCBIn1=true, WaitForOutput=true)
         {
             DeviceZoneScopedN("UP_PROJ");
+            // DPRINT << "start of UP_PROJ op\n";
             constexpr uint32_t cb_in1_addr = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
             deepseek_b1_ops::DRAMStreamingMatmul::
                 Op<Moe::Routed::UpProjCTArgs, Core::Routed::is_gate_proj_core, true, true, cb_in1_addr>
                     up_proj;
             up_proj();
+            // DPRINT << "end of UP_PROJ op\n";
         }
 
         // 8. Mul: Element-wise multiply (up_proj * gate_proj * expert_scale)
         {
             DeviceZoneScopedN("MUL");
+            // DPRINT << "start of MUL op\n";
             deepseek_b1_ops::EltwiseMul::Op<Moe::Routed::MulCTArgs, Core::Routed::is_gate_proj_core> mul_op;
             mul_op();
+            // DPRINT << "end of MUL op\n";
         }
 
         // 9. Shared: Down Mcast — broadcast gated reduce output [1, K_down] to all 130 cores
         //      Source is mcast_src_cb (CB 31) filled by gated reduce, pop_src=true
         {
             DeviceZoneScopedN("SHARED_DOWN_MCAST");
+            // DPRINT << "start of SHARED_DOWN_MCAST op\n";
             deepseek_b1_ops::Mcast::Op<
                 Moe::Shared::DownMcastCTArgs,
                 Core::is_sender_core,
@@ -2873,11 +3100,13 @@ void kernel_main() {
                 true>
                 shared_down_mcast;
             shared_down_mcast(moe.shared.down_mcast_args);
+            // DPRINT << "end of SHARED_DOWN_MCAST op\n";
         }
 
         // 9b. Shared: Down Proj Matmul — SRAM matmul [1, K_down] x [K_down, N_per_core] on 112 cores
         {
             DeviceZoneScopedN("SHARED_DOWN_MATMUL");
+            // DPRINT << "start of SHARED_DOWN_MATMUL op\n";
             deepseek_b1_ops::Matmul::Op<
                 Moe::Shared::DownMatmulCTArgs,
                 Core::Shared::is_mcast_receiver_core,
@@ -2885,17 +3114,18 @@ void kernel_main() {
                 /*pop_in1=*/false>
                 shared_down_matmul;
             shared_down_matmul(moe.shared.down_matmul_args);
+            ////DPRINT << "end of SHARED_DOWN_MATMUL op\n";
         }
 
         // 9c. Shared: Residual Add — matmul_out + shard(residual) on 112 cores
-        //      When multi-device reduce is enabled, only the ROOT1 device performs
+        //      When multi-device reduce is enabled, only the residual-holding device performs
         //      the actual add so the residual is counted exactly once after the
-        //      cross-device sum.  Non-root devices pass matmul output through.
+        //      cross-device sum.  Non-residual devices pass matmul output through.
         {
             DeviceZoneScopedN("SHARED_RESIDUAL_ADD");
-#ifdef ENABLE_REDUCE_TO_ONE
-            constexpr bool skip_residual_add =
-                get_named_compile_time_arg_val("reduce_device_role") != deepseek_b1_ops::MESH_ROOT1;
+            // DPRINT << "start of SHARED_RESIDUAL_ADD op\n";
+#ifdef ENABLE_REDUCE_TO_ALL
+            constexpr bool skip_residual_add = get_named_compile_time_arg_val("reduce_is_residual_device") == 0;
             deepseek_b1_ops::ResidualAdd::
                 Op<Moe::Shared::ResidualAddCTArgs, Core::Shared::is_mcast_receiver_core, skip_residual_add>
                     shared_residual_add;
@@ -2904,11 +3134,13 @@ void kernel_main() {
                 shared_residual_add;
 #endif
             shared_residual_add(moe.shared.residual_add_args);
+            ////DPRINT << "end of SHARED_RESIDUAL_ADD op\n";
         }
 
         // 9d. Shared: Output Gather — 112 matmul cores → sender core
         {
             DeviceZoneScopedN("SHARED_OUTPUT_GATHER");
+            // DPRINT << "start of SHARED_OUTPUT_GATHER op\n";
             deepseek_b1_ops::MoeGather::Op<
                 Core::Shared::is_mcast_receiver_core,  // IsSenderCore: 112 matmul cores
                 Core::is_sender_core,                  // IsReceiverCore: sender core
@@ -2916,11 +3148,13 @@ void kernel_main() {
                 /*UsePerCoreSenderIdx=*/true>
                 shared_output_gather;
             shared_output_gather(moe.shared.og_args);
+            // DPRINT << "end ofSHARED_OUTPUT_GATHER op\n";
         }
 
         // 9e. Shared: Output Mcast — sender core → 130 cores (DRAM cores receive into add_cb_in1)
         {
             DeviceZoneScopedN("SHARED_OUTPUT_MCAST");
+            // DPRINT << "start of SHARED_OUTPUT_MCAST op\n";
             deepseek_b1_ops::Mcast::Op<
                 Moe::Shared::OutputMcastCTArgs,
                 Core::is_sender_core,             // IsSenderCore
@@ -2930,19 +3164,23 @@ void kernel_main() {
                 /*ReceiverOnBrisc=*/true>
                 shared_output_mcast;
             shared_output_mcast(moe.shared.output_mcast_args);
+            // DPRINT << "end ofSHARED_OUTPUT_MCAST op\n";
         }
 
         // 10. down_proj Gather: Gather fused output from gate_proj cores to sender core
         {
             DeviceZoneScopedN("DOWN_PROJ_GATHER");
+            // DPRINT << "start of DOWN_PROJ_GATHER op\n";
             deepseek_b1_ops::MoeGather::Op<Core::Routed::is_gate_proj_core, Core::is_sender_core, true, true>
                 down_proj_gather;
             down_proj_gather(moe.routed.down_proj_gather_args);
+            // DPRINT << "end ofDOWN_PROJ_GATHER op\n";
         }
 
         // 11. down_proj Mcast: Broadcast gathered fused output to gate_proj cores
         {
             DeviceZoneScopedN("DOWN_PROJ_MCAST");
+            // DPRINT << "start of DOWN_PROJ_MCAST op\n";
             deepseek_b1_ops::Mcast::Op<
                 Moe::Routed::McastCTArgs,
                 Core::is_sender_core,
@@ -2952,11 +3190,13 @@ void kernel_main() {
                 /*ReceiverOnBrisc=*/true>
                 down_proj_mcast;
             down_proj_mcast(moe.routed.down_proj_mcast_args);
+            // DPRINT << "end ofDOWN_PROJ_MCAST op\n";
         }
 
         // 12. down_proj: DRAM Streaming Matmul (PopIndex=true: last consumer of expert index CB)
         {
             DeviceZoneScopedN("DOWN_PROJ");
+            // DPRINT << "start of DOWN_PROJ op\n";
             constexpr uint32_t down_proj_cb_in1_addr = get_named_compile_time_arg_val("down_proj_in1_buf_addr");
             deepseek_b1_ops::DRAMStreamingMatmul::Op<
                 Moe::Routed::DownProjCTArgs,
@@ -2967,13 +3207,15 @@ void kernel_main() {
                 true>
                 down_proj;
             down_proj();
+            // DPRINT << "end ofDOWN_PROJ op\n";
         }
 
         // 13. Eltwise Add: down_proj + shared_expert_output
         {
             DeviceZoneScopedN("ELTWISE_ADD");
+            // DPRINT << "start of ELTWISE_ADD op\n";
             constexpr bool add_pop_output =
-#ifdef ENABLE_REDUCE_TO_ONE
+#ifdef ENABLE_REDUCE_TO_ALL
                 false;  // reduce_local_cb aliases add_cb_out — reduce will consume it
 #else
                 true;  // pop for looping
@@ -2985,23 +3227,35 @@ void kernel_main() {
                 add_pop_output>  // PopOutput
                 add_op;
             add_op();
+            // DPRINT << "end of ELTWISE_ADD op\n";
         }
 
-        // 13. ReduceToOneB1: Multi-device reduce-to-one across 4x2 mesh
-        //     Reduces final_output from all 8 devices to ROOT1 device
-#ifdef ENABLE_REDUCE_TO_ONE
+        // 13. ReduceToAllB1: Multi-device reduce-to-all across 4x2 mesh
+        //     Reduces final_output from all 8 devices to the exit column devices
+#ifdef ENABLE_REDUCE_TO_ALL
         {
-            DeviceZoneScopedN("REDUCE_TO_ONE");
+            DeviceZoneScopedN("REDUCE_TO_ALL");
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
+            DPRINT << "start of REDUCE_TO_ALL op\n";
+#endif
             // IsReduceCore includes both worker cores and fabric cores
             constexpr bool is_reduce_core = Core::is_reduce_worker_core || Core::is_reduce_fabric_core;
-            deepseek_b1_ops::ReduceToOneB1::Op<Moe::Routed::ReduceToOneCTArgs, is_reduce_core, true> reduce_op;
+            deepseek_b1_ops::ReduceToAllB1::Op<Moe::Routed::ReduceToAllCTArgs, is_reduce_core, true> reduce_op;
+#if defined(COMPILE_FOR_BRISC)
+            reduce_op.fabric_brisc_arg_offset = get_named_compile_time_arg_val("reduce_brisc_rt_arg_base");
+#elif defined(COMPILE_FOR_NCRISC)
+            reduce_op.fabric_ncrisc_arg_offset = per_core_rta_arg_idx;
+#endif
             reduce_op(moe.routed.reduce_rt_args);
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
+            DPRINT << "end of REDUCE_TO_ALL op\n";
+#endif
         }
 #endif
 
         // Reduce fabric cores signal sender core that fabric sends are done.
         // Sender core NCRISC waits before starting next iteration.
-#ifdef ENABLE_REDUCE_TO_ONE
+#ifdef ENABLE_REDUCE_TO_ALL
 #if defined(COMPILE_FOR_BRISC)
         if constexpr (Core::is_reduce_fabric_core) {
             constexpr uint32_t sync_sem_addr = get_named_compile_time_arg_val("reduce_sync_sem_addr");
@@ -3021,7 +3275,7 @@ void kernel_main() {
         DeviceZoneScopedN("MCAST_INIT");
         mcast.init(mcast_args);
     }
-#ifdef ENABLE_REDUCE_TO_ONE
+#ifdef ENABLE_REDUCE_TO_ALL
 #if defined(COMPILE_FOR_NCRISC)
     // Check is at the start of the loop, so simulate an increment before the loop starts
     if constexpr (Core::is_sender_core) {
@@ -3050,7 +3304,7 @@ void kernel_main() {
 #if defined(COMPILE_FOR_TRISC)
         deepseek_compute_kernel_init();
 #endif
-#ifdef ENABLE_REDUCE_TO_ONE
+#ifdef ENABLE_REDUCE_TO_ALL
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_sender_core) {
             constexpr uint32_t sync_sem_addr = get_named_compile_time_arg_val("reduce_sync_sem_addr");

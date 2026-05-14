@@ -1123,6 +1123,7 @@ void kernel_main() {
                 get_common_arg_val<uint32_t>(fwd_ncrisc_base + 6),  // partner_noc_y
                 get_common_arg_val<uint32_t>(fwd_ncrisc_base + 7),  // partner_chip_id
                 get_common_arg_val<uint32_t>(fwd_ncrisc_base + 8),  // partner_mesh_id
+                0,  // fabric_arg_offset (per-core args start at 0 in standalone MoE)
             };
             deepseek_b1_ops::Forward::Op<FwdCTArgs, Core::is_sender_core> fwd_op;
             fwd_op(fwd_args);

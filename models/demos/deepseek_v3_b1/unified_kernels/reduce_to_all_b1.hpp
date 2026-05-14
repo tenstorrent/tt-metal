@@ -234,6 +234,8 @@ struct ReduceToAllB1 {
     template <typename CTArgs, bool IsWorkerCore, bool SkipLocalCbPush = false>
     class Op {
     public:
+        uint32_t fabric_brisc_arg_offset = 0;
+        uint32_t fabric_ncrisc_arg_offset = 0;
         void operator()(const RTArgs& args) { impl(args); }
 
     private:
@@ -315,20 +317,26 @@ struct ReduceToAllB1 {
             // ================================================================
             // NCRISC — FC: BWD forwarding; Worker: receive R1/R2/R3
             // ================================================================
+            DPRINT << "start of reduce-to-all reader kernel\n";
             if constexpr (CTArgs::is_fabric_core) {
+                DPRINT << "IS FABRIC CORE\n";
                 const uint32_t buf_base = get_write_ptr(CTArgs::packet_cb) + CTArgs::ncrisc_buffer_offset;
                 const uint32_t r1_base = buf_base;
                 const uint32_t r2_base = buf_base + CTArgs::r2_buffer_offset;
 
-                size_t arg_idx = 0;
+                size_t arg_idx = fabric_ncrisc_arg_offset;
                 uint32_t r1_sem_addr;
                 uint32_t r2_sem_addr;
                 if constexpr (CTArgs::use_raw_sem_addrs) {
                     r1_sem_addr = get_arg_val<uint32_t>(arg_idx++);
                     r2_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+                    DPRINT << " r1 sem addr: " << (uint32_t)r1_sem_addr << ", r2 sem addr: " << (uint32_t)r2_sem_addr
+                           << "\n";
                 } else {
                     r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
                     r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+                    DPRINT << " r1 sem addr: " << (uint32_t)r1_sem_addr << ", r2 sem addr: " << (uint32_t)r2_sem_addr
+                           << "\n";
                 }
 
                 auto bwd_sender =
@@ -336,7 +344,9 @@ struct ReduceToAllB1 {
 
                 volatile tt_l1_ptr uint32_t* r1_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r1_sem_addr);
                 volatile tt_l1_ptr uint32_t* r2_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r2_sem_addr);
+                DPRINT << "Opening forwarder connection to BWD neighbor\n";
                 bwd_sender.open();
+                DPRINT << "fabric connection open, waiting for R1/R2 from workers and forwarding to BWD neighbor\n";
 
                 {
                     uint32_t r1_sent = 0;
@@ -346,18 +356,26 @@ struct ReduceToAllB1 {
                         r1_sent = process_ready_slots(r1_sem, r1_sent, r1_base, bwd_sender);
                         r2_sent = process_ready_slots(r2_sem, r2_sent, r2_base, bwd_sender);
                     } while (r1_sent != CTArgs::all_sent_mask || r2_sent != CTArgs::all_sent_mask);
+                    DPRINT << "Finished processing R1/R2 from workers and forwarding to BWD neighbor, resetting "
+                              "semaphores\n";
                     noc_semaphore_set(r1_sem, 0);
                     noc_semaphore_set(r2_sem, 0);
+                    DPRINT << "Finished resetting semaphores for R1/R2\n";
                 }
                 noc_async_full_barrier();
+                DPRINT << "Finished forwarding R1/R2 to BWD neighbor and waiting for async writes to flush\n";
                 bwd_sender.close();
+                DPRINT << "Closed fabric connection to BWD neighbor\n";
                 noc_async_full_barrier();
+                DPRINT << "Finished receiving R1/R2 and forwarding to BWD neighbor\n";
                 return;
             }
-
+            DPRINT << "IS WORKER CORE\n";
+            DPRINT << "skip local CB push: " << (uint32_t)SkipLocalCbPush << "\n";
             if constexpr (!SkipLocalCbPush) {
                 cb_reserve_back(CTArgs::local_cb, CTArgs::num_tiles);
                 cb_push_back(CTArgs::local_cb, CTArgs::num_tiles);
+                DPRINT << "Reserved and pushed to local CB\n";
             }
 
             auto wait_round = [](uint32_t sem_addr) {
@@ -365,33 +383,44 @@ struct ReduceToAllB1 {
                 noc_semaphore_wait_min(sem_ptr, 1);
                 unified_kernels::semaphore_dec(sem_ptr);
             };
+            DPRINT << "Waiting on round 1 semaphore and pushing to received CB\n";
 
             cb_reserve_back(CTArgs::received_cb, CTArgs::num_tiles);
             wait_round(args.recv_sem_round1);
             cb_push_back(CTArgs::received_cb, CTArgs::num_tiles);
+            DPRINT << "Finished waiting on round 1 semaphore and pushing to received CB\n";
 
             cb_reserve_back(CTArgs::received_cb, CTArgs::num_tiles);
             wait_round(args.recv_sem_round2);
             cb_push_back(CTArgs::received_cb, CTArgs::num_tiles);
+            DPRINT << "Finished waiting on round 2 semaphore and pushing to received CB\n";
 
             if constexpr (CTArgs::is_exit_column) {
+                DPRINT << "Exit column: skipping round 3 wait and push to received CB since R3 is not forwarded to "
+                          "this column\n";
                 cb_reserve_back(CTArgs::received_cb, CTArgs::num_tiles);
                 wait_round(args.recv_sem_round3);
                 cb_push_back(CTArgs::received_cb, CTArgs::num_tiles);
+                DPRINT << "Finished waiting on round 3 semaphore and pushing to received CB for exit column\n";
             }
+            DPRINT << "Finished waiting on semaphores and pushing to received CB for all rounds\n";
 
 #elif defined(COMPILE_FOR_BRISC)
             // ================================================================
             // BRISC — FC: FWD + R3 forwarding; Worker: R1/R2/R3 via FC
             // ================================================================
+            DPRINT << "start of reduce-to-all writer kernel\n";
             constexpr uint32_t pkt_hdr_bytes = sizeof(PACKET_HEADER_TYPE);
             if constexpr (CTArgs::is_fabric_core) {
+                DPRINT << "IS FABRIC CORE\n";
                 const uint32_t buf_base = get_write_ptr(CTArgs::packet_cb);
                 const uint32_t r1_base = buf_base;
                 const uint32_t r2_base = buf_base + CTArgs::r2_buffer_offset;
                 const uint32_t r3_base = buf_base + CTArgs::r3_buffer_offset;
+                DPRINT << "r1 base: " << (uint32_t)r1_base << ", r2 base: " << (uint32_t)r2_base
+                       << ", r3 base: " << (uint32_t)r3_base << "\n";
 
-                size_t arg_idx = 0;
+                size_t arg_idx = fabric_brisc_arg_offset;
                 uint32_t r1_sem_addr;
                 uint32_t r2_sem_addr;
                 uint32_t r3_sem_addr_val;
@@ -399,10 +428,16 @@ struct ReduceToAllB1 {
                     r1_sem_addr = get_arg_val<uint32_t>(arg_idx++);
                     r2_sem_addr = get_arg_val<uint32_t>(arg_idx++);
                     r3_sem_addr_val = get_arg_val<uint32_t>(arg_idx++);
+                    DPRINT << "Using raw semaphore addresses. r1 sem addr: " << (uint32_t)r1_sem_addr
+                           << ", r2 sem addr: " << (uint32_t)r2_sem_addr
+                           << ", r3 sem addr: " << (uint32_t)r3_sem_addr_val << "\n";
                 } else {
                     r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
                     r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
                     r3_sem_addr_val = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+                    DPRINT << "Using semaphore indices. r1 sem addr: " << (uint32_t)r1_sem_addr
+                           << ", r2 sem addr: " << (uint32_t)r2_sem_addr
+                           << ", r3 sem addr: " << (uint32_t)r3_sem_addr_val << "\n";
                 }
 
                 auto fwd_sender =
@@ -411,8 +446,9 @@ struct ReduceToAllB1 {
                 volatile tt_l1_ptr uint32_t* r1_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r1_sem_addr);
                 volatile tt_l1_ptr uint32_t* r2_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r2_sem_addr);
                 volatile tt_l1_ptr uint32_t* r3_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r3_sem_addr_val);
-
+                DPRINT << "Opening forwarder connection to FWD neighbor\n";
                 fwd_sender.open();
+                DPRINT << "fabric connection open, waiting for R1/R2 from workers and forwarding to FWD neighbor\n";
 
                 {
                     uint32_t r1_sent = 0;
@@ -422,13 +458,19 @@ struct ReduceToAllB1 {
                         r1_sent = process_ready_slots(r1_sem, r1_sent, r1_base, fwd_sender);
                         r2_sent = process_ready_slots(r2_sem, r2_sent, r2_base, fwd_sender);
                     } while (r1_sent != CTArgs::all_sent_mask || r2_sent != CTArgs::all_sent_mask);
+                    DPRINT << "Finished processing R1/R2 from workers and forwarding to FWD neighbor, resetting "
+                              "semaphores\n";
                     noc_semaphore_set(r1_sem, 0);
                     noc_semaphore_set(r2_sem, 0);
+                    DPRINT << "Finished resetting semaphores for R1/R2\n";
                 }
                 fwd_sender.close();
+                DPRINT << "Finished processing R1/R2 from workers and forwarding to FWD neighbor\n";
                 noc_async_full_barrier();
-
+                DPRINT << "Finished sending R1/R2 to forwarder\n";
                 if constexpr (!CTArgs::is_exit_column || CTArgs::is_reduce_to_all) {
+                    DPRINT << "Receiving R3 from workers and forwarding to next column (either for reduce-to-all or "
+                              "for non-exit column)\n";
                     auto r3_sender =
                         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
                     r3_sender.open();
@@ -443,11 +485,14 @@ struct ReduceToAllB1 {
                     r3_sender.close();
                     noc_async_full_barrier();
                 }
+                DPRINT << "Finished processing R3 from workers and forwarding to next column\n";
 
                 // Persistent next-iteration signal. On exit devices, all reduce
                 // workers bump this FC's wait_sem directly after finishing their
                 // iteration. The FC waits for total_num_workers increments, then
                 // signals the entry device's sender_core.
+                DPRINT << "Persistent fabric signal enable: " << (uint32_t)CTArgs::persistent_fabric_signal_enable
+                       << "\n";
                 if constexpr (CTArgs::persistent_fabric_signal_enable != 0) {
                     uint32_t wait_sem_addr = get_arg_val<uint32_t>(arg_idx++);
                     uint32_t dst_noc_x = get_arg_val<uint32_t>(arg_idx++);
@@ -480,8 +525,9 @@ struct ReduceToAllB1 {
                         persistent_sender.close();
                         noc_async_full_barrier();
                     }
+                    DPRINT << "Finished processing persistent fabric signal\n";
                 }
-
+                DPRINT << "Finished all fabric core work for this kernel\n";
                 return;
             }
 
@@ -500,6 +546,7 @@ struct ReduceToAllB1 {
             } else {
                 local_data_addr = get_read_ptr(CTArgs::local_cb);
             }
+            DPRINT << "Cached local CB read pointer: " << (uint32_t)local_data_addr << "\n";
 
             const uint32_t my_noc_x = my_x[0];
             const uint32_t my_noc_y = my_y[0];
@@ -526,6 +573,7 @@ struct ReduceToAllB1 {
                     args.r1_sem_addr,
                     args.r1_slot_bit);
             }
+            DPRINT << "Finished sending R1 to forwarder\n";
 
             // R2: Type A → BWD (bwd_dst), Type B → FWD (fwd_dst)
             {
@@ -556,8 +604,9 @@ struct ReduceToAllB1 {
                 cb_push_back(CTArgs::reload_cb, CTArgs::num_tiles);
                 cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
             }
-
+            DPRINT << "Finished sending R1 and R2 to forwarder and writing R2 to reload CB for compute\n";
             if constexpr (!CTArgs::is_exit_column) {
+                DPRINT << "Non-exit column: sending R3 to forwarder for cross-column forwarding\n";
                 // Non-exit column: send R3 to FC for cross-column forwarding, then done
                 {
                     cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
@@ -578,6 +627,7 @@ struct ReduceToAllB1 {
                         args.r3_slot_bit);
                     cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
                 }
+                DPRINT << "Finished sending R3 to forwarder for cross-column forwarding\n";
 
                 if (args.persistent_enable != 0) {
                     uint64_t fc_sem = get_noc_addr(
@@ -588,6 +638,8 @@ struct ReduceToAllB1 {
             } else {
                 // Exit column: copy column sum to reload for TRISC R3 computation,
                 // then wait for global sum and write output
+                DPRINT << "Exit column: skipping sending R3 to forwarder, waiting for global sum in scratch CB, and "
+                          "writing final result to output address\n";
                 {
                     cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
                     uint32_t data_addr = get_read_ptr(CTArgs::scratch_cb);
@@ -616,6 +668,8 @@ struct ReduceToAllB1 {
                     noc_async_write_barrier();
                     cb_push_back(CTArgs::reload_cb, CTArgs::num_tiles);
                     cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
+                    DPRINT << "Finished copying R3 to reload CB for TRISC and sent R3 to forwarder for reduce-to-all "
+                              "cross-column forwarding\n";
                 }
 
                 // Wait for TRISC R3 output and write final result
@@ -626,7 +680,7 @@ struct ReduceToAllB1 {
                     uint64_t output_noc = get_noc_addr(CTArgs::output_core_noc_x, CTArgs::output_core_noc_y, dst_addr);
                     noc_async_write(src_addr, output_noc, CTArgs::payload_size_bytes);
                     noc_async_write_barrier();
-
+                    DPRINT << "ENABLE_DOWNSTREAM_SOCKET: " << (uint32_t)CTArgs::enable_downstream_socket << "\n";
                     if constexpr (CTArgs::enable_downstream_socket) {
                         constexpr bool is_last_worker_metadata_forwarder = CTArgs::forward_metadata_size_bytes > 0;
                         if (args.socket_config_addr != 0) {
@@ -673,14 +727,16 @@ struct ReduceToAllB1 {
                             noc_async_atomic_barrier();
                         }
                     }
-
+                    DPRINT << "Finished writing final result to output address and signaled downstream socket or next "
+                              "iteration\n";
                     cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
                 }
             }
-
+            DPRINT << "Finished all worker core work for this kernel\n";
             if constexpr (SkipLocalCbPush) {
                 cb_pop_front(CTArgs::local_cb, CTArgs::num_tiles);
             }
+            DPRINT << "Finished popping local CB for this kernel\n";
 
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================

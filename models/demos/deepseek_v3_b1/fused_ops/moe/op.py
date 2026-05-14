@@ -4355,6 +4355,10 @@ class MoeOp:
         bwd_r1_sem_addr = self.sem_addrs[MoeSem.REDUCE_FC_BWD_R1]
         bwd_r2_sem_addr = self.sem_addrs[MoeSem.REDUCE_FC_BWD_R2]
         r3_fwd_sem_addr = self.sem_addrs[MoeSem.REDUCE_FC_R3_FWD]
+        print(
+            f"[MOE REDUCE DEBUG] FC sem addrs: fwd_r1={fwd_r1_sem_addr:#x}, fwd_r2={fwd_r2_sem_addr:#x}, "
+            f"bwd_r1={bwd_r1_sem_addr:#x}, bwd_r2={bwd_r2_sem_addr:#x}, r3_fwd={r3_fwd_sem_addr:#x}"
+        )
 
         slots_per_direction = reduce_params["slots_per_direction"]
         ncrisc_buf_offset = reduce_params["ncrisc_buf_offset"]
@@ -4456,7 +4460,9 @@ class MoeOp:
                 ]
                 reduce_brisc_per_core_args.append((core, worker_args))
 
-            reduce_brisc_per_core_args.append((fc, [fwd_r1_sem_addr, fwd_r2_sem_addr, r3_fwd_sem_addr]))
+            fc_brisc_args = [fwd_r1_sem_addr, fwd_r2_sem_addr, r3_fwd_sem_addr]
+            print(f"[MOE REDUCE DEBUG] FC core ({fc.x},{fc.y}) BRISC per-core args: {[hex(v) for v in fc_brisc_args]}")
+            reduce_brisc_per_core_args.append((fc, fc_brisc_args))
 
             # NOTE: ttnn.CoreCoord.__eq__ raises TypeError when compared to
             # None, so guard with `is not None` before the equality check.
@@ -4476,7 +4482,11 @@ class MoeOp:
                     self._persistent_bcast_dst_sem_addr,
                 ]
             # FC NCRISC: BWD forwarding (R1+R2)
-            reduce_ncrisc_per_core_args.append((fc, [bwd_r1_sem_addr, bwd_r2_sem_addr]))
+            fc_ncrisc_args = [bwd_r1_sem_addr, bwd_r2_sem_addr]
+            print(
+                f"[MOE REDUCE DEBUG] FC core ({fc.x},{fc.y}) NCRISC per-core args: {[hex(v) for v in fc_ncrisc_args]}"
+            )
+            reduce_ncrisc_per_core_args.append((fc, fc_ncrisc_args))
 
         self.device_rt_args_desc = PerCoreRuntimeArgsDescriptor(
             brisc_args=reduce_brisc_per_core_args,
@@ -4639,9 +4649,10 @@ class MoeOp:
                     return
 
         if is_entry_col:
-            forward_socket = ctx.forward_sockets[chip_id]
+            forward_socket = ctx.forward_sockets[chip_id] if ctx.forward_sockets else None
+            fwd_socket_addr = int(forward_socket.get_config_buffer_address()) if forward_socket is not None else 0
             self.brisc_common_rt_args = [
-                int(forward_socket.get_config_buffer_address()),
+                fwd_socket_addr,
                 int(socket_page_size),
                 1,
             ]
@@ -5212,7 +5223,9 @@ class MoeOp:
         if self.ctx.reconfig_moe_cbs:
             defines += [("RECONFIG_MOE_CBS", "1")]
         if self.ctx.enable_forward:
-            defines += [("ENABLE_FORWARD", "1"), ("ENABLE_SOCKET_READER", "1")]
+            defines += [("ENABLE_FORWARD", "1")]
+            if self.ctx.forward_sockets and any(s is not None for s in self.ctx.forward_sockets):
+                defines += [("ENABLE_SOCKET_READER", "1")]
         return defines
 
     def _build_descriptors(self):

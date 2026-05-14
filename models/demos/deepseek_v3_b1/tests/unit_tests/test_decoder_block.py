@@ -543,7 +543,13 @@ def test_decoder(
     num_slots,
     get_reference_model_state_dict,
 ):
-    """Test TTNN decoder fused operation with CCL broadcast, kv cache, mla, reduce, residual add"""
+    """Test TTNN decoder fused operation with Forward (multi-entry) + ReduceToAll (multi-exit).
+
+    The Forward op reads pre-loaded input from the staging tensor on entry-column devices
+    (no real sockets), forwards it cross-column via fabric, then MoE runs and ReduceToAll
+    distributes output to all exit-column devices.  The test verifies all 4 exit-column
+    devices hold the correct MoE output.
+    """
     skip_known_decoder_moe_failure(
         position_id,
         expert_upload_mode,
@@ -736,9 +742,39 @@ def test_decoder(
         logger.info("Standalone AttentionBlock.op completed.")
 
     # ========================================================================
-    # Run decoder operation
+    # Run decoder operation (Forward + ReduceToAll)
     # ========================================================================
-    logger.info(f"Running decoder operation with position_id={position_id}...")
+    # The exit column is where ReduceToAll outputs AND where Forward reads input.
+    reduce_exit_column = 1 - sender_col
+    exit_column_chip_ids = [r * mesh_cols + reduce_exit_column for r in range(mesh_rows)]
+
+    # Create forward staging tensor pre-loaded with the decoder input.
+    # This backs the bcast_pkt_cb (cb46) that Forward BRISC reads from.
+    # Without ENABLE_SOCKET_READER the kernel just does cb_reserve_back + cb_push_back,
+    # reading whatever data is already in the staging tensor's L1 backing store.
+    K = 7168
+    sender_core = ttnn.CoreCoord(device_grid_size.x - 1, 9)
+    sender_grid = ttnn.CoreRangeSet([ttnn.CoreRange(sender_core, sender_core)])
+    staging_shard_spec = ttnn.ShardSpec(sender_grid, (1, K), ttnn.ShardOrientation.ROW_MAJOR)
+    staging_mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, staging_shard_spec)
+    forward_staging_tensor = ttnn.from_torch(
+        d["torch_input"],
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=staging_mem_cfg,
+        tile=ttnn.Tile([1, 32]),
+    )
+    ttnn.synchronize_device(submesh)
+
+    # forward_sockets=[None]*num_devices triggers enable_forward=True without
+    # real sockets, so ENABLE_FORWARD is emitted but ENABLE_SOCKET_READER is not.
+    forward_sockets = [None] * num_devices
+
+    logger.info(
+        f"Running decoder operation with position_id={position_id}, "
+        f"reduce_exit_column={reduce_exit_column} (exit devices: {exit_column_chip_ids})..."
+    )
     decoder_program_context = DecoderBlock.get_program_context(
         # AttentionBlock parameters
         d["input_tensor_mesh"],
@@ -760,7 +796,6 @@ def test_decoder(
         d["sdpa_out_interm_buffer"],
         d["sender_coord"],
         # Post-SDPA parameters
-        # Post-SDPA
         d["kv_b2_overlapped"],
         d["o_proj_overlapped"],
         d["ttnn_sdpa_input_l"],
@@ -796,7 +831,7 @@ def test_decoder(
         # Shared parameters
         enable_routing=True,
         reduce_cluster_axis=reduce_cluster_axis,
-        sdpa_cluster_axis=0,  # sdpa_cluster_axis
+        sdpa_cluster_axis=0,
         num_links_bcast=num_links_bcast,
         num_links_allreduce=num_links_allreduce,
         epsilon=epsilon,
@@ -809,6 +844,11 @@ def test_decoder(
         fabric_config=device_params["fabric_config"],
         persistent_next_iter_semaphore=persistent_next_iter_semaphore,
         persistent_mode=False,
+        # Forward + multi-exit MoE
+        forward_sockets=forward_sockets,
+        forward_staging_tensor=forward_staging_tensor,
+        exit_column=reduce_exit_column,
+        reduce_exit_column=reduce_exit_column,
     )
     for i in range(num_iters):
         moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.execute(*decoder_program_context)
@@ -826,14 +866,14 @@ def test_decoder(
     )
 
     # ========================================================================
-    # Extract decoder MoE output and reduce root info (always needed for golden)
+    # Extract decoder MoE output. With reduce-to-all, every exit-column device
+    # holds the full reduced output; we read all of them and validate each.
     # ========================================================================
     decoder_moe_output = ttnn.to_torch(moe_final_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
-    root_coord_tuple = d["reduce_root_coord"]
-    root_device_idx = root_coord_tuple[0] * mesh_cols + root_coord_tuple[1]
-    decoder_moe_output_root = decoder_moe_output[root_device_idx]
+    # Reference extraction uses the first exit-column device (any of the 4 is valid; the others
+    # are cross-checked below for bit-equality).
     decoder_moe_output_valid = extract_routed_expert_output(
-        decoder_moe_output_root.unsqueeze(0),
+        decoder_moe_output[exit_column_chip_ids[0]].unsqueeze(0),
         d["num_gate_proj_cores"],
         RoutedExpert.FINAL_OUTPUT_WIDTH_PER_CORE,
         d["per_core_down_proj_N"],
@@ -876,6 +916,7 @@ def test_decoder(
             reduce_output_tensor=d["moe_ref_reduce_output"],
             reduce_semaphores=moe_ref_reduce_sems,
             reduce_root_coord=ttnn.MeshCoordinate(d["reduce_root_coord"]),
+            reduce_exit_column=reduce_exit_column,
             semaphores=moe_ref_semaphores,
             noc_mode=noc_mode,
         )
@@ -895,7 +936,9 @@ def test_decoder(
             moe_ref_indices_torch = None
 
         moe_reduce_torch = ttnn.to_torch(moe_ref_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
-        moe_reduce_root = moe_reduce_torch[root_device_idx]
+        # With reduce-to-all the output is mirrored across all exit-column devices.
+        # Pick the first exit device for the standalone reference comparison.
+        moe_reduce_root = moe_reduce_torch[exit_column_chip_ids[0]]
         moe_device_output_valid = extract_routed_expert_output(
             moe_reduce_root.unsqueeze(0),
             d["num_gate_proj_cores"],
@@ -1039,11 +1082,31 @@ def test_decoder(
     # Validate MoE output vs DecoderBlock golden MoE output
     # ========================================================================
     # Golden with moe_num_devices>1 computes per-device golden with TP-sharded shared
-    # weights and per-device expert indices, then sums — matching reduce-to-one exactly.
+    # weights and per-device expert indices, then sums — matching reduce-to-all
+    # exactly (every exit-column device holds the full reduced output).
     passing, pcc = comp_pcc(moe_output.flatten(), decoder_moe_output_valid.flatten(), 0.97)
-    logger.info(f"MoE PCC (decoder vs golden): {pcc}")
+    logger.info(f"MoE PCC (decoder vs golden, exit dev {exit_column_chip_ids[0]}): {pcc}")
     logger.info(f"Golden MoE output: {moe_output.flatten()[:8]}")
     logger.info(f"DecoderBlock MoE output: {decoder_moe_output_valid.flatten()[:8]}")
+
+    # Verify every exit-column device has the (matching) full reduced output.
+    for exit_idx in exit_column_chip_ids:
+        per_exit_valid = extract_routed_expert_output(
+            decoder_moe_output[exit_idx].unsqueeze(0),
+            d["num_gate_proj_cores"],
+            RoutedExpert.FINAL_OUTPUT_WIDTH_PER_CORE,
+            d["per_core_down_proj_N"],
+        )
+        exit_passing, exit_pcc = comp_pcc(moe_output.flatten(), per_exit_valid.flatten(), 0.97)
+        logger.info(f"Exit device {exit_idx} MoE PCC (vs golden): {exit_pcc}")
+        assert exit_passing, f"Exit device {exit_idx} ReduceToAll output PCC check failed: {exit_pcc}"
+        if exit_idx != exit_column_chip_ids[0]:
+            # All exit-column devices should hold bit-identical reduced output.
+            mirror_passing, mirror_pcc = comp_pcc(decoder_moe_output_valid.flatten(), per_exit_valid.flatten(), 0.999)
+            logger.info(f"Exit device {exit_idx} vs reference exit device PCC: {mirror_pcc}")
+            assert (
+                mirror_passing
+            ), f"Exit device {exit_idx} ReduceToAll output mismatch vs exit device {exit_column_chip_ids[0]}: {mirror_pcc}"
 
     if validate_standalone_moe:
         pure_moe_passing, pure_moe_pcc = comp_pcc(moe_output.flatten(), moe_device_output_valid.flatten(), 0.97)
@@ -1089,7 +1152,7 @@ def test_decoder(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
             "fabric_router_config": create_fabric_router_config(15232),
             "worker_l1_size": 1374544,
         }
@@ -1120,7 +1183,7 @@ def test_decoder_mlp(
     num_slots,
     get_reference_model_state_dict,
 ):
-    """Test TTNN decoder fused operation for a dense (MLP) layer with enable_routing=False."""
+    """Test TTNN decoder fused operation for a dense (MLP) layer with Forward + ReduceToAll."""
     torch.manual_seed(0)
     num_devices = mesh_rows * mesh_cols
     logger.info(f"Number of devices: {num_devices}")
@@ -1186,7 +1249,31 @@ def test_decoder_mlp(
     )
     moe_semaphores = MoeOp.create_semaphores(submesh)
 
-    logger.info(f"Running dense decoder operation with position_id={position_id}...")
+    # Forward + ReduceToAll exit column
+    reduce_exit_column = 1 - sender_col
+    exit_column_chip_ids = [r * mesh_cols + reduce_exit_column for r in range(mesh_rows)]
+
+    K = 7168
+    sender_core = ttnn.CoreCoord(device_grid_size.x - 1, 9)
+    sender_grid = ttnn.CoreRangeSet([ttnn.CoreRange(sender_core, sender_core)])
+    staging_shard_spec = ttnn.ShardSpec(sender_grid, (1, K), ttnn.ShardOrientation.ROW_MAJOR)
+    staging_mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, staging_shard_spec)
+    forward_staging_tensor = ttnn.from_torch(
+        d["torch_input"],
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=staging_mem_cfg,
+        tile=ttnn.Tile([1, 32]),
+    )
+    ttnn.synchronize_device(submesh)
+
+    forward_sockets = [None] * num_devices
+
+    logger.info(
+        f"Running dense decoder operation with position_id={position_id}, "
+        f"reduce_exit_column={reduce_exit_column} (exit devices: {exit_column_chip_ids})..."
+    )
     decoder_program_context = DecoderBlock.get_program_context(
         # AttentionBlock parameters
         d["input_tensor_mesh"],
@@ -1257,17 +1344,23 @@ def test_decoder_mlp(
         fabric_config=device_params["fabric_config"],
         persistent_next_iter_semaphore=persistent_next_iter_semaphore,
         persistent_mode=False,
+        # Forward + multi-exit MoE
+        forward_sockets=forward_sockets,
+        forward_staging_tensor=forward_staging_tensor,
+        exit_column=reduce_exit_column,
+        reduce_exit_column=reduce_exit_column,
     )
+    logger.info("Running decoder block...")
     for i in range(num_iters):
         moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.execute(*decoder_program_context)
     ttnn.synchronize_device(submesh)
 
     # ========================================================================
-    # Extract decoder MLP output from reduce root
+    # Extract decoder MLP output. With reduce-to-all, every exit-column device
+    # holds the full reduced output; use the first exit device as the reference
+    # extraction and validate the remaining exit devices below.
     # ========================================================================
-    root_coord_tuple = d["reduce_root_coord"]
-    root_device_idx = root_coord_tuple[0] * mesh_cols + root_coord_tuple[1]
-    root_device_tensor = ttnn.get_device_tensors(moe_final_output_tensor)[root_device_idx]
+    root_device_tensor = ttnn.get_device_tensors(moe_final_output_tensor)[exit_column_chip_ids[0]]
     decoder_mlp_output = ttnn.to_torch(root_device_tensor)
     decoder_mlp_output_valid = extract_routed_expert_output(
         decoder_mlp_output.unsqueeze(0),
@@ -1385,13 +1478,34 @@ def test_decoder_mlp(
             logger.info(f"Device {device_idx} (SP={sp_group}) other slots unchanged validation passed")
 
     # ========================================================================
-    # Validate MLP output vs DecoderBlock golden
+    # Validate MLP output vs DecoderBlock golden. With reduce-to-all the output
+    # is mirrored on every exit-column device: verify each one matches the golden
+    # reference and they are pairwise consistent.
     # ========================================================================
     passing, pcc = comp_pcc(moe_output.flatten(), decoder_mlp_output_valid.float().flatten(), 0.975)
-    logger.info(f"MLP PCC (decoder vs golden): {pcc}")
+    logger.info(f"MLP PCC (decoder vs golden, exit dev {exit_column_chip_ids[0]}): {pcc}")
     logger.info(f"Golden MLP output: {moe_output.flatten()[:8]}")
     logger.info(f"DecoderBlock MLP output: {decoder_mlp_output_valid.flatten()[:8]}")
     assert passing, f"DecoderBlock MLP Output PCC check failed: {pcc}"
+
+    for exit_idx in exit_column_chip_ids[1:]:
+        per_exit_tensor = ttnn.to_torch(ttnn.get_device_tensors(moe_final_output_tensor)[exit_idx])
+        per_exit_valid = extract_routed_expert_output(
+            per_exit_tensor.unsqueeze(0),
+            d["num_gate_proj_cores"],
+            RoutedExpert.FINAL_OUTPUT_WIDTH_PER_CORE,
+            d["per_core_down_proj_N"],
+        )
+        exit_passing, exit_pcc = comp_pcc(moe_output.flatten(), per_exit_valid.float().flatten(), 0.975)
+        logger.info(f"Exit device {exit_idx} MLP PCC (vs golden): {exit_pcc}")
+        assert exit_passing, f"Exit device {exit_idx} MLP ReduceToAll PCC check failed: {exit_pcc}"
+        mirror_passing, mirror_pcc = comp_pcc(
+            decoder_mlp_output_valid.float().flatten(), per_exit_valid.float().flatten(), 0.999
+        )
+        logger.info(f"Exit device {exit_idx} vs reference exit device PCC: {mirror_pcc}")
+        assert (
+            mirror_passing
+        ), f"Exit device {exit_idx} MLP ReduceToAll mismatch vs exit device {exit_column_chip_ids[0]}: {mirror_pcc}"
 
     logger.info("✓ DecoderBlock MLP mesh test passed!")
 

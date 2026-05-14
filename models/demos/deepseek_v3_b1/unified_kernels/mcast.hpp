@@ -527,19 +527,29 @@ struct Mcast {
 #if defined(COMPILE_FOR_BRISC)
             // BRISC: Sender always, Receiver when ReceiverOnBrisc=true
             if constexpr (IsSenderCore) {
+                DPRINT << "start of mcast sender\n";
                 sender_impl(args.sender);
+                DPRINT << "end of mcast sender\n";
             }
             if constexpr (ReceiverOnBrisc && IsReceiverCore) {
+                DPRINT << "start of mcast receiver\n";
                 receiver_impl(args.receiver);
+                DPRINT << "end of mcast receiver\n";
             } else if constexpr (ReceiverOnBrisc && IsMcastGridCore) {
+                DPRINT << "start of mcast grid\n";
                 mcast_grid_impl(args.receiver);
+                DPRINT << "end of mcast grid\n";
             }
 #elif defined(COMPILE_FOR_NCRISC)
             // NCRISC: Receiver when ReceiverOnBrisc=false, no-op otherwise
             if constexpr (!ReceiverOnBrisc && IsReceiverCore) {
+                DPRINT << "start of mcast receiver\n";
                 receiver_impl(args.receiver);
+                DPRINT << "end of mcast receiver\n";
             } else if constexpr (!ReceiverOnBrisc && IsMcastGridCore) {
+                DPRINT << "start of mcast grid\n";
                 mcast_grid_impl(args.receiver);
+                DPRINT << "end of mcast grid\n";
             }
 #endif
         }
