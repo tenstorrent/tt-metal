@@ -482,11 +482,13 @@ _run_deepseekv3_tt() {
 
     local runtime_root="${TT_METAL_RUNTIME_ROOT:-${TT_METAL_HOME:-$(pwd -P)}}"
     local torus_mode="${USE_TORUS_MODE-__UNSET__}"
+    local ci_val="${CI-__UNSET__}"
 
     tt_run "${tt_run_args[@]}" env \
         _DS_MESH_DEVICE="${MESH_DEVICE:-}" \
         _DS_USE_TORUS_MODE="${torus_mode}" \
         _DS_RUNTIME_ROOT="${runtime_root}" \
+        _DS_CI="${ci_val}" \
         bash -c '
             if [[ -n "${_DS_MESH_DEVICE}" ]]; then
                 export MESH_DEVICE="${_DS_MESH_DEVICE}"
@@ -498,6 +500,9 @@ _run_deepseekv3_tt() {
             fi
             if [[ -n "${_DS_RUNTIME_ROOT}" ]]; then
                 export TT_METAL_RUNTIME_ROOT="${_DS_RUNTIME_ROOT}"
+            fi
+            if [[ "${_DS_CI}" != "__UNSET__" ]]; then
+                export CI="${_DS_CI}"
             fi
             exec "$@"
         ' _ "$@"
@@ -566,7 +571,7 @@ run_quad_deepseekv3_module_tests() {
     ((fail += ec)) || true
     _test_run_summary_append_junit_rows "deepseekv3_module_quad" "${junit_path}" "${ec}"
 
-    if [[ $fail -ne 0 ]]; then
+        if [[ $fail -ne 0 ]]; then
         exit 1
     fi
 }
