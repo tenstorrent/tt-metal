@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 
@@ -12,6 +12,7 @@ from ttnn.model_preprocessing import (
     preprocess_linear_bias,
     preprocess_linear_weight,
 )
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 def main():
@@ -63,7 +64,7 @@ def main():
         attention_scores = query @ key
         attention_scores = attention_scores * (1 / (head_size**0.5))
         attention_scores += attention_mask
-        attention_probs = ttnn.softmax(attention_scores, dim=-1, numeric_stable=False)
+        attention_probs = ttnn.softmax(attention_scores, dim=-1, numeric_stable=True)
 
         context_layer = attention_probs @ value
         context_layer = ttnn.permute(context_layer, (0, 2, 1, 3))
@@ -278,7 +279,14 @@ def main():
     torch_output = ttnn.to_torch(output)
     torch_optimized_output = ttnn.to_torch(optimized_output)
 
-    assert torch.allclose(torch_output, torch_optimized_output)
+    # Relaxed thresholds: optimized path uses bfloat8_b matmuls vs bfloat16 in the unoptimized path.
+    assert_numeric_metrics(
+        torch_output,
+        torch_optimized_output,
+        pcc_threshold=0.95,
+        frobenius_threshold=0.5,
+        check_allclose=False,
+    )
 
     ttnn.close_device(device)
 
