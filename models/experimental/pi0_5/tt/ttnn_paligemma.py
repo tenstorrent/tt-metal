@@ -336,7 +336,6 @@ class PaliGemmaBackboneTTNN:
         position_ids: Optional[ttnn.Tensor] = None,
         past_key_values: Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]] = None,
         use_cache: bool = False,
-        keep_padded: bool = False,
     ) -> Tuple[ttnn.Tensor, Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]]]:
         """
         Forward pass through VLM backbone using TTNN.
@@ -347,8 +346,6 @@ class PaliGemmaBackboneTTNN:
             position_ids: Position indices (TTNN tensor)
             past_key_values: Cached KV from previous forward
             use_cache: Whether to return updated cache
-            keep_padded: When True, skip post-RoPE slice in each VLM block's
-                attention (valid only when prefix seq_len is tile-aligned).
 
         Returns:
             Tuple of (output, optional_new_cache)
@@ -365,7 +362,6 @@ class PaliGemmaBackboneTTNN:
                 position_ids,
                 past_kv,
                 use_cache,
-                keep_padded=keep_padded,
             )
             if use_cache:
                 new_cache.append(new_kv)
@@ -599,7 +595,6 @@ class Pi0_5PaliGemmaBackboneTTNN(PaliGemmaBackboneTTNN):
         use_cache: bool = False,
         precomputed_block_mods: Optional[List[Tuple["ttnn.Tensor", ...]]] = None,
         precomputed_final_mod: Optional[Tuple["ttnn.Tensor", "ttnn.Tensor"]] = None,
-        keep_padded: bool = False,
     ) -> Tuple["ttnn.Tensor", Optional[List[Tuple["ttnn.Tensor", "ttnn.Tensor"]]]]:
         new_cache = [] if use_cache else None
 
@@ -616,7 +611,6 @@ class Pi0_5PaliGemmaBackboneTTNN(PaliGemmaBackboneTTNN):
                 past_kv,
                 use_cache,
                 precomputed_mod=block_mod,
-                keep_padded=keep_padded,
             )
             if use_cache:
                 new_cache.append(new_kv)

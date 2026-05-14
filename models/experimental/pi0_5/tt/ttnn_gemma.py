@@ -402,7 +402,6 @@ class GemmaAttentionTTNN:
         position_ids: Optional[ttnn.Tensor] = None,
         past_key_value: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
         use_cache: bool = False,
-        keep_padded: bool = False,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         """
         OPTIMIZED forward pass using fused QKV and native TTNN operations.
@@ -420,9 +419,6 @@ class GemmaAttentionTTNN:
             position_ids: Position indices
             past_key_value: Cached KV
             use_cache: Whether to return cache
-            keep_padded: When True, do not slice q_rope/k_rope back to logical seq_len after
-                rotary_embedding. Used by the expert path where the suffix is already tile-
-                aligned (logical=physical=64) and the SDPA mask handles phantom positions.
 
         Returns:
             Tuple of (output, optional_cache)
@@ -496,16 +492,9 @@ class GemmaAttentionTTNN:
         ttnn.deallocate(cos_sliced)
         ttnn.deallocate(sin_sliced)
 
-        if keep_padded:
-            # Expert/suffix fast path: q/k are already tile-aligned (logical=physical),
-            # SDPA mask handles phantom positions. Skipping the slice removes 360
-            # UntilizeWithUnpadding(50,256) ops per chunk.
-            q_rope = q_rope_padded
-            k_rope = k_rope_padded
-        else:
-            # rotary_embedding pads output to tile boundary, slice back to original seq_len
-            q_rope = ttnn.slice(q_rope_padded, [0, 0, 0, 0], [batch_size, self.num_heads, seq_len, self.head_dim])
-            k_rope = ttnn.slice(k_rope_padded, [0, 0, 0, 0], [batch_size, self.num_kv_heads, seq_len, self.head_dim])
+        # rotary_embedding pads output to tile boundary, slice back to original seq_len
+        q_rope = ttnn.slice(q_rope_padded, [0, 0, 0, 0], [batch_size, self.num_heads, seq_len, self.head_dim])
+        k_rope = ttnn.slice(k_rope_padded, [0, 0, 0, 0], [batch_size, self.num_kv_heads, seq_len, self.head_dim])
 
         # Handle KV cache. Force concat output to L1 — the result feeds SDPA
         # directly so keeping it on-chip avoids DRAM round-trips.
@@ -863,7 +852,6 @@ class GemmaBlockTTNN:
         position_ids: Optional[ttnn.Tensor] = None,
         past_key_value: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
         use_cache: bool = False,
-        keep_padded: bool = False,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         """
         Forward pass using TTNN operations.
@@ -875,8 +863,6 @@ class GemmaBlockTTNN:
             position_ids: Position indices
             past_key_value: Cached KV
             use_cache: Whether to return cache
-            keep_padded: When True, skip the post-RoPE slice in attention
-                (valid when input seq_len is already tile-aligned).
 
         Returns:
             Tuple of (output, optional_cache)
@@ -897,7 +883,6 @@ class GemmaBlockTTNN:
             position_ids,
             past_key_value,
             use_cache,
-            keep_padded=keep_padded,
         )
         hidden_states = ttnn.add(hidden_states, attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_output)
@@ -1082,7 +1067,6 @@ class AdaRMSGemmaBlockTTNN:
         past_key_value: Optional[Tuple["ttnn.Tensor", "ttnn.Tensor"]] = None,
         use_cache: bool = False,
         precomputed_mod: Optional[Tuple["ttnn.Tensor", ...]] = None,
-        keep_padded: bool = False,
     ) -> Tuple["ttnn.Tensor", Optional[Tuple["ttnn.Tensor", "ttnn.Tensor"]]]:
         # Fast path: 6 modulation tensors precomputed at init (sa already = 1+scale_a).
         if precomputed_mod is not None:
@@ -1107,7 +1091,7 @@ class AdaRMSGemmaBlockTTNN:
             ttnn.deallocate(sa1)
             ttnn.deallocate(ta)
         attn_output, new_cache = self.attention.forward(
-            normed, cos, sin, attention_mask, position_ids, past_key_value, use_cache, keep_padded=keep_padded
+            normed, cos, sin, attention_mask, position_ids, past_key_value, use_cache
         )
         ttnn.deallocate(normed)
         gated_attn = ttnn.mul(attn_output, ga, memory_config=ttnn.L1_MEMORY_CONFIG)
