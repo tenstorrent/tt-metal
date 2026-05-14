@@ -1047,6 +1047,15 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
         // GAP 5: Record force-reset channels so the next verify_all_fabric_channels_healthy()
         // can distinguish "was force-reset" from "corrupt from prior crash".
         std::vector<std::string> reset_failed_channels;
+        // FIX AW (#42429): Track devices where assert_risc_reset_at_core has already thrown.
+        // In a multiprocess T3K run, rank N may be PCIe-connected to a device that a different
+        // rank sees as non-MMIO.  From rank N's UMD cluster perspective that device IS MMIO
+        // (get_associated_mmio_device returns itself), so FIX BU's non-MMIO check never fires.
+        // When chan X on such a device fails with "Timeout waiting for Ethernet core service
+        // remote IO request", every subsequent channel on the same device will also hang for
+        // the full 5-second UMD timeout.  assert_failed_devices tracks ANY device (MMIO or
+        // non-MMIO) where assert already confirmed failure so the remaining channels can skip.
+        std::unordered_set<ChipId> assert_failed_devices;
         for (const auto& ch : pending) {
             // FIX AX (#42429): For non-MMIO channels whose device is already confirmed
             // relay-dead (from a prior channel's failed diagnostic read in this same loop),
@@ -1129,9 +1138,14 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
             // session's diagnostics are correct.
             // FIX BU (#42429) supersedes FIX AX-2: confirmed-dead relay channels skip the assert
             // entirely (saves 5s UMD timeout per channel); MMIO/live channels still attempt assert.
+            // FIX AW (#42429): also skip any device where assert already threw on a prior channel.
+            // This covers MMIO devices that appear MMIO from THIS rank's UMD cluster perspective
+            // (get_associated_mmio_device returns itself), for which FIX BU's non-MMIO check never
+            // fires even though assert_risc_reset_at_core will time out for exactly the same reason.
             const bool is_non_mmio_relay_dead = cluster_.get_associated_mmio_device(ch.dev->id()) != ch.dev->id() &&
                                                 relay_dead_devices.count(ch.dev->id()) > 0;
-            if (is_non_mmio_relay_dead) {
+            const bool assert_already_failed = assert_failed_devices.count(ch.dev->id()) > 0;
+            if (is_non_mmio_relay_dead || assert_already_failed) {
                 // FIX BU (#42429): The relay is confirmed dead — assert_risc_reset_at_core goes
                 // through read_non_mmio which costs 5s per channel (UMD relay timeout). With 4
                 // dead channels on each of Devices 4 and 7, this was ~40s of pure timeout per test.
@@ -1139,13 +1153,17 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                 // that serve as relay, restoring the ETH PHY link so non-MMIO ERISCs can reboot
                 // into base firmware on the next session. The channel is already registered in
                 // force_reset_channels_ above, so next-session diagnostics remain correct.
+                // FIX AW (#42429): assert_already_failed covers MMIO devices (from this rank's
+                // perspective) where a prior channel's assert already timed out — same 5s cost,
+                // same outcome; skip saves the full timeout per remaining channel on the device.
                 log_info(
                     tt::LogMetal,
-                    "FIX BU (#42429): Device {} chan={} relay confirmed dead — "
-                    "skipping assert_risc_reset_at_core (saves 5s relay timeout). "
+                    "FIX BU/AW (#42429): Device {} chan={} {} — "
+                    "skipping assert_risc_reset_at_core (saves 5s timeout). "
                     "RiscFirmwareInitializer::teardown (FIX AC) will PCIe-reset via MMIO relay channels.",
                     ch.dev->id(),
-                    ch.eth_chan_id);
+                    ch.eth_chan_id,
+                    is_non_mmio_relay_dead ? "relay confirmed dead" : "assert already failed on this device");
             } else {
                 // FIX AI (#42429): assert + deassert to restart the ERISC into base UMD firmware.
                 //
@@ -1221,6 +1239,9 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                     if (cluster_.get_associated_mmio_device(ch.dev->id()) != ch.dev->id()) {
                         relay_dead_devices.insert(ch.dev->id());
                     }
+                    // FIX AW (#42429): track assert failure for ALL devices (MMIO and non-MMIO).
+                    // Subsequent channels on this device will hit the same timeout — skip them.
+                    assert_failed_devices.insert(ch.dev->id());
                 }
             }
         }
