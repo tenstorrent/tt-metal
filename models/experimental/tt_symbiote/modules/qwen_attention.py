@@ -1075,6 +1075,7 @@ class TTNNQwen3LinearAttention(TTNNModule):
         self._in_proj_b_torch_weight = None  # bf16 torch tensor [num_v_heads, hidden_size]
         self._in_proj_a_weight_tt = None  # device tensor [hidden_size, num_v_heads], replicated
         self._in_proj_b_weight_tt = None  # device tensor [hidden_size, num_v_heads], replicated
+        self._norm_weight_tt = None  # device tensor [1, head_v_dim], replicated
 
         # DeltaNet kernel parameters (kept on PyTorch)
         self.conv1d = None  # PyTorch Conv1d for causal convolution (weight/bias accessed by causal_conv1d_fn/update)
@@ -1236,39 +1237,6 @@ class TTNNQwen3LinearAttention(TTNNModule):
         if self._in_proj_b_torch_weight is not None:
             self._in_proj_b_torch_weight = self._in_proj_b_torch_weight.T.contiguous()
 
-    def move_weights_to_device_impl(self):
-        """Move TTNN child weights and replicate the a/b projection weights across mesh.
-
-        The a/b projections produce a tiny output (``num_v_heads``, e.g. 32 elements),
-        which is too small to col-shard cleanly across a T3K mesh. Instead we replicate
-        the weight onto every device with ``ReplicateTensorToMesh`` so that a plain
-        ``ttnn.linear`` against a replicated input yields a replicated output, ready to
-        feed straight into the (torch) DeltaNet kernel without any extra reduce/gather.
-        """
-        super().move_weights_to_device_impl()
-        if self._in_proj_a_torch_weight is None or self._in_proj_b_torch_weight is None:
-            return
-        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
-        self._in_proj_a_weight_tt = ttnn.from_torch(
-            self._in_proj_a_torch_weight,
-            device=self.device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=mesh_mapper,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        self._in_proj_b_weight_tt = ttnn.from_torch(
-            self._in_proj_b_torch_weight,
-            device=self.device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=mesh_mapper,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        # Drop the host copies now that the device tensors are staged.
-        self._in_proj_a_torch_weight = None
-        self._in_proj_b_torch_weight = None
-
     def deallocate_weights_impl(self):
         """Deallocate TTNN weights from device.
 
@@ -1289,19 +1257,44 @@ class TTNNQwen3LinearAttention(TTNNModule):
         if self._in_proj_b_weight_tt is not None:
             ttnn.deallocate(self._in_proj_b_weight_tt)
             self._in_proj_b_weight_tt = None
+        if self._norm_weight_tt is not None:
+            ttnn.deallocate(self._norm_weight_tt)
+            self._norm_weight_tt = None
 
     def move_weights_to_device_impl(self):
-        """Move weights to device, including the TTNN-decode-path scratch.
-
-        For the tt-lang GDN kernel path (TTNN_GDN_KERNEL=1), pre-allocate the
-        per-layer decode-op weights and the state/output scratch buffers here
-        rather than lazy-allocating in forward(). Allocations inside the
-        traced region break Metal Trace capture; hoisting them to this
-        lifecycle hook (called once before any forward) keeps forward
-        allocation-free for trace.
-        """
+        """Move weights to device: upload in_proj_a/b, norm weight, and optional GDN buffers."""
         super().move_weights_to_device_impl()
 
+        from models.experimental.tt_symbiote.modules.ttnn_decode_ops import upload_replicated
+
+        # Upload replicated in_proj_a / in_proj_b weights (tiny output dim, can't col-shard).
+        if self._in_proj_a_torch_weight is not None and self._in_proj_b_torch_weight is not None:
+            mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
+            self._in_proj_a_weight_tt = ttnn.from_torch(
+                self._in_proj_a_torch_weight,
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mesh_mapper,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._in_proj_b_weight_tt = ttnn.from_torch(
+                self._in_proj_b_torch_weight,
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mesh_mapper,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._in_proj_a_torch_weight = None
+            self._in_proj_b_torch_weight = None
+
+        # Upload gated-RMS-norm weight for the non-GDN path.
+        if self.norm is not None and self._norm_weight_tt is None:
+            norm_weight = self.norm.weight.detach().to(torch.bfloat16)
+            self._norm_weight_tt = upload_replicated(norm_weight.unsqueeze(0), self.device)
+
+        # GDN kernel path: pre-allocate decode buffers.
         if (
             self.use_ttnn_gdn_kernel
             and self.device is not None
@@ -1316,61 +1309,11 @@ class TTNNQwen3LinearAttention(TTNNModule):
                 alloc_out_buffer,
             )
 
-            # Upload per-layer norm/conv/A_log/dt_bias and in_proj_a/b weights.
             self._ensure_gdn_decode_weights()
-            # Pre-allocate one state-scratch and one out-buffer. The first
-            # decode-after-prefill still allocates a fresh state-scratch
-            # (because prefill returns its state as a host torch tensor and
-            # the existing ping-pong falls into the else branch); steady-state
-            # decode reuses these without allocating.
             if self._gdn_state_scratch is None:
                 self._gdn_state_scratch = alloc_state_buffer(self.device)
             if self._gdn_out_buffer is None:
                 self._gdn_out_buffer = alloc_out_buffer(self.device)
-
-            # Trace-compatible kernel pipeline scratch + constants.
-            if self.use_ttnn_gdn_kernel_trace:
-                self._alloc_trace_pipeline_scratch()
-
-    def move_weights_to_device_impl(self):
-        """Move weights to device, including the TTNN-decode-path scratch.
-
-        For the tt-lang GDN kernel path (TTNN_GDN_KERNEL=1), pre-allocate the
-        per-layer decode-op weights and the state/output scratch buffers here
-        rather than lazy-allocating in forward(). Allocations inside the
-        traced region break Metal Trace capture; hoisting them to this
-        lifecycle hook (called once before any forward) keeps forward
-        allocation-free for trace.
-        """
-        super().move_weights_to_device_impl()
-
-        if (
-            self.use_ttnn_gdn_kernel
-            and self.device is not None
-            and hasattr(self.device, "get_num_devices")
-            and self.device.get_num_devices() in (4, 8)
-            and self.num_v_heads == 32
-            and self.head_k_dim == 128
-            and self.head_v_dim == 128
-        ):
-            from models.experimental.tt_symbiote.modules.gdn_kernel import (
-                alloc_state_buffer,
-                alloc_out_buffer,
-            )
-
-            # Upload per-layer norm/conv/A_log/dt_bias and in_proj_a/b weights.
-            self._ensure_gdn_decode_weights()
-            # Pre-allocate one state-scratch and one out-buffer. The first
-            # decode-after-prefill still allocates a fresh state-scratch
-            # (because prefill returns its state as a host torch tensor and
-            # the existing ping-pong falls into the else branch); steady-state
-            # decode reuses these without allocating.
-            if self._gdn_state_scratch is None:
-                self._gdn_state_scratch = alloc_state_buffer(self.device)
-            if self._gdn_out_buffer is None:
-                self._gdn_out_buffer = alloc_out_buffer(self.device)
-
-            # Trace-compatible kernel pipeline scratch + constants.
             if self.use_ttnn_gdn_kernel_trace:
                 self._alloc_trace_pipeline_scratch()
 
@@ -1953,30 +1896,12 @@ class TTNNQwen3LinearAttention(TTNNModule):
         # Project: in_proj_z -> [batch, seq, value_dim]
         z_ttnn = self.in_proj_z(hidden_states_ttnn)
 
-        # Launch a/b matmuls NOW — before the CCL all_gathers — so the compute units are
-        # busy while the Ethernet links carry out the all_gather operations.
         _ckernelcfg = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        _use_ttnn_ab = self._in_proj_a_weight_tt is not None and self._in_proj_b_weight_tt is not None
-        if _use_ttnn_ab:
-            b_ttnn = ttnn.linear(
-                hidden_states_ttnn,
-                self._in_proj_b_weight_tt,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                dtype=ttnn.bfloat16,
-                compute_kernel_config=_ckernelcfg,
-            )
-            a_ttnn = ttnn.linear(
-                hidden_states_ttnn,
-                self._in_proj_a_weight_tt,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                dtype=ttnn.bfloat16,
-                compute_kernel_config=_ckernelcfg,
-            )
 
         # Dispatch both output all_gathers together (no individual syncs).
         # The device pipelines them; a single sync below drains both CCL ops.
@@ -2041,10 +1966,27 @@ class TTNNQwen3LinearAttention(TTNNModule):
             )
             a = None  # consumed as a_tt_proj below
             b = None  # consumed as b_tt_proj below
+        elif self._in_proj_a_weight_tt is not None and self._in_proj_b_weight_tt is not None:
+            a_tt_proj = ttnn.linear(
+                hidden_states_ttnn,
+                self._in_proj_a_weight_tt,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=_ckernelcfg,
+            )
+            b_tt_proj = ttnn.linear(
+                hidden_states_ttnn,
+                self._in_proj_b_weight_tt,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=_ckernelcfg,
+            )
+            a = None
+            b = None
         else:
             hidden_states_pt = self._to_pytorch_replicated(hidden_states_ttnn)
-            b = self.in_proj_b(hidden_states_pt).contiguous()  # PyTorch nn.Linear -> [batch, seq, num_v_heads]
-            a = self.in_proj_a(hidden_states_pt).contiguous()  # PyTorch nn.Linear -> [batch, seq, num_v_heads]
+            b = self.in_proj_b(hidden_states_pt).contiguous()
+            a = self.in_proj_a(hidden_states_pt).contiguous()
             a_tt_proj = None
             b_tt_proj = None
 
@@ -2077,8 +2019,10 @@ class TTNNQwen3LinearAttention(TTNNModule):
             if mixed_qkv.shape[0] > batch_size:
                 mixed_qkv = mixed_qkv[:batch_size]
                 z = z[:batch_size]
-                b = b[:batch_size]
-                a = a[:batch_size]
+                if b is not None:
+                    b = b[:batch_size]
+                if a is not None:
+                    a = a[:batch_size]
 
         # On the TTNN-decode path a/b are TTNN tensors (no host slicing needed);
         # the per-device shape is already [1, 1, num_v_heads]. The legacy host
@@ -2202,6 +2146,9 @@ class TTNNQwen3LinearAttention(TTNNModule):
             g = ttnn.to_torch(g_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))[0:1]
             beta = ttnn.to_torch(beta_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))[0:1]
         else:
+            if a_tt_proj is not None and b_tt_proj is not None:
+                a = self._to_pytorch_replicated(a_tt_proj)
+                b = self._to_pytorch_replicated(b_tt_proj)
             beta = b.sigmoid()
             g = -self.A_log.float().exp() * F.softplus(a.float() + self.dt_bias)
 
@@ -2437,11 +2384,25 @@ class TTNNQwen3LinearAttention(TTNNModule):
                 [batch_size, seq_len, self.num_v_heads * self.head_v_dim],
             )
         else:
-            core_attn_out = core_attn_out.reshape(-1, self.head_v_dim)
-            z = z.reshape(-1, self.head_v_dim)
-            core_attn_out = self.norm(core_attn_out, z)
-            core_attn_out = core_attn_out.reshape(batch_size, seq_len, -1)
-            core_attn_out_ttnn = self._to_ttnn(core_attn_out)
+            if self._norm_weight_tt is not None:
+                from models.experimental.tt_symbiote.modules.ttnn_decode_ops import (
+                    ttnn_gated_rms_norm,
+                    upload_replicated,
+                )
+
+                n_heads_x_seq = batch_size * seq_len * self.num_v_heads
+                core_bf16 = core_attn_out.reshape(n_heads_x_seq, self.head_v_dim).to(torch.bfloat16)
+                z_bf16 = z.reshape(n_heads_x_seq, self.head_v_dim).to(torch.bfloat16)
+                core_tt = upload_replicated(core_bf16.unsqueeze(0), self.device)
+                z_tt = upload_replicated(z_bf16.unsqueeze(0), self.device)
+                normed_tt = ttnn_gated_rms_norm(core_tt, z_tt, self._norm_weight_tt, float(self.norm.variance_epsilon))
+                core_attn_out_ttnn = ttnn.reshape(normed_tt, [batch_size, seq_len, -1])
+            else:
+                core_attn_out = core_attn_out.reshape(-1, self.head_v_dim)
+                z = z.reshape(-1, self.head_v_dim)
+                core_attn_out = self.norm(core_attn_out, z)
+                core_attn_out = core_attn_out.reshape(batch_size, seq_len, -1)
+                core_attn_out_ttnn = self._to_ttnn(core_attn_out)
 
         # === TTNN Output Projection ===
         if core_attn_out_ttnn.layout != ttnn.TILE_LAYOUT:
