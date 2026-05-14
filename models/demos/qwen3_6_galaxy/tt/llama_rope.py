@@ -137,6 +137,7 @@ class Qwen36RopeSetup(LightweightModule):
         # ------------------------------------------------------------------
         cos_2d = cos_table.squeeze(0)  # [max_seq_len, rotary_dim]
         sin_2d = sin_table.squeeze(0)
+        # ROW_MAJOR for ttnn.embedding (the op requires ROW_MAJOR weight).
         self.cos_matrix = ttnn.from_torch(
             cos_2d,
             device=mesh_device,

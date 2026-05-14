@@ -127,14 +127,16 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
 
 @pytest.mark.hardware
 @pytest.mark.skip(
-    reason="T14b.9 in progress — capture body still emits ~16 'Writes are "
-    "not supported' warnings per decoder layer (64 for the 4-layer model). "
-    "Cleanup infrastructure (try/finally end_trace_capture, release_traces, "
-    "__del__) is in place; flipping _TRACE_SUPPORTED=True will run the test "
-    "once the residual host-write source inside ttnn_decode_forward is "
-    "identified — likely in either attention.forward_decode's paged "
-    "branch's k/v height_shard conversion (to_memory_config + paged_update_cache) "
-    "or DeltaNet's recurrent path / paged KV cache update."
+    reason="T14b.9 ~90% done. Two real findings this session: "
+    "(a) DeltaNet _causal_conv1d_fir_mesh leaked conv_state via the no-op "
+    "slice short-circuit (fixed in this commit — eager paths green); "
+    "(b) Qwen36RopeSetup.get_rm_rot_mats's ttnn.embedding output for [1,1] "
+    "indices needs an internal tile-padding write that fires inside the "
+    "trace. Olmo3 and llama_70b_galaxy avoid this by padding position_idxs "
+    "to a tile-aligned shape ([64, 8] / [32, 32]) so the embedding output "
+    "is naturally tile-aligned, then using ttnn.experimental.rotary_embedding_"
+    "llama_fused_qk which accepts ROW_MAJOR cos/sin directly. "
+    "Next session: port that pattern wholesale into apply_partial_rope."
 )
 def test_paged_decode_trace_parity_4layer(mesh_8x4):
     """T14b.9: paged decode trace replay produces same logits as eager paged decode.

@@ -89,16 +89,26 @@ def _causal_conv1d_fir_mesh(
     pad_is_persistent = False
     if conv_state is not None:
         # conv_state: [B, K-1, D] ROW_MAJOR (exact shape, no tile padding).
-        # Always make a new tensor so we can safely call pad.deallocate(True) below.
+        # CRITICAL: ttnn.slice short-circuits to a VIEW (returns the input
+        # unchanged) when the slice extents match the source shape exactly
+        # — see ttnn/cpp/ttnn/operations/data_movement/slice/slice.cpp:67
+        # ("no-op check: no_step && starts_zero && ends_max -> return
+        # input_tensor"). Since conv_state arrives already at the target
+        # shape [B, K-1, D] every decode step, the slice below is a no-op
+        # and pad ALIASES conv_state's storage. Deallocating pad would
+        # free the caller's conv_state.  Mark pad as "persistent" (i.e.
+        # not owned by us) so the deallocate at the end of the function
+        # is skipped, and the caller's conv_state stays alive.
         if conv_state.layout == ttnn.TILE_LAYOUT:
             cs_rm = ttnn.to_layout(conv_state, ttnn.ROW_MAJOR_LAYOUT, memory_config=memory_config)
         else:
             cs_rm = conv_state
         pad = ttnn.slice(cs_rm, [0, 0, 0], [B, kernel_size - 1, D], memory_config=memory_config)
-        if conv_state.layout == ttnn.TILE_LAYOUT:
-            cs_rm.deallocate(True)
-        # Note: cs_rm == conv_state in the ROW_MAJOR case, so don't deallocate cs_rm
-        # (the caller still holds a reference to conv_state).
+        # In both branches pad aliases cs_rm (no-op slice). Do NOT
+        # pad.deallocate later — that would free either the caller's
+        # conv_state (ROW_MAJOR case) or the cs_rm copy we'll free
+        # explicitly after the concat (TILE case).
+        pad_is_persistent = True
     elif conv_state_zero_pad is not None:
         # T14b.5: Use the persistent zero buffer allocated once at module init,
         # so this call site is trace-capture-safe (no host writes inside trace).
@@ -127,6 +137,13 @@ def _causal_conv1d_fir_mesh(
     x_padded = ttnn.concat([pad, x_rm], dim=1, memory_config=memory_config)
     if not pad_is_persistent:
         pad.deallocate(True)
+    # T14b.9 fix: if we built a ROW_MAJOR copy of a TILE_LAYOUT conv_state
+    # at the top, pad aliases it (no-op slice). It's safe to free the copy
+    # now that concat has captured its data — but the caller's original
+    # conv_state stays untouched. The ROW_MAJOR branch passes through
+    # conv_state directly, so cs_rm IS conv_state and we don't free it.
+    if conv_state is not None and conv_state.layout == ttnn.TILE_LAYOUT:
+        cs_rm.deallocate(True)
 
     # Compute new conv state: last K-1 tokens of x
     if T >= kernel_size - 1:
