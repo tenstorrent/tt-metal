@@ -920,8 +920,8 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
         // non-zero in L1 after a clean exit.  On the next test's reset_cores(),
         // erisc_app_still_running() reads this non-zero value and fires a false-positive
         // 500ms wait, cascading into force-reset for all 4 MMIO devices every test.
-        // FIX PC already clears fw_launch_addr on the force-reset path; this covers
-        // the clean clean-exit path (e.g. Devices 1, 3 on T3000 after a partial quiesce).
+        // FIX BN (#42429) clears fw_launch_addr on the force-reset path (post-heartbeat);
+        // this covers the clean-exit path (e.g. Devices 1, 3 on T3000 after a partial quiesce).
         std::vector<PendingChannel> cleanly_terminated;
 
         // Poll all pending channels until each terminates or the global deadline expires.
@@ -1196,26 +1196,12 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                         tt_cxy_pair(ch.dev->id(), virtual_eth_coord), tt::umd::RiscType::ALL);
                     cluster_.deassert_risc_reset_at_core(
                         tt_cxy_pair(ch.dev->id(), virtual_eth_coord), tt::umd::RiscType::ALL);
-                    // FIX PC: clear ERISC dispatch launch flag after fabric teardown force-reset.
-                    // HW reset (assert + deassert) halts the ERISC and restarts base UMD firmware
-                    // but does NOT zero L1.  If dispatch firmware was running on this channel,
-                    // fw_launch_addr retains its non-zero value from the prior session.
-                    // On the next test's reset_cores(), erisc_app_still_running() reads this
-                    // non-zero flag → 500ms wait_until_cores_done timeout → another force-reset
-                    // → loop on every single-device test open.
-                    // (Observed: 140 occurrences in run 25096771728, 146+ in prior runs.)
-                    // Clear fw_launch_addr here so reset_cores() sees the core as idle and skips
-                    // the stall entirely.
-                    try {
-                        const auto aeth_idx =
-                            hal_.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
-                        const uint32_t fw_launch_addr = hal_.get_jit_build_config(aeth_idx, 0, 0).fw_launch_addr;
-                        cluster_.write_core_immediate(
-                            ch.dev->id(), virtual_eth_coord, std::vector<uint32_t>{0}, fw_launch_addr);
-                    } catch (...) {
-                        // Best-effort: MMIO devices succeed via PCIe; non-MMIO with a dead relay
-                        // may throw — acceptable, FIX PA in reset_cores() handles the fallback.
-                    }
+                    // FIX BN (#42429): fw_launch_addr=0 moved to post-heartbeat-confirm path
+                    // (FIX XZ below).  Writing it here, immediately after deassert, raced with
+                    // ERISC ROM reading fw_launch_addr_value: if the PCIe write won, ERISC saw
+                    // 0 and entered the ROM wait loop (0x49705180) indefinitely, causing FIX XZ
+                    // to time out with 24/24 MMIO ETH channels at last_hb=0x00000000.
+                    // (Confirmed in CI run 25849783008.)
                     // FIX XY-2 (#42429): Successful assert+deassert means the relay path is
                     // restored (ERISC rebooted into base firmware).  Clear relay_broken so that
                     // subsequent multicast writes (cleanup, next session init) are not blocked
@@ -1360,10 +1346,41 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                                 mc.nonzero_seen = true;
                                 // UMD base firmware writes static 0xABCDxxxx marker — never increments.
                                 if ((hb_val >> 16) == 0xABCDu) {
+                                    // FIX BN (#42429): write fw_launch_addr=0 only after base firmware
+                                    // is confirmed running.  FIX PC (removed) wrote this immediately
+                                    // after deassert_risc_reset_at_core, racing with ERISC ROM reading
+                                    // fw_launch_addr_value.  Now we write it here, after ERISC has
+                                    // already read the entry point and jumped to firmware successfully.
+                                    try {
+                                        const auto aeth_idx = hal_.get_programmable_core_type_index(
+                                            HalProgrammableCoreType::ACTIVE_ETH);
+                                        const uint32_t fw_launch_addr =
+                                            hal_.get_jit_build_config(aeth_idx, 0, 0).fw_launch_addr;
+                                        cluster_.write_core_immediate(
+                                            mc.target.chip,
+                                            CoreCoord{mc.target.x, mc.target.y},
+                                            std::vector<uint32_t>{0},
+                                            fw_launch_addr);
+                                    } catch (...) {
+                                    }
                                     mc.ready = true;
                                 }
                             }
                         } else if ((hb_val >> 16) == 0xABCDu || hb_val != mc.prev_hb) {
+                            // FIX BN (#42429): see comment above — write fw_launch_addr=0 only
+                            // after base firmware heartbeat is confirmed (ABCD marker or increment).
+                            try {
+                                const auto aeth_idx = hal_.get_programmable_core_type_index(
+                                    HalProgrammableCoreType::ACTIVE_ETH);
+                                const uint32_t fw_launch_addr =
+                                    hal_.get_jit_build_config(aeth_idx, 0, 0).fw_launch_addr;
+                                cluster_.write_core_immediate(
+                                    mc.target.chip,
+                                    CoreCoord{mc.target.x, mc.target.y},
+                                    std::vector<uint32_t>{0},
+                                    fw_launch_addr);
+                            } catch (...) {
+                            }
                             mc.ready = true;
                         }
                         if (!mc.ready) {
