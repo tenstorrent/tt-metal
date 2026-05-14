@@ -97,7 +97,15 @@ struct NoPreKBlock {
  *   packer_l1_acc=false: Software spill/reload via interm_cb
  *   packer_l1_acc=true:  Hardware L1 accumulation via packer (no spill/reload)
  *
- * PREREQUISITE: Caller must call mm_block_init() before invoking this helper.
+ * PREREQUISITE: Caller must call compute_kernel_hw_startup() once at kernel entry
+ * (the universal big init shared with the rest of the helper library). This helper
+ * then issues mm_block_init_short + reconfig_data_format(in1_cb, in0_cb) at the top
+ * of every K-block iteration (after pre_k_block returns) to flip unpack/math into
+ * matmul mode with the correct srcA=in1 / srcB=in0 data formats — so callers do not
+ * need to re-init around chained helpers, pre_k_block, or post_compute callbacks.
+ * No big mm_block_init() is required (or wanted) inside this helper: mm_block_init_short
+ * carries the same llk_unpack_AB_matmul_init + llk_math_matmul_init without the
+ * once-only MMIO hw_configure / pack_init that compute_kernel_hw_startup already did.
  *
  * SKIP_COMPUTE: When this macro is defined by the calling TU (microbenchmark path),
  * the inner ckernel::matmul_block() call is omitted. All other pipeline work (waits,
