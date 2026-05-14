@@ -131,11 +131,14 @@ pi0_5/
 │   └── ttnn_pi0_5_model.py   # Pi0_5ModelTTNN
 ├── eval/
 │   └── libero_rollout.py     # LIBERO simulator → policy → success rate / videos
+├── scripts/
+│   └── download_weights.sh   # Download pi05_base / pi05_libero from HuggingFace
 ├── tests/
 │   ├── pcc/                  # Reference-vs-spec correctness
 │   └── perf/                 # Latency / throughput on Blackhole
 └── weights/
-    └── pi05_base/            # Symlink or directory of pi05_base safetensors
+    ├── pi05_base/            # lerobot/pi05_base safetensors (see download script)
+    └── pi05_libero_finetuned/# lerobot/pi05_libero_finetuned_v044 (LIBERO eval)
 ```
 
 ---
@@ -242,9 +245,8 @@ mkdir -p /storage/sdawle/pi05_weights
 curl -L -o /storage/sdawle/pi05_weights/paligemma_tokenizer.model \
   https://storage.googleapis.com/big_vision/paligemma_tokenizer.model
 
-# 2. pi05_libero finetune checkpoint (or your own pi0.5 LIBERO checkpoint)
-#    Expected layout: <ckpt_dir>/model.safetensors
-#                     <ckpt_dir>/policy_preprocessor_step_2_normalizer_processor.safetensors
+# 2. Download pi05_libero checkpoint (see "Weights" section above for details)
+./models/experimental/pi0_5/scripts/download_weights.sh libero
 
 # 3. LIBERO env from source (PyPI install is broken)
 git clone https://github.com/Lifelong-Robot-Learning/LIBERO.git /storage/sdawle/libero_repo
@@ -326,6 +328,32 @@ Per-chunk inference: ~225 ms at N=4, ~490 ms at N=10 (untraced, includes per-chu
 ---
 
 ## Weights
+
+### Downloading from HuggingFace
+
+Both checkpoints are hosted on HuggingFace. A convenience script handles the download:
+
+```bash
+# Install the HuggingFace CLI (if not already installed)
+pip install huggingface_hub[cli]
+
+# Log in (required — Gemma-family weights are gated)
+huggingface-cli login
+
+# Download both pi05_base and pi05_libero into weights/
+./models/experimental/pi0_5/scripts/download_weights.sh
+
+# Or download individually:
+./models/experimental/pi0_5/scripts/download_weights.sh base    # lerobot/pi05_base (~14.5 GB)
+./models/experimental/pi0_5/scripts/download_weights.sh libero  # lerobot/pi05_libero_finetuned_v044 (~7.5 GB)
+```
+
+| Checkpoint | HuggingFace repo | Size | Use |
+|---|---|---|---|
+| `pi05_base` | [`lerobot/pi05_base`](https://huggingface.co/lerobot/pi05_base) | ~14.5 GB | PCC tests, perf tests, general inference |
+| `pi05_libero_finetuned` | [`lerobot/pi05_libero_finetuned_v044`](https://huggingface.co/lerobot/pi05_libero_finetuned_v044) | ~7.5 GB | LIBERO simulator evaluation |
+
+### Checkpoint format
 
 The expert checkpoint must contain the adaRMS modulation tensors per layer:
 
