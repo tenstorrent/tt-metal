@@ -220,7 +220,7 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
     uint32_t block_size = get_block_size(Wt, 2U);  // We need two extra registers during calculation
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process, /*row_wise=*/false);
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
 
     uint32_t packed_scaler = pack_two_bfloat16_to_uint32(static_cast<float>(1.F / num_inner));
 
