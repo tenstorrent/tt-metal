@@ -47,8 +47,6 @@ constexpr uint32_t W2_TILES_PER_A2A_ITER_W = 4;
 constexpr uint32_t W2_TILES_PER_A2A_ITER_H =
     (W2_TXNS_PER_BLOCK * W2_TILES_PER_TXN) / W2_TILES_PER_A2A_ITER_W;  // = (2 * 14) / 4 = 7
 
-static constexpr uint32_t OUTPUT_HEIGHT_SHARD_DIM = 4;
-
 //-----------------------------------------------------------------------------
 // Shard distribution functions (hardware-agnostic).
 // Identical to the Python equivalents in ttnn/ttnn/_experimental/moe_compute_utils.py.
