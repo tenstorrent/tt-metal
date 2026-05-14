@@ -10,8 +10,8 @@
 
 #include "ttnn/operations/reduction/sampling/device/sampling_device_operation_types.hpp"
 #include "ttnn/operations/reduction/sampling/device/sampling_program_factory.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
-#include <tt-metalium/work_split.hpp>
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
@@ -52,6 +52,13 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
         "Input inner dim ({}) must be non-zero and divisible by 32, pad if needed!",
         input_shape[3]);
 
+    ReduceOpDeviceGridValidationOptions sampling_grid_opts;
+    sampling_grid_opts.num_cores_use_last_core_divider = true;
+    if (args.sub_core_grids.has_value()) {
+        sampling_grid_opts.sub_grid_contained_in_device_grid = &args.sub_core_grids.value();
+        sampling_grid_opts.sub_grid_label = "sub_core_grids";
+    }
+
     {
         const uint32_t sampling_in_tile_height = input_values_tensor.tensor_spec().tile().get_height();
         const uint32_t sampling_in_tile_width = input_values_tensor.tensor_spec().tile().get_width();
@@ -62,24 +69,7 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
             input_shape[0],
             input_shape[1],
             input_shape[2]);
-        const auto& sampling_in_padded = input_values_tensor.padded_shape();
-        TT_FATAL(
-            sampling_in_padded.rank() >= 2,
-            "Sampling input_values padded_shape rank {} must be at least 2",
-            sampling_in_padded.rank());
-        TT_FATAL(
-            sampling_in_padded[-2] > 0 && sampling_in_padded[-1] > 0,
-            "Sampling input_values padded last-2 dims must be positive");
-        TT_FATAL(
-            sampling_in_padded[-2] % sampling_in_tile_height == 0,
-            "Sampling input_values padded height {} must be tile-height-aligned ({})",
-            sampling_in_padded[-2],
-            sampling_in_tile_height);
-        TT_FATAL(
-            sampling_in_padded[-1] % sampling_in_tile_width == 0,
-            "Sampling input_values padded width {} must be tile-width-aligned ({})",
-            sampling_in_padded[-1],
-            sampling_in_tile_width);
+        validate_reduce_op_tensor(input_values_tensor, "Sampling", "input_values", &sampling_grid_opts);
         TT_FATAL(
             input_values_tensor.physical_volume() % (sampling_in_tile_height * sampling_in_tile_width) == 0,
             "Sampling input_values physical volume must be a multiple of tile element count {} (got {})",
@@ -129,22 +119,6 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(k.logical_shape() == Shape({32}), "k must have shape [32]!");
     TT_FATAL(p.logical_shape() == Shape({32}), "p must have shape [32]!");
     TT_FATAL(temp.logical_shape() == Shape({32}), "temp must have shape [32]!");
-
-    const auto sampling_device_grid = input_values_tensor.device()->compute_with_storage_grid_size();
-    TT_FATAL(
-        sampling_device_grid.x > 0 && sampling_device_grid.y > 0,
-        "Sampling requires non-empty device compute grid, got ({}, {})",
-        sampling_device_grid.x,
-        sampling_device_grid.y);
-    if (args.sub_core_grids.has_value()) {
-        const CoreRangeSet sampling_full_device_grid =
-            num_cores_to_corerangeset(sampling_device_grid.x * sampling_device_grid.y, sampling_device_grid, true);
-        TT_FATAL(
-            sampling_full_device_grid.contains(args.sub_core_grids.value()),
-            "Sampling sub_core_grids {} must be contained in device compute grid {}",
-            args.sub_core_grids.value(),
-            sampling_full_device_grid);
-    }
 }
 
 TensorSpec SamplingDeviceOperation::compute_output_specs(

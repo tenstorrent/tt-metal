@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "argmax_device_operation.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "argmax_utils.hpp"
-#include <tt-metalium/work_split.hpp>
 
 using namespace tt::tt_metal;
 
@@ -169,21 +169,12 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
     }
 
     {
-        const auto device_grid_size = tensor_args.input.device()->compute_with_storage_grid_size();
-        TT_FATAL(
-            device_grid_size.x > 0 && device_grid_size.y > 0,
-            "Device compute grid must be non-empty for argmax, got ({}, {})",
-            device_grid_size.x,
-            device_grid_size.y);
-        const CoreRangeSet device_grid =
-            num_cores_to_corerangeset(device_grid_size.x * device_grid_size.y, device_grid_size, false);
+        ReduceOpDeviceGridValidationOptions grid_opts;
         if (args.use_multicore && args.sub_core_grids.has_value()) {
-            TT_FATAL(
-                device_grid.contains(args.sub_core_grids.value()),
-                "Multicore argmax sub_core_grids {} must be contained in device grid {}",
-                args.sub_core_grids.value(),
-                device_grid);
+            grid_opts.sub_grid_contained_in_device_grid = &args.sub_core_grids.value();
+            grid_opts.sub_grid_label = "Multicore argmax sub_core_grids";
         }
+        validate_reduce_op_tensor(tensor_args.input, "Argmax", "input", &grid_opts);
     }
 }
 

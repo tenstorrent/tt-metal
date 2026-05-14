@@ -3,6 +3,7 @@
 
 #include "prod_all_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::prim {
@@ -34,30 +35,7 @@ void ProdAllDeviceOperation::validate_on_program_cache_miss(
             prod_all_logical_rank);
     }
 
-    {
-        const auto& prod_all_padded_shape = tensor_args.input.padded_shape();
-        const uint32_t prod_all_tile_height = tensor_args.input.tensor_spec().tile().get_height();
-        const uint32_t prod_all_tile_width = tensor_args.input.tensor_spec().tile().get_width();
-        TT_FATAL(
-            prod_all_padded_shape.rank() >= 2,
-            "Prod_all padded_shape rank {} must be at least 2 for H/W tile checks",
-            prod_all_padded_shape.rank());
-        TT_FATAL(
-            prod_all_padded_shape[-2] > 0 && prod_all_padded_shape[-1] > 0,
-            "Prod_all padded spatial dims must be positive: height={}, width={}",
-            prod_all_padded_shape[-2],
-            prod_all_padded_shape[-1]);
-        TT_FATAL(
-            prod_all_padded_shape[-2] % prod_all_tile_height == 0,
-            "Prod_all padded_height={} must be tile-height-aligned ({})",
-            prod_all_padded_shape[-2],
-            prod_all_tile_height);
-        TT_FATAL(
-            prod_all_padded_shape[-1] % prod_all_tile_width == 0,
-            "Prod_all padded_width={} must be tile-width-aligned ({})",
-            prod_all_padded_shape[-1],
-            prod_all_tile_width);
-    }
+    validate_reduce_op_tensor(tensor_args.input, "Prod_all", "input");
 }
 
 ProdAllDeviceOperation::spec_return_value_t ProdAllDeviceOperation::compute_output_specs(

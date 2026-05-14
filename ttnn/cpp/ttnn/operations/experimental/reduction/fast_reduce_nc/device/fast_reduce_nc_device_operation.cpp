@@ -5,10 +5,10 @@
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/device/fast_reduce_nc_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/device/fast_reduce_nc_program_factory.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::experimental::prim {
 void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
@@ -19,78 +19,6 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
     // FLOAT32 is allowed so multi-stage Sum chains can carry FP32 between stages.
     operations::check_tensor(
         input, "FastReduceNC", "input", {DataType::BFLOAT16, DataType::BFLOAT8_B, DataType::FLOAT32});
-
-    auto validate_tensor_padded_spatial = [](const Tensor& t, const char* tensor_label) {
-        const uint32_t tile_height = t.tensor_spec().tile().get_height();
-        const uint32_t tile_width = t.tensor_spec().tile().get_width();
-        const auto& padded_shape = t.padded_shape();
-        TT_FATAL(
-            padded_shape.rank() >= 2,
-            "FastReduceNC {} padded_shape rank {} must be at least 2",
-            tensor_label,
-            padded_shape.rank());
-        TT_FATAL(
-            padded_shape[-2] > 0 && padded_shape[-1] > 0,
-            "FastReduceNC {} padded last-2 dims must be positive",
-            tensor_label);
-        TT_FATAL(
-            padded_shape[-2] % tile_height == 0,
-            "FastReduceNC {} padded height {} must be tile-height-aligned ({})",
-            tensor_label,
-            padded_shape[-2],
-            tile_height);
-        TT_FATAL(
-            padded_shape[-1] % tile_width == 0,
-            "FastReduceNC {} padded width {} must be tile-width-aligned ({})",
-            tensor_label,
-            padded_shape[-1],
-            tile_width);
-    };
-
-    auto validate_shard_shape_2d = [&input](uint32_t shape0, uint32_t shape1, const char* which) {
-        const uint32_t tile_height = input.tensor_spec().tile().get_height();
-        const uint32_t tile_width = input.tensor_spec().tile().get_width();
-        TT_FATAL(
-            shape0 > 0 && shape1 > 0,
-            "FastReduceNC {} shard_shape must be positive, got [{}, {}]",
-            which,
-            shape0,
-            shape1);
-        TT_FATAL(
-            shape0 % tile_height == 0,
-            "FastReduceNC {} shard_shape[0]={} must be tile-height-aligned ({})",
-            which,
-            shape0,
-            tile_height);
-        TT_FATAL(
-            shape1 % tile_width == 0,
-            "FastReduceNC {} shard_shape[1]={} must be tile-width-aligned ({})",
-            which,
-            shape1,
-            tile_width);
-    };
-
-    auto validate_nd_shard_last_two = [&input](const Shape& shard_shape, const char* which) {
-        if (shard_shape.rank() < 2) {
-            return;
-        }
-        const uint32_t tile_height = input.tensor_spec().tile().get_height();
-        const uint32_t tile_width = input.tensor_spec().tile().get_width();
-        TT_FATAL(
-            shard_shape[-2] > 0 && shard_shape[-1] > 0, "FastReduceNC {} ND shard last-2 dims must be positive", which);
-        TT_FATAL(
-            shard_shape[-2] % tile_height == 0,
-            "FastReduceNC {} ND shard_shape[-2]={} must be tile-height-aligned ({})",
-            which,
-            shard_shape[-2],
-            tile_height);
-        TT_FATAL(
-            shard_shape[-1] % tile_width == 0,
-            "FastReduceNC {} ND shard_shape[-1]={} must be tile-width-aligned ({})",
-            which,
-            shard_shape[-1],
-            tile_width);
-    };
 
     if (preallocated_output.has_value()) {
         operations::check_tensor(
@@ -103,7 +31,6 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
             "FastReduceNC preallocated output rank {} must match input rank {}",
             preallocated_output.value().logical_shape().rank(),
             input.logical_shape().rank());
-        validate_tensor_padded_spatial(preallocated_output.value(), "preallocated output");
     }
 
     // validate input dim
@@ -119,53 +46,31 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
         input_rank,
         tt::tt_metal::MAX_NUM_DIMENSIONS);
 
-    validate_tensor_padded_spatial(input, "input");
+    ttnn::prim::ReduceOpDeviceGridValidationOptions input_grid_opts{};
+    if (args.sub_core_grids.has_value()) {
+        input_grid_opts.sub_grid_contained_in_device_grid = &args.sub_core_grids.value();
+        input_grid_opts.sub_grid_label = "sub_core_grids";
+    }
+    input_grid_opts.shard_grid_contained_in_device_grid = &input.memory_config();
+    input_grid_opts.memory_config_label = "input";
 
-    const auto fr_nc_device_grid = tensor_args.input.device()->compute_with_storage_grid_size();
-    TT_FATAL(
-        fr_nc_device_grid.x > 0 && fr_nc_device_grid.y > 0,
-        "FastReduceNC requires non-empty device compute grid, got ({}, {})",
-        fr_nc_device_grid.x,
-        fr_nc_device_grid.y);
-    const tt::tt_metal::CoreRangeSet fr_nc_full_device_grid =
-        tt::tt_metal::num_cores_to_corerangeset(fr_nc_device_grid.x * fr_nc_device_grid.y, fr_nc_device_grid, true);
-    const auto& fr_nc_in_memory_config = tensor_args.input.memory_config();
-    if (fr_nc_in_memory_config.shard_spec().has_value()) {
-        TT_FATAL(
-            fr_nc_full_device_grid.contains(fr_nc_in_memory_config.shard_spec().value().grid),
-            "FastReduceNC input shard grid {} must be contained in device compute grid {}",
-            fr_nc_in_memory_config.shard_spec().value().grid,
-            fr_nc_full_device_grid);
-        const auto& in_shard_spec = fr_nc_in_memory_config.shard_spec().value();
-        validate_shard_shape_2d(in_shard_spec.shape[0], in_shard_spec.shape[1], "input");
+    std::optional<TensorSpec> input_spec_nd_shard = std::nullopt;
+    if (input.memory_config().nd_shard_spec().has_value()) {
+        input_spec_nd_shard = input.tensor_spec();
     }
-    if (fr_nc_in_memory_config.nd_shard_spec().has_value()) {
-        TT_FATAL(
-            fr_nc_full_device_grid.contains(fr_nc_in_memory_config.nd_shard_spec().value().grid),
-            "FastReduceNC input ND shard grid {} must be contained in device compute grid {}",
-            fr_nc_in_memory_config.nd_shard_spec().value().grid,
-            fr_nc_full_device_grid);
-        const auto& in_nd_shard_spec = fr_nc_in_memory_config.nd_shard_spec().value();
-        validate_nd_shard_last_two(in_nd_shard_spec.shard_shape, "input");
+    ttnn::prim::validate_reduce_op_tensor(input, "FastReduceNC", "input", &input_grid_opts, input_spec_nd_shard);
+
+    ttnn::prim::ReduceOpDeviceGridValidationOptions output_grid_opts{};
+    output_grid_opts.shard_grid_contained_in_device_grid = &args.output_mem_config;
+    output_grid_opts.memory_config_label = "output";
+    std::optional<TensorSpec> output_spec_nd_shard = std::nullopt;
+    if (args.output_mem_config.nd_shard_spec().has_value() || args.output_mem_config.shard_spec().has_value()) {
+        output_spec_nd_shard = compute_output_specs(args, tensor_args);
     }
-    const auto& fr_nc_out_memory_config = args.output_mem_config;
-    if (fr_nc_out_memory_config.shard_spec().has_value()) {
-        TT_FATAL(
-            fr_nc_full_device_grid.contains(fr_nc_out_memory_config.shard_spec().value().grid),
-            "FastReduceNC output shard grid {} must be contained in device compute grid {}",
-            fr_nc_out_memory_config.shard_spec().value().grid,
-            fr_nc_full_device_grid);
-        const auto& out_shard_spec = fr_nc_out_memory_config.shard_spec().value();
-        validate_shard_shape_2d(out_shard_spec.shape[0], out_shard_spec.shape[1], "output");
-    }
-    if (fr_nc_out_memory_config.nd_shard_spec().has_value()) {
-        TT_FATAL(
-            fr_nc_full_device_grid.contains(fr_nc_out_memory_config.nd_shard_spec().value().grid),
-            "FastReduceNC output ND shard grid {} must be contained in device compute grid {}",
-            fr_nc_out_memory_config.nd_shard_spec().value().grid,
-            fr_nc_full_device_grid);
-        const auto& out_nd_shard_spec = fr_nc_out_memory_config.nd_shard_spec().value();
-        validate_nd_shard_last_two(out_nd_shard_spec.shard_shape, "output");
+    ttnn::prim::validate_reduce_op_tensor(input, "FastReduceNC", "output", &output_grid_opts, output_spec_nd_shard);
+
+    if (preallocated_output.has_value()) {
+        ttnn::prim::validate_reduce_op_tensor(preallocated_output.value(), "FastReduceNC", "preallocated_output");
     }
 }
 

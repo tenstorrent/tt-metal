@@ -69,6 +69,27 @@ tt::tt_metal::ProgramDescriptor EmaDeviceOperation::EmaProgramFactory::create_de
             "EMA program cores {} must be contained in device compute grid {}",
             all_cores,
             ema_full_device_grid);
+        auto validate_shard_grids_subset_of_program_cores = [&](const Tensor& t, const char* tensor_name) {
+            const auto& memory_config = t.memory_config();
+            if (memory_config.shard_spec().has_value()) {
+                TT_FATAL(
+                    all_cores.contains(memory_config.shard_spec().value().grid),
+                    "EMA {} shard grid {} must be contained in program cores {}",
+                    tensor_name,
+                    memory_config.shard_spec().value().grid,
+                    all_cores);
+            }
+            if (memory_config.nd_shard_spec().has_value()) {
+                TT_FATAL(
+                    all_cores.contains(memory_config.nd_shard_spec().value().grid),
+                    "EMA {} ND shard grid {} must be contained in program cores {}",
+                    tensor_name,
+                    memory_config.nd_shard_spec().value().grid,
+                    all_cores);
+            }
+        };
+        validate_shard_grids_subset_of_program_cores(input, "input");
+        validate_shard_grids_subset_of_program_cores(output, "output");
     }
     log_debug(
         tt::LogOp,

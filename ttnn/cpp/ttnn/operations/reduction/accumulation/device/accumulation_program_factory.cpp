@@ -109,11 +109,6 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
                 "Accumulation output shard grid {} must be contained in program core grid {}",
                 output_shard_grid,
                 all_cores);
-            TT_FATAL(
-                device_grid.contains(output_shard_grid),
-                "Accumulation output shard grid {} must be contained in device grid {}",
-                output_shard_grid,
-                device_grid);
         }
         if (output_memory_config.nd_shard_spec().has_value()) {
             const auto& output_nd_shard_grid = output_memory_config.nd_shard_spec().value().grid;
@@ -122,11 +117,6 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
                 "Accumulation output ND shard grid {} must be contained in program core grid {}",
                 output_nd_shard_grid,
                 all_cores);
-            TT_FATAL(
-                device_grid.contains(output_nd_shard_grid),
-                "Accumulation output ND shard grid {} must be contained in device grid {}",
-                output_nd_shard_grid,
-                device_grid);
         }
     }
 
