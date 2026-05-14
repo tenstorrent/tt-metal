@@ -16,7 +16,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.sampling import SamplingParams
+# from models.common.sampling import SamplingParams
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.demos.utils.model_targets import resolve_accuracy_targets
@@ -27,7 +27,7 @@ from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     sample_host,
 )
-from models.tt_transformers.tt.generator import Generator, SamplingParams, create_submeshes
+from models.tt_transformers.tt.generator import Generator, SamplingParams, create_submeshes # NOTE: why is SamplingParams imported twice?
 from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
 from models.tt_transformers.tt.prefetcher import is_prefetcher_supported
 
@@ -1123,6 +1123,7 @@ def test_demo_text(
                     k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
                     v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
             generator.prev_page_table = None
+            ttnn.synchronize_device(mesh_device)
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
         # Use device sampling for all cases when supported (prefill + decode)
