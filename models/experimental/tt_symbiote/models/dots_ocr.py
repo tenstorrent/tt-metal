@@ -38,15 +38,28 @@ from models.experimental.tt_symbiote.modules.dots_ocr_decoder_layer import (
 from models.experimental.tt_symbiote.modules.dots_ocr_vision import TTNNDotsOCRVisionTower
 from models.experimental.tt_symbiote.modules.embedding import TTNNEmbedding
 from models.experimental.tt_symbiote.modules.linear import (
-    TTNNLinearIColShardedWAllReduced,
-    TTNNLinearLLamaIColShardedWAllReduced,
+    TTNNDotsOCRDRAMShardedLMHead,
 )
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 from models.experimental.tt_symbiote.utils.device_management import timed_call
 
 
 def _argmax_token_on_device(logits: ttnn.Tensor) -> ttnn.Tensor:
-    """Greedy token from logits."""
+    """Greedy token from logits.
+
+    Note on the reduce-axis-sharding rule: literally that rule says never
+    split the reduce axis across cores. For ``argmax(dim=-1)`` on
+    ``[1, 1, vocab=152064]`` the non-reduce extent is 1, so the rule
+    points at single-core. We tried ``use_multicore=False`` and it
+    regressed wall-clock by ~3 ms/iter (decode 3.62 s -> 4.17 s at DP=8).
+    The single-core kernel becomes a sequential 152064-element scan with
+    a small read pipeline, while the multi-core kernel parallelizes the
+    scan and pays a small NoC fold at the end -- for vocab this large the
+    fold cost is dwarfed by the parallel speedup. Stay on
+    ``use_multicore=True`` here; the rule still applies as written for
+    "normal" reduction shapes (small reduce dim, larger non-reduce
+    extent), just not for argmax over a giant vocab with M=1.
+    """
     logits_rm = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
     token = ttnn.argmax(
         logits_rm,
@@ -330,7 +343,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
         vision_tower: TTNNDotsOCRVisionTower,
         decoder_stack: TTNNDotsOCRLayerStack,
         final_norm: TTNNDistributedRMSNorm,
-        lm_head: TTNNLinearIColShardedWAllReduced,
+        lm_head: TTNNModule,
         paged_cache: TTNNPagedAttentionKVCache,
         graph_prefill: TTNNDotsOCRPrefillGraph,
         graph_decode: TTNNDotsOCRDecodeGraph,
@@ -428,17 +441,24 @@ class TTNNDotsOCRPipeline(TTNNModule):
         final_norm = TTNNDistributedRMSNorm.from_torch(hf_model.model.norm)
         final_norm._unique_name = "model.norm"
 
-        # AllReduced gives full vocab on each device for argmax.
-        # NOTE: ``TTNNDotsOCRDRAMShardedLMHead`` (DRAM-width-sharded, N-parallel,
-        # 12-bank weight read) was attempted in this branch as a decode
-        # bandwidth win but produced corrupted argmax output -- left in
-        # ``modules/linear.py`` for future investigation. Possible causes:
-        # all_gather ordering on the K-replicated input, BFP8 output
-        # precision on a 152K-class vocab, or fp32_dest_acc_en interaction
-        # with the DRAM-sharded kernel's auto-chosen subblock factors. Until
-        # one of those is isolated and fixed, the K-parallel + reduce_scatter
-        # + all_gather path stays the production lm_head.
-        lm_head = TTNNLinearLLamaIColShardedWAllReduced.from_torch(hf_model.lm_head)
+        # ``TTNNDotsOCRDRAMShardedLMHead`` lays the lm_head weight out
+        # WIDTH_SHARDED across all 12 DRAM banks per chip and runs the matmul
+        # with ``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig``. The
+        # decode lm_head is bandwidth-bound (~60-65% DRAM in Tracy), so the
+        # 12-bank parallel read pulls per-chunk device time from
+        # ~78-100 µs (auto-config, 1-bank serial) toward ~40-50 µs.
+        #
+        # The previous correctness regression (garbled output when this class
+        # was wired in) was a weight-mapper bug: ``shard_tensor_to_mesh_mapper(
+        # dim=-1)`` always sharded along the first mesh axis, so on T3K
+        # mesh=(8,1) (DP=8, TP=1) every chip got 1/8 of the vocab columns,
+        # ``_tp_requires_ccl`` was False so no final all_gather ran, and
+        # argmax picked from a 1/8 garbage slice. The class now uses
+        # ``_tp_mesh_mapper`` which replicates across the DP axis and shards
+        # only across the TP axis -- so DP-only meshes get a fully-replicated
+        # vocab on every chip and TP meshes still get the N-parallel split
+        # plus all_gather restore.
+        lm_head = TTNNDotsOCRDRAMShardedLMHead.from_torch(hf_model.lm_head)
         lm_head._unique_name = "lm_head"
 
         # Paged KV cache
@@ -462,8 +482,26 @@ class TTNNDotsOCRPipeline(TTNNModule):
 
         graph_prefill = TTNNDotsOCRPrefillGraph(decoder_stack, final_norm, lm_head)
         graph_prefill._unique_name = "dots_ocr_graph_prefill"
-        graph_decode_embedding = embedding if batch_size == 1 else None
-        graph_decode = TTNNDotsOCRDecodeGraph(decoder_stack, final_norm, lm_head, embedding=graph_decode_embedding)
+        # Bisect step 2: embedding inside the decode trace for **both**
+        # batch_size==1 and DP batch-sharded modes. ``TTNNEmbedding`` is
+        # ``@trace_enabled``, but the trace decorator at
+        # ``run_config.py::TracedRun.__call__`` (line ~1197) explicitly
+        # falls back to inline ``forward()`` when ``_TRACE_RUNNING`` is
+        # already set by the parent ``graph_decode`` capture (so embedding
+        # does NOT create a nested per-instance trace cache here).
+        # ``prefill``'s separate ``self.embedding(tt_input_ids)`` call
+        # captures embedding's own trace cache for the prefill input shape;
+        # that is a different cache key from the decode embedding ops
+        # baked into ``graph_decode``'s trace, so they coexist safely.
+        #
+        # Per chip the decode embedding input is ``[1, 1] uint32 ROW_MAJOR``
+        # regardless of DP, identical to the proven batch_size==1 path. This
+        # also kills the per-iter ``_dp_repack_batch_sharded_hidden`` host
+        # roundtrip (sync + clone + to_torch via ConcatMesh2dToTensor +
+        # from_torch via _batch_input_mapper) since the trace was captured
+        # with already-properly-DP-sharded ``_decode_token_buffer`` and
+        # therefore preserves mesh-sharding metadata on its outputs.
+        graph_decode = TTNNDotsOCRDecodeGraph(decoder_stack, final_norm, lm_head, embedding=embedding)
         graph_decode._unique_name = "dots_ocr_graph_decode"
         graph_scatter_merge = TTNNDotsOCRScatterMergeGraph()
         graph_scatter_merge._unique_name = "dots_ocr_graph_scatter_merge"
@@ -731,7 +769,22 @@ class TTNNDotsOCRPipeline(TTNNModule):
             with _profile_stage(self.device, "decode.init_buffers"):
                 self._init_decode_buffers(prev_token_id)
         else:
-            upload_prev_token = self._batch_input_mapper is not None or not self._decode_token_buffer_has_next
+            # ``has_next`` is True whenever the previous iter's argmax already
+            # wrote the next-token directly into ``_decode_token_buffer`` via
+            # ``ttnn.copy(token_id_tt, _decode_token_buffer)`` below. In that
+            # case the host upload is redundant -- the device already has the
+            # token. This holds for **both** non-DP single-stream and DP
+            # batch-sharded modes: per chip, ``token_id_tt`` and
+            # ``_decode_token_buffer`` are both [1,1] uint32 ROW_MAJOR, so
+            # the on-device copy is just a per-chip element copy and the
+            # mesh-sharding metadata stays consistent.
+            #
+            # NOTE: this flag is the **only** DP host-overhead reduction
+            # being landed in this pass (step 1 of the bisect after the
+            # malloc-corrupted multi-change attempt). Embedding-in-trace
+            # and pipelined readback stay disabled for DP until step 1 is
+            # confirmed clean across two ``generate()`` calls.
+            upload_prev_token = not self._decode_token_buffer_has_next
             if upload_prev_token:
                 if isinstance(prev_token_id, int):
                     self._decode_token_host[0][0] = prev_token_id
@@ -762,14 +815,27 @@ class TTNNDotsOCRPipeline(TTNNModule):
                     ttnn.copy_host_to_device_tensor(token_host_tt, self._decode_token_buffer)
 
             self._decode_seq_counter += 1
-            with _profile_stage(self.device, "decode.cache_position_h2d"):
-                self._decode_cache_pos_host[0] = self._decode_seq_counter
-                cache_host_tt = ttnn.from_torch(
-                    self._decode_cache_pos_host,
-                    dtype=ttnn.int32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                )
-                ttnn.copy_host_to_device_tensor(cache_host_tt, self._decode_cache_position)
+            # Device-side cache_position increment for both DP and non-DP.
+            # ``_decode_cache_position`` is REPLICATED across the mesh (a
+            # single global counter, see ``_init_decode_buffers``) so the
+            # ``ttnn.add`` runs identically on every chip and stays in sync
+            # without any host-side h2d. Used to be DP-gated to a host h2d
+            # path (``_batch_input_mapper is not None``); removing the gate
+            # cuts another per-iter ``ttnn.from_torch + copy_host_to_device``
+            # (~3-5 ms wall-clock at DP=8 on T3K).
+            with _profile_stage(self.device, "decode.cache_position_device_inc"):
+                # NOTE: tried ``ttnn.add(..., output_tensor=cache_position)``
+                # to eliminate the explicit ``ttnn.copy`` + ``ttnn.deallocate``,
+                # but the in-place output_tensor path raises
+                # ``Optional output tensor with Row Major input is not
+                # supported right now for Elementwise operations``
+                # (ttnn/cpp/ttnn/operations/eltwise/binary/binary.cpp:362)
+                # because ``_decode_cache_position`` is INT32 / ROW_MAJOR. Stay
+                # on the temp-buffer path until in-place row-major elementwise
+                # is supported.
+                cache_next = ttnn.add(self._decode_cache_position, 1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.copy(cache_next, self._decode_cache_position)
+                ttnn.deallocate(cache_next)
 
         trace_decode_tokens = getattr(self.graph_decode, "_d_embedding", None) is not None
         if trace_decode_tokens:
@@ -783,17 +849,31 @@ class TTNNDotsOCRPipeline(TTNNModule):
 
         with _profile_stage(self.device, "decode.graph_decode_sync"):
             token_id_tt = self.graph_decode(decode_input, self._decode_cache_position, past_key_value=self.paged_cache)
+        # On-device token feedback. Skip the per-iter ``ttnn.from_torch +
+        # ttnn.copy_host_to_device_tensor`` host upload by writing the
+        # next-iter input directly on device.
+        #
+        # Per chip, both ``token_id_tt`` (argmax output reshaped to ``[b,1]``
+        # in ``_argmax_token_on_device``) and ``_decode_token_buffer`` are
+        # ``uint32`` ``ROW_MAJOR`` with the same physical ``[1,1]`` shape per
+        # chip (DP shards along batch dim, replicated metadata otherwise),
+        # so the copy is a per-chip element copy and mesh-sharding metadata
+        # is preserved.
+        ttnn.copy(token_id_tt, self._decode_token_buffer)
+        self._decode_token_buffer_has_next = True
         token_id_snapshot = None
-        if self._batch_input_mapper is None:
-            # Token feedback is handled inside the traced graph (TTNNDotsOCRDecodeGraph
-            # writes new_token into decode_input before returning), so no external copy
-            # is needed here. _decode_token_buffer_has_next stays True from _init_decode_buffers.
-            if not read_from_device:
-                token_id_snapshot = token_id_tt.cpu(blocking=False)
+        if self._batch_input_mapper is None and not read_from_device:
+            # Pipelined async d2h via ``.cpu(blocking=False)`` is enabled
+            # **only** for non-DP single-stream / replicated-mesh decode.
+            # Tried for DP (step 3 of the bisect) but reproducibly crashed
+            # with ``malloc(): unaligned tcache chunk detected`` on the
+            # warmup pass 2 prefill ``from_torch(input_ids)`` -- the
+            # multi-device mesh-sharded snapshot lifecycle is broken in
+            # this path. Stay gated until a safer DP-aware mechanism
+            # (ttnn events / pre-allocated host buffer pool) is wired up.
+            token_id_snapshot = token_id_tt.cpu(blocking=False)
 
         if not read_from_device:
-            if self._batch_input_mapper is not None:
-                raise RuntimeError("Deferred decode readback is only supported for non-DP single-stream decode")
             if token_id_snapshot is None:
                 raise RuntimeError("Deferred decode readback did not produce a token snapshot")
             return token_id_snapshot
@@ -851,13 +931,56 @@ class TTNNDotsOCRPipeline(TTNNModule):
             currents: List[int] = list(first_out)
             generated: List[List[int]] = [[t] for t in currents]
             active = [True] * len(currents)
+            num_streams = len(currents)
+            # Bisect-step-3 host-overhead state:
+            # - cache_position: device-side ``ttnn.add`` increment -- on.
+            # - token feedback: on-device ``ttnn.copy`` -- on (step 1).
+            # - embedding: inside the decode trace -- on (step 2).
+            # - readback: 1-deep pipelined via ``token_id_tt.cpu(blocking=False)``
+            #   in ``decode_step`` (step 3, this pass). The d2h overlaps
+            #   with the NEXT iter's trace replay; resolve via
+            #   ``ttnn.to_torch + ConcatMeshToTensor`` lagged by 1 iter.
+            #
+            # Correctness:
+            # - The next iter's trace replay reads ``_decode_token_buffer``,
+            #   which the previous iter wrote on-device via
+            #   ``ttnn.copy(token_id_tt, _decode_token_buffer)`` BEFORE the
+            #   ``.cpu(blocking=False)`` was scheduled. So the next trace
+            #   input is fully on-device and independent of the pending
+            #   d2h.
+            # - tt-metal serializes a queued d2h on ``token_id_tt`` before
+            #   any subsequent write to the same buffer (the next iter's
+            #   argmax inside the decode trace), so the host snapshot
+            #   captures the correct per-stream tokens even though the
+            #   device buffer is reused.
+            # - EOS lag is at most 1 iter; the trailing snapshot is
+            #   resolved after the loop.
+            # Synchronous DP loop. Step 3 (1-deep pipelined readback via
+            # ``token_id_tt.cpu(blocking=False)``) crashed with
+            # ``malloc(): unaligned tcache chunk detected`` even on its own
+            # (with steps 1 & 2 already verified stable in isolation): the
+            # ``.cpu(blocking=False)`` snapshot lifecycle on a
+            # multi-device mesh-sharded tensor is broken when combined
+            # with ``ttnn.deallocate(snapshot)``. Skipping the deallocate
+            # alone was insufficient (still corrupted the host heap on
+            # warmup pass 2's prefill ``from_torch(input_ids)``), so the
+            # failure is in ``.cpu(blocking=False)`` itself for DP, not
+            # just the explicit deallocate.
+            #
+            # Stay on the synchronous loop for DP. Steps 1 (on-device token
+            # feedback) and 2 (embedding-in-trace) remain enabled, so the
+            # loop is much cheaper than baseline -- only the per-iter
+            # ~10 ms ``ConcatMeshToTensor`` d2h on the host critical path
+            # remains as the dominant DP host overhead. Future work:
+            # explicit ttnn events, or a pre-allocated host buffer pool
+            # populated via a non-blocking ``ttnn.to_torch`` variant.
             for _ in range(max_new_tokens - 1):
                 if not any(active):
                     break
                 next_toks = self.decode_step(currents)
                 if not isinstance(next_toks, list):
                     raise RuntimeError("decode_step must return a list in DP dual-stream mode")
-                for i in range(len(currents)):
+                for i in range(num_streams):
                     if not active[i]:
                         continue
                     generated[i].append(next_toks[i])
