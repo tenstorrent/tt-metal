@@ -100,6 +100,9 @@ def mesh_8x4():
         # Smallest meaningful perf sample: 1 decoder layer, 1 prefill pass
         # + 1 decode step. num_tokens=2 because prefill produces token 1
         # and the decode loop produces 1 additional token (=2 total).
+        # Profiled region is bracketed by tracy signposts:
+        #   start --> prefill_done --> stop
+        # which segments the tracy CSV into prefill-only and decode-only rows.
         # Use under tracy:
         #   python -m tracy -p -v -r -m pytest \
         #     models/demos/qwen3_6_galaxy/demo/text_demo.py::test_demo_text -k perf_1L_1T

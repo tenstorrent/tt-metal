@@ -7,86 +7,113 @@ Captured via:
         -k perf_1L_1T
 
 Run config: 1 decoder layer (layer 0 = `linear_attention` / DeltaNet),
-prefill T=32 (prompt: "The capital of France is"), no decode steps
-(num_tokens=1 means only the prefill-tail token is emitted). Mesh: BH GLX 8×4.
+prefill T=32 (prompt: "The capital of France is"), 1 decode step
+(`num_tokens=2` so the prefill produces token 1 and the decode loop runs
+once for token 2). Mesh: BH GLX 8×4.
 
-Tracy CSV: `generated/profiler/reports/2026_05_14_07_22_59/ops_perf_results_2026_05_14_07_22_59.csv`
+Tracy CSV: `generated/profiler/reports/2026_05_14_07_31_52/ops_perf_results_2026_05_14_07_31_52.csv`
+
+The profiled region is bracketed by `tracy.signpost` markers
+(`start` → `prefill_done` → `stop`) — the analysis below filters to
+just those rows, excluding warmup and setup.
 
 ## Wall-clock
 
 | phase | latency |
 |---|---|
-| Model build (1 layer, on-device weight upload) | 25.9 s (one-time) |
-| Warmup prefill+decode (excluded from profile) | ~1.5 s |
-| Profiled prefill (T=32, 1 layer)               | **712.9 ms** |
+| Model build (1 layer, on-device weight upload)  | ~26 s (one-time) |
+| Warmup prefill + decode (excluded from profile) | ~1.5 s |
+| Profiled prefill (T=32, 1 layer)                | **720.2 ms** |
+| Profiled decode  (T=1, 1 layer)                 | **51.8 ms** |
 
-## Device-side op breakdown — profiled prefill region (signpost: `start` → `prefill_done`)
+## Prefill — device-side op breakdown (signpost: `start` → `prefill_done`)
 
-5472 op rows = 32 mesh chips × ~171 logical ops. `sum_dev_us` is summed
-across all chips × calls; chips run concurrently so wall-clock is bounded
-by max-per-chip, not sum.
+5 472 op rows = 32 mesh chips × 171 logical ops. `sum_dev_us` is summed
+across all chips × calls; chips run concurrently so wall-clock latency
+is bounded by the slowest per-chip path, not the sum.
 
 | op | count | sum_dev_us | avg_us | % of dev time |
 |---|---:|---:|---:|---:|
-| MatmulDeviceOperation                | 928 | 75 359.9 | 81.21 | **68.3 %** |
-| AllGatherDeviceOperation             | 256 | 14 484.4 | 56.58 | **13.1 %** |
-| BinaryNgDeviceOperation              | 1 408 | 4 216.8 | 2.99 | 3.8 % |
-| LayerNormPostAllGatherDeviceOperation | 96 | 3 796.3 | 39.55 | 3.4 % |
-| ReshapeViewDeviceOperation           | 608 | 2 986.8 | 4.91 | 2.7 % |
-| LayerNormPreAllGatherDeviceOperation | 96 | 2 151.6 | 22.41 | 1.9 % |
-| TilizeDeviceOperation                | 128 | 1 616.0 | 12.63 | 1.5 % |
-| UnaryDeviceOperation                 | 416 | 1 011.6 | 2.43 | 0.9 % |
-| EmbeddingsDeviceOperation            | 32  | 943.0 | 29.47 | 0.9 % |
-| FastReduceNCDeviceOperation          | 64  | 623.7 | 9.75 | 0.6 % |
-| TransposeDeviceOperation             | 288 | 535.3 | 1.86 | 0.5 % |
-| LayerNormDeviceOperation             | 96  | 443.2 | 4.62 | 0.4 % |
-| TilizeWithValPaddingDeviceOperation  | 64  | 392.4 | 6.13 | 0.4 % |
-| SliceDeviceOperation                 | 320 | 344.4 | 1.08 | 0.3 % |
-| UntilizeDeviceOperation              | 32  | 318.6 | 9.95 | 0.3 % |
-| UntilizeWithUnpaddingDeviceOperation | 64  | 251.1 | 3.92 | 0.2 % |
-| TypecastDeviceOperation              | 192 | 244.4 | 1.27 | 0.2 % |
-| CloneOperation                       | 96  | 222.0 | 2.31 | 0.2 % |
-| ConcatDeviceOperation                | 128 | 176.2 | 1.38 | 0.2 % |
-| MeshPartitionDeviceOperation         | 96  | 110.7 | 1.15 | 0.1 % |
-| FillPadDeviceOperation               | 32  | 90.5  | 2.83 | 0.1 % |
-| ReduceDeviceOperation                | 32  | 37.8  | 1.18 | 0.0 % |
-| **TOTAL**                            | **5 472** | **110 357** | — | **100 %** |
+| MatmulDeviceOperation                  | 928 | 75 395.0 | 81.24 | **68.3 %** |
+| AllGatherDeviceOperation               | 256 | 14 441.3 | 56.41 | **13.1 %** |
+| BinaryNgDeviceOperation                | 1 408 | 4 217.4 | 3.00 | 3.8 % |
+| LayerNormPostAllGatherDeviceOperation  | 96 | 3 794.0 | 39.52 | 3.4 % |
+| ReshapeViewDeviceOperation             | 608 | 2 985.4 | 4.91 | 2.7 % |
+| LayerNormPreAllGatherDeviceOperation   | 96 | 2 154.5 | 22.44 | 2.0 % |
+| TilizeDeviceOperation                  | 128 | 1 613.2 | 12.60 | 1.5 % |
+| UnaryDeviceOperation                   | 416 | 1 012.0 | 2.43 | 0.9 % |
+| EmbeddingsDeviceOperation              | 32  | 942.8 | 29.46 | 0.9 % |
+| FastReduceNCDeviceOperation            | 64  | 625.5 | 9.77 | 0.6 % |
+| TransposeDeviceOperation               | 288 | 535.0 | 1.86 | 0.5 % |
+| LayerNormDeviceOperation               | 96  | 443.1 | 4.62 | 0.4 % |
+| TilizeWithValPaddingDeviceOperation    | 64  | 392.3 | 6.13 | 0.4 % |
+| SliceDeviceOperation                   | 320 | 344.6 | 1.08 | 0.3 % |
+| UntilizeDeviceOperation                | 32  | 318.7 | 9.96 | 0.3 % |
+| UntilizeWithUnpaddingDeviceOperation   | 64  | 250.7 | 3.92 | 0.2 % |
+| TypecastDeviceOperation                | 192 | 244.3 | 1.27 | 0.2 % |
+| CloneOperation                         | 96  | 220.5 | 2.30 | 0.2 % |
+| ConcatDeviceOperation                  | 128 | 175.8 | 1.37 | 0.2 % |
+| MeshPartitionDeviceOperation           | 96  | 110.7 | 1.15 | 0.1 % |
+| FillPadDeviceOperation                 | 32  | 90.5 | 2.83 | 0.1 % |
+| ReduceDeviceOperation                  | 32  | 37.7 | 1.18 | 0.0 % |
+| **PREFILL TOTAL**                      | **5 472** | **110 345** | — | **100 %** |
+
+## Decode — device-side op breakdown (signpost: `prefill_done` → `stop`)
+
+4 000 op rows = 32 mesh chips × 125 logical ops per decode step. Fewer
+ops than prefill because the linear projections operate on T=1 instead
+of T=32, and the DeltaNet decode path uses the *recurrent* kernel (T
+sequential matmuls) instead of the *chunked* prefill kernel.
+
+| op | count | sum_dev_us | avg_us | % of dev time |
+|---|---:|---:|---:|---:|
+| MatmulDeviceOperation                  | 448 | 71 856.4 | **160.39** | **72.8 %** |
+| AllGatherDeviceOperation               | 256 | 13 750.3 | 53.71 | **13.9 %** |
+| LayerNormPostAllGatherDeviceOperation  | 96  | 3 798.7 | 39.57 | 3.8 % |
+| LayerNormPreAllGatherDeviceOperation   | 96  | 2 154.3 | 22.44 | 2.2 % |
+| ReshapeViewDeviceOperation             | 608 | 1 565.7 | 2.58 | 1.6 % |
+| BinaryNgDeviceOperation                | 640 | 1 490.7 | 2.33 | 1.5 % |
+| TilizeWithValPaddingDeviceOperation    | 224 | 861.0 | 3.84 | 0.9 % |
+| FastReduceNCDeviceOperation            | 64  | 627.0 | 9.80 | 0.6 % |
+| UnaryDeviceOperation                   | 256 | 531.2 | 2.07 | 0.5 % |
+| SliceDeviceOperation                   | 320 | 393.8 | 1.23 | 0.4 % |
+| LayerNormDeviceOperation               | 96  | 379.9 | 3.96 | 0.4 % |
+| TransposeDeviceOperation               | 192 | 270.9 | 1.41 | 0.3 % |
+| TypecastDeviceOperation                | 256 | 266.7 | 1.04 | 0.3 % |
+| UntilizeWithUnpaddingDeviceOperation   | 96  | 241.9 | 2.52 | 0.2 % |
+| CloneOperation                         | 96  | 222.2 | 2.31 | 0.2 % |
+| ConcatDeviceOperation                  | 128 | 128.2 | 1.00 | 0.1 % |
+| MeshPartitionDeviceOperation           | 96  | 110.0 | 1.15 | 0.1 % |
+| EmbeddingsDeviceOperation              | 32  | 46.9 | 1.47 | 0.0 % |
+| **DECODE TOTAL**                       | **4 000** | **98 695** | — | **100 %** |
 
 ## Headline findings
 
-1. **Matmul dominates at ~68 %** of device-kernel time. The 928 matmul
-   calls for one prefill pass break down into: QKV projection (wqkvg),
-   q-norm × k-norm internal matmuls, MLP gate/up/down, LM-head linear,
-   DeltaNet in-projections, and the DeltaNet recurrent kernel's many
-   small matmuls. The DeltaNet recurrent kernel is the largest single
-   contributor here — it issues ~24 matmuls per token (vs ~5 for a
-   standard attention layer).
+1. **Matmul dominates both phases** — 68 % of prefill, **73 % of decode**
+   device-kernel time. The decode average matmul (160 µs) is **2× the
+   prefill average** (81 µs) because the recurrent DeltaNet kernel
+   issues many small matmuls per call, each with low arithmetic
+   intensity (matmul of [1, K] × [K, V] is bandwidth-bound).
+2. **AllGather (CCL) is the second-largest line item** at ~13 % in both
+   phases. DistributedNorm uses `all_gather(cluster_axis=1)` 3× per
+   layer, and the MLP uses `all_gather(cluster_axis=0) + fast_reduce_nc`
+   for the row-parallel reduction.
+3. **Decode wall-clock = 51.8 ms** for 1 layer means a full 64-layer
+   decode step would run at roughly **1.0 tok/s eager** (extrapolating
+   linearly — actual scaling is sublinear because CCL ops grow with
+   layer count). The observed 64-layer wall-clock in the e2e demo
+   matches at ~0.66 s/step → ~1.5 tok/s.
+4. **No trace capture in this run** — `_TRACE_SUPPORTED=False` (T14b.9
+   in progress; see `tt/generator.py` docstring). The same decode loop
+   under trace replay would amortize the ~150 µs/op Python+kernel-launch
+   overhead, projecting to a 5–7× speedup based on the
+   trace-vs-eager ratio observed in llama3_70b_galaxy.
 
-2. **CCL (AllGather) ~13 %**. Distributed-norm uses `all_gather` across
-   `cluster_axis=1` (4 cols) and MLP uses `all_gather + fast_reduce_nc`
-   across `cluster_axis=0` (8 rows). 256 AllGather calls for 1 layer ×
-   T=32 means ~8 gathers per token-step.
+## Next obvious optimization targets
 
-3. **LayerNorm (pre + post) ~5.3 %**. DistributedNorm is invoked 2× per
-   decoder layer + once at the final norm = 3 invocations, each running
-   PreAllGather → AllGather → PostAllGather across 32 prefill positions.
-
-4. **No decode region in this profile** — `num_tokens=1` means the
-   prefill tail produces the only generated token; no `forward_decode`
-   call ran. To capture a decode-step perf sheet, change the
-   `perf_1L_1T` parametrize tuple to `(1, 2, "The capital of France is",
-   "perf_1L_1T")` and re-run; the second token comes from one
-   `forward_decode` call which the trace will record between the
-   `prefill_done` and `stop` signposts.
-
-## Next obvious optimization targets (based on % share)
-
-- Matmul: **fuse gate+up MLP projection** (currently 2 separate matmuls
-  + ttnn.silu + multiply). Llama 70B fuses these. Estimated saving:
-  ~10–15 % of MLP matmul time.
-- AllGather: **trace capture** would eliminate the per-step launch
-  overhead. (T14b.9 in progress — see `tt/generator.py` docstring.)
-- DeltaNet recurrent: **batched chunk size** in
-  `chunk_gated_delta_rule_ttnn` is fixed at 32; profiling indicates
-  this is where most of the matmul time goes per token. Worth a tuning
-  pass to find the chunk size that maximizes utilization.
+| target | est. savings | effort |
+|---|---|---|
+| Land T14b.9 trace capture for decode | 5–7× decode latency (~10 tok/s eager → 50–70 tok/s) | medium — one residual host-write site identified (`to_memory_config` in `llama_attention.forward_decode`); see PERF.md sibling files for diagnosis |
+| Fuse MLP gate + up projections | ~10–15 % of decode matmul time (~7 ms/step) | small — single matmul + split, llama_70b pattern |
+| Tune DeltaNet `chunk_gated_delta_rule_ttnn` chunk size (currently 32) | unknown; depends on memory hierarchy; needs sweep | small — single config knob |
+| Replace per-call shard configs with pre-computed configs | small (~1 ms/step) | small |
