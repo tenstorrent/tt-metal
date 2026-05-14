@@ -6,10 +6,10 @@
 #include "api/dataflow/dataflow_api.h"
 
 #include "api/debug/dprint.h"
-#include "experimental/noc.h"
-#include "experimental/endpoints.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t batch_ids_addr = get_arg_val<uint32_t>(0);
@@ -48,9 +48,9 @@ void kernel_main() {
     // program cache hits.
     const auto batchAddr = TensorAccessor(batch_ids_args, batch_ids_addr, batch_id_size << 2);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in0(cb_id_in0);
-    experimental::CircularBuffer batch_cb(batch_cb_id);
+    Noc noc;
+    CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer batch_cb(batch_cb_id);
 
     volatile tt_l1_ptr int* addr_ptr = nullptr;
 
@@ -104,7 +104,7 @@ void kernel_main() {
                     if constexpr (IS_B_SAME_SHARDED) {
                         const uint32_t b_offset = (replace_src * shard_ppb + p) * shard_page_stride;
                         noc.async_read(
-                            experimental::UnicastEndpoint{},
+                            UnicastEndpoint{},
                             cb_in0,
                             page_size,
                             {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
@@ -129,7 +129,7 @@ void kernel_main() {
                 } else {
                     const uint32_t a_offset = (b_local * shard_ppb + p) * shard_page_stride;
                     noc.async_read(
-                        experimental::UnicastEndpoint{},
+                        UnicastEndpoint{},
                         cb_in0,
                         page_size,
                         {.noc_x = (uint32_t)my_x[noc.get_noc_id()],

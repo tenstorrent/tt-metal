@@ -448,8 +448,20 @@ jobs:
           # This ensures the sweep fixture creates a mesh device matching the
           # traced topology (e.g., 4x8 for Galaxy, 1x2 for N300).
           MESH=$(python3 -c "
-          import json, glob, sys
+          import json, glob, sys, os
+          test_group = os.environ.get('TEST_GROUP_NAME', '').lower()
+          arch = os.environ.get('ARCH_NAME', '').lower()
+          arch_filter = 'wormhole' if 'wormhole' in arch else ('blackhole' if 'blackhole' in arch else '')
+          is_galaxy = 'galaxy' in test_group
           for f in glob.glob('/work/tests/sweep_framework/vectors_export/*.json'):
+              fname = os.path.basename(f).lower()
+              if arch_filter and arch_filter not in fname:
+                  continue
+              # Exclude galaxy vectors on non-galaxy runners and vice versa
+              if is_galaxy and 'galaxy' not in fname:
+                  continue
+              if not is_galaxy and 'galaxy' in fname:
+                  continue
               with open(f) as fh:
                   data = json.load(fh)
               for suite in data.values():
@@ -485,8 +497,8 @@ jobs:
           # own mesh axis, identical to the PCC sweep workflow.
           cd /work
           python3 tests/sweep_framework/split_vectors_by_axis.py
-          echo "::group::COL partition"; ls tests/sweep_framework/vectors_export_col/ | head -20; echo "::endgroup::"
-          echo "::group::ROW partition"; ls tests/sweep_framework/vectors_export_row/ | head -20; echo "::endgroup::"
+          echo "::group::COL partition"; ls tests/sweep_framework/vectors_export_col/ 2>/dev/null | head -20 || true; echo "::endgroup::"
+          echo "::group::ROW partition"; ls tests/sweep_framework/vectors_export_row/ 2>/dev/null | head -20 || true; echo "::endgroup::"
 
       - name: Run sweeps with tracer
         run: |
@@ -533,9 +545,35 @@ jobs:
               echo "[two-pass] $axis partition has no vectors for batch modules — skipping"
               return 0
             fi
+            # Check if any vector file in this partition has vectors for
+            # the current hardware.  Use ARCH_NAME + galaxy detection to
+            # avoid matching Galaxy vectors on N300 runners and vice versa.
+            local arch_tag="${ARCH_NAME:-}"
+            local tg="${TEST_GROUP_NAME:-}"
+            local is_galaxy=0
+            [[ "$tg" == *galaxy* ]] && is_galaxy=1
+            if [[ -n "$arch_tag" ]]; then
+              local arch_base="${arch_tag%%_*}"  # e.g. wormhole from wormhole_b0
+              local arch_matched=0
+              for f in "$vectors_dir"/*.json; do
+                local bname="$(basename "$f")"
+                [[ "$bname" == "generation_manifest.json" ]] && continue
+                # Must match arch family
+                [[ "$bname" != *"$arch_base"* ]] && continue
+                # Galaxy exclusion: skip galaxy vectors on non-galaxy and vice versa
+                if [[ $is_galaxy -eq 1 && "$bname" != *galaxy* ]]; then continue; fi
+                if [[ $is_galaxy -eq 0 && "$bname" == *galaxy* ]]; then continue; fi
+                arch_matched=1; break
+              done
+              if [[ "$arch_matched" == "0" ]]; then
+                echo "[two-pass] $axis partition has no vectors for $arch_tag (galaxy=$is_galaxy) — skipping"
+                return 0
+              fi
+            fi
             echo "[two-pass] === axis=$axis ==="
             TTNN_DISPATCH_AXIS="$axis" \
               TTNN_VECTORS_EXPORT_DIR="$vectors_dir" \
+              TTNN_MASTER_JSON_PATH="/work/model_tracer/traced_operations/ttnn_operations_master.json" \
               python3 model_tracer/generic_ops_tracer.py \
                 tests/sweep_framework/sweeps_runner.py \
                 -o "$TRACE_OUT" \

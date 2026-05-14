@@ -4,6 +4,12 @@
 #include "argmax_common.hpp"
 #include "api/numeric/bfloat16.h"
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/tensor/noc_traits.h"
 
 #include <cstdint>
 
@@ -31,13 +37,14 @@
  * @param in_vals Pointer to L1 memory containing input values with data type determined by data_format template
  * parameter
  */
-template <bool reduce_all, DataFormat data_format, typename AddrGen>
+template <bool reduce_all, DataFormat data_format, typename AddrGen, typename SrcCb>
 inline void find_argmax_for_core(
+    const Noc& noc,
     const uint32_t inner_dim_units,
     const uint32_t outer_idx,
     const uint32_t src_offset,
     const AddrGen& s_src,
-    const uint32_t src_cb_addr,
+    const SrcCb& src_cb,
     const uint32_t src_read_size,
     const uint32_t red_dim_offset,
     const uint32_t red_dim_units_this_core,
@@ -48,8 +55,13 @@ inline void find_argmax_for_core(
     volatile tt_l1_ptr uint32_t* red_idxs,
     volatile tt_l1_ptr decltype(get_default_value<data_format>())* red_vals) {
     for (uint32_t j = 0; j < inner_dim_units; ++j) {
-        noc_async_read(s_src.get_noc_addr(outer_idx * inner_dim_units + j, src_offset), src_cb_addr, src_read_size);
-        noc_async_read_barrier();
+        noc.async_read(
+            s_src,
+            src_cb,
+            src_read_size,
+            {.page_id = outer_idx * inner_dim_units + j, .offset_bytes = src_offset},
+            {.offset_bytes = 0});
+        noc.async_read_barrier();
 
         // Reset max_val for each new output
         if constexpr (not reduce_all) {
@@ -294,26 +306,31 @@ void kernel_main() {
     const auto s_src = TensorAccessor(s_src_args, src_base_addr);
     const auto s_dst = TensorAccessor(s_dst_args, dst_base_addr);
 
+    Noc noc;
+    UnicastEndpoint remote;
+    CircularBuffer src_cb(src_cb_idx);
+    CircularBuffer dst_cb(dst_cb_idx);
+    CircularBuffer red_idx_cb(red_idxs_cb_idx);
+    CircularBuffer red_val_cb(red_vals_cb_idx);
+
     // CB in L1 memory for storing input
     constexpr DataFormat src_cb_addr_data_format = get_dataformat(src_cb_idx);
-    const uint32_t src_cb_addr = get_write_ptr(src_cb_idx);
+    const uint32_t src_cb_addr = src_cb.get_write_ptr();
     volatile tt_l1_ptr auto* in_vals = get_tt_l1_ptr_based_on_data_format<src_cb_addr_data_format>(src_cb_addr);
 
     // CB in L1 memory of reducer core for storing output
-    const uint32_t dst_cb_addr = get_write_ptr(dst_cb_idx);
+    const uint32_t dst_cb_addr = dst_cb.get_write_ptr();
     volatile tt_l1_ptr uint32_t* out_idxs = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_cb_addr);
 
     // CB in L1 memory for storing partial idx output
-    const uint32_t red_idx_cb_local_base_addr = get_write_ptr(red_idxs_cb_idx);
+    const uint32_t red_idx_cb_local_base_addr = red_idx_cb.get_write_ptr();
     const uint32_t red_idx_offset = core_id * red_idx_size_per_core;
 
     const uint32_t red_idx_cb_local_addr = red_idx_cb_local_base_addr + red_idx_offset;
     volatile tt_l1_ptr uint32_t* red_idxs = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(red_idx_cb_local_addr);
 
-    const uint64_t red_idx_noc_addr = get_noc_addr(reduce_core_x, reduce_core_y, red_idx_cb_local_addr);
-
     // CB in L1 memory for storing partial val output
-    const uint32_t red_val_cb_local_base_addr = get_write_ptr(red_vals_cb_idx);
+    const uint32_t red_val_cb_local_base_addr = red_val_cb.get_write_ptr();
     constexpr DataFormat red_val_cb_local_addr_data_format = get_dataformat(red_vals_cb_idx);
     const uint32_t red_val_offset = core_id * red_val_size_per_core;
 
@@ -326,58 +343,49 @@ void kernel_main() {
         "Program logic error. "
         "Partial result buffer must use the same data format as values.");
 
-    const uint64_t red_val_noc_addr = get_noc_addr(reduce_core_x, reduce_core_y, red_val_cb_local_addr);
-
-    // Semaphore addresses
-    const uint32_t start_sem_local_addr = get_semaphore(start_sem_idx);
-    uint64_t start_sem_noc_addr0 =
-        get_noc_multicast_addr(start_core_x0, start_core_y0, end_core_x0, end_core_y0, start_sem_local_addr);
-    uint64_t start_sem_noc_addr1 =
-        get_noc_multicast_addr(start_core_x1, start_core_y1, end_core_x1, end_core_y1, start_sem_local_addr);
-    volatile tt_l1_ptr uint32_t* start_sem_local_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_sem_local_addr);
-
-    const uint32_t done_sem_local_addr = get_semaphore(done_sem_idx);
-    const uint64_t done_sem_noc_addr = get_noc_addr(reduce_core_x, reduce_core_y, done_sem_local_addr);
-    volatile tt_l1_ptr uint32_t* done_sem_local_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(done_sem_local_addr);
+    // Semaphores
+    Semaphore<> start_sem(start_sem_idx);
+    Semaphore<> done_sem(done_sem_idx);
 
     uint32_t max_idx = 0;
     auto max_val = get_default_value<src_cb_addr_data_format>();
 
-    noc_semaphore_set(done_sem_local_ptr, 0);
+    done_sem.set(0);
 
     // -------------------------------------------------------------------------
     // Main loop - run by all cores
     for (uint32_t k = 0; k < outer_dim_units; ++k) {
         if (is_reduce_core) {
-            noc_semaphore_set(done_sem_local_ptr, 0);
-            noc_semaphore_set(start_sem_local_ptr, k + 1);
+            done_sem.set(0);
+            start_sem.set(k + 1);
 
             if constexpr (num_cores > 1) {
                 if (k > 0) {
-                    noc_semaphore_set_multicast_loopback_src(start_sem_local_addr, start_sem_noc_addr0, num_cores0);
+                    start_sem.set_multicast<Noc::McastMode::INCLUDE_SRC>(
+                        noc, start_core_x0, start_core_y0, end_core_x0, end_core_y0, num_cores0);
                 }
 
                 if (num_cores1 > 0) {
-                    noc_semaphore_set_multicast(start_sem_local_addr, start_sem_noc_addr1, num_cores1);
+                    start_sem.set_multicast<Noc::McastMode::EXCLUDE_SRC>(
+                        noc, start_core_x1, start_core_y1, end_core_x1, end_core_y1, num_cores1);
                 }
 
-                noc_async_write_barrier();
+                noc.async_write_barrier();
             }
         }
 
         // Wait to start
         if (k > 0) {
-            noc_semaphore_wait(start_sem_local_ptr, k + 1);
+            start_sem.wait(k + 1);
         }
 
         find_argmax_for_core<reduce_all, src_cb_addr_data_format>(
+            noc,
             inner_dim_units,
             k,
             src_offset,
             s_src,
-            src_cb_addr,
+            src_cb,
             src_read_size,
             red_dim_offset,
             red_dim_units_this_core,
@@ -391,18 +399,28 @@ void kernel_main() {
         if constexpr (not reduce_all) {
             // We now write these local values to the equivalent position in the reduction core
             if (core_id != reduce_core_id) {
-                noc_async_write(red_idx_cb_local_addr, red_idx_noc_addr, red_idx_size_per_core);
-                noc_async_write(red_val_cb_local_addr, red_val_noc_addr, red_val_size_per_core);
-                noc_async_write_barrier();
+                noc.async_write(
+                    use<CircularBuffer::AddrSelector::WRITE_PTR>(red_idx_cb),
+                    remote,
+                    red_idx_size_per_core,
+                    {.offset_bytes = red_idx_offset},
+                    {.noc_x = reduce_core_x, .noc_y = reduce_core_y, .addr = red_idx_cb_local_addr});
+                noc.async_write(
+                    use<CircularBuffer::AddrSelector::WRITE_PTR>(red_val_cb),
+                    remote,
+                    red_val_size_per_core,
+                    {.offset_bytes = red_val_offset},
+                    {.noc_x = reduce_core_x, .noc_y = reduce_core_y, .addr = red_val_cb_local_addr});
+                noc.async_write_barrier();
             }
 
-            noc_semaphore_inc(done_sem_noc_addr, 1);
-            noc_async_atomic_barrier();
+            done_sem.up(noc, reduce_core_x, reduce_core_y, 1);
+            noc.async_atomic_barrier();
 
             // If this is the reducer core, wait for the semaphore to be set
             if (is_reduce_core) {
                 if constexpr (num_cores > 1) {
-                    noc_semaphore_wait(done_sem_local_ptr, num_cores);
+                    done_sem.wait(num_cores);
                 }
 
                 // Find argmax from intermediate outputs and write to output
@@ -415,9 +433,13 @@ void kernel_main() {
                         red_idx_size_per_core);
                 }
 
-                const uint64_t dst_noc_addr = get_noc_addr(k, s_dst);
-                noc_async_write(dst_cb_addr, dst_noc_addr, dst_page_size);
-                noc_async_write_barrier();
+                noc.async_write(
+                    use<CircularBuffer::AddrSelector::WRITE_PTR>(dst_cb),
+                    s_dst,
+                    dst_page_size,
+                    {.offset_bytes = 0},
+                    {.page_id = k});
+                noc.async_write_barrier();
             }
         }
     }  // for (uint32_t k = 0; k < outer_dim_units; ++k)
@@ -428,18 +450,28 @@ void kernel_main() {
 
         // We now write these local values to the equivalent position in the reduction core
         if (core_id != reduce_core_id) {
-            noc_async_write(red_idx_cb_local_addr, red_idx_noc_addr, red_idx_size_per_core);
-            noc_async_write(red_val_cb_local_addr, red_val_noc_addr, red_val_size_per_core);
-            noc_async_write_barrier();
+            noc.async_write(
+                use<CircularBuffer::AddrSelector::WRITE_PTR>(red_idx_cb),
+                remote,
+                red_idx_size_per_core,
+                {.offset_bytes = red_idx_offset},
+                {.noc_x = reduce_core_x, .noc_y = reduce_core_y, .addr = red_idx_cb_local_addr});
+            noc.async_write(
+                use<CircularBuffer::AddrSelector::WRITE_PTR>(red_val_cb),
+                remote,
+                red_val_size_per_core,
+                {.offset_bytes = red_val_offset},
+                {.noc_x = reduce_core_x, .noc_y = reduce_core_y, .addr = red_val_cb_local_addr});
+            noc.async_write_barrier();
         }
 
-        noc_semaphore_inc(done_sem_noc_addr, 1);
-        noc_async_atomic_barrier();
+        done_sem.up(noc, reduce_core_x, reduce_core_y, 1);
+        noc.async_atomic_barrier();
 
         // If this is the reducer core, wait for the semaphore to be set
         if (is_reduce_core) {
             if constexpr (num_cores > 1) {
-                noc_semaphore_wait(done_sem_local_ptr, num_cores);
+                done_sem.wait(num_cores);
             }
 
             out_idxs[0] = find_argmax_from_intermediate_outputs<num_cores, src_cb_addr_data_format>(
@@ -449,9 +481,13 @@ void kernel_main() {
                 red_val_size_per_core,
                 red_idx_size_per_core);
 
-            const uint64_t dst_noc_addr = get_noc_addr(0, s_dst);
-            noc_async_write(dst_cb_addr, dst_noc_addr, dst_page_size);
-            noc_async_write_barrier();
+            noc.async_write(
+                use<CircularBuffer::AddrSelector::WRITE_PTR>(dst_cb),
+                s_dst,
+                dst_page_size,
+                {.offset_bytes = 0},
+                {.page_id = 0});
+            noc.async_write_barrier();
         }
     }  // if constexpr (reduce_all)
 }
