@@ -20,13 +20,6 @@ import ttl
 TILE_WIDTH = 32
 
 
-def get_block_size(whole_row_width: int = 32, max_block_size: int = 4) -> int:
-    for block_size in range(max_block_size, 1, -1):
-        if whole_row_width % block_size == 0:
-            return block_size
-    return 1
-
-
 def make_kernel():
     bc = 2
 
@@ -49,14 +42,20 @@ def make_kernel():
         total_cores = grid_cols * grid_rows
         rows_per_core = -(-ht // total_cores)
 
+        # Input buffers
         inp_tile = ttl.make_dataflow_buffer_like(input_t, shape=one, block_count=bc)
         gamma_tile = ttl.make_dataflow_buffer_like(gamma_t, shape=one, block_count=bc)
         rms_tile = ttl.make_dataflow_buffer_like(rms_t, shape=one, block_count=bc)
         dL_tile = ttl.make_dataflow_buffer_like(dL_dout_t, shape=one, block_count=bc)
+
+        # Output buffers
         out_da_tile = ttl.make_dataflow_buffer_like(dL_dinput_out, shape=one, block_count=bc)
         out_dg_tile = ttl.make_dataflow_buffer_like(dL_dgamma_comp_out, shape=one, block_count=bc)
 
+        # Scale accumulator
         scale_acc = ttl.make_dataflow_buffer_like(input_t, shape=one, block_count=bc)
+
+        # Constant 1/C tile for rhs
         inv_c_dfb = ttl.make_dataflow_buffer_like(input_t, shape=one, block_count=1)
 
         @ttl.compute()
@@ -73,6 +72,7 @@ def make_kernel():
                     with scale_acc.reserve() as z:
                         z.store(ttl.math.fill(z, 0.0))
 
+                    # Pass 1: accumulate row scalar
                     for _local_col in range(wt):
                         with (
                             inp_tile.wait() as iv,
@@ -90,6 +90,7 @@ def make_kernel():
 
                     scale = scale_acc.wait()
 
+                    # Pass 2: emit dL_dinput and dL_dgamma
                     for _local_col in range(wt):
                         with (
                             inp_tile.wait() as iv,
@@ -143,73 +144,3 @@ def make_kernel():
                             ttl.copy(b, dL_dgamma_comp_out[r, local_col]).wait()
 
     return rmsnorm_bw_2pass
-
-
-def _torch_ref(x, gamma_1d, eps, dL):
-    x = x.float().clone().requires_grad_(True)
-    g = gamma_1d.float().clone().requires_grad_(True)
-    dL = dL.float()
-    var = x.pow(2).mean(-1, keepdim=True)
-    rms = (var + eps).sqrt()
-    y = x / rms * g
-    y.backward(dL)
-    return x.grad.to(torch.bfloat16), g.grad.to(torch.bfloat16), rms.detach().to(torch.bfloat16)
-
-
-def _to_dev(t, device):
-    return ttnn.from_torch(
-        t,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-
-def rmsnorm_2pass_smoke_test(device, height: int, width: int) -> None:
-    assert height % TILE_WIDTH == 0 and width % TILE_WIDTH == 0, (height, width)
-    eps = 1e-5 if width // TILE_WIDTH > 1 else 0.0078125
-    torch.manual_seed(0)
-    x = torch.randn(height, width, dtype=torch.bfloat16)
-    g1d = torch.randn(width, dtype=torch.bfloat16)
-    g2d = g1d.unsqueeze(0).expand(height, width).contiguous()
-    with torch.no_grad():
-        var = x.float().pow(2).mean(-1, keepdim=True)
-        rms = (var + eps).sqrt()
-        y = x.float() / rms * g2d.float()
-    dL = ((2.0 / y.numel()) * y).to(torch.bfloat16)
-
-    dL_dx_ref, dL_dg_ref, _ = _torch_ref(x, g1d, eps, dL)
-    rms_2d = rms.to(torch.bfloat16).expand(-1, width).contiguous()
-
-    k = make_kernel()
-    out_da = _to_dev(torch.zeros(height, width, dtype=torch.bfloat16), device)
-    out_dg = _to_dev(torch.zeros(height, width, dtype=torch.bfloat16), device)
-    k(
-        _to_dev(x, device),
-        _to_dev(g2d, device),
-        _to_dev(rms_2d, device),
-        _to_dev(dL, device),
-        out_da,
-        out_dg,
-    )
-    ttnn.synchronize_device(device)
-
-    da = ttnn.to_torch(out_da)
-    dg = ttnn.to_torch(out_dg)
-    torch.testing.assert_close(da, dL_dx_ref, rtol=5e-2, atol=5e-2)
-    torch.testing.assert_close(dg.sum(dim=0), dL_dg_ref, rtol=5e-2, atol=5e-2)
-    print(f"OK: rmsnorm_2pass {height}x{width}")
-
-
-def main():
-    device = ttnn.open_device(device_id=0)
-    try:
-        rmsnorm_2pass_smoke_test(device, 256, 384)
-        rmsnorm_2pass_smoke_test(device, 2048, 2048)
-    finally:
-        ttnn.close_device(device)
-
-
-if __name__ == "__main__":
-    main()
