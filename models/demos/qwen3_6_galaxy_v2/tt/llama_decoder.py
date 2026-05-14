@@ -4,9 +4,9 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.demos.llama3_70b_galaxy.tt.llama_mlp import TtLlamaMLP
 from models.demos.qwen3_6_galaxy_v2.tt.distributed_norm import DistributedNorm
 from models.demos.qwen3_6_galaxy_v2.tt.llama_attention import TtLlamaAttention
+from models.demos.qwen3_6_galaxy_v2.tt.llama_mlp import TtLlamaMLP
 
 
 def _extract_layer_dn_weights(state_dict, layer_num):
@@ -201,6 +201,141 @@ class TtTransformerBlock(LightweightModule):
         assert (
             x.memory_config() == skip_mem_cfg
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
+
+        # qwen3.6 prefill sharding contract:
+        #   - embedding produces col-sharded [B, 1, T, H/4] (see TtLlamaEmbedding)
+        #   - DistributedNorm prefill (tt_distributed_rmsnorm) preserves the
+        #     col-sharded layout (gamma is col-sharded H/4)
+        #   - qwen3.6 attention (full + DeltaNet) needs full-H replicated input
+        #     (wqkvg / w_q,k,v,z,a,b have dims=(None, 3) / dims=(1, None))
+        #   - qwen3.6 attention OUTPUT is full-H replicated (per-col WO + all_gather/
+        #     fast_reduce_nc inside TtLlamaAttention; per-row out_proj + all_gather/
+        #     fast_reduce_nc inside TtQwen36DeltaAttention)
+        #   - 70B-style MLP: w1/w3 dim_per_tp=H/4 input × intermediate_per_tp output;
+        #     i.e. it wants col-sharded H/4 input and produces col-sharded H/4 output
+        #
+        # The cleanest fix (V2-7b): keep the **residual stream full-H replicated**
+        # throughout the layer (mirrors v1 _shard_across_cols / _gather_from_cols)
+        # so attention's add-with-residual lands in the same H representation
+        # attention produces. Scatter just before each norm + MLP (which want
+        # col-sharded), gather their output before re-joining the residual.
+        # The decoder still receives + returns col-sharded H/4 (matching the
+        # embedding contract and the inter-layer contract), with a single
+        # entry gather + exit scatter.
+        is_qwen36_prefill = self.is_qwen36 and mode == "prefill"
+
+        if is_qwen36_prefill:
+            # --- Entry gather: residual stream lifted to full-H ---
+            # For layer 0, x and h-into-block both = the embedding output
+            # (col-sharded). Gather x to full-H once; h is unused this branch.
+            if self.layer_num == 0:
+                x_full = ttnn.all_gather(
+                    x,
+                    dim=3,
+                    num_links=1,
+                    cluster_axis=1,
+                    topology=ttnn.Topology.Linear,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                x.deallocate(True)
+                x = x_full
+                # h follows x (residual seed), full-H replicated.
+                h = x
+            else:
+                # x and h came from prior layer's exit (still col-sharded).
+                x_full = ttnn.all_gather(
+                    x,
+                    dim=3,
+                    num_links=1,
+                    cluster_axis=1,
+                    topology=ttnn.Topology.Linear,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                x.deallocate(True)
+                x = x_full
+                if h is not None:
+                    h_full = ttnn.all_gather(
+                        h,
+                        dim=3,
+                        num_links=1,
+                        cluster_axis=1,
+                        topology=ttnn.Topology.Linear,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    h.deallocate(True)
+                    h = h_full
+
+            # --- Attention norm: scatter → norm (col-sharded) → gather ---
+            x_norm_in = ttnn.mesh_partition(x, dim=-1, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            attn_in_sharded, _ = self.attention_norm(x_norm_in, None, mode)
+            x_norm_in.deallocate(True)
+            attn_in_full = ttnn.all_gather(
+                attn_in_sharded,
+                dim=3,
+                num_links=1,
+                cluster_axis=1,
+                topology=ttnn.Topology.Linear,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            attn_in_sharded.deallocate(True)
+
+            # --- Attention forward (full-H replicated in/out) ---
+            attn_out = self.attention.forward(
+                attn_in_full,
+                current_pos,
+                rot_mats,
+                user_id,
+                mode,
+                page_table=page_table,
+                chunk_page_table=chunk_page_table,
+                chunk_start_idx=chunk_start_idx,
+                chunk_start_idx_tensor=chunk_start_idx_tensor,
+                kv_cache=kv_cache,
+                batch_size=batch_size,
+            )
+            attn_in_full.deallocate(True)
+            # Some attention paths return rank-3 [B, T, H]; reshape to rank-4 for
+            # the residual add to match x's [B, 1, T, H] layout.
+            if len(list(attn_out.shape)) == 3:
+                _B_a, _T_a, _H_a = list(attn_out.shape)
+                attn_out_4d = ttnn.reshape(attn_out, ttnn.Shape([_B_a, 1, _T_a, _H_a]))
+                attn_out.deallocate(True)
+                attn_out = attn_out_4d
+
+            # --- Residual add (full-H replicated) ---
+            h_new = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)
+            x.deallocate(True)
+            attn_out.deallocate(True)
+
+            # --- FF norm: scatter → norm (col-sharded) ---
+            h_norm_in = ttnn.mesh_partition(h_new, dim=-1, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ff_in_sharded, _ = self.ff_norm(h_norm_in, None, mode)
+            h_norm_in.deallocate(True)
+
+            # --- MLP (col-sharded H/4 → col-sharded H/4) ---
+            ff_out_sharded = self.feed_forward.forward(ff_in_sharded, mode, batch_size=batch_size)
+            # Gather MLP output back to full-H for the residual add against h_new.
+            ff_out_full = ttnn.all_gather(
+                ff_out_sharded,
+                dim=3,
+                num_links=1,
+                cluster_axis=1,
+                topology=ttnn.Topology.Linear,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ff_out_sharded.deallocate(True)
+
+            # --- Final residual + exit scatter back to col-sharded H/4 ---
+            out_full = ttnn.add(ff_out_full, h_new, memory_config=skip_mem_cfg)
+            ff_out_full.deallocate(True)
+            h_new.deallocate(True)
+            # Decoder exit contract: col-sharded H/4 so the next layer / final
+            # norm / lm_head sees the same layout as the embedding produces.
+            out_sharded = ttnn.mesh_partition(out_full, dim=-1, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            out_full.deallocate(True)
+            return out_sharded, None
+
+        # --- Non-qwen36 / decode path (unchanged) -------------------------
         # Norms take fractured inputs and output replicated across devices
         # attn_in_sharded=norm(x+h), h = x+h happens implicitly
         if self.layer_num == 0 or mode == "prefill":

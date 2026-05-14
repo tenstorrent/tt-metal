@@ -167,23 +167,28 @@ class LMHead(LightweightModule):
                 outputs.append(output)
         else:
             for weight, pc in zip(self.output_weights_prefill, self.program_configs):
-                output = ttnn.linear(
-                    x,
-                    weight,
-                    compute_kernel_config=self.compute_kernel_config,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    program_config=self.prefill_pc,
-                    dtype=ttnn.bfloat8_b,
-                )
-                # Minimal matmul is not giving any performance improvement over linear
-                # output = ttnn.experimental.minimal_matmul(
-                #     input_tensor=x,
-                #     weight_tensor=weight,
-                #     config=self.prefill_pc,
-                #     dtype=ttnn.bfloat8_b,
-                #     compute_kernel_config=self.compute_kernel_config,
-                #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                # )
+                # qwen3.6 / olmo: LM_HEAD_PREFILL_PROGCFG is a MinimalMatmulConfig
+                # which ttnn.linear does not accept — must use
+                # ttnn.experimental.minimal_matmul instead.  The original
+                # `ttnn.linear(program_config=MinimalMatmulConfig)` call raises
+                # a TypeError at runtime (V2-7b 4L logits regression).
+                if isinstance(self.prefill_pc, ttnn.MinimalMatmulConfig):
+                    output = ttnn.experimental.minimal_matmul(
+                        input_tensor=x,
+                        weight_tensor=weight,
+                        config=self.prefill_pc,
+                        compute_kernel_config=self.compute_kernel_config,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                else:
+                    output = ttnn.linear(
+                        x,
+                        weight,
+                        compute_kernel_config=self.compute_kernel_config,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        program_config=self.prefill_pc,
+                        dtype=ttnn.bfloat8_b,
+                    )
                 x.deallocate(True)
                 outputs.append(output)
 

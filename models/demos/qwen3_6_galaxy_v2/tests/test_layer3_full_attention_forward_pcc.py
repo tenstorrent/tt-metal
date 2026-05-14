@@ -1,19 +1,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""V2-7 — Layer-3 full_attention prefill PCC test on BH GLX 8×4.
+"""V2-7b — Layer-3 full_attention prefill PCC test through TtTransformer.forward.
 
-Builds a 1-layer TtTransformer with the hybrid pattern forced to
-``["full_attention"]`` (which covers QKVG + per-head QK-norm + partial RoPE
-+ sigmoid output gate), forwards a T-token random hidden state through
-just the attention block, and asserts the output matches the CPU
-reference ``GatedAttention`` from
-``models/demos/qwen3_6_galaxy/reference/qwen36.py`` with PCC > 0.99.
+Builds a 1-layer ``TtTransformer`` whose only decoder block uses the layer-3
+``full_attention`` weights (QKVG + per-head QK-norm + partial RoPE + sigmoid
+output gate). The layer-3 HF weights are relabeled to ``layers.0`` so the
+1-layer model picks them up at slot 0. Runs an already-embedded col-sharded
+``[1, 1, T, H/4]`` hidden state through ``TtTransformer.forward(mode="prefill")``
+and compares to the CPU reference ``HybridDecoderLayer`` from
+``models/demos/qwen3_6_galaxy/reference/qwen36.py``.
 
-Block-level pattern (mirrors v1 ``test_qwen36_deltanet.py`` and
-``test_llama_attention.py``): the input is a full-H replicated random
-hidden state (pre-norm). We relabel layer 3 → layer 0 in the HF
-state-dict so the TtTransformer (which iterates ``range(n_layers=1)``)
-picks up the layer 3 weights at slot 0.
+PCC threshold > 0.99. Mirrors V2-7b layer-0 test scaffolding.
 """
 from __future__ import annotations
 
@@ -32,15 +29,11 @@ _SNAPSHOT = pathlib.Path(
 )
 
 _B = 1
-_T_PREFILL = 128  # TT_CCL prefill ``support_seqlens`` minimum
+_T_PREFILL = 128
 _LAYER_IDX = 3
+_LAYER_TYPE = "full_attention"
 _H = 5120
 _PCC_THRESH = 0.99
-
-
-# ---------------------------------------------------------------------------
-# Mesh
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="module")
@@ -55,11 +48,6 @@ def bh_glx_mesh():
     yield mesh
     ttnn.close_mesh_device(mesh)
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
-
-
-# ---------------------------------------------------------------------------
-# Weight loading + relabel
-# ---------------------------------------------------------------------------
 
 
 def _load_state_dict_for_layer(snapshot_dir: pathlib.Path, layer_idx: int) -> dict:
@@ -95,52 +83,45 @@ def _relabel_layer_idx(state_dict: dict, src_idx: int, dst_idx: int) -> dict:
     return out
 
 
-def _self_attn_short_weights(state_dict: dict, layer_idx: int) -> dict:
-    """Extract self_attn.* short keys for the CPU reference."""
-    pfx = f"model.language_model.layers.{layer_idx}.self_attn."
-    return {k[len(pfx) :]: v.float() for k, v in state_dict.items() if k.startswith(pfx)}
+def _cpu_reference_layer(state_dict_full_hf: dict, layer_idx: int, layer_type: str, x: torch.Tensor) -> torch.Tensor:
+    from models.demos.qwen3_6_galaxy.reference.qwen36 import HybridDecoderLayer, Qwen36Config, build_mrope_cos_sin
 
+    with open(_SNAPSHOT / "config.json") as f:
+        cfg_dict = json.load(f)
+    config = Qwen36Config(cfg_dict)
+    layer = HybridDecoderLayer(config, layer_idx).eval()
 
-# ---------------------------------------------------------------------------
-# Reference
-# ---------------------------------------------------------------------------
+    pfx = f"model.language_model.layers.{layer_idx}."
+    layer_sd: dict[str, torch.Tensor] = {}
+    for k, v in state_dict_full_hf.items():
+        if k.startswith(pfx):
+            short = k[len(pfx) :]
+            if short.startswith("self_attn."):
+                layer_sd["attention." + short[len("self_attn.") :]] = v.float()
+            elif short.startswith("linear_attn."):
+                layer_sd["attention." + short[len("linear_attn.") :]] = v.float()
+            else:
+                layer_sd[short] = v.float()
+    missing, _ = layer.load_state_dict(layer_sd, strict=False)
+    for k in missing:
+        if k.startswith("input_layernorm") or k.startswith("post_attention_layernorm") or k.startswith("mlp."):
+            raise AssertionError(f"Missing reference weight: {k}")
 
-
-def _build_partial_rope_cos_sin(T: int):
-    from models.demos.qwen3_6_galaxy.reference.qwen36 import build_mrope_cos_sin
-
+    T = x.shape[1]
     positions = torch.arange(T, dtype=torch.long)
     positions_3d = torch.stack([positions, positions, positions], dim=0)
-    return build_mrope_cos_sin(
+    cos, sin = build_mrope_cos_sin(
         positions_3d=positions_3d,
         head_dim=256,
         partial_rotary_factor=0.25,
         mrope_section=[11, 11, 10],
         theta=10_000_000.0,
     )
-
-
-def _cpu_reference_gated_attn(sd_short: dict, x: torch.Tensor, T: int) -> torch.Tensor:
-    """Run the validated GatedAttention CPU reference (block alone, no norm/MLP)."""
-    from models.demos.qwen3_6_galaxy.reference.qwen36 import GatedAttention, Qwen36Config
-
-    with open(_SNAPSHOT / "config.json") as f:
-        cfg_dict = json.load(f)
-    config = Qwen36Config(cfg_dict)
-    model = GatedAttention(config).eval()
+    causal_mask = torch.zeros(1, 1, T, T)
+    causal_mask = causal_mask.masked_fill(torch.triu(torch.ones(T, T), diagonal=1).bool(), float("-inf"))
     with torch.no_grad():
-        model.q_proj.weight.data.copy_(sd_short["q_proj.weight"])
-        model.k_proj.weight.data.copy_(sd_short["k_proj.weight"])
-        model.v_proj.weight.data.copy_(sd_short["v_proj.weight"])
-        model.o_proj.weight.data.copy_(sd_short["o_proj.weight"])
-        model.q_norm.weight.data.copy_(sd_short["q_norm.weight"])
-        model.k_norm.weight.data.copy_(sd_short["k_norm.weight"])
-
-        cos, sin = _build_partial_rope_cos_sin(T)
-        causal_mask = torch.zeros(1, 1, T, T)
-        causal_mask = causal_mask.masked_fill(torch.triu(torch.ones(T, T), diagonal=1).bool(), float("-inf"))
-        out, _ = model(x.float(), cos, sin, kv_cache=None, attention_mask=causal_mask)
-    return out  # [B, T, H]
+        out, _, _, _ = layer(x.float(), cos, sin, attention_mask=causal_mask)
+    return out
 
 
 def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -149,42 +130,94 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
 
 
-def _send_replicated(t: torch.Tensor, mesh, dtype=ttnn.bfloat16):
-    return ttnn.from_torch(
-        t,
+def _build_tt_model(mesh, state_dict, layer_type: str):
+    from models.demos.qwen3_6_galaxy_v2.tt.llama_model import TtTransformer
+    from models.demos.qwen3_6_galaxy_v2.tt.qwen36_model_config import TtQwen36ModelArgs
+
+    args = TtQwen36ModelArgs(mesh)
+    args.n_layers = 1
+    args.linear_attention_pattern = [layer_type]
+    # bfloat8_b model dtype with bf16-forced MLP weights (see llama_mlp.py
+    # is_qwen36 branch).  V2-7b: layer-3 PCC needs bf16 MLP w1/w3 to keep
+    # PCC > 0.99; bf8 w1/w3 dropped it to 0.77.
+    weight_cache_path = args.weight_cache_path(ttnn.bfloat8_b)
+    weight_cache_path.mkdir(parents=True, exist_ok=True)
+    model = TtTransformer(
+        args=args,
+        dtype=ttnn.bfloat8_b,
+        mesh_device=mesh,
+        state_dict=state_dict,
+        weight_cache_path=weight_cache_path,
+        paged_attention_config=None,
+        use_paged_kv_cache=False,
+    )
+    return model, args
+
+
+def _build_partial_rope_cos_sin_tt(mesh, T: int):
+    from models.demos.qwen3_6_galaxy.reference.qwen36 import build_mrope_cos_sin
+
+    positions = torch.arange(T, dtype=torch.long)
+    positions_3d = torch.stack([positions, positions, positions], dim=0)
+    cos_ref, sin_ref = build_mrope_cos_sin(
+        positions_3d=positions_3d,
+        head_dim=256,
+        partial_rotary_factor=0.25,
+        mrope_section=[11, 11, 10],
+        theta=10_000_000.0,
+    )
+    cos_tt = ttnn.from_torch(
+        cos_ref.unsqueeze(0),  # [1, T, 64] — rank-3, matches the validated v2 block test
         device=mesh,
-        dtype=dtype,
+        dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
     )
+    sin_tt = ttnn.from_torch(
+        sin_ref.unsqueeze(0),
+        device=mesh,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+    )
+    return cos_tt, sin_tt
 
 
-def _gather_replicated_first_dev(tt_tensor, mesh, T: int = None):
-    out = ttnn.to_torch(tt_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
+def _send_col_sharded_hidden(t: torch.Tensor, mesh, args):
+    B, T, H = t.shape
+    t_4d = t.reshape(1, 1, T, H)
+    return ttnn.from_torch(
+        t_4d,
+        device=mesh,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh, dims=(None, 3), mesh_shape=args.cluster_shape),
+    )
+
+
+def _gather_col_sharded_to_full(tt_tensor, mesh, args, T: int):
+    out = ttnn.to_torch(
+        tt_tensor,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh, dims=(0, 3), mesh_shape=args.cluster_shape),
+    )
     out = out[0:1]
-    if T is not None:
-        while out.dim() > 3 and out.shape[0] == 1:
-            out = out.squeeze(0)
-        if out.dim() == 3:
-            out = out[:, :T, :]
-        else:
-            out = out[..., :T, :]
+    while out.dim() > 3 and out.shape[0] == 1:
+        out = out.squeeze(0)
+    if out.dim() == 3:
+        out = out[:, :T, :]
     return out
 
 
-# ---------------------------------------------------------------------------
-# Test
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.hardware
-def test_qwen36_layer3_full_attention_prefill_pcc(bh_glx_mesh):
-    """Layer-3 (full_attention) prefill: PCC > 0.99 vs CPU GatedAttention reference."""
+def test_qwen36_layer3_full_attention_through_transformer_forward(bh_glx_mesh):
+    """1L TtTransformer.forward(prefill) — layer 3 full_attention end-to-end PCC."""
     state_dict_orig = _load_state_dict_for_layer(_SNAPSHOT, _LAYER_IDX)
-    print(f"[Layer3] loaded {len(state_dict_orig)} weights")
+    print(f"[Layer3/forward] loaded {len(state_dict_orig)} weights")
 
-    # Sanity: this layer is full_attention.
+    # Sanity check: layer 3 is full_attention in the canonical pattern.
     from models.demos.qwen3_6_galaxy.reference.qwen36 import Qwen36Config
 
     with open(_SNAPSHOT / "config.json") as f:
@@ -194,46 +227,29 @@ def test_qwen36_layer3_full_attention_prefill_pcc(bh_glx_mesh):
 
     # Relabel layer 3 -> layer 0 so the 1-layer TtTransformer picks up the right weights.
     state_dict_for_tt = _relabel_layer_idx(state_dict_orig, src_idx=_LAYER_IDX, dst_idx=0)
-
-    # Build TT model.
-    from models.demos.qwen3_6_galaxy_v2.tt.llama_model import TtTransformer
-    from models.demos.qwen3_6_galaxy_v2.tt.qwen36_model_config import TtQwen36ModelArgs
-
-    args = TtQwen36ModelArgs(bh_glx_mesh)
-    args.n_layers = 1
-    args.linear_attention_pattern = ["full_attention"]
-    weight_cache_path = args.weight_cache_path(ttnn.bfloat8_b)
-    weight_cache_path.mkdir(parents=True, exist_ok=True)
-
-    model = TtTransformer(
-        args=args,
-        dtype=ttnn.bfloat8_b,
-        mesh_device=bh_glx_mesh,
-        state_dict=state_dict_for_tt,
-        weight_cache_path=weight_cache_path,
-        paged_attention_config=None,
-        use_paged_kv_cache=False,
-    )
+    model, args = _build_tt_model(bh_glx_mesh, state_dict_for_tt, _LAYER_TYPE)
     assert getattr(model.layers[0], "is_linear_attention_layer", True) is False
-    print("[Layer3] TT 1-layer full_attention built")
+    print("[Layer3/forward] TT 1-layer full_attention built")
 
-    # Random hidden state.
+    # Random hidden state (post-embedding stand-in).
     torch.manual_seed(43)
     x_cpu = torch.randn(_B, _T_PREFILL, _H, dtype=torch.bfloat16)
 
-    # CPU reference (just the attention block).
-    sd_short = _self_attn_short_weights(state_dict_orig, _LAYER_IDX)
-    out_ref = _cpu_reference_gated_attn(sd_short, x_cpu, _T_PREFILL)
-    print(f"[Layer3] CPU ref shape: {out_ref.shape}")
+    # CPU reference (full HybridDecoderLayer forward, layer 3).
+    out_ref = _cpu_reference_layer(state_dict_orig, _LAYER_IDX, _LAYER_TYPE, x_cpu)
+    print(f"[Layer3/forward] CPU ref shape: {out_ref.shape}")
 
-    # TT forward — feed the attention block directly with full-H replicated input
-    # and partial-RoPE cos/sin (built at rope_dim=64, the qwen3.6 oracle).
-    x_tt = _send_replicated(x_cpu, bh_glx_mesh, dtype=ttnn.bfloat16)
-    cos_ref, sin_ref = _build_partial_rope_cos_sin(_T_PREFILL)
-    cos_tt = _send_replicated(cos_ref.unsqueeze(0), bh_glx_mesh)
-    sin_tt = _send_replicated(sin_ref.unsqueeze(0), bh_glx_mesh)
-
-    tt_out = model.layers[0].attention.forward(
+    # TT forward.
+    x_tt = _send_col_sharded_hidden(x_cpu, bh_glx_mesh, args)
+    cos_tt, sin_tt = _build_partial_rope_cos_sin_tt(bh_glx_mesh, _T_PREFILL)
+    chunk_start_idx_tt = ttnn.from_torch(
+        torch.tensor([0], dtype=torch.int32),
+        device=bh_glx_mesh,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(bh_glx_mesh),
+    )
+    tt_out = model.forward(
         x_tt,
         current_pos=None,
         rot_mats=(cos_tt, sin_tt),
@@ -241,17 +257,18 @@ def test_qwen36_layer3_full_attention_prefill_pcc(bh_glx_mesh):
         mode="prefill",
         page_table=None,
         chunk_page_table=None,
-        chunk_start_idx=0,
-        chunk_start_idx_tensor=None,
+        chunk_start_idx=chunk_start_idx_tt,
+        start_pos=0,
+        get_last_token=-1,
         kv_cache=None,
         batch_size=1,
     )
-    tt_out_cpu = _gather_replicated_first_dev(tt_out, bh_glx_mesh, T=_T_PREFILL)
+    tt_out_cpu = _gather_col_sharded_to_full(tt_out, bh_glx_mesh, args, T=_T_PREFILL)
     tt_out_cpu = tt_out_cpu.reshape(_B, _T_PREFILL, _H).float()
-    print(f"[Layer3] TT out shape: {tt_out_cpu.shape}")
+    print(f"[Layer3/forward] TT out shape: {tt_out_cpu.shape}")
 
     pcc = _pcc(tt_out_cpu, out_ref[:, :_T_PREFILL, :])
     p99 = torch.quantile((tt_out_cpu.float() - out_ref[:, :_T_PREFILL, :].float()).abs().flatten(), 0.99).item()
-    print(f"[Layer3] PCC = {pcc:.6f} (thresh={_PCC_THRESH})  |  p99 abs-diff = {p99:.4f}")
-    assert pcc > _PCC_THRESH, f"Layer3 full_attention PCC {pcc:.4f} < {_PCC_THRESH} (p99={p99:.4f})"
-    print("[Layer3] PASSED")
+    print(f"[Layer3/forward] PCC = {pcc:.6f} (thresh={_PCC_THRESH})  |  p99 abs-diff = {p99:.4f}")
+    assert pcc > _PCC_THRESH, f"Layer3/forward PCC {pcc:.4f} < {_PCC_THRESH} (p99={p99:.4f})"
+    print("[Layer3/forward] PASSED")

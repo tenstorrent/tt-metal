@@ -168,6 +168,12 @@ class TtQwen36DeltaAttention(LightweightModule):
         self.args = args
         self.layer_num = layer_num
         self.tt_ccl = tt_ccl
+        # Keep DeltaNet weights at the requested model dtype (bf8 by default).
+        # V2-7b: forcing self.dtype=bfloat16 unexpectedly dropped layer-0 PCC
+        # from 0.999 → 0.84 — DeltaNet relies on bf8-quantised recurrent inputs
+        # to keep its `exp(-A_log * softplus(...))` term within range.  The
+        # full-attention path (TtLlamaAttention) gets a separate bf16 weight
+        # override because its quantisation noise compounds differently.
         self.dtype = dtype
 
         # --- Mesh topology ---

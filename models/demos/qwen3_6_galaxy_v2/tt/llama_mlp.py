@@ -62,9 +62,15 @@ class TtLlamaMLP(LightweightModule):
         w2_mem_config = self.model_config[
             "W2_RING_MEMCFG"
         ]  # args.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices, args.dim)
+        # is_qwen / is_qwen36: MLP weights must be bfloat16. V2-7b found
+        # layer-3 forward PCC drops 0.999 -> 0.77 with bf8b w1/w3 weights
+        # when attention output flows through MLP via the full TtTransformer
+        # decoder. The 4L/64L precision floor requires bf16 across all
+        # 64 layers (matches olmo session-11 residual-stream dtype lesson).
+        _mlp_force_bf16 = args.is_qwen or getattr(args, "is_qwen36", False)
         as_sharded_tensor = lambda name, type, dim: ttnn.as_tensor(
             torch_weight(name[:2]).unsqueeze(0).unsqueeze(0),  # Grab only the wX part of the name
-            dtype=type if not args.is_qwen else ttnn.bfloat16,
+            dtype=ttnn.bfloat16 if _mlp_force_bf16 else type,
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dim, mesh_shape=args.cluster_shape),
             layout=ttnn.TILE_LAYOUT,
@@ -72,9 +78,11 @@ class TtLlamaMLP(LightweightModule):
             cache_file_name=cache_name(name),
         )
 
+        # Interleaved variants (prefill path) — same bf16 override for
+        # qwen3/qwen3.6.
         as_interleaved_tensor = lambda name, type, dim: ttnn.as_tensor(
             torch_weight(name[:2]).unsqueeze(0).unsqueeze(0),  # Grab only the wX part of the name
-            dtype=type,
+            dtype=ttnn.bfloat16 if _mlp_force_bf16 else type,
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dim, mesh_shape=args.cluster_shape),
             layout=ttnn.TILE_LAYOUT,

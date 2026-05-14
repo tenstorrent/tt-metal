@@ -245,7 +245,14 @@ class TtLlamaAttention(LightweightModule):
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=[8, 4]),
             )
 
-        self.dtype = dtype
+        # qwen3.6 forces bfloat16 attention weights (wqkvg / wo).  V2-7b layer-3
+        # forward PCC test: bfloat8_b weights drop PCC from 0.999 → 0.77 once
+        # the attention is composed inside the full TtTransformer.forward path
+        # (block-level bypass was 0.9997 even at bf8 — the residual + norm +
+        # MLP layering amplifies the bf8 quantisation noise).  Layer 0
+        # (DeltaNet) already kept its own bfloat16 weights so it was unaffected;
+        # layer 3 (full_attention) used self.dtype=bf8 for wqkvg / wo.
+        self.dtype = ttnn.bfloat16 if getattr(configuration, "is_qwen36", False) else dtype
         self.qk_norm = configuration.qk_norm
 
         if self.is_qwen36:

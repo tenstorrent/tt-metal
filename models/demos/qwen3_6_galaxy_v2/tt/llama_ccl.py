@@ -367,7 +367,10 @@ class TT_CCL:
 
         # Binary Mult + Silu
         if self.is_qwen36:
-            binary_mul_width = 1728  # intermediate_dim_per_tp = 13824 / 8
+            # qwen3.6 intermediate=17408, 8-row TP → per-row 2176.
+            # (Was 1728 stale-from-qwen3-32B; mismatched the actual w1_out
+            # shape on the V2-7b MLP path.)
+            binary_mul_width = 2176
         elif self.is_qwen:
             binary_mul_width = 3200
         else:
@@ -570,25 +573,35 @@ class TT_CCL:
             if self.model_config is None:
                 return persistent_buffers
 
-            buffers_dict = (
-                {
+            # qwen3.6 per-device prefill reduce_scatter widths (FFN=17408, H=5120,
+            # 8 rows × 4 cols). FF1/FF3 K-dim per row = 2176 (intermediate_dim_per_tp);
+            # FF2 K-dim per col = 1280 (dim_per_tp). The non-qwen36 branches below use
+            # 70B / qwen3-32B specific values; mixing them with qwen3.6 weights
+            # caused a 1728 vs 2176 matmul mismatch in V2-7b.
+            if self.is_qwen36:
+                buffers_dict = {
                     "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
-                    # "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
-                    "FF1": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
-                    "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
-                    "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
-                    "ATTN_REPLICATE": [(1, 1, seqlen, 128), (1, 1, seqlen, 128 // 4)],
+                    "FF1": [(1, 1, seqlen, 2176), (1, 1, seqlen, 2176 // 4)],
+                    "FF3": [(1, 1, seqlen, 2176), (1, 1, seqlen, 2176 // 4)],
+                    "FF2": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
+                    "ATTN_REPLICATE": [(1, 1, seqlen, 256), (1, 1, seqlen, 256 // 4)],  # head_dim=256
                 }
-                if not self.is_qwen
-                else {
+            elif self.is_qwen:
+                buffers_dict = {
                     "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
-                    # "WO": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
                     "FF1": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
                     "FF3": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
                     "FF2": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
                     "ATTN_REPLICATE": [(1, 1, seqlen, 128), (1, 1, seqlen, 128 // 4)],
                 }
-            )
+            else:
+                buffers_dict = {
+                    "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
+                    "FF1": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
+                    "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
+                    "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                    "ATTN_REPLICATE": [(1, 1, seqlen, 128), (1, 1, seqlen, 128 // 4)],
+                }
             for key, shape in buffers_dict.items():
                 tt_buffers = []
                 for i in range(1):
@@ -706,19 +719,20 @@ class TT_CCL:
             ag_persistent_buffers = {}
 
             if self.is_qwen36:
-                # qwen3.6 per-device widths:
+                # qwen3.6 per-device prefill all_gather widths (intermediate=17408,
+                # H=5120, head_dim=256, 8 rows × 4 cols):
                 #   QKV+Gate per col = (n_q + n_q + n_kv + n_kv)/n_cols * head_dim
                 #                    = (24 + 24 + 4 + 4)/4 * 256 = 14*256 = 3584
-                #     (total across cols = (24+4+4+24)*256 = 14336)
                 #   WO_AG per col   = dim_per_tp = 5120/4 = 1280
-                #   FF1/FF3 per col = intermediate_dim_per_tp = 13824/8 = 1728
+                #   FF1/FF3 per row = intermediate_dim_per_tp = 17408/8 = 2176
+                #     (line_all_gather inside the MLP gathers the col-scattered
+                #      product back to the per-row width 2176; v2 corrected from
+                #      the stale qwen3-32B value 13824/8=1728 that crashed the
+                #      V2-7b TtTransformer.forward path with a 1728 vs 2176
+                #      matmul mismatch on the W2 input gather.)
                 #   FF2 per col     = dim_per_tp = 1280
                 # SDPA per col      = n_local_heads * head_dim = 6 * 256 = 1536
-                #   (kept aligned with v1 qwen3.6 attention.py constants)
                 # ATTN_REPLICATE     = head_dim per slice (256 for qwen3.6 head_dim).
-                # TODO V2-7: verify SDPA shard width and ATTN_REPLICATE
-                # against test_qknorm_per_head failure mode (head_dim=256 vs the
-                # llama 128-wide assumption used by the prefix-cache slice).
                 buffers_dict = {
                     "QKV": [(1, 1, seqlen, 3584)],
                     "QKV_BF16": [(1, 1, seqlen, 3584)],
@@ -726,10 +740,10 @@ class TT_CCL:
                     "SDPA_REVERSE": [(1, 1, seqlen // 2, 1536)],
                     "WO_AG": [(8, 1, seqlen, 1280)],
                     "WO_AG_BF16": [(8, 1, seqlen, 1280)],
-                    "FF1": [(1, 1, seqlen, 1728)],
-                    "FF1_BF16": [(1, 1, seqlen, 1728)],
-                    "FF3": [(1, 1, seqlen, 1728)],
-                    "FF3_BF16": [(1, 1, seqlen, 1728)],
+                    "FF1": [(1, 1, seqlen, 2176)],
+                    "FF1_BF16": [(1, 1, seqlen, 2176)],
+                    "FF3": [(1, 1, seqlen, 2176)],
+                    "FF3_BF16": [(1, 1, seqlen, 2176)],
                     "FF2": [(1, 1, seqlen, 1280)],
                     "LAYERNORM": [(1, 1, seqlen, 128)],
                     "ATTN_REPLICATE": [(1, 1, seqlen, 256)],  # qwen3.6 head_dim=256
