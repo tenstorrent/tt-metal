@@ -515,12 +515,6 @@ FORCE_INLINE uint32_t read_from_pcie(
     return pending_read_size;
 }
 
-// We need this sleight-of-hand so the static initializer below is in
-// fact constinit (remember, reinterpret_cast expressions are not
-// constant-expressions, and sadly the compiler doesn't convert the
-// dynamic init to a static init.
-asm(".equiv prefetch_q_base_, %0" ::"n"(prefetch_q_base));
-
 // Fetch work from host PrefetchQ into `cmddat_q` using tagged PCIe NoC reads.
 //
 // - Each PrefetchQ entry encodes a `fetch_size` (payload bytes) plus an optional MSB `stall_after` flag.
@@ -577,6 +571,13 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
     // hierarchy. invalidate_l1_cache() alone doesn't flush L2, so cached reads of TL1 locations
     // written by an external NOC source (host fetch-queue write) can otherwise stall forever.
     // l1_uncached_addr is a no-op on non-Quasar archs.
+
+    // We need this sleight-of-hand so the static initializer below is in
+    // fact constinit (remember, reinterpret_cast expressions are not
+    // constant-expressions, and sadly the compiler doesn't convert the
+    // dynamic init to a static init. The assembler permits multiple .equ
+    // of the same symbol.
+    asm(".equ prefetch_q_base_, %0" ::"n"(prefetch_q_base));
     extern volatile tt_l1_ptr prefetch_q_entry_type prefetch_q_base_[];  // See the asm above
     static constinit volatile tt_l1_ptr prefetch_q_entry_type* prefetch_q_rd_ptr = prefetch_q_base_;
     constexpr uint32_t prefetch_q_msb_mask = 1u << (sizeof(prefetch_q_entry_type) * CHAR_BIT - 1U);
