@@ -166,3 +166,84 @@ Recommendation for V2-10 (closing the final 1.33x gap to 17 tok/s/user):
      with a direct `tt_ccl.line_all_reduce` (matches MLP path)
    - Fuse `_compute_beta_g` ops (sigmoid + add + softplus + exp + neg + multiply)
      into a custom kernel
+
+## Trace-default coherency loop (V2-9 follow-up)
+
+V2-9 follow-up: the trace replay path was made the **default** decode flow
+by switching to the **paged attention path** (`page_table != None`).  The
+paged decode:
+  - Uses `paged_update_cache(update_idxs_tensor=cur_pos_tensor)` — write
+    index is a device tensor (no Python int baking).
+  - Uses `paged_scaled_dot_product_attention_decode(cur_pos_tensor=...)`
+    — kernel reads cur_pos at runtime.
+  - Does NOT need the V2-9 `_decode_mask_buf` (kernel uses cur_pos_tensor).
+  - One captured trace serves all decode positions.
+
+Required port from v1: the qwen3.6 v2 `_forward_decode_qwen36` paged
+branch now `ttnn.to_memory_config`'s k_rot/v_t to HEIGHT_SHARDED 1-core
+shard_shape=[tile_rows, hd] before `paged_update_cache` (mirror v1
+`qwen3_6_galaxy/tt/llama_attention.py:1156-1181`).  Required port for
+the trace contract: the decoder block's first-layer `x.deallocate(True)`
+(`llama_decoder.py:458`) would free the user-provided input buffer on
+each replay, so the trace-default test wraps the input in `ttnn.clone`
+before feeding the model.
+
+Driver test: `tests/test_decode_coherency_isl128.py`
+(64-layer paged decode, ISL=128 Llama-70B-Galaxy demo prompt #0,
+32 greedy decode tokens via single-trace replay).
+
+| metric | value |
+|---|---|
+| Trace captures | 1 |
+| Trace replays  | 32 |
+| Prefill 128 tokens | 3332 ms (paged) |
+| Mean traced decode (real loop) | **604.86 ms/step** |
+| Traced tok/s/user (real loop) | **1.65** |
+| Output coherency | PASS (77 alpha chars, no NaN/Inf, qwen3.6 `<think>` reasoning prefix) |
+
+### Generated text (32 tokens after the demo prompt)
+
+```
+\n\n<think>\nHere's a thinking process:\n\n1.  **Analyze User Input:**\n   - **Question:** "What is your favorite condiment?
+```
+
+This matches the eager run token-for-token (token IDs 271, 248068, 198,
+8160, ...).  The `<think>` prefix is the canonical Qwen3.6 reasoning
+opening — model is producing correct in-distribution output.
+
+### Why the real-loop number (605 ms) is slower than the V2-9 bench (78 ms)
+
+The V2-9 4L/64L trace tests measure pure `execute_trace` latency over a
+warm replay loop with NO per-step input refresh — that's the ideal
+"device-only work" number (~78 ms/step at 64L).
+
+The coherency loop is the realistic decode contract — between each
+`execute_trace` we must:
+  - Build CPU embedding for the just-generated token (~5 µs)
+  - `copy_host_to_device_tensor` × 4:
+    * `input_emb_buf` (1280 bf16 per chip × 32 chips)
+    * `cos_buf`, `sin_buf` (64 bf16 per chip × 32 chips, replicated)
+    * `cur_pos_tensor` (1 int32 per chip × 32 chips, replicated)
+  - Build host-side cos/sin via `_build_partial_rope_cos_sin_torch`
+  - `ttnn.to_torch` of the logits buffer (248k vocab × bf16 × 32 chips)
+  - Argmax on host
+
+The dominant cost is the logits `to_torch` gather (32-chip device→host
+of the full vocab tensor) plus the cos/sin host build.  These are
+amenable to further optimization:
+  - **Move sampling on-device**: replace the host argmax with
+    `tt_sampling` (see `demo_qwen_decode.py:266`) → eliminates the full
+    248k-vocab logits gather, only need to read back the 1 sampled token.
+  - **In-trace cos/sin lookup**: replace per-step `_refresh_cos_sin_buf`
+    with `rope_setup.get_rm_rot_mats(rot_idxs)` inside the trace, where
+    `rot_idxs` is a persistent device tensor refreshed via `ttnn.plus_one`
+    in-trace (mirror `demo_qwen_decode.py:289`). Eliminates 2 of the 4
+    copy_h2d calls and the CPU cos/sin build per step.
+  - **Token tensor + on-device embedding**: replace the CPU embed +
+    col-sharded copy with `ttnn.embedding(tt_out_tok, weights)` inside
+    the trace (needs an L1→DRAM converter for the qwen3.6 contract; not
+    yet landed).
+
+Closing the gap from 605 ms → 78 ms × 1.5 (real-loop minimal overhead)
+should land around **5-7 tok/s/user**, and combined with DeltaNet kernel
+fusion (V2-10) the 17 tok/s/user target is approachable.

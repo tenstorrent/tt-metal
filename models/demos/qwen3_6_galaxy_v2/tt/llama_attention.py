@@ -1689,12 +1689,30 @@ class TtLlamaAttention(LightweightModule):
             keys_cache, values_cache = self.layer_past[0], self.layer_past[1]
 
         if page_table is not None:
+            # V2-9 trace-default: ``paged_update_cache`` requires the input
+            # (k_rot/v_t) to be HEIGHT_SHARDED on 1 core with shard_shape
+            # [tile_rows, hd]. k_rot/v_t arrive as DRAM-INTERLEAVED from
+            # ``_qwen36_qknorm_flat_to_heads`` / ``_qwen36_flat_to_heads``.
+            # Mirror v1's height-shard step (qwen3_6_galaxy/tt/llama_attention.py
+            # lines 1156-1180) — convert to height-sharded before the call.
+            tile_rows = ((T + _QWEN36_TILE - 1) // _QWEN36_TILE) * _QWEN36_TILE  # 32
+            _height_shard_cfg = ttnn.create_sharded_memory_config(
+                shape=[tile_rows, hd],
+                core_grid=ttnn.CoreGrid(y=1, x=1),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            k_rot_sharded = ttnn.to_memory_config(k_rot, memory_config=_height_shard_cfg)
+            v_t_sharded = ttnn.to_memory_config(v_t, memory_config=_height_shard_cfg)
             ttnn.experimental.paged_update_cache(
-                keys_cache, k_rot, update_idxs_tensor=current_pos, page_table=page_table
+                keys_cache, k_rot_sharded, update_idxs_tensor=current_pos, page_table=page_table
             )
             ttnn.experimental.paged_update_cache(
-                values_cache, v_t, update_idxs_tensor=current_pos, page_table=page_table
+                values_cache, v_t_sharded, update_idxs_tensor=current_pos, page_table=page_table
             )
+            k_rot_sharded.deallocate(True)
+            v_t_sharded.deallocate(True)
         else:
             # Non-paged decode requires a Python-int position.
             if isinstance(current_pos, int):
