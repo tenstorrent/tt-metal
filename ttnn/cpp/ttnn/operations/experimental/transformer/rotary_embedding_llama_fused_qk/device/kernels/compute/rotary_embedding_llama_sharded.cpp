@@ -119,26 +119,104 @@ void kernel_main() {
         cb_push_back(sin_interm_cb, Wt);
         cb_pop_front(rotated_in_interm_cb, Wt);
 
-        ACQ();
-        for (uint32_t j = 0; j < Wt; ++j) {
-            // cos_interim = x * cos
-            mul_tiles_bcast<BroadcastType::ROW>(in_cb, cos_cb, j, j, j);
-            pack_tile(j, cos_interm_cb, j);
+        // cos_interim = x * cos   (ROW-bcast mul over Wt tiles)
+        // Migrated: streaming BinaryFpu + PackTile. `in_cb` is selected at runtime from
+        // (q_in_cb, k_in_cb) by `is_q`, so the call branches into one chain per arm to keep
+        // the chain template parameters compile-time. All other CBs are constexpr; lifecycle
+        // is caller-managed (cb_wait/reserve above, pop/push below) → NoWaitNoPop /
+        // NoReserveNoPush.
+        if (is_q) {
+            compute_kernel_lib::eltwise_chain(
+                Wt,
+                compute_kernel_lib::BinaryFpu<
+                    q_in_cb,
+                    cos_cb,
+                    cos_interm_cb,
+                    compute_kernel_lib::BinaryFpuOp::Mul,
+                    compute_kernel_lib::BroadcastDim::Row,
+                    compute_kernel_lib::BinaryDataFormatReconfig::None,
+                    compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
+                    compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
+                    compute_kernel_lib::CbIndexMode::BlockIter,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::CbIndexMode::BlockIter>{},
+                compute_kernel_lib::PackTile<
+                    cos_interm_cb,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::PackTilePolicy::NoReserveNoPush,
+                    compute_kernel_lib::PackTileIndexMode::BlockIter>{});
+        } else {
+            compute_kernel_lib::eltwise_chain(
+                Wt,
+                compute_kernel_lib::BinaryFpu<
+                    k_in_cb,
+                    cos_cb,
+                    cos_interm_cb,
+                    compute_kernel_lib::BinaryFpuOp::Mul,
+                    compute_kernel_lib::BroadcastDim::Row,
+                    compute_kernel_lib::BinaryDataFormatReconfig::None,
+                    compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
+                    compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
+                    compute_kernel_lib::CbIndexMode::BlockIter,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::CbIndexMode::BlockIter>{},
+                compute_kernel_lib::PackTile<
+                    cos_interm_cb,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::PackTilePolicy::NoReserveNoPush,
+                    compute_kernel_lib::PackTileIndexMode::BlockIter>{});
         }
-        REL();
         cb_push_back(cos_interm_cb, Wt);
         cb_pop_front(in_cb, Wt);  // Done with input
 
         cb_wait_front(sin_interm_cb, Wt);
         cb_wait_front(cos_interm_cb, Wt);
-        add_tiles_init(cos_interm_cb, sin_interm_cb);
-        ACQ();
-        for (uint32_t j = 0; j < Wt; ++j) {
-            // out = cos_interim + sin_interim
-            add_tiles(cos_interm_cb, sin_interm_cb, j, j, j);
-            pack_tile(j, out_cb, j);
+
+        // out = cos_interim + sin_interim   (eltwise add over Wt tiles)
+        // Migrated: streaming BinaryFpu (Add) + PackTile. `out_cb` is runtime-selected by
+        // `is_q`, so the call branches per arm. Inputs were waited above and popped below;
+        // the pack CB is reserved earlier in the ht-loop and pushed below.
+        if (is_q) {
+            compute_kernel_lib::eltwise_chain(
+                Wt,
+                compute_kernel_lib::BinaryFpu<
+                    cos_interm_cb,
+                    sin_interm_cb,
+                    q_out_cb,
+                    compute_kernel_lib::BinaryFpuOp::Add,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::BinaryDataFormatReconfig::None,
+                    compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
+                    compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
+                    compute_kernel_lib::CbIndexMode::BlockIter,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::CbIndexMode::BlockIter>{},
+                compute_kernel_lib::PackTile<
+                    q_out_cb,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::PackTilePolicy::NoReserveNoPush,
+                    compute_kernel_lib::PackTileIndexMode::BlockIter>{});
+        } else {
+            compute_kernel_lib::eltwise_chain(
+                Wt,
+                compute_kernel_lib::BinaryFpu<
+                    cos_interm_cb,
+                    sin_interm_cb,
+                    k_out_cb,
+                    compute_kernel_lib::BinaryFpuOp::Add,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::BinaryDataFormatReconfig::None,
+                    compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
+                    compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
+                    compute_kernel_lib::CbIndexMode::BlockIter,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::CbIndexMode::BlockIter>{},
+                compute_kernel_lib::PackTile<
+                    k_out_cb,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::PackTilePolicy::NoReserveNoPush,
+                    compute_kernel_lib::PackTileIndexMode::BlockIter>{});
         }
-        REL();
         cb_push_back(out_cb, Wt);
         cb_pop_front(sin_interm_cb, Wt);
         cb_pop_front(cos_interm_cb, Wt);
