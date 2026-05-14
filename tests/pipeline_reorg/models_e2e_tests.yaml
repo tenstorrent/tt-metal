@@ -411,6 +411,7 @@
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E2B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E2B-it
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E2B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E2B-it
     pytest -s --timeout 1000 models/demos/gemma4/demo/text_demo.py::test_demo
     # test_lm_head, test_packed_verify (spec-decode packed verify, #46755) and
     # test_model::test_full_model load real weights via
@@ -440,6 +441,7 @@
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E4B-it
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E4B-it
     pytest -s --timeout 1000 models/demos/gemma4/demo/text_demo.py::test_demo
     pytest -s --timeout 600 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
@@ -468,6 +470,7 @@
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-26B-A4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-26B-A4B-it
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-26B-A4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-26B-A4B-it
     pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
     # Deselect packed-verify batch_perf (~2–3m): WH llmbox_perf SKU budget is
     # 10m; demo+lm_head+matches_sequential+full_model already fill it.
@@ -480,7 +483,10 @@
   model_family: Gemma
   skus:
     wh_llmbox_perf:
-      timeout: 10
+      timeout: 15
+      tier: 2
+    bh_quietbox_2:
+      timeout: 15
       tier: 2
     bh_quietbox_2:
       timeout: 22
@@ -500,6 +506,7 @@
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-31B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-31B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it
     pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
     # Deselect packed-verify batch_perf (~2–3m): WH llmbox_perf SKU budget is
     # 10m; demo+lm_head+matches_sequential+full_model already fill it.
@@ -512,7 +519,10 @@
   model_family: Gemma
   skus:
     wh_llmbox_perf:
-      timeout: 10
+      timeout: 15
+      tier: 2
+    bh_quietbox_2:
+      timeout: 15
       tier: 2
     bh_quietbox_2:
       timeout: 25

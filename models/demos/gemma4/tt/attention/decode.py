@@ -20,6 +20,7 @@ from .operations import (
     apply_rope_decode_peruser,
     concat_heads,
     effective_block_size,
+    effective_block_size,
     split_qkv_heads_decode,
     split_qkv_heads_prefill,
 )
