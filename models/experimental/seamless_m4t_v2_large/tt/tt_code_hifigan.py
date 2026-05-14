@@ -18,6 +18,8 @@ not a compute fallback.
   - HF's ``repeat_interleave`` is ``embeddings @ H`` with ``ttnn.cumsum`` + comparisons.
   - Lang/speaker broadcast uses ``ttnn.repeat`` to that same ``t_audio``.
   - Output lengths are an on-device ``ttnn.Tensor``; ``lengths`` stays on device for callers.
+  - Duration predictor and resblock ``conv1`` use post-conv fused ReLU / LeakyReLU via ``Conv1dConfig.activation``;
+    pre-conv LeakyReLU (upsampler, resblock input, conv_post) stays as separate ``ttnn.leaky_relu`` to match HF order.
 """
 
 from __future__ import annotations
@@ -46,6 +48,16 @@ def _core_grid(device: ttnn.Device) -> ttnn.CoreGrid:
     return ttnn.CoreGrid(y=grid.y, x=grid.x)
 
 
+def _fused_relu() -> ttnn.UnaryWithParam:
+    """Post-conv fused ReLU (same recipe as T2U ``Conv1dConfig.activation``)."""
+    return ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
+
+
+def _fused_leaky_relu(negative_slope: float) -> ttnn.UnaryWithParam:
+    """Post-conv fused LeakyReLU with HF ``negative_slope`` (block-float param on device)."""
+    return ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, float(negative_slope))
+
+
 class TTSeamlessM4Tv2CodeHifiGan:
     """Inference forward for HF ``SeamlessM4Tv2CodeHifiGan``."""
 
@@ -56,6 +68,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         self.leaky_slope = float(config.leaky_relu_slope)
         self.num_kernels = len(config.resblock_kernel_sizes)
 
+        # HiFi4 required for >0.99 waveform PCC (LoFi ~0.59; HiFi2 ~0.987 vs 0.99 gate in test_code_hifigan).
         self._compute = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -98,6 +111,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         padding: int,
         groups: int,
         dilation: int = 1,
+        fused_post_activation: Optional[ttnn.UnaryWithParam] = None,
     ) -> Tuple[ttnn.Tensor, int]:
         # ``ttnn.conv1d`` reshapes activations for the conv2d path; TILE NLC (e.g. from ``embedding``)
         # can hit "reshape between two shapes with different volumes". Host ROW_MAJOR weights are fine.
@@ -106,11 +120,16 @@ class TTSeamlessM4Tv2CodeHifiGan:
         if x_nlc.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
             rm_buf = ttnn.to_layout(x_nlc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             x_in = rm_buf
-        conv_config = ttnn.Conv1dConfig(
-            weights_dtype=ttnn.bfloat16,
+        conv_kwargs: dict = dict(
+            weights_dtype=ttnn.bfloat8_b,
             shard_layout=None,
             deallocate_activation=False,
+            enable_weights_double_buffer=True,
+            enable_act_double_buffer=True,
         )
+        if fused_post_activation is not None:
+            conv_kwargs["activation"] = fused_post_activation
+        conv_config = ttnn.Conv1dConfig(**conv_kwargs)
         out, out_len = ttnn.conv1d(
             input_tensor=x_in,
             weight_tensor=weight,
@@ -159,10 +178,12 @@ class TTSeamlessM4Tv2CodeHifiGan:
 
         x_nhwc = ttnn.reshape(x_nlc, (batch, input_length, 1, in_channels))
         conv_config = ttnn.Conv2dConfig(
-            weights_dtype=ttnn.bfloat16,
+            weights_dtype=ttnn.bfloat8_b,
             shard_layout=None,
             deallocate_activation=False,
             output_layout=ttnn.TILE_LAYOUT,
+            enable_weights_double_buffer=True,
+            enable_act_double_buffer=True,
         )
         out_4d, out_hw = ttnn.conv_transpose2d(
             input_tensor=x_nhwc,
@@ -208,8 +229,8 @@ class TTSeamlessM4Tv2CodeHifiGan:
             stride=1,
             padding=c1.padding,
             groups=1,
+            fused_post_activation=_fused_relu(),
         )
-        h = ttnn.relu(h, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         h = self._layer_norm(h, weight=dp.ln1.weight, bias=dp.ln1.bias, eps=dp.ln1.eps)
         h, tlen = self._conv1d(
             h,
@@ -223,8 +244,8 @@ class TTSeamlessM4Tv2CodeHifiGan:
             stride=1,
             padding=c2.padding,
             groups=1,
+            fused_post_activation=_fused_relu(),
         )
-        h = ttnn.relu(h, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         h = self._layer_norm(h, weight=dp.ln2.weight, bias=dp.ln2.bias, eps=dp.ln2.eps)
         log_dur = self._linear(h, dp.proj.weight, dp.proj.bias)  # [B, T_units, 1]
         ttnn.deallocate(h)
@@ -251,8 +272,8 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 padding=int(c1p["padding"]),
                 groups=1,
                 dilation=int(c1p["dilation"]),
+                fused_post_activation=_fused_leaky_relu(self.leaky_slope),
             )
-            x_nlc = ttnn.leaky_relu(x_nlc, negative_slope=self.leaky_slope, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             x_nlc, tlen = self._conv1d(
                 x_nlc,
                 weight=c2p["weight"],
@@ -312,6 +333,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
             ttnn.deallocate(acc)
             ttnn.deallocate(h)
             h = acc_scaled
+            ttnn.ReadDeviceProfiler(self.device)
 
         # Match HF: line 2489 of ``modeling_seamless_m4t_v2.py`` calls
         # ``nn.functional.leaky_relu(hidden_states)`` with the default 0.01 slope, NOT
@@ -333,6 +355,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
             groups=1,
         )
         h = ttnn.tanh(h, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.ReadDeviceProfiler(self.device)
         return h
 
     def forward(
@@ -384,6 +407,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         assert batch == 1, "_forward_one expects B == 1; use forward() for B > 1."
 
         # ---------- embeddings (all on device) ----------
+        # Tables uploaded ROW_MAJOR (``_vocoder_embedding_weight_row_major``); ``layout`` here is the *output* layout.
         ue = self.p.unit_embedding.weight
         use = ttnn.embedding(input_ids, weight=ue, layout=ttnn.TILE_LAYOUT)  # [B, T_units, E_unit] (TILE-padded)
 
