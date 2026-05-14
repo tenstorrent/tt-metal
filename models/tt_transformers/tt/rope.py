@@ -317,7 +317,7 @@ def rotary_embedding_factory(
             rotary_embedding = LlamaRotaryEmbedding
         elif rope_scaling.rope_type.value == "yarn":
             rotary_embedding = YarnRotaryEmbedding
-        elif rope_scaling.rope_type.value == "longrope":
+        elif rope_scaling.rope_type.value in ("longrope", "su"):
             rotary_embedding = Phi3RotaryEmbedding
         else:
             raise ValueError(f"Invalid rope_scaling: {rope_scaling}")

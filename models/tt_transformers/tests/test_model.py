@@ -89,8 +89,10 @@ def test_model_inference(
                 "Skipping Mistral-7B full model test for now. See issue https://github.com/tenstorrent/tt-metal/issues/19806"
             )
 
-        if ("Phi-3-mini" in model_name_env or "phi-4" in model_name_env) and weights == "random":
-            pytest.skip("Skipping Phi-3-mini-128k-instruct for single layer dummy weights test.")
+        if (
+            "Phi-3-mini" in model_name_env or "phi-4" in model_name_env or "Phi-3.5-vision" in model_name_env
+        ) and weights == "random":
+            pytest.skip("Skipping Phi model for single layer dummy weights test.")
 
         if ("Llama" in model_name_env) and ("Vision" in model_name_env) and (weights == "instruct"):
             pytest.skip("Skipping Llama Vision full model test: no CrossAttention functionality in this test.")

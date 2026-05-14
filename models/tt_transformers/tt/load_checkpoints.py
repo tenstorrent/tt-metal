@@ -132,6 +132,8 @@ def standardize_hf_keys_multimodal(state_dict):
     for k in all_keys:
         if "model.visual." in k:
             new_state_dict[k.replace("model.visual.", "visual.")] = state_dict[k]
+        elif "model.vision_embed_tokens." in k:
+            new_state_dict[k.replace("model.vision_embed_tokens.", "visual.vision_embed_tokens.")] = state_dict[k]
         elif "model.vision_tower.vision_model." in k:
             new_state_dict[k.replace("model.vision_tower.vision_model.", "visual.")] = state_dict[k]
         elif "model.vision_tower." in k:

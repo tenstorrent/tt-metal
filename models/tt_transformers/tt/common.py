@@ -86,6 +86,7 @@ class RopeScalingType(str, Enum):
     YARN = "yarn"
     LLAMA3 = "llama3"
     PHI3 = "longrope"
+    PHI3_SU = "su"  # Phi-3.5-vision uses 'su' type; functionally identical to 'longrope'
     DEFAULT = "default"
 
 
@@ -140,7 +141,7 @@ def rope_scaling_model_factory(
         return RopeScalingLlama3(**rope_scaling_params)
     elif rope_scaling_type == RopeScalingType.YARN:
         return RopeScalingYarn(**rope_scaling_params)
-    elif rope_scaling_type == RopeScalingType.PHI3:
+    elif rope_scaling_type in (RopeScalingType.PHI3, RopeScalingType.PHI3_SU):
         return RopeScalingPhi3(original_max_position_embeddings=original_max_context_len, **rope_scaling_params)
     elif rope_scaling_type in ["default", "mrope"]:
         logger.warning(

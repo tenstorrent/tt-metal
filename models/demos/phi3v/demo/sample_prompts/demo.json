@@ -1,0 +1,7 @@
+[
+  {
+    "role": "user",
+    "content": "<|image_1|>\nDescribe this image in detail.",
+    "images": ["models/demos/phi3v/demo/sample_prompts/test_image.png"]
+  }
+]

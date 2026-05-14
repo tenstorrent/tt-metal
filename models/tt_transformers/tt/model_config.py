@@ -476,6 +476,7 @@ class ModelArgs:
         "Qwen2.5-VL-3B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-3B-Instruct",
         "Qwen2.5-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct",
         "Phi-4": "models/tt_transformers/model_params/phi-4",
+        "Phi-3.5-vision-instruct": "models/tt_transformers/model_params/Phi-3.5-vision-instruct",
         "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
         "Qwen3-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen3-VL-32B-Instruct",
         "Qwen3-32B": "models/tt_transformers/model_params/Qwen3-32B",
@@ -556,6 +557,8 @@ class ModelArgs:
             ]  # HF model names use / even on windows. May be overridden by config.
             if "phi-4" in self.model_name.lower():
                 self.model_name = "Phi-4"
+            elif "phi-3.5-vision" in self.model_name.lower():
+                self.model_name = "Phi-3.5-vision-instruct"
         else:
             raise ValueError("Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct")
 
@@ -582,7 +585,7 @@ class ModelArgs:
             raise ValueError(f"Batch size {self.max_batch_size} not supported")
 
         # Load model params
-        if self.base_model_name in ["Phi-3-mini-128k-instruct"]:
+        if self.base_model_name in ["Phi-3-mini-128k-instruct", "Phi-3.5-vision-instruct"]:
             self.trust_remote_code_hf = True
 
         self._set_hf_params(self.CKPT_DIR)
@@ -594,7 +597,10 @@ class ModelArgs:
             self.base_model_name
             in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-27b", "gemma-3-4b", "Phi-4"]
             and self.device_name == "N150"
-        ) or (self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B", "Phi-4"] and self.device_name == "N300"):
+        ) or (
+            self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B", "Phi-4"]
+            and self.device_name == "N300"
+        ):
             logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
             self.prefill_len_cutoff = 512
         elif self.base_model_name in ["Mixtral-8x7B"] and self.device_name == "T3K":
@@ -2333,6 +2339,7 @@ class ModelArgs:
                 "Qwen3-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None, "P150x8": 64},
                 "DeepSeek-R1-Distill-Qwen-14B": {"N150": 4, "N300": 64, "T3K": 128, "TG": None, "P150x4": None},
                 "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Phi-3.5-vision-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Phi-3-mini-128k-instruct": {"N150": 32, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
@@ -2906,9 +2913,12 @@ class ModelArgs:
     def is_llama_vision(self):
         return self.CKPT_DIR is not None and ("llama" in self.CKPT_DIR.lower()) and ("vision" in self.CKPT_DIR.lower())
 
+    def is_phi3v(self):
+        return self.model_name == "Phi-3.5-vision-instruct"
+
     def is_vision(self):
-        """Check if this is a vision-capable model (Llama vision or Mistral multimodal)"""
-        return self.is_llama_vision() or (
+        """Check if this is a vision-capable model (Llama vision, Mistral multimodal, or Phi-3.5-vision)"""
+        return self.is_llama_vision() or self.is_phi3v() or (
             "mistral" in self.model_name.lower()
             and (
                 (self.CKPT_DIR is not None and "vision" in self.CKPT_DIR.lower())
@@ -2973,6 +2983,9 @@ class ModelArgs:
             if type(self.hf_config) in model_cls._model_mapping:
                 return model_cls
 
+        if self.trust_remote_code_hf:
+            return AutoModelForCausalLM
+
         raise ValueError(f"Unknown model for config {type(self.hf_config)}")
 
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
@@ -3022,15 +3035,18 @@ class ModelArgs:
         else:
             # Always HuggingFace since we only support HF_MODEL now
             model_cls = self.get_hf_model_cls()
-            model = model_cls.from_pretrained(
-                self.CKPT_DIR,
+            from_pretrained_kwargs = dict(
                 torch_dtype="auto",
                 trust_remote_code=self.trust_remote_code_hf,
-                local_files_only=os.getenv("CI") == "true"
-                # Note that the default setting is torch.dtype.float32, but model weights are
-                # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
-                # unnecessary cast.
+                local_files_only=os.getenv("CI") == "true",
+                attn_implementation="eager",
             )
+            hf_config = self.hf_config
+            if hasattr(hf_config, "_attn_implementation"):
+                hf_config._attn_implementation = "eager"
+            if hasattr(hf_config, "_attn_implementation_autoset"):
+                hf_config._attn_implementation_autoset = False
+            model = model_cls.from_pretrained(self.CKPT_DIR, config=hf_config, **from_pretrained_kwargs)
             if self.cache_hf_flag:
                 self.cached_hf_model = model
             state_dict = model.state_dict()
@@ -3443,6 +3459,7 @@ class ModelArgs:
             "Qwen2.5-72B": "Qwen/Qwen2.5-72B-Instruct",
             "Qwen2.5-VL-32B": "Qwen/Qwen2.5-VL-32B-Instruct",
             "Qwen2.5-VL-72B": "Qwen/Qwen2.5-VL-72B-Instruct",
+            "Qwen3-VL-2B": "Qwen/Qwen3-VL-2B-Instruct",
             "Qwen3-VL-32B": "Qwen/Qwen3-VL-32B-Instruct",
             "Qwen2.5-32B-Instruct": "Qwen/Qwen2.5-32B-Instruct",
             "Llama-3-8B": "meta-llama/Llama-3-8B",
@@ -3456,6 +3473,7 @@ class ModelArgs:
             "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
             "Mistral-Small-3.1-24B": "mistralai/Mistral-Small-3.1-24B-Instruct-2503",
             "Phi-3-mini-128k-instruct": "microsoft/Phi-3-mini-128k-instruct",
+            "Phi-3.5-vision-instruct": "microsoft/Phi-3.5-vision-instruct",
         }
 
         logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
@@ -3531,8 +3549,8 @@ class ModelArgs:
         # Add meta-compatible stop token list to the HF tokenizer
         if not hasattr(tokenizer, "stop_tokens") or tokenizer.stop_tokens is None:
             tokenizer.stop_tokens = [tokenizer.eos_token_id]
-            # Phi-3-mini uses "<|end|>" as EOS token
-            if "phi-3-mini" in self.base_model_name.lower():
+            # Phi-3 family uses "<|end|>" as EOS token
+            if "phi-3" in self.base_model_name.lower():
                 tokenizer.stop_tokens.append(tokenizer.encode("<|end|>")[0])
         return tokenizer
 
@@ -3541,7 +3559,11 @@ class ModelArgs:
 
         processor = None
         try:
-            processor = AutoProcessor.from_pretrained(self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true")
+            processor = AutoProcessor.from_pretrained(
+                self.TOKENIZER_PATH,
+                local_files_only=os.getenv("CI") == "true",
+                trust_remote_code=self.trust_remote_code_hf,
+            )
             logger.info(f"Successfully loaded processor from {self.TOKENIZER_PATH}")
         except Exception as e:
             logger.warning(f"Failed to load processor from {self.TOKENIZER_PATH}: {e}")
