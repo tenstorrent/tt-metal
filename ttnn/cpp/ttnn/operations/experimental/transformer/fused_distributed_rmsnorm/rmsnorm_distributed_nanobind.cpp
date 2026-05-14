@@ -59,7 +59,8 @@ void bind_rmsnorm_pre_all_gather_operation(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("dtype") = DataType::BFLOAT16,
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("memory_config") = nb::none());
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("num_heads") = 1u);
 }
 
 void bind_rmsnorm_post_all_gather_operation(nb::module_& mod) {
@@ -168,7 +169,8 @@ void bind_rmsnorm_post_all_gather_operation(nb::module_& mod) {
         nb::arg("rope_sin") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("dtype") = nb::none());
+        nb::arg("dtype") = nb::none(),
+        nb::arg("per_head_norm") = false);
 }
 
 }  // namespace
