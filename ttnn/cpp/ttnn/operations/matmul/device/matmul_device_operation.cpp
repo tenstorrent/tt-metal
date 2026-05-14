@@ -354,8 +354,7 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
     bool transpose_a,
     bool transpose_b,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const operations::matmul::MatmulProgramConfig& chosen_program_config,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const operations::matmul::MatmulProgramConfig& chosen_program_config) {
     std::visit(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
@@ -691,8 +690,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         attributes.transpose_a,
         attributes.transpose_b,
         attributes.output_mem_config,
-        chosen_program_config,
-        attributes.sub_device_id);
+        chosen_program_config);
 
     // Validate batch dimensions for non-bcast matmul
     if (!attributes.bcast_batch.value()) {
