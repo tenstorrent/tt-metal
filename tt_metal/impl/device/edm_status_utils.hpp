@@ -112,4 +112,41 @@ inline bool is_known_edm_status(uint32_t status) {
     return name[0] != '(';
 }
 
+// Returns true iff `status` is a valid, non-corrupt ERISC state that does NOT
+// correspond to a live fabric router (i.e. not an EDMStatus enumerator), but is
+// also NOT random/corrupt L1 garbage.  Callers should check is_known_edm_status()
+// first; this function handles the complementary benign cases:
+//
+//   BASE_UMD_FIRMWARE_SENTINEL (0x49706550, "iPeP")
+//     Written by the base UMD relay firmware once it has completed .bss init
+//     and entered its polling loop.  The channel is healthy — it just rebooted
+//     into base firmware and EDM has not been launched yet.
+//
+//   ROM postcode family (0x4970xxxx, excluding 0x49706550)
+//     The ERISC BRISC ROM writes a series of intermediate postcodes during
+//     boot (0x49705180 → 0x49705530 → … → 0x49706550).  The channel is
+//     mid-boot and will complete; it is NOT corrupt.
+//
+//   HOST_PRE_LAUNCH_CANARY (0xDEADB07E)
+//     Written intentionally by our own host code to router_sync_address before
+//     sending the EDM launch message.  If the field still reads this value the
+//     ERISC has not yet polled — the channel is not corrupt.
+inline bool is_benign_erisc_state(uint32_t status) {
+    if (status == static_cast<uint32_t>(EthDiagSentinel::BASE_UMD_FIRMWARE_SENTINEL)) {
+        return true;
+    }
+    if (status == static_cast<uint32_t>(EthDiagSentinel::HOST_PRE_LAUNCH_CANARY)) {
+        return true;
+    }
+    // ROM postcode family: 0x4970xxxx (covers all intermediate boot postcodes).
+    // BASE_UMD_FIRMWARE_SENTINEL (0x49706550) is also in this range and already
+    // handled above; the check is harmless but kept separate for clarity.
+    constexpr uint32_t kRomPostcodeBase = 0x49700000u;
+    constexpr uint32_t kRomPostcodeMask = 0xFFFF0000u;
+    if ((status & kRomPostcodeMask) == kRomPostcodeBase) {
+        return true;
+    }
+    return false;
+}
+
 }  // namespace tt::tt_metal

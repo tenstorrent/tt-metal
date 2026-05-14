@@ -338,6 +338,7 @@ void FabricFirmwareInitializer::init(
                 const auto& active_channels = control_plane_.get_active_fabric_eth_channels(fabric_node_id);
 
                 uint32_t stale_count = 0;
+                uint32_t booting_count = 0;
                 uint32_t corrupt_count = 0;
                 for (const auto& [eth_chan_id, direction] : active_channels) {
                     const auto eth_logical_core =
@@ -362,20 +363,26 @@ void FabricFirmwareInitializer::init(
                     }
                     if (is_known_edm_status(status)) {
                         stale_count++;
+                    } else if (is_benign_erisc_state(status)) {
+                        // BASE_UMD_FIRMWARE_SENTINEL, ROM postcode, or HOST_PRE_LAUNCH_CANARY:
+                        // channel is healthy (base firmware, mid-boot, or pre-launch) — not corrupt.
+                        booting_count++;
                     } else {
                         corrupt_count++;
                     }
                 }
 
-                if (stale_count > 0 || corrupt_count > 0) {
+                if (stale_count > 0 || booting_count > 0 || corrupt_count > 0) {
                     log_warning(
                         tt::LogMetal,
-                        "pre-init L1 scan: Device {} has {} stale-running and {} corrupt ETH "
-                        "channel(s) BEFORE routing table write. terminate_stale_erisc_routers() "
-                        "will attempt recovery — but routing table writes to non-MMIO devices "
-                        "that use these relay ERISCs may race with stale firmware (#42429).",
+                        "pre-init L1 scan: Device {} has {} stale-running, {} booting/base-firmware, "
+                        "and {} corrupt ETH channel(s) BEFORE routing table write. "
+                        "terminate_stale_erisc_routers() will attempt recovery — but routing table "
+                        "writes to non-MMIO devices that use these relay ERISCs may race with stale "
+                        "firmware (#42429).",
                         dev->id(),
                         stale_count,
+                        booting_count,
                         corrupt_count);
                 }
             }
