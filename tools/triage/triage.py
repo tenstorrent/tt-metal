@@ -5,7 +5,7 @@
 
 """
 Usage:
-    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--disable-elf-cache] [--triage-summary-path=<path>] [--llm-output]
+    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--disable-elf-cache] [--triage-summary-path=<path>] [--llm-output] [--llm-output-path=<path>]
 
 Options:
     --remote-exalens                 Connect to remote exalens server.
@@ -25,7 +25,8 @@ Options:
     --disable-progress               Disable progress bars. [default: False]
     --disable-elf-cache              Re-parse ELF files on every access instead of caching. [default: False]
     --triage-summary-path=<path>     Write a triage summary file to the given path (used by CI for hang reports).
-    --llm-output                     Print machine-readable report (CSV-formatted tables) to stdout instead of Rich tables. Easier and cheaper for LLMs (and grep/CI) to consume. Implies --disable-colors.
+    --llm-output                     Replace Rich tables on the console with a machine-readable report (CSV-formatted tables). Easier and cheaper for LLMs (and grep/CI) to consume. Implies --disable-colors.
+    --llm-output-path=<path>         Additionally write the machine-readable report to <path>. Can be combined with --llm-output; without it, Rich output still goes to the console.
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
@@ -639,18 +640,33 @@ def set_output_serializer(serializer: Any) -> None:
 
 
 def init_output_serializer(args: ScriptArguments) -> None:
-    """Build the active serializer based on CLI args.
+    """Build the active serializer(s) based on CLI args.
 
-    Default: `RichSerializer`. If `--llm-output` is set,
-    swap in `CsvSerializer` — replacing Rich tables with CSV-formatted
-    ones for cheaper LLM/grep consumption.
+    Combinations:
+      neither flag                      -> RichSerializer on the console
+      --llm-output                      -> CsvSerializer on the console (replaces Rich)
+      --llm-output-path=<path>          -> Rich on console + CsvSerializer to file
+      --llm-output --llm-output-path=.. -> CsvSerializer on console + CsvSerializer to file
     """
-    from serializers import CsvSerializer, RichSerializer
+    from serializers import ConsoleSink, CsvSerializer, FileSink, MultiSerializer, RichSerializer
+
+    console_sink = ConsoleSink(console)
+    serializers: list[Any] = []
 
     if args["--llm-output"]:
-        set_output_serializer(CsvSerializer(console, get_verbose_level))
+        serializers.append(CsvSerializer(console_sink, get_verbose_level))
     else:
-        set_output_serializer(RichSerializer(console, utils, get_verbose_level))
+        serializers.append(RichSerializer(console_sink, utils, get_verbose_level))
+
+    csv_path = args["--llm-output-path"]
+    if csv_path:
+        try:
+            file_sink = FileSink(csv_path)
+            serializers.append(CsvSerializer(file_sink, get_verbose_level))
+        except OSError as e:
+            utils.WARN(f"Failed to open --llm-output-path={csv_path!r}: {e}. File output will be skipped.")
+
+    set_output_serializer(serializers[0] if len(serializers) == 1 else MultiSerializer(serializers))
 
 
 def serialize_result(script: TriageScript | None, result, execution_time: str = ""):
@@ -868,6 +884,7 @@ def run_script(
     serialize_result(script, result)
 
     if force_exit:
+        get_output_serializer().close()
         # Remove nanobind leak check to avoid false positives on exit
         os._exit(0)
 
@@ -998,6 +1015,8 @@ def main():
     from elfs_cache import run as get_elfs_cache
 
     get_elfs_cache(args, context).log_stats()
+
+    get_output_serializer().close()
 
     # Remove nanobind leak check to avoid false positives on exit
     os._exit(0)

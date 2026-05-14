@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import csv
 import io
+import os
 import textwrap
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, fields, is_dataclass
@@ -90,7 +91,9 @@ def extract_table_data(result: Any, verbose_level: int = 0) -> TableData | None:
 
 
 class OutputSerializer(ABC):
-    """Sink for one script's serialized result. Subclasses must implement `emit`."""
+    """Turns one script's result into output. Subclasses pick the format
+    (Rich tables, CSV, future JSON, …). The *destination* is handled by a
+    `Sink` instance the serializer holds."""
 
     @abstractmethod
     def emit(
@@ -106,12 +109,63 @@ class OutputSerializer(ABC):
     ) -> None:
         pass
 
+    def close(self) -> None:
+        """Release any owned resources (e.g. file handles). Default is a no-op."""
+        pass
+
+
+class Sink(ABC):
+    """Where rendered text goes. Decouples *format* (Serializer) from
+    *destination* (Sink) so each can vary independently."""
+
+    @abstractmethod
+    def write_line(self, line: str) -> None:
+        pass
+
+    def close(self) -> None:
+        """Release any owned resources (e.g. file handles). Default is a no-op."""
+        pass
+
+
+class ConsoleSink(Sink):
+    """`Sink` backed by a Rich console. Supports plain lines and Rich
+    renderables (tables, panels) — the latter is needed by `RichSerializer`."""
+
+    def __init__(self, console: Any):
+        self._console = console
+
+    def write_line(self, line: str) -> None:
+        self._console.print(line, markup=False, highlight=False)
+
+    def write_rich(self, renderable: Any) -> None:
+        self._console.print(renderable)
+
+
+class FileSink(Sink):
+    """`Sink` backed by a file on disk. Closes the file in `close()`."""
+
+    def __init__(self, path: str):
+        path = os.path.abspath(path)
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        self._file = open(path, "w", encoding="utf-8")
+
+    def write_line(self, line: str) -> None:
+        self._file.write(line)
+        self._file.write("\n")
+        self._file.flush()
+
+    def close(self) -> None:
+        if not self._file.closed:
+            self._file.close()
+
 
 class RichSerializer(OutputSerializer):
-    """Renders results as Rich tables to the console."""
+    """Renders results as Rich tables."""
 
-    def __init__(self, console: Any, utils_module: Any, verbose_level_getter: Callable[[], int]):
-        self._console = console
+    def __init__(self, sink: ConsoleSink, utils_module: Any, verbose_level_getter: Callable[[], int]):
+        self._sink = sink
         self._utils = utils_module
         self._verbose_getter = verbose_level_getter
 
@@ -168,7 +222,14 @@ class RichSerializer(OutputSerializer):
             table.add_column(col, justify="left")
         for row in table_data.rows:
             table.add_row(*row)
-        self._console.print(table)
+        self._sink.write_rich(table)
+
+    def close(self) -> None:
+        self._sink.close()
+
+
+def _one_line(s: str) -> str:
+    return s.replace("\n", "\\n").replace("\r", "\\r")
 
 
 def _strip_rich_markup(s: str) -> str:
@@ -189,19 +250,17 @@ def _strip_rich_markup(s: str) -> str:
 
 
 class CsvSerializer(OutputSerializer):
-    """
-    Writes a report with one section per script to the Rich console.
+    """Renders results as CSV-formatted tables."""
 
-    Each section mirrors the console layout (`<script>:`, then `pass`/`fail`
-    and any warnings/failures), then emits tabular data as a CSV block.
-    """
-
-    def __init__(self, console: Any, verbose_level_getter: Callable[[], int]):
-        self._console = console
+    def __init__(self, sink: Sink, verbose_level_getter: Callable[[], int]):
+        self._sink = sink
         self._verbose_getter = verbose_level_getter
 
     def _print(self, line: str = "") -> None:
-        self._console.print(_strip_rich_markup(line), markup=False, highlight=False)
+        # Strip Rich markup (colour tags like `[blue]0x...[/]` embedded in cell
+        # values), then escape embedded newlines so each record is exactly one
+        # physical line.
+        self._sink.write_line(_one_line(_strip_rich_markup(line)))
 
     def _print_csv_row(self, row: list[str]) -> None:
         buf = io.StringIO()
@@ -253,3 +312,40 @@ class CsvSerializer(OutputSerializer):
         self._print_csv_row(table_data.columns)
         for row in table_data.rows:
             self._print_csv_row(row)
+
+    def close(self) -> None:
+        self._sink.close()
+
+
+class MultiSerializer(OutputSerializer):
+    """Fans `emit` / `close` out to several serializers (e.g. Rich + CSV file)."""
+
+    def __init__(self, serializers: Iterable[OutputSerializer]):
+        self._serializers = list(serializers)
+
+    def emit(
+        self,
+        script_name: str | None,
+        execution_time: str,
+        result: Any,
+        failures: list[str],
+        warnings: list[str],
+        script_failed: bool,
+        failure_message: str | None,
+        documentation: str | None,
+    ) -> None:
+        for s in self._serializers:
+            s.emit(
+                script_name=script_name,
+                execution_time=execution_time,
+                result=result,
+                failures=failures,
+                warnings=warnings,
+                script_failed=script_failed,
+                failure_message=failure_message,
+                documentation=documentation,
+            )
+
+    def close(self) -> None:
+        for s in self._serializers:
+            s.close()
