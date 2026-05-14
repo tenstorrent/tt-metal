@@ -12,17 +12,16 @@ on:
       docker-image:
         required: true
         type: string
-      enabled-skus:
-        required: true
-        type: string
-      weights-cache-mode:
-        required: false
-        type: string
-        default: "local-disk"
       model:
         required: false
         type: string
         default: "all"
+        description: "Model name to filter the test matrix by, or 'all'."
+      system-type-filter:
+        required: false
+        type: string
+        default: "all"
+        description: "If not 'all', only emit matrix entries whose system-name matches."
       regenerate-ttnn-cache:
         required: false
         type: boolean
@@ -32,7 +31,7 @@ jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.filter-matrix.outputs.matrix || steps.build-matrix.outputs.matrix }}
+      matrix: ${{ steps.filter-matrix.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/blackhole_demo_tests.yaml
     steps:
@@ -53,23 +52,38 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
             "demo"
-      - name: Build unified test matrix based on enabled SKUs
+      - name: Build full test matrix (all SKUs, with weights-cache-mode + system-name annotated)
         id: build-matrix
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
-      - name: Filter test matrix by model
+            ALL_SKUS_IN_TESTS \
+            ./.github/sku_config.yaml \
+            ./.github/blackhole_demo_systems.yaml
+      - name: Filter test matrix by model + system-type
         id: filter-matrix
-        if: inputs.model != 'all'
         env:
           MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+          MODEL: ${{ inputs.model }}
+          SYSTEM_TYPE_FILTER: ${{ inputs.system-type-filter }}
         run: |
-          filtered=$(echo "$MATRIX" | jq -c --arg model "${{ inputs.model }}" '[.[] | select(.["model-name"] == $model or (.["model-name"] == null))]')
+          # Filter pipeline:
+          #   1. Drop entries whose model-name doesn't match (unless model == 'all')
+          #   2. Drop entries whose system-name doesn't match (unless system-type-filter == 'all')
+          #      Entries without a system-name (e.g. tests on SKUs not in
+          #      blackhole_demo_systems.yaml) are kept verbatim.
+          filtered=$(echo "$MATRIX" \
+            | jq -c --arg model "$MODEL" '
+                if $model == "all" then .
+                else [.[] | select(.["model-name"] == $model)]
+                end' \
+            | jq -c --arg sys "$SYSTEM_TYPE_FILTER" '
+                if $sys == "all" then .
+                else [.[] | select((.["system-name"] // "") == $sys)]
+                end')
           count=$(echo "$filtered" | jq 'length')
           if [[ "$count" -eq 0 ]]; then
-            echo "::warning::No demo tests match model '${{ inputs.model }}' for enabled SKU(s) '${{ inputs.enabled-skus }}'; demo matrix is empty and demo jobs will be skipped."
+            echo "::warning::No demo tests match model='$MODEL', system-type='$SYSTEM_TYPE_FILTER'; demo matrix is empty and demo jobs will be skipped."
           fi
           echo "matrix<<EOF" >> $GITHUB_OUTPUT
           echo "$filtered" >> $GITHUB_OUTPUT
@@ -96,10 +110,12 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - ${{ (!contains(matrix.test-group.runs_on, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
-        # If weights-cache-mode is lfc, we don't need to mount the model cache volume because it will download via LFC (P300s in CIv1-style env on Proxmox with LFC endpoint)
-        # If weights-cache-mode is cloud-mlperf, we need to mount the model cache volume from /mnt/MLPerf/huggingface because it should be a Cloud machine (canonical HF cache root, shared with the Wormhole pipelines)
-        # If weights-cache-mode is local-disk, we need to mount the model cache volume from /localdev/blackhole_demos/huggingface_data because it's in CIv1 GH VLAN, so not on Cloud
-        - "${{ inputs.weights-cache-mode != 'lfc' && format('{0}:/localdev/blackhole_demos/huggingface_data{1}', inputs.weights-cache-mode == 'cloud-mlperf' && '/mnt/MLPerf/huggingface' || '/localdev/blackhole_demos/huggingface_data', inputs.regenerate-ttnn-cache == true && ':rw' || ':ro') || '/no_hf_cache' }}"
+        # Cache-mode is per-job now (matrix.test-group.weights-cache-mode), populated
+        # from .github/blackhole_demo_systems.yaml during matrix build.
+        # If weights-cache-mode is lfc, we don't mount the model cache volume — weights download via LFC (P300s in CIv1-style env on Proxmox with LFC endpoint)
+        # If weights-cache-mode is cloud-mlperf, mount from /mnt/MLPerf/huggingface (canonical HF cache root, shared with the Wormhole pipelines)
+        # If weights-cache-mode is local-disk, mount from /localdev/blackhole_demos/huggingface_data (CIv1 GH VLAN, not on Cloud)
+        - "${{ matrix.test-group['weights-cache-mode'] != 'lfc' && format('{0}:/localdev/blackhole_demos/huggingface_data{1}', matrix.test-group['weights-cache-mode'] == 'cloud-mlperf' && '/mnt/MLPerf/huggingface' || '/localdev/blackhole_demos/huggingface_data', inputs.regenerate-ttnn-cache == true && ':rw' || ':ro') || '/no_hf_cache' }}"
       options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
       run:
@@ -127,14 +143,14 @@ jobs:
         with:
           runner-label: ${{ matrix.test-group.sku == 'bh_deskbox' && 'BH-DeskBox' || '' }}
       - name: Download Llama model weights from LFC
-        if: ${{ inputs.weights-cache-mode == 'lfc' && contains(matrix.test-group.name, 'llama') }}
+        if: ${{ matrix.test-group['weights-cache-mode'] == 'lfc' && contains(matrix.test-group.name, 'llama') }}
         timeout-minutes: 15
         run: |
           set -e
           mkdir -p /localdev/blackhole_demos/huggingface_data/meta-llama
           wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
       - name: Download Flux.1-dev model weights from LFC
-        if: ${{ inputs.weights-cache-mode == 'lfc' && contains(matrix.test-group.name, 'Flux.1-dev') }}
+        if: ${{ matrix.test-group['weights-cache-mode'] == 'lfc' && contains(matrix.test-group.name, 'Flux.1-dev') }}
         timeout-minutes: 15
         run: |
           set -e
@@ -142,7 +158,7 @@ jobs:
           wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/black-forest-labs http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/black-forest-labs/models--black-forest-labs--FLUX.1-dev/
           wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/black-forest-labs http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/black-forest-labs/models--black-forest-labs--FLUX.1-dev/.no_exist/
       - name: Download Mochi model weights to local cache
-        if: ${{ inputs.regenerate-ttnn-cache && inputs.weights-cache-mode == 'local-disk' && contains(matrix.test-group.name, 'Mochi') }}
+        if: ${{ inputs.regenerate-ttnn-cache && matrix.test-group['weights-cache-mode'] == 'local-disk' && contains(matrix.test-group.name, 'Mochi') }}
         timeout-minutes: 120
         run: |
           set -e

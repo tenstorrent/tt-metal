@@ -24,6 +24,7 @@ from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     QAB_KVA_PROJ_SingleDeviceOverlapSpec,
 )
 from models.demos.deepseek_v3_b1.weights.transforms.moe import _tp_factors
+from models.demos.deepseek_v3_b1.weights.transforms.tp4_attention import pack_o_proj_weights_tp4_shuffled
 
 
 def preprocess_q_ab_kv_a(
@@ -214,7 +215,7 @@ def fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a(
     assert device_grid.y >= required_rows, f"Device grid needs at least {required_rows} rows, got {device_grid.y}"
     assert device_grid.x >= required_cols, f"Device grid needs at least {required_cols} cols, got {device_grid.x}"
 
-    o_packed = o_cfg.pack_o_proj_weights_tp4_shuffled(o_proj_weights)
+    o_packed = pack_o_proj_weights_tp4_shuffled(o_proj_weights)
     o_spec = replace(
         o_cfg.o_proj,
         raw_tensor_shape=tuple(o_packed.shape),

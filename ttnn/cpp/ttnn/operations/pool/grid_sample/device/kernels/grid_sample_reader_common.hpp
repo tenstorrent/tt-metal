@@ -139,7 +139,7 @@ struct GridCoordinateReader {
 // Input data reading template - handles both tensor accessor and direct NOC reads
 template <typename TensorAccessorT>
 ALWI void read_four_corner_inputs(
-    experimental::Noc noc,
+    Noc noc,
     const TensorAccessorT& input_tensor_accessor,
     uint32_t batch_offset,
     uint32_t input_width,
@@ -205,7 +205,7 @@ ALWI void read_four_corner_inputs(
 
 template <typename TensorAccessorT>
 ALWI void read_four_corner_inputs_with_fill(
-    experimental::Noc noc,
+    Noc noc,
     const TensorAccessorT& input_tensor_accessor,
     uint32_t batch_offset,
     uint32_t input_width,
@@ -222,7 +222,7 @@ ALWI void read_four_corner_inputs_with_fill(
     const bool w0_valid = is_coordinate_valid(w0, input_width);
     const bool w1_valid = is_coordinate_valid(w1, input_width);
 
-    experimental::UnicastEndpoint self_ep;
+    UnicastEndpoint self_ep;
     const auto fill_src = experimental::local_addr(fill_stick_addr, noc.get_noc_id());
     uint32_t write_offset = 0;
 
@@ -290,7 +290,7 @@ template <
     typename TensorAccessor,
     typename GridPtrType>
 ALWI void process_grid_point(
-    experimental::Noc noc,
+    Noc noc,
     experimental::CB input_cb,
     experimental::CB scalar_cb,
     GridPtrType grid_ptr,

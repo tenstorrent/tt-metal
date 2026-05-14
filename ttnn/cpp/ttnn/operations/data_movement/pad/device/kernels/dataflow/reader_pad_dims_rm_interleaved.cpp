@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 inline __attribute__((always_inline)) void fill_with_val_async(
     const uint64_t in_noc_addr,
@@ -57,7 +57,7 @@ void kernel_main() {
     constexpr auto pad_tensor_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
-    experimental::CircularBuffer cb(cb_id);
+    CircularBuffer cb(cb_id);
 
     // calculate the offset for alignment of padding in rows/sticks
     uint32_t l1_addr_partial = cb.get_write_ptr() + unpadded_X_nbytes;

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_nanobind.hpp"
+#include <tt-metalium/sub_device_types.hpp>
 
 #include <array>
 #include <string>
@@ -60,7 +61,8 @@ using BinaryOpTensorScalarFn = Tensor (*)(
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
-    const std::optional<CoreRangeSet>&);
+    const std::optional<CoreRangeSet>&,
+    const std::optional<tt::tt_metal::SubDeviceId>&);
 using BinaryOpTensorTensorFn = Tensor (*)(
     const Tensor&,
     const Tensor&,
@@ -70,7 +72,8 @@ using BinaryOpTensorTensorFn = Tensor (*)(
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
-    const std::optional<CoreRangeSet>&);
+    const std::optional<CoreRangeSet>&,
+    const std::optional<tt::tt_metal::SubDeviceId>&);
 
 using InplaceScalarFn = Tensor (*)(
     const Tensor&,
@@ -78,7 +81,8 @@ using InplaceScalarFn = Tensor (*)(
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
-    const std::optional<CoreRangeSet>&);
+    const std::optional<CoreRangeSet>&,
+    const std::optional<tt::tt_metal::SubDeviceId>&);
 
 using InplaceTensorFn = Tensor (*)(
     const Tensor&,
@@ -86,7 +90,8 @@ using InplaceTensorFn = Tensor (*)(
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
-    const std::optional<CoreRangeSet>&);
+    const std::optional<CoreRangeSet>&,
+    const std::optional<tt::tt_metal::SubDeviceId>&);
 
 using BitwiseScalarFn = Tensor (*)(
     const Tensor&,
@@ -96,7 +101,8 @@ using BitwiseScalarFn = Tensor (*)(
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
-    const std::optional<CoreRangeSet>&);
+    const std::optional<CoreRangeSet>&,
+    const std::optional<tt::tt_metal::SubDeviceId>&);
 using BitwiseTensorFn = Tensor (*)(
     const Tensor&,
     const Tensor&,
@@ -105,7 +111,8 @@ using BitwiseTensorFn = Tensor (*)(
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
-    const std::optional<CoreRangeSet>&);
+    const std::optional<CoreRangeSet>&,
+    const std::optional<tt::tt_metal::SubDeviceId>&);
 using BinaryUnaryScalarFn = Tensor (*)(
     const Tensor&,
     float,
@@ -144,10 +151,18 @@ using BinaryUnaryMaxTensorFn = Tensor (*)(
     ttsl::Span<const unary::EltwiseUnaryWithParam>);
 using BinaryCompositeTensorTensorFn = Tensor (*)(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 using BinaryCompositeTensorScalarFn = Tensor (*)(const Tensor&, float, const std::optional<MemoryConfig>&);
-using BinaryOverloadScalarFn =
-    Tensor (*)(const Tensor&, float, const std::optional<MemoryConfig>&, const std::optional<CoreRangeSet>&);
-using BinaryOverloadTensorFn =
-    Tensor (*)(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&, const std::optional<CoreRangeSet>&);
+using BinaryOverloadScalarFn = Tensor (*)(
+    const Tensor&,
+    float,
+    const std::optional<MemoryConfig>&,
+    const std::optional<CoreRangeSet>&,
+    const std::optional<tt::tt_metal::SubDeviceId>&);
+using BinaryOverloadTensorFn = Tensor (*)(
+    const Tensor&,
+    const Tensor&,
+    const std::optional<MemoryConfig>&,
+    const std::optional<CoreRangeSet>&,
+    const std::optional<tt::tt_metal::SubDeviceId>&);
 using PreluTensorArrayFn = Tensor (*)(const Tensor&, const std::array<float, 1>&, const std::optional<MemoryConfig>&);
 using InplaceFastApproxScalarFn = Tensor (*)(
     const Tensor&,
@@ -156,7 +171,8 @@ using InplaceFastApproxScalarFn = Tensor (*)(
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     std::optional<bool>,
-    const std::optional<CoreRangeSet>&);
+    const std::optional<CoreRangeSet>&,
+    const std::optional<tt::tt_metal::SubDeviceId>&);
 using InplaceFastApproxTensorFn = Tensor (*)(
     const Tensor&,
     const Tensor&,
@@ -164,7 +180,8 @@ using InplaceFastApproxTensorFn = Tensor (*)(
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     std::optional<bool>,
-    const std::optional<CoreRangeSet>&);
+    const std::optional<CoreRangeSet>&,
+    const std::optional<tt::tt_metal::SubDeviceId>&);
 
 template <ttnn::unique_string Name, typename TensorScalarFn, typename TensorTensorFn>
 void bind_binary_inplace_operation(
@@ -191,6 +208,7 @@ void bind_binary_inplace_operation(
             input_tensor_a_activations (List[str], optional): list of activation functions to apply to input_a. Defaults to `None`.
             input_tensor_b_activations (List[str], optional): list of activation functions to apply to input_b. Defaults to `None`.
             sub_core_grids (CoreRangeSet, optional): sub core grids. Defaults to `None`.
+            sub_device_id (ttnn.SubDeviceId, optional): sub device ID for core resolution. Mutually exclusive with sub_core_grids. Defaults to `None`.
 
         {6}
 
@@ -228,7 +246,8 @@ void bind_binary_inplace_operation(
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("sub_core_grids") = nb::none()),
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("sub_device_id") = nb::none()),
         ttnn::overload_t(
             tensor_tensor_fn,
             nb::arg("input_tensor_a"),
@@ -237,7 +256,8 @@ void bind_binary_inplace_operation(
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("sub_core_grids") = nb::none()));
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("sub_device_id") = nb::none()));
 }
 
 template <ttnn::unique_string Name, typename TensorScalarFn, typename TensorTensorFn>
@@ -311,7 +331,8 @@ void bind_binary_operation(
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("sub_core_grids") = nb::none()),
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("sub_device_id") = nb::none()),
         ttnn::overload_t(
             tensor_tensor_fn,
             nb::arg("input_tensor_a"),
@@ -323,7 +344,8 @@ void bind_binary_operation(
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("sub_core_grids") = nb::none()));
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("sub_device_id") = nb::none()));
 }
 
 template <ttnn::unique_string Name, typename Fn>
@@ -645,6 +667,7 @@ void bind_bitwise_binary_ops_operation(
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): restrict execution to a subset of cores (e.g. for subdevice use). Defaults to `None`.
+            sub_device_id (ttnn.SubDeviceId, optional): sub device ID — the op resolves cores internally. Mutually exclusive with sub_core_grids. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -688,7 +711,8 @@ void bind_bitwise_binary_ops_operation(
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("sub_core_grids") = nb::none()),
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("sub_device_id") = nb::none()),
         ttnn::overload_t(
             tensor_tensor_fn,
             nb::arg("input_tensor_a"),
@@ -699,7 +723,8 @@ void bind_bitwise_binary_ops_operation(
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("sub_core_grids") = nb::none()));
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("sub_device_id") = nb::none()));
 }
 
 template <ttnn::unique_string Name, typename Fn>
@@ -1029,7 +1054,8 @@ void bind_div(
         nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
         nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
         nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("sub_device_id") = nb::none());
     auto tensor_scalar_overload = ttnn::overload_t(
         tensor_scalar_fn,
         nb::arg("input_tensor_a"),
@@ -1043,7 +1069,8 @@ void bind_div(
         nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
         nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
         nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("sub_device_id") = nb::none());
     ttnn::bind_function<Name>(mod, doc.c_str(), tensor_tensor_overload, tensor_scalar_overload);
 }
 
@@ -1058,7 +1085,8 @@ Tensor multiply_fast_approx_tensor_scalar(
     ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt) {
     return ttnn::multiply(
         input_tensor_a,
         value,
@@ -1071,7 +1099,8 @@ Tensor multiply_fast_approx_tensor_scalar(
         ttsl::Span<const unary::EltwiseUnaryWithParam>(
             input_tensor_b_activations.data(), input_tensor_b_activations.size()),
         fast_and_approximate_mode,
-        sub_core_grids);
+        sub_core_grids,
+        sub_device_id);
 }
 
 Tensor multiply_fast_approx_tensor_tensor(
@@ -1084,7 +1113,8 @@ Tensor multiply_fast_approx_tensor_tensor(
     ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt) {
     return ttnn::multiply(
         input_tensor_a,
         input_tensor_b,
@@ -1097,7 +1127,8 @@ Tensor multiply_fast_approx_tensor_tensor(
         ttsl::Span<const unary::EltwiseUnaryWithParam>(
             input_tensor_b_activations.data(), input_tensor_b_activations.size()),
         fast_and_approximate_mode,
-        sub_core_grids);
+        sub_core_grids,
+        sub_device_id);
 }
 
 Tensor divide_fast_approx_tensor_scalar(
@@ -1110,7 +1141,8 @@ Tensor divide_fast_approx_tensor_scalar(
     ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt) {
     return ttnn::divide(
         input_tensor_a,
         value,
@@ -1123,7 +1155,8 @@ Tensor divide_fast_approx_tensor_scalar(
         ttsl::Span<const unary::EltwiseUnaryWithParam>(
             input_tensor_b_activations.data(), input_tensor_b_activations.size()),
         fast_and_approximate_mode,
-        sub_core_grids);
+        sub_core_grids,
+        sub_device_id);
 }
 
 Tensor divide_fast_approx_tensor_tensor(
@@ -1136,7 +1169,8 @@ Tensor divide_fast_approx_tensor_tensor(
     ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt) {
     return ttnn::divide(
         input_tensor_a,
         input_tensor_b,
@@ -1149,7 +1183,8 @@ Tensor divide_fast_approx_tensor_tensor(
         ttsl::Span<const unary::EltwiseUnaryWithParam>(
             input_tensor_b_activations.data(), input_tensor_b_activations.size()),
         fast_and_approximate_mode,
-        sub_core_grids);
+        sub_core_grids,
+        sub_device_id);
 }
 
 template <ttnn::unique_string Name, typename TensorScalarFn, typename TensorTensorFn>
@@ -1220,7 +1255,8 @@ void bind_binary_operation_with_fast_approx(
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("sub_core_grids") = nb::none()),
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("sub_device_id") = nb::none()),
         ttnn::overload_t(
             tensor_tensor_fn,
             nb::arg("input_tensor_a"),
@@ -1233,7 +1269,8 @@ void bind_binary_operation_with_fast_approx(
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("sub_core_grids") = nb::none()));
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("sub_device_id") = nb::none()));
 }
 
 template <ttnn::unique_string Name, typename Fn>
@@ -1319,6 +1356,7 @@ void bind_binary_overload_operation(
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
+            sub_device_id (ttnn.SubDeviceId, optional): sub device ID for core resolution. Mutually exclusive with sub_core_grids. Defaults to ``None``.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -1357,14 +1395,16 @@ void bind_binary_overload_operation(
             nb::arg("scalar"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()),
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("sub_device_id") = nb::none()),
         ttnn::overload_t(
             tensor_tensor_fn,
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()));
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("sub_device_id") = nb::none()));
 }
 
 template <ttnn::unique_string Name, typename TensorScalarFn, typename TensorTensorFn>
@@ -1389,6 +1429,7 @@ void bind_inplace_operation(
 
         Keyword Args:
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
+            sub_device_id (ttnn.SubDeviceId, optional): sub device ID for core resolution. Mutually exclusive with sub_core_grids. Defaults to ``None``.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -1429,7 +1470,8 @@ void bind_inplace_operation(
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("sub_core_grids") = nb::none()),
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("sub_device_id") = nb::none()),
         ttnn::overload_t(
             tensor_tensor_fn,
             nb::arg("input_a"),
@@ -1438,7 +1480,8 @@ void bind_inplace_operation(
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("sub_core_grids") = nb::none()));
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("sub_device_id") = nb::none()));
 }
 
 template <ttnn::unique_string Name, typename TensorScalarFn, typename TensorTensorFn>
@@ -1464,6 +1507,7 @@ void bind_inplace_operation_with_fast_approx(
         Keyword args:
             fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `False`.
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
+            sub_device_id (ttnn.SubDeviceId, optional): sub device ID for core resolution. Mutually exclusive with sub_core_grids. Defaults to ``None``.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -1505,7 +1549,8 @@ void bind_inplace_operation_with_fast_approx(
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("fast_and_approximate_mode") = false,
-            nb::arg("sub_core_grids") = nb::none()),
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("sub_device_id") = nb::none()),
         ttnn::overload_t(
             tensor_tensor_fn,
             nb::arg("input_a"),
@@ -1515,7 +1560,8 @@ void bind_inplace_operation_with_fast_approx(
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("fast_and_approximate_mode") = false,
-            nb::arg("sub_core_grids") = nb::none()));
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("sub_device_id") = nb::none()));
 }
 
 void bind_power(nb::module_& mod, const std::string& note = "") {
@@ -2008,7 +2054,8 @@ void py_module(nb::module_& mod) {
             ttsl::Span<const unary::EltwiseUnaryWithParam>,
             ttsl::Span<const unary::EltwiseUnaryWithParam>,
             ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            const std::optional<CoreRangeSet>&>(&ttnn::div),
+            const std::optional<CoreRangeSet>&,
+            const std::optional<tt::tt_metal::SubDeviceId>&>(&ttnn::div),
         nb::overload_cast<
             const Tensor&,
             float,
@@ -2020,7 +2067,8 @@ void py_module(nb::module_& mod) {
             ttsl::Span<const unary::EltwiseUnaryWithParam>,
             ttsl::Span<const unary::EltwiseUnaryWithParam>,
             ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            const std::optional<CoreRangeSet>&>(&ttnn::div),
+            const std::optional<CoreRangeSet>&,
+            const std::optional<tt::tt_metal::SubDeviceId>&>(&ttnn::div),
         R"doc(BFLOAT16, FLOAT32, INT32, UINT16)doc",
         R"doc(
         With INT32 inputs, rounding_mode `None` produces a FLOAT32 output, while `floor` and `trunc` produce an INT32 output.

@@ -93,6 +93,15 @@ RUNNER_PROFILES = {
         "tt_smi_cmd": "tt-smi -r",
         "matrix_output_key": "p150b",
     },
+    "p100a": {
+        # Shares the "p150b" matrix bucket so the ttnn-sweeps-p150b job picks
+        # up p100a-tagged matrix entries; runs_on dispatches to the p100a runner.
+        "arch": "blackhole",
+        "runs_on": "tt-ubuntu-2204-p100a-viommu-stable",
+        "runner_label": "p100a",
+        "tt_smi_cmd": "tt-smi -r",
+        "matrix_output_key": "p150b",
+    },
     "t3k": {
         "arch": "wormhole_b0",
         "runs_on": ["config-t3000", "arch-wormhole_b0", "in-service", "pipeline-functional"],
@@ -126,6 +135,7 @@ TEST_GROUPS = {
     "wormhole-n300-sweeps": {"runner_profile": "n300"},
     "n300-llmbox-ccl": {"runner_profile": "n300-llmbox"},
     "blackhole-p150b-sweeps": {"runner_profile": "p150b"},
+    "blackhole-p100a-sweeps": {"runner_profile": "p100a"},
     "wormhole-t3k-sweeps": {"runner_profile": "t3k"},
     "wormhole-galaxy-sweeps": {"runner_profile": "galaxy-topology-6u"},
     "lead-models-single-chip": {"runner_profile": "n150"},
@@ -196,10 +206,8 @@ MODEL_TRACED_MESH_TEST_GROUPS = {
 TEST_GROUP_HARDWARE_CAPABILITY_RULES = {
     "wormhole-n150-sweeps": ({"board_type": "wormhole", "device_series": "n150", "card_count": 1},),
     "wormhole-n300-sweeps": ({"board_type": "wormhole", "device_series": "n300", "card_count": 1},),
-    "blackhole-p150b-sweeps": (
-        {"board_type": "blackhole", "card_count": 1},
-        {"device_series": "p150b", "card_count": 1},
-    ),
+    "blackhole-p150b-sweeps": ({"board_type": "blackhole", "device_series": "p150b", "card_count": 1},),
+    "blackhole-p100a-sweeps": ({"board_type": "blackhole", "device_series": "p100a", "card_count": 1},),
     "wormhole-t3k-sweeps": ({"device_series": "n300", "card_count": 4},),
     "wormhole-galaxy-sweeps": ({"device_series": "tt_galaxy_wh"},),
     "lead-models-single-chip": ({"max_card_count": 1, "excluded_device_series": ("tt_galaxy_wh",)},),
@@ -238,6 +246,10 @@ LOCAL_HARDWARE_MESH_CAPABILITY_RULES = (
         "match": {"board_type": "blackhole", "device_series": "p150b", "card_count": 1},
         "allowed_mesh_shapes": ("1x1",),
     },
+    {
+        "match": {"board_type": "blackhole", "device_series": "p100a", "card_count": 1},
+        "allowed_mesh_shapes": ("1x1",),
+    },
 )
 
 
@@ -273,6 +285,8 @@ def get_test_group_name_for_hardware_group(hardware_group):
 
     board_type, device_series, card_count = hardware_group
 
+    if device_series == "p100a":
+        return "blackhole-p100a-sweeps"
     if board_type == "blackhole" or device_series == "p150b":
         return "blackhole-p150b-sweeps"
     if device_series == "tt_galaxy_wh":

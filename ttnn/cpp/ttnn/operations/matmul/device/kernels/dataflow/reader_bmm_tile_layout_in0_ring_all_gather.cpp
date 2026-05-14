@@ -7,11 +7,11 @@
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "api/debug/dprint.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/noc_semaphore.h"
-#include "experimental/endpoints.h"
-#include "experimental/core_local_mem.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
@@ -43,14 +43,14 @@ void kernel_main() {
         rt_args_idx += ring_size;
     }
 
-    experimental::Noc noc_obj(noc_id);
-    experimental::Semaphore<> signal_sem(get_compile_time_arg_val(4));
+    Noc noc_obj(noc_id);
+    Semaphore<> signal_sem(get_compile_time_arg_val(4));
 
     constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t cb_id_in2 = get_named_compile_time_arg_val("cb_in2");
 
-    experimental::CircularBuffer cb_in0(cb_id_in0);
-    experimental::CircularBuffer cb_in2(cb_id_in2);
+    CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_in2(cb_id_in2);
 
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
     constexpr uint32_t shard_size_in_tiles = shard_width_in_tiles * shard_height_in_tiles;
@@ -78,9 +78,9 @@ void kernel_main() {
         // Send data to next core
         if (shard_cnt < ring_size - 1 || is_hop_core) {  // Skip sending the last shard
             if (!skip_send) {
-                experimental::UnicastEndpoint dst_ep;
+                UnicastEndpoint dst_ep;
                 noc_obj.async_write(
-                    experimental::CoreLocalMem<uint32_t>(curr_shard_read_addr),
+                    CoreLocalMem<uint32_t>(curr_shard_read_addr),
                     dst_ep,
                     shard_size_bytes,
                     {},
