@@ -82,4 +82,27 @@ bool UsingDistributedEnvironment() {
     return DistributedContext::is_initialized() && *(distributed_context.size()) > 1;
 }
 
+TraceExportData GetTraceExportData(MeshDevice* device, const MeshTraceId& trace_id) {
+    auto trace_buffer = device->get_mesh_trace(trace_id);
+    TT_FATAL(trace_buffer != nullptr, "Trace ID {} not found on device", *trace_id);
+    auto& desc = *trace_buffer->desc;
+
+    TraceExportData result;
+    for (auto& [sub_device_id, wd] : desc.descriptors) {
+        result.worker_descs.push_back(TraceWorkerDescExport{
+            .sub_device_id = static_cast<uint8_t>(*sub_device_id),
+            .num_completion_worker_cores = wd.num_completion_worker_cores,
+            .num_mcast_programs = wd.num_traced_programs_needing_go_signal_multicast,
+            .num_unicast_programs = wd.num_traced_programs_needing_go_signal_unicast,
+        });
+    }
+    for (auto& td : desc.ordered_trace_data) {
+        result.trace_streams.push_back(td.data);
+    }
+    result.trace_buf_address = trace_buffer->mesh_buffer->address();
+    result.trace_buf_page_size = trace_buffer->mesh_buffer->page_size();
+    result.trace_buf_num_pages = trace_buffer->mesh_buffer->num_pages();
+    return result;
+}
+
 }  // namespace tt::tt_metal::distributed

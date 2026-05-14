@@ -33,6 +33,23 @@ class IDevice;
 
 namespace distributed {
 
+struct TraceWorkerDescExport {
+    uint8_t sub_device_id;
+    uint32_t num_completion_worker_cores;
+    uint32_t num_mcast_programs;
+    uint32_t num_unicast_programs;
+};
+
+struct TraceExportData {
+    std::vector<TraceWorkerDescExport> worker_descs;
+    std::vector<std::vector<uint32_t>> trace_streams;
+    uint64_t trace_buf_address;
+    uint32_t trace_buf_page_size;
+    uint32_t trace_buf_num_pages;
+};
+
+TraceExportData GetTraceExportData(MeshDevice* device, const MeshTraceId& trace_id);
+
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
 
 template <typename DType>

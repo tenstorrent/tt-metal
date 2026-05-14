@@ -155,6 +155,11 @@ from ttnn._ttnn.operations.trace import (
     release_trace,
 )
 
+try:
+    from ttnn._ttnn.operations.trace import TraceExportData, TraceWorkerDescData, get_trace_data, read_raw_buffer_data
+except ImportError:
+    pass
+
 from ttnn._ttnn.operations.debug import (
     apply_device_delay,
 )
