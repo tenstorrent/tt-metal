@@ -10,9 +10,9 @@
 #include "api/compute/tile_move_copy.h"
 
 #ifdef ARCH_QUASAR
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #else
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #endif
 
 void kernel_main() {
@@ -26,10 +26,10 @@ void kernel_main() {
         constexpr uint32_t dfb_in1_id = get_compile_time_arg_val(1);
         constexpr uint32_t dfb_in2_id = get_compile_time_arg_val(2);
         constexpr uint32_t dfb_out_id = get_compile_time_arg_val(3);
-        experimental::DataflowBuffer dfb_in0(dfb_in0_id);
-        experimental::DataflowBuffer dfb_in1(dfb_in1_id);
-        experimental::DataflowBuffer dfb_in2(dfb_in2_id);
-        experimental::DataflowBuffer dfb_out(dfb_out_id);
+        DataflowBuffer dfb_in0(dfb_in0_id);
+        DataflowBuffer dfb_in1(dfb_in1_id);
+        DataflowBuffer dfb_in2(dfb_in2_id);
+        DataflowBuffer dfb_out(dfb_out_id);
         binary_op_init_common(dfb_in0.get_id(), dfb_in1.get_id(), dfb_out.get_id());
         #if not defined ELTWISE_DEST_REUSE_TYPE
             #ifdef FULL_INIT
@@ -71,27 +71,27 @@ void kernel_main() {
         #endif
         tile_regs_acquire();
 
-#if defined(DST_ACCUM_MODE) || defined(ELTWISE_DEST_REUSE_TYPE)
-    #ifdef ARCH_QUASAR
-            dfb_in2.wait_front(per_core_block_size);
-            copy_tile_to_dst_init_short(dfb_in2.get_id());
-            for (uint32_t i = 0; i < per_core_block_size; ++i) {
-                copy_tile(dfb_in2.get_id(), i, i);  // copy from c_in[0] to DST[0]
-            }
-            dfb_in2.pop_front(per_core_block_size);
-    #else
-            cb_wait_front(cb_in2, per_core_block_size);
-            copy_tile_to_dst_init_short(cb_in2);
-            for (uint32_t i = 0; i < per_core_block_size; ++i) {
-                copy_tile(cb_in2, i, i);  // copy from c_in[0] to DST[0]
-            }
-            cb_pop_front(cb_in2, per_core_block_size);
-    #endif
+#if defined(DST_ACCUM_MODE) || defined(ACC_TO_DEST) || defined(ELTWISE_DEST_REUSE_TYPE)
+#ifdef ARCH_QUASAR
+        dfb_in2.wait_front(per_core_block_size);
+        copy_tile_to_dst_init_short(dfb_in2.get_id());
+        for (uint32_t i = 0; i < per_core_block_size; ++i) {
+            copy_tile(dfb_in2.get_id(), i, i);  // copy from c_in[0] to DST[0]
+        }
+        dfb_in2.pop_front(per_core_block_size);
+#else
+        cb_wait_front(cb_in2, per_core_block_size);
+        copy_tile_to_dst_init_short(cb_in2);
+        for (uint32_t i = 0; i < per_core_block_size; ++i) {
+            copy_tile(cb_in2, i, i);  // copy from c_in[0] to DST[0]
+        }
+        cb_pop_front(cb_in2, per_core_block_size);
+#endif
 #endif
 
-#ifdef DST_ACCUM_MODE
-// The following define is needed if mul_tiles/_init is used
-#ifdef MUL_TILES_WITH_DST_ACCUM
+#if defined(DST_ACCUM_MODE) || defined(ACC_TO_DEST)
+// The following define is needed for WH/BH if mul_tiles/_init is used
+#if defined(MUL_TILES_WITH_DST_ACCUM)
     #ifdef ARCH_QUASAR
         ELTWISE_OP_INIT(dfb_in0.get_id(), dfb_in1.get_id());
     #else

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/endpoints.h"
 
 void kernel_main() {
     constexpr uint32_t l1_local_addr = get_compile_time_arg_val(0);
@@ -25,11 +25,11 @@ void kernel_main() {
         std::swap(dest_y_start, dest_y_end);
     }
 
-    experimental::Noc noc(noc_index);
-    experimental::UnicastEndpoint unicast_endpoint;
-    experimental::MulticastEndpoint mcast_endpoint;
+    Noc noc(noc_index);
+    UnicastEndpoint unicast_endpoint;
+    MulticastEndpoint mcast_endpoint;
     constexpr auto mcast_mode =
-        loopback ? experimental::Noc::McastMode::INCLUDE_SRC : experimental::Noc::McastMode::EXCLUDE_SRC;
+        loopback ? Noc::McastMode::INCLUDE_SRC : Noc::McastMode::EXCLUDE_SRC;
     {
         DeviceZoneScopedN("RISCV0");
         for (uint32_t i = 0; i < num_transactions; i++) {

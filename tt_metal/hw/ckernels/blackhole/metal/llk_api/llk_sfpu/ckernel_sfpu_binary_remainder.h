@@ -8,6 +8,8 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_div_int32_floor.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_recip.h"
+#include "sfpu/ckernel_sfpu_rounding_ops.h"
 
 namespace ckernel::sfpu {
 
@@ -24,8 +26,8 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
 
     // Convert to float for reciprocal computation
     // Handle 2^31 edge case where sign-magnitude conversion yields negative
-    sfpi::vFloat a_f = sfpi::int32_to_float(a, 0);
-    sfpi::vFloat b_f = sfpi::int32_to_float(b, 0);
+    sfpi::vFloat a_f = sfpi::int32_to_float(a, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat b_f = sfpi::int32_to_float(b, sfpi::RoundMode::NearestEven);
     v_if(a_f < 0.0f) { a_f = TWO_POW_31; }
     v_endif;
     v_if(b_f < 0.0f) { b_f = TWO_POW_31; }
@@ -40,24 +42,23 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
 
     // Initial quotient approximation: q = a * (1/b)
     sfpi::vFloat q_f = a_f * inv_b_f + vConstFloatPrgm0;
-    sfpi::vUInt q = sfpi::exman9(q_f);
+    sfpi::vUInt q = sfpi::exman(q_f);
 
-    // Compute q * b using 24-bit multiplication
-    sfpi::vInt qb = __builtin_rvtt_sfpmul24(q.get(), b.get(), 0);
+    sfpi::vInt qb = sfpi::fractional_mul(q, b);
     qb <<= 10;
 
     // Compute initial remainder
     sfpi::vInt r = a - qb;
 
     // Compute correction for approximation error: correction = |r| / b
-    sfpi::vFloat r_f = sfpi::int32_to_float(sfpi::abs(r), 0);
-    sfpi::vInt correction = sfpi::float_to_uint16(r_f * inv_b_f, 0);
+    sfpi::vFloat r_f = sfpi::int32_to_float(sfpi::abs(r), sfpi::RoundMode::NearestEven);
+    sfpi::vInt correction = sfpi::float_to_uint16(r_f * inv_b_f, sfpi::RoundMode::NearestEven);
 
     // Compute correction * b (full 32-bit result from 24-bit multiplies)
-    sfpi::vInt tmp_lo = __builtin_rvtt_sfpmul24(correction.get(), b.get(), 0);
-    sfpi::vInt tmp_hi = __builtin_rvtt_sfpmul24(correction.get(), b.get(), 1);
+    sfpi::vInt tmp_lo = sfpi::fractional_mul(correction, b);
+    sfpi::vInt tmp_hi = sfpi::fractional_mul(correction, b, sfpi::FractionalHalf::High);
     sfpi::vInt b_hi = b >> 23;
-    b_hi = __builtin_rvtt_sfpmul24(correction.get(), b_hi.get(), 0);
+    b_hi = sfpi::fractional_mul(correction, b_hi);
     sfpi::vInt tmp = tmp_lo + ((tmp_hi + b_hi) << 23);
 
     // Extract sign mask of r
@@ -153,7 +154,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
     v_endif;
 
     if constexpr (!is_fp32_dest_acc_en) {
-        result = reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+        result = sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven);
     }
 
     return result;

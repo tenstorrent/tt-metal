@@ -17,6 +17,7 @@
 #include "program_device_map.hpp"        // ProgramTransferInfo
 #include "impl/buffers/semaphore.hpp"
 #include "tt-metalium/sub_device_types.hpp"
+#include "tt-metalium/experimental/tensor/spec/tensor_spec.hpp"  // Metal 2.0 TensorParameter registry
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>        // CoreType
@@ -27,6 +28,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -298,8 +300,24 @@ public:
     // Ensures that circular buffer core ranges are within the device compute grid
     void validate_circular_buffer_core_ranges(const IDevice* device);
 
+    // Deallocate circular buffers and unregister from devices
+    void deallocate_circular_buffers();
+
+    // CB tracking for SHM memory reporting
+    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> get_cb_l1_regions_per_core(
+        int device_id, size_t num_devices) const;
+    size_t get_num_cb_devices() const { return cb_devices_.size(); }
+
     KernelHandle add_kernel(const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType& core_type);
 
+    // Allocate the next free semaphore ID on the given cores and insert the semaphore.
+    // Returns the allocated ID; TT_FATALs if no slot can be found.
+    uint32_t create_semaphore(const CoreRangeSet& crs, uint32_t initial_value, CoreType core_type);
+
+    // Insert a semaphore at the caller-specified ID. Used by:
+    //   - Construction paths where the ID is already decided upstream (ProgramDescriptor ctor path).
+    //   - create_semaphore above
+    // The ProgramDescriptor path is something of a hack; it will eventually be deprecated in favor of Metal 2.0.
     void add_semaphore(const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
 
     // Validates that a semaphore ID is within bounds and not already in use on overlapping cores
@@ -319,28 +337,38 @@ public:
     void register_kernel_spec_name(const KernelSpecName& name, KernelHandle handle);
     void register_dfb_spec_name(const DFBSpecName& name, uint32_t dfb_id);
     void register_semaphore_spec_name(const SemaphoreSpecName& name, uint32_t sem_id);
+    void register_tensor_parameter(const std::string& name, const TensorSpec& spec);
 
     // Metal 2.0: Get handle from name (TT_FATAL if not found)
     KernelHandle get_kernel_handle(const KernelSpecName& name) const;
     uint32_t get_dfb_handle(const DFBSpecName& name) const;
     uint32_t get_semaphore_handle(const SemaphoreSpecName& name) const;
+    // Returns nullptr if name is not registered (caller validates).
+    const TensorSpec* get_tensor_parameter_layout(const std::string& name) const;
+    std::vector<std::string> get_registered_tensor_parameter_names() const;
 
     // Metal 2.0: Get kernel by name (TT_FATAL if not found)
     std::shared_ptr<Kernel> get_kernel_by_spec_name(const KernelSpecName& name) const {
         return get_kernel(get_kernel_handle(name));
     }
 
-    // Metal 2.0: Runtime argument schema for validation
+    // Metal 2.0: Runtime argument schema for validation.
+    // Includes both the named args (declaration-order name lists) and the vararg counts.
     struct KernelRTASchema {
-        std::unordered_map<CoreCoord, size_t> num_runtime_args_per_node;
-        size_t num_common_runtime_args = 0;
+        // Named arg names, in declaration order. Used to serialize ProgramRunParams values
+        // into the dispatch buffer and to validate that every declared name is supplied.
+        std::vector<std::string> named_runtime_args;
+        std::vector<std::string> named_common_runtime_args;
+
+        // Vararg counts. RTA vararg count is per-node (stored post-expansion from the
+        // user-facing schema, which groups nodes that share a count); CRTA vararg is a single
+        // broadcast count.
+        std::unordered_map<CoreCoord, size_t> num_runtime_varargs_per_node;
+        size_t num_common_runtime_varargs = 0;
     };
 
     // Metal 2.0: Runtime argument schema registration and lookup
-    void register_kernel_rta_schema(
-        const KernelSpecName& name,
-        const std::unordered_map<CoreCoord, size_t>& num_runtime_args_per_node,
-        size_t num_common_runtime_args);
+    void register_kernel_rta_schema(const KernelSpecName& name, const KernelRTASchema& schema);
     const KernelRTASchema* get_kernel_rta_schema(const KernelSpecName& name) const;
 
     // Metal 2.0: Get all registered kernel names (for completeness validation)
@@ -407,6 +435,8 @@ private:
     std::unordered_map<ChipId, ProgramBinaryStatus> binaries_on_device_;
     // Used to generate circular buffer addresses. There is one CircularBufferAllocator per unique CoreRange
     std::vector<CircularBufferAllocator> cb_allocators_;
+    // Tracks which devices this program has CBs allocated on (for CB memory reporting)
+    std::unordered_set<const IDevice*> cb_devices_;
 
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers_;
     std::unordered_map<uint32_t, std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>
@@ -424,6 +454,10 @@ private:
         std::unordered_map<DFBSpecName, uint32_t> dfb_handles;
         std::unordered_map<SemaphoreSpecName, uint32_t> semaphore_handles;
         std::unordered_map<KernelSpecName, KernelRTASchema> kernel_rta_schemas;
+        // TensorParameter name -> the parameter's declared single-device TensorSpec.
+        // Used by ValidateProgramRunParams to check that the supplied MeshTensor's spec matches
+        // the parameter's declared layout, and as the per-parameter lookup for completeness checks.
+        std::unordered_map<std::string, TensorSpec> tensor_parameter_layouts;
     };
     std::optional<Metal2NameRegistry> metal2_registry_;  // Only populated for Metal 2.0 programs
 
@@ -457,13 +491,12 @@ private:
 
     void set_remote_circular_buffer_init(const std::shared_ptr<Kernel>& kernel) const;
 
-    void set_cb_data_fmt(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
+    // Set data format and tile metadata in `build_options` for every circular buffer
+    // intersecting `crs`.
+    void set_cb_data_fmt_and_tile(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
 
-    void set_dfb_data_fmt(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
-
-    void set_cb_tile_dims(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
-
-    void set_dfb_tile_dims(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
+    // Same as `set_cb_data_fmt_and_tile`, but for dataflow buffers.
+    void set_dfb_data_fmt_and_tile(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
 
     void update_kernel_groups(uint32_t programmable_core_type_index);
 

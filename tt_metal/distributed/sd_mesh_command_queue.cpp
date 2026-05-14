@@ -9,6 +9,7 @@
 #include "tt_metal/impl/program/program_impl.hpp"
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
+#include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -73,7 +74,8 @@ bool SDMeshCommandQueue::write_shard_to_device(
     const void* src,
     const std::optional<BufferRegion>& region,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
-    std::shared_ptr<experimental::PinnedMemory> /* pinned_memory */) {
+    std::shared_ptr<experimental::PinnedMemory> /* pinned_memory */,
+    const tt::tt_metal::CoreRangeSet* logical_core_filter) {
     if (!mesh_device_->impl().is_local(device_coord)) {
         return false;
     }
@@ -93,9 +95,13 @@ bool SDMeshCommandQueue::write_shard_to_device(
         return false;
     }
 
-    tt::tt_metal::detail::WriteToBuffer(
-        *shard_view,
-        tt::stl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size));
+    auto payload =
+        tt::stl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size);
+    if (logical_core_filter != nullptr) {
+        tt::tt_metal::experimental::core_subset_write::WriteToBuffer(*shard_view, payload, *logical_core_filter);
+    } else {
+        tt::tt_metal::detail::WriteToBuffer(*shard_view, payload);
+    }
     return false;  // Slow dispatch doesn't support pinned memory
 }
 
@@ -134,6 +140,8 @@ WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t /*inde
 
 void SDMeshCommandQueue::wait_for_cores_idle() {
     if (!logical_cores_for_previous_workload_.empty()) {
+        // In emulated mode this map is always empty (LaunchProgram is synchronous),
+        // so this block is effectively a no-op for emulated devices.
         for (const auto& [device_id, logical_cores] : logical_cores_for_previous_workload_) {
             tt::llrt::internal_::wait_for_idle(device_id, logical_cores);
         }

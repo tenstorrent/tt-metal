@@ -7,7 +7,7 @@
 // 2. If MAX_RTA_IDX/MAX_CRTA_IDX defined: accesses that index to test bounds checking
 // Supports both DM and compute kernels
 
-#include "experimental/core_local_mem.h"
+#include "api/core_local_mem.h"
 #include "api/kernel_thread_globals.h"
 
 #ifndef COMPILE_FOR_TRISC
@@ -17,15 +17,7 @@
 #endif
 
 #ifdef ARCH_QUASAR
-// TODO: Remove this once PR #38124 is merged
-#include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
-inline __attribute__((always_inline)) void flush_l2_cache_line(uintptr_t addr) {
-    asm volatile("fence" ::: "memory");
-    volatile uint64_t* flush_reg = reinterpret_cast<volatile uint64_t*>(L2_FLUSH_ADDR);
-    *flush_reg = static_cast<uint64_t>(addr);
-    asm volatile("fence" ::: "memory");
-}
-
+#include "risc_common.h"
 thread_local extern uint32_t rta_count;
 thread_local extern uint32_t crta_count;
 #else
@@ -66,7 +58,7 @@ static FORCE_INLINE void trigger_bounds_check_assert() {
 
 // Helper: write RTA/CRTA metadata and values to L1
 static FORCE_INLINE void write_args_to_l1(uint32_t l1_write_addr) {
-    experimental::CoreLocalMem<uint32_t> ptr(l1_write_addr);
+    CoreLocalMem<uint32_t> ptr(l1_write_addr);
     ptr[0] = rta_count;
     ptr[1] = crta_count;
 
@@ -94,7 +86,7 @@ void core_agnostic_main() {
     // Compile args: [num_dms, l1_sync_addr]
     constexpr uint32_t num_dms = get_compile_time_arg_val(0);
     constexpr uint32_t l1_sync_addr = get_compile_time_arg_val(1);
-    experimental::CoreLocalMem<uint32_t> l1_sync_ptr(l1_sync_addr);
+    CoreLocalMem<uint32_t> l1_sync_ptr(l1_sync_addr);
     __atomic_add_fetch(l1_sync_ptr.get_unsafe_ptr(), 1, __ATOMIC_RELAXED);
     while (__atomic_load_n(l1_sync_ptr.get_unsafe_ptr(), __ATOMIC_ACQUIRE) != num_dms) {
     }

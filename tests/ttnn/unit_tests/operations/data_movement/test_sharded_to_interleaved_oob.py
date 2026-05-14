@@ -6,7 +6,7 @@ import pytest
 import ttnn
 import torch
 
-from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, comp_pcc
+from tests.ttnn.utils_for_testing import assert_equal
 
 
 def test_s2i_dram_height_sharded(device):
@@ -39,9 +39,5 @@ def test_s2i_dram_height_sharded(device):
     ttnn.deallocate(output_tensor)
     output_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
 
-    output_passed, output_message = comp_pcc(torch_input_tensor, ttnn.to_torch(output_tensor), 1.0)
-    weight_passed, weight_message = comp_pcc(torch_weight_tensor, ttnn.to_torch(weight_tensor), 1.0)
-
-    assert (
-        output_passed and weight_passed
-    ), f"Output result: (passed?={output_passed}, pcc={round(output_message, 4)}) - Weight result: (passed?={weight_passed}, pcc={round(weight_message, 4)})"
+    assert_equal(torch_input_tensor, ttnn.to_torch(output_tensor))
+    assert_equal(torch_weight_tensor, ttnn.to_torch(weight_tensor))

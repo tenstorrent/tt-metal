@@ -92,7 +92,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     uuid-runtime \
     wget \
     zstd \
-    libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install yq (YAML processor) for CI workflows
@@ -124,7 +123,7 @@ RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 # Numpy needed for tt-train to build
 # bundle uv with the venv for portable usage
-RUN umask 000 && uv pip install --no-cache-dir uv build numpy setuptools==80
+RUN umask 000 && uv pip install --no-cache-dir uv build numpy setuptools==80.10.2
 
 RUN git config --global --add safe.directory '*'
 
@@ -186,6 +185,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     acl \
     emacs \
     gdb \
+    gh \
     less \
     libmpfr-dev \
     nano \

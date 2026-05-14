@@ -14,7 +14,7 @@
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "llk_pack_untilize.h"
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 /*************************************************************************
  * LLK PACK UNTILIZE
@@ -80,7 +80,7 @@ inline void llk_pack_untilize(
     // merging adjacent face-columns into a single output row. Hence we use R_DIM_FACES instead of num_faces for L1
     // strides
     const std::uint32_t y_stride = full_ct_dim * R_DIM_FACES * face_r_dim;
-    LocalDFBInterface& local_dfb_interface = g_dfb_interface[output_id];
+    const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(output_id);
     const std::uint32_t base_l1 = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx * R_DIM_FACES * face_r_dim;
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {

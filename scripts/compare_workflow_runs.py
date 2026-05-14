@@ -454,7 +454,6 @@ def main():
         "t3000-fast-tests.yaml",
         "t3000-integration-tests.yaml",
         "t3000-perf-tests.yaml",
-        "t3000-perplexity-tests.yaml",
         "t3000-profiler-tests.yaml",
         "t3000-unit-tests.yaml",
         # Galaxy

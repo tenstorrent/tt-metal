@@ -3,7 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -25,8 +28,8 @@ void kernel_main() {
 #ifdef REDUCE_SCALER
     constexpr uint32_t cb_id_in2 = 2;
     constexpr auto src_args = TensorAccessorArgs<3>();
-    constexpr uint32_t scaler = get_compile_time_arg_val(src_args.next_compile_time_args_offset());
-    generate_reduce_scaler(cb_id_in2, scaler);
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<cb_id_in2, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
 #endif
 
     constexpr uint32_t cb_id_mask_h = 3;
@@ -36,18 +39,20 @@ void kernel_main() {
 
     const auto s = TensorAccessor(src_args, src_addr);
 
+    Noc noc;
+    CircularBuffer cb_in0_obj(cb_id_in0);
+    const auto in0_tile_bytes = get_tile_size(cb_id_in0);
+
     uint32_t w = curr_col_in_batch;
 
-    // this reader will read a NHW tensor in NWH order
     for (uint32_t i = 0; i < num_cols; i++) {
         uint32_t curr_id = col_start_tile_id;
         for (uint32_t j = 0; j < Ht; j++) {
-            cb_reserve_back(cb_id_in0, onetile);
-            uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-            noc_async_read_tile(curr_id, s, l1_write_addr);
-            noc_async_read_barrier();
-            cb_push_back(cb_id_in0, onetile);
-            curr_id += Wt;  // stride in H
+            cb_in0_obj.reserve_back(onetile);
+            noc.async_read(s, cb_in0_obj, in0_tile_bytes, {.page_id = curr_id}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_in0_obj.push_back(onetile);
+            curr_id += Wt;
         }
         w++;
         if (w == Wt) {

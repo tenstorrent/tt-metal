@@ -4,10 +4,9 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t onetile = 1;
@@ -20,6 +19,7 @@ void kernel_main() {
 
     constexpr auto cb_ydy = tt::CBIndex::c_24;  // y * dy
     constexpr auto cb_sum = tt::CBIndex::c_25;
+    CircularBuffer cb_sum_obj(cb_sum);
     constexpr auto cb_inter2 = tt::CBIndex::c_26;
     constexpr auto cb_add = tt::CBIndex::c_27;
 
@@ -50,7 +50,8 @@ void kernel_main() {
             }
         }
 
-        reduce_tile_to_cb<REDUCE_OP, REDUCE_DIM>(cb_add, cb_bcast_scaler, cb_sum, 1, /*pop0=*/1, /*pop1=*/0);
+        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
+            cb_add, cb_bcast_scaler, cb_sum, compute_kernel_lib::ReduceInputBlockShape::single());
 
         for (uint32_t w = 0; w < Wt; w += onetile) {
             // exp(y)
@@ -63,7 +64,7 @@ void kernel_main() {
             sub_tiles_to_cb(cb_dy, cb_inter2, cb_dx);
         }
 
-        cb_pop_front(cb_sum, onetile);
+        cb_sum_obj.pop_front(onetile);
 #else
         // step 1, compute y * dy
         for (uint32_t w = 0; w < Wt; ++w) {
@@ -82,7 +83,8 @@ void kernel_main() {
         }
 
         // step 2, compute sum(y * dy)
-        reduce_tile_to_cb<REDUCE_OP, REDUCE_DIM>(cb_add, cb_bcast_scaler, cb_sum, 1, /*pop0=*/1, /*pop1=*/0);
+        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
+            cb_add, cb_bcast_scaler, cb_sum, compute_kernel_lib::ReduceInputBlockShape::single());
 
         // step 3, compute final result
         for (uint32_t w = 0; w < Wt; w += onetile) {
@@ -98,7 +100,7 @@ void kernel_main() {
 #endif
         }
 
-        cb_pop_front(cb_sum, onetile);
+        cb_sum_obj.pop_front(onetile);
 #endif
     }
 }

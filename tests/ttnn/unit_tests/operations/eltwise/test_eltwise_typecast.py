@@ -7,7 +7,7 @@ import torch
 import ttnn
 
 from tests.ttnn.python_api_testing.sweep_tests.ttnn_pytorch_ops import eltwise_typecast
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
 mem_configs = [
     ttnn.DRAM_MEMORY_CONFIG,
@@ -125,8 +125,12 @@ class TestTypecast:
         torch_output = ttnn.to_torch(tt_output)
 
         torch_golden = eltwise_typecast(torch_input, tt_input_dtype=tt_input_dtype, tt_output_dtype=tt_output_dtype)
-        pcc = 0.98 if tt_input_dtype == ttnn.bfloat4_b or tt_output_dtype == ttnn.bfloat4_b else 0.99
-        assert_with_pcc(torch_golden, torch_output, pcc=pcc)
+
+        if tt_output_dtype == ttnn.float32 or tt_output_dtype == ttnn.bfloat16:
+            assert_equal(torch_golden, torch_output)
+        else:
+            pcc = 0.98 if tt_input_dtype == ttnn.bfloat4_b or tt_output_dtype == ttnn.bfloat4_b else 0.99
+            assert_with_pcc(torch_golden, torch_output, pcc=pcc)
 
 
 @pytest.mark.parametrize("tt_output_dtype", [ttnn.uint8, ttnn.uint16, ttnn.uint32, ttnn.int32])
@@ -600,6 +604,34 @@ def test_typecast_legacy_sharded_shard_size_not_tile_aligned(device):
     npu_result = ttnn.to_torch(output_tensor)
     expected = torch_input.int()
     assert torch.equal(npu_result, expected)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        [120, 104],  # width=104, not divisible by 32 (WAN 480p per-device shard)
+        [81, 120, 104],
+        [3, 81, 120, 104],
+        [1, 3, 81, 120, 104],
+        [10, 40],  # width=40, not divisible by 32
+        [5, 8],  # width=8, less than one tile row
+    ],
+)
+def test_typecast_rm_non_aligned_width(shape, device):
+    """ROW_MAJOR bfloat16→uint8 typecast with width not divisible by 32."""
+    torch.manual_seed(42)
+    torch_input = (torch.rand(shape) * 200).to(torch.bfloat16)
+    expected = torch_input.to(torch.uint8)
+
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    result = ttnn.to_torch(ttnn.typecast(input_tensor, ttnn.uint8))
+    assert torch.equal(result, expected), f"mismatch for shape {shape}"
 
 
 def test_typecast_rm_chunked_program_cache(device):

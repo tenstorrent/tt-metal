@@ -5,7 +5,7 @@
 #pragma once
 
 #include "api/compute/common_globals.h"
-#ifdef TRISC_MATH
+#if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "llk_math_eltwise_unary_sfpu_activations.h"
 #endif
 
@@ -28,10 +28,16 @@ ALWI void hardsigmoid_tile(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_hardsigmoid<APPROX, ckernel::ActivationType::Hardsigmoid>(idst)));
 }
 
+ALWI void hardsigmoid_tile_pack(uint32_t idst) {
+    PACK((llk_math_eltwise_unary_sfpu_hardsigmoid<APPROX, ckernel::ActivationType::Hardsigmoid>(idst)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */
 ALWI void hardsigmoid_tile_init() { MATH((llk_math_eltwise_unary_sfpu_hardsigmoid_init<APPROX>())); }
+
+ALWI void hardsigmoid_tile_init_pack() { PACK((llk_math_eltwise_unary_sfpu_hardsigmoid_init<APPROX>())); }
 
 // clang-format off
 /**
@@ -75,7 +81,7 @@ ALWI void celu_tile(uint32_t idst, uint32_t alpha, uint32_t alpha_recip) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void celu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_celu_init<APPROX>())); }
+ALWI void celu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_celu_init())); }
 
 // clang-format off
  /**
@@ -98,7 +104,7 @@ ALWI void celu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_celu_init<APPROX>
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void softshrink_tile_init() { MATH((llk_math_eltwise_unary_sfpu_softshrink_init<APPROX>())); }
+ALWI void softshrink_tile_init() { MATH((llk_math_eltwise_unary_sfpu_softshrink_init())); }
 
 // clang-format off
 /**
@@ -124,6 +130,6 @@ ALWI void hardshrink_tile(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void hardshrink_tile_init() { MATH((llk_math_eltwise_unary_sfpu_hardshrink_init<APPROX>())); }
+ALWI void hardshrink_tile_init() { MATH((llk_math_eltwise_unary_sfpu_hardshrink_init())); }
 
 }  // namespace ckernel

@@ -1439,6 +1439,9 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
         // as it will be the same state as at the beginning when buffer is empty. So in order to distinguish real
         // empty state and wrap around state, we will wait for reader to progress from start.
         if (read_position == 0) {
+            // Mark that we are in stall waiting for reader
+            device_print_buffer->aux.wpos = write_position | DEVICE_PRINT_WRITE_STALL_FLAG;
+
             // Reader is at the beginning, we need to wait for it to move before we can safely wrap around.
             WAYPOINT("DPW");
             while (read_position == 0) {
@@ -1453,12 +1456,27 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
 
                 // Read new read position for next check
                 read_position = device_print_buffer->aux.rpos;
+
+                // Check if read position is suggesting buffer clear
+                if (read_position == DEVICE_PRINT_RESET_BUFFER_MAGIC) {
+                    // Reader is suggesting buffer clear, we can reset buffer state to empty to avoid waiting for reader
+                    // to move.
+                    device_print_buffer->aux.wpos = 0;
+                    device_print_buffer->aux.rpos = 0;
+                    return 0;
+                }
             }
             WAYPOINT("DPD");
+
+            // Clear stall state, we can continue with normal flow now.
+            device_print_buffer->aux.wpos = write_position;
         }
 
-        // Check if we should wair for reader to consume until end of the buffer before we can wrap around.
+        // Check if we should wait for reader to consume until end of the buffer before we can wrap around.
         if (write_position < read_position) {
+            // Mark that we are in stall waiting for reader
+            device_print_buffer->aux.wpos = write_position | DEVICE_PRINT_WRITE_STALL_FLAG;
+
             WAYPOINT("DPW");
             while (write_position < read_position) {
                 invalidate_l1_cache();
@@ -1472,8 +1490,20 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
 
                 // Read new read position for next check
                 read_position = device_print_buffer->aux.rpos;
+
+                // Check if read position is suggesting buffer clear
+                if (read_position == DEVICE_PRINT_RESET_BUFFER_MAGIC) {
+                    // Reader is suggesting buffer clear, we can reset buffer state to empty to avoid waiting for reader
+                    // to move.
+                    device_print_buffer->aux.wpos = 0;
+                    device_print_buffer->aux.rpos = 0;
+                    return 0;
+                }
             }
             WAYPOINT("DPD");
+
+            // Clear stall state, we can continue with normal flow now.
+            device_print_buffer->aux.wpos = write_position;
         }
 
         // There is not enough space for our message until end of buffer.
@@ -1500,6 +1530,8 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
     if (write_position < read_position) {
         // Wrapped around, check if there is enough space between wpos and rpos
         WAYPOINT("DPW");
+        // Mark that we are in stall waiting for reader
+        device_print_buffer->aux.wpos = write_position | DEVICE_PRINT_WRITE_STALL_FLAG;
         while (write_position < read_position && write_position + message_size >= read_position) {
             invalidate_l1_cache();
 #if defined(COMPILE_FOR_ERISC)
@@ -1512,8 +1544,20 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
 
             // Read new read position for next check
             read_position = device_print_buffer->aux.rpos;
+
+            // Check if read position is suggesting buffer clear
+            if (read_position == DEVICE_PRINT_RESET_BUFFER_MAGIC) {
+                // Reader is suggesting buffer clear, we can reset buffer state to empty to avoid waiting for reader to
+                // move.
+                device_print_buffer->aux.wpos = 0;
+                device_print_buffer->aux.rpos = 0;
+                return 0;
+            }
         }
         WAYPOINT("DPD");
+
+        // Clear stall state, we can continue with normal flow now.
+        device_print_buffer->aux.wpos = write_position;
     }
     return write_position;
 }

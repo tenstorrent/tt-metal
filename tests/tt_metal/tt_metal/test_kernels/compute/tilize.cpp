@@ -6,14 +6,19 @@
 
 #include "api/compute/tilize.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "experimental/circular_buffer.h"
+#ifdef ARCH_QUASAR
+#include "api/dataflow/dataflow_buffer.h"
+#else
+#include "api/dataflow/circular_buffer.h"
+#endif
 
 void kernel_main() {
-    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
-    uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
+    constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
+    constexpr uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
 
-    experimental::CircularBuffer cb0(tt::CBIndex::c_0);
-    experimental::CircularBuffer cb16(tt::CBIndex::c_16);
+#ifndef ARCH_QUASAR
+    CircularBuffer cb0(tt::CBIndex::c_0);
+    CircularBuffer cb16(tt::CBIndex::c_16);
 
 #ifndef SHORT_INIT
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
@@ -54,6 +59,24 @@ void kernel_main() {
 #ifndef FAST_TILIZE
     tilize_uninit(tt::CBIndex::c_0, tt::CBIndex::c_16);
 #else
-    fast_tilize_uninit(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    fast_tilize_uninit(tt::CBIndex::c_0, tt::CBIndex::c_16, per_core_block_tile_cnt);
+#endif
+
+#else  // ARCH_QUASAR
+    DataflowBuffer dfb_in(get_compile_time_arg_val(2));
+    DataflowBuffer dfb_out(get_compile_time_arg_val(3));
+
+    compute_kernel_hw_startup(dfb_in.get_id(), dfb_out.get_id());
+    tilize_init(dfb_in.get_id(), per_core_block_tile_cnt, dfb_out.get_id());
+
+    for (uint32_t b = 0; b < per_core_block_cnt; ++b) {
+        dfb_in.wait_front(per_core_block_tile_cnt);
+        dfb_out.reserve_back(per_core_block_tile_cnt);
+
+        tilize_block(dfb_in.get_id(), per_core_block_tile_cnt, dfb_out.get_id());
+
+        dfb_in.pop_front(per_core_block_tile_cnt);
+        dfb_out.push_back(per_core_block_tile_cnt);
+    }
 #endif
 }
