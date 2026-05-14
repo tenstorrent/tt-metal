@@ -671,15 +671,14 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     static constexpr bool dispatch_local_discovery = false;
     static constexpr bool dispatch_live_discovery  = true;
 
-    // a bit pedantic but makes the selection logic of running `run_local_discovery_live` explicit
-    //
     bool const dispatch_live =
-        (run_live_discovery || (target_device_type == TargetDevice::Silicon)) ?
-            dispatch_live_discovery : dispatch_local_discovery;
+        (!run_live_discovery || (target_device_type != TargetDevice::Silicon)) ?
+            dispatch_local_discovery : dispatch_live_discovery;
 
     PhysicalSystemDescriptor psd = dispatch_live ?
         discovery_impl::run_local_discovery_live(distributed_context, target_device_type, all_hostnames_unique) :
         discovery_impl::run_local_discovery(cluster_desc, distributed_context, target_device_type, all_hostnames_unique);
+
 
     // Set local hostname and rank (friend access)
     auto my_rank = *(distributed_context->rank());
