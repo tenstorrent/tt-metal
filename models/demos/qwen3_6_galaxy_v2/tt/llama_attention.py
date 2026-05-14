@@ -1583,6 +1583,12 @@ class TtLlamaAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
         )
+        # V2-decode: ttnn.linear of rank-3 LHS @ rank-4 weight yields rank-4.
+        # Collapse leading singleton(s) back to rank-3 so the rank-3 slices
+        # below validate. Mirrors the prefill reshape (line ~1434).
+        if len(list(xqkvg.shape)) == 4:
+            _, _, _T_q, _N_q = list(xqkvg.shape)
+            xqkvg = ttnn.reshape(xqkvg, [B, _T_q, _N_q])
 
         q_flat = ttnn.slice(xqkvg, [0, 0, 0], [B, T, q_dim_pc], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         gate_flat = ttnn.slice(
@@ -1727,6 +1733,14 @@ class TtLlamaAttention(LightweightModule):
         )
         gathered.deallocate(True)
 
+        # V2-decode: ttnn.linear of rank-3 LHS @ rank-4 weight returns rank-4.
+        # Collapse leading singleton(s) back to rank-3 before slicing so the
+        # slice begins/ends rank match the tensor rank.
+        if len(list(dense_out_full.shape)) == 4:
+            _shape = list(dense_out_full.shape)
+            dense_out_full = ttnn.reshape(
+                dense_out_full, [_shape[0], _shape[-2], _shape[-1]], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
         out_T = list(dense_out_full.shape)[-2]
         if out_T != T_logical:
             dense_out = ttnn.slice(dense_out_full, [0, 0, 0], [B, T_logical, H], memory_config=ttnn.DRAM_MEMORY_CONFIG)

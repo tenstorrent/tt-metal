@@ -180,6 +180,108 @@ class TtTransformerBlock(LightweightModule):
         self.attention_norm.tt_ccl = tt_ccl
         self.ff_norm.tt_ccl = tt_ccl
 
+    def _mlp_decode_qwen36(self, ff_in_sharded: ttnn.Tensor, batch_size: int = 1) -> ttnn.Tensor:
+        """V2-decode: SwiGLU MLP for the qwen3.6 single-user decode path.
+
+        The prefill MLP (``forward_prefill``) uses ``matmul_1d_config`` for
+        ``seq_len <= 128`` which assumes L1-sharded mcast_in0 input plus
+        ``fuse_batch=True`` over an M >= 1 tile. For T=1 (tile-padded to 32),
+        the runtime tripped "Only L1 buffers can have an associated circular
+        buffer" — the 1D MCAST mcast_in0 path requires L1 input. The decode
+        MLP (``forward(mode='decode')``) on the 70B path uses ring-MMU prog
+        configs sized for a packed batch=32 single token — also incompatible
+        with single-user [B=1, 1, T=1, H/4] DRAM-residual.
+
+        Inline a minimal DRAM-safe variant: plain ``ttnn.linear`` (no prog
+        config), the same reduce-scatter / all-gather / all-reduce CCL
+        pattern as ``forward_prefill``, and the same residual-stream dtype
+        lock (typecast to bf16 at exit). Matches the GPU SwiGLU semantics
+        verified at 64L prefill PCC 0.998.
+
+        Input:  ``ff_in_sharded`` ttnn.Tensor [B, 1, T=1, H/4=1280] DRAM,
+                col-sharded across cluster_axis=1.
+        Output: ttnn.Tensor [B, 1, T=1, H/4=1280] DRAM, col-sharded.
+        """
+        mlp = self.feed_forward
+        compute_kernel = (
+            self.args.compute_kernel_config_lofi if mlp.four_bit_mlp else self.args.compute_kernel_config_hifi2_fp16
+        )
+        # 1. gate_proj (w1) and up_proj (w3): [B, 1, T, H/4] × [H/4, hidden_per_tp]
+        w1_out = ttnn.linear(
+            ff_in_sharded,
+            mlp.w1_interleaved,
+            compute_kernel_config=compute_kernel,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        w3_out = ttnn.linear(
+            ff_in_sharded,
+            mlp.w3_interleaved,
+            compute_kernel_config=compute_kernel,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # 2. Reduce-scatter across cols (cluster_axis=1, partial sum on K dim).
+        #    Skip the persistent FFx prefill buffer (seqlen=1 not in support).
+        w1_red = mlp.tt_ccl.line_reduce_scatter(
+            w1_out,
+            cluster_axis=1,
+            num_links=min(3, self.model_config["GALAXY_NUM_LINKS"]),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dim=3,
+            batch_size=batch_size,
+        )
+        w1_out.deallocate(True)
+        w3_red = mlp.tt_ccl.line_reduce_scatter(
+            w3_out,
+            cluster_axis=1,
+            num_links=min(3, self.model_config["GALAXY_NUM_LINKS"]),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dim=3,
+            batch_size=batch_size,
+        )
+        w3_out.deallocate(True)
+        # 3. SwiGLU: silu(w1) * w3
+        ff = ttnn.mul(
+            w1_red,
+            w3_red,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        w1_red.deallocate(True)
+        w3_red.deallocate(True)
+        # 4. Gather across cols so w2 sees the full hidden_per_tp dim.
+        ff_gathered = mlp.tt_ccl.line_all_gather(
+            ff,
+            cluster_axis=1,
+            num_links=min(3, self.model_config["GALAXY_NUM_LINKS"]),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dim=3,
+        )
+        ff.deallocate(True)
+        # 5. down_proj (w2): [B, 1, T, hidden_per_tp] × [hidden_per_tp, dim_per_tp]
+        w2_out = ttnn.linear(
+            ff_gathered,
+            mlp.w2_interleaved,
+            compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ff_gathered.deallocate(True)
+        # 6. All-reduce on rows (cluster_axis=0) so each col holds a full
+        #    sum partial -> col-sharded dim_per_tp output.
+        w2_red = mlp.tt_ccl.line_all_reduce(
+            w2_out,
+            cluster_axis=0,
+            num_links=min(3, self.model_config["GALAXY_NUM_LINKS"]),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            buffer_key="FF2",
+            batch_size=batch_size,
+        )
+        w2_out.deallocate(True)
+        return w2_red
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -197,7 +299,19 @@ class TtTransformerBlock(LightweightModule):
     ) -> ttnn.Tensor:
         # x contains input in layer 0 and ffout of previous layer thereafter, x should be dealocated
         # h contains 0 in layer 0 and h_prev+x_prev+attn_out_prev thereafter, h is persistent
-        skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+        # V2-decode: qwen3.6 single-user decode uses the DRAM-residual contract
+        # (mirrors v1's forward_decode and v2's qwen36 prefill path). The 70B
+        # decode L1-sharded contract is structurally incompatible with the
+        # qwen3.6 attention/DeltaNet blocks (they were written against
+        # ``[B=1, 1, T=1, H]`` DRAM single-user). We re-use the existing
+        # is_qwen36_prefill branch below for decode too; the skip_mem_cfg here
+        # only governs the 70B decode path.
+        is_qwen36_decode = self.is_qwen36 and mode == "decode"
+        skip_mem_cfg = (
+            self.model_config["DECODE_RESIDUAL_MEMCFG"]
+            if (mode == "decode" and not is_qwen36_decode)
+            else ttnn.DRAM_MEMORY_CONFIG
+        )
         assert (
             x.memory_config() == skip_mem_cfg
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
@@ -223,8 +337,16 @@ class TtTransformerBlock(LightweightModule):
         # embedding contract and the inter-layer contract), with a single
         # entry gather + exit scatter.
         is_qwen36_prefill = self.is_qwen36 and mode == "prefill"
+        # V2-decode: extend the qwen36 prefill DRAM-residual path to decode too.
+        # The norms + MLP are run via the prefill primitives (tt_distributed_rmsnorm,
+        # MLP forward_prefill) since those work on DRAM full-H/4 inputs and have
+        # been verified at 64L. The attention dispatches to the decode forward
+        # (_forward_decode_qwen36 for full-attention, forward_decode for DeltaNet).
+        is_qwen36_path = self.is_qwen36 and mode in ("prefill", "decode")
+        norm_mlp_mode = "prefill"  # both prefill and decode use the prefill primitives
+        attn_mode = mode  # "prefill" or "decode" dispatches to the right attention path
 
-        if is_qwen36_prefill:
+        if is_qwen36_path:
             # --- Entry gather: residual stream lifted to full-H ---
             # For layer 0, x and h-into-block both = the embedding output
             # (col-sharded). Gather x to full-H once; h is unused this branch.
@@ -267,7 +389,7 @@ class TtTransformerBlock(LightweightModule):
 
             # --- Attention norm: scatter → norm (col-sharded) → gather ---
             x_norm_in = ttnn.mesh_partition(x, dim=-1, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            attn_in_sharded, _ = self.attention_norm(x_norm_in, None, mode)
+            attn_in_sharded, _ = self.attention_norm(x_norm_in, None, norm_mlp_mode)
             x_norm_in.deallocate(True)
             attn_in_full = ttnn.all_gather(
                 attn_in_sharded,
@@ -285,7 +407,7 @@ class TtTransformerBlock(LightweightModule):
                 current_pos,
                 rot_mats,
                 user_id,
-                mode,
+                attn_mode,
                 page_table=page_table,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
@@ -302,6 +424,19 @@ class TtTransformerBlock(LightweightModule):
                 attn_out.deallocate(True)
                 attn_out = attn_out_4d
 
+            # V2-decode: DeltaNet's forward_decode may return logical T=32 (tile-
+            # padded T=1) when the internal output projection inflates the
+            # second-to-last dim. Slice back to T=1 so the downstream residual
+            # add / norms / MLP see the correct contract.
+            if mode == "decode":
+                _B_a, _, _T_a, _H_a = list(attn_out.shape)
+                if _T_a != 1:
+                    attn_out_t1 = ttnn.slice(
+                        attn_out, [0, 0, 0, 0], [_B_a, 1, 1, _H_a], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                    )
+                    attn_out.deallocate(True)
+                    attn_out = attn_out_t1
+
             # --- Residual add (full-H replicated) ---
             # Note: residual stream stays in bfloat16 because both inputs are
             # bfloat16 — x is bfloat16 (from embedding / prior layer all_gather)
@@ -317,11 +452,19 @@ class TtTransformerBlock(LightweightModule):
 
             # --- FF norm: scatter → norm (col-sharded) ---
             h_norm_in = ttnn.mesh_partition(h_new, dim=-1, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ff_in_sharded, _ = self.ff_norm(h_norm_in, None, mode)
+            ff_in_sharded, _ = self.ff_norm(h_norm_in, None, norm_mlp_mode)
             h_norm_in.deallocate(True)
 
             # --- MLP (col-sharded H/4 → col-sharded H/4) ---
-            ff_out_sharded = self.feed_forward.forward(ff_in_sharded, mode, batch_size=batch_size)
+            if mode == "decode":
+                # V2-decode: bypass the prefill MLP program-config path (it
+                # requires L1-sharded mcast_in0 input AND fuse_batch math that
+                # doesn't validate for the T=1 tile-padded-to-32 single-user
+                # contract). Use plain ttnn.linear (auto-selects a DRAM-safe
+                # 2D MCAST kernel) followed by the same CCL pattern.
+                ff_out_sharded = self._mlp_decode_qwen36(ff_in_sharded, batch_size=batch_size)
+            else:
+                ff_out_sharded = self.feed_forward.forward(ff_in_sharded, norm_mlp_mode, batch_size=batch_size)
             # Gather MLP output back to full-H for the residual add against h_new.
             ff_out_full = ttnn.all_gather(
                 ff_out_sharded,

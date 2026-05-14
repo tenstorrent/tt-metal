@@ -978,7 +978,12 @@ class TtTransformer(LightweightModule):
         kv_cache=None,
         batch_size=1,
     ):
-        if mode == "decode":
+        # V2-decode: qwen3.6 single-user decode uses the DRAM-residual contract
+        # via the qwen36 prefill primitives (see decoder block is_qwen36_path
+        # branch). Skip the L1-sharded prefetcher path which assumes the 70B
+        # batch-32 packed [1,1,32,H] contract.
+        is_qwen36_decode = self.is_qwen36 and mode == "decode"
+        if mode == "decode" and not is_qwen36_decode:
             if self.args.use_prefetcher:
                 self.prefetcher_setup.create_global_cb()
                 garbage_tensor = ttnn.dram_prefetcher(
@@ -1034,7 +1039,7 @@ class TtTransformer(LightweightModule):
                 batch_size=batch_size,
             )
         # ttnn.deallocate(h)
-        if mode == "decode":
+        if mode == "decode" and not is_qwen36_decode:
             if self.args.use_prefetcher:
                 ttnn.deallocate(garbage_tensor)
 
@@ -1045,6 +1050,21 @@ class TtTransformer(LightweightModule):
 
         if mode == "prefill":
             return x
+
+        # V2-decode: qwen3.6 single-user decode uses the prefill norm + lm_head
+        # primitives (DRAM-friendly). The 70B decode path uses the L1-sharded
+        # variants which assume the batch-32 packed contract.
+        if is_qwen36_decode:
+            # The decoder loop exit is col-sharded [B, 1, T=1, H/4] (same
+            # contract as prefill). Run the final norm + lm_head via the
+            # prefill primitives (tt_distributed_rmsnorm; lm_head forward
+            # with mode="prefill").
+            x, _ = self.norm(x, res=None, mode="prefill")
+            if get_last_token != -1:
+                x = x[:, :, get_last_token:, :]
+            lm_head_output = self.lm_head(x, None, mode="prefill")
+            return lm_head_output
+
         # Output norm
         x, res = self.norm(x, res=None, mode=mode)
 

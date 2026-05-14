@@ -807,6 +807,15 @@ class TT_CCL:
                 "LM_HEAD": [(4, 1, 32, 16384)],
                 "SAMPLING": [(1, 1, 32, 128 * 1024)],
             }
+        # V2-decode: build a FRESH dict for the seqlen=32 entry. The previous
+        # ``ag_persistent_buffers[key] = ...`` mutation accidentally leaked the
+        # final seqlen=128 LAYERNORM / QKV / FFx buffers into the seqlen=32
+        # entry (because ``ag_persistent_buffers`` was the loop's last dict).
+        # That bites decode (T=1 tile-padded to 32) when ``line_all_gather``
+        # looks up ``all_gather_buffers[32]["LAYERNORM"]`` and gets a [1,1,128,128]
+        # buffer — output shape validation then fails ("dim 2 should be 32 but
+        # has 128"). Keep the seqlen=32 entry strictly the fixed-length set.
+        ag_persistent_buffers_32: dict = {}
         for key, shape in buffers_fixed_length.items():
             tt_buffer = ttnn.as_tensor(
                 torch.zeros(shape[0]),
@@ -817,9 +826,9 @@ class TT_CCL:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 cache_file_name=self.weight_cache_path / ("pb_ag_" + key + "_32"),
             )
-            ag_persistent_buffers[key] = tt_buffer
+            ag_persistent_buffers_32[key] = tt_buffer
 
-        ag_persistent_buffers_all[32] = ag_persistent_buffers
+        ag_persistent_buffers_all[32] = ag_persistent_buffers_32
         return ag_persistent_buffers_all
 
     def line_all_reduce(
