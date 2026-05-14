@@ -96,7 +96,7 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
 
     // Step 3: (logits - global_max).exp() — TEMPORARILY UNFUSED for diagnostic check.
     // TODO: revert to fused_subtract_exp() once diagnostic is done.
-    auto shifted = ttnn::subtract(logits->get_value(), global_max);
+    auto shifted = ttnn::subtract(logits->get_value(), global_max, ttnn::DataType::FLOAT32);
     auto local_exp = ttnn::exp(shifted);
     auto local_sum = ttnn::sum(local_exp, 3, /* keepdim */ true, std::nullopt, core::ComputeKernelConfig::precise());
     auto global_sum = ttnn_fixed::distributed::all_reduce(local_sum, cluster_axis);
