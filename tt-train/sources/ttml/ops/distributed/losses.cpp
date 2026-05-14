@@ -87,11 +87,11 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
     [[maybe_unused]] const uint32_t N = B * S;
 
     // // Step 1: local max [B,1,S,1] per device (BF16 — no precision loss)
-    // auto local_max = ttnn::max(logits->get_value(), 3, /* keepdim */ true);
+    auto local_max = ttnn::max(logits->get_value(), 3, /* keepdim */ true);
 
     // // Step 2: all-gather local maxes → [B,1,S,tp_size] → global max [B,1,S,1]
-    // auto all_max_val = ttnn_fixed::distributed::all_gather(local_max, 3, cluster_axis);
-    // auto global_max = ttnn::max(all_max_val, 3, /* keepdim */ true);
+    auto all_max_val = ttnn_fixed::distributed::all_gather(local_max, 3, cluster_axis);
+    auto global_max = ttnn::max(all_max_val, 3, /* keepdim */ true);
 
     // // Step 3: fused (logits - global_max).exp() into FP32 — single binary_ng kernel,
     // // no intermediate [B,1,S,V/tp_size] FP32 tensor.
