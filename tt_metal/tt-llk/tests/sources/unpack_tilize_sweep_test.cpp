@@ -31,7 +31,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_configure_stoch_rnd_<STOCHASTIC_RND>();
 
     // Initialize tilize unpacker
-    _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, params.BLOCK_CT_DIM, FACE_R_DIM, params.NARROW_TILE);
+    _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, params.BLOCK_CT_DIM, FACE_R_DIM, params.NARROW_TILE, params.num_faces);
 
     std::uint32_t read_offset = 0;
 
