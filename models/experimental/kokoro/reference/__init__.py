@@ -1,47 +1,23 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-#
-# SPDX-License-Identifier: Apache-2.0
+__version__ = "0.9.4"
 
-"""
-Kokoro-82M reference (mirrors `models/experimental/speecht5_tts/reference/` layout).
+from loguru import logger
+import sys
 
-- Op-by-op PyTorch from Hugging Face weights (`kokoro_plbert`, `kokoro_predictor`, `kokoro_istftnet`)
-- Full composed reference (`kokoro_full_model`)
-- Upstream `kokoro` `KModel` wrapper (`kokoro_model`) for PCC vs the official implementation
-- Pipeline wrapper for G2P/voices (`kokoro_pipeline`)
-"""
+# Remove default handler
+logger.remove()
 
-from .kokoro_config import KokoroConfig
-from .kokoro_full_model import (
-    KokoroFullOutput,
-    KokoroFullReference,
-    load_full_reference_from_huggingface,
-    load_full_reference_model,
+# Add custom handler with clean format including module and line number
+logger.add(
+    sys.stderr,
+    format="<green>{time:HH:mm:ss}</green> | <cyan>{module:>16}:{line}</cyan> | <level>{level: >8}</level> | <level>{message}</level>",
+    colorize=True,
+    level="INFO"  # "DEBUG" to enable logger.debug("message") and up prints
+    # "ERROR" to enable only logger.error("message") prints
+    # etc
 )
-from .kokoro_istftnet import KokoroIstftNet, KokoroIstftNetOutput, load_decoder_from_huggingface
-from .kokoro_model import KokoroModelReference, load_reference_kmodel, load_reference_model
-from .kokoro_pipeline import KokoroPipelineReference, load_reference_pipeline
-from .kokoro_plbert import KokoroPlBert, KokoroPlBertOutput, load_plbert_from_huggingface
-from .kokoro_predictor import KokoroPredictor, KokoroPredictorOutput, load_predictor_from_huggingface
 
-__all__ = [
-    "KokoroConfig",
-    "KokoroFullOutput",
-    "KokoroFullReference",
-    "KokoroIstftNet",
-    "KokoroIstftNetOutput",
-    "KokoroModelReference",
-    "KokoroPlBert",
-    "KokoroPlBertOutput",
-    "KokoroPipelineReference",
-    "KokoroPredictor",
-    "KokoroPredictorOutput",
-    "load_decoder_from_huggingface",
-    "load_full_reference_from_huggingface",
-    "load_full_reference_model",
-    "load_plbert_from_huggingface",
-    "load_predictor_from_huggingface",
-    "load_reference_kmodel",
-    "load_reference_model",
-    "load_reference_pipeline",
-]
+# Disable before release or as needed
+logger.disable("kokoro")
+
+from .model import KModel
+from .pipeline import KPipeline
