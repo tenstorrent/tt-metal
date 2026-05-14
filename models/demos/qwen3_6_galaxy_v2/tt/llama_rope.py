@@ -15,7 +15,107 @@ def compute_gather_cos_sin(dhead, end, theta, position_ids, use_scaled_rope, sca
     return gather_cos_sin(position_ids, cos, sin)
 
 
+# ---------------------------------------------------------------------------
+# Qwen3.6 partial-RoPE helpers (CPU, used for unit-test + on-device table prep)
+# ---------------------------------------------------------------------------
+
+
+def build_qwen36_partial_rope_tables(
+    max_seq_len: int,
+    rope_dim: int,
+    rope_theta: float,
+) -> tuple:
+    """Build cos/sin tables for Qwen3.6 partial RoPE (text-only path).
+
+    Qwen3.6 uses MRoPE with sections [11, 11, 10], but in text-only inference
+    all three position axes equal the token index, which makes the MRoPE
+    section grouping numerically identical to standard partial RoPE.
+
+    The HF Qwen3NextRotaryEmbedding builds frequencies via::
+
+        inv_freq = 1 / theta ** (torch.arange(0, rope_dim, 2) / rope_dim)
+        freqs    = outer(positions, inv_freq)        # [T, rope_dim/2]
+        emb      = cat([freqs, freqs], dim=-1)       # [T, rope_dim]
+        cos, sin = emb.cos(), emb.sin()
+
+    Returns
+    -------
+    (cos, sin) : torch.Tensor each of shape [max_seq_len, rope_dim] (float32).
+    """
+    assert rope_dim % 2 == 0, f"rope_dim must be even, got {rope_dim}"
+    half = rope_dim // 2
+    # inv_freq[i] = 1 / theta^(2i/rope_dim) for i in [0, half)
+    inv_freq = 1.0 / (rope_theta ** (torch.arange(0, rope_dim, 2, dtype=torch.float32) / rope_dim))
+    positions = torch.arange(max_seq_len, dtype=torch.float32)
+    freqs = torch.outer(positions, inv_freq)  # [T, half]
+    emb = torch.cat([freqs, freqs], dim=-1)  # [T, rope_dim]
+    return emb.cos(), emb.sin()
+
+
+def apply_qwen36_partial_rope_torch(
+    x: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    rope_dim: int,
+) -> torch.Tensor:
+    """Apply Qwen3.6 partial RoPE to a [..., head_dim] tensor in pure pytorch.
+
+    Math (matches HF reference ``apply_rotary_pos_emb`` + ``_rotate_half`` in
+    ``models/demos/qwen3_6_galaxy/reference/qwen36.py`` lines 180-280)::
+
+        x_rot, x_pass = x[..., :rope_dim], x[..., rope_dim:]
+        x1, x2        = x_rot[..., :rope_dim//2], x_rot[..., rope_dim//2:]
+        rotate_half   = cat([-x2, x1], dim=-1)
+        x_rot_out     = x_rot * cos + rotate_half * sin
+        out           = cat([x_rot_out, x_pass], dim=-1)
+
+    Parameters
+    ----------
+    x : torch.Tensor [..., head_dim]
+    cos, sin : torch.Tensor broadcastable to [..., rope_dim]
+        Typically [1, 1, T, rope_dim] or [1, 1, 1, rope_dim] for decode.
+
+    Returns
+    -------
+    torch.Tensor of same shape as x.
+    """
+    head_dim = x.shape[-1]
+    assert rope_dim <= head_dim, f"rope_dim={rope_dim} > head_dim={head_dim}"
+    x_rot = x[..., :rope_dim]
+    x_pass = x[..., rope_dim:]
+    half = rope_dim // 2
+    x1 = x_rot[..., :half]
+    x2 = x_rot[..., half:]
+    rotate_half = torch.cat([-x2, x1], dim=-1)
+    x_rot_out = x_rot * cos + rotate_half * sin
+    return torch.cat([x_rot_out, x_pass], dim=-1)
+
+
 class TtLlamaRotarySetup(LightweightModule):
+    """RoPE setup for Llama-class models (70B / Qwen3-32B) and Qwen3.6 partial RoPE.
+
+    Backward-compatible with the original llama3_70b_galaxy positional signature:
+    ``TtLlamaRotarySetup(device, batch_size, head_dim, max_seq_len, rope_theta, use_scaled_rope, scale_factor)``.
+
+    Qwen3.6 partial-RoPE behaviour is gated by ``getattr(args, "is_qwen36", False)``
+    on an optional ``args`` keyword. When set:
+
+    * cos/sin tables are computed at ``args.rope_dim`` (= 64) width, NOT
+      ``args.head_dim`` (= 256). This means ``self.head_dim`` (the width of
+      gathered cos/sin shards used by downstream RoPE math) is set to
+      ``rope_dim``, while the original head_dim is stored as ``self.full_head_dim``.
+    * ``rope_theta`` defaults to ``args.rope_theta`` (10_000_000 for qwen3.6).
+    * ``self.sub_core_grids`` is taken directly from ``args.sub_core_grids``
+      instead of the hard-coded prefetcher-aware split (cols 1-3 + 5-6).
+    * A ``partial_rope_apply(x, cos, sin)`` helper exposes the slice→rotate→concat
+      math against a pre-fetched cos/sin pair (works for both prefill and decode
+      shapes; mirrors v1's ``apply_partial_rope`` in
+      ``models/demos/qwen3_6_galaxy/tt/llama_rope.py``).
+
+    The original 70B / qwen3-32B paths are untouched: they pass no ``args``
+    and continue to compute full-width cos/sin tables exactly as before.
+    """
+
     def __init__(
         self,
         device,
@@ -26,11 +126,30 @@ class TtLlamaRotarySetup(LightweightModule):
         use_scaled_rope: bool = False,
         scale_factor: float = 8,
         datatype=ttnn.bfloat16,
+        args=None,
     ):
         super().__init__()
 
+        # --- Qwen3.6 partial-RoPE branch detection ---
+        self.is_qwen36 = bool(getattr(args, "is_qwen36", False))
+        if self.is_qwen36:
+            # Take RoPE-specific config straight from args.
+            self.rope_dim = int(args.rope_dim)  # 64
+            self.full_head_dim = int(args.head_dim)  # 256
+            # rope_theta argument is ignored when args.is_qwen36 — use args.rope_theta.
+            rope_theta = float(args.rope_theta)
+            use_scaled_rope = False
+            scale_factor = 1.0
+            # The cos/sin tables we precompute have width = rope_dim.
+            # Downstream code (ttnn.embedding output, sharding shape) uses
+            # self.head_dim as the cos/sin width, so override it here.
+            self.head_dim = self.rope_dim
+        else:
+            self.rope_dim = head_dim
+            self.full_head_dim = head_dim
+            self.head_dim = head_dim
+
         self.batch_size = batch_size
-        self.head_dim = head_dim
         self.n_kv_heads = 8
         self.device = device
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
@@ -43,23 +162,50 @@ class TtLlamaRotarySetup(LightweightModule):
             self.batch_size_per_device_group = self.batch_size
         self.core_grid = device.compute_with_storage_grid_size()
         num_cores = self.core_grid.x * self.core_grid.y
-        self.sub_core_grids = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
-            ]
-        )
-        self.start_core = ttnn.CoreCoord(1, 0)
 
-        # Generate the cos/sin matrices needed for ttnn.embedding op
-        cos_matrix, sin_matrix = compute_gather_cos_sin(
-            dhead=head_dim,
-            end=max_seq_len * 2,
-            theta=rope_theta,
-            position_ids=torch.arange(max_seq_len),
-            use_scaled_rope=use_scaled_rope,
-            scale_factor=scale_factor,
-        )
+        # --- sub_core_grids: prefer args.sub_core_grids when provided ---
+        # Qwen3.6 v2 widens this to cols 1-6 (prefetcher off, col-4 reclaimed).
+        if args is not None and getattr(args, "sub_core_grids", None) is not None:
+            self.sub_core_grids = args.sub_core_grids
+            self.start_core = getattr(args, "start_core", ttnn.CoreCoord(1, 0))
+        else:
+            # Legacy 70B / qwen3-32B prefetcher-aware split.
+            self.sub_core_grids = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+                ]
+            )
+            self.start_core = ttnn.CoreCoord(1, 0)
+
+        # ------------------------------------------------------------------
+        # Generate the cos/sin matrices needed for ttnn.embedding op.
+        # For qwen3.6 we build at rope_dim width via the partial-RoPE oracle;
+        # for other models we keep the original full-head_dim path.
+        # ------------------------------------------------------------------
+        if self.is_qwen36:
+            cos_2d, sin_2d = build_qwen36_partial_rope_tables(
+                max_seq_len=max_seq_len * 2,
+                rope_dim=self.rope_dim,
+                rope_theta=rope_theta,
+            )  # each [max_seq_len*2, rope_dim] float32
+            # Match the gather_cos_sin output layout: [1, 1, T, rope_dim].
+            # gather_cos_sin produces a [1, 1, T, head_dim] tensor by
+            # interleaving (stack-then-flatten); for qwen3.6 partial RoPE the
+            # canonical layout is cat([f, f], dim=-1) which we already built
+            # directly above, so just expand dims.
+            positions = torch.arange(max_seq_len)
+            cos_matrix = cos_2d[positions].unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, rope_dim]
+            sin_matrix = sin_2d[positions].unsqueeze(0).unsqueeze(0)
+        else:
+            cos_matrix, sin_matrix = compute_gather_cos_sin(
+                dhead=head_dim,
+                end=max_seq_len * 2,
+                theta=rope_theta,
+                position_ids=torch.arange(max_seq_len),
+                use_scaled_rope=use_scaled_rope,
+                scale_factor=scale_factor,
+            )
 
         self.cos_matrix = ttnn.from_torch(
             cos_matrix,
@@ -317,3 +463,92 @@ class TtLlamaRotarySetup(LightweightModule):
         sin = ttnn.reshape(sin, [1, 1, seq_len, self.head_dim])
 
         return [cos, sin]
+
+    # ------------------------------------------------------------------
+    # Qwen3.6 partial-RoPE application (TTNN device path, option (a))
+    # ------------------------------------------------------------------
+
+    def partial_rope_apply(
+        self,
+        x_tt,
+        cos_tt,
+        sin_tt,
+    ):
+        """Apply Qwen3.6 partial RoPE to a ``[..., head_dim]`` device tensor.
+
+        Only the first ``self.rope_dim`` channels of the last dim are rotated;
+        the remaining ``self.full_head_dim - self.rope_dim`` channels pass
+        through unchanged. Ported verbatim from v1
+        ``models/demos/qwen3_6_galaxy/tt/llama_rope.py::apply_partial_rope``
+        which is the known-good math (PCC > 0.99 in v1 single-block tests).
+
+        Parameters
+        ----------
+        x_tt : ttnn.Tensor
+            Shape ``[..., full_head_dim]`` (e.g. ``[B, n_heads, T, 256]`` for
+            prefill, ``[1, 1, B, 256]`` for decode after concat).
+        cos_tt, sin_tt : ttnn.Tensor
+            Shape broadcastable to ``[..., rope_dim]`` — typically
+            ``[1, 1, T, rope_dim]`` for prefill or ``[1, 1, 1, rope_dim]`` for
+            decode.
+
+        Returns
+        -------
+        ttnn.Tensor of same shape as ``x_tt`` with the first ``rope_dim``
+        channels rotated.
+
+        Notes
+        -----
+        Must be called only when ``self.is_qwen36`` is True (the 70B / qwen3-32B
+        paths use the fused ``ttnn.experimental.rotary_embedding_llama_fused_qk``
+        kernel and do not need this helper).
+        """
+        assert self.is_qwen36, "partial_rope_apply is only valid when is_qwen36=True"
+        rd = self.rope_dim  # 64
+        hd = self.full_head_dim  # 256
+        shape = list(x_tt.shape)
+        last_dim = shape[-1]
+        assert last_dim == hd, f"Expected last dim={hd}, got {last_dim}"
+
+        ndim = len(shape)
+        # Slice into rotated / pass-through halves.
+        begins_rot = [0] * ndim
+        ends_rot = shape[:]
+        ends_rot[-1] = rd
+        begins_pass = [0] * ndim
+        ends_pass = shape[:]
+        begins_pass[-1] = rd
+        x_rot = ttnn.slice(x_tt, begins_rot, ends_rot)  # [..., rd]
+        x_pass = ttnn.slice(x_tt, begins_pass, ends_pass)  # [..., hd-rd]
+
+        # rotate_half(x_rot) = cat([-x2, x1]) with x1, x2 halves of x_rot.
+        half = rd // 2
+        shape_rot = list(x_rot.shape)
+        begins_x1 = [0] * ndim
+        ends_x1 = shape_rot[:]
+        ends_x1[-1] = half
+        begins_x2 = [0] * ndim
+        ends_x2 = shape_rot[:]
+        begins_x2[-1] = half
+        x1 = ttnn.slice(x_rot, begins_x1, ends_x1)
+        x2 = ttnn.slice(x_rot, begins_x2, ends_x2)
+        neg_x2 = ttnn.neg(x2)
+        rotate_half = ttnn.concat([neg_x2, x1], dim=-1)  # [..., rd]
+        x1.deallocate(True)
+        x2.deallocate(True)
+        neg_x2.deallocate(True)
+
+        # Rotated = x_rot * cos + rotate_half * sin
+        x_rot_cos = ttnn.multiply(x_rot, cos_tt)
+        rh_sin = ttnn.multiply(rotate_half, sin_tt)
+        x_rotated = ttnn.add(x_rot_cos, rh_sin)
+        x_rot.deallocate(True)
+        rotate_half.deallocate(True)
+        x_rot_cos.deallocate(True)
+        rh_sin.deallocate(True)
+
+        # Concat rotated + pass-through
+        out = ttnn.concat([x_rotated, x_pass], dim=-1)  # [..., hd]
+        x_rotated.deallocate(True)
+        x_pass.deallocate(True)
+        return out

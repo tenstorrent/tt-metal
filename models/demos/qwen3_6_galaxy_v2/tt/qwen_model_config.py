@@ -1802,7 +1802,7 @@ class TtQwenModelArgs(TtModelArgs):
         else:
             state_dict = load_hf_state_dict(self.CKPT_DIR)
         state_dict = standardize_hf_keys(state_dict)
-        state_dict = convert_hf_to_meta(state_dict, self.head_dim)
+        state_dict = convert_hf_to_meta(state_dict, self.head_dim, is_qwen36=getattr(self, "is_qwen36", False))
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
         for k in keys_dict:

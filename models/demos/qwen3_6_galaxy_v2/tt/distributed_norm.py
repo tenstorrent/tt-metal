@@ -8,11 +8,34 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import tt_distributed_rmsnorm, 
 
 
 class DistributedNorm(LightweightModule):
-    def __init__(self, norm, args, tt_ccl=None, ccl_topology=None):
+    """Wraps an inner RMSNorm and runs a distributed (col-sharded) RMSNorm forward.
+
+    Parameters
+    ----------
+    norm : RMSNorm
+        The wrapped per-device RMSNorm.  Must expose ``.weight`` and, when
+        used in distributed mode, ``.weight_distributed``.
+    args : ModelArgs
+    tt_ccl : optional CCL handle.
+    ccl_topology : optional topology hint.
+    zero_centered : bool, default False
+        When ``True``, bake ``w' = w + 1`` into the on-device weight tensors
+        (``norm.weight`` and ``norm.weight_distributed`` if present).  This
+        implements the HF ``Qwen3NextRMSNorm`` convention
+        ``output = (1 + w) * normalize(x)`` without any extra on-device math
+        in the forward path.  The transform is performed at construction
+        time and is lossless (we never need the un-transformed weight back).
+    """
+
+    def __init__(self, norm, args, tt_ccl=None, ccl_topology=None, zero_centered: bool = False):
         self.norm = norm
         self.args = args
         self.tt_ccl = tt_ccl
         self.ccl_topology = ccl_topology
+        self.zero_centered = zero_centered
+
+        if zero_centered:
+            self._bake_zero_centered_offset()
         if args.qk_norm:
             core_grid_ln, grid_offset = (5, 2), ttnn.CoreCoord(1, 0)
         else:
@@ -56,6 +79,70 @@ class DistributedNorm(LightweightModule):
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
         )
+
+    def _bake_zero_centered_offset(self):
+        """Bake the ``w' = w + 1`` transform into the on-device norm weight(s).
+
+        Reads back each weight tensor on ``self.norm`` (``weight`` and, if
+        present, ``weight_distributed``) to host, adds 1.0 in float, and
+        re-uploads via ``ttnn.from_torch`` preserving dtype / layout /
+        memory_config / mesh-mapper.  This is a one-shot transform performed
+        at construction time so the forward path is identical to a standard
+        RMSNorm — the +1 is fused into the stored weight.
+
+        Lossless: we never need the un-transformed weight back.
+        """
+        mesh_device = self.args.mesh_device
+        mesh_shape = list(mesh_device.shape)
+
+        for attr, mesh_mapper in (
+            ("weight", ttnn.ReplicateTensorToMesh(mesh_device)),
+            (
+                "weight_distributed",
+                ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 2), mesh_shape=mesh_shape),
+            ),
+        ):
+            tt_w = getattr(self.norm, attr, None)
+            if tt_w is None:
+                continue
+
+            dtype = tt_w.dtype
+            layout = tt_w.layout
+            memory_config = tt_w.memory_config()
+
+            # Read the (replicated/sharded) on-device tensor back to host.  We
+            # rely on the same mesh-mapper convention the inner RMSNorm used:
+            # ``weight`` is replicated (any shard is fine), ``weight_distributed``
+            # is column-sharded along dim 2.
+            if attr == "weight":
+                torch_w = ttnn.to_torch(tt_w, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+                # All shards are replicas — keep the first one.
+                torch_w = torch_w[: torch_w.shape[0] // (mesh_shape[0] * mesh_shape[1])]
+            else:
+                # Concat column shards back into the full weight along dim 2.
+                torch_w = ttnn.to_torch(
+                    tt_w,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 2), mesh_shape=mesh_shape),
+                )
+                # ConcatMesh2dToTensor stacks the row-axis along dim 0 → take
+                # the first row's worth of data (rows are replicated for norm).
+                torch_w = torch_w[: torch_w.shape[0] // mesh_shape[0]]
+
+            # Bake +1 in float32 to avoid bf16 rounding compounding.
+            torch_w = torch_w.float() + 1.0
+
+            new_tt_w = ttnn.from_torch(
+                torch_w,
+                device=mesh_device,
+                dtype=dtype,
+                layout=layout,
+                memory_config=memory_config,
+                mesh_mapper=mesh_mapper,
+            )
+
+            # Free the old on-device buffer and swap in the +1-baked weight.
+            ttnn.deallocate(tt_w)
+            setattr(self.norm, attr, new_tt_w)
 
     def forward(self, x, res, mode):
         """Apply a norm, possibly gathering inputs if required."""

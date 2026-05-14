@@ -44,16 +44,88 @@ def load_hf_state_dict(ckpt_dir):
     return loaded_weights
 
 
+def _is_qwen36_state_dict(state_dict):
+    """Detect Qwen3.6 HF state-dict by its distinctive ``model.language_model.`` prefix.
+
+    Qwen3.6-27B is a VLM whose language tower lives under ``model.language_model.*``
+    (as opposed to llama / Qwen3-32B where it lives under ``model.*``). This makes
+    detection unambiguous from the keys alone, so we do not require the caller to
+    pass ``model_args``. Mirrors the auto-detection style used elsewhere in the
+    galaxy ports (olmo precedent: ``models/demos/olmo_galaxy/tt/load_checkpoints.py``).
+    """
+    return any(k.startswith("model.language_model.") for k in state_dict)
+
+
+def _strip_qwen36_vlm_keys(state_dict):
+    """Drop the vision tower and MTP blocks; LM-only bring-up keeps only the LM keys.
+
+    Qwen3.6-27B is a VLM; the safetensors contain ``model.visual.*`` and ``mtp.*``
+    weights that the LM-only TT model does not consume. Drop them up front so they
+    don't waste host memory through the rest of the pipeline.
+    """
+    return {k: v for k, v in state_dict.items() if not (k.startswith("model.visual.") or k.startswith("mtp."))}
+
+
 def standardize_hf_keys(state_dict):
+    if _is_qwen36_state_dict(state_dict):
+        return standardize_hf_keys_qwen36(state_dict)
     if not "lm_head.weight" in state_dict:
         # Assume tied to the embeddings if not present
         state_dict["lm_head.weight"] = state_dict["model.embed_tokens.weight"]
     return state_dict
 
 
-def convert_hf_to_meta(state_dict, head_dim):
+def standardize_hf_keys_qwen36(state_dict):
+    """Rename Qwen3.6 HF keys (``model.language_model.*``) onto the canonical
+    ``model.*`` namespace and drop VLM/MTP weights.
+
+    After this pass the state-dict looks like a Qwen3-32B-style HF state-dict for the
+    full_attention layers; the ``linear_attn.*`` sub-keys keep their distinctive
+    names so :func:`map_hf_to_meta_keys` can route them into the DeltaNet namespace.
+    """
+    state_dict = _strip_qwen36_vlm_keys(state_dict)
+    renamed = {}
+    for k, v in state_dict.items():
+        if k.startswith("model.language_model."):
+            new_key = "model." + k[len("model.language_model.") :]
+        else:
+            new_key = k
+        renamed[new_key] = v
+    # Qwen3.6-27B has tie_word_embeddings=False; lm_head.weight is present in the
+    # checkpoint and should NOT be aliased to the embedding. Only synthesize a
+    # tied head if the checkpoint genuinely omits it.
+    if "lm_head.weight" not in renamed and "model.embed_tokens.weight" in renamed:
+        renamed["lm_head.weight"] = renamed["model.embed_tokens.weight"]
+    return renamed
+
+
+def convert_hf_to_meta(state_dict, head_dim, is_qwen36=None):
+    """Convert an HF state-dict into the canonical meta-style layout.
+
+    Args:
+        state_dict: state-dict (already passed through ``standardize_hf_keys``).
+        head_dim: head dimension, used by the QKV ``reverse_permute`` step.
+        is_qwen36: optional bool. If ``None``, auto-detected from the keys (any
+            ``.linear_attn.`` sub-key, or the pre-standardize ``model.language_model.``
+            prefix). Pass ``True`` explicitly for the full_attention-only test
+            scenario where no DeltaNet keys are present.
+    """
+    if is_qwen36 is None:
+        is_qwen36 = _is_qwen36_state_dict(state_dict) or any(".linear_attn." in k for k in state_dict)
     state_dict = split_hf_keys(state_dict)
-    state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
+    if is_qwen36:
+        # Qwen3.6-27B has ``attn_output_gate=True`` (q_proj packs Q and an output
+        # gate, doubling the leading dim) and ``partial_rotary_factor=0.25``. The
+        # llama "reverse_permute" trick assumes a single Q tensor of
+        # ``n_heads * head_dim`` rows that gets a full RoPE — neither holds here.
+        # The TT attention block carries an ``is_qwen36`` branch (V2-4
+        # ``llama_attention.py``) that consumes the un-permuted HF layout
+        # directly, so we skip the permutation step. q_norm/k_norm are also
+        # already per-head ``[head_dim]`` vectors and require no permutation.
+        # TODO(V2-4): revisit if/when the TT attention path is unified.
+        pass
+    else:
+        state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
     state_dict = map_hf_to_meta_keys(state_dict)
     return state_dict
 
@@ -107,6 +179,26 @@ def map_hf_to_meta_keys(loaded_weights):
         # Mappings for models with qk_norm
         "model.layers.{layer}.self_attn.q_norm.weight": "layers.{layer}.attention.q_norm.weight",
         "model.layers.{layer}.self_attn.k_norm.weight": "layers.{layer}.attention.k_norm.weight",
+        # ----------------------------------------------------------------
+        # Qwen3.6 DeltaNet (``linear_attn.*``) keys — kept under their own
+        # ``layers.{i}.linear_attn.*`` namespace so V2-5
+        # ``qwen36_delta_attention.py`` can ingest them without colliding with
+        # the self-attention namespace. Only present on layers whose
+        # ``config.layer_types[i] == "linear_attention"``. The sub-key suffixes
+        # (``in_proj_qkv``, ``in_proj_z``, ``in_proj_a``, ``in_proj_b``,
+        # ``conv1d``, ``A_log``, ``dt_bias``, ``norm.weight``, ``out_proj``)
+        # are preserved verbatim from the HF safetensors so the DeltaNet
+        # constructor can keep using the same names its reference code uses.
+        # ----------------------------------------------------------------
+        "model.layers.{layer}.linear_attn.in_proj_qkv.weight": "layers.{layer}.linear_attn.in_proj_qkv.weight",
+        "model.layers.{layer}.linear_attn.in_proj_z.weight": "layers.{layer}.linear_attn.in_proj_z.weight",
+        "model.layers.{layer}.linear_attn.in_proj_a.weight": "layers.{layer}.linear_attn.in_proj_a.weight",
+        "model.layers.{layer}.linear_attn.in_proj_b.weight": "layers.{layer}.linear_attn.in_proj_b.weight",
+        "model.layers.{layer}.linear_attn.conv1d.weight": "layers.{layer}.linear_attn.conv1d.weight",
+        "model.layers.{layer}.linear_attn.A_log": "layers.{layer}.linear_attn.A_log",
+        "model.layers.{layer}.linear_attn.dt_bias": "layers.{layer}.linear_attn.dt_bias",
+        "model.layers.{layer}.linear_attn.norm.weight": "layers.{layer}.linear_attn.norm.weight",
+        "model.layers.{layer}.linear_attn.out_proj.weight": "layers.{layer}.linear_attn.out_proj.weight",
     }
 
     meta_state_dict = {}
@@ -392,6 +484,25 @@ def reverse_permute_1d(tensor):
     imags = tensor[..., dim // 2 :]
     interleaved = torch.stack((reals, imags), dim=-1).flatten(start_dim=len(shape) - 1)
     return interleaved
+
+
+def get_qwen36_linear_attention_pattern(ckpt_dir):
+    """Return the ``layer_types`` list from a Qwen3.6 HF snapshot's ``config.json``.
+
+    Returns a list of length ``num_hidden_layers`` whose elements are either
+    ``"linear_attention"`` (DeltaNet) or ``"full_attention"`` (standard GQA).
+    """
+    cfg_path = os.path.join(ckpt_dir, "config.json")
+    with open(cfg_path) as f:
+        cfg = json.load(f)
+    text_cfg = cfg.get("text_config", cfg)
+    pattern = text_cfg.get("layer_types")
+    if pattern is None:
+        raise ValueError(
+            f"Could not find ``text_config.layer_types`` in {cfg_path}; this does "
+            f"not look like a Qwen3.6 checkpoint."
+        )
+    return list(pattern)
 
 
 def permute_1d(tensor):

@@ -32,6 +32,7 @@ class TT_CCL:
         mode="decode",
         allocate_prefill_buffers=True,
         is_qwen=False,
+        is_qwen36=None,
     ):
         self.mode = mode
         grid_size = mesh_device.compute_with_storage_grid_size()
@@ -57,6 +58,13 @@ class TT_CCL:
         self.max_batch_size = model_args.max_batch_size
         self.cluster_shape = model_args.cluster_shape
         self.is_qwen = is_qwen
+        # qwen3.6 marker — read by olmo-style dual-dtype persistent-buffer branches
+        # below.  Falls back to model_args.is_qwen36 when caller did not pass it,
+        # so existing test call-sites that only pass is_qwen=True keep working.
+        if is_qwen36 is None:
+            self.is_qwen36 = getattr(model_args, "is_qwen36", False)
+        else:
+            self.is_qwen36 = is_qwen36
 
         # Double buffered on each axis
         self.gather_semaphore_handles = [[], []]
@@ -126,6 +134,59 @@ class TT_CCL:
         self.gather_idx = [0, 0]
         self.reduce_scatter_buffer_idx = [0, 0]
         self.barrier_semaphore_idx = [0, 0]
+
+    # ------------------------------------------------------------------
+    # qwen3.6 dual-dtype persistent-buffer selectors
+    # ------------------------------------------------------------------
+    # Olmo galaxy hit a class of bugs at long ISL where persistent CCL
+    # buffers had hardcoded dtypes but the producing matmul changed dtype
+    # depending on ISL: ring SDPA forces bfloat8_b at ISL ≥ 4096 while
+    # shorter ISL paths produce bfloat16. Mismatched dtype between a
+    # matmul's output and the persistent buffer it writes into causes
+    # silent garbage output (no crash, just NaN/Inf).
+    #
+    # The fix replicated here for qwen3.6: pre-allocate BOTH a bfloat8_b
+    # and a bfloat16 variant of each affected persistent buffer (QKV,
+    # WO_AG, FF1, FF3, plus the decode BINARY_MUL residual buffer). The
+    # call-sites in `llama_attention.py` / `llama_mlp.py` (V2-4 / V2-5)
+    # select the variant whose dtype matches the producing matmul's
+    # output via `get_qkv_buffer_key()` / `get_wo_ag_buffer_key()` /
+    # `get_ff_buffer_key()` below.
+    #
+    # ISL selection rule (olmo session-12 precedent, BRINGUP_LOG.md):
+    #   ISL ≤ 2048           → bfloat16 ("..._BF16")  — bfloat16 xqkv path
+    #   ISL ≥ 4096           → bfloat8_b (no suffix)  — ring SDPA bf8b path
+    QWEN36_BF16_ISL_THRESHOLD = 4096  # >= → bfloat8_b key; < → bfloat16 key
+
+    @staticmethod
+    def _qwen36_pick_bf16(seq_len, bf16_key, bf8_key):
+        return bf8_key if seq_len >= TT_CCL.QWEN36_BF16_ISL_THRESHOLD else bf16_key
+
+    def get_qkv_buffer_key(self, seq_len):
+        """Return the persistent QKV all-gather buffer key for qwen3.6 prefill.
+
+        ISL < 4096 → bfloat16 buffer ("QKV_BF16"); ISL ≥ 4096 → bfloat8_b ("QKV").
+        Non-qwen36 paths keep the canonical key for backwards compat.
+        """
+        if not self.is_qwen36:
+            return "QKV"
+        return self._qwen36_pick_bf16(seq_len, "QKV_BF16", "QKV")
+
+    def get_wo_ag_buffer_key(self, seq_len):
+        """Return the persistent WO_AG all-gather buffer key for qwen3.6 prefill."""
+        if not self.is_qwen36:
+            return "WO_AG"
+        return self._qwen36_pick_bf16(seq_len, "WO_AG_BF16", "WO_AG")
+
+    def get_ff_buffer_key(self, name, seq_len):
+        """Return the persistent FF1/FF3 all-gather buffer key for qwen3.6 prefill.
+
+        `name` is "FF1" or "FF3". FF2 has a single dtype (bfloat16 reduction
+        output) so the caller does not go through this helper.
+        """
+        if not self.is_qwen36:
+            return name
+        return self._qwen36_pick_bf16(seq_len, f"{name}_BF16", name)
 
     def get_and_cycle_barrier_semaphore_handle(self, cluster_axis):
         semaphore_index = cluster_axis
@@ -305,26 +366,39 @@ class TT_CCL:
         persistent_buffers["LOGPROBS_LOGITS"] = tt_buffer
 
         # Binary Mult + Silu
-        tt_buffer = (
-            ttnn.from_torch(
-                torch.zeros((1, 1, self.max_batch_size, 3584)),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,
-                memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-            if not self.is_qwen
-            else ttnn.from_torch(
-                torch.zeros((1, 1, self.max_batch_size, 3200)),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,
-                memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
+        if self.is_qwen36:
+            binary_mul_width = 1728  # intermediate_dim_per_tp = 13824 / 8
+        elif self.is_qwen:
+            binary_mul_width = 3200
+        else:
+            binary_mul_width = 3584
+        tt_buffer = ttnn.from_torch(
+            torch.zeros((1, 1, self.max_batch_size, binary_mul_width)),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         persistent_buffers["BINARY_MUL"] = tt_buffer
+
+        # qwen3.6 decode dual-dtype variant — same shape/memcfg but bfloat16.
+        # See olmo BRINGUP session-10/12: the optimal-CCL path has hardcoded
+        # bfloat8_b assumptions in the C++ kernel, so the SwiGLU output
+        # `ff1ff3` carried as bfloat16 (avoids compounding quantisation error
+        # across 64 layers) needs a bfloat16 destination buffer.  Pre-allocating
+        # here makes the call trace-safe (no per-iteration alloc) and avoids
+        # the `ttnn.deallocate(w2_in)` use-after-free bug olmo hit.
+        if self.is_qwen36:
+            tt_buffer_bf16 = ttnn.from_torch(
+                torch.zeros((1, 1, self.max_batch_size, binary_mul_width)),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            persistent_buffers["BINARY_MUL_BF16"] = tt_buffer_bf16
 
         return persistent_buffers
 
@@ -631,20 +705,37 @@ class TT_CCL:
         for seqlen in self.support_seqlens:
             ag_persistent_buffers = {}
 
-            buffers_dict = (
-                {
-                    "QKV": [(1, 1, seqlen, 1280)],
-                    "SDPA": [(1, 1, seqlen // 2, 1024)],
-                    "SDPA_REVERSE": [(1, 1, seqlen // 2, 1024)],
-                    "WO_AG": [(8, 1, seqlen, 2048)],
-                    "FF1": [(1, 1, seqlen, 3584)],
-                    "FF3": [(1, 1, seqlen, 3584)],
-                    "FF2": [(1, 1, seqlen, 2048)],
+            if self.is_qwen36:
+                # qwen3.6 per-device widths:
+                #   QKV+Gate per col = (n_q + n_q + n_kv + n_kv)/n_cols * head_dim
+                #                    = (24 + 24 + 4 + 4)/4 * 256 = 14*256 = 3584
+                #     (total across cols = (24+4+4+24)*256 = 14336)
+                #   WO_AG per col   = dim_per_tp = 5120/4 = 1280
+                #   FF1/FF3 per col = intermediate_dim_per_tp = 13824/8 = 1728
+                #   FF2 per col     = dim_per_tp = 1280
+                # SDPA per col      = n_local_heads * head_dim = 6 * 256 = 1536
+                #   (kept aligned with v1 qwen3.6 attention.py constants)
+                # ATTN_REPLICATE     = head_dim per slice (256 for qwen3.6 head_dim).
+                # TODO V2-7: verify SDPA shard width and ATTN_REPLICATE
+                # against test_qknorm_per_head failure mode (head_dim=256 vs the
+                # llama 128-wide assumption used by the prefix-cache slice).
+                buffers_dict = {
+                    "QKV": [(1, 1, seqlen, 3584)],
+                    "QKV_BF16": [(1, 1, seqlen, 3584)],
+                    "SDPA": [(1, 1, seqlen // 2, 1536)],
+                    "SDPA_REVERSE": [(1, 1, seqlen // 2, 1536)],
+                    "WO_AG": [(8, 1, seqlen, 1280)],
+                    "WO_AG_BF16": [(8, 1, seqlen, 1280)],
+                    "FF1": [(1, 1, seqlen, 1728)],
+                    "FF1_BF16": [(1, 1, seqlen, 1728)],
+                    "FF3": [(1, 1, seqlen, 1728)],
+                    "FF3_BF16": [(1, 1, seqlen, 1728)],
+                    "FF2": [(1, 1, seqlen, 1280)],
                     "LAYERNORM": [(1, 1, seqlen, 128)],
-                    "ATTN_REPLICATE": [(1, 1, seqlen, 128)],  # For prefix caching column replication
+                    "ATTN_REPLICATE": [(1, 1, seqlen, 256)],  # qwen3.6 head_dim=256
                 }
-                if not self.is_qwen
-                else {
+            elif self.is_qwen:
+                buffers_dict = {
                     "QKV": [(1, 1, seqlen, 1280)],
                     "SDPA": [(1, 1, seqlen // 2, 1024)],
                     "SDPA_REVERSE": [(1, 1, seqlen // 2, 1024)],
@@ -655,13 +746,28 @@ class TT_CCL:
                     "LAYERNORM": [(1, 1, seqlen, 128)],
                     "ATTN_REPLICATE": [(1, 1, seqlen, 128)],  # For prefix caching column replication
                 }
-            )
+            else:
+                buffers_dict = {
+                    "QKV": [(1, 1, seqlen, 1280)],
+                    "SDPA": [(1, 1, seqlen // 2, 1024)],
+                    "SDPA_REVERSE": [(1, 1, seqlen // 2, 1024)],
+                    "WO_AG": [(8, 1, seqlen, 2048)],
+                    "FF1": [(1, 1, seqlen, 3584)],
+                    "FF3": [(1, 1, seqlen, 3584)],
+                    "FF2": [(1, 1, seqlen, 2048)],
+                    "LAYERNORM": [(1, 1, seqlen, 128)],
+                    "ATTN_REPLICATE": [(1, 1, seqlen, 128)],  # For prefix caching column replication
+                }
             for key, shape in buffers_dict.items():
+                # qwen3.6: dual-dtype keys ending with `_BF16` are bfloat16 variants
+                # used by the ISL ≤ 2048 / bfloat16 matmul path (olmo session-12).
+                # LAYERNORM stats also stay bfloat16.
+                use_bf16 = key == "LAYERNORM" or (self.is_qwen36 and key.endswith("_BF16"))
                 tt_buffer = ttnn.as_tensor(
                     torch.zeros(shape[0]),
                     device=self.mesh_device,
                     layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat16 if key == "LAYERNORM" else ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat16 if use_bf16 else ttnn.bfloat8_b,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                     cache_file_name=self.weight_cache_path / ("pb_ag_" + key + str(seqlen)),
@@ -670,17 +776,23 @@ class TT_CCL:
             ag_persistent_buffers_all[seqlen] = ag_persistent_buffers
 
         # Additional buffers for fixed lengths (1 Tile = 32)
-        buffers_fixed_length = (
-            {
-                "LM_HEAD": [(4, 1, 32, 16384)],
-                "SAMPLING": [(1, 1, 32, 128 * 1024)],
+        if self.is_qwen36:
+            # qwen3.6 padded_vocab_size = 248_832, per-device = 248_832 / 8 = 31_104.
+            qwen36_lm_head_width = 31_104
+            buffers_fixed_length = {
+                "LM_HEAD": [(4, 1, 32, qwen36_lm_head_width)],
+                "SAMPLING": [(1, 1, 32, qwen36_lm_head_width * 8)],
             }
-            if not self.is_qwen
-            else {
+        elif self.is_qwen:
+            buffers_fixed_length = {
                 "LM_HEAD": [(4, 1, 32, 19456)],
                 "SAMPLING": [(1, 1, 32, 19456 * 8)],
             }
-        )
+        else:
+            buffers_fixed_length = {
+                "LM_HEAD": [(4, 1, 32, 16384)],
+                "SAMPLING": [(1, 1, 32, 128 * 1024)],
+            }
         for key, shape in buffers_fixed_length.items():
             tt_buffer = ttnn.as_tensor(
                 torch.zeros(shape[0]),
@@ -734,7 +846,7 @@ class TT_CCL:
                 persistent_buffer.deallocate(True)
 
         else:
-            if buffer_key == "WO_AG" or lm_head:
+            if buffer_key in ("WO_AG", "WO_AG_BF16") or lm_head:
                 ttnn_tensor_gathered = self.line_all_gather(
                     input_tensor_mesh,
                     dim=0,
@@ -1153,9 +1265,9 @@ class TT_CCL:
             use_optimal_ccl_for_llama=use_optimal_ccl_for_llama,
         )
         if self.mode == "prefill" and buffer_key is not None:
-            # reshape input back; skip for LM_HEAD and WO_AG since their callers
-            # handle the shape (e.g. fast_reduce_nc along dim=0 for WO_AG)
-            if buffer_key not in ["LM_HEAD", "WO_AG"]:
+            # reshape input back; skip for LM_HEAD and WO_AG (both dtype variants)
+            # since their callers handle the shape (e.g. fast_reduce_nc along dim=0).
+            if buffer_key not in ["LM_HEAD", "WO_AG", "WO_AG_BF16"]:
                 ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
 
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
@@ -1199,7 +1311,7 @@ class TT_CCL:
             # This condition excludes SDPA tensors (which use dim=2) from reshaping
             # All other tensors (QKV, WO, FF1, FF3, FF2, LAYERNORM) use dims 0, 1, or 3
             # reshape input back
-            if buffer_key not in ["LM_HEAD", "WO_AG"]:
+            if buffer_key not in ["LM_HEAD", "WO_AG", "WO_AG_BF16"]:
                 ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out
