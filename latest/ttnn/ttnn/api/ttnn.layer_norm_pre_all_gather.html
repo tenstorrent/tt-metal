@@ -242,7 +242,7 @@ Its output should be combined across devices with <a class="reference internal" 
 <li><p>Input tensors must be on-device and rank 4.</p></li>
 <li><p>Unsharded runs: <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> must be interleaved.</p></li>
 <li><p>Sharded runs: inputs cannot be height-sharded, padded height must equal TILE_HEIGHT (32).</p></li>
-<li><p>When using <code class="xref py py-attr docutils literal notranslate"><span class="pre">residual_input_tensor</span></code> with sharding, it must match the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> padded shape and sharding.</p></li>
+<li><p>When using <code class="xref py py-attr docutils literal notranslate"><span class="pre">residual_input_tensor</span></code>, it must match the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> logical and padded shape, and sharding spec for sharded inputs.</p></li>
 <li><p>When using Welford algorithm (use_welford=True), <code class="xref py py-attr docutils literal notranslate"><span class="pre">recip_tensor</span></code> must be provided.</p></li>
 </ul>
 </dd>

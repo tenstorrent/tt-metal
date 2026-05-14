@@ -114,12 +114,7 @@
   <section id="device-2-0-data-movement-api-migration-guide">
 <h1>Device 2.0 Data Movement API Migration Guide<a class="headerlink" href="#device-2-0-data-movement-api-migration-guide" title="Permalink to this heading"></a>
 </h1>
-<p>This guide helps developers migrate from legacy data movement APIs to the new experimental Device 2.0 APIs located in <code class="docutils literal notranslate"><span class="pre">tt_metal/hw/inc/experimental/</span></code>.</p>
-<blockquote>
-<div>
-<p><strong>Note</strong>: These APIs are experimental and subject to change.</p>
-</div>
-</blockquote>
+<p>This guide helps developers migrate from legacy data movement APIs to the new Device 2.0 APIs located in <code class="docutils literal notranslate"><span class="pre">tt_metal/hw/inc/api/</span></code>.</p>
 <section id="table-of-contents">
 <h2>Table of Contents<a class="headerlink" href="#table-of-contents" title="Permalink to this heading"></a>
 </h2>
@@ -144,7 +139,7 @@
 <section id="overview">
 <h2>Overview<a class="headerlink" href="#overview" title="Permalink to this heading"></a>
 </h2>
-<p>The Device 2.0 experimental APIs provide a more object-oriented, type-safe interface for data movement operations on Tenstorrent hardware. Key benefits include:</p>
+<p>The Device 2.0 APIs provide a more object-oriented, type-safe interface for data movement operations on Tenstorrent hardware. Key benefits include:</p>
 <ul class="simple">
 <li><p><strong>Type Safety</strong>: Template-based traits system prevents common errors at compile time</p></li>
 <li><p><strong>Cleaner Abstractions</strong>: Object-oriented wrappers around raw addresses and operations</p></li>
@@ -157,37 +152,37 @@
 </h2>
 <p>Include the following headers based on your needs:</p>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"experimental/noc.h"</span><span class="c1">            // Core NoC operations</span>
-<span class="cp">#include</span><span class="w"> </span><span class="cpf">"experimental/circular_buffer.h"</span><span class="c1"> // CircularBuffer wrapper</span>
-<span class="cp">#include</span><span class="w"> </span><span class="cpf">"experimental/core_local_mem.h"</span><span class="c1">  // Safe L1 memory pointers</span>
-<span class="cp">#include</span><span class="w"> </span><span class="cpf">"experimental/endpoints.h"</span><span class="c1">       // Unicast/Multicast/AllocatorBank endpoints</span>
-<span class="cp">#include</span><span class="w"> </span><span class="cpf">"experimental/noc_semaphore.h"</span><span class="c1">   // Semaphore synchronization</span>
-<span class="cp">#include</span><span class="w"> </span><span class="cpf">"experimental/tensor.h"</span><span class="c1">          // TensorAccessor traits</span>
-<span class="cp">#include</span><span class="w"> </span><span class="cpf">"experimental/lock.h"</span><span class="c1">            // RAII lock utilities</span>
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/dataflow/noc.h"</span><span class="c1">        // Core NoC operations</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/dataflow/circular_buffer.h"</span><span class="c1"> // CircularBuffer wrapper</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/core_local_mem.h"</span><span class="c1">  // Safe L1 memory pointers</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/dataflow/endpoints.h"</span><span class="c1">       // Unicast/Multicast/AllocatorBank endpoints</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/dataflow/noc_semaphore.h"</span><span class="c1">   // Semaphore synchronization</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/tensor/noc_traits.h"</span><span class="c1">          // TensorAccessor traits</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/lock.h"</span><span class="c1">                    // RAII lock utilities</span>
 </pre></div>
 </div>
 </section>
 <section id="key-classes">
 <h2>Key Classes<a class="headerlink" href="#key-classes" title="Permalink to this heading"></a>
 </h2>
-<section id="experimental-noc">
+<section id="noc">
 <h3>
-<code class="docutils literal notranslate"><span class="pre">experimental::Noc</span></code><a class="headerlink" href="#experimental-noc" title="Permalink to this heading"></a>
+<code class="docutils literal notranslate"><span class="pre">Noc</span></code><a class="headerlink" href="#noc" title="Permalink to this heading"></a>
 </h3>
 <p>The central class for NoC operations. Wraps a Noc index and provides methods for async reads, writes, multicasts, and barriers.</p>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span><span class="w">           </span><span class="c1">// Uses default noc_index</span>
-<span class="n">experimental</span><span class="o">::</span><span class="n">Noc</span><span class="w"> </span><span class="nf">noc1</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span><span class="w">       </span><span class="c1">// Explicitly use NoC 1</span>
+<div class="highlight"><pre><span></span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span><span class="w">           </span><span class="c1">// Uses default noc_index</span>
+<span class="n">Noc</span><span class="w"> </span><span class="nf">noc1</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span><span class="w">       </span><span class="c1">// Explicitly use NoC 1</span>
 </pre></div>
 </div>
 </section>
-<section id="experimental-circularbuffer">
+<section id="circularbuffer">
 <h3>
-<code class="docutils literal notranslate"><span class="pre">experimental::CircularBuffer</span></code><a class="headerlink" href="#experimental-circularbuffer" title="Permalink to this heading"></a>
+<code class="docutils literal notranslate"><span class="pre">CircularBuffer</span></code><a class="headerlink" href="#circularbuffer" title="Permalink to this heading"></a>
 </h3>
 <p>Provides circular buffer operations.</p>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">CircularBuffer</span><span class="w"> </span><span class="nf">cb</span><span class="p">(</span><span class="n">cb_id</span><span class="p">);</span>
+<div class="highlight"><pre><span></span><span class="n">CircularBuffer</span><span class="w"> </span><span class="nf">cb</span><span class="p">(</span><span class="n">cb_id</span><span class="p">);</span>
 <span class="n">cb</span><span class="p">.</span><span class="n">reserve_back</span><span class="p">(</span><span class="n">num_pages</span><span class="p">);</span>
 <span class="n">cb</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">num_pages</span><span class="p">);</span>
 <span class="n">cb</span><span class="p">.</span><span class="n">wait_front</span><span class="p">(</span><span class="n">num_pages</span><span class="p">);</span>
@@ -195,13 +190,13 @@
 </pre></div>
 </div>
 </section>
-<section id="experimental-corelocalmem-t">
+<section id="corelocalmem-t">
 <h3>
-<code class="docutils literal notranslate"><span class="pre">experimental::CoreLocalMem&lt;T&gt;</span></code><a class="headerlink" href="#experimental-corelocalmem-t" title="Permalink to this heading"></a>
+<code class="docutils literal notranslate"><span class="pre">CoreLocalMem&lt;T&gt;</span></code><a class="headerlink" href="#corelocalmem-t" title="Permalink to this heading"></a>
 </h3>
 <p>Provides a safe zero overhead way to access a given type in L1 memory.</p>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">mem</span><span class="p">(</span><span class="n">address</span><span class="p">);</span>
+<div class="highlight"><pre><span></span><span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">mem</span><span class="p">(</span><span class="n">address</span><span class="p">);</span>
 <span class="n">mem</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">value</span><span class="p">;</span><span class="w">              </span><span class="c1">// Array-style access</span>
 <span class="k">auto</span><span class="w"> </span><span class="n">val</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">*</span><span class="n">mem</span><span class="p">;</span><span class="w">             </span><span class="c1">// Dereference</span>
 <span class="n">mem</span><span class="o">++</span><span class="p">;</span><span class="w">                       </span><span class="c1">// Pointer arithmetic</span>
@@ -209,13 +204,13 @@
 </pre></div>
 </div>
 </section>
-<section id="experimental-semaphore">
+<section id="semaphore">
 <h3>
-<code class="docutils literal notranslate"><span class="pre">experimental::Semaphore</span></code><a class="headerlink" href="#experimental-semaphore" title="Permalink to this heading"></a>
+<code class="docutils literal notranslate"><span class="pre">Semaphore</span></code><a class="headerlink" href="#semaphore" title="Permalink to this heading"></a>
 </h3>
 <p>Provides a semaphore for synchronization.</p>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">Semaphore</span><span class="o">&lt;&gt;</span><span class="w"> </span><span class="n">sem</span><span class="p">(</span><span class="n">semaphore_id</span><span class="p">);</span>
+<div class="highlight"><pre><span></span><span class="n">Semaphore</span><span class="o">&lt;&gt;</span><span class="w"> </span><span class="n">sem</span><span class="p">(</span><span class="n">semaphore_id</span><span class="p">);</span>
 <span class="n">sem</span><span class="p">.</span><span class="n">up</span><span class="p">(</span><span class="n">value</span><span class="p">);</span><span class="w">               </span><span class="c1">// Local increment</span>
 <span class="n">sem</span><span class="p">.</span><span class="n">down</span><span class="p">(</span><span class="n">value</span><span class="p">);</span><span class="w">             </span><span class="c1">// Blocking decrement</span>
 <span class="n">sem</span><span class="p">.</span><span class="n">wait</span><span class="p">(</span><span class="n">value</span><span class="p">);</span><span class="w">             </span><span class="c1">// Wait for exact value</span>
@@ -228,9 +223,9 @@
 </h3>
 <p>Endpoints are used as sources or destinations for the <code class="docutils literal notranslate"><span class="pre">Noc</span></code> interface. Depending on which endpoint is provided, additional arguments can be passed in to <code class="docutils literal notranslate"><span class="pre">src_args_t</span></code> or <code class="docutils literal notranslate"><span class="pre">dst_args_t</span></code> of each <code class="docutils literal notranslate"><span class="pre">Noc</span></code> action to specify additional metadata such as offset or size.</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">experimental::UnicastEndpoint</span></code> - For unicast NoC addresses</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">experimental::MulticastEndpoint</span></code> - For multicast NoC addresses</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">experimental::AllocatorBank&lt;AllocatorBankType&gt;</span></code> - For DRAM/L1 bank addressing</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">UnicastEndpoint</span></code> - For unicast NoC addresses</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">MulticastEndpoint</span></code> - For multicast NoC addresses</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">AllocatorBank&lt;AllocatorBankType&gt;</span></code> - For DRAM/L1 bank addressing</p></li>
 </ul>
 </section>
 </section>
@@ -251,11 +246,11 @@
 <span class="n">noc_async_read_barrier</span><span class="p">();</span>
 </pre></div>
 </div>
-<p><strong>New Experimental API:</strong></p>
+<p><strong>New API:</strong></p>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
-<span class="n">experimental</span><span class="o">::</span><span class="n">UnicastEndpoint</span><span class="w"> </span><span class="n">src</span><span class="p">;</span>
-<span class="n">experimental</span><span class="o">::</span><span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">dst</span><span class="p">(</span><span class="n">dst_l1_addr</span><span class="p">);</span>
+<div class="highlight"><pre><span></span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
+<span class="n">UnicastEndpoint</span><span class="w"> </span><span class="n">src</span><span class="p">;</span>
+<span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">dst</span><span class="p">(</span><span class="n">dst_l1_addr</span><span class="p">);</span>
 
 <span class="n">noc</span><span class="p">.</span><span class="n">async_read</span><span class="p">(</span>
 <span class="w">    </span><span class="n">src</span><span class="p">,</span><span class="w">                                    </span><span class="c1">// Source endpoint</span>
@@ -278,11 +273,11 @@
 <span class="n">noc_async_write_barrier</span><span class="p">();</span>
 </pre></div>
 </div>
-<p><strong>New Experimental API:</strong></p>
+<p><strong>New API:</strong></p>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
-<span class="n">experimental</span><span class="o">::</span><span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">src</span><span class="p">(</span><span class="n">src_l1_addr</span><span class="p">);</span>
-<span class="n">experimental</span><span class="o">::</span><span class="n">UnicastEndpoint</span><span class="w"> </span><span class="n">dst</span><span class="p">;</span>
+<div class="highlight"><pre><span></span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
+<span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">src</span><span class="p">(</span><span class="n">src_l1_addr</span><span class="p">);</span>
+<span class="n">UnicastEndpoint</span><span class="w"> </span><span class="n">dst</span><span class="p">;</span>
 
 <span class="n">noc</span><span class="p">.</span><span class="n">async_write</span><span class="p">(</span>
 <span class="w">    </span><span class="n">src</span><span class="p">,</span><span class="w">                                    </span><span class="c1">// Source</span>
@@ -307,11 +302,11 @@
 <span class="p">}</span>
 </pre></div>
 </div>
-<p><strong>New Experimental API:</strong></p>
+<p><strong>New API:</strong></p>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
-<span class="n">experimental</span><span class="o">::</span><span class="n">UnicastEndpoint</span><span class="w"> </span><span class="n">dst</span><span class="p">;</span>
-<span class="n">experimental</span><span class="o">::</span><span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">src</span><span class="p">(</span><span class="n">src_addr</span><span class="p">);</span>
+<div class="highlight"><pre><span></span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
+<span class="n">UnicastEndpoint</span><span class="w"> </span><span class="n">dst</span><span class="p">;</span>
+<span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">src</span><span class="p">(</span><span class="n">src_addr</span><span class="p">);</span>
 
 <span class="n">noc</span><span class="p">.</span><span class="n">set_async_write_state</span><span class="o">&lt;</span><span class="n">Noc</span><span class="o">::</span><span class="n">ResponseMode</span><span class="o">::</span><span class="n">NON_POSTED</span><span class="o">&gt;</span><span class="p">(</span>
 <span class="w">    </span><span class="n">dst</span><span class="p">,</span><span class="w"> </span><span class="n">size_bytes</span><span class="p">,</span><span class="w"> </span><span class="p">{.</span><span class="n">noc_x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc_y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">base_addr</span><span class="p">}</span>
@@ -333,11 +328,11 @@
 <span class="n">noc_async_write_multicast</span><span class="p">(</span><span class="n">src_l1_addr</span><span class="p">,</span><span class="w"> </span><span class="n">mcast_addr</span><span class="p">,</span><span class="w"> </span><span class="n">size_bytes</span><span class="p">,</span><span class="w"> </span><span class="n">num_dests</span><span class="p">);</span>
 </pre></div>
 </div>
-<p><strong>New Experimental API:</strong></p>
+<p><strong>New API:</strong></p>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
-<span class="n">experimental</span><span class="o">::</span><span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">src</span><span class="p">(</span><span class="n">src_l1_addr</span><span class="p">);</span>
-<span class="n">experimental</span><span class="o">::</span><span class="n">CircularBuffer</span><span class="w"> </span><span class="nf">cb</span><span class="p">(</span><span class="n">cb_id</span><span class="p">);</span><span class="w">  </span><span class="c1">// Or any destination with mcast traits</span>
+<div class="highlight"><pre><span></span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
+<span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">src</span><span class="p">(</span><span class="n">src_l1_addr</span><span class="p">);</span>
+<span class="n">CircularBuffer</span><span class="w"> </span><span class="nf">cb</span><span class="p">(</span><span class="n">cb_id</span><span class="p">);</span><span class="w">  </span><span class="c1">// Or any destination with mcast traits</span>
 
 <span class="n">noc</span><span class="p">.</span><span class="n">async_write_multicast</span><span class="o">&lt;</span><span class="n">Noc</span><span class="o">::</span><span class="n">McastMode</span><span class="o">::</span><span class="n">EXCLUDE_SRC</span><span class="o">&gt;</span><span class="p">(</span>
 <span class="w">    </span><span class="n">src</span><span class="p">,</span>
@@ -354,9 +349,9 @@
 <section id="transaction-id-support">
 <h4>Transaction ID Support<a class="headerlink" href="#transaction-id-support" title="Permalink to this heading"></a>
 </h4>
-<p><strong>New Experimental API (Transaction IDs):</strong></p>
+<p><strong>New API (Transaction IDs):</strong></p>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
+<div class="highlight"><pre><span></span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
 <span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">trid</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 
 <span class="c1">// Write with transaction ID</span>
@@ -391,9 +386,9 @@
 <span class="n">cb_pop_front</span><span class="p">(</span><span class="n">cb_id</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles</span><span class="p">);</span>
 </pre></div>
 </div>
-<p><strong>New Experimental API:</strong></p>
+<p><strong>New API:</strong></p>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">CircularBuffer</span><span class="w"> </span><span class="nf">cb</span><span class="p">(</span><span class="n">cb_id</span><span class="p">);</span>
+<div class="highlight"><pre><span></span><span class="n">CircularBuffer</span><span class="w"> </span><span class="nf">cb</span><span class="p">(</span><span class="n">cb_id</span><span class="p">);</span>
 
 <span class="n">cb</span><span class="p">.</span><span class="n">reserve_back</span><span class="p">(</span><span class="n">num_tiles</span><span class="p">);</span>
 <span class="kt">uint32_t</span><span class="w"> </span><span class="n">write_ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cb</span><span class="p">.</span><span class="n">get_write_ptr</span><span class="p">();</span>
@@ -410,11 +405,11 @@
 <section id="using-circularbuffer-with-noc">
 <h4>Using CircularBuffer with Noc<a class="headerlink" href="#using-circularbuffer-with-noc" title="Permalink to this heading"></a>
 </h4>
-<p><strong>New Experimental API:</strong></p>
+<p><strong>New API:</strong></p>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
-<span class="n">experimental</span><span class="o">::</span><span class="n">CircularBuffer</span><span class="w"> </span><span class="nf">cb</span><span class="p">(</span><span class="n">cb_id</span><span class="p">);</span>
-<span class="n">experimental</span><span class="o">::</span><span class="n">UnicastEndpoint</span><span class="w"> </span><span class="n">remote</span><span class="p">;</span>
+<div class="highlight"><pre><span></span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
+<span class="n">CircularBuffer</span><span class="w"> </span><span class="nf">cb</span><span class="p">(</span><span class="n">cb_id</span><span class="p">);</span>
+<span class="n">UnicastEndpoint</span><span class="w"> </span><span class="n">remote</span><span class="p">;</span>
 
 <span class="c1">// Read into circular buffer</span>
 <span class="n">cb</span><span class="p">.</span><span class="n">reserve_back</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
@@ -433,12 +428,12 @@
 <section id="selecting-read-write-pointer-for-noc-async-read-write-api">
 <h4>Selecting Read/Write Pointer for Noc Async Read/Write API<a class="headerlink" href="#selecting-read-write-pointer-for-noc-async-read-write-api" title="Permalink to this heading"></a>
 </h4>
-<p>Use <code class="docutils literal notranslate"><span class="pre">experimental::use&lt;&gt;()</span></code> to explicitly select which pointer to use:</p>
+<p>Use <code class="docutils literal notranslate"><span class="pre">use&lt;&gt;()</span></code> to explicitly select which pointer to use:</p>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="k">using</span><span class="w"> </span><span class="n">experimental</span><span class="o">::</span><span class="n">CircularBuffer</span><span class="p">;</span>
-<span class="k">using</span><span class="w"> </span><span class="n">experimental</span><span class="o">::</span><span class="n">use</span><span class="p">;</span>
+<div class="highlight"><pre><span></span><span class="k">using</span><span class="w"> </span><span class="n">CircularBuffer</span><span class="p">;</span>
+<span class="k">using</span><span class="w"> </span><span class="n">use</span><span class="p">;</span>
 
-<span class="n">experimental</span><span class="o">::</span><span class="n">CircularBuffer</span><span class="w"> </span><span class="nf">cb</span><span class="p">(</span><span class="n">cb_id</span><span class="p">);</span>
+<span class="n">CircularBuffer</span><span class="w"> </span><span class="nf">cb</span><span class="p">(</span><span class="n">cb_id</span><span class="p">);</span>
 
 <span class="c1">// Use read pointer explicitly</span>
 <span class="k">auto</span><span class="w"> </span><span class="n">cb_read_view</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">use</span><span class="o">&lt;</span><span class="n">CircularBuffer</span><span class="o">::</span><span class="n">AddrSelector</span><span class="o">::</span><span class="n">READ_PTR</span><span class="o">&gt;</span><span class="p">(</span><span class="n">cb</span><span class="p">);</span>
@@ -465,9 +460,9 @@
 <span class="n">noc_semaphore_wait</span><span class="p">(</span><span class="n">sem_addr</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
 </pre></div>
 </div>
-<p><strong>New Experimental API:</strong></p>
+<p><strong>New API:</strong></p>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">Semaphore</span><span class="o">&lt;&gt;</span><span class="w"> </span><span class="n">sem</span><span class="p">(</span><span class="n">sem_id</span><span class="p">);</span>
+<div class="highlight"><pre><span></span><span class="n">Semaphore</span><span class="o">&lt;&gt;</span><span class="w"> </span><span class="n">sem</span><span class="p">(</span><span class="n">sem_id</span><span class="p">);</span>
 <span class="n">sem</span><span class="p">.</span><span class="n">set</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
 <span class="n">sem</span><span class="p">.</span><span class="n">wait</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
 <span class="c1">// Or use sem.wait_min(1) for &gt;= comparison</span>
@@ -483,10 +478,10 @@
 <span class="n">noc_semaphore_inc</span><span class="p">(</span><span class="n">remote_sem_addr</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
 </pre></div>
 </div>
-<p><strong>New Experimental API:</strong></p>
+<p><strong>New API:</strong></p>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
-<span class="n">experimental</span><span class="o">::</span><span class="n">Semaphore</span><span class="o">&lt;&gt;</span><span class="w"> </span><span class="n">sem</span><span class="p">(</span><span class="n">sem_id</span><span class="p">);</span>
+<div class="highlight"><pre><span></span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
+<span class="n">Semaphore</span><span class="o">&lt;&gt;</span><span class="w"> </span><span class="n">sem</span><span class="p">(</span><span class="n">sem_id</span><span class="p">);</span>
 <span class="n">sem</span><span class="p">.</span><span class="n">up</span><span class="p">(</span><span class="n">noc</span><span class="p">,</span><span class="w"> </span><span class="n">noc_x</span><span class="p">,</span><span class="w"> </span><span class="n">noc_y</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span><span class="w">  </span><span class="c1">// Atomic remote increment</span>
 </pre></div>
 </div>
@@ -500,10 +495,10 @@
 <span class="n">noc_semaphore_set_multicast</span><span class="p">(</span><span class="n">local_sem_addr</span><span class="p">,</span><span class="w"> </span><span class="n">mcast_addr</span><span class="p">,</span><span class="w"> </span><span class="n">num_dests</span><span class="p">);</span>
 </pre></div>
 </div>
-<p><strong>New Experimental API:</strong></p>
+<p><strong>New API:</strong></p>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
-<span class="n">experimental</span><span class="o">::</span><span class="n">Semaphore</span><span class="o">&lt;&gt;</span><span class="w"> </span><span class="n">sem</span><span class="p">(</span><span class="n">sem_id</span><span class="p">);</span>
+<div class="highlight"><pre><span></span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
+<span class="n">Semaphore</span><span class="o">&lt;&gt;</span><span class="w"> </span><span class="n">sem</span><span class="p">(</span><span class="n">sem_id</span><span class="p">);</span>
 <span class="n">sem</span><span class="p">.</span><span class="n">set_multicast</span><span class="o">&lt;</span><span class="n">Noc</span><span class="o">::</span><span class="n">McastMode</span><span class="o">::</span><span class="n">EXCLUDE_SRC</span><span class="o">&gt;</span><span class="p">(</span>
 <span class="w">    </span><span class="n">noc</span><span class="p">,</span><span class="w"> </span><span class="n">x0</span><span class="p">,</span><span class="w"> </span><span class="n">y0</span><span class="p">,</span><span class="w"> </span><span class="n">x1</span><span class="p">,</span><span class="w"> </span><span class="n">y1</span><span class="p">,</span><span class="w"> </span><span class="n">num_dests</span>
 <span class="p">);</span>
@@ -530,9 +525,9 @@
 <span class="n">data</span><span class="o">++</span><span class="p">;</span>
 </pre></div>
 </div>
-<p><strong>New Experimental API:</strong></p>
+<p><strong>New API:</strong></p>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">mem</span><span class="p">(</span><span class="n">address</span><span class="p">);</span>
+<div class="highlight"><pre><span></span><span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">mem</span><span class="p">(</span><span class="n">address</span><span class="p">);</span>
 <span class="kt">uint32_t</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">mem</span><span class="p">[</span><span class="mi">0</span><span class="p">];</span><span class="w">    </span><span class="c1">// Bounds-checked in debug mode</span>
 <span class="n">mem</span><span class="o">++</span><span class="p">;</span><span class="w">                       </span><span class="c1">// Type-safe pointer arithmetic</span>
 </pre></div>
@@ -541,14 +536,14 @@
 <section id="struct-access">
 <h4>Struct Access<a class="headerlink" href="#struct-access" title="Permalink to this heading"></a>
 </h4>
-<p><strong>New Experimental API:</strong></p>
+<p><strong>New API:</strong></p>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">MyStruct</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">field1</span><span class="p">;</span>
 <span class="w">    </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">field2</span><span class="p">;</span>
 <span class="p">};</span>
 
-<span class="n">experimental</span><span class="o">::</span><span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="n">MyStruct</span><span class="o">&gt;</span><span class="w"> </span><span class="n">struct_mem</span><span class="p">(</span><span class="n">address</span><span class="p">);</span>
+<span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="n">MyStruct</span><span class="o">&gt;</span><span class="w"> </span><span class="n">struct_mem</span><span class="p">(</span><span class="n">address</span><span class="p">);</span>
 <span class="n">struct_mem</span><span class="o">-&gt;</span><span class="n">field1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">42</span><span class="p">;</span>
 <span class="n">struct_mem</span><span class="o">-&gt;</span><span class="n">field2</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">100</span><span class="p">;</span>
 </pre></div>
@@ -558,7 +553,7 @@
 <h4>Pointer Arithmetic<a class="headerlink" href="#pointer-arithmetic" title="Permalink to this heading"></a>
 </h4>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">experimental</span><span class="o">::</span><span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">mem</span><span class="p">(</span><span class="n">base_addr</span><span class="p">);</span>
+<div class="highlight"><pre><span></span><span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">mem</span><span class="p">(</span><span class="n">base_addr</span><span class="p">);</span>
 
 <span class="c1">// Navigate through memory</span>
 <span class="k">auto</span><span class="w"> </span><span class="n">mid</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">mem</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">offset</span><span class="p">;</span><span class="w">           </span><span class="c1">// Offset by elements</span>
@@ -606,9 +601,9 @@
 <p><strong>Migrated Kernel:</strong></p>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/dataflow/dataflow_api.h"</span>
-<span class="cp">#include</span><span class="w"> </span><span class="cpf">"experimental/noc.h"</span>
-<span class="cp">#include</span><span class="w"> </span><span class="cpf">"experimental/circular_buffer.h"</span>
-<span class="cp">#include</span><span class="w"> </span><span class="cpf">"experimental/tensor.h"</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/dataflow/noc.h"</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/dataflow/circular_buffer.h"</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/tensor/noc_traits.h"</span>
 
 <span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">src_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
@@ -618,8 +613,8 @@
 <span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">tile_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_tile_size</span><span class="p">(</span><span class="n">cb_id</span><span class="p">);</span>
 <span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">accessor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TensorAccessor</span><span class="p">(</span><span class="n">tensor_args</span><span class="p">,</span><span class="w"> </span><span class="n">src_addr</span><span class="p">,</span><span class="w"> </span><span class="n">tile_size</span><span class="p">);</span>
 
-<span class="w">    </span><span class="n">experimental</span><span class="o">::</span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
-<span class="w">    </span><span class="n">experimental</span><span class="o">::</span><span class="n">CircularBuffer</span><span class="w"> </span><span class="n">cb</span><span class="p">(</span><span class="n">cb_id</span><span class="p">);</span>
+<span class="w">    </span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
+<span class="w">    </span><span class="n">CircularBuffer</span><span class="w"> </span><span class="n">cb</span><span class="p">(</span><span class="n">cb_id</span><span class="p">);</span>
 
 <span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">tile_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">tile_id</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">num_tiles</span><span class="p">;</span><span class="w"> </span><span class="n">tile_id</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="n">cb</span><span class="p">.</span><span class="n">reserve_back</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
@@ -661,9 +656,9 @@
 </div>
 <p><strong>Migrated Kernel:</strong></p>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"experimental/noc.h"</span>
-<span class="cp">#include</span><span class="w"> </span><span class="cpf">"experimental/core_local_mem.h"</span>
-<span class="cp">#include</span><span class="w"> </span><span class="cpf">"experimental/endpoints.h"</span>
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/dataflow/noc.h"</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/core_local_mem.h"</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/dataflow/endpoints.h"</span>
 
 <span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">src_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
@@ -671,9 +666,9 @@
 <span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">neighbor_y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">2</span><span class="p">);</span>
 <span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_bytes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">3</span><span class="p">);</span>
 
-<span class="w">    </span><span class="n">experimental</span><span class="o">::</span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
-<span class="w">    </span><span class="n">experimental</span><span class="o">::</span><span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">mem</span><span class="p">(</span><span class="n">src_addr</span><span class="p">);</span>
-<span class="w">    </span><span class="n">experimental</span><span class="o">::</span><span class="n">UnicastEndpoint</span><span class="w"> </span><span class="n">remote</span><span class="p">;</span>
+<span class="w">    </span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
+<span class="w">    </span><span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">mem</span><span class="p">(</span><span class="n">src_addr</span><span class="p">);</span>
+<span class="w">    </span><span class="n">UnicastEndpoint</span><span class="w"> </span><span class="n">remote</span><span class="p">;</span>
 
 <span class="w">    </span><span class="c1">// Write to neighbor</span>
 <span class="w">    </span><span class="n">noc</span><span class="p">.</span><span class="n">async_write</span><span class="p">(</span>
@@ -711,7 +706,7 @@
 <p><strong>Static assertion failure: “NoC transactions are not supported for this type”</strong></p>
 <ul class="simple">
 <li><p>Ensure your type has a <code class="docutils literal notranslate"><span class="pre">noc_traits_t</span></code> specialization</p></li>
-<li><p>Include the appropriate header (e.g., <code class="docutils literal notranslate"><span class="pre">experimental/tensor.h</span></code> for <code class="docutils literal notranslate"><span class="pre">TensorAccessor</span></code>)</p></li>
+<li><p>Include the appropriate header (e.g., <code class="docutils literal notranslate"><span class="pre">api/tensor/noc_traits.h</span></code> for <code class="docutils literal notranslate"><span class="pre">TensorAccessor</span></code>)</p></li>
 </ul>
 </li>
 <li>

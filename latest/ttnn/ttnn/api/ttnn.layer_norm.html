@@ -286,8 +286,8 @@ See <a class="reference external" href="https://arxiv.org/abs/1607.06450">Layer 
 <li><p>All input tensors must be on-device and have a rank &gt;= 1.</p></li>
 <li><p>Unsharded tensors must be interleaved, sharded tensors cannot be height sharded.</p></li>
 <li><p>If the input is sharded, the <code class="xref py py-attr docutils literal notranslate"><span class="pre">output</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">residual_input_tensor</span></code> must have identical shard spec and memory config.</p></li>
-<li><p>If <cite>residual_input_tensor</cite> is provided, it must match the input’s padded shape.</p></li>
-<li><p>If TILE: <cite>weight</cite> and <cite>bias</cite> padded dim must match input’s last padded dim; padded height must equal TILE_HEIGHT (i.e. 32).</p></li>
+<li><p>If <cite>residual_input_tensor</cite> is provided, its shape must match the input’s logical and padded shape.</p></li>
+<li><p>If TILE: <cite>weight</cite> and <cite>bias</cite> last dim must match input’s last dim in both logical and padded shape; their padded height (second-to-last dim) must equal TILE_HEIGHT (i.e. 32).</p></li>
 <li><p>If ROW_MAJOR: <cite>weight</cite> and <cite>bias</cite> last padded dim must be TILE_WIDTH and the stick count must align with the input width.</p></li>
 </ul>
 </dd>

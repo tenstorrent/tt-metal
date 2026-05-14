@@ -152,6 +152,13 @@
 <p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
 <p>Configuration class for 1D multicast matmul operations with advanced features.</p>
 <p>This program config is for use with width and height sharded tensors, or very narrow interleaved tensors.</p>
+<p>When <code class="docutils literal notranslate"><span class="pre">gather_in0</span></code> is False and the matmul op is invoked with a <code class="docutils literal notranslate"><span class="pre">sub_device_id</span></code>,
+<code class="docutils literal notranslate"><span class="pre">compute_with_storage_grid_size</span></code> is anchored at the sub-device’s worker bounding-box start
+instead of <code class="docutils literal notranslate"><span class="pre">(0,</span> <span class="pre">0)</span></code>. The 1D multicast targets a single bounding-box rectangle and the
+per-core index math assumes a contiguous row-major rectangle, so the sub-device’s worker
+cores must themselves form a single rectangle. Non-rectangular sub-device worker grids are
+rejected at validate time. When <code class="docutils literal notranslate"><span class="pre">gather_in0</span></code> is True, <code class="docutils literal notranslate"><span class="pre">compute_with_storage_grid_size</span></code>
+is ignored and the gather path can run on any sub-device worker layout.</p>
 <dl class="py property">
 <dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.compute_with_storage_grid_size">
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">compute_with_storage_grid_size</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.compute_with_storage_grid_size" title="Permalink to this definition"></a>
@@ -161,6 +168,9 @@
 <p>Defines the 2D grid of cores that will be used for computation. In 1D multicast,
 this grid is used to determine the communication pattern for broadcasting data
 along one dimension while distributing computation.</p>
+<p>When the matmul op is invoked with a <code class="docutils literal notranslate"><span class="pre">sub_device_id</span></code> (and <code class="docutils literal notranslate"><span class="pre">gather_in0</span></code> is False),
+this rectangle is anchored at the sub-device’s worker bounding-box start (instead of
+<code class="docutils literal notranslate"><span class="pre">(0,</span> <span class="pre">0)</span></code>) and must fit inside that bounding box. Ignored when <code class="docutils literal notranslate"><span class="pre">gather_in0</span></code> is True.</p>
 </dd>
 </dl>
 

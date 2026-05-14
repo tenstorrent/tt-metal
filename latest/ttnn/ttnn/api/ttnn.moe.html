@@ -226,9 +226,9 @@
 <li><p>Tensors must be 4D with shape [N, C, H, W], and must be located on the device.</p></li>
 <li><p>For the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, N*C*H must be a multiple of 32. The last dimension must be a power of two and ≥64.</p></li>
 <li><p><code class="xref py py-attr docutils literal notranslate"><span class="pre">k</span></code> must be exactly 32.</p></li>
-<li><p>For the <code class="xref py py-attr docutils literal notranslate"><span class="pre">topk_mask_tensor</span></code>, H must be 32 and W must match <code class="xref py py-attr docutils literal notranslate"><span class="pre">k</span></code> (i.e. 32).</p></li>
-<li><p>For the <code class="xref py py-attr docutils literal notranslate"><span class="pre">expert_mask_tensor</span></code>, H must be 32 and W must match W of the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p></li>
-<li><p>All of the shape validations are performed on padded shapes.</p></li>
+<li><p>All of the above shape validations are performed on padded shapes.</p></li>
+<li><p>For the <code class="xref py py-attr docutils literal notranslate"><span class="pre">topk_mask_tensor</span></code>, the logical shape must be row-broadcastable (N, C, H must be 1) and the W must match <code class="xref py py-attr docutils literal notranslate"><span class="pre">k</span></code> (i.e. 32). The padded shape H must be 32.</p></li>
+<li><p>For the <code class="xref py py-attr docutils literal notranslate"><span class="pre">expert_mask_tensor</span></code>, the logical shape must be row-broadcastable (N, C, H must be 1) and the W must match W of the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>. The padded shape H must be 32.</p></li>
 <li><p>Sharding is not supported for this operation.</p></li>
 </ul>
 </dd>
