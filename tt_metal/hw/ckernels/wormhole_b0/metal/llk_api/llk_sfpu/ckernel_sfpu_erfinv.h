@@ -56,7 +56,7 @@ inline void calculate_erfinv() {
 
 template <bool APPROXIMATION_MODE>
 void erfinv_init() {
-    log_init<false, false, false>();
+    log_init<false, false, true>();
 }
 
 }  // namespace sfpu
