@@ -11,6 +11,7 @@
 #include "ckernel_instr_params.h"
 #include "ckernel_proj_params.h"
 #include "ckernel_template.h"
+#include "llk_assert.h"
 #include "llk_defs.h"
 #include "tensix_types.h"
 
@@ -93,12 +94,30 @@ inline bool _divisible_by_pow_two_(const std::uint32_t value, const std::uint32_
 }
 
 /**
+ * @brief Helper function to ensure valid tile sizes are programmed into the buffer descriptor
+ * @param buf_desc: Contains L1 buffer descriptor information
+ */
+void validate_buffer_desc(const buffer_descriptor_u& buf_desc)
+{
+    LLK_ASSERT(buf_desc.f.x_dim == 16, "x_dim must be 16");
+    LLK_ASSERT(
+        buf_desc.f.y_dim == 16 || buf_desc.f.y_dim == 8 || buf_desc.f.y_dim == 4 || buf_desc.f.y_dim == 2 || buf_desc.f.y_dim == 1,
+        "y_dim must be powers of 2 <= 16");
+    LLK_ASSERT(buf_desc.f.z_dim == 1 || buf_desc.f.z_dim == 4, "z_dim must be 1 or 4");
+    if (buf_desc.f.z_dim == 4)
+    {
+        LLK_ASSERT(buf_desc.f.y_dim == 16, "y_dim must be 16 when z_dim is 4");
+    }
+}
+
+/**
  * @brief Populates buffer table entry for TDMA engines
  * @param buf_desc_id: Buffer descriptor id into the buffer descriptor table
  * @param buf_desc: Contains L1 buffer descriptor information
  */
 inline void _configure_buf_desc_table_(const std::uint32_t buf_desc_id, const buffer_descriptor_u& buf_desc)
 {
+    validate_buffer_desc(buf_desc);
     for (std::uint32_t i = 0; i < BD_NUM_WORDS; i++)
     {
         bd_table[buf_desc_id].words[i] = buf_desc.words[i];
