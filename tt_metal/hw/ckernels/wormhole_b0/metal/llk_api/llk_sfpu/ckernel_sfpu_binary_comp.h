@@ -34,7 +34,7 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
     // Loop-invariant invert mask; hoisted out of the unrolled loop to avoid re-issuing
     // TTI_SFPLOADI on every iteration.
     if constexpr (invert_result) {
-        TTI_SFPLOADI(p_sfpu::LREG7, SFPLOADI_MOD0_USHORT, 0x01);
+        TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, 0x01);
     }
 
     // Pick X/Y order once; LREG0 holds X, LREG1 holds Y.
@@ -46,23 +46,15 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
         TT_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_3, dst_index_x * dst_tile_size);
         TT_SFPLOAD(p_sfpu::LREG1, INT32, ADDR_MOD_3, dst_index_y * dst_tile_size);
 
-        // Extract sign bits of X (LREG0) and Y (LREG1)
-        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG3, 0);
-        TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, 1);
-        TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG3, p_sfpu::LREG3, 1);
-
-        // LREG3 -> 0 for inputs of same sign, 1 for inputs of different signs
-        TTI_SFPXOR(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);
-
-        // if (LREG3 == 0) -> same signs: signed subtract + extract sign of X-Y
-        TTI_SFPSETCC(0, p_sfpu::LREG3, 0 /*unused*/, SFPSETCC_MOD1_LREG_EQ0);
+        // If X/Y have different signs, signed LT is the sign bit of X.
+        // Otherwise, the sign of X-Y is safe to use.
+        TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG2, 0);
+        TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
         TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, 6);
-        TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, 1);
-        // else -> different signs: load 0, then load 1 if MSB(X) != 0 (X is negative, so X < Y)
-        TTI_SFPCOMPC(0 /*unused*/, 0 /*unused*/, 0 /*unused*/, 0 /*unused*/);
-        TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);
+        TTI_SFPSETCC(0, p_sfpu::LREG2, 0 /*unused*/, sfpi::SFPSETCC_MOD1_LREG_LT0);
+        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
         TTI_SFPENCC(0, 0, 0, 0);
+        TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, 1);
 
         if constexpr (invert_result) {
             TTI_SFPXOR(0, p_sfpu::LREG7, p_sfpu::LREG1, 0);
@@ -274,7 +266,7 @@ inline void calculate_binary_comp_uint(const uint dst_index_in0, const uint dst_
     // Loop-invariant invert mask; hoisted out of the unrolled loop to avoid re-issuing
     // TTI_SFPLOADI on every iteration.
     if constexpr (invert_result) {
-        TTI_SFPLOADI(p_sfpu::LREG7, SFPLOADI_MOD0_USHORT, 0x01);
+        TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, 0x01);
     }
 
     // Pick X/Y order once; LREG0 holds X, LREG1 holds Y.
@@ -287,24 +279,16 @@ inline void calculate_binary_comp_uint(const uint dst_index_in0, const uint dst_
         TT_SFPLOAD(p_sfpu::LREG1, LD_ST_MOD, ADDR_MOD_3, dst_index_y * dst_tile_size);
 
         if constexpr (needs_msb_handling) {
-            // Extract MSBs of X (LREG0) and Y (LREG1)
-            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
-            TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG3, 0);
-            TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, 1);
-            TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG3, p_sfpu::LREG3, 1);
-
-            // LREG3 -> 0 for inputs with same MSB, 1 for inputs with different MSBs
-            TTI_SFPXOR(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);
-
-            // if (LREG3 == 0) -> same MSBs: signed subtract + extract sign
-            TTI_SFPSETCC(0, p_sfpu::LREG3, 0 /*unused*/, SFPSETCC_MOD1_LREG_EQ0);
+            // If X/Y have different MSBs, unsigned LT is the sign bit of Y.
+            // Otherwise, the sign of X-Y is safe to use.
+            TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG2, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
+            TTI_SFPXOR(0, p_sfpu::LREG1, p_sfpu::LREG3, 0);
             TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, 6);
-            TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, 1);
-            // else -> different MSBs: load 0, then load 1 if MSB(X) == 0 (X is smaller)
-            TTI_SFPCOMPC(0 /*unused*/, 0 /*unused*/, 0 /*unused*/, 0 /*unused*/);
-            TTI_SFPLOADI(p_sfpu::LREG1, SFPLOADI_MOD0_USHORT, 0x01);
-            TTI_SFPXOR(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);  // LREG1 = 1 XOR MSB(X)
+            TTI_SFPSETCC(0, p_sfpu::LREG3, 0 /*unused*/, sfpi::SFPSETCC_MOD1_LREG_LT0);
+            TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);
             TTI_SFPENCC(0, 0, 0, 0);
+            TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, 1);
         } else {
             // 16-bit case: signed subtract can't overflow, sign bit gives the answer directly.
             // LREG1 = LREG0 - LREG1 (imod=6: dst = src - dst)
