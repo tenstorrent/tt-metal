@@ -31,6 +31,16 @@ struct VariableMatmulConfig {
     bool transpose_b = false;
 };
 
+// EP-friendly on-device offsets: instead of a host-supplied scalar
+// out_row_offset_tiles, the kernel reads offsets[start_index] from a device tensor
+// at runtime and uses (offsets[start_index] / TILE_HEIGHT) as the write-at-offset
+// row. Lets moe_ffn avoid offsets.to_vector() under MeshDevice EP for the
+// down_proj / dX_via_* calls.
+enum class OffsetsRole : uint32_t {
+    None = 0,
+    OutputRow = 1,
+};
+
 struct VariableMatmulParams {
     VariableMatmulConfig config;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
@@ -71,6 +81,12 @@ struct VariableMatmulParams {
     uint32_t in0_k_offset_tiles = 0;
     uint32_t in1_k_offset_tiles = 0;
     uint32_t out_row_offset_tiles = 0;
+
+    // On-device offsets (EP). When role == OutputRow and offsets_tensor is set in
+    // tensor_args, in1_sender_out reads offsets[offsets_start_index] and uses
+    // (value / TILE_HEIGHT) as out_row_offset_tiles, overriding the scalar above.
+    OffsetsRole offsets_role = OffsetsRole::None;
+    uint32_t offsets_start_index = 0;
 };
 
 struct VariableMatmulInputs {
@@ -79,6 +95,8 @@ struct VariableMatmulInputs {
     // Optional caller-provided output tensor (write-at-offset mode). When set,
     // out_row_offset_tiles must be a valid sub-range and N must match.
     std::optional<ttnn::Tensor> output_tensor;
+    // Optional 1-D UINT32 ROW_MAJOR device tensor. Used with offsets_role.
+    std::optional<ttnn::Tensor> offsets_tensor;
 };
 
 }  // namespace ttml::metal::ops::variable_matmul::device

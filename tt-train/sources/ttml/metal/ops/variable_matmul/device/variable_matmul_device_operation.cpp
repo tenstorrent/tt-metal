@@ -160,6 +160,24 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
             operation_attributes.out_row_offset_tiles == 0U,
             "variable_matmul out_row_offset_tiles > 0 requires a caller-provided output tensor");
     }
+
+    // On-device offsets validation (minimal scope: OutputRow only).
+    const bool has_offsets = tensor_args.offsets_tensor.has_value();
+    const bool role_active = operation_attributes.offsets_role != OffsetsRole::None;
+    TT_FATAL(
+        has_offsets == role_active,
+        "variable_matmul: offsets_tensor and offsets_role must both be set or both be unset.");
+    if (role_active) {
+        TT_FATAL(
+            operation_attributes.offsets_role == OffsetsRole::OutputRow,
+            "variable_matmul: only OffsetsRole::OutputRow is currently supported.");
+        TT_FATAL(
+            tensor_args.output_tensor.has_value(),
+            "variable_matmul: OffsetsRole::OutputRow requires a caller-provided output_tensor.");
+        const auto& off = tensor_args.offsets_tensor.value();
+        TT_FATAL(off.dtype() == ttnn::DataType::UINT32, "variable_matmul: offsets_tensor must be UINT32.");
+        TT_FATAL(off.layout() == ttnn::Layout::ROW_MAJOR, "variable_matmul: offsets_tensor must be ROW_MAJOR.");
+    }
 }
 
 VariableMatmulDeviceOperation::spec_return_value_t VariableMatmulDeviceOperation::compute_output_specs(
@@ -260,7 +278,9 @@ ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(
         use_offset,
         use_offset_in1,
         // Write-at-offset toggles a CTA path. Boolean only (offset value is RT-only).
-        tensor_args.output_tensor.has_value());
+        tensor_args.output_tensor.has_value(),
+        // On-device offsets: different role = different cached program (CTA define).
+        static_cast<uint32_t>(operation_attributes.offsets_role));
 }
 
 }  // namespace ttml::metal::ops::variable_matmul::device
@@ -277,7 +297,10 @@ ttnn::Tensor ttml_variable_matmul(
     uint32_t in0_k_offset_tiles,
     uint32_t in1_k_offset_tiles,
     std::optional<ttnn::Tensor> output_tensor,
-    uint32_t out_row_offset_tiles) {
+    uint32_t out_row_offset_tiles,
+    std::optional<ttnn::Tensor> offsets_tensor,
+    ttml::metal::ops::variable_matmul::device::OffsetsRole offsets_role,
+    uint32_t offsets_start_index) {
     using OperationType = ttml::metal::ops::variable_matmul::device::VariableMatmulDeviceOperation;
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(),
@@ -296,11 +319,14 @@ ttnn::Tensor ttml_variable_matmul(
             .in0_k_offset_tiles = in0_k_offset_tiles,
             .in1_k_offset_tiles = in1_k_offset_tiles,
             .out_row_offset_tiles = out_row_offset_tiles,
+            .offsets_role = offsets_role,
+            .offsets_start_index = offsets_start_index,
         },
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .weight_tensor = weight_tensor,
             .output_tensor = output_tensor,
+            .offsets_tensor = offsets_tensor,
         });
 }
 

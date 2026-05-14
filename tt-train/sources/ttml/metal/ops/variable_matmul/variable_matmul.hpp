@@ -41,6 +41,8 @@ using VariableMatmulConfig = ttml::metal::ops::variable_matmul::device::Variable
 // Tile alignment: all offsets/counts must be in TILE_HEIGHT (32) units. With transpose_a,
 // "row" still means the matmul-M axis (= input's stored *col* axis) and "k_offset" still
 // means the matmul-K axis (= input's stored *row* axis).
+using OffsetsRole = ttml::metal::ops::variable_matmul::device::OffsetsRole;
+
 ttnn::Tensor variable_matmul(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
@@ -51,6 +53,12 @@ ttnn::Tensor variable_matmul(
     uint32_t in0_k_offset_tiles = 0,
     uint32_t in1_k_offset_tiles = 0,
     std::optional<ttnn::Tensor> output_tensor = std::nullopt,
-    uint32_t out_row_offset_tiles = 0);
+    uint32_t out_row_offset_tiles = 0,
+    // EP path: when offsets_tensor is set and offsets_role == OutputRow, the kernel
+    // reads offsets_tensor[offsets_start_index] and uses it (in tiles) as the
+    // write-at-offset row, replacing the scalar out_row_offset_tiles above.
+    std::optional<ttnn::Tensor> offsets_tensor = std::nullopt,
+    OffsetsRole offsets_role = OffsetsRole::None,
+    uint32_t offsets_start_index = 0);
 
 }  // namespace ttml::metal
