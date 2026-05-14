@@ -365,7 +365,7 @@ inline void _llk_pack_init_(
 }
 
 // TODO NC: Clean up as the part of tt-metal#34587
-template <bool untilize = false, bool zero_output = false, bool tilize = false, bool skip_addrmod_config = false>
+template <bool untilize = false, bool zero_output = false, bool tilize = false, bool skip_addrmod_config = false, bool skip_packer_strides = false>
 inline void _llk_pack_init_(
     const std::uint32_t pack_src_format,
     const std::uint32_t face_r_dim,
@@ -394,7 +394,10 @@ inline void _llk_pack_init_(
             _llk_pack_configure_addrmod_<untilize, false /* tilize */>();
         }
         _llk_pack_mop_config_<untilize, zero_output, false /* tilize */>(face_r_dim, tile_c_dim, num_faces, num_tiles);
-        set_packer_strides<untilize, false /* tilize */>(pack_src_format, tile_c_dim);
+        if constexpr (!skip_packer_strides)
+        {
+            set_packer_strides<untilize, false /* tilize */>(pack_src_format, tile_c_dim);
+        }
     }
     else
     {
@@ -403,7 +406,10 @@ inline void _llk_pack_init_(
             _llk_pack_configure_addrmod_<untilize, tilize>();
         }
         _llk_pack_mop_config_<untilize, zero_output, tilize>(face_r_dim, tile_c_dim, num_faces, num_tiles);
-        set_packer_strides<untilize, tilize>(pack_src_format, tile_c_dim);
+        if constexpr (!skip_packer_strides)
+        {
+            set_packer_strides<untilize, tilize>(pack_src_format, tile_c_dim);
+        }
     }
 
     TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
