@@ -859,7 +859,7 @@ def load_debug_trace(trace_dir: Path, num_layers: int | None = None) -> DebugTra
     """
     from safetensors import safe_open
 
-    trace_dir = Path(trace_dir)
+    trace_dir = Path(trace_dir).resolve()
     if not trace_dir.exists():
         raise FileNotFoundError(f"Debug trace directory not found: {trace_dir}")
 
