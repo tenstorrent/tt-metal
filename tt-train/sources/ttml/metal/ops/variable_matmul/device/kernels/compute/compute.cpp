@@ -360,22 +360,31 @@ void kernel_main() {
     // Variable-M: actual M_blocks_per_core from runtime args
     uint32_t M_blocks_per_core = get_arg_val<uint32_t>(argidx++);
     // Variable-K: K extent comes from runtime; K_num_blocks derived using K_block_tiles (CTA).
-    const uint32_t K_tiles = get_arg_val<uint32_t>(argidx++);
-    const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
-    const uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
+    // OFFSETS_ROLE=InputK/WeightK overrides K_tiles from cb_ctrl[3].
+    uint32_t K_tiles = get_arg_val<uint32_t>(argidx++);
 
-#if defined(OFFSETS_ROLE) && OFFSETS_ROLE == 2
-    // InputRow: dm_in0_sender publishes per-core (M_start, M_end, M_blocks_per_core) on
-    // cb_ctrl after reading on-device offsets. Override RT-arg-derived M values here.
+#if defined(OFFSETS_ROLE) && (OFFSETS_ROLE == 1 || OFFSETS_ROLE == 2 || OFFSETS_ROLE == 3 || OFFSETS_ROLE == 4)
+    // OutputRow / InputRow / InputK / WeightK: a dm kernel publishes overrides on cb_ctrl
+    // after reading on-device offsets.
+    //   OutputRow (1): ctrl[0..2] = (M_start, M_end, M_blocks_per_core) (in0 publishes).
+    //   InputRow  (2): ctrl[0..2] = (M_start, M_end, M_blocks_per_core) (in0 publishes).
+    //   InputK    (3): ctrl[3]    = K_tiles (in0 publishes).
+    //   WeightK   (4): ctrl[3]    = K_tiles (in1 publishes).
     {
         constexpr uint32_t cb_ctrl_id = tt::CBIndex::c_8;
         cb_wait_front(cb_ctrl_id, 1U);
+#if OFFSETS_ROLE == 1 || OFFSETS_ROLE == 2
         M_start_tile = read_tile_value(cb_ctrl_id, 0U, 0U);
         M_end_tile = read_tile_value(cb_ctrl_id, 0U, 1U);
         M_blocks_per_core = read_tile_value(cb_ctrl_id, 0U, 2U);
+#else
+        K_tiles = read_tile_value(cb_ctrl_id, 0U, 3U);
+#endif
         cb_pop_front(cb_ctrl_id, 1U);
     }
 #endif
+    const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
+    const uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
 
 #ifdef FUSE_TERNARY
     const uint32_t fused_ternary_scalar_uint = get_arg_val<uint32_t>(argidx++);
