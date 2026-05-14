@@ -212,11 +212,11 @@ struct CopyTile : CopyTileTag {
     /// per iter, Cumulative grows wait count with i (i+1), Upfront fires once via
     /// wait_upfront with full n_tiles. None scale by chain block_size — block_size
     /// only drives the inner DEST-lane loop and slot_offset.
-    ALWI void wait_per_tile(uint32_t i) const {
+    ALWI void wait_per_tile(uint32_t cumulative_count) const {
         if constexpr (Policy == CopyTilePolicy::WaitAndPop || Policy == CopyTilePolicy::WaitNoPop) {
             cb_wait_front(Cb, 1);
         } else if constexpr (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
-            cb_wait_front(Cb, i + 1);
+            cb_wait_front(Cb, cumulative_count);
         }
     }
 
@@ -495,18 +495,19 @@ struct BinaryFpu : BinaryFpuTag {
 
     // ---- CB lifecycle (per-tile) ----
     // Streaming policies (WaitAndPop / WaitNoPop) always wait 1 — they are incompatible
-    // with BlockSize > 1 per-iter consumption. Cumulative scales `(i+1) * block_size`.
-    ALWI void wait_per_tile(uint32_t i) const {
+    // with BlockSize > 1 per-iter consumption. Cumulative scales `(i+1) * block_size`
+    // — caller passes `cumulative_count = (i_outer + 1) * block_size`.
+    ALWI void wait_per_tile(uint32_t cumulative_count) const {
         if constexpr (APolicy == CopyTilePolicy::WaitAndPop || APolicy == CopyTilePolicy::WaitNoPop) {
             cb_wait_front(CbA, 1);
         } else if constexpr (APolicy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
-            cb_wait_front(CbA, i + 1);
+            cb_wait_front(CbA, cumulative_count);
         }
         if constexpr (!same_cb) {
             if constexpr (BPolicy == CopyTilePolicy::WaitAndPop || BPolicy == CopyTilePolicy::WaitNoPop) {
                 cb_wait_front(CbB, 1);
             } else if constexpr (BPolicy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
-                cb_wait_front(CbB, i + 1);
+                cb_wait_front(CbB, cumulative_count);
             }
         }
     }
@@ -623,11 +624,11 @@ struct DestReuseBinary : DestReuseBinaryTag {
         binary_dest_reuse_tiles_init<et, reuse>(Cb);
     }
 
-    ALWI void wait_per_tile(uint32_t i) const {
+    ALWI void wait_per_tile(uint32_t cumulative_count) const {
         if constexpr (Policy == CopyTilePolicy::WaitAndPop || Policy == CopyTilePolicy::WaitNoPop) {
             cb_wait_front(Cb, 1);
         } else if constexpr (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
-            cb_wait_front(Cb, i + 1);
+            cb_wait_front(Cb, cumulative_count);
         }
     }
     ALWI void wait_upfront(uint32_t n) const {
@@ -705,11 +706,11 @@ struct UnaryBcast : UnaryBcastTag {
         unary_bcast_init<bt>(Cb, ocb);
     }
 
-    ALWI void wait_per_tile(uint32_t i) const {
+    ALWI void wait_per_tile(uint32_t cumulative_count) const {
         if constexpr (Policy == CopyTilePolicy::WaitAndPop || Policy == CopyTilePolicy::WaitNoPop) {
             cb_wait_front(Cb, 1);
         } else if constexpr (Policy == CopyTilePolicy::CumulativeWaitPopAtEnd) {
-            cb_wait_front(Cb, i + 1);
+            cb_wait_front(Cb, cumulative_count);
         }
     }
     ALWI void wait_upfront(uint32_t n) const {
@@ -1081,7 +1082,10 @@ ALWI void elem_apply_compute(
     if constexpr (is_pack_tile_op_v<ElemT>) {
         (void)elem; (void)i_outer; (void)base_tile; (void)inner_count; (void)chain_lane_width; (void)n_tiles;
     } else if constexpr (is_cb_reader_op_v<ElemT>) {
-        elem.wait_per_tile(i_outer);
+        // Cumulative wait scales with BlockSize: by end-of-iter we need (base_tile + inner_count)
+        // tiles in CB. At BlockSize=1 this equals i_outer+1 (legacy shape). At BlockSize>1
+        // this grows in block chunks so cumulative tracks producer streaming progress.
+        elem.wait_per_tile(base_tile + inner_count);
         elem.wait_upfront(n_tiles);
         if constexpr (EmitInit) {
             emit_pre_element_transitions<ElemT, I, Es...>();

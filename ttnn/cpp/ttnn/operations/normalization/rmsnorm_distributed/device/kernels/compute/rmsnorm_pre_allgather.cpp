@@ -55,7 +55,7 @@ void kernel_main() {
          * Pack uses FirstTile because PerTileReserveAndPush advances the write
          * pointer each push, making absolute idx wt equivalent to relative 0.
          */
-        compute_kernel_lib::eltwise_chain(
+        compute_kernel_lib::eltwise_chain<compute_kernel_lib::AutoBlock::On>(
             Wt,
             compute_kernel_lib::BinaryFpu<
                 cb_inp,
@@ -72,7 +72,8 @@ void kernel_main() {
             compute_kernel_lib::PackTile<
                 cb_x2,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                compute_kernel_lib::PackTilePolicy::UpfrontReservePushAtEnd,
+                compute_kernel_lib::PackTileIndexMode::BlockIter>{});
 
         /*
          * sum(x**2)
