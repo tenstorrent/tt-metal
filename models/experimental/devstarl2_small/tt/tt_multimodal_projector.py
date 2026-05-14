@@ -51,7 +51,7 @@ class TTMistral3MultiModalProjector(LightweightModule):
                 device=mesh_device,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                 layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
                 cache_file_name=None
                 if weight_cache_path is None
                 else weight_cache_path / f"{state_dict_prefix}{name}.weight",
@@ -66,9 +66,9 @@ class TTMistral3MultiModalProjector(LightweightModule):
         x = self.norm(x, mode="prefill")
         x = ttnn.reshape(x, image_features.shape)
         x = self.patch_merger(x, image_sizes)
-        x = ttnn.linear(x, self.linear_1_weight, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.linear(x, self.linear_1_weight, dtype=self.dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.gelu(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x = ttnn.linear(x, self.linear_2_weight, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.linear(x, self.linear_2_weight, dtype=self.dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
         return x
 
 
