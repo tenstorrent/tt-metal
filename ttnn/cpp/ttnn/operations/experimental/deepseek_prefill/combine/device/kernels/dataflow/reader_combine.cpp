@@ -110,6 +110,7 @@ void kernel_main() {
 #if IS_TILE_LAYOUT
     constexpr uint32_t num_idle_cores_group = get_compile_time_arg_val(tile_layout_args_base);
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(tile_layout_args_base + 1);
+    constexpr uint32_t cb_metadata_buf_id = get_compile_time_arg_val(tile_layout_args_base + 2);
 #endif
 
     // ===== Runtime Args =====
@@ -233,12 +234,14 @@ void kernel_main() {
     // bounding box), so all senders can multicast in parallel.
     // Trailer layout (one l1_alignment region after counter_total_size bytes):
     //   [0]: receive_buf_addr  — sender's c_18 L1 offset (where idle NOC-writes untilized data)
+    //   [1]: metadata_buf_addr — sender's c_19 L1 offset (where idle NOC-writes routing metadata)
     {
         constexpr uint32_t counter_total_size = experts_tok_counter_pages * aligned_experts_tok_counter_page_size;
 
         volatile tt_l1_ptr uint32_t* trailer_slot =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counter_base_addr + counter_total_size);
         trailer_slot[0] = get_write_ptr(cb_untilize_id);
+        trailer_slot[1] = get_write_ptr(cb_metadata_buf_id);
 
         constexpr uint32_t mcast_total_size = counter_total_size + l1_alignment;
         uint32_t off = 0;
@@ -266,10 +269,12 @@ void kernel_main() {
 
 #if IS_TILE_LAYOUT
     uint32_t untilize_base = get_write_ptr(cb_untilize_id);
-    // receive_buf is partitioned k_s ways: idle c gets a SLOTS_PER_IDLE-deep ring at
-    // [untilize_base + c * SLOTS_PER_IDLE * aligned_output_page_size, ...).  read_slots[c]
-    // tracks the next slot index (mod SLOTS_PER_IDLE) we'll pull from for idle c.  Slot
-    // state is monotonic across batches because idle's writes for that pair are too.
+    uint32_t metadata_buf_base = get_write_ptr(cb_metadata_buf_id);
+    // Both receive_buf (c_18) and metadata_ring (c_19) are partitioned k_s ways:
+    // idle c owns a SLOTS_PER_IDLE-deep ring starting at
+    //   untilize_base    + c * SLOTS_PER_IDLE * aligned_output_page_size
+    //   metadata_buf_base + c * SLOTS_PER_IDLE * aligned_dispatched_metadata_page_size
+    // read_slots[c] tracks the next slot index (mod SLOTS_PER_IDLE) to pull from for idle c.
     uint32_t read_slots[num_idle_cores_group];
     for (uint32_t c = 0; c < num_idle_cores_group; c++) {
         read_slots[c] = 0;
