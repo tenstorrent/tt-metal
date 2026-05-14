@@ -222,6 +222,34 @@ class TtLlamaRotarySetup(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(device) if self.is_mesh_device else None,
         )
 
+        # ------------------------------------------------------------------
+        # V2-10: 2D cos/sin matrices for in-trace ttnn.embedding lookup.
+        # The default ``self.cos_matrix`` / ``self.sin_matrix`` are stored as
+        # 4-D ``[1, 1, max_seq_len, rope_dim]`` ROW_MAJOR replicated, which is
+        # what the eager path consumes (``ttnn.embedding`` accepts both).
+        # For the qwen3.6 in-trace decode path we want a clean
+        # ``[max_seq_len, rope_dim]`` 2-D lookup table that emits
+        # ``[T, T, rope_dim]`` output for a tile-aligned ``[T, T]`` rot_idxs
+        # tensor (T = 32). Mirrors v1's ``get_rm_rot_mats`` precedent:
+        # ``models/demos/qwen3_6_galaxy/tt/llama_rope.py:308``.
+        # ------------------------------------------------------------------
+        if self.is_qwen36:
+            # cos_2d / sin_2d already computed above. Replicated across mesh.
+            self.cos_matrix_2d_q36 = ttnn.from_torch(
+                cos_2d,
+                device=device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=datatype,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device) if self.is_mesh_device else None,
+            )
+            self.sin_matrix_2d_q36 = ttnn.from_torch(
+                sin_2d,
+                device=device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=datatype,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device) if self.is_mesh_device else None,
+            )
+
         self.core_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
             self.start_core, self.batch_size_per_device_group, self.sub_core_grids, row_wise=True
         )
@@ -552,3 +580,77 @@ class TtLlamaRotarySetup(LightweightModule):
         x_rotated.deallocate(True)
         x_pass.deallocate(True)
         return out
+
+    # ------------------------------------------------------------------
+    # V2-10: in-trace qwen3.6 partial-RoPE lookup helpers.
+    # Mirror v1 ``get_rm_rot_idxs`` / ``get_rm_rot_mats`` semantics: a
+    # tile-aligned [32, 32] uint32 rot_idxs tensor + on-device
+    # ttnn.embedding lookup that returns ``[1, 1, 1, rope_dim]`` cos/sin.
+    # Pure device ops (no host writes); safe inside trace capture.
+    # ------------------------------------------------------------------
+
+    def get_qwen36_rm_rot_idxs(self, cur_pos: int, on_host: bool = False):
+        """Build a tile-aligned ``[32, 32]`` rot_idxs tensor for qwen3.6 decode.
+
+        All 1024 entries hold the same position value; ``get_qwen36_rm_rot_mats``
+        slices ``[0, 0]`` to recover the single cos/sin row.
+
+        Parameters
+        ----------
+        cur_pos : int
+            Current decode position.
+        on_host : bool
+            When True returns a HOST ttnn tensor for ``copy_host_to_device_tensor``.
+
+        Returns
+        -------
+        ttnn.Tensor ``[32, 32]`` uint32, replicated.
+        """
+        assert self.is_qwen36, "get_qwen36_rm_rot_idxs is only valid when is_qwen36=True"
+        position_idxs_padded = torch.full((32, 32), int(cur_pos), dtype=torch.int32)
+        rot_idxs = ttnn.from_torch(
+            position_idxs_padded,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=None if on_host else self.device,
+            memory_config=None if on_host else ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if self.is_mesh_device else None,
+        )
+        return rot_idxs
+
+    def get_qwen36_rm_rot_mats(self, rot_idxs):
+        """Gather cos/sin via on-device ttnn.embedding (qwen3.6 partial RoPE).
+
+        Pure device op — safe inside trace capture. Mirrors v1
+        ``models/demos/qwen3_6_galaxy/tt/llama_rope.py:get_rm_rot_mats``.
+
+        Parameters
+        ----------
+        rot_idxs : ttnn.Tensor
+            ``[32, 32]`` uint32 device tensor (from ``get_qwen36_rm_rot_idxs``).
+
+        Returns
+        -------
+        (cos, sin) : each ``[1, 1, 1, rope_dim]`` device tensors, replicated.
+        """
+        assert self.is_qwen36, "get_qwen36_rm_rot_mats is only valid when is_qwen36=True"
+        rd = self.rope_dim  # 64
+        cos_padded = ttnn.embedding(
+            rot_idxs,
+            self.cos_matrix_2d_q36,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [32, 32, rope_dim]
+        sin_padded = ttnn.embedding(
+            rot_idxs,
+            self.sin_matrix_2d_q36,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        cos = ttnn.slice(cos_padded, [0, 0, 0], [1, 1, rd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        sin = ttnn.slice(sin_padded, [0, 0, 0], [1, 1, rd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        cos_padded.deallocate(True)
+        sin_padded.deallocate(True)
+        cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, 1, rope_dim]
+        sin = ttnn.unsqueeze_to_4D(sin)
+        return cos, sin
