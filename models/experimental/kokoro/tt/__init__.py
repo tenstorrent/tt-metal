@@ -4,6 +4,11 @@
 
 """Kokoro TTNN package (subset bring-up; extend as modules land)."""
 
+from .tt_ada_layer_norm import (
+    TTAdaLayerNorm,
+    TTAdaLayerNormParams,
+    preprocess_tt_ada_layer_norm,
+)
 from .tt_conv import (
     TTConv1dParams,
     TTConvTranspose1dParams,
@@ -21,6 +26,8 @@ from .tt_text_encoder import (
 )
 
 __all__ = [
+    "TTAdaLayerNorm",
+    "TTAdaLayerNormParams",
     "TTConv1dParams",
     "TTConvTranspose1dParams",
     "TTLSTMParams",
@@ -28,6 +35,7 @@ __all__ = [
     "TTTextEncoderConvLNBlock",
     "TTTextEncoderConvLNBlockParams",
     "TTTextEncoderParams",
+    "preprocess_tt_ada_layer_norm",
     "preprocess_tt_lstm_1layer",
     "preprocess_tt_text_encoder",
     "tt_bilstm_nlc",
