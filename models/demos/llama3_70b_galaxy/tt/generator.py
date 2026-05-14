@@ -427,6 +427,11 @@ class Generator(WarmupForwardMixin):
 
         # Accumulate sharded logits (same format as decode, before all-gather) for on-device sampling.
 
+        # Group only the narrow mixed-batch case that needs the 128-token batched trace:
+        # on-device sampling needs all users' logits accumulated before one sampling call;
+        # full 128-token batches already use batched prefill; prefix-cached runs use a
+        # different sp1/chunked-SDPA path; and longer prompts should stay on their normal
+        # single-user traces while only the 128-token requests avoid the 128_1_sp0 trace.
         group_mixed_128_prefill = (
             do_device_sampling
             and batch >= 16
