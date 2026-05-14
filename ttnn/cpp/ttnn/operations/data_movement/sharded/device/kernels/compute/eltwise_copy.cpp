@@ -12,10 +12,16 @@ void kernel_main() {
     constexpr auto cb_in = tt::CBIndex::c_0;
     constexpr auto cb_out = tt::CBIndex::c_16;
 
-    compute_kernel_lib::eltwise_chain_with_init(
+    compute_kernel_lib::eltwise_chain_with_init<compute_kernel_lib::AutoBlock::On>(
         per_core_tile_cnt,
-        compute_kernel_lib::
-            CopyTile<cb_in, compute_kernel_lib::Dst::D0, compute_kernel_lib::CopyTilePolicy::WaitAndPop>{},
-        compute_kernel_lib::
-            PackTile<cb_out, compute_kernel_lib::Dst::D0, compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+        compute_kernel_lib::CopyTile<
+            cb_in,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::CopyTilePolicy::WaitUpfrontPopAtEnd,
+            compute_kernel_lib::CbIndexMode::BlockIter>{},
+        compute_kernel_lib::PackTile<
+            cb_out,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::PackTilePolicy::UpfrontReservePushAtEnd,
+            compute_kernel_lib::PackTileIndexMode::BlockIter>{});
 }
