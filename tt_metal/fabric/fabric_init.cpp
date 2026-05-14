@@ -213,6 +213,28 @@ FabricCoresHealth configure_fabric_cores(
                     auto virtual_core = cluster.get_virtual_eth_core_from_channel(chip_id, router_chan);
                     tt_cxy_pair core_loc(chip_id, virtual_core);
                     cluster.assert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
+                    // FIX BO (#42429): restore fw_launch_addr to base-UMD firmware entry point
+                    // BEFORE deassert.  FIX BN clears fw_launch_addr=0 during teardown heartbeat
+                    // confirmation.  If FIX RR then resets such a channel, ERISC ROM reads
+                    // fw_launch_addr==0 and loops at 0x49705180 indefinitely — FIX BH then times
+                    // out (500ms) and the channel stays dead.  Writing the valid entry point
+                    // while ERISC is held in reset guarantees ROM can exit immediately on deassert.
+                    try {
+                        const auto& hal_bo = tt::tt_metal::MetalContext::instance().hal();
+                        const auto aeth_idx_bo = hal_bo.get_programmable_core_type_index(
+                            HalProgrammableCoreType::ACTIVE_ETH);
+                        const auto& jit_cfg_bo = hal_bo.get_jit_build_config(aeth_idx_bo, 0, 0);
+                        if (jit_cfg_bo.fw_launch_addr_value != 0) {
+                            cluster.write_core_immediate(
+                                chip_id,
+                                virtual_core,
+                                std::vector<uint32_t>{jit_cfg_bo.fw_launch_addr_value},
+                                jit_cfg_bo.fw_launch_addr);
+                        }
+                    } catch (...) {
+                        // Non-fatal — deassert proceeds; FIX BH may still see success if
+                        // fw_launch_addr was not previously zeroed.
+                    }
                     cluster.deassert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
                     // FIX BH (#42429): Wait for ERISC to boot from ROM phase (0x49705180)
                     // to base-UMD firmware before declaring recovery.  Without this wait,

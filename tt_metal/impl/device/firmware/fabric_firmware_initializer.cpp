@@ -2683,6 +2683,32 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
                     auto virtual_core = cluster_.get_virtual_eth_core_from_channel(dev->id(), chan);
                     tt_cxy_pair core_loc(dev->id(), virtual_core);
                     cluster_.assert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
+                    // FIX BO (#42429): restore fw_launch_addr to base-UMD firmware entry point
+                    // BEFORE deassert so ERISC ROM reads a non-zero jump address.
+                    // FIX BN (commit 1f01767) clears fw_launch_addr=0 after teardown heartbeat
+                    // confirmation.  That zero persists in the register.  When FIX RR-NM step 1
+                    // subsequently calls assert+deassert, ERISC ROM reads fw_launch_addr==0 and
+                    // enters the indefinite ROM wait loop at 0x49705180, causing every channel
+                    // to fail the 2000ms boot poll.  Writing the non-zero firmware entry point
+                    // while ERISC is held in assert-reset guarantees ROM sees a valid target
+                    // and exits to base-UMD firmware immediately on deassert.
+                    try {
+                        const auto aeth_idx_bo = hal_.get_programmable_core_type_index(
+                            HalProgrammableCoreType::ACTIVE_ETH);
+                        const auto& jit_cfg_bo = hal_.get_jit_build_config(aeth_idx_bo, 0, 0);
+                        // fw_launch_addr      = L1 address of the launch-address register
+                        // fw_launch_addr_value = firmware entry point to write into that register
+                        if (jit_cfg_bo.fw_launch_addr_value != 0) {
+                            cluster_.write_core_immediate(
+                                dev->id(),
+                                virtual_core,
+                                std::vector<uint32_t>{jit_cfg_bo.fw_launch_addr_value},
+                                jit_cfg_bo.fw_launch_addr);
+                        }
+                    } catch (...) {
+                        // Non-fatal — deassert proceeds; ERISC may still boot if fw_launch_addr
+                        // was not previously zeroed by FIX BN.
+                    }
                     cluster_.deassert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
 
                     // Poll for ROM boot completion (same as FIX BH).
