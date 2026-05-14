@@ -508,6 +508,12 @@ class ModelArgs:
 
         logger.info(f"Inferring device name: {self.device_name}")
         self.cluster_shape = list(mesh_device.shape) if mesh_device is not None else None
+        self.cluster_type = ttnn.cluster.get_cluster_type() if mesh_device is not None else None
+        self.is_galaxy_cluster = self.cluster_type in [
+            ttnn.cluster.ClusterType.GALAXY,
+            ttnn.cluster.ClusterType.TG,
+            ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
+        ]
         self.is_galaxy = self.num_devices == 32
 
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
@@ -655,17 +661,15 @@ class ModelArgs:
 
             # All Gather Matmul for Dense Out (DO) - computed flag stored as instance attribute
             # NOTE: Fused all gather matmul only supports a core grid of size num_devices x 1
-            # TODO: #26657 refactor ACTUAL_DEVICE environment variable usage
-            actual_device_is_tg = os.getenv("ACTUAL_DEVICE", "") == "TG"
             # Galaxy DP4 gives Llama 8B a routeable 1x8 row submesh, so it can
-            # use the same fused AGMM path as T3K even though ACTUAL_DEVICE is TG.
+            # use the same fused AGMM path as T3K on Galaxy-class systems.
             use_galaxy_dp4_8b_submesh_agmm = (
-                actual_device_is_tg
+                self.is_galaxy_cluster
                 and self.base_model_name == "Llama-3.1-8B"
                 and self.num_devices == 8
                 and tuple(self.cluster_shape) == (1, 8)
             )
-            self._use_t3k_fused_agmm_config = not actual_device_is_tg or use_galaxy_dp4_8b_submesh_agmm
+            self._use_t3k_fused_agmm_config = not self.is_galaxy_cluster or use_galaxy_dp4_8b_submesh_agmm
             self._use_fused_all_gather_matmul = (
                 self.num_devices == 8
                 and self._use_t3k_fused_agmm_config
@@ -1061,7 +1065,7 @@ class ModelArgs:
             }
             # Model-specific CCL configs are tuned for Galaxy (TG) with 4 links
             # Only apply them on Galaxy, otherwise use defaults
-            executed_on_galaxy = ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
+            executed_on_galaxy = self.is_galaxy_cluster
             if executed_on_galaxy and self.base_model_name in model_specific_ccl_configs:
                 self.model_config["ATTN_LN_AG_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["attn_ln_ag"]
                 self.model_config["FFN_LN_AG_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["ffn_ln_ag"]
@@ -1105,7 +1109,7 @@ class ModelArgs:
             self.mesh_device is not None
             and self.num_devices == 8
             and tuple(self.mesh_device.shape) == (1, 8)
-            and ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
+            and self.is_galaxy_cluster
         )
 
     def get_warmup_prefill_supported_seq_lens(self):
@@ -1929,14 +1933,13 @@ class ModelArgs:
                 return self.get_attn_output_program_config(Mode.DECODE)
         elif mode == Mode.PREFILL:
             dram_sharded_wo = not (self._use_fused_all_gather_matmul or self.is_galaxy)
-            # TODO: #26657 (if self.num_devices == 8 and os.getenv("ACTUAL_DEVICE", "") != "TG") should be refactored, and investigate if ACTUAL_DEVICE environment variable is still used
             n_dim = (
                 self.dim // self.cluster_shape[1]
                 if self.is_galaxy
                 else (
                     1024
                     if self.num_devices == 8
-                    and getattr(self, "_use_t3k_fused_agmm_config", os.getenv("ACTUAL_DEVICE", "") != "TG")
+                    and getattr(self, "_use_t3k_fused_agmm_config", not self.is_galaxy_cluster)
                     and not is_blackhole()
                     and 1024 % (self.dim // self.num_devices) == 0
                     else self.dim
@@ -2484,6 +2487,8 @@ class ModelArgs:
         elif ttnn.cluster.get_cluster_type() in [
             ttnn.cluster.ClusterType.T3K,
             ttnn.cluster.ClusterType.GALAXY,
+            ttnn.cluster.ClusterType.TG,
+            ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
         ]:
             if self.num_devices >= 8:
                 return ttnn.Topology.Ring
