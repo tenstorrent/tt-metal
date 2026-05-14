@@ -251,26 +251,31 @@ void kernel_main() {
 #ifdef NUMERIC_STABLE
             calc_numeric_stable(Wt, ndst, cb_in0, cb_max_scaler, cb_max, cb_exps);
 #else
-            for (uint32_t wt = 0; wt < Wt; wt += ndst) {
-                tile_regs_acquire();
-                cb_in0_obj.wait_front(ndst);
-                for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
-                    copy_tile(cb_in0, wt8, wt8);  // copy from c_in[0] to DST[0]
-                }
-                cb_in0_obj.pop_front(ndst);
-
-                cb_exps_obj.reserve_back(ndst);
-                for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
-                    exp_tile<EXP_APPROX>(wt8);  // exp on DST[0]
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
-                    pack_tile(wt8, cb_exps);    // DST[0]->cb_id[wt]
-                }
-                tile_regs_release();
-                cb_exps_obj.push_back(ndst);
-            }
+            // Migrated: streaming copy + exp + pack via eltwise_chain.
+            // CopyTile<WaitAndPop, FirstTile> emits per-tile cb_wait_front(1) on
+            // cb_in0 + copy_tile(cb_in0, 0, slot) + cb_pop_front(1). Functionally
+            // equivalent to the prior wait_front(ndst) / pop_front(ndst) batched
+            // shape because the read pointer advances per pop. PackTile with
+            // PerTileReserveAndPush + FirstTile mirrors the per-tile
+            // reserve_back/pack/push_back the original loop emits. Caller still
+            // owns the pre-loop reconfig_data_format / pack_reconfig_data_format
+            // and binary_op_init_common above (mid-MAIN chain — no extra hw
+            // startup per D5).
+            compute_kernel_lib::eltwise_chain(
+                Wt,
+                compute_kernel_lib::CopyTile<
+                    cb_in0,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::CopyTilePolicy::WaitAndPop,
+                    compute_kernel_lib::CbIndexMode::FirstTile>{},
+                compute_kernel_lib::Exp<
+                    static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::PackTile<
+                    cb_exps,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
 #endif
         }
 #endif
