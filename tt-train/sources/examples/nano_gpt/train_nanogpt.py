@@ -1405,6 +1405,7 @@ def main():
     # TP-sharded parameters cannot be round-tripped through the script's pickle checkpoint format, so refuse
     # any save/resume request up front rather than failing partway through.
     # FSDP-sharded weights have the same problem (the saved pickle would contain a per-rank slice of each weight, not the full tensor).
+    # TODO: add support for checkpointing TP and FSDP-sharded weights. (44387)
     if device_config.enable_tp or device_config.enable_fsdp:
         guard_name = "tensor parallelism" if device_config.enable_tp else "FSDP"
         guard_flag = "device_config.enable_tp=true" if device_config.enable_tp else "device_config.enable_fsdp=true"
