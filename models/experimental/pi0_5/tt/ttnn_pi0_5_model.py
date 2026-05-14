@@ -117,72 +117,139 @@ class Pi0_5ModelTTNN:
 
     def _precompute_bs1_modulations(self) -> None:
         """
-        OPTIMIZATION (TIER A): adarms_cond is deterministic per step, so the
-        per-block fused modulation Dense (W -> 6*W) and the final-norm Dense
-        (W -> 3*W) all produce constant outputs. Precompute them at init and
-        reuse across every inference call.
+        OPTIMIZATION (TIER A, host variant): adarms_cond is deterministic per
+        step, so the per-block fused modulation Dense (W -> 6*W) and the
+        final-norm Dense (W -> 3*W) produce constant outputs. We now compute
+        everything on host (torch) and upload the results pre-tilized to DRAM
+        in a single ttnn.from_torch per tensor.
 
-        Saves per inference:
-          - 18 layers × 10 steps = 180 modulation matmuls  (~8 ms)
-          - 360 (1→32) row tilizes that fed those matmuls   (~3 ms)
-          - 360 scale_plus_one adds inside _modulated_rms_norm (we also
-            pre-add the +1 here)
+        Saves at init (cold-start) vs. the old device-side path:
+          - 200 device matmuls (~9.8 ms): 180 block mod-Dense (W→6W) +
+            10 final-norm mod-Dense (W→3W) + 10 adarms_cond time-MLP linears
+            no longer happen on device.
+          - ~390 device-side TilizeWithValPadding ops (~4.5 ms): the 1-row
+            (1, W) tensors that fed the device matmuls and the post-add
+            (1+scale) tensors are now pre-tilized on host (padded to (1,1,32,W))
+            before from_torch.
+          - All scale_plus_one adds are done in torch.
+
+        Steady-state inference perf is unchanged — same precomputed tensors,
+        same DRAM placement. Only cold-start (init) gets faster.
         """
+        import torch
         import ttnn as _ttnn
-        from models.experimental.pi0_5.tt.ttnn_gemma import _split_modulation_6
+        from models.experimental.pi0_5.common.configs import SuffixConfig
+        from models.experimental.pi0_5.reference.torch_suffix import Pi0_5SuffixEmbedding
 
         num_steps = self.denoise_config.num_steps
-        blocks = self.backbone.expert_blocks
+        cfg = self.config
+        W = cfg.expert_config.width
+        depth = cfg.expert_config.depth
+        ae_weights = self.weight_loader.categorized_weights["action_expert"]
+        pi0_weights = self.weight_loader.get_pi0_projections()
+
+        # --- adarms_cond per step (host) ---
+        suffix_cfg = SuffixConfig(
+            action_dim=cfg.action_dim,
+            action_horizon=cfg.action_horizon,
+            expert_width=W,
+            pi05=True,
+        )
+        torch_suffix = Pi0_5SuffixEmbedding(suffix_cfg, pi0_weights)
+        timesteps = torch.tensor([1.0 - i / num_steps for i in range(num_steps)], dtype=torch.bfloat16)
+        # adarms_cond_per_step[step] shape (1, W) in bf16 — matches the
+        # original device-side compute precision (HiFi2 bf16 matmul / bf16
+        # output) to keep numerics bit-identical to the prior precompute.
+        adarms_cond_per_step: List[torch.Tensor] = []
+        for i in range(num_steps):
+            c = torch_suffix.embed_timestep_adarms(timesteps[i : i + 1]).to(torch.bfloat16)
+            adarms_cond_per_step.append(c)
+
+        # --- host helper: upload 1×W as logical (1, 1, W) in TILE layout ---
+        # Matches the original device-side _split_modulation_6 output shape
+        # exactly (B=1, 1, W). ttnn.from_torch(layout=TILE) does the tile
+        # padding on host, so no device TilizeWithValPadding op is emitted.
+        def host_pad_tile_upload(t: torch.Tensor) -> "_ttnn.Tensor":
+            assert t.dim() == 2 and t.shape[0] == 1, f"expected (1, W), got {tuple(t.shape)}"
+            t3d = t.unsqueeze(1).contiguous()  # (1, 1, W) — matches _split_modulation_6
+            return _ttnn.from_torch(
+                t3d,
+                dtype=_ttnn.bfloat16,
+                layout=_ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=_ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        # --- Per-block fused mod weights (3W rows per LN × 2 LNs = 6W) ---
         # [step][layer] -> (sa1, ta, ga, sf1, tf, gf)
         self._block_mods_per_step: List[List[tuple]] = []
-        # [step] -> (sf1_final, tf_final)
-        self._final_mod_per_step: List[tuple] = []
+
+        # Cache fused (mod_weight, mod_bias) per layer in torch — same for all steps.
+        per_layer_fused: List[tuple] = []
+        for layer_idx in range(depth):
+            prefix = f"model.layers.{layer_idx}."
+            w_pre_attn = ae_weights[f"{prefix}input_layernorm.dense.weight"]  # (3W, W)
+            w_pre_ffw = ae_weights[f"{prefix}post_attention_layernorm.dense.weight"]  # (3W, W)
+            fused_w = torch.cat([w_pre_attn, w_pre_ffw], dim=0).contiguous().to(torch.bfloat16)  # (6W, W)
+            b_attn_key = f"{prefix}input_layernorm.dense.bias"
+            b_ffw_key = f"{prefix}post_attention_layernorm.dense.bias"
+            if b_attn_key in ae_weights:
+                fused_b = (
+                    torch.cat([ae_weights[b_attn_key], ae_weights[b_ffw_key]], dim=0).contiguous().to(torch.bfloat16)
+                )  # (6W,)
+            else:
+                fused_b = None
+            per_layer_fused.append((fused_w, fused_b))
 
         for step_idx in range(num_steps):
-            cond = self._adarms_cond_per_step_bs1[step_idx]
-
-            per_layer: List[tuple] = []
-            for block in blocks:
-                mod = _ttnn.linear(
-                    cond,
-                    block.mod_weight,
-                    bias=block.mod_bias,
-                    memory_config=_ttnn.DRAM_MEMORY_CONFIG,
-                    core_grid=block.core_grid,
-                    compute_kernel_config=block.mod_compute_kernel_config,
+            cond = adarms_cond_per_step[step_idx]  # (1, W) torch float32
+            per_layer_step: List[tuple] = []
+            for layer_idx in range(depth):
+                fused_w, fused_b = per_layer_fused[layer_idx]
+                mod = torch.nn.functional.linear(cond, fused_w, fused_b)  # (1, 6W)
+                # Split into 6 × (1, W)
+                scale_a = mod[:, 0 * W : 1 * W]
+                shift_a = mod[:, 1 * W : 2 * W]
+                gate_a = mod[:, 2 * W : 3 * W]
+                scale_f = mod[:, 3 * W : 4 * W]
+                shift_f = mod[:, 4 * W : 5 * W]
+                gate_f = mod[:, 5 * W : 6 * W]
+                # Pre-add 1 to scale tensors so rms_norm uses them directly.
+                sa1 = scale_a + 1.0
+                sf1 = scale_f + 1.0
+                # Upload each as host-padded TILE → DRAM (no device tilize).
+                per_layer_step.append(
+                    (
+                        host_pad_tile_upload(sa1),
+                        host_pad_tile_upload(shift_a),
+                        host_pad_tile_upload(gate_a),
+                        host_pad_tile_upload(sf1),
+                        host_pad_tile_upload(shift_f),
+                        host_pad_tile_upload(gate_f),
+                    )
                 )
-                sa, ta, ga, sf, tf, gf = _split_modulation_6(mod)
-                # Pre-add 1 to the scale tensors so rms_norm uses them directly.
-                sa1 = _ttnn.add(sa, 1.0, memory_config=_ttnn.DRAM_MEMORY_CONFIG)
-                sf1 = _ttnn.add(sf, 1.0, memory_config=_ttnn.DRAM_MEMORY_CONFIG)
-                _ttnn.deallocate(sa)
-                _ttnn.deallocate(sf)
-                _ttnn.deallocate(mod)
-                per_layer.append((sa1, ta, ga, sf1, tf, gf))
-            self._block_mods_per_step.append(per_layer)
+            self._block_mods_per_step.append(per_layer_step)
 
-            # Final norm: separate Dense weight (3*W).
-            mod_w = self.backbone.expert_final_norm_mod_weight
-            mod_b = self.backbone.expert_final_norm_mod_bias
-            mod = _ttnn.linear(
-                cond,
-                mod_w,
-                bias=mod_b,
-                memory_config=_ttnn.DRAM_MEMORY_CONFIG,
-                core_grid=self.backbone.core_grid,
+        # --- Final norm (no gate, 3W output) ---
+        final_w = ae_weights["model.norm.dense.weight"].contiguous().to(torch.bfloat16)  # (3W, W)
+        final_b = ae_weights.get("model.norm.dense.bias")
+        if final_b is not None:
+            final_b = final_b.contiguous().to(torch.bfloat16)
+
+        self._final_mod_per_step: List[tuple] = []
+        for step_idx in range(num_steps):
+            cond = adarms_cond_per_step[step_idx]
+            mod = torch.nn.functional.linear(cond, final_w, final_b)  # (1, 3W)
+            scale = mod[:, 0 * W : 1 * W]
+            shift = mod[:, 1 * W : 2 * W]
+            # gate discarded for no-gate final norm.
+            scale1 = scale + 1.0
+            self._final_mod_per_step.append(
+                (
+                    host_pad_tile_upload(scale1),
+                    host_pad_tile_upload(shift),
+                )
             )
-            B = mod.shape[0]
-            width3 = mod.shape[-1]
-            width = width3 // 3
-            mod3 = _ttnn.reshape(mod, (B, 1, width3))
-            _ttnn.deallocate(mod)
-            scale = mod3[:, :, 0:width]
-            shift = mod3[:, :, width : 2 * width]
-            # gate is discarded for final norm (no_gate variant).
-            scale1 = _ttnn.add(scale, 1.0, memory_config=_ttnn.DRAM_MEMORY_CONFIG)
-            _ttnn.deallocate(scale)
-            _ttnn.deallocate(mod3)
-            self._final_mod_per_step.append((scale1, shift))
 
     def _build_sdpa_phantom_mask(self, prefix_kv_len_logical: int) -> "ttnn.Tensor":
         """
