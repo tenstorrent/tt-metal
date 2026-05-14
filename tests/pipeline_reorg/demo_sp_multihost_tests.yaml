@@ -57,7 +57,7 @@
     TT_METAL_SLOW_DISPATCH_MODE=1 tt-run \
       --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_superpod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output --wdir /home/user/tt-metal" \
       --rank-binding blitz_decode_pipeline_rank_binding_superpod_ci.yaml \
-      python3 models/demos/deepseek_v3_b1/demo/teacher_forced.py \
+      python3 -m models.demos.deepseek_v3_b1.demo.teacher_forced \
         --weights real \
         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
