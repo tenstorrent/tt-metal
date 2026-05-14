@@ -36,6 +36,9 @@ COMPUTE_PATH = f"{_KERNEL_DIR}/compute/gdn_recurrence.cpp"
 READER_FUSED_PATH = f"{_KERNEL_DIR}/dataflow/reader_gdn_fused.cpp"
 WRITER_FUSED_PATH = f"{_KERNEL_DIR}/dataflow/writer_gdn_fused.cpp"
 COMPUTE_FUSED_PATH = f"{_KERNEL_DIR}/compute/gdn_fused.cpp"
+# Native-input variant of the recurrence-only kernel (no Python-side retile).
+READER_NATIVE_PATH = f"{_KERNEL_DIR}/dataflow/reader_gdn_native.cpp"
+COMPUTE_NATIVE_PATH = f"{_KERNEL_DIR}/compute/gdn_recurrence_native.cpp"
 READER_PREFILL_PATH = f"{_KERNEL_DIR}/dataflow/reader_gdn_prefill.cpp"
 WRITER_PREFILL_PATH = f"{_KERNEL_DIR}/dataflow/writer_gdn_prefill.cpp"
 COMPUTE_PREFILL_PATH = f"{_KERNEL_DIR}/compute/gdn_prefill.cpp"
@@ -69,6 +72,8 @@ def _compute_kernel_hash():
         READER_FUSED_PATH,
         WRITER_FUSED_PATH,
         COMPUTE_FUSED_PATH,
+        READER_NATIVE_PATH,
+        COMPUTE_NATIVE_PATH,
         READER_PREFILL_PATH,
         WRITER_PREFILL_PATH,
         COMPUTE_PREFILL_PATH,
@@ -677,6 +682,229 @@ def _retile_l1(t):
     return ttnn.to_layout(t, ttnn.TILE_LAYOUT, memory_config=L1)
 
 
+# ---------------------------------------------------------------------------
+# Native-input fused recurrence (no Python-side retile)
+# ---------------------------------------------------------------------------
+
+
+def _build_device_program_native(
+    q_dev,
+    k_dev,
+    v_dev,
+    g_dev,
+    beta_dev,
+    scale_dev,
+    state_dev,
+    output_dev,
+    state_out_dev,
+    num_pairs_total,
+    num_cores,
+    grid,
+    Nv_TP,
+    Nk_TP,
+    repeat_factor,
+):
+    """Per-device program for the native-input recurrence kernel.
+
+    Reader does sub-tile reads from upstream tensors at their natural shapes:
+      q at (B, Nk_TP, Dk), k at (B, Nk_TP, Dk), v at (B, Nv_TP, Dv),
+      g/beta at (1, B, Nv_TP), scale at (1, 1, 1). State at (num_pairs, Dk, Dv).
+    Memory location (L1 vs DRAM) of every input/output is auto-handled at
+    compile-time via TensorAccessorArgs.
+    """
+    max_cores = grid.x * grid.y
+    num_cores = min(num_cores, num_pairs_total, max_cores)
+    pairs_per_core = num_pairs_total // num_cores
+    remainder = num_pairs_total % num_cores
+
+    core_coords = []
+    for i in range(num_cores):
+        core_coords.append(ttnn.CoreCoord(i % grid.x, i // grid.x))
+
+    core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in core_coords])
+
+    # Per-core runtime args (reader, writer)
+    reader_rt_args = ttnn.RuntimeArgs()
+    writer_rt_args = ttnn.RuntimeArgs()
+    pair_offset = 0
+    core_pair_counts = []
+    for i, cc in enumerate(core_coords):
+        n = pairs_per_core + (1 if i < remainder else 0)
+        core_pair_counts.append(n)
+        reader_rt_args[cc.x][cc.y] = [
+            q_dev.buffer_address(),
+            k_dev.buffer_address(),
+            v_dev.buffer_address(),
+            g_dev.buffer_address(),
+            beta_dev.buffer_address(),
+            scale_dev.buffer_address(),
+            state_dev.buffer_address(),
+            pair_offset,
+            n,
+        ]
+        writer_rt_args[cc.x][cc.y] = [
+            output_dev.buffer_address(),
+            state_out_dev.buffer_address(),
+            pair_offset,
+            n,
+        ]
+        pair_offset += n
+
+    # CB descriptors. Same as the retiled-input kernel plus cb_scale (persistent),
+    # cb_q_scaled (compute-internal), and cb_scratch (reader sub-tile landing zone).
+    cb_descriptors = [
+        _make_cb(0, Kt, core_ranges),  # cb_q (reader-filled)
+        _make_cb(1, Kt, core_ranges),  # cb_k (reader-filled, K rows)
+        _make_cb(2, Kt, core_ranges),  # cb_k_col (compute-filled via transpose)
+        _make_cb(3, Vt, core_ranges),  # cb_v
+        _make_cb(4, 1, core_ranges),  # cb_g
+        _make_cb(5, 1, core_ranges),  # cb_beta
+        _make_cb(6, STATE_TILES, core_ranges),  # cb_state_in
+        _make_cb(7, STATE_TILES, core_ranges),  # cb_state_b
+        _make_cb(8, STATE_TILES, core_ranges),  # cb_state_out
+        _make_cb(15, 1, core_ranges),  # cb_scale (persistent)
+        _make_cb(16, Vt, core_ranges),  # cb_out
+        _make_cb(21, 1, core_ranges),  # cb_scratch (reader sub-tile reads)
+        _make_cb(24, 1, core_ranges),  # cb_exp_g
+        _make_cb(25, Vt, core_ranges),  # cb_kv_mem
+        _make_cb(26, Vt, core_ranges),  # cb_delta
+        _make_cb(27, Vt, core_ranges),  # cb_delta_s
+        _make_cb(28, Kt, core_ranges),  # cb_q_scaled (compute-internal)
+    ]
+
+    # Group cores by pair count for compile-time specialization on num_pairs.
+    groups = {}
+    for i, cc in enumerate(core_coords):
+        n = core_pair_counts[i]
+        groups.setdefault(n, []).append(cc)
+
+    all_kernels = []
+    for n_pairs, cores in groups.items():
+        if n_pairs == 0:
+            continue
+
+        group_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+
+        group_reader_rt = ttnn.RuntimeArgs()
+        group_writer_rt = ttnn.RuntimeArgs()
+        for c in cores:
+            group_reader_rt[c.x][c.y] = list(reader_rt_args[c.x][c.y])
+            group_writer_rt[c.x][c.y] = list(writer_rt_args[c.x][c.y])
+
+        # Reader compile-time args: Kt, Vt, tile_bytes, Nv_TP, Nk_TP, repeat_factor,
+        # then 7 TensorAccessorArgs (q, k, v, g, beta, scale, state).
+        reader_ct = [Kt, Vt, BF16_TILE_BYTES, Nv_TP, Nk_TP, repeat_factor]
+        for t in [q_dev, k_dev, v_dev, g_dev, beta_dev, scale_dev, state_dev]:
+            reader_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
+
+        # Writer compile-time args: Kt, Vt, tile_bytes, then 2 TensorAccessorArgs.
+        writer_ct = [Kt, Vt, BF16_TILE_BYTES]
+        writer_ct.extend(ttnn.TensorAccessorArgs(output_dev).get_compile_time_args())
+        writer_ct.extend(ttnn.TensorAccessorArgs(state_out_dev).get_compile_time_args())
+
+        reader_kd = ttnn.KernelDescriptor(
+            kernel_source=READER_NATIVE_PATH,
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=group_ranges,
+            compile_time_args=reader_ct,
+            runtime_args=group_reader_rt,
+            config=ttnn.ReaderConfigDescriptor(),
+        )
+
+        writer_kd = ttnn.KernelDescriptor(
+            kernel_source=WRITER_PATH,  # existing TensorAccessor writer
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=group_ranges,
+            compile_time_args=writer_ct,
+            runtime_args=group_writer_rt,
+            config=ttnn.WriterConfigDescriptor(),
+        )
+
+        compute_kd = ttnn.KernelDescriptor(
+            kernel_source=COMPUTE_NATIVE_PATH,
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=group_ranges,
+            compile_time_args=[Kt, Vt, n_pairs],
+            runtime_args=[],
+            config=ttnn.ComputeConfigDescriptor(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                dst_full_sync_en=False,
+            ),
+        )
+
+        all_kernels.extend([reader_kd, writer_kd, compute_kd])
+
+    return ttnn.ProgramDescriptor(
+        kernels=all_kernels,
+        cbs=cb_descriptors,
+    )
+
+
+def _gdn_recurrence_fused_native(
+    q,
+    k,
+    v,
+    g,
+    beta,
+    scale,
+    state,
+    output,
+    state_out,
+    num_cores,
+    Nv_TP,
+    Nk_TP,
+    repeat_factor,
+):
+    """Execute the native-input fused GDN recurrence kernel.
+
+    Single-device and mesh (multi-device TP) supported, mirroring
+    `_gdn_recurrence_fused` for the retiled-input variant.
+    """
+    mesh_device = q.device()
+    num_pairs_total = state.shape[0]
+    mesh_shape = mesh_device.shape
+    num_devices = mesh_shape[0] * mesh_shape[1]
+
+    mesh_tensors = [q, k, v, g, beta, scale, state, output, state]
+
+    if num_devices == 1:
+        devs = [ttnn.get_device_tensors(t)[0] for t in mesh_tensors]
+        grid = devs[0].device().compute_with_storage_grid_size()
+        program = _build_device_program_native(
+            *devs,
+            num_pairs_total,
+            num_cores,
+            grid,
+            Nv_TP=Nv_TP,
+            Nk_TP=Nk_TP,
+            repeat_factor=repeat_factor,
+        )
+        return ttnn.generic_op(mesh_tensors, program)
+
+    per_device = [ttnn.get_device_tensors(t) for t in mesh_tensors]
+    mesh_program = ttnn.MeshProgramDescriptor()
+    for row in range(mesh_shape[0]):
+        for col in range(mesh_shape[1]):
+            device_idx = row * mesh_shape[1] + col
+            coord = ttnn.MeshCoordinate(row, col)
+            devs = [per_device[i][device_idx] for i in range(len(mesh_tensors))]
+            grid = devs[0].device().compute_with_storage_grid_size()
+            program = _build_device_program_native(
+                *devs,
+                num_pairs_total,
+                num_cores,
+                grid,
+                Nv_TP=Nv_TP,
+                Nk_TP=Nk_TP,
+                repeat_factor=repeat_factor,
+            )
+            mesh_program[ttnn.MeshCoordinateRange(coord, coord)] = program
+
+    return ttnn.generic_op(mesh_tensors, mesh_program)
+
+
 def gdn_recurrence_fused_native_inplace(
     q_raw,  # (B, Nk_TP, Dk)   L2-normed Q, pre-scale, pre-repeat-interleave
     k_raw,  # (B, Nk_TP, Dk)   L2-normed K
@@ -693,31 +921,53 @@ def gdn_recurrence_fused_native_inplace(
 ):
     """GDN recurrence on "native" (un-retiled, pre-scale, pre-repeat) inputs.
 
-    Step A (current): runs the full retile + repeat_interleave + scale + transpose
-    prep chain internally, then calls `gdn_recurrence_fused_inplace`. Behavior is
-    identical to the caller doing the prep externally — this entry point exists so
-    that Step B can swap the implementation to use a new reader that does sub-tile
-    reads, eliminating the retile chain entirely on the fused path.
+    Fast path (Step B): native reader does sub-tile reads from upstream shapes.
+    No Python-side retile / repeat_interleave / scale / transpose required.
 
-    The composite fallback (used when GDN_DISABLE_FUSED=1 or when the fused kernel
-    raises) always goes through the retile prep — composite ttnn ops can't operate
-    on the native shapes.
+    Fallback (composite path, e.g. GDN_DISABLE_FUSED=1 or runtime failure):
+    runs the full retile + repeat_interleave + scale + transpose prep chain
+    internally, then calls `gdn_recurrence_fused_inplace` (which drops to
+    `_gdn_recurrence_ttnn` since `_fused_available` is false at that point).
+    Composite ttnn ops can't operate on the native shapes.
     """
+    global _fused_available
+
+    # ---- Fast path: native-input fused kernel ----
+    if _fused_available:
+        try:
+            _gdn_recurrence_fused_native(
+                q_raw,
+                k_raw,
+                v_raw,
+                g_raw,
+                beta_raw,
+                scale_tile,
+                state,
+                output,
+                state,
+                num_cores=num_cores,
+                Nv_TP=Nv_TP,
+                Nk_TP=Nk_TP,
+                repeat_factor=repeat_factor,
+            )
+            return
+        except Exception as e:
+            logger.warning(f"Native fused GDN kernel failed, falling back to retile+composite: {e}")
+            _fused_available = False
+
+    # ---- Composite fallback: run the full retile prep, then the composite ttnn path ----
     L1 = ttnn.L1_MEMORY_CONFIG
     B = q_raw.shape[0]
     Dk = q_raw.shape[-1]
     Dv = v_raw.shape[-1]
     num_pairs = B * Nv_TP
 
-    # Repeat-interleave Q and K from Nk_TP heads to Nv_TP heads.
     q_exp = ttnn.repeat_interleave(q_raw, repeat_factor, dim=1, memory_config=L1)
     k_exp = ttnn.repeat_interleave(k_raw, repeat_factor, dim=1, memory_config=L1)
 
-    # Apply Q scale.
     q_ns = ttnn.multiply(q_exp, scale_tile, memory_config=L1)
     ttnn.deallocate(q_exp)
 
-    # Retile to (num_pairs, 1, D) for the per-pair tile-index kernel reader.
     q_fused = _retile_l1(ttnn.reshape(q_ns, (num_pairs, 1, Dk), memory_config=L1))
     ttnn.deallocate(q_ns)
 
