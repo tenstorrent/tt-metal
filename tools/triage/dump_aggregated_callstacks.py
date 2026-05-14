@@ -12,7 +12,7 @@ Options:
     --device-visualization           Show device visualizations instead of plain coordinate lists in the Locations column.
 
 Description:
-    Aggregates callstacks by (Kernel Id, normalized PC, RISC Name) and shows:
+    Aggregates callstacks by (Kernel Id, normalized PC, RISC Name and Operation Id) and shows:
       - Kernel Id / Kernel Name
       - Op Id (host_assigned_id, for correlation with dump_running_operations.py)
       - Callstack
