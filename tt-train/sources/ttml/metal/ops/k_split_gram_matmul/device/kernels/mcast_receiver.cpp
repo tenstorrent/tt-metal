@@ -13,14 +13,14 @@
 void kernel_main() {
     constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t tile_size = get_compile_time_arg_val(1);
-    uint32_t sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(2));
-    uint32_t receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(3));
+    const uint32_t sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(2));
+    const uint32_t receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(3));
     constexpr uint32_t cb_id = get_compile_time_arg_val(4);
     constexpr uint32_t block_size = get_compile_time_arg_val(5);
 
 #ifdef REDUCE_RECV
     constexpr uint32_t reduce_cb = get_compile_time_arg_val(6);
-    uint32_t reduce_sem_addr = get_semaphore(get_compile_time_arg_val(7));
+    const uint32_t reduce_sem_addr = get_semaphore(get_compile_time_arg_val(7));
     constexpr uint32_t Mpc = get_compile_time_arg_val(8);
     constexpr uint32_t num_m_blocks = get_compile_time_arg_val(9);
     constexpr uint32_t M_block = get_compile_time_arg_val(10);
@@ -59,11 +59,11 @@ void kernel_main() {
             {
                 volatile tt_l1_ptr uint32_t* reduce_sem_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_sem_addr);
-                uint32_t M_start = m_sub * M_block;
-                uint32_t current_M_block = std::min(M_block, Mpc - M_start);
-                uint32_t N_start = n_sub * N_block;
-                uint32_t current_N = std::min(N_block, Mpc - N_start);
-                uint32_t block_tiles = current_M_block * current_N;
+                const uint32_t M_start = m_sub * M_block;
+                const uint32_t current_M_block = std::min(M_block, Mpc - M_start);
+                const uint32_t N_start = n_sub * N_block;
+                const uint32_t current_N = std::min(N_block, Mpc - N_start);
+                const uint32_t block_tiles = current_M_block * current_N;
                 cb_reserve_back(reduce_cb, block_tiles);
                 noc_semaphore_wait(reduce_sem_ptr, 1);
                 noc_semaphore_set(reduce_sem_ptr, 0);

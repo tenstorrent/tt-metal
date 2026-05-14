@@ -17,10 +17,10 @@
 void kernel_main() {
     constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t tile_size = get_compile_time_arg_val(1);
-    uint32_t sender_sem_addr = get_semaphore(get_compile_time_arg_val(2));
-    uint32_t receiver_sem_addr = get_semaphore(get_compile_time_arg_val(3));
-    uint32_t sender_sem2_addr = get_semaphore(get_compile_time_arg_val(4));
-    uint32_t receiver_sem2_addr = get_semaphore(get_compile_time_arg_val(5));
+    const uint32_t sender_sem_addr = get_semaphore(get_compile_time_arg_val(2));
+    const uint32_t receiver_sem_addr = get_semaphore(get_compile_time_arg_val(3));
+    const uint32_t sender_sem2_addr = get_semaphore(get_compile_time_arg_val(4));
+    const uint32_t receiver_sem2_addr = get_semaphore(get_compile_time_arg_val(5));
     constexpr uint32_t cb_id = get_compile_time_arg_val(6);
     constexpr uint32_t block_size = get_compile_time_arg_val(7);
     constexpr uint32_t cb_size_tiles = get_compile_time_arg_val(8);
@@ -29,7 +29,7 @@ void kernel_main() {
     constexpr uint32_t cb_out = get_compile_time_arg_val(9);
     constexpr uint32_t out_tile_size = get_compile_time_arg_val(10);
     constexpr uint32_t reduce_cb = get_compile_time_arg_val(11);
-    uint32_t reduce_sem_addr = get_semaphore(get_compile_time_arg_val(12));
+    const uint32_t reduce_sem_addr = get_semaphore(get_compile_time_arg_val(12));
     constexpr uint32_t num_m_blocks = get_compile_time_arg_val(13);
     constexpr uint32_t M_block = get_compile_time_arg_val(14);
     constexpr uint32_t num_n_blocks = get_compile_time_arg_val(15);
@@ -80,15 +80,15 @@ void kernel_main() {
     constexpr uint32_t cb_capacity_bytes = cb_size_tiles * tile_size;
 
     // M_block = num_tiles / K_tiles, K_block_tiles = block_size / M_block
-    uint32_t rows_per_block = num_tiles / K_tiles;
-    uint32_t K_block_tiles = block_size / rows_per_block;
+    const uint32_t rows_per_block = num_tiles / K_tiles;
+    const uint32_t K_block_tiles = block_size / rows_per_block;
 
-    uint32_t recv_cb_base = get_write_ptr(cb_id);
+    const uint32_t recv_cb_base = get_write_ptr(cb_id);
 
     for (uint32_t m_sub = 0; m_sub < num_m_blocks; m_sub++) {
         for (uint32_t n_sub = 0; n_sub < num_n_blocks; n_sub++) {
             // Row sender (c_0): reads rows m_sub*M_block+m; col sender (c_1): reads rows n_sub*N_block+n
-            uint32_t row_base = (cb_id == 0) ? m_sub * rows_per_block : n_sub * rows_per_block;
+            const uint32_t row_base = (cb_id == 0) ? m_sub * rows_per_block : n_sub * rows_per_block;
 
             uint32_t lower_recv_offset = 0;
             uint32_t upper_recv_offset = 0;
@@ -96,18 +96,18 @@ void kernel_main() {
             for (uint32_t blk = 0; blk < num_blocks; blk++) {
                 bool is_lower_block = (blk % 2 == 0);
 
-                uint32_t batch_idx = blk / 2;
-                uint32_t first_k_col = batch_idx * K_block_tiles * 2 + (is_lower_block ? 0 : 1);
+                const uint32_t batch_idx = blk / 2;
+                const uint32_t first_k_col = batch_idx * K_block_tiles * 2 + (is_lower_block ? 0 : 1);
 
                 cb_reserve_back(cb_id, block_size);
-                uint32_t base_addr = get_write_ptr(cb_id);
+                const uint32_t base_addr = get_write_ptr(cb_id);
                 for (uint32_t kb = 0; kb < K_block_tiles; kb++) {
-                    uint32_t k_col = first_k_col + kb * 2;
+                    const uint32_t k_col = first_k_col + kb * 2;
                     for (uint32_t m = 0; m < rows_per_block; m++) {
-                        uint32_t cb_offset = (kb * rows_per_block + m) * tile_size;
-                        uint32_t global_row = tile_offset + row_base + m;
+                        const uint32_t cb_offset = (kb * rows_per_block + m) * tile_size;
+                        const uint32_t global_row = tile_offset + row_base + m;
                         if (global_row < logical_M_tiles && k_col < logical_K_tiles) {
-                            uint32_t dram_tile = global_row * logical_K_tiles + k_col;
+                            const uint32_t dram_tile = global_row * logical_K_tiles + k_col;
                             noc_async_read_tile(dram_tile, reader, base_addr + cb_offset);
                         } else {
                             fill_tile_zeros(base_addr + cb_offset, tile_size);
@@ -199,17 +199,17 @@ void kernel_main() {
 
 #ifdef SENDER_REDUCE_SEND
             {
-                uint32_t M_start = m_sub * rows_per_block;
-                uint32_t current_M_block = std::min(rows_per_block, Mpc - M_start);
-                uint32_t N_start = n_sub * rows_per_block;
-                uint32_t current_N = std::min(rows_per_block, Mpc - N_start);
-                uint32_t block_tiles = current_M_block * current_N;
+                const uint32_t M_start = m_sub * rows_per_block;
+                const uint32_t current_M_block = std::min(rows_per_block, Mpc - M_start);
+                const uint32_t N_start = n_sub * rows_per_block;
+                const uint32_t current_N = std::min(rows_per_block, Mpc - N_start);
+                const uint32_t block_tiles = current_M_block * current_N;
 
-                uint32_t partner_reduce_addr = get_write_ptr(reduce_cb);
-                uint64_t partner_sem_noc = get_noc_addr(partner_noc_x, partner_noc_y, reduce_sem_addr);
+                const uint32_t partner_reduce_addr = get_write_ptr(reduce_cb);
+                const uint64_t partner_sem_noc = get_noc_addr(partner_noc_x, partner_noc_y, reduce_sem_addr);
 
                 cb_wait_front(cb_out, block_tiles);
-                uint32_t l1_read_addr = get_read_ptr(cb_out);
+                const uint32_t l1_read_addr = get_read_ptr(cb_out);
                 uint64_t partner_noc_addr = get_noc_addr(partner_noc_x, partner_noc_y, partner_reduce_addr);
                 noc_async_write(l1_read_addr, partner_noc_addr, block_tiles * out_tile_size);
                 noc_async_write_barrier();

@@ -21,22 +21,22 @@ constexpr uint32_t kInnerKTiles = 1;  // K tiles per matmul_block call
 
 // M_block x N_block matmul with K-outer layout.
 void matmul_blocks(
-    uint32_t in0_cb,
-    uint32_t in1_cb,
-    uint32_t out_cb,
-    uint32_t M_block,
-    uint32_t N_block,
-    uint32_t K_block_tiles,
-    uint32_t subblock_h,
-    uint32_t subblock_w,
-    uint32_t current_M,
-    uint32_t current_N) {
+    const uint32_t in0_cb,
+    const uint32_t in1_cb,
+    const uint32_t out_cb,
+    const uint32_t M_block,
+    const uint32_t N_block,
+    const uint32_t K_block_tiles,
+    const uint32_t subblock_h,
+    const uint32_t subblock_w,
+    const uint32_t current_M,
+    const uint32_t current_N) {
     uint32_t last_sh = subblock_h, last_sw = subblock_w;
 
     for (uint32_t ms = 0; ms < current_M; ms += subblock_h) {
-        uint32_t current_sh = std::min(subblock_h, current_M - ms);
+        const uint32_t current_sh = std::min(subblock_h, current_M - ms);
         for (uint32_t ns = 0; ns < current_N; ns += subblock_w) {
-            uint32_t current_sw = std::min(subblock_w, current_N - ns);
+            const uint32_t current_sw = std::min(subblock_w, current_N - ns);
 
             // Only reconfigure when subblock size changes (edge tiles)
             if (current_sh != last_sh || current_sw != last_sw) {
@@ -48,8 +48,8 @@ void matmul_blocks(
             tile_regs_acquire();
 
             for (uint32_t k = 0; k < K_block_tiles; k++) {
-                uint32_t in0_index = k * M_block + ms;
-                uint32_t in1_index = k * N_block + ns;
+                const uint32_t in0_index = k * M_block + ms;
+                const uint32_t in1_index = k * N_block + ns;
                 matmul_block(
                     in0_cb,
                     in1_cb,
@@ -68,7 +68,7 @@ void matmul_blocks(
             uint32_t dst = 0;
             for (uint32_t h = 0; h < current_sh; h++) {
                 for (uint32_t w = 0; w < current_sw; w++) {
-                    uint32_t out_tile_id = (ms + h) * current_N + (ns + w);
+                    const uint32_t out_tile_id = (ms + h) * current_N + (ns + w);
                     pack_tile<true>(dst, out_cb, out_tile_id);
                     dst++;
                 }
@@ -86,7 +86,8 @@ void matmul_blocks(
 // Pack c_2 → c_5 in row-major order for DM to send to reduction partner.
 // REDUCE_SENDER_TRANSPOSE: transpose tile content + swap indices so receiver can add directly.
 // REDUCE_SENDER: identity copy with FP32 → BF16 format conversion.
-void pack_subblock_pernsb(uint32_t in_cb, uint32_t out_cb, uint32_t current_M, uint32_t current_N) {
+void pack_subblock_pernsb(
+    const uint32_t in_cb, const uint32_t out_cb, const uint32_t current_M, const uint32_t current_N) {
 #ifdef REDUCE_SENDER_TRANSPOSE
     transpose_wh_init(in_cb, out_cb);
     reconfig_data_format_srca(in_cb);
@@ -94,8 +95,8 @@ void pack_subblock_pernsb(uint32_t in_cb, uint32_t out_cb, uint32_t current_M, u
 
     for (uint32_t m = 0; m < current_M; m++) {
         for (uint32_t n = 0; n < current_N; n++) {
-            uint32_t in_tile = m * current_N + n;
-            uint32_t out_tile = n * current_M + m;
+            const uint32_t in_tile = m * current_N + n;
+            const uint32_t out_tile = n * current_M + m;
             acquire_dst();
             transpose_wh_tile(in_cb, in_tile, 0);
             pack_tile<true>(0, out_cb, out_tile);
@@ -117,7 +118,12 @@ void pack_subblock_pernsb(uint32_t in_cb, uint32_t out_cb, uint32_t current_M, u
 }
 
 #ifdef REDUCE_ACCUMULATOR
-void add_reduce_block(uint32_t own_cb, uint32_t recv_cb, uint32_t out_cb, uint32_t M_rows, uint32_t N_cols) {
+void add_reduce_block(
+    const uint32_t own_cb,
+    const uint32_t recv_cb,
+    const uint32_t out_cb,
+    const uint32_t M_rows,
+    const uint32_t N_cols) {
     add_tiles_init(own_cb, recv_cb);
     reconfig_data_format(own_cb, recv_cb);
     pack_reconfig_data_format(out_cb);
@@ -142,7 +148,12 @@ void add_reduce_block(uint32_t own_cb, uint32_t recv_cb, uint32_t out_cb, uint32
 // src_stride: column stride in source CBs (= M_block for row-major c_2).
 // Note: transpose_wh_dest() is buggy on Blackhole (PCC≈0.2), so we stage through c_7 BF16 CB.
 void add_transpose_block(
-    uint32_t own_cb, uint32_t recv_cb, uint32_t mirror_cb, uint32_t M_rows, uint32_t N_cols, uint32_t src_stride) {
+    const uint32_t own_cb,
+    const uint32_t recv_cb,
+    const uint32_t mirror_cb,
+    const uint32_t M_rows,
+    const uint32_t N_cols,
+    const uint32_t src_stride) {
     constexpr uint32_t staging_cb = tt::CBIndex::c_7;
     for (uint32_t n = 0; n < N_cols; n++) {
         // Phase 1: batch add M_rows tiles for column n into staging
@@ -151,7 +162,7 @@ void add_transpose_block(
         pack_reconfig_data_format(staging_cb);
         cb_reserve_back(staging_cb, M_rows);
         for (uint32_t m = 0; m < M_rows; m++) {
-            uint32_t tile_id = n * src_stride + m;
+            const uint32_t tile_id = n * src_stride + m;
             acquire_dst();
             add_tiles(own_cb, recv_cb, tile_id, tile_id, 0);
             pack_tile<true>(0, staging_cb, m);
@@ -209,12 +220,12 @@ void kernel_main() {
     pack_reconfig_data_format(intermed_cb);
 
     for (uint32_t m_sub = 0; m_sub < num_m_blocks; m_sub++) {
-        uint32_t current_M_block = std::min(M_block, Mpc - m_sub * M_block);
+        const uint32_t current_M_block = std::min(M_block, Mpc - m_sub * M_block);
 
         for (uint32_t n_sub = 0; n_sub < num_n_blocks; n_sub++) {
-            uint32_t N_start = n_sub * N_block;
-            uint32_t current_N = std::min(N_block, Mpc - N_start);
-            uint32_t intermed_tiles = current_M_block * current_N;
+            const uint32_t N_start = n_sub * N_block;
+            const uint32_t current_N = std::min(N_block, Mpc - N_start);
+            const uint32_t intermed_tiles = current_M_block * current_N;
 
             cb_reserve_back(intermed_cb, intermed_tiles);
 

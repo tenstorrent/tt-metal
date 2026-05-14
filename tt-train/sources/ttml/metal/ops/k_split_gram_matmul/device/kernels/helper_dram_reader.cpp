@@ -44,27 +44,27 @@ void kernel_main() {
     constexpr uint32_t K_block_tiles = block_size / M_block;
 
     for (uint32_t m_sub = 0; m_sub < num_m_blocks; m_sub++) {
-        uint32_t M_start = m_sub * M_block;
-        uint32_t current_M_block = std::min(M_block, Mpc - M_start);
+        const uint32_t M_start = m_sub * M_block;
+        const uint32_t current_M_block = std::min(M_block, Mpc - M_start);
 
         for (uint32_t n_sub = 0; n_sub < num_n_blocks; n_sub++) {
-            uint32_t row_base = n_sub * M_block;
-            uint32_t N_start = n_sub * M_block;
-            uint32_t current_N = std::min(M_block, Mpc - N_start);
+            const uint32_t row_base = n_sub * M_block;
+            const uint32_t N_start = n_sub * M_block;
+            const uint32_t current_N = std::min(M_block, Mpc - N_start);
 
             // Read odd K-columns from DRAM
             for (uint32_t blk = 0; blk < num_blocks; blk++) {
-                uint32_t first_k_col = blk * K_block_tiles * 2 + 1;
+                const uint32_t first_k_col = blk * K_block_tiles * 2 + 1;
 
                 cb_reserve_back(cb_id, block_size);
-                uint32_t base_addr = get_write_ptr(cb_id);
+                const uint32_t base_addr = get_write_ptr(cb_id);
                 for (uint32_t kb = 0; kb < K_block_tiles; kb++) {
-                    uint32_t k_col = first_k_col + kb * 2;
+                    const uint32_t k_col = first_k_col + kb * 2;
                     for (uint32_t m = 0; m < M_block; m++) {
-                        uint32_t cb_offset = (kb * M_block + m) * tile_size;
-                        uint32_t global_row = tile_offset + row_base + m;
+                        const uint32_t cb_offset = (kb * M_block + m) * tile_size;
+                        const uint32_t global_row = tile_offset + row_base + m;
                         if (global_row < logical_M_tiles && k_col < logical_K_tiles) {
-                            uint32_t dram_tile = global_row * logical_K_tiles + k_col;
+                            const uint32_t dram_tile = global_row * logical_K_tiles + k_col;
                             noc_async_read_tile(dram_tile, reader, base_addr + cb_offset);
                         } else {
                             fill_tile_zeros(base_addr + cb_offset, tile_size);
@@ -79,12 +79,12 @@ void kernel_main() {
             const auto out_writer = TensorAccessor(output_ta, out_addr, out_tile_size);
             for (uint32_t m = 0; m < current_M_block; m++) {
                 cb_wait_front(cb_out, current_N);
-                uint32_t l1_read_addr = get_read_ptr(cb_out);
-                uint32_t row = M_start_tile + M_start + m;
+                const uint32_t l1_read_addr = get_read_ptr(cb_out);
+                const uint32_t row = M_start_tile + M_start + m;
                 for (uint32_t n = 0; n < current_N; n++) {
-                    uint32_t col = N_start_tile + N_start + n;
+                    const uint32_t col = N_start_tile + N_start + n;
                     if (row < logical_M_tiles && col < logical_M_tiles) {
-                        uint32_t tid = row * padded_out_tiles + col;
+                        const uint32_t tid = row * padded_out_tiles + col;
                         noc_async_write_tile(tid, out_writer, l1_read_addr + n * out_tile_size);
                     }
                 }
