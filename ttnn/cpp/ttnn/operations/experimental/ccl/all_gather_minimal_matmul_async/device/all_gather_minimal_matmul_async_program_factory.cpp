@@ -221,8 +221,8 @@ all_gather_minimal_matmul_async_factory_helper(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    // Intermediate CB dataformat is the same datatype as DST register.
-    auto intermediate_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    // Intermediate CB dataformat: bf16 even with fp32 dest acc (saves L1 for deeper in0_cb).
+    auto intermediate_data_format = tt::DataFormat::Float16_b;
     auto intermediate_tile_size = tt::tile_size(intermediate_data_format);
 
     /**
@@ -336,10 +336,28 @@ all_gather_minimal_matmul_async_factory_helper(
     uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
     uint32_t in2_block_num_tiles = N_block_tiles;
 
-    // EXPERIMENT: depth-4 in0_cb, single-buffer out_cb
-    uint32_t in0_cb_num_tiles = in0_block_num_tiles * 4;  // depth-4
-    uint32_t in1_cb_num_tiles = in1_block_num_tiles * 2;  // depth-2
-    uint32_t out_cb_num_tiles = out_block_num_tiles;      // single
+    // Adaptive CB depth: maximize in0_cb depth subject to L1 budget. Deep in0_cb hides
+    // the chain mcast pipeline build-up (~100us at depth 2).
+    const uint32_t L1_BUDGET_BYTES = 1400 * 1024;                                  // conservative
+    uint32_t fixed_bytes = out_block_num_tiles * out_tile_size                     // out (single)
+                           + out_block_num_tiles * intermediate_tile_size          // intermediate (single)
+                           + (use_bias ? in2_block_num_tiles * in2_tile_size : 0)  // bias (single)
+                           + in1_block_num_tiles * in1_tile_size * 3;              // in1 (target depth 3)
+    uint32_t in0_block_bytes = in0_block_num_tiles * in0_tile_size;
+    uint32_t in0_depth = 2;
+    uint32_t in1_depth = 3;
+    if (fixed_bytes + 2 * in0_block_bytes > L1_BUDGET_BYTES) {
+        // Doesn't fit with in1 depth 3 — back off to depth 2.
+        fixed_bytes -= in1_block_num_tiles * in1_tile_size;
+        in1_depth = 2;
+    }
+    if (fixed_bytes < L1_BUDGET_BYTES) {
+        in0_depth = std::min(8u, (L1_BUDGET_BYTES - fixed_bytes) / std::max(1u, in0_block_bytes));
+        in0_depth = std::max(2u, in0_depth);
+    }
+    uint32_t in0_cb_num_tiles = in0_block_num_tiles * in0_depth;
+    uint32_t in1_cb_num_tiles = in1_block_num_tiles * in1_depth;
+    uint32_t out_cb_num_tiles = out_block_num_tiles;
     uint32_t interm_cb_num_tiles = out_block_num_tiles;  // not double buffered
     uint32_t in2_cb_num_tiles = in2_block_num_tiles;     // not double buffered
 
