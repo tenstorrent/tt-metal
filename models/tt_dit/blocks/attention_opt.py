@@ -128,7 +128,7 @@ class Attention(Module):
         )
 
         # Ring SDPA: reserve last column for CCL, use hardware/parallelism-adaptive chunk sizes.
-        self.ring_sdpa_worker_grid = (full_grid.x - 1, full_grid.y)
+        self.ring_sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
         ring_chunk_size = self.ring_sdpa_chunk_size_map.get(
             (
                 is_blackhole(),
@@ -575,8 +575,7 @@ class Attention(Module):
                 mesh_device=self.mesh_device,
                 topology=self.ccl_manager.topology,
                 subdevice_id=self.ccl_manager.ccl_sub_device_id,
-                ccl_core_grid_offset=(self.ring_sdpa_worker_grid[0], 0),
-                use_column_major_ccl=True,
+                ccl_core_grid_offset=(0, self.ring_sdpa_worker_grid[1]),
             )
         else:
             assert (
