@@ -26,6 +26,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_graph_capture_arguments_transpose.cpp
     test_graph_query_op_constraints.cpp
     test_graph_query_op_runtime.cpp
+    test_metal_env_mock_ccl_repro.cpp
     test_launch_operation.cpp
     test_matmul.cpp
     test_matmul_multicore.cpp

@@ -7,6 +7,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <set>
 #include <sstream>
@@ -27,6 +28,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/experimental/mock_device.hpp>
+#include <tt-metalium/experimental/context/metal_env.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
@@ -1019,6 +1021,7 @@ std::shared_ptr<distributed::MeshDevice> DistributedTensorOpIfRealFixture::devic
 //   WORMHOLE_B0 + 32 chips → Galaxy   4x8 grid
 template <uint32_t Rows, uint32_t Cols>
 class DistributedTensorOpIfMockFixture : public DistributedTensorOpIfFixtureBase {
+    static std::unique_ptr<tt::tt_metal::MetalEnv> env_holder_;
     static std::shared_ptr<distributed::MeshDevice> device_holder_;
 
 protected:
@@ -1031,36 +1034,41 @@ protected:
     void TearDown() override { device_ = nullptr; }
 
     static void SetUpTestSuite() {
-        try {
-            tt::tt_metal::experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, Rows * Cols);
-            device_holder_ =
-                distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{Rows, Cols}));
-        } catch (const std::exception& e) {
-            // Descriptor unavailable (e.g. TT_METAL_HOME not set for custom descriptors).
-            // Disable mock mode to avoid leaking global state into subsequent test suites.
-            tt::tt_metal::experimental::disable_mock_mode();
-            // device_holder_ stays null → per-test SetUp will GTEST_SKIP.
-            return;
+        auto mock_path = tt::tt_metal::experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, Rows * Cols);
+        if (!mock_path.has_value()) {
+            return;  // unsupported (arch, num_chips) → tests will GTEST_SKIP.
         }
-        // Mock devices skip the auto-enable path in device_manager, so fabric
-        // must be configured and routing tables populated manually.
-        // initialize_fabric_config() queries the mock YAML descriptor (not real
-        // hardware); RELAXED mode tolerates missing ETH links in that descriptor.
-        tt::tt_fabric::SetFabricConfig(
-            tt::tt_fabric::FabricConfig::FABRIC_1D,
-            tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
-        tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+        try {
+            // Fabric is configured up front on the descriptor; MetalEnv applies it during
+            // construction. RELAXED tolerates missing ETH links in the mock YAML.
+            // num_routing_planes must be set explicitly: the descriptor-driven init at
+            // metal_env.cpp:73-75 only stores the value when the optional has one, unlike
+            // the legacy SetFabricConfig path which defaults nullopt to numeric_limits::max().
+            tt::tt_metal::FabricConfigDescriptor fabric_desc;
+            fabric_desc.fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D;
+            fabric_desc.reliability_mode = tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE;
+            fabric_desc.num_routing_planes = std::numeric_limits<uint8_t>::max();
+            env_holder_ =
+                std::make_unique<tt::tt_metal::MetalEnv>(tt::tt_metal::MetalEnvDescriptor(*mock_path, fabric_desc));
+            device_holder_ =
+                env_holder_->create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape{Rows, Cols}));
+        } catch (const std::exception& e) {
+            // Mock cluster descriptor unavailable or env construction failed.
+            // RAII on env_holder_ tears down whatever partial state was set up.
+            env_holder_.reset();
+        }
     }
 
     static void TearDownTestSuite() {
         if (device_holder_) {
-            tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
             device_holder_->close();
             device_holder_.reset();
-            tt::tt_metal::experimental::disable_mock_mode();
         }
+        env_holder_.reset();  // RAII handles fabric reset and mock-mode cleanup.
     }
 };
+template <uint32_t Rows, uint32_t Cols>
+std::unique_ptr<tt::tt_metal::MetalEnv> DistributedTensorOpIfMockFixture<Rows, Cols>::env_holder_;
 template <uint32_t Rows, uint32_t Cols>
 std::shared_ptr<distributed::MeshDevice> DistributedTensorOpIfMockFixture<Rows, Cols>::device_holder_;
 
