@@ -191,29 +191,32 @@ void kernel_main() {
 #else
         reconfig_data_format(cb_in0, cb_in0);
         pack_reconfig_data_format(cb_exps);
-        // exp(x)
-        index_subblock_w_offset = 0;
-        copy_tile_to_dst_init_short(cb_in0);
-        exp_tile_init<EXP_APPROX>();
-        for (uint32_t j = 0; j < num_subblocks_w; j++) {
-            tile_regs_acquire();
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                index = w + index_subblock_w_offset;
-                copy_tile(cb_in0, index, w);
-            }
-            cb_exps_obj.reserve_back(subblock_w);
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                exp_tile<EXP_APPROX>(w);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                pack_tile(w, cb_exps);
-            }
-            tile_regs_release();
-            cb_exps_obj.push_back(subblock_w);
-            index_subblock_w_offset += subblock_w;
-        }
+        // Migrated: streaming copy + exp + pack via eltwise_chain (sharded path,
+        // no FUSED_SCALE_MASK, no NUMERIC_STABLE). cb_in0 lifecycle stays caller-
+        // owned (NoWaitNoPop) — cb_in0_obj.pop_front(block_w) below preserves
+        // the original block-sized pop. CopyTile uses BlockIter so each chain
+        // iter consumes tile[i] for i in 0..block_w-1, matching the absolute-
+        // index copy_tile(cb_in0, j*subblock_w + w, w) the prior loop emitted.
+        // PackTile<PerTileReserveAndPush + FirstTile> matches the per-tile
+        // reserve_back / pack_tile / push_back inside the original subblock
+        // loop (write pointer advances per push). Caller-side reconfigs above
+        // and the outer binary_op_init_common cover the chain's setup needs
+        // (mid-MAIN chain — no extra hw startup per D5).
+        compute_kernel_lib::eltwise_chain(
+            block_w,
+            compute_kernel_lib::CopyTile<
+                cb_in0,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
+                compute_kernel_lib::CbIndexMode::BlockIter>{},
+            compute_kernel_lib::Exp<
+                static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_exps,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
         cb_in0_obj.pop_front(block_w);
 #endif
 #endif  // FUSED_SCALE_MASK
