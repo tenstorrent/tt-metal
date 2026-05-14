@@ -13,7 +13,7 @@ namespace ckernel::pack
 // Covers ADDR32 54-55 (THCON_PACKER0_REG1)
 constexpr std::uint32_t NUM_WORDS_PACK_UNTILIZE_STRIDE_CFG = 2;
 
-typedef struct
+struct pack_untilize_stride_cfg_t
 {
     // word 0 — ADDR32 54
     std::uint32_t edge_mask_mode : 2;  // EDGE_MASK_MODE
@@ -24,15 +24,15 @@ typedef struct
     // word 1 — ADDR32 55
     std::uint32_t stride_offset_0 : 16; // PACK_STRIDE_OFFSET_0
     std::uint32_t stride_offset_1 : 16; // PACK_STRIDE_OFFSET_1
-} pack_untilize_stride_cfg_t;
+};
 
 static_assert(sizeof(pack_untilize_stride_cfg_t) == NUM_WORDS_PACK_UNTILIZE_STRIDE_CFG * sizeof(std::uint32_t));
 
-typedef union
+union pack_untilize_stride_cfg_u
 {
     std::uint32_t val[NUM_WORDS_PACK_UNTILIZE_STRIDE_CFG];
     pack_untilize_stride_cfg_t f;
-} pack_untilize_stride_cfg_u;
+};
 
 constexpr static std::uint32_t TRISC_ID = 2;
 static std::uint32_t clear_dest_bank_id = 0;
