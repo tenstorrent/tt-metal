@@ -84,6 +84,11 @@ on:
         type: string
         default: ""
         description: 'Commit SHA to test (default: HEAD)'
+      wheel-ref:
+        required: false
+        type: string
+        default: ""
+        description: "Git ref used only for wheel checkout/versioning"
       use-artifacts-from-run:
         required: false
         type: string
@@ -223,6 +228,11 @@ on:
         description: >-
           Git fetch depth for the checkout step. Must be large enough to
           include all tags and history needed for `git describe`.
+      wheel-ref:
+        required: false
+        type: string
+        default: ""
+        description: "Git ref used only for wheel checkout/versioning"
       publish-artifact:
         required: false
         type: boolean
@@ -649,6 +659,6 @@ jobs:
         ${{ inputs.manylinux-docker-image ||
             needs.build-docker-image.outputs.manylinux-tag ||
             'docker-image-unresolved!' }}
-      ref: ${{ inputs.ref || '' }}
+      ref: ${{ inputs.wheel-ref || inputs.ref || '' }}
       tracy: ${{ inputs.tracy }}
       enable-lto: ${{ inputs.enable-lto || false }}
