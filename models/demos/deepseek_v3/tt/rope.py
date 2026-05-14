@@ -260,12 +260,8 @@ class RotarySetup:
         # Galaxy where RoPE output is BWR but demo output is garbage, so we keep cos, sin L1 interleaved
         # See issue #40629.
         # Using prefill-mode kernel is possible because `rotary_embedding_llama` is (almost) an eltwise op.
-        cos_matrix_prefill_shape = ttnn.to_memory_config(
-            cos, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
-        sin_matrix_prefill_shape = ttnn.to_memory_config(
-            sin, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
+        cos_matrix_prefill_shape = ttnn.to_memory_config(cos, memory_config=ttnn.L1_MEMORY_CONFIG)
+        sin_matrix_prefill_shape = ttnn.to_memory_config(sin, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], dim]
         sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], dim]
@@ -333,12 +329,8 @@ class RotarySetup:
         # Galaxy where RoPE output is BWR but demo output is garbage, so we keep cos, sin L1 interleaved
         # See issue #40629.
         # Using prefill-mode kernel is possible because `rotary_embedding_llama` is (almost) an eltwise op.
-        cos_matrix_prefill_shape = ttnn.to_memory_config(
-            cos, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
-        sin_matrix_prefill_shape = ttnn.to_memory_config(
-            sin, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
+        cos_matrix_prefill_shape = ttnn.to_memory_config(cos, memory_config=ttnn.L1_MEMORY_CONFIG)
+        sin_matrix_prefill_shape = ttnn.to_memory_config(sin, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], dim]
         sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], dim]
