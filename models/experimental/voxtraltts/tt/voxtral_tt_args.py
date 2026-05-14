@@ -10,7 +10,10 @@ from huggingface_hub import snapshot_download
 from safetensors.torch import load_file as load_safetensors_file
 
 from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_MODEL, load_voxtral_config
-from models.experimental.voxtraltts.tt.text_decoder_layer import remap_voxtral_text_state_dict
+from models.experimental.voxtraltts.tt.text_decoder_layer import (
+    permute_voxtral_text_qk_for_hf_rope,
+    remap_voxtral_text_state_dict,
+)
 from models.tt_transformers.tt.model_config import ModelArgs
 
 
@@ -89,6 +92,13 @@ def get_VoxtralTTArgs(preloaded_state_dict: Optional[dict[str, torch.Tensor]] = 
                 state_dict = _load_safetensors_state_dict(self._voxtral_model_name_or_path)
 
             state_dict = remap_voxtral_text_state_dict(state_dict)
+            state_dict = permute_voxtral_text_qk_for_hf_rope(
+                state_dict,
+                num_heads=self.n_heads,
+                num_kv_heads=self.n_kv_heads,
+                head_dim=self.head_dim,
+                hidden_size=self.dim,
+            )
 
             if "output.weight" not in state_dict and "tok_embeddings.weight" in state_dict:
                 state_dict["output.weight"] = state_dict["tok_embeddings.weight"]
