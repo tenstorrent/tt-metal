@@ -114,7 +114,8 @@ template <
 inline void calculate_log(uint log_base_scale_factor) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat result = calculate_log_body<HAS_BASE_SCALING, is_fp32_dest_acc_en>(sfpi::dst_reg[0], log_base_scale_factor);
+        sfpi::vFloat result = calculate_log_body<FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en>(
+            sfpi::dst_reg[0], log_base_scale_factor);
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven);
         }
