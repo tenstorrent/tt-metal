@@ -4,6 +4,8 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 ALWI bool need_to_do_mask_h(uint32_t tile_idx, uint32_t ht, uint32_t wt) { return (((tile_idx / wt) + 1) % ht) == 0; }
@@ -54,43 +56,148 @@ void kernel_main() {
 
     // Compute cb_xpowadd
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
-        // Comput cb_xabs and mask(optional)
-        // |x|
-        tile_regs_acquire();
-        cb_wait_front(cb_x, onetile);  // comes from the reader
-        cb_reserve_back(cb_xabs, onetile);
-
-        copy_tile_init(cb_x);
-        copy_tile(cb_x, 0, dst0);
-
-        if (do_mask_h && need_to_do_mask_h(tile_idx, ht, wt)) {
-            copy_tile_init(cb_mask_h_w);
-            copy_tile(cb_mask_h_w, 0, dst1);
-
-            mask_tile_init();
-            mask_tile(dst0, dst1);
+        // PARTIAL migration: abs+mask+pack block via eltwise_chain. Four runtime
+        // branches cover (mask_h?, mask_w?) ∈ {(0,0),(1,0),(0,1),(1,1)}. The mask
+        // CB has 2 pre-waited tiles (tile 0 = mask_h, tile 1 = mask_w); we read
+        // them via NoWaitNoPop CopyTile elements pinned to fixed indices.
+        {
+            using namespace compute_kernel_lib;
+            const bool mh = do_mask_h && need_to_do_mask_h(tile_idx, ht, wt);
+            const bool mw = do_mask_w && ((tile_idx + 1) % wt) == 0;
+            if (mh && mw) {
+                eltwise_chain(
+                    onetile,
+                    CopyTile<cb_x, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+                    CopyTile<cb_mask_h_w, Dst::D1, CopyTilePolicy::NoWaitNoPop, CbIndexMode::FirstTile>{},
+                    Mask<DataFormat::Float16_b, Dst::D0>{},
+                    CopyTile<cb_mask_h_w, Dst::D1, CopyTilePolicy::NoWaitNoPop, CbIndexMode::Pinned>{1u},
+                    Mask<DataFormat::Float16_b, Dst::D0>{},
+                    Abs<Dst::D0>{},
+                    PackTile<cb_xabs, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+            } else if (mh) {
+                eltwise_chain(
+                    onetile,
+                    CopyTile<cb_x, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+                    CopyTile<cb_mask_h_w, Dst::D1, CopyTilePolicy::NoWaitNoPop, CbIndexMode::FirstTile>{},
+                    Mask<DataFormat::Float16_b, Dst::D0>{},
+                    Abs<Dst::D0>{},
+                    PackTile<cb_xabs, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+            } else if (mw) {
+                eltwise_chain(
+                    onetile,
+                    CopyTile<cb_x, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+                    CopyTile<cb_mask_h_w, Dst::D1, CopyTilePolicy::NoWaitNoPop, CbIndexMode::Pinned>{1u},
+                    Mask<DataFormat::Float16_b, Dst::D0>{},
+                    Abs<Dst::D0>{},
+                    PackTile<cb_xabs, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+            } else {
+                eltwise_chain(
+                    onetile,
+                    CopyTile<cb_x, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+                    Abs<Dst::D0>{},
+                    PackTile<cb_xabs, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+            }
         }
 
-        if (do_mask_w && ((tile_idx + 1) % wt) == 0) {
-            copy_tile_init(cb_mask_h_w);
-            copy_tile(cb_mask_h_w, 1, dst1);
+        // PARTIAL migration: inline power_tile_to_cb body as 4 eltwise_chain stages.
+        //   Block A: |x|^p          (CopyTile<cb_xabs, WaitNoPop> + PowerIterative + [Recip] + PackTile<cb_xpow>)
+        //   Block B: log(|x|)       (CopyTile<cb_xabs, NoWaitPop> + Log + PackTile<cb_logx>)
+        //   Block C: exp(log * d)   (BinaryFpu<cb_logx, cb_decimal, cb_exp_lxmd, Mul> + Exp + PackTile<cb_exp_lxmd>)
+        //   Block D: xpow*exp       (BinaryFpu<cb_xpow, cb_exp_lxmd, cb_correct_xpow, Mul> + PackTile<cb_correct_xpow>)
+        {
+            using namespace compute_kernel_lib;
+            if (p_is_negative) {
+                eltwise_chain(
+                    onetile,
+                    CopyTile<
+                        cb_xabs,
+                        Dst::D0,
+                        CopyTilePolicy::WaitNoPop,
+                        CbIndexMode::FirstTile,
+                        CopyTileReconfig::Input>{},
+                    PowerIterative<Dst::D0>{p},
+                    Recip<Dst::D0>{},
+                    PackTile<
+                        cb_xpow,
+                        Dst::D0,
+                        PackTilePolicy::PerTileReserveAndPush,
+                        PackTileIndexMode::FirstTile,
+                        PackTileReconfig::Output>{});
+            } else {
+                eltwise_chain(
+                    onetile,
+                    CopyTile<
+                        cb_xabs,
+                        Dst::D0,
+                        CopyTilePolicy::WaitNoPop,
+                        CbIndexMode::FirstTile,
+                        CopyTileReconfig::Input>{},
+                    PowerIterative<Dst::D0>{p},
+                    PackTile<
+                        cb_xpow,
+                        Dst::D0,
+                        PackTilePolicy::PerTileReserveAndPush,
+                        PackTileIndexMode::FirstTile,
+                        PackTileReconfig::Output>{});
+            }
 
-            mask_tile_init();
-            mask_tile(dst0, dst1);
+            eltwise_chain(
+                onetile,
+                CopyTile<
+                    cb_xabs,
+                    Dst::D0,
+                    CopyTilePolicy::NoWaitPop,
+                    CbIndexMode::FirstTile,
+                    CopyTileReconfig::Input>{},
+                Log<>{},
+                PackTile<
+                    cb_logx,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
+
+            eltwise_chain(
+                onetile,
+                BinaryFpu<
+                    cb_logx,
+                    cb_decimal,
+                    cb_exp_lxmd,
+                    BinaryFpuOp::Mul,
+                    BroadcastDim::None,
+                    BinaryDataFormatReconfig::Input,
+                    CopyTilePolicy::WaitAndPop,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CbIndexMode::FirstTile,
+                    Dst::D0>{},
+                Exp<>{},
+                PackTile<
+                    cb_exp_lxmd,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
+
+            eltwise_chain(
+                onetile,
+                BinaryFpu<
+                    cb_xpow,
+                    cb_exp_lxmd,
+                    cb_correct_xpow,
+                    BinaryFpuOp::Mul,
+                    BroadcastDim::None,
+                    BinaryDataFormatReconfig::Input,
+                    CopyTilePolicy::WaitAndPop,
+                    CopyTilePolicy::WaitAndPop,
+                    CbIndexMode::FirstTile,
+                    Dst::D0>{},
+                PackTile<
+                    cb_correct_xpow,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
         }
-
-        abs_tile_init();
-        abs_tile(dst0);
-        cb_pop_front(cb_x, onetile);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile(dst0, cb_xabs);
-        cb_push_back(cb_xabs, onetile);
-        tile_regs_release();
-
-        // |x + decimal|^p
-        power_tile_to_cb(cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_correct_xpow, p, p_is_negative);
 
         if (tile_idx == 0) {
             // Seed cb_xpowadd with first cb_correct_xpow tile.
