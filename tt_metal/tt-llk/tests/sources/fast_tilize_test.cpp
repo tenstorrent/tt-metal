@@ -151,6 +151,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_math_fast_tilize.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -239,6 +240,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "llk_pack.h"
 #include "llk_pack_common.h"
+#include "llk_pack_fast_tilize.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {

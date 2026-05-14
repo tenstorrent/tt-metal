@@ -116,7 +116,8 @@ FORCE_INLINE void send_pages_over_socket(
         }
         socket_push_pages(sender_socket, 1);
     } else {
-        write_data_to_local_core_with_ack(sender_socket, l1_read_addr, dst_addr, embedding_page_size);
+        write_data_to_local_core_with_ack(
+            sender_socket, l1_read_addr, dst_addr, embedding_page_size + metadata_size_bytes);
     }
 }
 
@@ -227,9 +228,7 @@ void kernel_main() {
         for (uint32_t md_idx = 0; md_idx < num_metadata_words; ++md_idx) {
             metadata_wr_ptr[md_idx] = metadata_rd_ptr[md_idx];
         }
-
         noc_async_read_barrier();
-
         if constexpr (loopback_mode) {
             cb_reserve_back(downstream_interface_index, 1);
             noc_async_write(

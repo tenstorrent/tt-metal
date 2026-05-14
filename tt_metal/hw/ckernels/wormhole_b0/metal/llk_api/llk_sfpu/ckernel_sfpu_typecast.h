@@ -31,7 +31,7 @@ inline void calculate_typecast_fp32_to_uint8() {
         // (CC flags avoid SFPEXEXP quirk: zero/subnormal biased_exp=0 returns wrong value)
         TTI_SFPEXEXP(
             0, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPEXEXP_MOD1_SET_CC_SGN_EXP | sfpi::SFPEXEXP_MOD1_SET_CC_COMP_EXP);
-        // mantissa = exman8(in)
+        // mantissa = exman(in, sfpi::MantissaMode::ImplicitOne)
         TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
         // shift_amount = exponent - 23
         TTI_SFPIADD(-23 & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);

@@ -264,8 +264,8 @@ Replaces the mantissa of  ''v'' with the mantissa in the low bits of ''man'' and
 .. code-block:: c++
 
     vFloat setsgn(const vFloat v, const int32_t sgn)
-    vFloat setsgn(const vFloat v, const vFloat sgn)
-    vFloat setsgn(const vFloat v, const vInt sgn)
+    vFloat copysgn(const vFloat v, const vFloat sgn)
+    vFloat copysgn(const vFloat v, const vInt sgn)
 
 Replaces the sign bit of ''v'' with the sign in ''sgn'' and returns the result (preserving the exponent and mantissa of ''v'').  Note that the ''int32_t'' version takes the sign from bit 0 while the ''vFloat'' and ''vInt'' versions take the sign from the sign bit location (bit 19 on GS and bit 32 on WH).
 

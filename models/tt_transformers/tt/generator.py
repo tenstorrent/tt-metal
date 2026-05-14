@@ -18,6 +18,7 @@ from models.common.llama_models import (
     extract_images_from_messages,
     sample_top_p,
 )
+from models.common.model_capabilities import ModelCapabilitiesMixin
 from models.common.sampling import (
     SamplingParams,
     broadcast_sampling_params,
@@ -51,7 +52,7 @@ def _deepseek_kvdbg_enabled() -> bool:
     return os.getenv("DEEPSEEK_KVDBG", "").lower() in ("1", "true", "yes", "y")
 
 
-class Generator(WarmupForwardMixin):
+class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
     def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
         """
         Creating a LlamaVision wrapper requires only a mesh_device and model_args.
@@ -797,15 +798,36 @@ class Generator(WarmupForwardMixin):
                         if log_probs_host is not None:
                             output_log_probs[slot] = log_probs_host[slot]
                 else:
-                    for local_idx, slot in enumerate(empty_slots):
-                        user_logits = logits[slot : slot + 1, :, :, :]
-                        _logits = self.model[model_id].process_logits_after_prefill_trace(
-                            user_logits, last_token_idx[slot]
-                        )
-                        _logits = ttnn.to_layout(_logits, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                        output_tensor[slot] = self.model[model_id].process_output_prefill(
-                            _logits.cpu(), last_token_idx=(last_token_idx[slot] % 32)
-                        )
+                    if return_hidden_states:
+                        # Embedding models: trace returns hidden states; extract last-token hidden per slot
+                        slot_hidden_list = []
+                        for local_idx, slot in enumerate(empty_slots):
+                            user_hidden = logits[slot : slot + 1, :, :, :]
+                            slot_hidden = self.model[model_id].process_hidden_states_after_prefill_trace(
+                                user_hidden, last_token_idx[slot]
+                            )
+                            slot_hidden_list.append((slot, slot_hidden, last_token_idx[slot]))
+                        ttnn.synchronize_device(self.model[model_id].mesh_device)
+                        dim = self.model[model_id].args.dim
+                        for slot, slot_hidden, lt_idx in slot_hidden_list:
+                            slot_hidden_torch = ttnn.to_torch(ttnn.get_device_tensors(slot_hidden)[0]).float()
+                            pos = int(lt_idx % 32)
+                            out = slot_hidden_torch[0, 0, pos, :dim].clone()
+                            if out.device.type != "cpu":
+                                out = out.cpu()
+                            output_tensor[slot] = out
+                    else:
+                        for local_idx, slot in enumerate(empty_slots):
+                            user_logits = logits[slot : slot + 1, :, :, :]
+                            _logits = self.model[model_id].process_logits_after_prefill_trace(
+                                user_logits, last_token_idx[slot]
+                            )
+                            _logits = ttnn.to_layout(
+                                _logits, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                            )
+                            output_tensor[slot] = self.model[model_id].process_output_prefill(
+                                _logits.cpu(), last_token_idx=(last_token_idx[slot] % 32)
+                            )
                 break
 
             # Non-batched prefill path
@@ -2481,18 +2503,35 @@ class Generator(WarmupForwardMixin):
             super().__del__()
 
 
+def _mesh_shape_tuple(mesh_shape):
+    return tuple(int(dim) for dim in mesh_shape)
+
+
+def _galaxy_data_parallel_submesh_shape(devices_per_group):
+    # Galaxy DP groups should follow the 4x8 row-oriented view recommended by
+    # the runtime, so DP=4 maps to four routeable 1x8 T3K-like submeshes.
+    if devices_per_group >= 8 and devices_per_group % 8 == 0:
+        return ttnn.MeshShape(devices_per_group // 8, 8)
+    # Smaller DP groups still use contiguous 1D row submeshes; callers select
+    # linear CCL when these groups are too small for ring topology.
+    return ttnn.MeshShape(1, devices_per_group)
+
+
 def create_submeshes(mesh_device, data_parallel):
-    if not isinstance(mesh_device, ttnn.MeshDevice) or data_parallel == 1:
+    mesh_device_type = getattr(ttnn, "MeshDevice", None)
+    if mesh_device_type is None:
+        mesh_device_type = getattr(getattr(ttnn, "device", None), "Device", None)
+    if mesh_device_type is None or not isinstance(mesh_device, mesh_device_type) or data_parallel == 1:
         return [mesh_device]
 
-    num_rows, num_cols = mesh_device.shape
+    num_rows, num_cols = _mesh_shape_tuple(mesh_device.shape)
     num_devices = num_rows * num_cols
     assert num_devices % data_parallel == 0, f"Unsupported device split: {num_devices} devices, {data_parallel} groups"
 
-    if num_rows == 8 and num_cols == 4 and num_cols % data_parallel == 0:
-        submeshes = mesh_device.create_submeshes(ttnn.MeshShape(num_rows, num_cols // data_parallel))
-        for submesh in submeshes:
-            submesh.reshape(ttnn.MeshShape(1, num_devices // data_parallel))
-        return submeshes
+    if num_devices == 32:
+        if (num_rows, num_cols) != (4, 8):
+            logger.info(f"Reshaping 32-device mesh from {(num_rows, num_cols)} to (4, 8) for DP submeshes")
+            mesh_device.reshape(ttnn.MeshShape(4, 8))
+        return mesh_device.create_submeshes(_galaxy_data_parallel_submesh_shape(num_devices // data_parallel))
 
     return mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))

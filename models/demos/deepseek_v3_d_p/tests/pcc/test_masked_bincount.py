@@ -191,3 +191,115 @@ def test_masked_bincount(
     )
     result.assert_passed("masked_bincount output does not match torch reference")
     logger.info("masked_bincount matches torch reference!")
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (1, 1),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 1), topology="linear"),
+            id="single",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_masked_bincount_tree_reduction_race(mesh_device):
+    """
+    Stress test for tree-reduction race condition in masked_bincount.
+
+    Crafts workload skew to maximize out-of-order child completion in the
+    binary-tree gather phase: one core's shard targets present experts (slow,
+    many atomic increments) while all other cores target absent experts (fast,
+    zero increments). This creates a timing gap where deeper subtrees signal
+    the root's gather_sem before the slow leaf finishes, exposing data races
+    where a parent reads a child's incomplete histogram.
+    """
+    sp_dim = 4096
+    topk = 8
+    n_routed_experts = 256
+    num_cores = 64
+    rows_per_core = sp_dim // num_cores  # 64
+    num_iterations = 50
+
+    # Custom dispatch table: only experts 0-7 are "present" (chip_id=0),
+    # rest are absent (-1). Shape: (1, 256) for single dispatch group.
+    dispatch_table = torch.full((1, n_routed_experts), -1, dtype=torch.int32)
+    num_present = 8
+    for e in range(num_present):
+        dispatch_table[0, e] = 0
+
+    # Height-shard config matching the gate module pattern: 8x8 core grid
+    sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=(rows_per_core, topk),
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    # Place dispatch table on device (static across iterations)
+    tt_dispatch_table = ttnn.from_torch(
+        dispatch_table,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device,
+            mesh_shape=mesh_device.shape,
+            dims=(None, 0),
+        ),
+    )
+
+    composer = get_ep_mesh_composer(mesh_device)
+    num_mismatches = 0
+
+    for iteration in range(num_iterations):
+        # Craft skewed indices:
+        # - Core 1 (rows 64-127): present experts 0..7 → many atomic increments (slow)
+        # - All other cores: absent experts 128..255 → zero increments (fast)
+        indices = torch.randint(128, n_routed_experts, (sp_dim, topk), dtype=torch.int32)
+        core1_start = 1 * rows_per_core
+        core1_end = 2 * rows_per_core
+        indices[core1_start:core1_end] = torch.randint(0, num_present, (rows_per_core, topk), dtype=torch.int32)
+
+        # Torch reference
+        reference = torch_masked_bincount(indices, dispatch_table[0], n_routed_experts)
+
+        # Place indices on device
+        tt_indices = ttnn.from_torch(
+            indices.to(torch.int16),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(0, None)),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.uint16,
+        )
+        tt_indices = ttnn.to_memory_config(tt_indices, sharded_mem_config)
+
+        # Run TTNN op
+        tt_hist = ttnn.experimental.deepseek_prefill.masked_bincount(
+            tt_indices, tt_dispatch_table, n_routed_experts, topk
+        )
+
+        # Read back and compare
+        tt_hist_4d = ttnn.unsqueeze_to_4D(tt_hist)
+        composed = ttnn.to_torch(tt_hist_4d, mesh_composer=composer).squeeze(2).to(torch.int32)
+        composed = composed[..., :n_routed_experts]
+        actual = composed.squeeze(0).squeeze(0)  # (n_routed_experts,)
+
+        if not torch.equal(actual, reference):
+            num_mismatches += 1
+            diff_mask = actual != reference
+            diff_indices = diff_mask.nonzero(as_tuple=True)[0]
+            logger.error(
+                f"Iteration {iteration}: MISMATCH at {len(diff_indices)} experts. "
+                f"First 5: {diff_indices[:5].tolist()}, "
+                f"actual={actual[diff_indices[:5]].tolist()}, "
+                f"expected={reference[diff_indices[:5]].tolist()}"
+            )
+
+    assert num_mismatches == 0, (
+        f"Tree-reduction race detected: {num_mismatches}/{num_iterations} iterations " f"produced incorrect histograms"
+    )
+    logger.info(f"All {num_iterations} iterations match torch reference (race test passed)")

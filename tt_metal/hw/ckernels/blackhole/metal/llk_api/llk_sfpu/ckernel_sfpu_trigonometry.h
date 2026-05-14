@@ -302,8 +302,8 @@ sfpi_inline sfpi::vFloat sfpu_atan(sfpi::vFloat val) {
     sfpi::vFloat result = sfpi::vConst0;
 
     // If input is NaN then output must be NaN as well
-    sfpi::vInt exponent = sfpi::exexp_nodebias(val);
-    sfpi::vInt mantissa = sfpi::exman9(val);
+    sfpi::vInt exponent = sfpi::exexp(val, sfpi::ExponentMode::NoDebias);
+    sfpi::vInt mantissa = sfpi::exman(val);
     v_if(exponent == 255 && mantissa != 0) { result = std::numeric_limits<float>::quiet_NaN(); }
     v_else {
         sfpi::vFloat absval_minus_1 = t0 - sfpi::vConst1;
@@ -343,7 +343,7 @@ sfpi_inline sfpi::vFloat sfpu_atan(sfpi::vFloat val) {
         v_if(absval_minus_1 > 0.0f) { t1 = PI_2 - t1; }
         v_endif;
 
-        result = sfpi::setsgn(t1, val);
+        result = sfpi::copysgn(t1, val);
     }
     v_endif;
 
@@ -416,7 +416,7 @@ sfpi_inline sfpi::vFloat sfpu_asin_range_reduced(sfpi::vFloat val) {
     }
     v_endif;
 
-    return sfpi::setsgn(asin_abs, val);
+    return sfpi::copysgn(asin_abs, val);
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool IS_ACOS, int ITERATIONS = 8>

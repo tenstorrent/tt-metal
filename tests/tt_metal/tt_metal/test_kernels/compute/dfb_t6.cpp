@@ -2,18 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/compute/common.h"
 #include "api/debug/dprint.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t num_entries = get_compile_time_arg_val(0);
-
-    uint32_t logical_dfb_in = get_arg_val<uint32_t>(0);
-    uint32_t logical_dfb_out = get_arg_val<uint32_t>(1);
-
-    experimental::DataflowBuffer dfb_in(logical_dfb_in);
-    experimental::DataflowBuffer dfb_out(logical_dfb_out);
+    constexpr uint32_t num_entries = get_arg(args::num_entries);
+    DataflowBuffer dfb_in(dfb::in);
+    DataflowBuffer dfb_out(dfb::out);
 
     for (uint32_t tile_id = 0; tile_id < num_entries; tile_id++) {
         // DPRINT << "rbw" << ENDL();
