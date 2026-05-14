@@ -902,6 +902,10 @@ TEST_F(MeshBufferTestSuite, EnqueueReadWithDistributedHostBufferAndPinnedMemory)
 }
 
 TEST_F(MeshBufferTestSuite, PinnedMemoryCacheUpgradesCoverageForSameHostBuffer) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes() == 0) {
+        GTEST_SKIP() << "Pinned memory cache is disabled";
+        return;
+    }
     if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
         return;
@@ -947,6 +951,10 @@ TEST_F(MeshBufferTestSuite, PinnedMemoryCacheUpgradesCoverageForSameHostBuffer) 
 }
 
 TEST_F(MeshBufferTestSuite, PinnedMemoryCacheEvictsOldestEntryToStayWithinLimit) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes() == 0) {
+        GTEST_SKIP() << "Pinned memory cache is disabled";
+        return;
+    }
     const auto pinning_params = experimental::GetMemoryPinningParameters(*mesh_device_);
     if (!pinning_params.can_map_to_noc) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
