@@ -269,25 +269,17 @@ def tensor_1d_to_2d_ttnn(
     if memory_config is None:
         memory_config = ttnn.DRAM_MEMORY_CONFIG
 
-    # Get the feature size
-    features = tensor.shape[0]
-
-    # Transfer as 1D with ROW_MAJOR (TILE requires 2D+)
-    tensor_ttnn = ttnn.from_torch(
-        tensor,
+    # Reshape on host (free) so we can upload directly in TILE_LAYOUT.
+    # ttnn.from_torch(layout=TILE_LAYOUT) does the tile padding on host —
+    # no device TilizeWithValPadding op emitted, no on-device to_layout call.
+    t2d = tensor.reshape(1, tensor.shape[0]).contiguous()
+    return ttnn.from_torch(
+        t2d,
         dtype=dtype,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=memory_config,
     )
-
-    # Reshape to 2D: [features] -> [1, features]
-    tensor_ttnn = ttnn.reshape(tensor_ttnn, (1, features))
-
-    # Convert to TILE_LAYOUT
-    tensor_ttnn = ttnn.to_layout(tensor_ttnn, ttnn.TILE_LAYOUT)
-
-    return tensor_ttnn
 
 
 # Default exports
