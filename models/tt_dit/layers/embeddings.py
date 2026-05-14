@@ -10,6 +10,7 @@ import torch
 import ttnn
 
 from ..parallel.manager import CCLManager
+from ..utils.substate import rename_substate
 from ..utils.tensor import bf16_tensor, typed_tensor, unflatten
 from .linear import ColParallelLinear, Linear, RowParallelLinear
 from .module import Module, Parameter
@@ -167,6 +168,92 @@ class SD35CombinedTimestepTextProjEmbeddings(Module):
 
         text_emb = self.text_embedder(pooled_projection)
         return timesteps_emb + text_emb
+
+
+class Flux2TimestepGuidanceEmbeddings(Module):
+    """Timestep + guidance embedding for Flux2 (no pooled text projection)."""
+
+    def __init__(
+        self,
+        *,
+        embedding_dim: int,
+        timestep_guidance_channels: int = 256,
+        mesh_device: ttnn.MeshDevice | None = None,
+        with_guidance: bool = True,
+    ) -> None:
+        super().__init__()
+
+        self.mesh_device = mesh_device
+        self.with_guidance = with_guidance
+
+        self.timestep_embedder_linear_1 = Linear(
+            timestep_guidance_channels,
+            embedding_dim,
+            bias=False,
+            mesh_device=mesh_device,
+        )
+        self.timestep_embedder_linear_2 = Linear(
+            embedding_dim,
+            embedding_dim,
+            bias=False,
+            mesh_device=mesh_device,
+        )
+
+        if with_guidance:
+            self.guidance_embedder_linear_1 = Linear(
+                timestep_guidance_channels,
+                embedding_dim,
+                bias=False,
+                mesh_device=mesh_device,
+            )
+            self.guidance_embedder_linear_2 = Linear(
+                embedding_dim,
+                embedding_dim,
+                bias=False,
+                mesh_device=mesh_device,
+            )
+
+        self.time_proj_factor = self._create_time_proj_factor(timestep_guidance_channels)
+
+    def _create_time_proj_factor(self, num_channels: int) -> ttnn.Tensor:
+        half_dim = num_channels // 2
+        exponent = -math.log(10000) * torch.arange(start=0, end=half_dim, dtype=torch.float32)
+        exponent = exponent / half_dim
+        factor = torch.exp(exponent)
+        return ttnn.unsqueeze_to_4D(bf16_tensor(factor, device=self.mesh_device))
+
+    def _prepare_torch_state(self, state: dict) -> None:
+        rename_substate(state, "timestep_embedder.linear_1", "timestep_embedder_linear_1")
+        rename_substate(state, "timestep_embedder.linear_2", "timestep_embedder_linear_2")
+        rename_substate(state, "guidance_embedder.linear_1", "guidance_embedder_linear_1")
+        rename_substate(state, "guidance_embedder.linear_2", "guidance_embedder_linear_2")
+
+    def forward(
+        self,
+        *,
+        timestep: ttnn.Tensor,
+        guidance: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor:
+        emb = timestep * self.time_proj_factor
+        c = ttnn.cos(emb)
+        s = ttnn.sin(emb)
+        timesteps_proj = ttnn.concat([c, s], dim=-1)
+        t = self.timestep_embedder_linear_1(timesteps_proj)
+        t = ttnn.silu(t)
+        t = self.timestep_embedder_linear_2(t)
+
+        if not self.with_guidance or guidance is None:
+            return t
+
+        emb = guidance * self.time_proj_factor
+        c = ttnn.cos(emb)
+        s = ttnn.sin(emb)
+        guidances_proj = ttnn.concat([c, s], dim=-1)
+        g = self.guidance_embedder_linear_1(guidances_proj)
+        g = ttnn.silu(g)
+        g = self.guidance_embedder_linear_2(g)
+
+        return t + g
 
 
 class CombinedTimestepGuidanceTextProjEmbeddings(Module):

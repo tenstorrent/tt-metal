@@ -45,6 +45,7 @@ class Attention(Module):
         k_chunk_size: int = 512,
         q_chunk_size: int = 128,
         is_fsdp: bool = False,
+        dtype: "ttnn.DataType" = ttnn.bfloat16,
     ) -> None:
         super().__init__()
 
@@ -65,7 +66,7 @@ class Attention(Module):
         # FSDP: shard weights on sequence parallel axis to reduce memory
         fsdp_mesh_axis = parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
 
-        common_args = dict(mesh_device=mesh_device, ccl_manager=ccl_manager, fsdp_mesh_axis=fsdp_mesh_axis)
+        common_args = dict(mesh_device=mesh_device, ccl_manager=ccl_manager, fsdp_mesh_axis=fsdp_mesh_axis, dtype=dtype)
 
         self.sdpa_worker_grid = (
             self.mesh_device.compute_with_storage_grid_size().x,
@@ -214,6 +215,7 @@ class Attention(Module):
         spatial_sequence_length: int,
         spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
         prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        parallel_config: "DiTParallelConfig | None" = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
         """Forward pass of the model.
 
@@ -235,13 +237,12 @@ class Attention(Module):
         core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
         tp_axis = self.parallel_config.tensor_parallel.mesh_axis
 
-        qkv = self.to_qkv(
-            spatial
-        )  # [batch_size, spatial_sequence_length / sp_factor, 3 * n_local_heads * head_dim (in this order)]
+        qkv = self.to_qkv(spatial, parallel_config=parallel_config)
+
         local_heads = self.n_local_heads
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
             qkv, num_heads=local_heads, transpose_key=False
-        )  # [batch_size, n_local_heads, spatial_sequence_length / sp_factor, head_dim]
+        )
 
         q = self.norm_q(q)
         k = self.norm_k(k)
@@ -251,7 +252,8 @@ class Attention(Module):
             k = _apply_rope(k, spatial_rope)
 
         if self.add_qkv_proj is not None:
-            add_qkv = self.add_qkv_proj(prompt)
+            add_qkv = self.add_qkv_proj(prompt, parallel_config=parallel_config)
+
             add_q, add_k, add_v = ttnn.transformer.split_query_key_value_and_split_heads(
                 add_qkv, num_heads=local_heads, transpose_key=False
             )
@@ -319,16 +321,18 @@ class Attention(Module):
             prompt = ttnn.transformer.concatenate_heads(prompt)
 
         if self.to_out is not None:
-            spatial = self.ccl_manager.all_gather_persistent_buffer(
-                spatial, dim=2, mesh_axis=tp_axis, use_hyperparams=True
-            )
-            spatial = self.to_out(spatial)
+            if parallel_config is None:
+                spatial = self.ccl_manager.all_gather_persistent_buffer(
+                    spatial, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+                )
+            spatial = self.to_out(spatial, parallel_config=parallel_config)
 
         if self.to_add_out is not None:
-            prompt = self.ccl_manager.all_gather_persistent_buffer(
-                prompt, dim=2, mesh_axis=tp_axis, use_hyperparams=True
-            )
-            prompt = self.to_add_out(prompt)
+            if parallel_config is None:
+                prompt = self.ccl_manager.all_gather_persistent_buffer(
+                    prompt, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+                )
+            prompt = self.to_add_out(prompt, parallel_config=parallel_config)
 
         return spatial, prompt
 
