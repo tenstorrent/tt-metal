@@ -4,6 +4,9 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"
+#ifdef IS_ZERO
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_predicates.hpp"
+#endif
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 void kernel_main() {
@@ -44,6 +47,9 @@ void kernel_main() {
     for (uint32_t col_idx = 0; col_idx < num_cols_per_core; ++col_idx) {
         for (uint32_t row_idx = 0; row_idx < Ht; ++row_idx) {
             // f(x)
+#ifdef MINUS_INF
+            // BLOCKED: mask_posinf_tile + negative_tile pattern. No chain op for
+            // mask_posinf — leave raw.
             tile_regs_acquire();
             cb_wait_front(cb_x, onetile);  // comes from the reader
             cb_reserve_back(cb_val, onetile);
@@ -56,11 +62,7 @@ void kernel_main() {
                 copy_tile(cb_mask_h, 0, dst1);
 
                 mask_tile_init();
-#ifdef MINUS_INF
                 mask_posinf_tile(dst0, dst1);
-#else
-                mask_tile(dst0, dst1);
-#endif
             }
 #ifdef IS_ZERO
             unary_ne_tile_init();
@@ -70,10 +72,8 @@ void kernel_main() {
             abs_tile(dst0);
 #endif
 
-#ifdef MINUS_INF
             negative_tile_init();
             negative_tile(dst0);
-#endif
             tile_regs_commit();
 
             tile_regs_wait();
@@ -82,6 +82,50 @@ void kernel_main() {
 
             cb_pop_front(cb_x, onetile);
             cb_push_back(cb_val, onetile);
+#else
+            // PARTIAL migration: f(x) prologue (plain mask_tile path) via eltwise_chain.
+            // The masked branch loads cb_x + cb_mask_h into D0/D1 (cb_mask_h is
+            // pre-waited outside the loop, hence NoWaitNoPop), applies Mask, then the
+            // per-macro SFPU (UnaryNe under IS_ZERO, else Abs).
+#if defined FP32_DEST_ACC_EN
+            reconfig_data_format_srca(cb_x);
+            pack_reconfig_data_format(cb_val);
+#endif
+            if (do_mask_h && (row_idx == Ht - 1)) {
+                compute_kernel_lib::eltwise_chain(
+                    onetile,
+                    compute_kernel_lib::
+                        CopyTile<cb_x, compute_kernel_lib::Dst::D0, compute_kernel_lib::CopyTilePolicy::WaitAndPop>{},
+                    compute_kernel_lib::CopyTile<
+                        cb_mask_h,
+                        compute_kernel_lib::Dst::D1,
+                        compute_kernel_lib::CopyTilePolicy::NoWaitNoPop>{},
+                    compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
+#ifdef IS_ZERO
+                    compute_kernel_lib::UnaryNe<compute_kernel_lib::Dst::D0>{0u},
+#else
+                    compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>{},
+#endif
+                    compute_kernel_lib::PackTile<
+                        cb_val,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+            } else {
+                compute_kernel_lib::eltwise_chain(
+                    onetile,
+                    compute_kernel_lib::
+                        CopyTile<cb_x, compute_kernel_lib::Dst::D0, compute_kernel_lib::CopyTilePolicy::WaitAndPop>{},
+#ifdef IS_ZERO
+                    compute_kernel_lib::UnaryNe<compute_kernel_lib::Dst::D0>{0u},
+#else
+                    compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>{},
+#endif
+                    compute_kernel_lib::PackTile<
+                        cb_val,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+            }
+#endif  // MINUS_INF
 
             // calculate f(x) over dimension
             if (row_idx == 0) {
