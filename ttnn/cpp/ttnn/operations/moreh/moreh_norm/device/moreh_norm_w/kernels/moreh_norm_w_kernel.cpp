@@ -4,6 +4,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 void kernel_main() {
@@ -61,31 +62,39 @@ void kernel_main() {
     for (uint32_t row_idx = 0; row_idx < num_rows_per_core; ++row_idx) {
         for (uint32_t col_idx = 0; col_idx < Wt; ++col_idx) {
             // |x|
-            tile_regs_acquire();
-            cb_wait_front(cb_x, onetile);  // comes from the reader
-            cb_reserve_back(cb_xabs, onetile);
-
-            copy_tile_init_with_dt(cb_x);
-            copy_tile(cb_x, 0, dst0);
-
+            // PARTIAL migration: |x| prologue via eltwise_chain.
+            // The masked branch loads cb_x + cb_mask_w into D0/D1 (cb_mask_w is
+            // pre-waited outside the loop, hence NoWaitNoPop), applies Mask, then Abs.
+#if defined FP32_DEST_ACC_EN
+            reconfig_data_format_srca(cb_x);
+            pack_reconfig_data_format(cb_xabs);
+#endif
             if (do_mask_w && (col_idx == Wt - 1)) {
-                copy_tile_init_with_dt(cb_mask_w);
-                copy_tile(cb_mask_w, 0, dst1);
-
-                mask_tile_init();
-                mask_tile(dst0, dst1);
+                compute_kernel_lib::eltwise_chain(
+                    onetile,
+                    compute_kernel_lib::
+                        CopyTile<cb_x, compute_kernel_lib::Dst::D0, compute_kernel_lib::CopyTilePolicy::WaitAndPop>{},
+                    compute_kernel_lib::CopyTile<
+                        cb_mask_w,
+                        compute_kernel_lib::Dst::D1,
+                        compute_kernel_lib::CopyTilePolicy::NoWaitNoPop>{},
+                    compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
+                    compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>{},
+                    compute_kernel_lib::PackTile<
+                        cb_xabs,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+            } else {
+                compute_kernel_lib::eltwise_chain(
+                    onetile,
+                    compute_kernel_lib::
+                        CopyTile<cb_x, compute_kernel_lib::Dst::D0, compute_kernel_lib::CopyTilePolicy::WaitAndPop>{},
+                    compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>{},
+                    compute_kernel_lib::PackTile<
+                        cb_xabs,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
             }
-
-            abs_tile_init();
-            abs_tile(dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_xabs);
-            tile_regs_release();
-
-            cb_pop_front(cb_x, onetile);
-            cb_push_back(cb_xabs, onetile);
 
             power_tile_to_cb(cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_correct_xpow, p, p_is_negative);
 
