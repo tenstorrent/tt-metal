@@ -33,7 +33,7 @@ languages = [
 ]
 
 if TYPE_CHECKING:
-    from kokoro import KPipeline
+    from models.experimental.kokoro.reference import KPipeline
 
 
 def generate_audio(text: str, kokoro_language: str, voice: str, speed=1) -> Generator["KPipeline.Result", None, None]:
