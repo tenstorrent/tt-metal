@@ -443,8 +443,9 @@ class TtAceStepDePatchify1D:
                 raise RuntimeError(f"Unexpected linear output rows: got {y2d_rm.shape[0]}, expected {m}")
             y2d_rm = y2d_rm[:, :n]
 
-        y = ttnn.reshape(y2d_rm, (b, t_p, self.patch_size, self.out_channels))
-        y = ttnn.reshape(y, (b, t_p * self.patch_size, self.out_channels))
+        # Single reshape RowMajor (m, patch*C) → (B, T_full, C); avoids an extra ReshapeView device op per forward
+        # (same linear memory order as the prior two-step (B,T_p,patch,C)→(B,T,C) sequence).
+        y = ttnn.reshape(y2d_rm, (b, t_p * self.patch_size, self.out_channels))
 
         # Add bias per output channel (broadcast across batch and time)
         y4 = ttnn.unsqueeze(y, 1)  # [B, 1, T, C]
