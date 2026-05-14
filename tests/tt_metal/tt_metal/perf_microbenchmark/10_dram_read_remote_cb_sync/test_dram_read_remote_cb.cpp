@@ -397,8 +397,8 @@ bool validation_bfp8_b(
 
     const auto& values = input_tensor.get_values();
 
-    int index = 0;
-    for (int i = 0; i < kt * nt * 32 * 32; ++i) {
+    uint32_t index = 0;
+    for (uint32_t i = 0; i < kt * nt * 32 * 32; ++i) {
         golden_vec[index] = float(values[i]);
         index++;
 
@@ -407,7 +407,7 @@ bool validation_bfp8_b(
         }
     }
 
-    for (int i = 0; i < result_untilized.size(); ++i) {
+    for (size_t i = 0; i < result_untilized.size(); ++i) {
         result_vec[i] = result_untilized[i];
     }
 
@@ -440,8 +440,8 @@ bool validation_fp16(
 
     const auto& values = input_tensor.get_values();
 
-    int index = 0;
-    for (int i = 0; i < kt * nt * 32 * 32; ++i) {
+    uint32_t index = 0;
+    for (uint32_t i = 0; i < kt * nt * 32 * 32; ++i) {
         golden_vec[index] = to_float(values[i]);
         index++;
 
@@ -450,7 +450,7 @@ bool validation_fp16(
         }
     }
 
-    for (int i = 0; i < result_untilized.size(); ++i) {
+    for (size_t i = 0; i < result_untilized.size(); ++i) {
         result_vec[i] = to_float(static_cast<bfloat16>(result_untilized[i]));
     }
 
@@ -492,10 +492,10 @@ bool validation_mixed_df(
     uint32_t block_num_tiles = block_h * block_w;
 
     auto num_datums_per_cb = kt * nt * 32 * 32 / num_blocks * cb_num_blocks / num_receivers;
-    int start_index = 0;
-    int fifo_size = kt * 32 / num_blocks * cb_num_blocks * nt * 32 * 2 / num_receivers;
-    int page_size, layer_transfer_size, fifo_wr_ptr = 0;
-    for (int l = 0; l < num_mixed_df_layers; ++l) {
+    uint32_t start_index = 0;
+    uint32_t fifo_size = kt * 32 / num_blocks * cb_num_blocks * nt * 32 * 2 / num_receivers;
+    uint32_t page_size, layer_transfer_size, fifo_wr_ptr = 0;
+    for (uint32_t l = 0; l < num_mixed_df_layers; ++l) {
         if (l % 2 == 0) {  // fp16
             page_size = 2048;
         } else {
@@ -521,10 +521,10 @@ bool validation_mixed_df(
     std::vector<std::vector<float>> values_fp16_split(
         num_receivers, std::vector<float>(values_fp16.size() / num_receivers));
 
-    int index = 0;
-    for (int k = 0; k < kt; ++k) {
-        for (int n = 0; n < num_receivers; ++n) {
-            for (int i = 0; i < nt * 32 * 32 / num_receivers; ++i) {
+    uint32_t index = 0;
+    for (uint32_t k = 0; k < kt; ++k) {
+        for (uint32_t n = 0; n < num_receivers; ++n) {
+            for (uint32_t i = 0; i < nt * 32 * 32 / num_receivers; ++i) {
                 values_fp16_split[n][i + (k * nt * 32 * 32 / num_receivers)] = to_float(values_fp16[index]);
                 index++;
             }
@@ -534,9 +534,9 @@ bool validation_mixed_df(
     std::vector<std::vector<float>> golden_vec_split(
         num_receivers, std::vector<float>(golden_vec.size() / num_receivers));
 
-    for (int n = 0; n < num_receivers; ++n) {
+    for (uint32_t n = 0; n < num_receivers; ++n) {
         index = start_index;
-        for (int i = 0; i < kt * nt * 32 * 32 / num_receivers; ++i) {
+        for (uint32_t i = 0; i < kt * nt * 32 * 32 / num_receivers; ++i) {
             golden_vec_split[n][index] = values_fp16_split[n][i];
             index++;
 
@@ -547,16 +547,16 @@ bool validation_mixed_df(
     }
 
     index = 0;
-    for (int k = 0; k < kt / num_blocks * cb_num_blocks; ++k) {
-        for (int n = 0; n < num_receivers; ++n) {
-            for (int i = 0; i < nt * 32 * 32 / num_receivers; ++i) {
+    for (uint32_t k = 0; k < kt / num_blocks * cb_num_blocks; ++k) {
+        for (uint32_t n = 0; n < num_receivers; ++n) {
+            for (uint32_t i = 0; i < nt * 32 * 32 / num_receivers; ++i) {
                 golden_vec[index] = golden_vec_split[n][i + (k * nt * 32 * 32 / num_receivers)];
                 index++;
             }
         }
     }
 
-    for (int i = 0; i < result_untilized_fp16.size(); ++i) {
+    for (size_t i = 0; i < result_untilized_fp16.size(); ++i) {
         result_vec_fp16[i] = to_float(static_cast<bfloat16>(result_untilized_fp16[i]));
     }
 

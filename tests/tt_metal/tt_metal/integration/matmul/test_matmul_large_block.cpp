@@ -336,7 +336,7 @@ bool matmul_large_block(
         in0_block_w,
         in0_num_subblocks,
         in0_block_num_tiles);
-    TT_FATAL(in0_block_w == K, "Parameter mismatch {} {}", in0_block_w, K);
+    TT_FATAL(static_cast<uint32_t>(in0_block_w) == K, "Parameter mismatch {} {}", in0_block_w, K);
 
     vector<uint32_t> compute_kernel_args = {
         uint(in0_block_w),

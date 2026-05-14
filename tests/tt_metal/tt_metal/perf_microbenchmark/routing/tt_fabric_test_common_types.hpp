@@ -47,40 +47,40 @@ using ParametrizationOptionsMap = std::unordered_map<std::string, Parametrizatio
 
 // Parsed structures (before resolution) - use DeviceIdentifier
 struct ParsedDestinationConfig {
-    std::optional<DeviceIdentifier> device;
-    std::optional<CoreConfig> core;
-    std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
-    std::optional<uint32_t> target_address;
-    std::optional<uint32_t> atomic_inc_address;
+    std::optional<DeviceIdentifier> device = std::nullopt;
+    std::optional<CoreConfig> core = std::nullopt;
+    std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops = std::nullopt;
+    std::optional<uint32_t> target_address = std::nullopt;
+    std::optional<uint32_t> atomic_inc_address = std::nullopt;
 };
 
 struct ParsedTrafficPatternConfig {
-    std::optional<ChipSendType> ftype;
-    std::optional<NocSendType> ntype;
-    std::optional<uint32_t> size;
-    std::optional<uint32_t> num_packets;
-    std::optional<ParsedDestinationConfig> destination;
-    std::optional<uint32_t> atomic_inc_val;
-    std::optional<uint32_t> mcast_start_hops;
-    std::optional<uint8_t> vc_id;  // VC selection: 0=VC0 (default), 2=VC2. Forwarded to generated senders.
+    std::optional<ChipSendType> ftype = std::nullopt;
+    std::optional<NocSendType> ntype = std::nullopt;
+    std::optional<uint32_t> size = std::nullopt;
+    std::optional<uint32_t> num_packets = std::nullopt;
+    std::optional<ParsedDestinationConfig> destination = std::nullopt;
+    std::optional<uint32_t> atomic_inc_val = std::nullopt;
+    std::optional<uint32_t> mcast_start_hops = std::nullopt;
+    std::optional<uint8_t> vc_id = std::nullopt;  // VC selection: 0=VC0 (default), 2=VC2. Forwarded to generated senders.
 };
 
 struct ParsedSenderConfig {
     DeviceIdentifier device = FabricNodeId(MeshId{0}, 0);
-    std::optional<CoreConfig> core;
-    std::optional<tt::tt_metal::NOC> noc_id;
+    std::optional<CoreConfig> core = std::nullopt;
+    std::optional<tt::tt_metal::NOC> noc_id = std::nullopt;
     std::vector<ParsedTrafficPatternConfig> patterns;
-    std::optional<uint32_t> link_id;  // Link ID for multi-link tests
-    std::optional<uint8_t> vc_id;     // VC selection: 0=VC0 (default), 2=VC2
+    std::optional<uint32_t> link_id = {};  // Link ID for multi-link tests
+    std::optional<uint8_t> vc_id = std::nullopt;     // VC selection: 0=VC0 (default), 2=VC2
 };
 
 // Resolved structures (after resolution) - use FabricNodeId
 struct DestinationConfig {
-    std::optional<FabricNodeId> device;
-    std::optional<CoreCoord> core;
-    std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
-    std::optional<uint32_t> target_address;
-    std::optional<uint32_t> atomic_inc_address;
+    std::optional<FabricNodeId> device = std::nullopt;
+    std::optional<CoreCoord> core = std::nullopt;
+    std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops = std::nullopt;
+    std::optional<uint32_t> target_address = std::nullopt;
+    std::optional<uint32_t> atomic_inc_address = std::nullopt;
 };
 
 // Credit flow structures for bidirectional sender-receiver communication
@@ -91,27 +91,27 @@ struct SenderCreditInfo {
 };
 
 struct TrafficPatternConfig {
-    std::optional<ChipSendType> ftype;
-    std::optional<NocSendType> ntype;
-    std::optional<uint32_t> size;
-    std::optional<uint32_t> num_packets;
-    std::optional<DestinationConfig> destination;
-    std::optional<uint32_t> atomic_inc_val;
-    std::optional<uint32_t> mcast_start_hops;
-    std::optional<uint8_t> vc_id;  // VC selection: 0=VC0 (default), 2=VC2
+    std::optional<ChipSendType> ftype = std::nullopt;
+    std::optional<NocSendType> ntype = std::nullopt;
+    std::optional<uint32_t> size = std::nullopt;
+    std::optional<uint32_t> num_packets = std::nullopt;
+    std::optional<DestinationConfig> destination = std::nullopt;
+    std::optional<uint32_t> atomic_inc_val = std::nullopt;
+    std::optional<uint32_t> mcast_start_hops = std::nullopt;
+    std::optional<uint8_t> vc_id = std::nullopt;  // VC selection: 0=VC0 (default), 2=VC2
 
     // Credit info
-    std::optional<SenderCreditInfo> sender_credit_info;  // For sender
-    std::optional<uint32_t> credit_return_batch_size;    // For receivers
+    std::optional<SenderCreditInfo> sender_credit_info = std::nullopt;  // For sender
+    std::optional<uint32_t> credit_return_batch_size = std::nullopt;    // For receivers
 };
 
 struct SenderConfig {
     FabricNodeId device = FabricNodeId(MeshId{0}, 0);
-    std::optional<CoreCoord> core;
-    std::optional<tt::tt_metal::NOC> noc_id;
+    std::optional<CoreCoord> core = std::nullopt;
+    std::optional<tt::tt_metal::NOC> noc_id = std::nullopt;
     std::vector<TrafficPatternConfig> patterns;
     uint32_t link_id = 0;          // Link ID for multi-link tests
-    std::optional<uint8_t> vc_id;  // VC selection: 0=VC0 (default), 2=VC2
+    std::optional<uint8_t> vc_id = {};  // VC selection: 0=VC0 (default), 2=VC2
     bool use_vc2() const { return vc_id.value_or(0) == 2; }
 };
 
@@ -141,18 +141,18 @@ enum class ChannelTrimmingMode { NONE, CAPTURE, REPLAY };
 
 struct TestFabricSetup {
     tt::tt_fabric::Topology topology{0};
-    std::optional<tt_fabric::FabricTensixConfig> fabric_tensix_config;
-    std::optional<tt_fabric::FabricReliabilityMode> fabric_reliability_mode;
+    std::optional<tt_fabric::FabricTensixConfig> fabric_tensix_config = std::nullopt;
+    std::optional<tt_fabric::FabricReliabilityMode> fabric_reliability_mode = std::nullopt;
     uint32_t num_links{};
-    std::optional<std::string> torus_config;  // For Torus topology: "X", "Y", or "XY"
-    std::optional<uint32_t> max_packet_size;  // Custom max packet size for router
+    std::optional<std::string> torus_config = std::nullopt;  // For Torus topology: "X", "Y", or "XY"
+    std::optional<uint32_t> max_packet_size = std::nullopt;  // Custom max packet size for router
     bool enable_channel_trimming = false;     // When true, test is expanded into CAPTURE + REPLAY phases
     bool use_vc2 = false;                     // When true, use private VC2 connection API instead of public API
 };
 
 struct HighLevelPatternConfig {
     std::string type;
-    std::optional<uint32_t> iterations;
+    std::optional<uint32_t> iterations = std::nullopt;
     bool is_sequential = false;
 };
 
@@ -160,16 +160,16 @@ struct ParsedTestConfig {
     std::string name;               // Original base name for golden lookup
     std::string parametrized_name;  // Enhanced name for debugging and logging
     TestFabricSetup fabric_setup;
-    std::optional<std::vector<std::string>> skip;  // Platforms on which this test should be skipped
-    std::optional<std::string> on_missing_param_policy;
-    std::optional<ParsedTrafficPatternConfig> defaults;
-    std::optional<ParametrizationOptionsMap> parametrization_params;
+    std::optional<std::vector<std::string>> skip = std::nullopt;  // Platforms on which this test should be skipped
+    std::optional<std::string> on_missing_param_policy = std::nullopt;
+    std::optional<ParsedTrafficPatternConfig> defaults = std::nullopt;
+    std::optional<ParametrizationOptionsMap> parametrization_params = std::nullopt;
     // A test can be defined by either a concrete list of senders or a high-level pattern.
-    std::optional<std::vector<HighLevelPatternConfig>> patterns;
+    std::optional<std::vector<HighLevelPatternConfig>> patterns = std::nullopt;
     // add sync sender configs here, each config contains current device and the patterns
     std::vector<SyncConfig> sync_configs;
-    std::vector<ParsedSenderConfig> senders;
-    std::optional<std::string> bw_calc_func;
+    std::vector<ParsedSenderConfig> senders = {};
+    std::optional<std::string> bw_calc_func = std::nullopt;
     PerformanceTestMode performance_test_mode =
         PerformanceTestMode::NONE;   // Performance testing mode (NONE, BANDWIDTH, or LATENCY)
     bool telemetry_enabled = false;  // Enable telemetry for performance testing
@@ -188,15 +188,15 @@ struct TestConfig {
     std::string parametrized_name;  // Enhanced name for debugging and logging
     uint32_t iteration_number = 0;  // For multi-iteration tests, notes the specific iteration of this test
     TestFabricSetup fabric_setup;
-    std::optional<std::string> on_missing_param_policy;
-    std::optional<TrafficPatternConfig> defaults;
-    std::optional<ParametrizationOptionsMap> parametrization_params;
+    std::optional<std::string> on_missing_param_policy = std::nullopt;
+    std::optional<TrafficPatternConfig> defaults = std::nullopt;
+    std::optional<ParametrizationOptionsMap> parametrization_params = std::nullopt;
     // A test can be defined by either a concrete list of senders or a high-level pattern.
-    std::optional<std::vector<HighLevelPatternConfig>> patterns;
+    std::optional<std::vector<HighLevelPatternConfig>> patterns = std::nullopt;
     // add sync sender configs here, each config contains current device and the patterns
     std::vector<SyncConfig> sync_configs;
-    std::vector<SenderConfig> senders;
-    std::optional<std::string> bw_calc_func;
+    std::vector<SenderConfig> senders = {};
+    std::optional<std::string> bw_calc_func = std::nullopt;
     PerformanceTestMode performance_test_mode =
         PerformanceTestMode::NONE;  // Performance testing mode (NONE, BANDWIDTH, or LATENCY)
     bool telemetry_enabled = false;
@@ -212,10 +212,10 @@ struct TestConfig {
 // Latency test results structure (parallel to bandwidth results)
 struct LatencyResults {
     std::string test_name;
-    uint32_t num_samples;
-    uint32_t message_size_bytes;
-    std::vector<uint64_t> latencies_cycles;  // raw cycle counts
-    std::vector<double> latencies_ns;        // converted to ns
+    uint32_t num_samples = 0;
+    uint32_t message_size_bytes = 0;
+    std::vector<uint64_t> latencies_cycles = {};  // raw cycle counts
+    std::vector<double> latencies_ns = {};        // converted to ns
     uint64_t min_latency_cycles;
     uint64_t max_latency_cycles;
     double avg_latency_ns;
@@ -281,7 +281,7 @@ struct CoreAllocationConfig {
 struct AllocatorPolicies {
     CoreAllocationConfig sender_config;
     CoreAllocationConfig receiver_config;
-    uint32_t default_payload_chunk_size;
+    uint32_t default_payload_chunk_size = 0;
 
     AllocatorPolicies(
         std::optional<CoreAllocationConfig> sender_config = std::nullopt,
@@ -312,7 +312,7 @@ struct AllocatorPolicies {
 
 struct PhysicalMeshConfig {
     std::string mesh_descriptor_path;
-    std::vector<std::vector<EthCoord>> eth_coord_mapping;
+    std::vector<std::vector<EthCoord>> eth_coord_mapping = {};
 
     PhysicalMeshConfig() : eth_coord_mapping({}) {
         // Default path to the mesh descriptor.

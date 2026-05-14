@@ -305,7 +305,7 @@ TEST_P(ShardedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
         // Find all factors of area
         std::vector<uint32_t> factors{1};
         auto temp = area;
-        auto f = 2;
+        uint32_t f = 2;
         while (f < temp) {
             if (temp % f == 0) {
                 factors.push_back(f);
@@ -356,7 +356,7 @@ TEST_P(ShardedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
         page_height = tile_height / tile_height_pages;
         page_width = tile_width / tile_width_pages;
     }
-    if (page_height * page_width != page_area) {
+    if (static_cast<uint32_t>(page_height * page_width) != page_area) {
         TT_THROW("Incorrectly derived page dims: {} {} {}", page_area, page_height, page_width);
     }
     Shape2D page_shape{page_height, page_width};

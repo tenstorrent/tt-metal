@@ -50,7 +50,7 @@ bool RunCrossCqReadWriteWithWaitForEvent(
         mesh_device->mesh_command_queue(0), mesh_device->mesh_command_queue(1)};
     bool pass = true;
 
-    for (uint buf_idx = 0; buf_idx < num_buffers_per_cq; buf_idx++) {
+    for (size_t buf_idx = 0; buf_idx < num_buffers_per_cq; buf_idx++) {
         if (vary_buffer_sizes && buf_idx > 0 && ((buf_idx % 10) == 0)) {
             config.page_size *= 2;
             config.num_pages *= 2;
@@ -60,7 +60,7 @@ bool RunCrossCqReadWriteWithWaitForEvent(
         vector<vector<uint32_t>> srcs;
         const size_t buf_size = config.num_pages * config.page_size;
 
-        for (uint i = 0; i < cqs.size(); i++) {
+        for (size_t i = 0; i < cqs.size(); i++) {
             const uint32_t wr_data_base = (buf_idx * 1000) + (i * 100);
             auto& cq_write = cqs[i];
             auto& cq_read = cqs[(i + 1) % cqs.size()];
@@ -235,7 +235,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsEventSynchronizeSanity)
         const size_t num_events = 10;
 
         for (size_t j = 0; j < num_events; j++) {
-            for (uint i = 0; i < cqs.size(); i++) {
+            for (size_t i = 0; i < cqs.size(); i++) {
                 log_debug(
                     tt::LogTest, "j : {} Recording and Host Syncing on event for CQ ID: {}", j, cqs[i].get().id());
                 auto event = sync_events[i].emplace_back(cqs[i].get().enqueue_record_event_to_host());
@@ -248,7 +248,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsEventSynchronizeSanity)
         }
 
         // Sync on earlier events again per CQ just to show it works.
-        for (uint i = 0; i < cqs.size(); i++) {
+        for (size_t i = 0; i < cqs.size(); i++) {
             for (size_t j = 0; j < num_events; j++) {
                 distributed::EventSynchronize(sync_events.at(i)[j]);
             }
@@ -275,7 +275,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceEventFixture, TestEventsEventSynchronizeSanity
     const size_t num_events = 10;
 
     for (size_t j = 0; j < num_events; j++) {
-        for (uint i = 0; i < cqs.size(); i++) {
+        for (size_t i = 0; i < cqs.size(); i++) {
             log_debug(tt::LogTest, "j : {} Recording and Host Syncing on event for CQ ID: {}", j, cqs[i].get().id());
             auto event = sync_events[i].emplace_back(cqs[i].get().enqueue_record_event_to_host());
             distributed::EventSynchronize(event);
@@ -287,7 +287,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceEventFixture, TestEventsEventSynchronizeSanity
     }
 
     // Sync on earlier events again per CQ just to show it works.
-    for (uint i = 0; i < cqs.size(); i++) {
+    for (size_t i = 0; i < cqs.size(); i++) {
         for (size_t j = 0; j < num_events; j++) {
             distributed::EventSynchronize(sync_events.at(i)[j]);
         }
@@ -312,7 +312,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsEnqueueWaitForEventSani
         auto start = std::chrono::system_clock::now();
 
         for (size_t j = 0; j < num_events; j++) {
-            for (uint i = 0; i < cqs.size(); i++) {
+            for (size_t i = 0; i < cqs.size(); i++) {
                 log_debug(
                     tt::LogTest, "j : {} Recording and Device Syncing on event for CQ ID: {}", j, cqs[i].get().id());
                 auto event = cqs[i].get().enqueue_record_event();
@@ -346,7 +346,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsEnqueueWaitForEventCros
 
         // Issue a number of Event Record/Waits per CQ, with Record/Wait on alternate CQs
         for (size_t j = 0; j < num_events_per_cq; j++) {
-            for (uint i = 0; i < cqs.size(); i++) {
+            for (size_t i = 0; i < cqs.size(); i++) {
                 auto cq_idx_record = i;
                 auto cq_idx_wait = (i + 1) % cqs.size();
                 log_debug(
@@ -393,10 +393,10 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
 
         std::unordered_map<uint, std::vector<distributed::MeshEvent>> sync_events;
 
-        for (uint buf_idx = 0; buf_idx < num_buffers_per_cq; buf_idx++) {
+        for (size_t buf_idx = 0; buf_idx < num_buffers_per_cq; buf_idx++) {
             vector<std::shared_ptr<distributed::MeshBuffer>> buffers;
             vector<vector<uint32_t>> srcs;
-            for (uint i = 0; i < cqs.size(); i++) {
+            for (size_t i = 0; i < cqs.size(); i++) {
                 uint32_t wr_data_base = (buf_idx * 1000) + (i * 100);
                 // Create MeshBuffer with proper config
                 distributed::ReplicatedBufferConfig global_buffer_config{.size = buf_size};
@@ -411,7 +411,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
                 auto event = sync_events[i].emplace_back(cqs[i].get().enqueue_record_event());
             }
 
-            for (uint i = 0; i < cqs.size(); i++) {
+            for (size_t i = 0; i < cqs.size(); i++) {
                 auto event = sync_events[i][buf_idx];
                 cqs[i].get().enqueue_wait_for_event(event);
                 vector<uint32_t> result;
@@ -548,7 +548,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
         auto start = std::chrono::system_clock::now();
 
         // Repeat test starting with different CQ ID. Could have placed this loop lower down.
-        for (uint cq_idx = 0; cq_idx < cqs.size(); cq_idx++) {
+        for (size_t cq_idx = 0; cq_idx < cqs.size(); cq_idx++) {
             auto& cq_write = cqs[cq_idx];
             auto& cq_read = cqs[(cq_idx + 1) % cqs.size()];
 
@@ -566,7 +566,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
                     distributed::MeshBuffer::create(global_buffer_config, device_local_config, mesh_device.get()));
 
                 // Number of write-read combos per buffer. Fewer make RAW race without events easier to hit.
-                for (uint j = 0; j < num_wr_rd_per_buf; j++) {
+                for (int j = 0; j < num_wr_rd_per_buf; j++) {
                     // Add entry in resutls vector, and construct write data, unique per loop
                     read_results.emplace_back();
                     write_data.push_back(generate_arange_vector(buffers.back()->size(), j * 100));
@@ -615,7 +615,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
                 ASSERT_EQ(write_data.size(), read_results.size());
                 ASSERT_EQ(write_data.size(), num_wr_rd_per_buf);
 
-                for (uint j = 0; j < num_wr_rd_per_buf; j++) {
+                for (int j = 0; j < num_wr_rd_per_buf; j++) {
                     // Make copy of read results, helpful for comparison without events, since vector may be updated
                     // between comparison and debug log.
                     auto read_results_snapshot = read_results[j];

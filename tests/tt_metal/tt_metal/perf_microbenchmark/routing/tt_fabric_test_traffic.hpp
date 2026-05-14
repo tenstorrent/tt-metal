@@ -16,10 +16,10 @@ using FlowUid = uint32_t;
 
 struct FlowDescriptor {
     FabricNodeId src_node_id;
-    CoreCoord src_logical_core;
+    CoreCoord src_logical_core = {};
 
-    std::vector<FabricNodeId> dst_node_ids;
-    CoreCoord dst_logical_core;
+    std::vector<FabricNodeId> dst_node_ids = {};
+    CoreCoord dst_logical_core = {};
 
     uint32_t link_id = 0;
     uint8_t vc_id = 0;
@@ -39,9 +39,9 @@ struct SenderMetadataFields {
         return args;
     }
 
-    uint32_t num_packets;
-    uint32_t seed;
-    uint32_t payload_buffer_size;
+    uint32_t num_packets = 0;
+    uint32_t seed = 0;
+    uint32_t payload_buffer_size = 0;
 };
 
 struct ReceiverMetadataFields {
@@ -54,9 +54,9 @@ struct ReceiverMetadataFields {
         return args;
     }
 
-    uint32_t num_packets;
-    uint32_t seed;
-    uint32_t payload_buffer_size;
+    uint32_t num_packets = 0;
+    uint32_t seed = 0;
+    uint32_t payload_buffer_size = 0;
 };
 
 struct ChipUnicastFields1D {
@@ -67,7 +67,7 @@ struct ChipUnicastFields1D {
         return args;
     }
 
-    uint32_t num_hops;
+    uint32_t num_hops = 0;
 };
 
 struct ChipUnicastFields2D {
@@ -97,8 +97,8 @@ struct ChipMulticastFields1D {
         return args;
     }
 
-    std::optional<uint32_t> mcast_start_hops;
-    uint32_t num_hops;
+    std::optional<uint32_t> mcast_start_hops = std::nullopt;
+    uint32_t num_hops = 0;
 };
 
 struct ChipMulticastFields2D {
@@ -144,9 +144,9 @@ struct NocUnicastWriteFields {
         return args;
     }
 
-    uint32_t payload_size_bytes;
-    uint32_t dst_address;
-    std::optional<uint32_t> dst_noc_encoding;
+    uint32_t payload_size_bytes = 0;
+    uint32_t dst_address = 0;
+    std::optional<uint32_t> dst_noc_encoding = std::nullopt;
 };
 
 struct NocUnicastAtomicIncFields {
@@ -172,9 +172,9 @@ struct NocUnicastAtomicIncFields {
         return args;
     }
 
-    std::optional<uint32_t> atomic_inc_val;
-    uint32_t dst_address;
-    std::optional<uint32_t> dst_noc_encoding;
+    std::optional<uint32_t> atomic_inc_val = {};
+    uint32_t dst_address = 0;
+    std::optional<uint32_t> dst_noc_encoding = std::nullopt;
 };
 
 struct NocUnicastWriteAtomicIncFields {
@@ -183,7 +183,7 @@ struct NocUnicastWriteAtomicIncFields {
 
     template <bool IS_SOURCE>
     std::vector<uint32_t> get_args() const {
-        std::vector<uint32_t> args;
+        std::vector<uint32_t> args = {};
         const auto write_args = write_fields.get_args<IS_SOURCE>();
         const auto atomic_inc_args = atomic_inc_fields.get_args<IS_SOURCE>();
         args.insert(args.end(), write_args.begin(), write_args.end());
@@ -220,7 +220,7 @@ struct NocUnicastScatterWriteFields {
             }
         }
 
-        std::vector<uint32_t> args;
+        std::vector<uint32_t> args = {};
         args.push_back(payload_size_bytes);
         args.push_back(chunk_count);
         for (uint32_t i = 0; i < chunk_count; i++) {
@@ -237,11 +237,11 @@ struct NocUnicastScatterWriteFields {
         return args;
     }
 
-    uint32_t payload_size_bytes;
+    uint32_t payload_size_bytes = 0;
     std::array<uint32_t, MAX_CHUNKS> dst_addresses;
     std::array<uint16_t, MAX_CHUNKS - 1> chunk_sizes;
-    std::optional<uint32_t> dst_noc_encoding;
-    uint32_t chunk_count;
+    std::optional<uint32_t> dst_noc_encoding = std::nullopt;
+    uint32_t chunk_count = 0;
 };
 
 // create memory maps
@@ -252,14 +252,14 @@ struct TrafficParameters {
     // from TrafficPatternConfig
     ChipSendType chip_send_type;
     NocSendType noc_send_type;
-    size_t payload_size_bytes;
-    size_t num_packets;
-    std::optional<uint32_t> atomic_inc_val;
-    std::optional<uint32_t> mcast_start_hops;
+    size_t payload_size_bytes = 0;
+    size_t num_packets = 0;
+    std::optional<uint32_t> atomic_inc_val = std::nullopt;
+    std::optional<uint32_t> mcast_start_hops = std::nullopt;
     bool enable_flow_control = false;
 
     // Global context
-    uint32_t seed;
+    uint32_t seed = 0;
     bool is_2D_routing_enabled;
     tt::tt_metal::distributed::MeshShape mesh_shape;
     tt::tt_fabric::Topology topology;
@@ -268,20 +268,20 @@ struct TrafficParameters {
 struct TestTrafficConfig {
     TrafficParameters parameters;
     FabricNodeId src_node_id;
-    std::optional<std::vector<FabricNodeId>> dst_node_ids;
-    std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
-    std::optional<CoreCoord> src_logical_core;
-    std::optional<CoreCoord> dst_logical_core;
-    std::optional<uint32_t> target_address;
-    std::optional<uint32_t> atomic_inc_address;
+    std::optional<std::vector<FabricNodeId>> dst_node_ids = std::nullopt;
+    std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops = std::nullopt;
+    std::optional<CoreCoord> src_logical_core = std::nullopt;
+    std::optional<CoreCoord> dst_logical_core = std::nullopt;
+    std::optional<uint32_t> target_address = std::nullopt;
+    std::optional<uint32_t> atomic_inc_address = std::nullopt;
     uint32_t link_id = 0;  // Link ID for multi-link tests
-    std::optional<tt::tt_metal::NOC> noc_id;
+    std::optional<tt::tt_metal::NOC> noc_id = std::nullopt;
     uint8_t vc_id = 0;  // VC selection: 0=VC0 (default), 2=VC2
     bool use_vc2() const { return vc_id == 2; }
 
     // Credit info (copied from pattern if populated by allocator)
-    std::optional<SenderCreditInfo> sender_credit_info;
-    std::optional<uint32_t> credit_return_batch_size;
+    std::optional<SenderCreditInfo> sender_credit_info = std::nullopt;
+    std::optional<uint32_t> credit_return_batch_size = std::nullopt;
 
     // TODO: add later
     // mode - BW, latency etc
@@ -290,34 +290,34 @@ struct TestTrafficConfig {
 struct ReceiverCreditInfo {
     FabricNodeId receiver_node_id;
     FabricNodeId sender_node_id;
-    CoreCoord sender_logical_core;
-    uint32_t sender_noc_encoding;
-    uint32_t credit_return_address;
+    CoreCoord sender_logical_core = {};
+    uint32_t sender_noc_encoding = 0;
+    uint32_t credit_return_address = 0;
 
     // Credit return batching configuration (similar to initial credit capacity)
     // Instead of returning 1 credit per packet, batch them for efficiency
-    uint32_t credit_return_batch_size;
-    std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
+    uint32_t credit_return_batch_size = 0;
+    std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops = std::nullopt;
 };
 
 struct TestTrafficSenderConfig {
     TrafficParameters parameters;
     FabricNodeId src_node_id;
-    std::vector<FabricNodeId> dst_node_ids;
-    std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
-    std::optional<FabricNodeId> mcast_start_node_id;
-    CoreCoord dst_logical_core;
-    size_t target_address;
-    std::optional<size_t> atomic_inc_address;
-    uint32_t dst_noc_encoding;  // TODO: decide if we should keep it here or not
-    uint32_t payload_buffer_size;  // Add payload buffer size field
+    std::vector<FabricNodeId> dst_node_ids = {};
+    std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops = std::nullopt;
+    std::optional<FabricNodeId> mcast_start_node_id = std::nullopt;
+    CoreCoord dst_logical_core = {};
+    size_t target_address = 0;
+    std::optional<size_t> atomic_inc_address = std::nullopt;
+    uint32_t dst_noc_encoding = 0;  // TODO: decide if we should keep it here or not
+    uint32_t payload_buffer_size = 0;  // Add payload buffer size field
     uint32_t link_id = 0;          // Link ID for multi-link tests
-    std::optional<tt::tt_metal::NOC> noc_id;
+    std::optional<tt::tt_metal::NOC> noc_id = std::nullopt;
     uint8_t vc_id = 0;  // VC selection: 0=VC0 (default), 2=VC2
     bool use_vc2() const { return vc_id == 2; }
 
     // Credit flow info (when enable_flow_control is true)
-    std::optional<SenderCreditInfo> sender_credit_info;
+    std::optional<SenderCreditInfo> sender_credit_info = std::nullopt;
 
     FlowUid flow_uid = 0;  // Host-only: index into TestContext::flow_descriptors_
 
@@ -325,20 +325,20 @@ struct TestTrafficSenderConfig {
 };
 
 struct TestTrafficSyncConfig {
-    uint32_t sync_val;
+    uint32_t sync_val = 0;
     TestTrafficSenderConfig sender_config;
 };
 
 struct TestTrafficReceiverConfig {
     TrafficParameters parameters;
-    uint32_t sender_id;
-    size_t target_address;
-    std::optional<size_t> atomic_inc_address;
-    uint32_t payload_buffer_size;  // Add payload buffer size field
+    uint32_t sender_id = 0;
+    size_t target_address = 0;
+    std::optional<size_t> atomic_inc_address = {};
+    uint32_t payload_buffer_size = 0;  // Add payload buffer size field
     uint32_t link_id = 0;          // Link ID derived from corresponding sender
 
     // Credit flow info (when enable_flow_control is true)
-    std::optional<ReceiverCreditInfo> receiver_credit_info;
+    std::optional<ReceiverCreditInfo> receiver_credit_info = std::nullopt;
 
     FlowUid flow_uid = 0;  // Host-only: index into TestContext::flow_descriptors_
 
@@ -346,7 +346,7 @@ struct TestTrafficReceiverConfig {
 };
 
 inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_config) const {
-    std::vector<uint32_t> args;
+    std::vector<uint32_t> args = {};
     args.reserve(20);  // Reserve a reasonable upper bound to avoid reallocations
 
     if (!is_sync_config) {
@@ -485,7 +485,7 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
 }
 
 inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
-    std::vector<uint32_t> args;
+    std::vector<uint32_t> args = {};
     args.reserve(10);  // Reserve a reasonable upper bound to avoid reallocations
 
     const auto metadata =

@@ -575,8 +575,8 @@ tt_metal::Program create_program_mcast_in0_in1(
 
     std::vector<KernelHandle> reader_kernel_ids;
     std::vector<KernelHandle> writer_kernel_ids;
-    for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
-        for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
+    for (uint32_t core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
+        for (uint32_t core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
             CoreCoord left_core = {(std::size_t)start_core_x, (std::size_t)core.y};
             CoreCoord left_core_plus_one = {(std::size_t)start_core_x + 1, (std::size_t)core.y};

@@ -131,7 +131,7 @@ bool vecadd_multi_core(
         "kernels/add_multi_core.cpp",
         cores,
         ComputeConfig{.math_approx_mode = false, .compile_args = compute_compile_time_args, .defines = {}});
-    for (int i = 0; i < num_core; ++i) {
+    for (uint32_t i = 0; i < num_core; ++i) {
         // Set runtime arguments for each core.
         CoreCoord core = {0, i};
         SetRuntimeArgs(program, reader, core, {a->address(), b->address(), tiles_per_core, i});
@@ -153,9 +153,9 @@ bool vecadd_multi_core(
 
     size_t data_per_core = tile_size * tiles_per_core;
 
-    for (int core = 0; core < num_core; ++core) {
+    for (uint32_t core = 0; core < num_core; ++core) {
         const auto core_offset = core * (tile_size + tiles_per_core);
-        for (int index = 0; index < data_per_core; index++) {
+        for (uint32_t index = 0; index < data_per_core; index++) {
             const auto i = core_offset + index;
             float golden = static_cast<float>(a_data[i]) + static_cast<float>(b_data[i]);
             pass &= tt::test_utils::is_close<float>(golden, static_cast<float>(c_data[i]), 0.015f);
