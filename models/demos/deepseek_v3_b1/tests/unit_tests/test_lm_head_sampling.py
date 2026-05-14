@@ -1805,7 +1805,7 @@ def create_input_page(
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
-            "worker_l1_size": 1455316,
+            "worker_l1_size": 1451828,
         }
     ],
     indirect=True,

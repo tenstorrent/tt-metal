@@ -467,7 +467,9 @@ void kernel_main() {
         get_named_compile_time_arg_val("metadata_output_l1_addr"),
         get_named_compile_time_arg_val("sampling_copy_probabilities_to_q"),
         get_named_compile_time_arg_val("sampling_p_bcast_cb"),
-        get_named_compile_time_arg_val("sampling_rand_bcast_cb")>;
+        get_named_compile_time_arg_val("sampling_rand_bcast_cb"),
+        get_named_compile_time_arg_val("sampling_max_cb"),
+        get_named_compile_time_arg_val("sampling_mask_cb")>;
 
     deepseek_b1_ops::TopKSampling::WriterArgs sampling_args{
         .final_noc_x = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
@@ -636,7 +638,9 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_stage1_row_elements"),
         get_named_compile_time_arg_val("sampling_stage1_num_input_tiles"),
         get_named_compile_time_arg_val("sampling_stage2_row_elements"),
-        get_named_compile_time_arg_val("sampling_stage2_num_input_tiles")>;
+        get_named_compile_time_arg_val("sampling_stage2_num_input_tiles"),
+        get_named_compile_time_arg_val("sampling_mask_cb")
+        >;
     deepseek_b1_ops::TopKSampling::ComputeArgs sampling_args{};
 
     // ── ReduceToOneB1 compute (eh_reduce cores) ─────────────────────

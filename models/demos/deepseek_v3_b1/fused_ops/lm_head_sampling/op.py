@@ -639,6 +639,7 @@ class LMHeadSampling:
         sampling_scaler_cb = 31
         sampling_temp_cb = 32
         sampling_rand_cb = 33
+        sampling_mask_cb = 39
         # Mesh-stage scratch CBs (live on stage-1 / stage-2 receiver = final core):
         sampling_mesh_stage_scores_cb = 34
         sampling_mesh_stage_indices_cb = 35
@@ -1544,6 +1545,7 @@ class LMHeadSampling:
                     ("sampling_topk_k", sampling_topk_k_value),
                     ("sampling_softmax_out_cb", sampling_softmax_out_cb),
                     ("sampling_rand_cb", sampling_rand_cb),
+                    ("sampling_mask_cb", sampling_mask_cb),
                     ("sampling_winner_cb", sampling_winner_cb),
                     ("sampling_p_bf16", sampling_p_bf16),
                     ("sampling_topk_scores_slot_bytes", sampling_topk_scores_slot_bytes),
@@ -1554,12 +1556,9 @@ class LMHeadSampling:
                     ("sampling_inv_temp_bf16", sampling_inv_temp_bf16),
                     ("sampling_softmax_in_cb", sampling_softmax_in_cb),
                     ("sampling_temp_cb", sampling_temp_cb),
-                    # Stage-B broadcast CBs. We physically reuse the two compute-side
-                    # buffers `softmax_sub_cb` and `sum_cb` (which the softmax tail
-                    # never touches) as cross-RISC broadcast slots: BRISC pushes `p`
-                    # and `rand` here, TRISC reads them in the fused post-softmax pipeline.
                     ("sampling_p_bcast_cb", sampling_softmax_sub_cb),
                     ("sampling_rand_bcast_cb", sampling_sum_cb),
+                    ("sampling_max_cb", sampling_max_cb),
                     ("sampling_enable_metadata", sampling_enable_metadata_value),
                     ("sampling_copy_probabilities", sampling_copy_probabilities_value),
                     ("sampling_copy_probabilities_to_q", sampling_copy_probabilities_to_q_value),
@@ -1733,6 +1732,7 @@ class LMHeadSampling:
                     ("sampling_scaler_cb", sampling_scaler_cb),
                     ("sampling_temp_cb", sampling_temp_cb),
                     ("sampling_rand_cb", sampling_rand_cb),
+                    ("sampling_mask_cb", sampling_mask_cb),
                     ("sampling_seed", int(seed) & 0xFFFFFFFF),
                     ("sampling_topk_k", sampling_topk_k_value),
                     ("sampling_mesh_mode", argmax_mesh_mode),
@@ -2191,6 +2191,7 @@ class LMHeadSampling:
                         sampling_scaler_cb,
                         sampling_temp_cb,
                         sampling_rand_cb,
+                        sampling_mask_cb,
                     ):
                         cbs_list.append(
                             ttnn.CBDescriptor(
