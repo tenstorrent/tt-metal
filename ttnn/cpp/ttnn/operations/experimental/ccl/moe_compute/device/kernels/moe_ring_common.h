@@ -16,6 +16,15 @@ constexpr uint32_t div_up() {
     return (a + b - 1) / b;
 }
 
+constexpr uint32_t largest_fitting_divisor(uint32_t n, uint32_t max_val) {
+    for (uint32_t d = max_val; d >= 1; --d) {
+        if (n % d == 0) {
+            return d;
+        }
+    }
+    return 1;
+}
+
 }  // namespace detail
 
 namespace moe_ring {

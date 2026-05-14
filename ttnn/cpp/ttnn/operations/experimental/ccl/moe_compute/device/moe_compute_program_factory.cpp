@@ -1070,6 +1070,9 @@ MoEComputeMeshWorkloadFactory::create_at(
                                          (hidden_size / combine_data_parallel_cores / double_buffer) /
                                          combine_token_parallel_cores;
 
+    // NOC_MAX_BURST_SIZE — arch-dependent, used by dm1 to split ring A2A packets
+    const uint32_t noc_max_burst_bytes = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? 16384u : 8192u;
+
     // activation function
     const ttnn::experimental::prim::detail::MoEActivationFunction activation_type = args.activation_type;
 
@@ -1097,6 +1100,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"width_shard_dim", combine_data_parallel_cores},
         {"hidden_tiles", hidden_tiles},
         {"intermediate_tiles", intermediate_tiles},
+        {"noc_max_burst_bytes", noc_max_burst_bytes},
         // Matmul -> combine: dm1 increments this on combine cores when data is written
         {"matmul_combine_sync_semaphore_id", matmul_combine_sync_semaphore_id},
     };

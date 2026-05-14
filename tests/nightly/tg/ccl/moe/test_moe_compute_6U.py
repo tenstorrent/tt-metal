@@ -110,9 +110,9 @@ _MODELS_1x16 = [
     MoEModelConfig("deepseek_v4_pro",     N=3072, hidden_size=7168, selected_experts_k=6, experts_per_device_values=(6,), num_layers=3, num_iterations=2,
                    marks=(pytest.mark.xfail(reason="Combine AllClose fails for specific output values (hidden=7168, N=3072) — likely selective_reduce_combine kernel bug"),)),
     MoEModelConfig("mistral_large_3",     N=4096, hidden_size=7168, selected_experts_k=4, num_layers=3, num_iterations=2,
-                   marks=(pytest.mark.xfail(reason="L1 overflow: hidden=7168 + intermediate=4096 CB region exceeds Wormhole L1 capacity"),)),
+                   marks=(pytest.mark.xfail(reason="L1 overflow: N=4096 A2A buffer (12*12*2048=288KB) exceeds Wormhole L1 budget by ~21KB"),)),
     MoEModelConfig("ling_1t",             N=2048, hidden_size=8192, selected_experts_k=8, num_layers=3, num_iterations=2,
-                   marks=(pytest.mark.xfail(reason="L1 overflow: hidden=8192 mux kernel memory overlaps L1 tensors in selective_reduce_combine"),)),
+                   marks=(pytest.mark.xfail(reason="selective_reduce_combine mux kernel L1 overlap: mux end=0x5ab70 > tensor start=0x43f40; needs combine L1 layout fix"),)),
 ]
 
 _MODELS_1x8 = [

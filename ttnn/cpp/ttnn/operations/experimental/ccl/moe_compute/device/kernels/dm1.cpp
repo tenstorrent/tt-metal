@@ -119,8 +119,12 @@ void kernel_main() {
     // Size of each transfer in bytes
     constexpr uint32_t a2a_xfer_bytes_per_step = tiles_per_step * in2_tile_size;
 
-    // Split into 2 packets
-    constexpr uint32_t a2a_packet_size = a2a_xfer_bytes_per_step / 2;
+    // Split into N packets that each fit within NOC_MAX_BURST_SIZE
+    constexpr uint32_t noc_max_burst_bytes = get_named_compile_time_arg_val("noc_max_burst_bytes");
+    constexpr uint32_t max_tiles_per_burst = noc_max_burst_bytes / in2_tile_size;
+    constexpr uint32_t tiles_per_packet = detail::largest_fitting_divisor(tiles_per_step, max_tiles_per_burst);
+    constexpr uint32_t a2a_num_packets = tiles_per_step / tiles_per_packet;
+    constexpr uint32_t a2a_packet_size = tiles_per_packet * in2_tile_size;
 
     // Source and destination addresses for the all2all
     const uint32_t local_base_addr = get_write_ptr(cb_s2c_in2);
@@ -238,9 +242,10 @@ void kernel_main() {
                     const uint32_t local_src_addr = LOCAL_BUFFER_OFFSET[step];
                     const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[(step == num_cores - 1) ? 0 : (step + 1)];
 
-                    noc_async_write_one_packet_with_state</*posted=*/true>(local_src_addr, neighbor_dst_addr);
-                    noc_async_write_one_packet_with_state</*posted=*/true>(
-                        local_src_addr + a2a_packet_size, neighbor_dst_addr + a2a_packet_size);
+                    for (uint32_t pkt = 0; pkt < a2a_num_packets; ++pkt) {
+                        noc_async_write_one_packet_with_state</*posted=*/true>(
+                            local_src_addr + pkt * a2a_packet_size, neighbor_dst_addr + pkt * a2a_packet_size);
+                    }
 
                     // Signal neighbor that data is ready (increment their semaphore value)
                     noc_inline_dw_write_with_state<
