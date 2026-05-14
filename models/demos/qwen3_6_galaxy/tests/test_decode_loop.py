@@ -340,3 +340,88 @@ def test_greedy_decode_5_tokens_after_prefill(mesh_8x4):
     print(f"\n[T10-Test2] Generated continuation ({len(generated)} tokens): '{full_text}'")
     print(f"[T10-Test2] Full sequence: '{prompt}{full_text}'")
     print("[T10-Test2] PASSED — 5 decode steps completed without NaN/Inf")
+
+
+# ---------------------------------------------------------------------------
+# Test 3: greedy decode 10 tokens (e2e sanity after T14b.9)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.hardware
+def test_greedy_decode_10_tokens_after_prefill(mesh_8x4):
+    """Full 64-layer model, greedy decode 10 tokens after the Paris prompt.
+
+    End-to-end eager sanity check after the T14b.9 work. First decode token
+    must be ' Paris' (token 11751). Subsequent tokens must produce no
+    NaN/Inf. Prints each token + its decoded text + step latency.
+    """
+    from transformers import AutoTokenizer
+
+    from models.demos.qwen3_6_galaxy.tt.qwen36_model_config import TtQwen36ModelArgs
+
+    N_LAYERS = 64
+    N_DECODE_STEPS = 10
+    config = _load_config()
+    args = TtQwen36ModelArgs(mesh_8x4)
+
+    print(f"\n[T10-decode-10] Loading weights for {N_LAYERS} layers ...")
+    global_weights = _load_embedding_and_norm_and_head_weights()
+    layers_weights = [_load_layer_weights(i) for i in range(N_LAYERS)]
+
+    tokenizer = AutoTokenizer.from_pretrained(str(_SNAPSHOT_DIR), trust_remote_code=True)
+    prompt = "The capital of France is"
+    input_ids = tokenizer(prompt, return_tensors="pt").input_ids
+    T_prompt = input_ids.shape[-1]
+    print(f"[T10-decode-10] Prompt: '{prompt}' -> {T_prompt} tokens")
+
+    T_padded = ((T_prompt + 31) // 32) * 32
+    if T_padded > T_prompt:
+        pad = torch.zeros(1, T_padded - T_prompt, dtype=input_ids.dtype)
+        input_ids_padded = torch.cat([input_ids, pad], dim=1)
+    else:
+        input_ids_padded = input_ids
+
+    print("[T10-decode-10] Building TTNN full 64-layer model ...")
+    tt_model = _build_tt_model(mesh_8x4, args, N_LAYERS, global_weights, layers_weights)
+
+    print("[T10-decode-10] Running prefill ...")
+    t0 = time.time()
+    tt_logits, kv_caches, dn_states, conv_states = tt_model.forward_prefill(input_ids_padded, return_caches=True)
+    t1 = time.time()
+    print(f"[T10-decode-10] Prefill done in {t1-t0:.2f}s")
+
+    last_logits = tt_logits[0, T_prompt - 1, : config.vocab_size]
+    generated = [last_logits.argmax().item()]
+    first_tok_text = tokenizer.decode([generated[-1]])
+    print(f"[T10-decode-10] Token 1 (from prefill): id={generated[-1]}, text='{first_tok_text}'")
+    assert "paris" in first_tok_text.lower(), (
+        f"Expected first generated token to contain 'paris', got '{first_tok_text}' " f"(token_id={generated[-1]})"
+    )
+
+    current_pos = T_padded
+    for step in range(1, N_DECODE_STEPS):
+        next_id = torch.tensor([[generated[-1]]])
+        t0 = time.time()
+        step_logits, kv_caches, dn_states, conv_states = tt_model.forward_decode(
+            next_id,
+            current_pos=current_pos,
+            kv_caches=kv_caches,
+            dn_states=dn_states,
+            conv_states=conv_states,
+        )
+        t1 = time.time()
+
+        step_last = step_logits[0, 0, : config.vocab_size]
+        assert not torch.isnan(step_last).any(), f"NaN in decode step {step+1} logits"
+        assert not torch.isinf(step_last).any(), f"Inf in decode step {step+1} logits"
+
+        next_tok = step_last.argmax().item()
+        generated.append(next_tok)
+        current_pos += 1
+        tok_text = tokenizer.decode([next_tok])
+        print(f"[T10-decode-10] Token {step+1} (decode step {step}): id={next_tok}, text='{tok_text}' ({t1-t0:.2f}s)")
+
+    full_text = tokenizer.decode(generated)
+    print(f"\n[T10-decode-10] Generated continuation ({len(generated)} tokens): '{full_text}'")
+    print(f"[T10-decode-10] Full sequence: '{prompt}{full_text}'")
+    print(f"[T10-decode-10] PASSED — {N_DECODE_STEPS} decode steps without NaN/Inf")
