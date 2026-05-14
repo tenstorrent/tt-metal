@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 void kernel_main() {
@@ -65,6 +67,93 @@ void kernel_main() {
                     compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
         }
     }
-    // x^p
-    power_tile_to_cb(cb_x, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_y, p, p_is_negative);
+    // PARTIAL migration: inline power_tile_to_cb body as 4 eltwise_chain stages.
+    //   Block A: x^p           (CopyTile<cb_x, WaitNoPop> + PowerIterative + [Recip] + PackTile<cb_xpow>)
+    //   Block B: log(x)        (CopyTile<cb_x, NoWaitPop> + Log + PackTile<cb_logx>)
+    //   Block C: exp(log(x)*d) (BinaryFpu<cb_logx, cb_decimal, cb_exp_lxmd, Mul> + Exp + PackTile<cb_exp_lxmd>)
+    //   Block D: xpow * exp(.) (BinaryFpu<cb_xpow, cb_exp_lxmd, cb_y, Mul> + PackTile<cb_y>)
+    {
+        using namespace compute_kernel_lib;
+
+        // Block A: x^p (optionally recip). Hold cb_x for Block B.
+        if (p_is_negative) {
+            eltwise_chain(
+                onetile,
+                CopyTile<cb_x, Dst::D0, CopyTilePolicy::WaitNoPop, CbIndexMode::FirstTile, CopyTileReconfig::Input>{},
+                PowerIterative<Dst::D0>{p},
+                Recip<Dst::D0>{},
+                PackTile<
+                    cb_xpow,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
+        } else {
+            eltwise_chain(
+                onetile,
+                CopyTile<cb_x, Dst::D0, CopyTilePolicy::WaitNoPop, CbIndexMode::FirstTile, CopyTileReconfig::Input>{},
+                PowerIterative<Dst::D0>{p},
+                PackTile<
+                    cb_xpow,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
+        }
+
+        // Block B: log(x). cb_x already waited in Block A; pop here.
+        eltwise_chain(
+            onetile,
+            CopyTile<cb_x, Dst::D0, CopyTilePolicy::NoWaitPop, CbIndexMode::FirstTile, CopyTileReconfig::Input>{},
+            Log<>{},
+            PackTile<
+                cb_logx,
+                Dst::D0,
+                PackTilePolicy::PerTileReserveAndPush,
+                PackTileIndexMode::FirstTile,
+                PackTileReconfig::Output>{});
+
+        // Block C: exp(log(x) * decimal). cb_decimal pre-waited at top of kernel — NoWaitNoPop.
+        eltwise_chain(
+            onetile,
+            BinaryFpu<
+                cb_logx,
+                cb_decimal,
+                cb_exp_lxmd,
+                BinaryFpuOp::Mul,
+                BroadcastDim::None,
+                BinaryDataFormatReconfig::Input,
+                CopyTilePolicy::WaitAndPop,
+                CopyTilePolicy::NoWaitNoPop,
+                CbIndexMode::FirstTile,
+                Dst::D0>{},
+            Exp<>{},
+            PackTile<
+                cb_exp_lxmd,
+                Dst::D0,
+                PackTilePolicy::PerTileReserveAndPush,
+                PackTileIndexMode::FirstTile,
+                PackTileReconfig::Output>{});
+
+        // Block D: cb_xpow * cb_exp_lxmd -> cb_y.
+        eltwise_chain(
+            onetile,
+            BinaryFpu<
+                cb_xpow,
+                cb_exp_lxmd,
+                cb_y,
+                BinaryFpuOp::Mul,
+                BroadcastDim::None,
+                BinaryDataFormatReconfig::Input,
+                CopyTilePolicy::WaitAndPop,
+                CopyTilePolicy::WaitAndPop,
+                CbIndexMode::FirstTile,
+                Dst::D0>{},
+            PackTile<
+                cb_y,
+                Dst::D0,
+                PackTilePolicy::PerTileReserveAndPush,
+                PackTileIndexMode::FirstTile,
+                PackTileReconfig::Output>{});
+    }
 }
