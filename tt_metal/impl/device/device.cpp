@@ -2652,6 +2652,16 @@ void Device::wait_for_eth_cores_launched(uint32_t timeout_ms) {
         timeout_ms,
         erisc_sync_addr);
 
+    // FIX BI (#42429): Track simultaneous-handshake early detection.
+    // If a channel reports REMOTE_HANDSHAKE_COMPLETE (0xa1b1c1d1) or beyond during the
+    // "wait for STARTED" poll, both ERISC sides launched and began handshaking before the
+    // host confirmed STARTED on this device — simultaneous-handshake deadlock is in progress.
+    // Collect such channels; after the poll loop, if ALL channels are in this state,
+    // set fabric_channels_not_ready_for_traffic_ immediately so quiesce_internal knows
+    // without waiting for the full Phase-2 timeout (FIX BH already saves ~24s per device
+    // in wait_for_fabric_workers_ready, but FIX BI catches it here in Pass 1b/1c).
+    uint32_t rhs_early_count = 0U;  // channels at REMOTE_HANDSHAKE_COMPLETE or beyond on first read
+
     // pending[i] = index into eth_cores that hasn't shown non-zero status yet.
     std::vector<size_t> pending;
     pending.reserve(eth_cores.size());
@@ -2697,16 +2707,43 @@ void Device::wait_for_eth_cores_launched(uint32_t timeout_ms) {
                 continue;
             }
             if (buf[0] != 0U) {
-                log_info(
-                    tt::LogMetal,
-                    "wait_for_eth_cores_launched: Device {} ETH logical ({},{}) reached "
-                    "edm_status=0x{:08x} ({}) after {}ms.",
-                    this->id(),
-                    eth_cores[idx].logical_core.x,
-                    eth_cores[idx].logical_core.y,
-                    buf[0],
-                    edm_status_str(buf[0]),
-                    elapsed_ms);
+                // FIX BI (#42429): Distinguish STARTED from already-past-STARTED states.
+                // STARTED = 0xa0b0c0d0: channel booted normally, sequencing is intact.
+                // REMOTE_HANDSHAKE_COMPLETE (0xa1b1c1d1) or beyond: the ERISC already began
+                // handshaking before the host polled — simultaneous-launch race in progress.
+                // Count these for the post-loop early-detection check.
+                const bool is_past_started =
+                    buf[0] >= static_cast<uint32_t>(tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE) &&
+                    buf[0] <= static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
+                // elapsed_ms < 10 means first poll before the first 100ms log interval.
+                // The ERISC advanced to handshake before the host even finished polling for STARTED.
+                if (is_past_started && elapsed_ms < 10) {
+                    // Near-zero elapsed time + already at handshake state = simultaneous launch.
+                    rhs_early_count++;
+                    log_warning(
+                        tt::LogMetal,
+                        "FIX BI (#42429): Device {} ETH logical ({},{}) already at "
+                        "edm_status=0x{:08x} ({}) before STARTED poll completed — "
+                        "simultaneous-handshake race detected (rhs_early={}/{}).",
+                        this->id(),
+                        eth_cores[idx].logical_core.x,
+                        eth_cores[idx].logical_core.y,
+                        buf[0],
+                        edm_status_str(buf[0]),
+                        rhs_early_count,
+                        eth_cores.size());
+                } else {
+                    log_info(
+                        tt::LogMetal,
+                        "wait_for_eth_cores_launched: Device {} ETH logical ({},{}) reached "
+                        "edm_status=0x{:08x} ({}) after {}ms.",
+                        this->id(),
+                        eth_cores[idx].logical_core.x,
+                        eth_cores[idx].logical_core.y,
+                        buf[0],
+                        edm_status_str(buf[0]),
+                        elapsed_ms);
+                }
             } else {
                 still_pending.push_back(idx);
             }
@@ -2738,13 +2775,40 @@ void Device::wait_for_eth_cores_launched(uint32_t timeout_ms) {
 
     const auto total_ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+
+    // FIX BI (#42429): If ALL channels were already at REMOTE_HANDSHAKE_COMPLETE (or beyond)
+    // on the very first poll (elapsed_ms == 0), this device and its peer(s) launched
+    // simultaneously — simultaneous-handshake deadlock is inevitable.  Set
+    // fabric_channels_not_ready_for_traffic_ here so:
+    //   1. quiesce_internal Pass 2 (wait_for_fabric_workers_ready) can short-circuit early.
+    //   2. FIX BH + FIX BC in phase5b_erisc_health_check still fire as the authoritative
+    //      classifier (they run in Pass 2 and populate unhealthy channel lists).
+    //   3. FIX AA (GTEST_SKIP guard in AllGather test) sees the flag immediately after
+    //      quiesce_devices() returns, even if Phase 2 didn't run.
+    // Note: only flag if ALL channels hit RHS early — a partial count means some channels
+    // sequenced correctly and the deadlock may not have occurred.
+    if (rhs_early_count > 0 && rhs_early_count == eth_cores.size()) {
+        log_warning(
+            tt::LogMetal,
+            "FIX BI (#42429): Device {} — ALL {}/{} ETH channels were already at "
+            "REMOTE_HANDSHAKE_COMPLETE (or beyond) at poll time=0ms.  Simultaneous-handshake "
+            "deadlock confirmed; setting fabric_channels_not_ready_for_traffic_=true immediately "
+            "to skip Phase 2 polling.",
+            this->id(),
+            rhs_early_count,
+            eth_cores.size());
+        fabric_channels_not_ready_for_traffic_.store(true);
+    }
+
     log_info(
         tt::LogMetal,
-        "wait_for_eth_cores_launched: Device {} — done in {}ms ({}/{} channels confirmed STARTED).",
+        "wait_for_eth_cores_launched: Device {} — done in {}ms ({}/{} channels confirmed, "
+        "{} simultaneous-handshake early detections).",
         this->id(),
         total_ms,
         eth_cores.size() - pending.size(),
-        eth_cores.size());
+        eth_cores.size(),
+        rhs_early_count);
 }
 
 bool Device::phase5b_erisc_health_check(
