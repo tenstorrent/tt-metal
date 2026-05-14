@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Thin executors for ``Qwen25_7BTTT`` delegating to shared ``EagerLLMExecutor`` /
+Thin executors for ``Qwen25_7B`` delegating to shared ``EagerLLMExecutor`` /
 ``TracedLLMExecutor`` (paged KV, page tables, compile).
 """
 
@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import ttnn
 from models.common.models.executor import EagerLLMExecutor, TracedLLMExecutor
-from models.common.models.qwen25_7b.model import Qwen25_7BTTT
+from models.common.models.qwen25_7b.model import Qwen25_7B, _slice_last_token_tile
 
 
-def _iter_qwen_executor_named_modules(model: Qwen25_7BTTT):
+def _iter_qwen_executor_named_modules(model: Qwen25_7B):
     yield ("embed", model.embed)
     yield ("rope_setup", model.rope_setup)
     for i, layer in enumerate(model.layers):
@@ -25,11 +25,11 @@ def _iter_qwen_executor_named_modules(model: Qwen25_7BTTT):
 class EagerQwenExecutor:
     """Delegates to ``EagerLLMExecutor``; attaches ``model_args`` on the model for the engine."""
 
-    def __init__(self, model: Qwen25_7BTTT, mesh_device: ttnn.MeshDevice):
+    def __init__(self, model: Qwen25_7B, mesh_device: ttnn.MeshDevice):
         self._engine = EagerLLMExecutor(model, mesh_device, iter_named_modules=_iter_qwen_executor_named_modules)
 
     @property
-    def model(self) -> Qwen25_7BTTT:
+    def model(self) -> Qwen25_7B:
         return self._engine.model
 
     @property
@@ -62,11 +62,11 @@ class EagerQwenExecutor:
 class TracedQwenExecutor:
     """Traced path; same surface as ``EagerQwenExecutor``."""
 
-    def __init__(self, model: Qwen25_7BTTT, mesh_device: ttnn.MeshDevice):
+    def __init__(self, model: Qwen25_7B, mesh_device: ttnn.MeshDevice):
         self._engine = TracedLLMExecutor(model, mesh_device, iter_named_modules=_iter_qwen_executor_named_modules)
 
     @property
-    def model(self) -> Qwen25_7BTTT:
+    def model(self) -> Qwen25_7B:
         return self._engine.model
 
     @property
@@ -108,23 +108,20 @@ class TracedQwenExecutor:
         return self._engine.cleanup()
 
 
-def run_prefill(model: Qwen25_7BTTT, token_ids_tt: ttnn.Tensor, *, start_pos: int = 0) -> ttnn.Tensor:
+def run_prefill(model: Qwen25_7B, token_ids_tt: ttnn.Tensor, *, start_pos: int = 0) -> ttnn.Tensor:
     """Prefill chunk without paged executor (tests): ``token_ids_tt`` shape ``[1,1,1,S]``, ``S % 128 == 0``."""
     return model.prefill_from_token_ids(token_ids_tt, start_pos=start_pos)
 
 
-def run_decode(model: Qwen25_7BTTT, token_id_tt: ttnn.Tensor, *, current_pos: int) -> ttnn.Tensor:
+def run_decode(model: Qwen25_7B, token_id_tt: ttnn.Tensor, *, current_pos: int) -> ttnn.Tensor:
     """Single-token decode without page table (tests)."""
     return model.decode_from_token_ids(token_id_tt, current_pos=current_pos)
 
 
-def run_lm_head(model: Qwen25_7BTTT, hidden_tt: ttnn.Tensor) -> ttnn.Tensor:
+def run_lm_head(model: Qwen25_7B, hidden_tt: ttnn.Tensor) -> ttnn.Tensor:
     """Last-tile hidden slice so width-sharded LM matmul M matches ``LMHead1D`` program config."""
     if len(hidden_tt.shape) == 4 and hidden_tt.shape[2] > 32:
-        seq_len = hidden_tt.shape[2]
-        last_token_idx = seq_len - 1
-        lo = (last_token_idx // 32) * 32
         old = hidden_tt
-        hidden_tt = ttnn.slice(old, (0, 0, lo, 0), (1, 1, lo + 32, old.shape[-1]))
+        hidden_tt = _slice_last_token_tile(old, hidden_tt.shape[2] - 1)
         ttnn.deallocate(old)
     return model.lm_logits(hidden_tt)

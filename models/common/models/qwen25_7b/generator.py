@@ -4,7 +4,7 @@
 """
 vLLM-shaped adapter and greedy helpers for Qwen2.5-7B TTTv2.
 
-Uses ``AutoConfig`` / ``Qwen25_7BTTT.from_pretrained`` and
+Uses ``AutoConfig`` / ``Qwen25_7B.from_pretrained`` and
 :class:`Qwen25GeneratorConfig` only — no v1 ``ModelArgs``.
 """
 
@@ -19,7 +19,7 @@ import ttnn
 from models.common.auto_compose import to_torch_auto_compose
 from models.common.models.executor import make_contiguous_page_table
 from models.common.models.qwen25_7b.executor import EagerQwenExecutor, TracedQwenExecutor
-from models.common.models.qwen25_7b.model import Qwen25_7BTTT
+from models.common.models.qwen25_7b.model import Qwen25_7B
 
 
 @dataclass
@@ -58,7 +58,7 @@ class Qwen25Generator:
         gen_cfg: Qwen25GeneratorConfig | None = None,
     ) -> Qwen25Generator:
         gen_cfg = gen_cfg or Qwen25GeneratorConfig()
-        model = Qwen25_7BTTT.from_pretrained(
+        model = Qwen25_7B.from_pretrained(
             mesh_device,
             gen_cfg.hf_model_id,
             revision=gen_cfg.hf_revision,
@@ -109,7 +109,7 @@ def greedy_argmax_from_logits(logits: ttnn.Tensor, *, mesh_device: ttnn.MeshDevi
     return int(torch.argmax(lt).item())
 
 
-def greedy_decode_one_step(model: Qwen25_7BTTT, token_id: int, *, current_pos: int) -> int:
+def greedy_decode_one_step(model: Qwen25_7B, token_id: int, *, current_pos: int) -> int:
     """Decode one token at ``current_pos``; returns next token id (greedy)."""
     tid = torch.tensor([[[[token_id]]]], dtype=torch.int32)
     x = ttnn.from_torch(

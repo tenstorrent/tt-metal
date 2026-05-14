@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Smoke and accuracy tests for ``Qwen25_7BTTT``.
+Smoke and accuracy tests for ``Qwen25_7B``.
 
 Requires Hugging Face weights locally (or network + auth for gated models).
 
@@ -38,7 +38,7 @@ import ttnn
 from models.common.models.executor import make_contiguous_page_table
 from models.common.models.qwen25_7b.executor import EagerQwenExecutor, TracedQwenExecutor, run_lm_head, run_prefill
 from models.common.models.qwen25_7b.generator import greedy_argmax_from_logits, greedy_decode_one_step
-from models.common.models.qwen25_7b.model import Qwen25_7BTTT
+from models.common.models.qwen25_7b.model import Qwen25_7B
 from models.common.tests.demos.cleanup_utils import cleanup_model_case
 from models.common.utility_functions import comp_pcc
 
@@ -111,7 +111,7 @@ def test_qwen25_7b_prefill_smoke(mesh_device, hf_model_id, seq_len: int, tmp_pat
     cache = tmp_path_factory.mktemp("qwen25_cache")
     model = None
     try:
-        model = Qwen25_7BTTT.from_pretrained(
+        model = Qwen25_7B.from_pretrained(
             mesh_device,
             hf_model_id,
             max_batch_size=32,
@@ -151,7 +151,7 @@ def test_qwen25_7b_decode_one_step(mesh_device, hf_model_id, tmp_path_factory):
     seq_len = 128
     model = None
     try:
-        model = Qwen25_7BTTT.from_pretrained(
+        model = Qwen25_7B.from_pretrained(
             mesh_device,
             hf_model_id,
             max_batch_size=32,
@@ -193,7 +193,7 @@ def test_qwen25_7b_executor_prefill_smoke(mesh_device, hf_model_id, seq_len: int
     cache = tmp_path_factory.mktemp("qwen25_exec_cache")
     model = None
     try:
-        model = Qwen25_7BTTT.from_pretrained(
+        model = Qwen25_7B.from_pretrained(
             mesh_device,
             hf_model_id,
             max_batch_size=1,
@@ -254,7 +254,7 @@ def test_qwen25_7b_teacher_forcing_prefill_vs_hf(mesh_device, hf_model_id, tmp_p
     cache = tmp_path_factory.mktemp("qwen25_tf")
     model = None
     try:
-        model = Qwen25_7BTTT.from_pretrained(
+        model = Qwen25_7B.from_pretrained(
             mesh_device,
             hf_model_id,
             max_batch_size=1,
@@ -305,7 +305,7 @@ def test_qwen25_7b_eager_traced_prefill_logits_match(mesh_device, hf_model_id, t
     seq_len = 128
     m_e = m_t = None
     try:
-        m_e = Qwen25_7BTTT.from_pretrained(
+        m_e = Qwen25_7B.from_pretrained(
             mesh_device,
             hf_model_id,
             max_batch_size=1,
@@ -314,7 +314,7 @@ def test_qwen25_7b_eager_traced_prefill_logits_match(mesh_device, hf_model_id, t
             cache_dir=cache_a,
             executor_mode=True,
         )
-        m_t = Qwen25_7BTTT.from_pretrained(
+        m_t = Qwen25_7B.from_pretrained(
             mesh_device,
             hf_model_id,
             max_batch_size=1,
