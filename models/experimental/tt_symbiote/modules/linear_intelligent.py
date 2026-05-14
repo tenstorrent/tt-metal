@@ -1,9 +1,11 @@
 from typing import Dict, Optional
 
+import torch
 import ttnn
-from models.experimental.tt_symbiote.modules.linear import TTNNLinear
+from models.experimental.tt_symbiote.modules.linear import TTNNLinear, TTNNLinearIColShardedWAllReduced
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 from models.experimental.tt_symbiote.core.module import deallocate_weights_after
+from models.experimental.tt_symbiote.core.run_config import trace_disabled
 
 
 class SmartTTNNLinear(TTNNLinear):
@@ -77,6 +79,74 @@ class SmartTTNNLinear(TTNNLinear):
             bias=self.tt_bias,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+
+@trace_disabled
+class TTNNLinearLMHead(TTNNLinearIColShardedWAllReduced):
+    """Optimal lm_head: col-sharded input × row-sharded weight + all-reduce → torch output.
+
+    Design choices:
+    1. Row-sharded weight (in_features axis): each device computes a partial-sum
+       matmul on its shard, so no input all-gather is needed.
+    2. reduce_scatter + all_gather (= all-reduce): sums the partial results to give
+       replicated correct logits on every device.
+    3. Returns torch.Tensor: bypasses the framework's ConcatMesh2dToTensor output
+       composer, which would otherwise concatenate identical device copies and inflate
+       vocab_size by num_devices → wrong token picks / gibberish.
+    """
+
+    def __init__(self, in_features: int, out_features: int) -> None:
+        super().__init__(in_features, out_features)
+        self.compute_kernel_config = compute_kernel_config()
+
+    def forward(self, input_tensor: ttnn.Tensor) -> torch.Tensor:
+        dev = self.device
+        is_multi = dev is not None and hasattr(dev, "get_num_devices") and dev.get_num_devices() > 1
+
+        if input_tensor.layout != ttnn.TILE_LAYOUT:
+            input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        input_tensor_shape = list(input_tensor.shape)
+        input_shape = list(input_tensor_shape)
+        if len(input_shape) == 2:
+            input_shape.insert(0, 1)
+        if len(input_shape) == 3:
+            input_shape.insert(1, 1)
+        input_tensor = ttnn.reshape(input_tensor, input_shape)
+
+        tt_output = ttnn.linear(
+            input_tensor,
+            self.tt_weight,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        if is_multi:
+            tt_output = ttnn.reduce_scatter(
+                tt_output,
+                dim=3,
+                num_links=1,
+                cluster_axis=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Ring,
+            )
+            tt_output = ttnn.all_gather(
+                tt_output,
+                dim=3,
+                num_links=1,
+                cluster_axis=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Ring,
+            )
+
+        if self.tt_bias is not None:
+            tt_output = ttnn.add(tt_output, self.tt_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
+
+        if is_multi:
+            return ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(dev, dim=0))[0:1]
+        return ttnn.to_torch(tt_output)
 
 
 class SmartTTNNLinearLLama(SmartTTNNLinear):

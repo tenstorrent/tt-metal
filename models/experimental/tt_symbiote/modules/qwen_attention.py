@@ -29,7 +29,6 @@ from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinear,
     TTNNLinearIReplicatedWColSharded,
 )
-from models.experimental.tt_symbiote.modules.conv import TTNNConv1d
 from models.experimental.tt_symbiote.modules.rope import (
     TTNNQwenOmniRotaryPositionEmbedding,
 )
@@ -1078,7 +1077,6 @@ class TTNNQwen3LinearAttention(TTNNModule):
 
         # DeltaNet kernel parameters (kept on PyTorch)
         self.conv1d = None  # PyTorch Conv1d for causal convolution (weight/bias accessed by causal_conv1d_fn/update)
-        self.ttnn_conv1d = None  # TTNNConv1d for TTNN-accelerated fallback path
         self.dt_bias = None  # Time step bias
         self.A_log = None  # A parameter (log space)
         self.norm = None  # RMSNorm with gating
@@ -1140,7 +1138,6 @@ class TTNNQwen3LinearAttention(TTNNModule):
 
         # Keep DeltaNet kernel components as references (not TTNN)
         new_layer.conv1d = torch_layer.conv1d  # kept for weight/bias access in causal_conv1d_fn/update paths
-        new_layer.ttnn_conv1d = TTNNConv1d.from_torch(torch_layer.conv1d)
         new_layer.dt_bias = torch_layer.dt_bias
         new_layer.A_log = torch_layer.A_log
         new_layer.norm = torch_layer.norm
@@ -1219,8 +1216,6 @@ class TTNNQwen3LinearAttention(TTNNModule):
             self.in_proj_z.deallocate_weights()
         if self.out_proj is not None:
             self.out_proj.deallocate_weights()
-        if self.ttnn_conv1d is not None:
-            self.ttnn_conv1d.deallocate_weights()
         if self._in_proj_a_weight_tt is not None:
             ttnn.deallocate(self._in_proj_a_weight_tt)
             self._in_proj_a_weight_tt = None
@@ -1794,16 +1789,7 @@ class TTNNQwen3LinearAttention(TTNNModule):
                     seq_idx=None,
                 )
             else:
-                conv_out = self.ttnn_conv1d(mixed_qkv)  # [B, C, T] ttnn tensor
-                conv_out = ttnn.silu(conv_out)
-                dev = conv_out.device()
-                if dev is not None and hasattr(dev, "get_num_devices") and dev.get_num_devices() > 1:
-                    mixed_qkv = ttnn.to_torch(conv_out, mesh_composer=ttnn.ConcatMeshToTensor(dev, dim=0))[0].unsqueeze(
-                        0
-                    )
-                else:
-                    mixed_qkv = ttnn.to_torch(conv_out)
-                mixed_qkv = mixed_qkv[:, :, :seq_len].contiguous()
+                mixed_qkv = F.silu(self.conv1d(mixed_qkv)[:, :, :seq_len])
 
         # Transpose back: [batch, seq, key_dim * 2 + value_dim]
         mixed_qkv = mixed_qkv.transpose(1, 2).contiguous()

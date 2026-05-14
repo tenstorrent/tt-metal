@@ -35,6 +35,7 @@ from models.experimental.tt_symbiote.modules.qwen_attention import (
     TTNNQwen3FullAttention,
     TTNNQwenPagedAttentionKVCache,
 )
+from models.experimental.tt_symbiote.modules.linear_intelligent import TTNNLinearLMHead
 
 assert transformers.__version__.startswith(
     "5."
@@ -314,13 +315,20 @@ def test_qwen3_6_35b_a3b(mesh_device, use_paged_attention, max_new_tokens):
     )
     # modules3 = register_module_replacement_dict(model, nn_to_ttnn2, model_config=None)
 
+    # Replace lm_head directly (TTNNModule ≠ nn.Module; can't use dict-pattern replacement).
+    _orig_lm_head = model.lm_head
+    ttnn_lm_head = TTNNLinearLMHead.from_torch(_orig_lm_head)
+    ttnn_lm_head._unique_name = "lm_head"
+    del model._modules["lm_head"]  # remove from PyTorch's _modules registry
+    model.lm_head = ttnn_lm_head  # store as plain __dict__ attribute
+
     # Assign layer indices so block-1 residual fast path fires on layers 1–N.
     # Layer 0's residual comes from the embedding whose buffer alignment cannot
     # be guaranteed; the default _layer_idx=0 keeps the safe torch+ path there.
     if nn_to_ttnn_second_pass:
         TTNNQwen3MoeDecoderLayer.assign_layer_indices(model.model.layers)
     set_device(model, mesh_device)
-    all_modules = {**modules1, **modules2}
+    all_modules = {**modules1, **modules2, "lm_head": ttnn_lm_head}
 
     print(f"Preprocessing {len(all_modules)} TTNN modules weights...")
     for k, v in tqdm(all_modules.items()):

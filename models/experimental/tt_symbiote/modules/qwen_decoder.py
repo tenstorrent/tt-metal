@@ -302,12 +302,7 @@ class TTNNQwen3MoeDecoderLayer(nn.Module):
 
         if _dbg:
             print(f"[RESIDUAL] layer={self._layer_idx} shape={per_dev_a} -> FAST PATH (ttnn.add)")
-        # Use L1 for the add output during decode (seq-len == 1) since this
-        # module is a plain nn.Module (not @trace_enabled) and decode tensors
-        # are small enough to fit in L1. Prefill uses DRAM.
-        is_decode = len(per_dev_a) >= 2 and int(per_dev_a[-2]) == 1
-        add_mem_cfg = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
-        out_ttnn = ttnn.add(a, b, memory_config=add_mem_cfg)
+        out_ttnn = ttnn.add(a, b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         out_wrapped = TorchTTNNTensor(out_ttnn)
         # Both configs are equivalent here; pick either one to propagate so
         # the next layer's residual lookup also takes the fast path.
