@@ -871,12 +871,12 @@ def test_prefill_transformer_from_trace(
     mesh_shape = list(mesh_device.shape)
     sp_factor = mesh_shape[sp_axis]
     tp_factor = mesh_shape[tp_axis]
-    emb_dim = config.hidden_size
     isl_per_chip = isl_total // sp_factor
 
     logger.info(
         f"Trace-based test: trace={trace_dir.name}, isl={isl_total}, "
         f"num_layers={num_layers}, mesh={mesh_shape}, "
+        f"sp_factor={sp_factor}, tp_factor={tp_factor}, "
         f"n_routed_experts={n_routed_experts}, capacity_factor={capacity_factor}, "
         f"gate_fallback_mode={gate_fallback_mode}"
     )
@@ -1050,8 +1050,6 @@ def test_prefill_transformer_from_trace(
     if ref_token_id is None or ref_token_text is None:
         output_meta_path = trace_dir / "output_metadata.json"
         if output_meta_path.exists():
-            import json
-
             with open(output_meta_path) as f:
                 output_meta = json.load(f)
             ref_token_id = ref_token_id or output_meta.get("next_token_id")
