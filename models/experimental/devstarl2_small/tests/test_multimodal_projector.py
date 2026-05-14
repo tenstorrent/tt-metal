@@ -106,7 +106,7 @@ def test_mistral3_multimodal_projector_pcc_devstral_weights(mesh_device, monkeyp
         mesh_device=mesh_device,
         args=model_args,
         state_dict=meta_state_dict,
-        weight_cache_path=None,
+        weight_cache_path=model_args.weight_cache_path(dtype_tt),
         dtype=dtype_tt,
         eps=float(hf_projector.norm.variance_epsilon),
     )

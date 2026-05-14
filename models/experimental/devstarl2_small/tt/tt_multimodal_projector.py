@@ -44,21 +44,45 @@ class TTMistral3MultiModalProjector(LightweightModule):
             dtype=dtype,
         )
 
-        def as_linear_weight(name):
+        def as_linear_weight(name, mesh_mapper, cache_suffix=""):
             return ttnn.as_tensor(
                 torch.transpose(state_dict[f"{state_dict_prefix}{name}.weight"], -2, -1),
                 dtype=dtype,
                 device=mesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                mesh_mapper=mesh_mapper,
                 layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_file_name=None
                 if weight_cache_path is None
-                else weight_cache_path / f"{state_dict_prefix}{name}.weight",
+                else weight_cache_path / f"{state_dict_prefix}{name}.weight{cache_suffix}",
             )
 
-        self.linear_1_weight = as_linear_weight("linear_1")
-        self.linear_2_weight = as_linear_weight("linear_2")
+        self.linear_1_weight = as_linear_weight("linear_1", ttnn.ReplicateTensorToMesh(mesh_device))
+        self.linear_2_weight = as_linear_weight(
+            "linear_2", ttnn.ShardTensorToMesh(mesh_device, dim=-1), cache_suffix=".sharded_dim_-1"
+        )
+        self.linear_2_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(11, 10),
+            in0_block_w=32,
+            out_subblock_h=8,
+            out_subblock_w=1,
+            per_core_M=8,
+            per_core_N=1,
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+        self.linear_2_large_m_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(11, 10),
+            in0_block_w=8,
+            out_subblock_h=1,
+            out_subblock_w=2,
+            per_core_M=16,
+            per_core_N=10,
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+        )
 
     def forward(self, image_features: ttnn.Tensor, image_sizes) -> ttnn.Tensor:
         # tt_rmsnorm expects rank-4 tensors; projector input is [tokens, hidden].
@@ -66,9 +90,23 @@ class TTMistral3MultiModalProjector(LightweightModule):
         x = self.norm(x, mode="prefill")
         x = ttnn.reshape(x, image_features.shape)
         x = self.patch_merger(x, image_sizes)
-        x = ttnn.linear(x, self.linear_1_weight, dtype=self.dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.linear(x, self.linear_1_weight, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x = ttnn.gelu(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x = ttnn.linear(x, self.linear_2_weight, dtype=self.dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.typecast(x, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        m_tiles = (x.shape[0] + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+        n_tiles = (self.linear_2_weight.shape[-1] + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+        linear_2_program_config = (
+            self.linear_2_large_m_program_config
+            if ((m_tiles + 7) // 8) * n_tiles > 110
+            else self.linear_2_program_config
+        )
+        x = ttnn.linear(
+            x,
+            self.linear_2_weight,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=linear_2_program_config,
+        )
         return x
 
 
