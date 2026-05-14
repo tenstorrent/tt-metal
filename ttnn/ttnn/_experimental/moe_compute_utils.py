@@ -860,6 +860,13 @@ def get_weight_core_shard_maps(mesh_device, hidden_size: int, intermediate_size:
         last_group_pad_tiles = groups_per_core * W2_TILES_PER_A2A_ITER_W - w2_tiles
         w2_shard_map_list.append((last_group_tiles, last_group_pad_tiles))
 
+    # TODO(#41827, BH N>8): BH N=12/16 needs synthetic shard_map entries for ring positions
+    # beyond bank count (the C++ program_factory pads matmul_cores from 8 up to N). The new
+    # formula-driven approach from PR #43932 makes the WIP manual padding from the pre-rebase
+    # branch obsolete; re-implement using shard_tiles(Nt, ring_pos, target_ring_size) and
+    # w2_shard_tiles(Ht, ring_pos, Nt, target_ring_size) for ring_pos in [n_cores, target_ring_size).
+    # Current support: BH N=8 (1:1 ring-to-bank) only.
+
     dram_core_coords = [ttnn.CoreCoord(c, 0) for c in sorted_dram_core_coords]
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(cc, cc) for cc in dram_core_coords])
 
@@ -875,6 +882,7 @@ def get_weight_mem_configs(
     w2_shard_map,
     dram_core_range_set,
     has_bias=False,
+    mesh_device=None,
 ):
     """
     Get memory configurations for W0/W1 and W2 weight tensors.

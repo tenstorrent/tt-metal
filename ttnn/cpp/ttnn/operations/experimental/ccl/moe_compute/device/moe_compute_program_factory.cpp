@@ -30,6 +30,39 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
+namespace ttnn::experimental::prim {
+
+// BH ring size resolver. Resolution order:
+//   1. If `explicit_value` is provided, validate ({8, 12, 16}) and return it; fatal on invalid.
+//   2. Else if env var TT_MOE_BH_N is set, validate and return it; fatal on invalid.
+//   3. Else return the default (16).
+// The chosen N feeds the templatized MoeRingConfig<Ht, Nt, N, has_bias> in moe_ring_common.h.
+// N=8 maps 1:1 to BH's 8 DRAM banks; N=12/16 use HEIGHT_SHARDED (8 banks) + bank-run reads.
+// Resolved per call (no static cache) so the op kwarg path can pass different N values within
+// a single session and have the program cache distinguish them.
+uint32_t resolve_bh_ring_size(std::optional<uint32_t> explicit_value) {
+    if (explicit_value.has_value()) {
+        const uint32_t n = *explicit_value;
+        TT_FATAL(
+            n == 8 || n == 12 || n == 16, "moe_compute: bh_ring_size={} is not supported (must be 8, 12, or 16)", n);
+        return n;
+    }
+    const char* env = std::getenv("TT_MOE_BH_N");
+    if (env != nullptr) {
+        const int parsed = std::atoi(env);
+        TT_FATAL(
+            parsed == 8 || parsed == 12 || parsed == 16,
+            "moe_compute: TT_MOE_BH_N={} is not supported (must be 8, 12, or 16)",
+            env);
+        return static_cast<uint32_t>(parsed);
+    }
+    return 16u;  // Default when neither kwarg nor env var is set.
+}
+
+uint32_t get_bh_ring_size() { return resolve_bh_ring_size(std::nullopt); }
+
+}  // namespace ttnn::experimental::prim
+
 namespace {
 
 constexpr uint32_t TILE_WIDTH = 32;
@@ -1603,7 +1636,7 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
     const ttnn::Tensor& matmul_output_tensor = tensor_return_value[4];
 
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
-        const auto& shared_variables = cached_workload.shared_variables.at(range);
+        const auto& shared_variables = cached_workload.shared_variables[range];
 
         // Update sharded circular buffer address
         tt::tt_metal::UpdateDynamicCircularBufferAddress(
