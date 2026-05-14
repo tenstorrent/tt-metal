@@ -231,8 +231,8 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
 //   ge(A,B) = GE(A,B)           le(A,B) = GE(B,A)
 // Like int32, UInt32 uses SFPSETSGN to form B with either a cleared or set MSB before
 // subtracting, then folds the original MSB relationship with the subtract result.
-// UInt16 stays simpler: A - B cannot overflow int32, so its sign bit gives LT directly
-// and SFPNOT turns LT into GE when needed.
+// On Blackhole, UInt16 stays simpler: the LO16 load zero-extends values into
+// non-negative sign-magnitude integers, so SFPGT/SFPLE can compare them directly.
 template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP, DataFormat DATA_FORMAT>
 inline void calculate_binary_comp_uint(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     static_assert(
@@ -272,10 +272,10 @@ inline void calculate_binary_comp_uint(const uint dst_index_in0, const uint dst_
             TTI_SFPSHFT((-31) & 0xfff, RESULT, RESULT, 1);
             TT_SFPSTORE(RESULT, LD_ST_MOD, ADDR_MOD_6, dst_index_out * dst_tile_size);
         } else {
-            // Signed subtraction cannot overflow for UInt16; the sign bit gives the strict comparison.
-            TTI_SFPIADD(0, A, B, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
             if constexpr (use_ge) {
-                TTI_SFPNOT(0, B, B, 0);
+                TTI_SFPLE(0, A, B, 8); // SFPLE_MOD1_SET_VD: B = (A >= B) ? -1 : 0
+            } else {
+                TTI_SFPGT(0, A, B, 8); // SFPGT_MOD1_SET_VD: B = (A < B) ? -1 : 0
             }
             TTI_SFPSHFT((-31) & 0xfff, B, B, 1);
             TT_SFPSTORE(B, LD_ST_MOD, ADDR_MOD_6, dst_index_out * dst_tile_size);
