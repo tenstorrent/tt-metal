@@ -148,7 +148,7 @@ inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_rows_
  */
 inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t num_rows_per_tile, const std::uint32_t tile_idx)
 {
-    _set_dst_write_addr_by_rows_(num_rows_per_tile, tile_idx);
+    _set_dst_write_addr_by_rows_<TRISC_ID>(num_rows_per_tile, tile_idx);
 
     // Run MOP
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
