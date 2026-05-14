@@ -1074,9 +1074,7 @@ def test_demo_text(
                 f"Teacher forced token at prefill {'PASSED' if does_pass else 'FAILED'} PCC check with torch reference model"
             )
             if not apc_test:
-                assert does_pass, (
-                    f"Prefill PCC check failed: {pcc_message}, while expected >= {expected_prefill_pcc}."
-                )
+                assert does_pass, f"Prefill PCC check failed: {pcc_message}, while expected >= {expected_prefill_pcc}."
         if apc_test:
             assert_message = (
                 f"Prefill PCC check failed: {pcc_message}, while expected {demo_targets['prefill_pcc']}.\n"
