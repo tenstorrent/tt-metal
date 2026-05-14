@@ -8,7 +8,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
-#include "api/debug/assert.h"
+#include "llk_assert.h"
 #include "api/debug/waypoint.h"
 #include "llk_defs.h"
 #include "llk_io.h"
@@ -99,8 +99,10 @@ inline void llk_unpack_reconfig_data_format_srca(
     static_assert(
         dim_stride_target == p_dim_stride_target::IGNORE,
         "Quasar unpack reconfig does not support stride/tile-dimension changes");
-    // Caller must only invoke reconfig when operand formats actually differ.
-    ASSERT(should_reconfig_src_reg_df(srca_old_operand, srca_new_operand));
+    LLK_ASSERT(
+        should_reconfig_src_reg_df(srca_old_operand, srca_new_operand),
+        "llk_unpack_reconfig_data_format_srca called with operands that share the same format; reconfig is "
+        "unnecessary.");
     llk_unpack_reconfig_data_format_srca<EN_32BIT_DEST, dim_stride_target, to_from_int8>(srca_new_operand);
 }
 
@@ -110,8 +112,10 @@ inline void llk_unpack_reconfig_data_format_srcb(
     static_assert(
         dim_stride_target == p_dim_stride_target::IGNORE,
         "Quasar unpack reconfig does not support stride/tile-dimension changes");
-    // Caller must only invoke reconfig when operand formats actually differ.
-    ASSERT(should_reconfig_src_reg_df(srcb_old_operand, srcb_new_operand));
+    LLK_ASSERT(
+        should_reconfig_src_reg_df(srcb_old_operand, srcb_new_operand),
+        "llk_unpack_reconfig_data_format_srcb called with operands that share the same format; reconfig is "
+        "unnecessary.");
     llk_unpack_reconfig_data_format_srcb<EN_32BIT_DEST, dim_stride_target, to_from_int8>(srcb_new_operand);
 }
 
