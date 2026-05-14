@@ -28,8 +28,9 @@ from pathlib import Path
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from models.common.utility_functions import is_blackhole, nearest_32
 from models.demos.qwen3_6_galaxy_v2.tt.model_config import (
+    PREFETCHER_NOC1_GRID,
     CheckpointType,
     LlamaOptimizations,
     TtModelArgs,
@@ -156,6 +157,26 @@ class TtQwen36ModelArgs(TtModelArgs):
         self.dim_per_tp = self.dim // self.dim_tp_factor  # 1280
         self.intermediate_dim_per_tp = self.intermediate_dim // self.intermediate_dim_tp_factor  # 1728
 
+        # Base-class compatibility aliases used by some shared helpers.
+        self.hidden_dim = self.intermediate_dim  # alias for parent code paths
+        self.is_galaxy = True  # 32-device BH GLX / TG
+        self.galaxy_type = "6U" if is_blackhole() else "4U"  # informational only
+        self.is_multichip = True
+
+        # Padded per-tp widths chosen so width % (24-core ring * tile_size == 768) == 0.
+        # 1728 → pad to 3 * 768 = 2304  (intermediate per col, ring-aligned)
+        # 1280 → pad to 2 * 768 = 1536  (dim per col, ring-aligned)
+        # 3584 → pad to 5 * 768 = 3840  (per-col QKVG width, ring-aligned)
+        self.dim_padded_24_cores = 6144  # = 4 cols × 1536
+        self.intermediate_dim_per_tp_padded_24_cores = 2304
+        self.qkvg_per_col_padded_24_cores = 3840  # 56-channel QKVG padded for ring matmul
+
+        # n_heads alias (matches base TtModelArgs convention used by helpers).
+        self.n_heads = self.n_q_heads
+        # Full QKV linear size (Q + K + V channels, NOT including the Qwen3.6 gate).
+        # head_dim * (2 * n_kv + n_q) = 256 * (2*4 + 24) = 256 * 32 = 8192
+        self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_q_heads)
+
         # --- Prefetcher carve-out reclamation ---
         # The 70B / qwen3-32B config carved cols 1-3 + 5-6 of the Tensix
         # grid (col 4 reserved as prefetcher-sender). With prefetcher off,
@@ -235,13 +256,714 @@ class TtQwen36ModelArgs(TtModelArgs):
         self.model_config["CCL_TOPOLOGY"] = ttnn.Topology.Linear if is_blackhole() else ttnn.Topology.Ring
         self.model_config["IS_QWEN36"] = True
 
-        # NOTE: Per-op program configs (matmul-2d, sharded norm, etc.) are NOT
-        # set up here. They are populated incrementally by V2-4 (full_attention),
-        # V2-5 (DeltaNet), V2-6 (CCL persistent buffers). The 60-core grid
-        # means several configs will need their `per_core_N` / grid-size
-        # parameters re-tuned vs the 50-core 70B values.
+        # Populate per-op program configs. Mirrors the structure of qwen_model_config.py
+        # but uses qwen3.6 shapes (n_q=24, n_kv=4, head_dim=256, intermediate=13824)
+        # and the 60-core full grid (sub_core_grids = (1,0)→(6,9)).
+        if mesh_device is not None:
+            self._populate_program_configs(mesh_device)
 
         self.tokenizer = None  # populated when actually needed
+
+    # ------------------------------------------------------------------
+    # Per-op program configs (adapted from qwen_model_config.py for
+    # qwen3.6 shapes + 60-core grid + prefetcher-off layout)
+    # ------------------------------------------------------------------
+    def _populate_program_configs(self, mesh_device):
+        """Build every program-config / memory-config dict entry that the
+        v2 ``tt/*.py`` files read at construction time.
+
+        Adapted from ``qwen_model_config.TtQwenModelArgs.__init__`` Galaxy
+        branch.  Diverges where qwen3.6 shapes (head_dim 256, n_q 24, GQA 6:1,
+        QKVG fused 56-channel buffer, intermediate 13824, vocab 248832) or the
+        60-core full grid (cols 1-6 × rows 0-9) require non-trivial shape
+        changes.  Values targeted to be construction-compatible — production
+        tuning happens on the first real device run.
+        """
+        grid = mesh_device.compute_with_storage_grid_size()
+        self.max_grid_size = ttnn.CoreGrid(x=grid.x, y=grid.y)
+        # DRAM grid (12 DRAM banks on a horizontal stripe at the top).
+        self.dram_weight_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(mesh_device.dram_grid_size().x - 1, mesh_device.dram_grid_size().y - 1),
+                )
+            }
+        )
+
+        # ------------------------------------------------------------------
+        # Compute-kernel configs (attributes + dict aliases)
+        # ------------------------------------------------------------------
+        self.compute_kernel_config_lofi = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+            dst_full_sync_en=True,
+        )
+        self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+            dst_full_sync_en=True,
+        )
+        self.compute_kernel_config_hifi2_fp16 = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        self.compute_kernel_config_hifi4 = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        self.compute_kernel_config_sdpa = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+        self.model_config["COMPUTE_KERNEL_CONFIG_HIFI2"] = self.compute_kernel_config_hifi2
+        self.model_config["LO_FI_COMPUTE_CONFIG"] = self.compute_kernel_config_lofi
+
+        # ------------------------------------------------------------------
+        # CCL / multichip bookkeeping
+        # ------------------------------------------------------------------
+        self.num_reduce_scatter_links = 1
+        self.num_all_gather_links = 1 if is_blackhole() else 2
+        self.ccl_dtype = ttnn.bfloat8_b
+
+        # ------------------------------------------------------------------
+        # Core-range sets used by ring matmuls / packet workers
+        # ------------------------------------------------------------------
+        # 24-core ring (input side). prefetcher cores live in cols 1, 2, 5, 6
+        # which are all inside the 60-core sub_core_grids — safe to reuse.
+        RING_SIZE = 24
+        ring_core_range_set = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in PREFETCHER_NOC1_GRID]
+        )
+        # 24-core ring output side (pf-receiver cores: same shape, mirrored).
+        pf_mm_out_core_range_set = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in self.pf_receiver_cores_list]
+        )
+
+        # ------------------------------------------------------------------
+        # Decode residual (skip / add) memory layout
+        # ------------------------------------------------------------------
+        # dim_per_tp = 1280 → 10 tile-cols × 32 per shard on a 5×2 band of cols 1-2.
+        num_cores_ln = 10
+        core_grid_ln, grid_offset = (5, 2), ttnn.CoreCoord(1, 0)
+        residual_core_range = ttnn.CoreRange(
+            grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
+        )
+        self.model_config["DECODE_RESIDUAL_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(1, 1, 32, self.dim_per_tp // num_cores_ln),  # (1,1,32,128)
+            core_grid=ttnn.CoreRangeSet([residual_core_range]),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        # ------------------------------------------------------------------
+        # SDPA program configs (prefill + decode)
+        # ------------------------------------------------------------------
+        sdpa_grid = (grid.x, grid.y)
+        self.model_config["SDPA_PROGCFG"] = lambda seqlen, chunk_start_idx=0, _g=sdpa_grid: ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=_g,
+            exp_approx_mode=False,
+            q_chunk_size=256
+            if seqlen >= 2048 and chunk_start_idx == 0
+            else 64
+            if seqlen < 2048 and chunk_start_idx == 0
+            else min(256, chunk_start_idx & -chunk_start_idx)
+            if seqlen >= 2048
+            else min(64, chunk_start_idx & -chunk_start_idx),
+            k_chunk_size=512
+            if seqlen >= 2048 and chunk_start_idx == 0
+            else 64
+            if seqlen < 2048 and chunk_start_idx == 0
+            else min(512, (seqlen + chunk_start_idx) & -(seqlen + chunk_start_idx))
+            if seqlen >= 2048
+            else min(64, (seqlen + chunk_start_idx) & -(seqlen + chunk_start_idx)),
+        )
+        self.model_config[
+            "SDPA_PROGCFG_FLEXIBLE_CHUNK"
+        ] = lambda seqlen, page_size, _g=sdpa_grid: ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=_g,
+            exp_approx_mode=False,
+            q_chunk_size=min(page_size, 128),
+            k_chunk_size=min(page_size, 128),
+        )
+
+        # Decode SDPA — use sub_core_grids (60 cores available). 48 / 32 cores.
+        self.model_config["PAGED_SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 6),
+            sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                self.start_core, 48, self.sub_core_grids, row_wise=True
+            ),
+            exp_approx_mode=False,
+            q_chunk_size=0,
+            k_chunk_size=0,
+        )
+        self.model_config["SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 4),
+            sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                self.start_core, 32, self.sub_core_grids, row_wise=True
+            ),
+            exp_approx_mode=False,
+            q_chunk_size=256,
+            k_chunk_size=256,
+        )
+        self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+
+        # SDPA output memory config (sharded by batch). qwen3.6 has 6 local
+        # Q heads (24/4); the tile padding rounds up to 32.
+        self.model_config[
+            "SCORES_BATCHED_MM_OUTPUT_MEMCFG"
+        ] = lambda batch_size_per_device_group: ttnn.create_sharded_memory_config(
+            shape=(math.ceil(self.n_local_heads / 32) * 32, self.head_dim),  # (32, 256)
+            core_grid=ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                self.start_core, max(1, batch_size_per_device_group), self.sub_core_grids, row_wise=True
+            ),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        # ------------------------------------------------------------------
+        # Use-fused-all-gather-matmul flag (decode WO ring)
+        # ------------------------------------------------------------------
+        self.model_config["USE_FUSED_ALL_GATHER_MATMUL"] = (
+            self.model_config["CCL_TOPOLOGY"] == ttnn.Topology.Ring
+            and (self.dim // self.tile_size // self.num_devices) % self.num_devices == 0
+            and self.num_devices > 1
+        )
+
+        # ------------------------------------------------------------------
+        # Decode QKV ring (XQKV decode)
+        # Per-col QKVG width = 3584 (6Q + 6Gate + 1K + 1V) × 256. Padded to 3840
+        # for 24-core ring tile alignment.
+        # ------------------------------------------------------------------
+        qkvg_n_padded = self.qkvg_per_col_padded_24_cores  # 3840
+        self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, self.dim_padded_24_cores // 4 // RING_SIZE),  # (32, 1536/24 = 64)
+            core_grid=ring_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.model_config["SHARDED_QKV_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
+            k=self.dim_per_tp,  # 1280
+            n=qkvg_n_padded,  # 3840
+        )
+        self.model_config["SHARDED_QKV_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, qkvg_n_padded // RING_SIZE),  # (32, 160)
+            core_grid=pf_mm_out_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.model_config["XQKV_DECODE_RING_PROGCFG"] = self.matmul_1d_ring_config(
+            1,
+            32,
+            self.dim_per_tp,
+            qkvg_n_padded,
+            RING_SIZE,
+            prefetch=self.use_prefetcher,
+            untilize_out=True,
+        )
+
+        # Packet worker shard for RS+create-heads interim buffer.
+        RS_CREATE_HEADS_PACKET_WORKER_CRS = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 0)),
+                ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 1)),
+            ]
+        )
+        self.model_config["RS_CREATE_HEADS_INTERIM_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, 512),
+            core_grid=RS_CREATE_HEADS_PACKET_WORKER_CRS,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        # ------------------------------------------------------------------
+        # Decode WO ring (attention output → residual)
+        # qwen3.6 WO input K = n_local_heads × head_dim = 6 × 256 = 1536 per col.
+        # N = dim_per_tp = 1280, padded to 1536 for 24-core ring alignment.
+        # ------------------------------------------------------------------
+        wo_k_decode = self.n_local_heads * self.head_dim  # 1536
+        wo_n_padded = self.dim_padded_24_cores // 4  # 1536
+        self.model_config["SHARDED_ATTN_WO_INPUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, wo_k_decode // RING_SIZE),  # (32, 64)
+            core_grid=ring_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.model_config["SHARDED_WO_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
+            k=wo_k_decode,
+            n=wo_n_padded,
+        )
+        self.model_config["SHARDED_WO_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, wo_n_padded // RING_SIZE),  # (32, 64)
+            core_grid=pf_mm_out_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.model_config["WO_DECODE_RING_PROGCFG"] = self.matmul_1d_ring_config(
+            1,
+            32,
+            wo_k_decode,
+            wo_n_padded,
+            RING_SIZE,
+            prefetch=self.use_prefetcher,
+        )
+
+        # ------------------------------------------------------------------
+        # Decode FF1/FF3/FF2 ring
+        # K = dim_per_tp = 1280, N = intermediate_per_tp_padded = 2304
+        # ------------------------------------------------------------------
+        ff_n_padded = self.intermediate_dim_per_tp_padded_24_cores  # 2304
+        # W1W3 / W2 DRAM-sharded weight memcfgs (read by llama_mlp.py at
+        # weight upload time).  K and N use padded widths so the 24-core
+        # ring matmul gets tile-aligned shards.
+        self.model_config["W1W3_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
+            k=self.dim_per_tp,  # 1280
+            n=ff_n_padded,  # 2304
+        )
+        self.model_config["W2_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
+            k=ff_n_padded,  # 2304
+            n=wo_n_padded,  # 1536
+        )
+        self.model_config["FF1_3_TG_RING_PROGCFG"] = self.matmul_1d_ring_config(
+            1,
+            32,
+            self.dim_per_tp,
+            ff_n_padded,
+            RING_SIZE,
+            prefetch=self.use_prefetcher,
+        )
+        self.model_config["FF2_TG_RING_PROGCFG"] = self.matmul_1d_ring_config(
+            1,
+            32,
+            ff_n_padded,
+            wo_n_padded,
+            RING_SIZE,
+            prefetch=self.use_prefetcher,
+        )
+        self.model_config["SHARDED_FF12_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, self.dim_padded_24_cores // 4 // RING_SIZE),  # (32, 64)
+            core_grid=ring_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, ff_n_padded // RING_SIZE),  # (32, 96)
+            core_grid=pf_mm_out_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.model_config["FF2_IN_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, ff_n_padded // RING_SIZE),  # (32, 96)
+            core_grid=ring_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.model_config["FF2_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, wo_n_padded // RING_SIZE),  # (32, 64)
+            core_grid=pf_mm_out_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        # ------------------------------------------------------------------
+        # Attention-input sharded memcfg (post-RMSNorm decode input).
+        # ------------------------------------------------------------------
+        # 60-core full grid: derive an N-core band that holds dim_per_tp.
+        # 1280 % (8 × N) == 0 for N ∈ {1,2,4,5,8,10,16,20,40} — pick 8 rows × 4 cols
+        # giving 32 cores. (Was 32 cores on the 50-core split grid too.)
+        attn_input_grid = self.dram_shard_core_grid_for_k(self.dim)  # CoreGrid
+        attn_input_sub_core_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            self.start_core, 32, self.sub_core_grids, row_wise=True
+        )
+        # Per-shard width: ensure tile-aligned.
+        attn_in_shard_w = max(self.tile_size, nearest_32(self.dim_per_tp // 32))
+        self.model_config["SHARDED_ATTN_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, attn_in_shard_w),
+            core_grid=attn_input_sub_core_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        # ------------------------------------------------------------------
+        # MLP input (decode, pre-FF1/FF3) sharded memcfg
+        # ------------------------------------------------------------------
+        mlp_core_grid = self.dram_shard_core_grid_for_k(self.dim)
+        self.model_config["SHARDED_MLP_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+            (32, self.dim // mlp_core_grid.num_cores),
+            mlp_core_grid,
+            ttnn.ShardStrategy.WIDTH,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        # ------------------------------------------------------------------
+        # CREATE_HEAD_INPUT / OUTPUT memcfg (nlp_create_heads_decode)
+        # ------------------------------------------------------------------
+        # Use a 10-core 5x2 band of sub_core_grids cols 1-2.
+        shard_spec_n_cores_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            self.start_core, 10, self.sub_core_grids, row_wise=False
+        )
+        self.model_config["CREATE_HEAD_INPUT_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                shard_spec_n_cores_grid,
+                [32, 128],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+        # qwen3.6 head_dim = 256 (vs. 70B 128). The CREATE_HEAD_OUTPUT shard
+        # holds (Q | K | V) heights × head_dim cols. The actual head-dim layout
+        # is handled at the op level; here we just lay out 32×128 shards
+        # height-first on the full 60-core grid (head-dim re-shaping handled
+        # downstream of nlp_create_heads_decode).
+        self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                self.sub_core_grids,
+                [32, 128],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+
+        # ------------------------------------------------------------------
+        # GATHER_USERS memcfg (post-SDPA gather across users → cluster_axis=0).
+        # ------------------------------------------------------------------
+        self.model_config["GATHER_USERS_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
+            shape=(32, 128),
+            core_grid=ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                self.start_core, 32, self.sub_core_grids, row_wise=True
+            ),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        # ------------------------------------------------------------------
+        # Reduce-scatter intermediate / output configs (decode all_reduce)
+        # ------------------------------------------------------------------
+        PACKET_WORKER_CRS = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(3, 2)),
+                ttnn.CoreRange(ttnn.CoreCoord(1, 3), ttnn.CoreCoord(2, 3)),
+            ]
+        )
+        self.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, 512),
+            core_grid=PACKET_WORKER_CRS,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        # RS-out: 30-core band of sub_core_grids — matches qwen3-32B.
+        FF1_CRS_RS_OUT = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            ttnn.CoreCoord(1, 0), 30, self.sub_core_grids, row_wise=True
+        )
+        self.model_config["REDUCE_SCATTER_OUT_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                FF1_CRS_RS_OUT,
+                [32, 32],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+
+        # ------------------------------------------------------------------
+        # Sharded RMSNorm program configs (attn / mlp / lm_head positions).
+        # ------------------------------------------------------------------
+        self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"] = self.create_sharded_norm_config(attn_input_grid)
+        self.model_config["SHARDED_NORM_MLP_PRGM_CFG"] = self.create_sharded_norm_config(mlp_core_grid)
+
+        # ------------------------------------------------------------------
+        # LM-head: padded_vocab=248832 → 248832/4 = 62208 per col (Galaxy 4-way).
+        # 62208 / (RING_SIZE=24 × tile=32) = 81 → well-aligned for 24-core ring.
+        # ------------------------------------------------------------------
+        # Find largest lm_head_num_rows so dim % (32*32*rows) == 0.  For dim=5120
+        # → 5120 / 1024 = 5 → use 4 rows.  (Same path as qwen3-32B.)
+        lm_head_num_rows = 4
+        while self.dim % (32 * 32 * lm_head_num_rows) != 0:
+            lm_head_num_rows -= 1
+        assert lm_head_num_rows > 0, f"Could not find lm_head_num_rows for dim={self.dim}"
+        self.lm_head_core_grid = ttnn.CoreGrid(y=lm_head_num_rows, x=8)
+        self.model_config["LM_HEAD_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+            (self.tile_padded_batch_rows, nearest_32(self.dim_per_tp // self.lm_head_core_grid.num_cores)),
+            self.lm_head_core_grid,
+            ttnn.ShardStrategy.WIDTH,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"] = self.create_sharded_norm_config(self.lm_head_core_grid)
+
+        # LM-head ring grid (re-use qwen3-32B's 32-core / output / input layouts —
+        # all cores are within the 60-core sub_core_grids).
+        from models.demos.qwen3_6_galaxy_v2.tt.model_config import (
+            LM_HEAD_16_GRID,
+            LM_HEAD_32_GRID,
+            LM_HEAD_INPUT_GRID,
+            LM_HEAD_OUTPUT_GRID,
+        )
+
+        LM_HEAD_RING_SIZE = 24
+        # Per-col padded vocab: pad to multiple of LM_HEAD_RING_SIZE * tile = 768.
+        per_col_vocab = self.padded_vocab_size // self.cluster_shape[1]  # 62208
+        RING_TILE_ALIGN = LM_HEAD_RING_SIZE * self.tile_size  # 768
+        per_col_vocab_padded = (
+            (per_col_vocab + RING_TILE_ALIGN - 1) // RING_TILE_ALIGN
+        ) * RING_TILE_ALIGN  # 62208 (no padding needed)
+        self.lm_head_shape = (self.dim_per_tp, per_col_vocab_padded)  # (1280, 62208)
+
+        lm_head_ring_core_range_set = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in LM_HEAD_32_GRID]
+        )
+        lm_head_ring_core_input_range_set = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in LM_HEAD_INPUT_GRID]
+        )
+        lm_head_ring_core_output_range_set = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in LM_HEAD_OUTPUT_GRID]
+        )
+        lm_head_ring_16_core_range_set = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in LM_HEAD_16_GRID]
+        )
+
+        # Input shard: 1280 / 24 = 53.33 (not tile-aligned).  Pad to (1280 + 511) //
+        # 512 * 512 = 1536 then /24 = 64.
+        lm_head_in_padded = self.dim_padded_24_cores // 4  # 1536
+        self.model_config["SHARDED_LM_HEAD_INPUT_32_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, lm_head_in_padded // LM_HEAD_RING_SIZE),  # (32, 64)
+            core_grid=lm_head_ring_core_input_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.model_config["SHARDED_LM_HEAD_INPUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, self.lm_head_shape[0] // 16),  # (32, 80)
+            core_grid=lm_head_ring_16_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.model_config["LM_HEAD_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, per_col_vocab_padded // LM_HEAD_RING_SIZE),  # (32, 2592)
+            core_grid=lm_head_ring_core_output_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.model_config["LM_HEAD_OUT_RING_RESHARD_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, per_col_vocab_padded // 32),  # (32, 1944)
+            core_grid=lm_head_ring_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.model_config["LM_HEAD_TG_RING_PROGCFG"] = self.matmul_1d_ring_lm_head_config(
+            1,
+            32,
+            lm_head_in_padded,
+            per_col_vocab_padded,
+            LM_HEAD_RING_SIZE,
+            prefetch=False,
+        )
+        # LM head prefill: matmul_1d_config over (32 × dim_per_tp) × (dim_per_tp × N).
+        # Use MinimalMatmulConfig (no dependency on awkward output dims).
+        self.model_config["LM_HEAD_PREFILL_PROGCFG"] = ttnn.MinimalMatmulConfig(
+            M_block_size=1,
+            K_block_size=8,
+            N_block_size=8,
+            subblock_h=1,
+            subblock_w=2,
+            compute_with_storage_grid_size=ttnn.CoreCoord(7, 7),
+        )
+
+        # ------------------------------------------------------------------
+        # Prefill MLP / XQKV / WO program configs (sequence-length switch).
+        # qwen3.6 intermediate_per_tp = 1728 — adapt block-shape math.
+        # ------------------------------------------------------------------
+        def w1_w3_prg_config(seq_len, use_w1_w3_interleaved=False):
+            if seq_len <= 128:
+                return self.matmul_1d_config(
+                    seq_len,
+                    self.dim_per_tp,
+                    self.intermediate_dim_per_tp,
+                    grid=ttnn.CoreGrid(x=7, y=4),
+                    overwrite_per_core_k=4,
+                )
+            return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(5, 8),
+                in0_block_w=4,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=max(1, 8 if seq_len >= 2048 else max(1, seq_len // self.tile_size // 8)),
+                per_core_N=math.ceil(self.intermediate_dim_per_tp / self.tile_size / 5),
+                transpose_mcast=False,
+                fused_activation=None,
+                fuse_batch=seq_len <= 2048,
+            )
+
+        def w2_prg_config(seq_len):
+            if seq_len <= 128:
+                return self.matmul_1d_config(
+                    seq_len,
+                    self.intermediate_dim_per_tp,
+                    self.dim_per_tp,
+                    grid=ttnn.CoreGrid(x=7, y=10),
+                    overwrite_per_core_k=2,
+                )
+            return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(5, 10),
+                in0_block_w=4,
+                out_subblock_h=1,
+                out_subblock_w=2,
+                per_core_M=max(1, 8 if seq_len >= 2048 else max(1, seq_len // self.tile_size // 8)),
+                per_core_N=math.ceil(self.dim_per_tp / self.tile_size / 5),
+                transpose_mcast=False,
+                fused_activation=None,
+                fuse_batch=seq_len <= 2048,
+            )
+
+        self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = w1_w3_prg_config
+        self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = w2_prg_config
+
+        def _prefill_minimal(seq_len, _hk=8, _wk=8):
+            return ttnn.MinimalMatmulConfig(
+                M_block_size=8,
+                K_block_size=8,
+                N_block_size=8,
+                subblock_h=_hk if seq_len <= 4096 else _wk,
+                subblock_w=2 if seq_len <= 4096 else 4,
+                compute_with_storage_grid_size=ttnn.CoreCoord(7, 8 if seq_len <= 4096 else 9),
+            )
+
+        self.model_config["PREFILL_FF1_FF3_MINIMAL_MATMUL_CONFIG"] = lambda seq_len: _prefill_minimal(seq_len, 4, 4)
+        self.model_config["PREFILL_FF2_MINIMAL_MATMUL_CONFIG"] = lambda seq_len: _prefill_minimal(seq_len, 4, 4)
+
+        # Prefill XQKV / WO — qwen3.6 prefill XQKV writes QKVG per-col padded width.
+        self.model_config["XQKV_PREFILL_PROGCFG"] = (
+            lambda seq_len: self.matmul_1d_config(
+                seq_len,
+                self.dim_per_tp,
+                qkvg_n_padded,
+                grid=ttnn.CoreGrid(x=4, y=10),
+                overwrite_per_core_k=8,
+            )
+            if seq_len <= 128
+            else ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(7, 10),
+                in0_block_w=8,
+                out_subblock_h=1,
+                out_subblock_w=2,
+                per_core_M=max(1, 8 if seq_len >= 2048 else max(1, seq_len // self.tile_size // 8)),
+                per_core_N=math.ceil(qkvg_n_padded / self.tile_size / 7),
+                transpose_mcast=False,
+                fused_activation=None,
+                fuse_batch=seq_len <= 2048,
+            )
+        )
+
+        def prefill_xqkv_minimal(seq_len):
+            if seq_len <= 128:
+                return ttnn.MinimalMatmulConfig(
+                    M_block_size=8,
+                    K_block_size=8,
+                    N_block_size=8,
+                    subblock_h=4,
+                    subblock_w=2,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(7, 7),
+                )
+            return ttnn.MinimalMatmulConfig(
+                M_block_size=8,
+                K_block_size=8,
+                N_block_size=8,
+                subblock_h=1,
+                subblock_w=8,
+                compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+            )
+
+        self.model_config["XQKV_PREFILL_MINIMAL_PROGCFG"] = prefill_xqkv_minimal
+
+        self.model_config["WO_PREFILL_PROGCFG"] = (
+            lambda seq_len: self.matmul_1d_config(
+                seq_len,
+                wo_k_decode,
+                self.dim_per_tp,
+                grid=ttnn.CoreGrid(x=7, y=10),
+                overwrite_per_core_k=8,
+            )
+            if seq_len <= 128
+            else ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(7, 10),
+                in0_block_w=8,
+                out_subblock_h=1,
+                out_subblock_w=2,
+                per_core_M=max(1, 4 if seq_len >= 1024 else max(1, seq_len // self.tile_size // 8)),
+                per_core_N=math.ceil(self.dim_per_tp / self.tile_size / 7),
+                transpose_mcast=False,
+                fused_activation=None,
+                fuse_batch=seq_len <= 1024,
+            )
+        )
+
+        def prefill_wo_minimal(seq_len):
+            if seq_len <= 4096:
+                return ttnn.MinimalMatmulConfig(
+                    M_block_size=8,
+                    K_block_size=8,
+                    N_block_size=8,
+                    subblock_h=1,
+                    subblock_w=8,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(7, 7),
+                )
+            return ttnn.MinimalMatmulConfig(
+                M_block_size=8,
+                K_block_size=8,
+                N_block_size=8,
+                subblock_h=4,
+                subblock_w=2,
+                compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+            )
+
+        self.model_config["WO_PREFILL_MINIMAL_PROGCFG"] = prefill_wo_minimal
+
+        # ------------------------------------------------------------------
+        # KV prefill mem-config (sharded by seq_len).
+        # ------------------------------------------------------------------
+        assert self.n_kv_heads % self.cluster_shape[1] == 0
+        self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / max(1, (self.n_kv_heads // self.cluster_shape[1]))
+        self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
+            (((self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
+            ttnn.CoreGrid(y=8, x=8),
+            ttnn.ShardStrategy.HEIGHT,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
 
     # ------------------------------------------------------------------
     # HF param loading (qwen3.6-specific keys)
