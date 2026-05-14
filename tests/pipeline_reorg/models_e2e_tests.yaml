@@ -355,7 +355,15 @@
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E2B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E2B-it
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E2B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E2B-it
     pytest -s --timeout 1000 models/demos/gemma4/demo/text_demo.py::test_demo
+    # test_lm_head and test_model::test_full_model load real weights via
+    # AutoModelForCausalLM.from_pretrained, so they live in the e2e job
+    # (HF_MODEL=hub-id resolves to the populated /mnt/MLPerf cache) rather
+    # than the unit job (HF_MODEL=local config-only dir).
+    pytest -s --timeout 600 \
+      models/demos/gemma4/tests/unit/test_lm_head.py \
+      models/demos/gemma4/tests/unit/test_model.py::test_full_model
     # test_lm_head and test_model::test_full_model load real weights via
     # AutoModelForCausalLM.from_pretrained, so they live in the e2e job
     # (HF_MODEL=hub-id resolves to the populated /mnt/MLPerf cache) rather
@@ -378,7 +386,11 @@
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E4B-it
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E4B-it
     pytest -s --timeout 1000 models/demos/gemma4/demo/text_demo.py::test_demo
+    pytest -s --timeout 600 \
+      models/demos/gemma4/tests/unit/test_lm_head.py \
+      models/demos/gemma4/tests/unit/test_model.py::test_full_model
     pytest -s --timeout 600 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
       models/demos/gemma4/tests/unit/test_model.py::test_full_model
@@ -387,7 +399,13 @@
     # wh_n300 disabled due to reduced N300 runner availability — re-enable when capacity returns.
     # wh_n300:
     #   timeout: 15
-    #   tier: 3
+    #   tier: 2
+    bh_p300:
+      timeout: 15
+      tier: 2
+    bh_quietbox_2:
+      timeout: 15
+      tier: 2
     bh_p300:
       timeout: 5
       tier: 3
@@ -401,14 +419,21 @@
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-26B-A4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-26B-A4B-it
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-26B-A4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-26B-A4B-it
     pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
+    pytest -s --timeout 900 \
+      models/demos/gemma4/tests/unit/test_lm_head.py \
+      models/demos/gemma4/tests/unit/test_model.py::test_full_model
     pytest -s --timeout 900 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
       models/demos/gemma4/tests/unit/test_model.py::test_full_model
   model: gemma-4-26b-a4b
   skus:
     wh_llmbox_perf:
-      timeout: 10
+      timeout: 15
+      tier: 2
+    bh_quietbox_2:
+      timeout: 15
       tier: 2
     bh_quietbox_2:
       timeout: 22
@@ -428,14 +453,21 @@
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-31B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-31B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it
     pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
+    pytest -s --timeout 900 \
+      models/demos/gemma4/tests/unit/test_lm_head.py \
+      models/demos/gemma4/tests/unit/test_model.py::test_full_model
     pytest -s --timeout 900 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
       models/demos/gemma4/tests/unit/test_model.py::test_full_model
   model: gemma-4-31b
   skus:
     wh_llmbox_perf:
-      timeout: 10
+      timeout: 15
+      tier: 2
+    bh_quietbox_2:
+      timeout: 15
       tier: 2
     bh_quietbox_2:
       timeout: 25
