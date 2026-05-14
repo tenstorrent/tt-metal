@@ -114,9 +114,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     static constexpr bool UNTILIZE  = false;
     const std::uint32_t DATUM_COUNT = 16 * 16 * params.num_faces;
 
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, TILIZE>>(
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>>(
         formats.pack_src, formats.pack_dst, DATUM_COUNT, FACE_R_DIM, TILE_C_DIM, params.num_faces);
-    _llk_pack_init_wrapper_<llk_test_pack_mode_v<UNTILIZE, TILIZE>, false>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, params.num_faces);
+    _llk_pack_init_wrapper_<llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>, false>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, params.num_faces);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
     _llk_packer_wait_for_math_done_();

@@ -120,7 +120,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool is_8bit_format = _llk_pack_skip_bh_tilize_workaround_wrapper_(formats.unpack_A_src);
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>(
         formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */, FACE_R_DIM, TILE_C_DIM, num_faces);
-    _llk_pack_init_with_src_wrapper_<llk_test_pack_mode_v<UNTILIZE, TILIZE>, false>(
+    _llk_pack_init_with_src_wrapper_<llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>, false>(
         formats.pack_src,
         formats.pack_dst,
         FACE_R_DIM,

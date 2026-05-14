@@ -52,7 +52,7 @@ class Packer(BasePacker):
             f"    _llk_pack_init_<PackMode::Default, false>(\n"
             f"        {config.sentinel.pack_dst_format}, {face_r_dim}, {num_faces}\n"
             f"    );\n"
-            f"    _llk_pack_dest_init_<{dest_sync}, {dest_acc}, false>();\n"
+            f"    _llk_pack_dest_init_<{dest_sync}, {dest_acc}, PackMode::Default>();\n"
         )
 
     def pack(

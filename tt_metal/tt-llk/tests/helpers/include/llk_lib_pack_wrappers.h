@@ -35,6 +35,11 @@ inline bool _llk_pack_skip_bh_tilize_workaround_wrapper_([[maybe_unused]] const 
     return false;
 }
 
+/// Pack configure/init \ref PackMode for unpack-tilize sweep-style tests. Wormhole B0 pack does not support
+/// \c PackMode::Tilize in \c configure_pack / \c _llk_pack_init_; Blackhole uses \ref llk_test_pack_mode_v.
+template <[[maybe_unused]] bool untilize, [[maybe_unused]] bool tilize>
+inline constexpr PackMode llk_unpack_tilize_sweep_pack_cfg_mode_v = PackMode::Default;
+
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_hw_configure_wrapper_(
     const std::uint32_t pack_src_format,
@@ -152,6 +157,10 @@ inline bool _llk_pack_skip_bh_tilize_workaround_wrapper_(const std::uint32_t pac
     // keep pack behavior aligned with the unpack tilize path used by LLK tests.
     return IS_8BIT_FORMAT(pack_src_format);
 }
+
+/// Pack configure/init \ref PackMode for unpack-tilize sweep-style tests (maps legacy untilize/tilize flags).
+template <bool untilize, bool tilize>
+inline constexpr PackMode llk_unpack_tilize_sweep_pack_cfg_mode_v = llk_test_pack_mode_v<untilize, tilize>;
 
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_hw_configure_wrapper_(
