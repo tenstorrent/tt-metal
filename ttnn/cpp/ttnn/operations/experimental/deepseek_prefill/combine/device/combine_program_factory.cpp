@@ -238,6 +238,29 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         }
     }
 
+    // Cap each sender's idle group at MAX_IDLES_PER_SENDER (TILE_LAYOUT only).  Required to
+    // stay under the per-core 16-semaphore limit on senders that own one data_ready sem per
+    // idle (k_s sems on sender) on top of zero_init/zero_init_barrier/counter_ready/zi_done
+    // + 2 fabric sems for middle chips, totaling 6 + k_s.  Excess idles assigned by the
+    // initial split above are dropped: their row cores stay in the worker grid but get no
+    // idle kernels.  k_s[i] = min(k_s[i], MAX_IDLES_PER_SENDER).
+    constexpr uint32_t MAX_IDLES_PER_SENDER = 5;
+    if (is_tile_layout) {
+        std::vector<CoreCoord> trimmed_all_idle_cores;
+        std::vector<uint32_t> trimmed_idle_sender_map;
+        for (uint32_t s = 0; s < num_cores; s++) {
+            if (sender_idle_groups[s].size() > MAX_IDLES_PER_SENDER) {
+                sender_idle_groups[s].resize(MAX_IDLES_PER_SENDER);
+            }
+            for (const auto& idle : sender_idle_groups[s]) {
+                trimmed_all_idle_cores.push_back(idle);
+                trimmed_idle_sender_map.push_back(s);
+            }
+        }
+        all_idle_cores = std::move(trimmed_all_idle_cores);
+        idle_sender_map = std::move(trimmed_idle_sender_map);
+    }
+
     uint32_t num_idle_cores = static_cast<uint32_t>(all_idle_cores.size());
     TT_FATAL(
         num_idle_cores >= num_cores,
