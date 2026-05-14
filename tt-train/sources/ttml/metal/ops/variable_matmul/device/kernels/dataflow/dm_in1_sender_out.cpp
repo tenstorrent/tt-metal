@@ -115,15 +115,14 @@ void kernel_main() {
 
 #ifdef OFFSETS_ROLE
     // EP path: read offsets from a 1-D UINT32 ROW_MAJOR device tensor.
-    //   OutputRow (1): offsets[start] is the write-at-offset row on the parent output.
-    //   InputRow  (2): offsets[start..start+2] gives the (start_row, end_row) sub-range of
-    //                  the parent input — overrides M_tiles and per-core M_start/M_end/
+    //   OutputRow (1): offsets[start] -> out_row_offset_tiles (write-at-offset row).
+    //   InputRow  (2): offsets[start..start+2] -> M_tiles + per-core M_start/M_end/
     //                  M_blocks_per_core. dm_in0_sender publishes the per-core M values
-    //                  via cb_ctrl; this kernel doesn't need cb_ctrl since it re-derives
-    //                  them locally from the same offsets + IN0_AXIS_CORES + in0_idx.
+    //                  via cb_ctrl; this kernel re-derives them locally.
+    //   WeightK   (4): offsets[start] -> in1_k_offset_tiles (parent-K start on the weight).
     {
         constexpr uint32_t kRole = OFFSETS_ROLE;
-        static_assert(kRole == 1U || kRole == 2U, "Unsupported OFFSETS_ROLE value.");
+        static_assert(kRole == 1U || kRole == 2U || kRole == 4U, "Unsupported OFFSETS_ROLE value.");
         const uint32_t offsets_addr = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 7);
         const uint32_t offsets_start_index = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 8);
         constexpr uint32_t offsets_args_cta_offset =
@@ -155,6 +154,8 @@ void kernel_main() {
             M_end_tile = per_core * (in0_idx + 1U);
             M_blocks_per_core = (per_core + M_block_tiles - 1U) / M_block_tiles;
         }
+#elif OFFSETS_ROLE == 4
+        in1_k_offset_tiles = offsets_stage[offsets_start_index] / 32U;
 #endif
     }
 #endif  // OFFSETS_ROLE

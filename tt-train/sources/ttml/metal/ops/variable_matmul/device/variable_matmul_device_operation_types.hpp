@@ -45,6 +45,13 @@ enum class OffsetsRole : uint32_t {
     // derived per-core M_start_tile / M_end_tile / M_blocks_per_core values used by both
     // dataflow and compute kernels.
     InputRow = 2,
+    // Reads offsets[start_index] and uses (value / TILE_HEIGHT) as in0_k_offset_tiles
+    // (matmul-K start offset on the input parent). Matmul-K extent comes from the other
+    // input's shape via the existing variable-K path; only the parent-K start is overridden.
+    InputK = 3,
+    // Reads offsets[start_index] and uses (value / TILE_HEIGHT) as in1_k_offset_tiles
+    // (matmul-K start offset on the weight parent). Same shape rules as InputK on the in1 side.
+    WeightK = 4,
 };
 
 struct VariableMatmulParams {
@@ -94,6 +101,8 @@ struct VariableMatmulParams {
     //   InputRow:  offsets[start..start+2] overrides in0_row_offset_tiles + effective_M
     //              (matmul-M) + per-core M_start/M_end/M_blocks_per_core (dm_in0_sender
     //              publishes the latter via cb_ctrl so compute can override RT args).
+    //   InputK:    offsets[start] overrides in0_k_offset_tiles.
+    //   WeightK:   offsets[start] overrides in1_k_offset_tiles.
     OffsetsRole offsets_role = OffsetsRole::None;
     uint32_t offsets_start_index = 0;
 };

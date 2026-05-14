@@ -140,17 +140,16 @@ void kernel_main() {
     const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
 
 #ifdef OFFSETS_ROLE
-    // EP path: read offsets[start_index] and offsets[start_index+1] from a 1-D UINT32 ROW_MAJOR
-    // device tensor. For InputRow (role==2), use them to override in0_row_offset_tiles +
-    // M_tiles (effective matmul-M) + per-core M_start_tile/M_end_tile/M_blocks_per_core.
-    // Per-core M range is derived from IN0_AXIS_CORES (CT) and in0_idx (RT). Publishes the
-    // computed M values via cb_ctrl so the compute kernel can override its own RT-arg values.
+    // EP path: read on-device offsets and override the matching host-derived values.
+    //   InputRow (2): offsets[start..start+2] -> in0_row_offset_tiles, M_tiles, per-core M.
+    //                 dm_in0_sender publishes (M_start, M_end, M_blocks) on cb_ctrl so the
+    //                 compute kernel can override its own RT args.
+    //   InputK   (3): offsets[start] -> in0_k_offset_tiles only.
     {
         constexpr uint32_t kRole = OFFSETS_ROLE;
-        static_assert(kRole == 2U, "dm_in0_sender's OFFSETS_ROLE block only handles InputRow (2).");
+        static_assert(kRole == 2U || kRole == 3U, "dm_in0_sender OFFSETS_ROLE: InputRow (2) or InputK (3).");
         const uint32_t offsets_addr = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 9);
         const uint32_t offsets_start_index = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 10);
-        const uint32_t in0_idx = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 11);
         constexpr uint32_t offsets_args_cta_offset =
             tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
         constexpr auto offsets_args = TensorAccessorArgs<offsets_args_cta_offset>();
@@ -162,6 +161,8 @@ void kernel_main() {
         noc_async_read(get_noc_addr(0, offsets_acc), offsets_l1_addr, kPageBytes);
         noc_async_read_barrier();
         volatile tt_l1_ptr uint32_t* offsets_stage = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(offsets_l1_addr);
+#if OFFSETS_ROLE == 2
+        const uint32_t in0_idx = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 11);
         const uint32_t row_start = offsets_stage[offsets_start_index];
         const uint32_t row_end = offsets_stage[offsets_start_index + 1U];
         const uint32_t actual_eff_M = (row_end - row_start) / 32U;
@@ -184,6 +185,9 @@ void kernel_main() {
         ctrl_l1[1] = M_end_tile;
         ctrl_l1[2] = M_blocks_per_core;
         cb_push_back(tt::CBIndex::c_8, 1U);
+#elif OFFSETS_ROLE == 3
+        in0_k_offset_tiles = offsets_stage[offsets_start_index] / 32U;
+#endif
     }
 #endif  // OFFSETS_ROLE
 
