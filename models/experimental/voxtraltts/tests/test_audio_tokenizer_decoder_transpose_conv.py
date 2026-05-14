@@ -81,3 +81,55 @@ def test_audio_tokenizer_decoder_transpose_conv_pcc(
     tt_ncl = torch.permute(ttnn.to_torch(y_tt).squeeze(1), (0, 2, 1)).contiguous().float()
     passing, msg = comp_pcc(ref.float(), tt_ncl, pcc=0.99)
     assert passing, f"decoder_blocks.{decoder_block_index} conv transpose PCC failed: {msg}"
+
+
+@torch.no_grad()
+@pytest.mark.timeout(3600)
+def test_audio_tokenizer_decoder_blocks_6_transpose_conv_chunked_pcc(device, reset_seeds):
+    """``decoder_blocks.6`` transpose conv long enough to exercise chunked TT conv1d."""
+    model_name = resolve_voxtral_model_name_or_skip()
+    try:
+        full = _load_safetensors_state_dict(model_name)
+    except Exception as exc:
+        pytest.skip(f"No checkpoint available: {exc}")
+
+    cfg = load_voxtral_config(model_name).audio_tokenizer_args
+    kerns = parse_csv_ints(cfg.decoder_convs_kernels_str)
+    strides = parse_csv_ints(cfg.decoder_convs_strides_str)
+    decoder_block_index = 6
+    kern_stride_index = 3
+    ks = kerns[kern_stride_index]
+    st = strides[kern_stride_index]
+    sd = extract_audio_tokenizer_state_dict(full)
+    try:
+        w = resolve_decoder_block_conv_transpose_fused_weight(sd, decoder_block_index)
+        conv_t = VoxtralTTAudioTokenizerDecoderCausalConvTranspose1d(
+            device,
+            state_dict=sd,
+            block_index=decoder_block_index,
+            kernel_size=ks,
+            stride=st,
+            in_channels=cfg.dim,
+            out_channels=cfg.dim,
+        )
+    except KeyError as exc:
+        pytest.skip(f"No decoder_blocks.{decoder_block_index} transpose weights: {exc}")
+
+    time_len = 600
+    x = torch.randn(1, cfg.dim, time_len, dtype=torch.bfloat16)
+    ref = causal_conv_transpose1d_reference_bf16(
+        x,
+        w.to(torch.bfloat16),
+        kernel_size=ks,
+        stride=st,
+        trim_ratio=1.0,
+    )
+
+    x_tt = _feat_ncl_to_tt_b1tc(device, x)
+    y_tt = conv_t(x_tt)
+    ttnn.deallocate(x_tt)
+
+    assert int(y_tt.shape[2]) == ref.shape[2]
+    tt_ncl = torch.permute(ttnn.to_torch(y_tt).squeeze(1), (0, 2, 1)).contiguous().float()
+    passing, msg = comp_pcc(ref.float(), tt_ncl, pcc=0.99)
+    assert passing, f"decoder_blocks.6 chunked conv transpose PCC failed: {msg}"
