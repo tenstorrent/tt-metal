@@ -310,6 +310,52 @@ class AceStepV15TTNNPipeline:
         neg = np.float32(-1e9)
         return np.where(ok[:, None, :, :], np.float32(0.0), neg).astype(np.float32)
 
+    def build_encoder_attention_mask_b1qk_optional(
+        self,
+        *,
+        xt_bt64: ttnn.Tensor,
+        context_latents_bt128: ttnn.Tensor,
+        encoder_hidden_states_btd: ttnn.Tensor,
+        encoder_attention_mask_1d_bk: np.ndarray,
+    ) -> Optional[ttnn.Tensor]:
+        """Build cross-attention additive mask ``[B,1,S_q,S_k_pad]`` once (same math as :meth:`forward`).
+
+        Call with the **same** ``xt_bt64`` / ``context_latents_bt128`` / ``encoder_hidden_states_btd`` shapes
+        and dtypes used during denoising so patchify yields the same ``S_q``. Upload happens once per
+        mask instead of on every ``forward`` when only ``encoder_attention_mask_1d_bk`` is passed.
+
+        Returns:
+            ``None`` when every encoder key is valid (no mask tensor needed).
+        """
+        if hasattr(ttnn, "concat"):
+            hidden_states_btC = ttnn.concat([context_latents_bt128, xt_bt64], dim=-1)
+        else:
+            hidden_states_btC = ttnn.concatenate([context_latents_bt128, xt_bt64], dim=-1)
+
+        patches, _meta = self.patch_embed.forward(hidden_states_btC)
+        b = int(hidden_states_btC.shape[0])
+        s_q = int(self._logical_seq_len_dim1(patches))
+        s_k = int(self._logical_seq_len_dim1(encoder_hidden_states_btd))
+        s_k_pad = ((int(s_k) + 31) // 32) * 32
+        keep_k_logical = self._to_1d_keep_numpy(encoder_attention_mask_1d_bk, expected_batch=b)
+        if int(keep_k_logical.shape[1]) != int(s_k):
+            raise ValueError(
+                f"encoder_attention_mask_1d_bk length mismatch: got S_k={keep_k_logical.shape[1]}, expected {s_k}"
+            )
+        if bool(np.all(keep_k_logical)):
+            return None
+        keep_k = keep_k_logical
+        if s_k_pad != s_k:
+            keep_k = np.pad(keep_k, ((0, 0), (0, int(s_k_pad - s_k))), constant_values=False)
+        m_np = self._build_sdpa_mask_b1qk(keep_q=None, keep_k=keep_k, b=b, s_q=s_q, s_k=s_k_pad)
+        return ttnn.as_tensor(
+            m_np,
+            device=self.device,
+            dtype=self.activation_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=getattr(ttnn, "DRAM_MEMORY_CONFIG", None),
+        )
+
     def forward(
         self,
         *,
