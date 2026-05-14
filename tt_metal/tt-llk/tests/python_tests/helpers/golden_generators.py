@@ -1049,13 +1049,20 @@ class MatmulGolden(FidelityMasking):
         operand2,
         fidelity_format: DataFormat,
         fidelity_iter: Optional[int],
+        *,
+        operand_fidelity_format: Optional[DataFormat] = None,
     ):
-        t1 = to_tensor(operand1, fidelity_format)
-        t2 = to_tensor(operand2, fidelity_format)
+        # The fidelity mask must be applied in the input-format mantissa
+        # space because that is where silicon stores SrcA/SrcB values.
+        # Casting to the output format before masking (the legacy path)
+        # drops/expands mantissa bits relative to what the FPU sees and
+        # produces a per-element +/- 1-ULP bias proportional to the
+        # input/output mantissa-width gap.
+        mask_format = operand_fidelity_format or fidelity_format
+        t1 = to_tensor(operand1, mask_format)
+        t2 = to_tensor(operand2, mask_format)
         if fidelity_iter is not None:
-            t1, t2 = self._apply_fidelity_masking(
-                fidelity_format, t1, t2, fidelity_iter
-            )
+            t1, t2 = self._apply_fidelity_masking(mask_format, t1, t2, fidelity_iter)
         return t1, t2
 
     def __call__(
@@ -1097,6 +1104,7 @@ class MatmulGolden(FidelityMasking):
             tilize,
             input_A_format,
             input_B_format,
+            dest_acc,
         )
 
     def _matmul_default(
@@ -1110,6 +1118,7 @@ class MatmulGolden(FidelityMasking):
         tilize: bool,
         input_A_format: DataFormat,
         input_B_format: DataFormat,
+        dest_acc: Optional[DestAccumulation] = None,
     ):
         torch_format = format_dict[data_format]
 
@@ -1130,23 +1139,46 @@ class MatmulGolden(FidelityMasking):
                 input_A_dimensions, input_B_dimensions
             )
 
+        # Silicon's K-accumulator dtype is FP16 when Dst16b holds FP16,
+        # BF16 when Dst16b holds BF16, FP32 when Dst32b. We always have
+        # input_A_format == input_B_format in the LLK weekly's matmul
+        # parametrize, so a single accumulator format is unambiguous.
+        # Bfp8_b/Bfp4_b inputs were dequantised to Float16_b by
+        # _convert_block_float_inputs above, so the post-dequant carrier
+        # is Float16_b.
+        accumulator_format = input_A_format or data_format
+        if accumulator_format in (DataFormat.Bfp8_b, DataFormat.Bfp4_b):
+            accumulator_format = DataFormat.Float16_b
+        if dest_acc == DestAccumulation.Yes:
+            # Dst32b: silicon accumulates in FP32 regardless of input format.
+            accumulator_format = DataFormat.Float32
+
+        accumulator_torch_format = format_dict[accumulator_format]
+
         fidelity_iters = self._get_fidelity_iters(math_fidelity)
         res: Optional[torch.Tensor] = None
 
         for fidelity_iter in fidelity_iters:
             t1, t2 = self._prepare_fidelity_operands(
-                operand1, operand2, data_format, fidelity_iter
+                operand1,
+                operand2,
+                data_format,
+                fidelity_iter,
+                operand_fidelity_format=accumulator_format,
             )
             t1, t2 = t1.view(M, K1), t2.view(K2, N)
             partial = (
                 torch.matmul(t1, t2)
                 .view(output_dimensions[0] * output_dimensions[1])
-                .to(torch_format)
+                .to(accumulator_torch_format)
             )
             if res is None:
                 res = partial
             else:
                 res += partial
+
+        # Final narrow to output format = silicon's late-packer narrow.
+        res = res.to(torch_format)
 
         if tilize:
             res = tilize_block(
