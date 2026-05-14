@@ -20,8 +20,11 @@ Each transformer stage: `hidden_size=768`, `num_heads=12`, `num_layers=12` (~80M
 
 ### Demo
 ```bash
-# Standalone demo
+# Standalone demo (greedy decoding)
 python models/demos/wormhole/bark/demo/demo.py --text "Hello from Tenstorrent!"
+
+# With top-k sampling for more natural speech variety
+python models/demos/wormhole/bark/demo/demo.py --text "Hello from Tenstorrent!" --top-k 50 --temperature 0.8
 
 # Demo writes bark_output.wav in the current working directory
 python models/demos/wormhole/bark/demo/demo.py --text "Testing Bark"
@@ -29,7 +32,13 @@ python models/demos/wormhole/bark/demo/demo.py --text "Testing Bark"
 
 ### Tests
 ```bash
-# Run all tests
+# CI smoke test (standard entry point)
+pytest models/demos/wormhole/bark/tests/test_bark_demo.py -v
+
+# CI performance test (generates perf report CSV)
+pytest models/demos/wormhole/bark/tests/test_bark_perf.py -v
+
+# Run all model tests
 pytest models/demos/wormhole/bark/tests/test_bark_model.py -v
 
 # Run specific test class
@@ -54,6 +63,7 @@ models/demos/wormhole/bark/
 │   ├── bark_gpt.py              # Core GPT block (attention + MLP + LN)
 │   ├── bark_fine.py             # Coarse-to-Fine (non-causal, multi-codebook)
 │   ├── bark_model.py            # Pipeline orchestrator & generation loops
+│   ├── bark_constants.py        # Shared vocab/token constants (single source of truth)
 │   ├── bark_long_text.py        # Long text support (500+ chars, chunking)
 │   ├── bark_voice_presets.py    # Voice preset loading & caching
 │   ├── bark_batch.py            # Batch audio generation
@@ -63,6 +73,8 @@ models/demos/wormhole/bark/
 ├── demo/
 │   └── demo.py                  # Standalone demo script
 └── tests/
+    ├── test_bark_demo.py        # CI entry point — standard test_demo()
+    ├── test_bark_perf.py        # CI performance test with prep_perf_report
     ├── test_bark_model.py       # Forward pass, PCC, pipeline, throughput tests
     ├── test_bark_reference_parity.py  # CPU-only token pipeline validation
     ├── run_bark_e2e.py          # End-to-end text→audio test suite
@@ -78,8 +90,10 @@ The implementation uses TTNN ops for all transformer computation:
 - **Pre-Allocated KV Cache**: Uses `ttnn.kv_cache.fill_cache_for_user_` (prefill) and `ttnn.kv_cache.update_cache_for_token_` (decode) for O(n) write-in-place updates instead of O(n²) concat. Cache stored in DRAM.
 - **On-Device Logits Masking**: Pre-created suppression masks applied via `ttnn.add` + `ttnn.argmax` on device. Host sync only for EOS detection (every 4 steps semantic, every step coarse for codebook-pair alignment).
 - **Stage 3 Persistent Tokens**: The fine acoustics stage maintains all 8 codebooks on-device, with on-device `ttnn.argmax` for codebook prediction.
+- **Device-Side Decode Embeddings**: Embedding weights are pre-transferred to device DRAM at model load. During decode (seq_len=1), `ttnn.embedding` performs the lookup on-device, eliminating per-token CPU→device transfers. Falls back to CPU `nn.Embedding` if NCRISC compilation fails.
+- **Top-k Sampling**: Optional temperature-scaled top-k sampling for more natural speech variety. Temperature scaling is applied on-device before host-side multinomial.
 - **Compute Grid Tuning**: Configured to utilize the available compute grid on Wormhole (8×7 on N300, 8×8 on N150).
-- **Chunked Coarse->Fine Processing**: Fine model processes coarse tokens in configurable chunks (default 100 frames), reducing peak memory. True concurrent overlap requires two devices; on single N300 the stages run sequentially. Full multi-device overlap is a follow-up.
+- **Chunked Coarse→Fine Processing**: Fine model processes coarse tokens in configurable chunks (default 100 frames), reducing peak memory. True concurrent overlap requires two devices; on single N300 the stages run sequentially. Full multi-device overlap is a follow-up.
 - **Intermediate Tensor Cleanup**: Transposed key tensors, pre-norm hidden states, and KV cache are explicitly deallocated to minimize L1/DRAM pressure.
 - **Operator Fusion**: MLP projections via `ttnn.linear`, GELU_NEW activation decomposed on-device (`x * 0.5 * (1 + tanh(√(2/π) * (x + 0.044715x³)))`).
 
@@ -87,8 +101,9 @@ The implementation uses TTNN ops for all transformer computation:
 - `ttnn.linear` — Projections and fused MLP transformations
 - `ttnn.transformer.scaled_dot_product_attention` — On-device attention
 - `ttnn.layer_norm` — Pre-norm in each block + final norm
-- `ttnn.embedding` — On-device lookups (used for fine stage; semantic/coarse use CPU nn.Embedding due to NCRISC compiler bug, see [#32069](https://github.com/tenstorrent/tt-metal/issues/32069))
+- `ttnn.embedding` — On-device lookups (decode path; semantic/coarse use CPU `nn.Embedding` for prefill, device-side `ttnn.embedding` for decode. Falls back to CPU if NCRISC compiler bug is triggered, see [#32069](https://github.com/tenstorrent/tt-metal/issues/32069))
 - `ttnn.add` / `ttnn.slice` / `ttnn.reshape` — Tensor manipulation
+- `ttnn.argmax` / `ttnn.multiply` / `ttnn.softmax` — Token selection & sampling
 - `ttnn.deallocate` — Explicit memory management
 
 ### Performance Targets

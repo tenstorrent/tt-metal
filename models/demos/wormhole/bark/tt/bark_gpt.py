@@ -487,17 +487,41 @@ class TtBarkGPT:
         self.config = config
         self.is_causal = is_causal
 
-        # Embedding layers -- use CPU nn.Embedding to avoid NCRISC kernel
-        # compilation bug in ttnn (embedding NCRISC template fails).
-        # TODO(Ashutosh0x): Switch to ttnn.embedding once NCRISC bug is resolved.
+        # Embedding layers - dual strategy for maximum throughput:
+        #
+        # PREFILL: CPU nn.Embedding (batched, amortized cost, avoids NCRISC bug)
+        # DECODE:  Device-side embedding table (eliminates per-token CPU→device transfer)
+        #
+        # The NCRISC kernel compilation bug affects ttnn.embedding() in some
+        # tt-metal versions. We use CPU embedding as fallback when ttnn.embedding fails.
+        # TODO(Ashutosh0x): Remove CPU fallback once NCRISC bug is resolved.
         #   Tracking: https://github.com/tenstorrent/tt-metal/issues/32069
-        # CPU->device transfer for embeddings is ~0.1ms, negligible vs transformer.
+
+        # CPU embeddings for prefill path
         self.input_embeds = torch.nn.Embedding.from_pretrained(
             parameters["input_embeds_layer"]["weight"].detach().float()
         )
         self.position_embeds = torch.nn.Embedding.from_pretrained(
             parameters["position_embeds_layer"]["weight"].detach().float()
         )
+
+        # Device-side embedding tables for decode path (pre-transferred to DRAM)
+        # This eliminates per-token CPU→device transfer (~0.1-1ms per token)
+        self._tt_input_embeds_table = ttnn.from_torch(
+            parameters["input_embeds_layer"]["weight"].detach().float(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._tt_position_embeds_table = ttnn.from_torch(
+            parameters["position_embeds_layer"]["weight"].detach().float(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._use_device_embeds = True  # Set to False if ttnn.embedding fails at runtime
 
         # Transformer blocks
         self.blocks = []
@@ -564,7 +588,6 @@ class TtBarkGPT:
             layer_present: List of updated (k_cache, v_cache, cache_len) tuples
         """
         if inputs_embeds is None and input_ids is not None:
-            # CPU embedding lookup (avoids NCRISC kernel bug in ttnn 0.67.0rc5)
             if isinstance(input_ids, torch.Tensor):
                 tok_ids = input_ids
             else:
@@ -573,12 +596,9 @@ class TtBarkGPT:
             # Safety clamp: prevent index-out-of-range from bfloat16→uint32 rounding
             vocab_size = self.input_embeds.weight.shape[0]
             tok_ids = tok_ids.long().clamp(0, vocab_size - 1)
-
-            tok_emb = self.input_embeds(tok_ids)
             seq_len = tok_ids.shape[-1]
 
             if layer_past is not None:
-                # layer_past items are (k_cache, v_cache, cache_len) tuples
                 past_len = layer_past[0][2]  # cache_len from first layer
                 position_ids = torch.arange(past_len, past_len + seq_len, dtype=torch.long)
             else:
@@ -588,11 +608,58 @@ class TtBarkGPT:
             max_pos = self.position_embeds.weight.shape[0] - 1
             position_ids = position_ids.clamp(0, max_pos)
 
-            pos_emb = self.position_embeds(position_ids)
-            hidden = (tok_emb + pos_emb).float()
+            # Decode path (seq_len=1, has KV cache): on-device embedding lookup
+            # Eliminates per-token CPU→device transfer (~0.1-1ms savings per token)
+            if layer_past is not None and seq_len == 1 and self._use_device_embeds:
+                try:
+                    # ttnn.embedding: input [B, S] uint32, weight [V, H] bfloat16
+                    tt_tok_ids = ttnn.from_torch(
+                        tok_ids.to(torch.int32),
+                        dtype=ttnn.uint32,
+                        device=self.device,
+                    )
+                    tok_emb = ttnn.embedding(
+                        tt_tok_ids,
+                        self._tt_input_embeds_table,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    ttnn.deallocate(tt_tok_ids)
 
-            # Transfer combined embeddings to device
-            inputs_embeds = ttnn.from_torch(hidden, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+                    tt_pos_ids = ttnn.from_torch(
+                        position_ids.unsqueeze(0).to(torch.int32),
+                        dtype=ttnn.uint32,
+                        device=self.device,
+                    )
+                    pos_emb = ttnn.embedding(
+                        tt_pos_ids,
+                        self._tt_position_embeds_table,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    ttnn.deallocate(tt_pos_ids)
+
+                    # Add token + position embeddings on device
+                    inputs_embeds = ttnn.add(tok_emb, pos_emb, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    ttnn.deallocate(tok_emb)
+                    ttnn.deallocate(pos_emb)
+                    # Convert to TILE layout for transformer blocks
+                    inputs_embeds = ttnn.to_layout(inputs_embeds, ttnn.TILE_LAYOUT)
+                except Exception:
+                    # NCRISC compilation failure — fall back to CPU path permanently
+                    self._use_device_embeds = False
+                    tok_emb = self.input_embeds(tok_ids)
+                    pos_emb = self.position_embeds(position_ids)
+                    hidden = (tok_emb + pos_emb).float()
+                    inputs_embeds = ttnn.from_torch(
+                        hidden, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+                    )
+            else:
+                # Prefill path: CPU embedding (batched, amortized cost)
+                tok_emb = self.input_embeds(tok_ids)
+                pos_emb = self.position_embeds(position_ids)
+                hidden = (tok_emb + pos_emb).float()
+                inputs_embeds = ttnn.from_torch(
+                    hidden, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+                )
         elif inputs_embeds is None:
             raise ValueError("Either input_ids or inputs_embeds must be provided")
         else:

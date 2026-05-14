@@ -48,11 +48,16 @@ Target: PCC ≥ 0.95 — **All stages exceed target by significant margin.**
 | Overall | RTF (warm) | < 0.8 | **~0.70** (projected) | PROJECTED - Pending N300 CI validation |
 | Overall | RTF (cold) | -- | **6.80** | First run, JIT compile |
 
-> **Note on RTF:** With pre-allocated KV cache (O(n) vs O(n^2) concat) and on-device
-> logits masking (argmax runs on device; host sync only for EOS checks), the
-> autoregressive stages are projected to be faster. Exact speedup pending
-> per-token profiling breakdown on N300. The 0.70 projection assumes KV cache
-> concat was the dominant per-step cost; CI validation will confirm.
+> **Note on RTF:** With pre-allocated KV cache (O(n) vs O(n^2) concat), on-device
+> logits masking (argmax runs on device; host sync only for EOS checks), and
+> device-side decode embeddings (`ttnn.embedding` lookup eliminates per-token
+> CPU→device transfer), the autoregressive stages are projected to be faster.
+> Exact speedup pending per-token profiling breakdown on N300. The 0.70 projection
+> assumes KV cache concat was the dominant per-step cost; CI validation will confirm.
+>
+> **Sampling:** Top-k sampling with temperature is available via
+> `model.generate(text, top_k=50, temperature=0.8)`. Greedy argmax is the
+> default for deterministic output and throughput benchmarking.
 
 ## Memory Budget
 
@@ -139,15 +144,17 @@ Text Input
 | Semantic EOS check | Device->Host | int32 scalar | Every 4 steps only |
 | Semantic tokens -> Coarse input | Host->Device | uint32 ROW_MAJOR | Tokens stay on host (small) |
 | Coarse logits -> mask+argmax | On-device | bfloat16 TILE | `ttnn.add` + `ttnn.argmax` on device |
-| Coarse EOS check | Device->Host | int32 scalar | Every step (codebook-pair alignment) |
+| Coarse EOS check | Device->Host | int32 scalar | Every 2 steps (codebook-pair alignment) |
 | Coarse tokens -> Fine input | Host->Device | uint32 ROW_MAJOR | Small tensor, unavoidable |
 | Fine logits -> argmax | On-device | ttnn.argmax | No transfer needed |
 | Fine codebooks -> EnCodec | Device->Host | int32 | Required (EnCodec is CPU) |
 
 **Summary:** Logits masking and argmax run on-device for all stages. Host-device
 transfers during generation are limited to EOS detection (scalar token ID
-transfer every N steps). Embeddings for stages 1-2 are computed on CPU due to
-an NCRISC compiler bug and transferred per step (~0.1ms, negligible vs transformer).
+transfer every N steps). During decode (seq_len=1), embeddings use device-side
+`ttnn.embedding` lookup on pre-transferred DRAM tables, eliminating per-token
+CPU→device transfer. Prefill uses CPU `nn.Embedding` (amortized, single transfer).
+Falls back to CPU embedding if NCRISC compiler bug is triggered.
 
 ## Pipeline Overlap Analysis
 
@@ -199,12 +206,14 @@ processed through the fine model independently. This:
 - [x] Voice preset loading with in-memory caching
 - [x] Batch processing with per-item RTF metrics
 - [x] Comprehensive memory budget documentation
+- [x] Device-side decode embeddings (pre-transferred to DRAM, ttnn.embedding lookup)
+- [x] Top-k sampling with temperature scaling (on-device temperature, host multinomial)
 
 ## Known Limitations
 
 1. **Batch size:** Currently limited to batch=1 for autoregressive generation
-2. **Sampling:** Greedy argmax only (no top-k/top-p/temperature)
-3. **EOS check frequency:** Host sync still required for EOS detection (every 4 steps semantic, every step coarse for codebook-pair alignment). Masking and argmax are fully on-device.
+2. **Sampling:** Top-k with temperature supported; top-p (nucleus) not yet implemented
+3. **EOS check frequency:** Host sync still required for EOS detection (every 4 steps semantic, every 2 steps coarse for codebook-pair alignment). Masking and argmax are fully on-device.
 4. **Pipeline overlap:** Sequential single-device execution; chunked fine processing implemented for memory reduction. Multi-device overlap documented with latency estimates.
 5. **EnCodec:** CPU-only decode (not ported to TTNN)
 6. **Long sequences:** KV cache may hit DRAM limits for very long generations (>2048 tokens)
@@ -212,6 +221,12 @@ processed through the fine model independently. This:
 ## Test Commands
 
 ```bash
+# CI smoke test (standard entry point)
+pytest models/demos/wormhole/bark/tests/test_bark_demo.py -v
+
+# CI performance test (generates perf report CSV via prep_perf_report)
+pytest models/demos/wormhole/bark/tests/test_bark_perf.py -v
+
 # Unit tests (requires N300)
 pytest models/demos/wormhole/bark/tests/test_bark_model.py -svv
 
@@ -226,4 +241,7 @@ python models/demos/wormhole/bark/tests/validate_token_accuracy.py
 
 # Per-stage profiling (requires N300)
 python models/demos/wormhole/bark/tests/profile_bark.py
+
+# Device profiling with profile_this.py (generates CSV perf sheet)
+./tools/tracy/profile_this.py -n bark_small -c "pytest models/demos/wormhole/bark/tests/test_bark_perf.py::test_perf_bark"
 ```
