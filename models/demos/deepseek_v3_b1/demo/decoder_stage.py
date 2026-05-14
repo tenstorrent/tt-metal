@@ -62,6 +62,7 @@ def create_decoder_block_tensors(
     validate_debug_tensors: bool = False,
     torch_input=None,
     forward_metadata=False,
+    sram_expert_ids: list[int] = (),
 ):
     """Create all tensors required by DecoderBlock.op().
 
@@ -221,7 +222,16 @@ def create_decoder_block_tensors(
         input_core = ttnn.CoreCoord(device_grid_size.x - 1, RoutedExpert.INPUT_CORE_Y)
         input_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(input_core, input_core)])
 
-        ttnn_gate_indices = create_gate_indices_tensor(submesh, input_core_grid, mesh_mapper=mesh_mapper)
+        # sram_expert_ids must match the slot ordering of weights.sram_{gate,up,down}_proj
+        # so the encoded bit-15 indices the kernel reads point at the correct SRAM slabs.
+        # Without this the gate indices stay as (eid, no bit-15) → DRAM kernel processes
+        # everything → SRAM chain runs n_sram_active=0 → SRAM path effectively skipped.
+        ttnn_gate_indices = create_gate_indices_tensor(
+            submesh,
+            input_core_grid,
+            sram_expert_ids=list(sram_expert_ids),
+            mesh_mapper=mesh_mapper,
+        )
 
         tile_1x16 = ttnn.Tile((1, 16))
         gate_output_shard_spec = ttnn.ShardSpec(input_core_grid, (1, 16), ttnn.ShardOrientation.ROW_MAJOR)

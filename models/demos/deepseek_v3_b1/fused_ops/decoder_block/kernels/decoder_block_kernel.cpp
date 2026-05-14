@@ -1944,7 +1944,7 @@ void kernel_main() {
                         get_named_compile_time_arg_val("moe_mcast_dest_noc_start_y"),
                         get_named_compile_time_arg_val("moe_mcast_dest_noc_end_x"),
                         get_named_compile_time_arg_val("moe_mcast_dest_noc_end_y"),
-                        get_named_compile_time_arg_val("sram_down_mcast_sender_semaphore_addr"),
+                        get_named_compile_time_arg_val("mcast_data_sender_semaphore_addr"),  // Initialized by MLA
                         get_named_compile_time_arg_val("sram_down_mcast_receiver_semaphore_addr"),
                         get_named_compile_time_arg_val("sram_down_mcast_data_size_bytes"),
                         get_named_compile_time_arg_val("sram_down_mcast_src_cb"),
@@ -2658,8 +2658,11 @@ void kernel_main() {
         }
 #endif
         if constexpr (Core::Routed::is_gate_proj_core) {
-            unified_kernels::setup_sharded_buffer(
-                get_named_compile_time_arg_val("mul_cb_in1"), get_named_compile_time_arg_val("mul_num_tiles"));
+            // mul_cb_in1 == gate_proj_cb_out is filled dynamically by gate_proj TRISC;
+            // pre-pushing here would fill CB capacity and (a) deadlock gate_proj at
+            // expert 7 mid-pipeline, or (b) when n_dram_active==0 (t8_all_picked) MUL
+            // is skipped via dram_invoke_eltwise_mul and the prefilled pages never
+            // drain → next iter's reserve hangs. Mirror moe_kernel.cpp:554-559.
             unified_kernels::setup_sharded_buffer(
                 get_named_compile_time_arg_val("add_cb_in0"), get_named_compile_time_arg_val("add_cb_in0_wait_tiles"));
         }
@@ -2733,7 +2736,7 @@ void kernel_main() {
         // ========================================================================
         if constexpr (!Core::skip_ccl) {
             {
-                DeviceZoneScopedN("CCL_BROADCAST");
+                // DeviceZoneScopedN("CCL_BROADCAST"); /* profiling: MLA muted */
                 deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
                 bcast.open_connections(bcast_args);
 #if defined(COMPILE_FOR_NCRISC)
@@ -2764,7 +2767,7 @@ void kernel_main() {
 
         // This first mcast is also used to synchronize downstream ccls, so must always run.
         {
-            DeviceZoneScopedN("METADATA_BROADCAST");
+            // DeviceZoneScopedN("METADATA_BROADCAST"); /* profiling: MLA muted */
             mcast_metadata(mcast_metadata_args);
         }
 
@@ -2796,13 +2799,13 @@ void kernel_main() {
         // Input core: RMSNorm + Mcast send
         // ====================================================================
         {
-            DeviceZoneScopedN("RMSNORM");
+            // DeviceZoneScopedN("RMSNORM"); /* profiling: MLA muted */
             deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, false> rmsnorm;
             rmsnorm(rmsnorm_args);
         }
 
         {
-            DeviceZoneScopedN("MCAST");
+            // DeviceZoneScopedN("MCAST"); /* profiling: MLA muted */
             mcast(mcast_args);
         }
         if constexpr (Core::is_input_core) {
@@ -2827,7 +2830,7 @@ void kernel_main() {
             // Matmul operation
             // ====================================================================
             {
-                DeviceZoneScopedN("MATMUL");
+                // DeviceZoneScopedN("MATMUL"); /* profiling: MLA muted */
                 deepseek_b1_ops::KNSlicedMatmul::Op<MatmulCTArgs, Core::is_matmul_core, false, false> matmul;
                 matmul(matmul_args);
             }
@@ -2836,7 +2839,7 @@ void kernel_main() {
             // GatherReduce: matmul cores (senders) -> input core (receiver/reducer)
             // ====================================================================
             {
-                DeviceZoneScopedN("GATHER");
+                // DeviceZoneScopedN("GATHER"); /* profiling: MLA muted */
                 deepseek_b1_ops::GatherReduce::Op<Core::is_matmul_core, Core::is_input_core, Core::is_input_core, true>
                     gather_reduce;
                 gather_reduce(gather_reduce_args);
@@ -2846,7 +2849,7 @@ void kernel_main() {
             // RMSNorm2
             // ====================================================================
             {
-                DeviceZoneScopedN("RMSNORM2");
+                // DeviceZoneScopedN("RMSNORM2"); /* profiling: MLA muted */
                 deepseek_b1_ops::RMSNorm::Op<RMSNorm2CTArgs, Core::is_input_core, true> rmsnorm2;
                 rmsnorm2(rmsnorm2_args);
             }
@@ -2855,7 +2858,7 @@ void kernel_main() {
             // Mcast2: Broadcast rmsnorm2 output to matmul2 cores
             // ====================================================================
             {
-                DeviceZoneScopedN("MCAST2");
+                // DeviceZoneScopedN("MCAST2"); /* profiling: MLA muted */
                 deepseek_b1_ops::Mcast::
                     Op<McastCTArgs, Core::is_input_core, Core::is_matmul2_core, Core::is_matmul2_core, true>
                         mcast2;
@@ -2866,20 +2869,20 @@ void kernel_main() {
             // Matmul2
             // ====================================================================
             {
-                DeviceZoneScopedN("MATMUL2");
+                // DeviceZoneScopedN("MATMUL2"); /* profiling: MLA muted */
                 deepseek_b1_ops::Matmul::Op<Matmul2CTArgs, Core::is_matmul2_core, true, false> matmul2;
                 matmul2(matmul2_args);
             }
 
             {
-                DeviceZoneScopedN("Q_HEADS") static_assert(
+                /*DeviceZoneScopedN("Q_HEADS")*/ static_assert(
                     !(Core::is_qnope_core && Core::is_qrope_core), "Core cannot be both QNOPE and QROPE");
 
                 // ================================================================
                 // Matmul3 (QNoPE)
                 // ================================================================
                 {
-                    DeviceZoneScopedN("QNOPE/MATMUL3");
+                    // DeviceZoneScopedN("QNOPE/MATMUL3"); /* profiling: MLA muted */
                     deepseek_b1_ops::Matmul::Op<Matmul3CTArgs, Core::is_qnope_core, true, false> matmul3;
                     matmul3(matmul3_args);
                 }
@@ -2888,7 +2891,7 @@ void kernel_main() {
                 // RoPE (Qrope)
                 // ================================================================
                 {
-                    DeviceZoneScopedN("QROPE");
+                    // DeviceZoneScopedN("QROPE"); /* profiling: MLA muted */
                     deepseek_b1_ops::Rope::Op<QRopeCTArgs, Core::is_qrope_core> rope;
                     rope.set_global_pos(qrope_args, cur_pos);
                     rope(qrope_args);
@@ -2898,7 +2901,7 @@ void kernel_main() {
                 // CreateQHeads (all data movement on NCRISC)
                 // ================================================================
                 {
-                    DeviceZoneScopedN("CREATE_Q_HEADS");
+                    // DeviceZoneScopedN("CREATE_Q_HEADS"); /* profiling: MLA muted */
                     constexpr bool is_create_q_heads_sender = Core::is_qnope_core || Core::is_qrope_core;
 #if defined(COMPILE_FOR_NCRISC)
                     deepseek_b1_ops::CreateQHeads::Op<
@@ -2934,12 +2937,12 @@ void kernel_main() {
                 kv_cache_update;
             kv_cache_update.set_pos_and_slot(kv_cache_update_args, local_cur_pos, metadata_ptr->slot_id);
             if (!skip_kv_cache_update) {
-                DeviceZoneScopedN("KV CACHE");
+                // DeviceZoneScopedN("KV CACHE"); /* profiling: MLA muted */
                 // ================================================================
                 // DKV Matmul: 9x2 grid, each core handles 1 head of 32 dim
                 // ================================================================
                 {
-                    DeviceZoneScopedN("DKV_MATMUL");
+                    // DeviceZoneScopedN("DKV_MATMUL"); /* profiling: MLA muted */
                     // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
                     deepseek_b1_ops::Matmul::Op<DKV_MatmulCTArgs, Core::is_dkv_matmul_core, false, false> dkv_matmul;
                     dkv_matmul(dkv_matmul_args);
@@ -2950,7 +2953,7 @@ void kernel_main() {
                 // NCRISC sends from knope grid, BRISC receives on rmsnorm grid
                 // ================================================================
                 {
-                    DeviceZoneScopedN("DKV_GATHER");
+                    // DeviceZoneScopedN("DKV_GATHER"); /* profiling: MLA muted */
                     deepseek_b1_ops::Gather::Op<Core::is_knope_core, Core::is_kv_rmsnorm_core, true, false, true>
                         dkv_gather;
                     dkv_gather(dkv_gather_args);
@@ -2960,7 +2963,7 @@ void kernel_main() {
                 // RMSNorm: Apply RMSNorm to the gathered data
                 // ================================================================
                 {
-                    DeviceZoneScopedN("KV_RMSNORM");
+                    // DeviceZoneScopedN("KV_RMSNORM"); /* profiling: MLA muted */
                     deepseek_b1_ops::RMSNorm::Op<KV_RMSNormCTArgs, Core::is_kv_rmsnorm_core, true> kv_rmsnorm;
                     kv_rmsnorm(kv_rmsnorm_args);
                 }
@@ -2969,7 +2972,7 @@ void kernel_main() {
                 // RoPE
                 // ================================================================
                 {
-                    DeviceZoneScopedN("K_ROPE");
+                    // DeviceZoneScopedN("K_ROPE"); /* profiling: MLA muted */
                     deepseek_b1_ops::Rope::Op<K_RopeCTArgs, Core::is_krope_core> krope;
                     krope.set_global_pos(krope_args, cur_pos);
                     krope(krope_args);
@@ -2980,12 +2983,12 @@ void kernel_main() {
                 // BRISC handles writing from output CBs to DRAM
                 // ================================================================
                 {
-                    DeviceZoneScopedN("KV_CACHE_UPDATE");
+                    // DeviceZoneScopedN("KV_CACHE_UPDATE"); /* profiling: MLA muted */
                     kv_cache_update(kv_cache_update_args);
                 }
             }
             {
-                DeviceZoneScopedN("KV_CACHE_SIGNAL_READY");
+                // DeviceZoneScopedN("KV_CACHE_SIGNAL_READY"); /* profiling: MLA muted */
                 kv_cache_update.signal_cache_ready(kv_cache_update_args);
             }
 
@@ -2993,7 +2996,7 @@ void kernel_main() {
             // Flash MLA: Compute
             // ====================================================================
             {
-                DeviceZoneScopedN("FLASH_MLA");
+                // DeviceZoneScopedN("FLASH_MLA"); /* profiling: MLA muted */
                 FlashMLAOp flash_mla;
                 flash_mla.set_pos_and_slot(flash_mla_args, local_cur_pos, metadata_ptr->slot_id);
                 flash_mla(flash_mla_args);
@@ -3012,7 +3015,7 @@ void kernel_main() {
         // Post SDPA: Reduce-to-All + Matmul4 + Gather2 + Mcast3 + Matmul5 + Gather3 + CCL All-Reduce
         // ========================================================================
         {
-            DeviceZoneScopedN("POST_SDPA");
+            // DeviceZoneScopedN("POST_SDPA"); /* profiling: MLA muted */
             if constexpr (Core::is_sdpa_worker_core) {
                 deepseek_b1_ops::SdpaReduceWorker::Op<SdpaReduceWorkerCTArgs> sdpa_reduce_worker;
                 sdpa_reduce_worker.set_global_pos(sdpa_reduce_worker_args, cur_pos);
@@ -3054,7 +3057,7 @@ void kernel_main() {
         // Matmul4: [1, 512] x [512, 128] -> [1, 128] per core (kv_b2 grid)
         // ========================================================================
         {
-            DeviceZoneScopedN("MATMUL4");
+            // DeviceZoneScopedN("MATMUL4"); /* profiling: MLA muted */
             deepseek_b1_ops::Matmul::Op<Matmul4CTArgs, Core::is_matmul4_core, true, false> matmul4;
             matmul4(matmul4_args);
         }
@@ -3064,7 +3067,7 @@ void kernel_main() {
         // Collects [1, 128] * 64 = [1, 8192]
         // ========================================================================
         {
-            DeviceZoneScopedN("GATHER2");
+            // DeviceZoneScopedN("GATHER2"); /* profiling: MLA muted */
             deepseek_b1_ops::Gather::Op<Core::is_matmul4_core, Core::is_gather_receiver_core, true, true> gather2;
             gather2(gather2_args);
         }
@@ -3079,7 +3082,7 @@ void kernel_main() {
             Op<McastCTArgs, Core::is_gather_receiver_core, Core::is_matmul5_core, Core::is_matmul5_core, true>
                 mcast3;
         {
-            DeviceZoneScopedN("MCAST3");
+            // DeviceZoneScopedN("MCAST3"); /* profiling: MLA muted */
             mcast3(mcast3_args);
         }
 
@@ -3088,7 +3091,7 @@ void kernel_main() {
         // 112 cores split into 2 halves of 56; each core: [1, 4096] @ [4096, 32] -> [1, 32]
         // ========================================================================
         {
-            DeviceZoneScopedN("MATMUL5");
+            // DeviceZoneScopedN("MATMUL5"); /* profiling: MLA muted */
             deepseek_b1_ops::KNSlicedMatmul::Op<Matmul5CTArgs, Core::is_matmul5_core, true, false> matmul5;
             matmul5(matmul5_args);
         }
@@ -3098,7 +3101,7 @@ void kernel_main() {
         // Each sender produces 1 tile of 1x32; halves are reduced on receiver
         // ========================================================================
         if constexpr (!Core::is_allreduce_sender_core) {
-            DeviceZoneScopedN("GATHER3");
+            // DeviceZoneScopedN("GATHER3"); /* profiling: MLA muted */
             deepseek_b1_ops::GatherReduce::
                 Op<Core::is_matmul5_core, Core::is_allreduce_sender_core, Core::is_allreduce_sender_core, true, true>
                     gather3;
@@ -3113,7 +3116,7 @@ void kernel_main() {
         // - Receiver core (12, 9): NCRISC reader + TRISC compute
         // ========================================================================
         if constexpr (Core::is_allreduce_sender_core) {
-            DeviceZoneScopedN("CCL_SENDER_WRITER");
+            // DeviceZoneScopedN("CCL_SENDER_WRITER"); /* profiling: MLA muted */
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
             PacketHeaderPool::reset();
             volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
@@ -3130,7 +3133,7 @@ void kernel_main() {
 #endif
             // gather3 must run on ALL RISCs (TRISC does the reduce that feeds local_data_cb).
             {
-                DeviceZoneScopedN("GATHER3");
+                // DeviceZoneScopedN("GATHER3"); /* profiling: MLA muted */
                 deepseek_b1_ops::GatherReduce::Op<
                     Core::is_matmul5_core,
                     Core::is_allreduce_sender_core,
@@ -3144,7 +3147,7 @@ void kernel_main() {
             ccl_writer(ccl_sender_args);
             // All-Gather: transport sender (BRISC=fwd, NCRISC=bwd)
             {
-                DeviceZoneScopedN("ALLGATHER_TRANSPORT");
+                // DeviceZoneScopedN("ALLGATHER_TRANSPORT"); /* profiling: MLA muted */
                 allgather_sender(allgather_transport_args);
                 // R2 active waits for the other risc to finish, so it's safe to reset the semaphore here.
                 if constexpr (AllGatherTransportCT::r2_active) {
@@ -3161,7 +3164,7 @@ void kernel_main() {
         }
 
         if constexpr (Core::is_allreduce_receiver_core) {
-            DeviceZoneScopedN("CCL_RECEIVER");
+            // DeviceZoneScopedN("CCL_RECEIVER"); /* profiling: MLA muted */
 #if defined(COMPILE_FOR_NCRISC)
             // TP4 outer-dim: NOC-copy the correct [1, per_device_out_w] slice of the
             // input tensor into the residual CB (2 tiles of 32x32) before AllReduce.
@@ -3187,7 +3190,7 @@ void kernel_main() {
             // All-Gather: gather controller — reads [1, per_device_out_w] from
             // ccl_output_cb and distributes across row ring into output tensor.
             {
-                DeviceZoneScopedN("ALLGATHER_GATHER");
+                // DeviceZoneScopedN("ALLGATHER_GATHER"); /* profiling: MLA muted */
                 constexpr uint32_t out_cb = get_named_compile_time_arg_val("output_cb_id");
                 constexpr uint32_t out_num_tiles = get_named_compile_time_arg_val("output_num_tiles");
                 cb_wait_front(out_cb, out_num_tiles);
@@ -3204,7 +3207,7 @@ void kernel_main() {
     auto moe_body = [&]() __attribute__((always_inline)) {
         // 0. Residual Mcast: Broadcast input as residual to mcast receiver cores (pop_src=false)
         {
-            DeviceZoneScopedN("RESIDUAL_MCAST");
+            // DeviceZoneScopedN("RESIDUAL_MCAST"); /* profiling: muted */
             residual_mcast(moe.routed.residual_mcast_args);
         }
         if constexpr (Core::is_reduce_fabric_core) {
@@ -3227,7 +3230,7 @@ void kernel_main() {
 
         // 1. RMSNorm Mcast: Broadcast normalized input from sender core to all receiver cores
         {
-            DeviceZoneScopedN("MCAST");
+            // DeviceZoneScopedN("MCAST"); /* profiling: muted */
             moe_mcast(moe.routed.mcast_args);
         }
 
@@ -3249,7 +3252,7 @@ void kernel_main() {
 #ifdef ENABLE_ROUTING
         // 2. Matmul + Activation: Routing matmul on gate_mm cores
         {
-            DeviceZoneScopedN("MATMUL");
+            // DeviceZoneScopedN("MATMUL"); /* profiling: muted */
             deepseek_b1_ops::Matmul::Op<Moe::Routed::GateMMCTArgs, Core::Routed::is_gate_mm_core, false, false> gate_mm;
             gate_mm(moe.routed.gate_mm_args);
         }
@@ -3261,12 +3264,15 @@ void kernel_main() {
         //     Using is_gate_proj_streamer_core (not is_gate_proj_core) — otherwise K-senders
         //     would have cb_in0 popped before they consume it.
         {
-            DeviceZoneScopedN("SHARED_GU_MATMUL");
+            // DeviceZoneScopedN("SHARED_GU_MATMUL"); /* profiling: muted */
             deepseek_b1_ops::KNSlicedMatmul::Op<
                 Moe::Shared::GUMatmulCTArgs,
                 Core::Shared::is_compute_core,
-                !Core::Routed::is_gate_proj_streamer_core,  // pop_act
-                false>                                      // pop_weights
+                // pop_act: skip on shared gate AND up compute cores so SRAM
+                // gate_proj/up_proj can read cb_in0 afterwards.
+                !Core::Routed::is_gate_proj_streamer_core && !Core::Shared::is_gate_compute_core &&
+                    !Core::Shared::is_up_compute_core,
+                false>  // pop_weights
                 shared_gu_matmul;
             shared_gu_matmul(moe.shared.gu_matmul_args);
         }
@@ -3274,13 +3280,13 @@ void kernel_main() {
 #ifdef ENABLE_ROUTING
         // 3. Gather: Collect matmul outputs from compute cores to sender core
         {
-            DeviceZoneScopedN("GATHER");
+            // DeviceZoneScopedN("GATHER"); /* profiling: muted */
             deepseek_b1_ops::MoeGather::Op<Core::Routed::is_gate_mm_core, Core::is_sender_core, true> gather;
             gather(moe.routed.gather_args);
         }
         // 4. Gate: Top-K expert selection (on sender core only)
         {
-            DeviceZoneScopedN("GATE");
+            // DeviceZoneScopedN("GATE"); /* profiling: muted */
             deepseek_b1_ops::DeepseekMoeGate::Op<Moe::Routed::GateCTArgs, Core::is_sender_core> gate;
             gate();
         }
@@ -3298,7 +3304,7 @@ void kernel_main() {
         }
 
         {
-            DeviceZoneScopedN("MCAST_INDEX");
+            // DeviceZoneScopedN("MCAST_INDEX"); /* profiling: muted */
             deepseek_b1_ops::Mcast::Op<
                 Moe::Routed::McastCTArgs,
                 Core::is_sender_core,
@@ -3338,7 +3344,7 @@ void kernel_main() {
         // 5b. Mcast Expert Scale: Broadcast expert scale to gate_proj cores. Skipped when
         // n_dram_active==0 because MUL (its only consumer) is skipped too.
         {
-            DeviceZoneScopedN("MCAST_EXPERT_SCALE");
+            // DeviceZoneScopedN("MCAST_EXPERT_SCALE"); /* profiling: muted */
             deepseek_b1_ops::Mcast::Op<
                 Moe::Routed::McastCTArgs,
                 Core::is_sender_core,
@@ -3360,7 +3366,7 @@ void kernel_main() {
         //       starts as early as possible → SHARED_DOWN_MCAST BRISC fires earlier →
         //       112-core SHARED_DOWN_MATMUL TRISC starts earlier.
         {
-            DeviceZoneScopedN("SHARED_GATE_GATHER");
+            // DeviceZoneScopedN("SHARED_GATE_GATHER"); /* profiling: muted */
             deepseek_b1_ops::MoeGather::Op<
                 Core::Shared::is_gate_compute_core,
                 Core::Shared::is_gated_reduce_core,
@@ -3372,7 +3378,7 @@ void kernel_main() {
 
         // 5d. Shared Expert: Up Gather (B) — 64 up cores send to sender core
         {
-            DeviceZoneScopedN("SHARED_UP_GATHER");
+            // DeviceZoneScopedN("SHARED_UP_GATHER"); /* profiling: muted */
             deepseek_b1_ops::MoeGather::Op<
                 Core::Shared::is_up_compute_core,
                 Core::Shared::is_gated_reduce_core,
@@ -3388,7 +3394,7 @@ void kernel_main() {
         //     feeds SHARED_DOWN_MCAST below — having SHARED_GR done early lets
         //     SHARED_DOWN_MCAST fire as the first down-side mcast on sender BRISC.
         {
-            DeviceZoneScopedN("SHARED_GATED_REDUCE");
+            // DeviceZoneScopedN("SHARED_GATED_REDUCE"); /* profiling: muted */
             deepseek_b1_ops::GatedReduce::Op<Moe::Shared::GatedReduceCTArgs, Core::Shared::is_gated_reduce_core>
                 gated_reduce;
             gated_reduce(moe.shared.gated_reduce_args);
@@ -3402,7 +3408,7 @@ void kernel_main() {
         constexpr bool sram_gp_pop_in0 =
             Core::Shared::is_gate_compute_core && !Core::Routed::is_gate_proj_streamer_core;
         {
-            DeviceZoneScopedN("SRAM_GATE_PROJ");
+            // DeviceZoneScopedN("SRAM_GATE_PROJ"); /* profiling: muted */
             deepseek_b1_ops::MatmulExpertCompressedSRAM::Op<
                 Moe::Routed::SramGateProjCTArgs,
                 Core::Shared::is_gate_compute_core,
@@ -3416,7 +3422,7 @@ void kernel_main() {
 
         constexpr bool sram_up_pop_in0 = Core::Shared::is_up_compute_core && !Core::Routed::is_gate_proj_streamer_core;
         {
-            DeviceZoneScopedN("SRAM_UP_PROJ");
+            // DeviceZoneScopedN("SRAM_UP_PROJ"); /* profiling: muted */
             deepseek_b1_ops::MatmulExpertCompressedSRAM::Op<
                 Moe::Routed::SramUpProjCTArgs,
                 Core::Shared::is_up_compute_core,
@@ -3441,7 +3447,7 @@ void kernel_main() {
         //    IsActiveCore = is_gate_proj_streamer_core (16 cores in K-split mode = both
         //    K-senders and the K-reducer/primary; 8 cores = primaries only otherwise).
         {
-            DeviceZoneScopedN("GATE_PROJ");
+            // DeviceZoneScopedN("GATE_PROJ"); /* profiling: muted */
             constexpr uint32_t gate_proj_cb_in1_addr = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
             // pop_out=true on secondary streamer cores only (= streamer && !primary).
             // Senders' cb_out is internal; primaries' cb_out is consumed by mul → don't pop.
@@ -3466,7 +3472,7 @@ void kernel_main() {
         //    calling reset_noc_trid_barrier_counter at up's entry would clear those counters
         //    mid-flight and the late ack would wrap them, making up's read barriers hang.
         {
-            DeviceZoneScopedN("UP_PROJ");
+            // DeviceZoneScopedN("UP_PROJ"); /* profiling: muted */
             constexpr uint32_t up_cb_in1_addr = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
             constexpr bool up_secondary_pop =
                 Core::Routed::is_gate_proj_streamer_core && !Core::Routed::is_gate_proj_core;
@@ -3485,7 +3491,7 @@ void kernel_main() {
 
         // 8. Mul: Element-wise multiply (up_proj * gate_proj * expert_scale)
         {
-            DeviceZoneScopedN("MUL");
+            // DeviceZoneScopedN("MUL"); /* profiling: muted */
             deepseek_b1_ops::EltwiseMul::Op<Moe::Routed::MulCTArgs, Core::Routed::is_gate_proj_core> mul_op;
             deepseek_b1_ops::dram_invoke_eltwise_mul(mul_op, n_dram_active);
         }
@@ -3501,7 +3507,7 @@ void kernel_main() {
         // letting that 16-core TRISC chain (which is independent of the 112-core SRAM/
         // SHARED chain) start without waiting for SRAM_DOWN_MCAST's 112-core mcast latency.
         {
-            DeviceZoneScopedN("SRAM_GATE_GATHER");
+            // DeviceZoneScopedN("SRAM_GATE_GATHER"); /* profiling: muted */
             deepseek_b1_ops::MoeGather::Op<
                 Core::Shared::is_gate_compute_core,
                 Core::Shared::is_gated_reduce_core,
@@ -3511,7 +3517,7 @@ void kernel_main() {
             deepseek_b1_ops::sram_invoke_moe_gather(sram_ag, moe.routed.sram_ag_args, n_sram_active);
         }
         {
-            DeviceZoneScopedN("SRAM_UP_GATHER");
+            // DeviceZoneScopedN("SRAM_UP_GATHER"); /* profiling: muted */
             deepseek_b1_ops::MoeGather::Op<
                 Core::Shared::is_up_compute_core,
                 Core::Shared::is_gated_reduce_core,
@@ -3522,7 +3528,7 @@ void kernel_main() {
         }
 
         {
-            DeviceZoneScopedN("SRAM_GATED_REDUCE");
+            // DeviceZoneScopedN("SRAM_GATED_REDUCE"); /* profiling: muted */
             deepseek_b1_ops::GatedReduce::Op<Moe::Routed::SramGatedReduceCTArgs, Core::Shared::is_gated_reduce_core>
                 sram_gated_reduce;
             deepseek_b1_ops::sram_invoke_gated_reduce(
@@ -3537,7 +3543,7 @@ void kernel_main() {
         //        drain on sender_core BRISC. Skipped via dram_invoke_* when n_dram_active==0.
         // 10. down_proj Gather: Gather fused output from gate_proj cores to sender core
         {
-            DeviceZoneScopedN("DOWN_PROJ_GATHER");
+            // DeviceZoneScopedN("DOWN_PROJ_GATHER"); /* profiling: muted */
             deepseek_b1_ops::MoeGather::Op<Core::Routed::is_gate_proj_core, Core::is_sender_core, true, true>
                 down_proj_gather;
             deepseek_b1_ops::dram_invoke_moe_gather(down_proj_gather, moe.routed.down_proj_gather_args, n_dram_active);
@@ -3554,7 +3560,7 @@ void kernel_main() {
         // 9. Shared: Down Mcast — broadcast gated reduce output [1, K_down] to all 130 cores
         //      Source is mcast_src_cb (CB 31) filled by gated reduce, pop_src=true
         {
-            DeviceZoneScopedN("SHARED_DOWN_MCAST");
+            // DeviceZoneScopedN("SHARED_DOWN_MCAST"); /* profiling: muted */
             deepseek_b1_ops::Mcast::Op<
                 Moe::Shared::DownMcastCTArgs,
                 Core::is_sender_core,
@@ -3567,7 +3573,7 @@ void kernel_main() {
 
         // SRAM down Mcast: SRAM_GATED_REDUCE output → 112 receivers.
         {
-            DeviceZoneScopedN("SRAM_DOWN_MCAST");
+            // DeviceZoneScopedN("SRAM_DOWN_MCAST"); /* profiling: muted */
             deepseek_b1_ops::Mcast::Op<
                 Moe::Routed::McastCTArgs,
                 Core::is_sender_core,
@@ -3582,7 +3588,7 @@ void kernel_main() {
         // 11. down_proj Mcast: Broadcast gathered fused output to all down_proj streamer cores
         // (16 cores in gather mode, 8 otherwise) so secondaries' cb_in0 is also pushed.
         {
-            DeviceZoneScopedN("DOWN_PROJ_MCAST");
+            // DeviceZoneScopedN("DOWN_PROJ_MCAST"); /* profiling: muted */
             deepseek_b1_ops::Mcast::Op<
                 Moe::Routed::McastCTArgs,
                 Core::is_sender_core,
@@ -3597,7 +3603,7 @@ void kernel_main() {
         // 9b. Shared: Down Proj Matmul — SRAM matmul [1, K_down] x [K_down, N_per_core] on 112 cores.
         //     112-core TRISC, consumes SHARED_DOWN_MCAST data first.
         {
-            DeviceZoneScopedN("SHARED_DOWN_MATMUL");
+            // DeviceZoneScopedN("SHARED_DOWN_MATMUL"); /* profiling: muted */
             deepseek_b1_ops::Matmul::Op<
                 Moe::Shared::DownMatmulCTArgs,
                 Core::Shared::is_mcast_receiver_core,
@@ -3609,7 +3615,7 @@ void kernel_main() {
 
         // SRAM down_proj on 112-core TRISC, consumes SRAM_DOWN_MCAST data after SHARED done.
         {
-            DeviceZoneScopedN("SRAM_DOWN_PROJ");
+            // DeviceZoneScopedN("SRAM_DOWN_PROJ"); /* profiling: muted */
             deepseek_b1_ops::MatmulExpertCompressedSRAM::Op<
                 Moe::Routed::SramDownProjCTArgs,
                 Core::Shared::is_mcast_receiver_core,
@@ -3625,7 +3631,7 @@ void kernel_main() {
         // mcast receiver cores. n_sram_active > 0: merged = sram_down + shared_down (add).
         // n_sram_active == 0: merged = shared_down (copy passthrough). Output feeds residual_add.
         {
-            DeviceZoneScopedN("SRAM_DOWN_MERGE");
+            // DeviceZoneScopedN("SRAM_DOWN_MERGE"); /* profiling: muted */
             deepseek_b1_ops::EltwiseAddOrCopy::
                 Op<Moe::Routed::SramDownMergeCTArgs, Core::Shared::is_mcast_receiver_core>
                     sram_down_merge;
@@ -3638,7 +3644,7 @@ void kernel_main() {
         //      the actual add so the residual is counted exactly once after the
         //      cross-device sum.  Non-root devices pass matmul output through.
         {
-            DeviceZoneScopedN("SHARED_RESIDUAL_ADD");
+            // DeviceZoneScopedN("SHARED_RESIDUAL_ADD"); /* profiling: muted */
 #ifdef ENABLE_REDUCE_TO_ONE
             constexpr bool skip_residual_add =
                 get_named_compile_time_arg_val("reduce_device_role") != deepseek_b1_ops::MESH_ROOT1;
@@ -3654,7 +3660,7 @@ void kernel_main() {
 
         // 9d. Shared: Output Gather — 112 matmul cores → sender core
         {
-            DeviceZoneScopedN("SHARED_OUTPUT_GATHER");
+            // DeviceZoneScopedN("SHARED_OUTPUT_GATHER"); /* profiling: muted */
             deepseek_b1_ops::MoeGather::Op<
                 Core::Shared::is_mcast_receiver_core,  // IsSenderCore: 112 matmul cores
                 Core::is_sender_core,                  // IsReceiverCore: sender core
@@ -3666,7 +3672,7 @@ void kernel_main() {
 
         // 9e. Shared: Output Mcast — sender core → 130 cores (DRAM cores receive into add_cb_in1)
         {
-            DeviceZoneScopedN("SHARED_OUTPUT_MCAST");
+            // DeviceZoneScopedN("SHARED_OUTPUT_MCAST"); /* profiling: muted */
             deepseek_b1_ops::Mcast::Op<
                 Moe::Shared::OutputMcastCTArgs,
                 Core::is_sender_core,             // IsSenderCore
@@ -3688,7 +3694,7 @@ void kernel_main() {
         //     wraps at the CB's physical end, so iter 2's writes land at a different L1
         //     region than the framework's tracked rd_ptr → UNPACK reads stale bytes.
         {
-            DeviceZoneScopedN("DOWN_PROJ");
+            // DeviceZoneScopedN("DOWN_PROJ"); /* profiling: muted */
             constexpr uint32_t down_proj_cb_in1_addr = get_named_compile_time_arg_val("down_proj_in1_buf_addr");
             // pop_out=true on secondary streamer cores only. Senders' cb_out is internal
             // (their gather NOC write went to the primary's cb_out slot 0); primaries'
@@ -3730,7 +3736,7 @@ void kernel_main() {
         //     Reduces final_output from all 8 devices to ROOT1 device
 #ifdef ENABLE_REDUCE_TO_ONE
         {
-            DeviceZoneScopedN("REDUCE_TO_ONE");
+            // DeviceZoneScopedN("REDUCE_TO_ONE"); /* profiling: muted */
             // IsReduceCore includes both worker cores and fabric cores
             constexpr bool is_reduce_core = Core::is_reduce_worker_core || Core::is_reduce_fabric_core;
             deepseek_b1_ops::ReduceToOneB1::Op<Moe::Routed::ReduceToOneCTArgs, is_reduce_core, true> reduce_op;
@@ -3757,7 +3763,7 @@ void kernel_main() {
     // Mcast: Initialize persistent mcast
     // ====================================================================
     {
-        DeviceZoneScopedN("MCAST_INIT");
+        // DeviceZoneScopedN("MCAST_INIT"); /* profiling: muted */
         mcast.init(mcast_args);
     }
 #ifdef ENABLE_REDUCE_TO_ONE
@@ -3774,7 +3780,7 @@ void kernel_main() {
     uint32_t iteration = 0;
     while (true) {
         {
-            DeviceZoneScopedN("MLA_CB_RECONFIG");
+            // DeviceZoneScopedN("MLA_CB_RECONFIG"); /* profiling: muted */
             unified_kernels::reconfig_cb_interfaces(mla_cb_config);
             setup_mla_sharded_buffers();
         }
@@ -3790,11 +3796,11 @@ void kernel_main() {
 #endif
 #endif
         {
-            DeviceZoneScopedN("MLA");
+            // DeviceZoneScopedN("MLA"); /* profiling: muted */
             mla_body();
         }
         {
-            DeviceZoneScopedN("MOE_CB_RECONFIG");
+            // DeviceZoneScopedN("MOE_CB_RECONFIG"); /* profiling: muted */
             unified_kernels::reconfig_cb_interfaces(moe_cb_config);
             // NCRISC is what pushes the input into MOE, and is the receiver of the All-Gather.
             // BRISC waits for previous fabric connections to finish, and is the mcaster broadcasting the sync signal.
@@ -3811,7 +3817,7 @@ void kernel_main() {
             setup_moe_sharded_buffers();
         }
         {
-            DeviceZoneScopedN("MOE");
+            // DeviceZoneScopedN("MOE"); /* profiling: muted */
             moe_body();
         }
         iteration++;
@@ -3826,7 +3832,7 @@ void kernel_main() {
     // Mcast: Teardown persistent mcast
     // ====================================================================
     {
-        DeviceZoneScopedN("MCAST_TEARDOWN");
+        // DeviceZoneScopedN("MCAST_TEARDOWN"); /* profiling: muted */
         mcast.teardown(mcast_args);
     }
 }

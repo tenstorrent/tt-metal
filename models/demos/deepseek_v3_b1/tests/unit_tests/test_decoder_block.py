@@ -359,10 +359,17 @@ def create_decoder_golden_tensors(
         pytest.param("t2_partial", marks=pytest.mark.skip_post_commit),
         pytest.param("t2_none_picked", marks=pytest.mark.skip_post_commit),
         pytest.param("t4_all_picked", marks=pytest.mark.skip_post_commit),
-        pytest.param("t8_all_picked", marks=pytest.mark.skip_post_commit),
-        pytest.param("t8_one_picked", marks=pytest.mark.skip_post_commit),
+        # Full t8_* sweep: N winners + (8-N) non-winners. Together they trace the
+        # SRAM-offload perf curve from pure DRAM (none_picked) to pure SRAM (all_picked).
         pytest.param("t8_none_picked", marks=pytest.mark.skip_post_commit),
-        "t8_partial",
+        pytest.param("t8_one_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_two_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_three_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_four_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_five_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_six_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_seven_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_all_picked", marks=pytest.mark.skip_post_commit),
     ],
 )
 @pytest.mark.parametrize(
@@ -443,6 +450,14 @@ def test_decoder(
     if use_real_weights and not os.getenv("DEEPSEEK_V3_HF_MODEL"):
         pytest.skip("DEEPSEEK_V3_HF_MODEL must be set to run real MTP layer tests")
 
+    # Force-disable standalone reference runs for clean MoE profiling. Standalone
+    # AttentionBlock.op / MoeOp.op use different programs whose zone names collide
+    # with the fused decoder kernel's zones (RMSNORM, ELTWISE_ADD, etc). Only the
+    # fused DecoderBlock.execute run produces measurable MoE timings.
+    # Revert before merging.
+    validate_standalone_mla = False
+    validate_standalone_moe = False
+
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
     device_grid_size = submesh.compute_with_storage_grid_size()
 
@@ -489,18 +504,31 @@ def test_decoder(
     elif rigged_expert_ids is not None:
         winners = [grp * 32 + e for grp in rigged_group_ids for e in rigged_expert_ids[grp]]
         non_winners = [eid for eid in range(256) if eid not in winners]
-        sram_override = {
-            "t1_picked": [winners[0]],
-            "t1_not_picked": [non_winners[0]],
-            "t2_both_picked": winners[:2],
-            "t2_partial": [winners[0], non_winners[0]],
-            "t2_none_picked": non_winners[:2],
-            "t4_all_picked": winners[:4],
-            "t8_all_picked": winners[:8],
-            "t8_one_picked": [winners[0]] + non_winners[:7],
-            "t8_none_picked": non_winners[:8],
-            "t8_partial": winners[:2] + non_winners[:6],
-        }[sram_scenario]
+        # For t8_*_picked, N = number of winners placed in SRAM (rest are non-winners).
+        # Sweep covers the full SRAM-offload curve from 0 (none_picked) to 8 (all_picked).
+        T8_PICKED_COUNT = {
+            "t8_none_picked": 0,
+            "t8_one_picked": 1,
+            "t8_two_picked": 2,
+            "t8_three_picked": 3,
+            "t8_four_picked": 4,
+            "t8_five_picked": 5,
+            "t8_six_picked": 6,
+            "t8_seven_picked": 7,
+            "t8_all_picked": 8,
+        }
+        if sram_scenario in T8_PICKED_COUNT:
+            n = T8_PICKED_COUNT[sram_scenario]
+            sram_override = winners[:n] + non_winners[: 8 - n]
+        else:
+            sram_override = {
+                "t1_picked": [winners[0]],
+                "t1_not_picked": [non_winners[0]],
+                "t2_both_picked": winners[:2],
+                "t2_partial": [winners[0], non_winners[0]],
+                "t2_none_picked": non_winners[:2],
+                "t4_all_picked": winners[:4],
+            }[sram_scenario]
     else:
         scenario_count = {
             "t1_picked": 1,
@@ -509,10 +537,15 @@ def test_decoder(
             "t2_partial": 2,
             "t2_none_picked": 2,
             "t4_all_picked": 4,
-            "t8_all_picked": 8,
-            "t8_one_picked": 8,
             "t8_none_picked": 8,
-            "t8_partial": 8,
+            "t8_one_picked": 8,
+            "t8_two_picked": 8,
+            "t8_three_picked": 8,
+            "t8_four_picked": 8,
+            "t8_five_picked": 8,
+            "t8_six_picked": 8,
+            "t8_seven_picked": 8,
+            "t8_all_picked": 8,
         }[sram_scenario]
         sram_override = list(range(scenario_count))
     sram_expert_ids = resolve_sram_expert_ids(ROUTED_EXPERT_LAYER_IDX, sram_override)
@@ -573,6 +606,7 @@ def test_decoder(
         is_moe=True,
         validate_debug_tensors=validate_standalone_mla or validate_standalone_moe,
         torch_input=torch_input,
+        sram_expert_ids=sram_expert_ids,
     )
 
     logger.info("Creating golden reference tensors...")
@@ -715,6 +749,9 @@ def test_decoder(
         gate_proj_weights_tensor=d["gate_proj_weights"],
         up_proj_weights_tensor=d["up_proj_weights"],
         down_proj_weights_tensor=d["down_proj_weights"],
+        sram_gate_proj_weights_tensor=d.get("sram_gate_proj_weights"),
+        sram_up_proj_weights_tensor=d.get("sram_up_proj_weights"),
+        sram_down_proj_weights_tensor=d.get("sram_down_proj_weights"),
         moe_final_output_tensor=None,
         rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
         shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
@@ -1163,6 +1200,9 @@ def test_decoder_mlp(
         gate_proj_weights_tensor=d["gate_proj_weights"],
         up_proj_weights_tensor=d["up_proj_weights"],
         down_proj_weights_tensor=d["down_proj_weights"],
+        sram_gate_proj_weights_tensor=d.get("sram_gate_proj_weights"),
+        sram_up_proj_weights_tensor=d.get("sram_up_proj_weights"),
+        sram_down_proj_weights_tensor=d.get("sram_down_proj_weights"),
         moe_final_output_tensor=None,
         rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
         shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
