@@ -25,15 +25,18 @@ set(UNIT_TESTS_API_SOURCES
     metal2_host_api/test_program_spec.cpp
     metal2_host_api/test_program_spec_hw.cpp
     metal2_host_api/test_program_run_params.cpp
+    test_kernel_thread_sync.cpp
     tensor/test_tensor_sharding.cpp
     tensor/test_host_tensor.cpp
     tensor/test_mesh_tensor.cpp
+    tensor/test_tensor_types.cpp
     test_banked.cpp
     test_bit_utils.cpp
     test_filesystem_utils.cpp
     test_buffer_region.cpp
     test_compile_time_args.cpp
     test_compile_defines.cpp
+    test_compiler_include_paths.cpp
     test_direct.cpp
     test_dram_kernels.cpp
     test_dram_to_l1_multicast.cpp
@@ -59,6 +62,7 @@ set(UNIT_TESTS_API_SOURCES
     test_tilize_untilize.cpp
     test_worker_config_buffer.cpp
     test_blockfloat_common.cpp
+    test_descriptor_patching.cpp
     test_duplicate_kernel.cpp
     test_core_local_mem_api.cpp
     disaggregation/test_kv_chunk_address_table.cpp

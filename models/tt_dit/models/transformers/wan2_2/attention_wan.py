@@ -232,6 +232,7 @@ class WanAttention(Module):
         addcmul_gate: ttnn.Tensor,
         compute_kernel_config=None,
         parallel_config=None,
+        dtype=None,
     ) -> ttnn.Tensor:
         """Fused to_out projection + addcmul: output = residual + (matmul(x, W) + bias) * gate."""
         to_out = self.to_out
@@ -276,6 +277,7 @@ class WanAttention(Module):
                 scalar=1.0,
                 addcmul_input_tensor1=addcmul_residual,
                 addcmul_input_tensor2=addcmul_gate,
+                dtype=dtype,
             )[0]
         else:
             M, K, N_out = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
@@ -291,6 +293,7 @@ class WanAttention(Module):
                 bias_tensor=to_out.bias.data if to_out.bias is not None else None,
                 config=matmul_config,
                 compute_kernel_config=compute_kernel_config or to_out.compute_config,
+                dtype=dtype,
             )
         return output
 
@@ -299,6 +302,7 @@ class WanAttention(Module):
         spatial_1BND: ttnn.Tensor,
         N: int,
         prompt_1BLP: ttnn.Tensor | None = None,
+        cross_attn_mask: ttnn.Tensor | None = None,
         rope_cos: ttnn.Tensor | None = None,
         rope_sin: ttnn.Tensor | None = None,
         trans_mat: ttnn.Tensor | None = None,
@@ -308,6 +312,8 @@ class WanAttention(Module):
         """
         spatial_1BND: fractured N on SP, fracturd D on TP
         prompt_1BLP: replicated on SP, replicated D on TP (optional)
+        cross_attn_mask: (optional, cross-attn only) mask for SDPA, shape [B|1, nqh|1, Sq, Sk].
+            Must be TILE layout, bf16/bfp8/bfp4 dtype, on device in DRAM.
         rope_cos: fractured on SP, TP
         rope_sin: fractured on SP, TP
         trans_mat: replicated
@@ -357,12 +363,27 @@ class WanAttention(Module):
             )
             k_1BNF, v_1BNF = self.to_kv(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
 
+        # Set norm output dtype to the input dtype required for ring self-attn.
+        sdpa_input_dtype = getattr(self, "_sdpa_input_dtype", None)
+        use_ring_sdpa = self.parallel_config.sequence_parallel.factor > 1
+        norm_output_dtype = sdpa_input_dtype if (use_ring_sdpa and prompt_1BLP is None) else None
+
         # Norm spatial before splitting heads
         q_BHNE = self.norm_q(
-            q_1BNF, num_heads_per_device=self.n_local_heads, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat
+            q_1BNF,
+            num_heads_per_device=self.n_local_heads,
+            rope_cos=rope_cos,
+            rope_sin=rope_sin,
+            trans_mat=trans_mat,
+            dtype=norm_output_dtype,
         )
         k_BHNE = self.norm_k(
-            k_1BNF, num_heads_per_device=self.n_local_heads, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat
+            k_1BNF,
+            num_heads_per_device=self.n_local_heads,
+            rope_cos=rope_cos,
+            rope_sin=rope_sin,
+            trans_mat=trans_mat,
+            dtype=norm_output_dtype,
         )
 
         def create_heads(inp):
@@ -376,25 +397,31 @@ class WanAttention(Module):
 
         v_BHNE = create_heads(v_1BNF)
 
-        # Rope
-
         if prompt_1BLP is None:
             # Self attention
             if self.parallel_config.sequence_parallel.factor > 1:
+                # Q and K already cast by norm kernel; cast V and dummy joint inputs to match
+                dummy_joint = self.dummy_joint_input
+                if sdpa_input_dtype is not None:
+                    if v_BHNE.dtype != sdpa_input_dtype:
+                        v_BHNE = ttnn.typecast(v_BHNE, sdpa_input_dtype)
+                    if dummy_joint.dtype != sdpa_input_dtype:
+                        dummy_joint = ttnn.typecast(dummy_joint, sdpa_input_dtype)
+
                 # HACK: pass null joint inputs to take advantage of ring attention, even though this is self-attention.
                 if self.use_exp_ring_sdpa:
                     spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
                         q_BHNE,
                         k_BHNE,
                         v_BHNE,
-                        self.dummy_joint_input,
-                        self.dummy_joint_input,
-                        self.dummy_joint_input,
+                        dummy_joint,
+                        dummy_joint,
+                        dummy_joint,
                         persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
-                            k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+                            k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=k_BHNE.dtype
                         ),
                         persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
-                            v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+                            v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=v_BHNE.dtype
                         ),
                         joint_strategy="rear",
                         logical_n=N,
@@ -417,14 +444,14 @@ class WanAttention(Module):
                         q_BHNE,
                         k_BHNE,
                         v_BHNE,
-                        self.dummy_joint_input,
-                        self.dummy_joint_input,
-                        self.dummy_joint_input,
+                        dummy_joint,
+                        dummy_joint,
+                        dummy_joint,
                         persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
-                            k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+                            k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=k_BHNE.dtype
                         ),
                         persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
-                            v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+                            v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=v_BHNE.dtype
                         ),
                         joint_strategy="rear",
                         logical_n=N,
@@ -458,6 +485,7 @@ class WanAttention(Module):
                 k_BHNE,
                 v_BHNE,
                 is_causal=False,
+                attn_mask=cross_attn_mask,
                 program_config=self.sdpa_program_config,
                 compute_kernel_config=self.sdpa_compute_kernel_config,
             )

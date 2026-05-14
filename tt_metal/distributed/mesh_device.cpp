@@ -16,6 +16,8 @@
 #include <system_mesh.hpp>
 #include <maybe_remote.hpp>
 #include <tt_metal.hpp>
+#include <tt-metalium/experimental/inspector.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -27,6 +29,7 @@
 #include <utility>
 
 #include "impl/allocator/allocator.hpp"
+#include "pinned_memory_cache.hpp"
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "device/device_impl.hpp"
@@ -44,6 +47,7 @@
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
 #include "distributed/fd_mesh_command_queue.hpp"
+#include "distributed/realtime_profiler_manager.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
 #include "tracy/Tracy.hpp"
 #include "tools/profiler/tt_metal_tracy.hpp"
@@ -420,6 +424,9 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
 
     ctx.device_manager()->initialize_profiler();
     ctx.device_manager()->initialize_fabric_and_dispatch_fw();
+
+    mesh_device->pimpl_->init_realtime_profiler_socket(mesh_device);
+
     return mesh_device;
 }
 
@@ -528,6 +535,11 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
 
     ctx.device_manager()->initialize_profiler();
     ctx.device_manager()->initialize_fabric_and_dispatch_fw();
+
+    for (auto& [device_id, submesh] : result) {
+        submesh->pimpl_->init_realtime_profiler_socket(submesh);
+    }
+
     return result;
 }
 
@@ -849,6 +861,9 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     ZoneScoped;
 
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
+
+    // Shut down the CQ first so dispatch_s sends TERMINATE to the profiler core with the
+    // final buffer; the push kernel, receiver thread, and callbacks must still be alive.
     if (is_initialized()) {
         if (MetalContext::instance(this->get_context_id()).get_cluster().get_target_device_type() !=
             tt::TargetDevice::Mock) {
@@ -897,6 +912,16 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         }
 
         mesh_command_queues_.clear();
+    }
+
+    // Tear down RT profiler after the CQ has shut down (so dispatch_s has already issued
+    // the final TERMINATE) but before the rest of the device teardown.
+    if (realtime_profiler_) {
+        realtime_profiler_->shutdown();
+        realtime_profiler_.reset();
+    }
+
+    if (is_initialized()) {
         sub_device_manager_tracker_.reset();
         scoped_devices_.reset();
         parent_mesh_.reset();
@@ -1184,6 +1209,8 @@ void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
     validate_sub_device_manager_tracker();
     sub_device_manager_tracker_->get_active_sub_device_manager()->release_trace(trace_id);
 
+    tt::tt_metal::experimental::inspector::ReleaseTraceDebugEntries(trace_id);
+
     // Only enable allocations once all captured traces are released
     if (this->trace_buffers_size_ == 0) {
         this->mark_allocations_safe();
@@ -1354,6 +1381,23 @@ bool MeshDeviceImpl::initialize_impl(
     return true;
 }
 
+void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device) {
+    if (realtime_profiler_) {
+        return;
+    }
+    realtime_profiler_ = std::make_unique<RealtimeProfilerManager>(mesh_device);
+}
+
+void MeshDeviceImpl::trigger_realtime_profiler_sync_check() {
+    if (realtime_profiler_) {
+        realtime_profiler_->trigger_sync_check();
+    }
+}
+
+D2HSocket* MeshDeviceImpl::get_realtime_profiler_socket() const {
+    return realtime_profiler_ ? realtime_profiler_->get_socket() : nullptr;
+}
+
 program_cache::detail::ProgramCache& MeshDeviceImpl::get_program_cache() { return *program_cache_; }
 HalProgrammableCoreType MeshDeviceImpl::get_programmable_core_type(CoreCoord virtual_core) const {
     return reference_device()->get_programmable_core_type(virtual_core);
@@ -1488,6 +1532,7 @@ MeshDevice::MeshDevice(MetalEnv& /*metal_env*/) {}
 
 MeshDevice::~MeshDevice() {
     Inspector::mesh_device_destroyed(this->pimpl_.get());
+    experimental::PinnedMemoryCache::instance().release_for_device(*this);
     pimpl_->close_impl(this);
 }
 

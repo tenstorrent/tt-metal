@@ -200,7 +200,10 @@ TensorSpec TensorSpec::block_sharded(CoreRange grid, ShardOrientation orientatio
     auto shard_width =
         div_up(physical_shape().width(), orientation == ShardOrientation::ROW_MAJOR ? grid_size.x : grid_size.y);
     NdShardSpec shard_spec(
-        Shape({static_cast<uint32_t>(shard_height), static_cast<uint32_t>(shard_width)}), grid, orientation);
+        Shape({static_cast<uint32_t>(shard_height), static_cast<uint32_t>(shard_width)}),
+        grid,
+        orientation,
+        ShardDistributionStrategy::GRID_2D);
     return sharded(std::move(shard_spec), ShardShapeAlignment::RECOMMENDED);
 }
 

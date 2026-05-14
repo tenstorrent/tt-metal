@@ -92,9 +92,9 @@ void kernel_main() {
                 const uint8_t curr_core = schedule[shard_idx][0];
                 const uint32_t read_offset = base_offset + schedule[shard_idx][1];
                 const uint32_t read_size = schedule[shard_idx][2];
-                ASSERT(curr_core < input_tensor_cores, "Invalid core index");
-                ASSERT(read_offset < num_devices, "Invalid read offset");
-                ASSERT(read_size <= num_pages_per_packet, "Invalid read size");
+                ASSERT(curr_core < input_tensor_cores);
+                ASSERT(read_offset < num_devices);
+                ASSERT(read_size <= num_pages_per_packet);
                 num_pages_reserve_push += read_size;
 
                 auto num_pages_left = sender_total_num_pages - num_pages_read;

@@ -25,6 +25,12 @@ struct MoEComputeMeshWorkloadFactory {
         // Matmul cores
         std::vector<CoreCoord> matmul_cores;
 
+        // CB handle for tensor backed indices tensor
+        tt::tt_metal::CBHandle indices_cb_handle;
+
+        // CB handle for tensor backed scores tensor
+        tt::tt_metal::CBHandle scores_cb_handle;
+
         // CB handle for shared global sharded tensor
         tt::tt_metal::CBHandle sharded_output_cb_handle;
 
@@ -70,6 +76,9 @@ struct MoEComputeMeshWorkloadFactory {
         std::vector<ttnn::Tensor>& tensor_return_value);
 };
 
-std::vector<ttnn::CoreCoord> get_moe_combine_cores(ttnn::MeshDevice* mesh_device);
+std::vector<ttnn::CoreCoord> get_moe_combine_cores(
+    ttnn::MeshDevice* mesh_device,
+    const uint32_t combine_token_parallel_cores,
+    const uint32_t combine_data_parallel_cores);
 
 }  // namespace ttnn::experimental::prim

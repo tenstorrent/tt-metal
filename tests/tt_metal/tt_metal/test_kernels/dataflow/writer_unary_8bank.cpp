@@ -4,14 +4,14 @@
 
 #include "api/dataflow/dataflow_api.h"
 #ifdef ARCH_QUASAR
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #else
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #endif
-#include "experimental/noc.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 #ifdef ARCH_QUASAR
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #endif
 
 void kernel_main() {
@@ -22,16 +22,16 @@ void kernel_main() {
     constexpr uint32_t out_id = get_compile_time_arg_val(0);
     constexpr auto dst_args = TensorAccessorArgs<1>();
 #ifdef ARCH_QUASAR
-    experimental::DataflowBuffer dfb_out(out_id);
+    DataflowBuffer dfb_out(out_id);
     uint32_t tile_bytes = dfb_out.get_entry_size();
 #else
     constexpr uint32_t cb_id_out0 = out_id;
-    experimental::CircularBuffer cb(cb_id_out0);
+    CircularBuffer cb(cb_id_out0);
     uint32_t tile_bytes = get_tile_size(cb_id_out0);
 #endif
     const auto s = TensorAccessor(dst_args, dst_addr);
 
-    experimental::Noc noc;
+    Noc noc;
 
     for (uint32_t i = 0; i < num_tiles; i++) {
 #ifdef ARCH_QUASAR

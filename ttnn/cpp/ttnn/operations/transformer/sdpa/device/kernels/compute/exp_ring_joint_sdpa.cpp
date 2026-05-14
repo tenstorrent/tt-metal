@@ -103,6 +103,9 @@ void kernel_main() {
     // Deferred norm: sum save/restore CBs for multi Q-chunk DRAM round-trip.
     constexpr uint32_t cb_sum_out = tt::CBIndex::c_10;
     constexpr uint32_t cb_sum_in = tt::CBIndex::c_11;
+    constexpr uint32_t cb_signal = tt::CBIndex::c_12;
+
+    constexpr uint32_t num_q_chunks = local_padded_Nt / Sq_chunk_t + Lt / Sq_chunk_t;
 
     mm_init(cb_q_in, cb_k_in, cb_qk_im);
 
@@ -208,10 +211,12 @@ void kernel_main() {
                 cb_out,  // cb_normalized_out — output goes directly to cb_out
                 cb_sum_out,
                 cb_sum_in,
+                cb_signal,
                 needs_lightweight_mask>(
                 global_q_start,
                 global_q_end,
                 num_kv_chunks,
+                num_q_chunks,
                 ring_iter,
                 ring_id,
                 num_local_k_chunks,

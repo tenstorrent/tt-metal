@@ -18,7 +18,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
-#include "device_fixture.hpp"
+#include "llk_device_fixture.hpp"
 
 namespace tt::tt_metal {
 
@@ -135,7 +135,7 @@ bool single_core_compute_kernel_sentinel(
 // These tests aim to cover usage of compute kernel sentinel API.
 ////////////////////////////////////////////////////////////////////////////
 
-TEST_F(MeshDeviceFixture, TensixComputeKernelSentinel) {
+TEST_F(LLKMeshDeviceFixture, TensixComputeKernelSentinel) {
     unit_tests::compute::compute_kernel_sentinel::ComputeKernelSentinelTestConfig test_config = {
         .num_tiles = 1, .fp32_dest_acc_en = false, .dst_full_sync_en = false};
 

@@ -16,7 +16,6 @@ from ttml.modules import (
     Embedding,
     LinearLayer,
     ModuleList,
-    VocabParallelEmbedding,
 )
 
 from .. import RunnerType, WeightTyingType, memory_efficient_runner
@@ -95,6 +94,12 @@ class LlamaConfig:
                 f"Provided num_attention_heads={self.num_attention_heads}, num_key_value_heads={self.num_key_value_heads}"
             )
         if self.use_tp:
+            if self.weight_tying == WeightTyingType.Enabled:
+                raise ValueError(
+                    "weight_tying=Enabled is not supported with use_tp=True: "
+                    "tok_emb is replicated but fc is sharded on dim 2, so they "
+                    "cannot share a single Parameter."
+                )
             tp_size = ttml.mesh().axis_size("tp")
             if self.num_attention_heads % tp_size != 0:
                 raise ValueError(
@@ -125,30 +130,21 @@ class Llama(AbstractModuleBase):
         self.config = config
 
         if config.use_tp:
-            # Pad the vocab up so each TP shard is tile-aligned: both the
-            # embedding rows and the LM-head columns need to be divisible by
-            # the TP size (for sharding) and by 32 (for tile layout).  Forward
-            # slices the padded logit columns away before returning, so
+            # Pad the vocab so the LM head's sharded output rows are
+            # tile-aligned: ColumnParallelLinear shards dim 2 across TP, so
+            # each shard needs to be divisible by 32.  Forward slices the
+            # padded logit columns away before returning, so
             # ``config.vocab_size`` is free to be arbitrary.
             tp_size = ttml.mesh().axis_size("tp")
             align = lcm(32, tp_size)
             self.padded_vocab_size = ((config.vocab_size + align - 1) // align) * align
-            # Under TP the embedding and LM head share the vocab (dim-2)
-            # sharding, so weight tying reuses a single shard on each device.
             # gather_output=True: the LM head must produce full-vocab logits
             # on every device so the loss can be computed without further CCL.
             self.fc = ColumnParallelLinear(
                 config.hidden_size,
                 self.padded_vocab_size,
                 has_bias=False,
-                weight_init=ttml.init.normal(0.0, 0.02),
                 gather_output=True,
-                axis_name="tp",
-            )
-            self.tok_emb = VocabParallelEmbedding(
-                self.padded_vocab_size,
-                config.hidden_size,
-                weight_init=ttml.init.normal(0.0, 0.02),
                 axis_name="tp",
             )
         else:
@@ -157,13 +153,13 @@ class Llama(AbstractModuleBase):
                 config.hidden_size,
                 self.padded_vocab_size,
                 False,
-                weight_init=ttml.init.normal(0.0, 0.02),
             )
-            self.tok_emb = Embedding(
-                self.padded_vocab_size,
-                config.hidden_size,
-                weight_init=ttml.init.normal(0.0, 0.02),
-            )
+
+        self.tok_emb = Embedding(
+            self.padded_vocab_size,
+            config.hidden_size,
+            weight_init=ttml.init.normal(0.0, 0.02),
+        )
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
             self.tok_emb.weight = self.fc.weight
@@ -263,6 +259,7 @@ from _ttml.models.llama import (
 )
 
 from .safetensors_loader import load_from_safetensors
+from .flops import calculate_flops_per_token
 
 __all__ = [
     # C++ bindings
@@ -273,5 +270,6 @@ __all__ = [
     "Llama",
     "LlamaConfig",
     "LlamaRopeScalingConfig",
+    "calculate_flops_per_token",
     "load_from_safetensors",
 ]

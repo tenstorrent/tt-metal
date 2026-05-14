@@ -22,7 +22,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc, is_slow_dispatch
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
-from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
+from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import HostIoPlacement, LoopbackConfig, PipelineBlock
 from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     ROUTED_EXPERT_LAYER_IDX,
@@ -78,6 +78,12 @@ def build_worker_grid_excluding_core(device_grid_size, excluded_core):
 )
 @pytest.mark.parametrize("vocab_size, embedding_dim", [(64, 7168)])
 @pytest.mark.parametrize("token_id", [0])
+# TODO(#43070): Root-cause this exact Blackhole FABRIC_2D_TORUS_Y mesh setup failure and remove the temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: mesh_device setup for "
+    "test_bcast_moe_reduce_pipeline[blackhole-0-64-7168-device_params0-mesh_device0] hit Fabric Router "
+    "Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43070"
+)
 @pytest.mark.timeout(12000)
 def test_bcast_moe_reduce_pipeline(
     mesh_device, vocab_size, embedding_dim, token_id, device_params, get_reference_model_state_dict
@@ -157,6 +163,7 @@ def test_bcast_moe_reduce_pipeline(
             d2h_socket_fifo_size=embedding_fifo_size,
             d2h_socket_page_size=embedding_size_bytes,
             embedding_tensor=embedding_tensor,
+            loopback=LoopbackConfig.fabric_loopback(HostIoPlacement.default(pipeline_core)),
         )
     elif is_stage1:
         exit_upstream_cores = [ttnn.MeshCoreCoord(reduce_root_coord, c) for c in shard_cores_list]
@@ -170,6 +177,7 @@ def test_bcast_moe_reduce_pipeline(
             entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, moe_sender_core),
             exit_node_upstream=exit_upstream_cores,
             exit_upstream_page_size=reduce_payload_per_shard,
+            loopback=LoopbackConfig.fabric_loopback(HostIoPlacement.default(pipeline_core)),
         )
     else:
         pipeline_block = PipelineBlock(
@@ -179,6 +187,7 @@ def test_bcast_moe_reduce_pipeline(
             downstream_d2d_socket_fifo_size=embedding_fifo_size,
             upstream_d2d_socket_page_size=embedding_size_bytes,
             downstream_d2d_socket_page_size=embedding_size_bytes,
+            loopback=LoopbackConfig.fabric_loopback(HostIoPlacement.default(pipeline_core)),
         )
 
     logger.info(f"[rank={my_mesh_id}] pipeline block created")
@@ -579,6 +588,12 @@ def test_bcast_moe_reduce_pipeline(
 )
 @pytest.mark.parametrize("embedding_dim", [7168])
 @pytest.mark.parametrize("iterations", [10])
+# TODO(#43070): Root-cause this exact Blackhole FABRIC_2D_TORUS_Y mesh setup failure and remove the temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: mesh_device setup for "
+    "test_persistent_mode_pipeline[blackhole-10-7168-device_params0-mesh_device0] hit Fabric Router "
+    "Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43070"
+)
 @pytest.mark.timeout(1200)
 def test_persistent_mode_pipeline(
     mesh_device, embedding_dim, iterations, device_params, get_reference_model_state_dict
@@ -670,6 +685,7 @@ def test_persistent_mode_pipeline(
                 d2h_socket_fifo_size=embedding_fifo_size,
                 d2h_socket_page_size=embedding_size_bytes,
                 embedding_tensor=embedding_tensor,
+                loopback=LoopbackConfig.fabric_loopback(HostIoPlacement.default(pipeline_core)),
             )
         elif is_stage1:
             exit_upstream_cores = [ttnn.MeshCoreCoord(reduce_root_coord, c) for c in shard_cores_list]
@@ -683,6 +699,7 @@ def test_persistent_mode_pipeline(
                 entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, moe_sender_core),
                 exit_node_upstream=exit_upstream_cores,
                 exit_upstream_page_size=reduce_payload_per_shard,
+                loopback=LoopbackConfig.fabric_loopback(HostIoPlacement.default(pipeline_core)),
             )
         else:
             pipeline_block = PipelineBlock(
@@ -692,6 +709,7 @@ def test_persistent_mode_pipeline(
                 downstream_d2d_socket_fifo_size=embedding_fifo_size,
                 upstream_d2d_socket_page_size=embedding_size_bytes,
                 downstream_d2d_socket_page_size=embedding_size_bytes,
+                loopback=LoopbackConfig.fabric_loopback(HostIoPlacement.default(pipeline_core)),
             )
 
         logger.info(f"[rank={my_mesh_id}] pipeline block created")
