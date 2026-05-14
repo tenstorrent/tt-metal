@@ -221,7 +221,7 @@ def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",)):
         if not param.is_grad_initialized():
             continue
 
-        # Drop axes on which this particular parameter is FSDP-sharded — the
+        # Drop axes on which this particular parameter is FSDP-sharded
         axes_for_param = tuple(a for a in axes if not _param_is_fsdp_sharded(param, a))
         if not axes_for_param:
             continue
