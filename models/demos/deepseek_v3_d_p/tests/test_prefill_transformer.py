@@ -769,8 +769,9 @@ def plot_pcc_results(
     [
         (256, 2, GateComputeMode.HOST_ALL),
         (256, 2, GateComputeMode.DEVICE),
+        (256, 2, GateComputeMode.DEVICE_FP32),
     ],
-    ids=["e256_cf32_host", "e256_cf32_device"],
+    ids=["e256_cf32_host", "e256_cf32_device", "e256_cf32_device_fp32"],
 )
 @pytest.mark.parametrize(
     "dequant_method",
