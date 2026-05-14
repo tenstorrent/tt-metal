@@ -67,7 +67,7 @@ class MistralTransformer(Transformer):
             device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device) if not return_host else None,
         )
         tokens_embd = self.embd(tt_tokens)
 
@@ -141,21 +141,16 @@ class MistralTransformer(Transformer):
         # When trace_enabled, use None for device to keep tensors on host
         device = None if trace_enabled else self.mesh_device
 
-        assert tokens.dim() == 2, "tokens must be a 2D tensor"
-        if kwargs.get("batch_size", 1) > 1:
-            S = tokens.shape[-1]
-            tokens = tokens.reshape(1, 1, 1, -1)
-        else:
-            tokens = tokens.reshape(1, 1, 1, -1)
-            S = tokens.shape[-1]
-
+        tokens = tokens.reshape(1, 1, 1, -1)
+        S = tokens.shape[-1]
         text_input_ids = tokens.reshape(1, -1)
+
         tokens = ttnn.from_torch(
             tokens,
             device=device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device) if not trace_enabled else None,
         )
 
         processed_inputs = kwargs.get("processed_inputs", None)
@@ -219,7 +214,7 @@ class MistralTransformer(Transformer):
                 device=device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device) if not trace_enabled else None,
             )
         else:
             tt_page_table = None
@@ -230,7 +225,7 @@ class MistralTransformer(Transformer):
                 device=device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device) if not trace_enabled else None,
             )
         else:
             tt_chunk_page_table = None
