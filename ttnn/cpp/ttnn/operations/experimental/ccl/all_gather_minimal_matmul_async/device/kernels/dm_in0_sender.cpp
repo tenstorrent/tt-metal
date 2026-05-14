@@ -431,6 +431,63 @@ void kernel_main() {
                 }
 #ifdef USE_MUX
 #ifndef AGMM_NO_FABRIC
+#ifdef AGMM_UNI_RING
+                // Uni-ring: every iter, every device sends ONE full K-block to its predecessor
+                // in the virtual ring. Dev 0 (num_targets_backward_direction == 0) long-sends
+                // to Dev N-1 via mux_backward (forward direction, N-1 hops; the routing was
+                // overridden in the program factory to set distance_in_hops = N-1). Other
+                // devices short-send to my_rank-1 via mux_forward (backward direction, 1 hop).
+                // All sends signal out_ready_semaphore_forward at the receiver (single sem).
+                if (n_block_iter == 0) {
+                    DeviceZoneScopedN("send");
+                    if constexpr (num_targets_backward_direction == 0) {
+                        // Dev 0 (chain head): long send via mux_backward + pkt_hdrs_forward
+                        if constexpr (num_targets_forward_direction > 0) {
+                            if (in0_core_order_index >= backward_in0_core_order_index &&
+                                in0_core_order_index < forward_in0_core_order_index) {
+                                forward_half_block_to_fabric_neighbor(
+                                    m_tile,
+                                    k_block_left_tile,
+                                    current_M_block_tiles,
+                                    k_left_tiles,
+                                    k_right_tiles,
+                                    num_tiles_to_write_per_packet,
+                                    in0_start_address,
+                                    K_tiles,
+                                    in0_reader,
+                                    mux_connection_handle_backward,
+                                    pkt_hdrs_forward,
+                                    in0_tile_size,
+                                    out_ready_sem_injector_noc_addr_forward_in_pkt,
+                                    true,
+                                    M_tiles,
+                                    true);
+                            }
+                        }
+                    } else {
+                        // Dev k > 0: short send via mux_forward + pkt_hdrs_backward
+                        if (in0_core_order_index >= forward_in0_core_order_index) {
+                            forward_half_block_to_fabric_neighbor(
+                                m_tile,
+                                k_block_left_tile,
+                                current_M_block_tiles,
+                                k_left_tiles,
+                                k_right_tiles,
+                                num_tiles_to_write_per_packet,
+                                in0_start_address,
+                                K_tiles,
+                                in0_reader,
+                                mux_connection_handle_forward,
+                                pkt_hdrs_backward,
+                                in0_tile_size,
+                                out_ready_sem_injector_noc_addr_forward_in_pkt,
+                                true,
+                                M_tiles,
+                                true);
+                        }
+                    }
+                }
+#else
                 if (n_block_iter == 0) {
                     DeviceZoneScopedN("send");
                     bool forward_slice = false;
@@ -509,6 +566,7 @@ void kernel_main() {
                         }
                     }
                 }
+#endif  // AGMM_UNI_RING
 #endif  // !AGMM_NO_FABRIC
 #endif  // USE_MUX
             }

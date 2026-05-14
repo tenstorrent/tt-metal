@@ -126,6 +126,16 @@ void compute_actual_k_block(
         k_left_start_tile = my_rank * k_tiles_per_device + device_k_block_iter * k_tiles_per_block;
         k_right_start_tile = k_left_start_tile + k_left_tiles;
     } else {
+#ifdef AGMM_UNI_RING
+        // Uni-ring on Linear: slice at iter K = (my_rank + K) mod N. Data flows leftward
+        // around a virtual ring (Dev k -> Dev k-1 each iter; Dev 0 long-sends to Dev N-1).
+        uint32_t actual_device_rank = my_rank + device_iter;
+        if (actual_device_rank >= num_devices) {
+            actual_device_rank -= num_devices;
+        }
+        k_left_start_tile = actual_device_rank * k_tiles_per_device + device_k_block_iter * k_tiles_per_block;
+        k_right_start_tile = k_left_start_tile;  // unused: k_right_tiles == 0
+#else
         if constexpr (IsLinear) {
             // Linear: no ring wrap-around.
             // device_iter 1..num_targets_fwd => forward device (rank + device_iter).
@@ -155,12 +165,20 @@ void compute_actual_k_block(
             k_right_start_tile =
                 actual_device_rank * k_tiles_per_device + device_k_block_iter * k_tiles_per_block + k_left_tiles;
         }
+#endif  // AGMM_UNI_RING
     }
 #ifdef IS_IN0
 #ifndef AGMM_NO_FABRIC
     if (device_iter > 0 && is_first_n_block) {
         // When we are not reading from local, and we are in the first forward pass through n, wait for data to arrive
         if (is_injector_core) {
+#ifdef AGMM_UNI_RING
+            // Uni-ring: one slice per iter from "successor" (Dev k+1 normally; for Dev N-1,
+            // from Dev 0 via long send). All sends use out_ready_semaphore_forward at the
+            // receiver — single sem per iter.
+            noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + 1);
+            sem_target_forward += 1;
+#else
             if constexpr (IsLinear) {
                 // Linear: each device_iter delivers from exactly one direction.
                 //   device_iter <= num_targets_fwd: source is forward of me; data arrives via
@@ -186,6 +204,7 @@ void compute_actual_k_block(
                     sem_target_backward += in0_core_order_size;
                 }
             }
+#endif  // AGMM_UNI_RING
         }
     }
 #endif  // !AGMM_NO_FABRIC

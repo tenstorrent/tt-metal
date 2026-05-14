@@ -540,6 +540,17 @@ all_gather_minimal_matmul_async_factory_helper(
     if (agmm_no_fabric) {
         defines["AGMM_NO_FABRIC"] = "1";
     }
+    // AGMM_UNI_RING env var: when set to "1" AND topology is Linear, run a unidirectional
+    // ring on top of the line. Each device sends one full K-block per iter to its
+    // predecessor (Dev k -> Dev k-1, 1 hop); Dev 0 sends to Dev N-1 via a long unicast
+    // (N-1 hops). Trades the multi-hop compute-level chain relay for a multi-hop fabric
+    // unicast — collapses the ~200us critical-path stall at end devices to ~3us.
+    const char* uni_ring_env = std::getenv("AGMM_UNI_RING");
+    const bool agmm_uni_ring =
+        (uni_ring_env != nullptr && std::string(uni_ring_env) == "1") && (topology == ttnn::ccl::Topology::Linear);
+    if (agmm_uni_ring) {
+        defines["AGMM_UNI_RING"] = "1";
+    }
     if (use_bias) {
         defines["FUSE_BIAS"] = "1";
     }
@@ -558,6 +569,14 @@ all_gather_minimal_matmul_async_factory_helper(
     in0_defines["IS_IN0"] = "1";
     in0_fabric_defines = in0_defines;
     in0_fabric_defines["USE_MUX"] = "1";
+
+    // Uni-ring routing override: Dev 0's "forward" unicast goes N-1 hops (long send) to
+    // Dev N-1, instead of 1 hop to Dev 1. fabric_set_unicast_route<false>(hdr, distance)
+    // routes the packet to the device `distance` hops away, with no intermediate
+    // deliveries — exactly what we want.
+    if (agmm_uni_ring && ring_index == 0) {
+        unicast_forward_args[1] = ring_size - 1;  // distance_in_hops = N-1
+    }
 
     uint32_t in0_addr = ag_output_tensor.buffer()->address();
     uint32_t in1_addr = weight_tensor.buffer()->address();
