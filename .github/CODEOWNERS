@@ -292,6 +292,8 @@ ttnn/api/tools/profiler/ @mo-tenstorrent @akerteszTT @tenstorrent/codeowner-bypa
 
 
 
+tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_layernorm_sharded.py @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
+tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_softmax_sharded.py @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 tests/tt_eager/python_api_testing/unit_testing/misc/test_concat.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/tt_eager/python_api_testing/unit_testing/misc/test_fill_rm.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/tt_eager/python_api_testing/unit_testing/misc/test_move_sharded.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
@@ -299,9 +301,11 @@ tests/tt_eager/python_api_testing/unit_testing/misc/test_move.py @tenstorrent/me
 tests/tt_eager/python_api_testing/unit_testing/misc/test_padding_test.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/tt_eager/python_api_testing/unit_testing/misc/test_reshape.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/tt_eager/python_api_testing/unit_testing/misc/test_reshard.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
+tests/tt_eager/python_api_testing/unit_testing/misc/test_sharded.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/tt_eager/python_api_testing/unit_testing/misc/test_tilize_test.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/tt_eager/python_api_testing/unit_testing/misc/test_transpose.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/tt_eager/python_api_testing/unit_testing/misc/test_untilize_test.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
+tests/tt_eager/python_api_testing/unit_testing/misc/test_update_cache.py @tenstorrent/metallium-maintainers-llama-models @tenstorrent/codeowner-bypass
 
 
 tests/ttnn/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT @tenstorrent/codeowner-bypass

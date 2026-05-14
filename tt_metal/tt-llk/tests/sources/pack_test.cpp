@@ -49,8 +49,7 @@ const bool is_int_fpu_en = true;
 const bool is_int_fpu_en = false;
 #endif
 
-#include "llk_math_common.h"
-#include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_lib_math_wrappers.h"
 #include "params.h"
 
 using namespace ckernel;
@@ -61,11 +60,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 // copy srca to dest
-#ifdef ARCH_BLACKHOLE
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, is_int_fpu_en>(params.num_faces, formats.math);
-#else
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en>(params.num_faces, formats.math);
-#endif
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* tilize */, is_int_fpu_en>(
+        params.num_faces, formats.math);
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
@@ -80,13 +76,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             LLK_ASSERT(
                 ((params.DST_INDEX + tile) < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                 "Block tile index exceeds maximum destination tiles");
-#ifdef ARCH_BLACKHOLE
-            _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+            _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                 params.DST_INDEX + tile, formats.math, formats.math, params.num_faces);
-#else
-            _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                params.DST_INDEX + tile, formats.math, formats.math);
-#endif
         }
         _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
@@ -95,7 +86,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifdef LLK_TRISC_PACK
 
-#include "llk_pack.h"
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 #include "params.h"
 
@@ -104,17 +95,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-#ifdef ARCH_BLACKHOLE
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, tilize_en>(
-        formats.pack_src, formats.pack_dst, 16 * 16 * 4, FACE_R_DIM, TILE_C_DIM, params.num_faces, false, params.RELU_CONFIG);
-    _llk_pack_init_<false, false, tilize_en>(FACE_R_DIM, TILE_C_DIM, params.num_faces);
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false /* untilize */, tilize_en>(
+        formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */, FACE_R_DIM, TILE_C_DIM, params.num_faces, false, false, params.RELU_CONFIG);
+    _llk_pack_init_wrapper_<false /* untilize */, false /* zero_output */, tilize_en>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, params.num_faces);
     _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
-#else
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(
-        formats.pack_src, formats.pack_dst, 16 * 16 * 4, FACE_R_DIM, params.num_faces, false, false, params.RELU_CONFIG);
-    _llk_pack_init_<false, false>(formats.pack_dst, FACE_R_DIM, params.num_faces);
-    _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
-#endif
     const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
     const std::uint32_t num_blocks         = params.NUM_BLOCKS;
 
