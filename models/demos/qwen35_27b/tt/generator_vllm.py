@@ -4,6 +4,13 @@
 
 import torch
 from tqdm import tqdm
+from vllm.model_executor.models.interfaces import SupportsMultiModal
+from vllm.model_executor.models.qwen3_5 import (
+    Qwen3_5ProcessingInfo,
+    Qwen3VLDummyInputsBuilder,
+    Qwen3VLMultiModalProcessor,
+)
+from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
 from models.demos.qwen35_27b.tt.generator import Generator
@@ -11,7 +18,21 @@ from models.demos.qwen35_27b.tt.model import create_qwen35_model
 from models.tt_transformers.tt.model_config import TensorGroup
 
 
-class Qwen35ForCausalLM(Generator):
+class TT_Qwen3_5ProcessingInfo(Qwen3_5ProcessingInfo):
+    # TODO HF/vLLM dispatches Qwen3.5-27B as a multi-modal model
+    # However, TT implementation only supports language-model functionalities.
+    # This subclass suppresses multi-modal functionality so vLLM accepts language-only inputs.
+    def get_supported_mm_limits(self):
+        return {"image": 0, "video": 0}
+
+
+@MULTIMODAL_REGISTRY.register_processor(
+    Qwen3VLMultiModalProcessor,
+    info=TT_Qwen3_5ProcessingInfo,  # TODO Remove this subclass and replace with `Qwen3_5ProcessingInfo` when vision components are implemented.
+    dummy_inputs=Qwen3VLDummyInputsBuilder,
+)
+class Qwen35ForCausalLM(Generator, SupportsMultiModal):
+    # TODO Change class name in the future to `Qwen3_5ForConditionalGeneration`
     """vLLM adapter for Qwen3.5-27B on Tenstorrent hardware.
 
     The framework Generator's prefill_forward_text loops users internally without
