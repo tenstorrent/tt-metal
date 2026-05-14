@@ -25,6 +25,7 @@ from models.common.sampling import (
     chunk_sampling_params,
     format_sampling_params,
 )
+from models.common.sampling.generator import _scatter_sampling_params_to_slots
 from models.common.sampling.tt_log_probs import LogProbsResult, reformat_logprobs
 from models.common.warmup import WarmupForwardMixin
 from models.tt_transformers.tt.common import (
@@ -735,6 +736,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     assert sampling_module is not None
                     assert sampling_batch is not None
                     combined_params = format_sampling_params(sampling_params, sampling_batch)
+                    slot_aligned_params = _scatter_sampling_params_to_slots(combined_params, empty_slots, sampling_batch)
                     max_prompt_len = max(int(prompt_lens[i]) for i in range(len(empty_slots)))
                     combined_prompt_tokens = torch.zeros(sampling_batch, max_prompt_len, dtype=torch.long)
                     for local_idx, slot in enumerate(empty_slots):
@@ -742,7 +744,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         combined_prompt_tokens[slot, :plen] = prefill_ids[slot, :plen]
 
                     sampling_module.apply_prefill_state(
-                        sampling_params=combined_params,
+                        sampling_params=slot_aligned_params,
                         prompt_tokens=combined_prompt_tokens,
                         empty_slots=empty_slots,
                         replicate_seeds=False,
@@ -1140,6 +1142,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     reset_batch=reset_batch,
                     prompt_tokens=model_prompt,
                     output_tokens=model_output,
+                    reset_seeds=reset_batch,
                 )
                 # Apply slot remap from condense before advancing seeds.
                 if slot_remap is not None:
@@ -1157,7 +1160,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         }
 
         if enable_trace:
-            tt_decode_output = self._decode_forward_trace_text(**decode_kwargs, reset_batch=mode_switched)
+            tt_decode_output = self._decode_forward_trace_text(
+                **decode_kwargs,
+                reset_batch=reset_batch or mode_switched,
+            )
         else:
             tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
 
