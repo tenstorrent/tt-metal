@@ -26,14 +26,42 @@ def _compute_cfg(device):
     )
 
 
-def _time_slice_time(x: ttnn.Tensor, t0: int, t1: int) -> ttnn.Tensor:
+# Per-slice input height the STFT analysis conv2d can safely keep in L1 alongside an L1-resident
+# sibling output (``real_o`` while ``fwd_i`` runs). Empirically 3000 matches the working baseline
+# at num_slices=8 for ~24k-sample audio; longer utterances scale ``num_slices`` proportionally.
+_STFT_FWD_TARGET_SLICE_H = 3000
+# Frame count at which to switch the iSTFT synthesis path to DRAM-input + DRAM-sliced
+# conv_transpose2d (matches ``_UpsConvTranspose1d`` strategy for long sequences). Below this we
+# keep the original "L1 input, no slice config" path which works for short, wide STFTs
+# (e.g. filter_length=800 / freq_bins=401 / frames=25).
+_STFT_INV_DRAM_FRAMES_THRESHOLD = 256
+
+
+def _stft_num_slices(height: int, target: int, min_slices: int = 8, max_slices: int = 512) -> int:
+    """Pick a num_slices that keeps each conv2d slice ≤ ``target`` rows tall."""
+    if height <= 0:
+        return min_slices
+    n = (int(height) + int(target) - 1) // int(target)
+    return max(int(min_slices), min(int(max_slices), int(n)))
+
+
+def _time_slice_time(
+    x: ttnn.Tensor,
+    t0: int,
+    t1: int,
+    *,
+    memory_config: Optional[ttnn.MemoryConfig] = None,
+) -> ttnn.Tensor:
     """Slice time as [t0:t1). Supports (B, 1, T) or (B, 1, T, C)."""
     b = int(x.shape[0])
     rank = len(x.shape)
+    kw: dict[str, Any] = {}
+    if memory_config is not None:
+        kw["memory_config"] = memory_config
     if rank == 3:
-        return ttnn.slice(x, [0, 0, t0], [b, 1, t1])
+        return ttnn.slice(x, [0, 0, t0], [b, 1, t1], **kw)
     c = int(x.shape[3])
-    return ttnn.slice(x, [0, 0, t0, 0], [b, 1, t1, c])
+    return ttnn.slice(x, [0, 0, t0, 0], [b, 1, t1, c], **kw)
 
 
 def _replicate_pad_1d(x: ttnn.Tensor, time_len: int, pad: int) -> ttnn.Tensor:
@@ -56,9 +84,15 @@ def _replicate_pad_1d(x: ttnn.Tensor, time_len: int, pad: int) -> ttnn.Tensor:
     return out
 
 
-def _narrow_time_dim2_b1t(x: ttnn.Tensor, start: int, length: int) -> ttnn.Tensor:
+def _narrow_time_dim2_b1t(
+    x: ttnn.Tensor,
+    start: int,
+    length: int,
+    *,
+    memory_config: Optional[ttnn.MemoryConfig] = None,
+) -> ttnn.Tensor:
     """Narrow along dim=2 to [start : start+length) via `ttnn.slice` (may alias input; do not deallocate `x`)."""
-    return _time_slice_time(x, start, start + length)
+    return _time_slice_time(x, start, start + length, memory_config=memory_config)
 
 
 class _StridedStftConv:
@@ -93,6 +127,12 @@ class _StridedStftConv:
         x_rm = ttnn.to_layout(x_n1lc, ttnn.ROW_MAJOR_LAYOUT)
         key = (batch_size, input_height)
         if self._prep_key != key:
+            # Scale num_slices with input_height so per-slice static CBs don't clash with the
+            # L1-resident sibling output (``real_o`` while ``fwd_i`` runs) on long utterances.
+            num_slices = _stft_num_slices(input_height, _STFT_FWD_TARGET_SLICE_H)
+            self.dram_slice_config = ttnn.Conv2dSliceConfig(
+                slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=num_slices
+            )
             self.weight_prepared = ttnn.prepare_conv_weights(
                 weight_tensor=self.weight_rm,
                 input_memory_config=x_rm.memory_config(),
@@ -143,12 +183,21 @@ class _StridedStftConv:
 
 
 class _StridedIstftConvTranspose:
-    def __init__(self, device, weight_rm: ttnn.Tensor, hop_length: int, freq_bins: int):
+    def __init__(
+        self,
+        device,
+        weight_rm: ttnn.Tensor,
+        hop_length: int,
+        freq_bins: int,
+        *,
+        pad_h: int = 0,
+    ):
         self.device = device
         self.weight = weight_rm
         self.hop_length = int(hop_length)
         self.freq_bins = int(freq_bins)
         self.kernel_size = int(weight_rm.shape[2])
+        self.pad_h = int(pad_h)
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.float32,
             output_layout=ttnn.TILE_LAYOUT,
@@ -167,11 +216,14 @@ class _StridedIstftConvTranspose:
         self.compute_cfg = _compute_cfg(device)
 
     def __call__(self, x_bcl: ttnn.Tensor, batch_size: int, frames: int) -> ttnn.Tensor:
-        x_bcl = ttnn.to_memory_config(x_bcl, ttnn.L1_MEMORY_CONFIG)
+        # Stage input layout/dtype in DRAM (cheap, no L1 pressure) — conv_transpose2d streams from
+        # DRAM input and picks its own L1 path. Forcing the input into L1 ahead of time leaves no
+        # room for the conv's static circular buffers on long synthesis.
+        x_bcl = ttnn.to_memory_config(x_bcl, ttnn.DRAM_MEMORY_CONFIG)
         if x_bcl.dtype != ttnn.float32:
-            x_bcl = ttnn.typecast(x_bcl, ttnn.float32)
-        x_bcl = ttnn.permute(x_bcl, [0, 2, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
-        x_n1lc = ttnn.reshape(x_bcl, [batch_size, 1, frames, self.freq_bins], memory_config=ttnn.L1_MEMORY_CONFIG)
+            x_bcl = ttnn.typecast(x_bcl, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x_bcl = ttnn.permute(x_bcl, [0, 2, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x_n1lc = ttnn.reshape(x_bcl, [batch_size, 1, frames, self.freq_bins], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         result, [oh, ow], wpair = ttnn.conv_transpose2d(
             input_tensor=x_n1lc,
             weight_tensor=self.weight,
@@ -181,7 +233,9 @@ class _StridedIstftConvTranspose:
             bias_tensor=None,
             kernel_size=(self.kernel_size, 1),
             stride=(self.hop_length, 1),
-            padding=(0, 0),
+            # ``padding=pad_h`` absorbs the otherwise-needed post-conv center trim (avoids a
+            # ``ttnn.slice`` whose static CB region blew through L1 on long synthesis).
+            padding=(self.pad_h, 0),
             output_padding=(0, 0),
             dilation=(1, 1),
             batch_size=batch_size,
@@ -197,9 +251,9 @@ class _StridedIstftConvTranspose:
         )
         self.weight = wpair[0]
         flat = int(oh) * int(ow)
-        result = ttnn.reshape(result, [batch_size, flat, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
-        result = ttnn.permute(result, [0, 2, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
-        return ttnn.to_memory_config(result, ttnn.L1_MEMORY_CONFIG)
+        result = ttnn.reshape(result, [batch_size, flat, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        result = ttnn.permute(result, [0, 2, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return result
 
 
 def _to_conv2d_input(x_b1t: ttnn.Tensor, batch_size: int, time_len: int) -> ttnn.Tensor:
@@ -226,18 +280,22 @@ class KokoroConvStft:
         self.center = bool(parameters["center"])
         self.pad_len = int(parameters["pad_len"])
         self.eps = float(parameters["eps"])
+        # Absorb the inverse "center trim" into the conv_transpose2d padding instead of running a
+        # post-conv ``ttnn.slice`` (see ``_StridedIstftConvTranspose.__call__`` comment).
+        inv_pad = self.pad_len if self.center else 0
         self.fwd_r = _StridedStftConv(device, parameters["weight_forward_real"], self.hop_length)
         self.fwd_i = _StridedStftConv(device, parameters["weight_forward_imag"], self.hop_length)
         self.inv_r = _StridedIstftConvTranspose(
-            device, parameters["weight_backward_real"], self.hop_length, self.freq_bins
+            device, parameters["weight_backward_real"], self.hop_length, self.freq_bins, pad_h=inv_pad
         )
         self.inv_i = _StridedIstftConvTranspose(
-            device, parameters["weight_backward_imag"], self.hop_length, self.freq_bins
+            device, parameters["weight_backward_imag"], self.hop_length, self.freq_bins, pad_h=inv_pad
         )
 
     def transform(self, waveform_b1t: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         """Return magnitude and phase, shape (B, freq_bins, num_frames)."""
         l1 = ttnn.L1_MEMORY_CONFIG
+        dram = ttnn.DRAM_MEMORY_CONFIG
         waveform_b1t = ttnn.to_memory_config(waveform_b1t, l1)
         if waveform_b1t.dtype != ttnn.float32:
             waveform_b1t = ttnn.typecast(waveform_b1t, ttnn.float32)
@@ -249,18 +307,24 @@ class KokoroConvStft:
             time_pad = time_len + 2 * self.pad_len
         else:
             time_pad = time_len
-            x_n1lc = ttnn.to_memory_config(x_n1lc, ttnn.DRAM_MEMORY_CONFIG)
+            x_n1lc = ttnn.to_memory_config(x_n1lc, dram)
+        # Stage ``real_o`` in DRAM while ``fwd_i`` runs: keeping it L1-resident leaves no room for
+        # ``fwd_i``'s static circular buffers on long utterances (clash at conv2d program load).
         real_o = self.fwd_r(x_n1lc, batch_size, time_pad)
+        real_o = ttnn.to_memory_config(real_o, dram)
         imag_o = self.fwd_i(x_n1lc, batch_size, time_pad)
+        imag_o = ttnn.to_memory_config(imag_o, dram)
         ttnn.deallocate(x_n1lc)
-        r2 = ttnn.multiply(real_o, real_o, memory_config=l1)
-        i2 = ttnn.multiply(imag_o, imag_o, memory_config=l1)
-        eps_t = ttnn.full_like(real_o, self.eps, memory_config=l1)
-        sq = ttnn.add(ttnn.add(r2, i2, memory_config=l1), eps_t, memory_config=l1)
+        # Run the magnitude / phase math against DRAM operands; ttnn elementwise ops can read/write
+        # DRAM directly so we stay clear of L1 for any unbounded-length intermediate.
+        r2 = ttnn.multiply(real_o, real_o, memory_config=dram)
+        i2 = ttnn.multiply(imag_o, imag_o, memory_config=dram)
+        eps_t = ttnn.full_like(real_o, self.eps, memory_config=dram)
+        sq = ttnn.add(ttnn.add(r2, i2, memory_config=dram), eps_t, memory_config=dram)
         ttnn.deallocate(r2)
         ttnn.deallocate(i2)
         ttnn.deallocate(eps_t)
-        mag = ttnn.sqrt(sq, memory_config=l1)
+        mag = ttnn.sqrt(sq, memory_config=dram)
         ttnn.deallocate(sq)
 
         # Phase via ``atan2`` + ``imag==0 & real<0 → π`` correction, matching ``CustomSTFT.transform``.
@@ -270,14 +334,14 @@ class KokoroConvStft:
         # ``imag``, which atan2 amplifies to ±π by definition. Downstream ``noise_conv`` weights absorb this
         # noise — ``noise_conv[i]`` PCC stays at 0.999997+ on real inputs — so the 0.87 phase PCC is not
         # a true e2e bottleneck.
-        phase = ttnn.atan2(imag_o, real_o, memory_config=l1)
+        phase = ttnn.atan2(imag_o, real_o, memory_config=dram)
         corr_mask = ttnn.logical_and(
-            ttnn.eq(imag_o, 0.0, memory_config=l1),
-            ttnn.lt(real_o, 0.0, memory_config=l1),
-            memory_config=l1,
+            ttnn.eq(imag_o, 0.0, memory_config=dram),
+            ttnn.lt(real_o, 0.0, memory_config=dram),
+            memory_config=dram,
         )
-        pi_fill = ttnn.full_like(phase, math.pi, memory_config=l1)
-        phase = ttnn.where(corr_mask, pi_fill, phase, memory_config=l1)
+        pi_fill = ttnn.full_like(phase, math.pi, memory_config=dram)
+        phase = ttnn.where(corr_mask, pi_fill, phase, memory_config=dram)
         ttnn.deallocate(corr_mask)
         ttnn.deallocate(pi_fill)
         ttnn.deallocate(real_o)
@@ -294,33 +358,51 @@ class KokoroConvStft:
         length: Optional[int] = None,
     ) -> ttnn.Tensor:
         """Synthesize waveform, shape (B, 1, num_samples)."""
-        magnitude = ttnn.to_memory_config(magnitude, ttnn.L1_MEMORY_CONFIG)
-        phase = ttnn.to_memory_config(phase, ttnn.L1_MEMORY_CONFIG)
+        l1 = ttnn.L1_MEMORY_CONFIG
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        # On long synthesis (e.g. ~36k+ output samples), the intermediate cos/sin/real/imag tensors
+        # plus the two inv_r/inv_i static circular buffer regions exceed per-core L1. Keep the math
+        # in DRAM so only the conv slicer touches L1.
+        frames_hint = int(magnitude.shape[2])
+        work_mc = dram if frames_hint > _STFT_INV_DRAM_FRAMES_THRESHOLD else l1
+        magnitude = ttnn.to_memory_config(magnitude, work_mc)
+        phase = ttnn.to_memory_config(phase, work_mc)
         if magnitude.dtype != ttnn.float32:
-            magnitude = ttnn.typecast(magnitude, ttnn.float32)
+            magnitude = ttnn.typecast(magnitude, ttnn.float32, memory_config=work_mc)
         if phase.dtype != ttnn.float32:
-            phase = ttnn.typecast(phase, ttnn.float32)
+            phase = ttnn.typecast(phase, ttnn.float32, memory_config=work_mc)
         batch_size = int(magnitude.shape[0])
         frames = int(magnitude.shape[2])
-        real_part = ttnn.multiply(
-            magnitude, ttnn.cos(phase, memory_config=ttnn.L1_MEMORY_CONFIG), memory_config=ttnn.L1_MEMORY_CONFIG
-        )
-        imag_part = ttnn.multiply(
-            magnitude, ttnn.sin(phase, memory_config=ttnn.L1_MEMORY_CONFIG), memory_config=ttnn.L1_MEMORY_CONFIG
-        )
+        cos_phase = ttnn.cos(phase, memory_config=work_mc)
+        sin_phase = ttnn.sin(phase, memory_config=work_mc)
+        # Do not deallocate magnitude/phase here: they are caller-owned (PCC tests read mag/phase after
+        # inverse). KokoroGenerator already deallocates spec/phase after stft.inverse returns.
+        real_part = ttnn.multiply(magnitude, cos_phase, memory_config=work_mc)
+        imag_part = ttnn.multiply(magnitude, sin_phase, memory_config=work_mc)
+        ttnn.deallocate(cos_phase)
+        ttnn.deallocate(sin_phase)
+        # Stage ``real_rec`` in DRAM while ``inv_i`` runs (mirror of the ``fwd_r``/``fwd_i`` fix):
+        # keeping it L1-resident leaves no room for ``inv_i``'s static circular buffers on long
+        # synthesis. Also free ``real_part`` before ``inv_i`` to keep L1 headroom.
         real_rec = self.inv_r(real_part, batch_size, frames)
-        imag_rec = self.inv_i(imag_part, batch_size, frames)
         ttnn.deallocate(real_part)
+        real_rec = ttnn.to_memory_config(real_rec, work_mc)
+        imag_rec = self.inv_i(imag_part, batch_size, frames)
         ttnn.deallocate(imag_part)
-        waveform = ttnn.subtract(real_rec, imag_rec, memory_config=ttnn.L1_MEMORY_CONFIG)
-        if self.center:
-            total = int(waveform.shape[2])
-            inner = total - 2 * self.pad_len
-            waveform = _narrow_time_dim2_b1t(waveform, self.pad_len, inner)
+        imag_rec = ttnn.to_memory_config(imag_rec, work_mc)
+        # Long synthesised waveforms (multi-second audio → 100k+ samples) don't fit in L1 alongside the
+        # slice op's static circular buffers on a single core, so keep the trim/narrow path in DRAM.
+        waveform = ttnn.subtract(real_rec, imag_rec, memory_config=dram)
+        ttnn.deallocate(real_rec)
+        ttnn.deallocate(imag_rec)
+        # The center trim is absorbed by ``conv_transpose2d`` padding in ``_StridedIstftConvTranspose``
+        # — no slice needed here. The length trim only runs if the caller asked for a shorter output
+        # than the conv produced.
         if length is not None:
             cur = int(waveform.shape[2])
             take = min(int(length), cur)
-            waveform = _narrow_time_dim2_b1t(waveform, 0, take)
-        ttnn.deallocate(real_rec)
-        ttnn.deallocate(imag_rec)
-        return ttnn.to_memory_config(waveform, ttnn.L1_MEMORY_CONFIG)
+            if take < cur:
+                # ROW_MAJOR slice handles byte-aligned offsets with smaller static CBs than TILE slice.
+                waveform = ttnn.to_layout(waveform, ttnn.ROW_MAJOR_LAYOUT)
+                waveform = _narrow_time_dim2_b1t(waveform, 0, take, memory_config=dram)
+        return waveform

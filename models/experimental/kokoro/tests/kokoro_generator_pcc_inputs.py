@@ -17,6 +17,12 @@ import ttnn
 
 from models.experimental.kokoro.tt import KokoroDecoderBody, KokoroDecoderFront
 
+# Representative ``time_asr`` (log-mel / ASR frames into ``Decoder``), analogous to SpeechT5
+# ``models/experimental/speecht5_tts/demo_ttnn.py`` ``DEMO_WARMUP_SIZES`` (32..256 encoder tokens):
+# sweep modest lengths so vocoder kernels are validated without N150-scale L1 blowups.
+# ``Tf = 2 * time_asr`` coarse F0 bins; F0 upsampled length ``Tf * f0_up_scale`` (~300×) drives SineGen.
+KOKORO_DECODER_PCC_TIME_ASR_SIZES: tuple[int, ...] = (8, 12, 16)
+
 
 def decoder_tensors_for_generator(
     dec,
@@ -142,3 +148,105 @@ def decoder_tensors_for_generator(
                 if block.upsample_type != "none":
                     res = False
     return x, s, f0_curve
+
+
+def run_decoder_tt_e2e_waveform_pcc_value(
+    ttnn_device,
+    *,
+    time_asr: int,
+    use_torch_sinegen: bool,
+    seed: int = 42,
+) -> float:
+    """Run ``KokoroDecoderTt`` vs PyTorch ``Decoder`` (deterministic SineGen) and return waveform PCC.
+
+    Used by ``test_kokoro_istftnet_tt_e2e_pcc`` and ``test_kokoro_decoder_e2e_sequence_lengths`` so sequence
+    sweeps stay aligned with a single implementation.
+    """
+    from unittest import mock
+
+    from models.common.utility_functions import comp_pcc
+    from models.experimental.kokoro.reference.kokoro_istftnet import load_decoder_from_huggingface
+    from models.experimental.kokoro.tt import KokoroDecoderTt, preprocess_kokoro_decoder_tt_parameters
+
+    dec_ref = load_decoder_from_huggingface(device="cpu", disable_complex=True).decoder
+    dec_tt = load_decoder_from_huggingface(device="cpu", disable_complex=True).decoder
+
+    batch = 1
+    tf = 2 * time_asr
+    torch.manual_seed(seed)
+    dim_in = dec_ref.asr_res[0].in_channels
+    asr = torch.randn(batch, dim_in, time_asr, dtype=torch.float32)
+    f0_curve = torch.randn(batch, tf, dtype=torch.float32) * 100.0 + 120.0
+    n = torch.randn(batch, tf, dtype=torch.float32)
+    s = torch.randn(batch, 128, dtype=torch.float32)
+
+    def zeros_rand(*args, **kwargs):
+        kwargs = {k: v for k, v in kwargs.items() if k != "generator"}
+        return torch.zeros(*args, **kwargs)
+
+    def zeros_randn(*args, **kwargs):
+        kwargs = {k: v for k, v in kwargs.items() if k != "generator"}
+        return torch.zeros(*args, **kwargs)
+
+    def zeros_randn_like(t, **kwargs):
+        return torch.zeros_like(t)
+
+    with (
+        mock.patch("torch.rand", side_effect=zeros_rand),
+        mock.patch("torch.randn", side_effect=zeros_randn),
+        mock.patch("torch.randn_like", side_effect=zeros_randn_like),
+    ):
+        with torch.no_grad():
+            y_ref = dec_ref(asr, f0_curve, n, s)
+
+    params = preprocess_kokoro_decoder_tt_parameters(
+        dec_tt,
+        ttnn_device,
+        f0_coarse_time=tf,
+        disable_complex=True,
+        use_torch_sinegen=use_torch_sinegen,
+    )
+    tt_dec = KokoroDecoderTt(ttnn_device, params)
+    l1 = ttnn.L1_MEMORY_CONFIG
+
+    asr_tt = ttnn.from_torch(
+        asr,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=ttnn_device,
+        memory_config=l1,
+    )
+    f0_tt = ttnn.from_torch(
+        f0_curve.unsqueeze(-1),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=ttnn_device,
+        memory_config=l1,
+    )
+    n_tt = ttnn.from_torch(
+        n.unsqueeze(-1),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=ttnn_device,
+        memory_config=l1,
+    )
+    s_tt = ttnn.from_torch(
+        s,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=ttnn_device,
+        memory_config=l1,
+    )
+
+    with (
+        mock.patch("torch.rand", side_effect=zeros_rand),
+        mock.patch("torch.randn", side_effect=zeros_randn),
+        mock.patch("torch.randn_like", side_effect=zeros_randn_like),
+    ):
+        y_tt = tt_dec(asr_tt, f0_tt, n_tt, s_tt, deterministic=True)
+
+    y_hat = ttnn.to_torch(y_tt).reshape(y_ref.shape)
+    assert y_hat.shape == y_ref.shape
+    assert torch.isfinite(y_hat).all()
+    _ok, p = comp_pcc(y_ref, y_hat, pcc=0.0)
+    return float(p)

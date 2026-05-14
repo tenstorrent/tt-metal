@@ -6,11 +6,11 @@
 
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 
 import ttnn
 
-from .ttnn_adain_resblk_encode import _adain_instance_norm
+from .ttnn_adain_resblk_encode import ADAIN_LONG_SEQ_DRAM_THRESHOLD, _adain_instance_norm
 
 
 def _compute_cfg(device):
@@ -26,7 +26,12 @@ def _compute_cfg(device):
 
 
 class _TtConv1dDilated:
-    """Conv1d via conv2d; stride 1; dilation on the time axis."""
+    """Conv1d via conv2d; stride 1; dilation on the time axis.
+
+    Long ``input_length`` (longer utterances) kept everything in L1 and collided with conv circular
+    buffers. Match ``_StridedNoiseConv1d``: ROW_MAJOR activations in DRAM + ``prepare_conv_weights`` +
+    height slice config so inference scales past short smoke phrases.
+    """
 
     def __init__(
         self,
@@ -39,8 +44,8 @@ class _TtConv1dDilated:
         dilation_h: int,
     ):
         self.device = device
-        self.weight = weight_rm
-        self.bias = bias_rm
+        self.weight_rm = weight_rm
+        self.bias_rm = bias_rm
         self.out_channels = int(weight_rm.shape[0])
         self.in_channels = int(weight_rm.shape[1])
         self.kernel_size = int(kernel_size)
@@ -61,16 +66,81 @@ class _TtConv1dDilated:
             enable_activation_reuse=False,
             full_inner_dim=False,
         )
+        self.compute_cfg = _compute_cfg(device)
+        self._prep_key: Optional[Tuple[int, int, int]] = None
+        self.dram_slice_config = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=16)
+        self.weight_prepared = weight_rm
+        self.bias_prepared: Optional[ttnn.Tensor] = bias_rm
 
     def __call__(self, x: ttnn.Tensor, batch_size: int, input_length: int) -> ttnn.Tensor:
-        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        l1 = ttnn.L1_MEMORY_CONFIG
+        # Large (B,1,T,C) TILE in L1 collides with conv circular buffers on long harmonic frames.
+        x = ttnn.to_memory_config(x, dram)
         if x.dtype != ttnn.float32:
-            x = ttnn.typecast(x, ttnn.float32)
-        x = ttnn.permute(x, [0, 2, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
-        x = ttnn.reshape(x, [batch_size, 1, input_length, self.in_channels], memory_config=ttnn.L1_MEMORY_CONFIG)
-        result, _, wpair = ttnn.conv2d(
-            input_tensor=x,
-            weight_tensor=self.weight,
+            x = ttnn.typecast(x, ttnn.float32, memory_config=dram)
+        x = ttnn.permute(x, [0, 2, 1], memory_config=dram)
+        x = ttnn.reshape(x, [batch_size, 1, input_length, self.in_channels], memory_config=dram)
+        x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        x_rm = ttnn.to_memory_config(x_rm, dram)
+
+        key = (batch_size, input_length, self.dilation_h)
+        has_bias = self.bias_rm is not None
+        if self._prep_key != key:
+            num_sl = max(2, min(512, max(16, (int(input_length) + 7) // 8)))
+            self.dram_slice_config = ttnn.Conv2dSliceConfig(
+                slice_type=ttnn.Conv2dDRAMSliceHeight,
+                num_slices=num_sl,
+            )
+            self.weight_prepared = ttnn.prepare_conv_weights(
+                weight_tensor=self.weight_rm,
+                input_memory_config=x_rm.memory_config(),
+                input_layout=x_rm.layout,
+                weights_format="OIHW",
+                in_channels=self.in_channels,
+                out_channels=self.out_channels,
+                batch_size=batch_size,
+                input_height=input_length,
+                input_width=1,
+                kernel_size=(self.kernel_size, 1),
+                stride=(1, 1),
+                padding=(self.padding_h, 0),
+                dilation=(self.dilation_h, 1),
+                has_bias=has_bias,
+                groups=1,
+                device=self.device,
+                input_dtype=x_rm.dtype,
+                conv_config=self.conv_config,
+                compute_config=self.compute_cfg,
+                slice_config=self.dram_slice_config,
+            )
+            if has_bias:
+                self.bias_prepared = ttnn.prepare_conv_bias(
+                    bias_tensor=self.bias_rm,
+                    input_memory_config=x_rm.memory_config(),
+                    input_layout=x_rm.layout,
+                    in_channels=self.in_channels,
+                    out_channels=self.out_channels,
+                    batch_size=batch_size,
+                    input_height=input_length,
+                    input_width=1,
+                    kernel_size=(self.kernel_size, 1),
+                    stride=(1, 1),
+                    padding=(self.padding_h, 0),
+                    dilation=(self.dilation_h, 1),
+                    groups=1,
+                    device=self.device,
+                    input_dtype=x_rm.dtype,
+                    conv_config=self.conv_config,
+                    compute_config=self.compute_cfg,
+                )
+            else:
+                self.bias_prepared = None
+            self._prep_key = key
+
+        result, [oh, _ow], wpair = ttnn.conv2d(
+            input_tensor=x_rm,
+            weight_tensor=self.weight_prepared,
             device=self.device,
             in_channels=self.in_channels,
             out_channels=self.out_channels,
@@ -81,19 +151,23 @@ class _TtConv1dDilated:
             stride=(1, 1),
             padding=(self.padding_h, 0),
             dilation=(self.dilation_h, 1),
-            bias_tensor=self.bias,
+            bias_tensor=self.bias_prepared,
             conv_config=self.conv_config,
+            compute_config=self.compute_cfg,
+            slice_config=self.dram_slice_config,
             return_weights_and_bias=True,
             return_output_dim=True,
         )
-        self.weight = wpair[0]
-        if self.bias is not None and len(wpair) > 1:
-            self.bias = wpair[1]
-        result = ttnn.reshape(
-            result, [batch_size, input_length, self.out_channels], memory_config=ttnn.L1_MEMORY_CONFIG
-        )
-        result = ttnn.permute(result, [0, 2, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
-        return ttnn.to_memory_config(result, ttnn.L1_MEMORY_CONFIG)
+        self.weight_prepared = wpair[0]
+        if has_bias and len(wpair) > 1:
+            self.bias_prepared = wpair[1]
+        oh_i = int(oh)
+        result = ttnn.reshape(result, [batch_size, oh_i, self.out_channels], memory_config=dram)
+        result = ttnn.permute(result, [0, 2, 1], memory_config=dram)
+        result = ttnn.to_layout(result, ttnn.TILE_LAYOUT)
+        if input_length > ADAIN_LONG_SEQ_DRAM_THRESHOLD:
+            return ttnn.to_memory_config(result, dram)
+        return ttnn.to_memory_config(result, l1)
 
 
 class AdaINResBlock1:
@@ -133,14 +207,15 @@ class AdaINResBlock1:
             )
 
     def __call__(self, x: ttnn.Tensor, s: ttnn.Tensor) -> ttnn.Tensor:
-        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+        seq = int(x.shape[2])
+        mc = ttnn.DRAM_MEMORY_CONFIG if seq > ADAIN_LONG_SEQ_DRAM_THRESHOLD else ttnn.L1_MEMORY_CONFIG
+        x = ttnn.to_memory_config(x, mc)
         if x.dtype != ttnn.float32:
-            x = ttnn.typecast(x, ttnn.float32)
+            x = ttnn.typecast(x, ttnn.float32, memory_config=mc)
         s = ttnn.to_memory_config(s, ttnn.L1_MEMORY_CONFIG)
         if s.dtype != ttnn.float32:
             s = ttnn.typecast(s, ttnn.float32)
         batch_size = int(x.shape[0])
-        seq = int(x.shape[2])
         for i, li in enumerate(self.layers):
             h1 = ttnn.linear(
                 s,
@@ -163,17 +238,18 @@ class AdaINResBlock1:
                 h1,
                 self.channels,
                 self.eps,
+                memory_config=mc,
             )
             a1 = li["alpha1"]
             inv_a1 = li["inv_alpha1"]
-            ax = ttnn.multiply(a1, xt, memory_config=ttnn.L1_MEMORY_CONFIG)
-            sn = ttnn.sin(ax, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ax = ttnn.multiply(a1, xt, memory_config=mc)
+            sn = ttnn.sin(ax, memory_config=mc)
             ttnn.deallocate(ax)
-            sn2 = ttnn.multiply(sn, sn, memory_config=ttnn.L1_MEMORY_CONFIG)
+            sn2 = ttnn.multiply(sn, sn, memory_config=mc)
             ttnn.deallocate(sn)
-            bump = ttnn.multiply(inv_a1, sn2, memory_config=ttnn.L1_MEMORY_CONFIG)
+            bump = ttnn.multiply(inv_a1, sn2, memory_config=mc)
             ttnn.deallocate(sn2)
-            xt = ttnn.add(xt, bump, memory_config=ttnn.L1_MEMORY_CONFIG)
+            xt = ttnn.add(xt, bump, memory_config=mc)
             ttnn.deallocate(bump)
             xt = self.convs1[i](xt, batch_size, seq)
             xt = _adain_instance_norm(
@@ -183,19 +259,20 @@ class AdaINResBlock1:
                 h2,
                 self.channels,
                 self.eps,
+                memory_config=mc,
             )
             a2 = li["alpha2"]
             inv_a2 = li["inv_alpha2"]
-            ax2 = ttnn.multiply(a2, xt, memory_config=ttnn.L1_MEMORY_CONFIG)
-            snb = ttnn.sin(ax2, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ax2 = ttnn.multiply(a2, xt, memory_config=mc)
+            snb = ttnn.sin(ax2, memory_config=mc)
             ttnn.deallocate(ax2)
-            sn2b = ttnn.multiply(snb, snb, memory_config=ttnn.L1_MEMORY_CONFIG)
+            sn2b = ttnn.multiply(snb, snb, memory_config=mc)
             ttnn.deallocate(snb)
-            bump2 = ttnn.multiply(inv_a2, sn2b, memory_config=ttnn.L1_MEMORY_CONFIG)
+            bump2 = ttnn.multiply(inv_a2, sn2b, memory_config=mc)
             ttnn.deallocate(sn2b)
-            xt = ttnn.add(xt, bump2, memory_config=ttnn.L1_MEMORY_CONFIG)
+            xt = ttnn.add(xt, bump2, memory_config=mc)
             ttnn.deallocate(bump2)
             xt = self.convs2[i](xt, batch_size, seq)
-            x = ttnn.add(x, xt, memory_config=ttnn.L1_MEMORY_CONFIG)
+            x = ttnn.add(x, xt, memory_config=mc)
             ttnn.deallocate(xt)
-        return ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+        return ttnn.to_memory_config(x, mc)

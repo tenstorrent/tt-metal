@@ -89,8 +89,8 @@ def test_source_module_hn_nsf_deterministic_pcc(ttnn_device, kokoro_decoder_cpu)
     noise_hat = ttnn.to_torch(noise_tt).reshape(noise_ref.shape)
     uv_hat = ttnn.to_torch(uv_tt).reshape(uv_ref.shape)
 
-    # Device SineGen + TTNN linear + tanh: ~0.974 vs full PyTorch on WH B0.
-    min_pcc = {"har_source": 0.974, "noise_merge": 0.99, "uv": 0.99}
+    # Device SineGen + TTNN linear + tanh (merge linear uses same HiFi4+fp32 dest as generator convs).
+    min_pcc = {"har_source": 0.99, "noise_merge": 0.99, "uv": 0.99}
     for name, ref, hat in (
         ("har_source", har_ref, har_hat),
         ("noise_merge", noise_ref, noise_hat),
