@@ -65,7 +65,7 @@ def generate_pcc_plots(result: dict, output_dir: str = "/tmp/pcc_plots") -> dict
     kv_threshold = result.get("kv_threshold", threshold)
     pe_threshold = result.get("pe_threshold", threshold)
 
-    out_path = Path(output_dir)
+    out_path = Path(output_dir).resolve()
     out_path.mkdir(parents=True, exist_ok=True)
 
     stats = {}
@@ -346,7 +346,7 @@ def write_pcc_summary(result: dict, threshold: float = 0.99, output_dir: str = N
     if output_dir is None:
         output_dir = os.getenv("PCC_SUMMARY_DIR", "/tmp/pcc_summaries")
 
-    out = Path(output_dir)
+    out = Path(output_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)
 
     run_name = _build_run_name(result)
