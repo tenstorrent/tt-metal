@@ -157,6 +157,41 @@ class Qwen36Generator:
         self._prefill_traces: dict = {}
         self._decode_traces: dict = {}
 
+    def release_traces(self) -> None:
+        """Release every captured trace_id back to the device pool.
+
+        Called from ``__del__`` and may be called explicitly by tests
+        before mesh teardown to guarantee the device's trace state is
+        clean. Safe to call multiple times — already-released entries
+        are skipped.
+
+        Without this, a captured trace_id that was left over from a
+        failed mid-capture run (or a successful capture that the user
+        never explicitly released) keeps a slot reserved on the command
+        queue, and ``ttnn.close_mesh_device`` may not clean it up — the
+        next process to open the mesh sees its ethernet cores stuck in
+        an uninitialized state and tt-smi -ls times out.
+        """
+        for cache_dict in (self._prefill_traces, self._decode_traces):
+            for key, cache in list(cache_dict.items()):
+                if cache != _NO_TRACE_FALLBACK and isinstance(cache, dict):
+                    trace_id = cache.get("trace_id")
+                    if trace_id is not None:
+                        try:
+                            ttnn.release_trace(self.mesh_device, trace_id)
+                        except Exception as exc:
+                            logger.warning(f"[Qwen36Generator] release_trace({trace_id}) " f"failed: {exc}")
+                # Replace with a sentinel so a subsequent call is a no-op.
+                cache_dict[key] = _NO_TRACE_FALLBACK
+
+    def __del__(self):
+        # Defensive: free any traces still held by this generator before
+        # GC / mesh teardown reaches the device.
+        try:
+            self.release_traces()
+        except Exception:
+            pass
+
     # ------------------------------------------------------------------
     # Private: gather a captured on-device logits tensor to CPU.  Used by
     # the trace execute path AFTER ``ttnn.execute_trace`` returns, so this
@@ -474,17 +509,37 @@ class Qwen36Generator:
         device_inputs = self.model.prepare_inputs_decode(input_ids, current_pos, page_table=page_table)
 
         # 3. Capture the pure-device forward against those tensor addresses.
+        #    Wrap in try/finally so that if ttnn_decode_forward raises
+        #    mid-capture (e.g. TT_FATAL "Writes are not supported"),
+        #    end_trace_capture still runs — otherwise the command queue's
+        #    trace_id_ stays set and every subsequent op on the device
+        #    fires the same assertion, hanging the mesh and necessitating
+        #    a tt-smi -r recovery.
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        captured = self.model.ttnn_decode_forward(
-            device_inputs["tokens"],
-            device_inputs["current_pos"],
-            device_inputs["rope_idxs"],
-            device_inputs["page_table"],
-            kv_caches=kv_caches,
-            dn_states=dn_states,
-            conv_states=conv_states,
-        )
-        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        capture_succeeded = False
+        try:
+            captured = self.model.ttnn_decode_forward(
+                device_inputs["tokens"],
+                device_inputs["current_pos"],
+                device_inputs["rope_idxs"],
+                device_inputs["page_table"],
+                kv_caches=kv_caches,
+                dn_states=dn_states,
+                conv_states=conv_states,
+            )
+            capture_succeeded = True
+        finally:
+            # Always end the trace so trace_id_ is cleared on the queue.
+            try:
+                ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+            except Exception as exc_end:
+                logger.warning(f"[Qwen36Generator] end_trace_capture failed after " f"capture body error: {exc_end}")
+            if not capture_succeeded:
+                # Release the half-captured trace_id to free its slot.
+                try:
+                    ttnn.release_trace(self.mesh_device, trace_id)
+                except Exception as exc_rel:
+                    logger.warning(f"[Qwen36Generator] release_trace failed: {exc_rel}")
         ttnn.synchronize_device(self.mesh_device)
 
         return {

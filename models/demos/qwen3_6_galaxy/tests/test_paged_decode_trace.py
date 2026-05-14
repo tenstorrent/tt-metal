@@ -127,14 +127,14 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
 
 @pytest.mark.hardware
 @pytest.mark.skip(
-    reason="T14b.9 step 3 partially landed — _materialize_cur_pos_int "
-    "eliminated the device-to-host READ inside trace capture (1 'Reads "
-    "are not supported' assertion gone). Capture body still emits ~16 "
-    "WRITES per decoder layer (64 total for 4-layer model). Source is "
-    "still unidentified; bisecting via instrumentation has been hampered "
-    "by the Galaxy's ethernet core (x=27,y=25) destabilizing after each "
-    "failed capture (needs tt-smi -r between runs). Next session: bisect "
-    "with prints once a stable device window is available."
+    reason="T14b.9 in progress — capture body still emits ~16 'Writes are "
+    "not supported' warnings per decoder layer (64 for the 4-layer model). "
+    "Cleanup infrastructure (try/finally end_trace_capture, release_traces, "
+    "__del__) is in place; flipping _TRACE_SUPPORTED=True will run the test "
+    "once the residual host-write source inside ttnn_decode_forward is "
+    "identified — likely in either attention.forward_decode's paged "
+    "branch's k/v height_shard conversion (to_memory_config + paged_update_cache) "
+    "or DeltaNet's recurrent path / paged KV cache update."
 )
 def test_paged_decode_trace_parity_4layer(mesh_8x4):
     """T14b.9: paged decode trace replay produces same logits as eager paged decode.
@@ -185,6 +185,15 @@ def test_paged_decode_trace_parity_4layer(mesh_8x4):
     model_eager, model_trace = _build_two_models()
     gen_eager = Qwen36Generator(model_eager, mesh_8x4, args)
     gen_trace = Qwen36Generator(model_trace, mesh_8x4, args)
+
+    # Cleanup hook — release any captured trace_ids BEFORE the mesh fixture
+    # tears the device down (otherwise a half-captured trace from a failed
+    # run leaves the queue's trace_id_ set and the ethernet cores hang on
+    # next open).
+    import atexit
+
+    atexit.register(gen_eager.release_traces)
+    atexit.register(gen_trace.release_traces)
 
     tokenizer = AutoTokenizer.from_pretrained(str(_SNAPSHOT_DIR), trust_remote_code=True)
     prompt = "The capital of France is"
