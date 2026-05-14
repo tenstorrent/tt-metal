@@ -76,6 +76,7 @@ set(DISTRIBUTED_UNIT_TEST_SOURCES
     test_gap78_fixp25clean_skip_already_terminated_phase3.cpp
     test_gap79_fixap_master_router_chan_relay_broken.cpp
     test_gap80_fixev_event_synchronize_dead_relay_guard.cpp
+    test_gap81_fixbc_fixbd_simultaneous_handshake_deadlock.cpp
     utils.cpp
 )
 # MPI sub-context tests require the MPI distributed build (matches tt_metal/distributed USE_MPI).
