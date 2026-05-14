@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <core/ttnn_all_includes.hpp>
+#include <iomanip>
 #include <iostream>
 #include <xtensor-blas/xlinalg.hpp>
 
@@ -12,6 +13,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "test_utils/random_data.hpp"
+#include "ttnn_fixed/matmuls.hpp"
 
 class KSplitGramMatmulTest : public ::testing::Test {
 protected:
@@ -164,6 +166,78 @@ TEST_F(KSplitGramMatmulTest, PreallocatedOutput) {
     uint32_t W = output.logical_shape()[-1];
 
     check_tile(in_vec, out_vec, K, W, 2, 15, kRtol, kOffDiagAtol, "Preallocated G[2,15]");
+}
+
+// Diagnostic: compare absolute error of our gram_matmul vs ttnn_fixed::matmul(X, X^T)
+// against a CPU FP64 reference, separately on diagonal vs off-diagonal tiles.
+TEST_F(KSplitGramMatmulTest, MEASURE_ErrorComparison) {
+    struct Shape {
+        uint32_t M, K;
+        const char* label;
+    };
+    Shape shapes[] = {{2048, 2048, "2048x2048"}, {4096, 4096, "4096x4096"}, {4096, 11008, "4096x11008"}};
+
+    // Sample 8 diagonal tiles and 8 off-diagonal tiles per shape
+    std::vector<std::pair<uint32_t, uint32_t>> samples = {
+        {0, 0},
+        {5, 5},
+        {10, 10},
+        {20, 20},
+        {30, 30},
+        {40, 40},
+        {50, 50},
+        {60, 60},
+        {0, 5},
+        {2, 15},
+        {7, 22},
+        {15, 31},
+        {3, 47},
+        {20, 50},
+        {10, 40},
+        {25, 55}};
+
+    for (const auto& s : shapes) {
+        auto input = make_random_tensor(s.M, s.K);
+        auto ours_t = ttml::metal::gram_matmul(input);
+        auto ttnn_t = ttml::ttnn_fixed::matmul(input, input, false, true);
+
+        auto in_vec = input.to_vector<float>();
+        auto ours_v = ours_t.to_vector<float>();
+        auto ttnn_v = ttnn_t.to_vector<float>();
+        uint32_t W_ours = ours_t.logical_shape()[-1];
+        uint32_t W_ttnn = ttnn_t.logical_shape()[-1];
+        uint32_t M_tiles = s.M / 32;
+
+        auto stats = [&](bool diagonal) {
+            double max_ours = 0, max_ttnn = 0, sum_ours = 0, sum_ttnn = 0;
+            uint32_t n = 0;
+            for (const auto& [r, c] : samples) {
+                if ((r == c) != diagonal)
+                    continue;
+                if (r >= M_tiles || c >= M_tiles)
+                    continue;
+                auto ref = compute_gram_tile(in_vec, s.K, r, c);
+                auto ours = extract_output_tile(ours_v, W_ours, r, c);
+                auto ttnn = extract_output_tile(ttnn_v, W_ttnn, r, c);
+                for (size_t i = 0; i < ref.size(); i++) {
+                    double e_ours = std::abs((double)ours[i] - ref[i]);
+                    double e_ttnn = std::abs((double)ttnn[i] - ref[i]);
+                    max_ours = std::max(max_ours, e_ours);
+                    max_ttnn = std::max(max_ttnn, e_ttnn);
+                    sum_ours += e_ours;
+                    sum_ttnn += e_ttnn;
+                    n++;
+                }
+            }
+            std::cout << "    " << (diagonal ? "diag    " : "off-diag") << " (n=" << n << "): "
+                      << "ours  max=" << std::fixed << std::setprecision(4) << max_ours << " mean=" << sum_ours / n
+                      << "  |  ttnn max=" << max_ttnn << " mean=" << sum_ttnn / n << "\n";
+        };
+        std::cout << "[" << s.label << "]\n";
+        stats(true);
+        stats(false);
+    }
+    SUCCEED();
 }
 
 TEST_F(KSplitGramMatmulTest, SmokeAllShapes) {
