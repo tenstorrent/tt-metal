@@ -68,6 +68,7 @@ class MoEModelConfig:
     activation_types: tuple = (MoEActivationFunction.SILU,)
     num_layers: int = 5
     num_iterations: int = 3
+    tokens_per_device: int = 32
     output_height_shard_dim: int = 4
     marks: tuple = ()
 
@@ -113,7 +114,7 @@ _MODELS_1x16 = [
     MoEModelConfig("mistral_large_3",     N=4096, hidden_size=7168, selected_experts_k=4, num_layers=3, num_iterations=2,
                    marks=(pytest.mark.xfail(reason="L1 overflow: N=4096 A2A buffer (12*12*2048=288KB) exceeds Wormhole L1 budget by ~21KB"),)),
     MoEModelConfig("ling_1t",             N=2048, hidden_size=8192, selected_experts_k=8, num_layers=3, num_iterations=2,
-                   output_height_shard_dim=2),
+                   tokens_per_device=16, output_height_shard_dim=2),
 ]
 
 _MODELS_1x8 = [
@@ -144,7 +145,7 @@ def _run_model_test(
         mesh_shape=mesh_shape,
         cluster_axis=1,
         experts_per_device=experts_per_device,
-        tokens_per_device=32,
+        tokens_per_device=model_cfg.tokens_per_device,
         selected_experts_k=selected_experts_k,
         num_layers=num_layers,
         num_iterations=num_iterations,
