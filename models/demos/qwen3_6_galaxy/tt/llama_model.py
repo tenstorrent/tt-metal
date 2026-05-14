@@ -657,8 +657,13 @@ class TtQwen36Transformer(LightweightModule):
         if conv_states is None:
             conv_states = [None] * self.num_layers
 
-        # On-device RoPE cos/sin gather via embedding lookup (T14b.9 step 1).
-        cos_tt, sin_tt = self.rope_setup.get_rm_rot_mats(rope_idxs_tt)
+        # T14b.9 step 7: read cos/sin from the rope_setup's persistent
+        # decode buffers directly. These are refreshed via
+        # ttnn.copy_host_to_device_tensor in the Generator BEFORE
+        # ttnn.execute_trace (outside the trace boundary), so reading them
+        # here is a pure device op — no host writes inside the trace body.
+        cos_tt = self.rope_setup._cos_decode_buf
+        sin_tt = self.rope_setup._sin_decode_buf
         rot_mats = (cos_tt, sin_tt)
 
         # On-device embedding lookup — tokens_tt is already on device.

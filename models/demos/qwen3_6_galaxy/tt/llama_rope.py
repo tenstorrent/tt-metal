@@ -263,6 +263,14 @@ class Qwen36RopeSetup(LightweightModule):
     def get_rm_rot_idxs(self, position_idxs: torch.Tensor, on_host: bool = False) -> ttnn.Tensor:
         """Build the ``rot_idxs`` lookup tensor for a decode batch.
 
+        T14b.9 step 6: pad to ``[TILE, TILE] = [32, 32]`` so the downstream
+        ``ttnn.embedding`` output is tile-aligned in both dims and the op
+        doesn't fire an internal tile-padding host-write inside trace
+        capture. The actual position lives at index ``[0, 0]`` (single
+        user, replicated across the rest of the tile). Mirrors the
+        tile-padding approach in olmo3's ``get_rm_rot_idxs`` and
+        llama3_70b_galaxy's ``get_rm_rot_idxs``.
+
         Parameters
         ----------
         position_idxs : torch.Tensor
@@ -275,18 +283,20 @@ class Qwen36RopeSetup(LightweightModule):
 
         Returns
         -------
-        ttnn.Tensor of shape ``[1, 1]`` uint32, replicated across the mesh.
-            The leading dim must be 1 because ``ttnn.embedding`` interprets
-            the last index dim as the batch axis for the embedding lookup;
-            for max_batch_size=1 the single position lives at ``[0, 0]``.
+        ttnn.Tensor of shape ``[32, 32]`` uint32, replicated across the
+            mesh. All entries hold the same position value; downstream
+            ``get_rm_rot_mats`` slices ``[0, 0]`` to recover the single
+            cos/sin row.
         """
         assert isinstance(position_idxs, torch.Tensor), "position_idxs must be a torch tensor"
         assert position_idxs.numel() == 1, f"qwen3.6 max_batch_size=1; got {tuple(position_idxs.shape)}"
-        # Reshape to [1, 1] — required by ttnn.embedding's [batch, n_idxs] convention.
-        position_idxs = position_idxs.view(1, 1).to(torch.uint32)
+        # Broadcast the single position across a TILE×TILE grid so the
+        # embedding output is naturally tile-aligned.
+        pos = int(position_idxs.view(-1)[0].item())
+        position_idxs_padded = torch.full((32, 32), pos, dtype=torch.int32)
 
         rot_idxs = ttnn.from_torch(
-            position_idxs,
+            position_idxs_padded,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=None if on_host else self.mesh_device,
@@ -310,18 +320,28 @@ class Qwen36RopeSetup(LightweightModule):
             host writes — the cos/sin tables are pre-uploaded in
             ``self.cos_matrix`` / ``self.sin_matrix`` once at __init__.
         """
-        cos = ttnn.embedding(
+        # rot_idxs has shape [32, 32] (T14b.9 step 6 — tile-aligned to avoid
+        # internal ttnn.embedding padding write inside trace capture).
+        # Embedding output: [32, 32, rotary_dim]. We slice down to
+        # [1, 1, rotary_dim] for the single position we actually care about.
+        cos_padded = ttnn.embedding(
             rot_idxs,
             self.cos_matrix,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )  # [1, 1, rotary_dim]
-        sin = ttnn.embedding(
+        )  # [32, 32, rotary_dim]
+        sin_padded = ttnn.embedding(
             rot_idxs,
             self.sin_matrix,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        # Slice to [1, 1, rotary_dim] — a real (non-no-op) slice that
+        # allocates a new device tensor; pure device op (no host write).
+        cos = ttnn.slice(cos_padded, [0, 0, 0], [1, 1, self.rotary_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        sin = ttnn.slice(sin_padded, [0, 0, 0], [1, 1, self.rotary_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        cos_padded.deallocate(True)
+        sin_padded.deallocate(True)
         # Unsqueeze to [1, 1, 1, rotary_dim] to match apply_partial_rope's expected
         # cos/sin shape (4-D, broadcast over heads).
         cos = ttnn.unsqueeze_to_4D(cos)

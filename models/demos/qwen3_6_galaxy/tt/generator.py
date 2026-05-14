@@ -385,6 +385,11 @@ class Qwen36Generator:
                 continue
             ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
 
+        # T14b.9 step 7: refresh rope_setup's persistent decode cos/sin
+        # buffers (also outside the trace boundary). Captured body reads
+        # cos/sin from these fixed buffer addresses directly.
+        self.model.rope_setup.get_cos_sin_for_decode(current_pos)
+
         ttnn.execute_trace(self.mesh_device, cache["trace_id"], cq_id=0, blocking=True)
         logits_tt, kv_c, dn_c, cv_c = cache["captured"]
         logits_cpu = self._gather_logits_to_cpu(logits_tt)
@@ -507,6 +512,12 @@ class Qwen36Generator:
 
         # 2. Build the persistent device input tensors OUTSIDE the trace.
         device_inputs = self.model.prepare_inputs_decode(input_ids, current_pos, page_table=page_table)
+
+        # T14b.9 step 7: refresh rope_setup's persistent decode cos/sin
+        # buffers via copy_host_to_device_tensor BEFORE the trace begins.
+        # The captured body reads from those buffer addresses; per-step
+        # replay below refreshes them again via the same call.
+        self.model.rope_setup.get_cos_sin_for_decode(current_pos)
 
         # 3. Capture the pure-device forward against those tensor addresses.
         #    Wrap in try/finally so that if ttnn_decode_forward raises

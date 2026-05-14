@@ -127,16 +127,22 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
 
 @pytest.mark.hardware
 @pytest.mark.skip(
-    reason="T14b.9 ~90% done. Two real findings this session: "
-    "(a) DeltaNet _causal_conv1d_fir_mesh leaked conv_state via the no-op "
-    "slice short-circuit (fixed in this commit — eager paths green); "
-    "(b) Qwen36RopeSetup.get_rm_rot_mats's ttnn.embedding output for [1,1] "
-    "indices needs an internal tile-padding write that fires inside the "
-    "trace. Olmo3 and llama_70b_galaxy avoid this by padding position_idxs "
-    "to a tile-aligned shape ([64, 8] / [32, 32]) so the embedding output "
-    "is naturally tile-aligned, then using ttnn.experimental.rotary_embedding_"
-    "llama_fused_qk which accepts ROW_MAJOR cos/sin directly. "
-    "Next session: port that pattern wholesale into apply_partial_rope."
+    reason="T14b.9 — diagnosed but not yet fixed. Bisect localized the "
+    "remaining trace-capture host-write to a single line: "
+    "llama_attention.forward_decode (paged branch) calls "
+    "ttnn.to_memory_config(k_rot, height_shard_cfg) to convert k_rot/v_t "
+    "from DRAM_INTERLEAVED to L1_HEIGHT_SHARDED before paged_update_cache. "
+    "That DRAM→sharded transition requires per-device CB descriptor setup "
+    "= 1 host-write per device = 32 writes per attention layer (33 total "
+    "with the cascade). ttnn.interleaved_to_sharded fires the same writes. "
+    "Verified clean: DeltaNet decode (3 layers), token embedding, RoPE "
+    "(via persistent _cos_decode_buf + Generator-side copy_h2d hoist), "
+    "norm + LM head. Only the full_attention layer's DRAM→sharded "
+    "transition is left. The 70B-galaxy/olmo3 path AVOIDS this by "
+    "producing K/V already sharded via the custom CCL+create_heads op "
+    "self.tt_ccl.llama_rs_create_heads. Porting that pattern requires "
+    "wiring up the tt_ccl object and a fused-RS+create_heads op — "
+    "substantial multi-file refactor."
 )
 def test_paged_decode_trace_parity_4layer(mesh_8x4):
     """T14b.9: paged decode trace replay produces same logits as eager paged decode.
