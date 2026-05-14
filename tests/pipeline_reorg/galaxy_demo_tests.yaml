@@ -48,7 +48,7 @@
   model: motif
   skus:
     wh_galaxy_perf:
-      timeout: 15
+      timeout: 35
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
 
