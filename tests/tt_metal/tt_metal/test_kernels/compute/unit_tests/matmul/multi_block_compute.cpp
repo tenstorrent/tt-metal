@@ -21,10 +21,10 @@ void kernel_main() {
     const uint32_t num_blocks = get_compile_time_arg_val(10);
     const uint32_t last_block_id = num_blocks - 1;
 
-    experimental::CircularBuffer cb0(in0_cb);
-    experimental::CircularBuffer cb1(in1_cb);
-    experimental::CircularBuffer cb_partials(partials_cb);
-    experimental::CircularBuffer cb_out(out_cb);
+    CircularBuffer cb0(in0_cb);
+    CircularBuffer cb1(in1_cb);
+    CircularBuffer cb_partials(partials_cb);
+    CircularBuffer cb_out(out_cb);
 
     // we are looking at block
     // out = in0[r x k]*in1[k x c]

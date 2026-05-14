@@ -70,6 +70,7 @@ set(SOURCES
     ops/layernorm_bw_fused_op_test.cpp
     ops/layernorm_fw_fused_op_test.cpp
     ops/swiglu_op_test.cpp
+    ops/moe_ffn_swiglu_op_test.cpp
     ops/binary_ops_fw_test.cpp
     ops/binary_ops_bw_test.cpp
     utils/memory_utils_test.cpp
@@ -155,14 +156,13 @@ target_link_libraries(
         TTNN::TTNN
 )
 
-add_executable(polynorm_fusion_benchmark benchmark/polynorm_fusion_benchmark.cpp)
+add_executable(moe_ffn_swiglu_benchmark benchmark/moe_ffn_swiglu_benchmark.cpp)
 target_link_libraries(
-    polynorm_fusion_benchmark
+    moe_ffn_swiglu_benchmark
     PUBLIC
         ttml
         TTNN::TTNN
 )
-
 ############################################################################################################################
 # Benchmark tests (using Google Benchmark)
 # Only available when building via tt-metal (Build from tt-train would require adding new dependency)
@@ -174,6 +174,7 @@ if(TARGET benchmark::benchmark)
         benchmark/from_vector_benchmark.cpp
         benchmark/adamw_benchmark.cpp
         benchmark/frobenius_normalize_benchmark.cpp
+        benchmark/polynorm_fusion_benchmark.cpp
     )
 
     foreach(BENCH_SRC ${BENCHMARK_SOURCES})

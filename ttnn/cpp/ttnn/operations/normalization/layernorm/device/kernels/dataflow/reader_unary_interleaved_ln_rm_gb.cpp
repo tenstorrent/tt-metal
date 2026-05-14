@@ -7,10 +7,10 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "api/dataflow/endpoints.h"
 
 namespace generic = norm::kernel_util::generic;
 
@@ -29,16 +29,16 @@ void kernel_main() {
     constexpr uint32_t cb_id_gamma = get_named_compile_time_arg_val("cb_gamma");
     constexpr uint32_t cb_id_beta = get_named_compile_time_arg_val("cb_beta");
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in0(cb_id_in0);
+    Noc noc;
+    CircularBuffer cb_in0(cb_id_in0);
 #ifdef FUSE_PRE_ADD
-    experimental::CircularBuffer cb_in1(cb_id_in1);
+    CircularBuffer cb_in1(cb_id_in1);
 #endif
 #ifdef FUSE_GAMMA
-    experimental::CircularBuffer cb_gamma(cb_id_gamma);
+    CircularBuffer cb_gamma(cb_id_gamma);
 #endif
 #ifdef FUSE_BETA
-    experimental::CircularBuffer cb_beta(cb_id_beta);
+    CircularBuffer cb_beta(cb_id_beta);
 #endif
 
     // ublocks size defined in tiles
@@ -124,7 +124,7 @@ void kernel_main() {
 #ifdef FUSE_GAMMA
                 {
                     cb_gamma.reserve_back(block.full_block_size());
-                    experimental::UnicastEndpoint local_ep;
+                    UnicastEndpoint local_ep;
                     uint32_t idx = 0;
                     for (auto r : block.local()) {
                         noc.async_read(
@@ -152,7 +152,7 @@ void kernel_main() {
 #ifdef FUSE_BETA
                 {
                     cb_beta.reserve_back(block.full_block_size());
-                    experimental::UnicastEndpoint local_ep;
+                    UnicastEndpoint local_ep;
                     uint32_t idx = 0;
                     for (auto r : block.local()) {
                         noc.async_read(

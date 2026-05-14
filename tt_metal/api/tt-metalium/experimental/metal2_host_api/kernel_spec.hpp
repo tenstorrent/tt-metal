@@ -123,7 +123,7 @@ struct KernelSpec {
     // Kernel compiler options
     ///////////////////////////////////////////////////////////////////
     struct CompilerOptions {
-        using IncludePaths = std::vector<std::string>;
+        using IncludePaths = std::vector<std::filesystem::path>;
         using Defines = std::vector<std::pair<std::string, std::string>>;
         using OptLevel = tt::tt_metal::KernelBuildOptLevel;
 
@@ -146,7 +146,7 @@ struct KernelSpec {
         DFBSpecName dfb_spec_name;        // identify the DFB within the ProgramSpec
         std::string local_accessor_name;  // DFB accessor name (used in the kernel source code)
         DFBEndpointType endpoint_type;    // producer, consumer, or relay
-        DFBAccessPattern access_pattern;  // strided, all, or blocked
+        DFBAccessPattern access_pattern = DFBAccessPattern::STRIDED;  // strided, all, or blocked
     };
     std::vector<DFBBinding> dfb_bindings;
 

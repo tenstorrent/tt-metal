@@ -548,14 +548,6 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // A Program needs at least one kernel
     TT_FATAL(!spec.kernels.empty(), "A ProgramSpec must have at least one KernelSpec");
 
-    // Validate no unimplemented compiler options are used
-    for (const auto& kernel : spec.kernels) {
-        TT_FATAL(
-            kernel.compiler_options.include_paths.empty(),
-            "KernelSpec '{}' specifies include_paths -- this feature is not yet implemented. (Coming soon!)",
-            kernel.unique_id);
-    }
-
     // Validate no per-node thread maps are used (not yet implemented)
     for (const auto& kernel : spec.kernels) {
         TT_FATAL(
@@ -760,6 +752,19 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 TT_FATAL(false, "Unknown architecture");
             }
         }
+    }
+
+    // Validate per-DFB sizing: entry_size and num_entries must be set to non-zero values.
+    // (Sizes may still be overridden at runtime via ProgramRunParams, but a ProgramSpec value is required.)
+    for (const auto& dfb : spec.dataflow_buffers) {
+        TT_FATAL(
+            dfb.entry_size > 0,
+            "DataflowBufferSpec '{}' has entry_size = 0. entry_size must be set to a non-zero value.",
+            dfb.unique_id);
+        TT_FATAL(
+            dfb.num_entries > 0,
+            "DataflowBufferSpec '{}' has num_entries = 0. num_entries must be set to a non-zero value.",
+            dfb.unique_id);
     }
 
     // Validate local DFB endpoint placement:
@@ -1589,6 +1594,7 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_arg_bindings),
         .opt_level = kernel_spec.compiler_options.opt_level,
+        .compiler_include_paths = kernel_spec.compiler_options.include_paths,
     };
 }
 
@@ -1654,6 +1660,7 @@ ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBName
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_arg_bindings),
         .opt_level = kernel_spec.compiler_options.opt_level,
+        .compiler_include_paths = kernel_spec.compiler_options.include_paths,
     };
 }
 
@@ -1671,6 +1678,7 @@ experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(cons
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_arg_bindings),
         .is_legacy_kernel = false,
         .opt_level = kernel_spec.compiler_options.opt_level,
+        .compiler_include_paths = kernel_spec.compiler_options.include_paths,
     };
 }
 
@@ -1698,6 +1706,7 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_arg_bindings),
         .opt_level = kernel_spec.compiler_options.opt_level,
+        .compiler_include_paths = kernel_spec.compiler_options.include_paths,
     };
 }
 
