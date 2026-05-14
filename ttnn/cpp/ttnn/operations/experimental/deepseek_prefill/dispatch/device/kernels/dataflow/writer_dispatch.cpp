@@ -194,7 +194,7 @@ void kernel_main() {
         // Debug guard: distance is bounded by max manhattan distance across the mesh.
         // Garbage values (stale-cache reads from CB-slot reuse) tend to be huge integers;
         // stall here so triage can identify the bad-distance hang location.
-        if (distance == 0 || distance > 1) {
+        if (distance == 0 || distance > 8) {
             while (true);
         }
         // Send payload
