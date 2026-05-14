@@ -345,7 +345,7 @@ def prepare_gpt_oss_generator_args(
             1,  # repeat_batches
             4 * 1024,  # max_seq_len
             200,  # max_generated_tokens
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 6 * 32},  # 6 blocks/user × 32 users = 192
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
             True,  # enable_decode_trace
             True,  # enable_prefill_trace
