@@ -60,7 +60,7 @@ namespace ckernel {
 template <bool out_of_order_output = false>
 ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_index = 0) {
 #ifndef ARCH_QUASAR
-    PACK((llk_pack<DST_ACCUM_MODE, out_of_order_output, false>(ifrom_dst, icb, output_tile_index)));
+    PACK((llk_pack<DST_ACCUM_MODE, out_of_order_output, PackMode::Default>(ifrom_dst, icb, output_tile_index)));
 #else
     PACK((llk_pack<out_of_order_output>(ifrom_dst, icb, output_tile_index)));
 #endif
@@ -100,7 +100,7 @@ ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_
 // clang-format on
 ALWI void pack_tile_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
 #ifndef ARCH_QUASAR
-    PACK((llk_matmul_pack<DST_ACCUM_MODE, false, false>(ifrom_dst, icb, ntiles)));
+    PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
 #else
     PACK((llk_pack_block(ifrom_dst, icb, ntiles)));
 #endif
@@ -129,11 +129,7 @@ ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
 #ifndef ARCH_QUASAR
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(new_cb_id)));
     if constexpr (is_tile_dim_reconfig_en) {
-        PACK((llk_pack_init<
-              false /* untilize */,
-              false /* zero_output */,
-              false /* tilize */,
-              true /* skip_addrmod_config */>(new_cb_id)));
+        PACK((llk_pack_init<PackMode::Default, false, true /* skip_addrmod_config */>(new_cb_id)));
     }
 #endif  // TODO: AM; add Quasar implementation
 }
@@ -164,11 +160,7 @@ ALWI void pack_reconfig_data_format(const uint32_t old_cb_id, const uint32_t new
 #ifndef ARCH_QUASAR
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(old_cb_id, new_cb_id)));
     if constexpr (is_tile_dim_reconfig_en) {
-        PACK((llk_pack_init<
-              false /* untilize */,
-              false /* zero_output */,
-              false /* tilize */,
-              true /* skip_addrmod_config */>(new_cb_id)));
+        PACK((llk_pack_init<PackMode::Default, false, true /* skip_addrmod_config */>(new_cb_id)));
     }
 #endif  // TODO: AM; add Quasar implementation
 }

@@ -50,10 +50,10 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
           DataCopyType::A2D,
           DST_ACCUM_MODE,
           BroadcastType::NONE,
-          false /*is_int_en*/,
-          true /*tilize en*/>(icb)));
+          PackMode::Tilize,
+          false /*is_int_en*/>(icb)));
 #ifdef ARCH_BLACKHOLE
-    PACK((llk_pack_init<false /*untilize*/, false /*zero output*/, true /*tilize en*/>(ocb, 1, icb)));
+    PACK((llk_pack_init<PackMode::Tilize, false>(ocb, 1, icb)));
 #endif
 #else
     // TODO(SK) #42757: Quasar unpack tilize could issue block_ct_dim tiles per MOP invocation, but scheduling
@@ -105,7 +105,7 @@ ALWI void tilizeA_B_reduce_init(
 
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>(ocb)));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>(ocb)));
 }
 #endif
 
@@ -128,8 +128,8 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
           DataCopyType::A2D,
           DST_ACCUM_MODE,
           BroadcastType::NONE,
-          false /*is_int_en*/,
-          true /*tilize en*/>(new_icb)));
+          PackMode::Tilize,
+          false /*is_int_en*/>(new_icb)));
     // This reconfig call checks if old operand has different data format to
     // new operand idx, otherwise no reconfig call occurs
     UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(old_icb, new_icb)));
@@ -137,7 +137,7 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
     UNPACK((llk_unpack_tilize_init(new_icb, block)));
 
 #ifdef ARCH_BLACKHOLE
-    PACK((llk_pack_init<false, false, true /*tilize en*/>(ocb, 1, new_icb)));
+    PACK((llk_pack_init<PackMode::Tilize, false>(ocb, 1, new_icb)));
 #endif
 }
 #endif  // !ARCH_QUASAR
@@ -170,7 +170,7 @@ ALWI void tilize_block(
         // Datacopy
         MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
             0 /*dst index*/, icb)));
-        PACK((llk_pack<DST_ACCUM_MODE, true, false>(0 /*tile index*/, ocb, t + output_tile_index)));
+        PACK((llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(0 /*tile index*/, ocb, t + output_tile_index)));
 #else
         MATH((llk_math_eltwise_unary_datacopy(0 /*dst index*/, icb)));
         PACK((llk_pack<true /*out_of_order*/>(0 /*tile index*/, ocb, t + output_tile_index)));
@@ -237,7 +237,7 @@ ALWI void unpack_tilizeA_B_block(
 ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
     UNPACK((llk_unpack_tilize_uninit(icb)));
 #ifdef ARCH_BLACKHOLE
-    PACK((llk_pack_init<false /*untilize*/, false /*zero output*/, false /*tilize en*/>(ocb)));
+    PACK((llk_pack_init<PackMode::Default>(ocb)));
 #endif
 }
 

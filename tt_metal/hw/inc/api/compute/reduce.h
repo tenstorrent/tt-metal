@@ -68,7 +68,7 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb, uint32_t 
         MATH((tensix_sync()));
         MATH((reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11)));
     }
-    PACK((llk_pack_reduce_mask_config<false /*untilize*/, reduce_dim>()));
+    PACK((llk_pack_reduce_mask_config<reduce_dim, PackMode::Default>()));
 #else
     UNPACK((llk_unpack_AB_reduce_init<reduce_dim>(icb, icb_scaler)));
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, MATH_FIDELITY>(icb)));

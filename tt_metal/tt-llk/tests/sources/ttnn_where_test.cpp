@@ -90,7 +90,7 @@ void run_kernel(RUNTIME_PARAMETERS)
     }
 
     // copy srca to dest
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* tilize */, false /* is_int_fpu_en */>(
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, PackMode::Default, false /* is_int_fpu_en */>(
         4 /* num_faces */, MATH_FMT);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(MATH_FMT, MATH_FMT);
@@ -148,14 +148,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PACK_FMT = to_ufmt(DataFormat::UInt16);
     }
 
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false /* untilize */, false /* tilize */>(PACK_FMT, PACK_FMT, 16 * 16 * 4 /* tile_size */);
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(PACK_FMT, PACK_FMT, 16 * 16 * 4 /* tile_size */);
 
-    _llk_pack_init_wrapper_<false /* untilize */, false /* zero_output */>(PACK_FMT);
+    _llk_pack_init_wrapper_<PackMode::Default, false>(PACK_FMT);
 
-    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, false /* untilize */>();
+    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>();
 
     _llk_packer_wait_for_math_done_();
-    _llk_pack_<DstSync::SyncHalf, false, is_fp32_dest_acc_en>(0, L1_ADDRESS(params.buffer_Res[0]));
+    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, L1_ADDRESS(params.buffer_Res[0]));
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 

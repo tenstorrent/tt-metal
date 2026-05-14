@@ -34,8 +34,8 @@ ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transp
           DataCopyType::A2D,
           DST_ACCUM_MODE,
           BroadcastType::NONE,
-          false,  // is_int_fpu_en
-          false   // tilize
+          PackMode::Default,
+          false  // is_int_fpu_en
           >(cbid)));
 }
 
