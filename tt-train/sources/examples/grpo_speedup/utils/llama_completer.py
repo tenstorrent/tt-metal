@@ -15,6 +15,82 @@ import ttml
 from ttml.common.config import DeviceConfig
 
 
+def _bf16_decoders_precision(num_decoders: int, model_name: str) -> Any:
+    """Build a hybrid ``DecodersPrecision``: BF16 attention + KV cache, BFP8 MLP.
+
+    Motivation: on Blackhole P100 with Llama-3.2-1B (``head_dim=64``), the
+    upstream ``DecodersPrecision.accuracy`` Llama-3 path leaves WQKV / WO /
+    KV_CACHE at BFP8, and the per-token BFP8 quantization in the KV cache
+    accumulates over generation steps into incoherent output ("fluent word
+    salad"). Bumping those three tensors to BF16 stops the per-token
+    compounding drift.
+
+    Promoting MLP weights (``FF1_FF3`` / ``FF2``) to BF16 as well overflows
+    L1 on P100: the BF16 weight CB is ~2x the BFP8 one, and any fidelity
+    setting that gives fp32 destination accumulation (HIFI2 / HIFI2_NOL1ACC
+    / HIFI4) further inflates the output CB by 2x. Empirically neither
+    HIFI2 nor HIFI2_NOL1ACC fits, so we keep the MLP at BFP8 + HIFI2_FP16
+    -- exactly the upstream Llama-3 default. The MLP has no across-token
+    state (no cache), so its BFP8 quantization noise does not compound;
+    it only contributes per-layer drift, which is identical to the
+    Wormhole / N150 baseline that already produces coherent output for
+    this model.
+
+    Every TensorPrecision and every OpFidelity entry is written out
+    explicitly (no implicit fall-through to ``ModelOptimizations`` defaults)
+    so that future changes to upstream defaults cannot silently shift this
+    profile.
+
+    Compared to ``DecodersPrecision.accuracy`` for Llama-3 the only deltas
+    are the three BF16 attention tensors and the six HIFI4 attention
+    fidelities.
+    """
+    from models.tt_transformers.tt.model_config import (
+        DecodersPrecision,
+        MathFidelitySetting,
+        ModelOptimizations,
+        OpGroup,
+        PrecisionSetting,
+        TensorGroup,
+    )
+
+    conf = ModelOptimizations(
+        {
+            "TensorPrecision": {
+                # MLP weights stay BFP8 to fit L1; MLP has no across-token
+                # state so BFP8 noise does not compound.
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                TensorGroup.FF2: PrecisionSetting.BFP8,
+                # Attention weights and KV cache are BF16; the KV cache
+                # bump in particular kills the per-token compounding drift.
+                TensorGroup.WQKV: PrecisionSetting.BF16,
+                TensorGroup.WO: PrecisionSetting.BF16,
+                TensorGroup.KV_CACHE: PrecisionSetting.BF16,
+            },
+            "OpFidelity": {
+                # MLP fidelity matches the upstream Llama-3 default. With
+                # BFP8 weights the FP16 destination accumulator is safe
+                # (BFP8's shared-exponent representation compresses the
+                # dynamic range that would otherwise overflow fp16).
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2_FP16,
+                OpGroup.LI_FF2: MathFidelitySetting.HIFI2_FP16,
+                # Attention runs at HIFI4 so the matmul math actually
+                # consumes the full BF16 mantissa we just stored above.
+                OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI4,
+                OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI4,
+                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4,
+                OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI4,
+                OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI4,
+            },
+        }
+    )
+    conf.__name__ = "bf16_attn_bfp8_mlp"
+    inst = DecodersPrecision(num_decoders, model_name, decoder_conf=conf)
+    inst.__name__ = "bf16_attn_bfp8_mlp"
+    return inst
+
+
 class LlamaGRPOCompleter:
     """Llama completer backed by a tt-transformers ``Transformer``.
 
@@ -54,9 +130,24 @@ class LlamaGRPOCompleter:
         *,
         max_seq_len: int = 2048,
         instruct: bool = True,
-        dtype: Any = None,
     ) -> None:
         """Open the device and build the tt-transformers ``ModelArgs``.
+
+        Precision profile is hybrid (see :func:`_bf16_decoders_precision`):
+
+          * Attention weights (WQKV / WO) and KV cache are bf16 with
+            HIFI4 attention math -- this is what stops the per-token
+            compounding drift seen on Blackhole P100 with BFP8 KV cache.
+          * MLP weights (FF1 / FF3 / FF2) stay BFP8 with HIFI2_FP16
+            math because BF16 MLP weights overflow L1 on P100.
+          * LM-head weights and matmul output, and CCL collectives,
+            are forced to ``ttnn.bfloat16`` via post-construction
+            overrides on ``ModelArgs``. The embedding and RMSNorm
+            weights are already hardcoded to bf16 inside ``Transformer``.
+
+        There is intentionally no ``dtype`` knob: mixed bfp8/bf4 modes
+        are handled by other completers and add reproducibility risk in
+        GRPO loops.
 
         Args:
             device_config: Mesh / device configuration.
@@ -69,15 +160,11 @@ class LlamaGRPOCompleter:
             max_seq_len: Max sequence length the ``Transformer`` will support.
             instruct: Whether to use the instruct chat template in
                 ``ModelArgs``.
-            dtype: ttnn weight dtype. Defaults to ``ttnn.bfloat8_b``.
         """
         import torch
 
         from models.tt_transformers.tt.common import PagedAttentionConfig
-        from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
-
-        if dtype is None:
-            dtype = ttnn.bfloat8_b
+        from models.tt_transformers.tt.model_config import ModelArgs
 
         self._mesh_device: Any = self.setup_device(device_config)
         self._model_source: str = model_source
@@ -85,17 +172,27 @@ class LlamaGRPOCompleter:
         # ``ModelArgs`` reads the model id from the env var.
         os.environ["HF_MODEL"] = model_source
 
-        self._dtype: Any = dtype
+        self._dtype: Any = ttnn.bfloat16
         self._max_batch_size: int = max_batch_size
 
         self._model_args = ModelArgs(
             self._mesh_device,
             instruct=instruct,
             max_batch_size=max_batch_size,
-            optimizations=lambda ma: DecodersPrecision.accuracy(ma.n_layers, ma.model_name),
+            optimizations=lambda ma: _bf16_decoders_precision(ma.n_layers, ma.model_name),
             max_seq_len=max_seq_len,
             cache_hf=True,
         )
+        # Override the two ``ModelArgs`` defaults that are not reachable via
+        # ``DecodersPrecision``:
+        #   * ``lm_head_dtype`` controls the LM-head matmul *output* dtype
+        #     (defaults to ``ttnn.bfloat8_b`` when the attribute is missing —
+        #     see ``models/tt_transformers/tt/lm_head.py``).
+        #   * ``ccl_dtype`` is the dtype used by cross-device collectives
+        #     (defaults to ``ttnn.bfloat8_b``). Inert on a single device but
+        #     keeps multi-device runs in bf16 end-to-end.
+        self._model_args.lm_head_dtype = ttnn.bfloat16
+        self._model_args.ccl_dtype = ttnn.bfloat16
         # Reuse the tokenizer created by ModelArgs so stop tokens and
         # fallbacks match simple_text_demo / tt-transformers behavior.
         self._tokenizer: Any = self._model_args.tokenizer

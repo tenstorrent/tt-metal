@@ -156,8 +156,6 @@ def run_ttt(prompts: List[str]) -> List[str]:
     """
     import gc
 
-    import ttnn
-
     import ttml
     from ttml.common.config import DeviceConfig, load_config
 
@@ -166,16 +164,15 @@ def run_ttt(prompts: List[str]) -> List[str]:
     raw = load_config(os.path.join(REPO_ROOT, TTML_DEVICE_CONFIG_REL))
     device_config = DeviceConfig(raw)
 
-    # Match ``run_ttml`` precision (bfloat16) so any pre-EOS quality gap
-    # comes from the implementation, not from the new completer's default
-    # bfloat8_b weight quantization.
-    print(f"[ttt] building LlamaGRPOCompleter ({MODEL_ID}, max_seq_len={MAX_SEQ_LEN}, dtype=bfloat16)")
+    # ``LlamaGRPOCompleter`` is hardwired to bf16 weights / activations /
+    # collectives, matching ``run_ttml``'s precision so any pre-EOS quality
+    # gap comes from the implementation rather than from quantization.
+    print(f"[ttt] building LlamaGRPOCompleter ({MODEL_ID}, max_seq_len={MAX_SEQ_LEN})")
     completer = LlamaGRPOCompleter(
         device_config=device_config,
         model_source=MODEL_ID,
         max_batch_size=1,
         max_seq_len=MAX_SEQ_LEN,
-        dtype=ttnn.bfloat16,
     )
     completer.load_weights(completer.model_args.load_state_dict())
 

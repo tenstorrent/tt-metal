@@ -40,7 +40,7 @@ sys.path.insert(0, str(REPO_ROOT))
 # Configuration
 # ---------------------------------------------------------------------------
 
-MODEL_ID = "TinyLlama/TinyLlama_v1.1_math_code"
+MODEL_ID = "meta-llama/Llama-3.2-1b-instruct"
 TTML_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1dev.yaml"
 
 PROMPT = "Q: A train travels at 60 mph for 2.5 hours. How far does it go?\nA:"
