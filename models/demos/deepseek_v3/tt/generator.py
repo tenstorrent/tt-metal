@@ -296,6 +296,9 @@ class DeepseekGenerator(WarmupForwardMixin):
         self._mtp_predict_trace_page_table: ttnn.Tensor | None = None
         self._sampling_trace_logits_device: ttnn.Tensor | None = None
         self._sampling_trace_logits_host: ttnn.Tensor | None = None
+        self._prefill_tokens_device_buffer: ttnn.Tensor | None = None
+        self._prefill_tokens_device_buffer_seq_len: int | None = None
+        self._prefill_rope_tensors_cache: dict[int, dict[str, ttnn.Tensor]] = {}
         self.enable_trace = enable_trace
         self.enable_mem_profile = enable_mem_profile
         self.signpost = signpost
@@ -354,7 +357,8 @@ class DeepseekGenerator(WarmupForwardMixin):
         )
 
         if sample_on_device:
-            self._sample_tokens_device(decode_logits, enable_trace=enable_trace)
+            # warmup flow precompiles the sampling path when tracing. Skip precompile within sampling module to avoid double precompile.
+            self._sample_tokens_device(decode_logits, enable_trace=enable_trace, skip_precompile=True)
         else:
             self._sample_on_host(decode_logits)
 
@@ -790,6 +794,23 @@ class DeepseekGenerator(WarmupForwardMixin):
             if self._sampling_trace_logits_host is not None:
                 ttnn.deallocate(self._sampling_trace_logits_host)
                 del self._sampling_trace_logits_host
+            if self._prefill_tokens_device_buffer is not None:
+                ttnn.deallocate(self._prefill_tokens_device_buffer)
+                del self._prefill_tokens_device_buffer
+            self._prefill_tokens_device_buffer_seq_len = None
+            if self._prefill_rope_tensors_cache:
+                released_rope_keys: set[int] = set()
+                for rope_tensors in self._prefill_rope_tensors_cache.values():
+                    for key in ("cos_matrix", "sin_matrix"):
+                        tensor = rope_tensors.get(key)
+                        if tensor is None:
+                            continue
+                        tensor_key = self._tensor_buffer_key(tensor)
+                        if tensor_key in released_rope_keys:
+                            continue
+                        released_rope_keys.add(tensor_key)
+                        ttnn.deallocate(tensor)
+                self._prefill_rope_tensors_cache.clear()
         except Exception as e:
             logger.warning(f"Failed to cleanup trace state: {e}")
 
@@ -894,6 +915,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         logits: ttnn.Tensor,
         enable_trace: bool = False,
         user_slots: list[int] | None = None,
+        skip_precompile: bool = False,
     ) -> ttnn.Tensor:
         sampling_batch_size = self.sampling_generator.tt_sampling.max_batch_size
         sampling_logits = logits
@@ -939,7 +961,9 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.sampling_generator.seed_manager.get_new_values(user_slots)
         self.sampling_generator.enable_internal_trace = enable_trace
         try:
-            tt_out = self.sampling_generator.sample(sampling_logits, enable_trace=enable_trace)
+            tt_out = self.sampling_generator.sample(
+                sampling_logits, enable_trace=enable_trace, skip_precompile=skip_precompile
+            )
         finally:
             if sampling_logits is not logits:
                 if sampling_logits is not self._sampling_trace_logits_device:
@@ -953,6 +977,48 @@ class DeepseekGenerator(WarmupForwardMixin):
             tt_out = tt_tokens
 
         return tt_out
+
+    def _ensure_prefill_token_device_buffer(self, seq_len: int) -> None:
+        if seq_len <= 0:
+            raise ValueError(f"Prefill token buffer seq_len must be > 0, got {seq_len}")
+
+        if self._prefill_tokens_device_buffer is not None and self._prefill_tokens_device_buffer_seq_len == seq_len:
+            logger.info(f"Prefill token device buffer already exists for seq_len: {seq_len}")
+            return
+
+        if self._prefill_tokens_device_buffer is not None:
+            ttnn.deallocate(self._prefill_tokens_device_buffer)
+            self._prefill_tokens_device_buffer = None
+            self._prefill_tokens_device_buffer_seq_len = None
+
+        # Materialize exact tensor spec once, then keep a reusable device buffer.
+        spec_tensor = ttnn.from_torch(
+            torch.zeros((1, 1, seq_len), dtype=torch.int32),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=None,
+        )
+        try:
+            self._prefill_tokens_device_buffer = ttnn.allocate_tensor_on_device(spec_tensor.spec, self.mesh_device)
+            self._prefill_tokens_device_buffer_seq_len = seq_len
+            logger.info(f"Prefill token device buffer created for seq_len: {seq_len}")
+        finally:
+            ttnn.deallocate(spec_tensor)
+
+    def _get_prefill_rope_tensors(self, seq_len: int) -> dict[str, ttnn.Tensor]:
+        cached = self._prefill_rope_tensors_cache.get(seq_len)
+        if cached is not None:
+            return cached
+
+        rot_mats = self.rope_setup.get_rot_mats_table(seq_len)
+        rope_tensors = {
+            "cos_matrix": rot_mats["cos_matrix"],
+            "sin_matrix": rot_mats["sin_matrix"],
+            "trans_matrix": rot_mats["trans_matrix"],
+        }
+        self._prefill_rope_tensors_cache[seq_len] = rope_tensors
+        return rope_tensors
 
     def _tokens_from_device(self, tt_out_tok, mesh_device, batch_size_per_row: int) -> torch.Tensor:
         composed = ttnn.to_torch(
@@ -1047,7 +1113,10 @@ class DeepseekGenerator(WarmupForwardMixin):
 
     def _get_page_tables(self) -> tuple[ttnn.Tensor, ...]:
         if hasattr(self, "page_tables_tt") and self.page_tables_tt is not None:
+            logger.info(f"Returning page tables from cache")
             return self.page_tables_tt
+
+        logger.info(f"Creating page tables")
 
         assert hasattr(self, "paged_config") and self.paged_config is not None
         assert hasattr(self, "mesh_device") and self.mesh_device is not None
@@ -2019,17 +2088,17 @@ class DeepseekGenerator(WarmupForwardMixin):
                         continue
                     logger.info(f"Running prefill for user_id: {user_id}")
                     prompt_len = int(lengths[user_id].item())
-                    logger.info(
-                        "Input to the prefill: "
-                        + (
-                            self.tokenizer.decode(
-                                tokens_batched[user_id][:prompt_len].tolist(),
-                                skip_special_tokens=True,
-                            )
-                            if self.tokenizer is not None
-                            else str(tokens_batched[user_id][:prompt_len].tolist())
-                        )
-                    )
+                    # logger.info(
+                    #     "Input to the prefill: "
+                    #     + (
+                    #         self.tokenizer.decode(
+                    #             tokens_batched[user_id][:prompt_len].tolist(),
+                    #             skip_special_tokens=True,
+                    #         )
+                    #         if self.tokenizer is not None
+                    #         else str(tokens_batched[user_id][:prompt_len].tolist())
+                    #     )
+                    # )
                     if use_mtp_path:
                         assert last_logits is not None
                         user_out, last_hidden = self._prefill(
@@ -2044,19 +2113,29 @@ class DeepseekGenerator(WarmupForwardMixin):
                         last_logits.append(user_out[0, 0, prompt_len - 1, :])
                     else:
                         assert prefill_tokens is not None
+                        logger.info(f"Calling _prefill on host for user_id: {user_id}")
                         prefill_logits = self._prefill(
                             tokens_batched[user_id], user_id=user_id, sample_on_device=self.sample_on_device
                         )
+                        logger.info(f"Prefill logits for user_id: {user_id} shape: {prefill_logits.shape}")
                         assert prefill_logits is not None
                         if self.sample_on_device:
+                            logger.info(f"Slicing last token logits for user_id: {user_id}")
                             prefill_logits = self._slice_last_token_logits(
                                 prefill_logits, prompt_len, expand_to_batch=True
                             )
+                            logger.info(f" Sampled prefill logits for user_id: {user_id} shape: {prefill_logits.shape}")
                             prefill_logits_sampled_device = self._sample_tokens_device(
-                                prefill_logits, user_slots=[user_id]
+                                prefill_logits, user_slots=[user_id], skip_precompile=True
+                            )
+                            logger.info(
+                                f"Sampled prefill logits for user_id: {user_id} shape: {prefill_logits_sampled_device.shape}"
                             )
                             prefill_logits_sampled_host = self._tokens_from_device(
                                 prefill_logits_sampled_device, self.mesh_device, batch_size_per_row=1
+                            )
+                            logger.info(
+                                f"Sampled prefill logits for user_id: {user_id} shape: {prefill_logits_sampled_host.shape}"
                             )
                             pred_token = int(prefill_logits_sampled_host[0].item())
                             ttnn.deallocate(prefill_logits)
@@ -2065,6 +2144,9 @@ class DeepseekGenerator(WarmupForwardMixin):
                             assert isinstance(
                                 prefill_logits, torch.Tensor
                             ), "prefill_logits should be a torch.Tensor on host"
+                            logger.info(
+                                f"Sampling on host prefill logits for user_id: {user_id} shape: {prefill_logits.shape}"
+                            )
                             last_token_logits = prefill_logits[0, 0, max(prompt_len - 1, 0), :]
                             pred_token = int(
                                 self._sample_on_host(last_token_logits.unsqueeze(0), start_user_idx=user_id).item()
@@ -2219,7 +2301,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                         self.ccl.reset_sem_counters()
                         if self.sample_on_device:
                             pred_tokens_device = self._sample_tokens_device(
-                                decode_logits, enable_trace=self.enable_trace
+                                decode_logits, enable_trace=self.enable_trace, skip_precompile=True
                             )
                             pred_tokens = self._tokens_from_device(
                                 pred_tokens_device, self.mesh_device, batch_size_per_row=self.batch_size_per_row
@@ -2460,26 +2542,30 @@ class DeepseekGenerator(WarmupForwardMixin):
                 seq_len = padded_seq_len
 
         # Prepare TT inputs for prefill - reshape to [1, 1, actual_seq_len]
-        tt_tokens = ttnn.from_torch(
+        self._ensure_prefill_token_device_buffer(seq_len)
+        logger.info(f"copying prefill tokens into preallocated device tensor for user_id: {user_id}")
+        host_tokens = ttnn.from_torch(
             tokens,
-            device=self.mesh_device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             dtype=ttnn.uint32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=None,
         )
+        assert self._prefill_tokens_device_buffer is not None
+        logger.info(f"copying prefill tokens from host to device for user_id: {user_id}")
+        ttnn.copy_host_to_device_tensor(host_tokens, self._prefill_tokens_device_buffer)
+        ttnn.deallocate(host_tokens)
+        tt_tokens = self._prefill_tokens_device_buffer
+        logger.info(f"prefill token device tensor for user_id: {user_id} shape: {tt_tokens.shape}")
 
-        rot_mats = self.rope_setup.get_rot_mats_table(seq_len)
-        rope_tensors = {
-            "cos_matrix": rot_mats["cos_matrix"],
-            "sin_matrix": rot_mats["sin_matrix"],
-            "trans_matrix": rot_mats["trans_matrix"],
-        }
+        rope_tensors = self._get_prefill_rope_tensors(seq_len)
 
         if page_table is not None:
             page_tables_to_use = self._convert_vllm_page_table_for_user(page_table, user_id, local_user_id)
         else:
+            logger.info(f"Getting page tables for user_id: {user_id}")
             page_tables_to_use = self._get_page_tables()
+            logger.info(f"Page tables for user_id: {user_id}")
 
         # RowBatchedModel forward prefill
         last_hidden = None
@@ -2493,6 +2579,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                 return_hidden=True,
             )
         else:
+            logger.info(f"Calling RowBatchedModel.forward_prefill for user_id: {user_id}")
             logits_tt = RowBatchedModel.forward_prefill(
                 x=tt_tokens,
                 user_id=user_id,
@@ -2501,7 +2588,9 @@ class DeepseekGenerator(WarmupForwardMixin):
                 page_tables=page_tables_to_use,
             )
             hidden_tt = None
-
+            logger.info(
+                f"RowBatchedModel.forward_prefill for user_id: {user_id} returned logits_tt shape: {logits_tt.shape}"
+            )
         if sample_on_device and return_last_hidden:
             raise ValueError("sample_on_device=True and return_last_hidden=True is not supported.")
 
@@ -2613,8 +2702,6 @@ class DeepseekGenerator(WarmupForwardMixin):
 
             ttnn.deallocate(hidden_tt)
 
-        ttnn.deallocate(tt_tokens)
-        self._deallocate_rope_tensors(rope_tensors)
         if not sample_on_device:
             ttnn.deallocate(logits_tt)
         if return_last_hidden:
@@ -3079,6 +3166,8 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         for sample_on_device in sample_on_device_list:
             for token_len in self._get_prefill_warmup_token_lens(min_token_len, max_token_len):
+                self._ensure_prefill_token_device_buffer(token_len)
+                self._get_prefill_rope_tensors(token_len)
                 vocab = int(getattr(self.hf_config, "vocab_size", 129280))
                 warmup_token_ids = [torch.randint(vocab, (token_len,), dtype=torch.int32).tolist()]
                 tokens, _ = self._pad_batch(warmup_token_ids, 1)
@@ -3099,7 +3188,10 @@ class DeepseekGenerator(WarmupForwardMixin):
                     sliced_prefill_logits = self._slice_last_token_logits(
                         prefill_logits, token_len, expand_to_batch=True
                     )
-                    sampled_tokens = self._sample_tokens_device(sliced_prefill_logits, user_slots=[user_id])
+                    # warmup flow precompiles the sampling path when tracing. Skip precompile within sampling module to avoid double precompile.
+                    sampled_tokens = self._sample_tokens_device(
+                        sliced_prefill_logits, user_slots=[user_id], skip_precompile=True
+                    )
                     try:
                         if sampled_tokens is not None:
                             ttnn.deallocate(sampled_tokens)
