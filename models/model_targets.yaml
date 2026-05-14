@@ -77,8 +77,38 @@ targets:
         entries:
           - batch_size: 1
             seq_len: 131072
-            status: TODO
-            perf: {}
+            status: active
+            perf:
+              # Calibrated from run 25828360727 (job 75888432264).
+              prefill_time_to_first_token: 151.0
+              prefill_tolerance: 1.15
+              decode_t/s/u: 6.39
+              decode_t/s: 6.39
+              decode_tolerance: 1.15
+            accuracy: {}
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
+          - batch_size: 4
+            seq_len: 4096
+            status: active
+            perf:
+              prefill_time_to_first_token: 28.0
+              prefill_tolerance: 1.15
+              decode_t/s/u: 11.72
+              decode_t/s: 46.89
+              decode_tolerance: 1.15
+            accuracy: {}
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
+          - batch_size: 8
+            seq_len: 4096
+            status: active
+            perf:
+              prefill_time_to_first_token: 28.5
+              prefill_tolerance: 1.15
+              decode_t/s/u: 7.17
+              decode_t/s: 57.36
+              decode_tolerance: 1.15
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
@@ -306,9 +336,31 @@ targets:
       wh_n150:
         entries:
           - batch_size: 1
-            seq_len: null
-            status: TODO
-            perf: {}
+            seq_len: 83
+            status: active
+            perf:
+              # "gemma4" benchmark payloads are shared across Gemma-4 variants on N150.
+              # Values below are calibrated to cover E2B + E4B from run 25828360727.
+              prefill_time_to_first_token: 46030.0
+              prefill_tolerance: 1.15
+              decode_t/s/u: 8.29
+              decode_t/s: 8.29
+              decode_tolerance: 1.15
+            accuracy: {}
+            owner_id: U08TJ70UFRT # Harry Andrews
+            team: models
+      wh_llmbox_perf:
+        entries:
+          - batch_size: 1
+            seq_len: 87
+            status: active
+            perf:
+              # "gemma4" benchmark payloads are shared across Gemma-4 26B/31B on T3K.
+              prefill_time_to_first_token: 74585.0
+              prefill_tolerance: 1.15
+              decode_t/s/u: 9.61
+              decode_t/s: 9.61
+              decode_tolerance: 1.15
             accuracy: {}
             owner_id: U08TJ70UFRT # Harry Andrews
             team: models
@@ -320,9 +372,14 @@ targets:
       wh_n150:
         entries:
           - batch_size: 1
-            seq_len: null
-            status: TODO
-            perf: {}
+            seq_len: 83
+            status: active
+            perf:
+              prefill_time_to_first_token: 45024.0
+              prefill_tolerance: 1.15
+              decode_t/s/u: 8.29
+              decode_t/s: 8.29
+              decode_tolerance: 1.15
             accuracy: {}
             owner_id: U08TJ70UFRT # Harry Andrews
             team: models
@@ -334,9 +391,14 @@ targets:
       wh_llmbox_perf:
         entries:
           - batch_size: 1
-            seq_len: null
-            status: TODO
-            perf: {}
+            seq_len: 87
+            status: active
+            perf:
+              prefill_time_to_first_token: 74585.0
+              prefill_tolerance: 1.15
+              decode_t/s/u: 11.89
+              decode_t/s: 11.89
+              decode_tolerance: 1.15
             accuracy: {}
             owner_id: U08TJ70UFRT # Harry Andrews
             team: models
@@ -348,9 +410,14 @@ targets:
       wh_llmbox_perf:
         entries:
           - batch_size: 1
-            seq_len: null
-            status: TODO
-            perf: {}
+            seq_len: 87
+            status: active
+            perf:
+              prefill_time_to_first_token: 51024.0
+              prefill_tolerance: 1.15
+              decode_t/s/u: 9.61
+              decode_t/s: 9.61
+              decode_tolerance: 1.15
             accuracy: {}
             owner_id: U08TJ70UFRT # Harry Andrews
             team: models
@@ -455,10 +522,27 @@ targets:
     skus:
       wh_llmbox_perf:
         entries:
-          - batch_size: 1
-            seq_len: null
-            status: TODO
-            perf: {}
+          - batch_size: 4
+            seq_len: 4096
+            status: active
+            perf:
+              prefill_time_to_first_token: 28.0
+              prefill_tolerance: 1.15
+              decode_t/s/u: 11.72
+              decode_t/s: 46.89
+              decode_tolerance: 1.15
+            accuracy: {}
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
+          - batch_size: 8
+            seq_len: 4096
+            status: active
+            perf:
+              prefill_time_to_first_token: 28.5
+              prefill_tolerance: 1.15
+              decode_t/s/u: 7.17
+              decode_t/s: 57.36
+              decode_tolerance: 1.15
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
@@ -491,16 +575,35 @@ targets:
       wh_llmbox_perf:
         entries:
           - batch_size: 1
-            seq_len: null
-            status: TODO
-            perf: {}
+            seq_len: 512
+            status: active
+            perf:
+              prefill_t/s: 15.33
+              decode_t/s/u: 28.98
+              decode_t/s: 28.98
+              decode_tolerance: 1.15
+            accuracy: {}
+            owner_id: U03FJB5TM5Y # Colman Glagovich
+            team: models
+          - batch_size: 4
+            seq_len: 512
+            status: active
+            perf:
+              prefill_t/s: 18.75
+              decode_t/s/u: 26.19
+              decode_t/s: 104.75
+              decode_tolerance: 1.15
             accuracy: {}
             owner_id: U03FJB5TM5Y # Colman Glagovich
             team: models
           - batch_size: 32
-            seq_len: 128
-            status: TODO
-            perf: {}
+            seq_len: 512
+            status: active
+            perf:
+              prefill_t/s: 14.78
+              decode_t/s/u: 20.37
+              decode_t/s: 651.74
+              decode_tolerance: 1.15
             accuracy: {}
             owner_id: U03FJB5TM5Y # Colman Glagovich
             team: models
@@ -527,8 +630,13 @@ targets:
         entries:
           - batch_size: 32
             seq_len: 131072
-            status: TODO
-            perf: {}
+            status: active
+            perf:
+              prefill_time_to_first_token: 607.0
+              prefill_tolerance: 1.15
+              decode_t/s/u: 2.5
+              decode_t/s: 2.5
+              decode_tolerance: 1.15
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
