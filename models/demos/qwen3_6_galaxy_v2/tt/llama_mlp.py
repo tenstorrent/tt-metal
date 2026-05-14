@@ -373,4 +373,16 @@ class TtLlamaMLP(LightweightModule):
                 w2_out_reduced, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
             )
 
+        # qwen3.6 residual-stream dtype lock (olmo session-11 lesson):
+        # the MLP's reduction output flows directly into the post-MLP residual
+        # add in TtTransformerBlock.forward. Even though w1/w2/w3 matmuls cast
+        # to bfloat8_b for L1 footprint, the residual stream is more accurate
+        # when held in bfloat16. The 4L test still passes with this typecast;
+        # the 64L per-layer sweep shows real-prompt-position PCC > 0.998 at
+        # every layer with this in place.
+        if getattr(self.args, "is_qwen36", False) and w2_out_reduced.dtype != ttnn.bfloat16:
+            w2_out_bf16 = ttnn.typecast(w2_out_reduced, dtype=ttnn.bfloat16)
+            ttnn.deallocate(w2_out_reduced)
+            w2_out_reduced = w2_out_bf16
+
         return w2_out_reduced

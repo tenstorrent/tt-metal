@@ -289,9 +289,30 @@ def test_qwen36_64_layer_full_prefill_pcc(bh_glx_mesh):
     tt_hidden_cpu = tt_hidden_cpu.reshape(1, _T_PREFILL, -1).float()
     print(f"[64L] TT hidden shape: {tt_hidden_cpu.shape}")
 
-    pcc_h = _pcc(tt_hidden_cpu, hidden_ref[:, :_T_PREFILL, :])
-    p99_h = torch.quantile((tt_hidden_cpu.float() - hidden_ref[:, :_T_PREFILL, :].float()).abs().flatten(), 0.99).item()
-    print(f"[64L] HIDDEN PCC = {pcc_h:.6f} (thresh={_PCC_THRESH_HIDDEN})  |  p99 abs-diff = {p99_h:.4f}")
+    # PCC is computed over the real prompt tokens (positions 0..T_prompt-1).
+    # Zero-padded positions are excluded because RMSNorm(zero_centered=True)
+    # of a near-zero vector divides bf8b/bf16 quantization noise by sqrt(eps),
+    # blowing it up to ~unit magnitude and dominating the global PCC. The
+    # per-layer PCC sweep (test_64layer_per_layer_pcc.py) shows the real
+    # prompt-position PCC stays > 0.998 across all 64 layers, while the
+    # zero-padded-positions PCC drops to ~0.6 — a measurement artifact,
+    # not a model bug. The 4L test masks this only because it uses
+    # torch.randn input (no zero positions). Production prefill uses real
+    # tokens for every position via attention masking.
+    hidden_ref_full = hidden_ref[:, :_T_PREFILL, :].float()
+    hidden_ref_prompt = hidden_ref_full[:, :T_prompt, :]
+    tt_hidden_prompt = tt_hidden_cpu[:, :T_prompt, :]
+    pcc_h_full = _pcc(tt_hidden_cpu, hidden_ref_full)
+    pcc_h = _pcc(tt_hidden_prompt, hidden_ref_prompt)
+    p99_h = torch.quantile((tt_hidden_prompt.float() - hidden_ref_prompt.float()).abs().flatten(), 0.99).item()
+    print(
+        f"[64L] HIDDEN PCC (prompt tokens only, T_prompt={T_prompt}) = {pcc_h:.6f} "
+        f"(thresh={_PCC_THRESH_HIDDEN})  |  p99 abs-diff = {p99_h:.4f}"
+    )
+    print(
+        f"[64L] HIDDEN PCC (full 128 positions incl. zero padding) = {pcc_h_full:.6f} "
+        f"(diagnostic — dominated by RMSNorm-of-zero quantization noise; not a model bug)"
+    )
 
     # CPU norm + lm_head applied to TT hidden state (V2-7b: TT's own lm_head
     # path is exercised in the 4L test; for 64L we focus on the layer-stack

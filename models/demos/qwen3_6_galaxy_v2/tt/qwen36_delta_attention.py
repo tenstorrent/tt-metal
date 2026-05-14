@@ -543,10 +543,17 @@ class TtQwen36DeltaAttention(LightweightModule):
 
     def _output_proj_and_reduce(self, out_flat, B, T):
         mem = ttnn.DRAM_MEMORY_CONFIG
+        # qwen3.6 residual-stream dtype lock (olmo session-11 lesson):
+        # DeltaNet runs on 48 of 64 layers; its output projection writes
+        # directly into the post-attention residual add in TtTransformerBlock.
+        # Even though out_proj weight stays bfloat8_b (forcing weights to bf16
+        # dropped layer-0 PCC 0.999 → 0.84 — see _build_weights comment),
+        # the OUTPUT activation must stay bfloat16 so the residual stream
+        # does not get quantized at every full-layer boundary.
         partial = ttnn.linear(
             out_flat,
             self.w_out,
-            dtype=self.dtype,
+            dtype=ttnn.bfloat16,
             memory_config=mem,
             compute_kernel_config=self.compute_kernel,
         )

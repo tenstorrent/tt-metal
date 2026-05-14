@@ -303,6 +303,14 @@ class TtTransformerBlock(LightweightModule):
                 attn_out = attn_out_4d
 
             # --- Residual add (full-H replicated) ---
+            # Note: residual stream stays in bfloat16 because both inputs are
+            # bfloat16 — x is bfloat16 (from embedding / prior layer all_gather)
+            # and attn_out is bfloat16 (TtLlamaAttention/_forward_prefill_qwen36
+            # and TtQwen36DeltaAttention._output_proj_and_reduce force bf16).
+            # We do NOT pass dtype=ttnn.bfloat16 here: an explicit dtype kwarg
+            # on ttnn.add with a tile-DRAM input observed a regression on
+            # layer-3 full_attention 1L (PCC 0.9995 → 0.77). The dtype default
+            # (inherited from inputs) is already bf16 and is the correct path.
             h_new = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)
             x.deallocate(True)
             attn_out.deallocate(True)
@@ -326,6 +334,9 @@ class TtTransformerBlock(LightweightModule):
             ff_out_sharded.deallocate(True)
 
             # --- Final residual + exit scatter back to col-sharded H/4 ---
+            # ff_out_full and h_new are both bf16 (MLP typecasts to bf16 at
+            # exit; h_new from previous add is bf16). Default add dtype keeps
+            # bf16; do NOT pass explicit dtype (see comment on h_new add above).
             out_full = ttnn.add(ff_out_full, h_new, memory_config=skip_mem_cfg)
             ff_out_full.deallocate(True)
             h_new.deallocate(True)
