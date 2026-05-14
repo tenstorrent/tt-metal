@@ -98,8 +98,8 @@ ALWI void matmul_block(
             // Covers (1) entry from another helper before this call, (2) state
             // disturbance from pre_k_block, (3) post_compute / packing state from
             // the prior batch iteration. srcA = in1, srcB = in0 for matmul.
-            mm_block_init_short(in0_cb, in1_cb, transpose, out_subblock_w, out_subblock_h, block_w);
             reconfig_data_format(in1_cb, in0_cb);
+            mm_block_init_short(in0_cb, in1_cb, transpose, out_subblock_w, out_subblock_h, block_w);
 
             // Full-block wait for both modes. Every caller (matmul + SDPA) has the
             // full in0 block resident before invoking the helper, so progressive
