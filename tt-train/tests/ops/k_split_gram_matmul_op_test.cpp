@@ -73,30 +73,51 @@ void check_tile(
 
 }  // namespace
 
-TEST_F(KSplitGramMatmulTest, Verification4096x4096) {
-    auto input = make_random_tensor(4096, 4096);
-    auto output = ttml::metal::gram_matmul(input);
+struct VerifyCase {
+    uint32_t M;
+    uint32_t K;
+    uint32_t tile_r;
+    uint32_t tile_c;
+    const char* name;
+};
 
+class KSplitGramMatmulVerifyTest : public ::testing::TestWithParam<VerifyCase> {
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device();
+    }
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+TEST_P(KSplitGramMatmulVerifyTest, Tile) {
+    const auto& c = GetParam();
+    auto input = make_random_tensor(c.M, c.K);
+    auto output = ttml::metal::gram_matmul(input);
     auto in_vec = input.to_vector<float>();
     auto out_vec = output.to_vector<float>();
-    uint32_t K = input.logical_shape()[-1];
     uint32_t W = output.logical_shape()[-1];
-
-    check_tile(in_vec, out_vec, K, W, 2, 15, kRtol, kAtol, "G[2,15] (upper)");
-    check_tile(in_vec, out_vec, K, W, 0, 0, kRtol, kAtol, "G[0,0] (diag)");
+    check_tile(in_vec, out_vec, c.K, W, c.tile_r, c.tile_c, kRtol, kAtol, c.name);
 }
 
-TEST_F(KSplitGramMatmulTest, Verification4096x11008) {
-    auto input = make_random_tensor(4096, 11008);
-    auto output = ttml::metal::gram_matmul(input);
-
-    auto in_vec = input.to_vector<float>();
-    auto out_vec = output.to_vector<float>();
-    uint32_t K = input.logical_shape()[-1];
-    uint32_t W = output.logical_shape()[-1];
-
-    check_tile(in_vec, out_vec, K, W, 2, 15, kRtol, kAtol, "G[2,15]");
+static std::string CaseName(const ::testing::TestParamInfo<VerifyCase>& info) {
+    return info.param.name;
 }
+
+// K must be multiple of 64 (op requires logical K_tiles even).
+// tile_r/tile_c chosen to land fully inside logical M (no partial tiles).
+static const VerifyCase kVerifyCases[] = {
+    {2048, 2048, 2, 15, "Square2048"},
+    {2048, 5632, 10, 40, "WideK_2048x5632"},
+    {4096, 4096, 0, 0, "Square4096_Diag"},
+    {4096, 4096, 2, 15, "Square4096_OffDiag"},
+    {4096, 11008, 2, 15, "WideK_4096x11008"},
+    {333, 384, 5, 5, "NonAligned_M333"},
+    {2049, 2048, 30, 30, "NonAligned_M2049"},
+};
+
+INSTANTIATE_TEST_SUITE_P(AllShapes, KSplitGramMatmulVerifyTest, ::testing::ValuesIn(kVerifyCases), CaseName);
 
 TEST_F(KSplitGramMatmulTest, VerificationMirror) {
     auto input = make_random_tensor(640, 640);
