@@ -43,7 +43,7 @@ echo ""
 echo "=== TIMELINE (fabric-relevant, deduplicated, relative seconds) ==="
 grep -E '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+' "$CLEAN" | \
 grep -E '(info|warning|error)' | \
-grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|fixture_teardown|fixture_setup|run_mailbox|failed to initialize FW|FIX AB extension|FIX AC|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AR2|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX BB|FIX BC|FIX CD|FIX DT-1|FIX GS|FIX M2|FIX NS|FIX NT|FIX NU|FIX NW|FIX NX|FIX NY|FIX PF|FIX PG|FIX PL|FIX PY|FIX QU|FIX QV|FIX QW|FIX RM|FIX RR|FIX RR-NM|FIX RS|FIX RX|FIX RZ|FIX SA|FIX SB|FIX SB2-R|FIX SC|FIX TE|FIX TF|FIX TG|FIX TH|FIX TJ|FIX TV|FIX TW|FIX XY-2|FIX EXT|FIX X|FIX P25-CLEAN|FIX EV|FIX BU|FIX BT|FIX FQ|FIX QD|FIX QE|FIX QS|FIX VC|FIX RZ2|FIX RZ3|FIX RZ4|teardown:.*relay|teardown second-pass:|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|relay_broken cleared|relay path restored|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|0x49705530|already.clean|already.terminated|phase25_already_clean|channels_not_ready_for_traffic|EventSynchronize.*broken|master_router_chan.*stuck|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|mark_relay_broken.*close_device|Marking relay broken|topology discovery|redundant.*topology|Physical chip id not found|EthCoord.*missing|chip_locations.*incomplete|Captured EthCoord.*MMIO|EthCoord.*FIX NT|EthCoord.*FIX NU|relay already known broken|relay_broken_chips|non-base firmware running|training status will never be written|ETH_TRAIN_STATUS_ADDR|l1_barrier timed out.*dead ERISC|dram_barrier timed out.*non-MMIO|WriteInitMagic.*read_core timed out|T3K topology check FAILED|chips visible|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|FIX TN|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded|NOT a valid EDMStatus|zeroed edm_status_address|0xdeaddead|open_devices_internal failed|FabricSwitchManager.*setup failed|warm-up complete|warm-up failed|Fabric health check failed|still-initializing|extending fabric_router_sync_timeout|skipping L1 clear|all_gather.*barrier|ENTERING.*barrier|EXITED.*barrier|topology damaged|topology recovered|topology still degraded|fabric_telemetry_dump|fabric_baseline_compare|rr_recovered|PCIe-direct soft reset|FIX BH|FIX BO|FIX BP|FIX FX|FIX QH|FIX FQ-1|FIX FQ-2|FIX FQ-5|FIX P25-CLEAN-V2|FIX BW|FIX BX|FIX VC2|FIX VC3|FIX NZ|FIX PE|FIX EXT2|FIX TB|FIX BQ|FIX AY-C|FIX AQ-2|FIX AQ-3|FIX BD|FIX BE|FIX BY|FIX E2|FIX G[^A-Z]|FIX H[^A-Z]|FIX I2|FIX U[^A-Z]|wait_for_eth_cores_launched)' | \
+grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|fixture_teardown|fixture_setup|run_mailbox|failed to initialize FW|FIX AB extension|FIX AC|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AR2|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX BB|FIX BC|FIX CD|FIX DT-1|FIX GS|FIX M2|FIX NS|FIX NT|FIX NU|FIX NW|FIX NX|FIX NY|FIX PF|FIX PG|FIX PL|FIX PY|FIX QU|FIX QV|FIX QW|FIX RM|FIX RR|FIX RR-NM|FIX RS|FIX RX|FIX RZ|FIX SA|FIX SB|FIX SB2-R|FIX SC|FIX TE|FIX TF|FIX TG|FIX TH|FIX TJ|FIX TV|FIX TW|FIX XY-2|FIX EXT|FIX X|FIX P25-CLEAN|FIX EV|FIX BU|FIX BT|FIX FQ|FIX QD|FIX QE|FIX QS|FIX VC|FIX RZ2|FIX RZ3|FIX RZ4|teardown:.*relay|teardown second-pass:|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|relay_broken cleared|relay path restored|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|0x49705530|already.clean|already.terminated|phase25_already_clean|channels_not_ready_for_traffic|EventSynchronize.*broken|master_router_chan.*stuck|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|mark_relay_broken.*close_device|Marking relay broken|topology discovery|redundant.*topology|Physical chip id not found|EthCoord.*missing|chip_locations.*incomplete|Captured EthCoord.*MMIO|EthCoord.*FIX NT|EthCoord.*FIX NU|relay already known broken|relay_broken_chips|non-base firmware running|training status will never be written|ETH_TRAIN_STATUS_ADDR|l1_barrier timed out.*dead ERISC|dram_barrier timed out.*non-MMIO|WriteInitMagic.*read_core timed out|T3K topology check FAILED|chips visible|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|FIX TN|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded|NOT a valid EDMStatus|zeroed edm_status_address|0xdeaddead|open_devices_internal failed|FabricSwitchManager.*setup failed|warm-up complete|warm-up failed|Fabric health check failed|still-initializing|extending fabric_router_sync_timeout|skipping L1 clear|all_gather.*barrier|ENTERING.*barrier|EXITED.*barrier|topology damaged|topology recovered|topology still degraded|fabric_telemetry_dump|fabric_baseline_compare|rr_recovered|PCIe-direct soft reset|FIX BH|FIX BO|FIX BP|FIX FX|FIX QH|FIX FQ-1|FIX FQ-2|FIX FQ-5|FIX P25-CLEAN-V2|FIX BW|FIX BX|FIX VC2|FIX VC3|FIX NZ|FIX PE|FIX EXT2|FIX TB|FIX BQ|FIX AY-C|FIX AQ-2|FIX AQ-3|FIX BD|FIX BE|FIX BY|FIX E2|FIX G[^A-Z]|FIX H[^A-Z]|FIX I2|FIX U[^A-Z]|FIX BI|FIX BJ|FIX BL|FIX BM|wait_for_eth_cores_launched|simultaneous-handshake|ETH core heartbeat check failed)' | \
 grep -viE '(hugepage|bind_area|motherboard|topology_mapper|num_routing_planes|errno|hwloc|cpuset)' | \
 python3 -c "
 import sys, re
@@ -112,7 +112,7 @@ echo ""
 
 # ─── PHASES ───
 echo "=== PHASES ==="
-grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|teardown second-pass:|FIX AB extension|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AR2|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX BB|FIX BC|FIX CD|FIX DT-1|FIX GS|FIX NS|FIX NT|FIX NU|FIX NW|FIX NX|FIX NY|FIX PF|FIX PG|FIX PY|FIX QU|FIX QV|FIX QW|FIX RM|FIX RR|FIX RS|FIX RX|FIX RZ|FIX SA|FIX SB|FIX SB2-R|FIX SC|FIX TE|FIX TF|FIX TG|FIX TH|FIX TJ|FIX TV|FIX TW|FIX XY-2|FIX EXT|FIX X|post_teardown:.*FIX AB|pre-launch|deferred|degraded|fixture_teardown|fixture_setup|run_mailbox|failed to initialize FW|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|Marking relay broken|relay_broken cleared|relay path restored|Physical chip id not found|Captured EthCoord.*MMIO|relay already known broken|non-base firmware running|ETH_TRAIN_STATUS_ADDR|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|FIX TN|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded|NOT a valid EDMStatus|zeroed edm_status_address|0xdeaddead|open_devices_internal failed|FabricSwitchManager.*setup failed|warm-up complete|warm-up failed|Fabric health check failed|still-initializing|extending fabric_router_sync_timeout|skipping L1 clear|all_gather.*barrier|ENTERING.*barrier|EXITED.*barrier|topology damaged|topology recovered|topology still degraded|rr_recovered|PCIe-direct soft reset|FIX BH|FIX BO|FIX BP|FIX VC2|FIX VC3|FIX NZ|FIX PE|FIX EXT2|FIX TB|FIX BQ|FIX AY-C|FIX AQ-2|FIX AQ-3|FIX BD|FIX BE|FIX BY|FIX E2|FIX G[^A-Z]|FIX H[^A-Z]|FIX I2|FIX U[^A-Z]|wait_for_eth_cores_launched' "$CLEAN" | \
+grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|teardown second-pass:|FIX AB extension|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AR2|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX BB|FIX BC|FIX CD|FIX DT-1|FIX GS|FIX NS|FIX NT|FIX NU|FIX NW|FIX NX|FIX NY|FIX PF|FIX PG|FIX PY|FIX QU|FIX QV|FIX QW|FIX RM|FIX RR|FIX RS|FIX RX|FIX RZ|FIX SA|FIX SB|FIX SB2-R|FIX SC|FIX TE|FIX TF|FIX TG|FIX TH|FIX TJ|FIX TV|FIX TW|FIX XY-2|FIX EXT|FIX X|post_teardown:.*FIX AB|pre-launch|deferred|degraded|fixture_teardown|fixture_setup|run_mailbox|failed to initialize FW|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|Marking relay broken|relay_broken cleared|relay path restored|Physical chip id not found|Captured EthCoord.*MMIO|relay already known broken|non-base firmware running|ETH_TRAIN_STATUS_ADDR|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|FIX TN|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded|NOT a valid EDMStatus|zeroed edm_status_address|0xdeaddead|open_devices_internal failed|FabricSwitchManager.*setup failed|warm-up complete|warm-up failed|Fabric health check failed|still-initializing|extending fabric_router_sync_timeout|skipping L1 clear|all_gather.*barrier|ENTERING.*barrier|EXITED.*barrier|topology damaged|topology recovered|topology still degraded|rr_recovered|PCIe-direct soft reset|FIX BH|FIX BO|FIX BP|FIX VC2|FIX VC3|FIX NZ|FIX PE|FIX EXT2|FIX TB|FIX BQ|FIX AY-C|FIX AQ-2|FIX AQ-3|FIX BD|FIX BE|FIX BY|FIX E2|FIX G[^A-Z]|FIX H[^A-Z]|FIX I2|FIX U[^A-Z]|FIX BI|FIX BJ|FIX BL|FIX BM|wait_for_eth_cores_launched|simultaneous-handshake|ETH core heartbeat check failed' "$CLEAN" | \
 grep -iE '(info|warning|error).*(Metal|Test|Always|Fabric)' | \
 python3 -c "
 import sys, re, signal
@@ -915,6 +915,25 @@ FIX_BH_DEGRADE=$(grep -cE 'FIX RR.*PCIe-direct soft reset FAILED' "$CLEAN" 2>/de
 # Saves ~24s per hang by breaking immediately; FIX BC classifies and force-resets as normal.
 # Log: "wait_for_fabric_workers_ready: Device N Phase 5b FIX BH (#42429): early simultaneous-handshake deadlock exit"
 FIX_BH_EARLY_DEADLOCK=$(grep -cE 'FIX BH \(#42429\).*early simultaneous-handshake deadlock exit' "$CLEAN" 2>/dev/null; :)
+# FIX BI (#42429): simultaneous-handshake early detection in wait_for_eth_cores_launched (Pass 1b/1c).
+# Fires when a channel is already at REMOTE_HANDSHAKE_COMPLETE during the "wait for STARTED" poll.
+# Individual channel: "FIX BI (#42429): Device N ETH logical (X,Y) already at edm_status=0x... — simultaneous-handshake race detected"
+# All channels (confirmed deadlock): "FIX BI (#42429): Device N — ALL N/N ETH channels were already at REMOTE_HANDSHAKE_COMPLETE"
+FIX_BI_INDIVIDUAL=$(grep -cE 'FIX BI \(#42429\).*simultaneous-handshake race detected' "$CLEAN" 2>/dev/null; :)
+FIX_BI_ALL_CONFIRMED=$(grep -cE 'FIX BI \(#42429\).*ALL.*ETH channels were already at REMOTE_HANDSHAKE_COMPLETE' "$CLEAN" 2>/dev/null; :)
+# FIX BJ (#42429): record_test_fabric_skip_ok in run_t3000_unit_tests.sh — treats GTEST_SKIP
+# from FIX AA/QW as PASS rather than FAIL for fabric-dependent tests.
+# Log: "FIX BJ (#42429): N test(s) SKIPPED — fabric not at READY_FOR_TRAFFIC"
+FIX_BJ_SKIP_OK=$(grep -cE 'FIX BJ \(#42429\).*SKIPPED.*fabric not at READY_FOR_TRAFFIC' "$CLEAN" 2>/dev/null; :)
+# FIX BL (#42429): extended FIX XZ teardown MMIO ETH heartbeat poll from 3000ms to 30000ms.
+# Fires on timeout: "FIX XZ (#42429): teardown MMIO ETH heartbeat poll timed out after Nms"
+# FIX BG per-channel: "teardown second-pass: Device N (mmio) chan=N ... did not report base firmware heartbeat within 30000ms"
+FIX_BL_TIMEOUT=$(grep -cE 'teardown MMIO ETH heartbeat poll timed out' "$CLEAN" 2>/dev/null; :)
+# FIX BM (#42429): catch "ETH core heartbeat check failed" in MeshDeviceFixtureBase::SetUp → GTEST_SKIP.
+# Log: "FIX BC/BR/BM (#42429): MeshDevice::create() threw degraded-cluster exception"
+# Also look for the raw heartbeat error: "ETH core heartbeat check failed"
+FIX_BM_HEARTBEAT_SKIP=$(grep -cE 'FIX BC/BR/BM.*MeshDevice::create\(\) threw degraded-cluster exception' "$CLEAN" 2>/dev/null; :)
+FIX_BM_HEARTBEAT_RAW=$(grep -cE 'ETH core heartbeat check failed' "$CLEAN" 2>/dev/null; :)
 # FIX BO (#42429): Phase 5 kSyncTimeoutMs extended 10s→120s when stale base-UMD channels present.
 # Without FIX BO: cluster with N base-UMD channels × 10s each → "Fabric health check failed" TT_THROW.
 # Log: "wait_for_fabric_workers_ready: Device N FIX BO — stale base-UMD channels detected, extending Phase 5..."
@@ -1646,6 +1665,25 @@ if [ "${FIX_BH_EARLY_DEADLOCK:-0}" -gt 0 ]; then
     echo "     All pending channels at REMOTE_HANDSHAKE_COMPLETE; broke out of 24s poll immediately."
     echo "     FIX BC will classify and force-reset — ~24s Phase 5b wait eliminated."
 fi
+if [ "${FIX_BI_ALL_CONFIRMED:-0}" -gt 0 ]; then
+    echo "  => [FIX BI] simultaneous-handshake deadlock confirmed on ${FIX_BI_ALL_CONFIRMED} device(s) during Pass 1b/1c."
+    echo "     ALL ETH channels were already at REMOTE_HANDSHAKE_COMPLETE before host finished first poll."
+    echo "     channels_not_ready_for_traffic set — Pass 2 will short-circuit."
+fi
+if [ "${FIX_BI_INDIVIDUAL:-0}" -gt 0 ]; then
+    echo "  => [FIX BI] ${FIX_BI_INDIVIDUAL} individual ETH channel(s) detected at RHS early (elapsed_ms < 10)."
+fi
+if [ "${FIX_BJ_SKIP_OK:-0}" -gt 0 ]; then
+    echo "  => [FIX BJ] ${FIX_BJ_SKIP_OK} test(s) SKIPPED because fabric was not at READY_FOR_TRAFFIC after quiesce restart."
+fi
+if [ "${FIX_BL_TIMEOUT:-0}" -gt 0 ]; then
+    echo "  => [FIX BL] MMIO ETH heartbeat reboot wait timed out ${FIX_BL_TIMEOUT} time(s) (30s timeout per teardown)."
+    echo "     Some MMIO ETH channels did not complete ROM→base-firmware boot within 30s."
+fi
+if [ "${FIX_BM_HEARTBEAT_SKIP:-0}" -gt 0 ]; then
+    echo "  => [FIX BM] ${FIX_BM_HEARTBEAT_SKIP} test(s) caught ETH heartbeat failure in fixture SetUp → GTEST_SKIP."
+    echo "     MeshDevice::create() threw because freshly-rebooted ERISC channels failed heartbeat check."
+fi
 if [ "${FIX_BO_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX BO] Phase 5 kSyncTimeoutMs extended 10s→120s on ${FIX_BO_FIRES} device(s) — stale base-UMD channels detected."
 fi
@@ -2197,7 +2235,7 @@ echo "  GAP_C_FIRES:               ${GAP_C_FIRES:-0}  (copy_buffer_data relay gu
 echo "  FIX_BG_SECOND_PASS_FIRES:  ${FIX_BG_SECOND_PASS_FIRES:-0}  (teardown second-pass partial failure events — audit #7)"
 echo "    FIX_BG_RELAY_DEAD_SKIP:  ${FIX_BG_RELAY_DEAD_SKIP:-0}  (non-mmio chan: diagnostic read skipped — relay already confirmed dead)"
 echo "    FIX_BG_ASSERT_SKIP:      ${FIX_BG_ASSERT_SKIP:-0}  (chan: assert_risc_reset skipped — relay dead or assert failed; delegated to FIX AC)"
-echo "    FIX_BG_HB_TIMEOUT:       ${FIX_BG_HB_TIMEOUT:-0}  (mmio chan: base firmware heartbeat not seen within 3000ms after force-reset)"
+echo "    FIX_BG_HB_TIMEOUT:       ${FIX_BG_HB_TIMEOUT:-0}  (mmio chan: base firmware heartbeat not seen within 30000ms after force-reset — FIX BL)"
 echo "  FIX_VC2_FIRES:             ${FIX_VC2_FIRES:-0}  (external UMD channel skip + coord-translation guard)"
 echo "  FIX_VC3_FIRES:             ${FIX_VC3_FIRES:-0}  (coord-translation failure guard in Phase 5 health check)"
 echo "  FIX_NZ_FIRES:              ${FIX_NZ_FIRES:-0}  (skip init+launch for non-MMIO with broken relay)"
@@ -2219,6 +2257,12 @@ echo "  FIX_AU2_FIRES:             ${FIX_AU2_FIRES:-0}  (best-effort TERMINATE o
 echo "  FIX_AR2_FIRES:             ${FIX_AR2_FIRES:-0}  (extended timeout for RHC channels in FIX AS)"
 echo "  AUDIT_L1_FIRES:            ${AUDIT_L1_FIRES:-0}  (sysmem_manager reset skipped — relay broken)"
 echo "  AUDIT_L5_FIRES:            ${AUDIT_L5_FIRES:-0}  (FIX AK-3 guard: all chans at RHC, AP suppressed)"
+echo "  FIX_BI_INDIVIDUAL:         ${FIX_BI_INDIVIDUAL:-0}  (FIX BI: per-channel simultaneous-handshake early detection in Pass 1b/1c)"
+echo "  FIX_BI_ALL_CONFIRMED:      ${FIX_BI_ALL_CONFIRMED:-0}  (FIX BI: ALL channels at RHS — confirmed deadlock, channels_not_ready set)"
+echo "  FIX_BJ_SKIP_OK:           ${FIX_BJ_SKIP_OK:-0}  (FIX BJ: fabric GTEST_SKIP treated as PASS in CI)"
+echo "  FIX_BL_TIMEOUT:           ${FIX_BL_TIMEOUT:-0}  (FIX BL: teardown MMIO ETH heartbeat poll timed out at 30000ms)"
+echo "  FIX_BM_HEARTBEAT_SKIP:    ${FIX_BM_HEARTBEAT_SKIP:-0}  (FIX BM: ETH heartbeat check failed → GTEST_SKIP in SetUp)"
+echo "  FIX_BM_HEARTBEAT_RAW:     ${FIX_BM_HEARTBEAT_RAW:-0}  (raw 'ETH core heartbeat check failed' occurrences)"
 echo "  FIX_BC_P5B_FIRES:         ${FIX_BC_P5B_FIRES:-0}  (FIX BC Phase 5b: simultaneous-handshake deadlock)"
 echo "  FIX_BD_FIRES:             ${FIX_BD_FIRES:-0}  (FIX BD AUDIT: enhanced FIX BC channel-peer logging)"
 echo "  AUDIT_R2_FIRES:            ${AUDIT_R2_FIRES:-0}  (all channels dead — Phase 3 early return)"
