@@ -118,6 +118,7 @@ class TransformerConfig:
         # Qwen3-specific
         self.head_dim = int(tc.get("head_dim", None))
 
+
 class SchedulerConfig:
     """Configuration for learning rate scheduler."""
 
