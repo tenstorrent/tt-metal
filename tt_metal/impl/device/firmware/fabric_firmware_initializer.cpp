@@ -1057,7 +1057,22 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
             // a single bad read would abort the loop, leaving other channels un-reset and
             // skipping devices_.clear() / init_done.erase(key) at the end of teardown.
             std::vector<uint32_t> status_buf(1, 0xDEAD'DEAD);
-            if (!is_non_mmio_already_dead) {
+            if (is_non_mmio_already_dead) {
+                // FIX BG (audit #7): log that we are skipping the diagnostic read for this
+                // non-MMIO channel because its relay device was already confirmed dead by a prior
+                // channel's failed read in this same second-pass loop.  Without this log the
+                // channel's state appears silently in the force-reset list with status=0xDEADDEAD
+                // and no explanation.  This makes partial teardown failures diagnosable from CI logs.
+                log_warning(
+                    tt::LogAlways,
+                    "teardown second-pass: Device {} (non-mmio) chan={} logical({},{}) — "
+                    "skipping diagnostic read; relay already confirmed dead on this device. "
+                    "status=0xdeaddead (sentinel). Channel registered for force-reset.",
+                    ch.dev->id(),
+                    ch.eth_chan_id,
+                    ch.eth_logical_core.x,
+                    ch.eth_logical_core.y);
+            } else {
                 try {
                     detail::ReadFromDeviceL1(
                         ch.dev, ch.eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
@@ -1140,13 +1155,22 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                 // FIX AW (#42429): assert_already_failed covers MMIO devices (from this rank's
                 // perspective) where a prior channel's assert already timed out — same 5s cost,
                 // same outcome; skip saves the full timeout per remaining channel on the device.
-                log_info(
-                    tt::LogMetal,
-                    "FIX BU/AW (#42429): Device {} chan={} {} — "
-                    "skipping assert_risc_reset_at_core (saves 5s timeout). "
-                    "RiscFirmwareInitializer::teardown (FIX AC) will PCIe-reset via MMIO relay channels.",
+                // FIX BG (audit #7): upgraded from log_info → log_warning so partial reset
+                // failures are visible at CI log level.  The channel is registered in
+                // force_reset_channels_ (hardware reset delegated to FIX AC), but it is NOT
+                // receiving an assert_risc_reset_at_core here.  Without this warning the channel
+                // is silently skipped — "teardown second-pass:" prefix enables grep in CI analysis.
+                const bool is_mmio_chan = cluster_.get_associated_mmio_device(ch.dev->id()) == ch.dev->id();
+                log_warning(
+                    tt::LogAlways,
+                    "teardown second-pass: Device {} ({}) chan={} logical({},{}) — "
+                    "skipping assert_risc_reset_at_core: {} (FIX BU/AW #42429). "
+                    "Delegating PCIe-reset to RiscFirmwareInitializer::teardown (FIX AC).",
                     ch.dev->id(),
+                    is_mmio_chan ? "mmio" : "non-mmio",
                     ch.eth_chan_id,
+                    ch.eth_logical_core.x,
+                    ch.eth_logical_core.y,
                     is_non_mmio_relay_dead ? "relay confirmed dead" : "assert already failed on this device");
             } else {
                 // FIX AI (#42429): assert + deassert to restart the ERISC into base UMD firmware.
@@ -1270,6 +1294,7 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
             // Collect MMIO channels that were force-reset.
             struct MmioResetChannel {
                 tt_cxy_pair target;
+                uint32_t eth_chan_id = 0;  // FIX BG (audit #7): stored for per-channel failure logging
                 uint32_t prev_hb = 0;
                 bool nonzero_seen = false;
                 bool ready = false;
@@ -1286,7 +1311,7 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                             cluster_.get_soc_desc(chip_id).get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
                         const CoreCoord virt = cluster_.get_virtual_coordinate_from_logical_coordinates(
                             chip_id, logical_core, CoreType::ETH);
-                        mmio_reset_chans.push_back({tt_cxy_pair(chip_id, virt), 0, false, false});
+                        mmio_reset_chans.push_back({tt_cxy_pair(chip_id, virt), eth_chan_id, 0, false, false});
                     } catch (...) {
                         log_debug(
                             tt::LogMetal,
@@ -1358,6 +1383,24 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                             elapsed_ms,
                             not_ready,
                             static_cast<int>(mmio_reset_chans.size()));
+                        // FIX BG (audit #7): log each channel that did not reach base firmware so
+                        // CI logs show exactly which chip/channel is stuck — "teardown second-pass:"
+                        // prefix makes these greppable by analyze_fabric_hang_log.sh.
+                        for (const auto& mc : mmio_reset_chans) {
+                            if (!mc.ready) {
+                                log_warning(
+                                    tt::LogAlways,
+                                    "teardown second-pass: Device {} (mmio) chan={} virt({},{}) — "
+                                    "did not report base firmware heartbeat within {}ms after force-reset "
+                                    "(last_hb=0x{:08x}). Probe_dead likely on next session.",
+                                    mc.target.chip,
+                                    mc.eth_chan_id,
+                                    mc.target.x,
+                                    mc.target.y,
+                                    kRebootWaitMs,
+                                    mc.prev_hb);
+                            }
+                        }
                         break;
                     }
                     std::this_thread::sleep_for(kPollInterval);
