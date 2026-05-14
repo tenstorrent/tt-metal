@@ -2513,9 +2513,23 @@ void Device::launch_eth_cores_for_quiesce() {
                 // FIX AS (#42429): force-reset channels must show UMD canary or TERMINATED —
                 // NOT 0x0, which means .bss init hasn't completed and edm_status would be
                 // zeroed after the launch message write (root cause of the race condition).
+                const bool is_edm_state_p3 = (pre_launch_buf[0] >= 0xA0B0C0D0U && pre_launch_buf[0] <= 0xA4B4C4D4U);
                 const bool status_ok = (pre_launch_buf[0] == terminated_val) ||
                                        (!is_force_reset_chan && pre_launch_buf[0] == 0x0) ||
-                                       (is_force_reset_chan && pre_launch_buf[0] == umd_relay_canary);
+                                       (is_force_reset_chan && pre_launch_buf[0] == umd_relay_canary) ||
+                                       (is_force_reset_chan && is_edm_state_p3);  // FIX AV (#42429): fast-reboot channels
+                if (is_force_reset_chan && is_edm_state_p3) {
+                    log_info(
+                        tt::LogMetal,
+                        "launch_eth_cores_for_quiesce: Device {} Phase 3: ETH logical ({},{}) "
+                        "pre_status=0x{:08x} ({}) — force-reset channel at active EDM state, "
+                        "proceeding with write_launch_msg (FIX AV: #42429)",
+                        this->id(),
+                        logical_core.x,
+                        logical_core.y,
+                        pre_launch_buf[0],
+                        edm_status_str(pre_launch_buf[0]));
+                }
                 if (!status_ok) {
                     log_warning(
                         tt::LogMetal,
