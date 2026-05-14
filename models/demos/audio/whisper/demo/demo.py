@@ -25,7 +25,6 @@ from transformers import (
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import is_blackhole
 from models.demos.audio.whisper.tt.ttnn_optimized_functional_whisper import (
     WHISPER_BATCH_SIZE,
     WHISPER_L1_SMALL_SIZE,
