@@ -147,6 +147,12 @@ def infer_unpack_out(
     # 2x-packed SrcA/SrcB opt-in: caller explicitly requests MxFp4 to be stored
     # in src registers as MxFp4_2x_A / MxFp4_2x_B (vs. default unpack-to-Float16_b path).
     if register_format_hint is not None:
+        if unpacking_to_dest:
+            raise ValueError(
+                f"register_format_hint={register_format_hint.name} is a SrcA/SrcB-only register "
+                "format and cannot be used when unpacking_to_dest=True. The 2x-packed formats "
+                "are not valid Dest register formats."
+            )
         if register_format_hint not in _SRCAB_ONLY_FORMATS:
             raise ValueError(
                 f"register_format_hint={register_format_hint.name} is not a supported "
