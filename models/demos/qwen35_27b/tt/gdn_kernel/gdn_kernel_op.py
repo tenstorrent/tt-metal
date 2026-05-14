@@ -330,10 +330,8 @@ def _gdn_recurrence_ttnn(q, k_row, k_col, v, g, beta, state):
     """
     l1 = ttnn.L1_MEMORY_CONFIG
 
-    # Step 1: decay
-    g_exp = ttnn.exp(g, memory_config=l1)
-    state_b = ttnn.multiply(state, g_exp, memory_config=l1)
-    ttnn.deallocate(g_exp)
+    # Step 1: decay -- exp(g) fused as a pre-activation on input_b of the multiply
+    state_b = ttnn.multiply(state, g, input_tensor_b_activations=[ttnn.UnaryOpType.EXP], memory_config=l1)
 
     # Step 2: kv_mem = k_row @ state
     kv_mem = ttnn.matmul(k_row, state_b, memory_config=l1)
@@ -345,7 +343,9 @@ def _gdn_recurrence_ttnn(q, k_row, k_col, v, g, beta, state):
     ttnn.deallocate(diff)
 
     # Step 4: state += outer(k_col, delta)  -- writes back into caller's DRAM state
-    outer = ttnn.matmul(k_col, delta, memory_config=l1)
+    # Outer product expressed as broadcast eltwise multiply:
+    #   k_col [..., 128, 1] * delta [..., 1, 128] -> [..., 128, 128]
+    outer = ttnn.mul(k_col, delta, memory_config=l1)
     ttnn.deallocate(delta)
     ttnn.add(state_b, outer, output_tensor=state)
     ttnn.deallocate(state_b)
