@@ -603,10 +603,18 @@ def _enrich_ops_from_perf_csv(
                     if cand_op_id == op_id:
                         candidates.extend(rows)
 
-            assert candidates, (
-                f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
-                f"for device {device_id} (trace_id={host_trace_id})"
-            )
+            if not candidates:
+                # Tolerate orphan host-side ops that have no matching device row.
+                # This happens for the trailing profiler-internal no-op dispatched
+                # by TTProfiler::read_results after the final dump_results=True
+                # call: it gets logged on the host but the dump already wrote the
+                # CSV before it ran. Skipping it is safe -- it's not a real op.
+                logger.warning(
+                    f"Skipping orphan op {op_id} (no row in {PROFILER_CPP_DEVICE_PERF_REPORT} "
+                    f"for device {device_id}, trace_id={host_trace_id}); "
+                    f"likely a profiler-internal post-noop."
+                )
+                continue
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
             for perf_row in candidates:
