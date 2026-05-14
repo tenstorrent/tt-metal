@@ -216,12 +216,12 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
         TT_SFPLOAD(A, INT32, ADDR_MOD_3, dst_index_a * dst_tile_size);
         TT_SFPLOAD(B, INT32, ADDR_MOD_3, dst_index_b * dst_tile_size);
 
-        TTI_SFPSETSGN(SIGN, B, D, 1);
+        TTI_SFPSETSGN(SIGN, B, D, 1); // SFPSETSGN_MOD1_ARG_IMM
         TTI_SFPIADD(0, A, D, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
         TTI_SFPXOR(0, XOR_SRC, TMP, 0);
         TTI_SFPOR(0, D, TMP, 0);
         TTI_SFPXOR(0, B, A, 0);
-        TTI_SFPSHFT((-31) & 0xfff, A, A, 1);
+        TTI_SFPSHFT((-31) & 0xfff, A, A, 1); // SFPSHFT_MOD1_ARG_IMM
         TT_SFPSTORE(A, INT32, ADDR_MOD_2, dst_index_out * dst_tile_size);
     }
 }
@@ -262,12 +262,12 @@ inline void calculate_binary_comp_uint(const uint dst_index_in0, const uint dst_
         TT_SFPLOAD(B, LD_ST_MOD, ADDR_MOD_3, dst_index_b * dst_tile_size);
 
         if constexpr (needs_msb_handling) {
-            TTI_SFPSETSGN(SIGN, B, D, 1);
+            TTI_SFPSETSGN(SIGN, B, D, 1); // SFPSETSGN_MOD1_ARG_IMM
             TTI_SFPIADD(0, A, D, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
             TTI_SFPXOR(0, XOR_SRC, RESULT, 0);
             TTI_SFPOR(0, D, RESULT, 0);
             TTI_SFPXOR(0, XOR_SRC, RESULT, 0);
-            TTI_SFPSHFT((-31) & 0xfff, RESULT, RESULT, 1);
+            TTI_SFPSHFT((-31) & 0xfff, RESULT, RESULT, 1); // SFPSHFT_MOD1_ARG_IMM
             TT_SFPSTORE(RESULT, LD_ST_MOD, ADDR_MOD_2, dst_index_out * dst_tile_size);
         } else {
             // Signed subtraction cannot overflow for UInt16; the sign bit gives the strict comparison.
@@ -275,7 +275,7 @@ inline void calculate_binary_comp_uint(const uint dst_index_in0, const uint dst_
             if constexpr (use_ge) {
                 TTI_SFPNOT(0, B, B, 0);
             }
-            TTI_SFPSHFT((-31) & 0xfff, B, B, 1);
+            TTI_SFPSHFT((-31) & 0xfff, B, B, 1); // SFPSHFT_MOD1_ARG_IMM
             TT_SFPSTORE(B, LD_ST_MOD, ADDR_MOD_2, dst_index_out * dst_tile_size);
         }
     }
