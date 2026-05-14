@@ -7,7 +7,7 @@ Kokoro TTNN convolution helpers (TT-prefixed params, ``tt_`` functions).
 
 - :func:`tt_weight_norm_materialize` — effective Conv weight from ``(v, g)`` tensors
 - :func:`tt_conv1d_nlc` — Conv1d on NLC activations ``[B, L, C]``
-- :func:`tt_conv_transpose1d_nlc` — ConvTranspose1d via ``conv_transpose2d`` with ``H=1``
+- :func:`tt_conv_transpose1d_nlc` — ConvTranspose1d via ``conv_transpose2d`` (``spatial_style`` width vs height)
 """
 
 from __future__ import annotations
@@ -103,7 +103,8 @@ def tt_conv1d_nlc(
 
 @dataclass(frozen=True)
 class TTConvTranspose1dParams:
-    # TTNN conv_transpose2d weights: [in_ch, out_ch/groups, 1, k]
+    # TTNN conv_transpose2d weights (NHWC op): default ``[in_ch, out_ch/groups, 1, k]`` (``spatial_style="width"``);
+    # Kokoro istftnet depthwise pool uses ``[in_ch, out_ch/groups, k, 1]`` (``spatial_style="height"``).
     weight: ttnn.Tensor
     bias: Optional[ttnn.Tensor]
     in_channels: int
@@ -113,6 +114,8 @@ class TTConvTranspose1dParams:
     padding: int
     output_padding: int
     groups: int = 1
+    mirror_kernel: bool = True
+    spatial_style: str = "width"  # "width" | "height"
 
 
 def tt_conv_transpose1d_nlc(
@@ -125,7 +128,7 @@ def tt_conv_transpose1d_nlc(
     out_dtype=ttnn.bfloat16,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
-    """1D transpose conv via ``conv_transpose2d`` (length as width, ``H=1``)."""
+    """1D transpose conv via ``conv_transpose2d`` (NHWC ``[N,H,W,C]`` staging inside the op)."""
     if x_nlc.layout != ttnn.ROW_MAJOR_LAYOUT:
         x_nlc = ttnn.to_layout(x_nlc, ttnn.ROW_MAJOR_LAYOUT)
     x = ttnn.reshape(x_nlc, (x_nlc.shape[0], 1, x_nlc.shape[1], x_nlc.shape[2]), memory_config=memory_config)
@@ -135,6 +138,37 @@ def tt_conv_transpose1d_nlc(
         compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(), math_fidelity=ttnn.MathFidelity.HiFi3, math_approx_mode=False, fp32_dest_acc_en=True
         )
+
+    bsz = int(x_nlc.shape[0])
+    seq = int(x_nlc.shape[1])
+    if params.spatial_style == "height":
+        # Matches ``ttnn_adain_resblk_encode._TtDepthwiseConvTransposePool`` (Kokoro istftnet pool).
+        y, out_hw = ttnn.conv_transpose2d(
+            input_tensor=x,
+            weight_tensor=params.weight,
+            in_channels=params.in_channels,
+            out_channels=params.out_channels,
+            device=device,
+            bias_tensor=params.bias,
+            kernel_size=(params.kernel_size, 1),
+            stride=(params.stride, 1),
+            padding=(params.padding, 0),
+            output_padding=(params.output_padding, 0),
+            dilation=(1, 1),
+            batch_size=bsz,
+            input_height=seq,
+            input_width=1,
+            conv_config=conv_config,
+            compute_config=compute_config,
+            groups=params.groups,
+            dtype=out_dtype,
+            mirror_kernel=params.mirror_kernel,
+            return_output_dim=True,
+        )
+        oh, ow = int(out_hw[0]), int(out_hw[1])
+        flat = oh * ow
+        y = ttnn.reshape(y, (y.shape[0], flat, y.shape[3]), memory_config=memory_config)
+        return y
 
     y, out_hw = ttnn.conv_transpose2d(
         input_tensor=x,
@@ -147,13 +181,15 @@ def tt_conv_transpose1d_nlc(
         stride=(1, params.stride),
         padding=(0, params.padding),
         output_padding=(0, params.output_padding),
-        batch_size=x_nlc.shape[0],
+        dilation=(1, 1),
+        batch_size=bsz,
         input_height=1,
-        input_width=x_nlc.shape[1],
+        input_width=seq,
         conv_config=conv_config,
         compute_config=compute_config,
         groups=params.groups,
         dtype=out_dtype,
+        mirror_kernel=params.mirror_kernel,
         return_output_dim=True,
     )
     y = ttnn.reshape(y, (y.shape[0], out_hw[1], y.shape[3]), memory_config=memory_config)
