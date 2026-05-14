@@ -149,7 +149,7 @@ std::string diagnostic_hint_for_stuck_stage(EdmInitProgress stuck_stage, uint32_
     return {};
 }
 
-[[noreturn]] void report_router_sync_timeout_and_throw(
+void log_router_sync_timeout_diagnostics(
     Device* dev,
     chan_id_t master_chan,
     const tt::umd::CoreCoord& master_core,
@@ -193,15 +193,11 @@ std::string diagnostic_hint_for_stuck_stage(EdmInitProgress stuck_stage, uint32_
             min_stage = r.stage;
         }
     }
-    const RouterStatusReport* representative_laggard = nullptr;
     size_t laggard_count = 0;
     if (min_stage) {
         for (const auto& r : reports) {
             if (r.stage == *min_stage) {
                 ++laggard_count;
-                if (representative_laggard == nullptr) {
-                    representative_laggard = &r;
-                }
             }
         }
     }
@@ -260,26 +256,29 @@ std::string diagnostic_hint_for_stuck_stage(EdmInitProgress stuck_stage, uint32_
             unknown_count);
     }
 
-    const std::string laggard_summary = representative_laggard != nullptr
-                                            ? fmt::format(
-                                                  "furthest-behind stage: {} ({} core(s), e.g. chan={} got 0x{:08x})",
-                                                  progress_name(*min_stage),
-                                                  laggard_count,
-                                                  representative_laggard->chan,
-                                                  representative_laggard->raw_status)
-                                            : std::string("no cores reached a comparable init stage");
+}
 
+[[noreturn]] void report_router_sync_timeout_and_throw(
+    Device* dev,
+    chan_id_t master_chan,
+    const tt::umd::CoreCoord& master_core,
+    uint32_t master_raw_status,
+    uint32_t expected_status,
+    uint32_t router_sync_address,
+    uint32_t timeout_ms,
+    tt::tt_fabric::ControlPlane& control_plane,
+    Cluster& cluster) {
+    log_router_sync_timeout_diagnostics(
+        dev, master_chan, master_core, master_raw_status, expected_status,
+        router_sync_address, timeout_ms, control_plane, cluster);
     TT_THROW(
         "Fabric Router Sync: Timeout after {} ms on Device {}: expected status 0x{:08x}. "
-        "Master chan={} got 0x{:08x}. {}.{}{} See error log above for per-core status breakdown.",
+        "Master chan={} got 0x{:08x}. See error log above for per-core status breakdown.",
         timeout_ms,
         dev->id(),
         expected_status,
         master_chan,
-        master_raw_status,
-        laggard_summary,
-        diagnostic_hint.empty() ? "" : " ",
-        diagnostic_hint);
+        master_raw_status);
 }
 
 }  // namespace
@@ -3357,23 +3356,24 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
             if (elapsed_ms > timeout_ms) {
                 // FIX AL (#42429): router sync timed out — mesh fabric is partially broken
                 // (likely a dead-relay neighbor holding up the ring handshake; see Job 932).
-                // Log rich diagnostics via main's report function, then gracefully degrade
-                // instead of crashing.  Fabric on this device is degraded; tests fail at
-                // fabric-op time rather than here.
-                //
-                // NOTE: main's report_router_sync_timeout_and_throw() throws, but we need
-                // to degrade gracefully.  Log the diagnostics ourselves and return.
-                log_error(
-                    tt::LogMetal,
-                    "wait_for_fabric_router_sync: Timeout after {} ms on Device {} "
-                    "(master chan={}, sync addr=0x{:08x}). Expected 0x{:08x}, got 0x{:08x}. "
-                    "Skipping — fabric on this device is degraded (FIX AL).",
-                    timeout_ms,
-                    dev->id(),
+                // Emit rich per-router diagnostics (same detail as the throwing path in main),
+                // then gracefully degrade instead of crashing.  Fabric on this device is
+                // degraded; tests fail at fabric-op time rather than here.
+                log_router_sync_timeout_diagnostics(
+                    dev,
                     master_router_chan,
-                    router_sync_address,
+                    master_router_logical_core,
+                    master_router_status[0],
                     expected_status,
-                    master_router_status[0]);
+                    router_sync_address,
+                    static_cast<uint32_t>(timeout_ms),
+                    control_plane_,
+                    cluster_);
+                log_warning(
+                    tt::LogMetal,
+                    "wait_for_fabric_router_sync: Device {} degrading gracefully (FIX AL) — "
+                    "fabric unusable but process continues.",
+                    dev->id());
                 // FIX TI (#42429): when base-UMD channels are present the ring barrier signal
                 // may never propagate (inter-rank quiesce can exceed even the 30s FIX TH2
                 // window).  Track this device so verify_all_fabric_channels_healthy() skips
