@@ -66,15 +66,6 @@ PagedUpdateCacheProgramFactory::cached_program_t PagedUpdateCacheProgramFactory:
     }
 
     // Pagetable-specific parameters.
-    //
-    // ``block_size`` selects how many tile-rows live in one cache block.
-    // In the legacy path we always read it from ``cache_tensor.padded_shape()[2]``;
-    // when ``block_size_override`` is set, the caller is reinterpreting
-    // the same physical buffer with a different ``(block_size, head_dim)``
-    // tile arrangement, so we use the override instead. Validation in
-    // ``validate_on_program_cache_miss`` already ensured the per-block
-    // byte count is preserved across views, so ``block_start_id`` math
-    // still addresses the right block boundary.
     bool is_paged_cache = page_table.has_value();
     uint32_t block_size = 0;
     uint32_t block_size_t = 0;
@@ -93,14 +84,9 @@ PagedUpdateCacheProgramFactory::cached_program_t PagedUpdateCacheProgramFactory:
         page_table_data_format = tt_metal::datatype_to_dataformat_converter(page_table_tensor.dtype());
     }
 
-    // CUDA-style: per-call write geometry (``head_dim`` and therefore
-    // ``Wt`` / ``Wbytes``) comes from the input tensor — the cache shape
-    // is just a byte-budget hint. The kernel still uses ``num_heads``
-    // from the cache because ``num_heads`` is per-block (a property of
-    // how the cache is laid out), not per-token. ``St`` is the cache's
-    // block-size in tiles — for paged mode it equals ``block_size_t``
-    // (overridden), for non-paged it's the cache's sequence length in
-    // tiles (no override).
+    // Per-call write geometry (head_dim, Wt, Wbytes) comes from the input tensor; the
+    // cache shape is only a byte budget. num_heads is per-block, so it still comes from
+    // the cache. St is block_size_t in paged mode, cache seq-len-in-tiles otherwise.
     uint32_t Wt = input_tensor.padded_shape()[-1] / TILE_WIDTH;
     uint32_t St = is_paged_cache ? block_size_t : cache_tensor.padded_shape()[-2] / TILE_HEIGHT;
     uint32_t Wbytes = fp32_dest_acc_en ? input_tensor.padded_shape()[-1] * sizeof(float)

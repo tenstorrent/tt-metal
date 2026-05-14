@@ -34,15 +34,11 @@ PagedFillCacheProgramFactory::cached_program_t PagedFillCacheProgramFactory::cre
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     // input_tensor: [1, num_heads, input_seq_len, head_dim]
-    // cache_tensor: [max_num_blocks, num_heads_or_num_kv_heads, block_size, head_dim]
+    // cache_tensor: [max_num_blocks, num_kv_heads, block_size, head_dim]
     // page_table_tensor: [b, max_num_blocks_per_seq]
     //
-    // ``head_dim`` (and therefore ``Wt``) is read from the input —
-    // CUDA-style — so callers can write into a cache that was physically
-    // allocated with a different ``head_dim`` per their HMA tensor-sharing
-    // view, as long as the per-block byte count is preserved (enforced
-    // in validate_on_program_cache_miss). ``block_size`` honors the
-    // optional override for the same reason.
+    // head_dim comes from the input and block_size honors the override; the cache shape
+    // is only a byte budget (per-block byte count enforced in validate).
     const uint32_t num_heads = input_tensor.padded_shape()[1];
     const uint32_t input_seq_len = input_tensor.padded_shape()[2];
 

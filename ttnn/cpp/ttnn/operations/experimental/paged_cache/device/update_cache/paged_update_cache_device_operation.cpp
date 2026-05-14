@@ -52,36 +52,20 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
         cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Only interleaved cache is supported");
 
-    // ``block_size_override`` only makes sense in paged mode (it overrides
-    // the cache's block dimension, which exists only when the cache is
-    // organised into pages indexed by ``page_table``). Reject early —
-    // before the byte-count check below — so the user sees the actual
-    // misconfiguration rather than an unrelated geometry-mismatch error
-    // computed against the non-paged ``cache.shape[2]`` (which is the
-    // sequence length, not a block size).
+    // block_size_override is paged-mode only: in non-paged mode cache.shape[2] is the
+    // sequence length, and a "geometry mismatch" error there would be misleading.
     if (operation_attributes.block_size_override.has_value()) {
         TT_FATAL(
             page_table.has_value(),
             "block_size_override is only supported in paged mode (when page_table is provided)");
     }
 
-    // Per-block byte-count consistency. The kernel derives its write
-    // geometry from ``num_heads`` (cache.padded_shape[1]),
-    // ``input.padded_shape[-1]`` (per-token head_dim — CUDA-style: read
-    // from input, not cache) and ``block_size`` (``block_size_override``
-    // when provided, else cache.padded_shape[2]). For the kernel's
-    // ``block_start_id = physical_block_id * num_heads * block_size_t * Wt``
-    // arithmetic to address the right block boundary in DRAM, the
-    // product ``num_heads * block_size * head_dim`` (elements per block,
-    // pre-dtype) must equal what the cache was physically allocated for.
-    // When the override is not provided and head_dims match, this check
-    // is trivially satisfied — behavior is byte-identical to the
-    // pre-override path for legacy callers.
-    //
-    // Only checked in paged mode: non-paged callers never set the
-    // override and the legacy assertion (input.last_dim ==
-    // cache.last_dim) below still applies to keep their sharding /
-    // stride assumptions intact.
+    // Per-block byte-count consistency. When the caller reinterprets the cache with a
+    // different (block_size, head_dim) view via block_size_override, the kernel's
+    // per-block element stride (num_kv_heads * block_size * head_dim) must be preserved
+    // or block_start_id math will land in the wrong place. Trivially holds for legacy
+    // callers (no override, matching head dims). Non-paged callers keep the stricter
+    // legacy last-dim equality below (sharding/stride assumptions upstream).
     const uint32_t input_head_dim = input_tensor.padded_shape()[-1];
     if (page_table.has_value()) {
         const uint32_t cache_num_heads = cache_tensor.padded_shape()[1];
@@ -94,12 +78,9 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
             static_cast<uint64_t>(cache_num_heads) * effective_block_size * input_head_dim;
         TT_FATAL(
             view_elems_per_block == cache_elems_per_block,
-            "paged_update_cache geometry mismatch: cache holds {} elements per block "
-            "(num_kv_heads={}, block_size={}, head_dim={}) but the call's view is {} "
-            "elements per block (num_kv_heads={}, block_size={}, head_dim={}). The "
-            "kernel addresses cache blocks at a stride of num_kv_heads * block_size "
-            "* head_dim, so this product must be preserved across views of the same "
-            "physical buffer.",
+            "paged_update_cache geometry mismatch: cache has {} elems/block "
+            "(kv_heads={}, block_size={}, head_dim={}) but call view is {} "
+            "(kv_heads={}, block_size={}, head_dim={}).",
             cache_elems_per_block,
             cache_num_heads,
             cache_block_size,
@@ -114,18 +95,14 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
             effective_block_size,
             tt::constants::TILE_HEIGHT);
     } else {
-        // Non-paged path: keep the legacy invariant that input and cache
-        // share the same last dim (sharding / stride assumption upstream
-        // of the program factory).
         TT_FATAL(
             input_head_dim == cache_tensor.padded_shape()[-1],
             "Last dim of input tensor ({}) must match last dim of cache tensor ({}) in non-paged mode",
             input_head_dim,
             cache_tensor.padded_shape()[-1]);
     }
-    // Sharded inputs assume the kernel's compile-time Wt matches the
-    // shard width. Wt is now derived from ``input.padded_shape[-1]``, so
-    // input must be tile-aligned on the last dim regardless of cache shape.
+    // Wt is derived from input.padded_shape[-1], so the last dim must be tile-aligned
+    // regardless of cache shape.
     TT_FATAL(
         input_head_dim % tt::constants::TILE_WIDTH == 0,
         "input_tensor last dim ({}) must be a multiple of TILE_WIDTH ({})",
@@ -291,9 +268,7 @@ ttsl::hash::hash_t PagedUpdateCacheDeviceOperation::compute_program_hash(
     // - compute_kernel_config: affects compile-time args (fp32_dest_acc_en)
     // - share_cache: affects program structure (semaphore setup)
     // - mesh_coords: affects program factory selection
-    // - block_size_override: enters compile-time args as block_size /
-    //   block_size_t; two calls with different overrides must compile
-    //   to different programs even on the same cache + input shapes.
+    // - block_size_override: enters compile-time args
     return operation::hash_operation<PagedUpdateCacheDeviceOperation>(
         args.compute_kernel_config,
         args.share_cache,

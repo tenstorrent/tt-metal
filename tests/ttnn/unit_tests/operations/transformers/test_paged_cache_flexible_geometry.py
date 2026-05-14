@@ -4,26 +4,13 @@
 """Tests for the ``block_size`` override on ``paged_update_cache`` and
 ``paged_fill_cache``.
 
-These ops gained an optional ``block_size`` kwarg so that callers (e.g.
-vLLM's hybrid kv-cache-groups manager) can write into a single physical
-cache buffer with different ``(block_size, head_dim)`` views per layer
-type, as long as ``num_kv_heads * block_size * head_dim`` (the per-block
-element count) is preserved across views. The kernel now derives
-``head_dim`` from the input tensor (CUDA-style) and ``block_size`` from
-the override or the cache shape.
+These ops accept an optional ``block_size`` kwarg so callers (e.g. vLLM's hybrid
+kv-cache-groups manager) can write into one physical cache with different
+``(block_size, head_dim)`` views per layer, as long as
+``num_kv_heads * block_size * head_dim`` is preserved across views.
 
-The tests cover:
-
-* legacy behavior (no override, matching head_dim): byte-identical to
-  the pre-change path.
-* "flips view" cases in both directions: cache allocated as one shape,
-  written through the override as the other shape; verified by
-  reinterpreting the round-tripped buffer with ``_permute_tile_grid``
-  rather than a torch ``view`` reshape.
-* shared buffer with both views interleaved: one physical cache, writes
-  from each view land at disjoint block IDs without trampling.
-* negative cases: byte-count mismatch and override without page_table
-  must both raise ``RuntimeError`` from validation.
+Coverage: legacy (no override), override in both directions, shared buffer with
+interleaved views, and negative cases (byte-count mismatch, override without page_table).
 """
 
 import pytest
@@ -37,12 +24,8 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 
 
 def _sharded_input(device, x_padded):
-    """Convert a torch input ``(1, B, padded_heads, head_dim)`` to a height-
-    sharded ttnn tensor on ``device``, one shard per batch user.
-
-    Matches the layout that ``run_test_paged_update_cache_decode`` uses in
-    ``tests/ttnn/nightly/unit_tests/operations/transformers/test_paged_update_cache.py``.
-    """
+    """Convert ``(1, B, padded_heads, head_dim)`` to a height-sharded ttnn tensor,
+    matching the layout in ``test_paged_update_cache.py::run_test_paged_update_cache_decode``."""
     num_users = x_padded.shape[1]
     xt = ttnn.Tensor(x_padded, ttnn.bfloat16).to(ttnn.TILE_LAYOUT)
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -76,29 +59,11 @@ def _read_paged_cache(cache_tt):
 def _permute_tile_grid(t, view_block_size, view_head_dim):
     """Reinterpret ``t``'s last two dims under a different tile-grid.
 
-    Why this is needed:
-    The op's ``block_size`` override lets a single physical buffer be
-    accessed with different ``(block_size, head_dim)`` views per call —
-    the kernel addresses DRAM tiles by their *linear* position within a
-    block, computed from the view's tile-grid. ttnn's tilize/untilize,
-    on the other hand, is bound to the cache's *declared* shape and
-    interprets the same DRAM bytes through the cache's tile-grid.
-
-    Concretely: a write to view tile ``(br, hc)`` (linear position
-    ``br * view_Wt + hc``) lands at the same DRAM bytes as the cache
-    tile ``(BR_alloc, HC_alloc) == (linear // alloc_Wt, linear % alloc_Wt)``.
-    Inside the tile, the kernel's 32x32-element layout is preserved.
-    The element-level permutation that takes the cache-shape torch
-    tensor (after ttnn's untilize) to the view-shape torch tensor
-    therefore has to respect the linear-tile correspondence, not the
-    naive element-row-major flat offset that ``torch.view`` would use.
-
-    Implementation: split the last two dims into ``(tile_rows, 32,
-    tile_cols, 32)``, group ``(tile_rows, tile_cols)`` into a linear
-    tile index, re-split that linear index under the view's
-    ``(view_tile_rows, view_tile_cols)`` shape, then put the inner
-    32x32 dims back. No data copy beyond the standard non-contiguous
-    permutes ``.contiguous()`` forces.
+    The kernel writes by linear tile position within a block; ttnn's untilize is bound
+    to the cache's *declared* shape. So when alloc-shape differs from call-view, a plain
+    ``torch.view`` reshape of the untilized tensor would mis-place data — the tile
+    boundaries are in different places. This permutation re-groups tiles by their linear
+    index into the view's tile-grid, keeping each 32×32 tile intact.
     """
     N, KV, alloc_block_size, alloc_head_dim = t.shape
     TILE = 32
@@ -111,17 +76,12 @@ def _permute_tile_grid(t, view_block_size, view_head_dim):
     total_tiles = alloc_BR_t * alloc_Wt
     assert total_tiles == view_BR_t * view_Wt, "per-block tile count must match"
 
-    # (N, KV, BS, HD) -> split into tile-grid + intra-tile.
+    # Split into (tile-grid, intra-tile), flatten tile-grid, re-split under view, repack.
     t = t.view(N, KV, alloc_BR_t, TILE, alloc_Wt, TILE)
-    # Move tile-grid dims together: (N, KV, alloc_BR_t, alloc_Wt, TILE, TILE).
     t = t.permute(0, 1, 2, 4, 3, 5).contiguous()
-    # Flatten tile-grid into linear tile index.
     t = t.view(N, KV, total_tiles, TILE, TILE)
-    # Re-split under view's tile-grid.
     t = t.view(N, KV, view_BR_t, view_Wt, TILE, TILE)
-    # Put intra-tile rows next to tile-row dim, intra-tile cols next to tile-col dim.
     t = t.permute(0, 1, 2, 4, 3, 5).contiguous()
-    # Collapse back to (N, KV, view_BS, view_HD).
     return t.view(N, KV, view_block_size, view_head_dim)
 
 
@@ -130,11 +90,7 @@ def _permute_tile_grid(t, view_block_size, view_head_dim):
 
 @pytest.mark.parametrize("block_size, head_dim", [(64, 256), (128, 256), (64, 512)])
 def test_paged_update_cache_legacy_no_override(block_size, head_dim, device):
-    """No ``block_size`` kwarg → behavior identical to the pre-change op.
-
-    This guards backward compatibility: every existing caller that doesn't
-    pass ``block_size`` must keep working unchanged.
-    """
+    """No ``block_size`` kwarg → behavior identical to the pre-change op. Backward-compat guard."""
     torch.manual_seed(0)
     num_users = 4
     num_kv_heads = 1
@@ -157,10 +113,8 @@ def test_paged_update_cache_legacy_no_override(block_size, head_dim, device):
     x_padded = torch.nn.functional.pad(x, (0, 0, 0, 32 - num_kv_heads), "constant", 0)
     xt = _sharded_input(device, x_padded)
 
-    # Update reference: in cache_ref, each user maps virtual block →
-    # physical via page_table; for user i, position cache_idxs[i] lands
-    # in block page_table[i, cache_idxs[i] // block_size] at row
-    # cache_idxs[i] % block_size.
+    # Reference: walk page_table to find each user's physical block, then write at
+    # ``cache_idxs[u] % block_size`` within it.
     for u in range(num_users):
         pos = cache_idxs[u]
         physical_block = page_table[u, pos // block_size].item()
@@ -180,44 +134,26 @@ def test_paged_update_cache_legacy_no_override(block_size, head_dim, device):
 
 @pytest.mark.parametrize("num_kv_heads", [1, 8])
 def test_paged_update_cache_override_view_full_into_sliding_buffer(num_kv_heads, device):
-    """Buffer allocated for sliding (block=128, head=256); call writes
-    with the full-attention view (block=64, head=512) via the override.
+    """Buffer allocated as sliding (block=128, head=256); writes use the full-attention
+    view (block=64, head=512) via the override. Canonical Gemma4-E2B scenario after
+    vLLM's page-size unifier matches sliding's block_size to full's.
 
-    Verifies the kernel addresses the right block boundary, and after
-    reading back + ``view``-reshaping to ``(N, 1, 64, 512)`` the written
-    data appears at the expected (view-relative) position.
-
-    This is the canonical Gemma4-E2B scenario: the page-size unifier in
-    vLLM doubles sliding's block_size from 64 to 128 to match full's
-    65,536-byte page; the shared DRAM buffer then needs to support both
-    views.
-
-    Parametrized on ``num_kv_heads`` so the multi-head per-block stride
-    (``num_kv_heads * block_size * head_dim`` elements) gets exercised:
-    single-head values can't catch a regression where the wrong
-    dimension is used in the stride math.
+    Parametrized on ``num_kv_heads`` to exercise the multi-head per-block stride.
     """
     torch.manual_seed(1)
 
     num_users = 4
-    # Allocation view: sliding shape.
+    # Alloc view: sliding. Call view: full.
     alloc_block_size = 128
     alloc_head_dim = 256
-    # Call view: full shape.
     view_block_size = 64
     view_head_dim = 512
-    # Both views have ``num_kv_heads * 32768`` elements/block, same per-block bytes.
     assert num_kv_heads * alloc_block_size * alloc_head_dim == num_kv_heads * view_block_size * view_head_dim
 
-    # Max logical sequence length under the *view*; the page table indexes
-    # the view's block count.
     max_seq_len_view = 512
     max_num_blocks_per_seq = max_seq_len_view // view_block_size
     max_num_blocks = num_users * max_num_blocks_per_seq
 
-    # Cache is allocated under the legacy/alloc view. The number of
-    # cache-blocks must also match (per-block-byte-count is identical, so
-    # the block count is identical too).
     assert max_seq_len_view % alloc_block_size == 0
     cache_tt, cache_ref_alloc = _make_paged_cache(
         max_num_blocks, num_kv_heads, alloc_block_size, alloc_head_dim, device
@@ -226,12 +162,10 @@ def test_paged_update_cache_override_view_full_into_sliding_buffer(num_kv_heads,
     page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(num_users, max_num_blocks_per_seq)
     page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
 
-    # Decode update positions, expressed in the *view* coordinate system
-    # (block_size=64 here).
-    cache_idxs = [10 + u * 17 for u in range(num_users)]  # spread across blocks
+    # cache_idxs are in view coordinates.
+    cache_idxs = [10 + u * 17 for u in range(num_users)]
     cache_idxs_tt = ttnn.Tensor(torch.tensor(cache_idxs), ttnn.int32).to(device)
 
-    # Input with the view's head_dim.
     x = torch.randn([1, num_users, num_kv_heads, view_head_dim]).bfloat16().float()
     x_padded = torch.nn.functional.pad(x, (0, 0, 0, 32 - num_kv_heads), "constant", 0)
     xt = _sharded_input(device, x_padded)
@@ -244,23 +178,15 @@ def test_paged_update_cache_override_view_full_into_sliding_buffer(num_kv_heads,
         block_size=view_block_size,
     )
 
-    # Read cache back as allocated, then re-interpret under the view's
-    # tile-grid via ``_permute_tile_grid`` (NOT torch.view — see that
-    # helper's docstring).
     got_alloc = _read_paged_cache(cache_tt)
     assert got_alloc.shape == (max_num_blocks, num_kv_heads, alloc_block_size, alloc_head_dim)
     got_view = _permute_tile_grid(got_alloc, view_block_size, view_head_dim)
 
-    # Build the reference in the view's coordinate system: take the
-    # initial cache, translate to view coords via the same tile-grid
-    # permutation, then apply the writes in view coords.
     cache_ref_view = _permute_tile_grid(cache_ref_alloc, view_block_size, view_head_dim).clone()
     for u in range(num_users):
         pos = cache_idxs[u]
         physical_block = page_table[u, pos // view_block_size].item()
-        # ``x[0, u]`` is ``[KV, head_dim]``; target slot is ``[KV, 1, head_dim]``.
-        # ``unsqueeze(1)`` makes the kv-head dim broadcast-compatible with the
-        # 1-token slot — both single-head and multi-head land at the right slot.
+        # unsqueeze(1) broadcasts [KV, head_dim] into the [KV, 1, head_dim] slot.
         cache_ref_view[physical_block, 0:num_kv_heads, pos % view_block_size : pos % view_block_size + 1, :] = x[
             0, u
         ].unsqueeze(1)
@@ -366,9 +292,7 @@ def test_paged_update_cache_shared_buffer_both_views_disjoint_blocks(device):
         xt_sliding,
         update_idxs_tensor=sliding_idxs_tt,
         page_table=sliding_pt_tt,
-        # No override here — call view matches the allocation view; this
-        # also exercises that legacy callers on a shared buffer keep
-        # working when other layers later use the override path.
+        # No override: call view matches alloc view.
     )
 
     # Full write: block IDs num_users..2*num_users-1.
@@ -386,10 +310,7 @@ def test_paged_update_cache_shared_buffer_both_views_disjoint_blocks(device):
         block_size=full_block_size,
     )
 
-    # Reference: apply sliding write directly in alloc/sliding coords
-    # (alloc shape == sliding view), then transition into full view via
-    # the tile-grid-aware permutation for the full write — same as the
-    # kernel does on device.
+    # Reference: write sliding in alloc coords, permute to full coords, then write full.
     cache_ref_sliding = cache_ref_alloc.clone()
     for u in range(num_users):
         pos = sliding_idxs[u]
@@ -413,15 +334,13 @@ def test_paged_update_cache_shared_buffer_both_views_disjoint_blocks(device):
 
 
 def test_paged_update_cache_negative_byte_count_mismatch(device):
-    """An override that breaks the per-block byte invariant must be
-    rejected at validation time, not silently corrupt memory."""
+    """Override that breaks the per-block byte invariant must be rejected at validation."""
     torch.manual_seed(4)
     num_users = 4
     num_kv_heads = 1
-    # Allocate (1, 64, 512) — 32768 elem/block.
+    # Alloc: 32768 elem/block. View: 65536 (mismatched).
     alloc_block_size = 64
     alloc_head_dim = 512
-    # Call with mismatched view: 256 * 256 = 65536 (double the bytes).
     view_block_size = 256
     view_head_dim = 256
     max_num_blocks = 4
@@ -447,10 +366,7 @@ def test_paged_update_cache_negative_byte_count_mismatch(device):
 
 
 def test_paged_update_cache_negative_override_without_page_table(device):
-    """``block_size`` only makes sense in paged mode. The validator
-    explicitly rejects it when no ``page_table`` is supplied to surface
-    the misconfiguration instead of letting the kernel use it silently
-    in non-paged mode."""
+    """``block_size`` is paged-mode only; validator must reject it without a page_table."""
     torch.manual_seed(5)
     num_users = 4
     num_kv_heads = 1
@@ -492,22 +408,14 @@ def _run_fill_cache_round_trip(
     input_seq_len,
     block_size_kwarg,
 ):
-    """Shared fill-cache test body.
-
-    Allocates a paged cache with ``(alloc_block_size, alloc_head_dim)``,
-    fills it user-by-user with an input shaped under the view's
-    ``(view_block_size, view_head_dim)``, and verifies the round trip
-    matches the reference torch fill (viewed in the same coordinate
-    system as the write).
-
-    ``block_size_kwarg`` is what we pass to ``paged_fill_cache``; when
-    None, we expect alloc-view == call-view (no override).
+    """Shared fill-cache test body. Allocates a paged cache under the alloc view, fills
+    user-by-user with input shaped under the call view, and checks the round-trip in
+    view coordinates. ``block_size_kwarg=None`` means no override (alloc == call view).
     """
     max_num_blocks_per_seq = input_seq_len // view_block_size
     assert max_num_blocks_per_seq * view_block_size == input_seq_len
     max_num_blocks = num_users * max_num_blocks_per_seq
 
-    # Allocate as alloc view.
     cache_shape = [max_num_blocks, num_kv_heads, alloc_block_size, alloc_head_dim]
     cache_torch_alloc = torch.randn(cache_shape).bfloat16().float()
     cache_tt = ttnn.Tensor(cache_torch_alloc, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
@@ -515,9 +423,6 @@ def _run_fill_cache_round_trip(
     page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(num_users, max_num_blocks_per_seq)
     page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
 
-    # One paged_fill_cache call per user. Reference is built in the view
-    # coordinate system, mapping alloc-shape bytes to view-shape via the
-    # tile-grid-aware permutation (see ``_permute_tile_grid``).
     cache_ref_view = _permute_tile_grid(cache_torch_alloc, view_block_size, view_head_dim).clone()
     for u in range(num_users):
         x = torch.randn([1, num_kv_heads, input_seq_len, view_head_dim]).bfloat16().float()
@@ -528,8 +433,6 @@ def _run_fill_cache_round_trip(
             kwargs["block_size"] = block_size_kwarg
         ttnn.experimental.paged_fill_cache(cache_tt, xt, page_table_tt, **kwargs)
 
-        # Apply equivalent torch fill: distribute tokens 0..input_seq_len-1
-        # to the user's virtual blocks per the page table.
         for t in range(input_seq_len):
             vb = t // view_block_size
             slot = t % view_block_size
@@ -561,15 +464,9 @@ def test_paged_fill_cache_legacy_no_override(device):
 
 @pytest.mark.parametrize("num_kv_heads", [1, 8])
 def test_paged_fill_cache_override_view_full_into_sliding_buffer(num_kv_heads, device):
-    """Cache allocated as sliding ``(128, 256)``, filled via override
-    with full ``(64, 512)``.
-
-    Parametrized on ``num_kv_heads`` so the kernel's per-block stride
-    (``num_kv_heads * block_size * head_dim``) is exercised on a
-    realistic multi-head case as well. ``paged_fill_cache``'s program
-    factory derives ``num_heads`` from ``input.padded_shape()[1]``, so
-    the multi-head case also catches regressions in the
-    ``input_num_heads == cache_num_heads`` validator.
+    """Cache allocated as sliding ``(128, 256)``, filled via override with full
+    ``(64, 512)``. Parametrized on ``num_kv_heads`` to exercise the multi-head per-block
+    stride and the ``input_num_heads == cache_num_heads`` validator.
     """
     torch.manual_seed(11)
     _run_fill_cache_round_trip(
@@ -607,9 +504,9 @@ def test_paged_fill_cache_negative_byte_count_mismatch(device):
     torch.manual_seed(13)
     num_users = 2
     num_kv_heads = 1
+    # Alloc: 32768 elem/block. View: 65536 (mismatched).
     alloc_block_size = 64
     alloc_head_dim = 512
-    # 256 * 256 = 65536 elem/block, doubled from alloc's 32768.
     view_block_size = 256
     view_head_dim = 256
     input_seq_len = 128

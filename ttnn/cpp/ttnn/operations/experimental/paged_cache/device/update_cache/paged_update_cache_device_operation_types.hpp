@@ -20,16 +20,10 @@ struct PagedUpdateCacheParams {
     const ttnn::DeviceComputeKernelConfig compute_kernel_config;
     const bool share_cache;
     const std::optional<std::set<ttnn::MeshCoordinate>> mesh_coords;
-    // Optional override of the per-block token capacity. When unset, the
-    // kernel derives ``block_size`` from ``cache_tensor.padded_shape()[2]``
-    // (the legacy CUDA-style "block_size from cache" path). When set,
-    // every call may interpret the same physical buffer as having a
-    // different ``(block_size, head_dim)`` tile arrangement, as long as
-    // the total bytes per cache block are preserved — this is what
-    // upstream vLLM's hybrid kv-cache-groups manager assumes after its
-    // page-size unifier doubles smaller-page-size groups' ``block_size``
-    // to equalise per-block memory. See validate_on_program_cache_miss
-    // for the byte-count consistency check.
+    // Optional per-call block_size, overriding cache.padded_shape[2]. Lets a single
+    // physical buffer be addressed with different (block_size, head_dim) views as long
+    // as num_kv_heads * block_size * head_dim is preserved (checked in
+    // validate_on_program_cache_miss). Used by vLLM's hybrid kv-cache-groups path.
     const std::optional<uint32_t> block_size_override;
 };
 

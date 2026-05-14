@@ -45,39 +45,26 @@ void PagedFillCacheDeviceOperation::validate_on_program_cache_miss(
     auto input_shape = input_tensor.padded_shape();
     auto page_table_shape = page_table_tensor.padded_shape();
 
-    // The kernel uses the batch index to select a row from the page table,
-    // so validate against the page-table batch dimension, not the cache's
-    // block dimension.
+    // batch_idx indexes the page table, not the cache's block dimension.
     TT_FATAL(
         args.batch_idx_fallback < page_table_shape[0],
         "Batch idx must be within the page_table batch size");
 
-    // The program factory derives ``num_heads`` from
-    // ``input_tensor.padded_shape()[1]`` (CUDA-style: per-token write
-    // geometry comes from the input) and uses it as a compile-time arg
-    // for the kernel's per-block stride. If input and cache disagree
-    // on ``num_heads`` the kernel addresses would be wrong on either
-    // side: too-large strides walk off the end of the cache page,
-    // too-small ones skip tiles. The byte-count check below only
-    // guards against mismatched ``(block_size, head_dim)`` views;
-    // assert ``num_heads`` separately so the failure mode is explicit.
+    // The program factory reads num_heads from input.padded_shape[1] and bakes it into
+    // the kernel's per-block stride, so input and cache must agree on num_heads
+    // independently of the per-block byte-count check below.
     const uint32_t cache_num_heads = cache_shape[1];
     const uint32_t input_num_heads = input_shape[1];
     TT_FATAL(
         input_num_heads == cache_num_heads,
-        "paged_fill_cache num_heads mismatch: input has {} heads but cache has {}. "
-        "The kernel uses input's num_heads as the per-block stride; they must agree.",
+        "paged_fill_cache num_heads mismatch: input has {} heads but cache has {}.",
         input_num_heads,
         cache_num_heads);
 
-    // Per-block byte-count consistency check. ``paged_fill_cache``'s
-    // kernel addresses cache pages at a stride of
-    // ``cache_block_size * num_heads * cache_head_dim`` elements
-    // (1 per cache page). When the caller reinterprets the same buffer
-    // with a different ``(block_size, head_dim)`` view — see
-    // ``PagedFillCacheParams::block_size_override`` — that product must
-    // be preserved. Trivially holds when no override is set and head
-    // dims match.
+    // Per-block byte-count consistency. When the caller reinterprets the cache with a
+    // different (block_size, head_dim) view via block_size_override, the kernel's
+    // per-block element stride (num_kv_heads * block_size * head_dim) must be preserved.
+    // Trivially holds for legacy callers (no override, matching head dims).
     const uint32_t cache_block_size = cache_shape[2];
     const uint32_t cache_head_dim = cache_shape[3];
     const uint32_t input_head_dim = input_shape[3];
@@ -87,12 +74,9 @@ void PagedFillCacheDeviceOperation::validate_on_program_cache_miss(
         static_cast<uint64_t>(cache_num_heads) * effective_block_size * input_head_dim;
     TT_FATAL(
         view_elems_per_block == cache_elems_per_block,
-        "paged_fill_cache geometry mismatch: cache holds {} elements per block "
-        "(num_kv_heads={}, block_size={}, head_dim={}) but the call's view is {} "
-        "elements per block (num_kv_heads={}, block_size={}, head_dim={}). The "
-        "kernel addresses cache pages at a stride of num_kv_heads * block_size "
-        "* head_dim, so this product must be preserved across views of the same "
-        "physical buffer.",
+        "paged_fill_cache geometry mismatch: cache has {} elems/block "
+        "(kv_heads={}, block_size={}, head_dim={}) but call view is {} "
+        "(kv_heads={}, block_size={}, head_dim={}).",
         cache_elems_per_block,
         cache_num_heads,
         cache_block_size,
@@ -144,9 +128,9 @@ ttsl::hash::hash_t PagedFillCacheDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto program_factory = select_program_factory(args, tensor_args);
 
-    // Exclude batch_idx_fallback and noop from hash since they're runtime-only parameters (used only in runtime args)
-    // Include mesh_coords since it affects program factory selection
-    // Include block_size_override since it enters compile-time args.
+    // Exclude batch_idx_fallback and noop (runtime-only).
+    // Include mesh_coords (affects program factory selection).
+    // Include block_size_override (enters compile-time args).
     return operation::hash_operation<PagedFillCacheDeviceOperation>(
         args.mesh_coords, args.block_size_override, tensor_args, program_factory.index());
 }
