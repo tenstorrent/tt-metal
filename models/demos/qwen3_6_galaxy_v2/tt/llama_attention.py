@@ -725,11 +725,15 @@ class TtLlamaAttention(LightweightModule):
                     self.max_seq_len,
                     self.head_dim,
                 )
+            # qwen3.6 fills the KV cache with bfloat16 (k_rot/v_t come from
+            # the QKVG linear at bfloat16 dtype); bake the cache in bfloat16
+            # so ttnn.fill_cache / paged_fill_cache don't trip the
+            # "input and cache must have same dtype" check.
             self.layer_past = [
                 ttnn.from_torch(
                     kv,
                     device=self.mesh_device,
-                    dtype=self.dtype,
+                    dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=col_shard_kv,
@@ -1407,6 +1411,15 @@ class TtLlamaAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
         )
+        # ttnn.linear of rank-3 LHS @ rank-4 weight yields a rank-4 output; the
+        # subsequent slices use rank-3 begins/ends, so collapse the leading
+        # singleton(s) back to rank-3 before slicing. The wqkvg weight is uploaded
+        # with shape [1, 1, H, 14336]; the per-device matmul preserves both
+        # leading singletons.  V2-7 PCC test surfaced this — the original v1
+        # path uploaded wqkvg as rank-2.
+        if len(list(xqkvg.shape)) == 4:
+            _, _, _T_q, _N_q = list(xqkvg.shape)
+            xqkvg = ttnn.reshape(xqkvg, [B, _T_q, _N_q])
 
         # 2. Split Q / Gate / K / V (per-col).
         q_flat = ttnn.slice(xqkvg, [0, 0, 0], [B, T, q_dim_pc], memory_config=ttnn.DRAM_MEMORY_CONFIG)
