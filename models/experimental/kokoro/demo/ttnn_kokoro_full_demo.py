@@ -2,7 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Kokoro-82M full TTNN demo (PL-BERT + predictor + experimental ISTFTNet vocoder on device)."""
+"""Kokoro-82M full TTNN demo (PL-BERT + predictor + experimental ISTFTNet vocoder on device).
+
+Run from the ``tt-metal`` repo root with this tree's venv (matches the local ``ttnn`` / Metal build)::
+
+    source python_env/bin/activate
+    python models/experimental/kokoro/demo/ttnn_kokoro_full_demo.py --text \"...\"
+"""
 
 from __future__ import annotations
 
@@ -49,7 +55,7 @@ def main() -> int:
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 1), l1_small_size=24576)
+    device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 1), l1_small_size=98304)
     try:
         model = KokoroFullTtnn(
             device,
