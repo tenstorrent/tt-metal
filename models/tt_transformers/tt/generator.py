@@ -62,7 +62,7 @@ def _pad_or_create_page_table(table, target_blocks):
     if table is not None:
         num_pad = aligned_blocks - table.shape[1]
         if num_pad > 0:
-            padding = torch.zeros(1, num_pad, dtype=torch.int32)
+            padding = torch.ones(1, num_pad, dtype=torch.int32) * -1
             return torch.cat([table, padding], dim=-1)
         return table
     return torch.ones(1, aligned_blocks, dtype=torch.int32) * -1
@@ -416,6 +416,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self,
         prefill_ids,
         page_table=None,
+        full_page_table=None,
         user_id=0,
         last_token_idx=None,
         kv_cache=None,
@@ -435,15 +436,21 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         if page_table is not None and batch_size == 1:
             page_table = page_table[user_id : user_id + 1, :]
+        if full_page_table is not None and batch_size == 1:
+            full_page_table = full_page_table[user_id : user_id + 1, :]
 
         chunk_page_table = None
         if batch_size == 1:
             max_blocks_prefill = _get_max_blocks_prefill(kv_cache)
-            page_table = _pad_or_create_page_table(page_table, max_blocks_prefill)
+            # Preserve full per-user page IDs for traced APC slicing.
+            source_page_table = full_page_table if full_page_table is not None else page_table
+            if source_page_table is None:
+                raise ValueError("Traced prefill requires a page_table")
+            page_table = _pad_or_create_page_table(source_page_table, max_blocks_prefill)
             if use_prefix_caching:
                 chunk_start_block = num_cached_tokens // block_size
                 chunk_end_block = num_blocks_in_seq(num_cached_tokens + prefill_seq_len, block_size)
-                chunk_page_table = page_table[:, chunk_start_block:chunk_end_block]
+                chunk_page_table = source_page_table[:, chunk_start_block:chunk_end_block]
                 chunk_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
                 chunk_page_table = _pad_or_create_page_table(chunk_page_table, chunk_blocks)
 
@@ -723,8 +730,22 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     user_id=batch_user_ids if use_batched_prefill else user_id,
                     padded_batch_size=padded_batch if use_batched_prefill else None,
                 )
+                full_page_table_user = None
+                if enable_trace_current_prompt and not use_batched_prefill:
+                    # Keep the full per-user mapping for traced APC page slicing.
+                    full_page_table_user = self._get_prefill_user_page_table(
+                        page_table_for_user,
+                        kv_cache[model_id],
+                        seq_len,
+                        trace_enabled=False,
+                        prefill_seq_len=prefill_seq_len,
+                        use_batched_prefill=False,
+                        user_id=user_id,
+                        padded_batch_size=None,
+                    )
             else:
                 page_table_user = None
+                full_page_table_user = None
             if page_table_user is not None and _deepseek_kvdbg_enabled():
                 sample = []
                 if page_table_user.numel():
@@ -770,6 +791,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 logits = self._easy_trace_prefill(
                     prefill_ids,
                     page_table=page_table_user,
+                    full_page_table=full_page_table_user,
                     user_id=batch_user_ids if use_batched_prefill else group_user_id,
                     last_token_idx=last_token_idx,
                     kv_cache=model_kv_cache,
