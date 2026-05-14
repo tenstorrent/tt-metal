@@ -140,8 +140,6 @@ class TtDevstral2LargeMLP(LightweightModule):
         return self.args.get_mlp_ff2_all_reduce_mem_config(mode, w2_out)
 
     def _binary_mult_mem(self, mode: Mode):
-        if self._dram_intermediates():
-            return ttnn.DRAM_MEMORY_CONFIG
         return self.args.get_mlp_binary_mult_mem_config(mode)
 
     def forward(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
@@ -256,7 +254,7 @@ class TtDevstral2LargeMLP(LightweightModule):
                     memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == Mode.DECODE else None,
                 )
 
-        mul_out_mem = ttnn.DRAM_MEMORY_CONFIG if self._dram_intermediates() else w1_out.memory_config()
+        mul_out_mem = ttnn.L1_MEMORY_CONFIG if self._dram_intermediates() else w1_out.memory_config()
         w2_in = ttnn.mul(
             w1_out,
             w3_out,
