@@ -12,7 +12,6 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
-#include "core/tt_tensor_utils.hpp"
 #include "metal/ops/select_target_logit/device/select_target_logit_device_operation.hpp"
 #include "metal/ops/subtract_at_target/device/subtract_at_target_device_operation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -30,12 +29,7 @@ namespace {
 // FP32 output here causes binary_ng to auto-inject a TYPECAST(BF16,FP32) into the
 // post_activations chain (binary_ng_program_factory.cpp). Combined with COL_B
 // broadcast (b's W=1) and the multi-device TP setup that vocab_parallel_cross_entropy
-// uses, that path hangs (silent device deadlock — likely tile-count mismatch between
-// compute and writer when the auto-typecast is appended). The downstream `ttnn::sum`
-// is invoked with `ComputeKernelConfig::precise()` (fp32_dest_acc_en=true), so
-// reductions still accumulate in FP32 and the precision argument for going FP32
-// here is moot. Keeping it BF16 also avoids materialising a 2x-bigger
-// [B,1,S,V/tp_size] FP32 intermediate.
+// uses, that path hangs.
 ttnn::Tensor fused_subtract_exp(const ttnn::Tensor& a, const ttnn::Tensor& b) {
     using EltwiseUnary = ttnn::operations::unary::EltwiseUnaryWithParam;
     // 0.0f matches ttnn::exp's default fast_and_approximate_mode=false.
@@ -90,15 +84,13 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
 
     const uint32_t B = logits_shape[0];
     const uint32_t S = logits_shape[2];
-    // TODO(bisect-hang): `[[maybe_unused]]` while the forward/backward bodies are commented
-    // out for hang bisection. Drop the attribute once the real ops are restored.
-    [[maybe_unused]] const uint32_t local_V = logits_shape[3];
-    [[maybe_unused]] const uint32_t N = B * S;
+    const uint32_t local_V = logits_shape[3];
+    const uint32_t N = B * S;
 
-    // // Step 1: local max [B,1,S,1] per device (BF16 — no precision loss)
+    // Step 1: local max [B,1,S,1] per device (BF16 — no precision loss).
     auto local_max = ttnn::max(logits->get_value(), 3, /* keepdim */ true);
 
-    // // Step 2: all-gather local maxes → [B,1,S,tp_size] → global max [B,1,S,1]
+    // Step 2: all-gather local maxes → [B,1,S,tp_size] → global max [B,1,S,1].
     auto all_max_val = ttnn_fixed::distributed::all_gather(local_max, 3, cluster_axis);
     auto global_max = ttnn::max(all_max_val, 3, /* keepdim */ true);
 
@@ -107,43 +99,40 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
     // hangs binary_ng on this COL_B-broadcast / multi-device combo. The downstream
     // ttnn::sum(..., precise()) accumulates in FP32 in DST anyway, so dropping the
     // upcast here costs no real precision and saves a 2x-bigger FP32 intermediate.
-    [[maybe_unused]] auto local_exp = fused_subtract_exp(logits->get_value(), global_max);
-    // auto local_sum = ttnn::sum(local_exp, 3, /* keepdim */ true, std::nullopt, core::ComputeKernelConfig::precise());
-    // auto global_sum = ttnn_fixed::distributed::all_reduce(local_sum, cluster_axis);
+    auto local_exp = fused_subtract_exp(logits->get_value(), global_max);
+    auto local_sum = ttnn::sum(local_exp, 3, /* keepdim */ true, std::nullopt, core::ComputeKernelConfig::precise());
+    auto global_sum = ttnn_fixed::distributed::all_reduce(local_sum, cluster_axis);
 
-    // // log_normalizer = global_max + log(global_sum)  [B,1,S,1]
-    // // global_max is BF16; log(global_sum) is FP32 — output_dtype promotes the add.
-    // auto log_normalizer = ttnn::add(global_max, ttnn::log(global_sum), ttnn::DataType::FLOAT32);
+    // log_normalizer = global_max + log(global_sum)  [B,1,S,1].
+    // Kept in BF16 — global_max and log(global_sum) are both small, well-behaved scalars
+    // per (B,S) row, so we don't need (and don't want) the FP32 output_dtype path on
+    // binary_ng. See note on fused_subtract_exp() above for the auto-typecast hazard.
+    auto log_normalizer = ttnn::add(global_max, ttnn::log(global_sum));
 
-    // // Step 4: target_logit_local via select_target_logit:
-    // // Each TP device k owns vocab [k*local_V, (k+1)*local_V).
-    // auto targets_raw = targets->get_value();
-    // if (targets_raw.layout() != ttnn::Layout::ROW_MAJOR) {
-    //     targets_raw = ttnn::to_layout(targets_raw, ttnn::Layout::ROW_MAJOR);
-    // }
-    // if (targets_raw.logical_shape().rank() != 2U) {
-    //     targets_raw = ttnn::reshape(targets_raw, ttnn::Shape({B, S}));
-    // }
-    // const auto& logits_val = logits->get_value();
-    // auto gather_output = ttnn::prim::ttml_select_target_logit(
-    //     logits_val, targets_raw, /*local_V=*/local_V, /*cluster_axis=*/cluster_axis, /*first_v=*/0U);
+    // Step 4: target_logit_local via select_target_logit:
+    // Each TP device k owns vocab [k*local_V, (k+1)*local_V).
+    auto targets_raw = targets->get_value();
+    if (targets_raw.layout() != ttnn::Layout::ROW_MAJOR) {
+        targets_raw = ttnn::to_layout(targets_raw, ttnn::Layout::ROW_MAJOR);
+    }
+    if (targets_raw.logical_shape().rank() != 2U) {
+        targets_raw = ttnn::reshape(targets_raw, ttnn::Shape({B, S}));
+    }
+    const auto& logits_val = logits->get_value();
+    auto gather_output = ttnn::prim::ttml_select_target_logit(
+        logits_val, targets_raw, /*local_V=*/local_V, /*cluster_axis=*/cluster_axis, /*first_v=*/0U);
 
-    // // All-reduce to collect contributions from all TP shards  [B,1,S,1]
-    // auto target_logit = ttnn_fixed::distributed::all_reduce(gather_output, cluster_axis);
+    // All-reduce to collect contributions from all TP shards  [B,1,S,1]
+    auto target_logit = ttnn_fixed::distributed::all_reduce(gather_output, cluster_axis);
 
-    // // Step 5: per-position loss = log_normalizer − target_logit  →  mean over B*S
-    // // log_normalizer is FP32, target_logit is BF16 — output_dtype keeps subtraction in FP32.
-    // auto per_pos = ttnn::subtract(log_normalizer, target_logit, ttnn::DataType::FLOAT32);
-    // auto s0 = ttnn::sum(per_pos, 0, /* keepdim */ true, std::nullopt, core::ComputeKernelConfig::precise());
-    // auto s2 = ttnn::sum(s0, 2, /* keepdim */ true, std::nullopt, core::ComputeKernelConfig::precise());
-    // // Transition back to BF16 to match the non-sharded cross_entropy_loss output type.
-    // auto loss_val = ttnn::multiply(s2, 1.0F / static_cast<float>(N), ttnn::DataType::BFLOAT16);
-
-    // TODO(bisect-hang): Dummy zero tensor so the function compiles while the forward body
-    // above is commented out for hang bisection. Shape matches the real `loss_val`
-    // ([1,1,1,1] BF16 — result of summing per_pos over dims 0 and 2 with keepdim, then
-    // multiplied by 1/N and cast to BF16). Remove once the real `loss_val` is restored.
-    auto loss_val = core::zeros(ttnn::Shape({1U, 1U, 1U, 1U}), &autograd::ctx().get_device(), ttnn::DataType::BFLOAT16);
+    // Step 5: per-position loss = log_normalizer − target_logit  →  mean over B*S.
+    // Kept in BF16 throughout (precise() compute config gives FP32 DST accum on the
+    // sums). Final multiply produces BF16 to match the non-sharded cross_entropy_loss
+    // output type.
+    auto per_pos = ttnn::subtract(log_normalizer, target_logit);
+    auto s0 = ttnn::sum(per_pos, 0, /* keepdim */ true, std::nullopt, core::ComputeKernelConfig::precise());
+    auto s2 = ttnn::sum(s0, 2, /* keepdim */ true, std::nullopt, core::ComputeKernelConfig::precise());
+    auto loss_val = ttnn::multiply(s2, 1.0F / static_cast<float>(N), ttnn::DataType::BFLOAT16);
 
     auto out = autograd::create_tensor(loss_val);
 
@@ -156,37 +145,31 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
     // target position; the ordering matches the reference cross_entropy_bw kernel,
     // whose writer does the onehot subtraction directly on the already-scaled BF16 tile.
     // ---------------------------------------------------------------
-    // TODO(bisect-hang): captures `global_max`, `global_sum`, `targets_raw`, `local_V`,
-    // `cluster_axis`, and `N` are dropped while the backward body below is commented out
-    // (`-Werror=unused-lambda-capture`). Re-add them as the corresponding backward steps
-    // are uncommented during hang bisection.
-    autograd::GradFunction grad_fn = [logits, out]() {
+    autograd::GradFunction grad_fn = [logits, out, global_max, global_sum, targets_raw, local_V, cluster_axis, N]() {
         if (!out->is_grad_initialized()) {
             return;
         }
-        // const float inv_N = 1.0F / static_cast<float>(N);
+        const float inv_N = 1.0F / static_cast<float>(N);
 
-        // auto local_exp = fused_subtract_exp(logits->get_value(), global_max);
+        // Recompute local_exp instead of capturing it (saves a [B,1,S,V/tp] BF16
+        // tensor across the forward/backward boundary). Same fused BF16 kernel as in
+        // the forward — see fused_subtract_exp() for the dtype rationale.
+        auto local_exp = fused_subtract_exp(logits->get_value(), global_max);
 
-        // auto softmax_k = ttnn::multiply(local_exp, ttnn::reciprocal(global_sum));
-        // auto scaled_softmax = ttnn::multiply(softmax_k, inv_N, ttnn::DataType::BFLOAT16);
+        // softmax_k = local_exp / global_sum  (BF16, COL_B broadcast on dim 3).
+        auto softmax_k = ttnn::multiply(local_exp, ttnn::reciprocal(global_sum));
+        auto scaled_softmax = ttnn::multiply(softmax_k, inv_N, ttnn::DataType::BFLOAT16);
 
-        // // Single mesh workload — the program factory derives each device's shard window
-        // // from its mesh coordinate, mirroring the forward-pass select_target_logit call.
-        // ttnn::prim::ttml_subtract_at_target(
-        //     scaled_softmax,
-        //     targets_raw,
-        //     /*local_V=*/local_V,
-        //     /*cluster_axis=*/cluster_axis,
-        //     /*first_v=*/0U,
-        //     scaled_softmax,
-        //     /*subtract_value=*/inv_N);
-
-        // TODO(bisect-hang): Dummy zero tensor so the lambda compiles while the backward body
-        // above is commented out. Shape matches the real `scaled_softmax` (same as logits:
-        // [B,1,S,local_V] BF16). Remove once the real `scaled_softmax` is restored.
-        auto scaled_softmax =
-            core::zeros(logits->get_value().logical_shape(), &autograd::ctx().get_device(), ttnn::DataType::BFLOAT16);
+        // Single mesh workload — the program factory derives each device's shard window
+        // from its mesh coordinate, mirroring the forward-pass select_target_logit call.
+        ttnn::prim::ttml_subtract_at_target(
+            scaled_softmax,
+            targets_raw,
+            /*local_V=*/local_V,
+            /*cluster_axis=*/cluster_axis,
+            /*first_v=*/0U,
+            scaled_softmax,
+            /*subtract_value=*/inv_N);
 
         logits->add_grad(ttnn::multiply(scaled_softmax, out->get_grad(), ttnn::DataType::BFLOAT16));
     };
