@@ -29,9 +29,19 @@ class _NoOpPrefetcherSetup:
     disabled (``use_prefetcher=False``) and previously passed ``None``, tripping an
     ``AttributeError`` at construction.  This stub accepts the insert calls as
     no-ops; ``USE_PREFETCHER`` is False in model_config, so the prefetcher-path
-    forward branches never read the (unset) ``global_circular_buffer`` /
-    ``worker_sub_device_id`` attributes.
+    forward branches never read the (unset) ``global_circular_buffer``.
+
+    ``worker_sub_device_id`` IS read unconditionally at the top of
+    ``TtTransformer.forward(mode='decode')`` (set_sub_device_stall_group), so
+    we expose it here.  The model owner (TtTransformer) updates it at
+    ``setup_decode`` / ``setup_prefill`` time.
     """
+
+    def __init__(self):
+        # Default to SubDeviceId(0); TtTransformer.setup_decode overwrites this
+        # with the actual worker_sub_device_id it bound when creating the
+        # all-cores sub_device.
+        self.worker_sub_device_id = ttnn.SubDeviceId(0)
 
     def insert_tensor(self, *_args, **_kwargs):
         return None
@@ -322,6 +332,10 @@ class TtTransformer(LightweightModule):
         if not use_prefetcher:
             self.prefetcher_setup = _NoOpPrefetcherSetup()
             worker_sub_device_id = ttnn.SubDeviceId(0)
+            # Mirror the prefetched-mode contract: forward() reads
+            # ``self.prefetcher_setup.worker_sub_device_id`` to set the stall
+            # group. Keep that attribute in sync with the actual id we bound.
+            self.prefetcher_setup.worker_sub_device_id = worker_sub_device_id
             if mesh_sub_device_manager_id_decode is None:
                 grid_size = self.mesh_device.compute_with_storage_grid_size()
                 all_core_range_set = ttnn.CoreRangeSet(

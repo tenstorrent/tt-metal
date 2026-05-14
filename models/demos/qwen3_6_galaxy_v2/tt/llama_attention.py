@@ -663,7 +663,14 @@ class TtLlamaAttention(LightweightModule):
 
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
-        if tt_ccl.mode == "decode":
+        # V2-9: qwen3.6 v2 has use_prefetcher=False and uses ``self.wqkvg``
+        # instead of the 70B-style ``self.wqkv`` / ``self.wkv`` split. The
+        # prefetcher path is disabled at the model level (NoOpPrefetcherSetup),
+        # but ``TtTransformer.switch_mode`` still walks
+        # ``self.attention.prefetch`` on every layer (including the qwen3.6
+        # full_attention layers). Skip the insert_tensor calls here so we
+        # don't AttributeError on ``self.wqkv``.
+        if tt_ccl.mode == "decode" and not self.is_qwen36:
             self.prefetcher_setup.insert_tensor(self.wqkv)
             self.prefetcher_setup.insert_tensor(self.wo)
         self.tt_ccl = tt_ccl

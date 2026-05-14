@@ -5,7 +5,7 @@ Live tracker. Append-only. Mirrors the format in
 
 ## Current Status
 
-**Stage:** Wave 2 complete (commit `41c190106dd`). 30 CPU-only tests pass. Next: Wave 3 — V2-model (per-layer instantiation + rope_setup threading) + V2-generator (DeltaNet state plumbing).
+**Stage:** V2-9 BLOCKED on V2-decode (dirty workspace). Prefill end-to-end PCC > 0.99 verified through 64L. Decode codepath never wired in v2; eager decode crashes at the embedding-output / decoder-input layout boundary. Trace machinery in `generator.py` is already wired; gated on V2-decode landing. See `tests/test_decode_trace_parity.py` module docstring for the full blocker chain.
 
 | stage | status | commit |
 |---|---|---|
@@ -19,12 +19,68 @@ Live tracker. Append-only. Mirrors the format in
 | V2-4 llama_attention.py — is_qwen36 (QKVG + QK-norm + RoPE + gate) | DONE | `41c190106dd` |
 | V2-decoder llama_decoder.py — hybrid dispatch | DONE | `41c190106dd` |
 | V2-embedding llama_embedding.py — bf16 force | DONE | `41c190106dd` |
-| **V2-model llama_model.py — per-layer + rope_setup threading** | pending | |
-| V2-generator generator.py — DeltaNet state plumbing | pending | |
-| V2-7 Block-test suite on BH GLX (Relay Race) | pending | |
-| V2-8 Full-model PCC + Paris-token parity | pending | |
-| V2-9 Trace capture parity | pending | |
+| V2-model llama_model.py — per-layer + rope_setup threading | DONE | `58ee671e46e` |
+| V2-config2 model_config populated (~100 keys) | DONE | `6472cdd551f` |
+| V2-device-smoke setup + 7 construction bugs fixed | DONE | `16ba2ca1fcc` `9a9b2c86439` |
+| V2-7 Block-test suite (DeltaNet 0.9995, full-attn 0.9997) | DONE | `eaefe1e13b8` |
+| V2-7b 1L/4L hybrid + decoder gather/scatter | DONE | `bc2b24d3074` |
+| V2-7c 64L hidden + logits PCC + Paris parity | DONE | `2227b2709c0` |
+| V2-decode (qwen3.6 decode end-to-end) — REQUIRED for V2-9 | **BLOCKED** | dirty (V2-9 attempt) |
+| V2-9 Trace capture parity (test added as skipped sentinel) | **BLOCKED** | dirty (this session) |
 | V2-10 Tracy perf sheet + PERF.md | pending | |
+
+### V2-9 attempt (2026-05-14) — findings
+
+- Generator trace machinery (`begin_trace_capture` / `end_trace_capture` /
+  `execute_trace`, `trace_ids_decode`, `_capture_trace_text`,
+  `_decode_easy_trace_text`, `release_traces` in `__del__`) is already
+  wired in `tt/generator.py` — no `_TRACE_SUPPORTED=False` flag exists
+  in v2. (v1's flag was a manual gate; v2 inherits 70B's hot path.)
+- Eager decode is broken before trace can even be attempted. Five
+  separate layout/contract mismatches between v2's inherited 70B decode
+  contract (batch-32 packed in T-dim, L1-WIDTH-sharded residual via
+  `DECODE_RESIDUAL_MEMCFG`, `tt_sharded_distributed_rmsnorm`) and the
+  qwen3.6 attention/DeltaNet blocks (written against v1's single-user
+  `[B=batch, 1, T=1, H]` DRAM-interleaved contract with
+  `tt_distributed_rmsnorm`).  Full chain in
+  `tests/test_decode_trace_parity.py` docstring.
+- Two small, safe infrastructure fixes APPLIED (no impact on the
+  passing prefill tests, validated):
+    - `TtLlamaAttention.prefetch`: skip `insert_tensor(self.wqkv)` /
+      `insert_tensor(self.wo)` for `is_qwen36=True` (we use `wqkvg`).
+    - `_NoOpPrefetcherSetup.worker_sub_device_id` attribute added +
+      synced in `setup_decode`.  `TtTransformer.forward(mode='decode')`
+      reads this unconditionally for the stall-group set call.
+- Test `tests/test_decode_trace_parity.py` lands as a skipped sentinel
+  (flag `_DECODE_ENABLED=False`).  Flip to `True` once V2-decode lands.
+- **Static review on qwen3.6 forward paths found no host-write
+  blockers** for trace capture: no `from_torch(device=...)` /
+  `to_torch` / `copy_host_to_device_tensor` calls in the hot path.
+  All persistent buffers (DeltaNet `dn_state_buffer`,
+  `conv_state_buffer`, `_conv_zero_pad`) are allocated at
+  `__init__` and written in-place via `ttnn.copy` (V2-5a contract).
+  The v1 PERF.md residual `to_memory_config` host-write blocker is
+  in the *70B branch* of `TtLlamaAttention.forward_decode`, NOT in
+  `_forward_decode_qwen36`.  So once V2-decode runs eager, the trace
+  capture itself should succeed without intervention.
+
+### Recommended V2-decode plan (predecessor)
+
+Rather than incrementally bridging the 70B↔qwen3.6 decode boundaries
+one layout converter at a time, mirror v1's decode contract directly:
+add a `forward_decode_qwen36` entry point on `TtTransformer` that
+takes `[B=batch, 1, T=1, H]` natively, uses DRAM-interleaved residual
+throughout, and calls `tt_distributed_rmsnorm` (the prefill primitive,
+which is already verified at PCC > 0.99 for 64L).  The generator's
+`ttnn_decode_forward` should dispatch to this for qwen3.6.  Estimated
+effort: 1-2 sessions.
+
+After V2-decode lands and eager decode is PCC-verified vs HF reference:
+
+- Flip `_DECODE_ENABLED=True` in `test_decode_trace_parity.py`
+- Static review predicts trace capture will succeed cleanly.
+- Then V2-10: tracy perf sheet, target >= 17 tok/s/user 64L decode
+  (olmo precedent on the same mesh).
 
 ## Model Overview
 
