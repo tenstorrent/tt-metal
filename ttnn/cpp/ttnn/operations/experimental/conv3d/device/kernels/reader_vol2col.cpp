@@ -12,7 +12,7 @@
 // Uses MEM_ZEROS_SIZE-aligned transactions (same pattern as zero_out_tiles in conv_reader_common.hpp).
 // padded_page_bytes must be a multiple of 16 to guarantee remainder alignment.
 template <uint32_t padded_page_bytes, typename Dst>
-FORCE_INLINE void pre_zero_pages(experimental::Noc noc, const Dst& dst, uint32_t offset, uint32_t num_pages) {
+FORCE_INLINE void pre_zero_pages(Noc noc, const Dst& dst, uint32_t offset, uint32_t num_pages) {
     static_assert(padded_page_bytes % 16 == 0, "CB page size must be 16-byte aligned for NOC transactions");
     uint32_t total = num_pages * padded_page_bytes;
     experimental::set_read_state<MEM_ZEROS_SIZE>(noc, MEM_ZEROS_BASE);
@@ -22,7 +22,7 @@ FORCE_INLINE void pre_zero_pages(experimental::Noc noc, const Dst& dst, uint32_t
         total -= MEM_ZEROS_SIZE;
     }
     if (total > 0) {
-        experimental::UnicastEndpoint self_ep;
+        UnicastEndpoint self_ep;
         noc.async_read(
             self_ep, dst, total, experimental::local_addr(MEM_ZEROS_BASE, noc.get_noc_id()), {.offset_bytes = offset});
     }
@@ -41,12 +41,12 @@ inline int32_t clampIndex(int32_t idx, int32_t lower_bound, int32_t upper_bound)
 }
 
 template <uint32_t in_row_size_bytes, typename Dst>
-inline void zeroPad(experimental::Noc noc, const Dst& dst, uint32_t offset) {
+inline void zeroPad(Noc noc, const Dst& dst, uint32_t offset) {
     // Zero-fill from MEM_ZEROS
     constexpr uint32_t num_full_reads = in_row_size_bytes / MEM_ZEROS_SIZE;
     constexpr uint32_t partial_read_size = in_row_size_bytes % MEM_ZEROS_SIZE;
 
-    experimental::UnicastEndpoint self_ep;
+    UnicastEndpoint self_ep;
     const auto zeros_src = experimental::local_addr(MEM_ZEROS_BASE, noc.get_noc_id());
 
     for (uint32_t i = 0; i < num_full_reads; ++i) {
@@ -60,7 +60,7 @@ inline void zeroPad(experimental::Noc noc, const Dst& dst, uint32_t offset) {
 
 template <typename Reader, typename Dst>
 FORCE_INLINE void read_input_row(
-    experimental::Noc noc,
+    Noc noc,
     const Reader& reader,
     uint32_t page_idx,
     uint32_t c_in_offset_bytes,
@@ -104,10 +104,10 @@ struct ChunkWriter {
     uint32_t chunk_size;
     uint32_t in_chunk;
     uint32_t write_offset;
-    experimental::Noc noc;
+    Noc noc;
     experimental::CB cb;
 
-    ChunkWriter(experimental::Noc n) : noc(n), cb(cb_id) {}
+    ChunkWriter(Noc n) : noc(n), cb(cb_id) {}
 
     void init(uint32_t total_patches) {
         remaining = total_patches;
@@ -199,7 +199,7 @@ template <
     uint32_t padded_page_bytes,
     uint32_t patch_pad_bytes>
 void vol2col_shard_to_cb(
-    experimental::Noc noc,
+    Noc noc,
     uint32_t shard_l1_base,
     uint32_t t_base,
     uint32_t h_base,
@@ -238,11 +238,11 @@ template <
     uint32_t stride_w,
     typename ShardCB>
 void shift_retained_w_columns(
-    experimental::Noc noc, const ShardCB& shard_cb, uint32_t T_shard_cur, uint32_t h_rows_gathered) {
+    Noc noc, const ShardCB& shard_cb, uint32_t T_shard_cur, uint32_t h_rows_gathered) {
     constexpr uint32_t overlap_w = kW > stride_w ? kW - stride_w : 0;
     constexpr uint32_t shift_bytes = overlap_w * C_in_block_bytes;
     constexpr uint32_t src_off = (W_shard_max - overlap_w) * C_in_block_bytes;
-    experimental::UnicastEndpoint self_ep;
+    UnicastEndpoint self_ep;
     const uint32_t shard_l1_base = shard_cb.get_write_ptr();
     for (uint32_t t_local = 0; t_local < T_shard_cur; t_local++) {
         for (uint32_t h_local = 0; h_local < h_rows_gathered; h_local++) {
@@ -290,7 +290,7 @@ template <
     typename Reader,
     typename ShardCB>
 void gather_rows_to_shard(
-    experimental::Noc noc,
+    Noc noc,
     const Reader& in_reader,
     const ShardCB& shard_cb,
     uint32_t batch_page_base,
@@ -445,7 +445,7 @@ template <
     typename Reader,
     typename ShardCB>
 void gather_rows_to_shard_coalesced(
-    experimental::Noc noc,
+    Noc noc,
     const Reader& in_reader,
     const ShardCB& shard_cb,
     uint32_t shard_l1_base,
@@ -519,7 +519,7 @@ void gather_rows_to_shard_coalesced(
                 if constexpr (C_in_block_bytes <= NOC_MAX_BURST_SIZE) {
                     experimental::read_with_state(noc, shard_cb, src_l1_addr, {.offset_bytes = dst_offset});
                 } else {
-                    experimental::UnicastEndpoint self_ep;
+                    UnicastEndpoint self_ep;
                     noc.async_read(
                         self_ep,
                         shard_cb,
@@ -550,7 +550,7 @@ template <
     typename Reader,
     typename ShardCB>
 void gather_rows_to_shard_selected(
-    experimental::Noc noc,
+    Noc noc,
     const Reader& in_reader,
     const ShardCB& shard_cb,
     [[maybe_unused]] uint32_t shard_l1_base,
@@ -700,7 +700,7 @@ void kernel_main() {
     constexpr auto in_args = TensorAccessorArgs<39>();
     const auto in_reader = TensorAccessor(in_args, in_addr);
 
-    experimental::Noc noc;
+    Noc noc;
 
     constexpr uint32_t num_patches = T_block_size * H_block_size * W_block_size;
     constexpr uint32_t H_in_W_in = H_in * W_in;

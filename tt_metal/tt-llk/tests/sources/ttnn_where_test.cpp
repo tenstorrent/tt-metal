@@ -57,9 +57,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "ckernel_sfpu.h"
 #include "ckernel_sfpu_where.h"
-#include "llk_math_common.h"
+#include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_ternary_sfpu.h"
-#include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "params.h"
 
@@ -91,11 +90,8 @@ void run_kernel(RUNTIME_PARAMETERS)
     }
 
     // copy srca to dest
-#ifdef ARCH_BLACKHOLE
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, false>(4, MATH_FMT);
-#else
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false>(4, MATH_FMT);
-#endif
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* tilize */, false /* is_int_fpu_en */>(
+        4 /* num_faces */, MATH_FMT);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(MATH_FMT, MATH_FMT);
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
@@ -126,7 +122,6 @@ void run_kernel(RUNTIME_PARAMETERS)
 #ifdef LLK_TRISC_PACK
 
 #include "llk_lib_pack_wrappers.h"
-#include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
 
@@ -153,19 +148,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PACK_FMT = to_ufmt(DataFormat::UInt16);
     }
 
-#ifdef ARCH_BLACKHOLE
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(PACK_FMT, PACK_FMT, 16 * 16 * 4);
-#else
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(PACK_FMT, PACK_FMT, 16 * 16 * 4);
-#endif
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false /* untilize */, false /* tilize */>(PACK_FMT, PACK_FMT, 16 * 16 * 4 /* tile_size */);
 
-    _llk_pack_init_wrapper_<false, false>(PACK_FMT);
+    _llk_pack_init_wrapper_<false /* untilize */, false /* zero_output */>(PACK_FMT);
 
-#ifdef ARCH_BLACKHOLE
-    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-#else
-    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>();
-#endif
+    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, false /* untilize */>();
 
     _llk_packer_wait_for_math_done_();
     _llk_pack_<DstSync::SyncHalf, false, is_fp32_dest_acc_en>(0, L1_ADDRESS(params.buffer_Res[0]));

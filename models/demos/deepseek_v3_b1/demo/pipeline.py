@@ -205,10 +205,6 @@ def create_single_pod_pipeline_configuration(
         14: stage_14,
         15: lambda d: PassthroughStage(fwd_payload),
     }
-    if enable_mtp:
-        stage_factories[13] = _decoder_stage(
-            moe_layer_id if moe_layer_id is not None else 12,
-        )
     return PipelineConfiguration(stage_factories)
 
 
@@ -281,8 +277,6 @@ def create_single_pod_spec_decode_pipeline_configuration(
         14: stage_14,
         15: _decoder_stage(61),
     }
-    if enable_mtp:
-        stage_factories[13] = _decoder_stage(moe_layer_id if moe_layer_id is not None else 12)
     return PipelineConfiguration(stage_factories)
 
 

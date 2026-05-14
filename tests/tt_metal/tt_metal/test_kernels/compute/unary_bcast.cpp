@@ -5,16 +5,16 @@
 #include <cstdint>
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_dim = get_compile_time_arg_val(1);
 
-    experimental::CircularBuffer cb0(tt::CBIndex::c_0);
-    experimental::CircularBuffer cb16(tt::CBIndex::c_16);
-    experimental::CircularBuffer cb1(tt::CBIndex::c_1);
-    experimental::CircularBuffer cb17(tt::CBIndex::c_17);
+    CircularBuffer cb0(tt::CBIndex::c_0);
+    CircularBuffer cb16(tt::CBIndex::c_16);
+    CircularBuffer cb1(tt::CBIndex::c_1);
+    CircularBuffer cb17(tt::CBIndex::c_17);
 
     unary_bcast_init<BCAST_DIM_0>(tt::CBIndex::c_0, tt::CBIndex::c_16);
 

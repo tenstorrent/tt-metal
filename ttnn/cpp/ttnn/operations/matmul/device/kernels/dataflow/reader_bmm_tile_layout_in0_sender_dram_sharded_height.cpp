@@ -13,9 +13,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
 
 void kernel_main() {
     // COMPILE TIME ARGS
@@ -40,9 +40,9 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
 
     // Build NOC address for the remote input storage core
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in0(cb_id_in0);
-    experimental::UnicastEndpoint src_core;
+    Noc noc;
+    CircularBuffer cb_in0(cb_id_in0);
+    UnicastEndpoint src_core;
 
     // Process each batch
     for (uint32_t batch = 0; batch < num_batches_per_core; ++batch) {

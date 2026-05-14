@@ -78,7 +78,7 @@ inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfp
 #endif
 
     // i1 is odd: copy sign of original x onto positive magnitude.
-    return sfpi::setsgn(exp_abs * rsqrt_y * correction, x_signed);
+    return sfpi::copysgn(exp_abs * rsqrt_y * correction, x_signed);
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
