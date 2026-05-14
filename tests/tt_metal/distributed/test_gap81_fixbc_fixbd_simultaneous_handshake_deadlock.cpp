@@ -245,13 +245,23 @@ TEST_F(SimultaneousHandshakeDeadlockFixture, Phase5bSimultaneousHandshakeDeadloc
 
             // Dispatch a small AllGather to get EDM channels into active state.
             // This establishes READY_FOR_TRAFFIC on all channels.
-            auto input = ttnn::unit_mesh::create_uniform_distributed_tensor(
-                dev,
-                ttnn::SimpleShape{1, 1, 32, 32 * static_cast<int>(num_devices)},
-                DataType::BFLOAT16,
-                Layout::TILE,
-                MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
-            auto output = ttnn::operations::ccl::all_gather(input, /*dim=*/3, /*num_links=*/1);
+            std::vector<std::shared_ptr<distributed::MeshDevice>> pred_submeshes;
+            for (size_t col = 0; col < num_devices; col++) {
+                pred_submeshes.push_back(
+                    dev->create_submesh(MeshShape(1, 1), distributed::MeshCoordinate(0, static_cast<uint32_t>(col))));
+            }
+            TensorSpec pred_spec(
+                ttnn::Shape({1, 1, 32, 32}),
+                TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
+            std::vector<ttnn::Tensor> pred_tensors;
+            for (size_t i = 0; i < num_devices; i++) {
+                std::vector<bfloat16> data(pred_spec.logical_shape().volume(), bfloat16(1.0f));
+                pred_tensors.push_back(
+                    Tensor::from_vector(std::move(data), pred_spec)
+                        .to_device(pred_submeshes[i].get()));
+            }
+            auto pred_input = tt::tt_metal::experimental::unit_mesh::aggregate(pred_tensors);
+            auto output = ttnn::all_gather(pred_input, /*dim=*/0);
             Finish(dev->mesh_command_queue(0));
             shm->child_allgather_done.store(1);
         } catch (const std::exception& e) {
@@ -369,13 +379,23 @@ TEST_F(SimultaneousHandshakeDeadlockFixture, Phase5bSimultaneousHandshakeDeadloc
         // Phase 5b health check.
         bool allgather_succeeded = false;
         try {
-            auto input = ttnn::unit_mesh::create_uniform_distributed_tensor(
-                dev,
-                ttnn::SimpleShape{1, 1, 32, 32 * static_cast<int>(num_devices)},
-                DataType::BFLOAT16,
-                Layout::TILE,
-                MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
-            auto output = ttnn::operations::ccl::all_gather(input, /*dim=*/3, /*num_links=*/1);
+            std::vector<std::shared_ptr<distributed::MeshDevice>> testee_submeshes;
+            for (size_t col = 0; col < num_devices; col++) {
+                testee_submeshes.push_back(
+                    dev->create_submesh(MeshShape(1, 1), distributed::MeshCoordinate(0, static_cast<uint32_t>(col))));
+            }
+            TensorSpec testee_spec(
+                ttnn::Shape({1, 1, 32, 32}),
+                TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
+            std::vector<ttnn::Tensor> testee_tensors;
+            for (size_t i = 0; i < num_devices; i++) {
+                std::vector<bfloat16> data(testee_spec.logical_shape().volume(), bfloat16(1.0f));
+                testee_tensors.push_back(
+                    Tensor::from_vector(std::move(data), testee_spec)
+                        .to_device(testee_submeshes[i].get()));
+            }
+            auto testee_input = tt::tt_metal::experimental::unit_mesh::aggregate(testee_tensors);
+            auto output = ttnn::all_gather(testee_input, /*dim=*/0);
             Finish(dev->mesh_command_queue(0));
             allgather_succeeded = true;
         } catch (const std::exception& e) {
