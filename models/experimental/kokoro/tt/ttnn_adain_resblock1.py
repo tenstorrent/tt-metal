@@ -87,7 +87,12 @@ class _TtConv1dDilated:
         key = (batch_size, input_length, self.dilation_h)
         has_bias = self.bias_rm is not None
         if self._prep_key != key:
-            num_sl = max(2, min(512, max(16, (int(input_length) + 7) // 8)))
+            # ``num_slices`` must be ≤ the conv2d's output height (TT_FATAL in prepare_conv2d_weights).
+            # Stride=1: ``out_h = input_length + 2*padding - dilation*(kernel-1)``.
+            out_h = int(input_length) + 2 * int(self.padding_h) - int(self.dilation_h) * (int(self.kernel_size) - 1)
+            out_h = max(1, out_h)
+            target = max(16, (int(input_length) + 7) // 8)
+            num_sl = max(2, min(min(512, target), out_h))
             self.dram_slice_config = ttnn.Conv2dSliceConfig(
                 slice_type=ttnn.Conv2dDRAMSliceHeight,
                 num_slices=num_sl,
