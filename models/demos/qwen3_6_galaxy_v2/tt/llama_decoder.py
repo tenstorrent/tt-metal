@@ -451,6 +451,9 @@ class TtTransformerBlock(LightweightModule):
             # on ttnn.add with a tile-DRAM input observed a regression on
             # layer-3 full_attention 1L (PCC 0.9995 → 0.77). The dtype default
             # (inherited from inputs) is already bf16 and is the correct path.
+            # V2-decode-debug-3: experimentally promoting to fp32 dest accum
+            # did NOT change the 64L decode PCC trajectory (0.298 → 0.282).
+            # The per-layer 1.07× error amplifier lives elsewhere.
             h_new = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)
             x.deallocate(True)
             attn_out.deallocate(True)
