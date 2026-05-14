@@ -161,7 +161,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
         num_cores);
 
     // Divide total_row_cores into num_cores groups.
-    // Within each group: center core = sender, surrounding cores = that sender's untilize cores.
+    // Within each group: first core = sender, remaining cores = that sender's untilize cores.
     uint32_t base_group_size = total_row_cores / num_cores;
     uint32_t extra_groups = total_row_cores % num_cores;
 
@@ -175,9 +175,8 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
         uint32_t pos = 0;
         for (uint32_t s = 0; s < num_cores; s++) {
             uint32_t group_size = base_group_size + (s >= num_cores - extra_groups ? 1 : 0);
-            uint32_t sender_offset = group_size / 2;
             for (uint32_t j = 0; j < group_size; j++, pos++) {
-                if (j == sender_offset) {
+                if (j == 0) {
                     sender_cores.push_back(all_row_cores[pos]);
                 } else {
                     sender_untilize_groups[s].push_back(all_row_cores[pos]);
