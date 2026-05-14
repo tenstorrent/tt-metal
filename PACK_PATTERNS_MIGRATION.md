@@ -7,9 +7,8 @@ Migration target: `compute_kernel_lib::eltwise_chain` (see `ttnn/cpp/ttnn/kernel
 
 ## TL;DR
 
-- **26 kernels migrated** across 26 commits this run. Each commit is per-kernel,
-  passes pre-commit clang-format, and either ran a representative pytest green or
-  is annotated `untestable_locally` (multi-chip / mesh-only).
+- **34 kernel migrations / advances** across 34 commits this run (26 initial + 8 follow-up advances on PARTIAL kernels). Each commit is per-kernel, passes pre-commit clang-format, and either ran a representative pytest green or is annotated `untestable_locally` (multi-chip / mesh-only).
+- Follow-up loop: revisited every PARTIAL kernel and BLOCKED kernels where stale "missing op struct" claims were challenged. `compute_kernel_lib::Mask` was rediscovered (was claimed missing) — unblocked 4 moreh_norm mask prologues. After two more revisit waves all remaining stages are genuinely BLOCKED (helper gaps documented below).
 - **Kernel_lib regression suite** (`tests/ttnn/unit_tests/kernel_lib/`): 465 passed,
   7 skipped (pre-existing infra skips), 0 regressions.
 - The remainder of `pack_patterns.tsv` is **structurally out of scope** for the
@@ -45,6 +44,14 @@ Migration target: `compute_kernel_lib::eltwise_chain` (see `ttnn/cpp/ttnn/kernel
 | `b2ca12e0c5d` | `experimental/transformer/rotary_embedding/.../rotary_embedding.cpp` | PARTIAL (final add stage) | `test_rotary_embedding_*` PASS |
 | `537e8c724b4` | `normalization/rmsnorm_distributed/.../rmsnorm_pre_allgather.cpp` | PARTIAL (x² stage) | `test_layernorm_part_1_with_program_cache[rmsnorm-...]` PASS |
 | `252540c2f6b` | `normalization/rmsnorm_distributed/.../rmsnorm_pre_allgather_2d.cpp` | PARTIAL (x² stage, mirrors peer) | mesh-only — `untestable_locally`, shape mirrors `537e8c724b4` |
+| `7a487c24959` | `normalization/softmax/.../softmax.cpp` (advance) | PARTIAL — added plain `copy+exp+pack` stage on top of prior mul-by-recip | `test_softmax_interleaved.py` 24 passed |
+| `598fedf3259` | `normalization/softmax/.../softmax_sharded.cpp` (advance) | PARTIAL — added plain `copy+exp+pack` subblock stage | `test_softmax_sharded.py` 13 passed |
+| `30decbdadb2` | `experimental/transformer/rotary_embedding_llama.cpp` (advance) | PARTIAL — added sin/cos mul under `RELOAD_IMPL == 1` | `test_rotary_embedding_llama.py` (prefill_32 + prefill_8k) PASS |
+| `63b3be5e289` | `experimental/transformer/rotary_embedding_llama_fused_qk/.../sharded.cpp` (advance) | PARTIAL — added cos mul + trailing add via runtime is_q branch | `test_rotary_embedding_llama_fused_qk.py` 16/16 PASS |
+| `3f975d48745` | `moreh/moreh_norm_h/.../moreh_norm_h_kernel.cpp` (advance) | PARTIAL — added \|x\| prologue plain-mask path via `Mask` element | `test_moreh_norm.py` PASS |
+| `8e0cc975fde` | `moreh/moreh_norm_w/.../moreh_norm_w_kernel.cpp` (advance) | PARTIAL — added \|x\| prologue plain-mask path | `test_moreh_norm.py` PASS |
+| `70bb8329370` | `moreh/moreh_norm/ord_other/moreh_norm_h/...` (advance) | PARTIAL — added f(x) prologue non-MINUS_INF arm | `test_moreh_norm.py` PASS |
+| `da4f99a8d37` | `moreh/moreh_norm/ord_other/moreh_norm_w/...` (advance) | PARTIAL — added f(x) prologue non-MINUS_INF arm | `test_moreh_norm.py` PASS |
 
 ## Helper-coverage by `pack_patterns.tsv` source category
 
@@ -92,7 +99,49 @@ These are not unique tags — many kernels carry two or three (e.g. `bmm_*` is
 matmul + macro-injection; layernorm welford is welford + reduce). The count
 column is "kernels for which this blocker was the recorded primary reason."
 
-## Helper-gap notes (would unblock specific kernels)
+## Helper gaps confirmed in revisit loop (would unblock specific stages)
+
+Follow-up agents revisited every PARTIAL kernel and the batchnorm/moreh_adam/sgd
+families to challenge prior BLOCKED claims. Findings, gap-by-gap:
+
+- **`BinaryMax` / `BinaryMin` op struct (missing)** — AMSGRAD branches in
+  `moreh_adam` (L304-317) and `moreh_adamw` (L309-326), plus the non-IS_ZERO
+  branch in 3 moreh_norm kernels.
+- **`PowerIterative` op struct (missing)** — `power_tile_to_cb` is a
+  `moreh_common.hpp` helper that wraps `power_iterative_tile`, not `power_tile`.
+  `compute_kernel_lib::Power` only wraps `power_tile`. Different LLK, different
+  semantics. Blocks `moreh_clip_grad_norm_step1` + `_step2` remaining stages.
+- **FP32_DEST_ACC-gated `_with_dt` semantics (no chain analogue)** — `moreh_adam`
+  has 5 remaining raw stages (sub+recip, mul+sqrt, add+recip) all guarded by
+  `WITH_FP32_DEST_ACC(reconfig_data_format(...))`. The chain's
+  `BinaryDataFormatReconfig::None` matches non-FP32 mode but omits FP32-mode
+  reconfig; `InputAndOutput` over-emits in non-FP32 mode. No single chain
+  template captures the FP32-conditional behaviour. Same blocker for
+  `moreh_adamw` (3 stages) and `moreh_sgd` (`_to_cb` helpers all go through
+  `_with_dt`).
+- **Runtime `last_srca_cb` walk variable** — `batch_norm_sfpu_kernel` and
+  `running_statistics_sfpu_kernel` thread a runtime variable across every
+  stage that records the most recent srca CB. Chain reconfig is entry-time
+  per chain element (compile-time fold). No mechanism to consume a runtime
+  prev-CB.
+- **Opaque moreh `_to_cb` helpers** — `running_statistics_kernel` body is
+  composed of `sub_tiles_to_cb`, `mul_tiles_to_cb`, `add_tiles_to_cb` calls
+  with internal `_with_dt`-style reconfig + their own dst-sync windows. Not
+  individually migratable without unwrapping the helper itself.
+- **Runtime tile index `j` inside `block_size` loops** — `moreh_layer_norm_large`
+  has remaining stages whose B-side CB index is a runtime `int j` from an inner
+  `block_size` loop. Chain `CbIndexMode::Pinned` is compile-time `k`;
+  `BlockIter` is `i` (outer chain loop var). No runtime-int CbIndexMode.
+- **Runtime CB selection (`is_q ? cb_a : cb_b`)** — `rotary_embedding.cpp`
+  `MUL_TILES` helper is invoked at 3 call sites with runtime `updated_sin_cb`
+  / `updated_cos_cb`. Could be expressed via runtime if-branch per site but
+  helper structure across call sites makes per-site chain calls add bloat;
+  left raw.
+- **`mask_posinf_tile` / `MINUS_INF`** — distinct LLK from `mask_tile`. No
+  chain `MaskPosInf` element. Affects `moreh_norm` ord_other MINUS_INF arm
+  and `moreh_sum` prologue.
+
+## Original helper-gap notes (would unblock specific kernels)
 
 Items below are suggested follow-ups for the helper-creation pipeline, not
 landed here. Each is gated on a small API addition with concrete unblock value.
