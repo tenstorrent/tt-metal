@@ -3183,15 +3183,57 @@ bool Device::phase5b_erisc_health_check(
                         details);
                 }
                 if (master_chan_stuck && all_remote_handshake_complete) {
+                    // FIX BC (#42429): FIX AK-3 assumed all REMOTE_HANDSHAKE_COMPLETE channels
+                    // are stale cross-batch timing artifacts (out-of-mesh peers).  That assumption
+                    // is wrong when the peer IS in quiescing_device_ids_ — that means both sides
+                    // launched their EDM simultaneously and are stuck waiting for each other to
+                    // complete handshake: a genuine simultaneous-handshake deadlock on freshly-
+                    // launched channels.  Check each stuck channel's peer chip ID and, if any peer
+                    // is in the quiesce set, set fabric_channels_not_ready_for_traffic_ so FIX AA
+                    // can GTEST_SKIP the AllGather test (rather than hanging for 5s).
+                    bool any_peer_in_quiesce_set = false;
+                    if (!quiescing_device_ids_.empty()) {
+                        for (const auto& u : truly_unhealthy) {
+                            try {
+                                const CoreCoord eth_lc =
+                                    soc_desc_p5.get_eth_core_for_channel(u.eth_chan_id, CoordSystem::LOGICAL);
+                                const auto [peer_chip_id, peer_core] =
+                                    this->get_connected_ethernet_core(eth_lc);
+                                if (quiescing_device_ids_.count(peer_chip_id) > 0) {
+                                    log_warning(
+                                        tt::LogMetal,
+                                        "wait_for_fabric_workers_ready: Device {} Phase 5b "
+                                        "FIX BC (#42429): chan {} stuck at "
+                                        "REMOTE_HANDSHAKE_COMPLETE but peer chip {} IS in "
+                                        "quiescing_device_ids_ — simultaneous-handshake deadlock "
+                                        "(freshly launched, NOT a cross-batch artifact). "
+                                        "Setting fabric_channels_not_ready_for_traffic_.",
+                                        this->id(),
+                                        u.eth_chan_id,
+                                        peer_chip_id);
+                                    any_peer_in_quiesce_set = true;
+                                    break;
+                                }
+                            } catch (...) {
+                                // Cannot resolve peer — skip this channel.
+                            }
+                        }
+                    }
+                    if (any_peer_in_quiesce_set) {
+                        fabric_channels_not_ready_for_traffic_ = true;
+                        return true;
+                    }
                     // AUDIT-L5: FIX AK-3 guard suppressed FIX AP — all unhealthy channels are
-                    // at REMOTE_HANDSHAKE_COMPLETE (cross-batch quiesce timing artifact).
+                    // at REMOTE_HANDSHAKE_COMPLETE and no peer is in the quiesce set
+                    // (confirmed cross-batch quiesce timing artifact).
                     // Log this decision so CI analysis can distinguish timing-artifact from
                     // genuine relay failure.
                     log_info(
                         tt::LogMetal,
                         "wait_for_fabric_workers_ready: Device {} Phase 5b AUDIT-L5: "
                         "master chan {} stuck but FIX AK-3 guard active — all {} unhealthy "
-                        "channel(s) at REMOTE_HANDSHAKE_COMPLETE (cross-batch timing artifact). "
+                        "channel(s) at REMOTE_HANDSHAKE_COMPLETE, no peer in quiesce set "
+                        "(confirmed cross-batch timing artifact). "
                         "NOT setting fabric_relay_path_broken_. (#42429)",
                         this->id(),
                         master_router_chan,
