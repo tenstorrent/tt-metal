@@ -7,23 +7,36 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
-#ifndef ARCH_QUASAR
+#ifdef ARCH_QUASAR
+#include "experimental/kernel_args.h"
+#else
 #include "api/dataflow/circular_buffer.h"
 #endif
 
 void kernel_main() {
+#ifdef ARCH_QUASAR
+    constexpr bool use_dfbs = get_arg(args::use_dfbs) == 1;
+#else
     const uint32_t cb_id = get_compile_time_arg_val(0);
     constexpr bool use_dfbs = get_compile_time_arg_val(1) == 1;
-    uint32_t dst_addr  = get_arg_val<uint32_t>(0); // global base address
-    uint32_t dst_bank_id = get_arg_val<uint32_t>(1); // data is in one bank
-    uint32_t num_tiles = get_arg_val<uint32_t>(2);
+#endif
     // DRAM page stride: the allocator may round page_size up (e.g. to
     // NOC_DRAM_READ_ALIGNMENT_BYTES = 64 on Quasar), so tiles are spaced
     // further apart in DRAM than their native size. Callers pass
     // Buffer::aligned_page_size() here; the kernel advances the DRAM
     // pointer by this stride while the DFB/CB still streams native-size
     // tiles into L1.
+#ifdef ARCH_QUASAR
+    uint32_t dst_addr = get_arg(args::dst_addr);        // global base address
+    uint32_t dst_bank_id = get_arg(args::dst_bank_id);  // data is in one bank
+    uint32_t num_tiles = get_arg(args::num_tiles);
+    uint32_t dram_page_stride = get_arg(args::dram_page_stride);
+#else
+    uint32_t dst_addr = get_arg_val<uint32_t>(0);     // global base address
+    uint32_t dst_bank_id = get_arg_val<uint32_t>(1);  // data is in one bank
+    uint32_t num_tiles = get_arg_val<uint32_t>(2);
     uint32_t dram_page_stride = get_arg_val<uint32_t>(3);
+#endif
 
     uint32_t ublock_size_tiles = 1;
 
@@ -38,7 +51,11 @@ void kernel_main() {
     Noc noc;
 
     if constexpr (use_dfbs) {
+#ifdef ARCH_QUASAR
+        DataflowBuffer dfb(dfb::in);
+#else
         DataflowBuffer dfb(cb_id);
+#endif
         uint32_t ublock_size_bytes = dfb.get_entry_size();
         // stride_factor = stride_in_entries: how many entry-sized slots one
         // consumer skips per tile. For a DFB with N consumers interleaved
