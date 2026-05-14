@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pytest fixtures for AceStep v1.5 demo tests.
+"""Pytest fixtures for AceStep v1.5 (``tests/``, ``perf/``, and future subtrees).
 
 Prefer the repo Python environment (``./create_venv.sh`` → ``./python_env``):
 
@@ -22,11 +22,11 @@ import pytest
 import torch
 
 # This conftest lives at:
-#   tt-metal/models/demos/ace_step_v1_5/tests/conftest.py
+#   tt-metal/models/demos/ace_step_v1_5/conftest.py
 # We need the repo root `tt-metal/` on sys.path, and also `tt-metal/ttnn/`
 # so `import ttnn` resolves to `tt-metal/ttnn/ttnn/__init__.py` (not the
 # namespace package at `tt-metal/ttnn/`).
-_TT_METAL_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+_TT_METAL_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 _TTNN_ROOT = os.path.join(_TT_METAL_ROOT, "ttnn")
 # NOTE: Do not add `tt-metal/tools` to sys.path here. Some environments contain an optional
 # `tools/tracy` package that depends on extra plotting libs (e.g. seaborn). Importing TTNN
