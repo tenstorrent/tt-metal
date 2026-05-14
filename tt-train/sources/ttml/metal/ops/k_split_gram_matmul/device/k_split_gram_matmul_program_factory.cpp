@@ -42,8 +42,8 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     const uint32_t padded_M_tiles = tt::round_up(M_tiles, grid_dim);
     const uint32_t Mpc = padded_M_tiles / grid_dim;
 
-    const auto tile_format = tt::DataFormat::Float16_b;
-    const auto tile_sz = tt::tile_size(tile_format);
+    constexpr auto tile_format = tt::DataFormat::Float16_b;
+    constexpr auto tile_sz = tt::tile_size(tile_format);
 
     const auto full_grid = tt::tt_metal::CoreRange({0, 0}, {grid_dim - 1, grid_dim - 1});
 
@@ -53,13 +53,13 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     // Upper x-bound for row multicast (includes helper column)
     const uint32_t upper_x_end = grid_dim;
 
-    const uint32_t subblock_h = 2;
+    constexpr uint32_t subblock_h = 2;
     const uint32_t subblock_w = std::min(Mpc, 2u);
 
-    const auto intermed_format = tt::DataFormat::Float32;
-    const auto intermed_tile_sz = tt::tile_size(intermed_format);
-    const auto out_tile_format = tt::DataFormat::Float16_b;
-    const auto out_tile_sz = tt::tile_size(out_tile_format);
+    constexpr auto intermed_format = tt::DataFormat::Float32;
+    constexpr auto intermed_tile_sz = tt::tile_size(intermed_format);
+    constexpr auto out_tile_format = tt::DataFormat::Float16_b;
+    constexpr auto out_tile_sz = tt::tile_size(out_tile_format);
 
     const bool mirror_active = (attrs.output_mode == ttml::metal::OutputMode::Full);
 
