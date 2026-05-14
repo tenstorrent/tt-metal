@@ -742,6 +742,7 @@ class EagerLlamaExecutor:
         kv_cache=None,
         prompt_lens=None,
         empty_slots=None,
+        enable_trace=True,
         sampling_params=None,
         start_pos=None,
     ):
@@ -751,6 +752,7 @@ class EagerLlamaExecutor:
             kv_cache=kv_cache,
             prompt_lens=prompt_lens,
             empty_slots=empty_slots,
+            enable_trace=enable_trace,
             sampling_params=sampling_params,
             start_pos=start_pos,
         )
@@ -764,6 +766,7 @@ class EagerLlamaExecutor:
         start_pos,
         page_table,  # Required
         kv_cache=None,
+        enable_trace=True,
         read_from_device=True,
         sampling_params=None,
     ):
@@ -772,6 +775,7 @@ class EagerLlamaExecutor:
             start_pos,
             page_table=page_table,
             kv_cache=kv_cache,
+            enable_trace=enable_trace,
             read_from_device=read_from_device,
             sampling_params=sampling_params,
         )
@@ -901,6 +905,7 @@ class TracedLlamaExecutor:
         kv_cache=None,
         prompt_lens=None,
         empty_slots=None,
+        enable_trace=True,
         sampling_params=None,
         start_pos=None,
     ):
@@ -910,6 +915,7 @@ class TracedLlamaExecutor:
             kv_cache=kv_cache,
             prompt_lens=prompt_lens,
             empty_slots=empty_slots,
+            enable_trace=enable_trace,
             sampling_params=sampling_params,
             start_pos=start_pos,
         )
@@ -920,6 +926,7 @@ class TracedLlamaExecutor:
         start_pos,
         page_table,  # Required
         kv_cache=None,
+        enable_trace=True,
         read_from_device=True,
         sampling_params=None,
     ):
@@ -928,6 +935,7 @@ class TracedLlamaExecutor:
             start_pos,
             page_table=page_table,
             kv_cache=kv_cache,
+            enable_trace=enable_trace,
             read_from_device=read_from_device,
             sampling_params=sampling_params,
         )
