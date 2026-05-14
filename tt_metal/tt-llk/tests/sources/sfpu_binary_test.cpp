@@ -69,7 +69,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     test_utils::call_binary_sfpu_operation_init<APPROX_MODE, SFPU_BINARY_OPERATION, 32 /* iterations */, formats.math>();
 
-    // Note: argument passed to _llk_math_eltwise_binary_sfpu_start_ is dest index of first operand, and
+    // Note: argument passed to _llk_math_eltwise_sfpu_start_ is dest index of first operand, and
     // argument passed of _calculate_sfpu_binary_ is dest index of the second operand
 
     test_utils::call_binary_sfpu_operation<DstSync::SyncHalf, is_fp32_dest_acc_en, APPROX_MODE, SFPU_BINARY_OPERATION, 32 /* iterations */, formats.math>(

@@ -58,7 +58,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "ckernel_sfpu.h"
 #include "ckernel_sfpu_where.h"
 #include "llk_lib_math_wrappers.h"
-#include "llk_math_eltwise_ternary_sfpu.h"
+#include "llk_math_eltwise_ternary_sfpu_params.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "params.h"
 
@@ -106,13 +106,8 @@ void run_kernel(RUNTIME_PARAMETERS)
     _llk_math_eltwise_ternary_sfpu_init_<SfpuType::where>();
     ckernel::sfpu::_init_where_<false>();
 
-    _llk_math_eltwise_ternary_sfpu_start_(0);
-
-    constexpr int iterations = 32;
-
-    ckernel::sfpu::_calculate_where_<false, static_cast<DataFormat>(UNPACK_A_IN), iterations>(0, 1, 2, 0);
-
-    _llk_math_eltwise_ternary_sfpu_done_();
+    constexpr int k_where_iterations = 32;
+    _llk_math_eltwise_ternary_sfpu_params_(ckernel::sfpu::_calculate_where_<false, static_cast<DataFormat>(UNPACK_A_IN), k_where_iterations>, 0, 1, 2, 0);
 
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }

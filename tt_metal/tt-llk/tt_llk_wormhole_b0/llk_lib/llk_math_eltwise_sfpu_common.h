@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -46,12 +46,6 @@ inline void _llk_math_eltwise_sfpu_assert_dst_index_(std::uint32_t dst_index, co
     LLK_ASSERT((dst_index < get_dest_max_tiles<Dst, Accum, DstTileShape::Tile32x32>()), message);
 }
 
-inline void _llk_math_eltwise_sfpu_inc_vector_mode_dst_face_addr_()
-{
-    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-}
-
 template <typename Callable>
 inline void _llk_math_eltwise_sfpu_apply_vector_mode_(Callable&& sfpu_func, int vector_mode)
 {
@@ -64,11 +58,11 @@ inline void _llk_math_eltwise_sfpu_apply_vector_mode_(Callable&& sfpu_func, int 
         for (int face = 0; face < 2; face++)
         {
             std::forward<Callable>(sfpu_func)();
-            _llk_math_eltwise_sfpu_inc_vector_mode_dst_face_addr_();
+            _llk_math_eltwise_sfpu_inc_dst_face_addr_();
         }
         // Skip the next 2 faces
-        _llk_math_eltwise_sfpu_inc_vector_mode_dst_face_addr_();
-        _llk_math_eltwise_sfpu_inc_vector_mode_dst_face_addr_();
+        _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+        _llk_math_eltwise_sfpu_inc_dst_face_addr_();
     }
     else if (mode == VectorMode::C)
     {
@@ -77,8 +71,8 @@ inline void _llk_math_eltwise_sfpu_apply_vector_mode_(Callable&& sfpu_func, int 
         for (int face = 0; face < 2; face++)
         {
             std::forward<Callable>(sfpu_func)();
-            _llk_math_eltwise_sfpu_inc_vector_mode_dst_face_addr_();
-            _llk_math_eltwise_sfpu_inc_vector_mode_dst_face_addr_();
+            _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+            _llk_math_eltwise_sfpu_inc_dst_face_addr_();
         }
     }
     else if (mode == VectorMode::RC)
@@ -88,7 +82,7 @@ inline void _llk_math_eltwise_sfpu_apply_vector_mode_(Callable&& sfpu_func, int 
         for (int face = 0; face < 4; face++)
         {
             std::forward<Callable>(sfpu_func)();
-            _llk_math_eltwise_sfpu_inc_vector_mode_dst_face_addr_();
+            _llk_math_eltwise_sfpu_inc_dst_face_addr_();
         }
     }
     else

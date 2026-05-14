@@ -27,7 +27,7 @@ inline void _llk_math_eltwise_ternary_sfpu_params_(
     _llk_math_eltwise_sfpu_start_(0); // Reuse same sync primitive
 
     auto invoke_sfpu = [&]() { std::forward<Callable>(sfpu_func)(dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, std::forward<Args>(args)...); };
-    _llk_math_eltwise_sfpu_apply_vector_mode_(invoke_sfpu, _llk_math_eltwise_sfpu_inc_vector_mode_dst_face_addr_, vector_mode);
+    _llk_math_eltwise_sfpu_apply_vector_mode_(invoke_sfpu, vector_mode);
 
     _llk_math_eltwise_sfpu_done_with_addrmod_reset_(); // Finalize
 }
