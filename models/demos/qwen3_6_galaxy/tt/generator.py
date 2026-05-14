@@ -123,31 +123,31 @@ class Qwen36Generator:
     """
 
     # When True, attempt trace capture for ``enable_trace=True`` callers.
-    # T14b.1..T14b.5 + T14b.7 collapsed every per-call ttnn.from_torch in
-    # the forward path into ``copy_host_to_device_tensor`` writes against
-    # pre-allocated persistent buffers (input_ids, current_pos, decode
-    # mask, conv_state pad, cos/sin). However the T14b.6 retry on real
-    # hardware confirmed those copies STILL trip the
+    # T14b.9 added the Generator/model split required for trace:
+    #   - model.prepare_decode_inputs_host / prepare_inputs_decode
+    #     hoist all host->device copies out of model.forward_*
+    #   - model.ttnn_decode_forward takes pre-uploaded device tensors and
+    #     is the body recorded into the trace
+    #   - Generator._capture_decode_trace runs the compile pass, calls
+    #     prepare_inputs_decode OUTSIDE begin_trace_capture, then captures
+    #     ttnn_decode_forward against those tensor addresses
+    #   - decode_forward_with_caches per-step replay uses
+    #     prepare_decode_inputs_host + copy_host_to_device_tensor against
+    #     the captured device tensors, then execute_trace
     #
-    #   TT_FATAL: Writes are not supported during trace capture.
-    #   (tt_metal/distributed/fd_mesh_command_queue.cpp:600
-    #    write_shard_to_device)
+    # Trace requires the paged decode path — page_table=None falls back to
+    # eager because the non-paged KV cache slice uses cur_pos as a Python
+    # literal that would bake into the trace.
     #
-    # assertion because they run INSIDE ``model.forward_{prefill,decode}``,
-    # which is itself inside the ``begin_trace_capture..end_trace_capture``
-    # window. The trace-safe pattern (see superpowers optimization skill
-    # and the Molmo2-8B Generator) requires the host→device copies to
-    # happen in the Generator BEFORE ``ttnn.execute_trace`` runs — i.e.
-    #
-    #     ttnn.copy_host_to_device_tensor(host_in, self._input_buf)
-    #     ttnn.execute_trace(self.device, self._tid, ...)
-    #
-    # not embedded inside the captured ``model.forward`` body.
-    #
-    # Enabling trace therefore needs a Generator/model refactor — hoist
-    # every persistent-buffer refresh out of ``model.forward_*`` into the
-    # Generator pre-trace boundary so the captured forward becomes purely
-    # device-side. This is tracked separately from the T14b series.
+    # _TRACE_SUPPORTED stays False until the residual "Writes are not
+    # supported during trace capture" warnings emitted inside
+    # ttnn_decode_forward are eliminated. The remaining host-write site
+    # is suspected to live in llama_attention.forward_decode's paged
+    # branch (the cur_pos_tensor / page_table interaction with
+    # paged_update_cache and paged_scaled_dot_product_attention_decode) or
+    # in DeltaNet's recurrent_gated_delta_rule_ttnn — see
+    # tests/test_paged_decode_trace.py for the diagnostic test that
+    # surfaces the warnings.
     _TRACE_SUPPORTED: bool = False
 
     def __init__(self, model, mesh_device, args):
@@ -280,26 +280,34 @@ class Qwen36Generator:
     ) -> Tuple[torch.Tensor, List, List, List]:
         """Run a decode step and return ``(logits, kv, dn, conv)``.
 
-        Always runs the eager forward.  ``enable_trace=True`` additionally
-        attempts trace capture per ``(B, has_page_table)`` key.  See module
-        docstring for the host-write precondition.
+        T14b.9 trace path (only when ``page_table is not None``):
+          - First call per ``(B, has_pt)`` key compiles + captures.
+          - Subsequent calls refresh the captured device input tensors via
+            ``ttnn.copy_host_to_device_tensor`` and call ``ttnn.execute_trace``.
+            The captured forward body is pure device — no host writes inside.
+          - Non-paged decode (page_table=None) is currently NOT trace-safe
+            because ``llama_attention.forward_decode``'s non-paged branch
+            slices the KV cache using ``cur_pos`` as a Python int (the slice
+            extents would bake into the trace). For page_table=None we fall
+            back to eager regardless of ``enable_trace``.
         """
         B, T = input_ids.shape
         assert T == 1, f"decode_forward_with_caches expects T=1, got T={T}"
 
-        # Always run eager forward for the actual result.
-        result = self.model.forward_decode(
-            input_ids,
-            current_pos=current_pos,
-            kv_caches=kv_caches,
-            dn_states=dn_states,
-            conv_states=conv_states,
-        )
-
-        if not enable_trace or not self._TRACE_SUPPORTED:
-            return result
-
         has_pt = page_table is not None
+        use_trace = enable_trace and self._TRACE_SUPPORTED and has_pt
+
+        if not use_trace:
+            # Eager fallback — handles both enable_trace=False and the
+            # non-paged path (see docstring).
+            return self.model.forward_decode(
+                input_ids,
+                current_pos=current_pos,
+                kv_caches=kv_caches,
+                dn_states=dn_states,
+                conv_states=conv_states,
+            )
+
         key = (B, has_pt)
         cache = self._decode_traces.get(key)
         if cache is None:
@@ -312,18 +320,40 @@ class Qwen36Generator:
                 conv_states=conv_states,
             )
             self._decode_traces[key] = cache
-        if cache != _NO_TRACE_FALLBACK and isinstance(cache, dict):
-            try:
-                ttnn.execute_trace(self.mesh_device, cache["trace_id"], cq_id=0, blocking=True)
-                # captured = (logits_tt, kv_caches, dn_states, conv_states).
-                # Gather logits AFTER execute_trace so the host-write is
-                # outside the trace boundary.
+            if cache != _NO_TRACE_FALLBACK and isinstance(cache, dict):
+                # The capture path already executed once with these exact
+                # inputs (the compile run + the trace run). Return that
+                # result directly without an extra refresh+replay.
                 logits_tt, kv_c, dn_c, cv_c = cache["captured"]
                 logits_cpu = self._gather_logits_to_cpu(logits_tt)
                 return logits_cpu, kv_c, dn_c, cv_c
-            except Exception as exc:
-                logger.warning(f"[Qwen36Generator] execute_trace (decode) failed: {exc}")
-        return result
+
+        if cache == _NO_TRACE_FALLBACK or not isinstance(cache, dict):
+            return self.model.forward_decode(
+                input_ids,
+                current_pos=current_pos,
+                kv_caches=kv_caches,
+                dn_states=dn_states,
+                conv_states=conv_states,
+            )
+
+        # Per-step trace replay: refresh captured device input tensors
+        # OUTSIDE the trace boundary, then execute_trace. The page_table is
+        # passed through unchanged (already on device; doesn't change per
+        # decode step), so we only copy the three refreshable inputs.
+        host_inputs = self.model.prepare_decode_inputs_host(input_ids, current_pos, page_table)
+        captured_device_inputs = cache["device_inputs"]
+        for key_name in ("tokens", "current_pos", "rope_idxs"):
+            host_tensor = host_inputs.get(key_name)
+            device_tensor = captured_device_inputs.get(key_name)
+            if host_tensor is None or device_tensor is None:
+                continue
+            ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
+
+        ttnn.execute_trace(self.mesh_device, cache["trace_id"], cq_id=0, blocking=True)
+        logits_tt, kv_c, dn_c, cv_c = cache["captured"]
+        logits_cpu = self._gather_logits_to_cpu(logits_tt)
+        return logits_cpu, kv_c, dn_c, cv_c
 
     # ------------------------------------------------------------------
     # Private: capture (best-effort)
@@ -400,12 +430,36 @@ class Qwen36Generator:
         dn_states,
         conv_states,
     ):
-        """Compile + capture trace for one decode step.
+        """Compile + capture trace for one decode step (T14b.9).
 
-        ``forward_decode`` is called with ``output_as_ttnn=True`` so the LM-head
-        ``ttnn.to_torch`` gather happens OUTSIDE the captured trace, in the
-        execute path after ``ttnn.execute_trace`` returns.
+        Mirrors ``llama3_70b_galaxy/tt/generator.py::_capture_trace_text``:
+          1. Compile run — eager ``forward_decode`` to populate the program
+             cache. Discarded (its outputs are not used for replay).
+          2. ``prepare_inputs_decode(...)`` — creates fresh DEVICE tensors
+             at concrete addresses; these are the addresses the trace will
+             record reads against. Returns the dict before ``begin_trace_capture``.
+          3. ``begin_trace_capture`` → ``ttnn_decode_forward(device tensors)``
+             → ``end_trace_capture``. The body is pure device — no host writes.
+          4. Returns a cache dict carrying ``trace_id``, ``device_inputs``
+             (the per-key handles to refresh between replays), and the
+             ``captured`` output ``(logits_tt, kv_caches, dn_states,
+             conv_states)`` so the replay path can gather logits afterwards.
+
+        Requires ``page_table is not None`` — the non-paged decode branch in
+        ``llama_attention.forward_decode`` slices the KV cache using
+        ``cur_pos`` as a Python literal, which bakes the slice extents into
+        the captured trace.
         """
+        assert page_table is not None, (
+            "Decode trace capture requires page_table — the non-paged path "
+            "slices the KV cache using a Python int cur_pos, which is not "
+            "trace-safe. Use the paged attention path for trace capture."
+        )
+
+        # 1. Compile run: populates the program cache for every op the
+        #    captured forward will issue. Uses the eager forward_decode so we
+        #    don't have to wire up fresh device tensors before the cache is
+        #    warm. The result is discarded.
         _ = self.model.forward_decode(
             input_ids,
             current_pos=current_pos,
@@ -415,15 +469,26 @@ class Qwen36Generator:
             output_as_ttnn=True,
         )
         ttnn.synchronize_device(self.mesh_device)
+
+        # 2. Build the persistent device input tensors OUTSIDE the trace.
+        device_inputs = self.model.prepare_inputs_decode(input_ids, current_pos, page_table=page_table)
+
+        # 3. Capture the pure-device forward against those tensor addresses.
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        captured = self.model.forward_decode(
-            input_ids,
-            current_pos=current_pos,
+        captured = self.model.ttnn_decode_forward(
+            device_inputs["tokens"],
+            device_inputs["current_pos"],
+            device_inputs["rope_idxs"],
+            device_inputs["page_table"],
             kv_caches=kv_caches,
             dn_states=dn_states,
             conv_states=conv_states,
-            output_as_ttnn=True,
         )
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(self.mesh_device)
-        return {"trace_id": trace_id, "captured": captured}
+
+        return {
+            "trace_id": trace_id,
+            "device_inputs": device_inputs,
+            "captured": captured,
+        }

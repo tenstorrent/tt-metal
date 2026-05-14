@@ -521,7 +521,189 @@ class TtQwen36Transformer(LightweightModule):
         return emb_cpu, hidden_cpu
 
     # ------------------------------------------------------------------
-    # Public: forward_decode
+    # T14b.9: trace-friendly decode entry points
+    # ------------------------------------------------------------------
+
+    def prepare_decode_inputs_host(
+        self,
+        input_ids: torch.Tensor,
+        current_pos: int,
+        page_table=None,
+    ) -> dict:
+        """Build the HOST ttnn tensors a single decode step refreshes per call.
+
+        Per-step refreshable inputs (returned as host ttnn.Tensor): ``tokens``,
+        ``current_pos``, ``rope_idxs``. ``ttnn.from_torch`` with
+        ``device=None`` produces a host-only tensor, which the Generator
+        later pushes into the captured device buffer via
+        ``ttnn.copy_host_to_device_tensor`` OUTSIDE the trace boundary.
+
+        ``page_table`` follows the existing qwen3_6 convention — it is a
+        pre-uploaded DEVICE ttnn.Tensor (built once per request, doesn't
+        change per decode step). It is passed through in the returned dict
+        unchanged so callers can keep using it across trace replays without
+        a per-step host write.
+
+        Args:
+            input_ids: ``[B, 1]`` int64 CPU. B must equal ``max_batch_size``.
+            current_pos: Python int — the current sequence position.
+            page_table: pre-uploaded device ttnn.Tensor (or None).
+
+        Returns:
+            Dict with keys ``tokens`` / ``current_pos`` / ``rope_idxs``
+            (host ttnn.Tensor) and ``page_table`` (the passed-through
+            device tensor, or None).
+        """
+        B, T = input_ids.shape
+        assert T == 1, f"decode expects T=1, got T={T}"
+        assert B == self.args.max_batch_size, f"input_ids batch {B} != max_batch_size {self.args.max_batch_size}"
+
+        # Tokens — flat [1, 1, 1, B*T=1] uint32, matches _get_input_ids_buffer.
+        ids_flat = input_ids.reshape(1, 1, 1, B * T)
+        tokens_host = ttnn.from_torch(
+            ids_flat,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        # current_pos — [max_batch_size] int32 replicated across mesh.
+        # Matches the layout the attention layer's persistent _cur_pos_buf
+        # uses (T14b.3), so the same device tensor can be reused for the
+        # paged_update_cache update_idxs AND the paged SDPA cur_pos_tensor.
+        cur_pos_torch = torch.tensor([current_pos] * self.args.max_batch_size, dtype=torch.int32)
+        current_pos_host = ttnn.from_torch(
+            cur_pos_torch,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        # rope_idxs — [1, 1] uint32, fed to rope_setup.get_rm_rot_mats for
+        # the on-device cos/sin embedding lookup (T14b.9 step 1).
+        rope_idxs_host = self.rope_setup.get_rm_rot_idxs(
+            torch.tensor([current_pos], dtype=torch.int64),
+            on_host=True,
+        )
+
+        return {
+            "tokens": tokens_host,
+            "current_pos": current_pos_host,
+            "rope_idxs": rope_idxs_host,
+            "page_table": page_table,  # already-on-device tensor, passes through
+        }
+
+    def prepare_inputs_decode(
+        self,
+        input_ids: torch.Tensor,
+        current_pos: int,
+        page_table=None,
+    ) -> dict:
+        """Build host inputs and upload them to fresh DEVICE ttnn tensors.
+
+        Used at trace capture time (creates the device tensors whose
+        addresses the trace will record) and by the eager ``forward_decode``
+        wrapper.  For per-step trace replay the Generator instead calls
+        ``prepare_decode_inputs_host`` and ``ttnn.copy_host_to_device_tensor``
+        against the previously-captured device tensors.
+
+        ``page_table`` is passed through unchanged (already on device by
+        qwen3_6 convention).
+        """
+        host = self.prepare_decode_inputs_host(input_ids, current_pos, page_table)
+        device = {}
+        for key, host_tensor in host.items():
+            if host_tensor is None:
+                device[key] = None
+            elif key == "page_table":
+                # page_table is already a device tensor — no re-upload needed.
+                device[key] = host_tensor
+            else:
+                device[key] = ttnn.to_device(host_tensor, device=self.mesh_device)
+        return device
+
+    def ttnn_decode_forward(
+        self,
+        tokens_tt: ttnn.Tensor,
+        current_pos_tt: ttnn.Tensor,
+        rope_idxs_tt: ttnn.Tensor,
+        page_table_tt: Optional[ttnn.Tensor],
+        kv_caches: List,
+        dn_states: Optional[List] = None,
+        conv_states: Optional[List] = None,
+    ):
+        """Pure-device decode forward. Accepts device tensors, returns device logits.
+
+        The body of this function is what gets recorded into a trace. Any
+        host writes invalidate the trace, so callers must:
+          - upload tokens/current_pos/rope_idxs/page_table BEFORE calling
+            this method (via ``prepare_inputs_decode``), and
+          - ensure ``page_table_tt is not None`` so the attention layer
+            takes the paged decode path (the non-paged path slices the KV
+            cache using ``cur_pos`` as a Python int — that bakes the slice
+            extents into the trace, breaking replay for any other position).
+
+        Returns
+        -------
+        (logits_tt, kv_caches, new_dn_states, new_conv_states)
+            ``logits_tt`` is an on-device tensor in the sharded LM-head
+            output format (per-chip ``[B, 1, padded_vocab/cluster_cols]``).
+            Use ``Qwen36Generator._gather_logits_to_cpu`` AFTER
+            ``ttnn.execute_trace`` to materialize CPU logits outside the
+            trace boundary.
+        """
+        if dn_states is None:
+            dn_states = [None] * self.num_layers
+        if conv_states is None:
+            conv_states = [None] * self.num_layers
+
+        # On-device RoPE cos/sin gather via embedding lookup (T14b.9 step 1).
+        cos_tt, sin_tt = self.rope_setup.get_rm_rot_mats(rope_idxs_tt)
+        rot_mats = (cos_tt, sin_tt)
+
+        # On-device embedding lookup — tokens_tt is already on device.
+        # For decode B*T=1 < TILE_HEIGHT, do the lookup in ROW_MAJOR then
+        # reshape + to_layout, matching the existing _embed decode branch.
+        x_tt = ttnn.embedding(
+            tokens_tt,
+            self.emb_weight,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+        )
+        B = self.args.max_batch_size
+        x_tt = ttnn.reshape(x_tt, ttnn.Shape([B, 1, self.hidden_size]))
+        x_tt = ttnn.to_layout(x_tt, ttnn.TILE_LAYOUT)
+
+        # Decoder layers — pass current_pos as a device tensor so attention
+        # skips its internal copy_host_to_device path (T14b.3 branch).
+        new_dn_states = [None] * self.num_layers
+        new_conv_states = [None] * self.num_layers
+        for i, layer in enumerate(self.layers):
+            x_tt, new_dn_states[i], new_conv_states[i] = layer.forward(
+                x_tt,
+                current_pos=current_pos_tt,
+                rot_mats=rot_mats,
+                kv_cache=kv_caches[i],
+                page_table=page_table_tt,
+                deltanet_state=dn_states[i],
+                deltanet_conv_state=conv_states[i],
+                mode="decode",
+            )
+
+        # Slice back to T=1 if tile-padding inflated the row dim.
+        x_shape = list(x_tt.shape)
+        T_out = x_shape[1] if len(x_shape) == 3 else x_shape[-2]
+        if T_out > 1:
+            x_tt = ttnn.slice(x_tt, [0, 0, 0], [B, 1, self.hidden_size], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # Final norm + LM head — keep result on device for the caller to
+        # gather AFTER execute_trace (mirrors T14b.1 output_as_ttnn flag).
+        logits_tt = self._norm_and_lm_head(x_tt, output_as_ttnn=True)
+        return logits_tt, kv_caches, new_dn_states, new_conv_states
+
+    # ------------------------------------------------------------------
+    # Public: forward_decode (eager wrapper around the device path)
     # ------------------------------------------------------------------
 
     def forward_decode(
