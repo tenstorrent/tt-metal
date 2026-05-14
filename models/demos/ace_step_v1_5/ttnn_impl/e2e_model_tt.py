@@ -7,12 +7,14 @@
 This module wraps the full inference pipeline into a single class so that
 callers only need to supply a text prompt and get a waveform tensor back.
 
-Qwen3 caption embeddings, instrumental condition assembly
-(:class:`TtAceStepInstrumentalConditionEncoder`), and Oobleck VAE decode run
-on the Tenstorrent device via TTNN. The DiT denoising loop runs on device via
-:func:`run_ttnn_denoise_loop`. Only the Hugging Face tokenizer runs on the
-host (NumPy token IDs); there is no PyTorch ``AutoModel.prepare_condition`` on
-this path — mirror ``run_prompt_to_wav.py`` with ``--ttnn-condition-embedding``.
+Neural inference (Qwen3 embeddings, instrumental condition, DiT, Oobleck VAE) runs
+on Tenstorrent via TTNN. Encoder SDPA masks are uploaded once per prompt via
+:class:`AceStepV15TTNNPipeline.build_encoder_attention_mask_b1qk_optional` (no
+per-step mask rebuild). Context latents from the silence template are cached on
+device at init. DiT latents feed the VAE without a host round trip when using the
+default path. Only Hugging Face **tokenization** (string → token ids) and
+checkpoint **loading** (host files → device weights) use the CPU; optional
+waveform peak-normalization can return a TTNN tensor via *return_waveform_ttnn*.
 
 The standalone function :func:`run_ttnn_denoise_loop` is exported for reuse by
 other scripts (e.g. the prompt-to-wav demo). For PyTorch VAE decode (e.g.
@@ -116,11 +118,15 @@ def run_ttnn_denoise_loop(
     progress_fn: Optional[Callable[[int, int, float, float], None]] = None,
     enc_tt_pipe: Optional[ttnn.Tensor] = None,
     ctx_tt_pipe: Optional[ttnn.Tensor] = None,
-) -> torch.Tensor:
+    return_device_latents: bool = False,
+    encoder_attention_mask_b1qk: Optional[ttnn.Tensor] = None,
+    deallocate_ctx_latents: bool = True,
+) -> Union[torch.Tensor, ttnn.Tensor]:
     """Run the TTNN DiT denoising loop (latents stay on device; Euler + APG/ADG).
 
     Matches the demo path from ``dit_sampling_ttnn``: ``ttnn.randn`` init, row-major BF16 DiT inputs,
-    FLOAT32 TILE latent state, numpy encoder attention mask, and ``attention_mask_1d_bt=None``.
+    FLOAT32 TILE latent state, and ``attention_mask_1d_bt=None`` (optional NumPy 1D encoder
+    mask or pre-uploaded *encoder_attention_mask_b1qk*).
 
     Args:
         pipe: TTNN pipeline instance.
@@ -130,8 +136,8 @@ def run_ttnn_denoise_loop(
         t_schedule: Descending timestep floats.
         frames: Temporal frame count.
         enc_hs: Encoder hidden states ``[B, S, D]`` (host path only).
-        enc_mask: Encoder attention mask ``[B, S]`` (float/bool); host path may
-            be a Torch tensor, device path may be a NumPy array.
+        enc_mask: Encoder attention mask ``[B, S]`` (float/bool); host NumPy or Torch tensor.
+            Omit when *encoder_attention_mask_b1qk* is set.
         ctx_lat: Context latents ``[B, T, 128]`` (host path only).
         null_emb: Null-condition embedding for CFG on the host path only
             (broadcastable to *enc_hs*).
@@ -145,12 +151,20 @@ def run_ttnn_denoise_loop(
         progress_fn: ``(step_idx, num_steps, t_curr, dt)`` after each Euler step.
         enc_tt_pipe: Optional pre-built DiT encoder hidden states on device
             (e.g. CFG batch already concatenated). When set, *ctx_tt_pipe* must
-            be set and *enc_mask* must be provided; *enc_hs*, *ctx_lat*, and
-            *null_emb* are ignored.
+            be set; *enc_hs*, *ctx_lat*, and *null_emb* are ignored.
         ctx_tt_pipe: Pre-built context latents on device (CFG batch when *do_cfg*).
+        return_device_latents: When True, return on-device TILE latents without ``ttnn.to_torch``;
+            caller deallocates. Encoder/context pipe tensors (and optional *encoder_attention_mask_b1qk*)
+            are deallocated in this function.
+        encoder_attention_mask_b1qk: Pre-built cross-attention SDPA mask (see
+            :meth:`AceStepV15TTNNPipeline.build_encoder_attention_mask_b1qk_optional`).
+            When set, ``pipe.forward`` does not take *encoder_attention_mask_1d_bk*.
+        deallocate_ctx_latents: If False, skip ``ttnn.deallocate(ctx_tt_pipe)`` at the end (for a
+            shared cached context tensor on non-CFG runs).
 
     Returns:
-        Denoised latents ``[B, frames, 64]`` on CPU float32.
+        Denoised latents ``[B, frames, 64]``: CPU float32 :class:`torch.Tensor`, or an on-device
+        :class:`ttnn.Tensor` when *return_device_latents* is True.
     """
     _ = act_dtype  # DiT uses BF16 row-major staging from NumPy, not this dtype.
     num_steps = len(t_schedule)
@@ -175,19 +189,24 @@ def run_ttnn_denoise_loop(
         seed=int(np.uint32(int(seed))),
     )
 
-    if enc_mask is None:
-        raise ValueError("enc_mask is required.")
+    if enc_mask is None and encoder_attention_mask_b1qk is None:
+        raise ValueError("Provide enc_mask or encoder_attention_mask_b1qk.")
 
-    if isinstance(enc_mask, np.ndarray):
-        encoder_keep_np_single = np.asarray(enc_mask, dtype=np.float32)
-    else:
-        encoder_keep_np_single = np.asarray(enc_mask.detach().cpu().numpy(), dtype=np.float32)
-    if encoder_keep_np_single.ndim != 2:
-        raise ValueError(f"encoder_attention_mask must be rank-2 [B,S], got {encoder_keep_np_single.shape}")
-    encoder_keep_np_single = (encoder_keep_np_single > np.float32(0.0)).astype(np.bool_)
-    encoder_attn_1d_bk_np = (
-        np.concatenate([encoder_keep_np_single, encoder_keep_np_single], axis=0) if do_cfg else encoder_keep_np_single
-    )
+    encoder_attn_1d_bk_np: Optional[np.ndarray] = None
+    if encoder_attention_mask_b1qk is None:
+        assert enc_mask is not None
+        if isinstance(enc_mask, np.ndarray):
+            encoder_keep_np_single = np.asarray(enc_mask, dtype=np.float32)
+        else:
+            encoder_keep_np_single = np.asarray(enc_mask.detach().cpu().numpy(), dtype=np.float32)
+        if encoder_keep_np_single.ndim != 2:
+            raise ValueError(f"encoder_attention_mask must be rank-2 [B,S], got {encoder_keep_np_single.shape}")
+        encoder_keep_np_single = (encoder_keep_np_single > np.float32(0.0)).astype(np.bool_)
+        encoder_attn_1d_bk_np = (
+            np.concatenate([encoder_keep_np_single, encoder_keep_np_single], axis=0)
+            if do_cfg
+            else encoder_keep_np_single
+        )
 
     prebuilt = enc_tt_pipe is not None
     if prebuilt:
@@ -240,7 +259,8 @@ def run_ttnn_denoise_loop(
             timestep_index=int(step_idx),
             encoder_hidden_states_btd=enc_tt_pipe,
             attention_mask_1d_bt=None,
-            encoder_attention_mask_1d_bk=encoder_attn_1d_bk_np,
+            encoder_attention_mask_1d_bk=None if encoder_attention_mask_b1qk is not None else encoder_attn_1d_bk_np,
+            encoder_attention_mask_b1qk=encoder_attention_mask_b1qk,
         )
 
         if do_cfg:
@@ -308,18 +328,26 @@ def run_ttnn_denoise_loop(
     t_curr_final = float(t_schedule[-1])
     _diffusion_iterate(step_idx=num_steps - 1, t_curr_f=t_curr_final, euler_dt=t_curr_final)
 
-    # Single device→Torch copy of latents for host VAE or other CPU consumers.
-    pred_latents = ttnn.to_torch(xt_tt, dtype=torch.float32).contiguous()
-
     try:
         ttnn.deallocate(enc_tt_pipe)
-        ttnn.deallocate(ctx_tt_pipe)
-        ttnn.deallocate(xt_tt)
+        if deallocate_ctx_latents:
+            ttnn.deallocate(ctx_tt_pipe)
+        if encoder_attention_mask_b1qk is not None:
+            ttnn.deallocate(encoder_attention_mask_b1qk)
     except Exception:
         pass
     if momentum_ttnn is not None:
         momentum_ttnn.reset()
 
+    if return_device_latents:
+        return xt_tt
+
+    # Single device→Torch copy of latents for host VAE or other CPU consumers.
+    pred_latents = ttnn.to_torch(xt_tt, dtype=torch.float32).contiguous()
+    try:
+        ttnn.deallocate(xt_tt)
+    except Exception:
+        pass
     return pred_latents
 
 
@@ -341,6 +369,8 @@ class AceStepE2EModel:
     ) -> None:
         self.config = config
         self.device = device
+        if hasattr(device, "enable_program_cache"):
+            device.enable_program_cache()
 
         self.act_dtype = getattr(ttnn, "bfloat16")
         self.mem = getattr(ttnn, "DRAM_MEMORY_CONFIG")
@@ -349,6 +379,7 @@ class AceStepE2EModel:
         self._qwen: Optional[TtQwen3EmbeddingEncoder] = None
         self._condition_encoder: Optional[TtAceStepInstrumentalConditionEncoder] = None
         self._tt_vae: Optional[TtOobleckVaeDecoder] = None
+        self._ctx_bt128_cached: Optional[ttnn.Tensor] = None
 
         self._load_silence_latent()
 
@@ -369,6 +400,7 @@ class AceStepE2EModel:
         self._init_condition_encoder()
         self._init_qwen_encoder()
         self._init_ttnn_vae()
+        self._ctx_bt128_cached = self._ctx_latents_ttnn()
 
     def _init_qwen_encoder(self) -> None:
         qwen_st = self.config.qwen_safetensors_path
@@ -477,76 +509,102 @@ class AceStepE2EModel:
             pass
         return ctx_tt_one
 
-    def decode_vae(self, pred_latents: Union[torch.Tensor, np.ndarray]) -> torch.Tensor:
+    def decode_vae(
+        self,
+        pred_latents: Union[torch.Tensor, np.ndarray, ttnn.Tensor],
+        *,
+        return_waveform_ttnn: bool = False,
+    ) -> Union[torch.Tensor, ttnn.Tensor]:
         """Decode latents to waveform via the TTNN Oobleck VAE (tiled along time if needed).
 
         Args:
-            pred_latents: [1, frames, 64]
+            pred_latents: ``[1, frames, 64]`` on host (NumPy or Torch) or already on device as TTNN
+                (same as ``run_prompt_to_wav``: DiT TILE float32 latents need no re-upload).
+            return_waveform_ttnn: If True, return ``wav_tt`` on device (no peak normalization).
 
         Returns:
-            waveform [1, channels, samples] normalized to [-1, 1].
+            waveform [1, channels, samples] normalized to [-1, 1] (default), or raw ``ttnn`` audio
+            when *return_waveform_ttnn* is True.
         """
         if self._tt_vae is None:
             raise RuntimeError("TTNN VAE was not initialized.")
-        if hasattr(pred_latents, "detach"):
+        owns_lat_tt = True
+        if isinstance(pred_latents, ttnn.Tensor):
+            lat_tt = pred_latents
+            owns_lat_tt = False
+        elif hasattr(pred_latents, "detach"):
             lat_np = pred_latents.detach().float().cpu().contiguous().numpy()
+            lat_tt = ttnn.as_tensor(
+                np.asarray(lat_np, dtype=np.float32),
+                device=self.device,
+                dtype=self.act_dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=self.mem,
+            )
         else:
-            lat_np = np.asarray(pred_latents, dtype=np.float32)
-        lat_tt = ttnn.as_tensor(
-            np.asarray(lat_np, dtype=np.float32),
-            device=self.device,
-            dtype=self.act_dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=self.mem,
-        )
+            lat_tt = ttnn.as_tensor(
+                np.asarray(pred_latents, dtype=np.float32),
+                device=self.device,
+                dtype=self.act_dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=self.mem,
+            )
         chunk = int(os.environ.get("ACE_STEP_VAE_CHUNK_LATENTS", str(self.config.vae_chunk_latents)))
         overlap = int(os.environ.get("ACE_STEP_VAE_OVERLAP_LATENTS", str(self.config.vae_overlap_latents)))
         wav_tt = self._tt_vae.decode_tiled(lat_tt, chunk_size=chunk, overlap=overlap)
+        try:
+            if owns_lat_tt:
+                ttnn.deallocate(lat_tt)
+        except Exception:
+            pass
+        if return_waveform_ttnn:
+            return wav_tt
         wav_bt_c = ttnn.to_torch(wav_tt, dtype=torch.float32).contiguous().numpy()
         wav_bct = np.ascontiguousarray(np.swapaxes(wav_bt_c, 1, 2))
         peak = np.maximum(np.amax(np.abs(wav_bct), axis=(1, 2), keepdims=True), 1e-8)
         wav_np = np.clip(wav_bct / peak, -1.0, 1.0)
         try:
-            ttnn.deallocate(lat_tt)
             ttnn.deallocate(wav_tt)
         except Exception:
             pass
         return torch.from_numpy(wav_np)
 
-    def generate(self, prompt: str) -> torch.Tensor:
+    def generate(
+        self,
+        prompt: str,
+        *,
+        return_waveform_ttnn: bool = False,
+    ) -> Union[torch.Tensor, ttnn.Tensor]:
         """Full end-to-end: text prompt → waveform tensor.
 
         Args:
             prompt: text description of the music.
+            return_waveform_ttnn: If True, return raw TTNN waveform from the VAE (no host peak norm).
 
         Returns:
-            waveform [1, channels, samples] normalized to [-1, 1].
+            waveform [1, channels, samples] normalized to [-1, 1] by default, or device tensor
+            when *return_waveform_ttnn* is True.
         """
         if self._condition_encoder is None:
             raise RuntimeError("TTNN condition encoder was not initialized.")
+        if self._ctx_bt128_cached is None:
+            raise RuntimeError("Cached context latents were not initialized.")
         do_cfg = self.config.guidance_scale > 1.0 + 1e-6
 
         text_hs_tt, attn_mask_np = self.encode_text(prompt)
-        enc_hs_tt_one, enc_mask_np, _null_fwd = self._condition_encoder.forward(text_hs_tt, attn_mask_np)
+        enc_hs_tt_one, enc_mask_np, null_emb_tt = self._condition_encoder.forward(text_hs_tt, attn_mask_np)
         try:
             ttnn.deallocate(text_hs_tt)
         except Exception:
             pass
 
-        ctx_tt_one = self._ctx_latents_ttnn()
+        ctx_tt_one = self._ctx_bt128_cached
         enc_tt_pipe: ttnn.Tensor
         ctx_tt_pipe: ttnn.Tensor
 
         if do_cfg:
             d_enc = int(enc_hs_tt_one.shape[-1])
             s_enc = int(enc_hs_tt_one.shape[1])
-            null_emb_tt = ttnn.as_tensor(
-                np.asarray(self._condition_encoder.weights_np["null_condition_emb"], dtype=np.float32),
-                device=self.device,
-                dtype=self.act_dtype,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=self.mem,
-            )
             null_4d = ttnn.reshape(null_emb_tt, (1, 1, 1, d_enc))
             null_rep_4d = ttnn.repeat(null_4d, (1, 1, s_enc, 1))
             null_rep = ttnn.reshape(null_rep_4d, (1, s_enc, d_enc))
@@ -557,16 +615,38 @@ class AceStepE2EModel:
                 ttnn.deallocate(null_4d)
                 ttnn.deallocate(null_rep_4d)
                 ttnn.deallocate(null_rep)
-                ttnn.deallocate(ctx_tt_one)
-                ttnn.deallocate(null_emb_tt)
             except Exception:
                 pass
         else:
             enc_tt_pipe = enc_hs_tt_one
             ctx_tt_pipe = ctx_tt_one
-            _ = _null_fwd  # unused; encoder keeps device null for other calls
 
-        pred_latents = run_ttnn_denoise_loop(
+        enc_row = np.asarray(enc_mask_np, dtype=np.float32).reshape(1, -1)
+        enc_attn_1d_bk = np.concatenate([enc_row, enc_row], axis=0) if do_cfg else enc_row
+
+        b_mask = 2 if do_cfg else 1
+        xt_dummy = ttnn.zeros(
+            (b_mask, int(self.frames), 64),
+            device=self.device,
+            dtype=self.act_dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=self.mem,
+        )
+        ctx_for_mask = concat_duplicate_batch(ctx_tt_one) if do_cfg else ctx_tt_one
+        mask_tt = self.pipe.build_encoder_attention_mask_b1qk_optional(
+            xt_bt64=xt_dummy,
+            context_latents_bt128=ctx_for_mask,
+            encoder_hidden_states_btd=enc_tt_pipe,
+            encoder_attention_mask_1d_bk=enc_attn_1d_bk,
+        )
+        try:
+            ttnn.deallocate(xt_dummy)
+            if do_cfg:
+                ttnn.deallocate(ctx_for_mask)
+        except Exception:
+            pass
+
+        loop_kw = dict(
             pipe=self.pipe,
             device=self.device,
             act_dtype=self.act_dtype,
@@ -574,7 +654,6 @@ class AceStepE2EModel:
             t_schedule=self.t_schedule,
             frames=self.frames,
             enc_hs=None,
-            enc_mask=enc_mask_np,
             ctx_lat=None,
             null_emb=None,
             do_cfg=do_cfg,
@@ -585,6 +664,21 @@ class AceStepE2EModel:
             cfg_interval_end=float(self.config.cfg_interval_end),
             enc_tt_pipe=enc_tt_pipe,
             ctx_tt_pipe=ctx_tt_pipe,
+            return_device_latents=True,
+            encoder_attention_mask_b1qk=mask_tt,
+            deallocate_ctx_latents=do_cfg,
         )
-        wav = self.decode_vae(pred_latents)
+        if mask_tt is None:
+            loop_kw["enc_mask"] = enc_mask_np
+        else:
+            loop_kw["enc_mask"] = None
+
+        pred_latents = run_ttnn_denoise_loop(**loop_kw)
+        try:
+            wav = self.decode_vae(pred_latents, return_waveform_ttnn=return_waveform_ttnn)
+        finally:
+            try:
+                ttnn.deallocate(pred_latents)
+            except Exception:
+                pass
         return wav
