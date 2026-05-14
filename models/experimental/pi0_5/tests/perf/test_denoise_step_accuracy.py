@@ -101,10 +101,16 @@ def _set_initial_noise(model, device, seed: int) -> None:
 
     Disables the per-call resampling in `sample_actions` so the deterministic
     noise placed here is actually used.
+
+    Host-pads the noise to the tile-aligned action_horizon (matches the
+    convention in Pi0_5ModelTTNN.__init__ so the device tensor lands with
+    logical=physical=tile-aligned and no per-call ttnn.pad is required).
     """
     g = torch.Generator().manual_seed(seed)
     cfg = model.config
-    noise = torch.randn(1, cfg.action_horizon, cfg.action_dim, generator=g)
+    ah_padded = getattr(model, "_action_horizon_padded", ((cfg.action_horizon + 31) // 32) * 32)
+    noise = torch.zeros(1, ah_padded, cfg.action_dim, dtype=torch.float32)
+    noise[:, : cfg.action_horizon, :] = torch.randn(1, cfg.action_horizon, cfg.action_dim, generator=g)
     model.x_t_ttnn = ttnn.from_torch(
         noise,
         dtype=ttnn.bfloat16,

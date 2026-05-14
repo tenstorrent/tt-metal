@@ -59,7 +59,15 @@ class Pi0_5ModelTTNN:
         # Initial noise tensor; resampled fresh on each sample_actions call to
         # match lerobot/openpi reference behavior (see sample_actions below).
         # Allocated once and reused as a destination buffer.
-        x_t_torch = torch.randn(1, config.action_horizon, config.action_dim)
+        #
+        # HOST-PAD: action_horizon (e.g. 50) is not tile-aligned. We pad to
+        # the next tile boundary (64) on host so the device tensor has
+        # logical=physical=tile-aligned from the start — eliminates a per-call
+        # ttnn.pad inside sample_actions. The phantom rows are zero-valued and
+        # masked out of SDPA via the prebuilt attention mask.
+        self._action_horizon_padded = ((config.action_horizon + 31) // 32) * 32
+        x_t_torch = torch.zeros(1, self._action_horizon_padded, config.action_dim, dtype=torch.float32)
+        x_t_torch[:, : config.action_horizon, :] = torch.randn(1, config.action_horizon, config.action_dim)
         self.x_t_ttnn = ttnn.from_torch(
             x_t_torch,
             dtype=ttnn.bfloat16,
@@ -312,9 +320,15 @@ class Pi0_5ModelTTNN:
         # Tests that need deterministic noise can set `self.resample_noise = False`
         # and pre-populate `self.x_t_ttnn` (see tests/perf/test_denoise_step_accuracy.py).
         if getattr(self, "resample_noise", True):
-            fresh_noise = torch.randn(1, self.config.action_horizon, self.config.action_dim)
+            # Host-pad noise to tile-aligned action_horizon so the device
+            # tensor lands with logical=physical=64 directly — eliminates the
+            # per-call ttnn.pad that previously ran on device.
+            ah = self.config.action_horizon
+            ah_padded = self._action_horizon_padded
+            noise_padded = torch.zeros(1, ah_padded, self.config.action_dim, dtype=torch.float32)
+            noise_padded[:, :ah, :] = torch.randn(1, ah, self.config.action_dim)
             x_t_ttnn = ttnn.from_torch(
-                fresh_noise,
+                noise_padded,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
@@ -323,18 +337,6 @@ class Pi0_5ModelTTNN:
         else:
             x_t_ttnn = self.x_t_ttnn
         fast_path = batch_size == 1
-
-        # Lift x_t logical action_horizon → tile-aligned (50 → 64) with zero rows.
-        # Phantom rows are masked out of SDPA so they don't pollute valid Q rows.
-        if keep_padded_expert:
-            ah = self.config.action_horizon
-            ah_padded = ((ah + 31) // 32) * 32
-            if ah_padded > ah:
-                x_t_ttnn = ttnn.pad(
-                    x_t_ttnn,
-                    padding=((0, 0), (0, ah_padded - ah), (0, 0)),
-                    value=0.0,
-                )
 
         for i in range(num_steps):
             t = timesteps[i]
