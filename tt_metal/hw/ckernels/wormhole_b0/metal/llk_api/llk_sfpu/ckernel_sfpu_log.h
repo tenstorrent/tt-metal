@@ -93,7 +93,7 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
         }
 
         // if a==nan or inf, result will be nan or ±inf
-        v_if(sfpi::exexp_nodebias(a) - 255 >= 0) { result *= a; }
+        v_if(sfpi::exexp(a, sfpi::ExponentMode::NoDebias) - 255 >= 0) { result *= a; }
         v_endif;
     }
     v_endif;

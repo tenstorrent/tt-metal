@@ -23,7 +23,7 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat x) {
     // function)
 
     // Compute log(1 - x^2)
-    sfpi::vFloat log_value = log_value = calculate_log_body<false, false, true>(sfpi::vConst1 - x * x, 0);
+    sfpi::vFloat log_value = calculate_log_body<false, false, true>(sfpi::vConst1 - x * x, 0);
 
     // Paper sets a constant a = 0.147.
     // This constant is used to compute two constant expressions:
@@ -48,8 +48,10 @@ template <bool APPROXIMATION_MODE>
 inline void calculate_erfinv() {
     constexpr int ITERATIONS = 8;
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat result = calculate_erfinv_body<false>(sfpi::dst_reg[0]);
-        sfpi::dst_reg[0] = sfpi::copysgn(result, sfpi::dst_reg[0]);
+        sfpi::vFloat in = sfpi::dst_reg[0];
+        sfpi::vFloat result = calculate_erfinv_body<false>(in);
+        in = sfpi::dst_reg[0];  // reload due to register pressure
+        sfpi::dst_reg[0] = sfpi::copysgn(result, in);
         sfpi::dst_reg++;
     }
 }
