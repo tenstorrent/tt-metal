@@ -6,6 +6,7 @@
 
 #include "api/compute/common.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
+#include "llk_assert.h"
 #ifdef TRISC_MATH
 #include "llk_math_matmul_api.h"
 #endif
@@ -104,7 +105,7 @@ ALWI void mm_init(
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>()));
     PACK((llk_pack_init(out_cb_id)));
 #else
-    ASSERT(transpose == 0);  // matmul transpose not yet implemented for Quasar
+    LLK_ASSERT(transpose == 0, "Matmul transpose not yet implemented for Quasar");
     UNPACK((llk_unpack_hw_configure(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id)));
 
@@ -187,7 +188,7 @@ ALWI void mm_init_short(
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
 #else
-    ASSERT(transpose == 0);  // matmul transpose not yet implemented for Quasar
+    LLK_ASSERT(transpose == 0, "Matmul transpose not yet implemented for Quasar");
     UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id)));
     MATH((llk_math_matmul_init<MATH_FIDELITY>()));
 #endif
@@ -261,7 +262,7 @@ ALWI void mm_block_init(
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>()));
     PACK((llk_pack_init<PackMode::Default, false /* zero_output */>(out_cb_id)));
 #else
-    ASSERT(transpose == 0);  // matmul transpose not yet implemented for Quasar
+    LLK_ASSERT(transpose == 0, "Matmul transpose not yet implemented for Quasar");
     UNPACK((llk_unpack_hw_configure(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id, ct_dim, rt_dim, kt_dim)));
 
@@ -356,7 +357,7 @@ ALWI void mm_block_init_short(
     MATH((throttled_mop_status = 0));
 #endif
 #else
-    ASSERT(transpose == 0);  // matmul transpose not yet implemented for Quasar
+    LLK_ASSERT(transpose == 0, "Matmul transpose not yet implemented for Quasar");
     UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_init<MATH_FIDELITY>(ct_dim, rt_dim)));
 #endif
