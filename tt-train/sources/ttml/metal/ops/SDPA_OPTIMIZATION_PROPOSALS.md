@@ -49,10 +49,9 @@ Tracking of completed, in-progress, and blocked work.
 | **F5** — `exp_tile_first_column` | **Done** (in Phase A PR) | Custom SFPU intrinsic for first-column-only fused scale+exp. Uses `_ckernel_sfpu_exp_accurate_` (same 7th-order Taylor series as `exp_tile<false>`) for training-grade accuracy. 4x fewer SFPU iterations. Used in `update_exp_max_diff` for max-correction factor. |
 | **B5** — Eliminate redundant u_scalar | **Done** (merged [#39812](https://github.com/tenstorrent/tt-metal/pull/39812)) | Precomputed `u_scalar = rowsum(dO * O)` in a pre-pass kernel. Result stored as `(B, H, S, 32)` tensor. Eliminates O(S²) redundant recomputation in KV-kernel and removes the need to read O tensor in KV backward. ~1.4% step-time improvement. |
 | **Different head dim for QK and V** | **Done** (merged) | Support different last dimension for QK and V tensors in SDPA forward and backward. Infrastructure change enabling future head-dim optimizations. |
-
-### In Progress
-
-(No items currently in progress.)
+| **F9** — Multi-tile K/V chunking (FW) | **Done** (branch `vmelnykov/sdpa_fw_multi_tile_kv_chunking`) | Forward inner-loop granularity is now `Sk_chunk_t` K/V tiles (`Sk_chunk_t = 4` for TinyLlama), reader pre-stages chunk-sized blocks in L1, online correction runs once per chunk instead of once per tile. ~9% step-time speedup on TinyLlama Shakespeare. |
+| **F10 step 1** — QK^T `matmul_block` + L1-acc mask (FW) | **Done** (same branch) | CAUSAL / BALANCED branch only: QK^T uses `matmul_block` with `ct_dim=Sk_chunk_t, rt_dim=1, kt_dim=qWt`, single `tile_regs_acquire` per chunk. Mask is added via packer L1-accumulate (`pack_reconfig_l1_acc(1)` + `pack_tile<true>`) — score stays at full FP32 in L1, no DST→SrcB TF32 truncation. Bit-identical loss to F9. ~0 ms wall-clock gain on its own (QK is only ~13% of MATH per profiling — see [post-F9+F10 profiling](#post-f9--f10-profiling-fw-fp32-dst4)). |
+| **F10 step 2** — PV `matmul_block` + per-arch `dst_size` (FW) | **Done** (same branch) | `matmul_qk_by_v` rewritten to call `matmul_block` once per K step with `ct_dim=pv_block_size, rt_dim=1, kt_dim=Sk_chunk_t`. Program factory now derives two block sizes from `dst_size` (4 for fp32_acc, 8 for bf16_acc): `block_size = dst_size - 1` for SFPU ops that need `unary_bcast<COL>` scratch, `pv_block_size = dst_size` for matmul_block which writes ct_dim tiles directly with no scratch. **Bit-identical loss to F10 step 1** across all 1000 TinyLlama steps; **~2% additional wall-clock gain** (1687.8 s → 1653.7 s, –34 s). |
 
 ### Blocked
 
@@ -75,6 +74,10 @@ Tracking of completed, in-progress, and blocked work.
 | Full PR (FP32 intermediates + FP32 buffers + reconfig fixes) | 1933 ms | +0.1% |
 | + B5 (u_scaler) + diff head dim | 1934 ms | — (new baseline) |
 | **Phase A (F13 + F1 + F3 + F5)** | **1820 ms** | **-5.9%** |
+| Single-WH dev baseline (batch=1, char tokenizer, memory_efficient, S=2048) | 1798.4 ms / 1798 ms | — (new dev baseline) |
+| **+ F9** (multi-tile K/V chunking) | **1634.5 ms** | **−9.1 % vs dev baseline** |
+| **+ F10 step 1** (QK^T `matmul_block` + L1-acc mask) | **~1688 ms total / 1000 steps → 1.688 s/step ≈ same as F9** | **±0 % vs F9** (kernel-build noise) |
+| **+ F10 step 2** (PV `matmul_block`, `pv_block_size = dst_size`) | **1654 ms total / 1000 steps → 1.654 s/step** | **−2.0 % vs F10 step 1, −6.2 % vs dev baseline cumulative** (loss bit-identical to F10 step 1) |
 
 The FP32 intermediate format itself is slightly faster (fewer tiles: 1 FP32 vs 2 BF16 per row). The ~20 ms overhead comes from FP32 `cb_attention_weights` promotion, which will be recovered by [#41686](https://github.com/tenstorrent/tt-metal/issues/41686).
 
@@ -483,6 +486,72 @@ compensates for that overhead.
 - Main baseline: ~1955 ms/step
 - Phase A: ~1842 ms/step → **~5.6% faster**
 - Loss convergence unchanged (bit-exact deterministic across runs)
+
+### Post-F9 + F10 Profiling (FW, FP32 DST=4)
+
+Re-profiled after F9 + F10 step 1 + F10 step 2 landed on
+`vmelnykov/sdpa_fw_multi_tile_kv_chunking`, using the new fine-grained
+`DeviceZoneScopedN` zone set:
+
+| Zone                | Wraps                                                                                | Frequency      |
+|---------------------|--------------------------------------------------------------------------------------|----------------|
+| `fw-qk-mm`          | `mm_block_init_short` + `matmul_block` loop + pack unmasked scores                   | every chunk    |
+| `fw-mask`           | l1-acc mask stamp (`pack_reconfig_l1_acc(1)` + `pack_tile<true>`)                    | diag chunk only|
+| `fw-sm-max`         | `update_cur_row_max_value` (per-tile row max + reduce + eltwise-max vs running max)  | every chunk    |
+| `fw-sm-sub`         | `sub_tiles_bcast_cols(score, cur_max)` loop                                          | every chunk    |
+| `fw-sm-exp`         | `exp_tile` loop on the subtracted scores                                             | every chunk    |
+| `fw-sm-pack-scores` | pack the `Sk_chunk_t` exp tiles back into `cb_attention_weights`                     | every chunk    |
+| `fw-sm-pack-sum`    | pack exp tiles into `cb_cur_exp_sum[0]` with L1-acc (overwrite, then accumulate)     | every chunk    |
+| `fw-pv-mm`          | `matmul_qk_by_v` + pop attention/value CBs                                           | every chunk    |
+| `fw-online`         | `update_exp_max_diff` + `update_cur_exp_sum_inplace` + `update_cur_mm_out`           | every chunk except first |
+| `fw-final`          | `row_reduce` + (optional `compute_and_pack_lse`) + `recip` + per-tile normalize loop | once per row   |
+
+(See `sources/ttml/metal/ops/SDPA_PROFILING_HOWTO.md` on the
+`vmelnykov/sdpa_fw_profile_infra` branch for the test config, run-script
+wrappers, and zone-budget math.)
+
+**Per-zone wall-clock share on the MATH TRISC** (mean across all chunks/rows on
+`NIGHTLY_ProfileSDPA_FW_TinyLlama_Row`, Q_NH=1, S=2048, D=64, Sk_chunk_t=4,
+causal mask). MATH dominates wall-clock; UNPACK and PACK have noticeable idle
+gaps consistent with a MATH-bound kernel.
+
+| Zone                | mean MATH [ns] | share of MATH wall-clock |
+|---------------------|---------------:|--------------------------|
+| **`fw-sm-exp`**     | **~5,500**     | **~55 %**                |
+| `fw-qk-mm`          | ~1,300         | ~13 %                    |
+| `fw-pv-mm`          | ~1,250         | ~12 %                    |
+| `fw-sm-max`         | ~700           | ~7 %                     |
+| `fw-online`         | ~600           | ~6 %                     |
+| `fw-sm-pack-scores` | ~400           | ~4 %                     |
+| `fw-sm-sub`         | ~250           | ~2 %                     |
+| `fw-sm-pack-sum`    | ~250           | ~2 %                     |
+| `fw-mask`           | ~200           | <1 % (diag chunk only)   |
+
+(Exact numbers depend on chip frequency; rerun
+`tt-train/tools/profiling/analyze_sdpa_profile.py` for current values.)
+
+**Headline**: `exp_tile` (inside `fw-sm-exp`) is by far the single largest
+contributor on MATH — ~5–6× larger than either matmul block. Splitting
+`fw-sm-sub` from `fw-sm-exp` (vs the earlier bundled `fw-sm-sub-exp`) confirms
+~99 % of the cost is in `exp_tile`, not in `sub_tiles_bcast_cols`.
+
+The two FPU matmuls are remarkably **balanced against each other** (~13 % / ~12 %)
+and small individually. That implies:
+- `matmul_block_no_mop` pipelining (trades MATH cycles for PACK overlap) would
+  buy single-digit % in MATH and lose just as much to setup, unless we also
+  overlap MATH and PACK *across chunks* — which TTNN does only on the BF16
+  (DST=8) streaming path. With our FP32 (DST=4) constraint the cross-chunk
+  pipeline doesn't fit.
+- TTNN's `exp_packthread_tile` (running `exp_tile` on the PACK thread) is **not
+  a fit either**: PACK doesn't have enough headroom to absorb the work without
+  becoming the new bottleneck, and the technique is again tightly coupled to
+  the BF16 streaming layout.
+
+**Single biggest remaining optimization lever (FW)**: replace `exp_tile` with a
+faster, equally accurate exponential (the team's WIP "diff exp") and aim for
+~18 % wall-clock reduction on the FW kernel. Streaming-style overlap (F12) is
+parked until we can move to BF16 intermediates or unblock the LLK SFPU
+primitives in [#41686](https://github.com/tenstorrent/tt-metal/issues/41686).
 
 ---
 
@@ -1131,7 +1200,7 @@ tiles, but the max + sum correction collapses from 3 DST cycles to 1.
 | **Effort** | Medium |
 | **Accuracy** | **LOSSLESS** — same FMAs, all accumulation stays in FP32 DST |
 | **Requires** | F9 (multi-tile chunking) |
-| **Status** | **Step 1 — QK^T → matmul_block (CAUSAL/BALANCED) — IMPLEMENTED.** Step 2 — PV → matmul_block — deferred to a follow-up commit. |
+| **Status** | **Step 1 — QK^T → matmul_block (CAUSAL/BALANCED) — DONE.** **Step 2 — PV → matmul_block — DONE.** Both bit-identical to F9 loss; combined ≈ –2 % wall-clock on top of F9. |
 
 **Step 1 implementation notes** (CAUSAL/BALANCED only — USE_ATTN_MASK stays on the F9
 `matmul_tiles + apply_mask_on_reg` path):
@@ -1175,21 +1244,65 @@ training loss to F9 across all 1000 TinyLlama steps.
 for the larger configs, USE_ATTN_MASK on the unchanged F9 path). TinyLlama training: F10 step 1
 loss ≡ F9 loss across all 1000 steps (zero diff in step-loss table).
 
-**Perf**: F10 step 1 alone is **a no-op for speed** — mean step time 1629.8 ms (F10) vs 1630.1 ms
+**Perf — Step 1 alone**: a no-op for speed — mean step time 1629.8 ms (F10 step 1) vs 1630.1 ms
 (F9), delta 0.3 ms within the ±0.5 ms standard-error-of-mean noise floor. F9's K/V chunking already
 extracted the data-motion win; `matmul_block` with `ct_dim=4, rt_dim=1` on QK^T alone doesn't beat
 `matmul_tiles` because the MOP has little extra work to amortize, and the L1-acc mask pass adds a
-second pack cycle on diagonal chunks. The actual F10 perf win is expected from **Step 2 (PV →
-`matmul_block`)** where `vWt ≥ 4` gives the MOP real work, and from `Sq_chunk_t > 1` (multi-Q-tile
-parallelism, a larger restructure). This commit lays the foundation.
+second pack cycle on diagonal chunks. The actual F10 perf win comes from Step 2 below.
 
-**Files touched**:
+**Step 2 implementation notes** (PV → `matmul_block`):
+
+1. **Two DST budgets in the program factory.** `fp32_dest_acc_en=true` gives DST=4; bf16 gives
+   DST=8 (mirrors TTNN's `dst_size` convention, see `ttnn/cpp/.../sdpa_program_factory.cpp:362`).
+   We now derive two clamped granularities from `dst_size`:
+   - `block_size = get_block_size(vWt, dst_size - 1)` — for SFPU ops that load `block_size` data
+     tiles **plus** a 1-tile scratch for `unary_bcast<COL>` (used by `update_cur_mm_out` and
+     final normalization). Needs `block_size + 1 ≤ dst_size`.
+   - `pv_block_size = get_block_size(vWt, dst_size)` — for `matmul_block` in PV. The MOP writes
+     `ct_dim` output tiles directly into DST and needs **no scratch**, so it can use the full
+     budget. Both are divisors of `vWt`, so no remainder handling.
+   - The compute kernel adds a new compile-time arg `pv_block_size` (slot 9) distinct from
+     `block_size` (slot 1).
+
+2. **Compute kernel `matmul_qk_by_v` rewritten.** Per output-block step:
+   ```cpp
+   mm_block_init_short(cb_attention_weights, cb_value, /* transpose */ 0,
+       /* ct_dim */ pv_block_size, /* rt_dim */ 1, /* kt_dim */ Sk_chunk_t);
+   for (uint32_t tile_idx = 0; tile_idx < vWt; tile_idx += pv_block_size) {
+     tile_regs_acquire();
+     for (uint32_t k = 0; k < Sk_chunk_t; ++k) {
+       matmul_block(cb_attention_weights, cb_value,
+         /* in0 idx */ k, /* in1 idx */ k * vWt + tile_idx, /* dst */ 0,
+         /* transpose */ 0, /* ct_dim */ pv_block_size, /* rt_dim */ 1, /* kt_dim */ Sk_chunk_t);
+     }
+     tile_regs_commit(); /* pack pv_block_size tiles */ tile_regs_release();
+   }
+   ```
+   V is row-major in `cb_value` (seq outer, feat inner), so the `pv_block_size` V tiles at a
+   fixed seq step are already contiguous — no transpose read needed (contrast with QK^T).
+
+**Perf — Step 2 (final F10)** (TinyLlama Shakespeare, batch=1, S=2048, single WH, 1000 steps):
+
+| Run | Total time | Δ vs prior |
+|---|---:|---:|
+| F9 + F10 step 1 (`block_size=3` MOP for PV, run_sk_chunk_05.txt) | 1687.83 s | — |
+| F10 step 2 first try (`block_size=3`, run_sk_chunk_06.txt) | 1659.48 s | −28.4 s (−1.7 %) |
+| **F10 step 2 final (`pv_block_size=4 = dst_size`, run_sk_chunk_07.txt)** | **1653.71 s** | **−5.8 s (−0.3 %) vs run_06, −34.1 s (−2.0 %) vs F9+F10 step 1** |
+
+Loss is bit-identical across all three runs at every sampled step (1, 90-94, 490-494, 991-1000).
+The Step 2 win is modest because PV matmul is only ~12 % of MATH wall-clock per the
+[post-F9+F10 profiling](#post-f9--f10-profiling-fw-fp32-dst4) — using DST=4 vs DST=3 trims
+one inner-loop iteration per output block. The bigger remaining lever is `exp_tile` (~55 % of
+MATH), discussed in the Findings section linked above.
+
+**Files touched (combined Step 1 + Step 2)**:
 - `sources/ttml/metal/common/dataflow_utils.hpp` — bit constants (`FP32_NEG_LARGE_BITS`,
   `BF16_NEG_LARGE_BITS`), `read_tile_block_transposed`, `generate_pretransformed_causal_mask_tile`.
 - `sources/ttml/metal/ops/sdpa_fw/device/kernels/dataflow/sdpa_fw_reader_kernel.cpp` — K col-major.
 - `sources/ttml/metal/ops/sdpa_fw/device/kernels/dataflow/sdpa_fw_writer_kernel.cpp` — pre-transformed masks.
-- `sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_fw_compute_kernel.cpp` — matmul_block + L1-acc mask.
-- `sources/ttml/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.cpp` — mask-tile comment update.
+- `sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_fw_compute_kernel.cpp` — `matmul_block` for QK + L1-acc mask + new `pv_block_size` compile arg + PV call site uses `pv_block_size`.
+- `sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_compute_utils.hpp` — `matmul_qk_by_v` rewritten to use `matmul_block`.
+- `sources/ttml/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.cpp` — `dst_size`/`block_size`/`pv_block_size` derivation + 3 compute_args lists updated with `pv_block_size`.
 
 **Current code** (`sdpa_compute_utils.hpp:144-152`):
 ```cpp
@@ -1351,7 +1464,7 @@ This is the endgame optimization — maximum pipeline utilization.
 | **F9** | Multi-tile K/V chunking | Very High | High | NEGLIGIBLE | — | **Done** (F9 PR) — 8.7–9.1% step-time speedup on TinyLlama (Shakespeare, B=64, S=256) |
 | **F4** | Fused sub_exp + L1 acc sum | High | Medium | NEGLIGIBLE | F9 | **Partially Done** (in F9 PR) — chunk-internal L1-acc landed; cross-chunk matmul_reduce-style sum still TODO |
 | **F6** | Fused correction block | Medium | Medium | BETTER | F9 | Not started |
-| **F10** | Subblock matmul | High | Medium | LOSSLESS | F9 | Not started |
+| **F10** | Subblock matmul | High | Medium | LOSSLESS | F9 | **Done** (kv_chunking branch) — QK^T `matmul_block` + L1-acc mask (step 1) bit-identical to F9; PV `matmul_block` with `pv_block_size = dst_size` (step 2) adds –2 % wall-clock. |
 | **F11** | Software polynomial exp | Medium | Medium | LOW (deg≥2) | — | Not started |
 | **F12** | Streaming pipeline | Very High | Very High | LOSSLESS | F9+F10+F4 | Not started |
 
@@ -1369,7 +1482,10 @@ Phase B (major architecture change):
   chunk-internal L1-acc partial sum (F4 partial).
 
 Phase C (leverage chunking):
-  F10 → F4 (cross-chunk reduce) → F6 → F8
+  F10 ✓ → F4 (cross-chunk reduce) → F6 → F8
+  Done: F10 — step 1 (QK^T matmul_block + L1-acc mask) and step 2 (PV matmul_block,
+  pv_block_size = dst_size) both landed. Combined ~2 % wall-clock gain on top of F9
+  (bottleneck is now `exp_tile`, ~55 % of MATH — see profiling findings).
 
 Phase D (advanced):
   F11 → F12
