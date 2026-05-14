@@ -501,8 +501,6 @@ def run_generation_exactly_like_test_end2end(
     chat = parse_chat_output(response)
     display_chat(logger, chat)
 
-    logger.info(f"Generated {len(results)} tokens successfully")
-
     run_t1 = time.perf_counter()
     full_run_time = run_t1 - run_t0
 
