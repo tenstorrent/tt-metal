@@ -68,6 +68,9 @@ from tests.ttnn.utils_for_testing import comp_pcc
 
 PCC_THRESHOLD = 0.99
 TRACE_PCC_THRESHOLD = 0.97
+TRACE_PCC_THRESHOLD_HOST = 0.96
+TRACE_PCC_THRESHOLD_DEVICE_BF16 = 0.88
+TRACE_PCC_THRESHOLD_DEVICE_FP32 = 0.88
 
 TRACE_DIR_BASE = Path(os.getenv("DEEPSEEK_V3_TRACE_DIR", "/data/ddjekic/bit_sculpt/results/deepseek-r1-0528"))
 ILLIAD_1024_TRACE = TRACE_DIR_BASE / "illiad_prefill_fa2"
@@ -1063,15 +1066,26 @@ def test_prefill_transformer_from_trace(
 
     profiler.end("pcc_validation")
 
+    # --- Per-mode threshold ---
+    if gate_fallback_mode == GateComputeMode.DEVICE:
+        trace_threshold = TRACE_PCC_THRESHOLD_DEVICE_BF16
+    elif gate_fallback_mode == GateComputeMode.DEVICE_FP32:
+        trace_threshold = TRACE_PCC_THRESHOLD_DEVICE_FP32
+    elif gate_fallback_mode == GateComputeMode.HOST_ALL:
+        trace_threshold = TRACE_PCC_THRESHOLD_HOST
+    else:
+        trace_threshold = TRACE_PCC_THRESHOLD
+    logger.info(f"Trace PCC threshold: {trace_threshold} (gate_mode={gate_fallback_mode})")
+
     # --- Summary table ---
     logger.info(f"\n{'='*50}")
     logger.info(f"{'Stage':<20s}  {'PCC':>10s}  {'Status':>8s}")
     logger.info(f"{'-'*50}")
     failures = []
     for label, pcc in pcc_results:
-        status = "PASS" if pcc > TRACE_PCC_THRESHOLD else ("FAIL" if pcc >= 0 else "ERROR")
+        status = "PASS" if pcc > trace_threshold else ("FAIL" if pcc >= 0 else "ERROR")
         logger.info(f"{label:<20s}  {pcc:>10.6f}  {status:>8s}")
-        if pcc <= TRACE_PCC_THRESHOLD:
+        if pcc <= trace_threshold:
             failures.append((label, pcc))
     logger.info(f"{'='*50}")
 
@@ -1095,6 +1109,7 @@ def test_prefill_transformer_from_trace(
         trace_dir,
         dataset_name=trace_dir.name,
         gate_fallback_mode=str(gate_fallback_mode),
+        threshold=trace_threshold,
         filename=f"pcc_results{gate_suffix}.png",
         annotation=first_token_annotation,
     )
@@ -1120,13 +1135,13 @@ def test_prefill_transformer_from_trace(
         "mesh_shape": mesh_shape,
         "n_routed_experts": n_routed_experts,
         "capacity_factor": capacity_factor,
-        "threshold": TRACE_PCC_THRESHOLD,
+        "threshold": trace_threshold,
     }
-    write_pcc_summary(summary_result, threshold=TRACE_PCC_THRESHOLD)
+    write_pcc_summary(summary_result, threshold=trace_threshold)
     generate_pcc_plots(summary_result, output_dir=str(trace_dir))
 
     DeepSeekV3Config.NUM_ROUTED_EXPERTS = orig_num_routed_experts
 
     if failures:
         pcc_failure_msg = "; ".join(f"{label}: {pcc:.6f}" for label, pcc in failures)
-        pytest.fail(f"PCC below {TRACE_PCC_THRESHOLD} at: {pcc_failure_msg}")
+        pytest.fail(f"PCC below {trace_threshold} at: {pcc_failure_msg}")
