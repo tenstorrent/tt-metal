@@ -611,10 +611,11 @@ def main() -> None:
         ensure_acestep_repo_on_path(ref_root)
         from acestep.handler import AceStepHandler
         from acestep.inference import GenerationConfig, GenerationParams, generate_music
-        from acestep.llm_inference import LLMHandler
+
+        from models.demos.ace_step_v1_5.five_hz_lm import LocalFiveHzLMHandler
 
         dit_handler = AceStepHandler()
-        llm_handler = LLMHandler()
+        llm_handler = LocalFiveHzLMHandler()
 
         device = "cpu"
         status, ok = dit_handler.initialize_service(
@@ -636,7 +637,7 @@ def main() -> None:
         )
         print(status, flush=True)
         if not ok:
-            raise RuntimeError("LLMHandler.initialize failed")
+            raise RuntimeError("5 Hz LM (local HF) initialize failed")
 
         params = GenerationParams(
             task_type="text2music",
