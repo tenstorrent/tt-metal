@@ -51,7 +51,8 @@ constexpr auto kCurMmOutCbIndex = tt::CBIndex::c_14;     // used for holding cur
 constexpr auto kOutputCbIndex = tt::CBIndex::c_15;
 
 constexpr uint32_t kNumScalerTiles = 1U;
-constexpr uint32_t kNumCausalMaskTiles = 2U;  // [0] = causal-diag pattern, [1] = all-zeros (post-diagonal)
+constexpr uint32_t kNumCausalMaskTiles = 2U;  // [0] = causal-diag pattern (0 kept / -1e9 masked),
+                                              // [1] = all -1e9 (strictly past the diagonal)
 constexpr uint32_t kMaxValueHolderTiles = 1U;
 constexpr uint32_t kExpMaxDiffTiles = 1U;
 constexpr uint32_t kExpSumTiles = 1U;

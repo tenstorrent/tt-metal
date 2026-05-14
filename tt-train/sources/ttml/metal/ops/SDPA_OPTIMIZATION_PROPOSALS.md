@@ -1129,8 +1129,67 @@ tiles, but the max + sum correction collapses from 3 DST cycles to 1.
 | **Source** | TTNN `sdpa_subblock_utils.hpp` + `compute_common.hpp:1177-1259` |
 | **Impact** | High |
 | **Effort** | Medium |
-| **Accuracy** | **LOSSLESS to SLIGHTLY BETTER** — same FMAs, more accumulation stays in high-precision DST |
+| **Accuracy** | **LOSSLESS** — same FMAs, all accumulation stays in FP32 DST |
 | **Requires** | F9 (multi-tile chunking) |
+| **Status** | **Step 1 — QK^T → matmul_block (CAUSAL/BALANCED) — IMPLEMENTED.** Step 2 — PV → matmul_block — deferred to a follow-up commit. |
+
+**Step 1 implementation notes** (CAUSAL/BALANCED only — USE_ATTN_MASK stays on the F9
+`matmul_tiles + apply_mask_on_reg` path):
+
+1. **Reader (`sdpa_fw_reader_kernel.cpp`)**: K is now written *column-major* into `cb_key`
+   (feat outer, seq inner). Uses the new `read_tile_block_transposed` helper. This lets
+   `matmul_block` with `transpose=1` step `in1_idx += Sk_chunk_t` per feature step (TTNN's
+   `matmul_blocks` idiom). V layout is unchanged.
+
+2. **Writer (`sdpa_fw_writer_kernel.cpp`)**: the two reusable causal mask tiles are emitted
+   in *pre-transformed* form (`0.0` kept / `-1e9` masked, instead of `1.0` / `0.0`). The
+   new `generate_pretransformed_causal_mask_tile` helper handles the diagonal pattern; the
+   all-past-diagonal tile is filled with `BF16_NEG_LARGE_BITS`. One-time cost on the writer
+   thread, runs in parallel with the reader's DRAM fetches.
+
+3. **Compute (`sdpa_fw_compute_kernel.cpp`)**:
+   - **Single `tile_regs_acquire` cycle for the matmul**: `mm_block_init_short` + a `qWt`-iteration
+     feat loop calling `matmul_block` with `ct_dim=Sk_chunk_t, rt_dim=1, kt_dim=qWt`. All
+     `Sk_chunk_t` score tiles land in `DST[0..Sk_chunk_t-1]` simultaneously. Pack to
+     `cb_attention_weights` (FP32 CB), push, release DST.
+   - **Mask add via packer L1-accumulate** (TTNN's `apply_causal_mask_lightweight` pattern,
+     `compute_common.hpp:1402-1441`). For the diagonal chunk only: pop+reserve
+     `cb_attention_weights` to re-enter reserved state on the same single-buffered L1 slots,
+     enable `pack_reconfig_l1_acc(1)`, then for each `n` in `[diag_pos_in_chunk, Sk_chunk_t)`
+     copy the appropriate mask tile to DST and pack with `pack_tile<true>(..., n)`. The packer
+     reads the existing FP32 score from L1, adds the mask in FP32, writes FP32 back. No DST→SRC
+     conversion, score never leaves FP32.
+
+**Why L1-acc, not `binary_dest_reuse_tiles<ELWADD, DEST_TO_SRCB>`**: an earlier iteration used
+the FPU "DEST as operand" path for the mask add inside the same DST cycle. Functionally it
+passed all 18 forward unit tests with low MSE, but it produced a slow training-loss divergence
+(loss plateau ~3.0 and spike at step ~340 vs F9 converging to 2.0). Root cause: routing the
+FP32 score through `DST → SRCB` truncates it to **TF32 (19-bit mantissa)** — the SRC registers
+are TF32 at best, regardless of CB format. 5 mantissa bits lost on every masked score, compounding
+through softmax and gradients into a biased error that broke training. The packer L1-acc path
+keeps the score at full FP32 in L1; mask is BF16→FP32 on its way through DST, but FP32 + FP32
+add in the packer is lossless on the score. With this fix, F10 step 1 produces **bit-identical**
+training loss to F9 across all 1000 TinyLlama steps.
+
+**Test result**: all 18 `*SDPAForwardTest*` pass (CAUSAL_MASK, BALANCED_PARALLELISM auto-enabled
+for the larger configs, USE_ATTN_MASK on the unchanged F9 path). TinyLlama training: F10 step 1
+loss ≡ F9 loss across all 1000 steps (zero diff in step-loss table).
+
+**Perf**: F10 step 1 alone is **a no-op for speed** — mean step time 1629.8 ms (F10) vs 1630.1 ms
+(F9), delta 0.3 ms within the ±0.5 ms standard-error-of-mean noise floor. F9's K/V chunking already
+extracted the data-motion win; `matmul_block` with `ct_dim=4, rt_dim=1` on QK^T alone doesn't beat
+`matmul_tiles` because the MOP has little extra work to amortize, and the L1-acc mask pass adds a
+second pack cycle on diagonal chunks. The actual F10 perf win is expected from **Step 2 (PV →
+`matmul_block`)** where `vWt ≥ 4` gives the MOP real work, and from `Sq_chunk_t > 1` (multi-Q-tile
+parallelism, a larger restructure). This commit lays the foundation.
+
+**Files touched**:
+- `sources/ttml/metal/common/dataflow_utils.hpp` — bit constants (`FP32_NEG_LARGE_BITS`,
+  `BF16_NEG_LARGE_BITS`), `read_tile_block_transposed`, `generate_pretransformed_causal_mask_tile`.
+- `sources/ttml/metal/ops/sdpa_fw/device/kernels/dataflow/sdpa_fw_reader_kernel.cpp` — K col-major.
+- `sources/ttml/metal/ops/sdpa_fw/device/kernels/dataflow/sdpa_fw_writer_kernel.cpp` — pre-transformed masks.
+- `sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_fw_compute_kernel.cpp` — matmul_block + L1-acc mask.
+- `sources/ttml/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.cpp` — mask-tile comment update.
 
 **Current code** (`sdpa_compute_utils.hpp:144-152`):
 ```cpp
