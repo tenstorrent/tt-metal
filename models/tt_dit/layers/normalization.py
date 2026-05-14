@@ -202,7 +202,19 @@ class DistributedRMSNorm(Module):
         rope_sin=None,
         trans_mat=None,
         dtype=None,
+        per_head_norm: bool = False,
     ) -> ttnn.Tensor:
+        """
+        Args:
+            per_head_norm: if True, normalize each head independently with divisor `head_dim`
+                instead of the global `embedding_dim`. Requires num_heads_per_device > 1.
+                The pre-AG kernel emits per-head stat tiles (num_heads_per_device tiles per row);
+                the AG step is SKIPPED because each device's per-head stats are already local
+                (heads are not split across TP). The post-AG kernel then applies per-head RMS.
+
+                When False (default), behavior is unchanged: global RMS across the full
+                `embedding_dim` per row (same as before — used by WAN, Flux2 double block, etc.).
+        """
         expected_dim = self.embedding_dim // self.mesh_width
         if x.shape[-1] != expected_dim:
             msg = (
@@ -211,11 +223,20 @@ class DistributedRMSNorm(Module):
             )
             raise ValueError(msg)
 
+        # Per-head mode tells the pre-AG kernel to emit `num_heads_per_device` per-head sum tiles
+        # per row (instead of one global tile). Default 1 = legacy single-stat behavior.
+        pre_num_heads = num_heads_per_device if per_head_norm else 1
+
         stats = ttnn.experimental.wan_fused_rmsnorm_pre_allgather(
-            x, dtype=ttnn.float32, compute_kernel_config=compute_kernel_config or self.compute_kernel_config
+            x,
+            dtype=ttnn.float32,
+            compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
+            num_heads=pre_num_heads,
         )
 
-        if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
+        if not per_head_norm and tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
+            # Legacy global-RMS path: AG stats across TP so post-AG can sum across devices.
+            # Per-head path skips this — each device's per-head sums are independent of peers.
             stats = self.ccl_manager.all_gather_persistent_buffer(
                 stats,
                 dim=len(x.shape) - 1,
@@ -233,6 +254,7 @@ class DistributedRMSNorm(Module):
             rope_cos=rope_cos,
             rope_sin=rope_sin,
             dtype=dtype,
+            per_head_norm=per_head_norm,
         )
         return x
 
