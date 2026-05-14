@@ -60,6 +60,7 @@ class ParallelFeedForward(Module):
         mesh_axis=0,
         fsdp_mesh_axis=None,
         ccl_manager=None,
+        dtype=ttnn.bfloat16,
     ):
         super().__init__()
 
@@ -87,6 +88,7 @@ class ParallelFeedForward(Module):
             mesh_axis=mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
+            dtype=dtype,
         )
         self.ff2 = RowParallelLinear(
             inner_dim,
@@ -96,6 +98,7 @@ class ParallelFeedForward(Module):
             mesh_axis=mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
+            dtype=dtype,
         )
 
     def forward(self, x: ttnn.Tensor, compute_kernel_config=None, parallel_config=None) -> ttnn.Tensor:
