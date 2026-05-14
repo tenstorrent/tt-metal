@@ -81,10 +81,8 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
             r = r * m + sfpi::vConstFloatPrgm2;
         }
 
-        if constexpr (!FAST_APPROX) {
-            // if a==0, then a=inf; does nothing if a==nan or inf
-            a = sfpi::addexp(a, -1);
-        }
+        // if a==0, then a=inf; does nothing if a==nan or inf
+        a = sfpi::addexp(a, -1);
 
         r = r * s + m;
         e_float = sfpi::copysgn(e_float, sfpi::reinterpret<sfpi::vFloat>(e));
@@ -94,11 +92,9 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
             result *= sfpi::reinterpret<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
         }
 
-        if constexpr (!FAST_APPROX) {
-            // if a==nan or inf, result will be nan or ±inf
-            v_if(sfpi::exexp_nodebias(a) - 255 >= 0) { result *= a; }
-            v_endif;
-        }
+        // if a==nan or inf, result will be nan or ±inf
+        v_if(sfpi::exexp_nodebias(a) - 255 >= 0) { result *= a; }
+        v_endif;
     }
     v_endif;
 
