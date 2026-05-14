@@ -30,10 +30,6 @@ public:
 
     [[nodiscard]] bool has_half() const;
     [[nodiscard]] bool has_full() const;
-
-
-    /// Release device buffers held in the half/full slots (for benchmarks / explicit lifetime control).
-    void deallocate_storage();
 };
 
 }  // namespace ttml::autograd
