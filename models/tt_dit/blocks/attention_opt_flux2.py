@@ -32,12 +32,17 @@ class Attention(Module):
     sdpa_chunk_size_map: dict[tuple, tuple[int, int]] = {}
     default_sdpa_chunk_size: tuple[int, int] = (128, 512)
 
-    # Ring SDPA chunk sizes — Step 1 of migration toward attention_opt.py / attention_wan.py
-    # patterns. Same map as attention_opt.py.
+    # Ring SDPA chunk sizes per (is_blackhole, sp_factor, tp_factor).
+    # The (True, 4, 8) entry is Flux2's actual config on Blackhole Galaxy (mesh (4, 8) with
+    # sp_axis=0, tp_axis=1 → sp_factor=4, tp_factor=8). Q-chunk 128 / K-chunk 512 matches
+    # the pre-Step-1 non-ring default and is measurably faster than the (256, 256) fallback
+    # for Flux2's Q/K shapes.
+    # Other entries are Wan-tuned (carried from attention_opt.py / attention_wan.py).
     ring_sdpa_chunk_size_map: dict[tuple, tuple[int, int]] = {
         (False, 2, 4): (256, 256),
         (False, 8, 4): (256, 256),
         (True, 2, 2): (128, 512),
+        (True, 4, 8): (128, 512),
         (True, 8, 4): (288, 512),
     }
     default_ring_sdpa_chunk_size: tuple[int, int] = (256, 256)
@@ -111,13 +116,21 @@ class Attention(Module):
             exp_approx_mode=False,  # NOTE: False is more correct
         )
 
-        # Step 1 (Item 1.1 — REVERTED, perf-neutral): Ring SDPA worker grid stays in the
-        # row-major orientation (reserves last ROW for CCL — same as the non-ring grid).
-        # Step 1 (Item 1.2 diagnostic — REVERTED): hardcode the pre-Step-1 chunk sizes
-        # (q=128, k=512), bypassing `ring_sdpa_chunk_size_map`. Perf is good at this point.
+        # Step 1: Ring SDPA worker grid uses the row-major orientation (reserves last ROW
+        # for CCL — same as the non-ring grid). Item 1.1 was perf-neutral for Flux2 either
+        # way; keeping it consistent with the non-ring path.
+        # Ring chunk sizes come from `ring_sdpa_chunk_size_map`; the Flux2 (Blackhole, sp=4,
+        # tp=8) entry is (128, 512). See class-level comment for rationale.
         full_grid = self.mesh_device.compute_with_storage_grid_size()
         self.ring_sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
-        ring_chunk_size = (128, 512)  # was: self.ring_sdpa_chunk_size_map.get(...)
+        ring_chunk_size = self.ring_sdpa_chunk_size_map.get(
+            (
+                is_blackhole(),
+                parallel_config.sequence_parallel.factor,
+                parallel_config.tensor_parallel.factor,
+            ),
+            self.default_ring_sdpa_chunk_size,
+        )
         self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.ring_sdpa_worker_grid,
             q_chunk_size=ring_chunk_size[0],
