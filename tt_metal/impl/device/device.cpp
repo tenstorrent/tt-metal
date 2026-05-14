@@ -1776,7 +1776,8 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                         lc_poll.y);
                     poll_buf[0] = 0U;
                 }
-                if (poll_buf[0] != umd_relay_canary_p0 && poll_buf[0] != terminated_val_p0) {
+                const bool is_edm_state_p0 = (poll_buf[0] >= 0xA0B0C0D0U && poll_buf[0] <= 0xA4B4C4D4U);
+                if (poll_buf[0] != umd_relay_canary_p0 && poll_buf[0] != terminated_val_p0 && !is_edm_state_p0) {
                     all_ready_p0 = false;
                 }
             }
@@ -1796,7 +1797,8 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                     lc_rpt.y);
                 final_buf[0] = 0U;
             }
-            const bool ready_p0 = (final_buf[0] == umd_relay_canary_p0 || final_buf[0] == terminated_val_p0);
+            const bool is_edm_state_final_p0 = (final_buf[0] >= 0xA0B0C0D0U && final_buf[0] <= 0xA4B4C4D4U);
+            const bool ready_p0 = (final_buf[0] == umd_relay_canary_p0 || final_buf[0] == terminated_val_p0 || is_edm_state_final_p0);
             if (ready_p0) {
                 log_info(
                     tt::LogMetal,
@@ -2309,7 +2311,8 @@ void Device::launch_eth_cores_for_quiesce() {
                         lc_poll.y);
                     poll_buf[0] = 0U;
                 }
-                if (poll_buf[0] != umd_relay_canary_poll && poll_buf[0] != terminated_val_poll) {
+                const bool is_edm_state = (poll_buf[0] >= 0xA0B0C0D0U && poll_buf[0] <= 0xA4B4C4D4U);
+                if (poll_buf[0] != umd_relay_canary_poll && poll_buf[0] != terminated_val_poll && !is_edm_state) {
                     all_ready = false;
                 }
             }
@@ -2330,7 +2333,8 @@ void Device::launch_eth_cores_for_quiesce() {
                     lc_rpt.y);
                 rpt_buf[0] = 0U;
             }
-            const bool ready = (rpt_buf[0] == umd_relay_canary_poll || rpt_buf[0] == terminated_val_poll);
+            const bool is_edm_state_final = (rpt_buf[0] >= 0xA0B0C0D0U && rpt_buf[0] <= 0xA4B4C4D4U);
+            const bool ready = (rpt_buf[0] == umd_relay_canary_poll || rpt_buf[0] == terminated_val_poll || is_edm_state_final);
             if (ready) {
                 log_info(
                     tt::LogMetal,
