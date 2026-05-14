@@ -69,6 +69,11 @@ class Parameter:
 
     def __init__(self, tensor: Any) -> None:
         object.__setattr__(self, "tensor", tensor)
+        # Generic "fire after .tensor becomes a real autograd tensor" hook.
+        # Used by features like FSDP to attach metadata onto the materialized
+        # autograd tensor without requiring materialize_module to know about
+        # them. See ``add_post_materialize_callback``.
+        object.__setattr__(self, "_post_materialize_callbacks", [])
 
     def __getattribute__(self, name: str) -> Any:
         if name == "tensor":
@@ -88,6 +93,39 @@ class Parameter:
     @property
     def is_lazy(self) -> bool:
         return isinstance(self.peek_tensor(), TensorMetadata)
+
+    def add_post_materialize_callback(self, fn: Callable[["Parameter"], None]) -> None:
+        """Register ``fn(self)`` to run once ``self.tensor`` is a real autograd tensor.
+
+        If this Parameter is already materialized at registration time, ``fn``
+        runs immediately (the eager case). Otherwise the call is deferred
+        until :func:`ttml.materialize_module` materializes the parameter and
+        drains the callback list via :meth:`_run_post_materialize_callbacks`.
+
+        This is the generic decoupling layer between lazy init and any feature
+        that needs to attach metadata to the materialized tensor — e.g. FSDP's
+        ``_fsdp_managed`` markers (looked up by ``sync_gradients`` and the
+        Muon guard via ``ttml.fsdp.is_fsdp_managed``). Without it, every such
+        feature would need a hand-coded propagation step inside
+        ``materialize_module``.
+        """
+        if not isinstance(self.peek_tensor(), TensorMetadata):
+            fn(self)
+            return
+        cbs = object.__getattribute__(self, "_post_materialize_callbacks")
+        cbs.append(fn)
+
+    def _run_post_materialize_callbacks(self) -> None:
+        """Fire and clear all registered post-materialize callbacks.
+
+        Called by :func:`ttml.materialize_module` immediately after binding
+        the materialized tensor. Idempotent; subsequent calls are no-ops
+        because the list has been drained.
+        """
+        cbs = object.__getattribute__(self, "_post_materialize_callbacks")
+        for fn in cbs:
+            fn(self)
+        cbs.clear()
 
     def __repr__(self) -> str:
         inner = self.peek_tensor()

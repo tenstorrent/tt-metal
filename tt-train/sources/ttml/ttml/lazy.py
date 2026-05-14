@@ -130,17 +130,13 @@ def materialize_module(
                 "is still lazy after materialize_module; check init_fn or layout_plan."
             )
         mod._bind_parameter(inner, attr_name)
-
-        # Propagate any FSDP markers placed on the Parameter wrapper (by an
-        # early ``ttml.fsdp.fully_shard`` call against a still-lazy model) onto
-        # the now-materialized autograd tensor. Downstream infra
-        # (``sync_gradients``, Muon guard, etc.) introspects the autograd
-        # tensor, not the Parameter wrapper, so the marker must live on the
-        # tensor by the time training starts.
-        if getattr(param, "_fsdp_managed", False):
-            inner._fsdp_managed = True
-            inner._fsdp_shard_dim = int(getattr(param, "_fsdp_shard_dim", 0))
-            inner._fsdp_axis = int(getattr(param, "_fsdp_axis", 0))
+        # Generic post-materialize hook. Features like FSDP register callbacks
+        # via ``parameter.add_post_materialize_callback(...)`` to attach
+        # metadata onto the now-materialized autograd tensor (e.g. mirror
+        # ``_fsdp_managed`` markers from the wrapper to ``inner`` so
+        # ``sync_gradients`` / ``ttml.fsdp.is_fsdp_managed`` can find them).
+        # ``materialize_module`` itself stays feature-agnostic.
+        param._run_post_materialize_callbacks()
 
     if on_device_init:
         # Placeholder: host NumPy init remains default; on-device rand path can be wired here.

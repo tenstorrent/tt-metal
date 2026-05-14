@@ -107,21 +107,6 @@ def _already_fsdp_sharded(placements: Optional[List[Any]], axis_index: int) -> b
 # ---------------------------------------------------------------------------
 
 
-def _resolve_param_tensor(entry: Any) -> Any:
-    """Return the live autograd tensor for an ``FSDPState.managed`` entry.
-
-    Eager path: ``entry`` *is* the autograd tensor. Lazy path: ``entry`` is a
-    :class:`~ttml.modules.parameter.Parameter` wrapper whose ``.tensor``
-    resolves to the autograd tensor *after* materialization. We dereference
-    on every hook call so the wrapper's update from
-    :func:`ttml.materialize_module` is picked up automatically — no separate
-    "finalize after materialize" step needed.
-    """
-    if isinstance(entry, Parameter):
-        return entry.tensor
-    return entry
-
-
 class FSDPState:
     """State holder for a single FSDP shard group.
 
@@ -147,24 +132,23 @@ class FSDPState:
         self.reshard_after_forward = reshard_after_forward
         self.sharded_state = _ShardedState.SHARDED
 
-        # Each entry: (param_handle, shard_dim) where ``param_handle`` is either
-        # an autograd tensor (eager wrap) or a :class:`Parameter` wrapper (lazy
-        # wrap; resolved to the autograd tensor at hook time via
-        # ``_resolve_param_tensor``). Order is stable across unshard/reshard so
-        # reducing/gathering pairs line up.
-        self.managed: List[Tuple[Any, int]] = []
+        # Each entry: ``(parameter, shard_dim)`` where ``parameter`` is the
+        # Python :class:`~ttml.modules.parameter.Parameter` wrapper. Hooks
+        # always go through ``parameter.tensor`` — for eager-wrapped models
+        # that's the autograd tensor at fully_shard time; for lazy-wrapped
+        # ones it resolves after :func:`ttml.materialize_module` runs. Order
+        # is stable across unshard/reshard so reducing/gathering pairs line up.
+        self.managed: List[Tuple[Parameter, int]] = []
 
         # id(autograd_tensor) -> cached sharded ttnn::Tensor, populated lazily
         # during the first pre-forward and reused across forwards to avoid a
-        # host roundtrip on every reshard. Keyed by the autograd tensor (not
-        # the Parameter wrapper) since the wrapper's ``.tensor`` is what hooks
-        # actually operate on.
+        # host roundtrip on every reshard.
         self._cached_shards: dict[int, Any] = {}
 
     # -- managed-param management --------------------------------------------
 
-    def add_managed_param(self, param_handle: Any, shard_dim: int) -> None:
-        self.managed.append((param_handle, shard_dim))
+    def add_managed_param(self, parameter: Parameter, shard_dim: int) -> None:
+        self.managed.append((parameter, shard_dim))
 
     # -- forward hooks -------------------------------------------------------
 
@@ -225,8 +209,8 @@ class FSDPState:
         restore the sharded m_value (in that order, so ``set_grad``'s shape
         check sees the shard-shaped m_value).
         """
-        for entry, shard_dim in self.managed:
-            param_tensor = _resolve_param_tensor(entry)
+        for parameter, shard_dim in self.managed:
+            param_tensor = parameter.tensor
             if not param_tensor.is_grad_initialized():
                 continue
             # Pull a Python-side handle to the gathered grad before we reduce
@@ -268,8 +252,8 @@ class FSDPState:
         Does NOT touch ``m_grad`` — grad reshaping lives in
         ``_gather_accumulated_grads`` and ``backward_post``.
         """
-        for entry, shard_dim in self.managed:
-            param_tensor = _resolve_param_tensor(entry)
+        for parameter, shard_dim in self.managed:
+            param_tensor = parameter.tensor
             current = param_tensor.get_value()
             self._cached_shards[id(param_tensor)] = current
             gathered = ttml.core.distributed.all_gather(current, shard_dim, self.axis_index)
@@ -283,8 +267,8 @@ class FSDPState:
         gathered grad against the (now gathered) ``m_value``.
 
         """
-        for entry, shard_dim in self.managed:
-            param_tensor = _resolve_param_tensor(entry)
+        for parameter, shard_dim in self.managed:
+            param_tensor = parameter.tensor
             if not param_tensor.is_grad_initialized():
                 continue
             shard_grad = param_tensor.get_grad()
@@ -304,8 +288,8 @@ class FSDPState:
         this makes the memory-saving property of ``reshard_after_forward``
         actually take effect on the device side at the moment we expect.
         """
-        for entry, _shard_dim in self.managed:
-            param_tensor = _resolve_param_tensor(entry)
+        for parameter, _shard_dim in self.managed:
+            param_tensor = parameter.tensor
             shard = self._cached_shards.get(id(param_tensor))
             if shard is None:
                 raise RuntimeError("FSDP: managed parameter has no cached shard. This should never happen.")
@@ -350,24 +334,6 @@ def _pick_shard_dim_from_shape(
     return None
 
 
-def _auto_shard_dim(autograd_tensor: Any, axis_index: int) -> Optional[int]:
-    """Pick a shard dim for this tensor, or return ``None`` to skip it.
-
-    Rules:
-      1. Prefer ``rank - 2`` (the first matmul weight dim on TTML's
-         ``[1,1,O,I]`` convention, where ``O`` is typically large). Fall back
-         to ``rank - 1`` if either:
-             (a) ``rank - 2`` is already sharded on another mesh axis (e.g. TP), or
-             (b) shape on ``rank - 2`` is 1 (e.g. LayerNorm gamma sized ``[1,1,1,F]``).
-      2. If no candidate survives those checks, return ``None`` — caller
-         skips this parameter with a warning.
-      3. Divisibility is enforced by the caller.
-    """
-    placements = _get_placements(autograd_tensor)
-    already_sharded = _sharded_tensor_dims(placements)
-    return _pick_shard_dim_from_shape(list(autograd_tensor.shape()), already_sharded, axis_index)
-
-
 def _placements_from_mapper(mapper: Any) -> Optional[List[Any]]:
     """Best-effort read of the placements list backing a ``CppTensorToMesh``.
 
@@ -386,17 +352,41 @@ def _placements_from_mapper(mapper: Any) -> Optional[List[Any]]:
         return None
 
 
-def _auto_shard_dim_lazy(meta: TensorMetadata, axis_index: int) -> Optional[int]:
-    """``_auto_shard_dim`` for a lazy :class:`TensorMetadata`.
+def _param_shape(parameter: Parameter) -> List[int]:
+    """Shape of a Parameter — works for both lazy (``TensorMetadata.shape``)
+    and materialized (``autograd_tensor.shape()``) wrappers."""
+    inner = parameter.peek_tensor()
+    if isinstance(inner, TensorMetadata):
+        return list(inner.shape)
+    return list(inner.shape())
 
-    Reads dims from ``meta.shape`` and existing tensor-axis sharding from
-    ``meta.mapper.config().placements`` when a mapper is set (e.g. TP-aware
-    modules pass ``mapper=mesh.axis_mapper(...)``). A missing mapper is
-    treated as fully replicated.
+
+def _auto_shard_dim_for_param(parameter: Parameter, axis_index: int) -> Optional[int]:
+    """Pick a shard dim for ``parameter``, or return ``None`` to skip it.
+
+    Rules (shared between lazy and eager paths):
+      1. Prefer ``rank - 2`` (the first matmul weight dim on TTML's
+         ``[1,1,O,I]`` convention, where ``O`` is typically large). Fall back
+         to ``rank - 1`` if either:
+             (a) ``rank - 2`` is already sharded on another mesh axis (e.g. TP), or
+             (b) shape on ``rank - 2`` is 1 (e.g. LayerNorm gamma sized ``[1,1,1,F]``).
+      2. If no candidate survives those checks, return ``None`` — caller
+         skips this parameter with a warning.
+      3. Divisibility is enforced by the caller.
+
+    "Already sharded on another mesh axis" is read from
+    ``parameter.tensor.tensor_topology().placements()`` in the eager case and
+    from ``parameter.peek_tensor().mapper.config().placements`` in the lazy
+    case — same logical question, different source depending on whether the
+    tensor exists yet.
     """
-    placements = _placements_from_mapper(meta.mapper)
+    inner = parameter.peek_tensor()
+    if isinstance(inner, TensorMetadata):
+        placements = _placements_from_mapper(inner.mapper)
+    else:
+        placements = _get_placements(inner)
     already_sharded = _sharded_tensor_dims(placements)
-    return _pick_shard_dim_from_shape(list(meta.shape), already_sharded, axis_index)
+    return _pick_shard_dim_from_shape(_param_shape(parameter), already_sharded, axis_index)
 
 
 # ---------------------------------------------------------------------------
@@ -404,49 +394,23 @@ def _auto_shard_dim_lazy(meta: TensorMetadata, axis_index: int) -> Optional[int]
 # ---------------------------------------------------------------------------
 
 
-def _collect_root_params(module: AbstractModuleBase) -> List[Tuple[str, Any]]:
-    """Return ``[(name, autograd_tensor), ...]`` for params owned by ``module``
-    but NOT owned by any nested FSDP-wrapped submodules.
+def _collect_root_param_wrappers(module: AbstractModuleBase) -> List[Tuple[str, Parameter]]:
+    """Return ``[(dotted_name, Parameter), ...]`` for every Python
+    :class:`~ttml.modules.parameter.Parameter` owned by ``module`` but NOT by
+    any nested ``fully_shard``-wrapped submodule.
 
-    Walks the param tree once via ``named_parameters`` (dot-separated paths
-    relative to ``module``) and excludes any parameter whose path descends
-    into a sub-module already wrapped with ``fully_shard``. Duplicate
-    TensorPtrs (weight tying) are deduped by tensor identity, first owner
-    wins.
-    """
-    # Build dot-separated prefixes of nested FSDP-wrapped modules, e.g.
-    # "blocks.0." for an inner block. The trailing "." is required so
-    # "blocks.10" doesn't accidentally match the "blocks.1" prefix.
-    fsdp_prefixes: List[str] = []
-    for name, child in module.named_modules():
-        if child is module:
-            continue
-        if _is_fsdp_wrapped_module(child):
-            fsdp_prefixes.append(name + ".")
+    Walking Python ``Parameter`` wrappers (rather than C++-registered autograd
+    tensors via ``module.named_parameters()``) lets the same code handle both
+    eager and lazy models: lazy params aren't C++-registered until
+    :func:`ttml.materialize_module` runs, so ``named_parameters()`` returns
+    nothing for them. ``Parameter.tensor`` then resolves to the autograd
+    tensor in either case (raising for still-lazy ones, which we never hold
+    past materialize time).
 
-    seen_ids: set = set()
-    out: List[Tuple[str, Any]] = []
-    for rel_name, tensor in module.named_parameters():
-        if any(rel_name.startswith(pref) for pref in fsdp_prefixes):
-            continue
-        key = id(tensor)
-        if key in seen_ids:
-            continue
-        seen_ids.add(key)
-        out.append((rel_name, tensor))
-    return out
-
-
-def _collect_root_lazy_params(module: AbstractModuleBase) -> List[Tuple[str, Parameter]]:
-    """Return ``[(name, parameter), ...]`` for *lazy* :class:`Parameter`s owned
-    by ``module`` but NOT by any nested FSDP-wrapped submodule.
-
-    Lazy parameters aren't registered with the C++ ``ModuleBase`` until
-    :func:`ttml.materialize_module` runs (see ``AbstractModuleBase.__setattr__``),
-    so ``named_parameters()`` returns nothing for a lazy model. Instead we walk
-    the Python ``__dict__`` (mirrors :func:`ttml.lazy._collect_lazy_parameter_slots`)
-    and return Parameter wrappers along with their dotted paths, deduping by
-    Parameter identity (weight tying).
+    Dedup is by ``Parameter`` identity, so weight-tied references (one
+    ``Parameter`` referenced under multiple attribute names) count once.
+    Implicitly assumes every parameter the model owns is exposed via a Python
+    ``Parameter`` wrapper — true for every model in ``ttml.models``.
     """
     fsdp_modules: set = set()
     fsdp_prefixes: List[str] = []
@@ -470,9 +434,6 @@ def _collect_root_lazy_params(module: AbstractModuleBase) -> List[Tuple[str, Par
             continue
         for attr_name, val in list(mod.__dict__.items()):
             if not isinstance(val, Parameter):
-                continue
-            inner = val.peek_tensor()
-            if not isinstance(inner, TensorMetadata):
                 continue
             if id(val) in seen_ids:
                 continue
@@ -622,6 +583,32 @@ def _shard_lazy_param(
     replace_lazy_mapper(parameter, new_mapper)
 
 
+def _shard_eager_param(
+    parameter: Parameter,
+    shard_dim: int,
+    axis_index: int,
+    axis_size: int,
+    mesh_axis_name: str,
+) -> None:
+    """Eager-path counterpart to :func:`_shard_lazy_param`.
+
+    Host-roundtrips ``parameter.tensor`` via :func:`_shard_replicated_param`
+    and swaps the result into the autograd tensor in place. Errors if the
+    tensor is already sharded on the FSDP axis (e.g. if some upstream code
+    layered TP onto this same axis).
+    """
+    param_tensor = parameter.tensor
+    placements = _get_placements(param_tensor)
+    if _already_fsdp_sharded(placements, axis_index):
+        raise RuntimeError(
+            f"Parameter is already sharded on mesh axis {mesh_axis_name!r} "
+            f"(placements={placements}). FSDP cannot layer a second shard on "
+            f"the same axis."
+        )
+    sharded = _shard_replicated_param(param_tensor, shard_dim, axis_index, axis_size)
+    param_tensor.set_value(sharded)
+
+
 # ---------------------------------------------------------------------------
 # Forward monkey-patching
 # ---------------------------------------------------------------------------
@@ -736,102 +723,49 @@ def fully_shard(
 
     n_axes = len(mesh.shape)
 
-    # Lazy params (constructed inside ``ttml.lazy_init()``) aren't registered
-    # with the C++ ``ModuleBase`` yet, so ``named_parameters()`` returns
-    # nothing for them. Walk Python ``Parameter`` wrappers to find them and
-    # rewrite their mappers in place; ``materialize_module`` later allocates
-    # them already FSDP-sharded (no full-tensor host roundtrip, no transient
-    # full-DRAM allocation — the only path that scales to ~70B-param models
-    # on a 32-device mesh).
-    lazy_params = _collect_root_lazy_params(module)
-    for rel_name, parameter in lazy_params:
+    # Walk Python ``Parameter`` wrappers (one collector for both eager and
+    # lazy models — see ``_collect_root_param_wrappers``). For each, decide
+    # the shard dim from shape + existing placements, then dispatch to either
+    # ``_shard_lazy_param`` (rewrites the mapper so materialize allocates
+    # already-sharded — required for ~70B models) or ``_shard_eager_param``
+    # (host-roundtrips the materialized tensor).
+    for rel_name, parameter in _collect_root_param_wrappers(module):
+        # Already FSDP-managed somewhere else (e.g. tied weight claimed by
+        # an inner block's FSDPState).
         if getattr(parameter, "_fsdp_managed", False):
             continue
-        meta = parameter.peek_tensor()
+
+        shape = _param_shape(parameter)
         if shard_dim == "auto":
-            chosen = _auto_shard_dim_lazy(meta, axis_index)
+            chosen = _auto_shard_dim_for_param(parameter, axis_index)
         else:
             chosen = int(shard_dim)
             if chosen < 0:
-                chosen = len(meta.shape) + chosen
+                chosen = len(shape) + chosen
 
-        shape = list(meta.shape)
         if chosen is None:
             warnings.warn(
-                f"Skipping FSDP sharding for lazy parameter {rel_name!r} "
+                f"Skipping FSDP sharding for parameter {rel_name!r} "
                 f"(shape {shape}): no suitable shard dim could be auto-selected.",
                 stacklevel=2,
             )
             continue
         if shape[chosen] % axis_size != 0:
             warnings.warn(
-                f"Skipping FSDP sharding for lazy parameter {rel_name!r} "
+                f"Skipping FSDP sharding for parameter {rel_name!r} "
                 f"(shape {shape}): chosen dim {chosen} has size {shape[chosen]} "
                 f"which is not divisible by FSDP axis size {axis_size}.",
                 stacklevel=2,
             )
             continue
 
-        _shard_lazy_param(parameter, chosen, axis_index, n_axes)
-        # Track the Parameter wrapper (resolves to the autograd tensor lazily
-        # at hook time, after materialization).
+        if isinstance(parameter.peek_tensor(), TensorMetadata):
+            _shard_lazy_param(parameter, chosen, axis_index, n_axes)
+        else:
+            _shard_eager_param(parameter, chosen, axis_index, axis_size, mesh_axis)
+
         state.add_managed_param(parameter, chosen)
         _mark_fsdp_managed(parameter, chosen, axis_index)
-
-    # Eager (already-materialized) params. With pure-lazy models this list is
-    # empty; with mixed (e.g. some submodules built outside ``lazy_init()``)
-    # both code paths run and contribute to the same FSDPState.
-    params = _collect_root_params(module)
-
-    for rel_name, param_tensor in params:
-        # Already FSDP-managed somewhere else (e.g. tied weight — very rare).
-        if getattr(param_tensor, "_fsdp_managed", False):
-            # Either attached to *this* state (shouldn't happen due to seen_ids
-            # dedup above) or the owning FSDPState is elsewhere — skip.
-            continue
-
-        # Resolve shard dim (explicit int, or auto).
-        if shard_dim == "auto":
-            chosen = _auto_shard_dim(param_tensor, axis_index)
-        else:
-            chosen = int(shard_dim)
-            if chosen < 0:
-                chosen = param_tensor.get_rank() + chosen
-
-        shape = list(param_tensor.shape())
-        if chosen is None:
-            warnings.warn(
-                f"Skipping FSDP sharding for parameter {rel_name!r} "
-                f"(shape {shape}): no suitable shard dim could be auto-selected.",
-                stacklevel=2,
-            )
-            continue
-        if shape[chosen] % axis_size != 0:
-            warnings.warn(
-                f"Skipping FSDP sharding for parameter {rel_name!r} "
-                f"(shape {shape}): chosen dim {chosen} has size {shape[chosen]} "
-                f"which is not divisible by FSDP axis size {axis_size}.",
-                stacklevel=2,
-            )
-            continue
-
-        # The tensor must be Replicate on the FSDP axis for us to install a
-        # Shard there. If it's already a Shard, something else (e.g. TP)
-        # sharded it on this axis and we have don't support "double sharding"
-        # one the same axis.
-        placements = _get_placements(param_tensor)
-        if _already_fsdp_sharded(placements, axis_index):
-            raise RuntimeError(
-                f"Parameter {rel_name!r} is already sharded on mesh axis "
-                f"{mesh_axis!r} (placements={placements}). FSDP cannot "
-                f"layer a second shard on the same axis."
-            )
-
-        sharded = _shard_replicated_param(param_tensor, chosen, axis_index, axis_size)
-        param_tensor.set_value(sharded)
-
-        state.add_managed_param(param_tensor, chosen)
-        _mark_fsdp_managed(param_tensor, chosen, axis_index)
 
     _wrap_forward(module)
 
@@ -852,12 +786,34 @@ def fully_shard(
     return module
 
 
-def _mark_fsdp_managed(param_tensor: Any, shard_dim: int, axis_index: int) -> None:
-    """Tag an autograd::Tensor so other infra (synchronize_gradients, Muon guard,
-    serializers) can detect FSDP-managed params."""
-    param_tensor._fsdp_managed = True
-    param_tensor._fsdp_shard_dim = int(shard_dim)
-    param_tensor._fsdp_axis = int(axis_index)
+def _mark_fsdp_managed(parameter: Parameter, shard_dim: int, axis_index: int) -> None:
+    """Tag a Parameter wrapper as FSDP-managed and mirror the marker to its
+    underlying autograd tensor.
+
+    The wrapper-side marker is used by ``fully_shard``'s own dedup (so a
+    second pass can skip already-managed wrappers, e.g. tied weights). The
+    tensor-side marker is what downstream infra — ``ttml.sync_gradients``,
+    the Muon guard, ``ttml.fsdp.is_fsdp_managed`` — looks at, since it
+    iterates ``model.parameters()`` (autograd tensors).
+
+    For eager wraps the autograd tensor exists already and the mirror runs
+    immediately. For lazy wraps the tensor doesn't exist yet, so the mirror
+    is deferred via :meth:`Parameter.add_post_materialize_callback`; it fires
+    inside :func:`ttml.materialize_module` right after the tensor is bound.
+    Either way, ``materialize_module`` itself stays FSDP-agnostic — the
+    FSDP-specific logic lives entirely in this file.
+    """
+    parameter._fsdp_managed = True
+    parameter._fsdp_shard_dim = int(shard_dim)
+    parameter._fsdp_axis = int(axis_index)
+
+    def _mirror_to_tensor(p: Parameter) -> None:
+        t = p.tensor
+        t._fsdp_managed = True
+        t._fsdp_shard_dim = int(shard_dim)
+        t._fsdp_axis = int(axis_index)
+
+    parameter.add_post_materialize_callback(_mirror_to_tensor)
 
 
 def is_fsdp_managed(param_tensor: Any) -> bool:
