@@ -47,7 +47,7 @@ class MistralGenerator(Generator):
 
             device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
             transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
-            tt_out_trace = self.model[model_id].ttnn_prefill_forward(
+            self.model[model_id].ttnn_prefill_forward(
                 x=transformed_inputs[0],
                 rot_mats_global=tt_rot_mats_prefill_global,
                 rot_mats_local=tt_rot_mats_prefill_local,
@@ -89,7 +89,7 @@ class MistralGenerator(Generator):
 
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
         transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
-        tt_out_trace = self.model[model_id].ttnn_prefill_forward(
+        self.model[model_id].ttnn_prefill_forward(
             x=transformed_inputs[0],
             rot_mats_global=tt_rot_mats_prefill_global,
             rot_mats_local=tt_rot_mats_prefill_local,
