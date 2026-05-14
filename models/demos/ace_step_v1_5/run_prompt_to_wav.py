@@ -653,7 +653,7 @@ def main() -> None:
         ref_root = _ensure_acestep_on_path()
 
         from models.demos.ace_step_v1_5.official_lm_preprocess import (
-            attach_infer_text_embeddings_ttnn,
+            attach_payload_preprocess_ttnn,
             build_filtered_dit_kwargs_for_handler,
             configure_acestep_logging,
             handler_prepare_condition_payload,
@@ -737,6 +737,7 @@ def main() -> None:
 
     _configure_ttnn_runtime(no_ttnn_strict=args.no_ttnn_strict)
     import ttnn
+    from models.demos.ace_step_v1_5.ttnn_impl.audio_code_detokenizer import TtAceStepAudioCodeDetokenizer
     from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_encoder import TtQwen3EmbeddingEncoder
 
     if not args.no_ttnn_strict and hasattr(ttnn, "CONFIG") and hasattr(ttnn.CONFIG, "throw_exception_on_fallback"):
@@ -750,8 +751,16 @@ def main() -> None:
     qwen_tt_encoder = TtQwen3EmbeddingEncoder(
         device=dev, hf_model_dir=str(text_model_dir), qwen_safetensors_path=str(qwen_safetensors)
     )
-    _restore_infer_txt = attach_infer_text_embeddings_ttnn(
-        dit_handler, tt_qwen_encoder=qwen_tt_encoder, max_seq_len=256
+    audio_code_detokenizer = TtAceStepAudioCodeDetokenizer(
+        device=dev,
+        checkpoint_safetensors_path=str(safetensors_path),
+        dtype=getattr(ttnn, "bfloat16", None),
+    )
+    _restore_infer_txt = attach_payload_preprocess_ttnn(
+        dit_handler,
+        tt_qwen_encoder=qwen_tt_encoder,
+        tt_audio_detokenizer=audio_code_detokenizer,
+        max_seq_len=256,
     )
     try:
         if args.ttnn_condition_embedding:
@@ -771,6 +780,7 @@ def main() -> None:
             enc_hs, enc_mask, ctx_lat, frames, null_emb = handler_prepare_condition_tensors(dit_handler, filtered)
     finally:
         _restore_infer_txt()
+        del audio_code_detokenizer
         del qwen_tt_encoder
     do_cfg = gs > 1.0 + 1e-6
 

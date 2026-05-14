@@ -73,6 +73,89 @@ def attach_infer_text_embeddings_ttnn(
     return _restore
 
 
+def attach_payload_preprocess_ttnn(
+    dit_handler: Any,
+    *,
+    tt_qwen_encoder: Any,
+    tt_audio_detokenizer: Any | None = None,
+    max_seq_len: int = 256,
+) -> Callable[[], None]:
+    """Move supported ``preprocess_batch`` tensor kernels to TTNN.
+
+    The ACE handler still owns prompt formatting, tokenization, masks, and other
+    Python control flow. This hook replaces the heavy tensor kernels it calls:
+
+    * prompt Qwen forward via ``TtQwen3EmbeddingEncoder``;
+    * lyric token embedding lookup via the same TTNN embedding table;
+    * audio-code -> 25 Hz latent hints via TTNN detokenizer when provided.
+    """
+    import ttnn
+
+    pad_id = getattr(dit_handler.text_tokenizer, "pad_token_id", None)
+    dtype = getattr(dit_handler, "dtype", torch.float32)
+    orig_text = dit_handler.infer_text_embeddings
+    orig_lyric = dit_handler.infer_lyric_embeddings
+    orig_decode = getattr(dit_handler, "_decode_audio_codes_to_latents", None)
+
+    def _text_replacement(text_token_idss: torch.Tensor) -> torch.Tensor:
+        ids = text_token_idss.detach()
+        ids_cpu = ids.cpu()
+        b, seq = int(ids_cpu.shape[0]), int(ids_cpu.shape[1])
+        if seq > int(max_seq_len):
+            raise ValueError(f"Text sequence length {seq} exceeds max_seq_len={max_seq_len}")
+        attn_cpu = (
+            ids_cpu.ne(pad_id).to(dtype=torch.float32)
+            if pad_id is not None
+            else torch.ones_like(ids_cpu, dtype=torch.float32)
+        )
+        ids_np = ids_cpu.numpy().astype(np.uint32)
+        attn_np = attn_cpu.numpy().astype(np.float32)
+        if seq < int(max_seq_len):
+            pad_val = int(pad_id) if pad_id is not None else 0
+            pad_w = int(max_seq_len) - seq
+            ids_np = np.pad(ids_np, ((0, 0), (0, pad_w)), constant_values=pad_val).astype(np.uint32)
+            attn_np = np.pad(attn_np, ((0, 0), (0, pad_w)), constant_values=np.float32(0.0)).astype(np.float32)
+        hid_tt = tt_qwen_encoder.forward(ids_np, attn_np)
+        out = ttnn.to_torch(hid_tt).float()
+        if out.ndim == 4:
+            out = out.squeeze(1)
+        out = out[:, :seq, :].contiguous()
+        target_device = ids.device if ids.device.type != "meta" else torch.device("cpu")
+        return out.to(device=target_device, dtype=dtype)
+
+    def _lyric_replacement(lyric_token_ids: torch.Tensor) -> torch.Tensor:
+        ids = lyric_token_ids.detach()
+        ids_np = ids.cpu().numpy().astype(np.uint32)
+        hid_tt = tt_qwen_encoder.embed_tokens(ids_np)
+        out = ttnn.to_torch(hid_tt).float()
+        target_device = ids.device if ids.device.type != "meta" else torch.device("cpu")
+        return out.to(device=target_device, dtype=dtype)
+
+    def _decode_replacement(code_str: str):
+        if tt_audio_detokenizer is None:
+            if orig_decode is None:
+                return None
+            return orig_decode(code_str)
+        hid_tt = tt_audio_detokenizer.forward(code_str)
+        if hid_tt is None:
+            return None
+        out = ttnn.to_torch(hid_tt).float()
+        return out.to(device=getattr(dit_handler, "device", torch.device("cpu")), dtype=dtype)
+
+    dit_handler.infer_text_embeddings = _text_replacement
+    dit_handler.infer_lyric_embeddings = _lyric_replacement
+    if orig_decode is not None:
+        dit_handler._decode_audio_codes_to_latents = _decode_replacement
+
+    def _restore() -> None:
+        dit_handler.infer_text_embeddings = orig_text
+        dit_handler.infer_lyric_embeddings = orig_lyric
+        if orig_decode is not None:
+            dit_handler._decode_audio_codes_to_latents = orig_decode
+
+    return _restore
+
+
 def configure_acestep_logging(*, level: str = "DEBUG") -> None:
     """Match CLI-style loguru lines (time | level | module:function:line - message)."""
     logger.remove()
