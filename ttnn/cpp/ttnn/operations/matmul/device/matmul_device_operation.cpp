@@ -278,19 +278,27 @@ void validate_matmul_basic_compute_grid_and_per_core_sanity(
                 std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig> ||
                 std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig> ||
                 std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                const auto& grid = program_config.compute_with_storage_grid_size;
-                TT_FATAL(
-                    grid.x > 0 && grid.y > 0,
-                    "compute_with_storage_grid_size must be non-zero, got ({}, {})",
-                    grid.x,
-                    grid.y);
-                TT_FATAL(
-                    grid.x <= device_grid.x && grid.y <= device_grid.y,
-                    "compute_with_storage_grid_size ({}, {}) must fit within device grid ({}, {})",
-                    grid.x,
-                    grid.y,
-                    device_grid.x,
-                    device_grid.y);
+                bool skip_grid_check = false;
+                if constexpr (std::is_same_v<
+                                  ProgramConfigType,
+                                  operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                    skip_grid_check = program_config.gather_in0;
+                }
+                if (!skip_grid_check) {
+                    const auto& grid = program_config.compute_with_storage_grid_size;
+                    TT_FATAL(
+                        grid.x > 0 && grid.y > 0,
+                        "compute_with_storage_grid_size must be non-zero, got ({}, {})",
+                        grid.x,
+                        grid.y);
+                    TT_FATAL(
+                        grid.x <= device_grid.x && grid.y <= device_grid.y,
+                        "compute_with_storage_grid_size ({}, {}) must fit within device grid ({}, {})",
+                        grid.x,
+                        grid.y,
+                        device_grid.x,
+                        device_grid.y);
+                }
                 validate_matmul_nonzero_k_block_and_per_core_dims(
                     program_config.in0_block_w, program_config.per_core_M, program_config.per_core_N);
                 return;
