@@ -47,7 +47,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     CoreCoord ccl_core_grid_offset,
     bool use_column_major_ccl,
     bool is_causal,
-    bool is_balanced) {
+    bool input_is_zigzag_layout) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
     auto outputs = ttnn::transformer::ring_joint_scaled_dot_product_attention(
@@ -71,10 +71,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         subdevice_id,
         ccl_core_grid_offset,
         is_causal,
-        is_balanced,
         scale,
         compute_kernel_config,
-        strategy);
+        strategy,
+        input_is_zigzag_layout);
     return outputs;
 }
 
@@ -384,7 +384,7 @@ void bind_sdpa(nb::module_& mod) {
           Internally, these are concatenated in the sequence dimension (joint_strategy = "rear"),
           then attention is computed once. The output is split ("sliced") into two parts: one for the original Q/K/V chunk,
           and one for the joint Q/K/V chunk.
-        - funtional causal attention over a single set of query, key and value tensors with the option of handling zig-zag load balancing across devices.
+        - functional causal attention over a single set of query, key and value tensors. Local causal Q scheduling always uses zig-zag balancing; input_is_zigzag_layout selects whether the physical multi-chip input layout is already zig-zagged or sequential.
 
         This op handles optional padding via an attention mask to omit padded tokens from
         both the "original" and "joint" sequences.
@@ -420,7 +420,8 @@ void bind_sdpa(nb::module_& mod) {
                 This places CCL workers in a column (useful when reserving the last column for CCL).
                 If False (default), uses row-major allocation. Defaults to False.
             is_causal (bool): Whether to use causal attention masking. Defaults to False.
-            is_balanced (bool): Whether to use balanced attention computation. Defaults to False.
+            input_is_zigzag_layout (bool): Whether the sequence shards are physically laid out in zig-zag order
+                across the ring. Defaults to False. This does not disable local causal zig-zag balancing.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
@@ -457,7 +458,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("ccl_core_grid_offset"),
         nb::arg("use_column_major_ccl") = false,
         nb::arg("is_causal").noconvert() = false,
-        nb::arg("is_balanced").noconvert() = false);
+        nb::arg("input_is_zigzag_layout").noconvert() = false);
 
     const auto* exp_ring_joint_doc = R"doc(
         ExpRingJointAttention operation that efficiently performs non-causal attention over two

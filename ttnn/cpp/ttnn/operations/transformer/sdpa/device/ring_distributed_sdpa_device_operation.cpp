@@ -43,10 +43,10 @@ void RingDistributedSdpaDeviceOperation::validate_on_program_cache_miss(
             operation_attributes.ring_size);
     }
 
-    // Ring distribution requires even number of chunks for load balancing
+    // Ring-distributed SDPA currently requires an even ring size for its zigzag work split.
     TT_FATAL(
         operation_attributes.ring_size % 2 == 0,
-        "ring_size must be even for balanced distribution, got {}",
+        "ring_size must be even for ring-distributed zigzag balancing, got {}",
         operation_attributes.ring_size);
 
     // Validate all tensors have the same dtype

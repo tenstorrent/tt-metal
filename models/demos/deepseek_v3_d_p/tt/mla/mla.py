@@ -697,8 +697,8 @@ class ttMLA:
             ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
             use_column_major_ccl=True,
             is_causal=True,
+            input_is_zigzag_layout=self.is_balanced,
             scale=self.scale,
-            is_balanced=self.is_balanced,
         )
 
         v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)

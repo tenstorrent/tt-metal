@@ -1271,7 +1271,8 @@ void sdpa_standard_v2(
     const uint32_t local_q_start = 0,
     const uint32_t chunked_q_chunk_offset = 0,
     const LightweightMaskContext& lw_mask = {},
-    const uint32_t q_num_chunks = 0) {
+    const uint32_t q_num_chunks = 0,
+    const bool use_zigzag_balancing = false) {
     // use_padded_mask + is_causal_sdpa is handled at the host level (mutually exclusive).
     static_assert(
         !(use_padded_mask && is_causal_sdpa), "use_padded_mask and is_causal_sdpa are mutually exclusive in v2");
@@ -1305,23 +1306,16 @@ void sdpa_standard_v2(
         constexpr bool can_reduce_trigger_padded = (padded_k_tiles_inner > 0) && (last_chunk_Sk % padded_sbw == 0) &&
                                                    (last_chunk_Sk / padded_sbw > 1) && (last_chunk_Sk % 2 == 0);
 
-        // Causal-only: BALANCED_Q_PARALLEL Q-chunk remap, per-Q diagonal K-chunk limit, and
+        // Causal-only: optional zigzag Q-chunk remap, per-Q diagonal K-chunk limit, and
         // q_start_tile (the only causal-mask consumer downstream). Non-causal builds skip
         // the whole block — q_chunk_local stays in-order, q_start_tile=0, k_loop_end=full.
         uint32_t q_chunk_local = local_q_start + q;
         uint32_t q_start_tile = 0;
         uint32_t k_loop_end = k_num_chunks;
         if constexpr (is_causal_sdpa) {
-#if defined BALANCED_Q_PARALLEL
-            // Pair a light (top-half) Q chunk with a heavy (bottom-half) Q chunk per core to
-            // balance causal work. Reader and writer apply the same remap; compute must agree
-            // or causal masks + output positions desync.
-            const uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
-            if (q >= q_chunk_div_2) {
-                const uint32_t back_q_iter = q - q_chunk_div_2;
-                q_chunk_local = q_num_chunks - 1 - (local_q_start + back_q_iter);
-            }
-#endif
+            // Reader and writer apply the same remap; compute must agree or causal
+            // masks and output positions desync.
+            q_chunk_local = remap_q_index(q_chunk_local, q_num_chunks, use_zigzag_balancing);
             // q_chunk_global is the absolute Q chunk index (used for the diagonal);
             // chunked-prefill shifts this via chunked_q_chunk_offset.
             const uint32_t q_chunk_global = q_chunk_local + chunked_q_chunk_offset;
@@ -1516,7 +1510,7 @@ template <
     uint32_t cb_signal = 0,
     bool lightweight_mask_enabled = false,
     bool is_causal_sdpa = false,
-    bool is_balanced_sdpa = false>
+    bool skip_first_half_q_enabled = false>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
     const uint32_t global_q_end,
@@ -1538,10 +1532,17 @@ void sdpa_ring_v2(
     const uint32_t q_per_core = 1,
     const LightweightMaskContext& lw_mask = {},
     const bool skip_first_half_q = false,
-    const bool use_zigzag_balancing = false) {
+    const bool use_zigzag_balancing = false,
+    const uint32_t causal_q_chunk_boundary = 0,
+    const uint32_t total_heads = 0,
+    const bool use_odd_global_q_schedule = false,
+    const uint32_t odd_schedule_pair_slots = 0,
+    const uint32_t odd_schedule_centers_per_core = 0) {
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     constexpr bool uniform_format = uniform_dataformat;
     const bool is_causal_iter = is_causal_sdpa && (ring_iter == 0);
+    const uint32_t effective_causal_q_chunk_boundary =
+        causal_q_chunk_boundary == 0 ? num_q_chunks / 2 : causal_q_chunk_boundary;
 
     // reduce_trigger enables early reduce start via semaphore signaling from packer to unpacker.
     // All conditions are compile-time except the active_Sk == Sk_chunk_t guard (padded chunks).
@@ -1571,9 +1572,9 @@ void sdpa_ring_v2(
     // ---- Q-loop helpers ---------------------------------------------------
 
     // Non-last ring iter: drain restored staging CBs and skip this Q chunk.
-    auto try_balanced_skip = [&](uint32_t q_chunk) -> bool {
-        if constexpr (is_balanced_sdpa) {
-            if (skip_first_half_q && q_chunk < num_q_chunks / 2 && !is_last_ring_iter) {
+    auto try_causal_zigzag_skip = [&](uint32_t q_chunk) -> bool {
+        if constexpr (skip_first_half_q_enabled) {
+            if (skip_first_half_q && q_chunk < effective_causal_q_chunk_boundary && !is_last_ring_iter) {
                 return true;
             }
         }
@@ -1582,8 +1583,8 @@ void sdpa_ring_v2(
 
     // Last ring iter: normalize accumulated state and signal writer, then skip K-loop.
     auto try_normalize_only = [&](uint32_t q_chunk) -> bool {
-        if constexpr (is_balanced_sdpa) {
-            if (skip_first_half_q && q_chunk < num_q_chunks / 2 && is_last_ring_iter) {
+        if constexpr (skip_first_half_q_enabled) {
+            if (skip_first_half_q && q_chunk < effective_causal_q_chunk_boundary && is_last_ring_iter) {
                 AccumulatorHalf q_prev_norm = acc_state.prev;
                 if (q_per_core > 1 && ring_iter > 0) {
                     q_prev_norm = {cb_sum_in, cb_max_in, cb_prev_out};
@@ -1630,7 +1631,16 @@ void sdpa_ring_v2(
         // Compute Q chunk index (with optional zigzag remapping for causal balancing).
         // num_q_chunks is total per-head chunks (local + joint), matching the divisor the
         // writer/reader use to flatten (batch, head, q_chunk) — see ring_joint_sdpa.cpp.
-        uint32_t q_chunk = remap_q_index(q, num_q_chunks, use_zigzag_balancing) % num_q_chunks;
+        uint32_t q_chunk = remap_ring_joint_q_index(
+                               q,
+                               num_q_chunks,
+                               total_heads,
+                               effective_causal_q_chunk_boundary,
+                               use_zigzag_balancing,
+                               use_odd_global_q_schedule,
+                               odd_schedule_pair_slots,
+                               odd_schedule_centers_per_core) %
+                           num_q_chunks;
 
         // Causal K-chunk limit and Q start tile for this Q chunk
         uint32_t causal_k_limit = num_kv_chunks;
@@ -1642,7 +1652,7 @@ void sdpa_ring_v2(
             }
         }
 
-        if (try_balanced_skip(q_chunk)) {
+        if (try_causal_zigzag_skip(q_chunk)) {
             continue;
         }
         if (try_normalize_only(q_chunk)) {
@@ -1650,7 +1660,7 @@ void sdpa_ring_v2(
         }
 
         // Per-Q pre-scan: count K chunks that will actually be processed.
-        // Placed after balanced-skip guards so skipped Q chunks don't pay for the scan.
+        // Placed after causal-zigzag skip guards so skipped Q chunks don't pay for the scan.
         uint32_t per_q_valid_kv = 0;
         for (uint32_t k = 0; k < num_kv_chunks; ++k) {
             const bool is_joint = k >= num_local_k_chunks;
@@ -1712,7 +1722,7 @@ void sdpa_ring_v2(
             const bool is_local_n_mask_chunk = local_n_needs_masking && k_chunk == local_n_mask_chunk_id;
             const bool is_joint_n_mask_chunk = ring_iter_needs_joint_n_mask && kv_chunk_is_joint &&
                                                (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id;
-            // Straddle chunk (rix > rid balanced-causal with k_chunk_size ∤ coarse_chunk_size):
+            // Straddle chunk (rix > rid causal zigzag with k_chunk_size not dividing coarse_chunk_size):
             // only the early-half columns attend; late-half columns must be dropped. Narrow
             // active_Sk like local_n; no partial-tile stamp needed for tile-aligned straddle.
             const bool is_straddle_mask_chunk =

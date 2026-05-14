@@ -1728,30 +1728,27 @@ void sdpa_inner_loop(
     const uint32_t cb_out,
     const LightweightMaskContext& lw_mask = {},
     const bool is_causal = false,
-    const bool is_balanced = false,
+    const bool skip_first_half_q = false,
     const bool use_zigzag_balancing = false,
-    const bool is_last_ring_iter = true) {
+    const bool is_last_ring_iter = true,
+    const uint32_t causal_q_chunk_boundary = 0,
+    const uint32_t ring_total_heads = 0,
+    const bool use_odd_global_q_schedule = false,
+    const uint32_t odd_schedule_pair_slots = 0,
+    const uint32_t odd_schedule_centers_per_core = 0) {
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
     uint32_t KV_chunks_processed_in_iter = 0;
     const uint32_t q_per_core = iter_q_end - iter_q_start;
+    const uint32_t effective_causal_q_chunk_boundary =
+        causal_q_chunk_boundary == 0 ? q_num_chunks / 2 : causal_q_chunk_boundary;
 
     for (uint32_t q_iter = iter_q_start; q_iter < iter_q_end; ++q_iter) {
         uint32_t q_start_tile = 0;    // First tile of Q chunk (tile units, both STANDARD and RING)
         uint32_t q_high_tile = 0;     // STANDARD: upper tile bound for K iteration
         uint32_t causal_k_limit = 0;  // RING: K-chunk index beyond which all K is above the diagonal
         if constexpr (sdpa_type == STANDARD) {
-            uint32_t q_chunk;
-#if defined BALANCED_Q_PARALLEL
-            uint32_t q_chunk_div_2 = iter_q_end / 2;  // q_chunks_per_core / 2.
-            if (q_iter < q_chunk_div_2) {             // bottom half
-                q_chunk = local_q_start + q_iter;
-            } else {
-                uint32_t back_q_iter = q_iter - q_chunk_div_2;  // Back half should start at 0
-                q_chunk = q_num_chunks - 1 - (local_q_start + back_q_iter);
-            }
-#else
-            q_chunk = local_q_start + q_iter;
-#endif
+            const uint32_t linear_q_chunk = local_q_start + (q_iter - iter_q_start);
+            uint32_t q_chunk = remap_q_index(linear_q_chunk, q_num_chunks, use_zigzag_balancing);
             // Get Q chunk
             if constexpr (is_chunked) {
                 q_chunk = chunked_q_chunk_offset + q_chunk;
@@ -1767,13 +1764,22 @@ void sdpa_inner_loop(
                 q_high_tile = Skt;
             }
         } else if (sdpa_type == RING) {
-            uint32_t q_chunk = remap_q_index(q_iter, q_num_chunks, use_zigzag_balancing) % q_num_chunks;
+            uint32_t q_chunk = remap_ring_joint_q_index(
+                                   q_iter,
+                                   q_num_chunks,
+                                   ring_total_heads,
+                                   effective_causal_q_chunk_boundary,
+                                   use_zigzag_balancing,
+                                   use_odd_global_q_schedule,
+                                   odd_schedule_pair_slots,
+                                   odd_schedule_centers_per_core) %
+                               q_num_chunks;
 
             if (is_causal) {
                 q_start_tile = q_chunk * Sq_chunk_t;
                 causal_k_limit = (q_start_tile + Sq_chunk_t + Sk_chunk_t - 1) / Sk_chunk_t;
             }
-            if (is_balanced && (q_chunk < q_num_chunks / 2)) {
+            if (skip_first_half_q && (q_chunk < effective_causal_q_chunk_boundary)) {
                 continue;
             }
         }  // If ring attention
@@ -2197,7 +2203,8 @@ void sdpa_standard(
     const uint32_t cb_sum_B,
     const uint32_t cb_exp_max_diff,
     const uint32_t cb_out,
-    const LightweightMaskContext& lw_mask = {}) {
+    const LightweightMaskContext& lw_mask = {},
+    const bool use_zigzag_balancing = false) {
     sdpa_inner_loop<
         STANDARD,
         cb_qk_im,
@@ -2272,7 +2279,9 @@ void sdpa_standard(
         0,  // cb_prev_out (not used)
         cb_out,
         lw_mask,
-        is_causal);
+        is_causal,
+        false,  // skip_first_half_q (not used)
+        use_zigzag_balancing);
 }
 
 /**
@@ -2464,7 +2473,12 @@ void sdpa_ring(
     const bool is_causal_ring_iter,
     const bool skip_first_half_q,
     const bool is_last_ring_iter,
-    const bool use_zigzag_balancing = false) {
+    const bool use_zigzag_balancing = false,
+    const uint32_t causal_q_chunk_boundary = 0,
+    const uint32_t ring_total_heads = 0,
+    const bool use_odd_global_q_schedule = false,
+    const uint32_t odd_schedule_pair_slots = 0,
+    const uint32_t odd_schedule_centers_per_core = 0) {
     sdpa_inner_loop<
         RING,
         cb_qk_im,
@@ -2542,7 +2556,12 @@ void sdpa_ring(
         is_causal_ring_iter,
         skip_first_half_q,
         use_zigzag_balancing,
-        is_last_ring_iter);
+        is_last_ring_iter,
+        causal_q_chunk_boundary,
+        ring_total_heads,
+        use_odd_global_q_schedule,
+        odd_schedule_pair_slots,
+        odd_schedule_centers_per_core);
 }
 
 /**

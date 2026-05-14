@@ -338,12 +338,19 @@ void kernel_main() {
     constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(22);
     constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(23);
     constexpr bool use_streaming_compute = get_compile_time_arg_val(24) == 1;
-    constexpr uint32_t is_causal = get_compile_time_arg_val(25) == 1;
-    constexpr uint32_t is_balanced = get_compile_time_arg_val(26) == 1;
-    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(27) == 1;
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(28);
+    constexpr bool is_causal = get_compile_time_arg_val(25) == 1;
+    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(26) == 1;
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(27);
+    constexpr bool use_zigzag_ring_mapping = get_compile_time_arg_val(28) == 1;
+    constexpr uint32_t odd_schedule_pair_slots = get_compile_time_arg_val(29);
+    constexpr uint32_t odd_schedule_centers_per_core = get_compile_time_arg_val(30);
+    constexpr bool use_sequential_causal_layout = is_causal && !use_zigzag_ring_mapping;
+    constexpr uint32_t total_heads = B * NH;
+    constexpr bool use_odd_global_q_schedule = use_zigzag_ring_mapping && (NHK == 1) && (num_joint_q_chunks == 0) &&
+                                               (num_q_chunks % 2 != 0) && (odd_schedule_pair_slots != 0) &&
+                                               (odd_schedule_centers_per_core != 0);
 
-    constexpr auto out_args = TensorAccessorArgs<29>();
+    constexpr auto out_args = TensorAccessorArgs<31>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto stats_args = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
 
@@ -411,11 +418,16 @@ void kernel_main() {
         generate_lightweight_mask_tiles<global_n_partial_col, joint_l_partial_col, cb_mask_in, is_causal>();
     }
 
-    const uint32_t last_active_ring_iter = find_last_active_ring_iter(
-        fused_op_receiver.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L, is_causal, is_balanced);
-
+    constexpr uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
     uint32_t ring_index = fused_op_receiver.seq.ring_index;
-    uint32_t half_sequence = num_q_chunks / 2;
+    uint32_t last_active_ring_iter = 0;
+    if constexpr (use_sequential_causal_layout) {
+        last_active_ring_iter =
+            find_last_active_sequential_causal_ring_iter(fused_op_receiver.seq, local_padded_Nt, global_n_tile_id, L);
+    } else {
+        last_active_ring_iter = find_last_active_ring_iter(fused_op_receiver.seq, local_padded_Nt, global_n_tile_id, L);
+    }
+    const uint32_t causal_q_chunk_boundary = num_local_q_chunks / 2;
 
     // Deferred save: stash params for save_accumulators_with_trid and call it
     // during the next Q chunk's K-loop window to avoid DRAM bank contention.
@@ -433,13 +445,18 @@ void kernel_main() {
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
 
         const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
-        const uint32_t ring_iter_kv_end_tile = ring_iter_kv_start_tile + num_local_k_chunks * Sk_chunk_t;
-        const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
         const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
-        const bool ring_iter_does_work = (ring_iter_processes_KV_chunks || (do_joint_kv && L != 0)) &&
-                                         !(is_causal && ring_index < ring_id && !is_balanced);
+        const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
         if (!ring_iter_does_work) {
             continue;
+        }
+
+        if constexpr (use_sequential_causal_layout) {
+            if (ring_index < ring_id) {
+                // Sequential causal layout: this KV shard is in the future for
+                // all local Q chunks.
+                continue;
+            }
         }
 
         // When total_valid_kv == 1, compute's sole K chunk triggers save_to_staging on K0,
@@ -490,7 +507,7 @@ void kernel_main() {
             // Deferred norm: accumulates across ring iterations with exponential rescaling.
             // Single Q-chunk: accumulators persist in L1, write final output on last ring_iter.
             // Multi Q-chunk: raw accumulators round-trip through DRAM between ring iterations.
-            const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
+            const bool is_last_ring_iter = ring_iter == last_active_ring_iter;
             const bool single_q_chunk = (global_q_end - global_q_start == 1);
             constexpr uint32_t sum_offset = local_padded_Nt + Lt;
             constexpr uint32_t out_num_tiles = Sq_chunk_t * vDHt;
@@ -513,7 +530,15 @@ void kernel_main() {
                 if (barrier_first) {
                     noc_async_write_barrier_with_trid(pf_trid);
                 }
-                const uint32_t gq = remap_q_index(global_q_start + pf_q_index, num_q_chunks, use_zigzag_balancing);
+                const uint32_t gq = remap_ring_joint_q_index(
+                    global_q_start + pf_q_index,
+                    num_q_chunks,
+                    total_heads,
+                    causal_q_chunk_boundary,
+                    use_zigzag_balancing,
+                    use_odd_global_q_schedule,
+                    odd_schedule_pair_slots,
+                    odd_schedule_centers_per_core);
                 const uint32_t nb_pf = gq / (NH * num_q_chunks);
                 const uint32_t nq_pf = (gq % (NH * num_q_chunks)) / num_q_chunks;
                 const uint32_t qc_pf = gq % num_q_chunks;
@@ -578,23 +603,32 @@ void kernel_main() {
             };
 
             for (uint32_t q_index = 0; q_index + global_q_start < global_q_end; ++q_index) {
-                uint32_t global_q_chunk = remap_q_index(global_q_start + q_index, num_q_chunks, use_zigzag_balancing);
+                uint32_t global_q_chunk = remap_ring_joint_q_index(
+                    global_q_start + q_index,
+                    num_q_chunks,
+                    total_heads,
+                    causal_q_chunk_boundary,
+                    use_zigzag_balancing,
+                    use_odd_global_q_schedule,
+                    odd_schedule_pair_slots,
+                    odd_schedule_centers_per_core);
 
                 const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
                 const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
                 const uint32_t q_chunk = global_q_chunk % num_q_chunks;
 
-                const bool balanced_skip_q = q_chunk < half_sequence && is_balanced && ring_index < ring_id;
+                const bool causal_skip_q =
+                    q_chunk < causal_q_chunk_boundary && use_zigzag_ring_mapping && ring_index < ring_id;
 
                 const auto qi =
                     get_q_chunk_info(q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, local_padded_Nt);
                 const uint32_t end_seq_tile = get_end_seq_tile(qi, ring_id, Lt, local_padded_Nt);
 
                 // 1. Complete restore for all Q chunks to keep the prefetch pipeline in sync.
-                // For balanced-skip non-last-ring-iter Q chunks, barrier without pushing —
+                // For causal-zigzag skipped non-last-ring-iter Q chunks, barrier without pushing —
                 // compute skips these Q chunks entirely and doesn't need staging data.
                 if (!single_q_chunk && ring_iter > 0) {
-                    if (balanced_skip_q && !is_last_ring_iter) {
+                    if (causal_skip_q && !is_last_ring_iter) {
                         noc_async_read_barrier();
                     } else {
                         complete_restore(cb_prev_out, out_num_tiles, cb_max_in, cb_sum_in, Sq_chunk_t);
@@ -615,12 +649,12 @@ void kernel_main() {
 
                 // 3. Prefetch next Q chunk's accumulators from DRAM.
                 // Skip the intra-ring prefetch when this Q is on the normalize-only path
-                // (balanced_skip_q + is_last_ring_iter): normalize produces cb_out incrementally
+                // (causal_skip_q + is_last_ring_iter): normalize produces cb_out incrementally
                 // and blocks on cb_out space; cb_out can't drain until the writer reaches
                 // write_out below. A cb_reserve_back(cb_prev_out) here would block until
                 // normalize finishes, creating a cycle with cb_out. Deferred prefetch below
                 // runs after write_out to break the cycle.
-                const bool defer_prefetch = balanced_skip_q && is_last_ring_iter;
+                const bool defer_prefetch = causal_skip_q && is_last_ring_iter;
                 if (!single_q_chunk && ring_iter > 0 && !defer_prefetch) {
                     prefetch_intra_ring(q_index + 1);
                 }
@@ -635,11 +669,11 @@ void kernel_main() {
                     flush_deferred_save();
                 }
 
-                // Balanced causal skip: on non-last ring iters, compute pops staging and
+                // Causal zigzag skip: on non-last ring iters, compute pops staging and
                 // doesn't push the K-loop signal. Writer skips signal wait + save + write.
                 // On the last ring iter, compute runs normalize-only and pushes the signal;
                 // fall through to signal wait + write (no save — no ping-pong state to save).
-                if (balanced_skip_q && !is_last_ring_iter) {
+                if (causal_skip_q && !is_last_ring_iter) {
                     continue;
                 }
 
@@ -688,7 +722,15 @@ void kernel_main() {
             }
         } else {
             for (uint32_t q_iter = 0; q_iter + global_q_start < global_q_end; ++q_iter) {
-                uint32_t global_q_chunk = remap_q_index(global_q_start + q_iter, num_q_chunks, use_zigzag_balancing);
+                uint32_t global_q_chunk = remap_ring_joint_q_index(
+                    global_q_start + q_iter,
+                    num_q_chunks,
+                    total_heads,
+                    causal_q_chunk_boundary,
+                    use_zigzag_balancing,
+                    use_odd_global_q_schedule,
+                    odd_schedule_pair_slots,
+                    odd_schedule_centers_per_core);
 
                 // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
                 const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
@@ -703,7 +745,7 @@ void kernel_main() {
                 // Other iterations will just skip the computation with subsequent KV chunks
                 bool causality = (ring_iter == 0 ? is_causal : false);
 
-                if (q_chunk < half_sequence && is_balanced && ring_index < ring_id) {
+                if (q_chunk < causal_q_chunk_boundary && use_zigzag_ring_mapping && ring_index < ring_id) {
                     continue;
                 }
 

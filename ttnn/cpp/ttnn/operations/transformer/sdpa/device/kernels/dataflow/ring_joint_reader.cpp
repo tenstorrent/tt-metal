@@ -19,7 +19,6 @@ void kernel_main() {
     constexpr uint32_t vDHt = get_compile_time_arg_val(4);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(6);
-    constexpr uint32_t local_padded_N = get_compile_time_arg_val(7);
     constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(8);
     constexpr uint32_t padded_Nt = get_compile_time_arg_val(9);
     constexpr uint32_t logical_n = get_compile_time_arg_val(10);
@@ -33,12 +32,14 @@ void kernel_main() {
     constexpr uint32_t num_q_chunks = get_compile_time_arg_val(18);
     constexpr uint32_t ring_size = get_compile_time_arg_val(19);
     constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(20);
-    constexpr uint32_t is_causal = get_compile_time_arg_val(21);
-    constexpr uint32_t is_balanced = get_compile_time_arg_val(22);
-    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(23) == 1;
-    constexpr uint32_t num_q_readers = get_compile_time_arg_val(25);
+    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(22) == 1;
+    constexpr uint32_t num_q_readers = get_compile_time_arg_val(24);
+    constexpr bool use_zigzag_ring_mapping = get_compile_time_arg_val(25) == 1;
+    constexpr uint32_t odd_schedule_pair_slots = get_compile_time_arg_val(26);
+    constexpr uint32_t odd_schedule_centers_per_core = get_compile_time_arg_val(27);
+    constexpr bool use_sequential_causal_layout = use_zigzag_balancing && !use_zigzag_ring_mapping;
 
-    constexpr auto q_args = TensorAccessorArgs<26>();
+    constexpr auto q_args = TensorAccessorArgs<28>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -225,7 +226,17 @@ void kernel_main() {
      * On subsequent iterations, read from gathered K, V. Sync with AllGather fused signaler.
      */
     uint32_t ring_index = fused_op_receiver.seq.ring_index;
-    uint32_t half_sequence = num_q_chunks / 2;
+    const uint32_t causal_q_chunk_boundary = num_local_q_chunks / 2;
+    constexpr uint32_t total_heads = B * NH;
+    constexpr bool use_odd_global_q_schedule = use_zigzag_ring_mapping && (NHK == 1) && (num_joint_q_chunks == 0) &&
+                                               (num_q_chunks % 2 != 0) && (odd_schedule_pair_slots != 0) &&
+                                               (odd_schedule_centers_per_core != 0);
+    using Straddle = KCausalStraddleInfo<local_padded_Nt, Sk_chunk_t>;
+    // Even per-head zigzag chunks are pair-distributed by the factory, so every
+    // core has the same skip parity and skipped Q chunks can skip K/V traffic.
+    // Odd counts can mix skipped and active Q chunks at the same q_iter across
+    // cores, so skipped chunks stay in the K/V chains as sync-only participants.
+    constexpr bool causal_skip_needs_sync_only = ((num_q_chunks % 2) != 0) && !use_odd_global_q_schedule;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         // find out which is the latest ring_id that synchronized
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
@@ -238,20 +249,24 @@ void kernel_main() {
         const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
         const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
 
-        // In causal non balanced case when processing KV received from other devices:
-        // - skip over KV received from subsequent devices
-        // - do non-causal attention on the KV from preceding devices
-        const bool ring_iter_does_work = (ring_iter_processes_KV_chunks || (do_joint_kv && L != 0)) &&
-                                         !(is_causal && ring_index < ring_id && !is_balanced);
+        const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
 
         uint32_t KV_chunks_processed_in_iter = 0;
         if (!ring_iter_does_work) {
             continue;
         }
 
+        if constexpr (use_sequential_causal_layout) {
+            if (ring_index < ring_id) {
+                // Sequential causal layout: this KV shard belongs to future tokens
+                // for every local Q chunk, so skip the whole ring iteration.
+                continue;
+            }
+        }
+
         uint32_t iter_num_kv_chunks = num_kv_chunks;
 
-        // In causal balanced case processing KV received from other devices:
+        // In causal cross-chip zigzag layout processing KV received from other devices:
         //
         // We will have two logical chunks of the input sequence, logical indexes are:
         // ring_index and (seq_len / 2 * num_devices) - ring_index
@@ -260,18 +275,16 @@ void kernel_main() {
         // - 1st part of the sequence precedes both chunks on the sender device, 2nd part attends to both
         // - both chunks preced 2nd part of the sequence in received KV
         // Indexes are updated accordingly; compute is skipped
-        if (is_causal && is_balanced && ring_index > ring_id) {
+        if (use_zigzag_ring_mapping && ring_index > ring_id) {
             iter_num_kv_chunks /= 2;
             // Mirror compute's K-loop extension: include the straddle chunk so K/V tiles
             // for it get loaded. Compute -inf-masks its late-half columns via lw_mask.
-            using Straddle = KCausalStraddleInfo<local_padded_Nt, Sk_chunk_t>;
             if constexpr (Straddle::has_straddle) {
                 iter_num_kv_chunks = Straddle::straddle_chunk_id + 1;
             }
         }
 
-        // When K mcast is enabled, loop max_q_per_core times to stay synchronized with injector
-        // Cores with less work do padded iterations (K mcast sync only, no real work)
+        // When K mcast is enabled, loop max_q_per_core times to stay synchronized with injector.
         const uint32_t loop_q_count = (k_uses_batch_chain && batch_mcast_enabled) ? max_q_per_core : q_per_core;
 
         for (uint32_t q_iter = 0; q_iter < loop_q_count; ++q_iter) {
@@ -281,7 +294,19 @@ void kernel_main() {
             // Calculate global_q_chunk for all iterations (including padded).
             // For padded iterations, global index may be out of bounds, but q_chunk = global_q_chunk % num_q_chunks
             // gives a valid position that correctly determines whether to skip this iteration.
-            uint32_t global_q_chunk = remap_q_index(global_q_start + q_iter, num_q_chunks, use_zigzag_balancing);
+            const uint32_t linear_q_index = global_q_start + q_iter;
+            uint32_t global_q_chunk = remap_ring_joint_q_index(
+                linear_q_index,
+                num_q_chunks,
+                total_heads,
+                causal_q_chunk_boundary,
+                use_zigzag_balancing,
+                use_odd_global_q_schedule,
+                odd_schedule_pair_slots,
+                odd_schedule_centers_per_core);
+            const bool odd_center_slot =
+                use_odd_global_q_schedule &&
+                ring_joint_is_odd_center_slot(linear_q_index, odd_schedule_pair_slots, odd_schedule_centers_per_core);
 
             // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
             const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
@@ -290,15 +315,12 @@ void kernel_main() {
             const auto q_row_start_tile = q_chunk * Sq_chunk_t;
             const bool is_joint_q = q_chunk >= num_local_q_chunks;
 
-            const bool balanced_skip_q = q_chunk < half_sequence && is_balanced && ring_index < ring_id;
-
-            // Balanced causal skip: this Q chunk is handled by the paired device. Reader sends
-            // nothing (no Q, no K/V) — compute's normalize-only path on the last ring iter does
-            // not read Q (normalize uses only restored sum/out).
-            // Skip logic applies to all iterations (including padded) so injector and receivers
-            // make the same skip decisions, keeping K mcast sync aligned.
-            if (balanced_skip_q) {
-                continue;
+            const bool causal_skip_q =
+                q_chunk < causal_q_chunk_boundary && use_zigzag_ring_mapping && ring_index < ring_id;
+            if constexpr (!causal_skip_needs_sync_only) {
+                if (causal_skip_q && !odd_center_slot) {
+                    continue;
+                }
             }
 
             Slice q_slice;
@@ -367,54 +389,60 @@ void kernel_main() {
                     }
                 }
 
-                // K: either read locally (injector or not participant) or receive from chain
-                if constexpr (k_uses_batch_chain && batch_mcast_enabled) {
-                    // Ensures that compute has completed with the previous K chunk before we overwrite the buffer with
-                    // the next K chunk for mcast.
-                    const uint32_t reserve_tiles = is_padded_iter ? 2 * k_chunk_tiles : k_chunk_tiles;
-                    cb_reserve_back(cb_k_in, reserve_tiles);
-                } else {
-                    cb_reserve_back(cb_k_in, k_chunk_tiles);
-                }
-                uint32_t cb_k_start_address = get_write_ptr(cb_k_in);
-                if (k_chain.should_receive(nb, nq)) {
-                    k_chain.receive();
-                } else {
-                    // Injector or non-participant: read K from DRAM
-                    // For padded iterations, injector still reads K to broadcast to receivers
-                    fetch_block(
-                        kv_chunk_is_joint ? joint_k_generator
-                                          : (ring_iter == 0 ? local_k_generator : gathered_k_generator),
-                        k_slice,
-                        end_seq_tile,
-                        cb_k_start_address,
-                        k_tile_bytes,
-                        true /*transpose*/
-                    );
+                // Sync-only iterations can receive/fetch/forward chain data without
+                // pushing K/V/Q to compute.
+                const bool sync_only_iter = is_padded_iter || causal_skip_q;
+                const bool odd_center_q = odd_center_slot;
+                const bool odd_center_uses_direct_k = false;
+
+                // K: either read locally (injector or not participant) or receive from chain.
+                const bool use_k_chain = !odd_center_uses_direct_k;
+                const bool k_should_receive = use_k_chain && k_chain.should_receive(nb, nq);
+                const bool k_should_forward = use_k_chain && k_chain.should_forward(nb, nq, q_iter_local);
+                const bool k_needs_data = !sync_only_iter || k_should_receive || k_should_forward;
+                // For sync-only iterations, reserve the whole double buffer before writing so
+                // we cannot overwrite a K chunk that compute is still consuming.
+                if (k_needs_data) {
+                    const uint32_t k_reserve_tiles = sync_only_iter ? 2 * k_chunk_tiles : k_chunk_tiles;
+                    cb_reserve_back(cb_k_in, k_reserve_tiles);
+                    uint32_t cb_k_start_address = get_write_ptr(cb_k_in);
+                    if (k_should_receive) {
+                        k_chain.receive();
+                    } else {
+                        // Injector/non-participant compute path, or sync-only injector forwarding.
+                        fetch_block(
+                            kv_chunk_is_joint ? joint_k_generator
+                                              : (ring_iter == 0 ? local_k_generator : gathered_k_generator),
+                            k_slice,
+                            end_seq_tile,
+                            cb_k_start_address,
+                            k_tile_bytes,
+                            true /*transpose*/
+                        );
+                    }
+
+                    // Forward K chunk via chain (uses K's data size explicitly).
+                    if (k_should_forward) {
+                        k_chain.forward(cb_k_start_address, k_chunk_tiles, k_tile_bytes);
+                    }
+
+                    if (!sync_only_iter) {
+                        // Make K available to compute.
+                        cb_push_back(cb_k_in, k_chunk_tiles);
+                        KV_chunks_processed_in_iter++;
+                    }
                 }
 
-                // Forward K chunk via chain (uses K's data size explicitly)
-                if (k_chain.should_forward(nb, nq, q_iter_local)) {
-                    k_chain.forward(cb_k_start_address, k_chunk_tiles, k_tile_bytes);
-                }
-
-                // Skip Q, V reads and V forward for padded iterations (K mcast sync only).
-                // Note: cb_push_back is intentionally skipped — without it, the write pointer
-                // doesn't advance, so cb_reserve_back returns the same address each iteration.
-                // This lets the buffer act as a reusable staging area for the mcast.
+                // Padded iterations are only for K-chain synchronization.
                 if (is_padded_iter) {
                     continue;
                 }
-
-                // Make K available to compute
-                cb_push_back(cb_k_in, k_chunk_tiles);
-                KV_chunks_processed_in_iter++;
 
                 // Download Q on the first K iteration — after K is downloaded and forwarded.
                 // Push Q one subblock at a time so compute can start QK matmul incrementally.
                 // Placed after K forward so no outstanding NOC writes remain
                 // (noc_async_read_barrier inside subblock read would deadlock with in-flight writes).
-                if (k_chunk == 0 && need_q_read) {
+                if (!causal_skip_q && k_chunk == 0 && need_q_read) {
                     if constexpr (use_q_subblock_push) {
                         for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
                             const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
@@ -442,31 +470,40 @@ void kernel_main() {
                     q_pushed = true;
                 }
 
-                // V: either read locally (injector or not participant) or receive from chain
-                cb_reserve_back(cb_v_in, v_chunk_tiles);
-                uint32_t cb_v_start_address = get_write_ptr(cb_v_in);
-                if (v_chain.should_receive(nb, nq)) {
-                    v_chain.receive();
-                } else {
-                    fetch_block(
-                        kv_chunk_is_joint ? joint_v_generator
-                                          : (ring_iter == 0 ? local_v_generator : gathered_v_generator),
-                        v_slice,
-                        end_seq_tile,
-                        cb_v_start_address,
-                        v_tile_bytes,
-                        false /*transpose*/
-                    );
-                }
+                // V: either read locally (injector or not participant) or receive from chain.
+                const bool use_v_chain = !odd_center_q;
+                const bool v_should_receive = use_v_chain && v_chain.should_receive(nb, nq);
+                const bool v_should_forward = use_v_chain && v_chain.should_forward(nb, nq, q_iter_local);
+                const bool v_needs_data = !causal_skip_q || v_should_receive || v_should_forward;
+                if (v_needs_data) {
+                    const uint32_t v_reserve_tiles = causal_skip_q ? 2 * v_chunk_tiles : v_chunk_tiles;
+                    cb_reserve_back(cb_v_in, v_reserve_tiles);
+                    uint32_t cb_v_start_address = get_write_ptr(cb_v_in);
+                    if (v_should_receive) {
+                        v_chain.receive();
+                    } else {
+                        fetch_block(
+                            kv_chunk_is_joint ? joint_v_generator
+                                              : (ring_iter == 0 ? local_v_generator : gathered_v_generator),
+                            v_slice,
+                            end_seq_tile,
+                            cb_v_start_address,
+                            v_tile_bytes,
+                            false /*transpose*/
+                        );
+                    }
 
-                // Forward V to next core(s) before push_back — prevents compute from
-                // popping the buffer while the mcast is still reading from it.
-                if (v_chain.should_forward(nb, nq, q_iter_local)) {
-                    v_chain.forward(cb_v_start_address);
-                }
+                    // Forward V to next core(s) before push_back — prevents compute from
+                    // popping the buffer while the mcast is still reading from it.
+                    if (v_should_forward) {
+                        v_chain.forward(cb_v_start_address);
+                    }
 
-                // Make V available to compute
-                cb_push_back(cb_v_in, v_chunk_tiles);
+                    if (!causal_skip_q) {
+                        // Make V available to compute.
+                        cb_push_back(cb_v_in, v_chunk_tiles);
+                    }
+                }
             }
         }
         if (KV_chunks_processed_in_iter % 2 == 0) {

@@ -20,7 +20,7 @@ struct RingJointSDPAParams {
     std::string joint_strategy;
     std::optional<float> scale;
     bool is_causal = false;
-    bool is_balanced = false;
+    bool input_is_zigzag_layout = false;
     std::size_t logical_n = 0;
     std::size_t ring_size = 0;
     tt::tt_metal::MemoryConfig output_memory_config;
@@ -35,7 +35,7 @@ struct RingJointSDPAParams {
         std::string joint_strategy,
         std::optional<float> scale,
         bool is_causal,
-        bool is_balanced,
+        bool input_is_zigzag_layout,
         std::size_t logical_n,
         std::size_t ring_size,
         tt::tt_metal::MemoryConfig output_memory_config,
@@ -47,7 +47,7 @@ struct RingJointSDPAParams {
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
         is_causal(is_causal),
-        is_balanced(is_balanced),
+        input_is_zigzag_layout(input_is_zigzag_layout),
         logical_n(logical_n),
         ring_size(ring_size),
         output_memory_config(std::move(output_memory_config)),
@@ -62,7 +62,7 @@ struct RingJointSDPAParams {
         std::vector<std::tuple<std::string, Attribute>> attrs;
         attrs.emplace_back("joint_strategy", joint_strategy);
         attrs.emplace_back("is_causal", is_causal);
-        attrs.emplace_back("is_balanced", is_balanced);
+        attrs.emplace_back("input_is_zigzag_layout", input_is_zigzag_layout);
         attrs.emplace_back("logical_n", logical_n);
         attrs.emplace_back("ring_size", ring_size);
         attrs.emplace_back("output_memory_config", output_memory_config);

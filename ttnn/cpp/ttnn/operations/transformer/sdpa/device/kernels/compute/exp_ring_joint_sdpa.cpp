@@ -295,7 +295,7 @@ void kernel_main() {
                 cb_out,
                 lw_mask,
                 false,  // is_causal
-                false,  // is_balanced
+                false,  // skip_first_half_q
                 is_last_ring_iter);
         }
     }
