@@ -821,6 +821,61 @@ TEST_F(VariableMatmulTest, OnDeviceOffsets_OutputRow) {
     EXPECT_LT(untouched_err, 1e-3F) << "OutputRow on-device offsets touched wrong rows: " << untouched_err;
 }
 
+// Read-at-offset (InputRow): kernel reads offsets[start..start+2] from a device tensor
+// and treats input rows [offsets[start], offsets[start+1]) as the matmul-M sub-range.
+// Output is sized [effective_M_tiles*32 x N] (upper bound); only the first
+// actual_eff_M_tiles*32 rows are valid. parent_M=320 > N=64 so transpose_core_grid=true
+// (dm_in1_sender_out is the output writer).
+TEST_F(VariableMatmulTest, OnDeviceOffsets_InputRow) {
+    const uint32_t M_parent = 320, K = 128, N = 64;
+    constexpr uint32_t effective_M_tiles_upper = 4U;  // 128 rows upper bound
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input = create_random_device_tensor(M_parent, K, device);
+    auto weight = create_random_device_tensor(K, N, device);
+
+    // Offsets [0, 32, 96, 160, 224, 288] (in rows). start_index=2 -> rows [96, 160) -> 2 tiles.
+    std::vector<uint32_t> offsets_host = {0U, 32U, 96U, 160U, 224U, 288U};
+    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
+
+    auto result = ttml::metal::variable_matmul(
+        input,
+        weight,
+        kConfig,
+        std::nullopt,
+        /*in0_row_offset_tiles=*/0,
+        /*effective_M_tiles=*/effective_M_tiles_upper,
+        /*in0_k_offset_tiles=*/0,
+        /*in1_k_offset_tiles=*/0,
+        /*output_tensor=*/std::nullopt,
+        /*out_row_offset_tiles=*/0,
+        /*offsets_tensor=*/offsets,
+        /*offsets_role=*/ttml::metal::OffsetsRole::InputRow,
+        /*offsets_start_index=*/2U);
+
+    // Reference: matmul over the actual input sub-range [96, 160).
+    auto input_slice = ttnn::slice(
+        input,
+        ttnn::SmallVector<uint32_t>{0U, 0U, 96U, 0U},
+        ttnn::SmallVector<uint32_t>{1U, 1U, 160U, K},
+        ttnn::SmallVector<uint32_t>{1U, 1U, 1U, 1U});
+    auto ref_chunk = ttnn::matmul(input_slice, weight, false, false);
+    auto ref_chunk_vec = ttml::core::to_vector<float>(ref_chunk);
+    auto result_vec = ttml::core::to_vector<float>(result);
+
+    // Verify the first 64 output rows match the matmul result. Rows beyond actual_eff_M
+    // are undefined (output sized to the upper bound).
+    constexpr uint32_t actual_eff_M = 64U;
+    float err = 0.0F;
+    for (uint32_t m = 0; m < actual_eff_M; ++m) {
+        for (uint32_t n = 0; n < N; ++n) {
+            err = std::max(err, std::abs(result_vec[m * N + n] - ref_chunk_vec[m * N + n]));
+        }
+    }
+    EXPECT_LT(err, 2.0F) << "InputRow on-device offsets err: " << err;
+}
+
 TEST_F(VariableMatmulTest, WriteAtOffset_NoTranspose) {
     const uint32_t M_e = 128, K = 128, N = 256, M_parent = 512;
     auto* device = &ttml::autograd::ctx().get_device();

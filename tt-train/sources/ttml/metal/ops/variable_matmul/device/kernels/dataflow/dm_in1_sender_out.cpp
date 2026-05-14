@@ -41,8 +41,9 @@ void kernel_main() {
     const uint32_t in1_dest_noc_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t in1_sender_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t in1_sender_noc_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
+    // OFFSETS_ROLE=InputRow overrides these from on-device offsets (per-core M re-derived).
+    uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
+    uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
@@ -93,9 +94,10 @@ void kernel_main() {
 #endif  // FUSE_TERNARY
 
     // Variable-M: read actual M values from runtime args (after output addresses)
-    const uint32_t M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks);
+    // OFFSETS_ROLE=InputRow overrides M_tiles and M_blocks_per_core from on-device offsets.
+    uint32_t M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks);
     const uint32_t padded_M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 1);
-    const uint32_t M_blocks_per_core = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 2);
+    uint32_t M_blocks_per_core = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 2);
     uint32_t in1_k_offset_tiles = 0U;
     uint32_t parent_K_tiles_stride_in1 = 0U;
     if constexpr (use_offset_in1) {
@@ -112,32 +114,48 @@ void kernel_main() {
     const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
 
 #ifdef OFFSETS_ROLE
-    // EP path: read offsets[start_index] from a 1-D UINT32 ROW_MAJOR device tensor and
-    // use the value (in tiles) as the write-at-offset row. Only OutputRow (1) is wired
-    // here; other roles need different overrides in different kernels.
+    // EP path: read offsets from a 1-D UINT32 ROW_MAJOR device tensor.
+    //   OutputRow (1): offsets[start] is the write-at-offset row on the parent output.
+    //   InputRow  (2): offsets[start..start+2] gives the (start_row, end_row) sub-range of
+    //                  the parent input — overrides M_tiles and per-core M_start/M_end/
+    //                  M_blocks_per_core. dm_in0_sender publishes the per-core M values
+    //                  via cb_ctrl; this kernel doesn't need cb_ctrl since it re-derives
+    //                  them locally from the same offsets + IN0_AXIS_CORES + in0_idx.
     {
         constexpr uint32_t kRole = OFFSETS_ROLE;
-        static_assert(kRole == 1U, "Only OffsetsRole::OutputRow is currently implemented.");
+        static_assert(kRole == 1U || kRole == 2U, "Unsupported OFFSETS_ROLE value.");
         const uint32_t offsets_addr = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 7);
         const uint32_t offsets_start_index = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 8);
-        // The offsets TensorAccessorArgs were appended right after the output accessor.
-        // No FUSE_BIAS / FUSE_TERNARY in variable_matmul, so its CTA offset is the slot
-        // right after the (N_chunks=1) output accessor.
         constexpr uint32_t offsets_args_cta_offset =
             tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
         constexpr auto offsets_args = TensorAccessorArgs<offsets_args_cta_offset>();
         const auto offsets_acc = TensorAccessor(offsets_args, offsets_addr);
 
-        // Use the in1 CB's L1 write pointer as scratch for the offsets read.
-        // The CB hasn't been used yet at this point (we're at kernel startup), so we
-        // can safely repurpose its L1 space for a tiny staging area. The real in1
-        // tile reads happen later inside the K-loop and won't conflict.
+        // Use the in1 CB's L1 write pointer as scratch — unused at kernel startup; the
+        // real in1 tile reads only begin inside the K-loop below.
         constexpr uint32_t kPageBytes = decltype(offsets_args)::AlignedPageSize;
         uint32_t offsets_l1_addr = get_write_ptr(tt::CBIndex::c_1);
         noc_async_read(get_noc_addr(0, offsets_acc), offsets_l1_addr, kPageBytes);
         noc_async_read_barrier();
         volatile tt_l1_ptr uint32_t* offsets_stage = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(offsets_l1_addr);
+#if OFFSETS_ROLE == 1
         out_row_offset_tiles = offsets_stage[offsets_start_index] / 32U;
+#elif OFFSETS_ROLE == 2
+        {
+            const uint32_t in0_idx = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 9);
+            const uint32_t row_start = offsets_stage[offsets_start_index];
+            const uint32_t row_end = offsets_stage[offsets_start_index + 1U];
+            const uint32_t actual_eff_M = (row_end - row_start) / 32U;
+            M_tiles = actual_eff_M;
+            constexpr uint32_t kAxisCores = IN0_AXIS_CORES;
+            const uint32_t per_core = (actual_eff_M + kAxisCores - 1U) / kAxisCores;
+            // Uniform M_blocks_per_core across cores — matches dm_in0_sender; bounds checks
+            // clip out-of-range reads/writes for the tail cores.
+            M_start_tile = per_core * in0_idx;
+            M_end_tile = per_core * (in0_idx + 1U);
+            M_blocks_per_core = (per_core + M_block_tiles - 1U) / M_block_tiles;
+        }
+#endif
     }
 #endif  // OFFSETS_ROLE
 

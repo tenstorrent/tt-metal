@@ -42,8 +42,9 @@ void kernel_main() {
     const uint32_t in0_dest_noc_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_sender_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_sender_noc_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
+    // OFFSETS_ROLE=InputRow overrides these from on-device offsets (and recomputes per-core M).
+    uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
+    uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
@@ -112,9 +113,10 @@ void kernel_main() {
 #endif  // FUSE_TERNARY
 
     // Variable-M: read actual M values from runtime args (after output addresses)
-    const uint32_t M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks);
+    // OFFSETS_ROLE=InputRow overrides M_tiles and M_blocks_per_core from on-device offsets.
+    uint32_t M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks);
     const uint32_t padded_M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 1);
-    const uint32_t M_blocks_per_core = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 2);
+    uint32_t M_blocks_per_core = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 2);
     // Read-at-offset support — only read the runtime args when the compile-time flag is set
     // (avoids any potential register pressure / dead-code propagation issues on the no-offset
     // hot path used by all backward calls).
@@ -136,6 +138,54 @@ void kernel_main() {
     // K_tiles + K_block_tiles (CTA). One cached program services any K value.
     const uint32_t K_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 8);
     const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
+
+#ifdef OFFSETS_ROLE
+    // EP path: read offsets[start_index] and offsets[start_index+1] from a 1-D UINT32 ROW_MAJOR
+    // device tensor. For InputRow (role==2), use them to override in0_row_offset_tiles +
+    // M_tiles (effective matmul-M) + per-core M_start_tile/M_end_tile/M_blocks_per_core.
+    // Per-core M range is derived from IN0_AXIS_CORES (CT) and in0_idx (RT). Publishes the
+    // computed M values via cb_ctrl so the compute kernel can override its own RT-arg values.
+    {
+        constexpr uint32_t kRole = OFFSETS_ROLE;
+        static_assert(kRole == 2U, "dm_in0_sender's OFFSETS_ROLE block only handles InputRow (2).");
+        const uint32_t offsets_addr = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 9);
+        const uint32_t offsets_start_index = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 10);
+        const uint32_t in0_idx = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 11);
+        constexpr uint32_t offsets_args_cta_offset =
+            tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
+        constexpr auto offsets_args = TensorAccessorArgs<offsets_args_cta_offset>();
+        const auto offsets_acc = TensorAccessor(offsets_args, offsets_addr);
+        // Use cb_id_in0's L1 backing as scratch — the CB is unused at kernel startup, and the
+        // real in0 tile reads only begin inside the K-loop below.
+        constexpr uint32_t kPageBytes = decltype(offsets_args)::AlignedPageSize;
+        uint32_t offsets_l1_addr = get_write_ptr(tt::CBIndex::c_0);
+        noc_async_read(get_noc_addr(0, offsets_acc), offsets_l1_addr, kPageBytes);
+        noc_async_read_barrier();
+        volatile tt_l1_ptr uint32_t* offsets_stage = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(offsets_l1_addr);
+        const uint32_t row_start = offsets_stage[offsets_start_index];
+        const uint32_t row_end = offsets_stage[offsets_start_index + 1U];
+        const uint32_t actual_eff_M = (row_end - row_start) / 32U;
+        in0_row_offset_tiles = row_start / 32U;
+        M_tiles = actual_eff_M;
+        // Per-core M split — mirrors host actual_M_tiles_per_core formula. M_blocks_per_core
+        // is UNIFORM across cores (avoids breaking the sender/receiver semaphore chain when
+        // some cores have less M-work). Read/write bounds checks (m_tile >= shape.logical_d0)
+        // clip out-of-range tiles for the tail cores.
+        constexpr uint32_t kAxisCores = IN0_AXIS_CORES;
+        const uint32_t per_core = (actual_eff_M + kAxisCores - 1U) / kAxisCores;
+        M_start_tile = per_core * in0_idx;
+        M_end_tile = per_core * (in0_idx + 1U);
+        M_blocks_per_core = (per_core + M_block_tiles - 1U) / M_block_tiles;
+        // Publish (M_start, M_end, M_blocks_per_core) to compute via cb_ctrl.
+        cb_reserve_back(tt::CBIndex::c_8, 1U);
+        volatile tt_l1_ptr uint32_t* ctrl_l1 =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(tt::CBIndex::c_8));
+        ctrl_l1[0] = M_start_tile;
+        ctrl_l1[1] = M_end_tile;
+        ctrl_l1[2] = M_blocks_per_core;
+        cb_push_back(tt::CBIndex::c_8, 1U);
+    }
+#endif  // OFFSETS_ROLE
 
     // Storage layout: without transpose_a the input is stored as [M, K]; with it, as [K, M].
     // shape carries the MATMUL-coord effective sizes — used for bounds checks.
