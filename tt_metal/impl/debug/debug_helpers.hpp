@@ -132,7 +132,8 @@ inline std::string get_debug_assert_message(
                    "transactions (missing NOC posted writes sent barrier).";
         case dev_msgs::DebugAssertNCriscNOCPacketTagClearedTripped:
             return "detected invalid NOC command buffer state before starting the next kernel "
-                   "(NOC packet tags must be zero so implicit transaction ID users start with transaction ID 0).";
+                   "(write-capable NOC packet tags must be zero so implicit transaction ID users start with "
+                   "transaction ID 0).";
         case dev_msgs::DebugAssertRtaOutOfBounds: return "accessed unique runtime arg index out of bounds.";
         case dev_msgs::DebugAssertCrtaOutOfBounds: return "accessed common runtime arg index out of bounds.";
         case dev_msgs::DebugAssertHwFault:
