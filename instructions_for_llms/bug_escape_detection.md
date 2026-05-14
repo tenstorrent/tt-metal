@@ -353,6 +353,20 @@ Run at 07:00Z. Check `campaign-state.json`:
 
 ---
 
+## Subagent Rules (MANDATORY)
+
+These rules exist so the campaign can always be interrupted by a human at any time.
+
+- ALL subagents MUST be launched with `run_in_background: true`. No blocking subagent calls.
+- Subagents MUST NOT commit or push code to any repository.
+- Subagents MUST NOT dispatch GitHub Actions workflow runs (no `workflow_dispatch` API calls).
+- Subagents MUST NOT cancel or modify in-progress workflow runs.
+
+Only the main BrAIn session may: commit/push code, dispatch workflows, cancel runs.
+Subagents may only: read data (Snowflake, GitHub API, logs), analyze, and return findings.
+
+---
+
 ## What NOT to Do
 
 - Do NOT dispatch two bisects simultaneously for the same hardware type (contends for runners)
