@@ -22,6 +22,7 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPreAllGatherProgramFactory::create_d
 
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
+    const uint32_t num_heads = operation_attributes.num_heads;
 
     const auto& input_shape = input_tensor.padded_shape();
     const uint32_t W = input_shape[-1];
@@ -29,10 +30,16 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPreAllGatherProgramFactory::create_d
 
     const uint32_t num_tile_cols = W / TILE_WIDTH;
     const uint32_t num_tile_rows = folded_H / TILE_HEIGHT;
+    // num_heads == 1: legacy mode. Reduce all num_tile_cols → 1 stat tile per row.
+    // num_heads >  1: per-head mode. Reduce head_dim_tiles tiles → 1 stat tile per head;
+    //                 emit num_heads stat tiles per row.
+    const uint32_t head_dim_tiles = num_tile_cols / num_heads;
     log_debug(tt::LogOp, "W: {}", W);
     log_debug(tt::LogOp, "folded_H: {}", folded_H);
     log_debug(tt::LogOp, "num_tile_rows: {}", num_tile_rows);
     log_debug(tt::LogOp, "num_tile_cols: {}", num_tile_cols);
+    log_debug(tt::LogOp, "num_heads: {}", num_heads);
+    log_debug(tt::LogOp, "head_dim_tiles: {}", head_dim_tiles);
 
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
@@ -79,7 +86,8 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPreAllGatherProgramFactory::create_d
     CB 2: partial sum
     CB 3: output
     */
-    const uint32_t output_tiles_per_row = 1;
+    // Per-head mode emits one stat tile per head; legacy mode emits one per row.
+    const uint32_t output_tiles_per_row = num_heads;
 
     const uint32_t double_buffer_constant = 2;
     const uint32_t input_cb_num_tiles = dst_reg_count * double_buffer_constant;
@@ -117,6 +125,8 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPreAllGatherProgramFactory::create_d
         output_cb_id,
         num_tile_cols,
         dst_reg_count,
+        num_heads,
+        head_dim_tiles,
     };
 
     const auto* compute_kernel_file =
