@@ -223,7 +223,7 @@ def run_reduce_to_all(mesh_device, num_iterations=1):
     [
         (
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
                 "fabric_router_config": create_fabric_router_config(15232),
             }
         )
@@ -246,7 +246,7 @@ def test_reduce_to_all_2d(bh_2d_mesh_device):
     [
         (
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
                 "fabric_router_config": create_fabric_router_config(15232),
             }
         )
