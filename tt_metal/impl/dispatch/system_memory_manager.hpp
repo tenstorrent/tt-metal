@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstdint>
 #include <mutex>
+#include <utility>
 #include <vector>
 #include "impl/context/context_types.hpp"
 
@@ -108,6 +109,10 @@ public:
 
     uint32_t get_dram_region_bank_id() const;
 
+    std::pair<void*, uint32_t> allocate_region(uint32_t size);
+
+    uint32_t get_channel_offset() const { return channel_offset; }
+
 private:
     bool is_mock_device() const;
 
@@ -146,6 +151,11 @@ private:
     // FIX FQ-1 (#42429): One-shot relay-broken warning per CQ to avoid log spam.
     // Indexed by cq_id; set to true after the first warning is emitted.
     bool fq1_relay_warned_[2] = {false, false};
+
+    uint32_t free_region_start_ = 0;
+    uint32_t free_region_size_ = 0;
+    uint32_t free_region_bump_ = 0;
+    char* free_region_host_ptr_ = nullptr;
 };
 
 }  // namespace tt::tt_metal

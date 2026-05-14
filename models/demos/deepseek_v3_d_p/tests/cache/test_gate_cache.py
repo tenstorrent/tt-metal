@@ -100,16 +100,18 @@ def test_gate_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         return ttnn.to_torch(tt_tensor, mesh_composer=sp_composer)
 
     # === Path 1: From Weights ===
+    experts_per_chip = config.n_routed_experts // (n_sp_devices * n_tp_devices)
     gate_from_weights = TtMoEGatePrefill(
         config,
         mesh_device,
         dispatch_table,
+        experts_per_chip=experts_per_chip,
         weight=gate_w,
         bias=gate_b,
         fallback_mode=gate_mode,
         weight_cache_path=None,  # No caching
     )
-    scores1, indices1, logits1, offsets1, counts1 = gate_from_weights(x)
+    scores1, indices1, logits1, offsets1, counts1, regions1 = gate_from_weights(x)
     output1 = to_torch_gate(scores1)
 
     # === Path 2: Cold Cache (build + load) ===
@@ -144,6 +146,7 @@ def test_gate_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         config,
         mesh_device,
         dispatch_table,
+        experts_per_chip=experts_per_chip,
         weight=None,
         bias=None,  # Cache-only mode
         fallback_mode=gate_mode,
@@ -151,7 +154,7 @@ def test_gate_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         cache_name_prefix="gate",
     )
     profiler.end("cold_load")
-    scores2, indices2, logits2, offsets2, counts2 = gate_cold(x)
+    scores2, indices2, logits2, offsets2, counts2, regions2 = gate_cold(x)
     output2 = to_torch_gate(scores2)
 
     # === Path 3: Warm Cache (reuse existing cache) ===
@@ -160,6 +163,7 @@ def test_gate_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         config,
         mesh_device,
         dispatch_table,
+        experts_per_chip=experts_per_chip,
         weight=None,
         bias=None,
         fallback_mode=gate_mode,
@@ -167,7 +171,7 @@ def test_gate_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         cache_name_prefix="gate",
     )
     profiler.end("warm_load")
-    scores3, indices3, logits3, offsets3, counts3 = gate_warm(x)
+    scores3, indices3, logits3, offsets3, counts3, regions3 = gate_warm(x)
     output3 = to_torch_gate(scores3)
 
     # === Validation ===

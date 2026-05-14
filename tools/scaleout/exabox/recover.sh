@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -eo pipefail
+
 # Function to display help
 show_help() {
     cat << EOF
@@ -241,6 +243,7 @@ if [[ "$SKIP_VALIDATION" == false ]]; then
     if [[ -n "$DOCKER_IMAGE" ]]; then
         ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
             --empty-entrypoint \
+            --volume /data/scaleout_configs \
             --host "$HOSTS" \
             ./build/tools/scaleout/run_cluster_validation \
             "${VALIDATION_ARGS[@]}"

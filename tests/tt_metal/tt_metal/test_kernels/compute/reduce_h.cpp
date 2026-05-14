@@ -6,9 +6,9 @@
 
 #include "api/compute/reduce.h"
 #ifdef ARCH_QUASAR
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #else
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #endif
 
 void kernel_main() {
@@ -19,17 +19,17 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
 #ifdef ARCH_QUASAR
-    experimental::DataflowBuffer dfb_in(0);
-    experimental::DataflowBuffer dfb_in_scaler(1);
-    experimental::DataflowBuffer dfb_out(2);
+    DataflowBuffer dfb_in(0);
+    DataflowBuffer dfb_in_scaler(1);
+    DataflowBuffer dfb_out(2);
     compute_kernel_hw_startup(dfb_in.get_id(), dfb_in_scaler.get_id(), dfb_out.get_id());
-    reduce_init(dfb_in.get_id(), dfb_in_scaler.get_id(), dfb_out.get_id());
+    reduce_init<REDUCE_OP, REDUCE_DIM>(dfb_in.get_id(), dfb_in_scaler.get_id(), dfb_out.get_id());
 #else
-    experimental::CircularBuffer cb0(tt::CBIndex::c_0);
-    experimental::CircularBuffer cb2(tt::CBIndex::c_2);
-    experimental::CircularBuffer cb16(tt::CBIndex::c_16);
+    CircularBuffer cb0(tt::CBIndex::c_0);
+    CircularBuffer cb2(tt::CBIndex::c_2);
+    CircularBuffer cb16(tt::CBIndex::c_16);
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
-    reduce_init(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
+    reduce_init<REDUCE_OP, REDUCE_DIM>(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
 #endif
 
 #ifdef ARCH_QUASAR
@@ -49,22 +49,22 @@ void kernel_main() {
                 dfb_in.wait_front(onetile);
 #if (MATH_ONLY == 1)
                 UNPACK((llk_unpack_AB_reduce(dfb_in.get_id(), dfb_in_scaler.get_id(), 0, 0)));
-                // REDUCE_OP is expected to come from add_define
-                reduce_tile_math(reduce_dst_idx);
+                // REDUCE_OP and REDUCE_DIM are expected to come from add_define
+                reduce_tile_math<REDUCE_OP, REDUCE_DIM>(reduce_dst_idx);
 #elif (MATH_ONLY == 0)
-                // REDUCE_OP is expected to come from add_define
-                reduce_tile(dfb_in.get_id(), dfb_in_scaler.get_id(), 0, 0, reduce_dst_idx);
+                // REDUCE_OP and REDUCE_DIM are expected to come from add_define
+                reduce_tile<REDUCE_OP, REDUCE_DIM>(dfb_in.get_id(), dfb_in_scaler.get_id(), 0, 0, reduce_dst_idx);
 #endif
                 dfb_in.pop_front(onetile);
 #else
                 cb0.wait_front(onetile);
 #if (MATH_ONLY == 1)
-                UNPACK((llk_unpack_AB_reduce(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0)));
-                // REDUCE_OP is expected to come from add_define
-                reduce_tile_math(reduce_dst_idx);
+                UNPACK((llk_unpack_AB_reduce<REDUCE_OP, REDUCE_DIM>(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0)));
+                // REDUCE_OP and REDUCE_DIM are expected to come from add_define
+                reduce_tile_math<REDUCE_OP, REDUCE_DIM>(reduce_dst_idx);
 #elif (MATH_ONLY == 0)
-                // REDUCE_OP is expected to come from add_define
-                reduce_tile(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, reduce_dst_idx);
+                // REDUCE_OP and REDUCE_DIM are expected to come from add_define
+                reduce_tile<REDUCE_OP, REDUCE_DIM>(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, reduce_dst_idx);
 #endif
                 cb0.pop_front(onetile);
 #endif

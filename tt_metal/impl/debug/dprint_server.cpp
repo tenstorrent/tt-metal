@@ -328,7 +328,9 @@ static_assert(sizeof(DevicePrintHeader) == sizeof(uint32_t));
 class DevicePrintImpl : public DPrintServer::Impl {
 public:
     DevicePrintImpl(MetalEnv& env, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) :
-        DPrintServer::Impl(env, num_hw_cqs, dispatch_core_config) {}
+        DPrintServer::Impl(env, num_hw_cqs, dispatch_core_config) {
+        Inspector::enable_kernel_path_collection();
+    }
 
 protected:
     bool poll_one_core(ChipId device_id, const umd::CoreDescriptor& logical_core, bool new_data_this_iter) override;

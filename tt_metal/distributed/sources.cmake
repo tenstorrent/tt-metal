@@ -8,6 +8,7 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/sd_mesh_command_queue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_device_view.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/realtime_profiler_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_event.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_socket.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_socket_utils.cpp
@@ -16,6 +17,7 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_workload.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_workload_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/pinned_memory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/pinned_memory_cache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/system_mesh.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/system_mesh_translation_map.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/distributed_host_buffer.cpp

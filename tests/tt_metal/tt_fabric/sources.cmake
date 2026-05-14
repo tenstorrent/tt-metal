@@ -11,6 +11,7 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_router/test_topology_mapper.cpp
     fabric_router/test_topology_mapper_utils.cpp
     fabric_router/test_topology_solver.cpp
+    fabric_router/test_topology_sat_encoder.cpp
     fabric_router/test_custom_routing_tables.cpp
     fabric_router/test_multi_host.cpp
     fabric_router/test_connection_registry.cpp

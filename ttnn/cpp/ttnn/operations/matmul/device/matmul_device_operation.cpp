@@ -67,13 +67,17 @@ MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_f
         [](const auto& c) -> program_factory_t {
             using T = std::decay_t<decltype(c)>;
             if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreProgramConfig>) {
-                return MatmulMeshWorkloadMultiCoreFactory{};
+                return MatmulMultiCoreProgramFactory{};
             } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
-                return MatmulMeshWorkloadMultiCoreReuseOptimizedProgramFactory{};
+                return MatmulMultiCoreReuseOptimizedProgramFactory{};
             } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
-                return MatmulMeshWorkloadMultiCoreReuseMcast2DProgramFactory{};
+                return MatmulMultiCoreReuseMcast2DProgramFactory{};
             } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                return MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory{};
+                // gather_in0 uses the legacy MeshWorkload path (create_descriptor not yet supported)
+                if (c.gather_in0) {
+                    return MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory{};
+                }
+                return MatmulMultiCoreReuseMcast1DProgramFactory{};
             } else if constexpr (std::is_same_v<
                                      T,
                                      operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
@@ -280,6 +284,37 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                 i,
                 a_shape[i],
                 b_shape[i]);
+        }
+    }
+
+    // matmul_multicore_reuse_mcast_1d (both program- and descriptor-based) targets a single
+    // bounding-box rectangle for the in0/in1 multicast and expects the sub-device's worker
+    // cores to form one contiguous row-major rectangle. Reject non-rectangular sub-device
+    // grids early with a clear message.
+    if (std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
+            chosen_program_config) &&
+        attributes.sub_device_id.has_value()) {
+        const auto& program_config_1d =
+            std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config);
+        if (!program_config_1d.gather_in0) {
+            auto* device = input_tensor_a.device();
+            auto sub_device_cores =
+                device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, attributes.sub_device_id.value());
+            auto bbox = sub_device_cores.bounding_box();
+            TT_FATAL(
+                sub_device_cores.num_cores() == bbox.size(),
+                "matmul_multicore_reuse_mcast_1d only supports rectangular sub-device worker grids. "
+                "Got sub-device worker cores: {} (bounding box: {})",
+                sub_device_cores,
+                bbox);
+            TT_FATAL(
+                bbox.start_coord.x + program_config_1d.compute_with_storage_grid_size.x - 1 <= bbox.end_coord.x &&
+                    bbox.start_coord.y + program_config_1d.compute_with_storage_grid_size.y - 1 <= bbox.end_coord.y,
+                "matmul_multicore_reuse_mcast_1d compute_with_storage_grid_size {} anchored at sub-device start {} "
+                "extends past the sub-device's worker bounding box {}",
+                program_config_1d.compute_with_storage_grid_size,
+                bbox.start_coord,
+                bbox);
         }
     }
 
@@ -1471,7 +1506,7 @@ MatmulDeviceOperation::create_op_performance_model(
     uint32_t batch_size = get_batch_size(out_shape);
     int64_t num_mul_adds = num_mul_adds_per_elem * out_shape[-2] * out_shape[-1] * batch_size;
 
-    tt::tt_metal::MathFidelity math_fidelity = ttnn::get_math_fidelity(operation_attributes.compute_kernel_config);
+    MathFidelity math_fidelity = ttnn::get_math_fidelity(operation_attributes.compute_kernel_config);
 
     int ideal_dev_clock_cycles = std::ceil(
         ((float)num_mul_adds / (float)(num_cores * tensix_mul_adds_per_cycle_lofi)) *
@@ -1497,12 +1532,12 @@ MatmulParams create_matmul_attributes(
         ((input_tensor_a.dtype() == DataType::BFLOAT8_B || input_tensor_a.dtype() == DataType::BFLOAT4_B) &&
          (input_tensor_b.dtype() == DataType::BFLOAT8_B || input_tensor_b.dtype() == DataType::BFLOAT4_B));
     const auto increase_fidelity = !has_program_config && !has_user_grid && !are_inputs_low_precision_df;
-    auto math_fidelity = increase_fidelity ? tt::tt_metal::MathFidelity::HiFi2 : tt::tt_metal::MathFidelity::LoFi;
+    auto math_fidelity = increase_fidelity ? MathFidelity::HiFi2 : MathFidelity::LoFi;
     bool are_inputs_32F = (input_tensor_a.dtype() == DataType::FLOAT32 && input_tensor_b.dtype() == DataType::FLOAT32);
     // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
     // When inputs are FLOAT32 (which drives fp32_dest_acc_en=True by default), use HiFi3 on Wormhole B0.
     const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
-    math_fidelity = are_inputs_32F ? (is_wormhole ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4) : math_fidelity;
+    math_fidelity = are_inputs_32F ? (is_wormhole ? MathFidelity::HiFi3 : MathFidelity::HiFi4) : math_fidelity;
 
     bool broadcast_batch = parameters.bcast_batch.value_or(get_broadcast_batch(
         input_tensor_a, input_tensor_b, parameters.transpose_a, parameters.transpose_b, parameters.program_config));

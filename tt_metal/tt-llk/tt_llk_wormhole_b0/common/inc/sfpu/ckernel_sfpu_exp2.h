@@ -30,7 +30,7 @@ inline void _calculate_exp2_()
         else
         {
             result = _sfpu_exp_21f_bf16_<true>(v);
-            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
+            result = sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven);
         }
 
         sfpi::dst_reg[0] = result;

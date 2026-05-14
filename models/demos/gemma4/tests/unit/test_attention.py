@@ -21,7 +21,15 @@ from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.attention import Gemma4Attention, Gemma4AttentionConfig
 from models.demos.gemma4.tt.ccl import CCLManager
 
-from ...tests.test_factory import TestFactory, compare_tensors, parametrize_mesh_with_fabric
+from ...tests.test_factory import (
+    PREFILL_BUCKETS,
+    TestFactory,
+    build_hf_prefill_mask,
+    compare_tensors,
+    find_layer_idx,
+    get_pcc_threshold,
+    parametrize_mesh_with_fabric,
+)
 
 
 def _skip_if_l1_overflow(config, mesh_device):
@@ -87,20 +95,35 @@ def _from_device(tensor, mesh_device):
 
 
 @parametrize_mesh_with_fabric()
-@pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
-@pytest.mark.parametrize("seq_len", [32], ids=["seq32"])
-def test_attention_prefill(layer_idx, seq_len, mesh_device):
-    """Test prefill attention against HF reference with PCC >= 0.95."""
+@pytest.mark.parametrize("layer_type", ["sliding_attention", "full_attention"], ids=["sliding", "global"])
+@pytest.mark.parametrize("seq_len", PREFILL_BUCKETS, ids=[f"seq{b}" for b in PREFILL_BUCKETS])
+def test_attention_prefill(layer_type, seq_len, mesh_device, reset_seeds, request):
+    """Test prefill attention against HF reference; threshold per
+    pcc_thresholds.json (defaults to 0.99 when unmeasured).
+
+    Resolves the layer index by layer_type so the test runs against an actual
+    sliding/global layer regardless of model variant (E2B has full layers at
+    indices 4/9/14/...; 26B-A4B places them differently).
+    """
+    hf_text_config = TestFactory.create_hf_text_config()
+    try:
+        layer_idx = find_layer_idx(hf_text_config, layer_type)
+    except ValueError:
+        pytest.skip(f"No {layer_type} layer in this model")
+
     hf_text_config, hf_attn, config, tt_attn, mesh_config = _setup_attention(mesh_device, layer_idx)
     _skip_if_l1_overflow(config, mesh_device)
 
     x_torch = torch.randn(1, seq_len, config.hidden_size, dtype=torch.float32)
 
-    # HF reference
+    # HF reference — sliding layers need a sliding+causal mask, otherwise the
+    # reference attends to far-history tokens that TT's SDPA correctly masks
+    # out via sliding_window_size, and PCC drops once seq_len > sliding_window.
     hf_rope = TestFactory.create_hf_rope(hf_text_config, seq_len, layer_idx)
-    causal_mask = torch.triu(torch.full((1, 1, seq_len, seq_len), float("-inf")), diagonal=1)
+    sliding = config.sliding_window if config.is_sliding else None
+    attn_mask = build_hf_prefill_mask(seq_len, sliding_window=sliding)
     with torch.no_grad():
-        ref_output, _ = hf_attn(x_torch, position_embeddings=hf_rope, attention_mask=causal_mask, shared_kv_states=None)
+        ref_output, _ = hf_attn(x_torch, position_embeddings=hf_rope, attention_mask=attn_mask, shared_kv_states=None)
 
     # TT forward
     cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, max(seq_len, 128), layer_idx)
@@ -108,8 +131,11 @@ def test_attention_prefill(layer_idx, seq_len, mesh_device):
     tt_output = tt_attn(x_tt, rope_mats=(cos_tt, sin_tt), is_decode=False)
     tt_output_torch = _from_device(tt_output, mesh_device).squeeze(0).float()
 
-    passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=0.95)
-    assert passing, f"Attention prefill (layer={layer_idx}, seq={seq_len}, tp={mesh_config.tp}) PCC too low: {pcc_msg}"
+    passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=get_pcc_threshold(request))
+    assert passing, (
+        f"Attention prefill (layer_type={layer_type}, layer_idx={layer_idx}, "
+        f"seq={seq_len}, tp={mesh_config.tp}) PCC too low: {pcc_msg}"
+    )
 
 
 # ── RoPE PCC Test at high positions ──────────────────────────────────────
@@ -118,7 +144,7 @@ def test_attention_prefill(layer_idx, seq_len, mesh_device):
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 @pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
 @pytest.mark.parametrize("position", [0, 32, 512, 1023, 1024, 1500, 2047], ids=lambda p: f"pos{p}")
-def test_rope_pcc(layer_idx, position, mesh_device):
+def test_rope_pcc(layer_idx, position, mesh_device, reset_seeds, request):
     """Test RoPE cos/sin values and apply_rope PCC at various decode positions up to 2k.
 
     Compares TT rotary embedding output against HF reference at each position.
@@ -174,7 +200,7 @@ def test_rope_pcc(layer_idx, position, mesh_device):
     sin_pcc = torch.corrcoef(torch.stack([sin_at_pos, sin_ref_flat]))[0, 1].item()
 
     # Check rotated output PCC
-    passing, pcc_msg = compare_tensors(tt_rotated_torch, ref_rotated, pcc_threshold=0.98)
+    passing, pcc_msg = compare_tensors(tt_rotated_torch, ref_rotated, pcc_threshold=get_pcc_threshold(request))
     assert passing, (
         f"RoPE output PCC too low at position {position} (layer={layer_idx}): {pcc_msg}\n"
         f"  cos PCC: {cos_pcc:.6f}, sin PCC: {sin_pcc:.6f}"
@@ -203,7 +229,7 @@ def _build_sliding_window_mask(cache_len, sliding_window):
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 @pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
 @pytest.mark.parametrize("cache_len", [32, 512, 1023, 1500], ids=lambda c: f"cache{c}")
-def test_attention_decode_paged(layer_idx, cache_len, mesh_device):
+def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, request):
     """Test decode attention with paged KV cache against HF reference.
 
     Tests at various cache lengths including positions beyond the sliding window (1024).
@@ -306,7 +332,7 @@ def test_attention_decode_paged(layer_idx, cache_len, mesh_device):
     )
     tt_output_torch = ttnn.to_torch(tt_output).squeeze(0).float()
 
-    passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=0.95)
+    passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=get_pcc_threshold(request))
     assert passing, (
         f"Attention paged decode (layer={layer_idx}, cache_len={cache_len}, "
         f"sliding_window={sliding_window}) PCC too low: {pcc_msg}"

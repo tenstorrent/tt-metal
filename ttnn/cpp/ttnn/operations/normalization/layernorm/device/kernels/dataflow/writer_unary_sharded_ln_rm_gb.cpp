@@ -5,10 +5,10 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
-#include "experimental/tensor.h"
-#include "experimental/endpoints.h"
+#include "api/tensor/noc_traits.h"
+#include "api/dataflow/endpoints.h"
 #include "reshard_writer.hpp"
 
 void kernel_main() {
@@ -47,18 +47,20 @@ void kernel_main() {
     constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t cb_out_resharded = get_named_compile_time_arg_val("cb_out_resharded");
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_gamma_obj(cb_gamma);
-    experimental::CircularBuffer cb_beta_obj(cb_beta);
-    experimental::CircularBuffer cb_out_obj(cb_out);
-    experimental::CircularBuffer cb_out_resharded_obj(cb_out_resharded);
+    Noc noc;
+    CircularBuffer cb_gamma_obj(cb_gamma);
+    CircularBuffer cb_beta_obj(cb_beta);
+    CircularBuffer cb_out_obj(cb_out);
+    CircularBuffer cb_out_resharded_obj(cb_out_resharded);
 
     const uint32_t out_single_tile_size_bytes = get_tile_size(cb_out);
 
     if constexpr (!use_welford) {
         constexpr uint32_t cb_in_2 = get_named_compile_time_arg_val("cb_in_2");
-        const uint32_t scalar_w = get_arg_val<uint32_t>(1);
-        generate_reduce_scaler(cb_in_2, scalar_w);
+        const uint32_t scalar_w_bits = get_arg_val<uint32_t>(1);
+        float scalar_w_f = __builtin_bit_cast(float, scalar_w_bits);
+        dataflow_kernel_lib::prepare_reduce_scaler<cb_in_2, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+            scalar_w_f);
 
         constexpr uint32_t eps_cb_id = get_named_compile_time_arg_val("cb_eps");
         const uint32_t eps = get_arg_val<uint32_t>(2);
@@ -66,8 +68,13 @@ void kernel_main() {
 
         if constexpr (is_all_to_all_worker) {
             constexpr uint32_t cb_in_4 = get_named_compile_time_arg_val("cb_in_4");
-            const uint32_t scalar_c = get_arg_val<uint32_t>(0);
-            generate_reduce_scaler(cb_in_4, scalar_c);
+            const uint32_t scalar_c_bits = get_arg_val<uint32_t>(0);
+            float scalar_c_f = __builtin_bit_cast(float, scalar_c_bits);
+            dataflow_kernel_lib::prepare_reduce_scaler<
+                cb_in_4,
+                ckernel::PoolType::AVG,
+                ckernel::ReduceDim::REDUCE_ROW,
+                /*compute_uses_reduce_tile=*/true>(scalar_c_f);
         }
     }
 
@@ -78,7 +85,7 @@ void kernel_main() {
         constexpr uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_GAMMA ? 64 : 32;
         constexpr uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_GAMMA ? 1024 : 512;
 
-        experimental::UnicastEndpoint local_ep;
+        UnicastEndpoint local_ep;
         cb_gamma_obj.reserve_back(block_w);
         for (uint32_t w = 0; w < block_w; w++) {
             uint32_t tile_id = gamma_tile_start_id + w;
@@ -109,7 +116,7 @@ void kernel_main() {
         uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_BETA ? 64 : 32;
         uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_BETA ? 1024 : 512;
 
-        experimental::UnicastEndpoint local_ep;
+        UnicastEndpoint local_ep;
         cb_beta_obj.reserve_back(block_w);
         for (uint32_t w = 0; w < block_w; w++) {
             uint32_t tile_id = beta_tile_start_id + w;

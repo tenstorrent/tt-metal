@@ -31,7 +31,7 @@ ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transp
         transpose, true /*transpose within 16x16 face*/, cbid)));
 
     MATH((llk_math_eltwise_unary_datacopy_init<
-          A2D,
+          DataCopyType::A2D,
           DST_ACCUM_MODE,
           BroadcastType::NONE,
           false,  // is_int_fpu_en
@@ -1228,10 +1228,13 @@ ALWI void matmul_blocks(
             if (add_mask) {
                 cb_wait_front(mask_cb, out_subblock_num_tiles);
                 cb_wait_front(zero_cb, 1);
+                reconfig_data_format(zero_cb, mask_cb);
                 add_tiles_init(zero_cb, mask_cb, true);
                 for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                     add_tiles(zero_cb, mask_cb, 0, i, i);
                 }
+                reconfig_data_format(in1_cb, in0_cb);
+                mm_block_init_short(in0_cb, in1_cb, transpose, subblock_w, subblock_h, in0_block_w);
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -1409,23 +1412,23 @@ void apply_causal_mask_lightweight(
     PACK((llk_pack_reconfig_l1_acc(1)));
 
     for (uint32_t row = 0; row < num_rows; row++) {
-        int32_t diag_col = (int32_t)(q_start_tile + row) - (int32_t)k_start_tile;
+        int32_t diag_col = static_cast<int32_t>(q_start_tile + row) - static_cast<int32_t>(k_start_tile);
         uint32_t row_offset = row * num_cols;
 
         if (diag_col < 0) {
             // Entire row above diagonal -> stamp all neginf
             stamp_tile_range_l1_acc<dst_batch>(mask_cb, neginf_idx, out_cb, row_offset, num_cols);
-        } else if ((uint32_t)diag_col < num_cols) {
+        } else if (static_cast<uint32_t>(diag_col) < num_cols) {
             // Stamp the diagonal tile
             tile_regs_acquire();
             copy_tile(mask_cb, diag_idx, 0);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile<true>(0, out_cb, row_offset + (uint32_t)diag_col);
+            pack_tile<true>(0, out_cb, row_offset + static_cast<uint32_t>(diag_col));
             tile_regs_release();
 
             // Stamp neginf tiles to the right of diagonal
-            uint32_t neginf_start = (uint32_t)diag_col + 1;
+            uint32_t neginf_start = static_cast<uint32_t>(diag_col) + 1;
             if (neginf_start < num_cols) {
                 stamp_tile_range_l1_acc<dst_batch>(
                     mask_cb, neginf_idx, out_cb, row_offset + neginf_start, num_cols - neginf_start);
@@ -1444,7 +1447,7 @@ void apply_causal_mask_lightweight(
  * template parameter(s), not by default-constructing this context.
  */
 struct LightweightMaskContext {
-    bool is_causal = false;                  // True only on ring_iter 0 for causal configs
+    bool is_causal = false;                  // Causal masking active for this context instance
     uint32_t neginf_tile_idx = 0;            // Index of -inf tile in the mask CB
     uint32_t causal_diag_tile_idx = 0;       // Index of causal diagonal tile in the mask CB
     uint32_t global_n_padded_tiles = 0;      // Fully padded K tile columns for global_n chunk
@@ -1755,7 +1758,11 @@ void sdpa_inner_loop(
             }
             q_start_tile = q_chunk * Sq_chunk_t;
             if (is_causal) {
-                q_high_tile = q_start_tile + Sq_chunk_t;
+                // Clamp to total K-tile extent. Mirrors reader_interleaved's clamp; without
+                // both, the reader and compute disagree on K-chunk count when Q-chunk extends
+                // past total K (Sq_chunk_t > Skt) → CB deadlock.
+                const uint32_t q_high_unclamped = q_start_tile + Sq_chunk_t;
+                q_high_tile = q_high_unclamped < Skt ? q_high_unclamped : Skt;
             } else {
                 q_high_tile = Skt;
             }
@@ -2492,7 +2499,7 @@ void sdpa_ring(
         out_num_blocks,
         global_q_start,  // iter_q_start
         global_q_end,    // iter_q_end
-        q_num_chunks,    // q_num_chunks (number of local q chunks)
+        q_num_chunks,    // q_num_chunks (total per-head chunks: local + joint)
         0,               // local_q_start (not used)
         0,               // chunked_q_chunk_offset (not used)
         0,

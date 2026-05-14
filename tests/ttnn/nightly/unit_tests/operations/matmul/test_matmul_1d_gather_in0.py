@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -360,17 +360,32 @@ def run_multi_core_matmul_1d(
     pt_out = in0 @ in1
 
     if activation:
-        act_fnc = torch.nn.functional.silu if activation == ttnn.UnaryOpType.SILU else torch.nn.functional.relu
-        pt_out = act_fnc(pt_out)
+        # Map ttnn activation types to PyTorch functions
+        if activation == ttnn.UnaryOpType.SILU:
+            pt_out = torch.nn.functional.silu(pt_out)
+        elif activation == ttnn.UnaryOpType.RELU:
+            pt_out = torch.nn.functional.relu(pt_out)
+        elif activation == ttnn.UnaryOpType.GELU:
+            pt_out = torch.nn.functional.gelu(pt_out)
+        elif activation == ttnn.UnaryOpType.TANH:
+            pt_out = torch.tanh(pt_out)
+        else:
+            raise ValueError(f"Unsupported activation type: {activation}")
 
     if in0_dtype == ttnn.bfloat4_b or in1_dtype == ttnn.bfloat4_b or output_dtype == ttnn.bfloat4_b:
+        if activation == ttnn.UnaryOpType.TANH and packer_l1_acc and fp32_acc_mode:
+            # See issue #42856
+            pcc_threshold = 0.913
+        else:
+            pcc_threshold = 0.99
+
         assert_numeric_metrics(
             pt_out,
             tt_out,
             atol=0.049 * K,
             rtol=39.159 * K,
             frobenius_threshold=0.002 * K,
-            pcc_threshold=0.99,
+            pcc_threshold=pcc_threshold,
             check_ulp=False,
         )
     elif in0_dtype == ttnn.bfloat8_b or in1_dtype == ttnn.bfloat8_b or output_dtype == ttnn.bfloat8_b:
@@ -590,6 +605,8 @@ def test_multi_core_matmul_1d_pad_wh(
         None,
         ttnn.UnaryOpType.SILU,
         ttnn.UnaryOpType.RELU,
+        ttnn.UnaryOpType.GELU,
+        ttnn.UnaryOpType.TANH,
     ],
 )
 @pytest.mark.parametrize(
@@ -665,6 +682,8 @@ def test_multi_core_matmul_1d_wh(
         None,
         ttnn.UnaryOpType.SILU,
         ttnn.UnaryOpType.RELU,
+        ttnn.UnaryOpType.GELU,
+        ttnn.UnaryOpType.TANH,
     ],
 )
 @pytest.mark.parametrize(
@@ -747,6 +766,8 @@ def test_multi_core_matmul_1d_ring_hop_wh(
         None,
         ttnn.UnaryOpType.SILU,
         ttnn.UnaryOpType.RELU,
+        ttnn.UnaryOpType.GELU,
+        ttnn.UnaryOpType.TANH,
     ],
 )
 @pytest.mark.parametrize(

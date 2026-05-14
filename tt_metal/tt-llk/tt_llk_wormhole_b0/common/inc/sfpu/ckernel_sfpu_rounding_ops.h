@@ -43,10 +43,8 @@ sfpi_inline sfpi::vFloat _trunc_body_(sfpi::vFloat val)
     // apply mask
     TTI_SFPAND(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
 
-    // Make sure compiler avoids these two regs here, ugh. And make
-    // sure the DCE pass considers this live without warning.
-    sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vFloat(sfpi::l_reg[sfpi::LRegs::LReg2]);
-    sfpi::l_reg[sfpi::LRegs::LReg3] = sfpi::vFloat(sfpi::l_reg[sfpi::LRegs::LReg3]);
+    sfpi::l_reg[sfpi::LRegs::LReg2].in_use();
+    sfpi::l_reg[sfpi::LRegs::LReg3].in_use();
 
     return sfpi::l_reg[sfpi::LRegs::LReg1];
 }
@@ -146,7 +144,7 @@ sfpi_inline sfpi::vFloat _round_even_(sfpi::vFloat v)
     v_if (exp < 23)
     {
         // v.{Exp,Man}=tmp.{Exp,Man}; retaining original sign.
-        v = sfpi::setsgn(tmp, v);
+        v = sfpi::copysgn(tmp, v);
     }
     v_endif;
     return v;
