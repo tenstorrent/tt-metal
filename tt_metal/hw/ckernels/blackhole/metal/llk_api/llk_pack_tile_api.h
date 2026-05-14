@@ -9,7 +9,12 @@
  * LLK PACK
  *************************************************************************/
 
-template <bool untilize = false, bool zero_output = false, bool tilize = false, bool skip_addrmod_config = false>
+template <
+    bool untilize = false,
+    bool zero_output = false,
+    bool tilize = false,
+    bool skip_addrmod_config = false,
+    bool skip_packer_strides = false>
 inline void llk_pack_init(
     const std::uint32_t pack_output = 16, std::uint32_t num_tiles = 1, const std::uint32_t input_operand = 0) {
     // TODO (https://github.com/tenstorrent/tt-metal/issues/18948): Revisit for narrow_tile
@@ -27,7 +32,7 @@ inline void llk_pack_init(
     // 8-bit datums (Int8, UInt8, Fp8_e4m3, Lf8) do not require the tilize workaround on Blackhole.
     const std::uint32_t src_format = static_cast<std::uint32_t>(unpack_src_format[input_operand]);
     const bool is_input_8bit_format = IS_8BIT_FORMAT(src_format);
-    _llk_pack_init_<untilize, zero_output, tilize, skip_addrmod_config>(
+    _llk_pack_init_<untilize, zero_output, tilize, skip_addrmod_config, skip_packer_strides>(
         pack_src_format[output_id], face_r_dim, tile_c_dim, num_faces, num_tiles, is_input_8bit_format);
 }
 
