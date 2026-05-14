@@ -343,7 +343,7 @@ sfpi_inline sfpi::vFloat sfpu_atan(sfpi::vFloat val) {
         v_if(absval_minus_1 > 0.0f) { t1 = PI_2 - t1; }
         v_endif;
 
-        result = sfpi::setsgn(t1, val);
+        result = sfpi::copysgn(t1, val);
     }
     v_endif;
 
@@ -416,7 +416,7 @@ sfpi_inline sfpi::vFloat sfpu_asin_range_reduced(sfpi::vFloat val) {
     }
     v_endif;
 
-    return sfpi::setsgn(asin_abs, val);
+    return sfpi::copysgn(asin_abs, val);
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool IS_ACOS, int ITERATIONS = 8>

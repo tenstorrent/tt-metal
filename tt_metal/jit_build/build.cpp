@@ -145,7 +145,7 @@ void JitBuildEnv::init(
         "-MMD "
         "-fno-use-cxa-atexit "
         "-Wall -Werror "
-        "-Wno-deprecated-declarations "
+        "-Wno-error=deprecated-declarations "
         "-Wno-error=multistatement-macros -Wno-error=parentheses "
         "-Wno-error=unused-but-set-variable -Wno-unused-variable "
         "-Wno-unused-function ";
