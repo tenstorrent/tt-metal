@@ -197,7 +197,7 @@ inline void _llk_math_eltwise_unary_broadcast_init_(const TileShape& tile_shape)
 template <BroadcastType BROADCAST_TYPE, bool unpack_to_dest = false, bool is_fp32_dest_acc_en = false>
 inline void _llk_math_eltwise_unary_broadcast_(const std::uint32_t tile_idx, [[maybe_unused]] const TileShape& tile_shape)
 {
-    _set_dst_write_addr_<TRISC_ID, DstTileShape::Tile32x32>(tile_idx);
+    _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
 
     if constexpr (unpack_to_dest)
     {

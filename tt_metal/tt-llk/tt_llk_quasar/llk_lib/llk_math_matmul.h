@@ -298,7 +298,7 @@ inline void _llk_math_matmul_init_(std::uint8_t ct_dim, std::uint8_t rt_dim)
  */
 inline void _llk_math_matmul_tile_(const std::uint32_t dst_index)
 {
-    _set_dst_write_addr_<TRISC_ID, DstTileShape::Tile32x32>(dst_index);
+    _set_dst_write_addr_<DstTileShape::Tile32x32>(dst_index);
     ckernel_template::run_bank0_sw_cntl(instrn_buffer);
     TTI_SETRWC(p_setrwc::CLR_B, 0, 0, p_setrwc::SET_ABD_F);
 }
@@ -321,7 +321,7 @@ inline void _llk_math_matmul_tile_(const std::uint32_t dst_index)
 inline void _llk_math_matmul_block_(std::uint8_t ct_dim, std::uint8_t rt_dim)
 {
     // Matmul Block, reset the dest addr to 0 for fused kernels
-    _set_dst_write_addr_<TRISC_ID, DstTileShape::Tile32x32>(0);
+    _set_dst_write_addr_<DstTileShape::Tile32x32>(0);
 
     const bool reuse_a          = ct_dim >= rt_dim;
     const std::uint32_t t_dim   = reuse_a ? rt_dim : ct_dim;

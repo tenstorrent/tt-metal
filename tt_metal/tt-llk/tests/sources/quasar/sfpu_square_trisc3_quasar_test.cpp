@@ -144,11 +144,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
         // _llk_math_eltwise_unary_sfpu_params_ -> _llk_math_eltwise_unary_sfpu_start_
-        // calls _set_dst_write_addr_<ckernel::math::TRISC_ID> (math's TRISC_ID = 1),
+        // calls ckernel::math::_set_dst_write_addr_ (math's TRISC_ID = 1),
         // which does not advance TRISC3's dest_section_base. Explicitly set
         // ISOLATE_SFPU's (TRISC_ID = 3) base here so each iteration operates
         // on the correct tile in dest.
-        _set_dst_write_addr_<ckernel::isolate_sfpu::TRISC_ID, ckernel::trisc::DstTileShape::Tile32x32>(params.DST_INDEX + i);
+        ckernel::isolate_sfpu::_set_dst_write_addr_<ckernel::trisc::DstTileShape::Tile32x32>(params.DST_INDEX + i);
         _llk_math_eltwise_unary_sfpu_params_(_calculate_square_, params.DST_INDEX + i, num_sfpu_iterations);
     }
 

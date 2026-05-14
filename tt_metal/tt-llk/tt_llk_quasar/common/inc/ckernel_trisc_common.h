@@ -158,47 +158,6 @@ inline std::uint32_t _get_dest_buffer_base_()
     return dest_register_offset;
 }
 
-/**
- * @brief Sets destination register base address depending on tile idx for the
- * given TRISC thread. Each Trisc0/1/2/3 has separate registers for setting the
- * dest base address; the TRISC_ID template parameter selects which one.
- * @tparam TRISC_ID: Trisc core which is executing this function, values = [0, 1, 2, 3].
- * Use the TRISC_ID constant defined in the corresponding c*_common.h
- * (e.g. ckernel::math::TRISC_ID, ckernel::unpack::TRISC_ID,
- * ckernel::isolate_sfpu::TRISC_ID) to pick the correct qualifier.
- * @tparam TILE_SHAPE: Tile shape, used to compute the per-tile stride.
- * @param tile_index: Tile index in the dest reg
- * 16bit dest reg data format -> tile_idx = 0 - 7
- * 32bit dest reg data format -> tile_idx = 0 - 3
- */
-template <std::uint8_t TRISC_ID, DstTileShape TILE_SHAPE>
-inline void _set_dst_write_addr_(const std::uint32_t tile_index)
-{
-    const std::uint32_t tile_shape_idx = (TILE_SHAPE == DstTileShape::Tile32x32) ? 6 : ((TILE_SHAPE == DstTileShape::Tile32x16) ? 5 : 4);
-    const std::uint32_t dst_index      = (tile_index << tile_shape_idx) + _get_dest_buffer_base_();
-    _set_dest_section_base_<TRISC_ID>(dst_index);
-}
-
-/**
- * @brief Sets destination register base address depending on tile idx and the
- * number of rows per tile for the given TRISC thread.
- * @tparam TRISC_ID: Trisc core which is executing this function, values = [0, 1, 2, 3].
- * Use the TRISC_ID constant defined in the corresponding c*_common.h to pick
- * the correct qualifier.
- * @param num_rows_per_tile: Number of rows per tile, used to compute the per-tile stride.
- * @param tile_index: Tile index in the dest reg.
- */
-template <std::uint8_t TRISC_ID>
-inline void _set_dst_write_addr_by_rows_(const std::uint32_t num_rows_per_tile, const std::uint32_t tile_index)
-{
-    const std::uint32_t tile_shape_idx =
-        (num_rows_per_tile == 64)
-            ? 6
-            : ((num_rows_per_tile == 32) ? 5 : ((num_rows_per_tile == 16) ? 4 : ((num_rows_per_tile == 8) ? 3 : ((num_rows_per_tile == 4) ? 2 : 1))));
-    const std::uint32_t dst_index = (tile_index << tile_shape_idx) + _get_dest_buffer_base_();
-    _set_dest_section_base_<TRISC_ID>(dst_index);
-}
-
 inline constexpr static std::uint32_t masked_data_format(std::uint32_t data_format)
 {
     return data_format & DATA_FORMAT_CONFIG_MASK;
