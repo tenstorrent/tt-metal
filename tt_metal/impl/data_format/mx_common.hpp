@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -96,7 +95,7 @@ void unpack_elem_words(
 // to std::ldexp so behavior matches at boundaries.
 inline float pow2_f32(int k) {
     if (k >= -126 && k <= 127) {
-        return std::bit_cast<float>(static_cast<uint32_t>(127 + k) << 23);
+        return __builtin_bit_cast(float, static_cast<uint32_t>(127 + k) << 23);
     }
     return std::ldexp(1.0f, k);
 }
