@@ -1324,7 +1324,13 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
             }
 
             if (!mmio_reset_chans.empty()) {
-                constexpr int kRebootWaitMs = 3000;
+                // FIX BL (#42429): 3000ms is insufficient when 24 MMIO ETH channels all need
+                // to reboot from ROM phase (0x49705180) after a massive simultaneous hard-reset
+                // (FIX AC). Each channel completes the reset→base-firmware sequence independently
+                // and the observed failure was all 24/24 still in ROM phase after 3009ms.
+                // 30000ms matches the scale of TH3's 12× extension for base-UMD channels
+                // (10s→120s) — 10× increase from the original value.
+                constexpr int kRebootWaitMs = 30000;
                 constexpr auto kPollInterval = std::chrono::milliseconds(10);
                 const auto poll_start = std::chrono::steady_clock::now();
 
