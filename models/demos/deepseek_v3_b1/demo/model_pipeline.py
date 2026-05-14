@@ -307,8 +307,12 @@ class ModelPipeline:
                 raise RuntimeError("Base decode requires token_1 output from the spec LM head")
 
             next_token = result.token_1
-            # Spec head reports draft positions as input tok0_pos+2; AR single-step uses +1.
             next_pos = result.token_1_pos - 1
+            if next_pos != result.token_0_pos:
+                raise RuntimeError(
+                    f"Base decode position mismatch: token_1_pos - 1 = {next_pos}, "
+                    f"but token_0_pos = {result.token_0_pos}"
+                )
             emit(next_token)
             if is_eos(next_token) or len(generated_tokens) >= max_new_tokens:
                 break

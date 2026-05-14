@@ -283,10 +283,7 @@ def create_single_pod_spec_decode_pipeline_configuration(
         1: _dense_stage(dense_ids[0]),
         2: _dense_stage(dense_ids[1]),
         3: _dense_stage(dense_ids[2]),
-        **{
-            i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1)
-            for i in range(4, 14 if enable_speculative_decode else 15)
-        },
+        **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 14)},
     }
     if enable_mtp:
         stage_factories[13] = _decoder_stage(moe_layer_id if moe_layer_id is not None else 12)
@@ -294,6 +291,7 @@ def create_single_pod_spec_decode_pipeline_configuration(
         stage_factories[14] = stage_14
         stage_factories[15] = _decoder_stage(61)
     else:
+        stage_factories[14] = passthrough_stage
         stage_factories[15] = passthrough_stage
     return PipelineConfiguration(stage_factories)
 
@@ -416,10 +414,7 @@ def create_sp4_pipeline_configuration(
         1: _dense_stage(dense_ids[0]),
         2: _dense_stage(dense_ids[1]),
         3: _dense_stage(dense_ids[2]),
-        **{
-            i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1)
-            for i in range(4, 62 if enable_speculative_decode else 63)
-        },
+        **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 62)},
     }
     if enable_mtp:
         stage_factories[61] = _decoder_stage(60)
@@ -427,6 +422,7 @@ def create_sp4_pipeline_configuration(
         stage_factories[62] = stage_62
         stage_factories[63] = _decoder_stage(61)
     else:
+        stage_factories[62] = passthrough_stage
         stage_factories[63] = passthrough_stage
     return PipelineConfiguration(stage_factories)
 
