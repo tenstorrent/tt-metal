@@ -906,7 +906,9 @@ class AttentionBlock:
 
         # CB indices (grouped by stage)
         input_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)
-        rmsnorm_output_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)
+        # (Removed `rmsnorm_output_cb` CB ID + L1 reservation: rmsnorm1 no longer runs on the input
+        # core after the deferred-norm refactor, so this CB was never read by any kernel. The
+        # `dkv_matmul_in0_view_cb` that previously overlaid its L1 region is also removed.)
         # Matmul1 + gather-reduce + RMSNorm2 path
         matmul_weights_cb_overlapped = cb_id_context.get_cb_id(
             matmul_weights_tensor.dtype, ttnn.TileDescriptor(matmul_weights_tensor.get_tile())
@@ -957,15 +959,12 @@ class AttentionBlock:
         # kv_rmsnorm gamma CB: backed by dkv_rmsnorm_gamma_tensor on dkv_rmsnorm_grid;
         # NCRISC sets it up via setup_sharded_buffer, TRISC reads it via cb_wait_front.
         kv_rmsnorm_gamma_cb = cb_id_context.get_cb_id(data_format, TD_16x32)
-        # Per-dkv-core RMSNorm (deferred from input core) writes here before dkv_matmul reads it.
-        # Reuses rmsnorm1 output CB ID since the input core no longer runs rmsnorm1 after the deferral
-        # (disjoint grids: input core vs dkv cores rows 8-9).
-        dkv_rmsnorm_output_cb = rmsnorm_output_cb
-        # Note: the earlier design had CB-overlay views (`dkv_rmsnorm_input_view_cb`,
-        # `dkv_matmul_in0_view_cb`) exposing `matmul_input_cb` / `dkv_rmsnorm_output_cb`'s L1
-        # under different tile shapes for a dkv-side RMSNorm. The current kernel skips that
+        # Note: the earlier design had a per-dkv-core RMSNorm with CB-overlay views
+        # (`dkv_rmsnorm_input_view_cb`, `dkv_matmul_in0_view_cb`) exposing `matmul_input_cb` /
+        # `rmsnorm_output_cb`'s L1 under different tile shapes. The current kernel skips that
         # pre-RMSNorm pass on the dkv path -- dkv_matmul reads `matmul_input_cb` directly with
-        # a fused CUSTOM_SFPU 1/RMS scalar -- so the view CBs are not allocated.
+        # a fused CUSTOM_SFPU 1/RMS scalar -- so the view CBs (and their `rmsnorm_output_cb`
+        # overlay base) are not allocated.
         # Output CB for the front-half RMSNorm on the input core (RMSInverse).
         # Holds a single 1x32 scalar tile = 1/RMS of the raw input. Not consumed yet.
         raw_input_rms_inv_output_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
@@ -1365,7 +1364,6 @@ class AttentionBlock:
         # RMSNorm compute compile-time args (named args for TRISC)
         rmsnorm_compute_named_compile_time_args = [
             ("rmsnorm_input_cb", input_cb),
-            ("rmsnorm_output_cb", rmsnorm_output_cb),
             ("rmsnorm_fp32_acc", 1 if fp32_dest_acc_en else 0),
             ("rmsnorm_num_tiles", num_tiles),
             ("rmsnorm_rsqrt_fast_approx", 0),
@@ -2123,23 +2121,10 @@ class AttentionBlock:
         # use sender device metadata as the canonical broadcast descriptor reference.
         bcast_pkt_cb_descriptor = bcast_config.get_cb_descriptor(sender_mesh_coord)
 
-        # CB: RMSNorm output buffer
-        rmsnorm_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            rmsnorm_output_cb,
-            ref_sdpa_kv_cache_buffer,
-            address_offset=sdpa_kv_cache_running_offset_mcast_core,
-            total_size=num_tiles * cb_page_size,
-            core_ranges=full_device_grid,
-        )
-        rmsnorm_output_cb_descriptor.format_descriptors = [
-            ttnn.CBFormatDescriptor(
-                buffer_index=rmsnorm_output_cb,
-                data_format=data_format,
-                page_size=cb_page_size,
-                tile=tile_descriptor,
-            )
-        ]
-        sdpa_kv_cache_running_offset_mcast_core += rmsnorm_output_cb_descriptor.total_size
+        # (rmsnorm_output_cb_descriptor removed: kernel never reads this CB, and the dkv view CB
+        # that previously overlaid its L1 region is also gone, so the L1 reservation is not
+        # needed. Subsequent CBs in this sdpa_kv_cache region now start at offset 0,
+        # saving num_tiles * cb_page_size bytes per core on full_device_grid.)
 
         # CB: Fused matmul weights (single CB backing matmul1, matmul2, dkv_matmul)
         fused_matmul_weights_cb_descriptor = cb_descriptor_from_overlapped_tensors(
@@ -3484,7 +3469,6 @@ class AttentionBlock:
         # CB list assembly (device-invariant)
         # ========================================================================
         cbs_list = [
-            rmsnorm_output_cb_descriptor,
             fused_matmul_weights_cb_descriptor,
             matmul_output_cb_descriptor,
             matmul_input_cb_descriptor,
