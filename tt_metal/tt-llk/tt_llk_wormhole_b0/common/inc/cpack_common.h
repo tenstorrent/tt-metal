@@ -1009,7 +1009,7 @@ enum class PackerProgramType
 /**
  * Validates that all packers' config and counters match the expected formats and face dimension.
  * On mismatch, issues DEVICE_PRINT (when enabled) and LLK_ASSERT. Typically invoked via
- * `LLK_ASSERT_BLOCK(are_packers_configured_correctly<...>(...))` in llk_pack_api.h.
+ * `LLK_ASSERT_BLOCK(are_packers_configured_correctly<...>(...))` in llk_pack_tile_api.h.
  *
  * @param pack_src_format   Expected input data format for all packers
  * @param pack_dst_format   Expected output data format for all packers

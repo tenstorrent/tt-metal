@@ -74,6 +74,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "llk_pack.h"
 #include "llk_pack_common.h"
+#include "llk_pack_untilize.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
