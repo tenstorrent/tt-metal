@@ -626,7 +626,8 @@ ConnectionKey TestDevice::register_fabric_connection(
     const FabricNodeId& dst_node_id,
     uint8_t vc_id) {
     // Get available link indices for this direction (to validate link_idx)
-    std::vector<uint32_t> available_link_indices = get_forwarding_link_indices_in_direction(outgoing_direction);
+    std::vector<uint32_t> available_link_indices =
+        get_forwarding_link_indices_in_direction(this->fabric_node_id_, dst_node_id, outgoing_direction);
 
     TT_FATAL(
         !available_link_indices.empty(),
