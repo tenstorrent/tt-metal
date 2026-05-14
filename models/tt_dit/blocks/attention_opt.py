@@ -28,14 +28,27 @@ if TYPE_CHECKING:
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
 class Attention(Module):
-    # Map from (is_blackhole, sp_factor, tp_factor) -> (q_chunk_size, k_chunk_size) for ring SDPA
-    ring_sdpa_chunk_size_map: dict[tuple, tuple] = {
+    # Non-ring SDPA chunk-size knobs. The map is empty by default and used to express
+    # per-(is_blackhole, sp_factor, tp_factor) overrides; constructor-provided q/k_chunk_size
+    # win if neither map nor caller overrides set a value. The class-level default applies
+    # when both the map entry and constructor args are absent.
+    sdpa_chunk_size_map: dict[tuple, tuple[int, int]] = {}
+    default_sdpa_chunk_size: tuple[int, int] = (128, 512)
+
+    # Ring SDPA chunk sizes per (is_blackhole, sp_factor, tp_factor).
+    # The (True, 4, 8) entry is Flux2's actual config on Blackhole Galaxy (mesh (4, 8) with
+    # sp_axis=0, tp_axis=1 → sp_factor=4, tp_factor=8). Q-chunk 128 / K-chunk 512 matches
+    # the pre-Step-1 non-ring default and is measurably faster than the (256, 256) fallback
+    # for Flux2's Q/K shapes.
+    # Other entries are Wan-tuned (carried from attention_wan.py).
+    ring_sdpa_chunk_size_map: dict[tuple, tuple[int, int]] = {
         (False, 2, 4): (256, 256),
         (False, 8, 4): (256, 256),
         (True, 2, 2): (128, 512),
+        (True, 4, 8): (128, 512),
         (True, 8, 4): (288, 512),
     }
-    default_ring_sdpa_chunk_size = (256, 256)
+    default_ring_sdpa_chunk_size: tuple[int, int] = (256, 256)
 
     def __init__(
         self,
@@ -55,8 +68,9 @@ class Attention(Module):
         ccl_manager: CCLManager | None,
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
-        k_chunk_size: int = 512,
-        q_chunk_size: int = 128,
+        k_chunk_size: int | None = None,
+        q_chunk_size: int | None = None,
+        sdpa_chunk_size_overrides: dict | None = None,
         is_fsdp: bool = False,
     ) -> None:
         super().__init__()
@@ -83,12 +97,28 @@ class Attention(Module):
 
         full_grid = self.mesh_device.compute_with_storage_grid_size()
 
-        # Non-ring SDPA: reserve last row for CCL, use constructor-provided chunk sizes.
+        # Non-ring SDPA: reserve last row for CCL. Chunk sizes resolved from (in priority order):
+        # caller-supplied `sdpa_chunk_size_overrides`, then `sdpa_chunk_size_map` (class const),
+        # then constructor `q_chunk_size`/`k_chunk_size` args, then `default_sdpa_chunk_size`.
         self.sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
+
+        chunk_lookup = {**self.sdpa_chunk_size_map, **(sdpa_chunk_size_overrides or {})}
+        resolved_q_chunk, resolved_k_chunk = chunk_lookup.get(
+            (
+                is_blackhole(),
+                parallel_config.sequence_parallel.factor,
+                parallel_config.tensor_parallel.factor,
+            ),
+            (
+                q_chunk_size if q_chunk_size is not None else self.default_sdpa_chunk_size[0],
+                k_chunk_size if k_chunk_size is not None else self.default_sdpa_chunk_size[1],
+            ),
+        )
+
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.sdpa_worker_grid,
-            q_chunk_size=q_chunk_size,
-            k_chunk_size=k_chunk_size,
+            q_chunk_size=resolved_q_chunk,
+            k_chunk_size=resolved_k_chunk,
             exp_approx_mode=False,  # NOTE: False is more correct
         )
 
