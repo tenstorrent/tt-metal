@@ -136,19 +136,6 @@
   team: models
 
 # TODO: Move DP tests to sweep pipelines when those come online
-- name: Llama 3.3-70B data-parallel e2e tests (T3K)
-  cmd: |
-    export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP-4 or performance-ci-b1-DP-8" --timeout 1000
-  model: llama3.3-70b-dp
-  skus:
-    wh_llmbox_perf:
-      timeout: 20
-      tier: 2
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-
-# TODO: Move DP tests to sweep pipelines when those come online
 # Disabled: failing with "Could not find any forwarding direction from src (M0, D0) to dst (M0, D19)" — under investigation in https://github.com/tenstorrent/tt-metal/issues/42553
 # - name: Llama 3.3-70B data-parallel e2e tests (Galaxy)
 #   cmd: |

@@ -74,9 +74,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_MATH
 
-#include "llk_math_common.h"
-#include "llk_math_eltwise_unary_datacopy.h"
-#include "llk_math_transpose_dest.h"
+#include "llk_lib_math_wrappers.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -104,11 +102,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
 
-#ifdef ARCH_BLACKHOLE
-            _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, false>(TILE_NUM_FACES, formats.math);
-#else
-            _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false>(TILE_NUM_FACES, formats.math);
-#endif
+            _llk_math_eltwise_unary_datacopy_init_wrapper_<
+                DataCopyType::A2D,
+                is_fp32_dest_acc_en,
+                BroadcastType::NONE,
+                false /* tilize */,
+                false /* is_int_fpu_en */>(TILE_NUM_FACES, formats.math);
             for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
             {
                 _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
@@ -120,11 +119,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 LLK_ASSERT(
                     (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "block_tile exceeds max dest tiles");
-#ifdef ARCH_BLACKHOLE
-                _llk_math_transpose_dest_<is_fp32_dest_acc_en, MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>(block_tile);
-#else
-                _llk_math_transpose_dest_<MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>(block_tile);
-#endif
+                _llk_math_transpose_dest_wrapper_<is_fp32_dest_acc_en, MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>(block_tile);
             }
 
             _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
@@ -139,7 +134,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 
 #include "llk_lib_pack_wrappers.h"
-#include "llk_pack.h"
 #include "llk_pack_common.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -154,7 +148,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
         _llk_pack_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT);
-        _llk_pack_init_wrapper_<false, false>(formats.pack_dst);
+        _llk_pack_init_wrapper_<false /* untilize */, false /* zero_output */>(formats.pack_dst);
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
