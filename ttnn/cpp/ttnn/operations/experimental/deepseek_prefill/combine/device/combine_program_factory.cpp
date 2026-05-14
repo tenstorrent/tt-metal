@@ -345,6 +345,18 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
                 /*buffering_factor=*/k_s * SLOTS_PER_IDLE,
                 /*cb_id=*/tt::CBIndex::c_18,
                 "receive_buf_sender_" + std::to_string(s));
+            // c_19: per-sender metadata ring.  Mirrors c_18's partitioning using the
+            // dispatched_metadata page size.  Idle i writes routing metadata (dst_chip,
+            // dst_token_idx, dst_topk_indice) for each non-local row into slot j at offset
+            //   c_19_base + i * SLOTS_PER_IDLE * aligned_dispatched_metadata_page_size + j * ...
+            // Sender reads from c_19 instead of DRAM, eliminating metadata DRAM reads on sender.
+            detail::create_tensor_cb(
+                program,
+                single_sender_crs,
+                dispatched_metadata,
+                /*buffering_factor=*/k_s * SLOTS_PER_IDLE,
+                /*cb_id=*/tt::CBIndex::c_19,
+                "metadata_ring_sender_" + std::to_string(s));
         }
     } else {
         // c_0 on sender cores: dispatched_buffer rows for ROW_MAJOR DMA reads
@@ -841,6 +853,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             uint32_t k_s = static_cast<uint32_t>(sender_idle_groups[s].size());
             per_sender_compile_args.push_back(k_s);                                       // num_idle_cores (per-sender)
             per_sender_compile_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_18));  // cb_untilize_id
+            per_sender_compile_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_19));  // cb_metadata_buf_id
         }
         CoreRangeSet single_sender_core({CoreRange(sender_cores[s])});
         reader_kernel_ids.push_back(tt::tt_metal::CreateKernel(

@@ -136,6 +136,7 @@ void kernel_main() {
     // so both see the single increment from the sender's multicast).  Then read the sender's
     // receive_buf_addr from c_1's trailer on this core.
     //   trailer[0] = sender's c_18 L1 offset (receive buffer for untilized data)
+    //   trailer[1] = sender's c_19 L1 offset (metadata ring for routing info)
     volatile tt_l1_ptr uint32_t* counter_ready_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(counter_ready_semaphore_id));
     noc_semaphore_wait(counter_ready_sem_ptr, 1);
@@ -149,6 +150,11 @@ void kernel_main() {
     // this (sender, idle) pair) cycle through slots 0..SLOTS_PER_IDLE-1 within that slice.
     uint32_t our_slice_l1_offset = sender_receive_buf_l1_offset + core_id * SLOTS_PER_IDLE * aligned_output_page_size;
     uint64_t our_slice_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, our_slice_l1_offset);
+
+    uint32_t sender_metadata_buf_l1_offset = trailer[1];
+    uint32_t our_metadata_slice_l1_offset =
+        sender_metadata_buf_l1_offset + core_id * SLOTS_PER_IDLE * aligned_dispatched_metadata_page_size;
+    uint64_t our_metadata_slice_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, our_metadata_slice_l1_offset);
 
     uint32_t local_credits = SLOTS_PER_IDLE;
     uint32_t write_slot = 0;
@@ -208,6 +214,14 @@ void kernel_main() {
                     local_credits += n;
                 }
 
+                // Write routing metadata (dst_chip, dst_token_idx, dst_topk_indice) to
+                // sender's c_19 metadata ring slot so sender can read from L1 instead of DRAM.
+                uint64_t meta_dst_addr =
+                    our_metadata_slice_noc_addr + write_slot * aligned_dispatched_metadata_page_size;
+                uint32_t meta_src_addr = metadata_read_ptr + t * aligned_dispatched_metadata_page_size;
+                noc_async_write(meta_src_addr, meta_dst_addr, 12);  // 3 × uint32
+
+                // Write untilized row data to sender's c_18 receive_buf ring slot.
                 uint64_t dst_addr = our_slice_noc_addr + write_slot * aligned_output_page_size;
                 uint32_t off = 0;
                 while (off < aligned_output_page_size) {
@@ -217,7 +231,7 @@ void kernel_main() {
                     noc_async_write(untilize_row_addr + off, dst_addr + off, chunk);
                     off += chunk;
                 }
-                noc_async_write_barrier();
+                noc_async_write_barrier();  // ensures both metadata and row data have landed
 
                 noc_semaphore_inc(sender_data_ready_noc_addr, 1);
                 noc_async_atomic_barrier();
