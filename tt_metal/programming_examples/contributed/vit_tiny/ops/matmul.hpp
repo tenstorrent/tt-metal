@@ -40,7 +40,7 @@ inline void matmul_op(
     TensorAccessorArgs(*src1_buf).append_to(reader_ct_args);
     auto reader_id = CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "vit_tiny/kernels/dataflow/reader_matmul_multicore.cpp",
+        OVERRIDE_KERNEL_PREFIX "contributed/vit_tiny/kernels/dataflow/reader_matmul_multicore.cpp",
         cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
@@ -51,7 +51,7 @@ inline void matmul_op(
     TensorAccessorArgs(*dst_buf).append_to(writer_ct_args);
     auto writer_id = CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "vit_tiny/kernels/dataflow/writer_matmul_multicore.cpp",
+        OVERRIDE_KERNEL_PREFIX "contributed/vit_tiny/kernels/dataflow/writer_matmul_multicore.cpp",
         cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -60,7 +60,7 @@ inline void matmul_op(
 
     CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "vit_tiny/kernels/compute/matmul_compute.cpp",
+        OVERRIDE_KERNEL_PREFIX "contributed/vit_tiny/kernels/compute/matmul_compute.cpp",
         cores,
         ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .compile_args = {rows_per_core, Kt, Nt}});
 

@@ -39,7 +39,7 @@ inline void eltwise_mul_op(
     TensorAccessorArgs(*src1_buf).append_to(reader_ct_args);
     auto reader_id = CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "vit_tiny/kernels/dataflow/reader_binary_multicore.cpp",
+        OVERRIDE_KERNEL_PREFIX "contributed/vit_tiny/kernels/dataflow/reader_binary_multicore.cpp",
         cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
@@ -50,7 +50,7 @@ inline void eltwise_mul_op(
     TensorAccessorArgs(*dst_buf).append_to(writer_ct_args);
     auto writer_id = CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "vit_tiny/kernels/dataflow/writer_unary_multicore.cpp",
+        OVERRIDE_KERNEL_PREFIX "contributed/vit_tiny/kernels/dataflow/writer_unary_multicore.cpp",
         cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -59,7 +59,7 @@ inline void eltwise_mul_op(
 
     CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "vit_tiny/kernels/compute/eltwise_mul_compute.cpp",
+        OVERRIDE_KERNEL_PREFIX "contributed/vit_tiny/kernels/compute/eltwise_mul_compute.cpp",
         cores,
         ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .compile_args = {tiles_per_core}});
 

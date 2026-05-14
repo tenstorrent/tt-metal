@@ -33,7 +33,7 @@ inline void transpose_2d_op(
     TensorAccessorArgs(*src_buf).append_to(reader_ct_args);
     auto reader_id = CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "vit_tiny/kernels/dataflow/reader_transpose.cpp",
+        OVERRIDE_KERNEL_PREFIX "contributed/vit_tiny/kernels/dataflow/reader_transpose.cpp",
         core,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
@@ -44,7 +44,7 @@ inline void transpose_2d_op(
     TensorAccessorArgs(*dst_buf).append_to(writer_ct_args);
     auto writer_id = CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "vit_tiny/kernels/dataflow/writer_unary.cpp",
+        OVERRIDE_KERNEL_PREFIX "contributed/vit_tiny/kernels/dataflow/writer_unary.cpp",
         core,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -53,7 +53,7 @@ inline void transpose_2d_op(
 
     CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "vit_tiny/kernels/compute/transpose_compute.cpp",
+        OVERRIDE_KERNEL_PREFIX "contributed/vit_tiny/kernels/compute/transpose_compute.cpp",
         core,
         ComputeConfig{.compile_args = {n_tiles}});
 

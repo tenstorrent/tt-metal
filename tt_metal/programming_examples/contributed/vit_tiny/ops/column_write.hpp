@@ -29,7 +29,7 @@ inline void column_write_op(
     TensorAccessorArgs(*src_buf).append_to(reader_ct_args);
     auto reader_id = CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "vit_tiny/kernels/dataflow/reader_unary_to_out.cpp",
+        OVERRIDE_KERNEL_PREFIX "contributed/vit_tiny/kernels/dataflow/reader_unary_to_out.cpp",
         core,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
@@ -40,7 +40,7 @@ inline void column_write_op(
     TensorAccessorArgs(*dst_buf).append_to(writer_ct_args);
     auto writer_id = CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "vit_tiny/kernels/dataflow/writer_column_write.cpp",
+        OVERRIDE_KERNEL_PREFIX "contributed/vit_tiny/kernels/dataflow/writer_column_write.cpp",
         core,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
