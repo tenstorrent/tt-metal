@@ -77,9 +77,9 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
         is_distributed=False,
         simplified_rms=True,
     )
-    input = torch.rand(batch_size, seq_len, 1024, dtype=torch.bfloat16)
+    input = torch.rand(batch_size, seq_len, 1024)
 
-    reference_output = reference_model(input)
+    reference_output = reference_model(input.float())
 
     tt_input = ttnn.from_torch(
         input,

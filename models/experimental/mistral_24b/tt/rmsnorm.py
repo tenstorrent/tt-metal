@@ -150,7 +150,7 @@ class RMSNorm(LightweightModule):
         )
 
         if in_sharded and not out_sharded:
-            ttnn.sharded_to_interleaved(x)
+            return ttnn.sharded_to_interleaved(x)
         else:
             return x
 
