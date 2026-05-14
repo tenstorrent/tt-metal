@@ -220,9 +220,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_MATH
 #include "ckernel_sfpu.h"
-#include "llk_math_common.h"
-#include "llk_math_eltwise_unary_datacopy.h"
-#include "llk_math_transpose_dest.h"
+#include "llk_lib_math_wrappers.h"
 
 using namespace ckernel;
 
@@ -299,26 +297,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, false /* to_from_int8 */>(math_format);
                     }
 
-#ifdef ARCH_BLACKHOLE
-                    _llk_math_eltwise_unary_datacopy_init_<
+                    _llk_math_eltwise_unary_datacopy_init_wrapper_<
                         DataCopyType::A2D,
                         is_fp32_dest_acc_en,
                         BroadcastType::NONE,
-                        false, // tilize
-                        false  // is_int_fpu_en
-                        >(
-                        /*num_rows_per_matrix=*/4,
-                        /*math_format=*/math_format);
-#else
-                    _llk_math_eltwise_unary_datacopy_init_<
-                        DataCopyType::A2D,
-                        is_fp32_dest_acc_en,
-                        BroadcastType::NONE,
-                        false // is_int_fpu_en
-                        >(
-                        /*num_rows_per_matrix=*/4,
-                        /*math_format=*/math_format);
-#endif
+                        false /* tilize */,
+                        false /* is_int_fpu_en */
+                        >(/*num_rows_per_matrix=*/4, /*math_format=*/math_format);
 
                     const int first_tile_in_pair_idx = stage_index * NUM_TILES_PER_STAGE;
 
@@ -397,7 +382,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 #include "llk_lib_pack_wrappers.h"
-#include "llk_pack.h"
 #include "llk_pack_common.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -413,11 +397,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // We pack the result with index tiles right after value tiles.
     const int NUM_TILES_IN_RESULT_BUFFER_PER_ROW = (TOPK_K / ckernel::TILE_C_DIM) * NUM_STAGES;
 
-#ifdef ARCH_BLACKHOLE
-    _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
-#else
-    _llk_pack_dest_init_<dest_sync, false, false>();
-#endif
+    _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, false /* untilize */>();
 
     const std::uint32_t pack_src_data_types[NUM_STAGES] = {formats.pack_src, ckernel::to_underlying(DataFormat::UInt16)};
     const std::uint32_t pack_dst_data_types[NUM_STAGES] = {formats.pack_dst, ckernel::to_underlying(DataFormat::UInt16)};
@@ -447,37 +427,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                     if (first_hardware_configuration)
                     {
-#ifdef ARCH_BLACKHOLE
-                        _llk_pack_hw_configure_<
-                            is_fp32_dest_acc_en,
-                            false,  // untilize
-                            false>( // tilize
-                            pack_src_format,
-                            pack_dst_format,
-                            16 * 16 * 4);
-#else
-                        _llk_pack_hw_configure_<
-                            is_fp32_dest_acc_en,
-                            false>( // untilize
-                            pack_src_format,
-                            pack_dst_format,
-                            16 * 16 * 4);
-#endif
+                        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false /* untilize */, false /* tilize */>(
+                            pack_src_format, pack_dst_format, 16 * 16 * 4 /* tile_size */);
                     }
                     else
                     {
                         // We need to use reconfigure API to avoid race condition between hardware configuration in the second stage and pack in the first
                         // stage.
-#ifdef ARCH_BLACKHOLE
-                        _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
-                            pack_src_format, pack_dst_format, 16 * 16 * 4, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */, false /* partial_face */);
-#else
-                        _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
-                            pack_src_format, pack_dst_format, 16 * 16 * 4, FACE_R_DIM, 4 /* num_faces */, false /* partial_face */, false /* narrow_tile */);
-#endif
+                        _llk_pack_reconfig_data_format_wrapper_<is_fp32_dest_acc_en, false /* is_tile_dim_reconfig_en */>(
+                            pack_src_format,
+                            pack_dst_format,
+                            16 * 16 * 4 /* tile_size */,
+                            FACE_R_DIM,
+                            TILE_C_DIM,
+                            4 /* num_faces */,
+                            false /* partial_face */,
+                            false /* narrow_tile */,
+                            1 /* num_tiles */);
                     }
 
-                    _llk_pack_init_wrapper_<false, false>(pack_dst_format);
+                    _llk_pack_init_wrapper_<false /* untilize */, false /* zero_output */>(pack_dst_format);
 
                     const int tile_dest_offset = stage_index * NUM_TILES_PER_STAGE;
 

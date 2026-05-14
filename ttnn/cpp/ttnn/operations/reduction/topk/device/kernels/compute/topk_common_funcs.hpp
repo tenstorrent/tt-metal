@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "api/dataflow/circular_buffer.h"
+
 void process_and_sort_tiles(
     uint32_t input_cb_index,
     uint32_t index_cb_index,
@@ -13,8 +15,13 @@ void process_and_sort_tiles(
     bool switch_dir,
     bool& ascending,
     int end_phase) {
-    cb_reserve_back(input_transposed_cb_index, Wt);
-    cb_reserve_back(index_transposed_cb_index, Wt);
+    CircularBuffer input_cb(input_cb_index);
+    CircularBuffer index_cb(index_cb_index);
+    CircularBuffer input_transposed_cb(input_transposed_cb_index);
+    CircularBuffer index_transposed_cb(index_transposed_cb_index);
+
+    input_transposed_cb.reserve_back(Wt);
+    index_transposed_cb.reserve_back(Wt);
 
     // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
     for (uint32_t wt = 0; wt < Wt; wt += 2) {
@@ -22,8 +29,8 @@ void process_and_sort_tiles(
         // local sort into k groups
         // for the last iteration, we only need to wait for 1 tile if Wt is odd, otherwise we wait for 2 tiles
         uint32_t tiles_to_wait = ((Wt % 2 != 0) && (wt + 2 > Wt)) ? 1 : 2;
-        cb_wait_front(input_cb_index, tiles_to_wait);
-        cb_wait_front(index_cb_index, tiles_to_wait);
+        input_cb.wait_front(tiles_to_wait);
+        index_cb.wait_front(tiles_to_wait);
 
         reconfig_data_format_srca(input_cb_index);
         transpose_wh_init_short(input_cb_index);
@@ -51,14 +58,14 @@ void process_and_sort_tiles(
         if (tiles_to_wait == 2) {
             pack_tile(3, index_transposed_cb_index);
         }
-        cb_pop_front(input_cb_index, tiles_to_wait);
-        cb_pop_front(index_cb_index, tiles_to_wait);
+        input_cb.pop_front(tiles_to_wait);
+        index_cb.pop_front(tiles_to_wait);
         release_dst();
         ascending = switch_dir ? !ascending : ascending;
     }
 
-    cb_push_back(input_transposed_cb_index, Wt);
-    cb_push_back(index_transposed_cb_index, Wt);
+    input_transposed_cb.push_back(Wt);
+    index_transposed_cb.push_back(Wt);
 }
 
 void process_tile_pair(
@@ -192,8 +199,11 @@ void process_iteration(
     uint32_t logk,
     int& seq_per_2tiles,
     bool largest_param) {
-    cb_wait_front(input_transposed_cb_index, Wt);
-    cb_wait_front(index_transposed_cb_index, Wt);
+    CircularBuffer input_transposed_cb(input_transposed_cb_index);
+    CircularBuffer index_transposed_cb(index_transposed_cb_index);
+
+    input_transposed_cb.wait_front(Wt);
+    index_transposed_cb.wait_front(Wt);
 
     process_tiles(
         m_iter,
@@ -210,14 +220,14 @@ void process_iteration(
         largest_param,
         seq_per_2tiles);
 
-    cb_reserve_back(input_transposed_cb_index, Wt);
-    cb_reserve_back(index_transposed_cb_index, Wt);
+    input_transposed_cb.reserve_back(Wt);
+    index_transposed_cb.reserve_back(Wt);
 
-    cb_pop_front(input_transposed_cb_index, Wt);
-    cb_pop_front(index_transposed_cb_index, Wt);
+    input_transposed_cb.pop_front(Wt);
+    index_transposed_cb.pop_front(Wt);
 
-    cb_push_back(input_transposed_cb_index, Wt);
-    cb_push_back(index_transposed_cb_index, Wt);
+    input_transposed_cb.push_back(Wt);
+    index_transposed_cb.push_back(Wt);
 
     // we have decreased our search space by half
     num_k_sequences = num_k_sequences >> 1;
@@ -228,8 +238,8 @@ void process_iteration(
     seq_per_2tiles = (seq_per_2tiles == 2) ? 2 : seq_per_2tiles >> 1;
     bool ascending = !largest;
 
-    cb_wait_front(input_transposed_cb_index, Wt);
-    cb_wait_front(index_transposed_cb_index, Wt);
+    input_transposed_cb.wait_front(Wt);
+    index_transposed_cb.wait_front(Wt);
 
     for (uint32_t idx = 0; idx < num_k_sequences; idx += (seq_per_2tiles >> 1)) {
         for (uint32_t t = 0; t < tiles_per_seq; t++) {
@@ -260,32 +270,35 @@ void process_iteration(
         }
     }
 
-    cb_reserve_back(input_transposed_cb_index, Wt);
-    cb_reserve_back(index_transposed_cb_index, Wt);
+    input_transposed_cb.reserve_back(Wt);
+    index_transposed_cb.reserve_back(Wt);
 
-    cb_pop_front(input_transposed_cb_index, Wt);
-    cb_pop_front(index_transposed_cb_index, Wt);
+    input_transposed_cb.pop_front(Wt);
+    index_transposed_cb.pop_front(Wt);
 
-    cb_push_back(input_transposed_cb_index, Wt);
-    cb_push_back(index_transposed_cb_index, Wt);
+    input_transposed_cb.push_back(Wt);
+    index_transposed_cb.push_back(Wt);
 }
 
 void transpose_and_pack(uint32_t transposed_cb_index, uint32_t dest_cb_index, uint32_t Kt, uint32_t Wt) {
+    CircularBuffer transposed_cb(transposed_cb_index);
+    CircularBuffer dest_cb(dest_cb_index);
+
     reconfig_data_format_srca(transposed_cb_index);
     transpose_wh_init_short(transposed_cb_index);
     // Pack using the DESTINATION CB format: transposed_cb may be bf16 (higher-precision
     // intermediate) while dest_cb is the original bfp8/bfp4 output format.
     pack_reconfig_data_format(dest_cb_index);
 
-    cb_wait_front(transposed_cb_index, Kt);
+    transposed_cb.wait_front(Kt);
     for (uint32_t i = 0; i < Kt; ++i) {
         acquire_dst();
-        cb_reserve_back(dest_cb_index, 1);
+        dest_cb.reserve_back(1);
         transpose_wh_tile(transposed_cb_index, i, 0);
         pack_tile(0, dest_cb_index);
-        cb_push_back(dest_cb_index, 1);
+        dest_cb.push_back(1);
         release_dst();
     }
-    cb_wait_front(transposed_cb_index, Wt);
-    cb_pop_front(transposed_cb_index, Wt);
+    transposed_cb.wait_front(Wt);
+    transposed_cb.pop_front(Wt);
 }
