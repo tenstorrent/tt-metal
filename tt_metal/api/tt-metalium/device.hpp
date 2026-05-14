@@ -189,6 +189,78 @@ public:
     virtual uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) = 0;
 
     virtual bool is_mmio_capable() const = 0;
+    virtual bool is_fabric_relay_path_broken() const { return false; }
+    virtual bool is_fabric_channels_not_ready_for_traffic() const { return false; }
+    // FIX RZ (#42429): Returns true if configure_fabric() found base-UMD relay firmware
+    // (edm_status=0x49706550) on channels of this non-MMIO device and had to skip soft reset
+    // via FIX M.  The launch_msg transition is sufficient for simple relay reads but leaves
+    // the ETH state in a mode where AllGather traffic hangs.  Python tests must skip AllGather
+    // when any non-MMIO device has stale base-UMD channels.
+    virtual bool is_fabric_stale_base_umd_channels() const { return false; }
+    // FIX RZ2 (#42429): Called by FabricFirmwareInitializer::configure() after ring-sync and
+    // health verification complete successfully.  fabric_stale_base_umd_channels_ was set by
+    // FIX M when base-UMD channels were transitioned via launch_msg.  After the ring barrier
+    // passes and all channels are verified healthy (channels_not_ready=false), the channels are
+    // running proper fabric firmware — the stale flag is no longer accurate and must be cleared.
+    // Leaving it set permanently causes FIX QW to skip ALL subsequent tests and FIX RX to
+    // skip quiesce in TearDown, each leading to progressively degraded hardware state.
+    virtual void clear_fabric_stale_base_umd_channels() {}
+    // FIX RZ3 (#42429): Persistent per-session record that FIX M fired for this device.
+    // Unlike fabric_stale_base_umd_channels_ (which FIX RZ2 clears once ring-sync passes),
+    // this flag is set at the same time as fabric_stale_base_umd_channels_ but is ONLY
+    // cleared at the start of configure_fabric() — never by ring-sync validation.
+    //
+    // Why this is needed: ring-sync (lightweight ping-pong) passes even when the ring-path
+    // ETH channels cannot handle AllGather packets (large multi-hop data with credit
+    // management).  FIX RZ2 clears fabric_stale_base_umd_channels_ after ring-sync, making
+    // is_fabric_degraded() return false and allowing AllGather to be dispatched — which then
+    // hangs at completion_queue_wait_front on device 4 (run 25620111520).
+    //
+    // is_fabric_degraded() and the GAP-A / GAP-C guards include this flag so the ENTIRE
+    // session is treated as AllGather-unsafe whenever FIX M fired at session open.
+    // FIX QW (C++ fixture) intentionally does NOT check this flag — it already checks
+    // fabric_stale_base_umd_channels_ (still set until FIX RZ2 fires) and C++ single-
+    // AllGather tests do not exhibit the accumulating-state hang seen in the 25-cycle stress.
+    virtual bool is_fabric_base_umd_fixm_init() const { return false; }
+    virtual void clear_fabric_base_umd_fixm_init() {}
+    // FIX BO (#42429): Set by MeshDeviceImpl::wait_for_fabric_workers_ready_for_quiesce() on ALL
+    // devices (including MMIO) when any device in the cluster has stale base-UMD channels.
+    // Allows wait_for_fabric_workers_ready() Phase 5 to extend kSyncTimeoutMs to 120s (matching
+    // FIX TH3) so the LOCAL_HANDSHAKE_COMPLETE poll does not time out prematurely.
+    virtual void set_fabric_stale_base_umd_channels() {}
+    virtual bool is_fabric_teardown_timed_out() const { return false; }
+    virtual void set_fabric_teardown_timed_out() {}
+    // Called by FabricFirmwareInitializer when a non-MMIO device enters dead_relay_devices_
+    // via the probe_dead path (FIX E2).  Setting this flag ensures RiscFirmwareInitializer::
+    // teardown() populates relay_broken_non_mmio so FIX AY + FIX AC fire and reset the stale
+    // ERISC firmware — preventing UMD topology discovery failures on the next open (#42429).
+    virtual void set_fabric_relay_path_broken() {}
+    // Called by FabricFirmwareInitializer::verify_all_fabric_channels_healthy() when an MMIO
+    // device's own master router ETH channel was excluded from configure_fabric_cores() (pre-dead —
+    // L1 corrupt or probe timed out at init).  No fabric firmware was loaded on that channel so
+    // the device's fabric routing is non-functional.  FIX QD (#42429): setting this flag lets
+    // tests (e.g. AllGather fixtures) detect the broken state and issue GTEST_SKIP() instead of
+    // hanging.
+    virtual void set_fabric_channels_not_ready_for_traffic() {}
+    // FIX TK (#42429): Set by FabricFirmwareInitializer::verify_all_fabric_channels_healthy()
+    // when a device's ring sync timed out during base-UMD channel quiesce (FIX TI path).
+    // Distinguishes FIX TI (ring barrier timeout — relay still alive) from FIX AM (ERISC in
+    // STARTED state — relay broken).  RiscFirmwareInitializer::teardown() checks this flag in
+    // FIX BA to avoid incorrectly adding the device to relay_broken_non_mmio, which would
+    // trigger FIX AC (PCIe reset of MMIO ETH channels that are mid-transition from base-UMD
+    // firmware).  PCIe reset fails in this scenario (channels stuck at REMOTE_HANDSHAKE_COMPLETE),
+    // leaving the machine with only 4/8 chips visible.
+    virtual bool is_fabric_ring_sync_timed_out() const { return false; }
+    virtual void set_fabric_ring_sync_timed_out() {}
+    // FIX ST (#42429): Returns the effective (post-FIX-RR) set of pre-dead ETH channels for
+    // this device.  Unlike the probe_dead_channels_map used at init time, this set is updated
+    // after configure_fabric_cores() runs — channels recovered by FIX RR are removed.
+    // Used by FabricFirmwareInitializer to accurately determine whether the MMIO master router
+    // channel still lacks firmware (and should be added to mmio_dead_master_chan_devices_).
+    virtual const std::unordered_set<uint32_t>& get_fabric_pre_dead_channels() const {
+        static const std::unordered_set<uint32_t> kEmpty;
+        return kEmpty;
+    }
 
     // Allowing to get corresponding MeshDevice for a given device to properly schedule programs / create buffers for
     // it. This is currently used exclusively by profiler.

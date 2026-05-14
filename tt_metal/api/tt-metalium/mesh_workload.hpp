@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <unordered_set>
+
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
@@ -35,6 +37,7 @@ public:
     void add_program(const MeshCoordinateRange& device_range, Program&& program);
     std::unordered_map<MeshCoordinateRange, Program>& get_programs();
     const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const;
+    std::unordered_set<SubDeviceId> determine_sub_device_ids(MeshDevice* mesh_device);
 
     // For testing purposes only
     void set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq);

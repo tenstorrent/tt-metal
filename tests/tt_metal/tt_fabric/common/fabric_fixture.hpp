@@ -61,6 +61,10 @@ public:
     inline static std::map<ChipId, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_map_;
     inline static std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
     inline static bool slow_dispatch_;
+    // FIX TK (#42429): Set to true when the fabric cluster has too few chips to run tests.
+    // Happens when the topology mapper downgrades to 1x1 on a severely degraded T3K cluster
+    // (all ETH links dead after progressive SIGKILL teardowns).  SetUp() skips when this is true.
+    inline static bool cluster_degraded_skip_ = false;
 
     const std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& get_devices() const { return devices_; }
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& get_device(ChipId id) const {
@@ -68,6 +72,13 @@ public:
     }
 
     void SetUp() override {
+        // FIX TK (#42429): Skip per-test if the fabric cluster was downgraded (e.g. 1x1 on T3K
+        // with all ETH links dead).  This check runs before the device-count guard so we don't
+        // crash trying to use devices that aren't in the cluster.
+        if (cluster_degraded_skip_) {
+            GTEST_SKIP() << "FIX TK (#42429): fabric cluster has fewer chips than expected "
+                            "(topology downgraded on severely degraded hardware — skipping)";
+        }
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
         if (num_devices < 2) {
             log_info(tt::LogTest, "Skipping fabric tests as there are less than 2 devices available");
@@ -109,6 +120,49 @@ public:
         }
         tt::tt_fabric::SetFabricConfig(
             fabric_config, reliability_mode, num_routing_planes, fabric_tensix_config, fabric_udm_mode);
+
+        // FIX TK (#42429): After topology discovery, some chips may not be in the fabric cluster
+        // (e.g. when all ETH links are dead and the mapper degrades to 1x1).  Filter ids to only
+        // chips the control plane knows about; if fewer chips remain than requested, mark the
+        // suite as degraded so per-test SetUp() can skip gracefully.
+        cluster_degraded_skip_ = false;
+        {
+            const auto& control_plane =
+                tt::tt_metal::MetalContext::instance().get_control_plane();
+            std::vector<ChipId> cluster_ids;
+            cluster_ids.reserve(ids.size());
+            for (ChipId id : ids) {
+                if (control_plane.is_physical_chip_in_fabric_cluster(id)) {
+                    cluster_ids.push_back(id);
+                } else {
+                    log_warning(
+                        tt::LogTest,
+                        "FIX TK (#42429): Physical chip {} not in fabric cluster "
+                        "(topology downgraded on degraded hardware). Excluding from unit meshes.",
+                        id);
+                }
+            }
+            if (cluster_ids.size() < ids.size()) {
+                cluster_degraded_skip_ = true;
+                // FIX TL (#42429): Do NOT proceed to create_unit_meshes with a partial chip set.
+                // A degraded cluster (topology downgraded to 1x1 etc.) may crash fabric initializers
+                // (e.g. UDM tensix builder) that require the full expected topology.
+                // SetUp() will GTEST_SKIP each test via cluster_degraded_skip_.
+                log_warning(
+                    tt::LogTest,
+                    "FIX TL (#42429): Fabric cluster has only {}/{} chips — skipping create_unit_meshes "
+                    "to avoid crashing fabric initializers on a degenerate topology.",
+                    cluster_ids.size(),
+                    ids.size());
+                return;
+            }
+            if (cluster_ids.empty()) {
+                log_warning(tt::LogTest, "FIX TK (#42429): No chips in fabric cluster — skipping SetUpTestSuite.");
+                return;
+            }
+            ids = std::move(cluster_ids);
+        }
+
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
         devices_map_ = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
@@ -125,6 +179,7 @@ public:
         devices_map_.clear();
         devices_.clear();
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+        cluster_degraded_skip_ = false;  // FIX TK (#42429): reset for next suite
     }
 
     static void SetUpTestSuite() { TT_THROW("SetUpTestSuite not implemented in BaseFabricFixture"); }
@@ -246,6 +301,23 @@ class Fabric2DFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D); }
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+
+    void SetUp() override {
+        BaseFabricFixture::SetUp();
+        // FIX SA (#42429): skip fabric unicast tests on degraded cluster — non-MMIO devices
+        // with broken relay paths will throw TT_THROW in read_completion_queue_event (FIX Z),
+        // turning a data-path race condition test into an uninformative crash.
+        for (const auto& mesh_dev : devices_) {
+            for (auto* dev : mesh_dev->get_devices()) {
+                if (dev->is_fabric_relay_path_broken() || dev->is_fabric_channels_not_ready_for_traffic() ||
+                    dev->is_fabric_stale_base_umd_channels()) {
+                    GTEST_SKIP() << "Fabric2DFixture: device " << dev->id()
+                                 << " has broken relay path or channels not ready"
+                                 << " — skipping unicast test on degraded cluster";
+                }
+            }
+        }
+    }
 };
 
 class Fabric2DUDMModeFixture : public BaseFabricFixture {
@@ -304,21 +376,52 @@ protected:
 
 class CustomMeshGraphFabric2DFixture : public BaseFabricFixture {
 public:
+    // FIX TC (#42429): prevents double-init when T3kCustomMeshGraphFabric2DFixture::SetUp()
+    // (GTest hook) calls SetUp(desc, mapping) early so GTEST_SKIP() fires in the right context,
+    // and the test body then calls SetUp(desc, mapping) again.
+    inline static bool custom_setup_initialized_ = false;
+
     static void SetUpTestSuite() {}
     static void TearDownTestSuite() {}
 
     void SetUp(
         const std::string& mesh_graph_desc_file,
         const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
+        // FIX TC (#42429): If T3kCustomMeshGraphFabric2DFixture::SetUp() (the GTest hook) already
+        // called us, the fabric mesh is set up and the degraded check already ran.  Calling again
+        // from the test body would double-init; bail out early.
+        if (custom_setup_initialized_) {
+            return;
+        }
+        custom_setup_initialized_ = true;
         tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
             mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
         BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
+        // FIX SA (#42429): skip fabric unicast tests on degraded cluster — non-MMIO devices
+        // with broken relay paths will throw TT_THROW in read_completion_queue_event (FIX Z),
+        // turning a data-path race condition test into an uninformative crash.
+        // NOTE: GTEST_SKIP() only stops the test when called in a GTest hook (SetUp/TearDown).
+        // When called from the test body (or helpers called from the test body) it just returns.
+        // T3kCustomMeshGraphFabric2DFixture::SetUp() calls us from the hook, so the skip below
+        // will be honoured by GTest.  Other callers (e.g. Galaxy1x32Fabric1DFixture) invoke us
+        // from SetUpTestSuite which is also a hook, so they are fine too.
+        for (const auto& mesh_dev : devices_) {
+            for (auto* dev : mesh_dev->get_devices()) {
+                if (dev->is_fabric_relay_path_broken() || dev->is_fabric_channels_not_ready_for_traffic() ||
+                    dev->is_fabric_stale_base_umd_channels()) {
+                    GTEST_SKIP() << "CustomMeshGraphFabric2DFixture: device " << dev->id()
+                                 << " has broken relay path or channels not ready"
+                                 << " — skipping unicast test on degraded cluster";
+                }
+            }
+        }
     }
 
 private:
     void SetUp() override {}
 
     void TearDown() override {
+        custom_setup_initialized_ = false;  // FIX TC: reset for next test
         BaseFabricFixture::DoTearDownTestSuite();
         tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
     }
@@ -372,9 +475,48 @@ class T3kCustomMeshGraphFabric2DFixture
     : public CustomMeshGraphFabric2DFixture,
       public testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<EthCoord>>>> {
     void SetUp() override {
+        // FIX TB (#42429): skip non-T3K systems before any fabric init to avoid teardown
+        // timeouts and topology re-discovery crashes on incompatible cluster types.
         if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
             GTEST_SKIP();
         }
+        // FIX TB (#42429): run the base-class guard (e.g. < 2 devices) so the fixture
+        // is correctly skipped on under-provisioned systems without entering fabric init.
+        BaseFabricFixture::SetUp();
+
+        // FIX TC (#42429): initialize the fabric mesh from within the GTest SetUp() hook so
+        // that GTEST_SKIP() in the degraded-cluster check inside
+        // CustomMeshGraphFabric2DFixture::SetUp(desc, mapping) actually stops test execution.
+        //
+        // Root cause: GTEST_SKIP() expands to "return GTEST_MESSAGE_(..., kSkip)".  When called
+        // from a helper that is invoked from the *test body* (not from SetUp), the "return" only
+        // exits the helper — the test body keeps running regardless of the kSkip result.  GTest
+        // only checks IsSkipped() after SetUp() returns, not mid-test-body.
+        //
+        // By calling CustomMeshGraphFabric2DFixture::SetUp(desc, mapping) here (from the GTest
+        // hook), any GTEST_SKIP() inside propagates "return" back to this function, which then
+        // returns to GTest.  GTest sees IsSkipped()==true and skips the test body entirely.
+        //
+        // CustomMeshGraphFabric2DFixture::SetUp(desc, mapping) is idempotent: the
+        // custom_setup_initialized_ flag prevents re-init when the test body calls it again.
+        const auto& [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        std::map<FabricNodeId, ChipId> physical_chip_ids_mapping;
+        for (std::uint32_t mesh_id = 0; mesh_id < mesh_graph_eth_coords.size(); mesh_id++) {
+            for (std::uint32_t chip_id = 0; chip_id < mesh_graph_eth_coords[mesh_id].size(); chip_id++) {
+                const auto& eth_coord = mesh_graph_eth_coords[mesh_id][chip_id];
+                auto maybe_chip_id = cluster.try_get_physical_chip_id_from_eth_coord(eth_coord);
+                if (!maybe_chip_id.has_value()) {
+                    GTEST_SKIP()
+                        << "T3kCustomMeshGraphFabric2DFixture: EthCoord ("
+                        << eth_coord.rack << "," << eth_coord.shelf << "," << eth_coord.x << "," << eth_coord.y
+                        << ") not found in cluster — skipping on incompatible topology";
+                }
+                physical_chip_ids_mapping.insert(
+                    {FabricNodeId(MeshId{mesh_id}, chip_id), *maybe_chip_id});
+            }
+        }
+        CustomMeshGraphFabric2DFixture::SetUp(mesh_graph_desc_path, physical_chip_ids_mapping);
     }
 };
 

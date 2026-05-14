@@ -84,6 +84,18 @@ public:
 
     std::set<ChipId> mmio_chip_ids() const { return this->driver_->get_target_mmio_device_ids(); }
 
+    // FIX NZ (#42429): Returns true if chip is a non-MMIO device whose relay is known broken
+    // at the tt-metal level (populated by write_core FIX NX). Used by run_launch_phase to skip
+    // initialize_and_launch_firmware for unreachable devices, and by read_core to avoid
+    // per-read 5s timeouts in wait_until_cores_done.
+    bool is_relay_broken(ChipId chip_id) const { return relay_broken_chips_.count(chip_id) > 0; }
+    // FIX XY-2 (#42429): clear relay_broken after successful ERISC force-reset so subsequent
+    // multicast writes and launch phases are not permanently suppressed.
+    void clear_relay_broken(ChipId chip_id) {
+        relay_broken_chips_.erase(chip_id);
+        this->driver_->clear_relay_broken(chip_id);
+    }
+
     size_t number_of_pci_devices() const { return this->driver_->get_target_mmio_device_ids().size(); }
 
     std::set<ChipId> all_pci_chip_ids() const { return this->driver_->get_target_mmio_device_ids(); }
@@ -109,6 +121,10 @@ public:
     std::unordered_map<ChipId, EthCoord> get_all_chip_ethernet_coordinates() const;
 
     ChipId get_physical_chip_id_from_eth_coord(const EthCoord& eth_coord) const;
+
+    // FIX PH (#42429): non-fatal variant — returns nullopt when the EthCoord is absent
+    // from chip_locations (e.g. YAML hardcoded coords don't match this hardware mapping).
+    std::optional<ChipId> try_get_physical_chip_id_from_eth_coord(const EthCoord& eth_coord) const;
 
     ARCH arch() const { return this->arch_; }
 
@@ -138,6 +154,13 @@ public:
     void deassert_risc_reset_at_core(
         const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets, bool staggered_start = true) const;
     void assert_risc_reset_at_core(const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets) const;
+
+    // Write-only variants: skip the relay read step so they work even when the non-MMIO ERISC
+    // is running FABRIC firmware (relay reads time out in that case). Followed by a best-effort
+    // wait_for_non_mmio_flush (FIX AE: marks relay broken on flush timeout rather than hanging).
+    void assert_risc_reset_at_core_write_only(
+        const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets) const;
+    void deassert_risc_reset_at_core_write_only(const tt_cxy_pair& core) const;
 
     void write_dram_vec(
         const void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const;
@@ -397,6 +420,7 @@ public:
         return this->device_eth_routing_info_.at(chip_id);
     }
 
+    // FIX AW: Register non-MMIO chips whose UMD relay CMD queue may have stale
 private:
     void detect_arch_and_target();
     void generate_cluster_descriptor();
@@ -490,6 +514,13 @@ private:
     // keep a local reference for init.
     const llrt::RunTimeOptions& rtoptions_;
     const tt_metal::Hal* hal_ = nullptr;
+
+    // FIX NY (#42429): Track non-MMIO chips whose relay is known broken at the tt-metal level.
+    // Once write_core() catches a relay timeout (FIX NX) for a chip, subsequent write_core()
+    // calls for that chip skip write_to_device entirely instead of paying another 5s UMD timeout.
+    // This prevents serial N×5s stalls when callers (set_internal_routing_info_for_ethernet_cores,
+    // WatcherServer::init_devices) iterate over ETH cores on a chip with a dead relay.
+    mutable std::unordered_set<ChipId> relay_broken_chips_;
 };
 
 }  // namespace tt

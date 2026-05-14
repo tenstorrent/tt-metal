@@ -116,6 +116,7 @@ HalCoreInfoType create_active_eth_mem_map() {
         MEM_SYSENG_ETH_MSG_LINK_STATUS_CHECK;
     fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::ETH_MSG_RELEASE_CORE)] =
         MEM_SYSENG_ETH_MSG_RELEASE_CORE;
+    fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::HEARTBEAT)] = MEM_SYSENG_ETH_HEARTBEAT;
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(0);
     // TODO Disabling Erisc FW for now

@@ -64,7 +64,8 @@ SDMeshCommandQueue::SDMeshCommandQueue(
 }
 
 std::optional<MeshTraceId> SDMeshCommandQueue::trace_id() const {
-    TT_THROW("Trace not supported for slow dispatch");
+    // Slow dispatch never has an active trace; return nullopt rather than throwing
+    // so callers can safely check trace_id().has_value() as a predicate.
     return std::nullopt;
 }
 

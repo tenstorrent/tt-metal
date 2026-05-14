@@ -271,6 +271,67 @@ void py_module(nb::module_& mod) {
             })
         .def("get_fabric_node_id", &MeshDevice::get_fabric_node_id, nb::arg("coord"))
         .def(
+            "is_fabric_degraded",
+            [](const MeshDevice& self) {
+                for (auto* dev : self.get_devices()) {
+                    if (dev->is_fabric_relay_path_broken() ||
+                        dev->is_fabric_channels_not_ready_for_traffic() ||
+                        // FIX RZ (#42429): Non-MMIO devices with base-UMD channels transitioned
+                        // via FIX M's launch_msg path appear healthy at init but hang during
+                        // AllGather (completion CQ on non-MMIO never signals).  Treat these as
+                        // degraded so Python tests skip AllGather on such clusters.
+                        dev->is_fabric_stale_base_umd_channels() ||
+                        // FIX RZ3 (#42429): Persistent companion to is_fabric_stale_base_umd_channels().
+                        // FIX RZ2 clears fabric_stale_base_umd_channels_ after ring-sync passes so
+                        // FIX QW (C++ fixture) doesn't permanently skip all tests.  But ring-sync
+                        // is NOT a valid proxy for AllGather capacity — the ring-path ETH channels
+                        // can pass a lightweight ping-pong while still hanging on large multi-hop
+                        // data transfers.  fabric_base_umd_fixm_init_ is set alongside the stale
+                        // flag but is never cleared by ring-sync, so is_fabric_degraded() remains
+                        // True for the entire session when FIX M fired at session open, preventing
+                        // the 25-cycle GAP-21 stress test from dispatching AllGather and hanging at
+                        // completion_queue_wait_front (device 4, run 25620111520).
+                        dev->is_fabric_base_umd_fixm_init()) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+            R"doc(
+              Returns True if any sub-device has a broken fabric relay path, channels not
+              ready for traffic, or stale base-UMD channels (FIX RZ) after a degraded-cluster
+              fabric init.
+
+              Use this as a skip guard in tests that require a healthy T3K fabric
+              (e.g. tests that dispatch AllGather to non-MMIO devices):
+
+              .. code-block:: python
+
+                  if mesh_device.is_fabric_degraded():
+                      pytest.skip("cluster degraded — fabric broken on >=1 device")
+            )doc")
+        .def(
+            "quiesce_devices",
+            &MeshDevice::quiesce_devices,
+            R"doc(
+              Quiesce all fabric workers across the mesh and restart them.
+
+              Drains all pending command queues, then runs the three-pass fabric quiesce+restart
+              sequence (Phase 2.5 ETH relay reads, Phase 3 firmware relaunch, Phase 5 handshake
+              wait).  During Phase 2.5, relay reads to non-MMIO devices will throw and set
+              ``fabric_relay_path_broken_`` if the ETH relay path is broken — making
+              ``is_fabric_degraded()`` return True on the next call.
+
+              Use as a pre-flight probe before AllGather on clusters that may have degraded
+              relay paths not detectable via the initial fabric-init ring sync (#42429 FIX BY):
+
+              .. code-block:: python
+
+                  mesh_device.quiesce_devices()
+                  if mesh_device.is_fabric_degraded():
+                      pytest.skip("FIX BY: relay path broken after quiesce probe")
+            )doc")
+        .def(
             "create_submesh",
             &MeshDevice::create_submesh,
             nb::arg("submesh_shape"),

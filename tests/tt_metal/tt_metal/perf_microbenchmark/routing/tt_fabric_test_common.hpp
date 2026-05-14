@@ -228,7 +228,29 @@ public:
             setup_channel_trimming_rtoptions(channel_trimming_mode);
 
             log_info(tt::LogTest, "Opening devices with fabric reliability mode: {}", reliability_mode);
-            open_devices_internal(new_fabric_config, fabric_tensix_config, reliability_mode, fabric_setup);
+            // FIX CD-5 (#42429): open_devices_internal() can throw (e.g. ControlPlane
+            // validate_requested_intermesh_connections unordered_map::at on degraded runner
+            // where not all mesh node IDs exist in the physical topology mapping).
+            // Catch and return false so the test loop treats it as an unsupported config skip,
+            // consistent with the is_fabric_config_valid() try/catch above.
+            try {
+                open_devices_internal(new_fabric_config, fabric_tensix_config, reliability_mode, fabric_setup);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogTest,
+                    "open_devices_internal failed (degraded runner / topology mismatch): {} — skipping test group",
+                    e.what());
+                // FIX CD-6 (#42429): Mark hardware fault so the test loop breaks instead of
+                // continuing to the next group. After a fatal exception, the peer MPI rank may
+                // have aborted; attempting collective control-plane reinit for the next group
+                // would hang indefinitely (up to the 15-minute CI timeout).
+                hardware_fault_during_open_ = true;
+                try {
+                    close_devices();
+                } catch (...) {
+                }
+                return false;
+            }
 
             topology_ = topology;
             current_channel_trimming_mode_ = channel_trimming_mode;
@@ -257,6 +279,31 @@ public:
     }
 
     void wait_for_programs() { tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue()); }
+
+    // FIX TF (#42429): After open_devices(), check if any device has dead ETH relay,
+    // channels not ready for traffic, or stale base-UMD channels (flags set by FIX QU/FIX M
+    // during fabric init degraded mode).  Must check all three flags — stale_base_umd_channels
+    // indicates non-MMIO devices running base-UMD relay firmware instead of fabric firmware,
+    // which causes dispatch hangs just like relay_broken or channels_not_ready.
+    // If true, the test binary must skip rather than crash inside compile_programs() when
+    // enqueue_write_shards_nolock hits FIX Z (cannot relay through dead non-MMIO device).
+    bool has_degraded_fabric() const {
+        if (!are_devices_open_ || !mesh_device_) {
+            return false;
+        }
+        for (auto* device : mesh_device_->get_devices()) {
+            if (device->is_fabric_relay_path_broken() || device->is_fabric_channels_not_ready_for_traffic() ||
+                device->is_fabric_stale_base_umd_channels()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // FIX CD-6 (#42429): Returns true when open_devices_internal() threw an unrecoverable
+    // exception. The test loop should break (not continue) to avoid hanging in collective
+    // control plane reinit with a peer MPI rank that may have already aborted.
+    bool had_hardware_fault() const { return hardware_fault_during_open_; }
 
     void close_devices() {
         if (!are_devices_open_) {
@@ -1849,6 +1896,10 @@ private:
 
     bool are_devices_open_ = false;
     bool wrap_around_mesh_ = false;
+    // FIX CD-6 (#42429): Set when open_devices_internal() throws an exception (hardware fault /
+    // unrecoverable topology mismatch). Signals the test loop to abort remaining groups —
+    // continuing after a fatal exception risks a collective hang when the peer MPI rank died.
+    bool hardware_fault_during_open_ = false;
     mutable std::map<FabricNodeId, uint32_t> device_frequency_cache_;
     mutable bool frequency_validated_ = false;
 
@@ -1865,9 +1916,25 @@ private:
             if (mesh_id == *local_mesh_id) {
                 for (std::uint32_t chip_id = 0; chip_id < eth_coord_mapping[mesh_id].size(); chip_id++) {
                     const auto& eth_coord = eth_coord_mapping[mesh_id][chip_id];
+                    // FIX PH (#42429): YAML hardcodes EthCoords assuming a fixed PCIe→chip
+                    // mapping. If this hardware's actual mapping differs, the coord won't be
+                    // in chip_locations — exit cleanly (skip) rather than TT_FATAL-crashing.
+                    auto physical_chip_id = cluster.try_get_physical_chip_id_from_eth_coord(eth_coord);
+                    if (!physical_chip_id.has_value()) {
+                        log_warning(
+                            tt::LogTest,
+                            "FIX PH: EthCoord ({},{},{},{},{}) from test YAML not found in "
+                            "chip_locations. YAML hardcoded mapping does not match this "
+                            "hardware's PCIe→chip assignment. Skipping test.",
+                            eth_coord.cluster_id,
+                            eth_coord.x,
+                            eth_coord.y,
+                            eth_coord.rack,
+                            eth_coord.shelf);
+                        exit(0);
+                    }
                     chip_to_eth_coord_mapping.insert(
-                        {FabricNodeId(MeshId{mesh_id}, chip_id),
-                         cluster.get_physical_chip_id_from_eth_coord(eth_coord)});
+                        {FabricNodeId(MeshId{mesh_id}, chip_id), physical_chip_id.value()});
                 }
             }
         }

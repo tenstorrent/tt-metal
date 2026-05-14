@@ -615,9 +615,19 @@ constexpr uint32_t l1_to_local_cache_copy_chunk = 6;
 // NOTE: CAREFUL USING THIS FUNCTION
 // It is call "careful_copy" because you need to be careful...
 // It copies beyond count by up to 5 elements make sure src and dst addresses are safe
+//
+// FIX FQ-3 (#42429): Added watchdog iteration counter.  If the copy loop runs for more
+// than kMaxCopyIterations without completing, the prefetcher halts with an ASSERT rather
+// than hanging silently (which fills the fetch queue to 128/128 and causes the host-side
+// fetch_queue_reserve_back timeout).  This makes the "ERISC in base firmware" condition
+// immediately visible in watcher/DPRINT output.
 template <uint32_t l1_to_local_cache_copy_chunk, uint32_t l1_cache_elements_rounded>
 FORCE_INLINE void careful_copy_from_l1_to_local_cache(
     volatile uint32_t tt_l1_ptr* l1_ptr, uint32_t count, uint32_t* l1_cache) {
+    // FIX FQ-3: Watchdog — the copy is a simple memcpy from L1; it should complete in
+    // count/6 iterations.  If we exceed this by 64× there is a NOC stall or corrupt source.
+    constexpr uint32_t kMaxCopyIterations = l1_cache_elements_rounded * 64;
+    uint32_t watchdog = 0;
     uint32_t n = 0;
     ASSERT(l1_to_local_cache_copy_chunk == 6);
     ASSERT(count <= l1_cache_elements_rounded);
@@ -635,5 +645,9 @@ FORCE_INLINE void careful_copy_from_l1_to_local_cache(
         l1_cache[n + 4] = v4;
         l1_cache[n + 5] = v5;
         n += 6;
+
+        // FIX FQ-3: Halt if stuck — likely source L1 not populated (peer ERISC in base FW).
+        ++watchdog;
+        ASSERT(watchdog < kMaxCopyIterations);
     }
 }

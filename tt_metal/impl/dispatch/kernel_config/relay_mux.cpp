@@ -20,6 +20,22 @@
 namespace tt::tt_metal {
 
 void RelayMux::GenerateStaticConfigs() {
+    // FIX NY: Guard against chips excluded from the fabric cluster due to damaged ETH.
+    // The dispatch topology is built from UMD tunnels (which still list the chip), but the fabric
+    // control plane may have excluded it from the mesh mapping (e.g. 2x4 → 2x2 downgrade).
+    // Calling get_fabric_node_id_from_physical_chip_id() on an excluded chip triggers a TT_FATAL.
+    // Returning early here lets MeshDevice::create() fail fast with a topology mismatch error
+    // rather than crashing inside the dispatch kernel compiler.
+    const auto& control_plane_ref = get_control_plane_ref();
+    if (!control_plane_ref.is_physical_chip_in_fabric_cluster(device_id_)) {
+        log_warning(
+            tt::LogMetal,
+            "FIX NY: RelayMux::GenerateStaticConfigs — device {} not in fabric cluster (degraded topology), "
+            "skipping static config generation",
+            device_id_);
+        return;
+    }
+
     uint32_t l1_base = 0;
     uint32_t l1_size = 0;
 
@@ -93,8 +109,49 @@ void RelayMux::GenerateStaticConfigs() {
         // Get the device which is downstream on the specified tunnel
         destination_device_id = tt::tt_metal::FDKernel::GetDownstreamDeviceId(descriptor_, device_id_, tunnel_id_);
     }
+    // FIX NY+ (#42429): Also guard the destination device — when topology degrades (e.g. 2x4→2x2),
+    // the MMIO source device may still be in the cluster but its non-MMIO tunnel destination may
+    // have been excluded from the downgraded mesh mapping.  Calling
+    // get_fabric_node_id_from_physical_chip_id() on an excluded destination triggers a TT_FATAL.
+    if (!control_plane_ref.is_physical_chip_in_fabric_cluster(destination_device_id)) {
+        log_warning(
+            tt::LogMetal,
+            "FIX NY+: RelayMux::GenerateStaticConfigs — destination device {} not in fabric cluster "
+            "(degraded topology), skipping static config generation for device {} → {}",
+            destination_device_id,
+            device_id_,
+            destination_device_id);
+        return;
+    }
+
     const auto src_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device_id_);
     const auto dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(destination_device_id);
+
+    // FIX TH (#42429): Guard against all ETH channels between src and dst being dead (e.g. when
+    // pre_dead_channels covers every channel on this device in the routing direction to dst).
+    // On a progressively-degraded T3K cluster (GAP test teardown leaves channels corrupt), the
+    // MMIO-to-MMIO dispatch relay path can lose all channels.  The existing FIX NY/NY+ guards only
+    // check whether chips are *excluded from the fabric cluster* — they do not catch the case where
+    // the chip is still in the cluster but every ETH link between src and dst is dead.
+    // Calling get_dispatch_link_index() here would TT_FATAL.  Instead: detect empty links first,
+    // mark this device as channels-not-ready (same flag FIX QU sets), and return early so that
+    // FIX SA in CustomMeshGraphFabric2DFixture::SetUp() can skip the test gracefully.
+    {
+        const auto& available_links =
+            tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id);
+        if (available_links.empty()) {
+            log_warning(
+                tt::LogMetal,
+                "FIX TH (#42429): RelayMux::GenerateStaticConfigs — no available dispatch links from "
+                "FabricNodeId ({}) to ({}) (all ETH channels between devices are dead/excluded). "
+                "Marking device {} fabric_channels_not_ready_for_traffic so FIX SA skips the test.",
+                src_fabric_node_id,
+                dst_fabric_node_id,
+                device_id_);
+            device_->set_fabric_channels_not_ready_for_traffic();
+            return;
+        }
+    }
 
     auto link_index = get_dispatch_link_index(
         get_control_plane_ref(),

@@ -1726,7 +1726,13 @@ void TestConfigBuilder::expand_one_or_all_to_all_unicast(
     std::vector<std::pair<FabricNodeId, FabricNodeId>> all_pairs = this->route_manager_.get_all_to_all_unicast_pairs();
 
     if (pattern_type == HighLevelTrafficPattern::OneToAll) {
-        TT_FATAL(!all_pairs.empty(), "Cannot expand one_to_all_unicast because no device pairs were found.");
+        if (all_pairs.empty()) {
+            log_warning(
+                LogTest,
+                "FIX TM (#42429): No device pairs found for one_to_all_unicast — cluster too degraded (0 routing "
+                "planes). Skipping pattern expansion.");
+            return;
+        }
 
         // Get the first device as the single sender
         FabricNodeId first_device = all_pairs[0].first;

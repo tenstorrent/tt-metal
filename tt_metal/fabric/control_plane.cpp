@@ -20,6 +20,7 @@
 #include <ostream>
 #include <queue>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <tuple>
 #include <unordered_map>
@@ -258,7 +259,21 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
                 auto mesh_coord_x = mesh_coord[0];
                 auto mesh_coord_y = mesh_coord[1];
 
-                const auto& port_directions = this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id);
+                // FIX TF (#42429): FIX TB may have excluded this chip from the topology mapper
+                // (degraded topology — corrupt ERISC L1). If the chip is absent from the map,
+                // skip it here to avoid throwing std::out_of_range BEFORE the MPI all_gather
+                // below, which would leave the peer rank(s) blocking in all_gather indefinitely.
+                auto port_dirs_it = this->router_port_directions_to_physical_eth_chan_map_.find(fabric_node_id);
+                if (port_dirs_it == this->router_port_directions_to_physical_eth_chan_map_.end()) {
+                    log_warning(
+                        tt::LogFabric,
+                        "FIX TF (#42429): FabricNodeId (M{}, D{}) not in router_port_directions map — "
+                        "excluded by degraded-topology guard.  Skipping routing-plane count for this chip.",
+                        *mesh_id,
+                        fabric_chip_id);
+                    continue;
+                }
+                const auto& port_directions = port_dirs_it->second;
 
                 const auto& golden_counts = golden_link_counts.at(MeshId{mesh_id}).at(fabric_chip_id);
                 apply_min(port_directions, RoutingDirection::E, golden_counts, row_min_planes.at(mesh_coord_x));
@@ -272,6 +287,14 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
             auto cols_min = *std::min_element(col_min_planes.begin(), col_min_planes.end());
             std::vector<size_t> rows_min_buf(*distributed_context.size());
             std::vector<size_t> cols_min_buf(*distributed_context.size());
+            log_info(
+                tt::LogFabric,
+                "initialize_dynamic_routing_plane_counts: ENTERING all_gather+barrier "
+                "(rank {}/{}, rows_min={}, cols_min={})",
+                *distributed_context.rank(),
+                *distributed_context.size(),
+                rows_min,
+                cols_min);
             distributed_context.all_gather(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&rows_min), sizeof(size_t)),
                 tt::stl::as_writable_bytes(tt::stl::Span<size_t>{rows_min_buf.data(), rows_min_buf.size()}));
@@ -279,6 +302,10 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&cols_min), sizeof(size_t)),
                 tt::stl::as_writable_bytes(tt::stl::Span<size_t>{cols_min_buf.data(), cols_min_buf.size()}));
             distributed_context.barrier();
+            log_info(
+                tt::LogFabric,
+                "initialize_dynamic_routing_plane_counts: EXITED all_gather+barrier (rank {})",
+                *distributed_context.rank());
             const auto global_rows_min = std::min_element(rows_min_buf.begin(), rows_min_buf.end());
             const auto global_cols_min = std::min_element(cols_min_buf.begin(), cols_min_buf.end());
             // TODO: specialize by topology for better perf
@@ -865,6 +892,17 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
 
             for (const auto& [_, src_fabric_chip_id] : local_mesh_chip_id_container) {
                 const auto src_fabric_node_id = FabricNodeId(mesh_id, src_fabric_chip_id);
+                // FIX TH (#42429): get_chip_ids() includes excluded chips (degraded topology); skip them
+                // to avoid TT_FATAL in get_physical_chip_id_from_fabric_node_id.
+                if (!this->topology_mapper_->try_get_asic_id_from_fabric_node_id(src_fabric_node_id).has_value()) {
+                    log_warning(
+                        tt::LogFabric,
+                        "FIX TH (#42429): convert_fabric_routing_table — skipping excluded chip "
+                        "FabricNodeId (M{}, D{}) in num_ports_per_chip loop (degraded topology).",
+                        *mesh_id,
+                        src_fabric_chip_id);
+                    continue;
+                }
                 auto physical_chip_id = get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
                 num_ports_per_chip =
                     this->cluster_.get().get_soc_desc(physical_chip_id).get_cores(CoreType::ETH).size();
@@ -894,8 +932,12 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
                 // We view ethernet channels on one side of the chip as parallel planes. So N[0] talks to S[0], E[0],
                 // W[0] and so on For all live ethernet channels on this chip, set the routing table entry to the
                 // destination chip as the ethernet channel on the same plane
-                for (const auto& [direction, eth_chans_on_side] :
-                     this->router_port_directions_to_physical_eth_chan_map_.at(src_fabric_node_id)) {
+                // FIX TF (#42429): excluded chips (degraded topology) are absent from the map — skip them.
+                auto intra_port_dirs_it = this->router_port_directions_to_physical_eth_chan_map_.find(src_fabric_node_id);
+                if (intra_port_dirs_it == this->router_port_directions_to_physical_eth_chan_map_.end()) {
+                    continue;
+                }
+                for (const auto& [direction, eth_chans_on_side] : intra_port_dirs_it->second) {
                     for (const auto& src_chan_id : eth_chans_on_side) {
                         if (src_fabric_chip_id == dst_fabric_chip_id) {
                             TT_ASSERT(
@@ -946,8 +988,12 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
                 // We view ethernet channels on one side of the chip as parallel planes. So N[0] talks to S[0], E[0],
                 // W[0] and so on For all live ethernet channels on this chip, set the routing table entry to the
                 // destination mesh as the ethernet channel on the same plane
-                for (const auto& [direction, eth_chans_on_side] :
-                     this->router_port_directions_to_physical_eth_chan_map_.at(src_fabric_node_id)) {
+                // FIX TF (#42429): excluded chips (degraded topology) are absent from the map — skip them.
+                auto inter_port_dirs_it = this->router_port_directions_to_physical_eth_chan_map_.find(src_fabric_node_id);
+                if (inter_port_dirs_it == this->router_port_directions_to_physical_eth_chan_map_.end()) {
+                    continue;
+                }
+                for (const auto& [direction, eth_chans_on_side] : inter_port_dirs_it->second) {
                     for (const auto& src_chan_id : eth_chans_on_side) {
                         if (src_mesh_id_val == dst_mesh_id_val) {
                             TT_ASSERT(
@@ -987,6 +1033,16 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
 // order ethernet channels using translated coordinates
 void ControlPlane::order_ethernet_channels() {
     for (auto& [fabric_node_id, eth_chans_by_dir] : this->router_port_directions_to_physical_eth_chan_map_) {
+        // FIX TE (#42429): Skip chips excluded by FIX TB (degraded topology — not in topology mapper).
+        // Their ASIC IDs are not in the PSD so get_asic_neighbors() would crash.
+        if (!this->topology_mapper_->try_get_asic_id_from_fabric_node_id(fabric_node_id).has_value()) {
+            log_warning(
+                tt::LogFabric,
+                "FIX TE (#42429): Skipping order_ethernet_channels for FabricNodeId {} — chip excluded by "
+                "degraded-topology guard.",
+                fabric_node_id);
+            continue;
+        }
         auto phys_chip_id = this->get_physical_chip_id_from_fabric_node_id(fabric_node_id);
         const auto src_asic_id = tt::tt_metal::AsicID{this->cluster_.get().get_unique_chip_ids().at(phys_chip_id)};
         const auto& asic_neighbors = physical_system_descriptor_->get_asic_neighbors(src_asic_id);
@@ -1132,8 +1188,20 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
 
         for (const auto& [_, fabric_chip_id] : local_mesh_chip_id_container) {
             const auto fabric_node_id = FabricNodeId(mesh_id, fabric_chip_id);
+            // FIX TE (#42429): FIX TB may have excluded this chip from the topology mapper
+            // (degraded topology — corrupt ERISC L1).  Skip it rather than TT_FATALing.
+            auto maybe_asic_id = this->topology_mapper_->try_get_asic_id_from_fabric_node_id(fabric_node_id);
+            if (!maybe_asic_id.has_value()) {
+                log_warning(
+                    tt::LogFabric,
+                    "FIX TE (#42429): FabricNodeId (M{}, D{}) not found in topology mapper — chip excluded by "
+                    "degraded-topology guard.  Skipping intra-mesh routing table entry.",
+                    *mesh_id,
+                    fabric_chip_id);
+                continue;
+            }
             auto physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(fabric_node_id);
-            auto asic_id = this->topology_mapper_->get_asic_id_from_fabric_node_id(fabric_node_id);
+            auto asic_id = *maybe_asic_id;
 
             for (const auto& [logical_connected_chip_id, edge] : intra_mesh_connectivity[*mesh_id][fabric_chip_id]) {
                 auto connected_mesh_coord = this->mesh_graph_->chip_to_coordinate(mesh_id, logical_connected_chip_id);
@@ -1185,11 +1253,23 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
                     auto host_rank_for_chip =
                         this->topology_mapper_->get_host_rank_for_chip(mesh_id, logical_connected_chip_id);
 
-                    TT_ASSERT(
-                        host_rank_for_chip.has_value(),
-                        "Mesh {} Chip {} does not have a host rank associated with it",
-                        *mesh_id,
-                        logical_connected_chip_id);
+                    // FIX TG (#42429): TT_ASSERT is a no-op in Release builds — calling .value()
+                    // without a preceding has_value() check throws std::bad_optional_access when the
+                    // connected chip has been excluded from the topology mapper by FIX TB (degraded
+                    // cluster, corrupt ERISC L1).  Skip the connection gracefully, matching the
+                    // pattern used by FIX TE for missing ASIC IDs on the source chip.
+                    if (!host_rank_for_chip.has_value()) {
+                        log_warning(
+                            tt::LogFabric,
+                            "FIX TG (#42429): Mesh {} Chip {} has no host rank in topology mapper "
+                            "(chip excluded by degraded-topology guard). "
+                            "Skipping cross-host routing table entry from FabricNodeId (M{}, D{}).",
+                            *mesh_id,
+                            logical_connected_chip_id,
+                            *mesh_id,
+                            fabric_chip_id);
+                        continue;
+                    }
                     auto connected_host_rank_id = host_rank_for_chip.value();
 
                     // Iterate over all neighboring hosts
@@ -1265,6 +1345,16 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_physical_chip_id(ChipId physi
         "cluster. Check that your mesh graph descriptor specifies the correct topology",
         physical_chip_id);
     return FabricNodeId(MeshId{0}, 0);
+}
+
+bool ControlPlane::is_physical_chip_in_fabric_cluster(ChipId physical_chip_id) const {
+    for (const auto& [fabric_node_id, mapped_physical_chip_id] :
+         this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
+        if (mapped_physical_chip_id == physical_chip_id) {
+            return true;
+        }
+    }
+    return false;
 }
 
 ChipId ControlPlane::get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const {
@@ -2160,7 +2250,12 @@ void ControlPlane::print_ethernet_channels() const {
 }
 
 FabricContext& ControlPlane::get_fabric_context() const {
-    TT_FATAL(this->fabric_context_ != nullptr, "Trying to get un-initialized fabric context");
+    // FIX BQ (#42429): Throw typed FabricContextNullException (replaces FIX BP's
+    // std::runtime_error) so callers can catch by type instead of e.what() string match.
+    // Evolution: TT_FATAL (pre-fix) → std::runtime_error (FIX BP) → typed exception (FIX BQ).
+    if (this->fabric_context_ == nullptr) {
+        throw FabricContextNullException{};
+    }
     return *this->fabric_context_;
 }
 
@@ -2639,7 +2734,15 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
         }
         // Barrier here for safety - Ensure that all ranks have completed the bcast op before proceeding to the next
         // root
+        log_trace(
+            tt::LogFabric,
+            "configure_routing_tables: ENTERING per-root barrier (rank {})",
+            *distributed_context.rank());
         distributed_context.barrier();
+        log_trace(
+            tt::LogFabric,
+            "configure_routing_tables: EXITED per-root barrier (rank {})",
+            *distributed_context.rank());
     }
 }
 
@@ -2783,7 +2886,15 @@ void ControlPlane::collect_and_merge_intermesh_exit_fabric_node_ids_from_all_hos
 
             merge_from_serialized(intermesh_exit_fabric_node_ids_, serialized_remote);
         }
+        log_trace(
+            tt::LogFabric,
+            "collect_and_merge_intermesh_exit_ids: ENTERING per-root barrier (rank {})",
+            *distributed_context.rank());
         distributed_context.barrier();
+        log_trace(
+            tt::LogFabric,
+            "collect_and_merge_intermesh_exit_ids: EXITED per-root barrier (rank {})",
+            *distributed_context.rank());
     }
 }
 
@@ -2904,7 +3015,15 @@ void ControlPlane::collect_and_merge_intermesh_exit_peer_fabric_node_id_pairs_fr
 
             merge_from_serialized(intermesh_exit_peer_fabric_node_id_pairs_, serialized_remote);
         }
+        log_trace(
+            tt::LogFabric,
+            "collect_and_merge_intermesh_exit_pairs: ENTERING per-root barrier (rank {})",
+            *distributed_context.rank());
         distributed_context.barrier();
+        log_trace(
+            tt::LogFabric,
+            "collect_and_merge_intermesh_exit_pairs: EXITED per-root barrier (rank {})",
+            *distributed_context.rank());
     }
 }
 
@@ -3231,7 +3350,15 @@ void ControlPlane::forward_descriptors_to_controller(
             }
         }
     }
+    log_trace(
+        tt::LogFabric,
+        "forward_descriptors_to_controller: ENTERING barrier (rank {})",
+        *distributed_context.rank());
     distributed_context.barrier();
+    log_trace(
+        tt::LogFabric,
+        "forward_descriptors_to_controller: EXITED barrier (rank {})",
+        *distributed_context.rank());
 }
 
 void ControlPlane::forward_intermesh_connections_from_controller(AnnotatedIntermeshConnections& intermesh_connections) {
@@ -3275,7 +3402,15 @@ void ControlPlane::forward_intermesh_connections_from_controller(AnnotatedInterm
             Tag{1});
         intermesh_connections = deserialize_intermesh_connections_from_bytes(serialized_connections);
     }
+    log_trace(
+        tt::LogFabric,
+        "forward_intermesh_connections_from_controller: ENTERING barrier (rank {})",
+        *distributed_context.rank());
     distributed_context.barrier();
+    log_trace(
+        tt::LogFabric,
+        "forward_intermesh_connections_from_controller: EXITED barrier (rank {})",
+        *distributed_context.rank());
 }
 
 // Rank 0: match cables across hosts by connection_hash, reconcile Z vs NESW (demote/promote),

@@ -74,6 +74,12 @@ template <bool RISC_CPU_DATA_CACHE_ENABLED>
 inline void wait_for_notification(
     uint32_t address, uint32_t value, volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     volatile tt_l1_ptr uint32_t* poll_addr = (volatile tt_l1_ptr uint32_t*)address;
+    // On Wormhole, got_immediate_termination_signal is not checked (compiled out),
+    // so there is no escape if the expected value never arrives.  A watchdog counter
+    // fires WAYPOINT("WNTO") periodically to make such hangs diagnosable.
+    // See: https://github.com/tenstorrent/tt-metal/issues/42429
+    constexpr uint32_t kWatchdogIter = 100'000'000;
+    uint32_t watchdog_count = 0;
     while (*poll_addr != value
 #ifndef ARCH_WORMHOLE
            && !got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr)
@@ -85,6 +91,10 @@ inline void wait_for_notification(
 #if (defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)) || !defined(ARCH_BLACKHOLE)
         run_routing();
 #endif
+        if (++watchdog_count >= kWatchdogIter) {
+            WAYPOINT("WNTO");  // Wait-for-Notification TimeOut — still spinning
+            watchdog_count = 0;
+        }
     }
 }
 

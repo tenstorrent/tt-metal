@@ -174,32 +174,57 @@ using FabricMuxToMuxSender = WorkerToFabricEdmSenderImpl<false, NUM_BUFFERS_MUX_
 static_assert(noc_index == 0, "Mux kernel requires noc_index to be 0 so relay kernel can use 1");
 
 template <uint8_t NUM_BUFFERS>
-void wait_for_static_connection_to_ready(
+bool wait_for_static_connection_to_ready(
     tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
-    while (!connect_is_requested(*worker_interface.connection_live_semaphore)
+    // Watchdog: on WH the termination signal check is compiled out of the main loop
+    // condition (#ifndef ARCH_WORMHOLE) for hardware reasons.  We check it in the
+    // periodic watchdog path using force-invalidate (<true>), which is safe on WH.
+    // Teardown is detected within ~kWatchdogIter iterations (~1-2s) — kernel exits
+    // cleanly rather than hanging forever.
+    // See: https://github.com/tenstorrent/tt-metal/issues/42429
+    constexpr uint32_t kWatchdogIter = 100'000'000;
+    uint32_t watchdog_count = 0;
     // set dcache enabled true (conservatively) - since we're in init code, the perf penalty is inconsequential
+    while (!connect_is_requested(*worker_interface.connection_live_semaphore)
 #ifndef ARCH_WORMHOLE
            && !got_immediate_termination_signal<true>(termination_signal_ptr)
 #endif
     ) {
         invalidate_l1_cache();
+        if (++watchdog_count >= kWatchdogIter) {
+            WAYPOINT("SCRW");  // Static-Connection-Ready Wait — diagnostic
+            watchdog_count = 0;
+            // Use force-invalidate here — safe on WH unlike the inline condition above.
+            if (got_immediate_termination_signal<true>(termination_signal_ptr)) {
+                return false;  // Teardown requested — caller enters termination-wait
+            }
+        }
     }
 
     worker_interface.template cache_producer_noc_addr<true>();
+    return true;
 }
 
 FORCE_INLINE void wait_for_mux_endpoint_ready(
-    uint8_t mux_noc_x, uint8_t mux_noc_y, size_t mux_status_address, uint32_t mux_status_readback_address) {
+    uint8_t mux_noc_x, uint8_t mux_noc_y, size_t mux_status_address, uint32_t mux_status_readback_address,
+    uint32_t max_poll_iterations = 1'000'000) {
     uint64_t noc_addr = get_noc_addr(mux_noc_x, mux_noc_y, mux_status_address);
     auto ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mux_status_readback_address);
 
     ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
-    do {
+    for (uint32_t i = 0; i < max_poll_iterations; ++i) {
         noc_async_read_one_packet(noc_addr, mux_status_readback_address, 4);
         noc_async_read_barrier();
         invalidate_l1_cache();
-    } while (ptr[0] != tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC);
+        if (ptr[0] == tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC) {
+            return;
+        }
+        // RISC-V PAUSE hint: adds backoff per iteration — more wall-clock time
+        // covered by 1M cap without enlarging the bound. Init-time only; safe.
+        asm volatile(".4byte 0x0100000F");
+    }
+    // Fall through on timeout — caller or host Phase 4 handles recovery.
 }
 
 template <uint8_t NUM_BUFFERS>
@@ -473,6 +498,9 @@ void kernel_main() {
 
     volatile auto termination_signal_ptr =
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_address);
+    // FIX LT9-CLEAR (#42429): Clear stale termination signal from previous kernel run.
+    // See fabric_erisc_router.cpp for full explanation. Same stale-signal hazard exists here.
+    *termination_signal_ptr = tt::tt_fabric::TerminationSignal::KEEP_RUNNING;
 
     // In UDM mode, mux does NOT signal upstream routers - the relay will do that
     // (upstream routers connect to relay, not mux)
@@ -481,11 +509,15 @@ void kernel_main() {
     if constexpr (has_fabric_router) {
         // wait for fabric router to be ready before setting up the connection
         if constexpr (wait_for_fabric_endpoint) {
-            tt::tt_fabric::wait_for_fabric_endpoint_ready(
+            bool erisc_ready = tt::tt_fabric::wait_for_fabric_endpoint_ready(
                 fabric_connection.edm_noc_x,
                 fabric_connection.edm_noc_y,
                 fabric_router_status_address,
                 local_fabric_router_status_address);
+            if (!erisc_ready) {
+                status_ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
+                return;
+            }
         }
 
         fabric_connection.open<false>();
@@ -512,23 +544,36 @@ void kernel_main() {
         }
     }
 
-    // Wait for persistent channels to be ready
+    // Wait for persistent channels to be ready.
+    // Returns false only if teardown was requested during the wait.
+    bool teardown_during_wait = false;
     for (uint32_t i = 0; i < NUM_WORKER_CHANNELS; i++) {
         if (worker_is_persistent[i] == 1) {
-            wait_for_static_connection_to_ready<NUM_BUFFERS_WORKER>(worker_channel_interfaces[i], termination_signal_ptr);
+            if (!wait_for_static_connection_to_ready<NUM_BUFFERS_WORKER>(worker_channel_interfaces[i], termination_signal_ptr)) {
+                teardown_during_wait = true;
+            }
         }
     }
 
     for (uint32_t i = 0; i < NUM_RELAY_TO_MUX_CHANNELS; i++) {
         if (relay_to_mux_is_persistent[i] == 1) {
-            wait_for_static_connection_to_ready<NUM_BUFFERS_RELAY_TO_MUX>(relay_to_mux_channel_interfaces[i], termination_signal_ptr);
+            if (!wait_for_static_connection_to_ready<NUM_BUFFERS_RELAY_TO_MUX>(relay_to_mux_channel_interfaces[i], termination_signal_ptr)) {
+                teardown_during_wait = true;
+            }
         }
     }
 
     for (uint32_t i = 0; i < NUM_MUX_TO_MUX_CHANNELS; i++) {
         if (mux_to_mux_is_persistent[i] == 1) {
-            wait_for_static_connection_to_ready<NUM_BUFFERS_MUX_TO_MUX>(mux_to_mux_channel_interfaces[i], termination_signal_ptr);
+            if (!wait_for_static_connection_to_ready<NUM_BUFFERS_MUX_TO_MUX>(mux_to_mux_channel_interfaces[i], termination_signal_ptr)) {
+                teardown_during_wait = true;
+            }
         }
+    }
+
+    if (teardown_during_wait) {
+        while (!got_immediate_termination_signal<true>(termination_signal_ptr)) {}
+        return;
     }
 
     while (!got_immediate_termination_signal<true>(termination_signal_ptr)) {

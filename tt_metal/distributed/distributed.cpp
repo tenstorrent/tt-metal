@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/fmt.hpp>
+#include <tt_stl/tt_pause.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <utility>
 
@@ -34,10 +35,40 @@ void EventSynchronize(const MeshEvent& event) {
         return;
     }
     for (const auto& coord : event.device_range()) {
-        auto* physical_device = event.device()->impl().get_device(coord);
-        while (physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) < event.id()) {
-            ;
+        // In multi-host meshes, event.device_range() spans all coordinates including remote
+        // ranks. Remote devices are not accessible from this host — the remote rank runs its
+        // own EventSynchronize and manages its local CQs. Skip non-local coordinates to
+        // avoid TT_FATAL("Cannot get device for remote device") in MeshDeviceViewImpl::get_device.
+        if (!event.device()->impl().is_local(coord)) {
+            continue;
         }
+        auto* physical_device = event.device()->impl().get_device(coord);
+        // FIX EV: Skip spin-wait for non-MMIO devices whose fabric relay path is broken.
+        // Such devices cannot execute dispatch commands, so last_completed_event will
+        // never advance and nice_spin_until would block forever (observed: 8-minute hang
+        // until CI cancels the job).  The reader thread already set thread_exception_state_
+        // and threw from read_completion_queue_event; the exception will surface through
+        // the normal error-propagation path after we return here.
+        if (!physical_device->is_mmio_capable() && physical_device->is_fabric_relay_path_broken()) {
+            log_warning(
+                LogMetal,
+                "EventSynchronize: device {} relay path broken (non-MMIO) — skipping spin-wait for event {} on cq {}",
+                physical_device->id(),
+                event.id(),
+                event.mesh_cq_id());
+            continue;
+        }
+        auto& sysmem = physical_device->sysmem_manager();
+        const auto cq_id = event.mesh_cq_id();
+        const auto target_id = event.id();
+        // If the device has been quiesced since this event was recorded, all in-flight
+        // events are implicitly complete (finish_and_reset_in_use drained the CQ).
+        if (sysmem.is_quiesced(cq_id)) {
+            continue;
+        }
+        ttsl::nice_spin_until([&sysmem, cq_id, target_id] {
+            return sysmem.is_quiesced(cq_id) || sysmem.get_last_completed_event(cq_id) >= target_id;
+        });
     }
 }
 
@@ -47,6 +78,10 @@ bool EventQuery(const MeshEvent& event) {
     }
     bool event_completed = true;
     for (const auto& coord : event.device_range()) {
+        // Skip remote coordinates — see comment in EventSynchronize above.
+        if (!event.device()->impl().is_local(coord)) {
+            continue;
+        }
         auto* physical_device = event.device()->impl().get_device(coord);
         event_completed &= physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) >= event.id();
     }

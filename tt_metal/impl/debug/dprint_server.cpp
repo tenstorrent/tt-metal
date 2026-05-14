@@ -153,9 +153,33 @@ void WriteInitMagic(
     // 4. now we will access wpos at the starting magic which is incorrect
     uint32_t num_tries = 100000;
     while (num_tries-- > 0) {
-        auto result = cluster.read_core(device_id, virtual_core, base_addr, 4);
-        if ((result[0] == DEBUG_PRINT_SERVER_STARTING_MAGIC && enabled) ||
-            (result[0] == DEBUG_PRINT_SERVER_DISABLED_MAGIC && !enabled)) {
+        // FIX PL (#42429): read_core() routes through the ERISC relay on non-MMIO chips.
+        // If the relay is dead (stale from a prior process) and FIX AF has added the
+        // read_non_mmio() timeout, this throws instead of hanging forever. DPRINT is
+        // opt-in debug tooling — accept the write on faith and let reset_cores() handle
+        // relay recovery rather than blocking init here.
+        try {
+            auto result = cluster.read_core(device_id, virtual_core, base_addr, 4);
+            if ((result[0] == DEBUG_PRINT_SERVER_STARTING_MAGIC && enabled) ||
+                (result[0] == DEBUG_PRINT_SERVER_DISABLED_MAGIC && !enabled)) {
+                return;
+            }
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogAlways,
+                "WriteInitMagic: read_core timed out on device {} core {} (dead ERISC relay): {}. "
+                "DPRINT buffer init not verified for this core.",
+                device_id,
+                virtual_core.str(),
+                e.what());
+            return;
+        } catch (...) {
+            log_warning(
+                tt::LogAlways,
+                "WriteInitMagic: read_core timed out on device {} core {} "
+                "(dead ERISC relay, unknown exception). DPRINT buffer init not verified.",
+                device_id,
+                virtual_core.str());
             return;
         }
     }

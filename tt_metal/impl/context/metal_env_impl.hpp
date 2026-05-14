@@ -7,6 +7,7 @@
 #include <map>
 #include <mutex>
 #include <set>
+#include <unordered_set>
 #include <atomic>
 #include <filesystem>
 #include <tt-metalium/experimental/context/metal_env.hpp>
@@ -69,9 +70,19 @@ public:
     void initialize_fabric_tensix_datamover_config();
     void teardown_fabric_config();
 
+    // Returns the set of chip IDs for which teardown_fabric_config() timed out waiting for
+    // TERMINATED.  Populated during teardown and consumed by FabricFirmwareInitializer::post_teardown()
+    // to set fabric_teardown_timed_out_ on the relevant Device objects, enabling FIX AB to
+    // hard-reset their MMIO ETH channels at process exit.  Cleared at the start of each call
+    // to teardown_fabric_config() so it always reflects the most recent teardown run.
+    const std::unordered_set<ChipId>& get_teardown_timed_out_chips() const { return teardown_timed_out_chips_; }
+
     // --- Control plane ---
     tt::tt_fabric::ControlPlane& get_control_plane();
     void initialize_control_plane();
+    // Returns true if control_plane_ is already initialized (non-null).
+    // Does NOT trigger lazy initialization.  Safe to call during teardown.
+    bool is_control_plane_initialized() const { return control_plane_ != nullptr; }
 
     // --- Custom topology ---
     // Need to call set_fabric_config to reinit the control plane after calling this
@@ -119,6 +130,12 @@ private:
     std::optional<std::string> custom_mesh_graph_desc_path_ = std::nullopt;
 
     bool force_reinit_ = false;
+
+    // Chip IDs for which teardown_fabric_config() timed out waiting for TERMINATED.
+    // Populated during teardown; consumed by FabricFirmwareInitializer::post_teardown()
+    // to set fabric_teardown_timed_out_ on Device objects for FIX AB.
+    // Cleared at the start of each teardown_fabric_config() call.
+    std::unordered_set<ChipId> teardown_timed_out_chips_;
 
     // --- Control plane / system mesh ---
     std::mutex control_plane_mutex_;

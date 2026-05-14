@@ -19,6 +19,10 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
+namespace tt::tt_metal {
+struct ProgramDescriptor;
+}
+
 namespace ttnn::ccl {
 
 bool is_fabric_2d();
@@ -778,6 +782,19 @@ void fabric_mux_connection_rt_args(
     const CoreCoord& worker_logical_core,
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
     tt::tt_metal::Program& program,
+    CoreCoord termination_master_virtual_core,
+    std::vector<uint32_t>& worker_rt_args,
+    std::optional<uint32_t> = std::nullopt);
+
+void fabric_mux_connection_rt_args(
+    bool mux_connection_valid,
+    bool is_termination_master,
+    tt::tt_fabric::FabricMuxChannelType channel_type,
+    const CoreCoord& mux_virtual_core,
+    uint32_t worker_id,
+    const CoreCoord& worker_logical_core,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    tt::tt_metal::ProgramDescriptor& program_descriptor,
     CoreCoord termination_master_virtual_core,
     std::vector<uint32_t>& worker_rt_args,
     std::optional<uint32_t> = std::nullopt);

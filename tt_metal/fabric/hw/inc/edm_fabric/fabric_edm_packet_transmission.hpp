@@ -114,30 +114,65 @@ FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::LowLatencyPacketHeade
 }
 
 FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
+    constexpr uint32_t kWatchdogIter = 100'000'000;
     if constexpr (enable_deadlock_avoidance) {
         auto start_trid = RX_CH_TRID_STARTS[rx_channel_id];
         auto end_trid = start_trid + NUM_TRANSACTION_IDS;
         for (int i = start_trid; i < end_trid; i++) {
+            uint32_t watchdog_count = 0;
             if constexpr (tt::tt_fabric::local_chip_noc_equals_downstream_noc) {
                 while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
+                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i)) {
+                    if (++watchdog_count >= kWatchdogIter) {
+                        WAYPOINT("NFLT");  // Noc FLush Trid timeout — TRID stuck in NOC pipeline
+                        watchdog_count = 0;
+                    }
+                }
             } else {
                 while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_downstream_noc, i));
+                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_downstream_noc, i)) {
+                    if (++watchdog_count >= kWatchdogIter) {
+                        WAYPOINT("NFLT");  // Noc FLush Trid timeout — TRID stuck in NOC pipeline
+                        watchdog_count = 0;
+                    }
+                }
+                watchdog_count = 0;
                 while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
+                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i)) {
+                    if (++watchdog_count >= kWatchdogIter) {
+                        WAYPOINT("NFLT");  // Noc FLush Trid timeout — TRID stuck in NOC pipeline
+                        watchdog_count = 0;
+                    }
+                }
             }
         }
     } else {
         for (size_t i = 0; i < NUM_TRANSACTION_IDS; i++) {
+            uint32_t watchdog_count = 0;
             if constexpr (tt::tt_fabric::local_chip_noc_equals_downstream_noc) {
                 while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
+                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i)) {
+                    if (++watchdog_count >= kWatchdogIter) {
+                        WAYPOINT("NFLT");  // Noc FLush Trid timeout — TRID stuck in NOC pipeline
+                        watchdog_count = 0;
+                    }
+                }
             } else {
                 while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_downstream_noc, i));
+                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_downstream_noc, i)) {
+                    if (++watchdog_count >= kWatchdogIter) {
+                        WAYPOINT("NFLT");  // Noc FLush Trid timeout — TRID stuck in NOC pipeline
+                        watchdog_count = 0;
+                    }
+                }
+                watchdog_count = 0;
                 while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
+                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i)) {
+                    if (++watchdog_count >= kWatchdogIter) {
+                        WAYPOINT("NFLT");  // Noc FLush Trid timeout — TRID stuck in NOC pipeline
+                        watchdog_count = 0;
+                    }
+                }
             }
         }
     }

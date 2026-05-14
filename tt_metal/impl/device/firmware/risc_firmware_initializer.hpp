@@ -93,6 +93,11 @@ private:
     void assert_cores(tt::ChipId device_id);
     void teardown_simulator_ethernet_cores();
 
+    // Transitively close the set of MMIO devices known to have dead relay paths.
+    // Any MMIO device whose Ethernet-connected peer is in mmio_dead_peer_devices_
+    // is also added.  Repeated until no new members are found (fixed point).
+    void propagate_dead_mmio_peers();
+
     GetControlPlaneFn get_control_plane_;
     dispatch_core_manager& dispatch_core_manager_;
     uint8_t num_hw_cqs_;
@@ -104,6 +109,12 @@ private:
     std::unordered_map<tt::ChipId, std::vector<uint16_t>> l1_bank_to_noc_xy_;
     std::unordered_map<tt::ChipId, std::vector<uint8_t>> worker_logical_col_to_virtual_col_;
     std::unordered_map<tt::ChipId, std::vector<uint8_t>> worker_logical_row_to_virtual_row_;
+
+    // MMIO device IDs whose relay path to at least one non-MMIO peer is known dead
+    // (stale ERISC left by a prior killed process).  Populated during reset_cores()
+    // and transitively closed by propagate_dead_mmio_peers().  Used to skip relay
+    // reads for subsequent devices whose MMIO host is already in this set.
+    std::unordered_set<tt::ChipId> mmio_dead_peer_devices_;
 
     bool initialized_ = false;
 };

@@ -35,4 +35,5 @@ void wait_for_event(tt::tt_metal::distributed::MeshCommandQueue& cq, const tt::t
 tt::tt_metal::distributed::MeshEvent record_event(tt::tt_metal::distributed::MeshCommandQueue& cq);
 // Record an event for device to host synchronization. This event should be passed to `event_synchronize`.
 tt::tt_metal::distributed::MeshEvent record_event_to_host(tt::tt_metal::distributed::MeshCommandQueue& cq);
+
 }  // namespace ttnn

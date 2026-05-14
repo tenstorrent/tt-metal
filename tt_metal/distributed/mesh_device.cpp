@@ -26,6 +26,8 @@
 #include <memory>
 #include <optional>
 #include <source_location>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 #include "impl/allocator/allocator.hpp"
@@ -138,6 +140,73 @@ decltype(auto) validate_and_get_reference_value(
         }
     }
     return reference_value;
+}
+
+std::vector<IDevice*> get_fabric_quiesce_restart_order(std::vector<IDevice*> devices) {
+    // Relaunch writes to non-MMIO devices are serviced through the MMIO device's ETH relay.
+    // Restarting MMIO first puts that relay into STARTED/not-ready firmware and can make
+    // subsequent non-MMIO L1 reads time out, so every quiesce entry point must use the same
+    // global non-MMIO-before-MMIO ordering instead of submesh traversal order.
+    std::stable_sort(devices.begin(), devices.end(), [](IDevice* a, IDevice* b) {
+        return !a->is_mmio_capable() && b->is_mmio_capable();
+    });
+    return devices;
+}
+
+std::vector<IDevice*> get_fabric_quiesce_ready_order(const std::vector<IDevice*>& devices) {
+    // Initial fabric bring-up publishes READY_FOR_TRAFFIC in tunnel order: farthest tunnel
+    // devices first, then the MMIO gateway.  Quiesce restart must mirror that order because
+    // wait_for_fabric_workers_ready() writes the same READY_FOR_TRAFFIC signal that releases
+    // peer ERISC handshakes.  Row-major polling can publish readiness at the gateway before
+    // the far end of the tunnel has completed its receiver side.
+    auto& cluster = MetalContext::instance().get_cluster();
+
+    std::unordered_map<ChipId, IDevice*> devices_by_id;
+    std::unordered_set<ChipId> remaining;
+    devices_by_id.reserve(devices.size());
+    remaining.reserve(devices.size());
+    for (auto* dev : devices) {
+        devices_by_id.emplace(dev->id(), dev);
+        remaining.insert(dev->id());
+    }
+
+    std::vector<IDevice*> ordered;
+    ordered.reserve(devices.size());
+    auto append_if_present = [&](ChipId chip_id) {
+        auto it = devices_by_id.find(chip_id);
+        if (it != devices_by_id.end() && remaining.erase(chip_id) > 0) {
+            ordered.push_back(it->second);
+        }
+    };
+
+    for (auto* dev : devices) {
+        if (cluster.get_associated_mmio_device(dev->id()) != dev->id()) {
+            continue;
+        }
+
+        try {
+            for (const auto& tunnel : cluster.get_tunnels_from_mmio_device(dev->id())) {
+                // Tunnel index 0 is the MMIO device; process remote devices farthest-to-closest.
+                for (size_t idx = tunnel.size(); idx > 1; --idx) {
+                    append_if_present(tunnel[idx - 1]);
+                }
+            }
+        } catch (const std::exception&) {
+            // Some mesh views (single-device, disabled fabric, or partially discovered hardware)
+            // do not have tunnel metadata for every MMIO chip. Fall back to the row-major append
+            // below instead of making quiesce fail before the per-device fabric guards can return.
+        }
+        append_if_present(dev->id());
+    }
+
+    // Preserve row-major order for any device that is not represented in the MMIO tunnel map.
+    // This keeps the helper total over submeshes and unusual discovery states while still
+    // applying startup-compatible order to every device whose tunnel is known.
+    for (auto* dev : devices) {
+        append_if_present(dev->id());
+    }
+
+    return ordered;
 }
 
 // Returns offset of the mesh device view in the system mesh.
@@ -684,7 +753,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
     submeshes_.push_back(submesh);
     log_trace(LogMetal, "Instantiating submesh {}: {} with offset: {}", submesh->pimpl_->id(), submesh_shape, offset);
     if (!submesh->pimpl_->get_view().get_devices().empty()) {
-        log_trace(
+        log_info(
             LogMetal,
             "Submesh {} instantiated with {} devices",
             submesh->pimpl_->id(),
@@ -867,7 +936,20 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     if (is_initialized()) {
         if (MetalContext::instance(this->get_context_id()).get_cluster().get_target_device_type() !=
             tt::TargetDevice::Mock) {
-            ReadMeshDeviceProfilerResults(*pimpl_wrapper, ProfilerReadState::LAST_FD_READ);
+            try {
+                ReadMeshDeviceProfilerResults(*pimpl_wrapper, ProfilerReadState::LAST_FD_READ);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "close_impl: ReadMeshDeviceProfilerResults threw during teardown: {}. "
+                    "Profiler data may be incomplete.",
+                    e.what());
+            } catch (...) {
+                log_warning(
+                    tt::LogMetal,
+                    "close_impl: ReadMeshDeviceProfilerResults threw non-std exception during teardown. "
+                    "Profiler data may be incomplete.");
+            }
         }
 
         if (distributed_context_) {
@@ -911,6 +993,7 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
             }
         }
 
+        log_info(LogMetal, "[close_impl] clearing mesh_command_queues_");
         mesh_command_queues_.clear();
     }
 
@@ -922,10 +1005,18 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     }
 
     if (is_initialized()) {
-        sub_device_manager_tracker_.reset();
-        scoped_devices_.reset();
-        parent_mesh_.reset();
+        log_info(LogMetal, "[close_impl] mesh_command_queues_ cleared, signaling is_initialized=false");
+        // Signal the device as closed BEFORE freeing allocator state.  Any concurrent
+        // MeshBuffer::deallocate() racing with teardown will now see is_initialized()==false
+        // and take the safe "device already closed" path instead of touching the (now-freed)
+        // sub_device_manager_tracker_ allocators.  See race analysis: Finding B.1.
         is_internal_state_initialized = false;
+        log_info(LogMetal, "[close_impl] resetting sub_device_manager_tracker_");
+        sub_device_manager_tracker_.reset();
+        log_info(LogMetal, "[close_impl] resetting scoped_devices_ (triggers ScopedDevices dtor -> close_devices)");
+        scoped_devices_.reset();
+        log_info(LogMetal, "[close_impl] scoped_devices_.reset() returned");
+        parent_mesh_.reset();
         if (distributed_context_) {
             distributed_context_.reset();
         }
@@ -936,7 +1027,9 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     // uplifted to the MetalEnv level.
     // https://github.com/tenstorrent/tt-metal/issues/21500
     if (destroy_metal_context_instance_on_close_) {
+        log_info(LogMetal, "[close_impl] calling MetalContext::destroy_instance");
         MetalContext::destroy_instance(false, context_id_);
+        log_info(LogMetal, "[close_impl] MetalContext::destroy_instance returned");
         destroy_metal_context_instance_on_close_ = false;
     }
 
@@ -1463,13 +1556,104 @@ bool MeshDeviceImpl::is_mmio_capable() const {
     return reference_device()->is_mmio_capable();
 }
 
+void MeshDeviceImpl::drain_cqs_for_quiesce() {
+    // Recursively drain submeshes first (depth-first).
+    for (const auto& submesh : submeshes_) {
+        if (auto submesh_ptr = submesh.lock()) {
+            submesh_ptr->drain_cqs_for_quiesce();
+        }
+    }
+    // Drain this mesh's own command queues.
+    bool have_reset_launch_msg_state = false;
+    for (auto& command_queue : mesh_command_queues_) {
+        command_queue->wait_for_completion(!have_reset_launch_msg_state);
+        have_reset_launch_msg_state = true;
+    }
+    for (auto& command_queue : mesh_command_queues_) {
+        command_queue->finish_and_reset_in_use();
+    }
+}
+
+void MeshDeviceImpl::restart_fabric_workers_for_quiesce() {
+    // Phase 1 per-device: terminate + reconfigure + relaunch all cores.
+    // Does NOT wait for handshake completion — that is deferred to
+    // wait_for_fabric_workers_ready_for_quiesce() so that all devices
+    // have their sender and receiver ERISCs running before any handshake poll.
+    //
+    // ORDERING: non-MMIO devices first, MMIO last.
+    // Non-MMIO L1 reads route through the MMIO device's ERISC relay firmware.
+    // If the MMIO device is quiesced first, its ERISCs enter a rebooting state
+    // (STARTED, not READY_FOR_TRAFFIC) and subsequent reads to non-MMIO devices
+    // time out with "Timeout waiting for Ethernet core service remote IO request".
+    // Use a flattened mesh-local list here. The old depth-first submesh walk could relaunch
+    // an MMIO gateway before a non-MMIO device in another submesh, recreating the relay race
+    // that quiesce_internal() avoids.
+    for (auto* idev : get_fabric_quiesce_restart_order(get_devices())) {
+        auto* dev = dynamic_cast<Device*>(idev);
+        if (dev) {
+            dev->quiesce_and_restart_fabric_workers();
+        }
+    }
+}
+
+void MeshDeviceImpl::wait_for_fabric_workers_ready_for_quiesce() {
+    // Phase 2 per-device: poll for ERISC handshake completion + Tensix MUX readiness.
+    // By this point, ALL devices across ALL meshes have completed Phase 1 (relaunch).
+    // Both sender and receiver ERISCs are running, so the natural sender-receiver
+    // handshake will complete without host MAGIC injection.
+    // Match init-time tunnel ordering (farthest-to-closest, then MMIO) because this phase
+    // publishes READY_FOR_TRAFFIC and can unblock peer ERISCs. Submesh order and row-major
+    // order are not equivalent to the startup sequence on T3K.
+    // FIX BO (#42429): When any non-MMIO device had base-UMD relay channels transitioned via
+    // launch_msg (FIX M), the ring handshake takes longer than the default 10s kSyncTimeoutMs
+    // in wait_for_fabric_workers_ready() — exactly as it does at initial startup (FIX TH3).
+    // Propagate fabric_stale_base_umd_channels_ to ALL devices (including MMIO) so their
+    // Phase 5 poll and Phase 5b health check can extend their timeouts to 120s and 24s
+    // respectively (matching FIX TH3 / FIX QH-2).
+    //
+    // FIX FX-1 (#42429): Use is_fabric_base_umd_fixm_init() instead of
+    // is_fabric_stale_base_umd_channels() because FIX RZ2 clears fabric_stale_base_umd_channels_
+    // after ring-sync completes, so by the time the AllGather pre-quiesce reaches this point
+    // the flag is already cleared.  fabric_base_umd_fixm_init_ is the persistent companion that
+    // is NOT cleared by FIX RZ2 — it survives through the entire session.
+    auto all_devices = get_devices();
+    const bool any_stale_base_umd = std::any_of(
+        all_devices.begin(), all_devices.end(), [](IDevice* d) { return d->is_fabric_base_umd_fixm_init(); });
+    if (any_stale_base_umd) {
+        log_info(
+            tt::LogMetal,
+            "wait_for_fabric_workers_ready_for_quiesce: FIX FX-1 (#42429) — {} device(s) have "
+            "fabric_base_umd_fixm_init set; propagating fabric_stale_base_umd_channels to all "
+            "{} devices to enable extended Phase 5 (120s) and Phase 5b (24s) timeouts.",
+            std::count_if(
+                all_devices.begin(),
+                all_devices.end(),
+                [](IDevice* d) { return d->is_fabric_base_umd_fixm_init(); }),
+            all_devices.size());
+        for (auto* idev : all_devices) {
+            idev->set_fabric_stale_base_umd_channels();
+        }
+    }
+    for (auto* idev : get_fabric_quiesce_ready_order(all_devices)) {
+        auto* dev = dynamic_cast<Device*>(idev);
+        if (dev) {
+            dev->wait_for_fabric_workers_ready();
+        }
+    }
+}
+
 void MeshDeviceImpl::quiesce_internal() {
     TT_FATAL(
         get_active_sub_device_manager_id() == get_default_sub_device_manager_id(),
         "Cannot quiesce when non-default sub-device manager is active");
+
+    // Phase 1: Drain ALL submesh command queues before restarting any fabric
+    // workers. On T3K, device 3's fabric restart disrupts device 5's dispatch
+    // relay path (they are mesh-adjacent); draining all CQs first prevents the
+    // 5-second completion_queue_wait_front hang on device 5.
     for (const auto& submesh : submeshes_) {
         if (auto submesh_ptr = submesh.lock()) {
-            submesh_ptr->quiesce_devices();
+            submesh_ptr->drain_cqs_for_quiesce();
         }
     }
     bool have_reset_launch_msg_state = false;
@@ -1480,6 +1664,133 @@ void MeshDeviceImpl::quiesce_internal() {
     for (auto& command_queue : mesh_command_queues_) {
         command_queue->finish_and_reset_in_use();
     }
+
+    // Phase 2: All CQs are drained; now safely restart fabric workers.
+    // Two-pass approach: first relaunch all cores on all devices, then wait for
+    // handshake completion on all devices.  This ensures sender and receiver ERISCs
+    // are both running before any handshake poll — fixing the FIX P regression where
+    // per-device sequential processing caused Device 4's receiver to complete the
+    // handshake before Device 0's sender was even launched.
+    // FIX AE (#42429): Three-pass ETH launch to prevent simultaneous ETH handshake deadlock.
+    //
+    // Background: when two ETH peer channels on different non-MMIO devices start within
+    // ~6ms of each other (possible because one device's UMD relay is ~200× faster than the
+    // other's), both ERISCs initiate the ETH handshake simultaneously.  The handshake
+    // protocol has no backoff/retry for this case — both stay stuck at STARTED indefinitely.
+    //
+    // Root cause in the original single-pass approach:
+    //   Device 4 (non-MMIO, relay via active Device 0: ~200ms/channel, 4 chans = ~800ms)
+    //   Device 5 (non-MMIO, relay via idle Device 1:  <1ms/channel,  4 chans = ~7ms)
+    //   → Device 4 chan 6 starts at T.  Device 5 chan 6 starts at T+6ms.  Deadlock.
+    //
+    // Fix — three sub-passes within Pass 1:
+    //   Pass 1a: All devices — Phase 2.5 + Phase 3 setup (configure_fabric_cores, runtime
+    //            args, l1_barrier, WORKER write_launch_msg).  ETH write_launch_msg deferred.
+    //   Pass 1b: MMIO devices only — ETH write_launch_msg (fast, direct PCIe, ~1ms/channel).
+    //            MMIO peer ERISCs are running and reach STARTED before non-MMIO ERISCs start.
+    //            When non-MMIO ERISCs initiate handshake, MMIO peers respond immediately.
+    //   Pass 1c: Non-MMIO devices only — ETH write_launch_msg (via UMD relay, sequential).
+    //            After launching each device, poll its ETH channels until all show
+    //            EDMStatus::STARTED (FIX AF).  This ensures SENDER ERISCs are past Object
+    //            Setup and in the handshake loop before the next device's RECEIVER launches.
+    //            (FIX AE assumed ~200ms relay latency for the gap, but that assumption was
+    //            violated in practice when Device 0 was in base_umd mode: relay was <1ms.)
+    //
+    // ORDERING in all passes: non-MMIO first, MMIO last — same as original Pass 1.
+    // NOTE: iterate get_devices() directly (not submesh_ loop) so global MMIO-last ordering
+    // is respected across submesh boundaries.
+    log_info(tt::LogMetal, "quiesce_internal: Pass 1a — Phase 2.5 + Phase 3 setup on all devices (ETH launch deferred)");
+    // FIX P25-CLEAN-V2 (#42429): before Pass 1a, tell every device which other devices are
+    // being quiesced together in this cycle.  Phase 2.5 uses this to avoid adding channels
+    // to phase25_already_clean_chans_ when their peer device is also being quiesced (i.e.
+    // the channel's TERMINATED state was caused by the peer quiescing first, not by the
+    // peer being outside the active fabric).  Those channels MUST be re-launched in Phase 3.
+    {
+        std::unordered_set<ChipId> quiesce_ids;
+        for (auto* idev : get_devices()) {
+            quiesce_ids.insert(idev->id());
+        }
+        for (auto* idev : get_devices()) {
+            auto* dev = dynamic_cast<Device*>(idev);
+            if (dev) {
+                dev->set_quiescing_devices(quiesce_ids);
+            }
+        }
+    }
+    for (auto* idev : get_fabric_quiesce_restart_order(get_devices())) {
+        auto* dev = dynamic_cast<Device*>(idev);
+        if (dev) {
+            log_info(tt::LogMetal, "quiesce_internal: Pass 1a — Device {} starting quiesce_and_restart_fabric_workers(defer_eth_launch=true)", dev->id());
+            dev->quiesce_and_restart_fabric_workers(/*defer_eth_launch=*/true);
+            log_info(tt::LogMetal, "quiesce_internal: Pass 1a — Device {} done", dev->id());
+        }
+    }
+    log_info(tt::LogMetal, "quiesce_internal: Pass 1a complete — starting Pass 1b (MMIO ETH launch)");
+
+    // Pass 1b: ETH write_launch_msg for MMIO devices, one device at a time.
+    //
+    // FIX BE (#43012): MMIO devices have ETH links to other MMIO devices (e.g. Device 1 chan7
+    // <-> Device 3 chan7 on T3000).  Launching all MMIO devices simultaneously caused both sides
+    // of an MMIO-MMIO ETH link to reach REMOTE_HANDSHAKE_COMPLETE concurrently — a mutual
+    // deadlock where neither side advances to LOCAL_HANDSHAKE_COMPLETE.  FIX BC detected this
+    // correctly and set fabric_channels_not_ready_for_traffic_=true, causing GTEST_SKIP via
+    // FIX AA, but the test was still skipped (counted as a CI failure).
+    //
+    // Fix: sequence MMIO launches exactly like Pass 1c sequences non-MMIO — launch one device,
+    // wait until its ETH cores reach STARTED (written their handshake signal), then launch the
+    // next.  When the next device's ERISCs start executing, they read the already-written signal
+    // and advance immediately past REMOTE_HANDSHAKE_COMPLETE, breaking the deadlock.
+    //
+    // wait_for_eth_cores_launched() now supports MMIO devices (PCIe direct-read, no relay).
+    for (auto* idev : get_fabric_quiesce_restart_order(get_devices())) {
+        auto* dev = dynamic_cast<Device*>(idev);
+        if (dev && dev->is_mmio_capable()) {
+            log_info(tt::LogMetal, "quiesce_internal: Pass 1b — Device {} (MMIO) launch_eth_cores_for_quiesce", dev->id());
+            dev->launch_eth_cores_for_quiesce();
+            log_info(tt::LogMetal, "quiesce_internal: Pass 1b — Device {} done, waiting for STARTED before next MMIO device", dev->id());
+            dev->wait_for_eth_cores_launched();
+            log_info(tt::LogMetal, "quiesce_internal: Pass 1b — Device {} ETH STARTED confirmed", dev->id());
+        }
+    }
+    log_info(tt::LogMetal, "quiesce_internal: Pass 1b complete — starting Pass 1c (non-MMIO ETH launch)");
+
+    // Pass 1c: ETH write_launch_msg for non-MMIO devices, one device at a time.
+    //
+    // FIX AF (#42429): After launching each non-MMIO device's ETH channels, poll until all
+    // its channels show a non-zero edm_status (EDMStatus::STARTED or beyond) before launching
+    // the next non-MMIO device.  This guarantees that the SENDER ERISCs on the first device
+    // (e.g. Device 4 chans 6,7) have written EDMStatus::STARTED and are in (or past) Object
+    // Setup — i.e. about to enter the handshake loop — before Device 5's RECEIVER ERISCs
+    // start executing.  Without this barrier:
+    //   • FIX AE assumed ~200ms relay latency to create a natural timing gap, but the relay
+    //     was <1ms in the failing run (Device 0 in base_umd mode), so both SENDER and RECEIVER
+    //     launched within ~2ms and hit the simultaneous-handshake deadlock anyway.
+    //   • By explicitly waiting for STARTED we remove the relay-latency assumption entirely.
+    for (auto* idev : get_fabric_quiesce_restart_order(get_devices())) {
+        auto* dev = dynamic_cast<Device*>(idev);
+        if (dev && !dev->is_mmio_capable()) {
+            log_info(tt::LogMetal, "quiesce_internal: Pass 1c — Device {} (non-MMIO) launch_eth_cores_for_quiesce", dev->id());
+            dev->launch_eth_cores_for_quiesce();
+            log_info(tt::LogMetal, "quiesce_internal: Pass 1c — Device {} done, waiting for STARTED before next device", dev->id());
+            dev->wait_for_eth_cores_launched();
+            log_info(tt::LogMetal, "quiesce_internal: Pass 1c — Device {} ETH channels STARTED confirmed", dev->id());
+        }
+    }
+    log_info(tt::LogMetal, "quiesce_internal: Pass 1 complete (1a+1b+1c) — all devices relaunched, starting Pass 2 (handshake wait)");
+
+    // Phase 3: All devices have relaunched; now wait for handshake completion.
+    // Match wait_for_fabric_router_sync() tunnel order: farthest-to-closest non-MMIO devices,
+    // then the MMIO gateway. Phase 5 writes READY_FOR_TRAFFIC to the master ERISC, so polling
+    // row-major can publish gateway readiness before far tunnel receivers have completed.
+    for (auto* idev : get_fabric_quiesce_ready_order(get_devices())) {
+        auto* dev = dynamic_cast<Device*>(idev);
+        if (dev) {
+            log_info(tt::LogMetal, "quiesce_internal: Pass 2 — Device {} starting wait_for_fabric_workers_ready", dev->id());
+            dev->wait_for_fabric_workers_ready();
+            log_info(tt::LogMetal, "quiesce_internal: Pass 2 — Device {} done", dev->id());
+        }
+    }
+    log_info(tt::LogMetal, "quiesce_internal: Pass 2 complete — all devices ready");
 }
 
 void MeshDeviceImpl::quiesce_devices() {
@@ -1737,6 +2048,9 @@ bool MeshDevice::is_parent_mesh() const { return pimpl_->is_parent_mesh(); }
 const std::shared_ptr<MeshDevice>& MeshDevice::get_parent_mesh() const { return pimpl_->get_parent_mesh(); }
 std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const { return pimpl_->get_submeshes(); }
 void MeshDevice::quiesce_devices() { pimpl_->quiesce_devices(); }
+void MeshDevice::drain_cqs_for_quiesce() { pimpl_->drain_cqs_for_quiesce(); }
+void MeshDevice::restart_fabric_workers_for_quiesce() { pimpl_->restart_fabric_workers_for_quiesce(); }
+void MeshDevice::wait_for_fabric_workers_ready_for_quiesce() { pimpl_->wait_for_fabric_workers_ready_for_quiesce(); }
 std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
     const MeshShape& submesh_shape, const std::optional<MeshCoordinate>& offset) {
     return pimpl_->create_submesh(shared_from_this(), submesh_shape, offset);

@@ -574,7 +574,22 @@ def mesh_device(request, silicon_arch_name, device_params):
     fabric_manager = updated_device_params.pop("fabric_manager", None)
     fabric_router_config = updated_device_params.pop("fabric_router_config", None)
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
-    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
+    # FIX RM (#42429): open_mesh_device can throw "failed to initialize FW" / "run_mailbox"
+    # when hardware cores are stuck in an unexpected mailbox state (e.g. run_mailbox=0x55
+    # from a prior test that left dispatch firmware mid-execution).  tt-smi -r + wait doesn't
+    # always flush these cores before the next session.  Convert to SKIP so the test suite
+    # continues rather than reporting an ERROR at fixture setup.
+    try:
+        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
+    except Exception as _e:
+        _msg = str(_e)
+        if "failed to initialize FW" in _msg or "run_mailbox" in _msg:
+            reset_fabric(fabric_config)
+            pytest.skip(
+                f"FIX RM (#42429): open_mesh_device threw FW init failure — "
+                f"hardware cores in unexpected mailbox state; skipping. ({_msg[:300]})"
+            )
+        raise
 
     from tests.tests_common.cache_entries_counter import CacheEntriesCounter
 

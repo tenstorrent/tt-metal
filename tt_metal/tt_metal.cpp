@@ -914,7 +914,11 @@ void WaitProgramDone(IDevice* device, Program& program, bool read_device_profile
     }
 }
 
-bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_slow_dispatch) {
+bool ConfigureDeviceWithProgram(
+    IDevice* device,
+    Program& program,
+    bool force_slow_dispatch,
+    const std::unordered_set<CoreCoord>& logical_cores_to_skip) {
     ZoneScoped;
     bool pass = true;
     // This function is shared between FD and SD.
@@ -950,6 +954,16 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
         const auto& logical_cores = logical_cores_used_in_program[index];
         CoreType core_type = hal.get_core_type(index);
         for (const auto& logical_core : logical_cores) {
+            // FIX (#42429): skip dead ETH relay cores to prevent indefinite hang.
+            if (core_type == CoreType::ETH && logical_cores_to_skip.count(logical_core)) {
+                log_debug(
+                    tt::LogMetal,
+                    "ConfigureDeviceWithProgram: skipping dead ETH core ({},{}) on device {}",
+                    logical_core.x,
+                    logical_core.y,
+                    device_id);
+                continue;
+            }
             KernelGroup* kernel_group = program.impl().kernels_on_core(logical_core, index);
             CoreCoord physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
             // Skip binary writing for emulated mode (JIT compilation happens in execute_program_emulated)
@@ -1025,7 +1039,14 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
     return pass;
 }
 
-void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow_dispatch) {
+// When fabric is initialising in degraded mode (some ETH channels dead), writing runtime args
+// through the dead relay path hangs indefinitely.  logical_cores_to_skip applies the same
+// per-core dead-channel guard used for write_launch_msg_to_core (FIX C, device.cpp) — see #42429.
+void WriteRuntimeArgsToDevice(
+    IDevice* device,
+    Program& program,
+    bool force_slow_dispatch,
+    const std::unordered_set<CoreCoord>& logical_cores_to_skip) {
     ZoneScoped;
     auto device_id = device->id();
     // This function is shared between FD and SD.
@@ -1049,6 +1070,16 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                         CoreCoord logical_core(x, y);
+                        // FIX (#42429): skip dead ETH relay cores to prevent indefinite hang.
+                        if (core_type == CoreType::ETH && logical_cores_to_skip.count(logical_core)) {
+                            log_debug(
+                                tt::LogMetal,
+                                "WriteRuntimeArgsToDevice: skipping dead ETH core ({},{}) on device {}",
+                                x,
+                                y,
+                                device_id);
+                            continue;
+                        }
                         auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
                         for (auto kernel_id : kg->kernel_ids) {
                             const auto& kernel = program.impl().get_kernel(kernel_id);

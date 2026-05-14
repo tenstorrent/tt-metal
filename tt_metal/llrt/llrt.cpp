@@ -7,6 +7,8 @@
 #include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
 #include <unistd.h>
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -266,16 +268,66 @@ bool check_if_riscs_on_specified_core_done(tt::ChipId chip_id, const CoreCoord& 
             core_status.data(), core_status.size(), {static_cast<size_t>(chip_id), core}, go_msg_addr & ~0x3);
         uint8_t run = core_status.view().signal();
         if (run != run_state && run != tt_metal::dev_msgs::RUN_MSG_DONE) {
-            fprintf(
-                stderr,
-                "Read unexpected run_mailbox value: 0x%x (expected 0x%x or 0x%x)\n",
-                run,
-                run_state,
-                tt_metal::dev_msgs::RUN_MSG_DONE);
-            TT_FATAL(
-                run == run_state || run == tt_metal::dev_msgs::RUN_MSG_DONE,
-                "Read unexpected run_mailbox value from core {}",
-                core.str());
+            // FIX SA (GAP-76): Any value that is not one of the six known RUN_MSG_* constants
+            // (0x00, 0x40, 0x80, 0xc0, 0xe0, 0xf0) indicates stale firmware state left behind
+            // by a tt-smi reset or a process killed mid-initialization.  In that case log a
+            // WARNING and return false (not done) so the caller's 10 s timeout fires and
+            // triggers a force-reset instead of aborting immediately with TT_FATAL.
+            // Known-valid transitional states (INIT, GO, RESET_READ_PTR, RESET_READ_PTR_FROM_HOST,
+            // REPLAY_TRACE) that are neither run_state nor DONE are also treated as "not done yet"
+            // for the same reason — they are observed transiently on ETH cores.
+            static constexpr std::array<uint8_t, 6> kKnownRunMsgValues = {
+                static_cast<uint8_t>(tt_metal::dev_msgs::RUN_MSG_DONE),
+                static_cast<uint8_t>(tt_metal::dev_msgs::RUN_MSG_INIT),
+                static_cast<uint8_t>(tt_metal::dev_msgs::RUN_MSG_GO),
+                static_cast<uint8_t>(tt_metal::dev_msgs::RUN_MSG_RESET_READ_PTR),
+                static_cast<uint8_t>(tt_metal::dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST),
+                static_cast<uint8_t>(tt_metal::dev_msgs::RUN_MSG_REPLAY_TRACE),
+            };
+            bool is_known = std::find(kKnownRunMsgValues.begin(), kKnownRunMsgValues.end(), run) !=
+                            kKnownRunMsgValues.end();
+            if (!is_known) {
+                if (dispatch_core_type == tt_metal::HalProgrammableCoreType::TENSIX) {
+                    // FIX SC (GAP-76): For Tensix cores with stale go_msg (e.g. 0x55 left by
+                    // rescued dispatch cores), assert BRISC reset to halt stale firmware then
+                    // write RUN_MSG_DONE inline.  This catches the cores that were not yet at
+                    // 0x55 when FIX SC's pre-scan ran but transitioned before this poll.
+                    log_warning(
+                        tt::LogAlways,
+                        "FIX SC (GAP-76): Tensix core {} run_mailbox=0x{:02x} — "
+                        "asserting BRISC reset + writing RUN_MSG_DONE inline; board reset required",
+                        core.str(),
+                        run);
+                    try {
+                        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+                        cluster.assert_risc_reset_at_core(
+                            tt_cxy_pair(chip_id, core), tt::umd::RiscType::ALL);
+                        auto done_msg = dev_msgs_factory.create<tt_metal::dev_msgs::go_msg_t>();
+                        done_msg.view().signal() = tt_metal::dev_msgs::RUN_MSG_DONE;
+                        cluster.write_core(
+                            done_msg.data(),
+                            done_msg.size(),
+                            {static_cast<size_t>(chip_id), core},
+                            go_msg_addr & ~0x3ULL);
+                        return true;
+                    } catch (const std::exception& e) {
+                        log_warning(
+                            tt::LogAlways,
+                            "FIX SC (GAP-76): inline rescue failed for core {}: {}",
+                            core.str(),
+                            e.what());
+                    }
+                }
+                log_warning(
+                    tt::LogLLRuntime,
+                    "FIX SA (GAP-76): core {} run_mailbox=0x{:02x} is not a known RUN_MSG_* value "
+                    "(stale firmware state) — treating as not-done, timeout will handle recovery",
+                    core.str(),
+                    run);
+                return false;
+            }
+            // Known transitional state that is neither run_state nor DONE — not done yet.
+            return false;
         }
 
         return run == tt_metal::dev_msgs::RUN_MSG_DONE;
@@ -313,7 +365,11 @@ void print_aerisc_training_status(tt::ChipId device_id, const CoreCoord& virtual
 }  // namespace
 
 void wait_until_cores_done(
-    tt::ChipId device_id, int run_state, std::unordered_set<CoreCoord>& not_done_phys_cores, int timeout_ms) {
+    tt::ChipId device_id,
+    int run_state,
+    std::unordered_set<CoreCoord>& not_done_phys_cores,
+    int timeout_ms,
+    bool skip_dispatch_alert) {
     // poll the cores until the set of not done cores is empty
     [[maybe_unused]] int loop_count = 1;
     auto start = std::chrono::high_resolution_clock::now();
@@ -339,7 +395,9 @@ void wait_until_cores_done(
                 }
                 std::string cores = fmt::format("{}", fmt::join(not_done_phys_cores, ", "));
 
-                tt::tt_metal::MetalContext::instance().on_dispatch_timeout_detected();
+                if (!skip_dispatch_alert) {
+                    tt::tt_metal::MetalContext::instance().on_dispatch_timeout_detected();
+                }
 
                 TT_THROW(
                     "Device {}: Timeout ({} ms) waiting for physical cores to finish: {}.",

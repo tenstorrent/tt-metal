@@ -33,6 +33,9 @@ std::vector<IDevice*> get_devices_from_coordinates(
     const MeshDeviceViewImpl& mesh, const std::vector<MeshCoordinate>& coords) {
     std::vector<IDevice*> devices;
     for (const auto& coord : coords) {
+        if (!mesh.is_local(coord)) {
+            continue;
+        }
         if (auto* device = mesh.get_device(coord)) {
             devices.push_back(device);
         }

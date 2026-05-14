@@ -537,7 +537,15 @@ for (std::size_t i = sender_channels_start;
 
 Without this wait for credits to arrive back at sender, it is possible for a channel done update from the other link to corrupt a future op running on the sender ERISC core, as mentioned in the “Asynchronous Program Completion Problem” section.
 
-<a name="example-multi-chip-program-implementation-walkthrough"></a>
+### Host-Side Teardown: L1 Overwrite Ordering
+
+The same “asynchronous completion” hazard applies at the host level when fabric firmware must be reloaded between consecutive workloads. If the host runtime overwrites an ERISC's L1 (e.g., to load fresh fabric firmware via `configure_fabric_cores()`) while that ERISC is still executing — even if the ERISC *appears* done from a device-mailbox perspective — the still-running ERISC will execute corrupted instructions and may generate invalid NOC traffic.
+
+**Host runtimes must confirm `EDMStatus::TERMINATED` on every active ERISC channel before overwriting its L1.** Checking only a “master” channel or only Tensix-side MUX termination is insufficient: each ETH channel runs an independent firmware instance and must be independently confirmed terminated.
+
+Additionally, on Wormhole hardware, `assert_risc_reset_at_core()` on an ERISC tears down its ETH PHY link. This breaks non-MMIO L1 access for the full mesh, so force-reset should be used only as a last resort for truly unresponsive firmware, and must be followed by `deassert_risc_reset_at_core()` to restore base firmware before new firmware can be loaded.
+
+<a name=”example-multi-chip-program-implementation-walkthrough”></a>
 # Example Multi-Chip Program Implementation Walkthrough
 
 With the information presented in earlier sections, it is possible to write end-to-end multi-chip workloads/programs. This section walks through the implementation of a simple end-to-end microbenchmark including host and device code snippets.

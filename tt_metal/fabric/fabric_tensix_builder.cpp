@@ -49,6 +49,17 @@ void FabricTensixDatamoverConfig::find_min_max_eth_channels(const std::vector<tt
     has_dispatch_tunnel_ = device_has_dispatch_tunnel(device_id);
 
     for (const auto& device : all_active_devices) {
+        // Skip devices excluded from the fabric cluster by auto-discovery (e.g. damaged ETH channels
+        // caused the topology mapper to downgrade the mesh and drop this physical chip).
+        if (!control_plane.is_physical_chip_in_fabric_cluster(device->id())) {
+            log_warning(
+                tt::LogFabric,
+                "find_min_max_eth_channels: Physical chip {} is not in the fabric cluster mapping "
+                "(auto-discovery excluded it due to connectivity issues); skipping.",
+                device->id());
+            continue;
+        }
+
         std::unordered_map<RoutingDirection, std::vector<chan_id_t>> active_fabric_eth_channels;
         std::unordered_map<RoutingDirection, FabricNodeId> chip_neighbors;
 
@@ -115,6 +126,13 @@ void FabricTensixDatamoverConfig::build_per_device_channel_mappings(
     // Create per-device channel mappings using real ethernet channel IDs
     for (const auto& device : all_active_devices) {
         auto dev_id = device->id();
+        if (!control_plane.is_physical_chip_in_fabric_cluster(dev_id)) {
+            log_warning(
+                tt::LogFabric,
+                "build_per_device_channel_mappings: Physical chip {} not in fabric cluster; skipping.",
+                dev_id);
+            continue;
+        }
         auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev_id);
         // Get all active ethernet channels for this device
         auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
@@ -158,6 +176,13 @@ void FabricTensixDatamoverConfig::build_fabric_tensix_noc_coords_map(
     // for each fabric node and routing plane (link index)
     for (const auto& device : all_active_devices) {
         auto dev_id = device->id();
+        if (!control_plane.is_physical_chip_in_fabric_cluster(dev_id)) {
+            log_warning(
+                tt::LogFabric,
+                "build_fabric_tensix_noc_coords_map: Physical chip {} not in fabric cluster; skipping.",
+                dev_id);
+            continue;
+        }
         auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev_id);
 
         // Get all active ethernet channels for this device

@@ -132,6 +132,10 @@ public:
         return fixture_->open_devices(fabric_setup, channel_trimming_mode);
     }
 
+    // FIX CD-6 (#42429): Expose fixture's hardware fault flag so test loop can break
+    // instead of continue when open_devices_internal threw a fatal exception.
+    bool had_hardware_fault() const { return fixture_->had_hardware_fault(); }
+
     void compile_programs();
 
     void launch_programs() { fixture_->run_programs(); }

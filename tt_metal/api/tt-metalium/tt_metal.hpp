@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <span>
+#include <unordered_set>
 #include <vector>
 
 #include <hostdevcommon/common_values.hpp>
@@ -209,13 +210,25 @@ void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch 
  * | program             | The program holding the runtime args                                   | const Program & | |
  * Yes      |
  */
-void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow_dispatch = false);
+// logical_cores_to_skip: when non-empty, skips writes to the named ETH cores (used by
+// configure_fabric() to avoid hanging writes to dead ETH relay channels — see #42429).
+void WriteRuntimeArgsToDevice(
+    IDevice* device,
+    Program& program,
+    bool force_slow_dispatch = false,
+    const std::unordered_set<CoreCoord>& logical_cores_to_skip = {});
 
 // Configures a given device with a given program.
 // - Loads all kernel binaries into L1s of assigned Tensix cores
 // - Configures circular buffers (inits regs with buffer data)
 // - Takes the device out of reset
-bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_slow_dispatch = false);
+// logical_cores_to_skip: when non-empty, skips configuration for the named ETH cores (used by
+// configure_fabric() to avoid hanging writes to dead ETH relay channels — see #42429).
+bool ConfigureDeviceWithProgram(
+    IDevice* device,
+    Program& program,
+    bool force_slow_dispatch = false,
+    const std::unordered_set<CoreCoord>& logical_cores_to_skip = {});
 
 /**
  * Generate a (unique) per device ID for a program (potentially) running across multiple devices. The generated ID is

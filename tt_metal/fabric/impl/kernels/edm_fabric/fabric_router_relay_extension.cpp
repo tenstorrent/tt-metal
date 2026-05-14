@@ -139,18 +139,29 @@ constexpr uint32_t DOWNSTREAM_WS_MUX_IDX = 2;
 constexpr bool ENABLE_RISC_CPU_DATA_CACHE = true;
 
 template <uint8_t NUM_BUFFERS>
-void wait_for_static_connection_to_ready(
+bool wait_for_static_connection_to_ready(
     tt::tt_fabric::FabricRelayStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
+    // Watchdog: on WH the termination signal check is compiled out — if the
+    // connection request never arrives this loop spins forever.
+    // FIX LT9: After watchdog fires, break out and return false to skip setup.
+    // See: https://github.com/tenstorrent/tt-metal/issues/42429
+    constexpr uint32_t kWatchdogIter = 100'000'000;
+    uint32_t watchdog_count = 0;
     while (!connect_is_requested(*worker_interface.connection_live_semaphore)
 #ifndef ARCH_WORMHOLE
            && !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)
 #endif
     ) {
         invalidate_l1_cache();
+        if (++watchdog_count >= kWatchdogIter) {
+            WAYPOINT("SCRW");  // Static-Connection-Ready Wait timeout
+            return false;
+        }
     }
 
     worker_interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE>();
+    return true;
 }
 
 FORCE_INLINE void wait_for_mux_endpoint_ready(
@@ -158,20 +169,29 @@ FORCE_INLINE void wait_for_mux_endpoint_ready(
     uint8_t mux_noc_y,
     size_t mux_status_address,
     uint32_t mux_status_readback_address,
-    volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
+    volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr,
+    uint32_t max_poll_iterations = 1'000'000) {
     uint64_t noc_addr = get_noc_addr(mux_noc_x, mux_noc_y, mux_status_address);
     auto ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mux_status_readback_address);
 
     ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
-    do {
+    for (uint32_t i = 0; i < max_poll_iterations; ++i) {
         noc_async_read_one_packet(noc_addr, mux_status_readback_address, 4);
         noc_async_read_barrier();
         invalidate_l1_cache();
-    } while (ptr[0] != tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC
+        if (ptr[0] == tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC) {
+            return;
+        }
 #ifndef ARCH_WORMHOLE
-             && !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)
+        if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+            return;
+        }
 #endif
-    );
+        // RISC-V PAUSE hint: adds backoff per iteration — more wall-clock time
+        // covered by 1M cap without enlarging the bound. Init-time only; safe.
+        asm volatile(".4byte 0x0100000F");
+    }
+    // Fall through on timeout.
 }
 
 template <uint8_t NUM_BUFFERS>
@@ -544,15 +564,24 @@ void kernel_main() {
     // signal, then it tells relay to teardown.
     volatile auto termination_signal_ptr =
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_address);
+    // FIX LT9-CLEAR (#42429): Clear stale termination signal from previous kernel run.
+    // See fabric_erisc_router.cpp for full explanation. The main loop at line 598 uses
+    // got_immediate_termination_signal<true> (force-invalidate) — a stale IMMEDIATELY_TERMINATE
+    // would cause the relay to exit immediately after READY_FOR_TRAFFIC without processing any traffic.
+    *termination_signal_ptr = tt::tt_fabric::TerminationSignal::KEEP_RUNNING;
 
     // before connecting to mux, wait for mux status to turn into READY_FOR_TRAFFIC
     volatile auto mux_status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mux_status_address);
-    while (*mux_status_ptr != tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC
-#ifndef ARCH_WORMHOLE
-           && !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)
-#endif
-    ) {
+    for (uint32_t i = 0; i < 1'000'000U; ++i) {
         invalidate_l1_cache();
+        if (*mux_status_ptr == tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC) {
+            break;
+        }
+#ifndef ARCH_WORMHOLE
+        if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+            break;
+        }
+#endif
     }
 
     // before connecting to downstream mux, wait for mux status to turn into READY_FOR_TRAFFIC
@@ -578,7 +607,11 @@ void kernel_main() {
     auto noc_addr = get_noc_addr(router_noc_x, router_noc_y, fabric_router_sync_address);
     noc_semaphore_inc(noc_addr, 1);
 
-    wait_for_static_connection_to_ready<NUM_BUFFERS>(worker_interface, termination_signal_ptr);
+    if (!wait_for_static_connection_to_ready<NUM_BUFFERS>(worker_interface, termination_signal_ptr)) {
+        // FIX LT9: static connection timed out — skip to termination wait
+        while (!got_immediate_termination_signal<true>(termination_signal_ptr)) {}
+        return;
+    }
 
     status_ptr[0] = tt::tt_fabric::FabricRelayStatus::READY_FOR_TRAFFIC;
 

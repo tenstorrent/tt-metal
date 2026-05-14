@@ -303,7 +303,20 @@ struct WorkerToFabricEdmSenderBase {
 
     FORCE_INLINE void wait_for_empty_write_slot() const {
         WAYPOINT("FWSW");
-        while (!this->edm_has_space_for_packet<1>());
+        // Bounded spin: if downstream EDM never frees a buffer slot (dead, stalled,
+        // or credits lost) this loop hangs the calling core.  After kWatchdogIter
+        // iterations (~2-4 s on ERISC) we log a distinct WAYPOINT so the hang is
+        // diagnosable from a watcher dump, then continue spinning — the caller
+        // cannot proceed without a free slot.
+        // See: https://github.com/tenstorrent/tt-metal/issues/42429
+        constexpr uint32_t kWatchdogIter = 100'000'000;
+        uint32_t watchdog_count = 0;
+        while (!this->edm_has_space_for_packet<1>()) {
+            if (++watchdog_count >= kWatchdogIter) {
+                WAYPOINT("FWST");  // Write-Slot Timeout — still spinning
+                watchdog_count = 0;
+            }
+        }
         WAYPOINT("FWSD");
     }
 
@@ -546,8 +559,18 @@ struct WorkerToFabricEdmSenderBase {
     // Must be called alongside (after) close_start().
     void close_finish() {
         WAYPOINT("FCFW");
-        // Need to wait for the ack to teardown notice, from edm
-        while (*this->worker_teardown_addr != 1) {
+        // Wait for the ETH router to ACK teardown by writing 1 to worker_teardown_addr.
+        // Bounded by kCloseFinishMaxIter to prevent an indefinite spin if the ETH router
+        // never ACKs (e.g. ARC flagged an unsafe NOC access from close_start() and the
+        // write to edm_connection_handshake_l1_addr was aborted).  On timeout the mux
+        // kernel still exits cleanly — its dispatch completion fires, the host unblocks,
+        // and teardown_fabric_config() force-resets the unresponsive ERISC.
+        // See: https://github.com/tenstorrent/tt-metal/issues/42429
+        constexpr uint32_t kCloseFinishMaxIter = 5'000'000;
+        for (uint32_t i = 0; i < kCloseFinishMaxIter; ++i) {
+            if (*this->worker_teardown_addr == 1) {
+                break;
+            }
             invalidate_l1_cache();
         }
         WAYPOINT("FCFD");

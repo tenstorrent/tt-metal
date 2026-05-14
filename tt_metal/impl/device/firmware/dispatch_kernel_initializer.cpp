@@ -4,6 +4,7 @@
 
 #include "dispatch_kernel_initializer.hpp"
 
+#include <thread>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -14,14 +15,17 @@
 #include "impl/dispatch/dispatch_mem_map.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include "device/device_impl.hpp"
+#include "device/device_manager.hpp"
 
 #include "dispatch/topology.hpp"
 
+#include "hal.hpp"
+#include "hal_types.hpp"
 #include "llrt/hal/generated/dev_msgs.hpp"
 
 namespace tt::llrt::internal_ {
 void wait_until_cores_done(
-    ChipId device_id, int run_state, std::unordered_set<CoreCoord>& not_done_phys_cores, int timeout_ms);
+    ChipId device_id, int run_state, std::unordered_set<CoreCoord>& not_done_phys_cores, int timeout_ms, bool skip_dispatch_alert);
 }  // namespace tt::llrt::internal_
 
 namespace tt::tt_metal {
@@ -119,10 +123,13 @@ void DispatchKernelInitializer::teardown(std::unordered_set<InitializerKey>& ini
         return;
     }
 
+    log_info(tt::LogMetal, "[dispatch_teardown] terminate_command_queues() start");
     terminate_command_queues();
+    log_info(tt::LogMetal, "[dispatch_teardown] terminate_command_queues() returned, calling wait_for_dispatch_cores()");
     wait_for_dispatch_cores();
-
+    log_info(tt::LogMetal, "[dispatch_teardown] wait_for_dispatch_cores() returned, calling process_termination_signals()");
     process_termination_signals();
+    log_info(tt::LogMetal, "[dispatch_teardown] process_termination_signals() returned");
 
     devices_.clear();
     initialized_ = false;
@@ -151,6 +158,24 @@ void DispatchKernelInitializer::compile_dispatch_kernels() {
                     devices_.begin(), devices_.end(), [&](IDevice* d) { return d->id() == mmio_controlled_device_id; });
                 if (it != devices_.end()) {
                     dispatch_topology_->populate_cq_static_args(*it);
+                } else {
+                    // Device excluded from dispatch_devices (dead ETH relay — see FIX E2 in #42429).
+                    // We still need to populate its kernel nodes' static_config so that MMIO device
+                    // kernels' GenerateDependentConfigs() can safely read downstream kernel metadata
+                    // (e.g. prefetch_d static_config fields) without throwing std::bad_optional_access.
+                    // Immediately remove the program from the compile group so it is never compiled
+                    // or written to device (#42429 FIX E3).
+                    auto* dead_relay_dev = device_manager_->get_device(mmio_controlled_device_id);
+                    if (dead_relay_dev != nullptr) {
+                        dispatch_topology_->populate_cq_static_args(dead_relay_dev);
+                        // Remove from compile group — returns (and drops) the program.
+                        dispatch_topology_->get_compiled_cq_program(dead_relay_dev);
+                        log_debug(
+                            tt::LogMetal,
+                            "compile_dispatch_kernels: Device {} static_config populated but excluded from "
+                            "compilation (dead ETH relay, #42429 FIX E3)",
+                            mmio_controlled_device_id);
+                    }
                 }
             }
         }
@@ -238,36 +263,304 @@ const std::unordered_set<CoreCoord>& DispatchKernelInitializer::get_virtual_disp
 
 void DispatchKernelInitializer::wait_for_dispatch_cores() const {
     for (auto* dev : devices_) {
-        if (!dev->is_mmio_capable()) {
+        // If the UMD relay path to this device is known-broken (non-MMIO device whose
+        // Ethernet-relay firmware is no longer servicing IO requests), skip both the
+        // wait_until_cores_done read and the subsequent rescue writes.  Every UMD relay
+        // operation on such a device blocks for the full 5s flush timeout; with 4 dispatch
+        // cores × 8 streams = 32 writes the cascade totals ~160s per device and causes the
+        // test to be killed (exit=124).  The device is already non-functional at this point
+        // so skipping rescue is safe.
+        if (!dev->is_mmio_capable() && dev->is_fabric_relay_path_broken()) {
+            log_warning(
+                tt::LogMetal,
+                "wait_for_dispatch_cores: Device {} relay path broken (non-MMIO) — skipping wait and rescue to prevent UMD flush cascade",
+                dev->id());
             continue;
         }
-
         auto dispatch_cores = get_virtual_dispatch_cores(dev->id());
+        log_info(tt::LogMetal, "[dispatch_teardown] wait_for_dispatch_cores device={} num_cores={}", dev->id(), dispatch_cores.size());
         // Wrap in try-catch so that device close continues even if dispatch cores fail or timeout.
         // This allows the device handles to be properly released, enabling subsequent
         // device opens and tt-smi resets to succeed.
+        // skip_dispatch_alert=true: do NOT invoke on_dispatch_timeout_detected() (which runs tt-triage,
+        // taking ~27s) when teardown times out.  During teardown, dispatch cores can legitimately
+        // fail to finish (e.g. FABRIC_2D: close_finish() spins waiting for an ERISC ack that never
+        // arrives because the fabric was already torn down).  The exception is caught below and
+        // teardown continues; running triage here adds 27s per device and causes the test suite to
+        // exceed the 700s predecessor timeout.
+        // Use 1000ms explicit timeout instead of 0 (which inherits TT_METAL_OPERATION_TIMEOUT_SECONDS=5)
+        // to avoid adding 5s per-device overhead to every test teardown — this is purely waste since
+        // the exception is caught and teardown continues regardless.
+        // NOTE: was 200ms; increased to 1000ms (#42429) to avoid premature timeout on slower relay paths.
         try {
-            tt::llrt::internal_::wait_until_cores_done(dev->id(), dev_msgs::RUN_MSG_GO, dispatch_cores, 0);
+            tt::llrt::internal_::wait_until_cores_done(dev->id(), dev_msgs::RUN_MSG_GO, dispatch_cores, 1000, true);
         } catch (const std::exception& e) {
             log_warning(
-                LogMetal,
-                "Device {}: Exception waiting for dispatch cores to finish during teardown. "
-                "Continuing with cleanup. Error: {}",
+                tt::LogMetal,
+                "[FIX DT-1 (#42429)] Device {}: dispatch ERISC teardown timeout (1000ms) — "
+                "rescue_stuck_dispatch_cores firing. ERISCs may be left with stale go_msg=0x02. "
+                "Warm-up will detect this and trigger remedial tt-smi -r. Error: {}",
                 dev->id(),
                 e.what());
+            rescue_stuck_dispatch_cores(dev);
+        }
+        // FIX PF (GAP-57): Clear fw_launch_addr for ALL dispatch ETH cores on MMIO devices
+        // after teardown, regardless of whether they completed normally or were rescued.
+        //
+        // Root cause: ERISC firmware does not self-clear fw_launch_addr on dispatch terminate.
+        // After dispatch teardown, ETH dispatch cores have fw_launch_addr != 0 in L1.
+        // FIX PB only clears fw_launch_addr in the hard-reset rescue path.
+        // For devices where dispatch cores complete normally (no rescue), fw_launch_addr is
+        // never cleared → next test's reset_cores() sees non-zero flag → 500ms cascade
+        // (observed: 136 occurrences in run 25113312511 on all 4 MMIO devices).
+        //
+        // Fix: after wait_for_dispatch_cores(), zero fw_launch_addr for every dispatch ETH
+        // core on MMIO devices (non-MMIO devices are excluded to prevent relay hang).
+        // This is idempotent with FIX PB (writing 0 again is harmless for rescued cores).
+        if (dev->is_mmio_capable()) {
+            const auto dispatch_core_infos = dispatch_topology_->get_logical_dispatch_cores_for_rescue(dev->id());
+            const auto aeth_idx = hal_.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+            const uint32_t fw_launch_addr_val = hal_.get_jit_build_config(aeth_idx, 0, 0).fw_launch_addr;
+            for (const auto& [logical_core, core_type] : dispatch_core_infos) {
+                if (core_type != CoreType::ETH) {
+                    continue;
+                }
+                try {
+                    const auto virtual_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
+                        dev->id(), logical_core, CoreType::ETH);
+                    cluster_.write_core_immediate(
+                        dev->id(), virtual_core, std::vector<uint32_t>{0}, fw_launch_addr_val);
+                } catch (...) {
+                    // Best-effort — MMIO devices should always succeed via PCIe.
+                }
+            }
+        }
+        log_info(tt::LogMetal, "[dispatch_teardown] wait_for_dispatch_cores device={} done", dev->id());
+    }
+}
+
+void DispatchKernelInitializer::rescue_stuck_dispatch_cores(IDevice* device) const {
+    // Belt-and-suspenders guard: if the relay path is already known-broken for a non-MMIO
+    // device, every WriteToDeviceL1 call below will time out after 5s (UMD Ethernet relay
+    // flush timeout).  Skip all writes to prevent a 160s hang cascade.
+    if (!device->is_mmio_capable() && device->is_fabric_relay_path_broken()) {
+        log_warning(
+            tt::LogMetal,
+            "rescue_stuck_dispatch_cores: Device {} relay path broken (non-MMIO) — skipping rescue writes to prevent UMD flush cascade",
+            device->id());
+        return;
+    }
+
+    // During teardown, dispatch cores (DISPATCH_S / DISPATCH_D) can get stuck spinning on
+    // STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX, waiting for a worker completion count
+    // that will never arrive because fabric was already torn down.
+    //
+    // To unblock: write a large value to STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX on each
+    // dispatch stream. Writing to SIZE *sets* (not increments) the SPACE_AVAILABLE register,
+    // satisfying any pending stream_wrap_gt/stream_wrap_ge comparison in the firmware wait loop.
+    //
+    // After unblocking, the termination signal path (process_termination_signals) will cleanly
+    // shut down the cores.
+    //
+    // KNOWN LIMITATION: This rescue only addresses the stream_wrap_gt stuck path in
+    // dispatch_s's wait_for_workers(). It does NOT rescue:
+    //   - dispatch_d stuck in cb_acquire_pages (waiting for prefetcher to produce CB pages):
+    //     that would require writing to the CB semaphore, not stream registers.
+    //   - Cores stuck in a NOC write barrier (requires NOC-level reset).
+    //   - Cores blocked waiting for fabric acknowledgment (requires fabric teardown first).
+    // For the cb_acquire_pages case, a device reset may be needed as last resort.
+
+    const auto& hal = descriptor_->hal();
+    CoreType dispatch_core_type = dispatch_core_manager_.get_dispatch_core_type();
+    const auto& mem_map = *dispatch_mem_map_[enchantum::to_underlying(dispatch_core_type)];
+
+    const uint32_t overlay_start = hal.get_noc_overlay_start_addr();
+    const uint32_t stream_reg_space = hal.get_noc_stream_reg_space_size();
+    const uint32_t buf_size_reg_idx = hal.get_noc_stream_remote_dest_buf_size_reg_index();
+    const uint32_t num_streams = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
+
+    // 0x1FFFF is the maximum 17-bit value (MEM_WORD_ADDR_WIDTH = 17).  The firmware uses
+    // 17-bit wrapping arithmetic (stream_wrap_gt) where the comparison window is 2^16 = 65536.
+    // Using the full 17-bit max ensures that any pending wait_count — including values in
+    // [0x10000, 0x1FFFE] that 0xFFFF would fail to satisfy — is covered.
+    const uint32_t rescue_count = 0x1FFFF;
+
+    // get_logical_dispatch_cores_for_rescue returns (logical_core, core_type) for all
+    // FDKernelType::DISPATCH kernels (DISPATCH_S, DISPATCH_D, DISPATCH, PREFETCH, etc.).
+    // This is the correct set to rescue: get_registered_termination_cores() only returns
+    // RelayMux (ROUTING) cores and would be a complete no-op for dispatch_s.
+    const auto dispatch_core_infos = dispatch_topology_->get_logical_dispatch_cores_for_rescue(device->id());
+    std::vector<uint32_t> val{rescue_count};  // value never changes; allocate once outside the loop
+    for (const auto& [logical_core, core_type] : dispatch_core_infos) {
+        for (uint32_t i = 0; i < num_streams; i++) {
+            uint32_t stream_id = mem_map.get_dispatch_stream_index(i);
+            uint32_t reg_addr = overlay_start + (stream_id * stream_reg_space) + (buf_size_reg_idx << 2);
+            try {
+                detail::WriteToDeviceL1(device, logical_core, reg_addr, val, core_type);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "rescue_stuck_dispatch_cores: Device {} core ({},{}) stream={} write failed: {}",
+                    device->id(),
+                    logical_core.x,
+                    logical_core.y,
+                    stream_id,
+                    e.what());
+            }
+        }
+        log_warning(
+            tt::LogMetal,
+            "rescue_stuck_dispatch_cores: Device {} core ({},{}) injected count={:#x} on {} streams",
+            device->id(),
+            logical_core.x,
+            logical_core.y,
+            rescue_count,
+            num_streams);
+    }
+
+    // Brief pause to let firmware observe the unblocked stream registers and advance
+    // past the wait loop before we send the termination signal.
+    if (!dispatch_core_infos.empty()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+        // GAP 3: Post-rescue verification — re-attempt wait_until_cores_done with a short
+        // timeout to confirm the firmware actually advanced past the stuck wait loop.
+        // If it still hasn't advanced, log a warning but don't TT_THROW — the termination
+        // signal path (process_termination_signals) may still succeed.
+        auto dispatch_cores = get_virtual_dispatch_cores(device->id());
+        try {
+            // NOTE: was 100ms; increased to 1000ms (#42429) to avoid premature timeout on slower relay paths.
+            tt::llrt::internal_::wait_until_cores_done(device->id(), dev_msgs::RUN_MSG_GO, dispatch_cores, 1000, true);
+            log_info(
+                tt::LogMetal,
+                "rescue_stuck_dispatch_cores: Device {} dispatch cores successfully unblocked after rescue injection",
+                device->id());
+        } catch (...) {
+            log_warning(
+                tt::LogMetal,
+                "rescue_stuck_dispatch_cores: Device {} dispatch cores may still be stuck after rescue injection "
+                "— proceeding to process_termination_signals anyway",
+                device->id());
+
+            // FIX AD: Hard-reset still-stuck Tensix dispatch cores via PCIe (MMIO devices only).
+            //
+            // Dispatch cores stuck in a NOC write barrier or fabric-acknowledgment wait are NOT
+            // unblocked by stream-counter injection (which only satisfies stream_wrap_gt waits).
+            // Leaving these cores running contaminates the next process: it inherits the stuck
+            // BRISC and sees 5-second CQ timeouts on every operation.
+            //
+            // For MMIO devices we can hard-reset the core directly via PCIe without going
+            // through the ETH relay, so it is safe to do here.  Non-MMIO relay-broken devices
+            // already returned early (FIX Y guard at the top of this function).
+            if (device->is_mmio_capable() && !dispatch_cores.empty()) {
+                log_warning(
+                    tt::LogMetal,
+                    "rescue_stuck_dispatch_cores: Device {} performing hard BRISC reset on {} still-stuck dispatch "
+                    "cores via PCIe",
+                    device->id(),
+                    dispatch_cores.size());
+                for (const auto& virtual_core : dispatch_cores) {
+                    try {
+                        cluster_.assert_risc_reset_at_core(
+                            tt_cxy_pair(device->id(), virtual_core), tt::umd::RiscType::ALL);
+                        cluster_.deassert_risc_reset_at_core(
+                            tt_cxy_pair(device->id(), virtual_core), tt::umd::RiscType::ALL);
+                        // FIX PB: clear ERISC dispatch launch flag after rescue hard-reset.
+                        // Identical to FIX PA in risc_firmware_initializer.cpp: hw reset does NOT zero L1,
+                        // so fw_launch_addr retains its non-zero value from the prior dispatch session.
+                        // On the next test's open, erisc_app_still_running() sees non-zero flag →
+                        // 500ms wait_until_cores_done timeout fires → another force-reset → loop.
+                        // (Observed cascade: runs 25094103200 / 25095358480, 146+ occurrences.)
+                        try {
+                            const auto aeth_idx = hal_.get_programmable_core_type_index(
+                                HalProgrammableCoreType::ACTIVE_ETH);
+                            const uint32_t fw_launch_addr =
+                                hal_.get_jit_build_config(aeth_idx, 0, 0).fw_launch_addr;
+                            cluster_.write_core_immediate(
+                                device->id(), virtual_core, std::vector<uint32_t>{0}, fw_launch_addr);
+                        } catch (...) {
+                            // Best-effort: MMIO chips always succeed via PCIe; non-MMIO chips
+                            // are already excluded by the relay guard at the top of this function.
+                        }
+                        log_info(
+                            tt::LogMetal,
+                            "rescue_stuck_dispatch_cores: Device {} hard-reset dispatch core ({},{})",
+                            device->id(),
+                            virtual_core.x,
+                            virtual_core.y);
+                    } catch (const std::exception& e) {
+                        log_error(
+                            tt::LogMetal,
+                            "rescue_stuck_dispatch_cores: Device {} hard-reset of core ({},{}) failed: {}",
+                            device->id(),
+                            virtual_core.x,
+                            virtual_core.y,
+                            e.what());
+                    } catch (...) {
+                        log_error(
+                            tt::LogMetal,
+                            "rescue_stuck_dispatch_cores: Device {} hard-reset of core ({},{}) failed with "
+                            "non-std exception",
+                            device->id(),
+                            virtual_core.x,
+                            virtual_core.y);
+                    }
+                }
+            }
         }
     }
 }
 
 void DispatchKernelInitializer::process_termination_signals() const {
     for (auto* dev : devices_) {
+        // FIX AO (#42429): skip relay-broken non-MMIO devices — UMD ETH relay is dead after
+        // Phase 3 re-launches fabric firmware on MMIO relay ERISCs; WriteToDeviceL1 and
+        // l1_barrier would each hang for ~5s before timing out, wasting ~10s per device.
+        if (!dev->is_mmio_capable() && dev->is_fabric_relay_path_broken()) {
+            log_warning(
+                tt::LogMetal,
+                "process_termination_signals: Device {} relay path broken (non-MMIO) — "
+                "skipping termination writes and l1_barrier to avoid UMD relay hang (FIX AO #42429)",
+                dev->id());
+            continue;
+        }
         const auto& info = dispatch_topology_->get_registered_termination_cores(dev->id());
         for (const auto& core_to_terminate : info) {
             std::vector<uint32_t> val{core_to_terminate.val};
-            detail::WriteToDeviceL1(
-                dev, core_to_terminate.logical_core, core_to_terminate.address, val, core_to_terminate.core_type);
+            try {
+                detail::WriteToDeviceL1(
+                    dev,
+                    core_to_terminate.logical_core,
+                    core_to_terminate.address,
+                    val,
+                    core_to_terminate.core_type);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "process_termination_signals: Device {} write failed (ETH relay dead?): {} — skipping",
+                    dev->id(),
+                    e.what());
+            } catch (...) {
+                log_warning(
+                    tt::LogMetal,
+                    "process_termination_signals: Device {} write failed with non-std exception — skipping",
+                    dev->id());
+            }
         }
-        cluster_.l1_barrier(dev->id());
+        try {
+            cluster_.l1_barrier(dev->id());
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogMetal,
+                "process_termination_signals: Device {} l1_barrier failed: {}",
+                dev->id(),
+                e.what());
+        } catch (...) {
+            log_warning(
+                tt::LogMetal,
+                "process_termination_signals: Device {} l1_barrier failed with non-std exception",
+                dev->id());
+        }
     }
 }
 

@@ -57,6 +57,23 @@ struct handshake_info_t {
 
 FORCE_INLINE volatile tt_l1_ptr handshake_info_t* init_handshake_info(
     uint32_t handshake_register_address, uint16_t my_mesh_id, uint8_t my_device_id) {
+    // FIX AH: Flush stale ETH TX queue state, but only when the queue is actually busy.
+    // ERISC soft-reset halts the RISCV core but does NOT reset ETH MAC/DMA hardware.
+    // If the prior firmware was terminated while an ETH TX was in-flight, ETH_TXQ_CMD
+    // remains non-zero, causing the next eth_send_packet() to spin forever on
+    // eth_txq_is_busy(). ETH_TXQ_CMD_FLUSH aborts that stale transfer.
+    //
+    // CRITICAL: On Wormhole, eth_txq_is_busy() = (ETH_TXQ_CMD != 0).
+    // Writing ETH_TXQ_CMD_FLUSH=0x8 to an already-idle queue (ETH_TXQ_CMD==0) may NOT
+    // auto-clear the register (HW does not self-clear for a no-op flush). The subsequent
+    // while(eth_txq_is_busy()){} would then spin forever — observed as both local ERISC
+    // and peer ERISC hanging at STARTED. Guard the flush to skip it when the queue is
+    // already idle (ETH_TXQ_CMD==0): nothing to abort, no hang risk.
+    if (eth_txq_is_busy()) {
+        eth_txq_reg_write(0, ETH_TXQ_CMD, ETH_TXQ_CMD_FLUSH);
+        eth_txq_reg_read(0, ETH_TXQ_CMD);  // dummy read (matches eth_txq_is_busy pattern)
+        while (eth_txq_is_busy()) {}        // wait for flush to complete
+    }
     volatile tt_l1_ptr handshake_info_t* handshake_info =
         reinterpret_cast<volatile tt_l1_ptr handshake_info_t*>(handshake_register_address);
     handshake_info->local_value = 0;
@@ -80,6 +97,8 @@ FORCE_INLINE void sender_side_handshake(
     uint32_t local_val_addr = ((uint32_t)(&handshake_info->local_value)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t scratch_addr = ((uint32_t)(&handshake_info->scratch)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t count = 0;
+    constexpr uint32_t kWatchdogIter = 100'000'000;
+    uint32_t watchdog_count = 0;
     while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE) {
         if (count == HS_CONTEXT_SWITCH_TIMEOUT) {
             count = 0;
@@ -90,8 +109,31 @@ FORCE_INLINE void sender_side_handshake(
             count++;
             internal_::eth_send_packet(0, scratch_addr, local_val_addr, 1);
         }
+        if (++watchdog_count >= kWatchdogIter) {
+            WAYPOINT("HSSB");  // HandShake Sender Base timeout — still spinning
+            watchdog_count = 0;
+        }
         invalidate_l1_cache();
     }
+    // FIX HS1 (#42429): Send one final packet after exiting to handle the simultaneous-sender
+    // race condition where both sides call sender_side_handshake() concurrently:
+    //
+    //   1. Side A sends MAGIC_HANDSHAKE_VALUE → B.local_value.
+    //   2. Side B's init_handshake_info() resets B.local_value = 0 (erasing A's write).
+    //      This is possible because one device's UMD relay is ~200x faster, so B starts
+    //      ~6ms after A — within A's send loop but before A exits.
+    //   3. Side B (also in sender mode) sends MAGIC_HANDSHAKE_VALUE → A.local_value.
+    //   4. Side A sees A.local_value == MAGIC_HANDSHAKE_VALUE and exits the loop.
+    //   5. Side A stops sending — B.local_value is still 0, nobody will write to it.
+    //   6. Side B is stuck forever: B.local_value never becomes MAGIC_HANDSHAKE_VALUE.
+    //
+    // Fix: after the loop exits, send one unconditional final packet. It arrives at the
+    // remote AFTER the remote has completed init_handshake_info() (and its reset), so
+    // even if all earlier sends were erased by the remote's reset, this packet unblocks it.
+    // In the normal (non-collision) case this is harmless: remote is receiver_side_handshake()
+    // which has already exited after sending its ack — the extra write to its local_value
+    // is ignored.
+    internal_::eth_send_packet(0, scratch_addr, local_val_addr, 1);
 }
 
 FORCE_INLINE void receiver_side_handshake(
@@ -104,6 +146,8 @@ FORCE_INLINE void receiver_side_handshake(
     uint32_t local_val_addr = ((uint32_t)(&handshake_info->local_value)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t scratch_addr = ((uint32_t)(&handshake_info->scratch)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t count = 0;
+    constexpr uint32_t kWatchdogIter = 100'000'000;
+    uint32_t watchdog_count = 0;
     while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE) {
         if (count == HS_CONTEXT_SWITCH_TIMEOUT) {
             count = 0;
@@ -112,6 +156,10 @@ FORCE_INLINE void receiver_side_handshake(
 #endif
         } else {
             count++;
+        }
+        if (++watchdog_count >= kWatchdogIter) {
+            WAYPOINT("HSRB");  // HandShake Receiver Base timeout — still spinning
+            watchdog_count = 0;
         }
         invalidate_l1_cache();
     }
@@ -165,6 +213,9 @@ FORCE_INLINE void sender_side_start(
     initialize_edm_common_datastructures(handshake_register_address);
     eth_wait_receiver_done(HS_CONTEXT_SWITCH_TIMEOUT);
     while (eth_txq_is_busy()) {
+        // NOTE: a RISC-V PAUSE hint (.4byte 0x0100000F) here caused a measured 13.8% BW
+        // regression in Ring topology (5.9% overall) on T3000 vs. the NOP-baseline goldens.
+        // Keep identical to main (nop).
         asm volatile("nop");
     }
     eth_send_bytes(handshake_register_address, handshake_register_address, 16);
@@ -197,6 +248,9 @@ FORCE_INLINE void receiver_side_finish(
     uint32_t handshake_register_address, size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
     eth_wait_for_bytes(16, HS_CONTEXT_SWITCH_TIMEOUT);
     while (eth_txq_is_busy()) {
+        // NOTE: a RISC-V PAUSE hint (.4byte 0x0100000F) here caused a measured 13.8% BW
+        // regression in Ring topology (5.9% overall) on T3000 vs. the NOP-baseline goldens.
+        // Keep identical to main (nop).
         asm volatile("nop");
     }
     eth_receiver_channel_done(0);

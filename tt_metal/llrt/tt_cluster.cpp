@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <future>
 #include <optional>
+#include <thread>
 #include <tt_stl/fmt.hpp>
 #include "tt_cluster.hpp"
 #include "llrt/rtoptions.hpp"
@@ -496,7 +498,42 @@ void Cluster::start_driver(umd::DeviceParams& device_params) const {
 
 Cluster::~Cluster() {
     log_info(tt::LogDevice, "Closing user mode device drivers");
-    this->driver_->close_device();
+
+    // FIX AE (#42429): Mark ALL remote chips relay-broken before close_device().
+    // UMD's close_device() -> RemoteChip::close_device() calls set_power_state() and
+    // assert_risc_reset() which go through the remote communication layer and may trigger
+    // wait_for_non_mmio_flush(). If the relay is dead, this blocks for up to 5 seconds,
+    // which allows a racing open_device() (new Cluster) to start while UMD destructors
+    // are still running -> heap corruption of shared global state.
+    // Since we're tearing down, no future I/O needs the flush to succeed.
+    // Supersedes FIX AW (detach + timeout) — no thread racing needed when flush is instant.
+    try {
+        for (const auto& chip_id : this->all_chip_ids()) {
+            if (this->cluster_desc_->is_chip_remote(chip_id)) {
+                this->driver_->mark_relay_broken(chip_id);
+            }
+        }
+    } catch (...) {
+        // Best-effort; if this fails, the try/catch below still protects us.
+    }
+
+    // FIX J: driver_->close_device() can throw UmdException (e.g. ETH relay timeout during
+    // RemoteChip::close_device()).  Destructors are implicitly noexcept, so an uncaught
+    // exception here calls std::terminate() -> SIGABRT.  Catch and log instead.
+    // See: https://github.com/tenstorrent/tt-metal/issues/42429
+    try {
+        this->driver_->close_device();
+    } catch (const std::exception& e) {
+        log_warning(
+            tt::LogDevice,
+            "~Cluster: driver_->close_device() threw: {}. Device may be left in unclean state and may need reset.",
+            e.what());
+    } catch (...) {
+        log_warning(
+            tt::LogDevice,
+            "~Cluster: driver_->close_device() threw non-std exception. Device may be left in unclean state and "
+            "may need reset.");
+    }
 
     this->sdesc_per_chip_.clear();
     this->device_to_host_mem_channel_.clear();
@@ -527,6 +564,15 @@ ChipId Cluster::get_physical_chip_id_from_eth_coord(const EthCoord& eth_coord) c
     }
     TT_FATAL(false, "Physical chip id not found for eth coord");
     return 0;
+}
+
+std::optional<ChipId> Cluster::try_get_physical_chip_id_from_eth_coord(const EthCoord& eth_coord) const {
+    for (const auto& [physical_chip_id, coord] : this->get_all_chip_ethernet_coordinates()) {
+        if (coord == eth_coord) {
+            return physical_chip_id;
+        }
+    }
+    return std::nullopt;
 }
 
 size_t Cluster::number_of_user_devices() const {
@@ -750,6 +796,46 @@ void Cluster::assert_risc_reset_at_core(const tt_cxy_pair& core, const tt::umd::
     this->driver_->assert_risc_reset(core.chip, core_coord, soft_resets);
 }
 
+void Cluster::assert_risc_reset_at_core_write_only(
+    const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets) const {
+    const metal_SocDescriptor& soc_desc = this->get_soc_desc(core.chip);
+    tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
+    this->driver_->assert_risc_reset_write_only(core.chip, core_coord, soft_resets);
+    if (this->cluster_desc_->is_chip_remote(core.chip)) {
+        // FIX AE-style: best-effort flush; mark relay broken on timeout rather than hanging.
+        try {
+            this->driver_->wait_for_non_mmio_flush(core.chip);
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogDevice,
+                "assert_risc_reset_at_core_write_only: wait_for_non_mmio_flush(chip {}) threw: {}. "
+                "Marking relay broken.",
+                core.chip,
+                e.what());
+            this->driver_->mark_relay_broken(core.chip);
+        }
+    }
+}
+
+void Cluster::deassert_risc_reset_at_core_write_only(const tt_cxy_pair& core) const {
+    const metal_SocDescriptor& soc_desc = this->get_soc_desc(core.chip);
+    tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
+    this->driver_->deassert_risc_reset_write_only(core.chip, core_coord);
+    if (this->cluster_desc_->is_chip_remote(core.chip)) {
+        try {
+            this->driver_->wait_for_non_mmio_flush(core.chip);
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogDevice,
+                "deassert_risc_reset_at_core_write_only: wait_for_non_mmio_flush(chip {}) threw: {}. "
+                "Marking relay broken.",
+                core.chip,
+                e.what());
+            this->driver_->mark_relay_broken(core.chip);
+        }
+    }
+}
+
 void Cluster::write_dram_vec(
     const void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const {
     const metal_SocDescriptor& desc_to_use = get_soc_desc(device_id);
@@ -811,20 +897,76 @@ void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair 
     }
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
-    if (this->supports_dma_operations(chip_id, sz_in_bytes)) {
-        this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
-    } else {
-        this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
-    }
-
+    // FIX NX (#42429): for non-MMIO chips, wrap both write_to_device and wait_for_non_mmio_flush
+    // in a try/catch. write_to_non_mmio does not short-circuit on relay_broken_, so even after
+    // a prior FIX AE catch has marked the relay broken, a subsequent write_to_device call will
+    // still attempt the write and timeout (~5s per chip). Callers such as
+    // WatcherServer::init_devices() and set_internal_routing_info_for_ethernet_cores iterate all
+    // chips; once a relay is dead this catch prevents uncaught exceptions from propagating to
+    // test SetUp() and killing the test process.
+    //
+    // FIX NY (#42429): Before attempting the write, check relay_broken_chips_ — a tt-metal-level
+    // set updated whenever FIX NX catches a relay timeout.  UMD's write_to_non_mmio does NOT
+    // check relay_broken_ before entering its 5s polling loop, so without this guard every
+    // subsequent write_core() call for the same chip pays another full 5s UMD timeout.
+    // Example: set_internal_routing_info_for_ethernet_cores iterates 6 ETH channels on chip 4,
+    // each call blocks 5s → 30s serial stall → GHA 5-minute action timeout.  With this guard,
+    // all writes after the first failure are skipped immediately (zero cost).
     if (this->cluster_desc_->is_chip_remote(chip_id)) {
-        this->driver_->wait_for_non_mmio_flush(chip_id);
+        // FIX NY: skip immediately if relay already known broken at tt-metal level.
+        if (this->relay_broken_chips_.count(chip_id)) {
+            log_debug(
+                tt::LogDevice,
+                "FIX NY: write_core(chip {}) skipped — relay already known broken.",
+                chip_id);
+            return;
+        }
+        try {
+            // DMA is MMIO-only (supports_dma_operations returns false for remote chips), so only
+            // the write_to_device (non-MMIO) path is relevant here.
+            this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+            // FIX AE (#42429): catch flush timeout so a dead relay doesn't hang the caller for 5s.
+            this->driver_->wait_for_non_mmio_flush(chip_id);
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogDevice,
+                "FIX NX: write_core(chip {}) threw: {}. Marking relay broken (FIX NX+NY).",
+                chip_id,
+                e.what());
+            this->driver_->mark_relay_broken(chip_id);
+            // FIX NY: also record in relay_broken_chips_ so subsequent write_core() calls for
+            // this chip are skipped immediately without paying another 5s UMD timeout.
+            this->relay_broken_chips_.insert(chip_id);
+        }
+    } else {
+        if (this->supports_dma_operations(chip_id, sz_in_bytes)) {
+            this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+        } else {
+            this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+        }
     }
 }
 
 void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const {
     const ChipId chip_id = core.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
+
+    // FIX NZ (#42429): For non-MMIO chips with a known-broken relay, skip read_from_device
+    // entirely. Without this guard, read_from_device -> read_non_mmio enters a 5s polling loop
+    // per read.  wait_until_cores_done in initialize_and_launch_firmware polls all worker cores
+    // (64+ on a full Wormhole tensix grid) on each device — a single pass over 64 cores on one
+    // dead-relay non-MMIO device blocks for 64 × 5 s = 320 s, well over the GHA 5-min timeout.
+    // Throwing immediately (same exception type UMD would eventually throw) allows callers such
+    // as reset_cores (try/catch around erisc_app_still_running) to handle the failure quickly.
+    // run_launch_phase checks is_relay_broken() to skip initialize_and_launch_firmware for
+    // these devices entirely, so in the normal degraded-init path this guard is a belt-and-
+    // suspenders safety net — no read should reach here for relay-broken non-MMIO devices.
+    if (this->cluster_desc_->is_chip_remote(chip_id) && this->relay_broken_chips_.count(chip_id)) {
+        throw std::runtime_error(fmt::format(
+            "FIX NZ: read_core(chip {}) skipped — relay already known broken. "
+            "Would have blocked for 5 s in read_non_mmio.",
+            chip_id));
+    }
 
     if (rtoptions_.get_watcher_enabled()) {
         tt::watcher_sanitize_host_noc_read(
@@ -865,10 +1007,35 @@ void Cluster::write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt
     }
 
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
-    this->driver_->write_to_device_reg(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
 
     if (this->cluster_desc_->is_chip_remote(chip_id)) {
-        this->driver_->wait_for_non_mmio_flush(chip_id);
+        // FIX BW (#42429): catch both write_to_device_reg and wait_for_non_mmio_flush
+        // exceptions for remote chips.  Previously, FIX AE only caught wait_for_non_mmio_flush;
+        // if write_to_device_reg itself threw (write_to_non_mmio timeout — "Timeout waiting
+        // for Ethernet core service remote IO request"), the relay was not marked broken at
+        // the Cluster level (relay_broken_chips_) and the exception propagated unchecked into
+        // callers such as initialize_and_launch_firmware, causing test failures.
+        //
+        // Two gaps in the original FIX AE fixed here:
+        //   1. write_to_device_reg exceptions are now caught (not just wait_for_non_mmio_flush).
+        //   2. relay_broken_chips_ is updated so is_relay_broken() returns true for subsequent
+        //      FIX NZ pre-checks and FIX NY guards.
+        // The exception is re-thrown so run_launch_phase's FIX BX catch can handle it.
+        try {
+            this->driver_->write_to_device_reg(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+            this->driver_->wait_for_non_mmio_flush(chip_id);
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogDevice,
+                "FIX BW: write_core_immediate(chip {}) threw: {}. Marking relay broken.",
+                chip_id,
+                e.what());
+            this->driver_->mark_relay_broken(chip_id);
+            this->relay_broken_chips_.insert(chip_id);
+            throw;
+        }
+    } else {
+        this->driver_->write_to_device_reg(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
     }
 }
 
@@ -897,7 +1064,17 @@ void Cluster::write_reg(const std::uint32_t* mem_ptr, tt_cxy_pair target, uint64
     tt::umd::CoreCoord target_coord = soc_desc.get_coord_at(target, CoordSystem::TRANSLATED);
     this->driver_->write_to_device_reg(mem_ptr, size_in_bytes, target.chip, target_coord, addr);
     if (this->cluster_desc_->is_chip_remote(chip_id)) {
-        this->driver_->wait_for_non_mmio_flush(chip_id);
+        // FIX AE (#42429): catch flush timeout so a dead relay doesn't hang the caller for 5s.
+        try {
+            this->driver_->wait_for_non_mmio_flush(chip_id);
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogDevice,
+                "FIX AE: wait_for_non_mmio_flush(chip {}) threw: {}. Marking relay broken.",
+                chip_id,
+                e.what());
+            this->driver_->mark_relay_broken(chip_id);
+        }
     }
 }
 
@@ -955,7 +1132,17 @@ void Cluster::noc_multicast_write(
     this->driver_->noc_multicast_write(const_cast<void*>(mem_ptr), sz_in_bytes, chip_id, start_coord, end_coord, addr);
 
     if (this->cluster_desc_->is_chip_remote(chip_id)) {
-        this->driver_->wait_for_non_mmio_flush(chip_id);
+        // FIX AE (#42429): catch flush timeout so a dead relay doesn't hang the caller for 5s.
+        try {
+            this->driver_->wait_for_non_mmio_flush(chip_id);
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogDevice,
+                "FIX AE: wait_for_non_mmio_flush(chip {}) threw: {}. Marking relay broken.",
+                chip_id,
+                e.what());
+            this->driver_->mark_relay_broken(chip_id);
+        }
     }
 }
 

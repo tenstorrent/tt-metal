@@ -4,9 +4,13 @@
 
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <unordered_set>
+
+#include <hostdevcommon/fabric_common.h>
 
 #include <tt-metalium/device.hpp>
 #include <hostdevcommon/common_values.hpp>
@@ -21,6 +25,8 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/experimental/device.hpp>
+
+struct metal_SocDescriptor;
 
 namespace tt::tt_metal {
 class SubDeviceManagerTracker;
@@ -149,7 +155,51 @@ public:
     void init_command_queue_device_with_topology(DispatchTopology* topology);
 
     bool compile_fabric();
-    void configure_fabric();
+    // pre_dead_channels: ETH channel IDs confirmed dead by terminate_stale_erisc_routers()
+    // (probe read timed out).  configure_fabric_cores() skips assert_risc_reset_at_core()
+    // for these channels to prevent the indefinite hang observed on T3K Device 4 ch7.
+    // skip_soft_reset_channels: ETH channel IDs with base-UMD relay firmware (edm_status=0x49706550).
+    // FIX M (#42429): configure_fabric_cores() must NOT soft-reset these — their BRISC is the relay
+    // endpoint for non-MMIO reads; halting it cascades into a full hang on deassert_risc_reset_at_core.
+    // external_umd_channels: ETH channel IDs at 0x49706550 with no in-cluster peer.
+    // FIX EXT (#42429): like skip_soft_reset_channels (soft-reset skipped via configure_fabric_cores),
+    // but ALSO skip write_launch_msg_to_core — loading FABRIC_1D on external channels causes ring-sync
+    // timeouts because the external peer can never respond to the ETH handshake.
+    void configure_fabric(
+        const std::unordered_set<uint32_t>& pre_dead_channels = {},
+        const std::unordered_set<uint32_t>& skip_soft_reset_channels = {},
+        const std::unordered_set<uint32_t>& external_umd_channels = {});
+    // Terminate fabric MUX tensix worker cores and re-launch them fresh.
+    // Called during quiesce to ensure MUX channel state is reset between iterations.
+    // Phase 1: quiesce_and_restart_fabric_workers() — terminate + reconfigure + relaunch all cores.
+    // Phase 2: wait_for_fabric_workers_ready() — poll for handshake completion + health check.
+    // The mesh-level caller MUST run Phase 1 on ALL devices before running Phase 2 on any
+    // device, so that sender and receiver ERISCs are both running before the handshake poll.
+    //
+    // FIX AE (#42429): When defer_eth_launch=true, Phase 3 configure_fabric_cores + runtime args
+    // + l1_barrier + WORKER write_launch_msg run normally, but ETH write_launch_msg is skipped.
+    // The mesh-level caller must then invoke launch_eth_cores_for_quiesce() to complete the ETH
+    // launch in the correct cross-device order (MMIO before non-MMIO, then non-MMIO sequentially).
+    void quiesce_and_restart_fabric_workers(bool defer_eth_launch = false);
+    // FIX AE: Completes the deferred ETH write_launch_msg from quiesce_and_restart_fabric_workers.
+    // Must be called after quiesce_and_restart_fabric_workers(defer_eth_launch=true).
+    // No-op if no ETH launch is pending (e.g. Phase 3 was skipped due to relay broken).
+    void launch_eth_cores_for_quiesce();
+    // FIX AF (#42429): After launch_eth_cores_for_quiesce(), poll this device's ETH channels
+    // until all show a non-zero edm_status (i.e. STARTED or beyond), or until timeout_ms
+    // elapses.  Called between successive non-MMIO device launches in Pass 1c to ensure the
+    // previous device's SENDER ERISCs are past Object Setup and in the handshake loop before
+    // the next device (whose channels peer with this device) begins executing.
+    // No-op for MMIO devices and for non-MMIO devices with a broken relay path.
+    void wait_for_eth_cores_launched(uint32_t timeout_ms = 500);
+    void wait_for_fabric_workers_ready();
+    // Called by FabricFirmwareInitializer when this device is placed in mmio_dead_peer_devices_.
+    void set_fabric_is_mmio_dead_peer_device(bool v) { fabric_is_mmio_dead_peer_device_ = v; }
+    // FIX P25-CLEAN-V2 (#42429): set of device IDs being quiesced together in the current cycle.
+    // Populated by mesh_device before Pass 1a; cleared at cycle end.  Used in Phase 2.5 to
+    // distinguish "already-TERMINATED because peer was quiesced first" (must re-launch) from
+    // "already-TERMINATED because peer is not in quiesce set" (safe to skip).
+    void set_quiescing_devices(std::unordered_set<ChipId> ids) { quiescing_device_ids_ = std::move(ids); }
     // Puts device into reset
     bool close() override;
 
@@ -169,6 +219,29 @@ public:
     CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const override;
 
     bool is_mmio_capable() const override;
+    bool is_fabric_relay_path_broken() const override { return fabric_relay_path_broken_.load(); }
+    bool is_fabric_channels_not_ready_for_traffic() const override { return fabric_channels_not_ready_for_traffic_.load(); }
+    bool is_fabric_stale_base_umd_channels() const override { return fabric_stale_base_umd_channels_.load(); }
+    void clear_fabric_stale_base_umd_channels() override { fabric_stale_base_umd_channels_.store(false); }
+    void set_fabric_stale_base_umd_channels() override { fabric_stale_base_umd_channels_.store(true); }
+    // FIX RZ3 (#42429): Persistent flag — set when FIX M fires, never cleared by ring-sync.
+    bool is_fabric_base_umd_fixm_init() const override { return fabric_base_umd_fixm_init_.load(); }
+    void clear_fabric_base_umd_fixm_init() override { fabric_base_umd_fixm_init_.store(false); }
+    bool is_fabric_teardown_timed_out() const override { return fabric_teardown_timed_out_.load(); }
+    // Called by FabricFirmwareInitializer::post_teardown() after teardown_fabric_config() records
+    // timed-out chip IDs.  Sets the flag so FIX AB hard-resets MMIO ETH channels at process exit.
+    void set_fabric_teardown_timed_out() override { fabric_teardown_timed_out_.store(true); }
+    void set_fabric_relay_path_broken() override { fabric_relay_path_broken_.store(true); }
+    void set_fabric_channels_not_ready_for_traffic() override {
+        fabric_channels_not_ready_for_traffic_.store(true);
+    }
+    bool is_fabric_ring_sync_timed_out() const override { return fabric_ring_sync_timed_out_.load(); }
+    void set_fabric_ring_sync_timed_out() override { fabric_ring_sync_timed_out_.store(true); }
+    // FIX ST (#42429): Returns the effective (post-FIX-RR) pre-dead ETH channel set.
+    // See device.hpp comment.
+    const std::unordered_set<uint32_t>& get_fabric_pre_dead_channels() const override {
+        return fabric_pre_dead_channels_;
+    }
     // TODO #20966: Remove these APIs
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
     void set_mesh_device(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -228,6 +301,27 @@ private:
     CoreCoord dram_core_from_dram_channel(uint32_t dram_channel, NOC noc = NOC::NOC_0) const;
     CoreCoord virtual_core_from_physical_core(const CoreCoord& physical_coord) const;
 
+    // Phase 5b of wait_for_fabric_workers_ready(): per-channel ERISC health check.
+    //
+    // Polls all active ETH channels until they reach READY_FOR_TRAFFIC (2-second budget).
+    // Separates pre-known-dead channels from genuinely unhealthy ones — pre-dead channels
+    // never received firmware and are expected to be absent from READY_FOR_TRAFFIC.
+    //
+    // Returns true  → caller should return early (all-dead cascade prevention path).
+    // Returns false → health check passed; caller should continue to success log.
+    // TT_THROW       → genuine firmware failure; propagates to caller.
+    //
+    // active_channels: set of (chan_id, direction) pairs for this device's active fabric links.
+    // soc_desc_p5:     SoC descriptor used to map channel IDs to logical ETH core coordinates.
+    // router_sync_addr: L1 address of the EDM status word polled for READY_FOR_TRAFFIC.
+    // expected_ready:   The READY_FOR_TRAFFIC sentinel value (EDMStatus::READY_FOR_TRAFFIC).
+    bool phase5b_erisc_health_check(
+        const std::set<std::pair<tt::tt_fabric::chan_id_t, tt::tt_fabric::eth_chan_directions>>& active_channels,
+        const metal_SocDescriptor& soc_desc_p5,
+        uint32_t router_sync_addr,
+        uint32_t expected_ready,
+        tt::tt_fabric::chan_id_t master_router_chan);
+
     // TODO: Remove this member in favor of passing in dependencies directly
     MetalContext* context_ = nullptr;  // Runtime state
     MetalEnv* env_;                    // Lower level state
@@ -244,6 +338,159 @@ private:
 
     // Fabric program includes ethernet router kernel
     std::unique_ptr<Program> fabric_program_;
+    // SERIALIZATION INVARIANT (non-atomic fabric state fields):
+    // The fields below are NOT protected by a mutex and are NOT atomic.  They are safe under
+    // the following invariant: the mesh-level caller (MeshDevice / DeviceManager) guarantees
+    // that configure_fabric() / configure_and_compile_fabric() completes on all devices before
+    // any quiesce_and_restart_fabric_workers() / wait_for_fabric_workers_ready() call begins.
+    //
+    // Concretely:
+    //   WRITE phase (configure):   fabric_pre_dead_channels_, fabric_is_mmio_dead_peer_device_
+    //                              are written during configure_fabric().
+    //   READ phase (quiesce/wait): same fields are read during Phase 5b of
+    //                              wait_for_fabric_workers_ready().
+    //   WRITE+READ (quiesce):      pending_eth_launch_, pending_quiesce_newly_dead_eth_chans_,
+    //                              pending_phase25_force_reset_chans_ are written by
+    //                              quiesce_and_restart_fabric_workers() and read+cleared by
+    //                              launch_eth_cores_for_quiesce() — both called sequentially
+    //                              from the same mesh-level orchestration thread.
+    //
+    // Future refactors that parallelize configure and quiesce phases MUST either maintain this
+    // serialization ordering or protect every field listed above with a mutex.
+
+    // FIX P2 (#42429): ETH channel IDs confirmed dead during configure_fabric() — no firmware
+    // was loaded for these channels, so Phase 5 of quiesce_and_restart_fabric_workers must not
+    // expect them to reach READY_FOR_TRAFFIC.
+    std::unordered_set<uint32_t> fabric_pre_dead_channels_;
+    // FIX EXT (#42429): ETH channel IDs at 0x49706550 with no in-cluster peer (out-of-mesh
+    // channels).  Firmware was NOT loaded on these (write_launch_msg_to_core skipped).  Phase 5b
+    // (phase5b_erisc_health_check) must treat them as pre-dead (warning-only, not truly_unhealthy).
+    std::unordered_set<uint32_t> fabric_external_umd_channels_;
+    // FIX I2 (#42429): True when this MMIO device's master ETH channel connects to a
+    // dead-relay peer.  Firmware was loaded on this device but the peer will never complete
+    // the handshake (peer ETH relay broken).  wait_for_fabric_workers_ready() must skip
+    // Phase 5 (handshake poll + health check) — same as init-time FIX I skip in
+    // wait_for_fabric_router_sync() and verify_all_fabric_channels_healthy().
+    // Set by FabricFirmwareInitializer::compile_and_configure_fabric().
+    bool fabric_is_mmio_dead_peer_device_ = false;
+
+    // fabric_relay_path_broken_ — state machine:
+    //
+    //   CLEAR (false)  ──[SET sites (6)]──►  SET (true)
+    //
+    //   SET site 1 (quiesce_and_restart_fabric_workers, ENTRY snapshot deadline):
+    //     ENTRY snapshot timed out reading all-channel statuses before quiesce begins.
+    //     The relay ERISC is suspected dead or unresponsive.
+    //
+    //   SET site 2 (quiesce_and_restart_fabric_workers, Phase 5 catch non-MMIO):
+    //     Phase 5 relay read threw an exception on a non-MMIO device.
+    //     Relay ERISC is now running fabric firmware; UMD relay is gone.
+    //
+    //   SET site 3 (quiesce_and_restart_fabric_workers, Phase 5 timeout 0x0 non-MMIO):
+    //     Phase 5 status read returned 0x0 (BRISC reset) on a non-MMIO device.
+    //     FIX V path — relay peer is unreachable.
+    //
+    //   SET site 4 (quiesce_and_restart_fabric_workers, Phase 2.5 non-MMIO relay read):
+    //     Phase 2.5 relay read threw or timed out, setting relay_path_broken for this
+    //     device before proceeding to Phase 3 re-launch.
+    //
+    //   SET site 5 (wait_for_fabric_workers_ready, Phase 5b relay read exception):
+    //     Phase 5b health-check relay read threw; relay ERISC confirmed non-functional.
+    //
+    //   SET site 6 (FIX AN — device.cpp, Phase 2.5 catch in quiesce):
+    //     Phase 2.5 L1 read threw (relay not ready, or out-of-mesh MMIO channel has no
+    //     SOC descriptor entry).  Applies to BOTH MMIO and non-MMIO devices — Phase 5
+    //     has an unconditional fabric_relay_path_broken_ early-return that protects all
+    //     device types from reading indeterminate ETH state.  Added by FIX AN (#42429).
+    //
+    //   CLEAR site (configure_fabric, top of function):
+    //     Fresh fabric firmware is loaded on all ETH channels.  Relay is restored.
+    //     Cleared unconditionally at the top of configure_fabric() so that the next
+    //     quiesce starts from a clean state regardless of prior session outcome.
+    //
+    // Must be std::atomic<bool>: read by fd_mesh_command_queue.cpp dispatch thread
+    // (FIX Z fast-throw) while quiesce writes it from a different thread.
+    std::atomic<bool> fabric_relay_path_broken_{false};
+
+    // FIX AM (#42429): Set by wait_for_fabric_workers_ready() Phase 5b FIX AK block when all
+    // truly-unhealthy channels are stuck at or below LOCAL_HANDSHAKE_COMPLETE (partial-mesh
+    // quiesce — peer devices not in the quiesce set never completed the EDM handshake).
+    // Unlike fabric_relay_path_broken_, the relay IS functional here; the fabric just isn't
+    // at READY_FOR_TRAFFIC.  Tests must check this flag (in addition to fabric_relay_path_broken_)
+    // before running AllGather operations that require full fabric readiness.
+    // Cleared unconditionally at the top of configure_fabric().
+    std::atomic<bool> fabric_channels_not_ready_for_traffic_{false};
+
+    // FIX TK (#42429): Set by FabricFirmwareInitializer::verify_all_fabric_channels_healthy()
+    // when fabric_channels_not_ready_for_traffic_ was set due to ring sync timeout (FIX TI path),
+    // not the FIX AM STARTED-state path.  RiscFirmwareInitializer::teardown() checks this flag
+    // in FIX BA to skip adding the device to relay_broken_non_mmio.  Cleared at top of
+    // configure_fabric() (device.cpp:430) so a fresh init cycle starts clean.
+    std::atomic<bool> fabric_ring_sync_timed_out_{false};
+
+    // FIX RZ (#42429): Set in configure_fabric() when this non-MMIO device had one or more
+    // ETH channels with base-UMD relay firmware (edm_status=0x49706550) that required FIX M's
+    // skip-soft-reset / launch_msg transition.  The launch_msg path is sufficient for relay
+    // reads but leaves the ETH in a state where AllGather traffic hangs.  The Python test
+    // is_fabric_degraded() guard checks this flag to skip AllGather in such clusters.
+    // Cleared unconditionally at the top of configure_fabric() alongside the other flags.
+    std::atomic<bool> fabric_stale_base_umd_channels_{false};
+    // FIX RZ3 (#42429): Persistent companion to fabric_stale_base_umd_channels_.
+    // Set whenever fabric_stale_base_umd_channels_ is set (FIX M fires at configure_fabric).
+    // Cleared only at the start of configure_fabric() — NOT by FIX RZ2's ring-sync clear.
+    // Checked by is_fabric_degraded() and GAP-A/GAP-C to prevent AllGather dispatch for
+    // the entire session when base-UMD channels were present at session open.
+    std::atomic<bool> fabric_base_umd_fixm_init_{false};
+
+    // FIX AE (#42429): State for deferred ETH ERISC launch during quiesce.
+    // (See SERIALIZATION INVARIANT block above — these fields are non-atomic/non-mutex.)
+    // Set by quiesce_and_restart_fabric_workers(defer_eth_launch=true),
+    // consumed and cleared by launch_eth_cores_for_quiesce().
+    // pending_eth_launch_ is true iff configure_fabric_cores completed and ETH
+    // write_launch_msg was skipped — launch_eth_cores_for_quiesce() must be called.
+    // pending_quiesce_newly_dead_eth_chans_: channels that died during configure_fabric_cores;
+    // ETH write_launch_msg is skipped for these to avoid relay hangs on dead cores.
+    bool pending_eth_launch_ = false;
+    std::unordered_set<uint32_t> pending_quiesce_newly_dead_eth_chans_;
+    // FIX AI-2 (#42429): ETH channels that Phase 2.5 force-halted with assert_risc_reset(ALL).
+    // Phase 3 / launch_eth_cores_for_quiesce() must deassert these after write_launch_msg.
+    std::unordered_set<uint32_t> pending_phase25_force_reset_chans_;
+    // FIX AR-2 (#42429): subset of pending_phase25_force_reset_chans_ that were at
+    // REMOTE_HANDSHAKE_COMPLETE (0xa1b1c1d1) when Phase 2.5 timed out and force-reset them.
+    // EDM firmware was actively running on these channels (not quiesced), so after force-reset
+    // they need a full UMD relay boot cycle — potentially >500ms.  FIX AS must use an extended
+    // timeout (2000ms) for these channels to avoid incorrectly marking them newly_dead and
+    // cascading into relay_path_broken_ via FIX AT.
+    std::unordered_set<uint32_t> phase25_force_reset_rhc_chans_;
+    // FIX P25-CLEAN (#42429): channels that Phase 2.5 found already TERMINATED
+    // (status=0xa4b4c4d4 "already clean") — skip Phase 3 launch for these, as
+    // their peers are not active in the current fabric/quiesce session.
+    std::unordered_set<uint32_t> phase25_already_clean_chans_;
+    // FIX P25-CLEAN-V2 (#42429): set of device IDs being quiesced together in the current cycle.
+    // Set by mesh_device before Pass 1a, used in Phase 2.5 to gate the P25-CLEAN skip:
+    // channels whose peer device IS in this set are NOT added to phase25_already_clean_chans_
+    // and WILL be re-launched in Phase 3 (their TERMINATED state was caused by the peer
+    // quiescing first, not by being disconnected from the active fabric).
+    std::unordered_set<ChipId> quiescing_device_ids_;
+    // FIX QH-1 (#42429): P25-CLEAN channels persisted for Phase 5b health check exclusion.
+    // Channels populated here were skipped by launch_eth_cores_for_quiesce() because they
+    // were already TERMINATED before quiesce and their peer was not in the quiesce set.
+    // They will naturally remain TERMINATED after quiesce restart — Phase 5b must NOT count
+    // them as failures (they never had firmware launched, so READY_FOR_TRAFFIC is unreachable).
+    // Cleared after Phase 5b consumes it.  Populated by both the inline path (in
+    // quiesce_and_restart_fabric_workers) and the deferred path (launch_eth_cores_for_quiesce).
+    std::unordered_set<uint32_t> phase25_p25_clean_for_health_check_;
+
+    // FIX AB extension: Set when teardown_fabric_config() times out waiting for TERMINATED
+    // on any ETH channel belonging to this device.  Unlike fabric_relay_path_broken_ (which
+    // only fires for non-MMIO relay failures), this flag can be set on ANY device — MMIO or
+    // non-MMIO — wherever a teardown timeout occurred without the relay breaking.  Timed-out
+    // channels are left running partial fabric firmware and will corrupt the next session's
+    // UMD relay reads.  FIX AB in risc_firmware_initializer.cpp reads this flag at process
+    // exit and hard-resets MMIO ETH channels via PCIe to restore UMD base relay firmware.
+    // Must be std::atomic<bool> for cross-thread safety (teardown and FIX AB may run on
+    // different threads at process exit).
+    std::atomic<bool> fabric_teardown_timed_out_{false};
 
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
     uint8_t num_hw_cqs_ = 1;

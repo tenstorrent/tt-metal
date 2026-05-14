@@ -121,6 +121,21 @@ public:
     bool system_supported() {
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const auto& eth_coord_mapping = this->get_eth_coord_mapping();
+        // FIX TD (#42429): Also verify that EthCoords for the local mesh exist in the cluster.
+        // On a degraded T3K, chip count may match but the actual EthCoords in the YAML may not
+        // be present (topology downgrade changed the PCIe→chip assignment). Using the fatal
+        // get_physical_chip_id_from_eth_coord() on missing coords causes TT_FATAL → SIGABRT.
+        const char* mesh_id_str = std::getenv("TT_MESH_ID");
+        if (mesh_id_str != nullptr) {
+            uint32_t local_mesh_id = static_cast<uint32_t>(std::stoi(mesh_id_str));
+            if (local_mesh_id < eth_coord_mapping.size()) {
+                for (const auto& eth_coord : eth_coord_mapping[local_mesh_id]) {
+                    if (!cluster.try_get_physical_chip_id_from_eth_coord(eth_coord).has_value()) {
+                        return false;  // EthCoord not in cluster → degraded topology, skip
+                    }
+                }
+            }
+        }
         return *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) ==
                    eth_coord_mapping.size() &&
                cluster.user_exposed_chip_ids().size() == eth_coord_mapping[0].size();
@@ -152,6 +167,21 @@ public:
     bool system_supported() {
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const auto& eth_coord_mapping = this->get_eth_coord_mapping();
+        // FIX TD (#42429): Verify that EthCoords for the local mesh exist in the cluster.
+        // On a degraded T3K, chip count may match but EthCoords in the YAML may not be present
+        // (topology downgrade changed PCIe→chip assignment). Using the fatal
+        // get_physical_chip_id_from_eth_coord() on missing coords causes TT_FATAL → SIGABRT.
+        const char* mesh_id_str = std::getenv("TT_MESH_ID");
+        if (mesh_id_str != nullptr) {
+            uint32_t local_mesh_id = static_cast<uint32_t>(std::stoi(mesh_id_str));
+            if (local_mesh_id < eth_coord_mapping.size()) {
+                for (const auto& eth_coord : eth_coord_mapping[local_mesh_id]) {
+                    if (!cluster.try_get_physical_chip_id_from_eth_coord(eth_coord).has_value()) {
+                        return false;  // EthCoord not in cluster → degraded topology, skip
+                    }
+                }
+            }
+        }
         return *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) ==
                    eth_coord_mapping.size() &&
                cluster.user_exposed_chip_ids().size() == eth_coord_mapping[0].size();

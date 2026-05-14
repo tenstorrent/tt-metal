@@ -235,10 +235,15 @@ inline float tanh_expected_bf16_daz(float x) {
 }
 
 // =============================================================================
-// Test Fixture
+// Test Fixtures
 // =============================================================================
 
 class TanhFwUlpTest : public TTNNFixtureWithDevice {};
+
+// UlpCalculatorVerification is pure CPU math — no device needed.
+// Using a plain ::testing::Test avoids hanging on device open_mesh_device()
+// when the ERISC relay is dead at init time.
+class TanhFwUlpCpuTest : public ::testing::Test {};
 
 float run_tanh_fw_single(tt::tt_metal::distributed::MeshDevice& device, float input_val) {
     ttnn::Shape shape({1, 1, 32, 32});
@@ -564,7 +569,7 @@ TEST_F(TanhFwUlpTest, ReferenceImplementationVerification) {
 // reference table. The reference enumerates all BF16 bit patterns, sorts by
 // float value, and assigns order indices. Any formula bug will show as a
 // mismatch. This test does NOT require a device.
-TEST_F(TanhFwUlpTest, UlpCalculatorVerification) {
+TEST_F(TanhFwUlpCpuTest, UlpCalculatorVerification) {
     auto ref_table = bf16_ulp_reference::build_order_index_table();
 
     int index_mismatches = 0;

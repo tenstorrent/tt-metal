@@ -586,9 +586,24 @@ FORCE_INLINE void send_next_data(
         pkt_header->src_ch_id = sender_channel_index;
     }
 
-    if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
-        while (internal_::eth_txq_is_busy(sender_txq_id)) {
-        };
+    // Pre-send teardown escape (single check, no spin).
+    //
+    // The caller already gates entry into send_next_data on !eth_txq_is_busy() (when
+    // ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA is false, the can_send predicate includes that check).
+    // This single, non-looping teardown check closes the race window between the can_send
+    // gate and the actual eth_send_packet_bytes_unsafe() call: if teardown was signaled after
+    // can_send but before we reach here, we bail without committing the packet.
+    //
+    // The residual race is a few RISC-V instructions wide (single-digit nanoseconds) — far
+    // smaller than the host L1 write propagation latency for the teardown signal, and no
+    // worse than main branch which had no pre-send check at all.
+    //
+    // Critically, this does NOT spin on eth_txq_is_busy(), so Galaxy FABRIC_2D init (where
+    // at least one TXQ is never free during setup) can proceed without hanging.
+    if constexpr (!SKIP_CONNECTION_LIVENESS_CHECK) {
+        if (sender_worker_interface.has_worker_teardown_request()) {
+            return;
+        }
     }
     internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
 
@@ -605,6 +620,13 @@ FORCE_INLINE void send_next_data(
     record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
 
     while (internal_::eth_txq_is_busy(sender_txq_id)) {
+        // Post-send TXQ drain: NO teardown early-exit here.
+        // The packet is already committed to the ETH link via eth_send_packet_bytes_unsafe().
+        // Returning early would leave the packet in-flight; the remote ERISC will still deliver
+        // it to the destination Tensix L1 — which may have been reloaded with the next dispatch
+        // program by then, causing L1 corruption (BRISC .text mismatch).
+        // Teardown is handled by the single pre-send check above (before any packet is committed).
+        // Hardware guarantees this drain completes for committed packets.
     };
     remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
 }
@@ -1417,10 +1439,17 @@ FORCE_INLINE void coordinated_context_switch_start_as_master(
         write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
             static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::RETRAIN_INTENT));
         // Wait for erisc1 to ack
+        uint32_t watchdog_count = 0;
+        constexpr uint32_t kWatchdogIter = 100'000'000;
         while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() !=
                static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::INTENT_ACK)) {
             if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
                 return;
+            }
+            if (++watchdog_count >= kWatchdogIter) {
+                WAYPOINT("CSMA");  // Context-Switch Master Ack timeout — peer may be dead
+                watchdog_count = 0;
+                break;
             }
         }
     }
@@ -1434,10 +1463,17 @@ FORCE_INLINE void coordinated_context_switch_finish_as_master(
         write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
             static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::RETRAIN_COMPLETE));
         // Wait for erisc1 to ack
+        uint32_t watchdog_count = 0;
+        constexpr uint32_t kWatchdogIter = 100'000'000;
         while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() !=
                static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::COMPLETE_ACK)) {
             if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
                 return;
+            }
+            if (++watchdog_count >= kWatchdogIter) {
+                WAYPOINT("CSMF");  // Context-Switch Master Finish timeout — peer may be dead
+                watchdog_count = 0;
+                break;
             }
         }
         // Resume normal operation
@@ -1461,18 +1497,36 @@ FORCE_INLINE void run_routing_without_noc_sync_coordinated_as_non_master(
             static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::RETRAIN_INTENT)) {
             write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
                 static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::INTENT_ACK));
-            while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() !=
-                   static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::RETRAIN_COMPLETE)) {
-                if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
-                    return;
+            {
+                uint32_t watchdog_count = 0;
+                constexpr uint32_t kWatchdogIter = 100'000'000;
+                while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() !=
+                       static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::RETRAIN_COMPLETE)) {
+                    if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+                        return;
+                    }
+                    if (++watchdog_count >= kWatchdogIter) {
+                        WAYPOINT("CSNS");  // Context-Switch Non-master Spin timeout — master may be dead
+                        watchdog_count = 0;
+                        break;
+                    }
                 }
             }
             write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
                 static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::COMPLETE_ACK));
-            while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() !=
-                   static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::NORMAL_EXECUTION)) {
-                if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
-                    return;
+            {
+                uint32_t watchdog_count = 0;
+                constexpr uint32_t kWatchdogIter = 100'000'000;
+                while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() !=
+                       static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::NORMAL_EXECUTION)) {
+                    if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+                        return;
+                    }
+                    if (++watchdog_count >= kWatchdogIter) {
+                        WAYPOINT("CSNR");  // Context-Switch Non-master Resume timeout — master may be dead
+                        watchdog_count = 0;
+                        break;
+                    }
                 }
             }
         }
@@ -2042,6 +2096,9 @@ void run_retrain_step(tt_l1_ptr RouterStateManager* state_manager_l1, volatile t
     // Placeholder
     state_manager_l1->state = RouterState::RETRAINING;
     run_routing_without_noc_sync();
+    {
+    constexpr uint32_t kWatchdogIter = 100'000'000;
+    uint32_t watchdog_count = 0;
     while (reinterpret_cast<tt_l1_ptr RouterStateManager*>(state_manager_l1)->command == RouterCommand::RETRAIN && !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
         // Wait for confirmation from host to avoid the WAW hazard:
         // Host issues retrain
@@ -2056,6 +2113,11 @@ void run_retrain_step(tt_l1_ptr RouterStateManager* state_manager_l1, volatile t
         // For the entirety of the H->D datapath. For the time being, this is too strong of a requirement
         // for cases where router code is not running in traditional H->D server/PC configurations
         // (i.e. some custom IP integrations may not easily satisfy this guarantee this)
+        if (++watchdog_count >= kWatchdogIter) {
+            WAYPOINT("RTRW");  // ReTRain Wait timeout — host has not cleared RETRAIN command
+            watchdog_count = 0;
+        }
+    }
     }
 
     // PAUSED is the only legal output state
@@ -2080,7 +2142,13 @@ void execute_pause_command(tt_l1_ptr RouterStateManager* state_manager_l1, volat
         // before we proceed. This coordination is not implemented yet. When mainlined, it will be integrated here.
 
         bool keep_running_pause = true;
+        constexpr uint32_t kWatchdogIter = 100'000'000;
+        uint32_t watchdog_count = 0;
         while (keep_running_pause && !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+            if (++watchdog_count >= kWatchdogIter) {
+                WAYPOINT("PAUS");  // PAUSe timeout — host has not issued RUN command
+                watchdog_count = 0;
+            }
             state_manager_l1->state = RouterState::PAUSED;
             switch (reinterpret_cast<tt_l1_ptr RouterStateManager*>(state_manager_l1)->command) {
                 case RouterCommand::RUN:
@@ -2246,6 +2314,13 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     constexpr uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR = 0x1F80;
 #endif
     volatile uint32_t* fabric_heartbeat_ptr = reinterpret_cast<volatile uint32_t*>(FABRIC_KERNEL_HEARTBEAT_ADDR);
+    // FIX LT9-PROGRESS (#42429 Approach B): always-on packet-progress counter at heartbeat+4.
+    // Host reads this in get_fabric_erisc_progress() and resets its dispatch-timeout clock whenever
+    // this counter advances, distinguishing "making progress on a large op" from "genuinely hung".
+    // Zero at kernel start so the host sees a clean baseline before any packets flow.
+    constexpr uint32_t FABRIC_PACKET_COUNTER_ADDR = FABRIC_KERNEL_HEARTBEAT_ADDR + 4;
+    volatile uint32_t* fabric_packet_counter_ptr = reinterpret_cast<volatile uint32_t*>(FABRIC_PACKET_COUNTER_ADDR);
+    *fabric_packet_counter_ptr = 0;
 
     auto execute_main_loop = [&]() {
         ActualSpeedySenderState<super_speedy_mode> local_speedy_sender_state;
@@ -2585,6 +2660,12 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     fabric_telemetry);
             }
 
+            // FIX LT9-PROGRESS: advance the packet counter whenever any channel made progress this
+            // loop iteration. Host polls this to distinguish "slow but working" from "hung".
+            if (tx_progress || rx_progress) {
+                ++(*fabric_packet_counter_ptr);
+            }
+
             if ((++fabric_heartbeat_counter & 0x3F) == 0) {
                 *fabric_heartbeat_ptr = 0xDCBA0000 | fabric_heartbeat_counter;
             }
@@ -2687,6 +2768,14 @@ void
             return;
         }
         uint32_t count = 0;
+        // Watchdog: on WH the termination signal check is compiled out of the main loop
+        // condition (#ifndef ARCH_WORMHOLE) for hardware reasons.  We check it in the
+        // periodic watchdog path using force-invalidate (<true>), which is safe on WH.
+        // Teardown is detected within ~kWatchdogIter iterations — kernel exits cleanly.
+        // See: https://github.com/tenstorrent/tt-metal/issues/42429
+        constexpr uint32_t kWatchdogIter = 100'000'000;
+        uint32_t watchdog_count = 0;
+        bool timed_out = false;
         while (!connect_is_requested(*interface.connection_live_semaphore)
 #ifndef ARCH_WORMHOLE
                && !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)
@@ -2701,8 +2790,19 @@ void
                 }
             }
 #endif
+            if (++watchdog_count >= kWatchdogIter) {
+                WAYPOINT("SCRW");  // Static-Connection-Ready Wait — diagnostic
+                watchdog_count = 0;
+                // Use force-invalidate here — safe on WH unlike the inline condition above.
+                if (got_immediate_termination_signal<true>(termination_signal_ptr)) {
+                    timed_out = true;
+                    break;
+                }
+            }
         }
-        establish_edm_connection(interface, local_sender_channel_free_slots_stream_ids[sender_channel_idx]);
+        if (!timed_out) {
+            establish_edm_connection(interface, local_sender_channel_free_slots_stream_ids[sender_channel_idx]);
+        }
     };
     if constexpr (multi_txq_enabled) {
         tuple_for_each_constexpr(
@@ -2822,25 +2922,37 @@ void populate_local_sender_channel_free_slots_stream_id_ordered_map(
 
 constexpr bool IS_TEARDOWN_MASTER() { return MY_ERISC_ID == 0; }
 
-// Note: No termination check is added here intentionally. Both local ERISCs share
-// the same termination signal, so both will see it and exit their respective wait
-// loops naturally. Adding a termination check here would be unsafe — if one ERISC
-// broke out of the sync early and skipped its scratch register write, the other
-// could spin forever waiting for a value that never arrives.
+// Note: No termination check is added here — both local ERISCs share the same
+// termination signal, so both will see it and exit their respective main-loop
+// wait loops naturally.  However, if one ERISC crashes or hangs before reaching
+// this sync point, the other would spin forever.  A bounded iteration count
+// lets the surviving ERISC proceed with teardown after a timeout.
+// See: https://github.com/tenstorrent/tt-metal/issues/42429
 __attribute__((optimize("Os"))) void wait_for_other_local_erisc() {
     constexpr uint32_t multi_erisc_sync_start_value = 0x0fed;
     constexpr uint32_t multi_erisc_sync_step2_value = 0x1bad;
+    constexpr uint32_t kSyncMaxIter = 100'000'000;  // ~2-4 s on ERISC
     if constexpr (IS_TEARDOWN_MASTER()) {
         write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(multi_erisc_sync_start_value);
+        uint32_t watchdog_count = 0;
         while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & 0x1FFF) !=
                multi_erisc_sync_step2_value) {
             router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+            if (++watchdog_count >= kSyncMaxIter) {
+                WAYPOINT("TSYN");  // Teardown SYNc timeout — other ERISC did not arrive
+                break;
+            }
         }
         write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(0);
     } else {
+        uint32_t watchdog_count = 0;
         while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & 0x1FFF) !=
                multi_erisc_sync_start_value) {
             router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+            if (++watchdog_count >= kSyncMaxIter) {
+                WAYPOINT("TSYN");  // Teardown SYNc timeout — other ERISC did not arrive
+                break;
+            }
         }
         write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(multi_erisc_sync_step2_value);
     }
@@ -2984,6 +3096,18 @@ void initialize_fabric_telemetry() {
 }
 
 void kernel_main() {
+    // CANARY (#42429): Written as the very first L1 store in kernel_main(), before
+    // POSTCODE(INITIALIZATION_STARTED).  After write_launch_msg_to_core transitions this ERISC
+    // from base-UMD relay (0x49706550) to fabric firmware, there is a narrow window before
+    // POSTCODE fires where the firmware is running but edm_status is still 0x49706550.
+    // If the firmware crashes in this window, terminate_stale_erisc_routers() would mistake
+    // it for a live base-UMD relay and skip soft-reset (wrong — the ERISC is crashed).
+    // Writing 0xA0A0A0A0 here eliminates that ambiguity:
+    //   0x49706550 → base-UMD relay never transitioned (skip soft-reset, correct)
+    //   0xA0A0A0A0 → fabric firmware entered kernel_main but crashed before INITIALIZATION_STARTED
+    //                (soft-reset needed — terminate_stale_erisc_routers handles this)
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(edm_status_ptr_addr) = 0xA0A0A0A0u;
+
     if constexpr (ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE) {
         channel_trimming_usage_recorder.reset();
     }
@@ -3075,6 +3199,13 @@ void kernel_main() {
     // TODO: CONVERT TO SEMAPHORE
     volatile auto termination_signal_ptr =
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_addr);
+    // FIX LT9-CLEAR (#42429): When FIX M skips soft reset (base-UMD relay firmware), L1 retains
+    // the IMMEDIATELY_TERMINATE value from the previous teardown. The FIX LT9-V2 watchdog in
+    // wait_for_static_connection_to_ready calls got_immediate_termination_signal<true> and would
+    // see this stale value, causing premature early exit and leaving EDM status at STARTED forever.
+    // Clear it here before any watchdog code runs. The host will write a fresh termination signal
+    // when it actually wants to stop this kernel.
+    *termination_signal_ptr = tt::tt_fabric::TerminationSignal::KEEP_RUNNING;
     volatile auto edm_local_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(edm_local_sync_ptr_addr);
     volatile auto edm_status_ptr = reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::EDMStatus*>(edm_status_ptr_addr);
 

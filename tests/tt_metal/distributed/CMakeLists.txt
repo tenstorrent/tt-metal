@@ -19,6 +19,64 @@ set(DISTRIBUTED_UNIT_TEST_SOURCES
     test_mesh_trace.cpp
     test_thread_pool.cpp
     test_dispatch_context.cpp
+    test_async_teardown_race.cpp
+    test_gap1_three_pass_eth_launch.cpp
+    test_gap2_launch_gate_live_erisc.cpp
+    test_gap3_erisc_heartbeat.cpp
+    test_gap4_partial_mesh_quiesce.cpp
+    test_gap5_relay_broken_teardown.cpp
+    test_gap6_phase25_relay_broken_cascade.cpp
+    test_gap8_init_router_sync_dead_relay.cpp
+    test_gap9_parallel_heartbeat_poll.cpp
+    test_gap7_mmio_phase5_relay_broken.cpp
+    test_gap10_channels_not_ready_lifecycle.cpp
+    test_gap11_relay_timeout_tolerance.cpp
+    test_gap14_teardown_reopen_eth_ordering.cpp
+    test_gap28_fixav_relay_broken_sysmem_guard.cpp
+    test_gap29_cluster_teardown_hang_relay_broken.cpp
+    test_gap31_fixay_deferred_nonmmio_reset.cpp
+    test_gap32_fixaz_l1barrier_skip_no_prior_fabric.cpp
+    test_gap41_fixnt_ethcoord_preserved_aq_skip.cpp
+    test_gap42_fixnu_mmio_ethcoord_before_relay_guard.cpp
+    test_gap43_fixnv_fixnw_async_build_phase_no_relay.cpp
+    test_gap44_fixnx_write_core_relay_guard.cpp
+    test_gap45_fixx_ext_eth_training_fabric_erisc.cpp
+    test_gap46_fixny_relay_broken_chips_cache.cpp
+    test_gap47_fixnz_read_core_relay_guard.cpp
+    test_gap48_fixpa_fw_launch_addr_force_reset.cpp
+    test_gap49_fixpb_fw_launch_addr_rescue.cpp
+    test_gap50_fixpd_fw_launch_addr_quiesce.cpp
+    test_gap51_fixpf_umd_heartbeat_skip_exit.cpp
+    test_gap52_fixpg_phase25_relay_retry.cpp
+    test_gap53_fixph_yaml_ethcoord_graceful_skip.cpp
+    test_gap54_fixba_teardown_null_control_plane.cpp
+    test_gap55_fixe2ay_probe_dead_fay_trigger.cpp
+    test_gap56_fixm2_dead_peer_erisc_reset.cpp
+    test_gap57_fixpl_barrier_guard_dead_relay.cpp
+    test_gap58_fixqc_nonmmio_reset_cores_skip.cpp
+    test_gap59_fixqb_reset_loop_early_break.cpp
+    test_gap60_fixpypz_phase25_topology_timeout.cpp
+    test_gap61_fixqd_dead_router_mmio_skip.cpp
+    test_gap62_fixqu_reassert_flags_after_configure.cpp
+    test_gap63_fixny_relay_mux_cluster_guard.cpp
+    test_gap64_fixtb_topology_mapper_unknown_asic.cpp
+    test_gap65_fixqv_phase4_skip_channels_not_ready.cpp
+    test_gap66_fixrz_stale_base_umd_flag.cpp
+    test_gap67_fixtf_2d_fabric_header_args_guard.cpp
+    test_gap68_fixtg_control_plane_host_rank_guard.cpp
+    test_gap69_fixth_relay_mux_no_links_guard.cpp
+    test_gap70_fixtk_degraded_cluster_chip_filter.cpp
+    test_gap71_fixtl_degraded_cluster_bail_before_create_meshes.cpp
+    test_gap73_fixqwb_stale_base_umd_skip_guard.cpp
+    test_gap74_fixrx_base_fixture_teardown_guard.cpp
+    test_gap75_fixbc_setup_not_active_skip_guard.cpp
+    test_gap76_fixsb_idle_eth_init_fabric_guard.cpp
+    test_gap77_fixtg2_base_umd_partial_l1_clear.cpp
+    test_gap72_fixti_ring_sync_fast_skip.cpp
+    test_gap78_fixp25clean_skip_already_terminated_phase3.cpp
+    test_gap79_fixap_master_router_chan_relay_broken.cpp
+    test_gap80_fixev_event_synchronize_dead_relay_guard.cpp
+    test_gap81_fixbc_fixbd_simultaneous_handshake_deadlock.cpp
     utils.cpp
 )
 # MPI sub-context tests require the MPI distributed build (matches tt_metal/distributed USE_MPI).
@@ -34,6 +92,7 @@ target_link_libraries(
     PRIVATE
         tt_metal
         test_common_libs
+        TTNN::CPP
 )
 if(ENABLE_DISTRIBUTED)
     target_link_libraries(distributed_unit_tests PRIVATE OpenMPI::MPI)

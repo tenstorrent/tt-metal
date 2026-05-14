@@ -19,6 +19,8 @@
 
 #include <map>
 #include <memory>
+#include <stdexcept>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -50,6 +52,18 @@ class Cluster;
 namespace tt::tt_fabric {
 
 class TopologyMapper;
+
+// FIX BQ (#42429): Typed exception for null-fabric_context teardown path.
+// Thrown by ControlPlane::get_fabric_context() when fabric_context_ is null
+// (post-teardown / atexit).  Catchers can distinguish this from other
+// std::runtime_error throws without fragile e.what() string matching.
+class FabricContextNullException : public std::runtime_error {
+public:
+    FabricContextNullException() :
+        std::runtime_error(
+            "FabricContextNullException: ControlPlane::get_fabric_context() called after teardown "
+            "(fabric_context_ is null). This is expected in post-teardown paths. (#42429 FIX BQ)") {}
+};
 
 // TODO: remove this once UMD provides API for UBB ID and bus ID
 struct UbbId {
@@ -148,6 +162,8 @@ public:
 
     // Return mesh_id, chip_id from physical chip id
     FabricNodeId get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id) const;
+    // Return true if physical chip id is part of the fabric cluster (i.e. in the control plane mapping)
+    bool is_physical_chip_in_fabric_cluster(ChipId physical_chip_id) const;
     // Return physical chip id from fabric node id
     ChipId get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
     // Return fabric node id from ASIC id

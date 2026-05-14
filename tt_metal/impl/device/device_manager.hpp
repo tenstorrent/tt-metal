@@ -107,6 +107,8 @@ private:
     std::vector<Device*> get_all_active_devices_impl() const;
 
     friend class experimental::DispatchContext;
+    friend class DispatchKernelInitializer;
+    friend class RiscFirmwareInitializer;
 };
 
 }  // namespace tt::tt_metal

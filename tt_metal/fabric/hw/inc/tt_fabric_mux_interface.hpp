@@ -55,20 +55,38 @@ WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS> build_connection_to_fabr
         write_at_cmd_buf);
 }
 
-FORCE_INLINE void wait_for_fabric_endpoint_ready(
+// Poll the fabric endpoint's status address until it reports READY_FOR_TRAFFIC, or
+// until max_poll_iterations elapses.  The bounded default matches
+// wait_for_fabric_endpoint_terminated() and prevents a stuck ERISC/MUX from
+// permanently wedging the calling Tensix kernel.  On timeout the function falls
+// through; the caller (dispatch relay / MUX) will proceed on a best-effort basis
+// and host-side reset logic recovers the device if the endpoint never becomes ready.
+FORCE_INLINE bool wait_for_fabric_endpoint_ready(
     uint8_t fabric_ep_x,
     uint8_t fabric_ep_y,
     size_t fabric_ep_status_address,
-    uint32_t local_fabric_ep_status_address) {
+    uint32_t local_fabric_ep_status_address,
+    uint32_t max_poll_iterations = 1'000'000) {
     uint64_t noc_addr = get_noc_addr(fabric_ep_x, fabric_ep_y, fabric_ep_status_address);
     auto local_fabric_ep_status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_fabric_ep_status_address);
 
     local_fabric_ep_status_ptr[0] = tt::tt_fabric::FabricEndpointStatus::TERMINATED;
-    do {
+    for (uint32_t i = 0; i < max_poll_iterations; ++i) {
         noc_async_read_one_packet(noc_addr, local_fabric_ep_status_address, 4);
         noc_async_read_barrier();
         invalidate_l1_cache();
-    } while (local_fabric_ep_status_ptr[0] != tt::tt_fabric::FabricEndpointStatus::READY_FOR_TRAFFIC);
+        if (local_fabric_ep_status_ptr[0] == tt::tt_fabric::FabricEndpointStatus::READY_FOR_TRAFFIC) {
+            return true;
+        }
+        // RISC-V PAUSE hint: adds ~5-50 cycles of backoff per iteration so the
+        // 1M cap covers more wall-clock time without a larger loop bound. Safe
+        // here because this function is only called at init time, not on the
+        // data-path hot loop (where PAUSE caused a 13.8% BW regression).
+        asm volatile(".4byte 0x0100000F");
+    }
+    // Fall through on timeout: host-side reset logic recovers. Avoid infinite spin
+    // so a stuck peer cannot permanently wedge this kernel.
+    return false;
 }
 
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
@@ -104,6 +122,47 @@ FORCE_INLINE void fabric_endpoint_terminate(
         graceful_termination ? tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE
                              : tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
     noc_async_write_barrier();
+}
+
+// Poll the mux core's status address until it reports TERMINATED, or until a bounded
+// number of iterations elapses.
+//
+// Must be called after fabric_endpoint_terminate() by the termination master to ensure
+// the mux Tensix core has advanced its teardown handshake far enough to publish
+// TERMINATED. Note: the mux writes TERMINATED between close_start() and close_finish()
+// (see tt_fabric_mux.cpp), so observing TERMINATED here only guarantees that the
+// teardown handshake has progressed, NOT that the mux kernel has fully returned.
+// Full mux completion is still tracked by normal dispatch completion for that core.
+//
+// Without this wait, quiesce_devices() / wait_for_completion() can return while the
+// mux core is still mid-teardown, causing binary integrity failures when the next
+// AllGather reprograms the same cores.
+//
+// The loop is bounded by kMaxPollIterations so a stuck mux does not hang the writer
+// forever; host-side reset logic (RiscFirmwareInitializer::reset_cores,
+// teardown_fabric_config) recovers in that case. The default (~1M reads) matches the
+// host-side 5s timeout at typical NOC read latencies and is conservative enough that
+// a healthy MUX always terminates well within it.
+FORCE_INLINE void wait_for_fabric_endpoint_terminated(
+    uint8_t fabric_ep_x,
+    uint8_t fabric_ep_y,
+    size_t fabric_ep_status_address,
+    uint32_t local_fabric_ep_status_address,
+    uint32_t max_poll_iterations = 1'000'000) {
+    uint64_t noc_addr = get_noc_addr(fabric_ep_x, fabric_ep_y, fabric_ep_status_address);
+    auto local_fabric_ep_status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_fabric_ep_status_address);
+
+    local_fabric_ep_status_ptr[0] = tt::tt_fabric::FabricEndpointStatus::READY_FOR_TRAFFIC;
+    for (uint32_t i = 0; i < max_poll_iterations; ++i) {
+        noc_async_read_one_packet(noc_addr, local_fabric_ep_status_address, 4);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        if (local_fabric_ep_status_ptr[0] == tt::tt_fabric::FabricEndpointStatus::TERMINATED) {
+            return;
+        }
+    }
+    // Fall through on timeout: host-side ERISC/MUX reset recovers. Avoid infinite spin
+    // so a stuck peer cannot permanently wedge the writer kernel.
 }
 
 // assumes packet header is correctly populated

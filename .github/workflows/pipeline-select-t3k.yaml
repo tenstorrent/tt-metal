@@ -25,6 +25,7 @@ on:
           - all
           - t3k_ttmetal_tests
           - t3k_ttnn_tests
+          - racecondition-hunt
           - falcon7b
           - llama3-small
           - llama3.2-11b

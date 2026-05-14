@@ -112,8 +112,14 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_STATE)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_COMMAND)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] = sizeof(uint32_t);
-    // Base FW api not supported on WH
+    // ETH_MAILBOX_API (command dispatch) is not supported on WH, so most
+    // fw_mailbox_addr entries stay 0.  However, the base UMD relay firmware
+    // does write a heartbeat counter in 0xABCDxxxx format to 0x1F80
+    // (test_results[48]).  This address is readable via PCIe on MMIO cores
+    // and is used by UMD topology discovery and by FIX AC teardown logic to
+    // detect ERISC reboot completion after a PCIe RISC reset.
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
+    fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::HEARTBEAT)] = 0x1F80u;
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes = {
         // DM

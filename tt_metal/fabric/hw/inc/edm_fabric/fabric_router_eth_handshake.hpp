@@ -30,6 +30,11 @@ FORCE_INLINE void fabric_sender_side_handshake(
     uint32_t local_val_addr = ((uint32_t)(&handshake_info->local_value)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t scratch_addr = ((uint32_t)(&handshake_info->scratch)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t count = 0;
+    // Watchdog: on WH the termination signal check is compiled out — if the peer
+    // never sends the handshake value this loop spins forever.
+    // See: https://github.com/tenstorrent/tt-metal/issues/42429
+    constexpr uint32_t kWatchdogIter = 100'000'000;
+    uint32_t watchdog_count = 0;
     while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE
 #ifndef ARCH_WORMHOLE
            && !tt::tt_fabric::got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr)
@@ -46,7 +51,23 @@ FORCE_INLINE void fabric_sender_side_handshake(
             internal_::eth_send_packet(0, scratch_addr, local_val_addr, 1);
         }
         invalidate_l1_cache();
+        if (++watchdog_count >= kWatchdogIter) {
+            WAYPOINT("HSST");  // HandShake Sender Timeout — still spinning
+            watchdog_count = 0;
+        }
     }
+    // FIX HS2 (#42429): Post-loop final send to handle simultaneous-sender race.
+    // Same fix as FIX HS1 in sender_side_handshake() — if both sides call
+    // fabric_sender_side_handshake() concurrently, the early-exiting side must
+    // send one final packet after the loop to unblock the peer whose
+    // init_handshake_info() may have erased all prior sends.
+#ifndef ARCH_WORMHOLE
+    if (!tt::tt_fabric::got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr)) {
+        internal_::eth_send_packet(0, scratch_addr, local_val_addr, 1);
+    }
+#else
+    internal_::eth_send_packet(0, scratch_addr, local_val_addr, 1);
+#endif
 }
 
 template <bool RISC_CPU_DATA_CACHE_ENABLED>
@@ -61,6 +82,11 @@ FORCE_INLINE void fabric_receiver_side_handshake(
     uint32_t local_val_addr = ((uint32_t)(&handshake_info->local_value)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t scratch_addr = ((uint32_t)(&handshake_info->scratch)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t count = 0;
+    // Watchdog: on WH the termination signal check is compiled out — if the peer
+    // never sends the handshake value this loop spins forever.
+    // See: https://github.com/tenstorrent/tt-metal/issues/42429
+    constexpr uint32_t kWatchdogIter = 100'000'000;
+    uint32_t watchdog_count = 0;
     while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE
 #ifndef ARCH_WORMHOLE
            && !tt::tt_fabric::got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr)
@@ -76,6 +102,10 @@ FORCE_INLINE void fabric_receiver_side_handshake(
             count++;
         }
         invalidate_l1_cache();
+        if (++watchdog_count >= kWatchdogIter) {
+            WAYPOINT("HSRT");  // HandShake Receiver Timeout — still spinning
+            watchdog_count = 0;
+        }
     }
 #ifndef ARCH_WORMHOLE
     if (!tt::tt_fabric::got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr)) {
