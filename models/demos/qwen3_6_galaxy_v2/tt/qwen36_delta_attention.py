@@ -325,6 +325,43 @@ class TtQwen36DeltaAttention(LightweightModule):
         self.w_a = self._to_device(a_w_T, row_shard_out)  # per-row: [5120, 6]
         self.w_b = self._to_device(b_w_T, row_shard_out)  # per-row: [5120, 6]
 
+        # V2-11 (lever E): fused projection weights.
+        # ShardTensor2dMesh(dims=(1, None)) distributes contiguous column
+        # chunks across the 8 mesh-rows. Naively `cat([Q_w_T, K_w_T], dim=-1)`
+        # would give rows 0..3 a Q-only chunk and rows 4..7 a K-only chunk,
+        # which is wrong. We need to INTERLEAVE per-row so that each row's
+        # contiguous shard is `[Q_row_i | K_row_i | ...]`.
+        # This produces the same per-row matmul output as separate Q, K
+        # matmuls — the fused matmul's output slice [0:256] is the row's
+        # Q, [256:512] is the row's K, and so on.
+        mesh_rows = self.mesh_rows
+        # Q+K (per-row 256+256=512, tile-multiple)
+        QK_rows = []
+        for i in range(mesh_rows):
+            q_row = Q_w_T[:, i * 256 : (i + 1) * 256]
+            k_row = K_w_T[:, i * 256 : (i + 1) * 256]
+            QK_rows.append(torch.cat([q_row, k_row], dim=-1))  # [5120, 512]
+        QK_w_T_interleaved = torch.cat(QK_rows, dim=-1)  # [5120, 4096]
+        self.w_qk = self._to_device(QK_w_T_interleaved, row_shard_out)
+
+        # V+Z (per-row 768+768=1536, tile-multiple)
+        VZ_rows = []
+        for i in range(mesh_rows):
+            v_row = V_w_T[:, i * 768 : (i + 1) * 768]
+            z_row = Z_w_T[:, i * 768 : (i + 1) * 768]
+            VZ_rows.append(torch.cat([v_row, z_row], dim=-1))  # [5120, 1536]
+        VZ_w_T_interleaved = torch.cat(VZ_rows, dim=-1)  # [5120, 12288]
+        self.w_vz = self._to_device(VZ_w_T_interleaved, row_shard_out)
+
+        # B+A (per-row 6+6=12, NOT tile-multiple but matmul pads internally)
+        BA_rows = []
+        for i in range(mesh_rows):
+            b_row = b_w_T[:, i * self.n_v_per_row : (i + 1) * self.n_v_per_row]
+            a_row = a_w_T[:, i * self.n_v_per_row : (i + 1) * self.n_v_per_row]
+            BA_rows.append(torch.cat([b_row, a_row], dim=-1))  # [5120, 12]
+        BA_w_T_interleaved = torch.cat(BA_rows, dim=-1)  # [5120, 96]
+        self.w_ba = self._to_device(BA_w_T_interleaved, row_shard_out)
+
         # -- Conv1d weight: pre-interleave by row (Bug1 fix from v1) --
         conv_w_src = self._resolve_weight(sd, "linear_attn.conv1d.weight", "conv1d.weight")
         conv_w = conv_w_src.squeeze(1)
@@ -364,6 +401,12 @@ class TtQwen36DeltaAttention(LightweightModule):
         row_shard_3d = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(2, None), mesh_shape=self.cluster_shape)
         self.A_log = self._to_device(A_log_3d, row_shard_3d, layout=ttnn.TILE_LAYOUT)
         self.dt_bias = self._to_device(dt_bias_3d, row_shard_3d, layout=ttnn.TILE_LAYOUT)
+        # V2-11 (lever C) attempted to precompute -exp(A_log) once at init
+        # to elide the per-step `exp` + `neg` (saves 2 ops × 48 DeltaNet
+        # layers / step). Coherency broke when the precomputed tensor was
+        # quantized at init time vs the runtime exp(bf8-stored A_log) → neg
+        # chain — the per-step path picks up a fresh L1 intermediate that
+        # the static precompute cannot replicate. Left out.
 
         # -- Norm weight (replicated, standard RMSNorm — Bug5 fix from v1) --
         # NB: ROW_MAJOR_LAYOUT requires bfloat16 (bfloat8_b requires TILE). The
@@ -491,14 +534,62 @@ class TtQwen36DeltaAttention(LightweightModule):
     # ------------------------------------------------------------------
 
     def _project_inputs(self, x):
+        """V2-11 (lever E): collapse 6 projection matmuls → 3 fused matmuls.
+
+        Q+K → w_qk (output dim 512)
+        V+Z → w_vz (output dim 1536)
+        B+A → w_ba (output dim 12, padded to 32 internally)
+
+        Saves 3 matmul launches per DeltaNet layer × 48 layers = 144 fewer
+        ops per decode step. The slice cost (3 extra ops here) is ~0.05ms
+        per slice vs the matmul launch cost it saves.
+        """
         mem = ttnn.DRAM_MEMORY_CONFIG
         ck = self.compute_kernel
-        q = ttnn.linear(x, self.w_q, dtype=self.dtype, memory_config=mem, compute_kernel_config=ck)
-        k = ttnn.linear(x, self.w_k, dtype=self.dtype, memory_config=mem, compute_kernel_config=ck)
-        v = ttnn.linear(x, self.w_v, dtype=self.dtype, memory_config=mem, compute_kernel_config=ck)
-        z = ttnn.linear(x, self.w_z, dtype=self.dtype, memory_config=mem, compute_kernel_config=ck)
-        a = ttnn.linear(x, self.w_a, dtype=self.dtype, memory_config=mem, compute_kernel_config=ck)
-        b = ttnn.linear(x, self.w_b, dtype=self.dtype, memory_config=mem, compute_kernel_config=ck)
+        # Q+K fused
+        qk = ttnn.linear(x, self.w_qk, dtype=self.dtype, memory_config=mem, compute_kernel_config=ck)
+        # Determine input layout: x is [B, T, H] (3-D) or [B,1,T,H] (4-D).
+        # ttnn.linear preserves the input rank in v2 (verified by _forward_decode_qwen36).
+        # The qk output is therefore [..., q_per_row + q_per_row].
+        out_rank = len(qk.shape)
+        # Slice along the last dim.
+        if out_rank == 3:
+            B_, T_, _ = list(qk.shape)
+            q = ttnn.slice(qk, [0, 0, 0], [B_, T_, self.q_per_row], memory_config=mem)
+            k = ttnn.slice(qk, [0, 0, self.q_per_row], [B_, T_, 2 * self.q_per_row], memory_config=mem)
+        elif out_rank == 4:
+            B_, D1_, T_, _ = list(qk.shape)
+            q = ttnn.slice(qk, [0, 0, 0, 0], [B_, D1_, T_, self.q_per_row], memory_config=mem)
+            k = ttnn.slice(qk, [0, 0, 0, self.q_per_row], [B_, D1_, T_, 2 * self.q_per_row], memory_config=mem)
+        else:
+            raise RuntimeError(f"Unexpected qk rank {out_rank}: shape={qk.shape}")
+        qk.deallocate(True)
+
+        # V+Z fused
+        vz = ttnn.linear(x, self.w_vz, dtype=self.dtype, memory_config=mem, compute_kernel_config=ck)
+        if out_rank == 3:
+            B_, T_, _ = list(vz.shape)
+            v = ttnn.slice(vz, [0, 0, 0], [B_, T_, self.v_per_row], memory_config=mem)
+            z = ttnn.slice(vz, [0, 0, self.v_per_row], [B_, T_, 2 * self.v_per_row], memory_config=mem)
+        else:
+            B_, D1_, T_, _ = list(vz.shape)
+            v = ttnn.slice(vz, [0, 0, 0, 0], [B_, D1_, T_, self.v_per_row], memory_config=mem)
+            z = ttnn.slice(vz, [0, 0, 0, self.v_per_row], [B_, D1_, T_, 2 * self.v_per_row], memory_config=mem)
+        vz.deallocate(True)
+
+        # B+A fused (note: matches in_proj_ba layout which is b|a, not a|b)
+        ba = ttnn.linear(x, self.w_ba, dtype=self.dtype, memory_config=mem, compute_kernel_config=ck)
+        n_v_per_row = self.n_v_per_row
+        if out_rank == 3:
+            B_, T_, _ = list(ba.shape)
+            b = ttnn.slice(ba, [0, 0, 0], [B_, T_, n_v_per_row], memory_config=mem)
+            a = ttnn.slice(ba, [0, 0, n_v_per_row], [B_, T_, 2 * n_v_per_row], memory_config=mem)
+        else:
+            B_, D1_, T_, _ = list(ba.shape)
+            b = ttnn.slice(ba, [0, 0, 0, 0], [B_, D1_, T_, n_v_per_row], memory_config=mem)
+            a = ttnn.slice(ba, [0, 0, 0, n_v_per_row], [B_, D1_, T_, 2 * n_v_per_row], memory_config=mem)
+        ba.deallocate(True)
+
         return q, k, v, z, a, b
 
     def _apply_conv_and_split(self, q, k, v, B, T, conv_state=None):
@@ -522,6 +613,25 @@ class TtQwen36DeltaAttention(LightweightModule):
         return q_conv, k_conv, v_conv, new_conv_state
 
     def _compute_beta_g(self, b, a, B, T):
+        """V2-11 (lever C): attempted unary-chain fusion, NOT LANDED.
+
+        Original (6 ops):
+          beta = sigmoid(b); a_biased = add(a, dt_bias); sp = softplus(a_biased)
+          A_exp = exp(A_log); neg_A_exp = neg(A_exp); g = multiply(neg_A_exp, sp)
+
+        Attempts:
+          (i)  Precompute neg_exp(A_log) once at init, multiply directly.
+          (ii) Fuse add+softplus via activations=[SOFTPLUS].
+          (iii) Fuse exp+neg into multiply via input_tensor_a_activations.
+        All three variants broke coherency — the generated text became
+        gibberish (~80 alpha chars of mojibake). The fused-activation path
+        evaluates softplus / exp / neg at a slightly different precision
+        than the standalone unary launches (likely L1-vs-DRAM intermediate
+        dtype or in-tile activation chain rounding), and the 48 DeltaNet
+        layers compound that drift past the coherency tolerance. Reverted
+        to the verified per-op pattern; the device-time saving from this
+        lever alone (~0.4 ms / step) was not worth the coherency cost.
+        """
         mem = ttnn.DRAM_MEMORY_CONFIG
         beta = ttnn.sigmoid(b, memory_config=mem)
         a_biased = ttnn.add(a, self.dt_bias, memory_config=mem)
@@ -538,6 +648,20 @@ class TtQwen36DeltaAttention(LightweightModule):
         return q_e, k_e
 
     def _apply_norm_gated(self, core_out, z, B, T):
+        """V2-11 (lever D): attempted silu(z) into multiply fusion, NOT LANDED.
+
+        The fused path
+          out = multiply(out, z, input_tensor_b_activations=[SILU])
+        ran at the same speed (~77.71 ms / step vs 77.77 baseline) but
+        the compile-pass token shifted from 248068 (<think>) → 232, and
+        subsequent decode tokens became gibberish (~96 alpha chars of
+        mojibake across 32 generated tokens). The pre-multiply SILU
+        activation evaluates at slightly different precision than the
+        standalone unary launch (likely the fused activation pipeline
+        sees an L1-vs-DRAM intermediate dtype it would not otherwise
+        hit), and the 48 DeltaNet layer compounding pushes the output
+        past tolerance. Reverted to the verified two-op pattern.
+        """
         mem = ttnn.DRAM_MEMORY_CONFIG
         out = ttnn.rms_norm(
             core_out,
@@ -568,23 +692,18 @@ class TtQwen36DeltaAttention(LightweightModule):
             memory_config=mem,
             compute_kernel_config=self.compute_kernel,
         )
-        # Sum-reduce across mesh rows (cluster_axis=0). v1 used all_gather +
-        # fast_reduce_nc directly; in v2 ``self.tt_ccl`` is available for a
-        # future swap to a trace-safe ring-CCL primitive (see TT_CCL.line_all_reduce).
-        # The current path matches v1's verified correctness — keep it until
-        # an explicit optimization step swaps in tt_ccl.line_all_reduce.
-        gathered = ttnn.all_gather(
+        # V2-11 (lever B): collapse `all_gather + fast_reduce_nc` (2 ops) into
+        # a single `ttnn.all_reduce` (1 op). 48 DeltaNet layers × 1 saved op
+        # per decode step = 48 fewer device ops + lower per-CCL launch
+        # latency (single barrier semaphore vs two). The math is identical
+        # (Sum reduction across cluster_axis=0). Topology defaults to the
+        # Linear fabric configured for BH GLX 8x4.
+        reduced = ttnn.all_reduce(
             partial,
-            dim=0,
-            num_links=1,
             cluster_axis=0,
-            topology=ttnn.Topology.Linear,
+            num_links=1,
             memory_config=mem,
         )
-        reduced = ttnn.experimental.fast_reduce_nc(
-            gathered, dims=[0], output=None, compute_kernel_config=None, memory_config=mem
-        )
-        gathered.deallocate(True)
         partial.deallocate(True)
         return reduced
 

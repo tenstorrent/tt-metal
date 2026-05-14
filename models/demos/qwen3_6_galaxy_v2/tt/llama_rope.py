@@ -567,13 +567,14 @@ class TtLlamaRotarySetup(LightweightModule):
         neg_x2.deallocate(True)
 
         # Rotated = x_rot * cos + rotate_half * sin
+        # V2-11 (lever I): fuse the mul + add via addcmul.
+        # Original (3 ops): mul, mul, add
+        # Fused (2 ops): mul, addcmul(... = x_rot_cos + rotate_half*sin)
         x_rot_cos = ttnn.multiply(x_rot, cos_tt)
-        rh_sin = ttnn.multiply(rotate_half, sin_tt)
-        x_rotated = ttnn.add(x_rot_cos, rh_sin)
+        x_rotated = ttnn.addcmul(x_rot_cos, rotate_half, sin_tt, value=1.0)
         x_rot.deallocate(True)
         rotate_half.deallocate(True)
         x_rot_cos.deallocate(True)
-        rh_sin.deallocate(True)
 
         # Concat rotated + pass-through
         out = ttnn.concat([x_rotated, x_pass], dim=-1)  # [..., hd]

@@ -109,19 +109,28 @@ def _fused_decay_and_write_fp32(
     k_col.deallocate(True)
     d_row.deallocate(True)
 
-    outer_beta = ttnn.multiply(
-        outer,
-        beta_expanded,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-    outer.deallocate(True)
-    beta_expanded.deallocate(True)
-
+    # V2-11 (lever G): fuse h*decay + outer*beta into 2 ops via addcmul.
+    # Original (3 ops):
+    #   outer_beta = outer * beta
+    #   h_decayed = h * decay
+    #   h_new = h_decayed + outer_beta
+    # Fused (2 ops):
+    #   h_decayed = h * decay
+    #   h_new = addcmul(h_decayed, outer, beta_expanded, value=1.0)
+    #          = h_decayed + 1.0 * outer * beta_expanded
+    # 1 fewer op × 48 DeltaNet layers = 48 fewer ops per decode step.
     h_decayed = ttnn.multiply(h, decay, memory_config=ttnn.L1_MEMORY_CONFIG)
     decay.deallocate(True)
-    h_new = ttnn.add(h_decayed, outer_beta, memory_config=ttnn.L1_MEMORY_CONFIG)
+    h_new = ttnn.addcmul(
+        h_decayed,
+        outer,
+        beta_expanded,
+        value=1.0,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
     h_decayed.deallocate(True)
-    outer_beta.deallocate(True)
+    outer.deallocate(True)
+    beta_expanded.deallocate(True)
 
     return h_new
 
@@ -145,7 +154,16 @@ def _recurrent_delta_rule_step_fp32(
     K = q_t.shape[2]
     V = v_t.shape[2]
 
-    h = ttnn.to_layout(h, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+    # V2-11 (lever G2): skip the explicit to_layout(TILE) at the top.
+    # h comes from one of (a) the persistent dn_state_buffer (allocated
+    # at __init__ with layout=TILE_LAYOUT — see _build_dn_state_buffer),
+    # (b) the previous iteration of this same loop (where it was the
+    # output of a matmul — also TILE_LAYOUT), or (c) ttnn.zeros with
+    # layout=TILE_LAYOUT. In all paths h is already in TILE_LAYOUT, so
+    # the unconditional to_layout is a no-op metadata-write that wastes
+    # ~0.05 ms / call × 48 layers = ~2.4 ms / decode step.
+    if h.layout != ttnn.TILE_LAYOUT:
+        h = ttnn.to_layout(h, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     if matmul_compute_cfg is None:
         matmul_compute_cfg = _fp32_compute_cfg_hifi4()

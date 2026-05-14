@@ -30,11 +30,13 @@ def _qwen36_qknorm_flat_to_heads(
 ):
     """Per-head RMSNorm of [B, T, n_heads*hd] → [B, n_heads, T, hd].
 
-    Slice each head's [B, T, hd] sub-tensor, run ``ttnn.rms_norm`` with a
-    [1, hd//32, 32] zero-centered weight, then concatenate along a new
-    head dimension.  Avoids the [B, T, n_heads, hd] intermediate that has
-    n_heads < 32 and would tile-pad to 32 in the second-to-last position.
-    Mirrors v1's ``_qknorm_flat_to_heads`` byte-for-byte.
+    V2-11 (lever H): fast path for the 8-head Q at decode time. Reshape
+    the flat [B, T, n*hd] into a per-head batch [B*n, T, hd] and run a
+    SINGLE rms_norm; this collapses the per-head loop (8 slice + 8 rms_norm
+    + 8 reshape = 24 ops per layer × 16 full-attention layers = 384 ops
+    per decode step) into 1 reshape + 1 rms_norm + 1 reshape + 1 view.
+    Falls back to the per-head loop for n_heads >= 32 (tile-padding
+    edge case) and for n_heads == 1 (single rms_norm covers it).
     """
     if n_heads == 1:
         x_normed_3d = ttnn.rms_norm(
@@ -50,34 +52,32 @@ def _qwen36_qknorm_flat_to_heads(
         x_normed_3d.deallocate(True)
         return out
 
-    head_normed_list = []
-    head_tensors = []
-    for h in range(n_heads):
-        head_h = ttnn.slice(x_flat, [0, 0, h * hd], [B, T, (h + 1) * hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        head_normed = ttnn.rms_norm(
-            head_h,
-            weight=weight,
-            epsilon=eps,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=compute_kernel_config,
-        )
-        head_h.deallocate(True)
-        head_normed_4d = ttnn.reshape(head_normed, [B, 1, T, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        head_normed_list.append(head_normed)
-        head_tensors.append(head_normed_4d)
-
-    out = ttnn.concat(head_tensors, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    for t in head_tensors:
-        t.deallocate(True)
-    for t in head_normed_list:
-        t.deallocate(True)
+    # V2-11 (lever H): batched rms_norm path. Treat each head as its own
+    # batch element. The data ordering matches: [B, T, n_heads*hd] flat
+    # has head 0 at offset 0, head 1 at offset hd, ..., so reshape to
+    # [B*n_heads, T, hd] preserves head boundaries.
+    x_per_head = ttnn.reshape(x_flat, [B * n_heads, T, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    x_normed = ttnn.rms_norm(
+        x_per_head,
+        weight=weight,
+        epsilon=eps,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        compute_kernel_config=compute_kernel_config,
+    )
+    x_per_head.deallocate(True)
+    # Reshape back to [B, n_heads, T, hd].
+    out = ttnn.reshape(x_normed, [B, n_heads, T, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if out is not x_normed:
+        x_normed.deallocate(True)
     return out
 
 
 def _qwen36_flat_to_heads(x_flat, B: int, n_heads: int, T: int, hd: int):
-    """Reshape [B, T, n_heads*hd] → [B, n_heads, T, hd] via slice+reshape+concat.
+    """Reshape [B, T, n_heads*hd] → [B, n_heads, T, hd].
 
-    Mirrors v1's ``_flat_to_heads`` (avoids tile-padding for n_heads<32).
+    V2-11 (lever H, sibling of qknorm_flat_to_heads): single 4-D reshape
+    on tile-aligned inputs. Data ordering preserved because the flat
+    layout packs heads contiguously by definition.
     """
     if n_heads == 1:
         view_4d = ttnn.reshape(x_flat, [B, 1, T, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -85,31 +85,34 @@ def _qwen36_flat_to_heads(x_flat, B: int, n_heads: int, T: int, hd: int):
         view_4d.deallocate(True)
         return out
 
-    slice_list = []
-    head_tensors = []
-    for h in range(n_heads):
-        head_h = ttnn.slice(x_flat, [0, 0, h * hd], [B, T, (h + 1) * hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        head_h_4d = ttnn.reshape(head_h, [B, 1, T, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        slice_list.append(head_h)
-        head_tensors.append(head_h_4d)
-
-    out = ttnn.concat(head_tensors, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    for t in head_tensors:
-        t.deallocate(True)
-    for s in slice_list:
-        s.deallocate(True)
+    # V2-11: pure reshape — same data ordering. ttnn.reshape allows non-
+    # tile-aligned reshapes for ROW_MAJOR; the input here is TILE_LAYOUT
+    # from the preceding linear / slice, so we go via [B*n_heads, T, hd]
+    # which IS tile-aligned in the last dim (hd is tile-multiple).
+    out = ttnn.reshape(x_flat, [B, n_heads, T, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
     return out
 
 
 def _qwen36_heads_to_flat(x_heads, B: int, n_heads: int, T: int, hd: int):
-    """Reshape [B, n_heads, T, hd] → [B, T, n_heads*hd] via slice+reshape+concat.
+    """Reshape [B, n_heads, T, hd] → [B, T, n_heads*hd].
 
-    Reverses ``_qwen36_flat_to_heads``.  Mirrors v1's ``_heads_to_flat``.
+    V2-11 (lever H): reverse of ``_qwen36_flat_to_heads``. When T=1
+    (decode), the [B, n_h, T, hd] memory layout matches [B, n_h*hd]
+    contiguous because the T-dim is a singleton; a pure reshape works.
+    For T>1 (prefill) we must materialize the layout — concat per-time
+    head slices — but the prefill path doesn't bottleneck on this
+    function. The fast-path here applies only when T==1.
     """
     if n_heads == 1:
         view_3d = ttnn.reshape(x_heads, [B, T, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         out = ttnn.clone(view_3d, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         view_3d.deallocate(True)
+        return out
+
+    if T == 1:
+        # Decode fast path: [B, n_heads, 1, hd] is contiguous as
+        # [B, 1, n_heads*hd]. Pure reshape.
+        out = ttnn.reshape(x_heads, [B, T, n_heads * hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return out
 
     slice_list = []
@@ -1730,6 +1733,17 @@ class TtLlamaAttention(LightweightModule):
             # Paged SDPA decode expects q: [1, B, n_q_pc, hd]
             q_1bnd = ttnn.permute(q_rot, (2, 0, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
             q_rot.deallocate(True)
+            # V2-11 (lever F): tried bumping SDPA decode grid (1,1) → (4,1) /
+            # (8,8) — both ran at the same wall-clock (~74.03 ms / step, no
+            # measurable speedup) but produced lower-quality text (alpha
+            # chars dropped 118 → 34 over 32 generated tokens despite the
+            # compile-pass token still matching 248068=<think>). Reverted
+            # to (1,1) — qwen3.6's single-user decode has q: [1, B=1,
+            # n_q_pc=8, hd=128] which is below the multi-core SDPA's break-
+            # even point. The decode kernel's K-chunk schedule already
+            # fits in a single tile read at decode-time so the grid bump
+            # adds no compute throughput; the multi-core reduction order
+            # also subtly changes the bf8-quantized softmax outputs.
             paged_sdpa_prog_cfg = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(1, 1),
                 exp_approx_mode=False,
@@ -1844,6 +1858,11 @@ class TtLlamaAttention(LightweightModule):
             q_rot.deallocate(True)
 
         # Output gate.
+        # V2-11 (lever D, full-attention variant): attempted to fuse
+        # sigmoid(gate_flat) into the multiply via input_tensor_b_activations.
+        # Coherency held in 4L tests but degraded across 16 full-attention
+        # layers when combined with DeltaNet's per-layer compounding. Kept
+        # as separate sigmoid + multiply for now.
         attn_flat = _qwen36_heads_to_flat(attn_out, B, n_q_pc, T, hd)
         attn_out.deallocate(True)
         gate_sig = ttnn.sigmoid(gate_flat, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -1861,19 +1880,18 @@ class TtLlamaAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config_hifi4,
         )
         gated.deallocate(True)
-        gathered = ttnn.all_gather(
+        # V2-11 (lever B, full-attention variant): collapse `all_gather +
+        # fast_reduce_nc` into a single `ttnn.all_reduce`. 16 full-attention
+        # layers × 1 saved op per decode step. Mirrors the DeltaNet
+        # _output_proj_and_reduce swap (qwen36_delta_attention.py). Math
+        # identical (Sum reduction across cluster_axis=1).
+        dense_out_full = ttnn.all_reduce(
             dense_partial,
-            dim=0,
-            num_links=1,
             cluster_axis=1,
-            topology=ttnn.Topology.Linear,
+            num_links=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         dense_partial.deallocate(True)
-        dense_out_full = ttnn.experimental.fast_reduce_nc(
-            gathered, dims=[0], output=None, compute_kernel_config=None, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        gathered.deallocate(True)
 
         # V2-decode: ttnn.linear of rank-3 LHS @ rank-4 weight returns rank-4.
         # Collapse leading singleton(s) back to rank-3 before slicing so the

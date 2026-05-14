@@ -337,3 +337,117 @@ The host gap is closed (V2-10). The remaining 1.34× is device-side:
 
 All four are device-side optimizations that don't change the host
 contract — the in-trace decode loop here will pick them up automatically.
+
+## V2-11: device-side op + block-architecture parity audit (LANDED)
+
+V2-11 closed roughly half the remaining gap to 17 tok/s/user via device-
+side op-count reduction. The audit (vs llama3_70b_galaxy + olmo_galaxy)
+identified 9 levers; 5 landed cleanly, 4 broke coherency and were
+reverted.
+
+### Per-lever perf progression (real-loop traced 64L decode, 32 steps)
+
+| step | lever | ms / step | tok/s/user | notes |
+|---|---|---|---|---|
+| V2-10 baseline | — | 78.68 | 12.71 | starting point |
+| post-B (DeltaNet AR) | B (DeltaNet `_output_proj_and_reduce`) | 75.47 | 13.25 | `all_gather + fast_reduce_nc` → `ttnn.all_reduce` (1 op/layer × 48 layers) |
+| post-B (full-attn WO) | B (full-attn output proj) | 75.06 | 13.32 | same swap on 16 full-attn layers |
+| post-E (projection fusion) | E (`_project_inputs` 6 → 3 matmuls) | 68.22 | 14.66 | row-interleaved weight concat preserves per-shard math |
+| post-G (delta-rule addcmul) | G (`_fused_decay_and_write_fp32`) | 68.18 | 14.67 | `h*decay + outer*beta` → `mul + addcmul` (3 ops → 2) |
+| post-H (qknorm batched) | H (per-head loop → reshape-to-batch rms_norm) | 67.42 | 14.83 | 8 slice + 8 rms_norm + 8 reshape + 1 concat → 2 ops |
+| post-H ext (flat-to-heads) | H ext (`_qwen36_flat_to_heads` / `_heads_to_flat`) | 67.37 | 14.84 | T=1 contiguous-data fast path: 8 ops → 1 reshape |
+| post-G2 (skip to_layout) | G2 (`_recurrent_delta_rule_step_fp32`) | 67.36 | 14.84 | guard the `to_layout(h, TILE)` on entry — h is already TILE |
+| **post-I (rope addcmul)** | **I (`partial_rope_apply` mul+add → addcmul)** | **67.20** | **14.88** | per Q,K × 16 full-attn layers |
+| pure-execute_trace (final) | | **66.16** | **15.12** | trace-only loop, no host work |
+
+**Total improvement: 78.68 → 67.20 ms (-14.6%), 12.71 → 14.88 tok/s/user (+17.1%).**
+
+### Levers landed cleanly
+
+- **B (CCL collapse, DeltaNet + full-attn)** — biggest single win (-3.6 ms).
+  `ttnn.all_reduce(cluster_axis=0|1)` is a single CCL launch vs
+  `all_gather + fast_reduce_nc` (2 ops). Math is identical (Sum reduction);
+  trace-safe.
+- **E (projection fusion, DeltaNet)** — second-biggest (-6.8 ms).
+  Concatenated Q+K, V+Z, and B+A weights into 3 fused matmuls (per-row
+  interleave preserves the `ShardTensor2dMesh(dims=(1, None))` contiguous-
+  chunk per-row sharding semantics — naive `cat` puts Q-only chunks on
+  rows 0..3 and K-only chunks on rows 4..7 and silently breaks coherency).
+- **G (delta-rule `mul + addcmul`)** — small but clean (-0.05 ms).
+- **H (qknorm + heads transforms)** — modest (-0.85 ms).
+- **I (rope mul+add → addcmul)** — small (-0.2 ms).
+
+### Levers NOT landed (coherency broke despite same wall-clock)
+
+- **C (`_compute_beta_g` activation fusion)** — `add(a, dt_bias,
+  activations=[SOFTPLUS])` and/or `multiply(A_log, sp,
+  input_tensor_a_activations=[EXP], activations=[NEG])` both passed at
+  the same wall-clock (~77.5 ms) but the compile-pass token diverged
+  (248068 → 232) and the generated text became gibberish over 32 tokens
+  (alpha chars 98 → 87 → 34). The fused-activation path evaluates at a
+  slightly different precision than the standalone unary launches; the
+  48 DeltaNet layer compounding pushes the output past tolerance.
+  Pre-computing `-exp(A_log)` once at init triggered the same drift.
+- **D (`_apply_norm_gated` silu fusion / full-attn gate sigmoid
+  fusion)** — same failure mode: `multiply(out, z,
+  input_tensor_b_activations=[SILU])` ran at 77.71 ms (vs 77.78
+  baseline, no perf win) but compile-pass token shifted to 232 and the
+  output went to mojibake. Activation-fused binary ops are too lossy
+  for the bf8/bf16 residual stream over 48 DeltaNet layers.
+- **F (SDPA decode prog_cfg grid bump from (1,1))** — bumped to (4,1)
+  and (8,8) gave the same wall-clock as (1,1) (qwen3.6's
+  single-user [B=1, n_q_pc=8] is below the multi-core SDPA break-even
+  point) but the multi-core reduction order subtly changed the
+  bf8-quantized softmax outputs — text quality fell from 118 → 34
+  alpha chars even though the compile-pass token still matched 248068.
+- **A (DeltaNet recurrent kernel fusion — fused `_compute_beta_g`
+  chain into a single device kernel)** — attempted via
+  `input_tensor_a_activations` + `activations` post-op chains; same
+  precision drift as lever C. The "true" kernel-level fusion would
+  require a custom SFPU kernel, which is out of scope for this V2-11
+  iteration.
+
+### Iterations used + recoveries
+
+- 13 iterations (well under the 20 budget).
+- 0 `tt-smi -r` / `tt-smi -glx_reset` recoveries — no device hangs
+  encountered.
+
+### Remaining gap to 17 tok/s/user
+
+Final state: **15.12 tok/s/user pure-execute_trace** (66.16 ms / step).
+Gap to 17 tok/s/user: **1.125×** (need to shave 7.2 ms more off the
+66.16 ms per-step latency).
+
+**Concrete next-step recommendations (not landed in V2-11):**
+
+1. **Custom SFPU kernel for `_compute_beta_g`** — write a per-tile
+   SFPU kernel that takes `(b, a, dt_bias, A_log)` and produces
+   `(sigmoid(b), -exp(A_log) * softplus(a + dt_bias))` in one launch.
+   Bypasses the activation-fusion precision issue because the chained
+   compute happens inside SFPU registers at full fp32, not at the
+   per-op bf16/bf8 boundary. Estimated savings: ~3 ms / step
+   (48 layers × 4 saved ops × ~15 us / op).
+2. **Move DeltaNet recurrent state from DRAM-INTERLEAVED to a per-row
+   L1 width-sharded buffer** — currently `dn_state_buffer` lives in
+   DRAM and is copied into L1 every step via
+   `to_memory_config(initial_state, L1)`. The state is fp32 [B, 6, 128,
+   128] = 384 KB per row chip — fits in L1. Eliminates 48 DRAM→L1
+   copies per step.
+3. **Fuse Q+K+V into a single matmul** — currently V+Z fused and Q+K
+   fused but V vs Z and Q vs K can't be co-fused because they go
+   through different downstream paths. Move V into the QK matmul
+   instead (output 256+256+768=1280) and keep Z standalone (1 op).
+   Saves 1 matmul / layer × 48 = ~1 ms / step.
+4. **Replace `ttnn.all_reduce` with the `tt_ccl.line_all_reduce`
+   persistent-buffer variant for DeltaNet + full-attn paths** — the
+   `tt_ccl` variant uses pre-allocated L1 width-sharded semaphores +
+   buffers vs `ttnn.all_reduce`'s per-call allocation. Need to thread
+   a DRAM→L1 width-sharded conversion of the DeltaNet/full-attn output
+   first (the persistent buffer expects width-sharded L1 input). Net
+   savings depend on whether the conversion outweighs the AR speedup.
+
+If even one of these lands the gap closes to <1.05× and 17 tok/s/user
+becomes a question of measurement noise. The activation-fusion path
+(C/D) remains blocked on the precision-compounding issue across the 48
+DeltaNet layers — a custom SFPU kernel is the cleanest unlock.
