@@ -17,6 +17,11 @@ the lightweight TTNN condition path, or ``--no-ttnn-condition-embedding`` to com
 ``prepare_condition``.
 
 ``--use-official-lm`` runs full ``acestep.inference.generate_music`` (PyTorch DiT on host) with no TTNN.
+
+On the default (non ``--fast-preprocess``) path, after the TTNN device is opened for the Qwen3 caption
+encoder, the same device is attached to the 5 Hz LM handler so the **narrow CFG** combine on the valid
+audio-token slice (codes phase) runs on TTNN with strict fallbacks disabled inside that op; see
+``ttnn_impl/lm_logits_ttnn.py``. The 5 Hz causal LM forward remains PyTorch.
 """
 
 from __future__ import annotations
@@ -434,7 +439,8 @@ def main() -> None:
         try:
             from acestep.handler import AceStepHandler
             from acestep.inference import GenerationConfig, GenerationParams, generate_music
-            from acestep.llm_inference import LLMHandler
+
+            from models.demos.ace_step_v1_5.five_hz_lm import LocalFiveHzLMHandler
         except ModuleNotFoundError as e:
             raise RuntimeError(
                 "--use-official-lm requires AceStepHandler and its deps "
@@ -446,7 +452,7 @@ def main() -> None:
         _mdl.MAIN_MODEL_COMPONENTS = [args.variant, "vae", "Qwen3-Embedding-0.6B", args.lm_variant]
 
         dit_handler = AceStepHandler()
-        llm_handler = LLMHandler()
+        llm_handler = LocalFiveHzLMHandler()
         device = "cpu"
         status, ok = dit_handler.initialize_service(
             project_root=str(ref_root),
@@ -466,7 +472,7 @@ def main() -> None:
         )
         print(status, flush=True)
         if not ok:
-            raise RuntimeError("LLMHandler.initialize failed")
+            raise RuntimeError("5 Hz LM (local HF) initialize failed")
         params = GenerationParams(
             task_type="text2music",
             caption=args.prompt,
@@ -663,7 +669,8 @@ def main() -> None:
     configure_acestep_logging()
     try:
         from acestep.handler import AceStepHandler
-        from acestep.llm_inference import LLMHandler
+
+        from models.demos.ace_step_v1_5.five_hz_lm import LocalFiveHzLMHandler
     except ModuleNotFoundError as e:
         raise RuntimeError(
             "Default preprocessing imports AceStepHandler, which pulls ACE-Step training code "
@@ -678,7 +685,7 @@ def main() -> None:
     _mdl.MAIN_MODEL_COMPONENTS = [args.variant, "vae", "Qwen3-Embedding-0.6B", args.lm_variant]
 
     dit_handler = AceStepHandler()
-    llm_handler = LLMHandler()
+    llm_handler = LocalFiveHzLMHandler()
     device = "cpu"
     status, ok = dit_handler.initialize_service(
         project_root=str(ref_root),
@@ -697,7 +704,7 @@ def main() -> None:
     )
     print(status, flush=True)
     if not ok:
-        raise RuntimeError("LLMHandler.initialize failed")
+        raise RuntimeError("5 Hz LM (local HF) initialize failed")
 
     ts_list = None
     if args.timesteps:
@@ -747,6 +754,7 @@ def main() -> None:
     if hasattr(dev, "enable_program_cache"):
         dev.enable_program_cache()
     dev_opened_for_ttnn_text_encoder = True
+    llm_handler.set_ttnn_logits_device(dev)
 
     qwen_tt_encoder = TtQwen3EmbeddingEncoder(
         device=dev, hf_model_dir=str(text_model_dir), qwen_safetensors_path=str(qwen_safetensors)
