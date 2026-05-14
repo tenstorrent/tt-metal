@@ -99,7 +99,10 @@ def _assert_text_logits_pcc_local(
 ) -> None:
     ref_f = ref_logits.detach().float().cpu()
     _, sd, v = ref_f.shape
-    flat = ttnn.to_torch(ttnn.from_device(logits_tt)).to(torch.bfloat16).contiguous().reshape(-1)
+    if logits_tt.storage_type() == ttnn.StorageType.DEVICE:
+        flat = ttnn.to_torch(ttnn.from_device(logits_tt)).to(torch.bfloat16).contiguous().reshape(-1)
+    else:
+        flat = ttnn.to_torch(logits_tt).to(torch.bfloat16).contiguous().reshape(-1)
     sp = flat.numel() // v
     tt_f = flat.reshape(1, sp, v)[:, :sd, :v].contiguous().float().cpu()
     assert tt_f.shape == ref_f.shape, f"{ctx}: shape ref {tuple(ref_f.shape)} vs ttnn {tuple(tt_f.shape)}"
@@ -201,6 +204,12 @@ def _t2u_timed_stages(model: Any, tt_model: Any, device: ttnn.Device, *, ctx: st
         "T2U forward": (t_fwd - t_h2d) * 1000.0,
         "T2U PCC validation": (t_end - t_fwd) * 1000.0,
     }
+
+
+# Shared with ``test_e2e_perf_2cq.py`` (Pipeline host outputs may be TTNN on HOST).
+SEAMLESS_E2E_TASKS = _TASKS
+assert_text_logits_pcc_vs_ref = _assert_text_logits_pcc_local
+t2u_timed_stages_for_e2e = _t2u_timed_stages
 
 
 @pytest.mark.models_performance_bare_metal
