@@ -5,7 +5,7 @@
 
 """
 Usage:
-    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--disable-elf-cache] [--triage-summary-path=<path>] [--llm-output=<path>]
+    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--disable-elf-cache] [--triage-summary-path=<path>] [--llm-output]
 
 Options:
     --remote-exalens                 Connect to remote exalens server.
@@ -25,7 +25,7 @@ Options:
     --disable-progress               Disable progress bars. [default: False]
     --disable-elf-cache              Re-parse ELF files on every access instead of caching. [default: False]
     --triage-summary-path=<path>     Write a triage summary file to the given path (used by CI for hang reports).
-    --llm-output=<path>              Write a compact text report with CSV-formatted tables to <path>. Easier and cheaper for LLMs (and grep/CI) to consume than the Rich-table console output.
+    --llm-output                     Print machine-readable report (CSV-formatted tables) to stdout instead of Rich tables. Easier and cheaper for LLMs (and grep/CI) to consume. Implies --disable-colors.
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
@@ -435,8 +435,11 @@ def init_console_and_verbosity(args: ScriptArguments) -> None:
     # When in a terminal, let Rich auto-detect the terminal width.
     # Similarly, if verbosity is increased, use larger width to avoid wrapping.
     width = None if sys.stdout.isatty() and _verbose_level == 0 else 10000
-    console = Console(theme=utils.create_console_theme(args["--disable-colors"]), highlight=False, width=width)
-    progress_disabled = bool(args["--disable-progress"])
+    # --llm-output implies no colors: non-table console output (status lines,
+    # warnings) needs to stay plain text for cheap LLM consumption.
+    disable_colors = bool(args["--disable-colors"]) or bool(args["--llm-output"])
+    console = Console(theme=utils.create_console_theme(disable_colors), highlight=False, width=width)
+    progress_disabled = bool(args["--disable-progress"]) or bool(args["--llm-output"])
 
     # Set verbose level from -v count (controls which columns are displayed)
     verbose_level = args["-v"] or 0
@@ -638,18 +641,16 @@ def set_output_serializer(serializer: Any) -> None:
 def init_output_serializer(args: ScriptArguments) -> None:
     """Build the active serializer based on CLI args.
 
-    Default: `RichSerializer`. If `--llm-output=<path>` is set, fan out to both
-    Rich and `CsvSerializer` so the console view is preserved while a
-    machine-readable file is also written.
+    Default: `RichSerializer`. If `--llm-output` is set,
+    swap in `CsvSerializer` — replacing Rich tables with CSV-formatted
+    ones for cheaper LLM/grep consumption.
     """
-    from serializers import CsvSerializer, MultiSerializer, RichSerializer
+    from serializers import CsvSerializer, RichSerializer
 
-    rich = RichSerializer(console, utils, get_verbose_level)
-    llm_output_path = args["--llm-output"]
-    if llm_output_path:
-        set_output_serializer(MultiSerializer([rich, CsvSerializer(llm_output_path, get_verbose_level)]))
+    if args["--llm-output"]:
+        set_output_serializer(CsvSerializer(console, get_verbose_level))
     else:
-        set_output_serializer(rich)
+        set_output_serializer(RichSerializer(console, utils, get_verbose_level))
 
 
 def serialize_result(script: TriageScript | None, result, execution_time: str = ""):
@@ -846,8 +847,6 @@ def run_script(
             all_scripts.setdefault(path, script)
         args = parse_arguments(all_scripts, script_path, argv)
 
-    init_output_serializer(args)
-
     # Initialize context if not provided
     if context is None:
         _enforce_dependencies(args)
@@ -865,10 +864,10 @@ def run_script(
     script = scripts[script_path] if script_path in scripts else None
     if return_result:
         return result
+    init_output_serializer(args)
     serialize_result(script, result)
 
     if force_exit:
-        get_output_serializer().close()
         # Remove nanobind leak check to avoid false positives on exit
         os._exit(0)
 
@@ -999,8 +998,6 @@ def main():
     from elfs_cache import run as get_elfs_cache
 
     get_elfs_cache(args, context).log_stats()
-
-    get_output_serializer().close()
 
     # Remove nanobind leak check to avoid false positives on exit
     os._exit(0)

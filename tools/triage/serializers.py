@@ -7,16 +7,15 @@
 Output serializers for tt-triage script results.
 
 Each script's result flows through `serialize_result()` in `triage.py`, which
-delegates to an `OutputSerializer`. The default `RichSerializer` renders Rich
-tables to the console. The `CsvSerializer` writes a single text report
-file whose tables are emitted as CSV — easier and cheaper to consume for
-machine readers (LLMs, grep, diff) than the Rich box-drawing format.
+delegates to an `OutputSerializer`. `RichSerializer` renders Rich tables;
+`CsvSerializer` renders the same data as CSV-formatted tables,
+which is cheaper for machine readers (LLMs, grep, diff) than the box-drawing format.
 """
 
 from __future__ import annotations
 
 import csv
-import os
+import io
 import textwrap
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, fields, is_dataclass
@@ -91,7 +90,7 @@ def extract_table_data(result: Any, verbose_level: int = 0) -> TableData | None:
 
 
 class OutputSerializer(ABC):
-    """Sink for one script's serialized result. Subclasses must implement `emit` and `close`."""
+    """Sink for one script's serialized result. Subclasses must implement `emit`."""
 
     @abstractmethod
     def emit(
@@ -105,11 +104,7 @@ class OutputSerializer(ABC):
         failure_message: str | None,
         documentation: str | None,
     ) -> None:
-        ...
-
-    @abstractmethod
-    def close(self) -> None:
-        ...
+        pass
 
 
 class RichSerializer(OutputSerializer):
@@ -161,6 +156,7 @@ class RichSerializer(OutputSerializer):
 
         if isinstance(result, list) and len(result) == 0:
             utils.ERROR("  No results found.")
+            return
 
         table_data = extract_table_data(result, self._verbose_getter())
         if table_data is None:
@@ -174,38 +170,43 @@ class RichSerializer(OutputSerializer):
             table.add_row(*row)
         self._console.print(table)
 
-    def close(self) -> None:
-        pass
-
 
 def _strip_rich_markup(s: str) -> str:
     """Strip Rich markup tags (e.g. `[warning]...[/]`) from a string.
 
-    Log helpers in utils.py wrap messages in Rich tags for console rendering,
-    and some scripts embed inline markup in their messages. The Rich console
-    renders these away; a plain-text file must do the equivalent stripping.
+    Some script messages contain bracketed text that looks like markup but
+    isn't (e.g. `[!] core`, `[0x...]`, coordinate strings like `[1-1 (0,0)]`).
+    Rich raises `MarkupError` on those — fall back to the original string in
+    that case so we never crash on otherwise valid triage output.
     """
+    from rich.errors import MarkupError
     from rich.text import Text
 
-    return Text.from_markup(s).plain
+    try:
+        return Text.from_markup(s).plain
+    except MarkupError:
+        return s
 
 
 class CsvSerializer(OutputSerializer):
     """
-    Writes a report with one section per script.
+    Writes a report with one section per script to the Rich console.
 
     Each section mirrors the console layout (`<script>:`, then `pass`/`fail`
     and any warnings/failures), then emits tabular data as a CSV block.
     """
 
-    def __init__(self, path: str, verbose_level_getter: Callable[[], int]):
-        self._path = path
+    def __init__(self, console: Any, verbose_level_getter: Callable[[], int]):
+        self._console = console
         self._verbose_getter = verbose_level_getter
-        parent = os.path.dirname(os.path.abspath(path))
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        self._file = open(path, "w", encoding="utf-8")
-        self._writer = csv.writer(self._file, lineterminator="\n")
+
+    def _print(self, line: str = "") -> None:
+        self._console.print(_strip_rich_markup(line), markup=False, highlight=False)
+
+    def _print_csv_row(self, row: list[str]) -> None:
+        buf = io.StringIO()
+        csv.writer(buf, lineterminator="").writerow(row)
+        self._print(buf.getvalue())
 
     def emit(
         self,
@@ -218,80 +219,37 @@ class CsvSerializer(OutputSerializer):
         failure_message: str | None,
         documentation: str | None,
     ) -> None:
-        f = self._file
         if script_name is not None:
-            f.write("\n")
-            f.write(f"{script_name}{execution_time}:\n")
+            self._print()
+            self._print(f"{script_name}{execution_time}:")
 
         if result is None:
             if len(failures) > 0 or script_failed:
-                f.write("  fail\n")
+                self._print("  fail")
                 for failure in failures:
-                    f.write(f"    {_strip_rich_markup(failure)}\n")
+                    self._print(f"    {failure}")
                 if script_failed and failure_message:
-                    f.write(f"    {_strip_rich_markup(failure_message)}\n")
+                    self._print(f"    {failure_message}")
             else:
-                f.write("  pass\n")
+                self._print("  pass")
                 for warning in warnings:
-                    f.write(f"    {_strip_rich_markup(warning)}\n")
-            f.flush()
+                    self._print(f"    {warning}")
             return
 
         for failure in failures:
-            f.write(f"  {_strip_rich_markup(failure)}\n")
+            self._print(f"  {failure}")
         for warning in warnings:
-            f.write(f"  {_strip_rich_markup(warning)}\n")
+            self._print(f"  {warning}")
 
         if isinstance(result, list) and len(result) == 0:
-            f.write("  No results found.\n")
-            f.flush()
+            self._print("  No results found.")
             return
 
         table_data = extract_table_data(result, self._verbose_getter())
         if table_data is None:
-            f.write(f"  {result}\n")
-            f.flush()
+            self._print(f"  {result}")
             return
 
-        self._writer.writerow(table_data.columns)
+        self._print_csv_row(table_data.columns)
         for row in table_data.rows:
-            self._writer.writerow(row)
-        f.flush()
-
-    def close(self) -> None:
-        if not self._file.closed:
-            self._file.close()
-
-
-class MultiSerializer(OutputSerializer):
-    """Fans a single emit out to several serializers (e.g. Rich + CSV)."""
-
-    def __init__(self, serializers: Iterable[OutputSerializer]):
-        self._serializers = list(serializers)
-
-    def emit(
-        self,
-        script_name: str | None,
-        execution_time: str,
-        result: Any,
-        failures: list[str],
-        warnings: list[str],
-        script_failed: bool,
-        failure_message: str | None,
-        documentation: str | None,
-    ) -> None:
-        for s in self._serializers:
-            s.emit(
-                script_name=script_name,
-                execution_time=execution_time,
-                result=result,
-                failures=failures,
-                warnings=warnings,
-                script_failed=script_failed,
-                failure_message=failure_message,
-                documentation=documentation,
-            )
-
-    def close(self) -> None:
-        for s in self._serializers:
-            s.close()
+            self._print_csv_row(row)
