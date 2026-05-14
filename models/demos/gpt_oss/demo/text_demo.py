@@ -27,12 +27,10 @@ from loguru import logger
 
 import ttnn
 from models.common.sampling import SamplingParams
-from models.common.utility_functions import is_blackhole
 from models.demos.gpt_oss.tests.test_factory import TestFactory, parametrize_mesh_with_fabric
 
 # Import GPT-OSS components using our refactored patterns
 from models.demos.gpt_oss.tt.common import create_tt_model
-from models.demos.gpt_oss.utils.general_utils import throughput_experts_supported_on_arch
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.demo.simple_text_demo import create_tt_page_table, load_inputs
@@ -119,7 +117,7 @@ def prepare_gpt_oss_generator_args(
 
     for submesh in submesh_devices:
         # Use GPT-OSS create_tt_model directly!
-        use_throughput = mesh_device.shape[0] > 1 and global_batch_size > 1 and throughput_experts_supported_on_arch()
+        use_throughput = mesh_device.shape[0] > 1 and global_batch_size > 1
         logger.info(f"Creating GPT-OSS model for submesh {submesh} with throughput experts: {use_throughput}")
         model_args_i, model_i, tt_kv_cache_i, state_dict = create_tt_model(
             submesh,
@@ -486,11 +484,6 @@ def test_gpt_oss_demo(
             )
         if max_seq_len > 64 * 1024:
             pytest.skip(f"Long context demo with >64k tokens skipped for mesh shape {mesh_shape} due to OOM.")
-    if is_blackhole() and batch_size > 1:
-        pytest.skip(
-            f"Batch size {batch_size} demo skipped on Blackhole: throughput experts are not supported, "
-            "only batch=1 low-latency experts run on this arch."
-        )
     if long_context_mode:
         assert batch_size >= mesh_shape[0], "Long-context mode requires batch_size >= number of mesh rows"
     if os.environ.get("CI", None) and not run_in_ci:

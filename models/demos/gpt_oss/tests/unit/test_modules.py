@@ -7,13 +7,11 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_blackhole
 from models.tt_transformers.tt.common import gather_cos_sin, precompute_freqs, rope_scaling_model_factory
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 from models.tt_transformers.tt.rope import RotarySetup
 
 from ...tt.layer import DecoderLayer
-from ...utils.general_utils import throughput_experts_supported_on_arch
 from ..test_factory import TestFactory, compare_tensors, parametrize_batch_seq, parametrize_mesh_with_fabric
 
 
@@ -302,7 +300,6 @@ def run_fused_throughput_experts_component(
     the tokens it receives. routing_weight_map=None → unweighted sum over processed experts.
     """
     from models.demos.gpt_oss.tt.experts_throughput import create_fused_moe_gpt_config, fused_decode_forward
-    from models.demos.gpt_oss.utils.general_utils import get_default_num_links
 
     _, _, num_tokens, hidden_size = hidden_shape
 
@@ -325,7 +322,7 @@ def run_fused_throughput_experts_component(
         tokens_per_device=tokens_per_device,
         weight_dtype=ttnn.bfloat4_b,
         cluster_axis=cluster_axis,
-        num_links=get_default_num_links(mesh_device),
+        num_links=4,
     )
 
     # Create routing with global expert IDs (0..num_experts-1).
@@ -564,8 +561,7 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
         max_seq_len=max(seq_len, 128),
         max_local_batch_size=local_batch_size,
         use_throughput_experts=setup["mesh_device"].shape[0] > 1
-        and local_batch_size * seq_len > 1
-        and throughput_experts_supported_on_arch(),  # high throughput experts don't support single user decode currently
+        and local_batch_size * seq_len > 1,  # high throughput experts don't support single user decode currently
     )
     return decoder_layer
 
@@ -621,12 +617,6 @@ def test_decoder(
         pytest.skip(
             f"Skipping batch size {batch_size} for mesh shape {tuple(mesh_device.shape)}. "
             "Only batch size 1 is supported for mesh shape without row-sharding."
-        )
-
-    if is_blackhole() and mesh_device.shape[0] > 1 and batch_size * seq_len > 1:
-        pytest.skip(
-            f"Skipping batch={batch_size} seq_len={seq_len} on Blackhole {tuple(mesh_device.shape)}: "
-            "this configuration uses throughput experts which are not supported on Blackhole."
         )
 
     assert batch_size == 1 or seq_len == 1, "Only single user prefill or single token decode is supported"
@@ -958,7 +948,6 @@ def run_model_forward_test(
     """
     from models.demos.gpt_oss.tt.ccl import CCLManager
     from models.demos.gpt_oss.tt.model import Model
-    from models.demos.gpt_oss.utils.general_utils import get_default_num_links
 
     # Determine local batch size for row sharding
     if batch_size > 32:
@@ -970,11 +959,11 @@ def run_model_forward_test(
         local_batch_size = batch_size
 
     # Create CCL manager
-    ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device))
+    ccl_manager = CCLManager(mesh_device, num_links=4 if mesh_device.shape[0] > 1 else 1)
 
     # Create TT model with meta format weights
     # Use throughput experts for row-sharded batches (batch > 32 on multi-row mesh)
-    use_throughput_experts = is_row_sharded and mesh_device.shape[0] > 1 and throughput_experts_supported_on_arch()
+    use_throughput_experts = is_row_sharded and mesh_device.shape[0] > 1
     tt_model = Model(
         mesh_device=mesh_device,
         hf_config=config,
@@ -1119,12 +1108,6 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, num_layers
     if mesh_shape[0] == 1 and batch_size > 1:
         pytest.skip(
             f"Skipping batch size {batch_size} for mesh shape {mesh_shape}. Only batch size 1 is supported when mesh rows = 1."
-        )
-
-    if is_blackhole() and batch_size > 32 and mesh_device.shape[0] > 1:
-        pytest.skip(
-            f"Skipping batch={batch_size} on Blackhole {tuple(mesh_device.shape)}: row-sharded batches "
-            "use throughput experts which are not supported on Blackhole."
         )
 
     is_decode = mode == "decode"
