@@ -119,6 +119,7 @@ jobs:
         test-group: ${{ fromJSON(needs.define-ops-tests.outputs.ops-tests) }}
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label) }}
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
       image: ${{ format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image) || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -149,6 +150,8 @@ jobs:
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+          enable-kernel-ccache: true
+          redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}|read-only=${{ vars.REDIS_CCACHE_IS_READONLY }}
           auto-triage: ${{ !inputs.enable-watcher }}
 
       - name: ${{ matrix.test-group.name }} tests

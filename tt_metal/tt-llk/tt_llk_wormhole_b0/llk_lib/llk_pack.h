@@ -235,7 +235,7 @@ inline void _llk_pack_hw_configure_(
 }
 
 // TODO NC: Clean up as the part of tt-metal#34587
-template <bool untilize = false, bool zero_output = false, bool tilize = false /*unused*/, bool skip_addrmod_config = false>
+template <bool untilize = false, bool zero_output = false, bool tilize = false /*unused*/, bool skip_addrmod_config = false, bool skip_packer_strides = false>
 inline void _llk_pack_init_(
     const std::uint32_t pack_dst_format,
     const std::uint32_t face_r_dim = FACE_R_DIM,
@@ -251,7 +251,10 @@ inline void _llk_pack_init_(
     }
     _llk_pack_mop_config_<untilize, zero_output>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
 
-    set_packer_l1_offset(pack_dst_format, face_r_dim);
+    if constexpr (!skip_packer_strides)
+    {
+        set_packer_l1_offset(pack_dst_format, face_r_dim);
+    }
     const std::uint32_t face_dim   = face_r_dim * FACE_C_DIM;
     const std::uint32_t pack_x_dim = (narrow_tile || !untilize) ? face_dim : FACE_R_DIM;
     TT_SETADCXX(p_setadc::PAC, pack_x_dim - 1, 0x0);
