@@ -22,6 +22,7 @@ Examples:
 /run-test test_eltwise_binary_quasar.py --arch quasar --compile-only
 /run-test test_sfpu_square_quasar.py --arch quasar --no-split
 /run-test test_eltwise_binary_quasar.py --arch quasar --maxfail 5
+/run-test test_matmul_quasar.py --arch quasar --test-id 'test_matmul_quasar.py::test_matmul[math_fidelity:LoFi-...-format:Float16->Float16-...]'
 ```
 
 ## Arguments
@@ -36,6 +37,7 @@ Examples:
 - `--no-split` — combined compile+run in one pytest invocation (issue-solver tests)
 - `--port <N>` — simulator port (default 5556)
 - `--timeout <secs>` — pytest timeout ceiling (default 600)
+- `--progress` — manual-debug aid: emit a `[progress] <phase>: elapsed=Ns, last_output=Ns ago` line to stderr every 30s during compile and simulate. Off by default; pass when you suspect a hang and want to see whether a phase is alive but slow vs. truly stuck. Pair with `--progress-interval <secs>` to tune.
 
 ## Arch Inference
 

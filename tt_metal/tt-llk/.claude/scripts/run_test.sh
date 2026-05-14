@@ -43,6 +43,15 @@
 #                     Output still streams to the terminal as usual; the file is only
 #                     so you can scroll back through long verification runs and see
 #                     in-timeline what happened. Default: no log file.
+#   --progress        Manual-debug aid: emit a periodic `[progress]` status line to
+#                     stderr during the compile and simulate phases (elapsed time;
+#                     in simulate also the age of the last output line). Off by
+#                     default. Use when a phase is quiet for tens of seconds (Quasar
+#                     model load, BH/WH long compile) and you want to know it's
+#                     still alive vs. silently stuck.
+#   --progress-interval N
+#                     Seconds between progress lines (default: 30). Ignored unless
+#                     --progress is set.
 #   --verbose         Print step headers to stderr
 #
 # Exit codes:
@@ -51,10 +60,11 @@
 #   2  Compile step failed  (only from the 'run' command)
 #   3  Environment error (flock timeout, simulator port stuck, venv missing)
 #   4  Usage / validation error (missing required options)
-#   5  Hang detected by watchdog. QSR: emu-quasar stalled (CPU ticks flat).
-#      BH/WH: pytest stdout went quiet past the silicon-stall threshold;
-#      tt-triage.py output (if available) is dumped to stderr and the device
-#      is reset with tt-smi -r. See _watchdog_emu / _watchdog_silicon.
+#   5  Hang detected by watchdog. Both modes watch the consumer's stdout
+#      cadence via a heartbeat file's mtime; if it goes quiet past the per-mode
+#      threshold (QSR=120s, silicon=300s) the watchdog kills the consumer tree.
+#      Silicon additionally runs tt-triage.py and tt-smi -r.
+#      See _watchdog_emu / _watchdog_silicon.
 #
 # Agents invoke this via the Bash tool with timeout: 1800000 (synchronous,
 # never run_in_background). The script blocks until completion and returns one
@@ -103,6 +113,8 @@ LOCK_TIMEOUT="900"
 SIM_PATH=""
 NO_SPLIT="false"
 LOG_DIR=""
+PROGRESS_ENABLED="false"
+PROGRESS_INTERVAL="30"
 VERBOSE="false"
 
 while [[ $# -gt 0 ]]; do
@@ -120,6 +132,8 @@ while [[ $# -gt 0 ]]; do
     --lock-timeout)  LOCK_TIMEOUT="$2";  shift 2 ;;
     --sim-path)      SIM_PATH="$2";      shift 2 ;;
     --log-dir)       LOG_DIR="$2";       shift 2 ;;
+    --progress)      PROGRESS_ENABLED="true"; shift ;;
+    --progress-interval) PROGRESS_INTERVAL="$2"; shift 2 ;;
     --no-split)      NO_SPLIT="true";    shift   ;;
     --verbose|-v)    VERBOSE="true";     shift   ;;
     --help|-h)
@@ -202,21 +216,46 @@ _validate() {
 # non-empty = "this was a hang, not a normal pytest failure" (same pattern as
 # tt-metal's run_safe_pytest.sh uses with tt-triage's log file).
 #
-# Two flavours, picked by MODE inside _do_simulate:
-#   * QSR (emulation): poll emu-quasar's /proc/<pid>/stat for CPU tick
-#     progress. The simulator is a CPU-bound kHz emulation loop, so utime+stime
-#     advances continuously when it's healthy — flat ticks for tens of seconds
-#     means the sim itself is wedged, not just slow.
-#   * BH/WH (silicon): poll a heartbeat file's mtime (fed by tee-ing consumer
-#     stdout). On stall, run tt-triage.py to capture device callstacks/NoC
-#     state, dump them to HANG_LOG, and tt-smi -r afterwards. This is coarser
-#     than QSR's signal because pytest output is bursty (compile-consumer
-#     rebuilds variants in series), so the threshold has to absorb that.
+# Both flavours poll a heartbeat file's mtime (fed by tee-ing consumer
+# stdout/stderr). They differ only in stall threshold and on-trip cleanup:
+#   * QSR (emulation): emu-quasar-1x3 is an SSH wrapper that blocks on a
+#     remote Zebu emulator — local CPU ticks stay flat for tens of seconds
+#     even when the remote model is healthy, so a CPU-tick signal produces
+#     false positives. SSH output cadence (model-load INFO lines, xtor
+#     init, pytest progress) is the only reliable local signal.
+#   * BH/WH (silicon): same heartbeat signal. On stall, run tt-triage.py to
+#     capture device callstacks/NoC state, dump them to HANG_LOG, and
+#     tt-smi -r afterwards.
 
 HANG_POLL_SECS=5
-HANG_STALL_QUASAR=30        # tight: healthy emu-quasar always burns CPU
+HANG_STALL_QUASAR=120       # absorbs Zebu model-load quiet phases (~30s max)
 HANG_STALL_SILICON=300      # loose: absorbs compile-consumer's quiet phases
 LLK_TRIAGE_SCRIPT_REL=".claude/scripts/llk_triage.py"
+
+# Background ticker: prints a `[progress]` line to stderr every
+# PROGRESS_INTERVAL seconds for as long as the supervised PID is alive. Lets
+# the caller see "still in compile / still in simulate" during phases that go
+# tens of seconds without output (Zebu model load, BH/WH long compile).
+# Heartbeat is optional: when supplied, the line also includes "last_output=Ns
+# ago" so a quiet but progressing phase looks different from a wedged one.
+_progress_ticker() {
+  local supervised_pid="$1" heartbeat="$2" phase="$3"
+  local start_ts now mtime hb_age elapsed
+  start_ts=$(date +%s)
+  while kill -0 "$supervised_pid" 2>/dev/null; do
+    sleep "$PROGRESS_INTERVAL"
+    kill -0 "$supervised_pid" 2>/dev/null || break
+    now=$(date +%s)
+    elapsed=$((now - start_ts))
+    if [[ -n "$heartbeat" && -f "$heartbeat" ]]; then
+      mtime=$(stat -c %Y "$heartbeat" 2>/dev/null || echo "$now")
+      hb_age=$((now - mtime))
+      echo "[run_llk_tests][progress] ${phase}: elapsed=${elapsed}s, last_output=${hb_age}s ago" >&2
+    else
+      echo "[run_llk_tests][progress] ${phase}: elapsed=${elapsed}s" >&2
+    fi
+  done
+}
 
 # Recursively kill PID and all descendants. We need this instead of
 # `pkill -9 -P pid` (which only walks one level) because the consumer tree
@@ -285,34 +324,26 @@ _run_llk_triage() {
   echo "--- end llk-triage ---" >&2
 }
 
-# QSR watchdog. Polls emu-quasar tick counter; on stall, writes HANG_LOG and
-# kills the consumer tree plus any straggler simulator processes.
+# QSR watchdog. Polls the heartbeat file's mtime — emu-quasar-1x3 is an SSH
+# wrapper that's mostly idle while the remote Zebu emulator runs, so CPU
+# ticks on the local wrapper are flat even during healthy emulation. The
+# stream of model-load / xtor / pytest output piped through the heartbeat
+# file is the reliable local signal that the remote side is alive.
 _watchdog_emu() {
-  local consumer_pid="$1" hang_log="$2" emu_name="$3"
-  local last_ticks=-1 stuck_for=0 emu_pid ticks
+  local consumer_pid="$1" hang_log="$2" heartbeat="$3"
+  local now mtime quiet_for
 
   while kill -0 "$consumer_pid" 2>/dev/null; do
     sleep "$HANG_POLL_SECS"
-    emu_pid=$(pgrep -f "$emu_name" 2>/dev/null | head -1)
-    if [[ -z "$emu_pid" ]]; then
-      last_ticks=-1
-      stuck_for=0
-      continue
-    fi
-    ticks=$(awk '{print $14+$15}' "/proc/${emu_pid}/stat" 2>/dev/null) || ticks=""
-    [[ -z "$ticks" ]] && continue
-    if [[ "$ticks" == "$last_ticks" ]]; then
-      stuck_for=$((stuck_for + HANG_POLL_SECS))
-      if [[ "$stuck_for" -ge "$HANG_STALL_QUASAR" ]]; then
-        printf '%s (pid %s) stalled at %s CPU ticks for %ds\n' \
-          "$emu_name" "$emu_pid" "$ticks" "$stuck_for" >"$hang_log"
-        kill -9 "$emu_pid" 2>/dev/null || true
-        _kill_tree "$consumer_pid"
-        return
-      fi
-    else
-      stuck_for=0
-      last_ticks="$ticks"
+    now=$(date +%s)
+    mtime=$(stat -c %Y "$heartbeat" 2>/dev/null || echo "$now")
+    quiet_for=$((now - mtime))
+    if [[ "$quiet_for" -ge "$HANG_STALL_QUASAR" ]]; then
+      _dump_hang_diagnosis "$hang_log" \
+        "emu-quasar hang: no output for ${quiet_for}s (threshold ${HANG_STALL_QUASAR}s)"
+      pkill -9 -f "emu-${ARCH}" 2>/dev/null || true
+      _kill_tree "$consumer_pid"
+      return
     fi
   done
 }
@@ -403,25 +434,53 @@ _do_compile() {
   # simulate's --compile-consumer reads per-variant artifacts that producer
   # wrote, so an unfiltered producer + filtered consumer would either rebuild
   # variants the consumer skips or miss variants the consumer needs.
-  local -a kflag=()
-  [[ -n "$K_FILTER" ]] && kflag=(-k "$K_FILTER")
+  # Resolution order matches _do_simulate: --test-id > --k > whole file.
+  local -a pytest_args=()
+  if [[ -n "$TEST_ID" ]]; then
+    pytest_args=("$TEST_ID")
+  elif [[ -n "$K_FILTER" ]]; then
+    pytest_args=(-k "$K_FILTER" "$TEST_FILE")
+  else
+    pytest_args=("$TEST_FILE")
+  fi
 
+  # Background pytest so the progress ticker can run alongside. If progress is
+  # disabled we still pay the (negligible) cost of background+wait — keeps the
+  # control flow uniform.
+  local compile_pid progress_pid="" compile_exit
   if [[ -n "$LOG_DIR" ]]; then
     mkdir -p "$LOG_DIR"
     (
       # shellcheck disable=SC1091
       source "${VENV}/bin/activate"
       cd "${TEST_DIR}"
-      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" "${kflag[@]}" "${TEST_FILE}"
-    ) > >(tee -a "${LOG_DIR}/compile.log") 2> >(tee -a "${LOG_DIR}/compile.log" >&2)
+      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" "${pytest_args[@]}"
+    ) > >(tee -a "${LOG_DIR}/compile.log") 2> >(tee -a "${LOG_DIR}/compile.log" >&2) &
+    compile_pid=$!
   else
     (
       # shellcheck disable=SC1091
       source "${VENV}/bin/activate"
       cd "${TEST_DIR}"
-      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" "${kflag[@]}" "${TEST_FILE}"
-    )
+      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" "${pytest_args[@]}"
+    ) &
+    compile_pid=$!
   fi
+
+  if [[ "$PROGRESS_ENABLED" == "true" ]]; then
+    _progress_ticker "$compile_pid" "" "compile" &
+    progress_pid=$!
+  fi
+
+  wait "$compile_pid"
+  compile_exit=$?
+
+  if [[ -n "$progress_pid" ]]; then
+    kill "$progress_pid" 2>/dev/null || true
+    wait "$progress_pid" 2>/dev/null || true
+  fi
+
+  return "$compile_exit"
 }
 
 # ── simulate ──────────────────────────────────────────────────────────────────
@@ -546,13 +605,19 @@ _do_simulate() {
   # Spawn the appropriate watchdog. Picked by MODE rather than ARCH so future
   # simulator/silicon arches inherit the right behaviour automatically.
   if [[ "$MODE" == "simulator" ]]; then
-    _watchdog_emu "$consumer_pid" "$hang_log" "emu-${ARCH}" &
+    _watchdog_emu "$consumer_pid" "$hang_log" "$heartbeat" &
     watchdog_pid=$!
-    _vlog "Watchdog: emu-${ARCH} tick monitor (stall=${HANG_STALL_QUASAR}s, poll=${HANG_POLL_SECS}s)"
+    _vlog "Watchdog: emu-${ARCH} heartbeat monitor (stall=${HANG_STALL_QUASAR}s, poll=${HANG_POLL_SECS}s)"
   else
     _watchdog_silicon "$consumer_pid" "$hang_log" "$heartbeat" &
     watchdog_pid=$!
     _vlog "Watchdog: silicon stdout-cadence (stall=${HANG_STALL_SILICON}s, poll=${HANG_POLL_SECS}s)"
+  fi
+
+  local progress_pid=""
+  if [[ "$PROGRESS_ENABLED" == "true" ]]; then
+    _progress_ticker "$consumer_pid" "$heartbeat" "simulate" &
+    progress_pid=$!
   fi
 
   wait "$consumer_pid"
@@ -561,6 +626,11 @@ _do_simulate() {
   # Stop watchdog. If it already tripped and returned, this is a no-op.
   kill "$watchdog_pid" 2>/dev/null || true
   wait "$watchdog_pid" 2>/dev/null || true
+
+  if [[ -n "$progress_pid" ]]; then
+    kill "$progress_pid" 2>/dev/null || true
+    wait "$progress_pid" 2>/dev/null || true
+  fi
 
   # Post-mortem: if the watchdog didn't trip live but pytest exited non-zero
   # AND the captured output contains TENSIX TIMED OUT, reclassify as a hang.

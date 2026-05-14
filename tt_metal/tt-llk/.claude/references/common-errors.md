@@ -37,7 +37,6 @@ Grep for "X" in tt_llk_{target_arch}/ (*.h files)
 Common SFPU includes:
 ```cpp
 #include "sfpi.h"
-#include "sfpi_fp16.h"
 #include "ckernel_sfpu_load_config.h"
 ```
 
