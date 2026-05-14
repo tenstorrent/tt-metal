@@ -26,6 +26,91 @@ namespace ttnn::device_operation {
 template <typename T>
 using AdaptedCachedMeshWorkload = tt::tt_metal::program_cache::detail::AdaptedCachedMeshWorkload<T>;
 
+// Extracts every Tensor reachable from an aggregate `T` and pushes its buffer()
+// onto `out`.  Generated per-T at compile time so the compiler emits a
+// straight-line walk of T's tensor fields with no runtime reflection visit,
+// no lambda dispatch, and no virtual call.  Equivalent in semantics to
+// ttsl::reflection::visit_object_of_type<Tensor> but keeps the call chain
+// short enough that the optimiser inlines through it for typical tensor_args.
+//
+// Default specialisation is a no-op; a second specialisation handles
+// Reflectable aggregates by unrolling over their fields.  Container/leaf
+// specialisations follow.
+template <typename T, typename = void>
+struct extract_tensor_buffers_t {
+    template <typename Out>
+    static void call(const T&, Out&) {}
+};
+
+template <typename T, typename Out>
+inline void extract_tensor_buffers_into(const T& obj, Out& out) {
+    extract_tensor_buffers_t<std::decay_t<T>>::call(obj, out);
+}
+
+// Tensor leaf — push the buffer.
+template <>
+struct extract_tensor_buffers_t<tt::tt_metal::Tensor, void> {
+    template <typename Out>
+    static void call(const tt::tt_metal::Tensor& t, Out& out) {
+        out.push_back(t.buffer());
+    }
+};
+
+// Aggregate — unroll over fields at compile time.
+template <typename T>
+struct extract_tensor_buffers_t<
+    T,
+    std::enable_if_t<ttsl::concepts::Reflectable<T> and not std::is_same_v<T, tt::tt_metal::Tensor>>> {
+    template <typename Out>
+    static void call(const T& obj, Out& out) {
+        reflect::for_each([&obj, &out](auto I) { extract_tensor_buffers_into(reflect::get<I>(obj), out); }, obj);
+    }
+};
+
+// Optional — visit value if present.
+template <typename T>
+struct extract_tensor_buffers_t<std::optional<T>, void> {
+    template <typename Out>
+    static void call(const std::optional<T>& v, Out& out) {
+        if (v.has_value()) {
+            extract_tensor_buffers_into(v.value(), out);
+        }
+    }
+};
+
+// Vector — runtime loop (unavoidable, count is dynamic).
+template <typename T>
+struct extract_tensor_buffers_t<std::vector<T>, void> {
+    template <typename Out>
+    static void call(const std::vector<T>& v, Out& out) {
+        for (const auto& e : v) {
+            extract_tensor_buffers_into(e, out);
+        }
+    }
+};
+
+// Array — unroll at compile time.
+template <typename T, std::size_t N>
+struct extract_tensor_buffers_t<std::array<T, N>, void> {
+    template <typename Out>
+    static void call(const std::array<T, N>& v, Out& out) {
+        [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+            (extract_tensor_buffers_into(v[Is], out), ...);
+        }(std::make_index_sequence<N>{});
+    }
+};
+
+// Tuple — unroll at compile time.
+template <typename... Ts>
+struct extract_tensor_buffers_t<std::tuple<Ts...>, void> {
+    template <typename Out>
+    static void call(const std::tuple<Ts...>& v, Out& out) {
+        [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+            (extract_tensor_buffers_into(std::get<Is>(v), out), ...);
+        }(std::make_index_sequence<sizeof...(Ts)>{});
+    }
+};
+
 /**
  * A generic adapter that adds mesh device capabilities to any existing device operation.
  * This adapter delegates to the base operation for standard functionality while providing
@@ -232,15 +317,31 @@ public:
         };
         using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
 
-        // Enumerate all Buffer* reachable from tensor_args and tensor_return_value,
-        // in a stable field-declaration order via reflection.  Used to map buffer
-        // bindings to indices that survive across calls without storing raw pointers.
-        static std::vector<tt::tt_metal::Buffer*> collect_tensor_buffers(
-            const tensor_args_t& tensor_args, const tensor_return_value_t& tensor_return_value) {
-            std::vector<tt::tt_metal::Buffer*> buffers;
-            auto collect = [&buffers](const Tensor& t) { buffers.push_back(t.buffer()); };
-            ttsl::reflection::visit_object_of_type<Tensor>(collect, tensor_args);
-            ttsl::reflection::visit_object_of_type<Tensor>(collect, tensor_return_value);
+        // Enumerate all Buffer* reachable from tensor_args, tensor_return_value, and
+        // any Tensor fields inside resources (from prepare_resources).  Stable field
+        // order via reflection.  Used to map buffer bindings to indices that survive
+        // across calls without storing raw pointers.  Resource tensors are included
+        // so factories can bind kernel runtime args to halo lookup tables and other
+        // op-owned buffers via emplace_runtime_args() / Buffer*.
+        //
+        // The resources visit is gated on has_prepare_resources because empty_resource_t
+        // is not guaranteed to be reflectable, and visit_object_of_type would throw at
+        // runtime on an unreflectable type that is not the target object_t.
+        //
+        // Returns a stack-allocated SmallVector (16 inline slots) instead of a heap
+        // vector so the cache-hit fast path avoids one allocation per dispatch.
+        // The reflection itself is already compile-time generated; this just removes
+        // the runtime allocation tax.
+        static ttsl::SmallVector<tt::tt_metal::Buffer*, 16> collect_tensor_buffers(
+            const tensor_args_t& tensor_args,
+            const tensor_return_value_t& tensor_return_value,
+            const resource_t& resources) {
+            ttsl::SmallVector<tt::tt_metal::Buffer*, 16> buffers;
+            extract_tensor_buffers_into(tensor_args, buffers);
+            extract_tensor_buffers_into(tensor_return_value, buffers);
+            if constexpr (has_prepare_resources) {
+                extract_tensor_buffers_into(resources, buffers);
+            }
             return buffers;
         }
 
@@ -328,7 +429,7 @@ public:
                     auto desc = invoke_create_descriptor(
                         attrs, tensor_args, tensor_return_value, resources, mesh_dispatch_coordinate);
                     tt::tt_metal::Program program{desc};
-                    auto tensor_buffers = collect_tensor_buffers(tensor_args, tensor_return_value);
+                    auto tensor_buffers = collect_tensor_buffers(tensor_args, tensor_return_value, resources);
                     auto resolved = tt::tt_metal::resolve_bindings(program, desc, tensor_buffers);
                     mesh_workload.add_program(device_range, std::move(program));
                     shared_variables[device_range] = shared_variables_t{
@@ -357,7 +458,7 @@ public:
                 if (!sv.resolved_bindings.empty()) {
                     // Fast path: patch only the buffer positions using current tensor addresses.
                     // No create_descriptor() call — tensor_buffers enumeration is O(n_tensors).
-                    auto current_buffers = collect_tensor_buffers(tensor_args, tensor_return_value);
+                    auto current_buffers = collect_tensor_buffers(tensor_args, tensor_return_value, sv.resources);
                     tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, current_buffers);
                 } else {
                     // Slow path: full descriptor rebuild + bulk copy.

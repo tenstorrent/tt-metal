@@ -12,6 +12,10 @@
 #ifdef TRISC_UNPACK
 #include "llk_unpack_A_api.h"
 #endif
+#ifdef TRISC_PACK
+#include "llk_pack_untilize_api.h"
+#include "llk_pack_tile_api.h"
+#endif
 
 namespace ckernel {
 
