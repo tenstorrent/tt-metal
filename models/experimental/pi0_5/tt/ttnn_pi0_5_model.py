@@ -381,7 +381,7 @@ class Pi0_5ModelTTNN:
             velocity = self.suffix_embedding.project_output(expert_output)
             ttnn.deallocate(expert_output)
 
-            velocity_scaled = ttnn.mul(velocity, dt)
+            velocity_scaled = ttnn.mul(velocity, dt, memory_config=ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(velocity)
 
             x_t_new = ttnn.add(x_t_ttnn, velocity_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)

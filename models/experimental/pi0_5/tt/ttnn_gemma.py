@@ -507,11 +507,12 @@ class GemmaAttentionTTNN:
             q_rope = ttnn.slice(q_rope_padded, [0, 0, 0, 0], [batch_size, self.num_heads, seq_len, self.head_dim])
             k_rope = ttnn.slice(k_rope_padded, [0, 0, 0, 0], [batch_size, self.num_kv_heads, seq_len, self.head_dim])
 
-        # Handle KV cache
+        # Handle KV cache. Force concat output to L1 — the result feeds SDPA
+        # directly so keeping it on-chip avoids DRAM round-trips.
         if past_key_value is not None:
             past_k, past_v = past_key_value
-            k_rope = ttnn.concat([past_k, k_rope], dim=2)
-            v = ttnn.concat([past_v, v], dim=2)
+            k_rope = ttnn.concat([past_k, k_rope], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
+            v = ttnn.concat([past_v, v], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         new_cache = (k_rope, v) if use_cache else None
 
@@ -535,6 +536,7 @@ class GemmaAttentionTTNN:
             scale=self.scale,
             program_config=sdpa_cfg,
             compute_kernel_config=self.compute_kernel_config_sdpa,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         # OPTIMIZATION 4: Native TTNN head concatenation (no PyTorch transfers!)
@@ -770,8 +772,8 @@ class GemmaMLPTTNN:
                 up = ttnn.linear(x_chunk, self.up_proj, core_grid=self.core_grid, **common_kwargs)
             ttnn.deallocate(x_chunk)
 
-            # Element-wise multiply
-            hidden_out = ttnn.multiply(gate_activated, up)
+            # Element-wise multiply (keep on L1 — feeds the down-proj matmul next)
+            hidden_out = ttnn.multiply(gate_activated, up, memory_config=ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(gate_activated)
             ttnn.deallocate(up)
 
@@ -897,7 +899,7 @@ class GemmaBlockTTNN:
             use_cache,
             keep_padded=keep_padded,
         )
-        hidden_states = ttnn.add(hidden_states, attn_output)
+        hidden_states = ttnn.add(hidden_states, attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_output)
 
         # Pre-MLP norm
@@ -910,7 +912,7 @@ class GemmaBlockTTNN:
         # MLP with residual
         mlp_output = self.mlp.forward(normed)
         ttnn.deallocate(normed)
-        hidden_states = ttnn.add(hidden_states, mlp_output)
+        hidden_states = ttnn.add(hidden_states, mlp_output, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(mlp_output)
 
         return hidden_states, new_cache
@@ -1108,11 +1110,11 @@ class AdaRMSGemmaBlockTTNN:
             normed, cos, sin, attention_mask, position_ids, past_key_value, use_cache, keep_padded=keep_padded
         )
         ttnn.deallocate(normed)
-        gated_attn = ttnn.mul(attn_output, ga)
+        gated_attn = ttnn.mul(attn_output, ga, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_output)
         if mod_owned:
             ttnn.deallocate(ga)
-        hidden_states = ttnn.add(hidden_states, gated_attn)
+        hidden_states = ttnn.add(hidden_states, gated_attn, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(gated_attn)
 
         # ---- FFW sublayer ----
@@ -1122,11 +1124,11 @@ class AdaRMSGemmaBlockTTNN:
             ttnn.deallocate(tf)
         mlp_output = self.mlp.forward(normed)
         ttnn.deallocate(normed)
-        gated_mlp = ttnn.mul(mlp_output, gf)
+        gated_mlp = ttnn.mul(mlp_output, gf, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(mlp_output)
         if mod_owned:
             ttnn.deallocate(gf)
-        hidden_states = ttnn.add(hidden_states, gated_mlp)
+        hidden_states = ttnn.add(hidden_states, gated_mlp, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(gated_mlp)
 
         return hidden_states, new_cache

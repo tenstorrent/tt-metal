@@ -426,7 +426,7 @@ class SigLIPAttentionTTNN:
             exp_approx_mode=True,
         )
 
-        # SDPA - stays entirely on device
+        # SDPA - stays entirely on device, L1 output feeds the o-proj matmul.
         attn_output = ttnn.transformer.scaled_dot_product_attention(
             q_heads,
             k_heads,
@@ -435,6 +435,7 @@ class SigLIPAttentionTTNN:
             scale=self.scale,
             program_config=sdpa_cfg,
             compute_kernel_config=self.compute_kernel_config_sdpa,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         ttnn.deallocate(q_heads)
@@ -949,7 +950,7 @@ class SigLIPVisionTowerTTNN:
                     layout=ttnn.TILE_LAYOUT,
                 )
 
-            hidden_states = ttnn.add(hidden_states, positional_embeddings)
+            hidden_states = ttnn.add(hidden_states, positional_embeddings, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Run through TTNN transformer blocks
         for block in self.blocks:
