@@ -72,6 +72,10 @@ class Pi0_5ModelTTNN:
         self._precompute_bs1_timestep_tensors()
         self._precompute_bs1_adarms_cond()
         self._precompute_bs1_modulations()
+        # SDPA mask is built lazily on first sample_actions call (depends on
+        # actual prefix kv length, which is fixed across replays).
+        self._sdpa_attn_mask: Optional["ttnn.Tensor"] = None
+        self._sdpa_mask_kv_len: int = 0
 
     def _precompute_bs1_timestep_tensors(self) -> None:
         num_steps = self.denoise_config.num_steps
@@ -172,6 +176,39 @@ class Pi0_5ModelTTNN:
             _ttnn.deallocate(mod3)
             self._final_mod_per_step.append((scale1, shift))
 
+    def _build_sdpa_phantom_mask(self, prefix_kv_len_logical: int) -> "ttnn.Tensor":
+        """
+        Build the SDPA attention mask used in the expert's keep_padded path.
+
+        Math: the suffix is processed as logical=physical=64 (padded action_horizon).
+        The prefix kv-cache is lifted to logical=physical=ceil_to_tile(prefix_len).
+        The 16 prefix phantom positions and 14 suffix phantom positions in K must
+        be masked out so attention to them doesn't pollute valid Q positions.
+
+        Mask shape: (1, 1, 64, kv_len_total). Values: 0 = attend, -inf = mask.
+        """
+        action_horizon = self.config.action_horizon
+        q_len_padded = ((action_horizon + 31) // 32) * 32
+        prefix_padded = ((prefix_kv_len_logical + 31) // 32) * 32
+        kv_total = prefix_padded + q_len_padded
+
+        mask = torch.zeros(1, 1, q_len_padded, kv_total, dtype=torch.bfloat16)
+        # Prefix phantom positions
+        if prefix_padded > prefix_kv_len_logical:
+            mask[:, :, :, prefix_kv_len_logical:prefix_padded] = float("-inf")
+        # Suffix phantom positions
+        if q_len_padded > action_horizon:
+            suffix_phantom_start = prefix_padded + action_horizon
+            mask[:, :, :, suffix_phantom_start:kv_total] = float("-inf")
+
+        return ttnn.from_torch(
+            mask,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     def _init_components(self):
         suffix_config = SuffixConfig(
             action_dim=self.config.action_dim,
@@ -228,6 +265,36 @@ class Pi0_5ModelTTNN:
             prefix_embs = ttnn.to_layout(prefix_embs, ttnn.TILE_LAYOUT)
         _, prefix_kv_cache = self.backbone.forward_vlm(prefix_embs, use_cache=True)
 
+        # OPTIMIZATION (keep_padded): lift the prefix kv-cache to logical=physical
+        # by zeroing the implicit tile padding. This eliminates the 360
+        # UntilizeWithUnpadding(272→272) ops in the per-layer suffix-attention
+        # concat path (~3 ms / chunk). The phantom positions become valid K/V
+        # rows of zeros, which the SDPA mask zeros out.
+        keep_padded_expert = batch_size == 1
+        # Keep a reference to the original prefix kv-cache list so its storage
+        # isn't reclaimed before any aliased lifted tensors are used.
+        _prefix_kv_cache_original = prefix_kv_cache
+        if keep_padded_expert and prefix_kv_cache is not None:
+            prefix_kv_cache = [
+                (
+                    ttnn.fill_implicit_tile_padding(k, 0.0),
+                    ttnn.fill_implicit_tile_padding(v, 0.0),
+                )
+                for k, v in prefix_kv_cache
+            ]
+
+            # Build the SDPA mask if not yet built (size depends on prefix_len).
+            prefix_logical = prefix_kv_cache[0][0].shape[2]  # post-fill: logical=physical
+            # Recover original (pre-lift) logical for mask construction. After
+            # fill_implicit_tile_padding the logical==physical, but the *real*
+            # token positions are the first `prefix_kv_len_logical` rows. We
+            # cache by the padded size so trace replay reuses the same mask.
+            if self._sdpa_attn_mask is None or self._sdpa_mask_kv_len != prefix_logical:
+                # The original logical length is prefix_embs.shape[1] (pre-fill).
+                orig_prefix_len = prefix_embs.shape[1]
+                self._sdpa_attn_mask = self._build_sdpa_phantom_mask(orig_prefix_len)
+                self._sdpa_mask_kv_len = prefix_logical
+
         num_steps = self.denoise_config.num_steps
         timesteps = [1.0 - i / num_steps for i in range(num_steps + 1)]
 
@@ -261,6 +328,22 @@ class Pi0_5ModelTTNN:
             x_t_ttnn = self.x_t_ttnn
         fast_path = batch_size == 1
 
+        # OPTIMIZATION (keep_padded): lift x_t LOGICAL shape from action_horizon
+        # to the next tile-aligned size (50 → 64) with zeros in the new rows.
+        # ttnn.pad changes the logical shape (fill_implicit_tile_padding only
+        # zeros the implicit padding region — see fill_pad_device_operation.cpp
+        # :22-26). The 14 phantom rows are masked out of SDPA by the prebuilt
+        # attn mask, so they're benign mathematically.
+        if keep_padded_expert:
+            ah = self.config.action_horizon
+            ah_padded = ((ah + 31) // 32) * 32
+            if ah_padded > ah:
+                x_t_ttnn = ttnn.pad(
+                    x_t_ttnn,
+                    padding=((0, 0), (0, ah_padded - ah), (0, 0)),
+                    value=0.0,
+                )
+
         for i in range(num_steps):
             t = timesteps[i]
             t_next = timesteps[i + 1]
@@ -287,6 +370,8 @@ class Pi0_5ModelTTNN:
                 past_key_values=prefix_kv_cache,
                 precomputed_block_mods=precomputed_block_mods,
                 precomputed_final_mod=precomputed_final_mod,
+                attention_mask=self._sdpa_attn_mask if keep_padded_expert else None,
+                keep_padded=keep_padded_expert,
             )
             ttnn.deallocate(suffix_embs)
 
