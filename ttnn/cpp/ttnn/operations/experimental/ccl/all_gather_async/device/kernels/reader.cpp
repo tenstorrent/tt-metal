@@ -55,6 +55,7 @@ void kernel_main() {
     const uint32_t input_page_id_end = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t output_page_id_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t output_page_in_stride_start = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t output_page_byte_offset = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_output_pages = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t device_idx = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_connections = get_arg_val<uint32_t>(arg_idx++);
@@ -173,10 +174,10 @@ void kernel_main() {
             // Send Fabric data in our dir
             for (uint32_t i = 0; i < pages_per_cb_entry && valid_output_page_id(); ++i) {
                 auto page_id = next_output_page_id();
-                auto fabric_tensor_page_addr =
-                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_tensor_accessor, page_id, 0);
+                auto fabric_tensor_page_addr = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                    output_tensor_accessor, page_id, output_page_byte_offset);
                 fabric.send(l1_read_addr, fabric_tensor_page_addr);
-                l1_read_addr += input_page_size;
+                l1_read_addr += output_page_size;
             }
             fabric.flush();
             if (l1_read_addr == l1_end_addr) {
@@ -200,10 +201,10 @@ void kernel_main() {
         // Send Fabric data in our dir
         for (uint32_t i = 0; i < pages_per_cb_entry && valid_output_page_id(); ++i) {
             auto page_id = next_output_page_id();
-            auto fabric_tensor_page_addr =
-                tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_tensor_accessor, page_id, 0);
+            auto fabric_tensor_page_addr = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                output_tensor_accessor, page_id, output_page_byte_offset);
             fabric.send(l1_read_addr, fabric_tensor_page_addr);
-            l1_read_addr += input_page_size;
+            l1_read_addr += output_page_size;
         }
         fabric.flush();
         if (l1_read_addr == l1_end_addr) {

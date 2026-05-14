@@ -52,6 +52,7 @@ void kernel_main() {
     const size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t output_page_id_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t output_page_in_stride_start = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t output_page_byte_offset = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_output_pages = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t device_idx = get_arg_val<uint32_t>(arg_idx++);
     const bool wait_output_semaphore = get_arg_val<uint32_t>(arg_idx++);
@@ -145,8 +146,8 @@ void kernel_main() {
         for (uint32_t i = 0; i < pages_per_cb_entry && valid_output_page_id(); ++i) {
             auto page_id = next_output_page_id();
             // Fabric write
-            auto fabric_tensor_page_addr =
-                tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_tensor_accessor, page_id, 0);
+            auto fabric_tensor_page_addr = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                output_tensor_accessor, page_id, output_page_byte_offset);
             fabric.send(l1_read_addr, fabric_tensor_page_addr);
 
             // Local write.
@@ -157,7 +158,7 @@ void kernel_main() {
                 output_tensor_accessor,
                 output_page_size,
                 {},
-                {.page_id = page_id},
+                {.page_id = page_id, .offset_bytes = output_page_byte_offset},
                 NOC_UNICAST_WRITE_VC + 1);
 
             l1_read_addr += output_page_size;

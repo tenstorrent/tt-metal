@@ -329,15 +329,16 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
     const uint32_t num_input_pages = input_tensor.buffer()->num_pages();
     TT_FATAL(num_input_pages > 0, "Broadcast all-gather requires at least one input page");
     TT_FATAL(
-        (num_input_pages * input_page_size) % output_page_size == 0,
-        "Broadcast all-gather requires per-device bytes ({}) to be divisible by output page size ({})",
-        num_input_pages * input_page_size,
-        output_page_size);
-    const uint32_t num_output_pages = (num_input_pages * input_page_size) / output_page_size;
-
-    // Compute output_pages_per_stride: consecutive output pages before skipping to next stride.
-    // Equal to num_input_pages / (product of dims before gather_dim).
-    // For tile layout, dims rank-2 and rank-1 are divided by TILE_SIZE to get page extents.
+        input_tensor.buffer()->aligned_page_size() == input_tensor.buffer()->page_size(),
+        "AG doesnt support unaligned RM pages");
+    // TT_FATAL(
+    //     (num_input_pages * input_page_size) % output_page_size == 0,
+    //     "Broadcast all-gather requires per-device bytes ({}) to be divisible by output page size ({})",
+    //     num_input_pages * input_page_size,
+    //     output_page_size);
+    //  Compute output_pages_per_stride: consecutive output pages before skipping to next stride.
+    //  Equal to num_input_pages / (product of dims before gather_dim).
+    //  For tile layout, dims rank-2 and rank-1 are divided by tile size to get page extents.
     auto input_shape = input_tensor.padded_shape();
     uint32_t rank = input_shape.rank();
     int32_t gather_dim = operation_attributes.dim;
@@ -359,7 +360,23 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
     uint32_t output_pages_per_stride = num_input_pages / outer_pages;
     uint32_t output_page_stride = (num_devices - 1) * output_pages_per_stride + 1;
     TT_FATAL(output_pages_per_stride > 0, "output_pages_per_stride must be > 0");
-    // TODO gather_dim=rank-1 with RM is unsupported -> each page gets wider
+
+    // Special case: ROW_MAJOR gather on dim -1: pages get wider, not more numerous.
+    // Each device needs to write its own portion at some offset within the output page.
+    // We emulate this behavior by setting input_page_size as the kernel's output page size,
+    // and set output_pages_per_stride = num_input_pages so the iterator produces page IDs
+    // like (0, 1, 2, ...).
+    uint32_t kernel_output_page_size = output_page_size;
+    uint32_t output_page_byte_offset = 0;
+    bool is_rm_last_dim = input_tensor.layout() == ttnn::ROW_MAJOR_LAYOUT && gather_dim == rank - 1;
+    if (is_rm_last_dim) {
+        kernel_output_page_size = input_page_size;
+        output_pages_per_stride = num_input_pages;
+        output_page_byte_offset = device_idx * input_page_size;
+    }
+    // For sharded RM tensors, input/output shard widths can differ, making page sizes differ.
+    // This scaling converts input page counts to output page counts proportionally.
+    const uint32_t num_output_pages = (num_input_pages * input_page_size) / kernel_output_page_size;
 
     // L1 Scratch CB Creation
     uint32_t cb0_id = tt::CB::c_in0;
@@ -374,7 +391,7 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
     std::vector<uint32_t> reader_compile_args = {
         cb0_id,                                                 // cb0_id
         input_page_size,                                        // input tensor page size
-        output_page_size,                                       // output tensor page size
+        kernel_output_page_size,                                // output page size (input_page_size for RM last-dim)
         output_pages_per_stride,                                // consecutive pages before a stride jump
         output_page_stride,                                     // jump amount at stride boundary
         cb_page_size,                                           // cb entry size
@@ -382,13 +399,13 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
         forward_coord.has_value() ? num_targets_forward : 0,    // range_hops
         backward_coord.has_value() ? num_targets_backward : 0,  // range_hops alternate (opposite dir)
     };
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);   // [9...]
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);  // [next...]
+    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
 
     // Writer kernel
     std::vector<uint32_t> writer_compile_args = {
         cb0_id,                                                 // cb0_id
-        output_page_size,                                       //
+        kernel_output_page_size,                                // output page size (input_page_size for RM last-dim)
         output_pages_per_stride,                                // consecutive pages before a stride jump
         output_page_stride,                                     // jump amount at stride boundary
         cb_page_size,                                           //
@@ -396,7 +413,7 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
         backward_coord.has_value() ? num_targets_backward : 0,  // range_hops
         forward_coord.has_value() ? num_targets_forward : 0,    // range_hops alternate (opposite dir)
     };
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);  // [8...]
+    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
 
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -431,16 +448,22 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
         uint32_t input_tile_id_start = (link * input_pages_per_link) + std::min(link, remainder);
         uint32_t input_tile_id_end = ((link + 1) * input_pages_per_link) + std::min(link + 1, remainder);
 
-        // Output page range assuming the output tensor only contains our slice
+        // Map input page range to output page range for this worker, assuming the output
+        // tensor only contains our slice.
+        // Scaling handles sharded RM tensors where input/output page sizes can differ.
         uint32_t local_output_start = (input_tile_id_start * num_output_pages) / num_input_pages;
         uint32_t local_output_end = (input_tile_id_end * num_output_pages) / num_input_pages;
-        uint32_t num_output_pages = local_output_end - local_output_start;
-        // Now derive output page range in the actual output tensor containing all device slices:
-        //   output_page_id = (local / G * N + device_idx) * G + local % G
+        uint32_t num_worker_output_pages = local_output_end - local_output_start;
+        // Derive output page range in the actual output tensor containing all device slices:
+        //       output_page_id = (local / G * N + device_idx) * G + local % G
+        // For RM last-dim, page IDs are simply (0,1,2,...) — device position is in byte offset only.
         uint32_t output_page_id_start =
             (local_output_start / output_pages_per_stride * num_devices + device_idx) * output_pages_per_stride +
             local_output_start % output_pages_per_stride;
         uint32_t output_page_in_stride_start = local_output_start % output_pages_per_stride;
+        if (is_rm_last_dim) {
+            output_page_id_start = local_output_start;
+        }
 
         bool wait_output_semaphore = (link == 0);
         bool reset_global_semaphore = (link == 0);
@@ -455,7 +478,8 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
             input_tile_id_end,                  // input_page_id_end
             output_page_id_start,               // output page start
             output_page_in_stride_start,        // initial position within stride
-            num_output_pages,                   // number of output pages for this worker
+            output_page_byte_offset,            // byte offset within output page (for RM gather_dim=-1)
+            num_worker_output_pages,            // number of output pages for this worker
             device_idx,                         // this device's index
             1,                                  // num_connections // TODO hardcoded
         };
@@ -479,7 +503,8 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
             barrier_semaphore.address(),        // barrier_sem
             output_page_id_start,               // output page start
             output_page_in_stride_start,        // initial position within stride
-            num_output_pages,                   // number of output pages for this worker
+            output_page_byte_offset,            // byte offset within output page (for RM gather_dim=-1)
+            num_worker_output_pages,            // number of output pages for this worker
             device_idx,                         // this device's index
             wait_output_semaphore,              // wait_output_semaphore
             reset_global_semaphore,             // reset_global_semaphore
