@@ -370,10 +370,15 @@ void kernel_main() {
                 noc_semaphore_inc(self_data_ready_noc_addrs[current_idle_core], (uint32_t)-1);
                 noc_async_atomic_barrier();
 
-                auto dst_token_idx = metadata[1];
-                auto dst_topk_indice = metadata[2];
-                uint32_t output_page_idx = dst_token_idx * num_experts_per_tok + dst_topk_indice;
+                // Read routing values from the idle core's metadata ring slot (c_19).
+                // These landed in sender L1 via NOC write from zero_init_writer — no DRAM read.
                 uint32_t slot = read_slots[current_idle_core];
+                volatile tt_l1_ptr uint32_t* ring_meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    metadata_buf_base +
+                    (current_idle_core * SLOTS_PER_IDLE + slot) * aligned_dispatched_metadata_page_size);
+                auto dst_token_idx = ring_meta[1];
+                auto dst_topk_indice = ring_meta[2];
+                uint32_t output_page_idx = dst_token_idx * num_experts_per_tok + dst_topk_indice;
                 uint32_t buffer_scratch_addr =
                     untilize_base + (current_idle_core * SLOTS_PER_IDLE + slot) * aligned_output_page_size;
 
