@@ -275,16 +275,38 @@ Delete BEFORE/AFTER branches from GitHub.
 
 ---
 
-### Step 7: Confluence Update
+### Step 7: Confluence Updates (happens at MULTIPLE points, not just at the end)
 
-On the Tenstorrent Confluence, maintain this page:
 Page ID: 2424012846
 URL: https://tenstorrent.atlassian.net/wiki/spaces/MI6/pages/2424012846/bug+escapes
 
-For each confirmed escape, append a section:
+The page has four sections. Move each escape between sections as its status changes.
+Never delete an entry — only move it and update its status field.
 
+**After Step 3 (Opus pre-classification passes) → add to "🔍 Under Investigation":**
 ```
-## Escape #{N}: {fix_commit_message[:60]}
+### Candidate: {test_name[:60]}
+
+- *Test*: {test_name}
+- *Test layer*: {test_layer}
+- *Fix layer (suspected)*: {suspected_fix_layer}
+- *Last failure*: [Run {last_failure_run_id}](https://github.com/tenstorrent/tt-metal/actions/runs/{last_failure_run_id})
+- *First success*: [Run {first_success_run_id}](https://github.com/tenstorrent/tt-metal/actions/runs/{first_success_run_id})
+- *Opus reasoning*: {opus_reasoning}
+- *Status*: Under Investigation — bisect dispatched {date}
+```
+
+**After Step 4 (bisect completes) → update the entry, still in "Under Investigation":**
+Add fix commit and bisect proof link. Update status to "Under Investigation — verification dispatched {date}".
+
+**After Step 5 (verification complete):**
+- CONFIRMED → move entry to "✅ Confirmed Escapes", update status, add before/after run links
+- REFUTED → move entry to "❌ Refuted", update status, add explanation of why it was refuted
+- INCONCLUSIVE_TIMEOUT → move entry to "⏳ Inconclusive", update status, note retry scheduled
+
+**Entry format once confirmed:**
+```
+### Escape #{N}: {fix_commit_message[:60]}
 
 - *Test*: {test_name}
 - *Test layer*: {test_layer}
@@ -294,10 +316,12 @@ For each confirmed escape, append a section:
 - *First success*: [Run {first_success_run_id}](https://github.com/tenstorrent/tt-metal/actions/runs/{first_success_run_id})
 - *Fix commit*: [{fix_commit_sha[:8]}](https://github.com/tenstorrent/tt-metal/commit/{fix_commit_sha})
 - *Bisect proof*: [Run {bisect_run_id}](https://github.com/tenstorrent/tt-metal/actions/runs/{bisect_run_id})
+- *Verification*: BEFORE [Run {before_run_id}](https://github.com/tenstorrent/tt-metal/actions/runs/{before_run_id}) | AFTER [Run {after_run_id}](https://github.com/tenstorrent/tt-metal/actions/runs/{after_run_id})
 - *Reasoning*: {reasoning}
+- *Status*: Confirmed {date}
 ```
 
-Update the page, don't replace it — append to existing content.
+Always fetch the current page content before updating so you don't clobber concurrent writes.
 
 ---
 
