@@ -3,12 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Kokoro TTNN LSTM helpers.
+Kokoro TTNN LSTM helpers (TT-prefixed params, ``tt_`` entrypoints).
 
-TTNN does not currently provide a high-level `lstm` op, so we implement a
-host-driven timestep loop using TTNN matmuls/activations.
-
-This is intended for correctness/PCC bring-up first; performance tuning comes later.
+Host-driven timestep loop using ``ttnn.linear`` and activations (no high-level LSTM op).
 """
 
 from __future__ import annotations
@@ -23,37 +20,36 @@ import ttnn
 
 
 @dataclass(frozen=True)
-class LSTMParams:
-    # Combined weights for efficiency:
-    # gates = x @ W_x + h @ W_h + b, where W_x: [in, 4H], W_h: [H, 4H], b: [4H]
+class TTLSTMParams:
+    """One-direction LSTM gate weights: ``x @ W_x + h @ W_h + b`` with ``W_*`` stored for ``transpose_b=True``."""
+
     w_x: ttnn.Tensor
     w_h: ttnn.Tensor
     b: ttnn.Tensor
     hidden_size: int
 
 
-def preprocess_pytorch_lstm_1layer(
+def preprocess_tt_lstm_1layer(
     lstm: torch.nn.LSTM,
     mesh_device,
     *,
     weights_dtype=ttnn.bfloat16,
-) -> Tuple[LSTMParams, Optional[LSTMParams]]:
+) -> Tuple[TTLSTMParams, Optional[TTLSTMParams]]:
     """
-    Convert a 1-layer PyTorch LSTM into TTNN gate matrices.
+    Convert a 1-layer PyTorch ``nn.LSTM`` into TTNN gate tensors.
 
-    Returns (forward_params, reverse_params_or_none).
+    Returns ``(forward_params, reverse_params_or_none)``.
     """
     assert lstm.num_layers == 1, "Only 1-layer LSTM supported in bring-up helper"
     hidden_size = lstm.hidden_size
 
-    def pack(prefix: str) -> LSTMParams:
-        w_ih = getattr(lstm, f"weight_ih_{prefix}").detach().cpu()  # [4H, in]
-        w_hh = getattr(lstm, f"weight_hh_{prefix}").detach().cpu()  # [4H, H]
+    def pack(prefix: str) -> TTLSTMParams:
+        w_ih = getattr(lstm, f"weight_ih_{prefix}").detach().cpu()
+        w_hh = getattr(lstm, f"weight_hh_{prefix}").detach().cpu()
         b_ih = getattr(lstm, f"bias_ih_{prefix}").detach().cpu()
         b_hh = getattr(lstm, f"bias_hh_{prefix}").detach().cpu()
         b = (b_ih + b_hh).reshape(1, 1, 1, -1)
 
-        # Store transposed to use ttnn.linear(..., transpose_b=True)
         w_x = ttnn.from_torch(
             w_ih,
             dtype=weights_dtype,
@@ -71,7 +67,7 @@ def preprocess_pytorch_lstm_1layer(
         b_tt = ttnn.from_torch(
             b, dtype=weights_dtype, layout=ttnn.TILE_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        return LSTMParams(w_x=w_x, w_h=w_h, b=b_tt, hidden_size=hidden_size)
+        return TTLSTMParams(w_x=w_x, w_h=w_h, b=b_tt, hidden_size=hidden_size)
 
     fwd = pack("l0")
     rev = pack("l0_reverse") if lstm.bidirectional else None
@@ -79,15 +75,14 @@ def preprocess_pytorch_lstm_1layer(
 
 
 def _lstm_step(
-    x_bt: ttnn.Tensor,  # [B, 1, in] or [B, in]
-    h: ttnn.Tensor,  # [B, H]
-    c: ttnn.Tensor,  # [B, H]
-    params: LSTMParams,
+    x_bt: ttnn.Tensor,
+    h: ttnn.Tensor,
+    c: ttnn.Tensor,
+    params: TTLSTMParams,
     *,
     compute_kernel_config=None,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-    # Ensure 2D [B, in]
     if len(x_bt.shape) == 3 and x_bt.shape[1] == 1:
         x_bt = ttnn.reshape(x_bt, [x_bt.shape[0], x_bt.shape[2]], memory_config=memory_config)
 
@@ -110,15 +105,15 @@ def _lstm_step(
     gates = ttnn.add(gates_x, gates_h, memory_config=memory_config)
     gates = ttnn.add(gates, params.b, memory_config=memory_config)
 
-    # Normalize gates to [B, 4H] for slicing
-    if len(gates.shape) == 4 and gates.shape[1] == 1 and gates.shape[2] == 1:
-        gates = ttnn.reshape(gates, [gates.shape[0], gates.shape[3]], memory_config=memory_config)
+    gs = tuple(int(s) for s in gates.shape)
+    if len(gs) > 2:
+        batch_leading = int(np.prod(gs[:-1], dtype=np.int64))
+        gates = ttnn.reshape(gates, [batch_leading, gs[-1]], memory_config=memory_config)
 
     H4 = gates.shape[-1]
     H = params.hidden_size
     assert H4 == 4 * H
 
-    # Slice gates: i,f,g,o
     i = ttnn.slice(gates, [0, 0], [gates.shape[0], H], [1, 1])
     f = ttnn.slice(gates, [0, H], [gates.shape[0], 2 * H], [1, 1])
     g = ttnn.slice(gates, [0, 2 * H], [gates.shape[0], 3 * H], [1, 1])
@@ -146,7 +141,6 @@ def _length_valid_mask_b1(
     device,
     memory_config: ttnn.MemoryConfig,
 ) -> ttnn.Tensor:
-    """[B, L, 1] bfloat16: 1.0 where timestep t < length[b], else 0.0 (matches packed LSTM padding)."""
     vm = np.zeros((batch, seq_len, 1), dtype=np.float32)
     for bi, le in enumerate(sequence_lengths):
         le = max(0, min(int(le), seq_len))
@@ -167,7 +161,6 @@ def _blend_state(
     *,
     memory_config: ttnn.MemoryConfig,
 ) -> ttnn.Tensor:
-    """valid_bh in {0,1}: return valid*new + (1-valid)*old."""
     one_m = ttnn.add(ttnn.multiply(valid_bh, -1.0, memory_config=memory_config), 1.0, memory_config=memory_config)
     return ttnn.add(
         ttnn.multiply(valid_bh, new_state, memory_config=memory_config),
@@ -176,22 +169,20 @@ def _blend_state(
     )
 
 
-def bilstm_nlc(
+def tt_bilstm_nlc(
     *,
-    x_nlc: ttnn.Tensor,  # [B, L, in]
-    fwd: LSTMParams,
-    rev: LSTMParams,
+    x_nlc: ttnn.Tensor,
+    fwd: TTLSTMParams,
+    rev: TTLSTMParams,
     compute_kernel_config=None,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
     sequence_lengths: Optional[Sequence[int]] = None,
 ) -> ttnn.Tensor:
     """
-    1-layer BiLSTM over sequence dimension for NLC activations.
+    1-layer BiLSTM over sequence for NLC ``[B, L, in]``.
 
-    When ``sequence_lengths`` is set (per-batch valid lengths), timesteps ``t >= length[b]``
-    produce zero outputs and do not advance hidden state, matching ``pack_padded_sequence`` behavior.
-
-    Returns NLC: [B, L, 2H]
+    With ``sequence_lengths``, timesteps ``t >= length[b]`` yield zero output and frozen state
+    (``pack_padded_sequence`` semantics). Returns ``[B, L, 2H]``.
     """
     B, L, _ = x_nlc.shape
     H = fwd.hidden_size
@@ -210,7 +201,6 @@ def bilstm_nlc(
             batch=B, seq_len=L, sequence_lengths=sequence_lengths, device=x_nlc.device(), memory_config=memory_config
         )
 
-    # Forward pass
     h_f = h0
     c_f = c0
     outs_f = []
@@ -221,7 +211,7 @@ def bilstm_nlc(
             xt, h_f, c_f, fwd, compute_kernel_config=compute_kernel_config, memory_config=memory_config
         )
         if valid_all is not None:
-            vt = ttnn.slice(valid_all, [0, t, 0], [B, t + 1, 1], [1, 1, 1])  # [B, 1, 1]
+            vt = ttnn.slice(valid_all, [0, t, 0], [B, t + 1, 1], [1, 1, 1])
             vt = ttnn.reshape(vt, [B, 1, 1], memory_config=memory_config)
             vt_h3 = ttnn.repeat(vt, (1, 1, H), memory_config=memory_config)
             vt_h = ttnn.reshape(vt_h3, [B, H], memory_config=memory_config)
@@ -232,7 +222,6 @@ def bilstm_nlc(
             h_f, c_f = h_new, c_new
             outs_f.append(h_f)
 
-    # Reverse pass
     h_b = h0
     c_b = c0
     outs_b_rev = []
@@ -243,7 +232,7 @@ def bilstm_nlc(
             xt, h_b, c_b, rev, compute_kernel_config=compute_kernel_config, memory_config=memory_config
         )
         if valid_all is not None:
-            vt = ttnn.slice(valid_all, [0, t, 0], [B, t + 1, 1], [1, 1, 1])  # [B, 1, 1]
+            vt = ttnn.slice(valid_all, [0, t, 0], [B, t + 1, 1], [1, 1, 1])
             vt = ttnn.reshape(vt, [B, 1, 1], memory_config=memory_config)
             vt_h3 = ttnn.repeat(vt, (1, 1, H), memory_config=memory_config)
             vt_h = ttnn.reshape(vt_h3, [B, H], memory_config=memory_config)
@@ -259,7 +248,6 @@ def bilstm_nlc(
 
     outs_b = list(reversed(outs_b_rev))
 
-    # Stack and concat
     hs_f = ttnn.concat([ttnn.reshape(h, [B, 1, H], memory_config=memory_config) for h in outs_f], dim=1)
     hs_b = ttnn.concat([ttnn.reshape(h, [B, 1, H], memory_config=memory_config) for h in outs_b], dim=1)
     return ttnn.concat([hs_f, hs_b], dim=2)
