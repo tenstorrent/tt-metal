@@ -445,13 +445,11 @@ class TtQwen3EmbeddingEncoder:
             mesh_mapper=mapper,
         )
 
-    def forward(self, input_ids: np.ndarray, attention_mask: Optional[np.ndarray] = None) -> ttnn.Tensor:
+    def embed_tokens(self, input_ids: np.ndarray) -> ttnn.Tensor:
+        """Token IDs ``[B,S]`` -> embedding hidden states ``[B,S,H]`` on device."""
         cfg = self.cfg
         ids = np.asarray(input_ids, dtype=np.uint32)
         b, s = int(ids.shape[0]), int(ids.shape[1])
-        if s != cfg.max_seq_len:
-            raise ValueError(f"seq_len must be {cfg.max_seq_len}, got {s}")
-
         mapper = ttnn.ReplicateTensorToMesh(self.device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
         ids_tt = ttnn.as_tensor(
             ids,
@@ -463,6 +461,17 @@ class TtQwen3EmbeddingEncoder:
         )
         h = ttnn.embedding(ids_tt, weight=self.embed_weight, dtype=self.dtype)
         ttnn.deallocate(ids_tt)
+        return h
+
+    def forward(self, input_ids: np.ndarray, attention_mask: Optional[np.ndarray] = None) -> ttnn.Tensor:
+        cfg = self.cfg
+        ids = np.asarray(input_ids, dtype=np.uint32)
+        b, s = int(ids.shape[0]), int(ids.shape[1])
+        if s != cfg.max_seq_len:
+            raise ValueError(f"seq_len must be {cfg.max_seq_len}, got {s}")
+
+        mapper = ttnn.ReplicateTensorToMesh(self.device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
+        h = self.embed_tokens(ids)
         h = ttnn.reshape(h, (b, 1, s, cfg.hidden_size))
 
         attn_bias_tt = None
