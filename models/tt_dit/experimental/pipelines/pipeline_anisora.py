@@ -31,11 +31,11 @@ from __future__ import annotations
 import contextlib
 import os
 
-from ...utils import cache
-from ...utils.lightx2v_loader import load_lightx2v_state_dict
-from .pipeline_wan import WanPipeline
-from .pipeline_wan_distill import _patch_torch_transformer_random
-from .pipeline_wan_i2v import WanPipelineI2V
+from models.tt_dit.experimental.pipelines.pipeline_wan_distill import _patch_torch_transformer_random
+from models.tt_dit.experimental.utils.lightx2v_loader import load_lightx2v_state_dict
+from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
+from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
+from models.tt_dit.utils import cache
 
 
 class AniSoraPipeline(WanPipelineI2V):

@@ -29,10 +29,10 @@ import os
 
 import torch
 
-from ...utils import cache
-from ...utils.lightx2v_loader import load_lightx2v_state_dict
-from .pipeline_wan import TorchWanTransformer3DModel, WanPipeline
-from .pipeline_wan_i2v import WanPipelineI2V
+from models.tt_dit.experimental.utils.lightx2v_loader import load_lightx2v_state_dict
+from models.tt_dit.pipelines.wan.pipeline_wan import TorchWanTransformer3DModel, WanPipeline
+from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
+from models.tt_dit.utils import cache
 
 # Hard-coded config for Wan2.2-I2V-A14B-Diffusers transformer subfolders. Used
 # only in random_weights mode so we don't have to fetch transformer/config.json

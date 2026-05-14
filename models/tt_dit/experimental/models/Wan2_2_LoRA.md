@@ -103,7 +103,7 @@ export GUIDANCE_SCALE=3.5
 export BOUNDARY_RATIO=0.875
 export NO_PROMPT=1
 
-pytest models/tt_dit/tests/models/wan2_2/test_pipeline_lora.py \
+pytest models/tt_dit/experimental/tests/test_pipeline_lora.py \
   -v -k "bh_4x8sp1tp0_ring and resolution_480p" \
   --timeout 1800 -s
 # Output: ./wan_lora_i2v_832x480_0.mp4
@@ -123,7 +123,7 @@ export GUIDANCE_SCALE=3.5
 export BOUNDARY_RATIO=0.875
 export NO_PROMPT=1
 
-pytest models/tt_dit/tests/models/wan2_2/test_pipeline_lora.py \
+pytest models/tt_dit/experimental/tests/test_pipeline_lora.py \
   -v -k "bh_4x8sp1tp0_ring and resolution_480p" \
   --timeout 1800 -s
 # Output: ./wan_lora_i2v_832x480_0.mp4

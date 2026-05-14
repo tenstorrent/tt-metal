@@ -12,10 +12,9 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.pipelines.wan.pipeline_wan_distill import WanDistillPipelineI2V
+from models.tt_dit.experimental.pipelines.pipeline_anisora import AniSoraPipeline
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt
-
-from ....utils.test import ring_params
+from models.tt_dit.utils.test import ring_params
 
 
 @pytest.mark.parametrize(
@@ -25,7 +24,7 @@ from ....utils.test import ring_params
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        # BH Galaxy 4x8 Ring — sole supported config in the first Distill PR.
+        # BH Galaxy 4x8 Ring — sole supported config in the first AniSora PR.
         [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
     ],
     ids=["bh_4x8sp1tp0_ring"],
@@ -60,16 +59,16 @@ def test_pipeline_inference(
 
     pil_image = PIL.Image.open(os.environ.get("PROMPT_IMAGE", "./prompt_image.png"))
     image_prompt = [ImagePrompt(image=pil_image, frame_pos=0)]
-    # Distill bakes CFG in; negative_prompt is unused when guidance_scale == 1.0,
-    # but we keep one for parity with the base I2V test.
     negative_prompt = ""
 
+    # AniSora upstream defaults (anisoraV3.2/wan/configs/wan_i2v_A14B.py):
+    #   sample_steps=40, boundary=0.9, sample_guide_scale=(3.5, 3.5).
     num_frames = 81
-    num_inference_steps = 4
-    guidance_scale = 1.0
-    guidance_scale_2 = 1.0
+    num_inference_steps = int(os.environ.get("NUM_STEPS", "40"))
+    guidance_scale = 3.5
+    guidance_scale_2 = 3.5
 
-    pipeline = WanDistillPipelineI2V.create_pipeline(
+    pipeline = AniSoraPipeline.create_pipeline(
         mesh_device=mesh_device,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
@@ -82,10 +81,10 @@ def test_pipeline_inference(
         num_frames=num_frames,
     )
 
-    prompt = "The cat in the hat runs up the hill to the house."
+    prompt = "An anime girl smiling, soft lighting, cinematic."
 
     def run(*, prompt, number, seed):
-        logger.info(f"Running distill inference with prompt: '{prompt}'")
+        logger.info(f"Running AniSora inference with prompt: '{prompt}'")
         logger.info(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 
         with torch.no_grad():
@@ -108,7 +107,7 @@ def test_pipeline_inference(
         else:
             frames = result[0] if isinstance(result, tuple) else result
 
-        logger.info("Distill inference completed successfully")
+        logger.info("AniSora inference completed successfully")
         logger.info(f"  Output shape: {frames.shape if hasattr(frames, 'shape') else 'Unknown'}")
         logger.info(f"  Output type: {type(frames)}")
 
@@ -118,7 +117,7 @@ def test_pipeline_inference(
             logger.info(f"  Video data range: [{frames.min().item():.3f}, {frames.max().item():.3f}]")
 
         frames = frames[0]
-        output_filename = f"wan_distill_i2v_{width}x{height}_{number}.mp4"
+        output_filename = f"wan_anisora_i2v_{width}x{height}_{number}.mp4"
         try:
             from models.tt_dit.utils.video import export_to_video
 
@@ -142,12 +141,13 @@ def test_pipeline_inference(
 # ---------------------------------------------------------------------------
 # Random-weight smoke test
 # ---------------------------------------------------------------------------
-# Runs the full pipeline end-to-end without downloading the lightx2v safetensors
+# Runs the full pipeline end-to-end without downloading the AniSora safetensors
 # or the two ~28 GB transformer subfolders from Wan-AI. Tokenizer / UMT5 text
 # encoder / VAE / scheduler still come from Wan-AI/Wan2.2-I2V-A14B-Diffusers
 # (~12 GB total) and require TT_DIT_ALLOW_HF_DOWNLOAD=1 the first time.
 # Output frames are garbage by design — this only validates compile / mesh /
-# shape / CCL plumbing, not numeric quality.
+# shape / CCL plumbing, not numeric quality. Uses 4 sampling steps to keep the
+# smoke test short; the 40-step real-weights config is exercised above.
 
 
 @pytest.mark.parametrize(
@@ -188,7 +188,7 @@ def test_pipeline_inference_random_weights(
 
     os.environ["TT_DIT_RANDOM_WEIGHTS"] = "1"
     try:
-        pipeline = WanDistillPipelineI2V.create_pipeline(
+        pipeline = AniSoraPipeline.create_pipeline(
             mesh_device=mesh_device,
             sp_axis=sp_axis,
             tp_axis=tp_axis,
@@ -216,8 +216,8 @@ def test_pipeline_inference_random_weights(
             num_frames=num_frames,
             num_inference_steps=num_inference_steps,
             seed=42,
-            guidance_scale=1.0,
-            guidance_scale_2=1.0,
+            guidance_scale=3.5,
+            guidance_scale_2=3.5,
             output_type="uint8",
         )
 

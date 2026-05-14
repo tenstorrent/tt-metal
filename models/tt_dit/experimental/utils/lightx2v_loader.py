@@ -28,7 +28,7 @@ import torch
 from loguru import logger
 from safetensors.torch import load_file
 
-from .substate import rename_substate
+from models.tt_dit.utils.substate import rename_substate
 
 # Per-block prefix renames (lightx2v → diffusers), applied under each
 # ``blocks.<i>.`` subtree. Uses rename_substate for prefix-based renaming.

@@ -63,7 +63,7 @@ export TT_DIT_ALLOW_HF_DOWNLOAD=1
 # Place a seed image at ./prompt_image.png in the working directory.
 
 NO_PROMPT=1 pytest \
-  models/tt_dit/tests/models/wan2_2/test_pipeline_wan_distill_i2v.py \
+  models/tt_dit/experimental/tests/test_pipeline_wan_distill_i2v.py \
   -v -k "bh_4x8sp1tp0_ring and resolution_480p" --timeout 1500
 ```
 

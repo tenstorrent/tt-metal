@@ -20,10 +20,9 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.tt_dit.experimental.pipelines.pipeline_wan_lora import WanLoraPipelineI2V
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt
-from models.tt_dit.pipelines.wan.pipeline_wan_lora import WanLoraPipelineI2V
-
-from ....utils.test import ring_params
+from models.tt_dit.utils.test import ring_params
 
 
 @pytest.mark.parametrize(

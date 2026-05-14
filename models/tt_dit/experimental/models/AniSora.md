@@ -119,18 +119,18 @@ export NUM_STEPS=40       # 40 default, or 16/8 for faster previews
 export NO_PROMPT=1
 
 # Run AniSora inference (480p)
-pytest models/tt_dit/tests/models/wan2_2/test_pipeline_anisora.py \
+pytest models/tt_dit/experimental/tests/test_pipeline_anisora.py \
   -v -k "bh_4x8sp1tp0_ring and resolution_480p and not random_weights" \
   --timeout 1800 -s
 # Output: ./wan_anisora_i2v_832x480_0.mp4
 
 # Run AniSora inference (720p)
-pytest models/tt_dit/tests/models/wan2_2/test_pipeline_anisora.py \
+pytest models/tt_dit/experimental/tests/test_pipeline_anisora.py \
   -v -k "bh_4x8sp1tp0_ring and resolution_720p and not random_weights" \
   --timeout 1800 -s
 # Output: ./wan_anisora_i2v_1280x720_0.mp4
 
 # Random-weights smoke test (no large download needed)
-pytest models/tt_dit/tests/models/wan2_2/test_pipeline_anisora.py::test_pipeline_inference_random_weights \
+pytest models/tt_dit/experimental/tests/test_pipeline_anisora.py::test_pipeline_inference_random_weights \
   -v --timeout 1500 -s
 ```

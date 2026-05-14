@@ -28,10 +28,10 @@ import torch
 from loguru import logger
 from safetensors.torch import load_file
 
-from ...utils import cache
-from ...utils.lightx2v_loader import wan_lightx2v_to_diffusers_key
-from .pipeline_wan import WanPipeline
-from .pipeline_wan_i2v import WanPipelineI2V
+from models.tt_dit.experimental.utils.lightx2v_loader import wan_lightx2v_to_diffusers_key
+from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
+from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
+from models.tt_dit.utils import cache
 
 _STRIP_PREFIXES = ("diffusion_model.", "transformer.", "unet.", "model.")
 
