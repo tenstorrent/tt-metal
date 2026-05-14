@@ -336,17 +336,19 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
     //     "Broadcast all-gather requires per-device bytes ({}) to be divisible by output page size ({})",
     //     num_input_pages * input_page_size,
     //     output_page_size);
-    //  Compute output_pages_per_stride: consecutive output pages before skipping to next stride.
-    //  Equal to num_input_pages / (product of dims before gather_dim).
-    //  For tile layout, dims rank-2 and rank-1 are divided by tile size to get page extents.
+
+    // Compute how many contiguous output pages to write to before jumping, and what the jump
+    // (stride) should be.
+    // Equal to product of dims after gather dim. Ex: for shape (a, b, c, d, e), if 'c' is the
+    // gather dim, then: output_pages_per_stride = c * d * e
     auto input_shape = input_tensor.padded_shape();
     uint32_t rank = input_shape.rank();
     int32_t gather_dim = operation_attributes.dim;
     if (gather_dim < 0) {
         gather_dim += rank;
     }
-    uint32_t outer_pages = 1;
-    for (int32_t i = 0; i < gather_dim; i++) {
+    uint32_t inner_pages = 1;
+    for (int32_t i = gather_dim; i < rank; i++) {
         uint32_t extent = input_shape[i];
         if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
             if (i == rank - 2) {
@@ -354,10 +356,14 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
             } else if (i == rank - 1) {
                 extent /= tt::constants::TILE_WIDTH;
             }
+        } else {
+            if (i == rank - 1) {
+                extent = 1;
+            }
         }
-        outer_pages *= extent;
+        inner_pages *= extent;
     }
-    uint32_t output_pages_per_stride = num_input_pages / outer_pages;
+    uint32_t output_pages_per_stride = inner_pages;
     uint32_t output_page_stride = (num_devices - 1) * output_pages_per_stride + 1;
     TT_FATAL(output_pages_per_stride > 0, "output_pages_per_stride must be > 0");
 
