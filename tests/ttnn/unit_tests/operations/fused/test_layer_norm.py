@@ -2,14 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
+from dataclasses import dataclass
 
+import pytest
 import torch
 
 import ttnn
-
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from dataclasses import dataclass
 
 pytestmark = pytest.mark.use_module_device
 
@@ -505,6 +504,36 @@ def test_layer_norm_with_padding(device, h, w, use_welford, dtype):
     golden_output = golden(torch_input_tensor, weight=None, bias=None, eps=1e-5)
 
     assert_output_accuracy(golden_output, output_ttnn)
+
+
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [(21 * 4 + 1) * 32])
+def test_dest_reuse_tiles(device, h, w):
+    """Regression test for binary_dest_reuse_tiles accumulation bug (tt-llk#868).
+
+    binary_dest_reuse_tiles<ELWMUL, DEST_TO_SRCB> was accumulating into dest
+    instead of overwriting, causing values to double when multiplied by ~1.
+    This triggers via the large-tensor layernorm path (w > num_tiles_per_block * 32).
+    """
+    torch.manual_seed(18)
+    torch_input = torch.randn((h, w), dtype=torch.float32)
+    torch_output = torch.nn.functional.layer_norm(torch_input, normalized_shape=[w])
+
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=False, legacy_reduction=False, legacy_rsqrt=False)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    output_tensor = ttnn.layer_norm(
+        input_tensor, program_config=program_config, compute_kernel_config=compute_kernel_config
+    )
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_output_accuracy(torch_output, output_tensor)
 
 
 def test_layer_norm_inputs_requires_input_tensor():
