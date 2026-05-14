@@ -35,6 +35,7 @@
 #include <tt_stl/aligned_allocator.hpp>
 
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
+#include "impl/context/metal_context.hpp"
 
 namespace ttnn::distributed::test {
 namespace {
@@ -780,6 +781,10 @@ TEST_F(MeshTensorDataMovementTest, UniformCopyToDevice_CopyToHost_Roundtrip) {
 }
 
 TEST_F(MeshTensorTest, UniformCopyToDevice_ReusesPinnedMemoryCacheEntries) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes() == 0) {
+        GTEST_SKIP() << "Pinned memory cache is disabled";
+        return;
+    }
     auto& cache = tt::tt_metal::experimental::PinnedMemoryCache::instance();
     const auto pinning_params = tt::tt_metal::experimental::GetMemoryPinningParameters(*mesh_device_);
     if (!pinning_params.can_map_to_noc) {
@@ -833,6 +838,10 @@ TEST_F(MeshTensorTest, UniformCopyToDevice_ReusesPinnedMemoryCacheEntries) {
 }
 
 TEST_F(MeshTensorTest, HostTensorCopyKeepsPinnedMemoryCacheEntriesUntilLastPinRelease) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes() == 0) {
+        GTEST_SKIP() << "Pinned memory cache is disabled";
+        return;
+    }
     auto& cache = tt::tt_metal::experimental::PinnedMemoryCache::instance();
     const auto pinning_params = tt::tt_metal::experimental::GetMemoryPinningParameters(*mesh_device_);
     if (!pinning_params.can_map_to_noc) {
@@ -872,6 +881,10 @@ TEST_F(MeshTensorTest, HostTensorCopyKeepsPinnedMemoryCacheEntriesUntilLastPinRe
 }
 
 TEST_F(MeshTensorTest, UniformCopyToHost_ReusesPinnedMemoryCacheEntries) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes() == 0) {
+        GTEST_SKIP() << "Pinned memory cache is disabled";
+        return;
+    }
     auto& cache = tt::tt_metal::experimental::PinnedMemoryCache::instance();
     const auto pinning_params = tt::tt_metal::experimental::GetMemoryPinningParameters(*mesh_device_);
     if (!pinning_params.can_map_to_noc) {
@@ -1198,6 +1211,10 @@ TEST_F(MeshTensorTest2x4, CopyToDeviceFiltered_ThrowsOnInterleavedLayout) {
 // ---------------------------------------------------------------------------
 
 TEST_F(MeshTensorTest, LargeWriteRoundtrip_PinnedMemoryPath) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes() == 0) {
+        GTEST_SKIP() << "Pinned memory cache is disabled";
+        return;
+    }
     // 1024 * 9216 * 4 bytes = 36 MB, above the 32 MB pinned-write threshold.
     const ttnn::Shape shape{1, 1, 1024, 9216};
     auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
@@ -1221,6 +1238,10 @@ TEST_F(MeshTensorTest, LargeWriteRoundtrip_PinnedMemoryPath) {
 }
 
 TEST_F(MeshTensorTest, LargeWriteRoundtrip_HeightShardedDeviceRequiringShardPadding) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes() == 0) {
+        GTEST_SKIP() << "Pinned memory cache is disabled";
+        return;
+    }
     // 1024 * 9216 * 4 bytes = 36 MB, above the 32 MB pinned-write threshold.
     // Device uses HEIGHT_SHARDED with shard_height=257 on 4 DRAM cores;
     // ceil(1024/257)=4, and 4*257=1028 > 1024, so the last shard carries
