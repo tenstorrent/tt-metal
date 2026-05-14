@@ -25,9 +25,18 @@ namespace {
 
 // Fuses `exp` after `subtract` into a single binary_ng kernel via the SFPU
 // op-chain (post_activations).  The (a - b) intermediate stays in DST regs.
-// TODO(bisect-hang): `[[maybe_unused]]` while callers in the forward/backward bodies are
-// commented out for hang bisection. Drop the attribute once a caller is restored.
-[[maybe_unused]] ttnn::Tensor fused_subtract_exp_fp32(const ttnn::Tensor& a, const ttnn::Tensor& b) {
+//
+// NOTE: output_dtype is intentionally left as input dtype (BF16). Requesting an
+// FP32 output here causes binary_ng to auto-inject a TYPECAST(BF16,FP32) into the
+// post_activations chain (binary_ng_program_factory.cpp). Combined with COL_B
+// broadcast (b's W=1) and the multi-device TP setup that vocab_parallel_cross_entropy
+// uses, that path hangs (silent device deadlock — likely tile-count mismatch between
+// compute and writer when the auto-typecast is appended). The downstream `ttnn::sum`
+// is invoked with `ComputeKernelConfig::precise()` (fp32_dest_acc_en=true), so
+// reductions still accumulate in FP32 and the precision argument for going FP32
+// here is moot. Keeping it BF16 also avoids materialising a 2x-bigger
+// [B,1,S,V/tp_size] FP32 intermediate.
+ttnn::Tensor fused_subtract_exp(const ttnn::Tensor& a, const ttnn::Tensor& b) {
     using EltwiseUnary = ttnn::operations::unary::EltwiseUnaryWithParam;
     // 0.0f matches ttnn::exp's default fast_and_approximate_mode=false.
     const EltwiseUnary exp_act{ttnn::operations::unary::UnaryOpType::EXP, 0.0f};
@@ -35,7 +44,7 @@ namespace {
     return ttnn::subtract(
         a,
         b,
-        /*output_dtype=*/ttnn::DataType::FLOAT32,
+        /*output_dtype=*/std::nullopt,
         /*memory_config=*/std::nullopt,
         /*output=*/std::nullopt,
         post_activations);
@@ -93,9 +102,12 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
     auto all_max_val = ttnn_fixed::distributed::all_gather(local_max, 3, cluster_axis);
     auto global_max = ttnn::max(all_max_val, 3, /* keepdim */ true);
 
-    // // Step 3: fused (logits - global_max).exp() into FP32 — single binary_ng kernel,
-    // // no intermediate [B,1,S,V/tp_size] FP32 tensor.
-    auto local_exp = fused_subtract_exp_fp32(logits->get_value(), global_max);
+    // Step 3: fused (logits - global_max).exp() — single binary_ng kernel, BF16 in/out.
+    // Output is BF16 (NOT FP32): see comment on fused_subtract_exp() — FP32 output_dtype
+    // hangs binary_ng on this COL_B-broadcast / multi-device combo. The downstream
+    // ttnn::sum(..., precise()) accumulates in FP32 in DST anyway, so dropping the
+    // upcast here costs no real precision and saves a 2x-bigger FP32 intermediate.
+    [[maybe_unused]] auto local_exp = fused_subtract_exp(logits->get_value(), global_max);
     // auto local_sum = ttnn::sum(local_exp, 3, /* keepdim */ true, std::nullopt, core::ComputeKernelConfig::precise());
     // auto global_sum = ttnn_fixed::distributed::all_reduce(local_sum, cluster_axis);
 
@@ -154,7 +166,7 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
         }
         // const float inv_N = 1.0F / static_cast<float>(N);
 
-        // auto local_exp = fused_subtract_exp_fp32(logits->get_value(), global_max);
+        // auto local_exp = fused_subtract_exp(logits->get_value(), global_max);
 
         // auto softmax_k = ttnn::multiply(local_exp, ttnn::reciprocal(global_sum));
         // auto scaled_softmax = ttnn::multiply(softmax_k, inv_N, ttnn::DataType::BFLOAT16);
