@@ -421,6 +421,24 @@ class Gemma4Model:
         # when the explicit kwarg is None — same pattern as the prefill
         # stash above.
         self._decode_pli_combined = None
+
+        # Stash for prefill inputs computed in ``prepare_inputs_prefill``.
+        # The Generator interface splits prefill into prepare→forward, but
+        # forward's signature doesn't carry the host-side input_ids/embeds
+        # the model needs for per-layer inputs, so we cache them here.
+        # Direct callers (text_demo, unit tests) pass them explicitly to
+        # ``ttnn_prefill_forward`` and bypass this stash.
+        self._prefill_input_ids_torch = None
+        self._prefill_embeds_torch = None
+
+        # Stash for the per-layer-input (PLI) device tensor produced in
+        # ``prepare_decode_inputs_host``. ``Generator``'s decode path
+        # unpacks only the first 4 elements of ``prepare_inputs_decode``'s
+        # return tuple, dropping the trailing PLI tensor (E2B/E4B), so we
+        # cache it here and have ``ttnn_decode_forward`` fall back to it
+        # when the explicit kwarg is None — same pattern as the prefill
+        # stash above.
+        self._decode_pli_combined = None
         self.per_layer_input_weights = {}
         if self.hidden_size_per_layer_input and state_dict:
             pli_size = self.hidden_size_per_layer_input
@@ -997,6 +1015,7 @@ class Gemma4Model:
                 hidden_states,
                 rope_mats=layer_rope,
                 position_idx=position_idx,
+                page_table=layer_page_table,
                 page_table=layer_page_table,
                 kv_cache=kv_cache,
                 is_decode=is_decode,
@@ -1583,7 +1602,6 @@ class Gemma4Model:
         start_pos=0,
         page_table=None,
         chunk_page_table=None,
-        chunk_start_idx=None,
         trace_enabled=False,
         last_token_idx=None,
         global_user_id=None,
@@ -1595,12 +1613,10 @@ class Gemma4Model:
         """Build prefill device inputs and cache the host-side state needed
         for per-layer inputs.
 
-        Returns a 6-tuple matching
-        ``models/tt_transformers/tt/model.py:prepare_inputs_prefill``:
-        ``(tt_input, None, None, tt_page_table, tt_chunk_page_table,
-        tt_chunk_start_idx)``. ``tt_input`` is host-staged token IDs when
-        ``trace_enabled`` (so the trace owns the embed step) and tile-laid
-        embeddings otherwise. The two ``None`` slots are placeholders for
+        Returns ``(tt_input, None, None, tt_page_table, tt_chunk_page_table)``
+        where ``tt_input`` is host-staged token IDs when ``trace_enabled``
+        (so the trace owns the embed step) and tile-laid embeddings
+        otherwise. The ``None`` slots are positional placeholders for
         ``rot_mats_global``/``rot_mats_local`` — Gemma4 computes RoPE
         internally from layer state. ``tt_chunk_start_idx`` is a device
         scalar when tracing multi-chunk / APC (so RoPE + chunked SDPA can
@@ -1692,7 +1708,7 @@ class Gemma4Model:
             tt_embeds = ttnn.reshape(tt_embeds, (1, 1, per_user_seq_len, self.hidden_size))
         tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
 
-        return tt_embeds, None, None, tt_page_table, tt_chunk_page_table, None
+        return tt_embeds, None, None, tt_page_table, tt_chunk_page_table
 
     def prepare_prefill_inputs_trace(self, tokens, **kwargs):
         return self.prepare_inputs_prefill(tokens, trace_enabled=True, **kwargs)
@@ -1732,8 +1748,12 @@ class Gemma4Model:
         x,
         rot_mats_global=None,
         rot_mats_local=None,
+        rot_mats_global=None,
+        rot_mats_local=None,
         user_id=0,
         page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
         chunk_page_table=None,
         chunk_start_idx=None,
         get_last_token=-1,
@@ -2034,6 +2054,26 @@ class Gemma4Model:
         """
         if len(device_inputs) > 4:
             self._decode_pli_combined = device_inputs[4]
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+        self.bind_decode_trace_inputs(device_inputs)
+        return device_inputs
+
+    def bind_decode_trace_inputs(self, device_inputs):
+        """Stash extra (>4) device inputs on ``self`` so
+        ``ttnn_decode_forward`` can pick them up.
+
+        ``Generator``'s decode paths only thread the first four
+        elements of ``prepare_inputs_decode``'s return tuple through
+        the call signature; anything beyond that — Gemma4's
+        host-precomputed per-layer-input (PLI) at index 4 — has to
+        reach the model via a side channel. ``Generator`` calls this
+        hook in both the no-trace path (through this wrapper) and at
+        trace-capture time (so traced ops bind against
+        ``trace_inputs_decode[i][4]`` rather than the compile-run
+        buffer); see :meth:`Generator._capture_decode_trace_text`.
+        """
+        if len(device_inputs) > 4:
+            self._decode_pli_combined = device_inputs[4]
 
     def ttnn_decode_forward(
         self,
@@ -2044,6 +2084,7 @@ class Gemma4Model:
         kv_cache=None,
         on_device_logits=False,
         pli_combined=None,
+        page_tables_per_layer=None,
         page_tables_per_layer=None,
     ):
         """Decode forward — matches tt_transformers Generator interface.
@@ -2060,6 +2101,9 @@ class Gemma4Model:
             on_device_logits: If True, return logits in on-device sampling layout.
             pli_combined: Optional [1,1,n_layers,pli_size] device tensor of host-precomputed
                 per-layer inputs (E2B/E4B). Required for Gemma3n-style models in decode.
+            page_tables_per_layer: Optional list of per-layer page tables. Falls back to
+                ``self._active_page_tables_per_layer`` (set by the vLLM hybrid bridge,
+                since ``Generator``'s decode path doesn't thread the kwarg).
             page_tables_per_layer: Optional list of per-layer page tables. Falls back to
                 ``self._active_page_tables_per_layer`` (set by the vLLM hybrid bridge,
                 since ``Generator``'s decode path doesn't thread the kwarg).
@@ -2092,6 +2136,18 @@ class Gemma4Model:
         token_index = None if self.rope_caches_2d else 0
 
         position_idx_cache = rot_mat_idxs  # Generator passes pos_int32 as rot_mat_idxs
+
+        if page_tables_per_layer is None:
+            page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
+        page_tables_per_layer = self._page_tables_to_ttnn(page_tables_per_layer)
+
+        # ``Generator``'s decode path slices ``prepare_inputs_decode``'s
+        # return tuple to its first 4 elements before calling here, so
+        # the PLI tensor produced by ``prepare_decode_inputs_host`` for
+        # E2B/E4B per-layer inputs is dropped on the way in. Fall back
+        # to the cached value the host-prep step stashed on ``self``.
+        if pli_combined is None:
+            pli_combined = self._decode_pli_combined
 
         if page_tables_per_layer is None:
             page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
