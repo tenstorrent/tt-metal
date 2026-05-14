@@ -81,7 +81,15 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
             r = r * m + sfpi::vConstFloatPrgm2;
         }
 
-        // if a==0, then a=inf; does nothing if a==nan or inf
+        // Handle special cases:
+        //
+        //   input 0.0  -> -inf
+        //   input +inf -> +inf
+        //   input NaN  -> NaN
+        //
+        // In the non-fast path, earlier normalisation maps -0.0 and subnormals
+        // to +0.0. addexp(a, -1) wraps exponent 0 to 255, so zero becomes
+        // +inf; exponent 255 values (Inf/NaN) are left unchanged.
         a = sfpi::addexp(a, -1);
 
         r = r * s + m;
@@ -92,7 +100,9 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
             result *= sfpi::reinterpret<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
         }
 
-        // if a==nan or inf, result will be nan or ±inf
+        // For zero, result is negative before this multiply, so result * +inf
+        // gives -inf. For +inf, result is positive, so result * +inf gives
+        // +inf. NaNs either skip the main block or propagate here.
         v_if(sfpi::exexp(a, sfpi::ExponentMode::NoDebias) - 255 >= 0) { result *= a; }
         v_endif;
     }
