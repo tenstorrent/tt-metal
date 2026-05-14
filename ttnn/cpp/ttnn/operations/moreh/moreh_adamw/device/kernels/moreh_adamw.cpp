@@ -10,8 +10,9 @@
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/tile_move_copy.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // BinaryMax
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // Recip
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // Recip, Sqrt
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 namespace {
@@ -307,65 +308,96 @@ void kernel_main() {
 
 #ifdef AMSGRAD
         // tmp_cb_max_exp_avg_sq = max(cb_max_exp_avg_sq_in, tmp_cb_exp_avg_sq);
-        tile_regs_acquire();
-        cb_reserve_back(tmp_cb_max_exp_avg_sq, onetile);
-        copy_tile_init_with_dt(cb_max_exp_avg_sq_in);
-        copy_tile(cb_max_exp_avg_sq_in, first_tile, dst0);
-        copy_tile_init_with_dt(tmp_cb_exp_avg_sq);
-        copy_tile(tmp_cb_exp_avg_sq, first_tile, dst1);
-        binary_max_tile_init();
-        binary_max_tile(dst0, dst1, dst0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, tmp_cb_max_exp_avg_sq);
-        cb_push_back(tmp_cb_max_exp_avg_sq, onetile);
-        tile_regs_release();
+        {
+            using namespace compute_kernel_lib;
+            eltwise_chain(
+                onetile,
+                CopyTile<
+                    cb_max_exp_avg_sq_in,
+                    Dst::D0,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CbIndexMode::FirstTile,
+                    CopyTileReconfig::Input>{},
+                CopyTile<
+                    tmp_cb_exp_avg_sq,
+                    Dst::D1,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CbIndexMode::FirstTile,
+                    CopyTileReconfig::Input>{},
+                BinaryMax<Dst::D0, Dst::D1, Dst::D0>{},
+                PackTile<
+                    tmp_cb_max_exp_avg_sq,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
+        }
 
         // cb_max_exp_avg_sq_out
         moreh_copy_chain<tmp_cb_max_exp_avg_sq, cb_max_exp_avg_sq_out, first_tile, /*pop=*/false>();
 #endif
 
         // cb_tmp1 = sqrt(exp_avg_sq / cb_tmp1);
-        tile_regs_acquire();
-        cb_wait_front(cb_tmp1, onetile);
-        cb_reserve_back(cb_tmp1, onetile);
+        {
+            using namespace compute_kernel_lib;
 #ifdef AMSGRAD
-        mul_tiles_init_with_dt(tmp_cb_max_exp_avg_sq, cb_tmp1);
-        mul_tiles(tmp_cb_max_exp_avg_sq, cb_tmp1, first_tile, first_tile, dst0);
+            eltwise_chain(
+                onetile,
+                BinaryFpu<
+                    tmp_cb_max_exp_avg_sq,
+                    cb_tmp1,
+                    cb_tmp1,
+                    BinaryFpuOp::Mul,
+                    BroadcastDim::None,
+                    BinaryDataFormatReconfig::InputAndOutput,
+                    CopyTilePolicy::WaitNoPop,
+                    CopyTilePolicy::WaitAndPop,
+                    CbIndexMode::FirstTile,
+                    Dst::D0>{},
+                Sqrt<Approx::Exact, Dst::D0>{},
+                PackTile<cb_tmp1, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 #else
-        mul_tiles_init_with_dt(tmp_cb_exp_avg_sq, cb_tmp1);
-        mul_tiles(tmp_cb_exp_avg_sq, cb_tmp1, first_tile, first_tile, dst0);
+            eltwise_chain(
+                onetile,
+                BinaryFpu<
+                    tmp_cb_exp_avg_sq,
+                    cb_tmp1,
+                    cb_tmp1,
+                    BinaryFpuOp::Mul,
+                    BroadcastDim::None,
+                    BinaryDataFormatReconfig::InputAndOutput,
+                    CopyTilePolicy::WaitNoPop,
+                    CopyTilePolicy::WaitAndPop,
+                    CbIndexMode::FirstTile,
+                    Dst::D0>{},
+                Sqrt<Approx::Exact, Dst::D0>{},
+                PackTile<cb_tmp1, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 #endif
-        sqrt_tile_init();
-        sqrt_tile(dst0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp1);
-        cb_pop_front(cb_tmp1, onetile);
-        cb_push_back(cb_tmp1, onetile);
+        }
 #ifdef AMSGRAD
         cb_pop_front(tmp_cb_max_exp_avg_sq, onetile);
 #endif
         cb_pop_front(tmp_cb_exp_avg_sq, onetile);
-        tile_regs_release();
 
         // cb_tmp1 = 1 / (cb_tmp1 + eps)
-        tile_regs_acquire();
-        cb_wait_front(cb_tmp1, onetile);
-        cb_reserve_back(cb_tmp1, onetile);
-        add_tiles_init_with_dt(cb_tmp1, cb_scalar_args);
-        add_tiles(cb_tmp1, cb_scalar_args, first_tile, eps_tile, dst0);
-        recip_tile_init();
-        recip_tile(dst0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp1);
-        cb_pop_front(cb_tmp1, onetile);
-        cb_push_back(cb_tmp1, onetile);
-        tile_regs_release();
+        {
+            using namespace compute_kernel_lib;
+            eltwise_chain(
+                onetile,
+                BinaryFpu<
+                    cb_tmp1,
+                    cb_scalar_args,
+                    cb_tmp1,
+                    BinaryFpuOp::Add,
+                    BroadcastDim::None,
+                    BinaryDataFormatReconfig::InputAndOutput,
+                    CopyTilePolicy::WaitAndPop,
+                    CopyTilePolicy::NoWaitNoPop,
+                    CbIndexMode::Pinned,
+                    Dst::D0>{first_tile, eps_tile},
+                Recip<Dst::D0>{},
+                PackTile<cb_tmp1, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        }
 
         // bias_correction1 = 1 - pow(beta1, step);
         // cb_beta1_exponent = pow(beta1, step); Calculated from host
