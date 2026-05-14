@@ -36,10 +36,11 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.qwen3_6_galaxy_v2.tt.ttnn_delta_rule_ops_fp32 import recurrent_gated_delta_rule_ttnn_fp32
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
-    chunk_gated_delta_rule_ttnn,
-    recurrent_gated_delta_rule_ttnn,
+    recurrent_gated_delta_rule_ttnn,  # kept for back-compat; not used in fp32 path
 )
+from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import chunk_gated_delta_rule_ttnn
 
 
 # ----------------------------------------------------------------------------
@@ -408,18 +409,26 @@ class TtQwen36DeltaAttention(LightweightModule):
         the cluster_shape — each row holds the state for its own 6 V-heads;
         the 4 cols on a row are independent replicas (they all do the same
         work, see module docstring).
+
+        V2-decode-debug: dtype is ``float32`` so the recurrent state does NOT
+        round-trip through bf16 between decode steps.  Compounding across 48
+        DeltaNet layers had previously pinched 64L decode logits PCC to 0.30;
+        keeping the state at fp32 (and running the recurrent kernel at fp32
+        internally — see ``ttnn_delta_rule_ops_fp32``) restores the precision
+        floor.  Prefill (``chunk_gated_delta_rule_ttnn``) ALREADY returns the
+        state at fp32, so this change is consistent with the prefill seed.
         """
         state_torch = torch.zeros(
             self.max_batch_size,
             self.n_v_per_row,
             self.head_dim,
             self.head_dim,
-            dtype=torch.bfloat16,
+            dtype=torch.float32,
         )
         return ttnn.from_torch(
             state_torch,
             device=self.mesh_device,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -450,14 +459,16 @@ class TtQwen36DeltaAttention(LightweightModule):
 
     def clear_state(self):
         """Zero both persistent buffers (fresh-sequence entry point)."""
+        # dn_state_buffer is fp32 (see _build_dn_state_buffer docstring); use a
+        # matching fp32 source for the in-place copy.
         zero_state = torch.zeros(
-            self.max_batch_size, self.n_v_per_row, self.head_dim, self.head_dim, dtype=torch.bfloat16
+            self.max_batch_size, self.n_v_per_row, self.head_dim, self.head_dim, dtype=torch.float32
         )
         zero_conv = torch.zeros(self.max_batch_size, self.conv_kernel - 1, self.conv_per_row, dtype=torch.bfloat16)
         new_state = ttnn.from_torch(
             zero_state,
             device=self.mesh_device,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -737,8 +748,11 @@ class TtQwen36DeltaAttention(LightweightModule):
         q_h.deallocate(True)
         k_h.deallocate(True)
 
-        # 6. Recurrent delta rule — read persistent recurrent state buffer
-        core_out, new_state = recurrent_gated_delta_rule_ttnn(
+        # 6. Recurrent delta rule — read persistent recurrent state buffer.
+        # V2-decode-debug: use the fp32-state fork so the recurrent state stays
+        # at fp32 across decode steps (eliminates the per-layer bf16 round-trip
+        # that was compounding to 64L PCC 0.30 — see ttnn_delta_rule_ops_fp32).
+        core_out, new_state = recurrent_gated_delta_rule_ttnn_fp32(
             q=q_exp,
             k=k_exp,
             v=v_h,
