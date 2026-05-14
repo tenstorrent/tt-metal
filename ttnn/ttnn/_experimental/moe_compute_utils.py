@@ -807,39 +807,55 @@ def get_weight_core_shard_maps(mesh_device, hidden_size: int, intermediate_size:
     Uses _shard_tiles() (Euclidean rhythm) for W0/W1 and _w2_shard_tiles()
     (complementary when Nt%n_cores + Ht%n_cores == n_cores) for W2.
     Ring ordering: DRAM bank logical coords sorted by (y, x) descending.
+
+    Ring length:
+    - WH: target_ring_size = num_dram_banks = 12 (1:1 ring-to-bank).
+    - BH: target_ring_size = _get_bh_ring_size() (env var TT_MOE_BH_N, default 16).
+          When target_ring_size > num_dram_banks (=8), the shard_map has extra entries
+          for the synthetic ring positions that the C++ program_factory appends via
+          kBhMatmulExtras. The prepare functions emit a matching target_ring_size-slot
+          logical tensor; HEIGHT_SHARDED regroups it onto num_banks physical shards,
+          and the kernel's dm0.cpp bank-run loop walks each ring core's contiguous
+          slice across the bank(s) it covers.
+
+    dram_core_range_set always has exactly num_dram_banks entries (the placement target),
+    regardless of target_ring_size.
     """
     in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(mesh_device, 0)
-    n_cores = len(in0_core_coords)
+    n_dram_banks = len(in0_core_coords)
+
+    is_blackhole = mesh_device is not None and mesh_device.arch() == ttnn.Arch.BLACKHOLE
+    target_ring_size = _get_bh_ring_size() if is_blackhole else n_dram_banks
 
     core2dram = {cc: dram_bank_id for dram_bank_id, cc in enumerate(in0_core_coords)}
     in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
 
     Nt = intermediate_size // ttnn.TILE_SIZE
     Ht = hidden_size // ttnn.TILE_SIZE
-    max_w2_tiles = (Ht + n_cores - 1) // n_cores
+    # groups_per_core is fixed across ring positions (max W2 tiles owned by any ring slot,
+    # rounded up to BLOCK_TILES_W). Must use target_ring_size so it matches the kernel's
+    # num_a2a_iters * BLOCK_TILES_W / W2_TILES_PER_TXN.
+    max_w2_tiles = (Ht + target_ring_size - 1) // target_ring_size
     groups_per_core = (max_w2_tiles + BLOCK_TILES_W - 1) // BLOCK_TILES_W
 
     sorted_dram_core_coords = []
     w0_w1_shard_map = []
     w2_shard_map_list = []
 
-    for ring_pos, core_coord in enumerate(in0_core_coords_sorted):
-        sorted_dram_core_coords.append(core2dram[core_coord])
+    for ring_pos in range(target_ring_size):
+        # First n_dram_banks ring positions own actual DRAM-bank-adjacent cores; positions
+        # beyond that are synthetic (their data lives in the leading dim of the prepared
+        # tensor, which HEIGHT_SHARDED regroups onto the same n_dram_banks physical shards).
+        if ring_pos < n_dram_banks:
+            sorted_dram_core_coords.append(core2dram[in0_core_coords_sorted[ring_pos]])
 
-        w0_w1_tiles = _shard_tiles(Nt, ring_pos, n_cores)
+        w0_w1_tiles = _shard_tiles(Nt, ring_pos, target_ring_size)
         w0_w1_shard_map.append(w0_w1_tiles)
 
-        w2_tiles = _w2_shard_tiles(Ht, ring_pos, Nt, n_cores)
+        w2_tiles = _w2_shard_tiles(Ht, ring_pos, Nt, target_ring_size)
         last_group_tiles = w2_tiles - (groups_per_core - 1) * BLOCK_TILES_W
         last_group_pad_tiles = groups_per_core * BLOCK_TILES_W - w2_tiles
         w2_shard_map_list.append((last_group_tiles, last_group_pad_tiles))
-
-    # TODO(#41827, BH N>8): BH N=12/16 needs synthetic shard_map entries for ring positions
-    # beyond bank count (the C++ program_factory pads matmul_cores from 8 up to N). The new
-    # formula-driven approach from PR #43932 makes the WIP manual padding from the pre-rebase
-    # branch obsolete; re-implement using shard_tiles(Nt, ring_pos, target_ring_size) and
-    # w2_shard_tiles(Ht, ring_pos, Nt, target_ring_size) for ring_pos in [n_cores, target_ring_size).
-    # Current support: BH N=8 (1:1 ring-to-bank) only.
 
     dram_core_coords = [ttnn.CoreCoord(c, 0) for c in sorted_dram_core_coords]
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(cc, cc) for cc in dram_core_coords])
