@@ -11,7 +11,6 @@
 #include <string>
 
 #include "llk_assert.h"
-#include "sanitizer/error.h"
 #include "sanitizer/output.h"
 #include "sanitizer/types.h"
 
@@ -124,7 +123,7 @@ TT_ALWAYS_INLINE void operand_error_assert(
     const bool update_known  = update.pc != UINTPTR_MAX;
     const bool current_known = current.pc != UINTPTR_MAX;
 
-    DEVICE_PRINT("DJUBRE!!!");
+    DEVICE_PRINT("DJUBRE!!!\n");
 
     LLK_SAN_ERROR_MSG(
         "┌─[ llk::san ]─[ error ]──────\n"
