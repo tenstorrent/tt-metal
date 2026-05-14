@@ -262,6 +262,12 @@ def render_human_report(report: dict, window_seconds: float | None) -> str:
         )
 
     lines.append(_render_table(summary_headers, summary_rows))
+    lines.append("")
+    lines.append("Stat definitions:")
+    lines.append("max/min/mean: largest, smallest, and average value across servers.")
+    lines.append("stddev: spread of server values around the mean (higher means more imbalance).")
+    lines.append("max/min_ratio: skew between busiest and least busy server (1.0 means perfectly balanced).")
+    lines.append("coefficient_of_variation: normalized spread (stddev/mean), useful across different scales.")
     return "\n".join(lines)
 
 
