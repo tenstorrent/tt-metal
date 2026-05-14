@@ -522,6 +522,23 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                         // PCIe-direct for MMIO — safe even with broken relay.
                         cluster_.assert_risc_reset_at_core(
                             tt_cxy_pair(mmio_id, virtual_core), tt::umd::RiscType::ALL);
+                        // FIX BR (#42429): Write fw_launch_addr to base-UMD firmware entry point BEFORE deassert.
+                        // FIX BN clears fw_launch_addr=0 after heartbeat confirmation; FIX PE clears it for cleanly
+                        // terminated channels. Without this write, ERISC ROM reads fw_launch_addr=0 and enters the
+                        // indefinite wait loop at 0x49705180, causing FIX AC heartbeat poll to time out and FIX PG.
+                        try {
+                            const auto aeth_idx_br = hal_.get_programmable_core_type_index(
+                                HalProgrammableCoreType::ACTIVE_ETH);
+                            const auto& jit_cfg_br = hal_.get_jit_build_config(aeth_idx_br, 0, 0);
+                            if (jit_cfg_br.fw_launch_addr_value != 0) {
+                                cluster_.write_core_immediate(
+                                    mmio_id, virtual_core,
+                                    std::vector<uint32_t>{jit_cfg_br.fw_launch_addr_value},
+                                    jit_cfg_br.fw_launch_addr);
+                            }
+                        } catch (...) {
+                            // Non-fatal — deassert proceeds
+                        }
                         cluster_.deassert_risc_reset_at_core(
                             tt_cxy_pair(mmio_id, virtual_core), tt::umd::RiscType::ALL);
                         log_info(
@@ -1153,6 +1170,23 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                     try {
                         cluster_.assert_risc_reset_at_core(
                             tt_cxy_pair(mmio_id, virtual_core), tt::umd::RiscType::ALL);
+                        // FIX BR (#42429): Write fw_launch_addr to base-UMD firmware entry point BEFORE deassert.
+                        // FIX BN clears fw_launch_addr=0 after heartbeat confirmation; FIX PE clears it for cleanly
+                        // terminated channels. Without this write, ERISC ROM reads fw_launch_addr=0 and enters the
+                        // indefinite wait loop at 0x49705180, causing FIX AC heartbeat poll to time out and FIX PG.
+                        try {
+                            const auto aeth_idx_br = hal_.get_programmable_core_type_index(
+                                HalProgrammableCoreType::ACTIVE_ETH);
+                            const auto& jit_cfg_br = hal_.get_jit_build_config(aeth_idx_br, 0, 0);
+                            if (jit_cfg_br.fw_launch_addr_value != 0) {
+                                cluster_.write_core_immediate(
+                                    mmio_id, virtual_core,
+                                    std::vector<uint32_t>{jit_cfg_br.fw_launch_addr_value},
+                                    jit_cfg_br.fw_launch_addr);
+                            }
+                        } catch (...) {
+                            // Non-fatal — deassert proceeds
+                        }
                         cluster_.deassert_risc_reset_at_core(
                             tt_cxy_pair(mmio_id, virtual_core), tt::umd::RiscType::ALL);
                     } catch (const std::exception& e) {
