@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -377,6 +377,10 @@ void kernel_main() {
     constexpr uint32_t previous_chunk_sent_semaphore_id =
         get_named_compile_time_arg_val("previous_chunk_sent_semaphore_id");
     constexpr uint32_t combine_sync_semaphore_id = get_named_compile_time_arg_val("combine_sync_semaphore_id");
+
+    // When compute_only=1, the fused selective_reduce_combine path is bypassed and no combine
+    // kernels run on combine cores. Skip the metadata-ready signal to combine cores.
+    constexpr bool compute_only = get_named_compile_time_arg_val("compute_only") == 1;
 
     uint32_t partial_metadata_ready_semaphore_addr = get_semaphore(partial_metadata_ready_semaphore_id);
     uint32_t metadata_ready_semaphore_addr = get_semaphore(metadata_ready_semaphore_id);
@@ -953,12 +957,14 @@ void kernel_main() {
         noc_async_write_barrier();
 
         // signal to A2A combine that metadata is available. Separate signal from matmul because e_t write is also
-        // needed.
-        const uint64_t combine_sync_noc_addr =
-            safe_get_noc_addr(combine_sync_noc_x, combine_sync_noc_y, combine_sync_addr, 1);
-        noc_semaphore_inc(combine_sync_noc_addr, 1);
+        // needed. Skipped in compute_only mode (no combine kernels listening).
+        if constexpr (!compute_only) {
+            const uint64_t combine_sync_noc_addr =
+                safe_get_noc_addr(combine_sync_noc_x, combine_sync_noc_y, combine_sync_addr, 1);
+            noc_semaphore_inc(combine_sync_noc_addr, 1);
 
-        noc_async_atomic_barrier();
+            noc_async_atomic_barrier();
+        }
     }
 
     // DEBUG

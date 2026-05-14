@@ -76,9 +76,31 @@ See individual function docstrings for argument details and layout invariants.
 from __future__ import annotations
 
 import math
+import os
 from typing import Sequence
 
 import ttnn
+
+
+def _get_bh_ring_size():
+    """BH ring size, configurable via env var TT_MOE_BH_N. Supported: {8, 12, 16}; default 16.
+
+    Must align with C++ get_bh_ring_size() in moe_compute_program_factory.cpp. WH always uses N=12.
+    All BH N values use HEIGHT_SHARDED weights with leading dim = num_banks (=8); N=8 is 1:1
+    with banks, N=12/16 cross banks via the bank-run loop in dm0.cpp.
+
+    Raises ValueError on an invalid env value; returns 16 only when the env var is unset.
+    """
+    env = os.environ.get("TT_MOE_BH_N")
+    if env is None:
+        return 16
+    try:
+        n = int(env)
+    except ValueError:
+        raise ValueError(f"TT_MOE_BH_N={env!r} is not an integer (must be 8, 12, or 16)")
+    if n not in (8, 12, 16):
+        raise ValueError(f"TT_MOE_BH_N={env} is not supported (must be 8, 12, or 16)")
+    return n
 
 
 def cluster_distance(d0: int, d1: int, mesh_shape: tuple[int, int], cluster_axis: int) -> int | None:
@@ -399,10 +421,16 @@ def prepare_w0_w1_tensor_for_moe_compute(
         E: Number of experts
         K: Input dimension
         N: Output dimension
-        shard_map: List of shard sizes for each core
+        shard_map: List of logical shard sizes (one per ring core).
 
     Returns:
-        torch_w0_w1_interleaved: Interleaved tensor of shape (L, E, K, 4096)
+        torch_w0_w1_paired: tensor of shape (num_cores, L, E, groups_per_core, ..., 4*ttnn.TILE_SIZE).
+
+    Note on layout: The byte volume of the returned tensor equals num_cores * L * E *
+    groups_per_core * K_padded * 4*TILE. When the caller uses HEIGHT_SHARDED with num_banks
+    physical shards (where num_banks may differ from num_cores), ttnn.from_torch treats the
+    torch buffer as a flat byte stream and applies the shard config. Each ring core's
+    contiguous slice of the flat layout is what the kernel walks via its bank-run loop.
     """
     import torch
 
@@ -495,7 +523,9 @@ def prepare_w2_tensor_for_moe_compute(
         w0_w1_shard_map: List of shard sizes from w0_w1 preparation
 
     Returns:
-        torch_w2_reordered: Reordered tensor of shape (L, E, N_padded, 7680)
+        torch_w2_paired: tensor of shape (num_cores, L, E, w2_groups_per_core, ..., 4*ttnn.TILE_SIZE).
+
+    See :func:`prepare_w0_w1_tensor_for_moe_compute` for the layout/HEIGHT_SHARDED note.
     """
     import torch
 
@@ -804,6 +834,13 @@ def get_weight_core_shard_maps(mesh_device, hidden_size: int, intermediate_size:
         last_group_pad_tiles = groups_per_core * BLOCK_TILES_W - w2_tiles
         w2_shard_map_list.append((last_group_tiles, last_group_pad_tiles))
 
+    # TODO(#41827, BH N>8): BH N=12/16 needs synthetic shard_map entries for ring positions
+    # beyond bank count (the C++ program_factory pads matmul_cores from 8 up to N). The new
+    # formula-driven approach from PR #43932 makes the WIP manual padding from the pre-rebase
+    # branch obsolete; re-implement using shard_tiles(Nt, ring_pos, target_ring_size) and
+    # w2_shard_tiles(Ht, ring_pos, Nt, target_ring_size) for ring_pos in [n_cores, target_ring_size).
+    # Current support: BH N=8 (1:1 ring-to-bank) only.
+
     dram_core_coords = [ttnn.CoreCoord(c, 0) for c in sorted_dram_core_coords]
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(cc, cc) for cc in dram_core_coords])
 
@@ -819,6 +856,7 @@ def get_weight_mem_configs(
     w2_shard_map,
     dram_core_range_set,
     has_bias=False,
+    mesh_device=None,
 ):
     """
     Get memory configurations for W0/W1 and W2 weight tensors.
@@ -826,6 +864,16 @@ def get_weight_mem_configs(
     When has_bias=True:
     - W0/W1: K dimension grows by 1 tile (for bias) and is padded to transaction boundary
     - W2: N dimension grows by 1 tile (for bias) and is padded to align with 7-tile reads
+
+    Memory layout: always HEIGHT_SHARDED with leading dim = num_banks. On WH (12 banks)
+    the ring is N=12 so num_cores == num_banks (1:1, byte-identical M1 baseline). On BH
+    (8 banks) num_cores can be 8/12/16; when num_cores != 8 the prepare functions reshape
+    the leading dim from num_cores → 8 (byte-equivalent regrouping). The kernel then walks
+    each ring core's contiguous slice across the 1-or-more banks it covers via the
+    "bank-run" loop in dm0.cpp.
+
+    `dram_core_range_set` is constructed by `get_weight_core_shard_maps` and has exactly
+    num_banks entries (placement target).
 
     Returns:
         tuple: (w0_w1_mem_config, w2_mem_config, K_for_shard, w2_N_total)
@@ -851,18 +899,6 @@ def get_weight_mem_configs(
         # Without bias, just pad to BLOCK_TILES_H
         K_for_shard = math.ceil(hidden_size // ttnn.TILE_SIZE / BLOCK_TILES_H) * ttnn.TILE_SIZE * BLOCK_TILES_H
 
-    # W0/W1 memory config
-    max_w0_w1 = max(w0_w1_shard_map)
-    w1_w0_groups_per_core = (max_w0_w1 + (max_w0_w1 % 2)) // 2
-    w0_w1_shard_height = num_layers * experts_per_device * w1_w0_groups_per_core * K_for_shard
-    w0_w1_shard_width = 4 * ttnn.TILE_SIZE
-
-    w0_w1_shard_spec = ttnn.ShardSpec(
-        dram_core_range_set, (w0_w1_shard_height, w0_w1_shard_width), ttnn.ShardOrientation.ROW_MAJOR
-    )
-
-    w0_w1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w0_w1_shard_spec)
-
     # Calculate N dimension for W2
     Nt = intermediate_size // ttnn.TILE_SIZE
     Ht = hidden_size // ttnn.TILE_SIZE
@@ -877,8 +913,41 @@ def get_weight_mem_configs(
         # Without bias: just pad to 7-tile alignment
         w2_N_total = math.ceil(Nt / BLOCK_TILES_H) * BLOCK_TILES_H * ttnn.TILE_SIZE
 
+    # HEIGHT_SHARDED with num_banks shards. Shard height is computed from the LOGICAL view
+    # (per-ring-core view): num_cores * groups_per_core * K_for_shard rows total flat,
+    # which redistributes evenly into num_banks shards because the prepare functions enforce
+    # divisibility (see prepare_w0_w1_tensor_for_moe_compute / prepare_w2_tensor_for_moe_compute).
+    num_cores = len(w0_w1_shard_map)
+    num_banks = dram_core_range_set.num_cores()
+
+    # W0/W1 memory config. Use ceiling div to handle odd shard counts (PR #43932 generalization).
+    max_w0_w1 = max(w0_w1_shard_map)
+    w1_w0_groups_per_core = (max_w0_w1 + (max_w0_w1 % 2)) // 2
+    # Total flat rows = num_layers * experts_per_device * num_cores * w1_w0_groups_per_core * K_for_shard
+    # Per-bank shard height = total_rows / num_banks.
+    w0_w1_total_rows = num_layers * experts_per_device * num_cores * w1_w0_groups_per_core * K_for_shard
+    if w0_w1_total_rows % num_banks != 0:
+        raise RuntimeError(
+            f"get_weight_mem_configs: w0_w1 total rows {w0_w1_total_rows} not divisible by num_banks {num_banks} "
+            f"(num_cores={num_cores}, groups_per_core={w1_w0_groups_per_core}, K_for_shard={K_for_shard})"
+        )
+    w0_w1_shard_height = w0_w1_total_rows // num_banks
+    w0_w1_shard_width = 4 * ttnn.TILE_SIZE
+
+    w0_w1_shard_spec = ttnn.ShardSpec(
+        dram_core_range_set, (w0_w1_shard_height, w0_w1_shard_width), ttnn.ShardOrientation.ROW_MAJOR
+    )
+
+    w0_w1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w0_w1_shard_spec)
+
     # W2 memory config
-    w2_shard_height = num_layers * experts_per_device * w2_groups_per_core * w2_N_total
+    w2_total_rows = num_layers * experts_per_device * num_cores * w2_groups_per_core * w2_N_total
+    if w2_total_rows % num_banks != 0:
+        raise RuntimeError(
+            f"get_weight_mem_configs: w2 total rows {w2_total_rows} not divisible by num_banks {num_banks} "
+            f"(num_cores={num_cores}, w2_groups_per_core={w2_groups_per_core}, w2_N_total={w2_N_total})"
+        )
+    w2_shard_height = w2_total_rows // num_banks
     w2_shard_width = 4 * ttnn.TILE_SIZE
 
     w2_shard_spec = ttnn.ShardSpec(
