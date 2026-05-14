@@ -91,18 +91,18 @@ inline void _llk_unpack_dest_dvalid_section_done_()
  * UNP_DEST is not a valid selector: there is no source register to reprogram for the dest path.
  *
  * @tparam UNP_SEL              Unpacker to update
- * @tparam is_fp32_dest_acc_en  FP32 dest accumulation (validated with `unpack_src_format` / `unpack_dst_format`).
+ * @tparam EN_32BIT_DEST  FP32 dest accumulation (validated with `unpack_src_format` / `unpack_dst_format`).
  * @param unpack_src_format     BD/L1 input DataFormat (used only for the conversion check).
  * @param unpack_dst_format     OUT_DATA_FORMAT register value to program (unpacker gasket output).
  */
-template <std::uint32_t UNP_SEL, bool is_fp32_dest_acc_en>
+template <std::uint32_t UNP_SEL, bool EN_32BIT_DEST>
 inline void _llk_unpack_reconfig_data_format_src_(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format)
 {
     static_assert(
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_S), "UNP_SEL must be p_unpacr::UNP_A, UNP_B, or UNP_S");
 
     LLK_ASSERT(
-        ckernel::unpack::is_quasar_unpack_reconfig_pair_supported(unpack_src_format, unpack_dst_format, is_fp32_dest_acc_en, false /* unpack_to_dest */),
+        ckernel::unpack::is_quasar_unpack_reconfig_pair_supported(unpack_src_format, unpack_dst_format, EN_32BIT_DEST, false /* unpack_to_dest */),
         "Unsupported Quasar unpacker OUT_DATA_FORMAT for this L1 format and unpack path.");
 
     const auto out_fmt = static_cast<std::uint8_t>(unpack_dst_format);

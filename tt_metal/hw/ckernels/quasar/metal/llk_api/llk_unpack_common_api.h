@@ -73,27 +73,27 @@ inline bool should_reconfig_src_reg_df(std::uint32_t old_operand, std::uint32_t 
 /**
  * Reprograms unpacker THCON OUT_DATA_FORMAT only (gasket); L1 format stays in buffer descriptors.
  */
-template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, [[maybe_unused]] bool to_from_int8 = false>
+template <bool EN_32BIT_DEST, p_dim_stride_target dim_stride_target, [[maybe_unused]] bool to_from_int8 = false>
 inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_operand) {
     static_assert(
         dim_stride_target == p_dim_stride_target::IGNORE,
         "Quasar unpack reconfig does not support stride/tile-dimension changes");
     const std::uint32_t srca_operand_id = get_operand_id(srca_new_operand);
-    _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_A, is_fp32_dest_acc_en>(
+    _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_A, EN_32BIT_DEST>(
         unpack_src_format[srca_operand_id], unpack_dst_format[srca_operand_id]);
 }
 
-template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, [[maybe_unused]] bool to_from_int8 = false>
+template <bool EN_32BIT_DEST, p_dim_stride_target dim_stride_target, [[maybe_unused]] bool to_from_int8 = false>
 inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_new_operand) {
     static_assert(
         dim_stride_target == p_dim_stride_target::IGNORE,
         "Quasar unpack reconfig does not support stride/tile-dimension changes");
     const std::uint32_t srcb_operand_id = get_operand_id(srcb_new_operand);
-    _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_B, is_fp32_dest_acc_en>(
+    _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_B, EN_32BIT_DEST>(
         unpack_src_format[srcb_operand_id], unpack_dst_format[srcb_operand_id]);
 }
 
-template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
+template <bool EN_32BIT_DEST, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
 inline void llk_unpack_reconfig_data_format_srca(
     const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
     static_assert(
@@ -101,10 +101,10 @@ inline void llk_unpack_reconfig_data_format_srca(
         "Quasar unpack reconfig does not support stride/tile-dimension changes");
     // Caller must only invoke reconfig when operand formats actually differ.
     ASSERT(should_reconfig_src_reg_df(srca_old_operand, srca_new_operand));
-    llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, dim_stride_target, to_from_int8>(srca_new_operand);
+    llk_unpack_reconfig_data_format_srca<EN_32BIT_DEST, dim_stride_target, to_from_int8>(srca_new_operand);
 }
 
-template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
+template <bool EN_32BIT_DEST, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
 inline void llk_unpack_reconfig_data_format_srcb(
     const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
     static_assert(
@@ -112,20 +112,20 @@ inline void llk_unpack_reconfig_data_format_srcb(
         "Quasar unpack reconfig does not support stride/tile-dimension changes");
     // Caller must only invoke reconfig when operand formats actually differ.
     ASSERT(should_reconfig_src_reg_df(srcb_old_operand, srcb_new_operand));
-    llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, dim_stride_target, to_from_int8>(srcb_new_operand);
+    llk_unpack_reconfig_data_format_srcb<EN_32BIT_DEST, dim_stride_target, to_from_int8>(srcb_new_operand);
 }
 
-template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
+template <bool EN_32BIT_DEST, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
 inline void llk_unpack_reconfig_data_format(
     const std::uint32_t srca_new_operand, const std::uint32_t srcb_new_operand) {
     static_assert(
         dim_stride_target == p_dim_stride_target::IGNORE,
         "Quasar unpack reconfig does not support stride/tile-dimension changes");
-    llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, dim_stride_target, to_from_int8>(srca_new_operand);
-    llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, dim_stride_target, to_from_int8>(srcb_new_operand);
+    llk_unpack_reconfig_data_format_srca<EN_32BIT_DEST, dim_stride_target, to_from_int8>(srca_new_operand);
+    llk_unpack_reconfig_data_format_srcb<EN_32BIT_DEST, dim_stride_target, to_from_int8>(srcb_new_operand);
 }
 
-template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
+template <bool EN_32BIT_DEST, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
 inline void llk_unpack_reconfig_data_format(
     const std::uint32_t srca_old_operand,
     const std::uint32_t srca_new_operand,
@@ -134,8 +134,8 @@ inline void llk_unpack_reconfig_data_format(
     static_assert(
         dim_stride_target == p_dim_stride_target::IGNORE,
         "Quasar unpack reconfig does not support stride/tile-dimension changes");
-    llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, dim_stride_target, to_from_int8>(
+    llk_unpack_reconfig_data_format_srca<EN_32BIT_DEST, dim_stride_target, to_from_int8>(
         srca_old_operand, srca_new_operand);
-    llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, dim_stride_target, to_from_int8>(
+    llk_unpack_reconfig_data_format_srcb<EN_32BIT_DEST, dim_stride_target, to_from_int8>(
         srcb_old_operand, srcb_new_operand);
 }

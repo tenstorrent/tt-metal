@@ -17,13 +17,13 @@ constexpr static std::uint32_t TRISC_ID               = 0;
  * Whether reprogramming OUT_DATA_FORMAT from buffer-descriptor \p unpack_src_format (L1) to
  * \p unpack_dst_format is supported on Quasar for the given FP32 dest-accumulation mode and unpack path.
  *
- * \param is_fp32_dest_acc_en   Enables TF32 / FP32 register paths where the ISA requires it.
+ * \param en_32bit_dest   Enables TF32 / FP32 register paths where the ISA requires it.
  * \param unpack_to_dest        True: Unpack-to-Dest or Unpack-to-SrcS; false: SrcA/SrcB.
  *
  * Rules follow the Quasar Unpacker Format Conversions table (gasket outside TDMA).
  */
 __attribute__((noinline, optimize("no-jump-tables"))) bool is_quasar_unpack_reconfig_pair_supported(
-    const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const bool is_fp32_dest_acc_en, const bool unpack_to_dest)
+    const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const bool en_32bit_dest, const bool unpack_to_dest)
 {
     const DataFormat src = static_cast<DataFormat>(unpack_src_format);
     const DataFormat dst = static_cast<DataFormat>(unpack_dst_format);
@@ -38,7 +38,7 @@ __attribute__((noinline, optimize("no-jump-tables"))) bool is_quasar_unpack_reco
                 case DataFormat::Float32:
                     return unpack_to_dest;
                 case DataFormat::Tf32:
-                    return is_fp32_dest_acc_en && !unpack_to_dest;
+                    return en_32bit_dest && !unpack_to_dest;
                 case DataFormat::Float16:
                 case DataFormat::Float16_b:
                     return true;
@@ -52,9 +52,9 @@ __attribute__((noinline, optimize("no-jump-tables"))) bool is_quasar_unpack_reco
             switch (dst)
             {
                 case DataFormat::Tf32:
-                    return is_fp32_dest_acc_en && !unpack_to_dest;
+                    return en_32bit_dest && !unpack_to_dest;
                 case DataFormat::Float32:
-                    return is_fp32_dest_acc_en && unpack_to_dest;
+                    return en_32bit_dest && unpack_to_dest;
                 case DataFormat::Float16:
                 case DataFormat::Float16_b:
                     return true;
@@ -93,7 +93,7 @@ __attribute__((noinline, optimize("no-jump-tables"))) bool is_quasar_unpack_reco
             switch (dst)
             {
                 case DataFormat::Tf32:
-                    return is_fp32_dest_acc_en && !unpack_to_dest;
+                    return en_32bit_dest && !unpack_to_dest;
                 case DataFormat::Float16_b:
                     return true;
                 default:
@@ -109,7 +109,7 @@ __attribute__((noinline, optimize("no-jump-tables"))) bool is_quasar_unpack_reco
                 case DataFormat::Float16_b:
                     return true;
                 case DataFormat::Tf32:
-                    return is_fp32_dest_acc_en && !unpack_to_dest;
+                    return en_32bit_dest && !unpack_to_dest;
                 case DataFormat::MxFp4_2x_A:
                 case DataFormat::MxFp4_2x_B:
                     return !unpack_to_dest;
@@ -133,7 +133,7 @@ __attribute__((noinline, optimize("no-jump-tables"))) bool is_quasar_unpack_reco
             switch (dst)
             {
                 case DataFormat::Tf32:
-                    return is_fp32_dest_acc_en && !unpack_to_dest;
+                    return en_32bit_dest && !unpack_to_dest;
                 case DataFormat::Float16_b:
                 case DataFormat::Int8:
                     return true;
