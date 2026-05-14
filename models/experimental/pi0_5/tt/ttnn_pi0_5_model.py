@@ -72,6 +72,10 @@ class Pi0_5ModelTTNN:
         self._precompute_bs1_timestep_tensors()
         self._precompute_bs1_adarms_cond()
         self._precompute_bs1_modulations()
+        # Reapplied TIER B (commit 3d597a3b8e6) — see _build_sdpa_phantom_mask
+        # docstring for the finite-mask hybrid rationale.
+        self._sdpa_attn_mask: Optional["ttnn.Tensor"] = None
+        self._sdpa_mask_kv_len: int = 0
 
     def _precompute_bs1_timestep_tensors(self) -> None:
         num_steps = self.denoise_config.num_steps
@@ -172,6 +176,42 @@ class Pi0_5ModelTTNN:
             _ttnn.deallocate(mod3)
             self._final_mod_per_step.append((scale1, shift))
 
+    def _build_sdpa_phantom_mask(self, prefix_kv_len_logical: int) -> "ttnn.Tensor":
+        """
+        SDPA attention mask for the expert keep_padded path.
+
+        Lifted from reverted commit 3d597a3b8e6 with the critical fix from
+        the revert's "TIER B revisit" note: use a FINITE large-negative value
+        (-1e4) instead of float('-inf'). The original -inf path dropped LIBERO
+        accuracy 70%→50% due to bf16 softmax pathology (-inf can poison valid
+        rows via NaN propagation; the denominator can also drift if all values
+        in a row are -inf). A finite value like -1e4 still produces effectively
+        zero softmax weight (exp(-1e4) underflows cleanly to 0 in bf16) without
+        the numerical edge cases.
+
+        Mask shape: (1, 1, q_len_padded, kv_total). Values: 0 = attend, -1e4 = mask.
+        """
+        action_horizon = self.config.action_horizon
+        q_len_padded = ((action_horizon + 31) // 32) * 32
+        prefix_padded = ((prefix_kv_len_logical + 31) // 32) * 32
+        kv_total = prefix_padded + q_len_padded
+        mask = torch.zeros(1, 1, q_len_padded, kv_total, dtype=torch.bfloat16)
+        # Use -1e4 — finite, large enough that exp(-1e4) = 0 in bf16, but small
+        # enough to avoid -inf NaN-propagation and denominator drift.
+        MASK_VAL = -1e4
+        if prefix_padded > prefix_kv_len_logical:
+            mask[:, :, :, prefix_kv_len_logical:prefix_padded] = MASK_VAL
+        if q_len_padded > action_horizon:
+            suffix_phantom_start = prefix_padded + action_horizon
+            mask[:, :, :, suffix_phantom_start:kv_total] = MASK_VAL
+        return ttnn.from_torch(
+            mask,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     def _init_components(self):
         suffix_config = SuffixConfig(
             action_dim=self.config.action_dim,
@@ -228,6 +268,29 @@ class Pi0_5ModelTTNN:
             prefix_embs = ttnn.to_layout(prefix_embs, ttnn.TILE_LAYOUT)
         _, prefix_kv_cache = self.backbone.forward_vlm(prefix_embs, use_cache=True)
 
+        # OPTIMIZATION (keep_padded, reapplied from reverted commit 3d597a3b8e6
+        # with finite-mask hybrid fix): treat the expert suffix as
+        # logical=physical=tile_align(action_horizon) throughout so the per-layer
+        # KV-cache concat path skips the tile/untile ping-pong. Phantom prefix
+        # and suffix positions are masked out of softmax via a *finite*
+        # large-negative SDPA mask (-1e4 in bf16, exp underflows to 0) — see
+        # _build_sdpa_phantom_mask for why -inf was wrong.
+        keep_padded_expert = batch_size == 1
+        _prefix_kv_cache_original = prefix_kv_cache  # keep alive for tensor lifetime
+        if keep_padded_expert and prefix_kv_cache is not None:
+            prefix_kv_cache = [
+                (
+                    ttnn.fill_implicit_tile_padding(k, 0.0),
+                    ttnn.fill_implicit_tile_padding(v, 0.0),
+                )
+                for k, v in prefix_kv_cache
+            ]
+            prefix_logical_lifted = prefix_kv_cache[0][0].shape[2]  # post-fill: logical=physical
+            if self._sdpa_attn_mask is None or self._sdpa_mask_kv_len != prefix_logical_lifted:
+                # prefix_embs.shape[1] is the original (pre-lift) logical length.
+                self._sdpa_attn_mask = self._build_sdpa_phantom_mask(prefix_embs.shape[1])
+                self._sdpa_mask_kv_len = prefix_logical_lifted
+
         num_steps = self.denoise_config.num_steps
         timesteps = [1.0 - i / num_steps for i in range(num_steps + 1)]
 
@@ -261,6 +324,18 @@ class Pi0_5ModelTTNN:
             x_t_ttnn = self.x_t_ttnn
         fast_path = batch_size == 1
 
+        # Lift x_t logical action_horizon → tile-aligned (50 → 64) with zero rows.
+        # Phantom rows are masked out of SDPA so they don't pollute valid Q rows.
+        if keep_padded_expert:
+            ah = self.config.action_horizon
+            ah_padded = ((ah + 31) // 32) * 32
+            if ah_padded > ah:
+                x_t_ttnn = ttnn.pad(
+                    x_t_ttnn,
+                    padding=((0, 0), (0, ah_padded - ah), (0, 0)),
+                    value=0.0,
+                )
+
         for i in range(num_steps):
             t = timesteps[i]
             t_next = timesteps[i + 1]
@@ -287,6 +362,8 @@ class Pi0_5ModelTTNN:
                 past_key_values=prefix_kv_cache,
                 precomputed_block_mods=precomputed_block_mods,
                 precomputed_final_mod=precomputed_final_mod,
+                attention_mask=self._sdpa_attn_mask if keep_padded_expert else None,
+                keep_padded=keep_padded_expert,
             )
             ttnn.deallocate(suffix_embs)
 
@@ -299,6 +376,13 @@ class Pi0_5ModelTTNN:
             x_t_new = ttnn.add(x_t_ttnn, velocity_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(velocity_scaled)
             x_t_ttnn = x_t_new
+
+        # Slice off the phantom rows we padded for the keep_padded fast path.
+        if keep_padded_expert:
+            ah = self.config.action_horizon
+            ah_padded = ((ah + 31) // 32) * 32
+            if ah_padded > ah:
+                x_t_ttnn = ttnn.slice(x_t_ttnn, [0, 0, 0], [1, ah, self.config.action_dim])
 
         return x_t_ttnn
 
