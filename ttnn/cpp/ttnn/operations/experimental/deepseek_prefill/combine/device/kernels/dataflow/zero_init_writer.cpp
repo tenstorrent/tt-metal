@@ -257,6 +257,20 @@ void kernel_main() {
         cb_pop_front(cb_metadata_batch_id, batch_count);
         cb_pop_front(cb_untilize_id, read_batch_size);
     }
-    noc_semaphore_set(counter_ready_sem_ptr, 0);
+
+    // All batches processed — send job-done sentinel to sender so it knows this idle
+    // core has finished completely.  Uses one ring slot (credit consumed, data_ready++).
+    if (local_credits == 0) {
+        noc_semaphore_wait_min(credits_sem_ptr, 1);
+        uint32_t n = *credits_sem_ptr;
+        noc_semaphore_inc(self_credits_noc_addr, (uint32_t)(-(int32_t)n));
+        noc_async_atomic_barrier();
+        local_credits += n;
+    }
+    uint64_t done_meta_noc = our_metadata_slice_noc_addr + write_slot * aligned_dispatched_metadata_page_size;
+    noc_inline_dw_write(done_meta_noc, ROUTE_INFO_SENTINEL);
+    noc_async_write_barrier();
+    noc_semaphore_inc(sender_data_ready_noc_addr, 1);
+    noc_async_atomic_barrier();
 #endif
 }
