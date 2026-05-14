@@ -1095,17 +1095,31 @@ class TtQwen36GatedAttention(LightweightModule):
         else:
             keys_cache, values_cache = self.layer_past[0], self.layer_past[1]
 
-        # current_pos is either an int or a TTNN tensor [max_batch_size] int32.
-        # ttnn.update_cache accepts an integer update_index.
+        # current_pos is either a Python int OR a device ttnn.Tensor
+        # [max_batch_size] int32. ``cur_pos_int`` is materialized lazily —
+        # only when we hit a code path that actually needs the Python value
+        # (non-paged KV cache slicing + non-paged decode mask construction).
+        # The paged path uses the device tensor directly as cur_pos_tensor
+        # for paged SDPA + update_idxs_tensor for paged_update_cache, so it
+        # must NEVER trigger a ttnn.to_torch — that's a device-to-host read
+        # forbidden inside a captured trace (T14b.9 — paged decode trace
+        # parity).
         if isinstance(current_pos, int):
             cur_pos_int = current_pos
         else:
-            # Gather from all devices (replicated) then take first element
-            cur_pos_cpu = ttnn.to_torch(
-                current_pos,
-                mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0),
-            )
-            cur_pos_int = int(cur_pos_cpu[0].item())
+            cur_pos_int = None  # lazy; materialize via _materialize_cur_pos_int() below
+
+        def _materialize_cur_pos_int():
+            """Read current_pos to a Python int. Forbidden inside trace capture
+            (device->host read). Only the non-paged decode branch calls this."""
+            nonlocal cur_pos_int
+            if cur_pos_int is None:
+                cur_pos_cpu = ttnn.to_torch(
+                    current_pos,
+                    mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0),
+                )
+                cur_pos_int = int(cur_pos_cpu[0].item())
+            return cur_pos_int
 
         # Update KV cache at position cur_pos_int for batch 0.  Each col stores
         # its own 1 KV head (cache per-chip shape varies by paged/non-paged).
@@ -1166,8 +1180,11 @@ class TtQwen36GatedAttention(LightweightModule):
             k_rot_sharded.deallocate(True)
             v_t_sharded.deallocate(True)
         else:
-            ttnn.update_cache(keys_cache, k_rot, cur_pos_int, batch_offset=0)
-            ttnn.update_cache(values_cache, v_t, cur_pos_int, batch_offset=0)
+            # Non-paged path requires the Python-int position for the per-row
+            # update_index — materialize it now (host read; forbidden in trace).
+            _cur_pos_int = _materialize_cur_pos_int()
+            ttnn.update_cache(keys_cache, k_rot, _cur_pos_int, batch_offset=0)
+            ttnn.update_cache(values_cache, v_t, _cur_pos_int, batch_offset=0)
         k_rot.deallocate(True)
         v_t.deallocate(True)
 
@@ -1224,11 +1241,14 @@ class TtQwen36GatedAttention(LightweightModule):
             attn_out = ttnn.permute(attn_out_1bnd, (1, 2, 0, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
             attn_out_1bnd.deallocate(True)
         else:
-            # Slice KV cache up to cur_pos_int (per-col, n_kv_pc=1 dim).
+            # Non-paged SDPA path uses Python-int cur_pos for KV cache slice
+            # extents (inherently shape-dependent, not trace-safe).
+            _cur_pos_int = _materialize_cur_pos_int()
+            # Slice KV cache up to _cur_pos_int (per-col, n_kv_pc=1 dim).
             # T_kv is the number of VALID tokens; T_kv_pad is tile-aligned (≥ T_kv).
             # Important: the tile-padded region beyond T_kv contains zeros — we must
             # mask those positions with -inf in SDPA so they don't corrupt attention.
-            T_kv = cur_pos_int + 1
+            T_kv = _cur_pos_int + 1
             T_kv_pad = ((T_kv + TILE - 1) // TILE) * TILE
             k_cached = ttnn.slice(
                 keys_cache, [0, 0, 0, 0], [B, n_kv_pc, T_kv_pad, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -1254,7 +1274,7 @@ class TtQwen36GatedAttention(LightweightModule):
             # B == self.max_batch_size and T_logical == 1 by construction (the
             # buffer was sized accordingly in _build_decode_buffers).
             if T_kv_pad > T_kv:
-                self._update_decode_mask_buf(cur_pos_int)
+                self._update_decode_mask_buf(_cur_pos_int)
                 decode_mask_tt = ttnn.slice(
                     self._decode_mask_buf,
                     [0, 0, 0, 0],

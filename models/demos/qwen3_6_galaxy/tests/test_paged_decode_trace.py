@@ -127,15 +127,14 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
 
 @pytest.mark.hardware
 @pytest.mark.skip(
-    reason="T14b.9 in progress — capture path triggers ~16 'Writes are not "
-    "supported during trace capture' warnings per decoder layer and the device "
-    "hangs after the failed capture. Infrastructure (prepare_decode_inputs_host, "
-    "prepare_inputs_decode, ttnn_decode_forward, _capture_decode_trace replay) "
-    "is in place; the remaining work is to identify the host-write site inside "
-    "ttnn_decode_forward — most likely in llama_attention.forward_decode's paged "
-    "branch (paged_update_cache cur_pos_tensor handling) or DeltaNet's "
-    "recurrent_gated_delta_rule_ttnn. Unskip after the remaining host write "
-    "is eliminated and _TRACE_SUPPORTED=True."
+    reason="T14b.9 step 3 partially landed — _materialize_cur_pos_int "
+    "eliminated the device-to-host READ inside trace capture (1 'Reads "
+    "are not supported' assertion gone). Capture body still emits ~16 "
+    "WRITES per decoder layer (64 total for 4-layer model). Source is "
+    "still unidentified; bisecting via instrumentation has been hampered "
+    "by the Galaxy's ethernet core (x=27,y=25) destabilizing after each "
+    "failed capture (needs tt-smi -r between runs). Next session: bisect "
+    "with prints once a stable device window is available."
 )
 def test_paged_decode_trace_parity_4layer(mesh_8x4):
     """T14b.9: paged decode trace replay produces same logits as eager paged decode.
