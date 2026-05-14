@@ -1087,9 +1087,7 @@ class Attention(LightweightModule):
                     page_table_tensor=page_table,
                     chunk_start_idx=chunk_start_idx,
                     compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
-                    program_config=self.args.get_attn_sdpa_program_config(
-                        Mode.PREFILL, seq_len, chunk_start_idx, None
-                    ),
+                    program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, chunk_start_idx, None),
                 )
         else:
             # For batched prefill, the actual per-user seq_len is seq_len // batch_size
