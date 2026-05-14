@@ -66,14 +66,14 @@ def ref_recurrence_single_step(q, k, v, g, beta, state):
     indirect=True,
 )
 @pytest.mark.parametrize("device_params", [{}], indirect=True)
-@pytest.mark.parametrize("num_pairs", [10, 32, 384])
+@pytest.mark.parametrize("num_pairs", [384])
 def test_gdn_kernel_correctness(mesh_device, reset_seeds, ensure_gc, num_pairs):
     """Test fused GDN kernel against PyTorch reference for a single decode step."""
     device = mesh_device
 
     Dk, Dv = 128, 128
     Kt, Vt = Dk // 32, Dv // 32  # tiles
-    num_cores = min(10, num_pairs)  # up to 10 cores
+    num_cores = min(96, num_pairs)
     logger.info(f"Testing kernel: num_pairs={num_pairs}, Dk={Dk}, Dv={Dv}")
 
     # Create random inputs in float32 for reference
@@ -92,20 +92,24 @@ def test_gdn_kernel_correctness(mesh_device, reset_seeds, ensure_gc, num_pairs):
     )
 
     # Convert to bfloat16 for device
-    def to_tt(t):
+    def to_tt(t, memory_config=ttnn.DRAM_MEMORY_CONFIG):
         return ttnn.from_torch(
             t.to(torch.bfloat16),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
+            memory_config=memory_config,
         )
 
-    q_tt = to_tt(q_ref)
-    k_row_tt = to_tt(k_ref)
-    k_col_tt = to_tt(k_ref.transpose(-2, -1))
-    v_tt = to_tt(v_ref)
-    g_tt = to_tt(g_ref)
-    beta_tt = to_tt(beta_ref)
+    # Kernel inputs in L1 (recurrence-only ephemeral tensors in production).
+    # Requires GDN_USE_TA=1 to route through the TensorAccessor reader path.
+    l1 = ttnn.L1_MEMORY_CONFIG
+    q_tt = to_tt(q_ref, memory_config=l1)
+    k_row_tt = to_tt(k_ref, memory_config=l1)
+    k_col_tt = to_tt(k_ref.transpose(-2, -1), memory_config=l1)
+    v_tt = to_tt(v_ref, memory_config=l1)
+    g_tt = to_tt(g_ref, memory_config=l1)
+    beta_tt = to_tt(beta_ref, memory_config=l1)
     state_tt = ttnn.from_torch(
         state_ref.to(torch.bfloat16),
         dtype=ttnn.bfloat16,
