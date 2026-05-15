@@ -801,3 +801,69 @@ Net: the path to ≥17 tok/s/user at 64L is to fuse / persistent-buffer
 the CCL pair (lever L3) so that 51.8 % of decode dev time per chip
 shrinks, then close the lm_head matmul. Trace + lever L3 + lm_head
 fusion is plausibly the 17 tok/s/user landing.
+
+## V2-13 investigation — `line_all_reduce` swap audit (2026-05-15)
+
+**Status: NOT LANDED.** V2-13 investigated swapping v2's two remaining
+`ttnn.all_reduce` call sites to `tt_ccl.line_all_reduce` (the
+persistent-buffer kernel-fused single op used by both
+`llama3_70b_galaxy` and `olmo_galaxy`). All attempts reverted.
+
+### Existing parity (already on `line_all_reduce`)
+v2 already uses `tt_ccl.line_all_reduce` at 4 of 6 reduction call sites:
+* `llama_mlp.py` — w2 reduction
+* `lm_head.py` — final reduction
+* `llama_attention.py:1054` — full-attn WO ring path
+* `llama_attention.py:1120/1388` — prefill paths
+
+### The 2 remaining `ttnn.all_reduce` call sites
+1. `qwen36_delta_attention.py:728` — DeltaNet `_output_proj_and_reduce`
+   (48 layers × 64L decode), `cluster_axis=0`.
+2. `llama_attention.py:1888` — full-attention `_forward_decode_qwen36`
+   WO (16 layers × 64L decode), `cluster_axis=1`.
+
+### Why the swap is not a 5-line edit
+`ttnn.all_reduce` internally forwards to `ttnn.experimental.all_reduce_async`
+(verified in `ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp:45`).
+V2-13 confirmed: literally swapping `ttnn.all_reduce` →
+`ttnn.experimental.all_reduce_async` gave a **0.5 ms REGRESSION**
+(62.74 → 63.66 ms TRACED) due to extra Python-API overhead with no
+underlying-op change.
+
+The speedup comes from the **persistent-buffer 3rd overload** of
+`all_reduce_async`, which requires:
+* **Width-sharded** input on the reduced dim
+* A **width-sharded persistent buffer** with `output_shard_volume ×
+  ring_size ≤ buffer_shard_volume`
+* Matmul `program_config` that produces width-sharded output directly
+  (otherwise need a `to_memory_config` conversion that adds an op)
+
+### Why v2's existing persistent buffers don't fit qwen3.6 dims
+The existing axis=0 buffer is shard `(32, 1024) × 32 cores` →
+volume 32768 per shard. For qwen3.6 output dim 5120 with ring=8:
+output shard volume `(32, 512) × 8 = 16384 × 8 = 131072 > 32768`.
+**Doesn't fit by 4×.**
+
+### Concrete V2-14 plan (multi-iteration infra work)
+
+| # | step | risk | est. |
+|---|---|---|---|
+| 1 | Add new persistent buffers in `llama_ccl.py::get_persistent_buffers`. For cluster_axis=0: shard `(32, 4096)` × 10 cores (axis=0 ring=8: 5120/10=512 per core × ring=8 = 4096). For cluster_axis=1: shard `(32, 2048)` × 10 cores (axis=1 ring=4: 5120/10=512 × ring=4 = 2048). | low | small |
+| 2 | Change `_output_proj_and_reduce` linear's `memory_config` from DRAM-interleaved to a width-sharded L1 memcfg matching the new buffer's input shard spec. | medium | medium |
+| 3 | Add matmul `program_config` (`matmul_1d_ring_config`) so the linear writes directly into the width-sharded output — avoids an inserted `to_memory_config` op. | high | medium |
+| 4 | Call `self.tt_ccl.line_all_reduce(partial, cluster_axis=0, num_links=1, memory_config=DECODE_RESIDUAL_MEMCFG, use_optimal_ccl_for_llama=True)`. | low | small |
+| 5 | Repeat steps 2-4 for `_forward_decode_qwen36` WO at `cluster_axis=1`. | medium | medium |
+| 6 | L1 footprint validation: 2 × 32 × 32 × 4096 = ~16 MB additional per chip. Must fit alongside KV cache + DeltaNet state buffers (~18 MB L1 from V2-12 lever 1). | low | small |
+
+### Expected payoff
+If steps 1-5 land cleanly: 51.8% CCL share → ~30% → save 10-15 ms/step
+on the 78 ms baseline → **≥17 tok/s/user** clears the old olmo bar.
+
+### Risk
+Each step has a coherency-gating boundary identical to V2-11 levers
+D/F that previously failed at bf8 reduction-order shifts. The width-
+sharded conversion + new `matmul_1d_ring_config` interaction with the
+DeltaNet 48-layer compounding chain is the highest-risk surface.
+Defensive engineering needed: gate each step with both the
+`test_decode_perf_intrace.py` coherency check AND
+`test_decode_64L_real_prompt_pcc.py` real-prompt validation.
