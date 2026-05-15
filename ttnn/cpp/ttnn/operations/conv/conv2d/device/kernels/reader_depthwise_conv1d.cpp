@@ -24,6 +24,9 @@ void kernel_main() {
     constexpr uint32_t cb_id_act = get_compile_time_arg_val(21);
     constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(22);
     constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(23);
+    // Depthwise reuses the common reader arg slot that non-depthwise height-sharded conv uses for
+    // activation reuse. Activation reuse is unsupported for the 1D depthwise path.
+    constexpr bool coalesce_kw_reads = get_compile_time_arg_val(28) == 1;
 
     // LOOP TO FILL READER OFFSETS
     /* We can add another loop to read chunks of a stick as well.
@@ -55,15 +58,13 @@ void kernel_main() {
 
     uint32_t reader_idx = 0;
 
-    // TODO: need to make the read coalescing optimization cleaner
-    // pass coalesce_window_inner_reads as a compile time arg and num_coalesced_reads so we can constexpr the if
-    // currently works for the case of num_coalesced_reads == weight_size_w since these reads are contiguous on both
-    // src/dst side we check if window_inner == weight_size_w to make sure coalescing is legal along full window_inner
-    // so the loop can be removed
-    constexpr uint32_t num_coalesced_reads = weight_size_w;
+    constexpr uint32_t num_coalesced_reads = coalesce_kw_reads ? weight_size_w : 1;
     constexpr uint32_t coalesced_read_bytes = num_coalesced_reads * conv_act_c_read_bytes;
-    // the conditional selecting between coalescing and no-colescing must be constexpr to that compiler can optimized
-    // the other path away this has shown to be a big perf win
+    static_assert(!coalesce_kw_reads || weight_size_h == 1);
+    static_assert(!coalesce_kw_reads || window_outer == 1);
+    static_assert(!coalesce_kw_reads || window_inner == weight_size_w);
+    static_assert(!coalesce_kw_reads || coalesced_read_bytes <= NOC_MAX_BURST_SIZE);
+
     reader_offset_idx = 0;
     uint32_t act_l1_offset = 0;
     uint32_t act_l1_read_addr = sharded_act_cb.get_read_ptr();
@@ -92,7 +93,7 @@ void kernel_main() {
 
                 for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
                     act_l1_offset = reader_offset + (ind * conv_act_c_read_bytes);
-                    experimental::read_with_state(noc, l1_write_addr_act, act_l1_offset);
+                    experimental::read_with_state<coalesced_read_bytes>(noc, l1_write_addr_act, act_l1_offset);
                     l1_write_addr_act += (coalesced_read_bytes + act_block_w_extra_align_bytes);
                 }
             }
