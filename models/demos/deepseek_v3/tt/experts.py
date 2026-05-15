@@ -27,6 +27,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI2,
+    COMPUTE_KERNEL_CONFIG_HIFI2_FULL_SYNC,
     COMPUTE_KERNEL_CONFIG_LOFI,
     even_int_div,
     get_dequantized_tensor,
@@ -388,6 +389,9 @@ class Experts(AbstractModule):
                 # multicast w2 matmul path that can deadlock in legacy QUAD prefill.
                 config["split_legacy_quad_w2_prefill"] = True
                 config["w2_experts_split_n"] = cls._LEGACY_QUAD_W2_PREFILL_N_CHUNK
+                # Use full DST sync for this spill/reload-heavy fp32 matmul. The default half-sync path can
+                # deadlock while reloading partials under full QUAD 8 users/row prefill pressure.
+                config["w2_experts_split_compute_kernel_config"] = COMPUTE_KERNEL_CONFIG_HIFI2_FULL_SYNC
                 config["w2_experts_split_program_config"] = cls._legacy_quad_w2_prefill_program_config()
                 config["w2_experts_split_concat"] = ConcatConfig(dim=-1, memory_config=output_memory_config)
             config["w3_experts"] = LinearConfig(
@@ -496,6 +500,7 @@ class Experts(AbstractModule):
 
         w2_cfg = dict(cfg["w2_experts"].items())
         weight = w2_cfg.pop("input_tensor_b")
+        w2_cfg["compute_kernel_config"] = cfg["w2_experts_split_compute_kernel_config"]
         split_n = cfg["w2_experts_split_n"]
         output_width = weight.shape[-2]
         if output_width % split_n != 0:
