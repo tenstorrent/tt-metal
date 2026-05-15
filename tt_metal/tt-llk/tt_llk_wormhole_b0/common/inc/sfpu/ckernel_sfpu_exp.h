@@ -340,7 +340,6 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor)
     //   + is_fp32_dest_acc_en ? 0 : 1       (SFP_STOCH_RND fp32→bf16)
     //   + CLAMP_NEGATIVE ? 2 : 0            (SFPSWAP + SFPNOP)
     constexpr unsigned BODY_LEN = 17 + (SCALE_EN ? 2 : 0) + (is_fp32_dest_acc_en ? 0 : 1) + (CLAMP_NEGATIVE ? 2 : 0);
-    // constexpr int BODY_LEN = 17;
 
     // Record the loop body into replay buffer slot 0 the first time
     // through. Subsequent iterations replay the recorded sequence, which
@@ -427,11 +426,6 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor)
     // sfpi::dst_reg[0] = y; sfpi::dst_reg++;
     TTI_SFPSTORE(p_sfpu::LREG0, input_type, ADDR_MOD_3, 0);
     TTI_INCRWC(0, 2, 0, 0);
-
-    TTI_SFPNOP;
-    TTI_SFPNOP;
-    TTI_SFPNOP;
-    TTI_SFPNOP;
 
 #pragma GCC unroll 8
     for (std::uint32_t i = 1; i < ITERATIONS; i++)
