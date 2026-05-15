@@ -20,7 +20,6 @@ inline void cast_fp32_to_fp16a() {
         sfpi::dst_reg[0].mode<sfpi::SFPSTORE_MOD0_FMT_FP16A>() =
             sfpi::convert<sfpi::vFloat16a>(x, sfpi::RoundMode::NearestEven);
         sfpi::dst_reg++;
-        dst_reg++;
     }
 }
 
