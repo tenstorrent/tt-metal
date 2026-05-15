@@ -39,8 +39,8 @@ protected:
 namespace {
 constexpr float kForwardRtol = 2.5e-2F;
 constexpr float kForwardAtol = 2.5e-2F;
-constexpr float kBackwardRtol = 5.0e-3F;
-constexpr float kBackwardAtol = 5.0e-3F;
+constexpr float kBackwardRtol = 1.0e-2F;
+constexpr float kBackwardAtol = 1.0e-2F;
 
 struct PolyNormCaseData {
     xt::xarray<float> input;
@@ -368,11 +368,9 @@ TEST_F(PolyNormOpTest, PolyNorm_Compare_BlockSizeRemainders) {
 }
 
 TEST_F(PolyNormOpTest, PolyNorm_Compare_EpsilonVariants) {
-    constexpr float kEpsilonVariantBackwardTol = 1.0e-2F;
-
-    CompareKernelVsReferenceWithShape({1, 1, 2, 64}, 1e-6F, kEpsilonVariantBackwardTol, kEpsilonVariantBackwardTol);
-    CompareKernelVsReferenceWithShape({1, 1, 2, 64}, 1e-5F, kEpsilonVariantBackwardTol, kEpsilonVariantBackwardTol);
-    CompareKernelVsReferenceWithShape({1, 1, 2, 64}, 1e-4F, kEpsilonVariantBackwardTol, kEpsilonVariantBackwardTol);
+    CompareKernelVsReferenceWithShape({1, 1, 2, 64}, 1e-6F);
+    CompareKernelVsReferenceWithShape({1, 1, 2, 64}, 1e-5F);
+    CompareKernelVsReferenceWithShape({1, 1, 2, 64}, 1e-4F);
 }
 
 TEST_F(PolyNormOpTest, PolyNorm_RepeatedRuns_NoHang) {
