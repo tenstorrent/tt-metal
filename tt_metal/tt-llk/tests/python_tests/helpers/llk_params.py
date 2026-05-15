@@ -370,6 +370,10 @@ class Tilize(Enum):
     def cpp_enum_value(self):
         return str(self.value).lower()
 
+    @property
+    def pack_mode_value(self) -> str:
+        return "PackMode::Tilize" if self == Tilize.Yes else "PackMode::Default"
+
 
 class FastMode(Enum):
     Yes = True
