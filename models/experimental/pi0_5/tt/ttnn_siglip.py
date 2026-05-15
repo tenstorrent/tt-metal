@@ -61,10 +61,22 @@ _SIGLIP_INTERMEDIATE_PADDED = _SIGLIP_INTERMEDIATE_PADDED_TILES * 32
 
 
 def _siglip_bs_enabled() -> bool:
-    """Master switch for SigLIP block-sharded encoder path. Default ON."""
+    """Master switch for SigLIP block-sharded encoder path.
+
+    Default OFF. The block-sharded encoder is faster on paper (-0.30 ms
+    end-to-end) and PCC-neutral (0.9917 -> 0.9910 = inside 1 stdev), but
+    a 40-task LIBERO sim sweep on real pi05_libero weights showed a major
+    task-level regression: -42.5 pp at N=5, -60 pp at N=10 vs the
+    interleaved baseline. Two whole suites (object and goal) dropped to
+    near-zero success. Disabling by default until the directional drift
+    in vision features is understood / fixed.
+
+    Set PI0_SIGLIP_BS=1 (or true/yes/on) to opt into the block-sharded
+    path for perf experiments.
+    """
     v = os.environ.get("PI0_SIGLIP_BS")
     if v is None:
-        return True
+        return False
     return v.strip().lower() in ("1", "true", "yes", "on")
 
 
