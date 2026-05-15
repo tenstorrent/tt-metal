@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// AutoBlock::On validation:
-//   eltwise_chain<AutoBlock::On>(N, CopyTile<…, WaitUpfrontPopAtEnd, BlockIter>{},
+// BlockSize > 1 validation:
+//   eltwise_chain<DEST_AUTO_LIMIT>(N, CopyTile<…, WaitUpfrontPopAtEnd, BlockIter>{},
 //                                Exp{}, PackTile<…, UpfrontReservePushAtEnd, BlockIter>{})
 //
 // chain_lane_width = 1 (all elements at Dst::D0). BlockSize = DEST_AUTO_LIMIT / 1.
@@ -27,7 +27,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_in, cb_in, cb_out);
 
-    eltwise_chain<AutoBlock::On>(
+    eltwise_chain<DEST_AUTO_LIMIT>(
         num_tiles,
         CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitUpfrontPopAtEnd, CbIndexMode::BlockIter>{},
         Exp<>{},

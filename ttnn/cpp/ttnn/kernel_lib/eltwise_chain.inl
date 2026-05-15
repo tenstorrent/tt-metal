@@ -812,9 +812,10 @@ template <class... Es>
 struct chain_loads_share_cb<EltwiseChain<Es...>>
     : std::bool_constant<detail::copy_tiles_share_cb_v<Es...>> {};
 
-// chain_lane_width — N-element fold (item 2). Max of per-element `lane_width`. Drives
-// auto-block: chain BlockSize = DEST_AUTO_LIMIT / chain_lane_width when AutoBlock::On.
-// Each element writes to DEST[dst_slot + j * chain_lane_width] for lane j in [0, BlockSize).
+// chain_lane_width — N-element fold (item 2). Max of per-element `lane_width`. Bounds
+// the legal BlockSize at the chain call site via the static_assert
+// `BlockSize * chain_lane_width <= DEST_AUTO_LIMIT`. Each element writes to
+// DEST[dst_slot + j * chain_lane_width] for lane j in [0, BlockSize).
 //
 // SFINAE fallback: elements that don't expose a `lane_width` member (caller-defined
 // chain elements that inherit directly from `CopyTileTag` / `PackTileTag` / `DestOnlyTag`
@@ -858,7 +859,7 @@ inline constexpr uint32_t chain_lane_width_v = chain_lane_width<Chain>::value;
 // policy that stages a multi-tile DEST window (Upfront / Cumulative / NoWaitNoPop).
 // Streaming policies (WaitAndPop / WaitNoPop / NoWaitPop) consume ONE tile per iter
 // and are incompatible with chain BlockSize > 1 (chain consumes BlockSize tiles per
-// outer iter). The chain `static_assert`s on this predicate when AutoBlock::On.
+// outer iter). The chain `static_assert`s on this predicate when `BlockSize > 1`.
 namespace detail {
 constexpr bool policy_supports_block(CopyTilePolicy p) {
     return p == CopyTilePolicy::WaitUpfrontPopAtEnd ||
@@ -1200,7 +1201,7 @@ ALWI void hoisted_init_for_each(std::index_sequence<Is...>, Es&... elts) {
 //     immediately before that stage's chain call).
 // =============================================================================
 
-template <AutoBlock Block, class... Es>
+template <uint32_t BlockSize, class... Es>
 ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
     using Chain = EltwiseChain<Es...>;
 
@@ -1214,23 +1215,23 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
 
     constexpr bool emit_init_per_tile = !chain_is_hoist_safe_v<Chain>;
 
-    // ---- Auto-block (item 2 of eltwise_helper_proposal.md) ----
+    // ---- Block size (item 2 of eltwise_helper_proposal.md) ----
     //
-    // AutoBlock::On  → BlockSize = DEST_AUTO_LIMIT / chain_lane_width.
-    //                  Each outer iter processes BlockSize tiles in BlockSize DEST lanes
-    //                  (lane j at slot dst_slot + j * chain_lane_width). Requires every
-    //                  CB-reader policy to stage a multi-tile window — see
-    //                  chain_supports_block_v.
-    // AutoBlock::Off → BlockSize = 1 (today's per-tile shape).
-    static_assert(Block == AutoBlock::Off || chain_supports_block_v<Chain>,
-                  "eltwise_chain<AutoBlock::On>: streaming CB-reader policy (WaitAndPop / "
+    // Caller picks BlockSize at compile time. Each outer iter processes BlockSize
+    // tiles in BlockSize DEST lanes (lane j at slot dst_slot + j * chain_lane_width).
+    // BlockSize == 1 reproduces the per-tile shape. BlockSize > 1 requires every
+    // CB-reader policy to stage a multi-tile window (see chain_supports_block_v).
+    static_assert(BlockSize >= 1, "eltwise_chain: BlockSize must be >= 1");
+    constexpr uint32_t chain_lane_w = chain_lane_width_v<Chain>;
+    static_assert(BlockSize * chain_lane_w <= DEST_AUTO_LIMIT,
+                  "eltwise_chain: BlockSize * chain_lane_width exceeds DEST_AUTO_LIMIT. "
+                  "Reduce BlockSize or shrink the chain's DEST footprint.");
+    static_assert(BlockSize == 1 || chain_supports_block_v<Chain>,
+                  "eltwise_chain<BlockSize>1>: streaming CB-reader policy (WaitAndPop / "
                   "WaitNoPop / NoWaitPop) consumes one tile per iter — incompatible with "
                   "BlockSize > 1. Switch the reader to WaitUpfrontPopAtEnd, "
-                  "CumulativeWaitPopAtEnd, or NoWaitNoPop, or call eltwise_chain<AutoBlock::Off>.");
-    constexpr uint32_t chain_lane_w = chain_lane_width_v<Chain>;
-    constexpr uint32_t auto_block_size = DEST_AUTO_LIMIT / chain_lane_w;
-    constexpr uint32_t block_size = (Block == AutoBlock::On) ? auto_block_size : 1u;
-    static_assert(block_size >= 1, "eltwise_chain: chain_lane_width exceeds DEST_AUTO_LIMIT");
+                  "CumulativeWaitPopAtEnd, or NoWaitNoPop, or call eltwise_chain<1>.");
+    constexpr uint32_t block_size = BlockSize;
 
     using IdxSeq = std::make_index_sequence<sizeof...(Es)>;
 
@@ -1376,7 +1377,7 @@ constexpr uint32_t first_pack_cb() { return first_pack_cb_impl<Es...>(); }
 
 }  // namespace detail
 
-template <AutoBlock Block, class... Es>
+template <uint32_t BlockSize, class... Es>
 ALWI void eltwise_chain_with_init(uint32_t n_tiles, Es... elts) {
     static_assert(detail::has_any_pack_tile_v<Es...>,
                   "eltwise_chain_with_init: chain has no PackTile element. Multi-stage kernels "
@@ -1387,7 +1388,7 @@ ALWI void eltwise_chain_with_init(uint32_t n_tiles, Es... elts) {
     constexpr uint32_t cb_b   = detail::has_any_binary_v<Es...> ? detail::first_cb_b<Es...>() : cb_a;
 
     compute_kernel_hw_startup(cb_a, cb_b, cb_out);
-    eltwise_chain<Block>(n_tiles, elts...);
+    eltwise_chain<BlockSize>(n_tiles, elts...);
 }
 
 }  // namespace compute_kernel_lib

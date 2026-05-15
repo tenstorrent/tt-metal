@@ -12,7 +12,7 @@ void kernel_main() {
     constexpr auto cb_in = tt::CBIndex::c_0;
     constexpr auto cb_out = tt::CBIndex::c_16;
 
-    compute_kernel_lib::eltwise_chain_with_init<compute_kernel_lib::AutoBlock::On>(
+    compute_kernel_lib::eltwise_chain_with_init<compute_kernel_lib::DEST_AUTO_LIMIT>(
         per_core_tile_cnt,
         compute_kernel_lib::CopyTile<
             cb_in,

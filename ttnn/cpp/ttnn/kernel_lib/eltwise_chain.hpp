@@ -319,12 +319,15 @@ constexpr uint32_t to_u32(Dst s) noexcept { return static_cast<uint32_t>(s); }
 enum class Approx : bool { Exact = false, Fast = true };
 enum class Legacy : bool { Off = false, On = true };
 
-/// Auto-block toggle (item 2 of eltwise_helper_proposal.md). Chain-wide template
-/// parameter on `eltwise_chain<AutoBlock, ...>`. When On, chain computes
-/// `BlockSize = DEST_AUTO_LIMIT / chain_lane_width` and runs that many lanes per
-/// outer iter (each lane offsets DEST slot by `j * chain_lane_width`). When Off,
-/// `BlockSize = 1` — every outer iter processes one tile (today's per-tile shape).
-enum class AutoBlock : bool { Off = false, On = true };
+/// Auto-block size (item 2 of eltwise_helper_proposal.md). Chain-wide template
+/// parameter on `eltwise_chain<BlockSize, ...>`. Caller picks the per-outer-iter
+/// block size at compile time. The chain runs `BlockSize` DEST lanes per outer iter
+/// (each lane offsets DEST slot by `j * chain_lane_width`). Default `BlockSize = 1`
+/// reproduces the per-tile shape. Static asserts validate:
+///   - `BlockSize * chain_lane_width <= DEST_AUTO_LIMIT`  (slot reach)
+///   - `BlockSize == 1 || chain_supports_block_v<Chain>`  (policy compat)
+/// Callers needing the "auto" max BlockSize can pass `DEST_AUTO_LIMIT / chain_lane_width`
+/// directly — typically `DEST_AUTO_LIMIT` when every element has `lane_width == 1`.
 
 // =============================================================================
 // 4. Policy enums — CB lifecycle, indexing, reconfig, broadcast
@@ -478,8 +481,8 @@ struct UnaryOp : DestOnlyTag {
 
     /// Pipeline dispatch — forwards to `Derived::exec_impl(slot_offset)`. Override
     /// in derived to consume runtime payload (per-instance fields). `slot_offset`
-    /// is added by the chain to shift DEST writes into lane `j` when auto-block is
-    /// on; AutoBlock::Off passes 0 (today's shape).
+    /// is added by the chain to shift DEST writes into lane `j` when `BlockSize > 1`;
+    /// `BlockSize == 1` passes 0 (per-tile shape).
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { Derived::exec_impl(slot_offset); }
 };
 
@@ -735,7 +738,7 @@ inline constexpr bool chain_is_hoist_safe_v = chain_is_hoist_safe<Chain>::value;
 ///
 /// Block-mode auto-detection: if any element in `Es...` exposes `is_upfront == true`,
 /// the helper takes the upfront-block path (wait N upfront, loop, pop N at end).
-template <AutoBlock Block = AutoBlock::Off, class... Es>
+template <uint32_t BlockSize = 1, class... Es>
 ALWI void eltwise_chain(uint32_t n_tiles, Es... elts);
 
 /// Run the chain over `n_tiles` iterations, plus emit `compute_kernel_hw_startup`
@@ -752,7 +755,7 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts);
 /// kernels (different PACK output CB per stage) MUST keep explicit per-stage
 /// `compute_kernel_hw_startup` calls — `eltwise_chain_with_init` would emit it once
 /// with stage-1 CBs and stage 2's PACK would target the wrong CB.
-template <AutoBlock Block = AutoBlock::Off, class... Es>
+template <uint32_t BlockSize = 1, class... Es>
 ALWI void eltwise_chain_with_init(uint32_t n_tiles, Es... elts);
 
 }  // namespace compute_kernel_lib

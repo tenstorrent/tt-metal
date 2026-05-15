@@ -72,7 +72,7 @@ void kernel_main() {
         // Migrated: streaming BinaryFpu + PackTile. All input/output CBs are
         // caller-managed (reserved at top of ht-loop, popped/pushed below) so the
         // chain runs NoWaitNoPop on inputs and NoReserveNoPush on the pack side.
-        compute_kernel_lib::eltwise_chain<compute_kernel_lib::AutoBlock::On>(
+        compute_kernel_lib::eltwise_chain<compute_kernel_lib::DEST_AUTO_LIMIT>(
             Wt,
             compute_kernel_lib::BinaryFpu<
                 rotated_in_interm_cb,
@@ -95,7 +95,7 @@ void kernel_main() {
         cb_pop_front(rotated_in_interm_cb, Wt);
 
         // cos_interim = x * cos   (ROW-bcast mul over Wt tiles)
-        compute_kernel_lib::eltwise_chain<compute_kernel_lib::AutoBlock::On>(
+        compute_kernel_lib::eltwise_chain<compute_kernel_lib::DEST_AUTO_LIMIT>(
             Wt,
             compute_kernel_lib::BinaryFpu<
                 in_cb,
@@ -121,7 +121,7 @@ void kernel_main() {
         cb_wait_front(cos_interm_cb, Wt);
 
         // out = cos_interim + sin_interim   (eltwise add over Wt tiles)
-        compute_kernel_lib::eltwise_chain<compute_kernel_lib::AutoBlock::On>(
+        compute_kernel_lib::eltwise_chain<compute_kernel_lib::DEST_AUTO_LIMIT>(
             Wt,
             compute_kernel_lib::BinaryFpu<
                 cos_interm_cb,

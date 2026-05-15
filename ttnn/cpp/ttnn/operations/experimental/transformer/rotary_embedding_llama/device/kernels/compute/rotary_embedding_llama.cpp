@@ -86,7 +86,7 @@ void kernel_main() {
                 // (BlockIter + runtime offset), and the chain has no BlockIter-plus-base mode.
 
                 // sin_interim = rotated * sin   (eltwise mul over Wt tiles)
-                compute_kernel_lib::eltwise_chain<compute_kernel_lib::AutoBlock::On>(
+                compute_kernel_lib::eltwise_chain<compute_kernel_lib::DEST_AUTO_LIMIT>(
                     Wt,
                     compute_kernel_lib::BinaryFpu<
                         rotated_in_interm_cb,
@@ -109,7 +109,7 @@ void kernel_main() {
                 cb_pop_front(rotated_in_interm_cb, Wt);
 
                 // cos_interim = x * cos   (eltwise mul over Wt tiles)
-                compute_kernel_lib::eltwise_chain<compute_kernel_lib::AutoBlock::On>(
+                compute_kernel_lib::eltwise_chain<compute_kernel_lib::DEST_AUTO_LIMIT>(
                     Wt,
                     compute_kernel_lib::BinaryFpu<
                         in_cb,
@@ -164,7 +164,7 @@ void kernel_main() {
                 // Migrated: streaming BinaryFpu (Add) + PackTile. Inputs were
                 // waited above and are popped below; the pack CB is reserved
                 // earlier in the seq_tile loop and pushed via the chain.
-                compute_kernel_lib::eltwise_chain<compute_kernel_lib::AutoBlock::On>(
+                compute_kernel_lib::eltwise_chain<compute_kernel_lib::DEST_AUTO_LIMIT>(
                     Wt,
                     compute_kernel_lib::BinaryFpu<
                         cos_interm_cb,
