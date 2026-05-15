@@ -929,8 +929,11 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         num_routed_experts=num_routed_experts,
         include_global=False,
     )
+    # Only group 0 is loaded (num_routed_experts=32). Within-group expert IDs match the
+    # original 256-expert rigging (which spread 2 experts across each of groups 0/2/5/7),
+    # collapsed into group 0.
     winning_groups = [0]
-    winning_experts_by_group = {0: [1, 4, 7, 11, 15, 19, 23, 28]}
+    winning_experts_by_group = {0: [1, 9, 4, 19, 7, 23, 3, 28]}
     expected_expert_ids = rig_moe_gate_for_expected_experts(
         state_dict,
         ROUTED_EXPERT_LAYER_IDX,
