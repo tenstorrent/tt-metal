@@ -13,8 +13,10 @@
 #include "autograd/graph_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/full_like/full_like.hpp"
 
 namespace ttml::ops {
 
@@ -87,19 +89,18 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
 
     // Pre-zero so unused rows (per-expert pad + trailing slack) stay zero — guarantees
     // silu(0)*0=0 in `activated`'s pad rows and zeros in y for any row not written by some
-    // expert's down_proj.
-    auto y = ttml::core::zeros(
-        ttnn::Shape({1U, 1U, token_capacity, hidden_dim}), &ttml::autograd::ctx().get_device(), grouped_value.dtype());
-
+    // expert's down_proj. moreh_full_like over ttnn::empty is ~100x faster than
+    // `ttml::core::zeros` (which roundtrips through host-side `ttnn::full`).
     const uint32_t intermediate_dim = wg0_shape[-2];
-    auto gate_proj = ttml::core::zeros(
-        ttnn::Shape({1U, 1U, token_capacity, intermediate_dim}),
-        &ttml::autograd::ctx().get_device(),
-        grouped_value.dtype());
-    auto up_proj = ttml::core::zeros(
-        ttnn::Shape({1U, 1U, token_capacity, intermediate_dim}),
-        &ttml::autograd::ctx().get_device(),
-        grouped_value.dtype());
+    auto* device = &ttml::autograd::ctx().get_device();
+    const auto dtype = grouped_value.dtype();
+    auto zeros_device = [&](const ttnn::Shape& shape) {
+        return ttnn::moreh_full_like(
+            ttnn::empty(shape, dtype, ttnn::Layout::TILE, device, ttnn::DRAM_MEMORY_CONFIG), 0.F);
+    };
+    auto y = zeros_device(ttnn::Shape({1U, 1U, token_capacity, hidden_dim}));
+    auto gate_proj = zeros_device(ttnn::Shape({1U, 1U, token_capacity, intermediate_dim}));
+    auto up_proj = zeros_device(ttnn::Shape({1U, 1U, token_capacity, intermediate_dim}));
 
     // gate_proj / up_proj: each expert reads grouped[offsets[e]:offsets[e+1]] and writes into
     // the matching slice of the shared tensor (InputAndOutputRow). w_gate / w_up are [I, H],
@@ -186,13 +187,17 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
 
         // All bwd intermediates are shared [T_cap, *] tensors. Pre-zeroed so unused rows stay
         // zero through swiglu_bw and the dX matmuls. Same memory pattern as fwd: one shared
-        // tensor per gradient instead of E per-expert ones.
-        auto d_activated = ttml::core::zeros(
-            ttnn::Shape({1U, 1U, gate_proj.logical_shape()[-2], intermediate_dim}),
-            &ttml::autograd::ctx().get_device(),
-            grouped_value.dtype());
-        auto dX_via_gate = ttml::core::zeros(grouped_shape, &ttml::autograd::ctx().get_device(), grouped_value.dtype());
-        auto dX_via_up = ttml::core::zeros(grouped_shape, &ttml::autograd::ctx().get_device(), grouped_value.dtype());
+        // tensor per gradient instead of E per-expert ones. moreh_full_like over ttnn::empty
+        // is ~100x faster than `ttml::core::zeros` here.
+        auto* device = &ttml::autograd::ctx().get_device();
+        const auto dtype = grouped_value.dtype();
+        auto zeros_device = [&](const ttnn::Shape& shape) {
+            return ttnn::moreh_full_like(
+                ttnn::empty(shape, dtype, ttnn::Layout::TILE, device, ttnn::DRAM_MEMORY_CONFIG), 0.F);
+        };
+        auto d_activated = zeros_device(ttnn::Shape({1U, 1U, gate_proj.logical_shape()[-2], intermediate_dim}));
+        auto dX_via_gate = zeros_device(grouped_shape);
+        auto dX_via_up = zeros_device(grouped_shape);
 
         using EltwiseUnary = ttnn::operations::unary::EltwiseUnaryWithParam;
         const EltwiseUnary silu_act{ttnn::operations::unary::UnaryOpType::SILU};
