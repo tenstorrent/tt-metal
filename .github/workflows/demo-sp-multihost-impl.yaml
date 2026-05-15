@@ -261,14 +261,15 @@ jobs:
             fi
 
             echo "--- Kill stale processes on all hosts ---"
-            mpirun --pernode --tag-output bash -lc '
-              mpi_processes="prted|prterun|orted|mpirun"
-              test_processes="tt-run|run_cluster_validation"
-              b1_demo_processes="models\.demos\.deepseek_v3_b1\.demo\.cli"
-              b1_teacher_forced_processes="models\.demos\.deepseek_v3_b1\.demo\.teacher_forced"
-              stale_processes="${mpi_processes}|${test_processes}|${b1_demo_processes}|${b1_teacher_forced_processes}"
-              pkill -u "$(id -un)" -f "${stale_processes}" || true
-            '
+            # todo)) figure out a proper way to kill stale processes from the docker containers
+            # mpirun --pernode --tag-output bash -lc '
+            #   mpi_processes="prted|prterun|orted|mpirun"
+            #   test_processes="tt-run|run_cluster_validation"
+            #   b1_demo_processes="models\.demos\.deepseek_v3_b1\.demo\.cli"
+            #   b1_teacher_forced_processes="models\.demos\.deepseek_v3_b1\.demo\.teacher_forced"
+            #   stale_processes="${mpi_processes}|${test_processes}|${b1_demo_processes}|${b1_teacher_forced_processes}"
+            #   pkill -u "$(id -un)" -f "${stale_processes}" || true
+            # '
 
             echo "Sleeping 30s before retry..."
             sleep 30
