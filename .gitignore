@@ -159,3 +159,4 @@ models/experimental/petr/resources/*.pth
 
 .claude
 .cursor/.DS_store
+*.DS_Store

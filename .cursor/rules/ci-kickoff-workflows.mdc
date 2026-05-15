@@ -1,0 +1,69 @@
+---
+description: Kick off targeted workflows for an existing PR by creating a temporary workflow-pruned branch and posting run links as a PR comment.
+alwaysApply: false
+---
+
+# Kick Off Targeted Workflows for Existing PR
+
+Use this rule when asked to launch CI workflows for an already-open PR, without creating a new PR.
+
+## Goal
+
+Run only the workflows relevant to PR risk by creating a temporary branch from the PR head, pruning unrelated workflow sections, dispatching runs, and posting links back to the PR as a comment.
+
+## Required Input
+
+- PR URL or PR number in `tenstorrent/tt-metal`.
+
+## GitHub API Preference
+
+- Assume GitHub CLI auth is valid.
+- Prefer `gh api` for PR/workflow metadata, changed files, and PR comments.
+- Use non-API `gh` commands when they are materially simpler (for example workflow dispatch and run listing).
+
+## Required Flow
+
+1. **Load PR context**
+   - Resolve PR number, base branch, head branch, and latest head SHA.
+   - Read changed files (`base...head`) and infer impacted subsystems.
+
+2. **Select workflows**
+   - Choose workflows based on impacted areas and actual test ownership in `.github/workflows`.
+   - Exclude unrelated workflows.
+   - Prefer targeted validation over broad/full-pipeline runs unless broad scope is necessary.
+
+3. **Create temporary kickoff branch**
+   - Branch off the PR head branch, not from `main`.
+   - Use a dedicated kickoff branch name (for example `ci-kickoff/pr-<number>-<slug>`).
+
+4. **Prune non-relevant workflow sections**
+   - In selected workflow file(s), comment out or disable matrix entries/sections/tests that are not relevant to the PR.
+   - Keep YAML valid and dispatchable.
+   - Use exactly one temporary commit with message prefix `[TO REVERT]`.
+   - Keep this commit focused to workflow-pruning only.
+
+5. **Dispatch and capture runs**
+   - Push kickoff branch.
+   - Trigger selected workflows against kickoff branch ref.
+   - Collect run URLs/IDs.
+
+6. **Comment on PR (not description)**
+   - Post a new PR comment that includes:
+     - kickoff branch,
+     - temporary commit hash,
+     - workflows launched,
+     - links to each run.
+   - Do not rewrite PR description for this command.
+
+## Non-Negotiables
+
+- Do not create a new PR.
+- Do not force-push protected branches.
+- Do not include unrelated code changes in pruning commit.
+- Keep references non-closing (`Refs #...`) if issue mentions are included.
+- Make clear in PR comment that workflow pruning is temporary and intended for targeted validation.
+
+## If Workflow Mapping Is Ambiguous
+
+- Ask for user confirmation before launching broad workflows.
+- If proceeding without confirmation, bias toward the smallest safe set and explain assumptions in PR comment.

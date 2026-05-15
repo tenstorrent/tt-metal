@@ -1,0 +1,61 @@
+name: "Generate Slack Data Report"
+description: "Runs Cursor Agent over exported Slack JSON and writes a markdown report"
+inputs:
+  input-json-path:
+    description: "Path to exported Slack JSON"
+    required: true
+  report-path:
+    description: "Path where markdown report should be written"
+    required: true
+  model:
+    description: "Cursor agent model to use (for example: auto, claude-3-7-sonnet, gpt-5)"
+    required: false
+    default: "auto"
+runs:
+  using: "composite"
+  steps:
+    - name: Generate markdown report with Cursor agent
+      shell: bash
+      run: |
+        set -euo pipefail
+        input_json="${{ inputs.input-json-path }}"
+        report_path="${{ inputs.report-path }}"
+        model="${{ inputs.model }}"
+        prompt_file="${{ github.action_path }}/prompt.md"
+
+        if [ ! -f "$input_json" ]; then
+          echo "Input JSON not found: $input_json"
+          exit 1
+        fi
+
+        mkdir -p "$(dirname "$report_path")"
+        prompt_text="$(cat "$prompt_file")"
+        prompt_text="${prompt_text//__INPUT_JSON_PATH__/$input_json}"
+        run_prompt="$prompt_text"
+        run_prompt+=$'\n\nImportant output contract:\n'
+        run_prompt+=$'- You may reason however you want while working.\n'
+        run_prompt+=$'- At the very end, emit this exact marker on its own line:\n'
+        run_prompt+=$'===FINAL_REPORT_MD===\n'
+        run_prompt+=$'- After that marker, output only the final markdown report.\n'
+        raw_output_path="${report_path}.raw.log"
+        echo "Running Cursor agent with model: $model"
+        echo "Writing report to: $report_path"
+        echo "Streaming readable Cursor output to job logs..."
+        if [ "$model" = "auto" ]; then
+          agent --trust \
+            --output-format stream-json \
+            --stream-partial-output \
+            -p "$run_prompt" | python -u "${{ github.action_path }}/stream_json_pretty.py" "$raw_output_path"
+        else
+          agent --trust --model "$model" \
+            --output-format stream-json \
+            --stream-partial-output \
+            -p "$run_prompt" | python -u "${{ github.action_path }}/stream_json_pretty.py" "$raw_output_path"
+        fi
+        python "${{ github.action_path }}/extract_final_report.py" "$raw_output_path" "$report_path"
+        if [ ! -s "$report_path" ]; then
+          echo "Failed to extract final markdown report from agent output."
+          echo "Raw output was saved to: $raw_output_path"
+          exit 1
+        fi
+        test -s "$report_path"
