@@ -159,8 +159,8 @@ int main(int argc, char** argv) {
         CoreCoord end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};
         CoreRange all_cores(start_core, end_core);
 
-        for (int i = 0; i < num_cores_r; i++) {
-            for (int j = 0; j < num_cores_c; j++) {
+        for (uint32_t i = 0; i < num_cores_r; i++) {
+            for (uint32_t j = 0; j < num_cores_c; j++) {
                 CoreCoord core = {(std::size_t)j, (std::size_t)i};
                 uint32_t cb_index = 0;
                 uint32_t cb_tiles = 32;
@@ -183,8 +183,8 @@ int main(int argc, char** argv) {
                                               : tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = (noc_index == 0) ? tt_metal::NOC::RISCV_0_default : tt_metal::NOC::RISCV_1_default});
 
-        for (int i = 0; i < num_cores_r; i++) {
-            for (int j = 0; j < num_cores_c; j++) {
+        for (uint32_t i = 0; i < num_cores_r; i++) {
+            for (uint32_t j = 0; j < num_cores_c; j++) {
                 CoreCoord core = {(std::size_t)j, (std::size_t)i};
                 uint32_t core_index = (i * num_cores_c) + j;
                 uint32_t l1_buffer_addr = l1_mesh_buffer->address();
