@@ -59,9 +59,15 @@ def _device_params() -> dict:
 # ---------------------------------------------------------------------------
 _BIT_SCULPT_ROOT_ENV = "BIT_SCULPT_ROOT"
 _PIPECLEAN_TRACES_ENV = "DEEPSEEK_PIPECLEAN_TRACES_DIR"
+_KIMI_WEIGHTS_ENV = "KIMI_K26_BF16_DEQUANT_PATH"
 
 _DEFAULT_BIT_SCULPT_ROOT = Path("/workspace/bit_sculpt")
 _DEFAULT_PIPECLEAN_TRACES_DIR = Path("/data/asaigal/pipeclean_traces")
+_DEFAULT_KIMI_WEIGHTS_PATH = Path("/workspace/models/moonshotai/Kimi-K2.6-bf16-dequant")
+
+
+def _kimi_weights_path() -> Path:
+    return Path(os.environ.get(_KIMI_WEIGHTS_ENV, str(_DEFAULT_KIMI_WEIGHTS_PATH)))
 
 
 def _bit_sculpt_trace_root() -> Path:
@@ -168,16 +174,11 @@ SWEEP_CASES = [
         ),
     ),
     # --- Kimi K2.6 layer 0 (dense) --------------------------------------------
-    # The bit_sculpt trace is fine — see test_host_io_decoder_trace_loader.py
-    # for proof of load. Two on-device blockers remain:
-    #   (1) Kimi BF16 dequant weights not staged. Produce via bit_sculpt
-    #       scripts/dequant_compressed_tensors_streaming.py, stage at
-    #       /workspace/models/moonshotai/Kimi-K2.6-bf16-dequant (or pass
-    #       --hf-model-path).
-    #   (2) CacheWeightProvider reads `model.layers.{i}.*` keys. Kimi's HF
-    #       state dict prefixes them with `language_model.` because the wrapper
-    #       is KimiK25ForConditionalGeneration. Needs a prefix-shim knob on
-    #       CacheWeightProvider, or strip the prefix at dequant time.
+    # Unblocked by the `weight_key_prefix="language_model."` knob added to
+    # CacheWeightProvider in this PR. Skip now requires only the BF16-dequant
+    # snapshot to be staged at $KIMI_K26_BF16_DEQUANT_PATH (default
+    # /workspace/models/moonshotai/Kimi-K2.6-bf16-dequant). Produce the
+    # snapshot via bit_sculpt's scripts/dequant_compressed_tensors_streaming.py.
     _build_param(
         case_id="kimi_safetensors_flat_dense_layer0_modeA",
         config_kwargs=dict(
@@ -185,15 +186,15 @@ SWEEP_CASES = [
             hidden_states_dir=_kimi_trace_dir(),
             prompt_names=("smoke_kimi_k26_2026-05-14_bf16",),
             trace_format="safetensors",
+            hf_model_path=_kimi_weights_path(),
+            weight_key_prefix="language_model.",
         ),
-        skip=pytest.mark.skip(
+        skip=pytest.mark.skipif(
+            not (_kimi_weights_path() / "config.json").exists(),
             reason=(
-                "Kimi K2.6 layer 0 (dense) needs (a) BF16-dequant snapshot at "
-                "--hf-model-path (produce via bit_sculpt "
-                "scripts/dequant_compressed_tensors_streaming.py) and (b) a "
-                "`language_model.` prefix shim in CacheWeightProvider (Kimi's HF "
-                "state dict wraps the DeepSeek-V3 backbone under that prefix). "
-                "Trace I/O is already proven (see test_host_io_decoder_trace_loader)."
+                f"Kimi K2.6 BF16-dequant snapshot not staged. Expected "
+                f"{_kimi_weights_path()}/config.json (override via ${_KIMI_WEIGHTS_ENV}). "
+                f"Produce via bit_sculpt scripts/dequant_compressed_tensors_streaming.py."
             ),
         ),
     ),
@@ -210,13 +211,17 @@ SWEEP_CASES = [
             hidden_states_dir=_kimi_trace_dir(),
             prompt_names=("smoke_kimi_k26_2026-05-14_bf16",),
             trace_format="safetensors",
+            hf_model_path=_kimi_weights_path(),
+            weight_key_prefix="language_model.",
         ),
         skip=pytest.mark.skip(
             reason=(
                 "Kimi K2.6 MoE layers (1-60) need a 384-expert / ungrouped-top-8 "
                 "gate kernel. b1's DeepseekMoeGateSingleCore hardcodes 16x16=256 "
                 "grouped routing. Tracked on origin/ddjekic/kimi26_bringup and "
-                "origin/gchoudhary/41826-generalize-moe_compute-shape-support."
+                "origin/gchoudhary/41826-generalize-moe_compute-shape-support. "
+                "See KIMI_K26_PORT_NOTES section in host_io_decoder_harness.py "
+                "for the full breakdown."
             ),
         ),
     ),
@@ -227,6 +232,8 @@ SWEEP_CASES = [
             hidden_states_dir=_kimi_trace_dir(),
             prompt_names=("q_what_is_python",),
             trace_format="safetensors",
+            hf_model_path=_kimi_weights_path(),
+            weight_key_prefix="language_model.",
         ),
         skip=pytest.mark.skip(
             reason=(

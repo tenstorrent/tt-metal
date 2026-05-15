@@ -229,13 +229,24 @@ class CacheWeightProvider:
         sram_core_grids: SramExpertCoreGrids | None = None,
         sram_assigner: CompressedTensorAssigner | None = None,
         worker_l1_size: int | None = None,
+        weight_key_prefix: str = "",
     ) -> None:
+        """Args (subset):
+        weight_key_prefix: Forwarded to ``LazyStateDict(base_prefix=...)``. Set
+            to ``"language_model."`` when loading Kimi K2.6 weights through
+            this provider — Kimi's HF state dict wraps the DeepSeek-V3 backbone
+            under ``language_model.`` because the top-level architecture is
+            ``KimiK25ForConditionalGeneration`` (multimodal). With the prefix
+            set, ``prepare_*`` calls that look up ``model.layers.{i}.*`` keys
+            resolve to ``language_model.model.layers.{i}.*`` on disk. Default
+            ``""`` preserves the existing DeepSeek path bit-exactly.
+        """
         cache_path = Path(cache_path)
         model_path = Path(model_path)
         assert model_path.exists(), f"Model path does not exist: {model_path}"
         assert model_path.is_dir(), f"Model path is not a directory: {model_path}"
         self._cache = TensorCache(cache_path)
-        self._state_dict = LazyStateDict(model_path)
+        self._state_dict = LazyStateDict(model_path, base_prefix=weight_key_prefix)
         self._schema_version = schema_version
         self._hf_model_id = hf_model_id or model_path.name
         self._hf_revision = hf_revision
@@ -243,6 +254,7 @@ class CacheWeightProvider:
         self._sram_core_grids = sram_core_grids
         self._sram_assigner = sram_assigner
         self._worker_l1_size = worker_l1_size
+        self._weight_key_prefix = weight_key_prefix
 
     def _cache_config(self, device: ttnn.MeshDevice) -> CacheConfig:
         context = CacheContext(

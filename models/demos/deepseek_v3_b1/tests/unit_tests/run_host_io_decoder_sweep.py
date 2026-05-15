@@ -353,6 +353,18 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=DEFAULT_CACHE_PATH,
         help="CacheWeightProvider persistent cache directory.",
     )
+    weights.add_argument(
+        "--weight-key-prefix",
+        type=str,
+        default="",
+        help=(
+            "Prefix prepended to every state-dict key when looking up weights on disk. "
+            "Default '' matches DeepSeek-V3 HF snapshots. Set to 'language_model.' for Kimi "
+            "K2.6 BF16-dequant snapshots (Kimi wraps the DeepSeek-V3 backbone under that "
+            "prefix via its KimiK25ForConditionalGeneration multimodal architecture). "
+            "Forwarded to CacheWeightProvider -> LazyStateDict(base_prefix=...)."
+        ),
+    )
 
     # --- misc ---
     misc = parser.add_argument_group("misc")
@@ -435,6 +447,7 @@ def _config_from_args(args: argparse.Namespace) -> HostIoDecoderSweepConfig:
         dump_format=dump_format,
         hf_model_path=args.hf_model_path,
         cache_path=args.cache_path,
+        weight_key_prefix=args.weight_key_prefix,
         seed=args.seed,
         log_per_iteration=args.log_per_iteration,
     )
@@ -477,6 +490,7 @@ def _log_resolved_config(config: HostIoDecoderSweepConfig) -> None:
         ("dump_format", config.dump_format),
         ("hf_model_path", config.hf_model_path),
         ("cache_path", config.cache_path),
+        ("weight_key_prefix", repr(config.weight_key_prefix)),
         ("seed", config.seed),
         ("log_per_iteration", config.log_per_iteration),
     ):

@@ -214,6 +214,14 @@ class HostIoDecoderSweepConfig:
     # --- weights ---
     hf_model_path: Path = DEFAULT_HF_MODEL_PATH
     cache_path: Path = DEFAULT_CACHE_PATH
+    # Prefix prepended to every state_dict key when looking up weights on
+    # disk. Default "" matches DeepSeek-V3 HF snapshots, which expose keys
+    # directly as ``model.layers.{i}.*``. Set to ``"language_model."`` for
+    # Kimi K2.6 BF16-dequant snapshots — Kimi's HF wrapper is
+    # ``KimiK25ForConditionalGeneration`` and nests the DeepSeek-V3 backbone
+    # under that prefix. Forwarded to ``CacheWeightProvider(weight_key_prefix=...)``
+    # which forwards to ``LazyStateDict(base_prefix=...)``.
+    weight_key_prefix: str = ""
 
     # --- misc ---
     seed: int = 0
@@ -1045,7 +1053,13 @@ def run_sweep(
 
     logger.info(f"Using HF model path: {config.hf_model_path}")
     logger.info(f"Using cache path:    {config.cache_path}")
-    provider = CacheWeightProvider(cache_path=config.cache_path, model_path=config.hf_model_path)
+    if config.weight_key_prefix:
+        logger.info(f"Using weight key prefix: {config.weight_key_prefix!r}")
+    provider = CacheWeightProvider(
+        cache_path=config.cache_path,
+        model_path=config.hf_model_path,
+        weight_key_prefix=config.weight_key_prefix,
+    )
 
     # Auto-detect dense vs MoE from layer_idx (see NUM_DENSE_LAYERS comment at the
     # top of this module). Dense layers use a different weight loader and pass
@@ -1299,3 +1313,84 @@ def run_sweep(
         schedule=schedule,
         traces=traces,
     )
+
+
+# ============================================================================
+# KIMI_K26_PORT_NOTES
+# ============================================================================
+#
+# Status snapshot (2026-05-15) of Kimi K2.6 on-device validation through this
+# harness. Referenced from the ``pytest.mark.skip`` reasons in
+# ``test_host_io_decoder_sweep_e2e.py`` and from
+# ``micro_ops/deepseek_moe_gate/op.py:DeepseekMoeGateSingleCore``.
+#
+# What works today
+# ----------------
+# - **Trace I/O for Kimi safetensors traces** (this PR): both flat and per-step
+#   layouts load through ``_load_reference_trace``. Validated end-to-end against
+#   ``moonshotai-kimi-k26/debug_trace/{smoke_*, q_what_is_python}`` at layers
+#   0/3/30/60.
+# - **Kimi weight loading via the** ``weight_key_prefix="language_model."``
+#   **knob** on ``CacheWeightProvider`` (this PR). Forwards to
+#   ``LazyStateDict(base_prefix=...)`` so callers can keep using
+#   ``model.layers.{i}.*`` keys against a Kimi BF16-dequant snapshot that has
+#   the keys stored as ``language_model.model.layers.{i}.*``.
+# - **Preflight metadata mismatch warning**: if you load a Kimi trace
+#   (``moe_layer_offset=1``) against this harness (``NUM_DENSE_LAYERS=3``), the
+#   preflight warns about layers in the ambiguous range [1, 3) where the
+#   harness will route to dense but the trace was produced treating them as
+#   MoE. See ``_check_metadata_consistency``.
+#
+# What does NOT work — the 384-expert MoE gate kernel blocker
+# -----------------------------------------------------------
+# ``micro_ops/deepseek_moe_gate/op.py:DeepseekMoeGateSingleCore`` hardcodes a
+# ``(16, 16) = 256`` input tile and implements DeepSeek's grouped top-k
+# (16 groups × 16, top-2-per-group → top-4-groups → top-8). Kimi K2.6 has
+# 1 group × 384 experts, plain ``topk(sigmoid(scores) + bias, k=8)``. The
+# kernel cannot be reused.
+#
+# Three porting options for whoever picks up Kimi MoE on this code path:
+#
+# - **C1. Port from** ``models/demos/kimi26_d_p/``. Active feature branch
+#   ``origin/ddjekic/kimi26_bringup`` already has ``tt/moe/tt_moe_gate_prefill.py``,
+#   ``tt_dispatch.py``, ``tt_combine.py``. Adapter work: that demo uses
+#   dispatch/combine MoE primitives; this ``_b1`` line uses bcast/reduce.
+#   Estimated weeks of focused integration work, but the kernel + algorithm
+#   are proven.
+# - **C2. Wait for / land** ``origin/gchoudhary/41826-generalize-moe_compute-shape-support``
+#   (also ``origin/dchen/moe_compute*``). That refactor makes the MoE compute
+#   accept arbitrary ``(n_routed_experts, top_k, n_groups, …)`` — right
+#   abstraction for Kimi K2.5, DS V4 Pro (384/top-6), Ling-1T (256/top-8),
+#   GLM-4.7 (160/top-8), Mistral Large 3, Gemma 4 26B, DS-OCR. See
+#   ``tests/nightly/tg/ccl/moe/test_moe_compute_6U.py`` for the full target
+#   matrix. **Strongly preferred** if landing is on a reasonable timeline.
+# - **C3. New kernel from scratch.** ``UngroupedTopKGateSingleCore`` alongside
+#   the DeepSeek one — e.g. ``(16, 24) = 384`` tile or ``(32, 16) = 512``
+#   padded with –∞ dummies. Teach ``HostIoDecoderStage`` to dispatch by config.
+#   ~3-4 weeks of new kernel work. Only useful for Kimi-family configs.
+#
+# When the gate-kernel blocker is resolved, flip these e2e cases from
+# ``pytest.mark.skip`` to ``pytest.mark.skipif`` against ``--hf-model-path``
+# existence (the prefix knob is already in place):
+#
+#   - kimi_safetensors_flat_moe_layer1_modeA
+#   - kimi_safetensors_per_step_moe_layer30_modeA
+#
+# Other Kimi-MoE-layer cases (different layers, Mode B fanout, …) can be added
+# alongside. The ``language_model.`` prefix is already wired into the e2e
+# config dicts so no test changes needed beyond the skip → skipif flip.
+#
+# Re-validate at flip time
+# ------------------------
+# 1. ``_check_metadata_consistency`` ``moe_layer_offset`` warning fires
+#    correctly for any Kimi case (offset=1 vs harness's effective offset).
+# 2. ``NUM_DENSE_LAYERS`` constant at the top of this file may need to become
+#    a per-config field (``moe_layer_offset`` on ``HostIoDecoderSweepConfig``)
+#    if you want to actually *route* Kimi layers correctly rather than just
+#    *warn* about the mismatch.
+# 3. ``CacheWeightProvider.load_moe_layer`` calls ``prepare_moe_layer_weights``
+#    with ``num_routed_experts=NUM_ROUTED_EXPERTS`` (==256 from
+#    ``weights/prepare.py``). That constant also needs lifting to a config /
+#    per-model knob before Kimi can run.
+#
+# ============================================================================

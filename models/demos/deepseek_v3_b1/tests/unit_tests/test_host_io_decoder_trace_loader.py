@@ -548,3 +548,84 @@ def test_write_dumps_both_off_is_noop(tmp_path: Path) -> None:
     schedule = MultiTurnSchedule(prompt_lengths=(4,))
     _write_dumps(config, collected={}, kv_cache_torch=None, schedule=schedule)
     assert list(tmp_path.iterdir()) == []
+
+
+# ----- weight_key_prefix wiring -----
+#
+# Smoke tests that confirm CacheWeightProvider's weight_key_prefix kwarg
+# threads correctly into LazyStateDict.base_prefix and the right HF keys are
+# in/out of the resulting Mapping view. Doesn't load any real model weights —
+# just checks the index resolution layer, which is what Kimi needs.
+
+
+def _make_fake_hf_model_dir(tmp_path: Path, weight_map: dict[str, str]) -> Path:
+    """Create a minimal HF snapshot dir: model.safetensors.index.json + sharded names.
+
+    Doesn't write actual safetensors shards (LazyStateDict reads the index
+    eagerly but tensor files only on __getitem__ access). Sufficient for
+    testing the prefix-resolution path.
+    """
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    (model_dir / "model.safetensors.index.json").write_text(
+        json.dumps({"metadata": {"total_size": 0}, "weight_map": weight_map})
+    )
+    return model_dir
+
+
+def test_cache_weight_provider_default_prefix_is_empty(tmp_path: Path) -> None:
+    """Default behavior unchanged: weight_key_prefix='' means HF keys used as-is."""
+    from models.demos.deepseek_v3_b1.demo.weight_provider import CacheWeightProvider
+
+    model_dir = _make_fake_hf_model_dir(tmp_path, {"model.layers.0.input_layernorm.weight": "dummy.safetensors"})
+    provider = CacheWeightProvider(cache_path=tmp_path / "cache", model_path=model_dir)
+    assert provider._weight_key_prefix == ""
+    assert provider._state_dict._base_prefix == ""
+    assert "model.layers.0.input_layernorm.weight" in provider._state_dict
+
+
+def test_cache_weight_provider_kimi_prefix_resolves_keys(tmp_path: Path) -> None:
+    """With weight_key_prefix='language_model.', Kimi-style keys are resolvable.
+
+    Kimi's HF state dict has keys like "language_model.model.layers.0.…" because
+    the DeepSeek-V3 backbone is wrapped under that prefix by the multimodal
+    KimiK25ForConditionalGeneration architecture. With the prefix set, code
+    that looks up "model.layers.0.…" against the provider's state dict resolves
+    to the right physical key.
+    """
+    from models.demos.deepseek_v3_b1.demo.weight_provider import CacheWeightProvider
+
+    model_dir = _make_fake_hf_model_dir(
+        tmp_path,
+        {
+            "language_model.model.layers.0.input_layernorm.weight": "dummy.safetensors",
+            "language_model.model.layers.5.self_attn.q_a_proj.weight": "dummy.safetensors",
+        },
+    )
+    provider = CacheWeightProvider(
+        cache_path=tmp_path / "cache",
+        model_path=model_dir,
+        weight_key_prefix="language_model.",
+    )
+    # Provider records the prefix and forwards it to LazyStateDict.
+    assert provider._weight_key_prefix == "language_model."
+    assert provider._state_dict._base_prefix == "language_model."
+    # Caller-facing keys are stripped of the prefix.
+    assert "model.layers.0.input_layernorm.weight" in provider._state_dict
+    assert "model.layers.5.self_attn.q_a_proj.weight" in provider._state_dict
+    # Caller-facing key collision with the *full* key must miss — the prefix
+    # is prepended *to* lookups, not stripped from them.
+    assert "language_model.model.layers.0.input_layernorm.weight" not in provider._state_dict
+
+
+def test_cache_weight_provider_prefix_mismatch_fails_lookup(tmp_path: Path) -> None:
+    """Wrong prefix → physical key never resolves → contains check is False."""
+    from models.demos.deepseek_v3_b1.demo.weight_provider import CacheWeightProvider
+
+    model_dir = _make_fake_hf_model_dir(
+        tmp_path,
+        # Stored under "language_model." but provider is configured with no prefix.
+        {"language_model.model.layers.0.input_layernorm.weight": "dummy.safetensors"},
+    )
+    provider = CacheWeightProvider(cache_path=tmp_path / "cache", model_path=model_dir)
+    assert "model.layers.0.input_layernorm.weight" not in provider._state_dict

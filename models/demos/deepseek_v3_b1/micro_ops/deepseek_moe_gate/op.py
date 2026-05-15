@@ -19,6 +19,39 @@ class DeepseekMoeGateSingleCore:
     This class implements the Deepseek Moe Gate operation on a single face (16x16) of data.
     The operation is a combination of sigmoid activation, element-wise addition with bias,
     and sorting of top 8 values per group.
+
+    .. note:: Kimi K2.6 compatibility
+
+       This kernel is **structurally specific to DeepSeek V3 / R1's grouped routing**:
+       16 groups × 16 experts (=256), top-2-per-group → top-4-groups → top-8 overall.
+       The ``(16, 16)`` tile shape is asserted at line ~114 (``expected_input_tile_size``).
+
+       Kimi K2.6 cannot use this kernel as-is — its routing config is
+       1 group × 384 experts, plain ``topk(sigmoid(scores) + bias, k=8)``. Adapting
+       to Kimi requires either:
+
+       - **C1.** Port the gate kernel + dispatch/combine primitives from
+         ``models/demos/kimi26_d_p/tt/moe/`` (sister demo on
+         ``origin/ddjekic/kimi26_bringup``) into ``_b1``. Adapter work — Kimi
+         demo uses dispatch/combine vs ``_b1``'s bcast/reduce MoE primitives.
+       - **C2.** Wait for ``origin/gchoudhary/41826-generalize-moe_compute-shape-support``
+         (also ``origin/dchen/moe_compute``) to land. That track makes the MoE
+         compute accept variable ``(n_routed_experts, top_k, n_groups, ...)`` —
+         it's the right long-term abstraction and unblocks Kimi K2.5, DS V4 Pro,
+         Ling-1T, GLM-4.7, etc. simultaneously. See
+         ``tests/nightly/tg/ccl/moe/test_moe_compute_6U.py`` for the model-config
+         matrix.
+       - **C3.** Write a new ``UngroupedTopKGateSingleCore`` alongside this one
+         (e.g. ``(16, 24) = 384`` tile or ``(32, 16) = 512`` padded with –∞
+         dummy entries), and teach ``HostIoDecoderStage`` to dispatch by config.
+         Cleanest at the kernel layer, heaviest at the trace-validation infra.
+
+       Cross-reference: ``models/demos/deepseek_v3_b1/tests/unit_tests/host_io_decoder_harness.py``
+       has a ``KIMI_K26_PORT_NOTES`` section with the full breakdown and pointers
+       to the matching e2e test skips in ``test_host_io_decoder_sweep_e2e.py``.
+       The ``weight_key_prefix`` knob for Kimi's ``language_model.`` HF prefix
+       already exists on ``CacheWeightProvider`` (added 2026-05-15); the gate
+       kernel above is the last blocker for Kimi MoE-layer on-device validation.
     """
 
     @staticmethod
