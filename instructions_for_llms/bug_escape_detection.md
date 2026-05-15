@@ -437,8 +437,8 @@ After backfill, switch to incremental mode. The `seen-escapes.json` file prevent
 needs fix commits, which are in the opposite direction. The workflow will error or find the
 wrong commit if used for fix commit search.
 
-**Fix**: Use the Snowflake oracle (Step 4a), binary search (Step 4b Method A), or hypothesis
-testing (Step 4b Method B).
+**Fix**: Use Method A (binary search) or Method B (hypothesis testing) from Step 4. Both
+dispatch actual GHA workflow runs — there is no Snowflake shortcut for finding the fix commit.
 
 ### 4. Refuting a bug escape after testing only one hypothesis
 
