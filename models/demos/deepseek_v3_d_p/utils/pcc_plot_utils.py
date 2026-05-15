@@ -312,9 +312,12 @@ def generate_pcc_mermaid(result: dict, threshold: float = 0.99) -> str:
                 f"| {label} | {o_val} | {o_th} | {o_st} | {kv_val} | {kv_th} | {kv_st} | {pe_val} | {pe_th} | {pe_st} |"
             )
 
-        sections.append(
-            f"\n**Min PCC**: {min(all_values):.6f} | **Mean PCC**: {sum(all_values)/len(all_values):.6f} | **Failures**: {failures}/{len(all_values)}"
-        )
+        if all_values:
+            sections.append(
+                f"\n**Min PCC**: {min(all_values):.6f} | **Mean PCC**: {sum(all_values)/len(all_values):.6f} | **Failures**: {failures}/{len(all_values)}"
+            )
+        else:
+            sections.append("\n**Min PCC**: N/A | **Mean PCC**: N/A | **Failures**: 0/0")
 
     return "\n".join(sections)
 
