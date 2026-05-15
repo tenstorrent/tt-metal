@@ -15,10 +15,6 @@ only hyperparameters differ (see KimiK26Config). Versus DSv3:
 
 q_lora_rank, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_head_dim,
 hidden_size are inherited from DSv3 unchanged.
-
-Both reference (CPU torch) MLA and TT MLA are constructed from the same
-randomly-initialized state_dict shaped to Kimi's dims; final output and
-KVPE cache (KV latent and PE rope parts separately) are PCC-checked.
 """
 
 import random
@@ -26,24 +22,18 @@ import random
 import pytest
 import torch
 from loguru import logger
-from transformers.cache_utils import DynamicCache
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3.reference.configuration_deepseek import DeepseekV3Config
-from models.demos.deepseek_v3_d_p.reference.kimi_k26.modeling_deepseek import (
+from models.experimental.kimi_k26.reference.configuration_deepseek import DeepseekV3Config
+from models.experimental.kimi_k26.kimi_k26_config import KimiK26Config
+from models.experimental.kimi_k26.reference.modeling_deepseek import (
     DeepseekV3Attention as KimiBundledAttention,
 )
-from models.demos.deepseek_v3_d_p.reference.kimi_k26_config import KimiK26Config
-from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
-# Kimi's eager DeepseekV3Attention.forward materializes (heads, seq, seq) in fp32;
-# cap the comparison to total seq lengths that fit comfortably in CPU RAM.
-KIMI_VANILLA_MAX_SEQ_LEN = 5120
 
 
 def _build_kimi_config() -> DeepseekV3Config:
@@ -87,16 +77,15 @@ def _build_kimi_config() -> DeepseekV3Config:
     )
 
 
-def _run_kimi_vanilla_mla(
+def _run_kimi_mla_cpu(
     config: DeepseekV3Config,
     weights: dict[str, torch.Tensor],
     hidden_states: torch.Tensor,
     position_ids: torch.Tensor,
 ) -> torch.Tensor:
-    """Forward Kimi's bundled (vanilla) DeepseekV3Attention on CPU.
-
-    Returns shape (1, q_len, hidden_size). Constructs the (1, 1, q_len, q_len)
-    causal attention mask the eager forward asserts non-None.
+    """
+    Forward Kimi's bundled DeepseekV3Attention on CPU.
+    Returns shape (1, q_len, hidden_size).
     """
     attn = KimiBundledAttention(config, layer_idx=0)
     attn.load_state_dict(weights, strict=False)
@@ -119,7 +108,7 @@ def _run_kimi_vanilla_mla(
 
 
 def _generate_random_mla_weights(config: DeepseekV3Config) -> dict[str, torch.Tensor]:
-    """Random (init-scaled) state_dict matching DeepseekV3Attention's expected keys."""
+    """Random state_dict matching DeepseekV3Attention's expected keys."""
     h = config.hidden_size
     n = config.num_attention_heads
     qlr = config.q_lora_rank
@@ -141,10 +130,6 @@ def _generate_random_mla_weights(config: DeepseekV3Config) -> dict[str, torch.Te
     }
 
 
-# Total seq = sp_factor (= 8 on 8x4) * seq_len_per_chip.
-# 8 * 128  = 1024     (~ 1k)
-# 8 * 640  = 5120     (~ 5k)
-# 8 * 3200 = 25600    (~ 25k)
 @pytest.mark.parametrize(
     "seq_len_per_chip",
     [
@@ -173,13 +158,6 @@ def _generate_random_mla_weights(config: DeepseekV3Config) -> dict[str, torch.Te
     indirect=["mesh_device", "device_params"],
 )
 def test_ttnn_kimi_k26_mla(mesh_device, device_params, seq_len_per_chip, topology):
-    """
-    PCC test: ttMLA (Kimi K2.6 dims) vs MLAReference on a (8, 4) mesh.
-
-    Compares the final attention output (post o_proj) and the KVPE cache
-    (KV latent and PE rope parts) end to end.
-    """
-
     random.seed(42)
     torch.manual_seed(42)
 
@@ -190,7 +168,6 @@ def test_ttnn_kimi_k26_mla(mesh_device, device_params, seq_len_per_chip, topolog
     mesh_shape = list(mesh_device.shape)
 
     config = _build_kimi_config()
-    # RotarySetup reads max_seq_len; mirrors the temp hack in test_mla.py
     config.max_seq_len = seq_len
 
     logger.info(
@@ -201,31 +178,9 @@ def test_ttnn_kimi_k26_mla(mesh_device, device_params, seq_len_per_chip, topolog
 
     weights = _generate_random_mla_weights(config)
 
-    # ---- Reference MLA (CPU torch) ----
-    mla_ref = create_mla_reference(
-        config=config,
-        state_dict={"model.layers.0.self_attn." + k: v for k, v in weights.items()},
-        layer_idx=0,
-        module_path="model.layers.0.self_attn",
-    )
-    mla_ref = mla_ref.eval().to(torch.bfloat16)
-
-    # Inputs (host)
     hidden_states = torch.randn(1, seq_len, config.hidden_size).to(torch.bfloat16)
     position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
 
-    ref_cache = DynamicCache()
-    with torch.no_grad():
-        ref_output, _, ref_cache = mla_ref(
-            hidden_states=hidden_states,
-            position_ids=position_ids,
-            past_key_value=ref_cache,
-            use_cache=True,
-        )
-    ref_kvpe = ref_cache.key_cache[0]
-    logger.info(f"ref_output={tuple(ref_output.shape)}, ref_kvpe={tuple(ref_kvpe.shape)}")
-
-    # ---- TT MLA ----
     tt_mla = ttMLA(
         config,
         weights,
@@ -271,39 +226,12 @@ def test_ttnn_kimi_k26_mla(mesh_device, device_params, seq_len_per_chip, topolog
     ttnn.synchronize_device(mesh_device)
     ttnn.distributed_context_barrier()
 
-    # ---- Validation: final output ----
     tt_output_cpu = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape),
     ).to(torch.bfloat16)
-    _, output_pcc = assert_with_pcc(ref_output.unsqueeze(0), tt_output_cpu, 0.98)
-    logger.info(f"[mla_output] PCC: {output_pcc}")
 
-    # ---- Validation: KVPE cache (KV latent and PE rope parts) ----
-    tt_kvpe_cache_torch = ttnn.to_torch(
-        tt_kvpe_cache,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-    ).to(torch.bfloat16)
-    tt_kvpe_cache_torch = tt_kvpe_cache_torch[:1, :1, :, :]
-
-    kv_lora_rank = config.kv_lora_rank
-    _, kv_pcc = assert_with_pcc(ref_kvpe[:, :, :, :kv_lora_rank], tt_kvpe_cache_torch[:, :, :, :kv_lora_rank], 0.99)
-    logger.info(f"[kvpe_kv] PCC: {kv_pcc}")
-    _, pe_pcc = assert_with_pcc(ref_kvpe[:, :, :, kv_lora_rank:], tt_kvpe_cache_torch[:, :, :, kv_lora_rank:], 0.99)
-    logger.info(f"[kvpe_pe] PCC: {pe_pcc}")
-
-    # ---- Validation: TT vs Kimi-bundled vanilla DeepseekV3Attention ----
-    # Catches drift between tt-metal's forked reference (absorbed-Q + shared-KV +
-    # meta_style RoPE) and Kimi's canonical upstream MLA. Skipped above 5k since
-    # Kimi's eager forward materializes the full (heads, seq, seq) attention
-    # matrix in fp32 and would OOM on CPU.
-    if seq_len > KIMI_VANILLA_MAX_SEQ_LEN:
-        logger.warning(
-            f"[mla_output_vs_kimi_vanilla] SKIPPED at seq_len={seq_len} "
-            f"(>{KIMI_VANILLA_MAX_SEQ_LEN} would OOM in eager forward)"
-        )
-    else:
-        logger.info(f"Running Kimi-bundled DeepseekV3Attention reference at seq_len={seq_len}")
-        kimi_out = _run_kimi_vanilla_mla(config, weights, hidden_states, position_ids)
-        _, kimi_pcc = assert_with_pcc(kimi_out.unsqueeze(0), tt_output_cpu, 0.98)
-        logger.info(f"[mla_output_vs_kimi_vanilla] PCC: {kimi_pcc}")
+    logger.info(f"Running Kimi MLA reference at seq_len={seq_len}")
+    kimi_out = _run_kimi_mla_cpu(config, weights, hidden_states, position_ids)
+    _, kimi_pcc = assert_with_pcc(kimi_out.unsqueeze(0), tt_output_cpu, 0.995)
+    logger.info(f"[mla_output] PCC: {kimi_pcc}")

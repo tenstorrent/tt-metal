@@ -17,28 +17,26 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 
 
 class KimiK26Config(DeepSeekV3Config):
-    """Kimi K2.6 hyperparameters as overrides over DeepSeek V3."""
-
     # MoE: routing
-    NUM_ROUTED_EXPERTS = 384  # vs 256
-    NUM_EXPERT_GROUPS = 1  # vs 8 (Kimi uses a single group)
-    NUM_LIMITED_GROUPS = 1  # vs 4 (topk_group = 1)
-    ROUTE_SCALE = 2.827  # vs 2.5 (routed_scaling_factor)
+    NUM_ROUTED_EXPERTS = 384
+    NUM_EXPERT_GROUPS = 1
+    NUM_LIMITED_GROUPS = 1
+    ROUTE_SCALE = 2.827
 
     # Model architecture
-    NUM_DENSE_LAYERS = 1  # vs 3 (first_k_dense_replace)
-    VOCAB_SIZE = 163840  # vs 129280
+    NUM_DENSE_LAYERS = 1
+    VOCAB_SIZE = 163840
 
     # MLA
-    NUM_ATTENTION_HEADS = 64  # vs 128
-    NUM_KEY_VALUE_HEADS = 64  # not present in DSv3 config; same as num_attention_heads here
+    NUM_ATTENTION_HEADS = 64
+    NUM_KEY_VALUE_HEADS = 64
 
     # Norm / RoPE
-    RMS_NORM_EPS = 1e-5  # vs 1e-6
+    RMS_NORM_EPS = 1e-5
     ROPE_THETA = 50000.0
     MAX_POSITION_EMBEDDINGS = 262144
 
-    # YaRN scaling (Kimi uses yarn factor=64, original_max_position_embeddings=4096)
+    # YaRN scaling
     ROPE_SCALING_FACTOR = 64.0
     ROPE_SCALING_ORIGINAL_MAX_POSITION_EMBEDDINGS = 4096
     ROPE_SCALING_BETA_FAST = 32.0

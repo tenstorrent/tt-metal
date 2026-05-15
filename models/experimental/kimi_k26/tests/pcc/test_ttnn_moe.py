@@ -14,9 +14,9 @@ Notes:
 - experts_per_chip = 384 / 32 = 12 on the 8x4 mesh.
 - TtMoe and TorchMoe are constructed with their DSv3 defaults, then
   the gate's grouping (n_group, topk_group) and route_scale are
-  overridden in-place to Kimi's values (1, 1, 2.827). This avoids
-  modifying the DSv3 modules; only HOST_ALL gate fallback is supported
-  for Kimi values today (the device kernels TT_FATAL on n_groups != 8).
+  overridden in-place to Kimi's values (1, 1, 2.827). Only HOST_ALL gate
+  fallback is supported for Kimi values today (the device kernels TT_FATAL
+  on n_groups != 8).
 """
 
 import random
@@ -27,9 +27,9 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole, profiler
-from models.demos.deepseek_v3.reference.configuration_deepseek import DeepseekV3Config
-from models.demos.deepseek_v3_d_p.reference.kimi_k26.modeling_deepseek import DeepseekV3MoE as KimiBundledMoE
-from models.demos.deepseek_v3_d_p.reference.kimi_k26_config import KimiK26Config
+from models.experimental.kimi_k26.reference.configuration_deepseek import DeepseekV3Config
+from models.experimental.kimi_k26.kimi_k26_config import KimiK26Config
+from models.experimental.kimi_k26.reference.modeling_deepseek import DeepseekV3MoE as KimiBundledMoE
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
@@ -50,11 +50,8 @@ from tests.ttnn.utils_for_testing import comp_pcc
 
 
 def _override_gate_to_kimi_tt(tt_moe):
-    """Patch a freshly constructed TtMoe so its (host) gate matches Kimi K2.6.
-
-    For HOST_ALL / HOST_GROUPED_GATE fallback, _host_grouped_gate reads
-    n_expert_groups, n_limited_groups, route_scale directly off self.config,
-    so updating the config dataclass is enough (no need to rebuild reference_model).
+    """
+    Patch a freshly constructed TtMoe so host gate matches Kimi K2.6.
     """
     cfg = tt_moe.gate.config
     cfg.n_expert_groups = KimiK26Config.NUM_EXPERT_GROUPS
@@ -63,10 +60,8 @@ def _override_gate_to_kimi_tt(tt_moe):
 
 
 def _override_gate_to_kimi_torch(torch_moe):
-    """Patch TorchMoe.gate (a ReferenceMoEGate) attributes to Kimi K2.6 values.
-
-    ReferenceMoEGate.forward() reads these attributes set in __init__; patching
-    them on the instance changes the routing rule without rebuilding the module.
+    """
+    Patch TorchMoe.gate (a ReferenceMoEGate) attributes to Kimi K2.6 values.
     """
     g = torch_moe.gate
     g.n_group = KimiK26Config.NUM_EXPERT_GROUPS
@@ -115,14 +110,14 @@ def _build_kimi_config() -> DeepseekV3Config:
     )
 
 
-def _run_kimi_vanilla_moe(
+def _run_kimi_moe_cpu(
     config: DeepseekV3Config,
     gate_weights: dict,
     routed_expert_weights: list[dict],
     shared_expert_weights: dict,
     x: torch.Tensor,
 ) -> torch.Tensor:
-    """Forward Kimi's bundled (vanilla) DeepseekV3MoE on CPU.
+    """Forward Kimi's bundled DeepseekV3MoE on CPU.
 
     Reuses the same random gate / routed-expert / shared-expert weight tensors
     that drive the existing TorchMoe reference, repackaged into Kimi's
@@ -149,10 +144,6 @@ def _run_kimi_vanilla_moe(
     return out
 
 
-# Total seq = dispatch_group_size (= 8 on 8x4) * seq_len_per_chip.
-# 8 * 128  = 1024     (~ 1k)
-# 8 * 640  = 5120     (~ 5k)
-# 8 * 3200 = 25600    (~ 25k)
 @pytest.mark.parametrize(
     (
         "seq_len_per_chip, num_routed_experts, num_experts_per_tok, "
@@ -165,7 +156,7 @@ def _run_kimi_vanilla_moe(
             KimiK26Config.NUM_EXPERTS_PER_TOKEN,
             5,
             GateComputeMode.HOST_ALL,
-            False,
+            True,
             id="kimi-1k",
             marks=pytest.mark.timeout(0),
         ),
@@ -175,7 +166,7 @@ def _run_kimi_vanilla_moe(
             KimiK26Config.NUM_EXPERTS_PER_TOKEN,
             5,
             GateComputeMode.HOST_ALL,
-            False,
+            True,
             id="kimi-5k",
             marks=pytest.mark.timeout(0),
         ),
@@ -185,7 +176,7 @@ def _run_kimi_vanilla_moe(
             KimiK26Config.NUM_EXPERTS_PER_TOKEN,
             5,
             GateComputeMode.HOST_ALL,
-            False,
+            True,
             id="kimi-25k",
             marks=pytest.mark.timeout(0),
         ),
@@ -223,15 +214,6 @@ def test_ttnn_kimi_k26_moe(
     topology,
     gate_fallback_mode,
 ):
-    """
-    PCC test: TtMoe (Kimi K2.6 dims) vs TorchMoe reference on a (8, 4) mesh.
-
-    Compares dense outputs (gate recall, shared_output, routed_output,
-    final_output). Intermediate sparse validations are intentionally
-    omitted; this test focuses on end-to-end pipeline correctness with
-    Kimi's 384-expert routing fan-out.
-    """
-
     mesh_device.disable_and_clear_program_cache()
 
     profiler.clear()
@@ -275,7 +257,6 @@ def test_ttnn_kimi_k26_moe(
         f"max_dispatched_tokens_per_expert={max_dispatched_tokens_per_expert}"
     )
 
-    # Weights
     if run_pcc_check:
         all_routed_weights = create_torch_expert_weights(num_routed_experts, emb_dim, hidden_dim)
         shared_expert_weights = create_shared_expert_weights(emb_dim, hidden_dim)
@@ -291,7 +272,6 @@ def test_ttnn_kimi_k26_moe(
         num_dispatch_groups=num_dispatch_groups,
     )
 
-    # Input
     x = torch.randn(dispatch_group_size, seq_len_per_chip, emb_dim, dtype=torch.bfloat16)
     tt_x = ttnn.from_torch(
         x,
@@ -301,7 +281,6 @@ def test_ttnn_kimi_k26_moe(
         dtype=ttnn.bfloat16,
     )
 
-    # Torch reference
     if run_pcc_check:
         torch_moe = TorchMoe(
             dispatch_group_size=dispatch_group_size,
@@ -323,7 +302,6 @@ def test_ttnn_kimi_k26_moe(
         _override_gate_to_kimi_torch(torch_moe)
         torch_output, torch_intermediates = torch_moe(x, return_intermediates=True)
 
-    # TT under test
     tt_moe = TtMoe(
         mesh_device=mesh_device,
         dispatch_group_size=dispatch_group_size,
@@ -348,10 +326,9 @@ def test_ttnn_kimi_k26_moe(
         gate_weights=gate_weights,
         gate_fallback_mode=gate_fallback_mode,
     )
-    assert gate_fallback_mode == GateComputeMode.HOST_ALL, (
-        "Kimi gate (n_group=1, topk_group=1) is only supported via host fallback; "
-        "device grouped-gate kernels TT_FATAL on values != DSv3."
-    )
+    assert (
+        gate_fallback_mode == GateComputeMode.HOST_ALL
+    ), "Kimi gate (n_group=1, topk_group=1) is only supported via host fallback"
     _override_gate_to_kimi_tt(tt_moe)
     ttnn.synchronize_device(mesh_device)
 
@@ -361,9 +338,7 @@ def test_ttnn_kimi_k26_moe(
     if not run_pcc_check:
         return
 
-    # Validation
     all_passed = True
-
     tt_indices = ttnn.to_torch(
         tt_intermediates.gate_indices,
         mesh_composer=get_sp_mesh_composer(mesh_device),
@@ -423,15 +398,9 @@ def test_ttnn_kimi_k26_moe(
             logger.error(f"[{name}] FAILED - PCC: {pcc:.6f} below threshold {threshold}")
             all_passed = False
 
-    # ---- Validation: TT vs Kimi-bundled vanilla DeepseekV3MoE ----
-    # Catches drift between tt-metal's forked reference (bitonic-sort gate +
-    # rearranged dispatch/combine) and Kimi's canonical upstream MoE. Reuses
-    # the same random gate / routed-expert / shared-expert weight tensors,
-    # repackaged into Kimi's state_dict layout. Memory-heavy (~16 GB bf16
-    # weights for 384 experts) but sequence-length independent.
     if tt_output is not None:
         logger.info("Running Kimi-bundled DeepseekV3MoE reference")
-        kimi_out = _run_kimi_vanilla_moe(
+        kimi_out = _run_kimi_moe_cpu(
             config=_build_kimi_config(),
             gate_weights=gate_weights,
             routed_expert_weights=all_routed_weights,
@@ -442,11 +411,9 @@ def test_ttnn_kimi_k26_moe(
         kimi_threshold = 0.96
         _, kimi_pcc = comp_pcc(kimi_out.float(), tt_final_host.float())
         if kimi_pcc >= kimi_threshold:
-            logger.info(f"[final_output_vs_kimi_vanilla] PASSED - PCC: {kimi_pcc:.6f} (threshold: {kimi_threshold})")
+            logger.info(f"[final_output_vs_kimi_cpu] PASSED - PCC: {kimi_pcc:.6f} (threshold: {kimi_threshold})")
         else:
-            logger.error(
-                f"[final_output_vs_kimi_vanilla] FAILED - PCC: {kimi_pcc:.6f} below threshold {kimi_threshold}"
-            )
+            logger.error(f"[final_output_vs_kimi_cpu] FAILED - PCC: {kimi_pcc:.6f} below threshold {kimi_threshold}")
             all_passed = False
         del kimi_out
 
