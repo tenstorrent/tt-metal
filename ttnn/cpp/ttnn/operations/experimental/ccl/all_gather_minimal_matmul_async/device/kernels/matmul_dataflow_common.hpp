@@ -176,8 +176,21 @@ void compute_actual_k_block(
             // Uni-ring: one slice per iter from "successor" (Dev k+1 normally; for Dev N-1,
             // from Dev 0 via long send). All sends use out_ready_semaphore_forward at the
             // receiver — single sem per iter.
+            //
+            // Sender fires K_num_blocks sem incs per m_block (iter 0..N-1). The receiver
+            // only enters this wait at device_iter > 0, so it consumes (N-1)*K_blocks_per_device
+            // sem incs per m_block here — leaving K_blocks_per_device extra (from sender's
+            // iter N-1 sends, which carry data the receiver doesn't need). Without
+            // compensation, sem accumulates past sem_target and the NEXT m_block's first
+            // wait passes BEFORE sender has written that m_block's data, causing stale
+            // reads. Fix: at the last K-block iter of each m_block, advance sem_target by
+            // k_blocks_per_device to consume those extras and keep the counter in lockstep
+            // with the sender across m_block boundaries.
             noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + 1);
             sem_target_forward += 1;
+            if (k_block_iter == total_k_block_count - 1) {
+                sem_target_forward += k_blocks_per_device;
+            }
 #else
             if constexpr (IsLinear) {
                 // Linear: each device_iter delivers from exactly one direction.
