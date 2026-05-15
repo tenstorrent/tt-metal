@@ -912,7 +912,7 @@ def test_gpt_oss_demo(
 
         with open(Path(__file__).parent.parent.joinpath("perf_targets.json"), "r") as f:
             perf_targets = json.load(f)
-        prefill_pad_length = get_padded_prefill_len(max(prefill_lens))
+        prefill_pad_length = 1 << max(prefill_lens).bit_length()  # round up to the next power of 2
         targets = {}
         if (
             f"batch_{batch_size}" in perf_targets["targets"]
@@ -969,7 +969,7 @@ def test_gpt_oss_demo(
             num_layers=model_args[0].n_layers,
             batch_size=global_batch_size,
             config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},
-            input_sequence_length=prefill_pad_length,
+            input_sequence_length=max(prefill_lens),
             output_sequence_length=num_tokens_generated_decode[0],
         )
 
@@ -1013,14 +1013,9 @@ def test_gpt_oss_demo(
                     )
 
                     # Verify decode performance with decode-specific tolerance
-                    decode_ts_target = perf_config.get("decode_tok_s")
-                    if isinstance(decode_ts_target, list):
-                        decode_ts_target = decode_ts_target[0]
-                    if decode_ts_target is None:
-                        decode_ts_target = decode_tsu_target * global_batch_size
                     decode_targets = {
                         "decode_t/s/u": decode_tsu_target,
-                        "decode_t/s": decode_ts_target,
+                        "decode_t/s": decode_tsu_target * global_batch_size,  # calculate from per-user rate
                     }
                     verify_perf(
                         measurements,
