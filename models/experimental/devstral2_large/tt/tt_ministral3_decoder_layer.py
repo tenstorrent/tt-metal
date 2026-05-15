@@ -24,6 +24,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_gather
 from models.experimental.devstral2_large.tt.model_utils import (
+    devstral_to_memory_if_needed,
     get_decode_mem_config_after_hidden_dim_concat,
 )
 from models.experimental.devstral2_large.tt.tt_ministralattn import TtDevstral2LargeAttention
@@ -206,7 +207,7 @@ class TtMinistral3DecoderLayer(LightweightModule):
         attn_norm_config = self.args.get_norm_config("attn", mode, self.prefetcher)
         attn_in = self.input_layernorm(x, mode, norm_config=attn_norm_config)
         if mode == Mode.PREFILL:
-            attn_in = ttnn.to_memory_config(attn_in, ttnn.L1_MEMORY_CONFIG)
+            attn_in = devstral_to_memory_if_needed(attn_in, ttnn.L1_MEMORY_CONFIG)
 
         if batch_size > 1:
             attn_in = ttnn.reshape(attn_in, [batch_size, 1, attn_in.shape[-2] // batch_size, -1])
@@ -256,7 +257,7 @@ class TtMinistral3DecoderLayer(LightweightModule):
         attn_residual_mem = skip_mem_cfg
         if mode == Mode.DECODE and self.prefetcher is None and not TG and int(attn_out.shape[-1]) == int(self.args.dim):
             attn_residual_mem = get_decode_mem_config_after_hidden_dim_concat(self.args, mode, self.prefetcher)
-        attn_out = ttnn.to_memory_config(attn_out, attn_residual_mem)
+        attn_out = devstral_to_memory_if_needed(attn_out, attn_residual_mem)
 
         hidden_states = ttnn.add(
             residual,
@@ -273,10 +274,13 @@ class TtMinistral3DecoderLayer(LightweightModule):
         ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
         hidden_states = self.post_attention_layernorm(hidden_states, mode, norm_config=ff_norm_config)
         if mode == Mode.PREFILL:
-            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+            hidden_states = devstral_to_memory_if_needed(hidden_states, ttnn.L1_MEMORY_CONFIG)
 
         if TG and mode == Mode.DECODE:
-            hidden_states = ttnn.to_memory_config(hidden_states, memory_config=self.args.get_mlp_act_mem_config(mode))
+            hidden_states = devstral_to_memory_if_needed(
+                hidden_states,
+                self.args.get_mlp_act_mem_config(mode),
+            )
 
         hidden_states = self.mlp.forward(hidden_states, mode)
 

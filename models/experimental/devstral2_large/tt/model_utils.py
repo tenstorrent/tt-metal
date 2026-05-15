@@ -14,12 +14,21 @@ from __future__ import annotations
 
 from typing import Any
 
+import ttnn
+
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.tt_transformers.tt.common import Mode
 
 # Hidden sizes at or above this use the wide-model DRAM / minimal-matmul mitigations on
 # multi-device non-Galaxy Wormhole (T3K) as well as Blackhole multi-chip.
 _MIN_WIDE_DIM_FOR_MITIGATION = 8192
+
+
+def devstral_to_memory_if_needed(tensor: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -> ttnn.Tensor:
+    """Skip redundant ``to_memory_config`` when the tensor already uses ``memory_config``."""
+    if tensor.memory_config() == memory_config:
+        return tensor
+    return ttnn.to_memory_config(tensor, memory_config)
 
 
 def devstral2_large_multi_device_dram_mitigation(mesh_device: Any, args: Any) -> bool:

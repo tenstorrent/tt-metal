@@ -20,6 +20,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.devstral2_large.tt.model_utils import (
+    devstral_to_memory_if_needed,
     devstral2_large_multi_device_dram_mitigation,
 )
 from models.tt_transformers.tt.ccl import tt_all_reduce
@@ -167,7 +168,8 @@ class TtDevstral2LargeMLP(LightweightModule):
         # activations. Post-attention RMSNorm on BH wide models returns **interleaved** L1 (see
         # ``tt_ministralrmsnorm._forward_bh_wide_local_rmsnorm``), so re-shard before w1/w3.
         if mode == Mode.DECODE and not TG and self.prefetcher is None and not x.is_sharded():
-            x = ttnn.to_memory_config(x, self.args.get_mlp_input_mem_config(mode, self.prefetcher))
+            mlp_in = self.args.get_mlp_input_mem_config(mode, self.prefetcher)
+            x = devstral_to_memory_if_needed(x, mlp_in)
 
         # Interleaved DRAM ``w1``/``w3`` are incompatible with ``dram_matmul_config`` (requires
         # width-sharded in1). Use ``ttnn.linear`` **without** that program config for gate/up only.
@@ -302,7 +304,7 @@ class TtDevstral2LargeMLP(LightweightModule):
         )
 
         if mode == Mode.DECODE and not TG and self.prefetcher is None:
-            w2_in = ttnn.to_memory_config(w2_in, self._binary_mult_mem(mode))
+            w2_in = devstral_to_memory_if_needed(w2_in, self._binary_mult_mem(mode))
 
         ttnn.deallocate(w3_out)
         ttnn.deallocate(w1_out)
@@ -325,7 +327,7 @@ class TtDevstral2LargeMLP(LightweightModule):
             )
 
             if mode == Mode.DECODE:
-                w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
+                w2_in = devstral_to_memory_if_needed(w2_in, ttnn.L1_MEMORY_CONFIG)
 
         li_ff2_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
@@ -414,7 +416,7 @@ class TtDevstral2LargeMLP(LightweightModule):
         )
 
         if mode == Mode.DECODE:
-            w2_out_reduced = ttnn.to_memory_config(
+            w2_out_reduced = devstral_to_memory_if_needed(
                 w2_out_reduced,
                 self.args.get_mlp_output_mem_config(mode, self.prefetcher),
             )
