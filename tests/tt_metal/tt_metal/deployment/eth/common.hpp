@@ -231,18 +231,20 @@ static void track_eth_progress_timeout(
 struct core_setup {
     std::shared_ptr<tt_metal::Program> program;
     std::shared_ptr<distributed::MeshDevice> mesh_device;
-    distributed::MeshCoordinateRange& device_range;
-    const CoreCoord& core;
+    distributed::MeshCoordinateRange device_range;
+    const CoreCoord core;
+    uint32_t iter_l1_addr;
+    uint32_t expected_count;
+    uint32_t delta_time_addr;
+    uint64_t total_transferred;
+    double bw_threshold;
+    uint32_t recv_l1_address;
+    std::span<uint32_t> inp;
 };
 
 template <typename FIXTURE>
 [[maybe_unused]]
-static void wait_to_finish_eth_timeout_cores(
-    FIXTURE* fixture,
-    std::vector<struct core_setup>& cores,
-    distributed::MeshCoordinateRange& device_range,
-    uint32_t iter_l1_addr,
-    uint32_t expected_count) {
+static void wait_to_finish_eth_timeout_cores(FIXTURE* fixture, std::vector<struct core_setup>& cores) {
     /* ==================== */
     std::map<std::shared_ptr<distributed::MeshDevice>, std::shared_ptr<distributed::MeshWorkload>> devices;
 
@@ -700,6 +702,30 @@ static bool tensix_compare_dram_banks(
             last_error);
     }
     return !total_errors;
+}
+
+[[maybe_unused]]
+bool bandwidth_check_cores(std::span<struct core_setup> cores) {
+    bool pass = true;
+
+    for (const auto& cs : cores) {
+        auto* const dev = cs.mesh_device->get_devices()[0];
+        pass &= bandwidth_check(dev, cs.core, cs.delta_time_addr, cs.total_transferred, cs.bw_threshold);
+    }
+
+    return pass;
+}
+
+[[maybe_unused]]
+bool data_check_cores(std::span<struct core_setup> cores) {
+    bool pass = true;
+
+    for (const auto& cs : cores) {
+        auto* const dev = cs.mesh_device->get_devices()[0];
+        pass &= data_check(dev, cs.core, cs.recv_l1_address, cs.inp);
+    }
+
+    return pass;
 }
 
 void print_summary(std::span<struct LinkError> errors) {
