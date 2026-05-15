@@ -1286,9 +1286,6 @@ def prepare_moe_routed_experts_bspm_tp8(
     assignment, same hash), so the per-layer disk footprint collapses
     dramatically when ``bspm_path is None``.
     """
-    if cache_config is None:
-        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device, mesh_shape=_device_mesh_shape(device))
-
     tile_w = 32
     bspm_data = None
     if bspm_path is not None:
@@ -1300,6 +1297,9 @@ def prepare_moe_routed_experts_bspm_tp8(
             )
         logger.info("Loading BSPM for layer {}: {}", layer_idx, bspm_path)
         bspm_data = load_bspm_for_layer(str(bspm_path))
+
+    if cache_config is None:
+        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device, mesh_shape=_device_mesh_shape(device))
         logger.info("  BSPM TP8 mixed-precision compression for {} experts", bspm_data["n_experts"])
 
     # (proj_name, shard_dim, subblock_k, subblock_n) — must match the kernel's
