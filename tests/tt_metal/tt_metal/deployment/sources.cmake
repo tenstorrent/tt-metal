@@ -7,4 +7,5 @@ set(UNIT_TESTS_DEPLOYMENT_SRC
     eth/test_eth_data_integrity_dram_bidir.cpp
     eth/test_eth_data_integrity_dram.cpp
     eth/test_eth_link_up.cpp
+    eth/test_eth_stress_test.cpp
 )

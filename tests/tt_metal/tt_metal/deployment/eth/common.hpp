@@ -228,6 +228,74 @@ static void track_eth_progress_timeout(
     }
 }
 
+struct core_setup {
+    std::shared_ptr<tt_metal::Program> program;
+    std::shared_ptr<distributed::MeshDevice> mesh_device;
+    distributed::MeshCoordinateRange& device_range;
+    const CoreCoord& core;
+};
+
+template <typename FIXTURE>
+[[maybe_unused]]
+static void wait_to_finish_eth_timeout_cores(
+    FIXTURE* fixture,
+    std::vector<struct core_setup>& cores,
+    distributed::MeshCoordinateRange& device_range,
+    uint32_t iter_l1_addr,
+    uint32_t expected_count) {
+    /* ==================== */
+    std::map<std::shared_ptr<distributed::MeshDevice>, std::shared_ptr<distributed::MeshWorkload>> devices;
+
+    for (auto& cs : cores) {
+        devices[cs.mesh_device] = std::make_shared<distributed::MeshWorkload>();
+    }
+
+    for (const auto& [dev, workload] : devices) {
+        for (auto& cs : cores) {
+            if (cs.mesh_device != dev) {
+                continue;
+            }
+
+            devices[cs.mesh_device]->add_program(cs.device_range, std::move(*cs.program));
+            break;
+        }
+    }
+
+    for (const auto& [dev, workload] : devices) {
+        fixture->RunProgram(dev, *workload, true);
+    }
+
+    for (const auto& [dev, workload] : devices) {
+        fixture->FinishCommands(dev);
+    }
+
+#if 0
+
+    distributed::MeshWorkload send_workload;
+    distributed::MeshWorkload recv_workload_;
+    distributed::MeshWorkload& recv_workload = same_device ? send_workload : recv_workload_;
+
+    send_workload.add_program(device_range, std::move(send_program));
+    if (!same_device) {
+        recv_workload.add_program(device_range, std::move(recv_program));
+    }
+
+    fixture->RunProgram(send_mesh_device, send_workload, true);
+    if (!same_device) {
+        fixture->RunProgram(recv_mesh_device, recv_workload, true);
+    }
+
+    auto* const send_device = send_mesh_device->get_devices()[0];
+    auto* const recv_device = recv_mesh_device->get_devices()[0];
+    // track_eth_progress_timeout(send_device, recv_device, send_core, recv_core, iter_l1_addr, expected_count);
+
+    fixture->FinishCommands(send_mesh_device);
+    if (!same_device) {
+        fixture->FinishCommands(recv_mesh_device);
+    }
+#endif
+}
+
 template <typename FIXTURE>
 [[maybe_unused]]
 static void wait_to_finish_eth_timeout(
