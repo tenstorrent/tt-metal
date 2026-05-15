@@ -18,13 +18,23 @@ decoder layers with MoE top-k routing in float vs bf16. Realistic floor is
 0.85 overall, with per-position numbers typically ≥0.95 at the last position.
 For a 2 + 2 layer reduced run, expect ≥0.95 overall.
 
+Inputs match the demo path: ``AutoProcessor.apply_chat_template`` produces
+``pixel_values`` + ``input_ids`` with the chat-template framing the model was
+trained on. With ``MISTRAL4_MM_IMAGE`` unset, a deterministic synthetic RGB
+image is used (still goes through the processor's resize + normalization).
+This stabilises the MoE router compared to feeding ``randint(100, 1000)``
+into the text positions, which was previously causing top-k expert flips
+between fp32 (HF) and bf16 (TTNN) and dragging full-stack PCC to ~0.5.
+
 Run::
 
     export MISTRAL4_MM_PCC=1
-    export MISTRAL4_MM_TEXT_LAYERS=2     # default 2
-    export MISTRAL4_MM_VISION_LAYERS=2   # default 2
-    export MISTRAL4_MM_IMG_PATCHES=10    # patches per side; default 10
-    export MISTRAL4_MM_TEXT_LEN=8        # flanking text tokens; default 8
+    export MISTRAL4_MM_TEXT_LAYERS=2          # default 2
+    export MISTRAL4_MM_VISION_LAYERS=2        # default 2
+    export MISTRAL4_MM_IMAGE=path/to/img.jpg  # optional; else synthetic
+    export MISTRAL4_MM_PROMPT="Describe this image."   # optional
+    export MISTRAL4_MM_IMAGE_MAX_SIDE=224      # cap HF CPU forward cost
+    export MISTRAL4_MM_IMG_PATCHES=10          # synth-fallback patches/side
     export MESH_DEVICE=T3K
     pytest models/experimental/mistral_small_4_119b/tests/test_multimodal_pcc.py -v -s --timeout=0
 
@@ -66,8 +76,10 @@ pytest.importorskip("transformers.models.pixtral.modeling_pixtral", reason="Pixt
 
 _TEXT_LAYERS = int(os.environ.get("MISTRAL4_MM_TEXT_LAYERS", "2"))
 _VISION_LAYERS = int(os.environ.get("MISTRAL4_MM_VISION_LAYERS", "2"))
+_IMAGE_PATH = os.environ.get("MISTRAL4_MM_IMAGE", "")
+_PROMPT = os.environ.get("MISTRAL4_MM_PROMPT", "Describe this image.")
+_IMAGE_MAX_SIDE = int(os.environ.get("MISTRAL4_MM_IMAGE_MAX_SIDE", "224"))
 _IMG_PATCHES = int(os.environ.get("MISTRAL4_MM_IMG_PATCHES", "10"))
-_TEXT_LEN = int(os.environ.get("MISTRAL4_MM_TEXT_LEN", "8"))
 _PCC_FLOOR = 0.85
 
 
@@ -179,33 +191,66 @@ def test_mistral_small_4_multimodal_pcc(reset_seeds, mesh_device):
         pytest.skip(f"Could not load HF config: {exc}")
 
     image_token_id = int(getattr(cfg, "image_token_index", 10))
-    assert _IMG_PATCHES % MMP_SPATIAL_MERGE_SIZE == 0, f"--patches ({_IMG_PATCHES}) must be even for 2x2 merge"
 
     try:
         state_dict = load_hf_state_dict_filtered(HF_MODEL_ID, _state_dict_prefixes(_TEXT_LAYERS, _VISION_LAYERS))
     except (FileNotFoundError, OSError) as exc:
         pytest.skip(f"Checkpoint load failed: {exc}")
 
-    # ── Build inputs ─────────────────────────────────────────────────────
-    img_size = _IMG_PATCHES * VISION_PATCH_SIZE
-    num_image_tokens = (_IMG_PATCHES // MMP_SPATIAL_MERGE_SIZE) ** 2
-    text_before = _TEXT_LEN // 2
-    text_after = _TEXT_LEN - text_before
-    seq_len = text_before + num_image_tokens + text_after
+    # ── Build inputs via HF chat-template processor (matches demo_multimodal) ───
+    from PIL import Image
+    from transformers import AutoProcessor
 
-    pixel_values = torch.rand(1, 3, img_size, img_size, dtype=torch.bfloat16) * 2 - 1
+    if _IMAGE_PATH and os.path.exists(_IMAGE_PATH):
+        img = Image.open(_IMAGE_PATH).convert("RGB")
+        if max(img.size) > _IMAGE_MAX_SIDE:
+            scale = _IMAGE_MAX_SIDE / max(img.size)
+            new_w = max(VISION_PATCH_SIZE, int(round(img.size[0] * scale)))
+            new_h = max(VISION_PATCH_SIZE, int(round(img.size[1] * scale)))
+            img = img.resize((new_w, new_h))
+            logger.info(f"Resized {_IMAGE_PATH!r} → {img.size} (max side ≤ {_IMAGE_MAX_SIDE})")
+        else:
+            logger.info(f"Loaded {_IMAGE_PATH!r} at {img.size}")
+    else:
+        assert (
+            _IMG_PATCHES % MMP_SPATIAL_MERGE_SIZE == 0
+        ), f"MISTRAL4_MM_IMG_PATCHES ({_IMG_PATCHES}) must be even for 2x2 merge"
+        side = _IMG_PATCHES * VISION_PATCH_SIZE
+        gen = torch.Generator().manual_seed(0)
+        arr = (torch.rand(side, side, 3, generator=gen) * 255).to(torch.uint8).numpy()
+        img = Image.fromarray(arr, mode="RGB")
+        logger.info(f"No MISTRAL4_MM_IMAGE set; using deterministic synthetic {side}×{side} RGB image")
 
-    rng = torch.Generator().manual_seed(0)
-    txt_before = torch.randint(100, 1000, (text_before,), generator=rng, dtype=torch.long)
-    txt_after = torch.randint(100, 1000, (text_after,), generator=rng, dtype=torch.long)
-    img_slots = torch.full((num_image_tokens,), image_token_id, dtype=torch.long)
-    input_ids = torch.cat([txt_before, img_slots, txt_after]).unsqueeze(0)
-    image_sizes = torch.tensor([[img_size, img_size]], dtype=torch.long)
+    processor = AutoProcessor.from_pretrained(HF_MODEL_ID)
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": img},
+                {"type": "text", "text": _PROMPT},
+            ],
+        }
+    ]
+    inputs = processor.apply_chat_template(
+        messages,
+        tokenize=True,
+        return_dict=True,
+        return_tensors="pt",
+        add_generation_prompt=True,
+    )
+    pixel_values = inputs["pixel_values"].to(torch.bfloat16)
+    input_ids = inputs["input_ids"]
+    seq_len = input_ids.shape[-1]
+    num_image_tokens = int((input_ids[0] == image_token_id).sum().item())
+    if "image_sizes" in inputs:
+        image_sizes = inputs["image_sizes"]
+    else:
+        image_sizes = torch.tensor([[pixel_values.shape[-2], pixel_values.shape[-1]]], dtype=torch.long)
 
     logger.info(
         f"Config: text_layers={_TEXT_LAYERS}, vision_layers={_VISION_LAYERS}, "
-        f"image {img_size}×{img_size}, {num_image_tokens} image tokens, "
-        f"seq_len={seq_len}"
+        f"pixel_values {tuple(pixel_values.shape)}, {num_image_tokens} image tokens, "
+        f"seq_len={seq_len}, prompt={_PROMPT!r}"
     )
 
     # ── HF reference forward ─────────────────────────────────────────────
