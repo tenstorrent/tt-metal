@@ -21,6 +21,7 @@ except ModuleNotFoundError:
     from models.demos.utils import model_targets
 
 LOWER_IS_BETTER_METRICS = {
+    "prefill_time_to_token",
     "prefill_time_to_first_token",
     "compile_prefill",
     "compile_decode",
@@ -40,6 +41,7 @@ METRIC_NAME_MAP = {
     "compile_prefill": ("compile_prefill", "time(s)"),
     "compile_decode": ("compile_decode", "time(s)"),
     "prefill_t/s": ("inference_prefill", "tokens/s"),
+    "prefill_time_to_token": ("inference_prefill", "time_to_token"),
     "prefill_time_to_first_token": ("inference_prefill", "time_to_token"),
     "prefill_decode_t/s/u": ("inference_prefill_decode", "tokens/s/user"),
     "decode_t/s": ("inference_decode", "tokens/s"),
@@ -55,6 +57,7 @@ ALLOWED_TARGET_METRIC_NAMES = {
     "decode_t/s/u",
     "prefill_decode_t/s/u",
     "prefill_t/s",
+    "prefill_time_to_token",
     "prefill_time_to_first_token",
     "top1",
     "top5",
@@ -62,6 +65,7 @@ ALLOWED_TARGET_METRIC_NAMES = {
 TOLERANCE_FAMILY_ALIASES = {
     "decode_t/s": "decode_tolerance",
     "decode_t/s/u": "decode_tolerance",
+    "prefill_time_to_token": "prefill_tolerance",
     "prefill_time_to_first_token": "prefill_tolerance",
 }
 
@@ -113,6 +117,9 @@ def _extract_metric_value(metric_name: str, lookup: dict[tuple[str, str], float]
             # model_targets.yaml stores TTFT in milliseconds after migration,
             # while benchmark payloads still expose time_to_token in seconds.
             return value * 1000.0
+        if metric_name == "prefill_time_to_token":
+            # Legacy TTFT target is stored in seconds.
+            return value
         return value
 
     matches: list[tuple[str, str, float]] = []
@@ -235,6 +242,15 @@ def _validate_targets_schema(targets_yaml: dict[str, Any]) -> list[str]:
                     if not isinstance(block, dict):
                         errors.append(
                             f"Model '{model_name}' sku '{sku_name}' entry #{idx} has non-dict '{block_name}' block"
+                        )
+                        continue
+                    if block_name == "perf" and (
+                        "prefill_time_to_token" in block and "prefill_time_to_first_token" in block
+                    ):
+                        errors.append(
+                            f"Model '{model_name}' sku '{sku_name}' entry #{idx} has both "
+                            "'prefill_time_to_token' and 'prefill_time_to_first_token' in perf; "
+                            "keep only one key"
                         )
                         continue
                     for metric_name, metric_value in block.items():

@@ -312,6 +312,106 @@ def test_validate_perf_targets_supports_new_metric_names_and_ttft_ms_targets(tmp
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_validate_perf_targets_supports_legacy_ttft_seconds_targets(tmp_path):
+    (tmp_path / "generated/benchmark_data").mkdir(parents=True)
+    (tmp_path / "models").mkdir(parents=True)
+    (tmp_path / "tests/pipeline_reorg").mkdir(parents=True)
+
+    _write_complete_run(
+        tmp_path / "generated/benchmark_data/complete_run_1.json",
+        model="demo-model",
+        batch_size=4,
+        seq_len=128,
+        decode_tsu=33.0,
+        extra_measurements=[
+            {"step_name": "inference_prefill", "name": "time_to_token", "value": 0.11},
+            {"step_name": "inference_decode", "name": "tokens/s", "value": 140.0},
+        ],
+    )
+
+    targets = {
+        "version": 1,
+        "targets": {
+            "demo-model": {
+                "aliases": [],
+                "skus": {
+                    "wh_n150": {
+                        "entries": [
+                            {
+                                "batch_size": 4,
+                                "seq_len": 128,
+                                "status": "active",
+                                "perf": {
+                                    "prefill_time_to_token": 0.12,
+                                    "prefill_tolerance": 1.15,
+                                    "decode_t/s/u": 30.0,
+                                    "decode_t/s": 130.0,
+                                    "decode_tolerance": 1.2,
+                                },
+                                "accuracy": {},
+                            }
+                        ]
+                    }
+                },
+            }
+        },
+    }
+    (tmp_path / "models/model_targets.yaml").write_text(yaml.safe_dump(targets), encoding="utf-8")
+    tests_yaml = [{"model": "demo-model", "skus": {"wh_n150": {"tier": 1}}, "team": "models"}]
+    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(yaml.safe_dump(tests_yaml), encoding="utf-8")
+
+    result = _run_validator(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_validate_perf_targets_respects_prefill_tolerance_for_legacy_ttft_key(tmp_path):
+    (tmp_path / "generated/benchmark_data").mkdir(parents=True)
+    (tmp_path / "models").mkdir(parents=True)
+    (tmp_path / "tests/pipeline_reorg").mkdir(parents=True)
+
+    _write_complete_run(
+        tmp_path / "generated/benchmark_data/complete_run_1.json",
+        model="demo-model",
+        batch_size=1,
+        seq_len=128,
+        decode_tsu=100.0,
+        extra_measurements=[
+            {"step_name": "inference_prefill", "name": "time_to_token", "value": 0.08},
+        ],
+    )
+
+    targets = {
+        "version": 1,
+        "targets": {
+            "demo-model": {
+                "aliases": [],
+                "skus": {
+                    "wh_n150": {
+                        "entries": [
+                            {
+                                "batch_size": 1,
+                                "seq_len": 128,
+                                "status": "active",
+                                "perf": {
+                                    "prefill_time_to_token": 0.10,
+                                    "prefill_tolerance": 1.30,
+                                },
+                                "accuracy": {},
+                            }
+                        ]
+                    }
+                },
+            }
+        },
+    }
+    (tmp_path / "models/model_targets.yaml").write_text(yaml.safe_dump(targets), encoding="utf-8")
+    tests_yaml = [{"model": "demo-model", "skus": {"wh_n150": {"tier": 1}}, "team": "models"}]
+    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(yaml.safe_dump(tests_yaml), encoding="utf-8")
+
+    result = _run_validator(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_validate_perf_targets_detects_regression(tmp_path):
     (tmp_path / "generated/benchmark_data").mkdir(parents=True)
     (tmp_path / "models").mkdir(parents=True)
@@ -809,6 +909,44 @@ def test_validate_targets_schema_skips_duplicate_check_when_dims_are_missing():
     assert len(errors) == 2
     assert all("must define both 'batch_size' and 'seq_len' keys" in error for error in errors)
     assert all("duplicate entry for batch_size=None, seq_len=None" not in error for error in errors)
+
+
+def test_validate_targets_schema_rejects_dual_ttft_keys_in_same_perf_block():
+    validator = _load_validator_module()
+    targets_yaml = {
+        "version": 1,
+        "targets": {
+            "demo-model": {
+                "aliases": [],
+                "skus": {
+                    "wh_n150": {
+                        "entries": [
+                            {
+                                "batch_size": 1,
+                                "seq_len": 128,
+                                "status": "active",
+                                "perf": {
+                                    "prefill_time_to_token": 0.1,
+                                    "prefill_time_to_first_token": 100.0,
+                                },
+                                "accuracy": {},
+                            }
+                        ]
+                    }
+                },
+            }
+        },
+    }
+
+    errors = validator._validate_targets_schema(targets_yaml)
+    assert len(errors) == 1
+    assert "has both 'prefill_time_to_token' and 'prefill_time_to_first_token' in perf" in errors[0]
+
+
+def test_repo_model_targets_yaml_uses_canonical_ttft_key_only():
+    repo_targets = yaml.safe_load((REPO_ROOT / "models/model_targets.yaml").read_text(encoding="utf-8"))
+    assert "prefill_time_to_first_token" in yaml.safe_dump(repo_targets)
+    assert "prefill_time_to_token" not in yaml.safe_dump(repo_targets)
 
 
 def test_parse_args_accepts_high_tol_multiplier(monkeypatch):

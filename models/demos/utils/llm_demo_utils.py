@@ -13,12 +13,33 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler, per
 TOLERANCE_FAMILY_ALIASES = {
     "decode_t/s": "decode_tolerance",
     "decode_t/s/u": "decode_tolerance",
+    "prefill_time_to_token": "prefill_tolerance",
     "prefill_time_to_first_token": "prefill_tolerance",
+}
+
+METRIC_NAME_ALIASES = {
+    "prefill_time_to_token": "prefill_time_to_first_token",
 }
 
 
 class PerfRegressionWarning(UserWarning):
     """Warning emitted when measured perf drifts from configured thresholds."""
+
+
+def _normalize_metric_aliases(metrics: dict, source_name: str) -> dict:
+    """Map legacy metric aliases to canonical names, rejecting conflicting duplicates."""
+    normalized = {}
+    source_keys = {}
+    for key, value in metrics.items():
+        canonical_key = METRIC_NAME_ALIASES.get(key, key)
+        if canonical_key in normalized and source_keys[canonical_key] != key:
+            raise ValueError(
+                f"{source_name} contains both legacy and canonical forms for '{canonical_key}': "
+                f"use only one of '{key}' or '{canonical_key}'"
+            )
+        normalized[canonical_key] = value
+        source_keys[canonical_key] = key
+    return normalized
 
 
 def create_benchmark_data(profiler: BenchmarkProfiler, measurements: dict, N_warmup_iter: dict, targets: dict):
@@ -162,6 +183,10 @@ def verify_perf(
                 f"No centralized perf targets found for model={model_name}, sku={sku}, "
                 f"batch_size={batch_size}, seq_len={seq_len}"
             )
+    else:
+        expected_perf_metrics = _normalize_metric_aliases(expected_perf_metrics, "expected_perf_metrics")
+
+    measurements = _normalize_metric_aliases(measurements, "measurements")
 
     expected_measurements_default = {
         "compile_prefill": False,
@@ -173,6 +198,7 @@ def verify_perf(
         "decode_t/s/u": True,
     }
     expected_measurements = expected_measurements_default if expected_measurements is None else expected_measurements
+    expected_measurements = _normalize_metric_aliases(expected_measurements, "expected_measurements")
 
     def normalized_expected_value(metric_name: str, expected_value: float) -> float:
         """
@@ -213,6 +239,10 @@ def verify_perf(
         "compile_prefill",
         "compile_decode",
     }
+    if lower_is_better_metrics:
+        lower_is_better_metrics = {
+            METRIC_NAME_ALIASES.get(metric_name, metric_name) for metric_name in lower_is_better_metrics
+        }
     lower_is_better_metrics = (
         lower_is_better_metrics_default.union(lower_is_better_metrics)
         if lower_is_better_metrics
