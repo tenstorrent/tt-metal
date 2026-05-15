@@ -1,0 +1,95 @@
+name: "(triage-tests) On-demand triage tests"
+run-name: "(triage-tests) ${{ inputs.runner-labels }}${{ inputs.ref && format(' @ {0}', inputs.ref) || '' }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner-labels:
+        description: 'Comma-separated runner labels (e.g. "N150,P150b"). Valid: N150, N300, P150b, P100, N150-viommu, P150b-viommu, P150b-viommu-prio'
+        required: true
+        type: string
+        default: "N150"
+      ref:
+        description: 'Git ref (branch, tag, or commit SHA) to build. Leave empty to use the branch selected in "Use workflow from".'
+        required: false
+        type: string
+        default: ""
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      run-hang-report-test:
+        description: 'Run hang report generation test (intentionally hangs a card)'
+        required: false
+        type: boolean
+        default: false
+      reset-device-after-hang:
+        description: 'Reset device after a hang is detected (TT_METAL_RESET_DEVICE_AFTER_HANG)'
+        required: false
+        type: boolean
+        default: true
+      timeout:
+        description: 'Test timeout in minutes'
+        required: false
+        type: number
+        default: 30
+
+permissions:
+  packages: write
+  contents: read
+
+jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.parse.outputs.matrix }}
+    steps:
+      - name: Parse runner-labels into matrix
+        id: parse
+        run: |
+          set -euo pipefail
+          raw='${{ inputs.runner-labels }}'
+          matrix=$(echo "$raw" \
+            | tr ',' '\n' \
+            | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
+            | grep -v '^$' \
+            | jq -R . \
+            | jq -sc '{"runner-label": .}')
+          if [[ "$(echo "$matrix" | jq '.["runner-label"] | length')" -eq 0 ]]; then
+            echo "Error: no runner labels parsed from input: \"$raw\"" >&2
+            exit 1
+          fi
+          echo "Matrix: $matrix"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: Release
+      build-wheel: true
+      tracy: true
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      ref: ${{ inputs.ref }}
+
+  triage-tests:
+    needs: [build-artifact, generate-matrix]
+    secrets: inherit
+    uses: ./.github/workflows/triage.yaml
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.generate-matrix.outputs.matrix) }}
+    with:
+      runner-label: ${{ matrix.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      run-hang-report-test: ${{ inputs.run-hang-report-test }}
+      reset-device-after-hang: ${{ inputs.reset-device-after-hang }}
+      timeout: ${{ inputs.timeout }}

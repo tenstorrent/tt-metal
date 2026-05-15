@@ -35,6 +35,10 @@ on:
         description: 'Run hang report generation test (intentionally hangs a card)'
         default: false
         type: boolean
+      reset-device-after-hang:
+        description: 'Reset device after a hang is detected (TT_METAL_RESET_DEVICE_AFTER_HANG)'
+        default: true
+        type: boolean
 
 jobs:
   triage-tests:
@@ -82,7 +86,10 @@ jobs:
             if [[ "${{ inputs.run-hang-report-test }}" != "true" ]]; then
               IGNORE_ARGS="--ignore=./tools/tests/triage/test_hang_report.py"
             fi
-            TT_METAL_RESET_DEVICE_AFTER_HANG=1 pytest -v -s ./tools/tests/triage/ $IGNORE_ARGS
+            if [[ "${{ inputs.reset-device-after-hang }}" == "true" ]]; then
+              export TT_METAL_RESET_DEVICE_AFTER_HANG=1
+            fi
+            pytest -v -s ./tools/tests/triage/ $IGNORE_ARGS
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
