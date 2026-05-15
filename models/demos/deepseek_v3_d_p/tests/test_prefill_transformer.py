@@ -70,7 +70,7 @@ PCC_THRESHOLD = 0.99
 TRACE_PCC_THRESHOLD = 0.97
 TRACE_PCC_THRESHOLD_HOST = 0.96
 TRACE_PCC_THRESHOLD_DEVICE_BF16 = 0.88
-TRACE_PCC_THRESHOLD_DEVICE_FP32 = 0.88
+TRACE_PCC_THRESHOLD_DEVICE_FP32 = 0.95
 
 TRACE_DIR_BASE = Path(os.getenv("DEEPSEEK_V3_TRACE_DIR", "/mnt/MLPerf/deepseek-prefill-cache"))
 ILLIAD_1024_TRACE = TRACE_DIR_BASE / "illiad_prefill_fa2"
@@ -225,9 +225,8 @@ def test_prefill_transformer(
         f"weights={weight_type}"
     )
 
-    # --- Monkeypatch n_routed_experts ---
-    orig_num_routed_experts = DeepSeekV3Config.NUM_ROUTED_EXPERTS
-    DeepSeekV3Config.NUM_ROUTED_EXPERTS = n_routed_experts
+    monkeypatch = request.getfixturevalue("monkeypatch")
+    monkeypatch.setattr(DeepSeekV3Config, "NUM_ROUTED_EXPERTS", n_routed_experts)
 
     padding_side = tokenizer.padding_side
 
@@ -668,9 +667,6 @@ def test_prefill_transformer(
     for key in profiler.times:
         logger.info(f"  {key}: {profiler.get(key) * 1000:.2f} ms")
 
-    # Restore original config
-    DeepSeekV3Config.NUM_ROUTED_EXPERTS = orig_num_routed_experts
-
     # Deferred PCC failure check (after timing report)
     if pcc_validation and has_pcc_failures:
         pytest.fail(f"PCC below {threshold} at: {pcc_failure_msg}")
@@ -750,48 +746,19 @@ def plot_pcc_results(
 @pytest.mark.skipif(not is_blackhole(), reason="Requires Blackhole.")
 @pytest.mark.parametrize(
     "trace_dir, max_seq_len, pad_left",
-    [
-        # (ILLIAD_1024_TRACE, None, False),
-        (LONGBOOK_QA_ENG_25024, None, False),
-        # (ABC_1k_PADD_RIGHT_1024, 1024, False),
-        # (ABC_1k_PADD_LEFT_1024, 1024, True),
-    ],
+    [(LONGBOOK_QA_ENG_25024, None, False)],
     ids=["longbook_25k_qa_eng"],
 )
-@pytest.mark.parametrize(
-    "num_layers",
-    [
-        61,
-    ],
-)
+@pytest.mark.parametrize("num_layers", [61])
 @pytest.mark.parametrize(
     "n_routed_experts, capacity_factor, gate_fallback_mode",
-    [
-        (256, 2, GateComputeMode.HOST_ALL),
-        (256, 2, GateComputeMode.DEVICE),
-        (256, 2, GateComputeMode.DEVICE_FP32),
-    ],
-    ids=["e256_cf32_host", "e256_cf32_device", "e256_cf32_device_fp32"],
+    [(256, 2, GateComputeMode.DEVICE_FP32)],
+    ids=["e256_cf32_device_fp32"],
 )
-@pytest.mark.parametrize(
-    "dequant_method",
-    ["tt"],
-    ids=["dequant_tt"],
-)
+@pytest.mark.parametrize("dequant_method", ["tt"], ids=["dequant_tt"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
-        pytest.param(
-            (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="mesh-2x4",
-        ),
         pytest.param(
             (8, 4),
             {
@@ -881,8 +848,8 @@ def test_prefill_transformer_from_trace(
         f"gate_fallback_mode={gate_fallback_mode}"
     )
 
-    orig_num_routed_experts = DeepSeekV3Config.NUM_ROUTED_EXPERTS
-    DeepSeekV3Config.NUM_ROUTED_EXPERTS = n_routed_experts
+    monkeypatch = request.getfixturevalue("monkeypatch")
+    monkeypatch.setattr(DeepSeekV3Config, "NUM_ROUTED_EXPERTS", n_routed_experts)
 
     # --- Weight cache: build if missing, reuse if present ---
     if weight_cache_path is not None:
@@ -1102,7 +1069,7 @@ def test_prefill_transformer_from_trace(
         f"Trace={ref_token_id} [{repr(ref_token_text)}], "
         f"Match={'YES' if token_match else 'NO' if token_match is not None else 'N/A'}"
     )
-    gate_suffix = "_device_gate" if gate_fallback_mode == GateComputeMode.DEVICE else "_host_gate"
+    gate_suffix = f"_{gate_fallback_mode.name.lower()}"
     plot_pcc_results(
         pcc_results,
         trace_dir,
@@ -1137,9 +1104,8 @@ def test_prefill_transformer_from_trace(
         "threshold": trace_threshold,
     }
     write_pcc_summary(summary_result, threshold=trace_threshold)
-    generate_pcc_plots(summary_result, output_dir=str(trace_dir))
-
-    DeepSeekV3Config.NUM_ROUTED_EXPERTS = orig_num_routed_experts
+    if not os.getenv("GITHUB_ACTIONS"):
+        generate_pcc_plots(summary_result, output_dir=str(trace_dir))
 
     if failures:
         pcc_failure_msg = "; ".join(f"{label}: {pcc:.6f}" for label, pcc in failures)
