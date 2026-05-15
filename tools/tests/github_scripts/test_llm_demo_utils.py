@@ -9,7 +9,7 @@ from models.demos.utils.llm_demo_utils import verify_perf
 
 def test_verify_perf_uses_prefill_tolerance_for_ttft_when_decode_tolerance_present():
     expected_perf_metrics = {
-        "prefill_time_to_first_token": 100.0,
+        "prefill_time_to_first_token": 0.1,
         "prefill_tolerance": 1.25,
         "decode_t/s/u": 100.0,
         "decode_tolerance": 1.05,
@@ -27,6 +27,49 @@ def test_verify_perf_uses_prefill_tolerance_for_ttft_when_decode_tolerance_prese
             "prefill_time_to_first_token": True,
             "decode_t/s/u": True,
         },
+    )
+
+
+def test_verify_perf_does_not_rescale_explicit_ttft_seconds_targets():
+    expected_perf_metrics = {
+        "prefill_time_to_first_token": 1.7,
+        "prefill_tolerance": 1.2,
+    }
+    measurements = {
+        "prefill_time_to_first_token": 1.6,
+    }
+
+    verify_perf(
+        measurements=measurements,
+        expected_perf_metrics=expected_perf_metrics,
+        expected_measurements={
+            "prefill_time_to_first_token": True,
+        },
+    )
+
+
+def test_verify_perf_converts_centralized_ttft_ms_targets(monkeypatch):
+    monkeypatch.setattr(
+        "models.demos.utils.llm_demo_utils.resolve_perf_targets",
+        lambda **kwargs: {
+            "prefill_time_to_first_token": 1700.0,
+            "prefill_tolerance": 1.2,
+        },
+    )
+    measurements = {
+        "prefill_time_to_first_token": 1.6,
+    }
+
+    verify_perf(
+        measurements=measurements,
+        expected_perf_metrics=None,
+        expected_measurements={
+            "prefill_time_to_first_token": True,
+        },
+        model_name="gpt-oss-120b",
+        sku="wh_llmbox_perf",
+        batch_size=1,
+        seq_len=128,
     )
 
 

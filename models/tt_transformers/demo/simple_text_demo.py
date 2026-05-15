@@ -1567,7 +1567,6 @@ def test_demo_text(
                 }
                 verify_perf(
                     measurements,
-                    expected_perf_metrics=ci_targets,
                     high_tol_percentage=high_tol_percentage,
                     expected_measurements=expected_measurements,
                     model_name=model_name,

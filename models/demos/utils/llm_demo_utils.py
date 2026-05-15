@@ -205,14 +205,13 @@ def verify_perf(
         Normalize expected metric units before comparing with raw measurements.
 
         TTFT measurements are emitted in seconds; centralized YAML stores TTFT in
-        milliseconds. Keep backward compatibility for legacy call sites that
-        already pass TTFT targets in seconds.
+        milliseconds. Explicit expected_perf_metrics callers are expected to pass
+        TTFT targets in seconds.
         """
         if metric_name != "prefill_time_to_first_token":
             return expected_value
         expected_ttft = float(expected_value)
-        is_millisecond_scaled_ttft = targets_from_centralized_yaml or expected_ttft > 1.0
-        if is_millisecond_scaled_ttft:
+        if targets_from_centralized_yaml:
             return expected_ttft / 1000.0
         return expected_ttft
 
