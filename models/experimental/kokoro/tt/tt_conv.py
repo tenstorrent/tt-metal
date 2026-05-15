@@ -67,6 +67,52 @@ def tt_conv1d_nlc(
     """
     if preserve_input_dtype:
         out_dtype = x_nlc.dtype
+
+    B = int(x_nlc.shape[0])
+    L = int(x_nlc.shape[1])
+    C_in = int(x_nlc.shape[2])
+
+    # Workaround: ttnn.conv1d produces incorrect results on Wormhole B0 when B*L
+    # falls in [97..192] (or near 384). For B>1 we process each item separately.
+    if B > 1:
+        slices = []
+        for b in range(B):
+            x_b = ttnn.slice(x_nlc, [b, 0, 0], [b + 1, L, C_in], [1, 1, 1], memory_config=memory_config)
+            if x_b.layout != ttnn.TILE_LAYOUT:
+                x_b = ttnn.to_layout(x_b, ttnn.TILE_LAYOUT, memory_config=memory_config)
+            y_b = tt_conv1d_nlc(
+                x_nlc=x_b,
+                params=params,
+                device=device,
+                compute_config=compute_config,
+                out_dtype=out_dtype,
+                memory_config=memory_config,
+                preserve_input_dtype=False,
+            )
+            # conv output may be sharded; move to DRAM before concat
+            if y_b.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+                y_b = ttnn.to_memory_config(y_b, memory_config)
+            slices.append(y_b)
+        ttnn.deallocate(x_nlc)
+        return ttnn.concat(slices, dim=0, memory_config=memory_config)
+
+    # Workaround: B=1 with L in (96, 194) also hits the broken range; pad to 194.
+    _BL_BROKEN_MAX = 96
+    _BL_PAD_TARGET = 194
+    orig_L = L
+    if _BL_BROKEN_MAX < L < _BL_PAD_TARGET:
+        pad = _BL_PAD_TARGET - L
+        zeros = ttnn.zeros(
+            [1, pad, C_in],
+            dtype=x_nlc.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=memory_config,
+        )
+        x_nlc = ttnn.concat([x_nlc, zeros], dim=1, memory_config=memory_config)
+        ttnn.deallocate(zeros)
+        L = _BL_PAD_TARGET
+
     if conv_config is None:
         conv_config = ttnn.Conv1dConfig(weights_dtype=params.weight.dtype)
         conv_config.config_tensors_in_dram = True
@@ -92,8 +138,8 @@ def tt_conv1d_nlc(
         stride=params.stride,
         padding=params.padding,
         dilation=params.dilation,
-        batch_size=x_nlc.shape[0],
-        input_length=x_nlc.shape[1],
+        batch_size=1,
+        input_length=L,
         conv_config=conv_config,
         compute_config=compute_config,
         groups=params.groups,
@@ -105,7 +151,12 @@ def tt_conv1d_nlc(
     if len(y.shape) == 4 and y.shape[1] == 1:
         y = ttnn.reshape(y, [y.shape[0], y.shape[2], y.shape[3]], memory_config=memory_config)
     if len(y.shape) == 3 and y.shape[1] != out_len:
-        y = ttnn.reshape(y, (x_nlc.shape[0], out_len, y.shape[-1]), memory_config=memory_config)
+        y = ttnn.reshape(y, (1, out_len, y.shape[-1]), memory_config=memory_config)
+
+    if orig_L != L:
+        orig_out_L = (orig_L + 2 * params.padding - params.dilation * (params.kernel_size - 1) - 1) // params.stride + 1
+        C_out = int(y.shape[-1])
+        y = ttnn.slice(y, [0, 0, 0], [1, orig_out_L, C_out], [1, 1, 1], memory_config=memory_config)
     return y
 
 
