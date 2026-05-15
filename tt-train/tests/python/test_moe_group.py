@@ -48,11 +48,6 @@ def _hal_l1_alignment_bytes() -> int:
         return 16
 
 
-def _l1_align_u32() -> int:
-    """L1 alignment expressed in uint32 entries (used for round_up_align)."""
-    return _hal_l1_alignment_bytes() // 4
-
-
 def _cursor_align() -> int:
     """Per-core cursor alignment in element-count units. Must satisfy 16 B
     alignment for ALL three side tensors written per active row (uint32 plan,

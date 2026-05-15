@@ -108,18 +108,12 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     uint32_t bf16_tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
 
     // cb_src0: TILE bf16, double-buffered
-    tt::tt_metal::CircularBufferConfig cb_src0_cfg =
-        tt::tt_metal::CircularBufferConfig(
-            2U * tiles_per_chunk * bf16_tile_bytes, {{kCbSrc0, tt::DataFormat::Float16_b}})
-            .set_page_size(kCbSrc0, bf16_tile_bytes);
-    CreateCircularBuffer(program, worker_all, cb_src0_cfg);
+    create_circular_buffer(
+        program, worker_all, kCbSrc0, tt::DataFormat::Float16_b, bf16_tile_bytes, 2U * tiles_per_chunk);
 
     // cb_out: row-major bf16 produced by untilize, double-buffered
-    tt::tt_metal::CircularBufferConfig cb_out_cfg =
-        tt::tt_metal::CircularBufferConfig(
-            2U * tiles_per_chunk * bf16_tile_bytes, {{kCbOut, tt::DataFormat::Float16_b}})
-            .set_page_size(kCbOut, bf16_tile_bytes);
-    CreateCircularBuffer(program, worker_all, cb_out_cfg);
+    create_circular_buffer(
+        program, worker_all, kCbOut, tt::DataFormat::Float16_b, bf16_tile_bytes, 2U * tiles_per_chunk);
 
     // cb_zero: reader scratch holding offsets DMA + per-expert caches:
     //   offsets_l1 (e_local+1) u32  +  tr_start_per_expert e_local u32
@@ -128,58 +122,42 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     // e_local (e.g. 300+) where stack arrays would otherwise overflow.
     const uint32_t kL1_ALIGN = tt::tt_metal::hal::get_l1_alignment();
     uint32_t cb_zero_bytes = tt::round_up((3U * e_local + 1U) * sizeof(uint32_t), kL1_ALIGN);
-    tt::tt_metal::CircularBufferConfig cb_zero_cfg =
-        tt::tt_metal::CircularBufferConfig(cb_zero_bytes, {{kCbZero, tt::DataFormat::UInt32}})
-            .set_page_size(kCbZero, cb_zero_bytes);
-    CreateCircularBuffer(program, worker_all, cb_zero_cfg);
+    create_circular_buffer_bytes(program, worker_all, kCbZero, tt::DataFormat::UInt32, cb_zero_bytes);
 
     // cb_w: 32×32 broadcast weight tile (TILE bf16). BRISC writer builds this
     // each chunk where w_tile[r,c] = bf16(w[r]); compute multiplies cb_src0
     // against it before untilizing. Capacity: 2 (double-buffer for pipelining).
-    tt::tt_metal::CircularBufferConfig cb_w_cfg =
-        tt::tt_metal::CircularBufferConfig(2U * bf16_tile_bytes, {{kCbW, tt::DataFormat::Float16_b}})
-            .set_page_size(kCbW, bf16_tile_bytes);
-    CreateCircularBuffer(program, worker_all, cb_w_cfg);
+    create_circular_buffer(program, worker_all, kCbW, tt::DataFormat::Float16_b, bf16_tile_bytes, 2U);
 
     // cb_existing_rm: row-major existing rows from ungrouped DRAM (writer fills,
     // compute tilizes). Asymmetric pages: one page per ROW (hidden_chunk_bytes).
     // 32 pages per chunk (one per tile-row's row), so tilize sees the data as
     // row-major with each row = block_width_tiles*32 cols contiguous.
-    uint32_t cb_existing_rm_pages = 32U;  // 32 rows per chunk
-    tt::tt_metal::CircularBufferConfig cb_existing_rm_cfg =
-        tt::tt_metal::CircularBufferConfig(
-            cb_existing_rm_pages * hidden_chunk_bytes, {{kCbExistingRm, tt::DataFormat::Float16_b}})
-            .set_page_size(kCbExistingRm, hidden_chunk_bytes);
-    CreateCircularBuffer(program, worker_all, cb_existing_rm_cfg);
+    constexpr uint32_t cb_existing_rm_pages = 32U;  // 32 rows per chunk
+    create_circular_buffer_bytes(
+        program,
+        worker_all,
+        kCbExistingRm,
+        tt::DataFormat::Float16_b,
+        cb_existing_rm_pages * hidden_chunk_bytes,
+        hidden_chunk_bytes);
 
     // cb_existing_tile: compute's tilize output, fed into mul+add.
-    tt::tt_metal::CircularBufferConfig cb_existing_tile_cfg =
-        tt::tt_metal::CircularBufferConfig(
-            tiles_per_chunk * bf16_tile_bytes, {{kCbExistingTile, tt::DataFormat::Float16_b}})
-            .set_page_size(kCbExistingTile, bf16_tile_bytes);
-    CreateCircularBuffer(program, worker_all, cb_existing_tile_cfg);
+    create_circular_buffer(
+        program, worker_all, kCbExistingTile, tt::DataFormat::Float16_b, bf16_tile_bytes, tiles_per_chunk);
 
     // cb_combined: compute's add output, untilize input.
-    tt::tt_metal::CircularBufferConfig cb_combined_cfg =
-        tt::tt_metal::CircularBufferConfig(
-            tiles_per_chunk * bf16_tile_bytes, {{kCbCombined, tt::DataFormat::Float16_b}})
-            .set_page_size(kCbCombined, bf16_tile_bytes);
-    CreateCircularBuffer(program, worker_all, cb_combined_cfg);
+    create_circular_buffer(
+        program, worker_all, kCbCombined, tt::DataFormat::Float16_b, bf16_tile_bytes, tiles_per_chunk);
 
     // cb_scaled: compute's mul output, add input.
-    tt::tt_metal::CircularBufferConfig cb_scaled_cfg =
-        tt::tt_metal::CircularBufferConfig(tiles_per_chunk * bf16_tile_bytes, {{kCbScaled, tt::DataFormat::Float16_b}})
-            .set_page_size(kCbScaled, bf16_tile_bytes);
-    CreateCircularBuffer(program, worker_all, cb_scaled_cfg);
+    create_circular_buffer(program, worker_all, kCbScaled, tt::DataFormat::Float16_b, bf16_tile_bytes, tiles_per_chunk);
 
     // cb_ctrl: NCRISC reader publishes per-core active-block count once at
     // startup; compute reads it to size its outer loop. 16B page (one uint32
     // padded to L1 alignment), single-page CB.
     constexpr uint32_t cb_ctrl_bytes = 16U;
-    tt::tt_metal::CircularBufferConfig cb_ctrl_cfg =
-        tt::tt_metal::CircularBufferConfig(cb_ctrl_bytes, {{kCbCtrl, tt::DataFormat::UInt32}})
-            .set_page_size(kCbCtrl, cb_ctrl_bytes);
-    CreateCircularBuffer(program, worker_all, cb_ctrl_cfg);
+    create_circular_buffer_bytes(program, worker_all, kCbCtrl, tt::DataFormat::UInt32, cb_ctrl_bytes);
 
     // cb_scratch: writer's scratch — zero buf + offsets + plan + grouped_scores
     // slice + w + rmw_buf. With moe_group emitting grouped_scores per row, we
@@ -193,16 +171,8 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     scratch_bytes += tt::round_up(32U * sizeof(uint32_t), kL1_ALIGN);  // plan_buf
     scratch_bytes += tt::round_up(32U * sizeof(uint16_t), kL1_ALIGN);  // w_buf (bf16,
                                                                        //   directly read from grouped_scores)
-    // stage_buf: 32 contiguous slots of hidden_chunk_bytes — required by the
-    // OPT 1 barrier-coalesced writer. Worst-case size: 32 * 128KB / 32 = 128KB
-    // (chunk size is capped at kTargetChunkBytes).
-    scratch_bytes += tt::round_up(32U * hidden_chunk_bytes, kL1_ALIGN);  // stage_buf
     scratch_bytes = tt::round_up(scratch_bytes, kL1_ALIGN);
-
-    tt::tt_metal::CircularBufferConfig cb_scratch_cfg =
-        tt::tt_metal::CircularBufferConfig(scratch_bytes, {{kCbScratch, tt::DataFormat::UInt32}})
-            .set_page_size(kCbScratch, scratch_bytes);
-    CreateCircularBuffer(program, worker_all, cb_scratch_cfg);
+    create_circular_buffer_bytes(program, worker_all, kCbScratch, tt::DataFormat::UInt32, scratch_bytes);
 
     // -------------------------------------------------------------------------
     // Semaphores
@@ -259,6 +229,7 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
         mcast_ey,                   // 14
         mcast_num_dests_incl_self,  // 15
         kCbCtrl,                    // 16
+        Wt,                         // 17
     };
     tt::tt_metal::TensorAccessorArgs(expert_out_buf).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(offsets_buf).append_to(reader_ct_args);

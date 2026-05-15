@@ -23,7 +23,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 #include "tt-train/sources/ttml/metal/ops/moe_ungroup/device/kernels/moe_ungroup_utils.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/matmul_dataflow_common.hpp"
 
 constexpr uint32_t cb_out0 = tt::CBIndex::c_2;
 constexpr uint32_t cb_scratch = tt::CBIndex::c_4;      // BRISC scratch (zero buf, plan slice, gs slice, rmw_buf)
@@ -50,8 +49,8 @@ constexpr auto gs_args = TensorAccessorArgs<offsets_args.next_compile_time_args_
 constexpr uint32_t off_page_bytes = decltype(offsets_args)::AlignedPageSize;
 constexpr uint32_t ungrouped_aligned_page = decltype(ungrouped_args)::AlignedPageSize;
 
-constexpr uint32_t TILE_H = 32U;
-constexpr uint32_t TILE_W = 32U;
+constexpr uint32_t TILE_H = tt::constants::TILE_HEIGHT;
+constexpr uint32_t TILE_W = tt::constants::TILE_WIDTH;
 constexpr uint32_t SENTINEL = 0xFFFFFFFFU;
 
 // Local BRISC<->NCRISC handshake on the same core (no NOC; both RISCs share L1).
@@ -59,10 +58,8 @@ constexpr uint32_t SENTINEL = 0xFFFFFFFFU;
 // NCRISC observes brisc_done == 1, runs the cross-core mcast barrier, sets
 // brisc_release = 1 (and resets brisc_done).
 inline void brisc_signal_done_wait_release() {
-    volatile tt_l1_ptr uint32_t* brisc_done =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(brisc_done_sem_id));
-    volatile tt_l1_ptr uint32_t* brisc_release =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(brisc_release_sem_id));
+    volatile tt_l1_ptr uint32_t* brisc_done = get_sem_ptr(brisc_done_sem_id);
+    volatile tt_l1_ptr uint32_t* brisc_release = get_sem_ptr(brisc_release_sem_id);
     *brisc_done = 1U;
     do {
         invalidate_l1_cache();
@@ -88,7 +85,6 @@ void kernel_main() {
     //   [offsets_buf (offset TensorAccessor page bytes)]
     //   [plan_buf    (32*4 bytes)]
     //   [w_buf       (32*2 bytes — bf16, read directly from grouped_scores)]
-    //   [stage_buf   (32 * hidden_chunk_bytes — barrier-coalesced writeback)]
     // ---------------------------------------------------------------
     cb_reserve_back(cb_scratch, 1U);
     uint32_t scratch = get_write_ptr(cb_scratch);
@@ -113,10 +109,6 @@ void kernel_main() {
     off += round_up(32U * sizeof(uint16_t), l1_align);
     volatile tt_l1_ptr uint16_t* w_buf = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(w_buf_addr);
 
-    // OPT 1: 32 contiguous slots of hidden_chunk_bytes each — one per row of
-    // the tile. Lets us issue all 32 row reads/writes async and barrier once.
-    uint32_t stage_buf_addr = scratch + off;
-    // (off is unused after this point; sizing handled by program_factory.)
     cb_push_back(cb_scratch, 1U);
 
     // Pre-zero: tokens whose top-K is entirely non-local never get touched by
@@ -145,14 +137,12 @@ void kernel_main() {
     // Per-expert loop.
     // ---------------------------------------------------------------
     for (uint32_t e = 0; e < e_local; ++e) {
-        uint32_t expert_start_tr = offsets_buf[e] / TILE_H;
-        uint32_t expert_total_tr = (offsets_buf[e + 1U] - offsets_buf[e]) / TILE_H;
-        auto slice = ttml::metal::moe_ungroup::slice_for_core(expert_total_tr, num_total_cores, my_core_idx);
-        uint32_t my_start_in_e = slice.start;
-        uint32_t my_real_count = slice.count;
+        auto slice =
+            ttml::metal::moe_ungroup::expert_slice_for_core(offsets_buf, e, TILE_H, num_total_cores, my_core_idx);
+        uint32_t my_real_count = slice.my_count;
 
         for (uint32_t step = 0; step < my_real_count; ++step) {
-            uint32_t tr_global = expert_start_tr + my_start_in_e + step;
+            uint32_t tr_global = slice.my_start_tr_global + step;
 
             // Pre-fetch plan slice + grouped_scores slice. Both are
             // [TILE_H = 32]-entry contiguous slices of [T_cap]-sized

@@ -106,7 +106,7 @@ constexpr uint32_t leids_aligned_page = decltype(leids_args)::AlignedPageSize;
 constexpr uint32_t cnt_page_bytes = decltype(counts_args)::AlignedPageSize;
 constexpr uint32_t off_page_bytes = decltype(offsets_args)::AlignedPageSize;
 
-constexpr uint32_t TILE_H = 32U;
+constexpr uint32_t TILE_H = tt::constants::TILE_HEIGHT;
 constexpr uint32_t SENTINEL = 0xFFFFFFFFU;
 constexpr uint16_t K_SLOT_SENTINEL = 0xFFFFU;
 constexpr uint32_t PLAN_CHUNK = 32U;
@@ -280,8 +280,7 @@ void kernel_main() {
     if (my_core_idx == 0) {
         // Wait for all other cores to publish their counts.
         if (num_total_cores > 1U) {
-            volatile tt_l1_ptr uint32_t* phase1_sem =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(scan_phase1_sem_id));
+            volatile tt_l1_ptr uint32_t* phase1_sem = get_sem_ptr(scan_phase1_sem_id);
             noc_semaphore_wait(phase1_sem, num_total_cores - 1U);
         }
 
@@ -374,8 +373,7 @@ void kernel_main() {
             phase2_sem_ptr, phase2_sem_addr, mcast_sx, mcast_sy, mcast_ex, mcast_ey, mcast_num_dests_incl_self);
     } else {
         // Non-lead cores wait for phase 2 signal.
-        volatile tt_l1_ptr uint32_t* phase2_sem =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(scan_phase2_sem_id));
+        volatile tt_l1_ptr uint32_t* phase2_sem = get_sem_ptr(scan_phase2_sem_id);
         noc_semaphore_wait(phase2_sem, 1U);
     }
 
@@ -503,8 +501,7 @@ void kernel_main() {
     // ===========================================================
     if (my_core_idx == 0) {
         if (num_total_cores > 1U) {
-            volatile tt_l1_ptr uint32_t* phase3_sem =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(scan_phase3_sem_id));
+            volatile tt_l1_ptr uint32_t* phase3_sem = get_sem_ptr(scan_phase3_sem_id);
             noc_semaphore_wait(phase3_sem, num_total_cores - 1U);
         }
         // Signal plan_ready_sem on every core (incl. lead) via ONE multicast.
@@ -518,8 +515,7 @@ void kernel_main() {
     // ===========================================================
     // WORKER PHASE: wait for plan_ready, then gather rows
     // ===========================================================
-    volatile tt_l1_ptr uint32_t* plan_ready_sem =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(plan_ready_sem_id));
+    volatile tt_l1_ptr uint32_t* plan_ready_sem = get_sem_ptr(plan_ready_sem_id);
     noc_semaphore_wait(plan_ready_sem, 1U);
 
     // Pull offsets[e_local] from DRAM so we can short-circuit reads for

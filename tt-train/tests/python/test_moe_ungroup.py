@@ -8,13 +8,15 @@ The op consumes:
   expert_out      : [1, 1, T_cap, H]      TILE bf16
   plan            : [1, 1, 1, T_cap]      uint32  — moe_group's plan
   offsets         : [1, 1, 1, E_local+1]  uint32  — moe_group's offsets
-  counts          : [1, 1, 1, E_local]    uint32  — moe_group's counts
-  metadata        : [D, B, S, K]          uint16  — top-K expert ids per token
-  scores          : [D, B, S, K]          bf16    — top-K weights per token
-  local_expert_ids: [E_local]             uint16  — global ids of this device's experts
+  grouped_scores  : [1, 1, 1, T_cap]      bf16    — moe_group's grouped_scores
+                                                    (= scores[plan[i], k_slot[i]])
 
 and produces:
   ungrouped: [D, B, S, H] ROW_MAJOR bf16
+
+The torch reference and tests additionally use counts / metadata / scores /
+local_expert_ids to build inputs and check correctness; these are NOT op
+inputs.
 
 Reference implementation in `moe_ungroup_torch_reference()` below.
 """
@@ -364,7 +366,7 @@ class TestMoeUngroupDevice:
 
         device = ttml.autograd.AutoContext.get_instance().get_device()
         ttnn.synchronize_device(device)
-        ungrouped = ttml.ops.metal_ops.moe_ungroup(
+        ungrouped = ttml.ops.metal.moe_ungroup(
             grouped,
             plan,
             offsets,
@@ -469,7 +471,7 @@ class TestMoeUngroupDevice:
         grouped_scores = _to_device_tensor(torch.zeros(1, 1, 1, T_cap), ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16)
 
         with pytest.raises(RuntimeError, match="e_local must be > 0"):
-            ttml.ops.metal_ops.moe_ungroup(grouped, plan, offsets, grouped_scores, 0, D, B, S)
+            ttml.ops.metal.moe_ungroup(grouped, plan, offsets, grouped_scores, 0, D, B, S)
 
     def test_rejects_non_tile_aligned_t_cap(self):
         """Reader/writer consume plan/grouped_scores/expert_out in 32-row chunks."""
@@ -481,7 +483,7 @@ class TestMoeUngroupDevice:
         grouped_scores = _to_device_tensor(torch.zeros(1, 1, 1, T_cap), ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16)
 
         with pytest.raises(RuntimeError, match="T_cap must be a multiple of 32"):
-            ttml.ops.metal_ops.moe_ungroup(grouped, plan, offsets, grouped_scores, 1, D, B, S)
+            ttml.ops.metal.moe_ungroup(grouped, plan, offsets, grouped_scores, 1, D, B, S)
 
     def test_all_tokens_active(self):
         """Every token routed to all local experts — multi-expert accumulation per row."""
@@ -598,7 +600,7 @@ class TestMoeUngroupProfile:
         )
         # Warmup.
         for _ in range(warmup):
-            ttml.ops.metal_ops.moe_ungroup(
+            ttml.ops.metal.moe_ungroup(
                 grouped,
                 plan,
                 offsets,
@@ -612,7 +614,7 @@ class TestMoeUngroupProfile:
 
         # Timed iters with per-iter profiler flush.
         for _ in range(num_iters):
-            ttml.ops.metal_ops.moe_ungroup(
+            ttml.ops.metal.moe_ungroup(
                 grouped,
                 plan,
                 offsets,

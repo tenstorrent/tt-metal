@@ -117,38 +117,22 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     // -------------------------------------------------------------------------
     uint32_t bf16_tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
 
-    tt::tt_metal::CircularBufferConfig cb_src0_cfg =
-        tt::tt_metal::CircularBufferConfig(
-            2U * tiles_per_chunk * bf16_tile_bytes, {{kCbSrc0, tt::DataFormat::Float16_b}})
-            .set_page_size(kCbSrc0, bf16_tile_bytes);
-    CreateCircularBuffer(program, all_cores, cb_src0_cfg);
-
-    tt::tt_metal::CircularBufferConfig cb_out_cfg =
-        tt::tt_metal::CircularBufferConfig(
-            2U * tiles_per_chunk * bf16_tile_bytes, {{kCbOut, tt::DataFormat::Float16_b}})
-            .set_page_size(kCbOut, bf16_tile_bytes);
-    CreateCircularBuffer(program, all_cores, cb_out_cfg);
+    create_circular_buffer(
+        program, all_cores, kCbSrc0, tt::DataFormat::Float16_b, bf16_tile_bytes, 2U * tiles_per_chunk);
+    create_circular_buffer(
+        program, all_cores, kCbOut, tt::DataFormat::Float16_b, bf16_tile_bytes, 2U * tiles_per_chunk);
 
     constexpr uint32_t kPlanCbBytes = 32U * sizeof(uint32_t);
-    tt::tt_metal::CircularBufferConfig cb_plan_cfg =
-        tt::tt_metal::CircularBufferConfig(kPlanCbBytes, {{kCbPlan, tt::DataFormat::UInt32}})
-            .set_page_size(kCbPlan, kPlanCbBytes);
-    CreateCircularBuffer(program, all_cores, cb_plan_cfg);
+    create_circular_buffer_bytes(program, all_cores, kCbPlan, tt::DataFormat::UInt32, kPlanCbBytes);
 
     uint32_t offset_cb_bytes = tt::round_up((e_local + 1U) * sizeof(uint32_t), kL1_ALIGN);
-    tt::tt_metal::CircularBufferConfig cb_offset_cfg =
-        tt::tt_metal::CircularBufferConfig(offset_cb_bytes, {{kCbOffset, tt::DataFormat::UInt32}})
-            .set_page_size(kCbOffset, offset_cb_bytes);
-    CreateCircularBuffer(program, all_cores, cb_offset_cfg);
+    create_circular_buffer_bytes(program, all_cores, kCbOffset, tt::DataFormat::UInt32, offset_cb_bytes);
 
     // cb_ctrl: NCRISC reader publishes per-core active-block count after the
     // worker phase reads offsets[E_local]; compute reads it to size the bulk
     // tilize call. 16B page (one uint32 padded to L1 alignment).
     constexpr uint32_t cb_ctrl_bytes = 16U;
-    tt::tt_metal::CircularBufferConfig cb_ctrl_cfg =
-        tt::tt_metal::CircularBufferConfig(cb_ctrl_bytes, {{kCbCtrl, tt::DataFormat::UInt32}})
-            .set_page_size(kCbCtrl, cb_ctrl_bytes);
-    CreateCircularBuffer(program, all_cores, cb_ctrl_cfg);
+    create_circular_buffer_bytes(program, all_cores, kCbCtrl, tt::DataFormat::UInt32, cb_ctrl_bytes);
 
     // cb_scan: every core's scratch for scan + shared tables (only meaningful on lead).
     // Layout: [stage 128B][leids_buf 32B][counts e_local*4][offsets (e_local+1)*4]
@@ -211,11 +195,7 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     uint32_t scan_scratch_bytes = overhead_bytes + two_shared_tables + md_block_bytes + sc_block_bytes +
                                   plan_stage_bytes + gs_stage_bytes + ks_stage_bytes + fill_bytes;
     scan_scratch_bytes = tt::round_up(scan_scratch_bytes, kL1_ALIGN);
-
-    tt::tt_metal::CircularBufferConfig cb_scan_cfg =
-        tt::tt_metal::CircularBufferConfig(scan_scratch_bytes, {{kCbScan, tt::DataFormat::UInt32}})
-            .set_page_size(kCbScan, scan_scratch_bytes);
-    CreateCircularBuffer(program, all_cores, cb_scan_cfg);
+    create_circular_buffer_bytes(program, all_cores, kCbScan, tt::DataFormat::UInt32, scan_scratch_bytes);
 
     // Compute address of shared tables in cb_scan (offset within scratch).
     // Layout: stage(kStageBytes), leids_buf(kLeidsBufBytes), counts, offsets, cursors.

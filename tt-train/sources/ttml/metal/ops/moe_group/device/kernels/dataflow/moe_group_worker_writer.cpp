@@ -26,6 +26,7 @@
 //   3: offsets_addr
 
 #include "api/dataflow/dataflow_api.h"
+#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 constexpr uint32_t cb_out = tt::CBIndex::c_2;
 constexpr uint32_t cb_offset = tt::CBIndex::c_5;
@@ -39,7 +40,7 @@ constexpr uint32_t plan_ready_sem_id = get_compile_time_arg_val(6);
 constexpr auto grouped_args = TensorAccessorArgs<7>();
 constexpr auto offsets_args = TensorAccessorArgs<grouped_args.next_compile_time_args_offset()>();
 
-constexpr uint32_t TILE_H = 32U;
+constexpr uint32_t TILE_H = tt::constants::TILE_HEIGHT;
 
 void kernel_main() {
     const uint32_t grouped_addr = get_arg_val<uint32_t>(0);
@@ -48,8 +49,7 @@ void kernel_main() {
     const uint32_t offsets_addr = get_arg_val<uint32_t>(3);
 
     // Wait for scan to finish writing plan/counts/offsets.
-    volatile tt_l1_ptr uint32_t* plan_ready_sem =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(plan_ready_sem_id));
+    volatile tt_l1_ptr uint32_t* plan_ready_sem = get_sem_ptr(plan_ready_sem_id);
     noc_semaphore_wait(plan_ready_sem, 1U);
 
     const uint32_t tile_bytes = get_tile_size(cb_out);
