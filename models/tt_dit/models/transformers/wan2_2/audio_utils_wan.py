@@ -4,24 +4,29 @@
 
 """S2V audio conditioning modules.
 
-Mirrors `wan/modules/s2v/audio_utils.py` and `wan/modules/s2v/auxi_blocks.py`
-from the Wan-Video/Wan2.2 reference implementation:
+Mirrors ``wan/modules/s2v/audio_utils.py`` and
+``wan/modules/s2v/auxi_blocks.py`` from the Wan-Video/Wan2.2 reference:
 
-  * ``CausalConv1d`` — Conv1d with left-only ("causal") temporal padding,
-    expressed as ``ttnn.experimental.conv3d`` with ``kernel_size=(k, 1, 1)``.
-  * ``MotionEncoder_tc`` — 3-stage causal conv stack that maps the
+  * :class:`CausalConv1d` — ``Conv1d`` with left-only ("causal") temporal
+    padding, expressed as ``ttnn.experimental.conv3d`` with kernel
+    ``(k, 1, 1)``.
+  * :class:`MotionEncoder_tc` — 3-stage causal conv stack mapping the
     learned-weighted wav2vec2 features to per-frame multi-token audio
-    embeddings. Reduces the temporal rate by 4 (two ``stride=2`` convs).
-  * ``CausalAudioEncoder`` — learned-weighted aggregation across wav2vec2
-    hidden states (one weight per layer, init 0.01), followed by SiLU and
-    ``MotionEncoder_tc``.
-  * ``AudioInjector_WAN`` — ``ModuleList`` of cross-attention modules + two
-    pre-norm LayerNorms each, indexed by transformer-block id. No ``forward``
-    here; the DiT calls ``injector[id]``, ``injector_pre_norm_feat[id]``, etc.
-    at the chosen layers.
-  * ``AdaLayerNormZero`` — drop-in for ``diffusers.AdaLayerNorm`` used by the
-    production ``adain_mode="attn_norm"`` path. SP-aware per-token application
-    lives in ``transformer_wan_s2v._apply_adain_pre_norm``.
+    embeddings. Reduces temporal rate by 4 (two ``stride=2`` convs).
+  * :class:`CausalAudioEncoder` — learned per-layer weighted sum across
+    wav2vec2 hidden states, followed by SiLU + :class:`MotionEncoder_tc`.
+  * :class:`AudioInjector_WAN` — :class:`ModuleList` of cross-attention
+    modules indexed by transformer-block id. The DiT calls
+    ``injector[id]`` directly via :meth:`after_transformer_block`.
+  * :class:`AdaLayerNormZero` — holds the per-layer Linear used by the
+    production ``adain_mode="attn_norm"`` path; the spatial modulation
+    runs in :meth:`WanS2VTransformer3DModel.after_transformer_block`.
+
+The reference's ``injector_pre_norm_feat`` / ``injector_pre_norm_vec`` are
+``nn.LayerNorm(elementwise_affine=False)`` with zero parameters; we
+represent them as empty :class:`ModuleList` slots (no state-dict keys to
+load) and the spatial pre-norm is done via the surrounding block's
+``norm1`` (a ``DistributedLayerNorm(elementwise_affine=False)``).
 """
 
 from __future__ import annotations
@@ -52,21 +57,6 @@ register_conv3d_configs(
         (768, 5120, (3, 1, 1)): (256, 64, 1, 1, 1),
     }
 )
-
-
-def _layernorm_no_affine(x: ttnn.Tensor, eps: float = 1e-6) -> ttnn.Tensor:
-    """LayerNorm over the last axis, no learned scale/bias. Matches HF's
-    ``nn.LayerNorm(dim, elementwise_affine=False, eps=1e-6)``.
-
-    Done manually because tt_dit's ``LayerNorm`` always allocates an affine
-    weight tile when ``norm_elementwise_affine=True``; here we want the
-    cheaper no-affine variant since the MotionEncoder does its own per-stage
-    LayerNorms with no learned scale.
-    """
-    mean = ttnn.mean(x, dim=-1, keepdim=True)
-    centered = ttnn.subtract(x, mean)
-    var = ttnn.mean(ttnn.multiply(centered, centered), dim=-1, keepdim=True)
-    return ttnn.multiply(centered, ttnn.rsqrt(ttnn.add(var, eps)))
 
 
 class CausalConv1d(Module):
@@ -240,26 +230,27 @@ class MotionEncoder_tc(Module):
         in_chan: int,
         out_chan: int,
     ) -> ttnn.Tensor:
-        """One conv-stage: TILE ``[B_eff, T, in_chan]`` → causal-pad → conv →
-        ``[B_eff, T_out, out_chan]`` → LN(no-affine) → SiLU → TILE.
+        """One conv-stage: ``[B_eff, T, in_chan]`` → causal-pad → conv → LN
+        (host, no-affine) → SiLU → TILE.
 
-        T_out follows ``⌈T / stride⌉`` for the conv's stride (recovered from
-        the actual device tensor's element count).
+        The tensor is replicated across devices throughout this method, so
+        the LN runs in torch before re-upload — keeping no-affine LayerNorm
+        out of the ttnn op set (where it lives only as an affine-required
+        ``DistributedLayerNorm``).
         """
         x_torch = local_device_to_torch(x_tile_BTC).reshape(B_eff, -1, in_chan)
         x_torch_p = self._causal_pad_host(x_torch, kernel_size=3)
         x_5d = x_torch_p.reshape(B_eff, x_torch_p.shape[1], 1, 1, in_chan).contiguous()
         x_dev = ttnn.from_torch(x_5d, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = conv(x_dev)
-        x_torch_full = local_device_to_torch(x)
-        T_out = x_torch_full.numel() // (B_eff * out_chan)
+        x_torch_full = local_device_to_torch(x).reshape(B_eff, -1, out_chan)
+        x_torch_normed = torch.nn.functional.layer_norm(x_torch_full.float(), (out_chan,), eps=1e-6)
         x_dev = ttnn.from_torch(
-            x_torch_full.reshape(B_eff, T_out, out_chan),
+            x_torch_normed,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
         )
-        x_dev = _layernorm_no_affine(x_dev)
         return ttnn.silu(x_dev)
 
     def forward(self, x_torch: torch.Tensor) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -285,8 +276,11 @@ class MotionEncoder_tc(Module):
             .permute(0, 2, 1, 3)
             .reshape(B * self.num_heads, T, self.hidden_dim // 4)
         )
-        x_dev = ttnn.from_torch(head_split, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        x_dev = ttnn.silu(_layernorm_no_affine(x_dev))
+        head_split_normed = torch.nn.functional.layer_norm(head_split.float(), (self.hidden_dim // 4,), eps=1e-6)
+        x_dev = ttnn.from_torch(
+            head_split_normed, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
+        x_dev = ttnn.silu(x_dev)
         # Stages 2 & 3.
         B_local = B * self.num_heads
         x_dev = self._conv_stage_BTC(x_dev, self.conv2, B_local, self.hidden_dim // 4, self.hidden_dim // 2)
@@ -316,9 +310,10 @@ class MotionEncoder_tc(Module):
         x_5d = x_torch_p.reshape(B, x_torch_p.shape[1], 1, 1, self.in_dim).contiguous()
         x_dev = ttnn.from_torch(x_5d, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = self.conv1_global(x_dev)  # [B, T, 1, 1, hidden/4]
-        x_torch = local_device_to_torch(x).reshape(B, T, self.hidden_dim // 4)
-        x_dev = ttnn.from_torch(x_torch, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        x_dev = ttnn.silu(_layernorm_no_affine(x_dev))
+        x_torch = local_device_to_torch(x).reshape(B, T, self.hidden_dim // 4).float()
+        x_torch_normed = torch.nn.functional.layer_norm(x_torch, (self.hidden_dim // 4,), eps=1e-6)
+        x_dev = ttnn.from_torch(x_torch_normed, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        x_dev = ttnn.silu(x_dev)
         x_dev = self._conv_stage_BTC(x_dev, self.conv2, B, self.hidden_dim // 4, self.hidden_dim // 2)
         x_dev = self._conv_stage_BTC(x_dev, self.conv3, B, self.hidden_dim // 2, self.hidden_dim)
         x_dev = self.final_linear(x_dev)  # [B, T/4, hidden]
@@ -415,18 +410,16 @@ class CausalAudioEncoder(Module):
 
 
 class AdaLayerNormZero(Module):
-    """Drop-in for ``diffusers.models.attention.AdaLayerNorm`` (chunk_dim=1).
+    """Holder for the per-layer ``Linear(adain_dim, 2*dim)`` projection used
+    by the production ``adain_mode="attn_norm"`` path.
 
-    Maps a global audio temb (``[bsz_t, adain_dim]``) to per-channel
-    ``(scale, shift)`` via SiLU + Linear, applies LayerNorm-no-affine to the
-    spatial input, then broadcasts the scale/shift over the patch-token axis:
-
-        temb = linear(silu(temb))            # [bsz_t, 2 * dim]
-        shift, scale = temb.chunk(2, dim=1)  # each [bsz_t, dim]
-        x = norm(x) * (1 + scale[:, None, :]) + shift[:, None, :]
-
-    Matches the reference S2V's ``injector_adain_layers[i]`` config
-    (``output_dim=dim*2, embedding_dim=adain_dim, chunk_dim=1``).
+    The SP-aware spatial modulation lives in
+    :meth:`WanS2VTransformer3DModel.after_transformer_block` — it calls
+    ``self.linear(silu(audio_emb_global))`` directly and applies the
+    per-token shift/scale alongside the block's no-affine pre-norm. The
+    class exists so the state-dict path
+    ``audio_injector.injector_adain_layers[i].linear.{weight,bias}`` lands
+    on a tt_dit module.
     """
 
     def __init__(
@@ -444,25 +437,8 @@ class AdaLayerNormZero(Module):
         # weight, single call per layer per step).
         self.linear = Linear(adain_dim, dim * 2, bias=True, mesh_device=mesh_device)
 
-    def forward(self, x: ttnn.Tensor, temb: ttnn.Tensor) -> ttnn.Tensor:
-        """Apply AdaIN modulation.
-
-        Args:
-            x: ``[bsz_t, N, dim]`` spatial Q tokens for one frame.
-            temb: ``[bsz_t, adain_dim]`` global audio embedding for the
-                corresponding frame.
-
-        Returns:
-            ``[bsz_t, N, dim]`` modulated tokens.
-        """
-        temb = ttnn.silu(temb)
-        temb = self.linear(temb)  # [bsz_t, 2*dim]
-        shift, scale = ttnn.chunk(temb, 2, dim=-1)  # each [bsz_t, dim]
-        # Broadcast over N: unsqueeze shift/scale on axis 1.
-        shift = ttnn.unsqueeze(shift, 1)  # [bsz_t, 1, dim]
-        scale = ttnn.unsqueeze(scale, 1)
-        x_normed = _layernorm_no_affine(x, eps=1e-5)
-        return ttnn.add(ttnn.multiply(x_normed, ttnn.add(scale, 1.0)), shift)
+    def forward(self, *_args, **_kwargs):
+        raise NotImplementedError("AdaLayerNormZero is a parameter holder; call .linear directly")
 
 
 class AudioInjector_WAN(Module):
@@ -521,12 +497,12 @@ class AudioInjector_WAN(Module):
             for _ in range(n_inject)
         )
 
-        # HF uses elementwise_affine=False here, so we keep these as bookkeeping
-        # in the state dict only — the actual norm is done on the fly via
-        # `_layernorm_no_affine`. We still declare them so HF state-dict keys
-        # (which have no weights for these LayerNorms) load cleanly without
-        # tripping the strict loader.
-        self.injector_pre_norm_feat = ModuleList()  # empty: no parameters
+        # The reference's ``injector_pre_norm_feat`` / ``injector_pre_norm_vec``
+        # are ``nn.LayerNorm(elementwise_affine=False)`` and contribute no
+        # parameters to the state dict. The actual spatial pre-norm runs via
+        # the surrounding block's ``norm1`` (a no-affine DistributedLayerNorm)
+        # inside ``WanS2VTransformer3DModel.after_transformer_block``.
+        self.injector_pre_norm_feat = ModuleList()
         self.injector_pre_norm_vec = ModuleList()
 
         if enable_adain:
@@ -545,14 +521,6 @@ class AudioInjector_WAN(Module):
                 state.pop(k)
 
     def forward(self, *args, **kwargs):
-        msg = "AudioInjector_WAN has no top-level forward; index into .injector / .injector_adain_layers"
-        raise NotImplementedError(msg)
-
-
-def apply_pre_norm_feat(spatial_BNC: ttnn.Tensor) -> ttnn.Tensor:
-    """Pre-norm helper for the injector's spatial Q input.
-
-    Mirrors HF: ``LayerNorm(dim, elementwise_affine=False, eps=1e-6)`` on the
-    last (channel) axis.
-    """
-    return _layernorm_no_affine(spatial_BNC, eps=1e-6)
+        raise NotImplementedError(
+            "AudioInjector_WAN has no top-level forward; index into .injector / .injector_adain_layers"
+        )

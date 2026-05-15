@@ -4,23 +4,26 @@
 
 """On-device port of the S2V motion-frame encoder.
 
-The production Wan2.2-S2V-14B config uses ``FramePackMotioner``, defined at
-``wan/modules/s2v/motioner.py`` in the reference repo. It is three ``Conv3d``
-layers with ``kernel == stride`` (so they're patch-style projections):
+The production Wan2.2-S2V-14B config uses ``FramePackMotioner`` from
+``wan/modules/s2v/motioner.py``: three ``Conv3d`` layers with
+``kernel == stride`` (patch-style projections):
 
-  * ``proj``     — kernel (1, 2, 2), processes the most-recent frame
-  * ``proj_2x``  — kernel (2, 4, 4), processes the next 2 frames
-  * ``proj_4x``  — kernel (4, 8, 8), processes the oldest 16 frames
+  * ``proj``     — kernel (1, 2, 2), most-recent frame
+  * ``proj_2x``  — kernel (2, 4, 4), next 2 frames
+  * ``proj_4x``  — kernel (4, 8, 8), oldest 16 frames
 
 Each maps ``in_channels=16`` motion-latent channels to ``inner_dim`` (5120
-for the production checkpoint). Because the strides equal the kernels, every
-op is a standard unfold + matmul — same pattern as :class:`WanPatchEmbed`.
+for the production checkpoint). Because stride equals kernel, every op is
+an unfold + matmul — same pattern as :class:`WanPatchEmbed`.
 
-The forward takes a list of motion latents (or a stacked tensor), pads / zips
-into the three buckets, runs each projection, and concatenates the token
-sequences. Rope-precompute is done on host via the reference helper and
-uploaded as a real tensor — it's invoked once per clip outside the denoise
-loop.
+The forward takes a motion-latent tensor, pads/zips into the three buckets,
+runs each projection, and concatenates the token sequences. Rope-precompute
+runs on host via :func:`s2v_rope.rope_precompute` and is uploaded once per
+clip.
+
+The alternative ``MotionerTransformers`` path (``enable_motioner=True``) is
+not in scope; :class:`MotionerTransformersWan` is a placeholder that raises
+on instantiation so the class hierarchy stays parallel to the reference.
 """
 
 from __future__ import annotations
@@ -35,6 +38,7 @@ from ....layers.embeddings import WanPatchEmbed
 from ....layers.module import Module
 from ....parallel.config import DiTParallelConfig
 from ....utils.tensor import bf16_tensor
+from .s2v_rope import rope_params, rope_precompute
 
 
 def _patchify_for_unfolded_conv(x_BCTHW: torch.Tensor, patch_size: tuple[int, int, int]) -> torch.Tensor:
@@ -115,32 +119,10 @@ class FramePackMotionerWan(Module):
             tp_mesh_axis=tp_axis,
         )
 
-        # Rope frequencies — same construction as the reference's ``self.freqs``
-        # in WanModel_S2V.__init__. Cached on host; the per-clip
-        # ``rope_precompute`` call uses these to build motion token rotaries.
-        # The reference's ``wan/__init__.py`` eagerly evaluates
-        # ``torch.cuda.current_device()`` at import time; stub it for CPU.
+        # Rope frequencies — same construction as ``WanModel_S2V.__init__``.
+        # Cached on host; the per-clip ``rope_precompute`` call uses these to
+        # build motion-token rotaries.
         d = self.head_dim
-        import sys
-        import types
-
-        if "flash_attn" not in sys.modules:
-            mod = types.ModuleType("flash_attn")
-            mod.flash_attn_func = None  # type: ignore[attr-defined]
-            mod.flash_attn_qkvpacked_func = None  # type: ignore[attr-defined]
-            sys.modules["flash_attn"] = mod
-        if "decord" not in sys.modules:
-            mod = types.ModuleType("decord")
-            mod.VideoReader = None  # type: ignore[attr-defined]
-            mod.cpu = lambda x=0: None  # type: ignore[attr-defined]
-            sys.modules["decord"] = mod
-        _orig_cuda_current = torch.cuda.current_device
-        torch.cuda.current_device = lambda: 0  # type: ignore[assignment]
-        try:
-            from wan.modules.model import rope_params
-        finally:
-            torch.cuda.current_device = _orig_cuda_current  # type: ignore[assignment]
-
         self.freqs = torch.cat(
             [
                 rope_params(1024, d - 4 * (d // 6)),
@@ -165,40 +147,25 @@ class FramePackMotionerWan(Module):
         """Run the three projections and concatenate.
 
         Args:
-            motion_latents: CPU motion-latent tensor of shape ``[B, C=16, T, H, W]``
-                (or a single-element list of one). For v1 single-clip the
-                contents are typically zero; the projections still produce the
-                learned-bias broadcast pattern.
-            add_last_motion: matches the reference's flag. ``< 2`` with
-                ``drop_mode == "drop"`` zeros out the most-recent slot.
+            motion_latents: CPU motion-latent tensor ``[B, C=16, T, H, W]``
+                (or a single-element list of one). For single-clip the
+                contents are typically zero.
+            add_last_motion: production default is ``2``; other values are
+                rejected (not in the HF prod path).
 
         Returns:
             ``(motion_tokens_dev, motion_rope_torch)``:
-                * ``motion_tokens_dev`` — ``[1, B, N_motion, inner_dim]`` ttnn
-                  tensor (TP-fractured on D, matching the noisy patched tokens).
+                * ``motion_tokens_dev`` — ``[1, B, N_motion, inner_dim]``
+                  ttnn tensor, TP-fractured on D.
                 * ``motion_rope_torch`` — ``[B, N_motion, num_heads,
-                  head_dim/2]`` complex CPU tensor; applied in the standard
-                  attention path via the existing rope plumbing.
+                  head_dim/2]`` complex CPU tensor; applied downstream via
+                  the standard rope plumbing.
         """
-        import sys
-        import types
-
-        if "flash_attn" not in sys.modules:
-            mod = types.ModuleType("flash_attn")
-            mod.flash_attn_func = None  # type: ignore[attr-defined]
-            mod.flash_attn_qkvpacked_func = None  # type: ignore[attr-defined]
-            sys.modules["flash_attn"] = mod
-        if "decord" not in sys.modules:
-            mod = types.ModuleType("decord")
-            mod.VideoReader = None  # type: ignore[attr-defined]
-            mod.cpu = lambda x=0: None  # type: ignore[attr-defined]
-            sys.modules["decord"] = mod
-        _orig_cuda_current = torch.cuda.current_device
-        torch.cuda.current_device = lambda: 0  # type: ignore[assignment]
-        try:
-            from wan.modules.s2v.s2v_utils import rope_precompute
-        finally:
-            torch.cuda.current_device = _orig_cuda_current  # type: ignore[assignment]
+        # Production always passes add_last_motion=2; lower values are an
+        # historical legacy of multi-clip / partial-context inference paths
+        # the production pipeline never exercises.
+        if add_last_motion != 2:
+            raise NotImplementedError(f"add_last_motion={add_last_motion} is not in the HF prod path (expected 2)")
 
         if isinstance(motion_latents, torch.Tensor):
             motion_latents = [motion_latents]
@@ -215,9 +182,6 @@ class FramePackMotionerWan(Module):
         overlap = min(total_T, T_motion)
         if overlap > 0:
             padd_lat[:, :, -overlap:] = x[:, :, -overlap:]
-        if add_last_motion < 2 and self.drop_mode != "drop":
-            zero_end_frame = sum(self.zip_frame_buckets[: len(self.zip_frame_buckets) - add_last_motion - 1])
-            padd_lat[:, :, -zero_end_frame:] = 0
 
         # Split the temporal axis as the reference does — bucket order is
         # [4x, 2x, post] (reverse of self.zip_frame_buckets).
@@ -227,12 +191,6 @@ class FramePackMotionerWan(Module):
         post_tokens = self._project(clean_post, self.proj)  # [1, B, N_post, dim]
         twox_tokens = self._project(clean_2x, self.proj_2x)
         fourx_tokens = self._project(clean_4x, self.proj_4x)
-
-        if add_last_motion < 2 and self.drop_mode == "drop":
-            if add_last_motion < 2:
-                post_tokens = ttnn.slice(post_tokens, [0, 0, 0, 0], [1, 1, 0, post_tokens.shape[-1]])
-            if add_last_motion < 1:
-                twox_tokens = ttnn.slice(twox_tokens, [0, 0, 0, 0], [1, 1, 0, twox_tokens.shape[-1]])
 
         motion_tokens = ttnn.concat([post_tokens, twox_tokens, fourx_tokens], dim=2)
 
@@ -268,3 +226,16 @@ class FramePackMotionerWan(Module):
         rope_input = torch.zeros(B, N_motion, self.num_heads, self.head_dim, dtype=torch.float32)
         motion_rope = rope_precompute(rope_input, grid_sizes, self.freqs, start=None)
         return motion_tokens, motion_rope
+
+
+class MotionerTransformersWan(Module):
+    """Placeholder for the alternative ``MotionerTransformers`` path.
+
+    Kept so the class hierarchy parallels ``wan/modules/s2v/motioner.py``,
+    but ``enable_motioner=True`` is rejected by
+    :class:`WanS2VTransformer3DModel.__init__`, so instantiation is never
+    expected.
+    """
+
+    def __init__(self, *_args, **_kwargs) -> None:
+        raise NotImplementedError("MotionerTransformersWan is not implemented; production uses FramePackMotionerWan")

@@ -4,25 +4,25 @@
 
 """WAN 2.2 Speech-to-Video DiT.
 
-Subclasses ``WanTransformer3DModel`` and adds every S2V-specific conditioning
-module from the reference ``WanModel_S2V`` (``wan/modules/s2v/model_s2v.py``)
-as on-device tt_dit modules — no host shadows:
+Subclasses ``WanTransformer3DModel`` and adds every S2V-specific
+conditioning module from the reference ``WanModel_S2V``
+(``wan/modules/s2v/model_s2v.py``) as on-device tt_dit modules:
 
-  * ``audio_encoder`` — :class:`CausalAudioEncoder` (multi-layer wav2vec2
-    weighted sum + :class:`MotionEncoder_tc`, including the global branch).
-  * ``audio_injector`` — :class:`AudioInjector_WAN`; cross-attention slots
-    invoked at the inject layer indices via ``after_transformer_block``.
-  * ``frame_packer`` — :class:`FramePackMotionerWan` (three patch-style
-    Conv3d projections + rope precompute).
+  * ``audio_encoder`` — :class:`CausalAudioEncoder`.
+  * ``audio_injector`` — :class:`AudioInjector_WAN` cross-attention slots
+    invoked at the inject layer indices via :meth:`after_transformer_block`.
+  * ``frame_packer`` — :class:`FramePackMotionerWan`.
   * ``cond_encoder`` — :class:`WanPatchEmbed` for the pose video.
-  * ``trainable_cond_mask`` — :class:`Parameter` shape ``[3, dim]``;
-    per-token mask add via host-side gather in :meth:`prepare_cond_emb`.
+  * ``trainable_cond_mask`` — :class:`Parameter` shape ``[3, dim]``.
 
 :meth:`prepare_cond_emb` builds the per-clip device-side caches (pose
 embedding, ref+motion+mask const tokens, noisy-mask broadcast). The
-``inner_step`` block loop then runs on the extended ``Sq = noisy + ref +
-motion`` sequence with audio cross-attention masked to the noisy slot, and
-slices off ref+motion before the output head.
+``inner_step`` block loop runs on the extended ``Sq = noisy + ref + motion``
+sequence with audio cross-attention masked to noisy positions, then slices
+off ref+motion before the output head.
+
+The production config uses ``enable_framepack=True`` and
+``enable_motioner=False``; the constructor refuses any other combination.
 """
 
 from __future__ import annotations
@@ -34,8 +34,9 @@ import ttnn
 from ....layers.embeddings import WanPatchEmbed
 from ....layers.module import Parameter
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, float32_tensor, from_torch, local_device_to_torch
-from .audio_utils_wan import AudioInjector_WAN, CausalAudioEncoder, apply_pre_norm_feat
+from .audio_utils_wan import AudioInjector_WAN, CausalAudioEncoder
 from .motioner_wan import FramePackMotionerWan
+from .s2v_rope import rope_precompute
 from .transformer_wan import WanTransformer3DModel
 
 
@@ -71,24 +72,22 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         ),
         enable_adain: bool = False,
         cond_dim: int = 16,
-        # Production S2V uses FramePackMotioner, not MotionerTransformers.
-        # `MotionerCPU` wraps either via the bound HF module, so the choice is
-        # config-driven at load time, not at construction.
+        # Production-only: `enable_framepack=True`, `enable_motioner=False`.
+        # We accept the kwargs to keep the call sites verbose but reject any
+        # non-production combination at construction time.
         enable_motioner: bool = False,
         enable_framepack: bool = True,
         motion_token_num: int = 1024,
         motioner_dim: int = 2048,
-        # WAN 14B uses num_layers=40; the S2V variant inherits that.
         num_layers: int = 40,
         **kwargs,
     ) -> None:
-        # The S2V config uses 32 blocks and the standard ``in_channels=16``.
-        # ``model_type="s2v"`` is accepted by ``WanTransformer3DModel`` after the
-        # small assertion-relaxation in task #8.
+        if enable_motioner or not enable_framepack:
+            raise NotImplementedError(
+                "Only the production FramePacker path is supported "
+                f"(enable_motioner={enable_motioner}, enable_framepack={enable_framepack})"
+            )
         kwargs.setdefault("model_type", "s2v")
-        # The reference S2V model uses ``num_layers=32`` (vs 40 in WAN 14B).
-        # We override the parent's default via the ``num_layers`` kwarg so the
-        # ``blocks`` ModuleList sizes correctly.
         super().__init__(num_layers=num_layers, **kwargs)
 
         self.audio_dim = audio_dim
@@ -97,8 +96,6 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         self.audio_inject_layers = tuple(audio_inject_layers)
         self.enable_adain = enable_adain
         self.cond_dim = cond_dim
-        self.enable_motioner = enable_motioner
-        self.enable_framepack = enable_framepack
         self.motion_token_num = motion_token_num
         self.motioner_dim = motioner_dim
 
@@ -125,13 +122,10 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
             is_fsdp=self.is_fsdp,
         )
 
-        # ------------------------------------------------------------------
-        # Conditioning modules on device. ``cond_encoder`` mirrors the
-        # patch embedding for the pose video; ``trainable_cond_mask`` is a
-        # 3-entry table {noisy=0, ref=1, motion=2} added per-token after
-        # ref/motion concat. (Motioner/frame_packer still bound as CPU shadow
-        # via ``MotionerCPU`` until task #9 lands.)
-        # ------------------------------------------------------------------
+        # Conditioning modules on device. ``cond_encoder`` mirrors the patch
+        # embedding for the pose video; ``trainable_cond_mask`` is a 3-entry
+        # table {noisy=0, ref=1, motion=2} added per-token after ref/motion
+        # concat.
         self.cond_encoder = WanPatchEmbed(
             patch_size=self.patch_size,
             in_channels=cond_dim,
@@ -139,23 +133,22 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
             mesh_device=self.mesh_device,
             tp_mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
         )
-        # Replicated (not TP-sharded) so the host-side gather in
-        # ``prepare_cond_emb`` reads the full [3, dim] table from any device.
-        # The table is tiny (3 * 5120 floats); replication cost is negligible.
+        # Replicated (not TP-sharded): the table is tiny (3 * 5120 floats),
+        # and replication keeps the host gather in ``prepare_cond_emb``
+        # device-axis-agnostic.
         self.trainable_cond_mask = Parameter(
             total_shape=[3, self.dim],
             device=self.mesh_device,
         )
-        if self.enable_framepack:
-            self.frame_packer = FramePackMotionerWan(
-                in_channels=16,
-                inner_dim=self.dim,
-                num_heads=kwargs.get("num_heads", 40),
-                zip_frame_buckets=(1, 2, 16),
-                drop_mode="padd",
-                mesh_device=self.mesh_device,
-                parallel_config=self.parallel_config,
-            )
+        self.frame_packer = FramePackMotionerWan(
+            in_channels=16,
+            inner_dim=self.dim,
+            num_heads=kwargs.get("num_heads", 40),
+            zip_frame_buckets=(1, 2, 16),
+            drop_mode="padd",
+            mesh_device=self.mesh_device,
+            parallel_config=self.parallel_config,
+        )
 
         # Per-clip state populated by ``prepare_audio_emb``.
         # Flattened per-frame audio K/V used by the cross-attention injector.
@@ -195,10 +188,6 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         # (whose weights are already loaded on device).
         self.audio_emb_global_token0_torch: torch.Tensor | None = None
         self.audio_emb_global_token0_dev: ttnn.Tensor | None = None
-
-    # ----------------------------------------------------------------------
-    # Loading helpers.
-    # ----------------------------------------------------------------------
 
     # ----------------------------------------------------------------------
     # Audio preparation. Called once per audio clip by the pipeline.
@@ -420,6 +409,14 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         # present in the sequence.
         N_ref = pph * ppw
         if self._cached_total_seq_len > N_noisy + N_ref:
+            # Motion-token spatial extents mirror FramePackMotioner's Conv3d
+            # output sizes (kernel == stride == (1,2,2)/(2,4,4)/(4,8,8) on
+            # latent input of size (T, 2*pph, 2*ppw)):
+            #   * post: (1, pph,     ppw)       — proj output H = lat_h // 2 = pph
+            #   * 2x:   (1, pph//2,  ppw//2)    — proj_2x output H = lat_h // 4 = pph // 2
+            #   * 4x:   (4, pph//4,  ppw//4)    — proj_4x output H = lat_h // 8 = pph // 4
+            # The rope grid_sizes must match these or trailing motion tokens
+            # get zero rope (no spatial info → broken attention).
             zb = self.frame_packer.zip_frame_buckets
             motion_post = _grid([-zb[0], 0, 0], [0, pph, ppw], [zb[0], pph, ppw])
             motion_2x = _grid(
@@ -429,7 +426,7 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
             )
             motion_4x = _grid(
                 [-(zb[0] + zb[1] + zb[2]), 0, 0],
-                [-(zb[0] + zb[1] + zb[2]) + zb[2] // 4, pph // 8, ppw // 8],
+                [-(zb[0] + zb[1] + zb[2]) + zb[2] // 4, pph // 4, ppw // 4],
                 [zb[2], pph, ppw],
             )
             grid_sizes += [motion_post, motion_2x, motion_4x]
@@ -438,23 +435,6 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         # shape from it (specifically ``x.size(1)`` for the seq_len total).
         N_total = self._cached_total_seq_len
         placeholder = torch.zeros(1, N_total, num_heads, head_dim, dtype=torch.float32)
-
-        import sys
-        import types
-
-        if "flash_attn" not in sys.modules:
-            sys.modules["flash_attn"] = types.ModuleType("flash_attn")
-        if "decord" not in sys.modules:
-            mod = types.ModuleType("decord")
-            mod.VideoReader = None  # type: ignore[attr-defined]
-            mod.cpu = lambda x=0: None  # type: ignore[attr-defined]
-            sys.modules["decord"] = mod
-        _orig = torch.cuda.current_device
-        torch.cuda.current_device = lambda: 0  # type: ignore[assignment]
-        try:
-            from wan.modules.s2v.s2v_utils import rope_precompute
-        finally:
-            torch.cuda.current_device = _orig  # type: ignore[assignment]
 
         freqs_complex = rope_precompute(placeholder, grid_sizes, freqs_ref, start=None)
         # freqs_complex: [1, N_total, num_heads, head_dim/2] complex
@@ -547,23 +527,6 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
         self._adain_modulation_cache[cache_key] = (shift_tt, scale_tt)
         return shift_tt, scale_tt
 
-    def _apply_adain_pre_norm(
-        self,
-        spatial_1BND: ttnn.Tensor,
-        audio_attn_id: int,
-        N: int,
-    ) -> ttnn.Tensor:
-        """Per-frame AdaIN modulation under SP fracturing.
-
-        Math: ``(1 + scale_per_token) * LN(x) + shift_per_token``, mirroring
-        the reference's ``AdaLayerNorm(chunk_dim=1)``. The ``+1`` is folded
-        into the cached scale tensor so the on-device op is a plain
-        ``multiply + add`` with no scalar broadcast.
-        """
-        shift_full, scale_plus_one_full = self._build_adain_modulation_for_layer(audio_attn_id, N)
-        x_normed = apply_pre_norm_feat(spatial_1BND)
-        return ttnn.add(ttnn.multiply(x_normed, scale_plus_one_full), shift_full)
-
     def after_transformer_block(
         self,
         block_idx: int,
@@ -600,12 +563,9 @@ class WanS2VTransformer3DModel(WanTransformer3DModel):
 
         # Pre-norm for the audio cross-attn. The reference uses a full-dim
         # ``nn.LayerNorm(elementwise_affine=False)`` over the spatial
-        # representation. Our ``apply_pre_norm_feat`` was computing LN over
-        # the **TP-fractured** last dim (i.e. only ``D/tp`` features), which
-        # is mathematically wrong under TP > 1 — it normalizes each TP shard
-        # independently instead of over the full ``D``. Use the block's
-        # ``norm1`` (DistributedLayerNorm, no-affine; AG's stats across TP)
-        # to match the reference's full-dim LN.
+        # representation. ``block.norm1`` is a no-affine
+        # :class:`DistributedLayerNorm` that all-gathers stats across TP, so
+        # it gives the correct full-D normalization here.
         block = self.blocks[block_idx]
         if self.enable_adain and self.audio_emb_global_token0_dev is not None:
             shift_full, scale_plus_one_full = self._build_adain_modulation_for_layer(audio_attn_id, N)

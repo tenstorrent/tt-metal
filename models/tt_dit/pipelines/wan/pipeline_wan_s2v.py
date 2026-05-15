@@ -12,19 +12,14 @@ a Diffusers wrapper — the safetensors at the root are keyed by the reference
 repo's native module names, the T5 text encoder is a raw `.pth` file, the VAE
 is a raw `.pth` file, and there is no `scheduler/`, `tokenizer/`, or
 `transformer/` subfolder. The parent :class:`WanPipeline` therefore cannot
-load this checkpoint directly.
-
-This pipeline:
+load this checkpoint directly. This pipeline:
 
   * **Reuses** the Diffusers-style ``Wan-AI/Wan2.2-T2V-A14B-Diffusers`` repo
     for the UMT5 tokenizer + text encoder and the VAE decoder/encoder
     (these components are weight-compatible across T2V / I2V / S2V).
   * **Loads** the S2V DiT transformer weights from the native S2V snapshot
     via :func:`wan_s2v_loader.load_s2v_state_dict` and the name translator at
-    :func:`wan_s2v_weight_map.translate_s2v_state_dict`. Every reference
-    module — ``frame_packer``, ``cond_encoder``, ``trainable_cond_mask``,
-    the AdaIN per-layer linears, and the audio-encoder global branch — is
-    loaded into an on-device tt_dit module; there are no host shadows.
+    :func:`wan_s2v_weight_map.translate_s2v_state_dict`.
   * **Loads** the wav2vec2-large-xlsr-53 audio encoder from the bundled copy
     inside the S2V snapshot.
   * **Builds** ``UniPCMultistepScheduler`` from scratch with the WAN default
@@ -34,6 +29,27 @@ The denoise loop and end-to-end inference are inherited from
 :meth:`WanPipeline.__call__`; ``WanS2VTransformer3DModel.prepare_cond_emb`` is
 invoked once per clip from :meth:`prepare_latents` to build the conditioning
 caches that ``inner_step`` consumes.
+
+Latent-space rationale for the conditioning constants
+-----------------------------------------------------
+S2V conditions on a reference image, motion latents, and a pose video
+(``cond_states``). All three are produced in **normalized latent space** —
+the VAE encoder's mean output ``mu`` minus ``latents_mean`` divided by
+``latents_std`` (matches ``wan/modules/vae2_1.py:WanVAE_.encode``). The
+"no motion" default is *not* literal latent zeros but
+``vae_encode(zeros_in_pixel_space)`` after normalization (~−3.0 mean). Pose
+conditioning, when absent, is literal latent zeros (matches the reference's
+``COND[0] * 0`` shortcut for the no-pose case). See
+:meth:`WanPipelineS2V._encode_normalized` for the VAE encode + normalize
+helper used by both the reference latent and the motion-latent paths.
+
+Not supported (production HF path only)
+---------------------------------------
+Any non-default S2V option raises :class:`NotImplementedError`:
+``pose_video`` (only zero pose conditioning), multi-clip
+(``num_repeat > 1``), ``enable_tts``, ``init_first_frame=True``, and
+``adain_mode != "attn_norm"``. AdaIN modulation itself is gated off until
+the upstream ttnn ``binary_ng`` broadcast issue is resolved.
 """
 
 from __future__ import annotations
@@ -56,7 +72,13 @@ from models.perf.benchmarking_utils import BenchmarkProfiler  # noqa: F401  (kep
 
 from ...encoders.umt5.model_umt5 import UMT5Config, UMT5Encoder
 from ...encoders.wav2vec2 import Wav2Vec2Config, Wav2Vec2Encoder
-from ...encoders.wav2vec2.audio_preprocess import WAV2VEC2_HZ, get_audio_embed_bucket_fps, load_audio_to_input_values
+from ...encoders.wav2vec2.audio_preprocess import (
+    S2V_VIDEO_RATE,
+    WAV2VEC2_HZ,
+    get_audio_embed_bucket_fps,
+    linear_interpolation,
+    load_audio_to_input_values,
+)
 from ...models.transformers.wan2_2.transformer_wan_s2v import WanS2VTransformer3DModel
 from ...models.vae.vae_wan2_1 import WanDecoder, WanEncoder
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
@@ -203,11 +225,14 @@ class WanPipelineS2V(WanPipeline):
         # ------------------------------------------------------------------
         s2v_snapshot = find_s2v_snapshot(checkpoint_name)
         s2v_cfg = load_s2v_config(s2v_snapshot)
-        logger.info(
-            f"S2V transformer config: dim={s2v_cfg['dim']}, num_layers={s2v_cfg['num_layers']}, "
-            f"audio_dim={s2v_cfg['audio_dim']}, enable_adain={s2v_cfg.get('enable_adain', False)}, "
-            f"enable_framepack={s2v_cfg.get('enable_framepack', True)}"
-        )
+        if s2v_cfg.get("adain_mode", "attn_norm") != "attn_norm":
+            raise NotImplementedError(
+                f"adain_mode={s2v_cfg.get('adain_mode')!r} is not supported; production uses 'attn_norm'"
+            )
+        if s2v_cfg.get("enable_motioner", False):
+            raise NotImplementedError(
+                "enable_motioner=True (MotionerTransformers) is not supported; production uses FramePacker"
+            )
         inject_layers = (
             tuple(audio_inject_layers) if audio_inject_layers is not None else tuple(s2v_cfg["audio_inject_layers"])
         )
@@ -540,20 +565,11 @@ class WanPipelineS2V(WanPipeline):
     # ----------------------------------------------------------------------
 
     def _encode_normalized(self, pixels_BCTHW: torch.Tensor) -> torch.Tensor:
-        """Encode pixel-space input through the **TT VAE encoder** (fast,
-        device-resident; uses the precomputed conv3d blockings for the
-        configured height/width) and apply the production normalization
-        ``(mu - mean) / std``.
+        """TT VAE encode + production ``(mu - latents_mean) / latents_std`` normalization.
 
-        Equivalent to the reference's ``wan/modules/vae2_1.py:WanVAE_.encode``
-        which applies ``(mu - scale[0]) * scale[1]`` with
-        ``scale = [latents_mean, 1/latents_std]``. Used to produce
-        ``motion_latents`` and ``cond_states`` constants for the S2V "no pose,
-        no motion" defaults — the model needs these in normalized latent
-        space, not literal pixel-space zeros / -1s.
-
-        Pixel input shape: ``[B, 3, T, H, W]``, values typically in ``[-1, 1]``.
-        Output: ``[B, z_dim=16, T_lat, H_lat, W_lat]`` in normalized latent space.
+        Pixel input shape ``[B, 3, T, H, W]``, output ``[B, z_dim=16, T_lat, H_lat, W_lat]``.
+        Module docstring covers why normalized latents are used as the
+        conditioning constants.
         """
         # Match the ref-image encode path: BCTHW → BTHWC, pad in-channels &
         # height to the VAE's 2D-sharded grid, upload 2D-sharded, run encoder,
@@ -588,19 +604,22 @@ class WanPipelineS2V(WanPipeline):
             torch.float32
         )
 
-    # --- __call__ shim: ``WanPipeline.__call__`` doesn't know about
-    # ``audio_prompt``, so stash it on the instance and route through the
-    # parent. ``prepare_latents`` reads ``self._pending_audio_prompt`` to pick
-    # up the audio path.
     @torch.no_grad()
     def __call__(self, *args, audio_prompt: Optional[str] = None, **kwargs):
+        """S2V entry point.
+
+        ``audio_prompt`` is a first-class kwarg here. It is forwarded to
+        :meth:`prepare_latents` via a private instance attribute because the
+        parent ``WanPipeline.__call__`` predates the audio-prompt arg and
+        does not propagate extra kwargs through to ``prepare_latents``.
+        """
         if audio_prompt is None:
             raise ValueError("audio_prompt (path to a .wav/.mp3 file) is required for S2V")
-        self._pending_audio_prompt = audio_prompt
+        self._audio_prompt = audio_prompt
         try:
             return super().__call__(*args, **kwargs)
         finally:
-            self._pending_audio_prompt = None
+            self._audio_prompt = None
 
     def prepare_latents(
         self,
@@ -614,10 +633,14 @@ class WanPipelineS2V(WanPipeline):
         device: Optional[torch.device] = None,
         latents: Optional[torch.Tensor] = None,
         audio_prompt: Optional[str] = None,
+        pose_video: Optional[str] = None,
     ) -> tuple:
-        assert batch_size == 1, "Only batch size 1 is currently supported for S2V"
+        if batch_size != 1:
+            raise NotImplementedError(f"S2V only supports batch_size=1, got {batch_size}")
+        if pose_video is not None:
+            raise NotImplementedError("--pose_video conditioning is not implemented; only zero-pose is supported")
         if audio_prompt is None:
-            audio_prompt = getattr(self, "_pending_audio_prompt", None)
+            audio_prompt = getattr(self, "_audio_prompt", None)
         if audio_prompt is None:
             raise ValueError("audio_prompt (path to a .wav/.mp3 file) is required for S2V")
         if image_prompt is None or not isinstance(image_prompt, Image.Image):
@@ -636,20 +659,20 @@ class WanPipelineS2V(WanPipeline):
             latents=latents,
         )
 
-        # 2. Reference image → VAE encode (same as I2V first-frame path).
-        # The TT VAE encoder returns the raw Gaussian mean; ``_encode_normalized``
-        # then applies the production ``(mu - latents_mean) / latents_std``
-        # normalization (matches ``wan/modules/vae2_1.py:540``). Without this
-        # normalization conditioning is ~8σ off-distribution and the model
-        # produces incoherent output.
-        ref_pil = image_prompt
-        ref_tensor = self.video_processor.preprocess(ref_pil, height=height, width=width).to(
+        # 2. Reference image → VAE encode + normalize.
+        ref_tensor = self.video_processor.preprocess(image_prompt, height=height, width=width).to(
             device, dtype=torch.float32
         )
         ref_video = ref_tensor.unsqueeze(2)  # [B, C, T=1, H, W]
         ref_latent_torch = self._encode_normalized(ref_video)
 
-        # 3. Audio: load wav, run wav2vec2, bucket to video FPS.
+        # 3. Audio: load wav, run wav2vec2, resample to video_rate, bucket to video FPS.
+        # Matches the reference flow in `wan/speech2video.py:encode_audio`:
+        # wav2vec2 outputs at 50 Hz → linear_interpolation → 30 Hz →
+        # `get_audio_embed_bucket_fps` evenly samples `num_frames` features
+        # for the clip at 16 fps. Skipping the resample or zero-padding short
+        # clips (the prior behavior) misaligns the audio and the model
+        # produces silent / incoherent output.
         input_values = load_audio_to_input_values(audio_prompt, self.audio_processor)
         all_hidden = self.tt_audio_encoder(input_values, output_hidden_states=True)
         # ``fast_device_to_host`` expects exactly two concat_dims for a 2D mesh.
@@ -659,11 +682,14 @@ class WanPipelineS2V(WanPipeline):
                 for h in all_hidden
             ],
             dim=1,
-        )  # [B, num_layers, T_a, 1024]
+        )  # [B=1, num_layers, T_50Hz, audio_dim]
         bucketed_per_layer = []
         for layer_idx in range(hidden_torch.shape[1]):
+            feat_30Hz = linear_interpolation(
+                hidden_torch[0, layer_idx], input_fps=WAV2VEC2_HZ, output_fps=S2V_VIDEO_RATE
+            )
             aligned, _ = get_audio_embed_bucket_fps(
-                hidden_torch[0, layer_idx], fps=16, batch_frames=num_frames, encoder_hz=WAV2VEC2_HZ
+                feat_30Hz, fps=16, batch_frames=num_frames, video_rate=S2V_VIDEO_RATE
             )
             bucketed_per_layer.append(aligned)
         audio_BLNF = torch.stack(bucketed_per_layer, dim=0).unsqueeze(0).permute(0, 1, 3, 2)
@@ -675,21 +701,13 @@ class WanPipelineS2V(WanPipeline):
         self.transformer.prepare_audio_emb(audio_BLNF, target_num_frames=num_latent_frames)
 
         # 4. Motion latents — VAE-encoded zero pixels, NOT literal latent zeros.
-        # Reference (``wan/speech2video.py:478``): ``motion_latents`` starts as
-        # ``torch.zeros([1, 3, motion_frames=17, H, W])`` in pixel space, then
-        # ``self.vae.encode(...)``. Encoding zero pixels gives a non-zero latent
-        # baseline (~-8.8 mean unnormalized; ~-3 normalized) — that's the
-        # distribution the model was trained on for "no motion".
+        # (See module docstring for the latent-space rationale.)
         MOTION_FRAMES_PIXEL = 17  # reference config: s2v_14B motion_frames
         motion_pixels = torch.zeros(1, 3, MOTION_FRAMES_PIXEL, height, width, dtype=torch.float32)
         motion_latents_torch = self._encode_normalized(motion_pixels)
 
-        # 5. Pose conditioning (cond_states). Reference (``wan/speech2video.py:584``):
-        # ``cond_latents = COND[r] if pose_video else COND[0] * 0`` —
-        # mathematically zeros. The reference's VAE-encoded -1 pixels with
-        # latent normalization happens to be very close to zero (the latent
-        # baseline for uniform -1 input is small after normalization). For
-        # safety we pass literal zeros to exactly match the reference.
+        # 5. Pose conditioning (cond_states): zero pose; matches the reference's
+        # ``COND[0] * 0`` shortcut when ``pose_video`` is not provided.
         latent_shape = latents.shape
         cond_states_torch = torch.zeros(
             1,
@@ -702,15 +720,11 @@ class WanPipelineS2V(WanPipeline):
 
         # Build the on-device caches for pose / ref / motion / mask. After
         # this call the transformer's ``inner_step`` consumes ``_cached_*``
-        # attributes; the pipeline only needs to keep the cond bundle for
-        # traceability.
-        #
-        # NOTE: leaving ``drop_first_motion=False`` here (motion tokens
-        # kept). Production reference sets this to True for first-clip, but
-        # an A/B run on our pipeline showed the motion-dropped output is
-        # worse — likely because another component (audio injection or
-        # frame_packer) has a bug whose effect is masked when motion tokens
-        # carry through. Revisit after isolating the other component.
+        # attributes.
+        # NOTE: ``drop_first_motion=False`` is intentionally non-reference.
+        # The reference sets this to True for the first clip, but an A/B run
+        # on our pipeline showed the motion-dropped output is worse —
+        # tracked separately while we hunt the upstream cause.
         self.transformer.prepare_cond_emb(
             noisy_latents_torch=latents,
             ref_latent_torch=ref_latent_torch,
@@ -718,12 +732,24 @@ class WanPipelineS2V(WanPipeline):
             cond_states_torch=cond_states_torch,
             drop_first_motion=False,
         )
-        self._s2v_cond_bundle = {
-            "ref_latent": ref_latent_torch,
-            "motion_latents": motion_latents_torch,
-            "audio": audio_BLNF,
-        }
         return latents, None
 
     def get_model_input(self, latents, cond_latents):
         return super().get_model_input(latents, None)
+
+    # ----------------------------------------------------------------------
+    # Export.
+    # ----------------------------------------------------------------------
+
+    @staticmethod
+    def export(frames, output_path: str, *, audio_path: Optional[str] = None, fps: int = 16) -> str:
+        """Encode pipeline output to MP4, optionally muxing in ``audio_path``.
+
+        When ``audio_path`` is provided the muxed file matches the
+        reference's ``wan.utils.utils.merge_video_audio`` step.
+        """
+        from ...utils.video import export_to_video, export_to_video_with_audio
+
+        if audio_path is not None:
+            return export_to_video_with_audio(frames, output_path, audio_path=audio_path, fps=fps)
+        return export_to_video(frames, output_path, fps=fps)
