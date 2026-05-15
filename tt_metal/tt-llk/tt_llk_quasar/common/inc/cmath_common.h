@@ -19,12 +19,6 @@ constexpr static unsigned int SFP_ROWS           = 2;
 constexpr static unsigned int SFPU_DEST_BASE_ADDR = 0x0;
 constexpr static unsigned int SFPU_SRCS_BASE_ADDR = 0x400;
 
-#if defined(LLK_TRISC_ISOLATE_SFPU)
-constexpr static std::uint32_t TRISC_ID = 3;
-#else
-constexpr static std::uint32_t TRISC_ID = 1;
-#endif
-
 // Struct for the ALU addresses
 constexpr std::uint32_t NUM_WORDS_ALU_FORMAT = 3;
 

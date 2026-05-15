@@ -40,5 +40,4 @@ union unpack_tilize_cfg_u
 
 // Number of rows for Unpack functions
 constexpr static std::uint32_t UNPACR_STRIDE_MAX_ROWS = 8;
-constexpr static std::uint32_t TRISC_ID               = 0;
 } // namespace ckernel::unpack

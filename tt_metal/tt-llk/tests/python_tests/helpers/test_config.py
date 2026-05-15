@@ -1108,11 +1108,14 @@ class TestConfig:
             )
 
             def build_kernel_part(name: str):
-                optional_kernel_flags = ""
-                if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
-                    optional_kernel_flags = "-DCOMPILE_FOR_TRISC=" + str(
-                        TestConfig.KERNEL_COMPONENTS.index(name)
-                    )
+                # COMPILE_FOR_TRISC is the canonical per-thread integer used by
+                # ckernel_trisc_common.h (TRISC role = value % 4: 0=unpack,
+                # 1=math, 2=pack, 3=isolate_sfpu). KERNEL_COMPONENTS is ordered
+                # so that .index() yields exactly this value for all supported
+                # names on every architecture (0..2 on tt-1xx, 0..3 on quasar).
+                optional_kernel_flags = "-DCOMPILE_FOR_TRISC=" + str(
+                    TestConfig.KERNEL_COMPONENTS.index(name)
+                )
 
                 if not self.compile_time_formats:
                     optional_kernel_flags += " -DRUNTIME_FORMATS"

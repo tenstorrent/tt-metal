@@ -15,30 +15,22 @@
 #include "llk_defs.h"
 #include "tensix_types.h"
 
-// Build-system-provided integer identifying which TRISC this translation
-// unit is compiled for (0=unpack, 1=math, 2=pack, 3=isolate_sfpu). Each
-// downstream layer's build glue (LLK tests, metal compute API, sim, ...)
-// is responsible for translating its own per-thread flag into this single
-// integer macro. The block below is a stepping-stone fallback that maps
-// the legacy LLK_TRISC_* boolean flags onto CKERNEL_TRISC_ID so
-// existing builds keep working while layers migrate to setting the macro
-// directly. Remove the fallback once every build sets CKERNEL_TRISC_ID.
-#ifndef CKERNEL_TRISC_ID
-#if defined(LLK_TRISC_UNPACK)
-#define CKERNEL_TRISC_ID 0
-#elif defined(LLK_TRISC_MATH)
-#define CKERNEL_TRISC_ID 1
-#elif defined(LLK_TRISC_PACK)
-#define CKERNEL_TRISC_ID 2
-#elif defined(LLK_TRISC_ISOLATE_SFPU)
-#define CKERNEL_TRISC_ID 3
-#else
-#error "CKERNEL_TRISC_ID must be defined by the kernel build (0=unpack, 1=math, 2=pack, 3=isolate_sfpu)"
-#endif
+// COMPILE_FOR_TRISC is the build-system-provided integer identifying which
+// physical compute processor this translation unit is compiled for. Every
+// kernel build (LLK tests, metal compute API, sim, ...) should set it.
+#ifndef COMPILE_FOR_TRISC
+#error "COMPILE_FOR_TRISC must be defined by the kernel build (TRISC role = COMPILE_FOR_TRISC % 4: 0=unpack, 1=math, 2=pack, 3=isolate_sfpu)"
 #endif
 
 namespace ckernel::trisc
 {
+// Canonical TRISC role for the current translation unit, derived from
+// COMPILE_FOR_TRISC. Values: 0 = unpack, 1 = math, 2 = pack,
+// 3 = isolate_sfpu. The %4 collapses Quasar's multi-NEO encoding
+// (NEO_<n>_COMPUTE_<m> = 4*n + m) and is a no-op on layouts that already
+// emit the role directly (Wormhole/Blackhole give 0..2).
+constexpr static std::uint32_t TRISC_ID = COMPILE_FOR_TRISC % 4;
+
 // Num of words in buffer descriptor struct
 constexpr static std::uint32_t BD_NUM_WORDS = 3;
 
@@ -208,8 +200,8 @@ inline std::uint32_t _get_dest_buffer_base_()
 
 /**
  * @brief Sets destination register base address depending on tile idx for the
- * TRISC this translation unit is compiled for. The TRISC is selected by
- * CKERNEL_TRISC_ID; consumers no longer need to pass it.
+ * TRISC this translation unit is compiled for. The TRISC role is taken from
+ * ckernel::trisc::TRISC_ID; consumers no longer need to pass it.
  * @tparam TILE_SHAPE: Tile shape, used to compute the per-tile stride.
  * @param tile_index: Tile index in the dest reg
  * 16bit dest reg data format -> tile_idx = 0 - 7
@@ -220,13 +212,13 @@ inline void _set_dst_write_addr_(const std::uint32_t tile_index)
 {
     const std::uint32_t tile_shape_idx = (TILE_SHAPE == DstTileShape::Tile32x32) ? 6 : ((TILE_SHAPE == DstTileShape::Tile32x16) ? 5 : 4);
     const std::uint32_t dst_index      = (tile_index << tile_shape_idx) + _get_dest_buffer_base_();
-    _set_dest_section_base_<CKERNEL_TRISC_ID>(dst_index);
+    _set_dest_section_base_<TRISC_ID>(dst_index);
 }
 
 /**
  * @brief Sets destination register base address depending on tile idx and the
  * number of rows per tile for the TRISC this translation unit is compiled for
- * (selected by CKERNEL_TRISC_ID).
+ * (TRISC role taken from ckernel::trisc::TRISC_ID).
  * @param num_rows_per_tile: Number of rows per tile, used to compute the per-tile stride.
  * @param tile_index: Tile index in the dest reg.
  */
@@ -237,7 +229,7 @@ inline void _set_dst_write_addr_by_rows_(const std::uint32_t num_rows_per_tile, 
             ? 6
             : ((num_rows_per_tile == 32) ? 5 : ((num_rows_per_tile == 16) ? 4 : ((num_rows_per_tile == 8) ? 3 : ((num_rows_per_tile == 4) ? 2 : 1))));
     const std::uint32_t dst_index = (tile_index << tile_shape_idx) + _get_dest_buffer_base_();
-    _set_dest_section_base_<CKERNEL_TRISC_ID>(dst_index);
+    _set_dest_section_base_<TRISC_ID>(dst_index);
 }
 
 inline constexpr static std::uint32_t masked_data_format(std::uint32_t data_format)
