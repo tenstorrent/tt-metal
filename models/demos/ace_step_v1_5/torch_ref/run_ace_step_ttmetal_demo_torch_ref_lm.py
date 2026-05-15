@@ -1,31 +1,11 @@
 """
-ACE-Step v1.5 demo: official-style host preprocessing + TTNN DiT sampler + VAE decode.
+ACE-Step v1.5 demo (tt-metal pipeline) using **PyTorch-only** LM from ``torch_ref.five_hz_lm``.
 
-Latent diffusion runs on TTNN; VAE decode uses the TTNN Oobleck port from ``ign/ACE_perf`` by default
-(HF-style ``ckpt_dir/vae/`` with ``config.json``). Long latent sequences are decoded in overlapping
-time tiles so ``ttnn.conv1d`` stays within L1 limits. Pass ``--torch-vae`` for PyTorch ``AutoencoderOobleck``.
+This file is a copy of ``../run_prompt_to_wav.py`` with ``LocalFiveHzLMHandler`` imported from
+``models.demos.ace_step_v1_5.torch_ref.five_hz_lm`` for PCC / parity against the production
+``five_hz_lm`` handler. See ``torch_ref/README_LM_PCC_TORCH_REF.md`` and ``torch_ref/five_hz_lm/README.md``.
 
-By default this matches ``torch_ref/run_prompt_to_wav.py --use-official-acestep`` for **Phase 1**
-(5 Hz LM / CoT, audio codes, handler ``preprocess_batch``, TTNN Qwen3 caption encoder via
-``infer_text_embeddings``, and TTNN ``prepare_condition`` replacement with **precomputed LM hints**),
-emitting the same style of **loguru** / model logs as the official CLI. DiT sampling runs on TTNN.
-
-Use ``--fast-preprocess`` to skip the LM and use the lightweight path (tokenizer + TTNN ``Qwen3Model``
-embedding encoder + ``precomputed_lm_hints_25Hz=None``), avoiding a PyTorch Qwen forward while still
-using HF ``prepare_condition`` on the host by default. Pass ``--ttnn-condition-embedding`` to force
-the lightweight TTNN condition path, or ``--no-ttnn-condition-embedding`` to compare against Torch
-``prepare_condition``.
-
-``--use-official-lm`` runs full ``acestep.inference.generate_music`` (PyTorch DiT on host) with no TTNN.
-
-On the default (non ``--fast-preprocess``) path, after the TTNN device is opened for the Qwen3 caption
-encoder, the same device is attached to the 5 Hz LM handler so the **CFG logit combine**
-(``uncond + cfg_scale * (cond - uncond)``) runs on TTNN with strict fallbacks disabled inside that op:
-valid-audio **slice** in codes phase when a mask is applied, otherwise **full vocabulary**; see
-``ttnn_impl/lm_logits_ttnn.py``. The 5 Hz causal LM forward remains PyTorch unless you pass
-``--experimental-5hz-ttnn-causal-lm`` (then ``ttnn_impl/five_hz_causal_lm_experimental.py`` wraps
-``ttnn_impl/qwen_model_full_device.QwenModelFullDevice``; use ``--guidance-scale 1`` if that backend
-cannot batch cond+uncond).
+Latent diffusion runs on TTNN; VAE decode uses the TTNN Oobleck port by default unless ``--torch-vae``.
 """
 
 from __future__ import annotations
@@ -453,7 +433,7 @@ def main() -> None:
             from acestep.handler import AceStepHandler
             from acestep.inference import GenerationConfig, GenerationParams, generate_music
 
-            from models.demos.ace_step_v1_5.five_hz_lm import LocalFiveHzLMHandler
+            from models.demos.ace_step_v1_5.torch_ref.five_hz_lm import LocalFiveHzLMHandler
         except ModuleNotFoundError as e:
             raise RuntimeError(
                 "--use-official-lm requires AceStepHandler and its deps "
@@ -672,7 +652,7 @@ def main() -> None:
         ref_root = _ensure_acestep_on_path()
 
         from models.demos.ace_step_v1_5.official_lm_preprocess import (
-            attach_payload_preprocess_ttnn,
+            attach_infer_text_embeddings_ttnn,
             build_filtered_dit_kwargs_for_handler,
             configure_acestep_logging,
             handler_prepare_condition_payload,
@@ -683,7 +663,7 @@ def main() -> None:
     try:
         from acestep.handler import AceStepHandler
 
-        from models.demos.ace_step_v1_5.five_hz_lm import LocalFiveHzLMHandler
+        from models.demos.ace_step_v1_5.torch_ref.five_hz_lm import LocalFiveHzLMHandler
     except ModuleNotFoundError as e:
         raise RuntimeError(
             "Default preprocessing imports AceStepHandler, which pulls ACE-Step training code "
@@ -780,7 +760,6 @@ def main() -> None:
 
     _configure_ttnn_runtime(no_ttnn_strict=args.no_ttnn_strict)
     import ttnn
-    from models.demos.ace_step_v1_5.ttnn_impl.audio_code_detokenizer import TtAceStepAudioCodeDetokenizer
     from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_encoder import TtQwen3EmbeddingEncoder
 
     if not args.no_ttnn_strict and hasattr(ttnn, "CONFIG") and hasattr(ttnn.CONFIG, "throw_exception_on_fallback"):
@@ -799,16 +778,8 @@ def main() -> None:
     qwen_tt_encoder = TtQwen3EmbeddingEncoder(
         device=dev, hf_model_dir=str(text_model_dir), qwen_safetensors_path=str(qwen_safetensors)
     )
-    audio_code_detokenizer = TtAceStepAudioCodeDetokenizer(
-        device=dev,
-        checkpoint_safetensors_path=str(safetensors_path),
-        dtype=getattr(ttnn, "bfloat16", None),
-    )
-    _restore_infer_txt = attach_payload_preprocess_ttnn(
-        dit_handler,
-        tt_qwen_encoder=qwen_tt_encoder,
-        tt_audio_detokenizer=audio_code_detokenizer,
-        max_seq_len=256,
+    _restore_infer_txt = attach_infer_text_embeddings_ttnn(
+        dit_handler, tt_qwen_encoder=qwen_tt_encoder, max_seq_len=256
     )
     try:
         if args.ttnn_condition_embedding:
@@ -828,7 +799,6 @@ def main() -> None:
             enc_hs, enc_mask, ctx_lat, frames, null_emb = handler_prepare_condition_tensors(dit_handler, filtered)
     finally:
         _restore_infer_txt()
-        del audio_code_detokenizer
         del qwen_tt_encoder
     do_cfg = gs > 1.0 + 1e-6
 

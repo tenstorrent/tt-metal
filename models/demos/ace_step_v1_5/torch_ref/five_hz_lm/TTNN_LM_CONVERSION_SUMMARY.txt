@@ -1,0 +1,67 @@
+ACE-Step v1.5 — LocalFiveHzLMHandler (five_hz_lm) vs TTNN
+==========================================================
+
+Scope: ``LocalFiveHzLMHandler`` and modules under ``five_hz_lm/``. Qwen3 **caption** encoding for DiT
+is TTNN in ``ttnn_impl/qwen3_embedding_encoder.py`` but lives **outside** this handler (see
+``official_lm_preprocess.attach_infer_text_embeddings_ttnn``).
+
+
+Table 1 — Already on TTNN (inside or wired with the 5 Hz LM handler)
+-------------------------------------------------------------------
++------------------------------------+----------+-----------------------------------------------+
+| Component                          | Backend  | Code / notes                                  |
++------------------------------------+----------+-----------------------------------------------+
+| CFG on valid audio-token slice     | TTNN     | ``uncond + s*(cond-uncond)`` on [B,K] subset |
+|   (codes phase + non-audio mask)   |          | ``ttnn_impl/lm_logits_ttnn.py``              |
+|                                    |          | ``cfg_linear_combination_bf16``; strict     |
+|                                    |          | ``throw_exception_on_fallback`` in-call     |
+| Device attachment                  | Host     | ``set_ttnn_logits_device(dev)``;            |
+|                                    |          | ``run_prompt_to_wav.py`` after ``_open_tt_   |
+|                                    |          | device``                                     |
++------------------------------------+----------+-----------------------------------------------+
+| Causal LM forward (optional)       | TTNN     | ``--experimental-5hz-ttnn-causal-lm``:      |
+|                                    |          | ``ttnn_impl/five_hz_causal_lm_experimental`` |
+|                                    |          | wraps ``ace_step_ds_r1_qwen``;              |
+|                                    |          | **batch=1** only; use ``--guidance-scale 1``|
++------------------------------------+----------+-----------------------------------------------+
+
+
+Table 2 — Still PyTorch / host today, but possible to move to TTNN later
+------------------------------------------------------------------------
++------------------------------------+-------------+--------------------------------------------+
+| Component                          | Feasibility | Notes / tt-metal direction               |
++------------------------------------+-------------+--------------------------------------------+
+| Causal LM forward (all layers,     | Optional  | ``--experimental-5hz-ttnn-causal-lm`` uses |
+| KV cache, lm_head)                 | TTNN exp. | ``ace_step_ds_r1_qwen.QwenModel``; prod.   |
+|                                    | or HF     | remains ``AutoModelForCausalLM``.         |
++------------------------------------+-------------+--------------------------------------------+
+| Full-vocab CFG (cond/uncond        | Partial     | Full [B,V] matmuls on device are memory-   |
+| without narrow mask)             |             | heavy; narrow path already TTNN.          |
++------------------------------------+-------------+--------------------------------------------+
+| Top-k / top-p on last-step logits  | Partial     | ``ttnn.topk`` / sort+mask patterns exist   |
+|                                    |             | in demos; V~150k–220k is costly per step.|
++------------------------------------+-------------+--------------------------------------------+
+| Softmax on last-step logits        | Good        | ``ttnn.softmax``; often paired with slice |
+| (before sampling)                  |             | to valid tokens to save bandwidth.        |
++------------------------------------+-------------+--------------------------------------------+
+| Repetition penalty (logit scatter) | Good        | Elementwise add/mask on device.           |
++------------------------------------+-------------+--------------------------------------------+
+| CFG + constrained order            | Tricky      | FSM stays on CPU; **applying** large      |
+| (MetadataConstrainedLogitsProc.) |             | -inf masks could use TTNN where static.  |
++------------------------------------+-------------+--------------------------------------------+
+| Multinomial / argmax sampling      | Low TTNN   | Usually small host step after probs;     |
+|                                    |             | on-device sampling is non-idiomatic.      |
++------------------------------------+-------------+--------------------------------------------+
+| ``AutoTokenizer`` encode/decode    | N/A         | Keep host; no TTNN tokenizer equivalent.|
++------------------------------------+-------------+--------------------------------------------+
+| vLLM / MLX backend paths           | N/A         | Different runtimes; “convert” = replace   |
+|                                    |             | with a dedicated TTNN LM path, not patch. |
++------------------------------------+-------------+--------------------------------------------+
+
+
+Related (not inside the LM handler class)
+-----------------------------------------
++------------------------------------+----------+-----------------------------------------------+
+| DiT Qwen3 caption encoder          | TTNN     | ``ttnn_impl/qwen3_embedding_encoder.py``    |
+| DiT denoise / VAE                  | TTNN opt.| ``ttnn_impl/e2e_model.py``, ``full_pipeline``|
++------------------------------------+----------+-----------------------------------------------+
