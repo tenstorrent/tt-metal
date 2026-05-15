@@ -357,15 +357,10 @@ bool single_core_reconfig(
     return pass;
 }
 
-// TF32 is float32 with the low 13 mantissa bits discarded (1 sign + 8 exp + 10 mant).
-// Quantizing the host stimulus matches what the unpacker gasket actually delivers to
-// the math engine, so the golden computed in float space stays bit-exact w.r.t. HW.
-inline float quantize_to_tf32(float f) { return std::bit_cast<float>(std::bit_cast<uint32_t>(f) & 0xFFFFE000u); }
-
 bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     constexpr uint32_t kNumOps = 3;
     const uint32_t f16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
-    const uint32_t tf32_tile_size = tt::tile_size(tt::DataFormat::Tf32);
+    const uint32_t fp32_tile_size = tt::tile_size(tt::DataFormat::Float32);
     const uint32_t out_bytes = kNumOps * f16_tile_size;
 
     const CoreCoord core = {0, 0};
@@ -379,16 +374,16 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
 
     distributed::DeviceLocalBufferConfig f16_dram_cfg{
         .page_size = f16_tile_size, .buffer_type = tt::tt_metal::BufferType::DRAM, .bottom_up = false};
-    distributed::DeviceLocalBufferConfig tf32_dram_cfg{
-        .page_size = tf32_tile_size, .buffer_type = tt::tt_metal::BufferType::DRAM, .bottom_up = false};
+    distributed::DeviceLocalBufferConfig fp32_dram_cfg{
+        .page_size = fp32_tile_size, .buffer_type = tt::tt_metal::BufferType::DRAM, .bottom_up = false};
     distributed::ReplicatedBufferConfig f16_buf_cfg{.size = f16_tile_size};
-    distributed::ReplicatedBufferConfig tf32_buf_cfg{.size = tf32_tile_size};
+    distributed::ReplicatedBufferConfig fp32_buf_cfg{.size = fp32_tile_size};
     distributed::ReplicatedBufferConfig out_buf_cfg{.size = out_bytes};
 
     auto inp0_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
     auto inp1_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
-    auto inp2_dram = distributed::MeshBuffer::create(tf32_buf_cfg, tf32_dram_cfg, mesh_device.get());
-    auto inp3_dram = distributed::MeshBuffer::create(tf32_buf_cfg, tf32_dram_cfg, mesh_device.get());
+    auto inp2_dram = distributed::MeshBuffer::create(fp32_buf_cfg, fp32_dram_cfg, mesh_device.get());
+    auto inp3_dram = distributed::MeshBuffer::create(fp32_buf_cfg, fp32_dram_cfg, mesh_device.get());
     auto inp4_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
     auto inp5_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
     auto out_dram = distributed::MeshBuffer::create(out_buf_cfg, f16_dram_cfg, mesh_device.get());
@@ -403,21 +398,20 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
         .enable_implicit_sync = false,
         .data_format = tt::DataFormat::Float16_b,
     };
-    // d2, d3 use Tf32 to exercise reconfig_data_format on Quasar. Each reconfig
+    // d2, d3 use Float32 to exercise reconfig_data_format on Quasar. Each reconfig
     // reprograms the unpacker OUT_DATA_FORMAT register across the sequence:
-    // Float16_b (d0, d1) -> Tf32 (d2, d3) -> Float16_b (d4, d5). Tf32 stays in the
-    // same exp-B family as Float16_b (so the host JIT consistency check passes) and
-    // is one of the few pairs accepted by the Quasar unpacker gasket. Tf32 is stored
-    // as 4 bytes per element (vs 2 for bfloat16), so entry_size is 2x.
-    tt_metal::experimental::dfb::DataflowBufferConfig tf32_input_dfb_cfg = {
-        .entry_size = tf32_tile_size,
+    // Float16_b (d0, d1) -> Float32 (d2, d3) -> Float16_b (d4, d5). Float32 stays in
+    // the same exp-B family as Float16_b (so the host JIT consistency check passes).
+    // Float32 is stored as 4 bytes per element (vs 2 for bfloat16), so entry_size is 2x.
+    tt_metal::experimental::dfb::DataflowBufferConfig fp32_input_dfb_cfg = {
+        .entry_size = fp32_tile_size,
         .num_entries = 1,
         .num_producers = 1,
         .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
         .num_consumers = 1,
         .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = false,
-        .data_format = tt::DataFormat::Tf32,
+        .data_format = tt::DataFormat::Float32,
     };
     tt_metal::experimental::dfb::DataflowBufferConfig out_dfb_cfg = {
         .entry_size = f16_tile_size,
@@ -432,8 +426,8 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
 
     const uint32_t inp0_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, f16_input_dfb_cfg);
     const uint32_t inp1_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, f16_input_dfb_cfg);
-    const uint32_t inp2_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, tf32_input_dfb_cfg);
-    const uint32_t inp3_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, tf32_input_dfb_cfg);
+    const uint32_t inp2_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, fp32_input_dfb_cfg);
+    const uint32_t inp3_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, fp32_input_dfb_cfg);
     const uint32_t inp4_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, f16_input_dfb_cfg);
     const uint32_t inp5_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, f16_input_dfb_cfg);
     const uint32_t out_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, out_dfb_cfg);
@@ -463,8 +457,8 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
         tt_metal::experimental::quasar::QuasarComputeConfig{
             .num_threads_per_cluster = 1,
             .math_fidelity = MathFidelity::HiFi4,
-            // Tf32 -> Tf32 in the Quasar unpacker pair table requires en_32bit_dest, which
-            // is driven by DST_ACCUM_MODE (= fp32_dest_acc_en) on the math side.
+            // Float32 -> Float32 in the Quasar unpacker pair table requires en_32bit_dest,
+            // which is driven by DST_ACCUM_MODE (= fp32_dest_acc_en) on the math side.
             .fp32_dest_acc_en = true,
             .compile_args = compute_cta});
 
@@ -484,22 +478,21 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
         program_, out_dfb, compute_kernel, writer_kernel);
 
     // Random stimulus: U(0, 2) per element, distinct seeds per input. Inputs 0/1/4/5
-    // are bfloat16-packed; inputs 2/3 are Tf32 (one float per uint32, low 13 mantissa
-    // bits masked to mirror the HW gasket).
+    // are bfloat16-packed; inputs 2/3 are Float32 (one IEEE-754 float per uint32 word).
     constexpr int kRandMax = 2;
     auto src0 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x1001);
     auto src1 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x1002);
-    auto gen_tf32_stimulus = [&](uint32_t seed) {
-        std::vector<uint32_t> out(tf32_tile_size / sizeof(uint32_t), 0);
+    auto gen_fp32_stimulus = [&](uint32_t seed) {
+        std::vector<uint32_t> out(fp32_tile_size / sizeof(uint32_t), 0);
         std::mt19937 rng(seed);
         std::uniform_real_distribution<float> dist(0.0f, static_cast<float>(kRandMax));
         for (auto& word : out) {
-            word = std::bit_cast<uint32_t>(quantize_to_tf32(dist(rng)));
+            word = std::bit_cast<uint32_t>(dist(rng));
         }
         return out;
     };
-    auto src2 = gen_tf32_stimulus(0x1003);
-    auto src3 = gen_tf32_stimulus(0x1004);
+    auto src2 = gen_fp32_stimulus(0x1003);
+    auto src3 = gen_fp32_stimulus(0x1004);
     auto src4 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x1005);
     auto src5 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x1006);
 
@@ -512,7 +505,7 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
 
     auto in0 = unpack_uint32_vec_into_bfloat16_vec(src0);
     auto in1 = unpack_uint32_vec_into_bfloat16_vec(src1);
-    auto unpack_tf32 = [](const std::vector<uint32_t>& packed) {
+    auto unpack_fp32 = [](const std::vector<uint32_t>& packed) {
         std::vector<float> out;
         out.reserve(packed.size());
         for (uint32_t w : packed) {
@@ -520,8 +513,8 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
         }
         return out;
     };
-    auto in2 = unpack_tf32(src2);
-    auto in3 = unpack_tf32(src3);
+    auto in2 = unpack_fp32(src2);
+    auto in3 = unpack_fp32(src3);
     auto in4 = unpack_uint32_vec_into_bfloat16_vec(src4);
     auto in5 = unpack_uint32_vec_into_bfloat16_vec(src5);
 
@@ -578,11 +571,11 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
          tt::DataFormat::Float16_b,
          tt::DataFormat::Float16_b,
          tt::DataFormat::Float16_b},
-        {"OP[1]: add_tiles(d2, d3) -> dst[1]  [after reconfig Float16_b -> Tf32]",
-         tt::DataFormat::Tf32,
-         tt::DataFormat::Tf32,
+        {"OP[1]: add_tiles(d2, d3) -> dst[1]  [after reconfig Float16_b -> Float32]",
+         tt::DataFormat::Float32,
+         tt::DataFormat::Float32,
          tt::DataFormat::Float16_b},
-        {"OP[2]: add_tiles(d4, d5) -> dst[2]  [after reconfig Tf32 -> Float16_b]",
+        {"OP[2]: add_tiles(d4, d5) -> dst[2]  [after reconfig Float32 -> Float16_b]",
          tt::DataFormat::Float16_b,
          tt::DataFormat::Float16_b,
          tt::DataFormat::Float16_b},
@@ -592,7 +585,6 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
             case tt::DataFormat::Float16_b: return "Float16_b";
             case tt::DataFormat::Float16: return "Float16";
             case tt::DataFormat::Float32: return "Float32";
-            case tt::DataFormat::Tf32: return "Tf32";
             default: return "?";
         }
     };

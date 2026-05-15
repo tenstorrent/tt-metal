@@ -70,8 +70,8 @@ constexpr static uint32_t datum_size(const DataFormat& format) {
         case DataFormat::MxFp4: throw std::invalid_argument("datum for mxfp4 is invalid");
         case DataFormat::Float16:
         case DataFormat::Float16_b: return 2;
-        case DataFormat::Float32:
-        case DataFormat::Tf32: return 4;
+        case DataFormat::Float32: return 4;
+        case DataFormat::Tf32: throw std::invalid_argument("TF32 unsupported atm");
         case DataFormat::Fp8_e4m3:
         case DataFormat::Int8:
         case DataFormat::Lf8:
@@ -108,8 +108,8 @@ constexpr static uint32_t tile_size(const DataFormat& format) {
         case DataFormat::MxFp4: return (1024 / 2) + 32;  // 544 bytes: 32 scales (1 per 32-elem block) + 512 data
         case DataFormat::Float16:
         case DataFormat::Float16_b: return (1024 * 2);
-        case DataFormat::Float32:
-        case DataFormat::Tf32: return (1024 * 4);
+        case DataFormat::Float32: return (1024 * 4);
+        case DataFormat::Tf32: throw std::invalid_argument("TF32 unsupported atm");
         case DataFormat::Fp8_e4m3:
         case DataFormat::Int8:
         case DataFormat::Lf8:
