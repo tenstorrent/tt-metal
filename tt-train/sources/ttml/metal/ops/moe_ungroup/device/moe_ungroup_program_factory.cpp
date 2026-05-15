@@ -185,11 +185,13 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     // slice + w + rmw_buf. With moe_group emitting grouped_scores per row, we
     // no longer keep metadata/scores/leids buffers here; the writer reads a
     // 32-entry slice of grouped_scores per tile-row directly into w_buf.
+    const uint32_t dram_align_bytes = tt::tt_metal::hal::get_dram_alignment();
+    const uint32_t offsets_page_bytes = tt::round_up((e_local + 1U) * sizeof(uint32_t), dram_align_bytes);
     uint32_t scratch_bytes = 0U;
-    scratch_bytes += tt::round_up(h * 2U, kL1_ALIGN);                             // zero_buf
-    scratch_bytes += tt::round_up((e_local + 1U) * sizeof(uint32_t), kL1_ALIGN);  // offsets_buf
-    scratch_bytes += tt::round_up(32U * sizeof(uint32_t), kL1_ALIGN);             // plan_buf
-    scratch_bytes += tt::round_up(32U * sizeof(uint16_t), kL1_ALIGN);             // w_buf (bf16,
+    scratch_bytes += tt::round_up(h * 2U, offsets_page_bytes);         // zero_buf, aligns offsets_buf start
+    scratch_bytes += offsets_page_bytes;                               // offsets_buf, matches TensorAccessor page
+    scratch_bytes += tt::round_up(32U * sizeof(uint32_t), kL1_ALIGN);  // plan_buf
+    scratch_bytes += tt::round_up(32U * sizeof(uint16_t), kL1_ALIGN);  // w_buf (bf16,
                                                                        //   directly read from grouped_scores)
     // stage_buf: 32 contiguous slots of hidden_chunk_bytes — required by the
     // OPT 1 barrier-coalesced writer. Worst-case size: 32 * 128KB / 32 = 128KB
@@ -281,6 +283,7 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
         num_total_cores,       // 7
         brisc_done_sem_id,     // 8
         brisc_release_sem_id,  // 9
+        kL1_ALIGN,             // 10
     };
     tt::tt_metal::TensorAccessorArgs(ungrouped_buf).append_to(writer_ct_args);
     tt::tt_metal::TensorAccessorArgs(plan_buf).append_to(writer_ct_args);

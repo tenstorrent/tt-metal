@@ -20,6 +20,12 @@ namespace ttml::metal {
 //   grouped_scores  : [1, 1, 1, T_cap]      bf16        — moe_group's grouped_scores
 //                                                          (= scores[plan[i], k_slot[i]])
 //
+// ABI invariants:
+//   - T_cap is a multiple of 32.
+//   - offsets[0] == 0 and every offsets[i] is a multiple of 32. The dataflow
+//     kernels divide offsets by TILE_H=32 and process whole tile rows; direct
+//     callers must preserve the alignment that moe_group produces.
+//
 // Output:
 //   ungrouped: [D, B, S, H]  ROW_MAJOR bf16 — dense per-token MoE output (per-device).
 //

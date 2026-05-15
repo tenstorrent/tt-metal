@@ -5,6 +5,7 @@
 #include "moe_ungroup_device_operation.hpp"
 
 #include <enchantum/enchantum.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 
 #include "moe_ungroup_program_factory.hpp"
@@ -77,7 +78,9 @@ void MoeUngroupDeviceOperation::validate_on_program_cache_miss(
         gss.rank(),
         gss);
 
+    TT_FATAL(attrs.e_local > 0U, "moe_ungroup: e_local must be > 0");
     TT_FATAL(attrs.h > 0U, "moe_ungroup: H must be > 0");
+    TT_FATAL(attrs.t_cap % tt::constants::TILE_HEIGHT == 0U, "moe_ungroup: T_cap must be a multiple of 32");
 }
 
 spec_return_value_t MoeUngroupDeviceOperation::compute_output_specs(

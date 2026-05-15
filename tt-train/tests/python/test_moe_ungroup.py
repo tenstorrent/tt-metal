@@ -132,8 +132,24 @@ def _round_up_32(x: int) -> int:
     return ((x + 31) // 32) * 32
 
 
+def _hal_l1_alignment_bytes() -> int:
+    """L1 NOC alignment in bytes from the same HAL-backed API the op uses."""
+    try:
+        import ttnn
+
+        return int(ttnn.get_l1_alignment())
+    except Exception:
+        # Reference-only tests can run without a visible device.
+        return 16
+
+
+def _cursor_align() -> int:
+    return _hal_l1_alignment_bytes() // 2
+
+
 def moe_group_t_cap(e_local: int, k: int, d: int, b: int, s: int, num_total_cores: int = 64) -> int:
-    return min(e_local, k) * d * b * s + e_local * (32 + 3 * num_total_cores)
+    cursor_align = _cursor_align()
+    return _round_up_32(min(e_local, k) * d * b * s + e_local * (32 + (cursor_align - 1) * num_total_cores))
 
 
 def _make_dispatched(D: int, B: int, S: int, H: int, seed: int = 0) -> torch.Tensor:
@@ -348,7 +364,7 @@ class TestMoeUngroupDevice:
 
         device = ttml.autograd.AutoContext.get_instance().get_device()
         ttnn.synchronize_device(device)
-        ungrouped = ttml.ops.metal.moe_ungroup(
+        ungrouped = ttml.ops.metal_ops.moe_ungroup(
             grouped,
             plan,
             offsets,
@@ -442,6 +458,30 @@ class TestMoeUngroupDevice:
             md[0, 0, s] = perm.to(torch.int32)
         scores = torch.rand(D, B, S, K) * 0.5
         self._check_correctness(dispatched, md, scores, local_expert_ids, K, "zero_active")
+
+    def test_rejects_zero_local_experts(self):
+        """e_local=0 would leave BRISC waiting for a reader release after pre-zero."""
+        D, B, S, H = 1, 1, 32, 64
+        T_cap = 32
+        grouped = _to_device_tensor(torch.zeros(1, 1, T_cap, H), ttnn.TILE_LAYOUT, ttnn.bfloat16)
+        plan = _to_device_tensor(torch.zeros(1, 1, 1, T_cap, dtype=torch.int32), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
+        offsets = _to_device_tensor(torch.zeros(1, 1, 1, 1, dtype=torch.int32), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
+        grouped_scores = _to_device_tensor(torch.zeros(1, 1, 1, T_cap), ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16)
+
+        with pytest.raises(RuntimeError, match="e_local must be > 0"):
+            ttml.ops.metal_ops.moe_ungroup(grouped, plan, offsets, grouped_scores, 0, D, B, S)
+
+    def test_rejects_non_tile_aligned_t_cap(self):
+        """Reader/writer consume plan/grouped_scores/expert_out in 32-row chunks."""
+        D, B, S, H = 1, 1, 32, 64
+        T_cap = 33
+        grouped = _to_device_tensor(torch.zeros(1, 1, T_cap, H), ttnn.TILE_LAYOUT, ttnn.bfloat16)
+        plan = _to_device_tensor(torch.zeros(1, 1, 1, T_cap, dtype=torch.int32), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
+        offsets = _to_device_tensor(torch.zeros(1, 1, 1, 2, dtype=torch.int32), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
+        grouped_scores = _to_device_tensor(torch.zeros(1, 1, 1, T_cap), ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16)
+
+        with pytest.raises(RuntimeError, match="T_cap must be a multiple of 32"):
+            ttml.ops.metal_ops.moe_ungroup(grouped, plan, offsets, grouped_scores, 1, D, B, S)
 
     def test_all_tokens_active(self):
         """Every token routed to all local experts — multi-expert accumulation per row."""
@@ -558,7 +598,7 @@ class TestMoeUngroupProfile:
         )
         # Warmup.
         for _ in range(warmup):
-            ttml.ops.metal.moe_ungroup(
+            ttml.ops.metal_ops.moe_ungroup(
                 grouped,
                 plan,
                 offsets,
@@ -572,7 +612,7 @@ class TestMoeUngroupProfile:
 
         # Timed iters with per-iter profiler flush.
         for _ in range(num_iters):
-            ttml.ops.metal.moe_ungroup(
+            ttml.ops.metal_ops.moe_ungroup(
                 grouped,
                 plan,
                 offsets,
