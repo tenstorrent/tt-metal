@@ -1,0 +1,158 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+// Isolated SFPU square: UNPACK2 (UNP_S) -> SrcS -> SFPU -> PACK1 -> L1.
+// All logic runs in LLK_TRISC_ISOLATE_SFPU; UNPACK, MATH, PACK are stubbed.
+// SrcS dvalid is controlled by UNPACR2/PACR1 TILE_INC (SetDatValid/ClrDatValid in llk_srcs.h).
+
+#include <cstdint>
+
+#include "ckernel.h"
+#include "llk_defs.h"
+#include "llk_memory_checks.h"
+
+#ifdef LLK_TRISC_UNPACK
+
+#include "params.h"
+
+void run_kernel(RUNTIME_PARAMETERS /*params*/)
+{
+}
+
+#endif
+
+#ifdef LLK_TRISC_MATH
+
+#include "params.h"
+
+void run_kernel(RUNTIME_PARAMETERS /*params*/)
+{
+}
+
+#endif
+
+#ifdef LLK_TRISC_ISOLATE_SFPU
+
+#include "cfg_defines.h"
+#include "cmath_common.h"
+#include "llk_math_common.h"
+#include "llk_math_eltwise_unary_sfpu_common.h"
+#include "llk_srcs.h"
+#include "params.h"
+#include "sfpi.h"
+
+using namespace ckernel;
+using namespace ckernel::math;
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const volatile FormatConfig& formats = params.formats;
+#endif
+    const std::uint32_t num_tiles = params.TILE_CNT;
+
+    // -------------------------------------------------------------------------
+    // Data format inference and dimensions
+    // -------------------------------------------------------------------------
+
+    const bool PARAM_SRCS_32BIT_MODE                = _is_srcs_32bit_mode_(static_cast<DataFormat>(formats.unpack_S_dst));
+    constexpr std::uint32_t PARAM_SRCS_XDIM         = srcs_dims::XDIM;
+    constexpr std::uint32_t PARAM_SRCS_ZDIM         = srcs_dims::ZDIM;
+    const std::uint32_t PARAM_SRCS_YDIM             = srcs_dims::ydim(PARAM_SRCS_32BIT_MODE);
+    const std::uint32_t PARAM_SRCS_SLICE_COUNT      = srcs_dims::slice_count(PARAM_SRCS_32BIT_MODE);
+    constexpr std::uint32_t PARAM_SRCS_INSTRN_COUNT = 1;
+
+    // -------------------------------------------------------------------------
+    // Buffer descriptor and HW setup
+    // -------------------------------------------------------------------------
+
+    constexpr std::uint32_t buf_desc_id_unpack = 0;
+    constexpr std::uint32_t buf_desc_id_pack   = 8;
+
+    buffer_descriptor_u bd_unpack = {0};
+    tdma_descriptor_t td_unpack;
+    buffer_descriptor_u bd_pack = {0};
+    tdma_descriptor_t td_pack;
+
+    // Unpack BD: L1 input -> SrcS
+    bd_unpack.f.l1_addr_16B   = L1_ADDRESS(params.buffer_A[0]);
+    bd_unpack.f.format        = static_cast<std::uint8_t>(formats.unpack_S_src);
+    bd_unpack.f.x_dim         = PARAM_SRCS_XDIM;
+    bd_unpack.f.y_dim         = PARAM_SRCS_YDIM;
+    bd_unpack.f.z_dim         = PARAM_SRCS_ZDIM;
+    td_unpack.buf_desc        = bd_unpack;
+    td_unpack.buf_desc_id     = buf_desc_id_unpack;
+    td_unpack.reg_data_format = static_cast<std::uint8_t>(formats.unpack_S_dst);
+    _configure_buf_desc_table_(td_unpack.buf_desc_id, td_unpack.buf_desc);
+    _llk_unpack_configure_unary_<p_unpacr::UNP_S>(td_unpack);
+
+    // Pack BD: SrcS -> L1 output
+    bd_pack.f.l1_addr_16B   = L1_ADDRESS(params.buffer_Res[0]);
+    bd_pack.f.format        = static_cast<std::uint8_t>(formats.pack_S_dst);
+    bd_pack.f.x_dim         = PARAM_SRCS_XDIM;
+    bd_pack.f.y_dim         = PARAM_SRCS_YDIM;
+    bd_pack.f.z_dim         = PARAM_SRCS_ZDIM;
+    td_pack.buf_desc        = bd_pack;
+    td_pack.buf_desc_id     = buf_desc_id_pack;
+    td_pack.reg_data_format = static_cast<std::uint8_t>(formats.pack_S_src);
+    _configure_buf_desc_table_(td_pack.buf_desc_id, td_pack.buf_desc);
+    _llk_pack_hw_configure_<p_pacr::PACK1>(td_pack);
+
+    // Implied math format disable for SrcS and sfpmem mod selection
+    cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = !IMPLIED_MATH_FORMAT;
+
+    // -------------------------------------------------------------------------
+    // SFPU configuration and execution
+    // -------------------------------------------------------------------------
+
+    // If SrcS is 32-bit, we need 16 slices (unpack/pack) per tile
+    _llk_unpack_srcs_config_for_tile_<PARAM_SRCS_INSTRN_COUNT>(PARAM_SRCS_32BIT_MODE);
+    _llk_pack_srcs_config_for_tile_<PARAM_SRCS_INSTRN_COUNT>(PARAM_SRCS_32BIT_MODE);
+    _llk_math_eltwise_unary_sfpu_init_();
+
+    const int num_sfpu_iterations = PARAM_SRCS_YDIM >> 1; // SFP_ROWS == 2
+
+    for (std::uint32_t i = 0; i < num_tiles; ++i)
+    {
+        // Unpack/Pack calls can be moved outside the loop by incorporating the loop into the auto-loop registers
+        // Keeping them here for now since num_tiles is not a compile-time constant
+        _llk_unpack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_unpack, i * PARAM_SRCS_SLICE_COUNT); // Sets dvalid for SFPU to read
+
+        // Pack is placed before SFPU because SFPU loop fills up and clogs the instruction buffer leading to hangs
+        _llk_pack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_pack, i * PARAM_SRCS_SLICE_COUNT); // Sets dvalid for SFPU to write
+
+        for (std::uint32_t slice = 0; slice < PARAM_SRCS_SLICE_COUNT; slice++)
+        {
+            sfpi::UnpackSrcS in_slice;
+            // sfpi::PackSrcS   out_slice;
+            sfpi::ComputeSrcS out_slice;
+
+#pragma GCC unroll 4
+            for (int d = 0; d < num_sfpu_iterations; d++)
+            {
+                sfpi::vFloat x = sfpi::vFloat(in_slice[d]);
+                out_slice[d]   = x * x;
+            }
+
+            _llk_math_eltwise_unary_sfpu_srcs_clear_vlds_<0x1, 0x1>(); // Clears dvalid for SFPU read and write
+        }
+    }
+
+    // Wait for all operations to complete
+    wait_sfpu_idle();
+    wait_unpack_idle();
+    wait_pack_idle();
+}
+
+#endif
+
+#ifdef LLK_TRISC_PACK
+
+#include "params.h"
+
+void run_kernel(RUNTIME_PARAMETERS /*params*/)
+{
+}
+
+#endif
