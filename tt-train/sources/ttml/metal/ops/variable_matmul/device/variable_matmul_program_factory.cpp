@@ -840,8 +840,12 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
     const bool input_row_active = offsets_active && operation_attributes.offsets_role == OffsetsRole::InputRow;
     const bool input_k_active = offsets_active && operation_attributes.offsets_role == OffsetsRole::InputK;
     const bool weight_k_active = offsets_active && operation_attributes.offsets_role == OffsetsRole::WeightK;
-    const bool in0_needs_offsets = input_row_active || input_k_active;
-    const bool in1_needs_offsets = output_row_active || input_row_active || weight_k_active;
+    // Mirror init-path eligibility (see comment ~line 274): both in0 and in1 kernels are
+    // compiled with OFFSETS_ROLE for every role, so RT-arg updates must match — otherwise the
+    // kernel's `offsets_start_index` arg keeps the value from the first build and subsequent
+    // cache-hit invocations read offsets[0] instead of offsets[e].
+    const bool in0_needs_offsets = output_row_active || input_row_active || input_k_active || weight_k_active;
+    const bool in1_needs_offsets = output_row_active || input_row_active || input_k_active || weight_k_active;
     const uint32_t offsets_addr = offsets_active ? tensor_args.offsets_tensor.value().buffer()->address() : 0U;
     constexpr uint32_t IN0_OFFSETS_ADDR_IDX = 23;  // appended after K_tiles (idx 22).
     constexpr uint32_t IN0_OFFSETS_START_IDX_IDX = 24;

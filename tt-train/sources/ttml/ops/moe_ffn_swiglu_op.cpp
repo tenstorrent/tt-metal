@@ -289,7 +289,6 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                 e);
             w_up[e]->add_grad(dW_up_e);
 
-            // dX_via_* write into the expert's row range via OutputRow.
             ttml::metal::variable_matmul(
                 d_gate_proj_e,
                 w_gate_e,
