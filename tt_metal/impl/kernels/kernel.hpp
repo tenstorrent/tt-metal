@@ -6,8 +6,10 @@
 
 #include <umd/device/types/core_coordinates.hpp>
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 #include "api/tt-metalium/kernel_types.hpp"
@@ -93,6 +95,18 @@ using DataflowBufferLocalAccessorHandleMap = std::unordered_map<std::string, uin
 // Metal 2.0: local semaphore accessor names -> semaphore ids
 using SemaphoreLocalAccessorHandleMap = std::unordered_map<std::string, uint16_t>;
 
+// Metal 2.0: per-kernel resolved TensorBinding.
+// Carries the offsets the kernel-side codegen needs to emit a token, plus the program-level
+// TensorParameter name so SetProgramRunParameters can fill the binding's base-address slot
+// from the corresponding TensorArg at enqueue time.
+struct TensorBindingHandle {
+    std::string accessor_name;          // user-facing identifier (kernel symbol in `ta::`)
+    std::string tensor_parameter_name;  // refers back to the program-level TensorParameter
+    uint32_t cta_offset;                // first word index of this binding's payload in the kernel's compile-time args
+    uint32_t addr_crta_offset;  // byte offset of this binding's base-address slot within the kernel's CRTA buffer
+                                // (binding addresses live in their own section appended after user-named CRTAs)
+};
+
 class Kernel : public JitBuildSettings {
 public:
     using Config = std::variant<
@@ -153,6 +167,10 @@ public:
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const override;
     void process_semaphore_local_accessor_handles(
         std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const override;
+    void process_tensor_binding_handles(
+        std::function<void(const std::string& accessor_name, uint32_t cta_offset, uint32_t addr_crta_offset)>)
+        const override;
+    const std::vector<TensorBindingHandle>& tensor_binding_handles() const { return tensor_binding_handles_; }
     const std::vector<std::string>& get_named_runtime_args() const override { return named_runtime_args_; }
     const std::vector<std::string>& get_named_common_runtime_args() const override {
         return named_common_runtime_args_;
@@ -214,13 +232,14 @@ protected:
         const std::vector<uint32_t>& compile_args,
         const std::map<std::string, std::string>& defines,
         const std::unordered_map<std::string, uint32_t>& named_compile_args,
-        // Metal 2.0-only parameters below. is_metal2_kernel leads the group so the
-        // boundary is obvious at a glance; the others are ignored when it is false.
+        // Metal 2.0-only parameters below.
+        // If is_metal2_kernel is false, the remaining parameters are ignored and should be left default.
         bool is_metal2_kernel = false,
         const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
         const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
         const std::vector<std::string>& named_runtime_args = {},
-        const std::vector<std::string>& named_common_runtime_args = {});
+        const std::vector<std::string>& named_common_runtime_args = {},
+        const std::vector<TensorBindingHandle>& tensor_binding_handles = {});
 
     HalProgrammableCoreType programmable_core_type_;
     HalProcessorClassType processor_class_;
@@ -239,6 +258,7 @@ protected:
     const SemaphoreLocalAccessorHandleMap semaphore_local_accessor_handles_;
     const std::vector<std::string> named_runtime_args_;
     const std::vector<std::string> named_common_runtime_args_;
+    const std::vector<TensorBindingHandle> tensor_binding_handles_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
     std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
     uint32_t common_runtime_args_count_{0};
@@ -256,6 +276,15 @@ protected:
     // Build key -> binaries (moved from KernelImpl)
     std::unordered_map<uint64_t, std::vector<const ll_api::memory*>> binaries_;
     std::optional<experimental::PrecompiledKernelConfig> precompiled_config_;
+
+    // User-supplied include paths (-I), resolved to absolute paths
+    // Populated by subclass constructors via set_compiler_include_paths()
+    std::vector<std::string> resolved_compiler_include_paths_;
+
+    // Resolve user-supplied include paths and store them on the kernel:
+    //  - Absolute paths pass through unmodified
+    //  - Relative paths are resolved against the current working directory
+    void set_compiler_include_paths(const std::vector<std::filesystem::path>& paths);
 
     virtual std::string config_hash() const = 0;
 
@@ -276,7 +305,8 @@ public:
         const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
         const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
         const std::vector<std::string>& named_runtime_args = {},
-        const std::vector<std::string>& named_common_runtime_args = {}) :
+        const std::vector<std::string>& named_common_runtime_args = {},
+        const std::vector<TensorBindingHandle>& tensor_binding_handles = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::DM,
@@ -289,11 +319,13 @@ public:
             dataflow_buffer_local_accessor_handles,
             semaphore_local_accessor_handles,
             named_runtime_args,
-            named_common_runtime_args),
+            named_common_runtime_args,
+            tensor_binding_handles),
         config_(config) {
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() != ARCH::QUASAR,
             "DataMovementKernel is not supported on Quasar. Use QuasarDataMovementKernel instead.");
+        this->set_compiler_include_paths(config_.compiler_include_paths);
     }
 
     ~DataMovementKernel() override = default;
@@ -408,7 +440,8 @@ public:
         const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
         const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
         const std::vector<std::string>& named_runtime_args = {},
-        const std::vector<std::string>& named_common_runtime_args = {}) :
+        const std::vector<std::string>& named_common_runtime_args = {},
+        const std::vector<TensorBindingHandle>& tensor_binding_handles = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::COMPUTE,
@@ -421,11 +454,13 @@ public:
             dataflow_buffer_local_accessor_handles,
             semaphore_local_accessor_handles,
             named_runtime_args,
-            named_common_runtime_args),
+            named_common_runtime_args,
+            tensor_binding_handles),
         config_(config) {
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() != ARCH::QUASAR,
             "ComputeKernel is not supported on Quasar. Use QuasarComputeKernel instead.");
+        this->set_compiler_include_paths(config_.compiler_include_paths);
     }
 
     ~ComputeKernel() override = default;
@@ -489,7 +524,8 @@ public:
         const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
         const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
         const std::vector<std::string>& named_runtime_args = {},
-        const std::vector<std::string>& named_common_runtime_args = {}) :
+        const std::vector<std::string>& named_common_runtime_args = {},
+        const std::vector<TensorBindingHandle>& tensor_binding_handles = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::DM,
@@ -502,7 +538,8 @@ public:
             dataflow_buffer_local_accessor_handles,
             semaphore_local_accessor_handles,
             named_runtime_args,
-            named_common_runtime_args),
+            named_common_runtime_args,
+            tensor_binding_handles),
         config_(config),
         dm_processors_(dm_processors.begin(), dm_processors.end()) {
         TT_FATAL(
@@ -513,6 +550,7 @@ public:
             "Number of DM cores per cluster specified in config must match number of DM cores per cluster that have "
             "been reserved");
         TT_FATAL(std::is_sorted(dm_processors_.begin(), dm_processors_.end()), "DM cores must be ordered");
+        this->set_compiler_include_paths(config_.compiler_include_paths);
     }
 
     ~QuasarDataMovementKernel() override = default;
@@ -556,7 +594,8 @@ public:
         const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
         const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
         const std::vector<std::string>& named_runtime_args = {},
-        const std::vector<std::string>& named_common_runtime_args = {}) :
+        const std::vector<std::string>& named_common_runtime_args = {},
+        const std::vector<TensorBindingHandle>& tensor_binding_handles = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::COMPUTE,
@@ -569,7 +608,8 @@ public:
             dataflow_buffer_local_accessor_handles,
             semaphore_local_accessor_handles,
             named_runtime_args,
-            named_common_runtime_args),
+            named_common_runtime_args,
+            tensor_binding_handles),
         config_(config),
         compute_processors_(compute_processors.begin(), compute_processors.end()) {
         TT_FATAL(
@@ -582,6 +622,7 @@ public:
             "per Tensix engine must match number of compute cores per cluster that have been reserved");
         TT_FATAL(
             std::is_sorted(compute_processors_.begin(), compute_processors_.end()), "Compute cores must be ordered");
+        this->set_compiler_include_paths(config_.compiler_include_paths);
     }
 
     ~QuasarComputeKernel() override = default;

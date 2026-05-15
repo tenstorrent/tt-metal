@@ -30,7 +30,7 @@ void kernel_main() {
     const auto input_tensor_accessor = TensorAccessor(src_args, input_buffer_addr);
 
     experimental::CB out_cb(cb_id_out);
-    experimental::Noc noc;
+    Noc noc;
 
     // Process sticks assigned to this core
     uint32_t page_id = start_stick_id;

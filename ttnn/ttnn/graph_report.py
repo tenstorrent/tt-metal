@@ -30,12 +30,59 @@ from typing import Union
 
 from loguru import logger
 
+# Support both `import ttnn.graph_report` (package) and standalone
+# `import graph_report` from tests that put ttnn/ttnn on sys.path to skip
+# loading the C++-backed ttnn/__init__.py. Branch on __package__ so real
+# import failures inside stack_trace_source surface instead of being masked.
+if __package__:
+    from .stack_trace_source import (
+        CREATE_INDEX_STACK_TRACES_SOURCE_FILE_SQL,
+        CREATE_SOURCE_FILES_TABLE_SQL,
+        CREATE_STACK_TRACES_TABLE_WITH_SOURCE_SQL,
+        get_source_file_id,
+        normalize_source_path_from_stack_trace,
+        read_source_file,
+    )
+else:
+    from stack_trace_source import (
+        CREATE_INDEX_STACK_TRACES_SOURCE_FILE_SQL,
+        CREATE_SOURCE_FILES_TABLE_SQL,
+        CREATE_STACK_TRACES_TABLE_WITH_SOURCE_SQL,
+        get_source_file_id,
+        normalize_source_path_from_stack_trace,
+        read_source_file,
+    )
+
 SUPPORTED_REPORT_VERSION = 1
-DATABASE_SCHEMA_VERSION = 3
+# String so we can follow semver-like bumps (was int on an older branch). Bump when the
+# visualizer schema changes; stale DBs are deleted on import (no migration path).
+DATABASE_SCHEMA_VERSION = "2.2"
 
 # Second and later JSON files for the same rank get operation ids shifted by this stride
 # so they do not collide (each capture must have fewer than this many ops).
 _OPERATION_ID_STRIDE_PER_RANK_FILE = 10000
+
+
+def _schema_version_tuple(ver: str) -> tuple[int, ...]:
+    """Parse ``schema_version`` metadata for ordering (e.g. ``2.1``, ``3`` → comparable tuples)."""
+    s = str(ver).strip()
+    if not s:
+        return (0,)
+    parts: list[int] = []
+    for p in s.split("."):
+        if p.isdigit():
+            parts.append(int(p))
+    return tuple(parts) if parts else (0,)
+
+
+def _schema_is_older(stored: str | None, current: str) -> bool:
+    if stored is None:
+        return True
+    a, b = _schema_version_tuple(stored), _schema_version_tuple(current)
+    n = max(len(a), len(b))
+    aa = a + (0,) * (n - len(a))
+    bb = b + (0,) * (n - len(b))
+    return aa < bb
 
 
 def _report_rank(report, path: Path) -> int:
@@ -89,10 +136,10 @@ def _remove_stale_database_if_needed(db_path: Path) -> None:
             cur = conn.cursor()
             cur.execute("SELECT value FROM report_metadata WHERE key = 'schema_version'")
             row = cur.fetchone()
-            ver = int(row[0]) if row else 0
+            stored = row[0] if row else None
         finally:
             conn.close()
-        if ver < DATABASE_SCHEMA_VERSION:
+        if _schema_is_older(stored, DATABASE_SCHEMA_VERSION):
             db_path.unlink()
     except (sqlite3.Error, OSError, ValueError):
         db_path.unlink(missing_ok=True)
@@ -109,6 +156,32 @@ def _int_param(params, key):
 def _tid_int(tid):
     """Coerce a tensor ID (possibly a string) to int."""
     return int(tid) if isinstance(tid, str) else tid
+
+
+def _prepare_stack_traces_with_source_refs(
+    stack_traces_batch: list[tuple[int, str, int]],
+) -> tuple[list[tuple[str, str]], list[tuple[int, str, str | None, int]]]:
+    """Return deduped (path, contents) rows and per-row (op_id, trace, path_or_none, rank)."""
+    source_files_by_path: dict[str, str] = {}
+    stack_rows: list[tuple[int, str, str | None, int]] = []
+
+    for operation_id, stack_trace, rank in stack_traces_batch:
+        normalized_path = normalize_source_path_from_stack_trace(stack_trace)
+        if normalized_path is None:
+            stack_rows.append((operation_id, stack_trace, None, rank))
+            continue
+
+        if normalized_path not in source_files_by_path:
+            file_contents = read_source_file(normalized_path)
+            if file_contents is None:
+                stack_rows.append((operation_id, stack_trace, None, rank))
+                continue
+            source_files_by_path[normalized_path] = file_contents
+
+        stack_rows.append((operation_id, stack_trace, normalized_path, rank))
+
+    source_files_batch = list(source_files_by_path.items())
+    return source_files_batch, stack_rows
 
 
 def create_database_schema(cursor: sqlite3.Cursor) -> None:
@@ -275,16 +348,9 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
     """
     )
 
-    # Stack traces table (when stack trace capture is enabled)
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS stack_traces (
-            operation_id int,
-            stack_trace text,
-            rank int NOT NULL DEFAULT 0
-        )
-    """
-    )
+    # Source files (deduped); stack_traces optionally reference source_files.id (includes rank)
+    cursor.execute(CREATE_SOURCE_FILES_TABLE_SQL)
+    cursor.execute(CREATE_STACK_TRACES_TABLE_WITH_SOURCE_SQL)
 
     # Input/output tensors
     cursor.execute(
@@ -354,6 +420,7 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
         )
     """
     )
+    cursor.execute(CREATE_INDEX_STACK_TRACES_SOURCE_FILE_SQL)
 
 
 def save_database_schema_version(cursor: sqlite3.Cursor) -> None:
@@ -1183,6 +1250,7 @@ def import_graph(
             seen_dt.add(key)
             filtered_dt.append(dt)
     device_tensors_batch = filtered_dt
+    source_files_batch, stack_traces_with_paths = _prepare_stack_traces_with_source_refs(stack_traces_batch)
 
     # Batch inserts
     if captured_graph_batch:
@@ -1197,8 +1265,15 @@ def import_graph(
         cursor.executemany("""INSERT INTO nodes VALUES (?, ?, ?, ?, ?)""", nodes_batch)
     if edges_batch:
         cursor.executemany("""INSERT INTO edges VALUES (?, ?, ?, ?, ?, ?, ?)""", edges_batch)
-    if stack_traces_batch:
-        cursor.executemany("""INSERT INTO stack_traces VALUES (?, ?, ?)""", stack_traces_batch)
+    path_to_source_id: dict[str, int] = {}
+    for path, contents in source_files_batch:
+        path_to_source_id[path] = get_source_file_id(cursor, path, contents)
+    stack_traces_rows = [
+        (op_id, trace, path_to_source_id[path] if path else None, rk)
+        for op_id, trace, path, rk in stack_traces_with_paths
+    ]
+    if stack_traces_rows:
+        cursor.executemany("""INSERT INTO stack_traces VALUES (?, ?, ?, ?)""", stack_traces_rows)
     if operations_batch:
         cursor.executemany("""INSERT OR REPLACE INTO operations VALUES (?, ?, ?, ?)""", operations_batch)
     if operation_arguments_batch:
