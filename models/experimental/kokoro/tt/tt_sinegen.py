@@ -24,9 +24,8 @@ Reference math (for input ``f0 ∈ [B, T, 1]`` with ``dim = harmonic_num + 1``):
     noise     = noise_amp * randn(B, T, dim)
     out       = sine_w * uv + noise
 
-Three linear maps suffice — downsample, cumsum, upsample — and they only depend on ``T``,
-``upsample_scale`` and ``dim``, so we bake them once into fixed device matrices. The runtime is
-two matmuls per direction plus pointwise ops.
+Downsample and cumsum are baked as fixed matmuls. The upsample step uses elementwise linear
+interpolation instead of a matmul to avoid BF16 precision loss from the small K=T_down dimension.
 
 Randomness
 ----------
@@ -52,10 +51,18 @@ import ttnn
 class TTSineGenParams:
     """Device-resident weights / scalars for :class:`TTSineGen`."""
 
-    # Time-axis linear maps (matmul along last axis of ``[B, dim, *]``).
+    # Time-axis linear maps for downsample and cumsum (matmul along last axis of ``[B, dim, *]``).
     interp_down: ttnn.Tensor  # [T, T_down]
-    interp_up: ttnn.Tensor  # [T_down, T]
     cumsum: ttnn.Tensor  # [T_down, T_down]
+
+    # Elementwise lerp weights for the upsample step (replaces the interp_up matmul).
+    # ``lerp_alpha[k] = (k + 0.5) / upsample_scale`` for k=0..upsample_scale-1.
+    # Shape: ``[1, upsample_scale, dim]`` — broadcasts over B.
+    lerp_alpha: ttnn.Tensor
+    lerp_one_minus_alpha: ttnn.Tensor
+    # ``[1, clamp_len, dim]`` all-ones tensor for broadcasting the edge-clamped regions.
+    lerp_clamp_ones: ttnn.Tensor
+    clamp_len: int  # = upsample_scale // 2
 
     # Per-harmonic multiplier ``[1, 1, dim]`` (``[1, 2, ..., dim]``).
     harmonics: ttnn.Tensor
@@ -148,13 +155,34 @@ def preprocess_tt_sinegen(
     time_len_down = time_len // upsample_scale
 
     M_down = _linear_interp_matrix(time_len, time_len_down)  # [T_down, T]
-    M_up = _linear_interp_matrix(time_len_down, time_len)  # [T, T_down]
     M_cum = _cumsum_matrix(time_len_down)
 
     # Store as the transpose so we can ``y @ M`` directly (matmul along last axis of activation).
     interp_down_tt = _upload_matrix(M_down.T, device, dtype=weights_dtype)  # [T, T_down]
-    interp_up_tt = _upload_matrix(M_up.T, device, dtype=weights_dtype)  # [T_down, T]
     cumsum_tt = _upload_matrix(M_cum, device, dtype=weights_dtype)  # [T_down, T_down]
+
+    # Elementwise lerp weights for upsample — avoids the K=T_down matmul whose BF16 accumulation
+    # introduces ~5e-4 fractional-unit error (×2π×300 ≈ 1 radian in phase_up, destroying sines).
+    # alpha[k] = (k + 0.5) / upsample_scale  matches ``F.interpolate(mode='linear', align_corners=False)``.
+    clamp_len = upsample_scale // 2
+    alpha_1d = (np.arange(upsample_scale, dtype=np.float32) + 0.5) / float(upsample_scale)
+    alpha_2d = np.tile(alpha_1d[:, None], (1, dim))  # [upsample_scale, dim]
+    lerp_alpha_np = alpha_2d[None, :, :]  # [1, upsample_scale, dim]
+    lerp_one_minus_alpha_np = 1.0 - lerp_alpha_np
+    lerp_clamp_ones_np = np.ones((1, clamp_len, dim), dtype=np.float32)
+
+    def _upload_3d(arr: np.ndarray) -> ttnn.Tensor:
+        return ttnn.from_torch(
+            torch.from_numpy(arr.astype(np.float32)),
+            dtype=weights_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    lerp_alpha_tt = _upload_3d(lerp_alpha_np)
+    lerp_one_minus_alpha_tt = _upload_3d(lerp_one_minus_alpha_np)
+    lerp_clamp_ones_tt = _upload_3d(lerp_clamp_ones_np)
 
     harmonics = torch.arange(1, dim + 1, dtype=torch.float32).reshape(1, 1, dim)
     harmonics_tt = ttnn.from_torch(
@@ -178,8 +206,11 @@ def preprocess_tt_sinegen(
 
     return TTSineGenParams(
         interp_down=interp_down_tt,
-        interp_up=interp_up_tt,
         cumsum=cumsum_tt,
+        lerp_alpha=lerp_alpha_tt,
+        lerp_one_minus_alpha=lerp_one_minus_alpha_tt,
+        lerp_clamp_ones=lerp_clamp_ones_tt,
+        clamp_len=clamp_len,
         harmonics=harmonics_tt,
         inv_sampling_rate=_upload_scalar(1.0 / float(sampling_rate), device, dtype=weights_dtype),
         one=_upload_scalar(1.0, device, dtype=weights_dtype),
@@ -310,24 +341,49 @@ class TTSineGen:
         )
         ttnn.deallocate(rad_down)
 
-        # ``× 2π × upsample_scale`` (matches reference's two-step scaling).
-        phase = ttnn.multiply(phase, p.two_pi_times_scale, memory_config=memory_config)
-
-        # Upsample along T: ``[B, dim, T_down] @ [T_down, T]`` → ``[B, dim, T]``
-        phase_up = ttnn.matmul(
-            phase,
-            p.interp_up,
-            memory_config=memory_config,
-            compute_kernel_config=self.compute_kernel_config,
-        )
+        # Upsample via elementwise linear interpolation (avoids K=T_down matmul whose BF16
+        # accumulation causes ~1 radian phase_up error, destroying sines PCC).
+        # Layout: permute phase [B, dim, T_down] → [B, T_down, dim] for dim=1 slicing.
+        phase_btd = ttnn.permute(phase, (0, 2, 1), memory_config=memory_config)
         ttnn.deallocate(phase)
 
-        sines_bdt = ttnn.sin(phase_up, memory_config=memory_config)
-        ttnn.deallocate(phase_up)
+        # Clamped start: repeat phase[t=0] for clamp_len output steps.
+        p0 = ttnn.slice(phase_btd, [0, 0, 0], [B, 1, p.dim], [1, 1, 1], memory_config=memory_config)
+        start_seg = ttnn.multiply(p0, p.lerp_clamp_ones, memory_config=memory_config)  # [B, clamp_len, dim]
+        ttnn.deallocate(p0)
 
-        # Back to ``[B, T, dim]`` for the final mix.
-        sines = ttnn.permute(sines_bdt, (0, 2, 1), memory_config=memory_config)
-        ttnn.deallocate(sines_bdt)
+        # Interior lerp segments: one upsample_scale-length segment per adjacent pair.
+        lerp_segs = [start_seg]
+        for s in range(p.time_len_down - 1):
+            p_s = ttnn.slice(phase_btd, [0, s, 0], [B, s + 1, p.dim], [1, 1, 1], memory_config=memory_config)
+            p_s1 = ttnn.slice(phase_btd, [0, s + 1, 0], [B, s + 2, p.dim], [1, 1, 1], memory_config=memory_config)
+            seg = ttnn.add(
+                ttnn.multiply(p_s, p.lerp_one_minus_alpha, memory_config=memory_config),
+                ttnn.multiply(p_s1, p.lerp_alpha, memory_config=memory_config),
+                memory_config=memory_config,
+            )
+            ttnn.deallocate(p_s)
+            ttnn.deallocate(p_s1)
+            lerp_segs.append(seg)
+
+        # Clamped end: repeat phase[t=T_down-1] for clamp_len output steps.
+        p_last = ttnn.slice(
+            phase_btd, [0, p.time_len_down - 1, 0], [B, p.time_len_down, p.dim], [1, 1, 1], memory_config=memory_config
+        )
+        end_seg = ttnn.multiply(p_last, p.lerp_clamp_ones, memory_config=memory_config)  # [B, clamp_len, dim]
+        ttnn.deallocate(p_last)
+        ttnn.deallocate(phase_btd)
+        lerp_segs.append(end_seg)
+
+        # [B, clamp_len + (T_down-1)*upsample_scale + clamp_len, dim] = [B, T, dim]
+        phase_up = ttnn.concat(lerp_segs, dim=1, memory_config=memory_config)
+        for seg in lerp_segs:
+            ttnn.deallocate(seg)
+
+        # Scale to radians and compute sin — result is already [B, T, dim].
+        phase_up = ttnn.multiply(phase_up, p.two_pi_times_scale, memory_config=memory_config)
+        sines = ttnn.sin(phase_up, memory_config=memory_config)
+        ttnn.deallocate(phase_up)
 
         sine_waves_unmasked = ttnn.multiply(sines, p.sine_amp, memory_config=memory_config)
         ttnn.deallocate(sines)

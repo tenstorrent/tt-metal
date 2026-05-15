@@ -123,7 +123,13 @@ def _conv_transpose1d_to_tt_params(m: nn.ConvTranspose1d, _device, *, weights_dt
     depthwise (groups=in) and regular (groups=1) transpose convs.
     """
     w = m.weight.detach().cpu().unsqueeze(-1)  # [in, out/g, k] -> [in, out/g, k, 1]
-    w_tt = ttnn.from_torch(w, dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+    # Keep transpose-conv weights/bias in host ROW_MAJOR; TTNN conv_transpose2d expects to
+    # preprocess this raw IOHW form for the current invocation shape.
+    w_tt = ttnn.from_torch(
+        w,
+        dtype=weights_dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
     b_tt = None
     if m.bias is not None:
         b_tt = ttnn.from_torch(
@@ -349,6 +355,10 @@ class TTGenerator:
         )
         self._m_source = TTSourceModuleHnNSF(device, params.m_source)
         self._stft = TTTorchSTFT(device, params.stft)
+        # Keep the full harmonic-source path (SineGen + Source linear + STFT) on the same
+        # precision profile as the rest of the generator to avoid mixed-fidelity phase drift.
+        self._m_source.compute_kernel_config = self.compute_kernel_config
+        self._m_source._sinegen.compute_kernel_config = self.compute_kernel_config
         self._noise_res = tuple(TTAdaINResBlock1(device, sp.noise_res) for sp in params.stages)
         self._resblocks = tuple(tuple(TTAdaINResBlock1(device, rb) for rb in sp.resblocks) for sp in params.stages)
 
