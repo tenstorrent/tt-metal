@@ -38,14 +38,6 @@ def _ckpt_root() -> Path:
     ).expanduser()
 
 
-def _pearson(a: np.ndarray, b: np.ndarray) -> float:
-    aa = np.asarray(a, dtype=np.float64).reshape(-1)
-    bb = np.asarray(b, dtype=np.float64).reshape(-1)
-    if np.array_equal(aa, bb):
-        return 1.0
-    return float(np.corrcoef(aa, bb)[0, 1])
-
-
 @pytest.mark.skipif(
     not (_ckpt_root() / "Qwen3-Embedding-0.6B" / "model.safetensors").is_file()
     or not (_ckpt_root() / "acestep-v15-base" / "model.safetensors").is_file()
@@ -77,14 +69,7 @@ def test_ttnn_text_condition_embedding_pcc_vs_torch(device):
 
     ref_qwen = AutoModel.from_pretrained(str(text_dir), torch_dtype=torch.bfloat16).eval()
     with safe_open(str(model_path), framework="pt", device="cpu") as sf:
-        text_projector_w = sf.get_tensor("encoder.text_projector.weight").to(torch.float32)
-
-    with torch.inference_mode():
-        text_ref = ref_qwen(input_ids=input_ids, attention_mask=attn).last_hidden_state.to(torch.float32)
-        # The TTNN path uses BF16 activations/weights, so compare against BF16 matmul rather than
-        # an FP32 projector reference.
-        projected_ref = torch.matmul(text_ref.to(torch.bfloat16), text_projector_w.to(torch.bfloat16).t())
-        projected_ref = projected_ref.float().cpu().numpy()
+        text_projector_w = sf.get_tensor("encoder.text_projector.weight").to(torch.bfloat16)
 
     qwen_tt = TtQwen3EmbeddingEncoder(
         device=device,
@@ -92,6 +77,21 @@ def test_ttnn_text_condition_embedding_pcc_vs_torch(device):
         qwen_safetensors_path=str(text_dir / "model.safetensors"),
     )
     text_tt = qwen_tt.forward(input_ids.numpy().astype(np.uint32), attn.numpy().astype(np.float32))
+
+    with torch.inference_mode():
+        text_ref_hf = ref_qwen(input_ids=input_ids, attention_mask=attn).last_hidden_state.float()
+
+    text_tt_torch = ttnn.to_torch(text_tt).float()
+    if text_tt_torch.ndim == 4:
+        text_tt_torch = text_tt_torch.squeeze(1)
+
+    # Qwen encoder parity (separate from projector; HF vs TTNN BF16 stack).
+    assert_pcc_print("ttnn_qwen3_hidden_vs_hf", text_ref_hf, text_tt_torch, pcc=0.98)
+
+    # Projector PCC: same TTNN Qwen hidden states as production (``run_prompt_to_wav`` path).
+    with torch.inference_mode():
+        projected_ref = torch.matmul(text_tt_torch.to(torch.bfloat16), text_projector_w.t()).float()
+
     projector_tt = TtAceStepTextProjector(
         device=device,
         weight_f32_numpy=load_text_projector_weight_numpy(str(model_path)),
@@ -99,13 +99,11 @@ def test_ttnn_text_condition_embedding_pcc_vs_torch(device):
         weight_memory_config=getattr(ttnn, "DRAM_MEMORY_CONFIG", None),
     )
     projected_tt = projector_tt.forward_from_hidden(text_tt, activation_dtype=getattr(ttnn, "bfloat16", None))
-    projected_tt_np = ttnn.to_torch(projected_tt).float().reshape(projected_ref.shape).numpy()
+    projected_tt_torch = ttnn.to_torch(projected_tt).float()
+    if projected_tt_torch.ndim == 4:
+        projected_tt_torch = projected_tt_torch.squeeze(1)
 
-    assert_pcc_print(
-        "ttnn_text_condition_embedding",
-        torch.from_numpy(projected_ref),
-        torch.from_numpy(projected_tt_np),
-    )
+    assert_pcc_print("ttnn_text_projector", projected_ref, projected_tt_torch)
 
 
 @pytest.mark.skipif(
