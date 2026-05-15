@@ -4,9 +4,12 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import fields
 from types import UnionType
 from typing import Protocol, Union, get_args, get_origin, get_type_hints
+
+from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import CompressedTensor
@@ -242,6 +245,7 @@ def _upload_tensors(device: ttnn.MeshDevice, host_tensors: list[ttnn.Tensor]) ->
     sd_partial_jobs: list[tuple[ttnn.Tensor, ttnn.Tensor, ttnn.CoreRangeSet]] = []
     uploaded: list[ttnn.Tensor] = []
 
+    t_alloc_start = time.perf_counter()
     for host_tensor in host_tensors:
         device_tensor = ttnn.allocate_tensor_on_device(host_tensor.spec, device)
         uploaded.append(device_tensor)
@@ -263,16 +267,32 @@ def _upload_tensors(device: ttnn.MeshDevice, host_tensors: list[ttnn.Tensor]) ->
                 fd_partial_jobs.append((host_tensor, device_tensor, fd_filter))
         if not sd_filter.empty():
             sd_partial_jobs.append((host_tensor, device_tensor, sd_filter))
+    alloc_elapsed = time.perf_counter() - t_alloc_start
 
+    t_fd_start = time.perf_counter()
     with ttnn.device.setup_fast_dispatch(device):
         for host_tensor, device_tensor in full_fd_jobs:
             ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
         for host_tensor, device_tensor, core_filter in fd_partial_jobs:
             ttnn.copy_host_to_device_tensor_partial(host_tensor, device_tensor, core_filter)
+    fd_elapsed = time.perf_counter() - t_fd_start
 
+    t_sd_start = time.perf_counter()
     for host_tensor, device_tensor, core_filter in sd_partial_jobs:
         ttnn.copy_host_to_device_tensor_partial(host_tensor, device_tensor, core_filter)
+    sd_elapsed = time.perf_counter() - t_sd_start
 
+    logger.debug(
+        "two_phase_upload: {} tensors -> alloc={:.3f}s | fd_full={} fd_partial={} sd_partial={} | "
+        "fd={:.3f}s sd={:.3f}s",
+        len(host_tensors),
+        alloc_elapsed,
+        len(full_fd_jobs),
+        len(fd_partial_jobs),
+        len(sd_partial_jobs),
+        fd_elapsed,
+        sd_elapsed,
+    )
     return uploaded
 
 
@@ -282,10 +302,26 @@ def two_phase_upload(device: ttnn.MeshDevice, host_weights: Uploadable):
     Tensors that are already on device (e.g. ones uploaded earlier by
     :func:`eager_upload_l1_lockstep`) are passed through unchanged.
     """
+    t0 = time.perf_counter()
     host_tensors = host_weights.backing_tensors()
+    t_extract = time.perf_counter() - t0
+    t1 = time.perf_counter()
     device_tensors = _upload_tensors(device, host_tensors)
+    t_upload = time.perf_counter() - t1
+    t2 = time.perf_counter()
     host_to_device: TensorMap = {tensor_identity_key(host): dev for host, dev in zip(host_tensors, device_tensors)}
-    return host_weights.with_device_tensors(host_to_device)
+    rebuilt = host_weights.with_device_tensors(host_to_device)
+    t_rebuild = time.perf_counter() - t2
+    logger.debug(
+        "two_phase_upload({}): extract={:.3f}s upload={:.3f}s rebuild={:.3f}s total={:.3f}s ({} tensors)",
+        type(host_weights).__name__,
+        t_extract,
+        t_upload,
+        t_rebuild,
+        time.perf_counter() - t0,
+        len(host_tensors),
+    )
+    return rebuilt
 
 
 def eager_upload_l1_lockstep(

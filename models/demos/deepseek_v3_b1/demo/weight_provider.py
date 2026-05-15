@@ -37,6 +37,7 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     prepare_spec_weights,
 )
 from models.demos.deepseek_v3_b1.weights.transforms.sram_experts import SramExpertCoreGrids, SramHotExpertConfig
+from models.demos.deepseek_v3_b1.weights.upload import Uploadable, two_phase_upload
 
 
 class WeightProvider(Protocol):
@@ -257,6 +258,16 @@ class CacheWeightProvider:
             mesh_shape=(device.shape[0], device.shape[1]),
         )
         return CacheConfig(cache=self._cache, context=context)
+
+    def _upload_prepared_weights(self, device: ttnn.MeshDevice, host_weights: Uploadable):
+        """Two-phase upload: FD-batched H2D for the FD grid, SD writes for the rest.
+
+        Used by ``load_moe_layer`` / ``load_dense_layer`` after host-staging
+        weights via ``prepare_*_weights(move_to_device=False)``. Tensors
+        already on device (e.g. attn L1 lockstep tensors uploaded eagerly
+        to seed the SRAM hot-expert trim) are passed through unchanged.
+        """
+        return two_phase_upload(device, host_weights)
 
     def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
         return prepare_embedding_weights(
