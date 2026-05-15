@@ -118,8 +118,15 @@ inline tt::tt_metal::KernelHandle create_compute_kernel(
         ComputeConfig{
             .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
             .fp32_dest_acc_en = false,
+            .dst_full_sync_en = false,
+            .unpack_to_dest_mode = {},
+            .bfp8_pack_precise = false,
             .math_approx_mode = math_approx_mode,
-            .compile_args = compile_time_args});
+            .compile_args = compile_time_args,
+            .defines = {},
+            .named_compile_args = {},
+            .opt_level = KernelBuildOptLevel::O3,
+            .compiler_include_paths = {}});
 }
 
 /**
