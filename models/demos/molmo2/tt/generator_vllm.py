@@ -276,11 +276,31 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         return allocate_molmo2_kv_cache(*args, **kwargs, model=self.model, cfg=self.cfg)
 
     def _unwrap(self, val):
-        """Unwrap up to two layers of list nesting."""
+        """Unwrap list nesting, concatenating all tensors for multi-image requests.
+
+        For video (always 1): return the single tensor.
+        For image (may be N>1): concatenate all tensors along dim=0 so multi-image
+        pixel_values and pooling are passed as one combined tensor.
+        """
+        import torch
+
         if isinstance(val, list):
-            val = val[0] if val else None
-        if isinstance(val, list):
-            val = val[0] if val else None
+            if not val:
+                return None
+            # Flatten one extra level of nesting
+            flat = []
+            for item in val:
+                if isinstance(item, list):
+                    flat.extend(item)
+                else:
+                    flat.append(item)
+            if len(flat) == 1:
+                return flat[0]
+            # Multiple tensors (multi-image) — concatenate along dim 0
+            try:
+                return torch.cat(flat, dim=0)
+            except Exception:
+                return flat[0]
         return val
 
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, enable_trace=False, **kwargs):
