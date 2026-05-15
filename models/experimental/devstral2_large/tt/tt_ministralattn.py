@@ -153,11 +153,13 @@ def _decode_wo_interleaved_multicast_prog_cfg(args):
     return _tighten_wo_prefill_prog_cfg(cfg)
 
 
-def _widen_qkv_prefill_in0_block_w(cfg, in0_block_w: int = 2):
+def _widen_qkv_prefill_in0_block_w(cfg, in0_block_w: int = 4):
     """Increase in0_block_w for QKV prefill matmul on Devstral-2-123B.
 
-    The shared config defaults to in0_block_w=1 for seq_len<=128. For K=12288 that means
-    384 inner-loop iterations per core; doubling to 2 halves the loop overhead. Only touches
+    The shared config defaults to in0_block_w=1 for seq_len<=128. For K=12288 that is
+    384 inner-loop tile steps per core at block width 1. A default of 4 cuts that to 96 steps
+    (Tracy: ~0.43% lower summed device FW vs in0_block_w=2 on P150x4 PCC tests). in0_block_w=8
+    was only marginally better (~0.03% over 4) in the same run. Only touches
     MatmulMultiCoreReuseMultiCastProgramConfig (seq_len<=128 path); MinimalMatmulConfig
     (seq_len>128) is returned unchanged.
     """
@@ -244,8 +246,8 @@ class TtDevstral2LargeAttention(Attention):
 
             self.args.get_attn_wo_program_config = _get_attn_wo_wide_prefill  # type: ignore[method-assign]
 
-        # Widen in0_block_w for QKV prefill: shared config defaults to 1 (K=12288 → 384 loop
-        # iterations). in0_block_w=2 halves that, improving compute pipeline utilization.
+        # Widen in0_block_w for QKV prefill: shared config defaults to 1 (K=12288 → 384 inner steps
+        # at width 1). Devstral-specific block width improves QKV prefill / decode-reuse matmul.
         # Bind the real ModelArgs method before reassignment; use a distinct closure cell name so
         # we never recurse if this block is edited alongside other get_* patches.
         _base_get_attn_qkv = self.args.get_attn_qkv_program_config

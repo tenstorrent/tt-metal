@@ -37,6 +37,15 @@ DEVSTRAL2_LARGE_L1_SMALL_SIZE = 24576
 # Max sequence tokens per RMSNorm invocation on BH + ~12k hidden (L1 CB budget).
 # Width-sharded ``interleaved_to_sharded`` requires shard shapes tile-aligned (32).
 _BH_WIDE_SEQ_CHUNK = 32
+# Prefills up to this length run one RMSNorm pass when safe; longer sequences chunk by ``_BH_WIDE_SEQ_CHUNK``.
+# Saves repeated slice→DRAM→norm→concat and associated ROW_MAJOR tilize churn on typical 128-seq tests/runners.
+_BH_WIDE_SINGLE_PASS_MAX_SEQ = 128
+
+
+def _bh_wide_seq_chunk(seq_len: int) -> int:
+    if seq_len <= _BH_WIDE_SINGLE_PASS_MAX_SEQ:
+        return _BH_WIDE_SINGLE_PASS_MAX_SEQ
+    return _BH_WIDE_SEQ_CHUNK
 
 
 def _resolve_norm_core_grid(mesh_device, hidden_dim: int) -> ttnn.CoreGrid:
@@ -186,7 +195,8 @@ class TtDevstral2LargeRMSNorm(RMSNorm):
     def _forward_bh_wide_distributed(self, x: ttnn.Tensor, weight) -> ttnn.Tensor:
         """Distributed RMSNorm with sharded program config + optional sequence chunking."""
         seq_len = int(x.shape[2])
-        if seq_len <= _BH_WIDE_SEQ_CHUNK:
+        chunk_stride = _bh_wide_seq_chunk(seq_len)
+        if seq_len <= chunk_stride:
             pc = self._bh_wide_norm_program_config(x)
             return self._distributed_rmsnorm_sharded_program(
                 x,
@@ -198,25 +208,25 @@ class TtDevstral2LargeRMSNorm(RMSNorm):
 
         b, _, _, h = x.shape
         parts: list = []
-        for start in range(0, seq_len, _BH_WIDE_SEQ_CHUNK):
-            end = min(start + _BH_WIDE_SEQ_CHUNK, seq_len)
-            chunk = ttnn.slice(
+        for start in range(0, seq_len, chunk_stride):
+            end = min(start + chunk_stride, seq_len)
+            seq_chunk = ttnn.slice(
                 x,
                 [0, 0, start, 0],
                 [b, 1, end, h],
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            pc = self._bh_wide_norm_program_config(chunk)
+            pc = self._bh_wide_norm_program_config(seq_chunk)
             parts.append(
                 self._distributed_rmsnorm_sharded_program(
-                    chunk,
+                    seq_chunk,
                     program_config=pc,
                     epsilon=self.eps,
                     weight=weight,
                     compute_kernel_config=self.compute_kernel_config_hifi2,
                 )
             )
-            chunk.deallocate(True)
+            seq_chunk.deallocate(True)
         out = ttnn.concat(parts, dim=2)
         for p in parts:
             p.deallocate(True)
@@ -298,13 +308,14 @@ class TtDevstral2LargeRMSNorm(RMSNorm):
                 y = ttnn.slice(y, [0, 0, 0, 0], [bsz, 1, sl, self._hidden_dim])
             return y
 
-        if seq_len <= _BH_WIDE_SEQ_CHUNK:
+        chunk_stride = _bh_wide_seq_chunk(seq_len)
+        if seq_len <= chunk_stride:
             return _run_chunk(x)
 
         b, _, _, h = x.shape
         parts: list = []
-        for start in range(0, seq_len, _BH_WIDE_SEQ_CHUNK):
-            end = min(start + _BH_WIDE_SEQ_CHUNK, seq_len)
+        for start in range(0, seq_len, chunk_stride):
+            end = min(start + chunk_stride, seq_len)
             chunk = ttnn.slice(
                 x,
                 [0, 0, start, 0],
