@@ -265,6 +265,10 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
     }
     dispatch_thread_pool_->wait();
 
+    if (any_pinned_used.load(std::memory_order_relaxed)) {
+        this->invalidate_prefetcher_cache_after_pinned_write();
+    }
+
     if (blocking) {
         this->finish_nolock();
     } else if (any_pinned_used.load(std::memory_order_relaxed)) {

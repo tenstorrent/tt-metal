@@ -217,7 +217,7 @@ class RunTimeOptions {
     bool clear_l1 = false;
     bool clear_dram = false;
 
-    size_t pinned_memory_cache_limit_bytes = 0;
+    size_t pinned_memory_cache_limit_bytes = 4ULL * 1024 * 1024 * 1024;
 
     bool skip_loading_fw = false;
 

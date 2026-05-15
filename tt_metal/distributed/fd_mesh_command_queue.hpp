@@ -201,6 +201,7 @@ protected:
     MeshEvent enqueue_record_event_to_host_nolock(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt) override;
+    void invalidate_prefetcher_cache_after_pinned_write() override;
 
 public:
     FDMeshCommandQueue(
