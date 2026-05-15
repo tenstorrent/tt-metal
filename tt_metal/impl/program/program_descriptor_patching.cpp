@@ -97,11 +97,26 @@ ResolvedBindings resolve_bindings(
         }
     }
 
-    // Resolve every `.buffer = ...` CB binding the descriptor declares.  The
-    // resolver makes no policy decision about when CB patching is safe — that
-    // belongs to the caller (the adapter), which knows whether its workload
-    // contract supports a slow-path rebuild on cache hits.  See the
-    // contract-aware gate in DescriptorMeshWorkloadAdapter::apply_descriptor.
+    // Resolve every `.buffer = ...` CB binding the descriptor declares.
+    //
+    // This used to be gated on `!result.rt_args.empty()` to keep contract-1
+    // sharded factories that mixed `.buffer = ...` CBs with OLD-style raw
+    // `buffer->address()` runtime args from accidentally taking the fast path:
+    // a non-empty `cbs` alone would have made the adapter patch CBs while
+    // leaving those raw rt-args pointing at stale addresses.
+    //
+    // That guard now lives in the caller, not the resolver.  The adapter's
+    // `apply_descriptor` picks the path per workload contract:
+    //   - contract 1 (per-coord factory): fast-path only when there are
+    //     declared rt-arg bindings, otherwise rebuild the descriptor — exactly
+    //     the old behaviour.
+    //   - contract 2 (declarative MeshWorkload): always fast-path, because the
+    //     contract forbids raw-uint32 rt-args (factories must declare bindings
+    //     via emplace_runtime_args) and rebuilding would re-allocate the
+    //     workload-scoped resources held in the descriptor.
+    //
+    // Resolving CBs unconditionally here gives the adapter the information it
+    // needs to make that contract-aware decision.
     {
         auto program_cbs = program.circular_buffers();
         for (uint32_t ci = 0; ci < static_cast<uint32_t>(desc.cbs.size()); ++ci) {
