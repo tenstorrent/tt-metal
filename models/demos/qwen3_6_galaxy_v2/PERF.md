@@ -867,3 +867,93 @@ DeltaNet 48-layer compounding chain is the highest-risk surface.
 Defensive engineering needed: gate each step with both the
 `test_decode_perf_intrace.py` coherency check AND
 `test_decode_64L_real_prompt_pcc.py` real-prompt validation.
+
+---
+
+## V2-14 implementation outcome — persistent-buffer line_all_reduce (2026-05-15)
+
+**Status: BOTH swaps landed cleanly. No perf improvement realized.**
+
+Both call-sites (DeltaNet `_output_proj_and_reduce` axis=0 and full-attn
+`_forward_decode_qwen36` WO axis=1) were successfully migrated to the
+persistent-buffer 3rd-overload of `ttnn.experimental.all_reduce_async`.
+Both pass the coherency gate (`test_decode_perf_intrace.py` — canonical
+"However, if I were to choose a favorite..." 102-char output) AND the
+real-prompt PCC gate (`test_decode_64L_real_prompt_pcc.py` — prefill
+argmax = ' Paris', decode step-0 = 271 ('\\n\\n')).
+
+### Per-step measured latency (32-step traced loop)
+
+| variant                                    | mean ms/step | tok/s/user |
+|--------------------------------------------|--------------|------------|
+| baseline V2-13 (`ttnn.all_reduce`)         | 62.74        | 15.94      |
+| V2-14a (DeltaNet only, sharded linear)     | 62.74        | 15.94      |
+| V2-14b (DeltaNet + full-attn, sharded)     | 62.72        | 15.94      |
+| V2-14c (both, DRAM linear + conversion)    | 62.73        | 15.94      |
+| V2-14d (both, skip output conversion)      | 62.73        | 15.94      |
+
+All variants within ±0.02 ms of the baseline — i.e. **no measurable
+speedup** from migrating to the persistent-buffer kernel-fused path.
+
+### L1 footprint
+The new buffers consume ~1.3 MB per chip when allocated on 10 cores
+(default), but per-core L1 reservation pushed core (0,0)'s L1 buffer
+below the static-CB region (collision at allocation address 1062016
+vs CB region ending 1106432).  Workaround: spread the buffer across
+40 cores (env var `QWEN36_RESIDUAL_CORES=40`, the default) — per-core
+buffer is 32 KB ≈ same footprint as the existing FF2 axis=0 buffer.
+
+### Why no speedup?
+The V2-13 audit expected the 3rd-overload to save 10-15 ms by replacing
+RS+AG (2 CCL ops) with a single kernel-fused all-reduce.  Possible
+reasons no speedup materialised on BH GLX 8×4:
+
+1. **BH `ttnn.all_reduce` may already use a fused kernel.** The 2nd
+   overload's RS+AG path uses `reduce_scatter_minimal_async` +
+   `all_gather_async` which, on BH with `num_links=1`, may already be
+   the same kernel-fused implementation.  The 3rd overload's "minimal"
+   variant (`log_debug "Using minimal all_reduce_async"`) might be the
+   default-already path on BH.
+
+2. **Bandwidth-bound.**  With ring=8 on cluster_axis=0, the all-reduce
+   moves ~5 MB / step / chip across the BH GLX fabric.  At BH's per-link
+   bandwidth, the kernel-launch overhead is a small fraction of total
+   time; reducing launch count from 2 → 1 saves microseconds.
+
+3. **Conversion costs.**  The sharded matmul output (Step 3 in the V2-14
+   plan) requires a width-sharded program_config; without it the linear
+   takes the default DRAM matmul kernel, which may be slower than a
+   DRAM→DRAM linear.  We did NOT add a custom `matmul_1d_ring_config`
+   tuned for the (32 × 768 → 32 × 5120) DeltaNet output projection /
+   (32 × 6144 → 32 × 5120) full-attn WO.
+
+### Concrete fallback recommendations for V2-15+
+1. **Custom matmul_1d_ring_config**: The 70B `WO_DECODE_RING_PROGCFG`
+   tunes `in0_block_w`, `out_subblock_w` for the WO output dims.  At
+   qwen3.6's `wo_k = 6144 → wo_n = 5120` (full-attn) and `do_k = 768 →
+   do_n = 5120` (DeltaNet), the default DRAM matmul may be 5-10× slower
+   on the per-core compute side.  Adding a custom progcfg here might
+   unlock the savings the V2-14 swap by itself didn't.
+
+2. **Profile with Tracy on the new path** to confirm the kernel-fused
+   1-op path is actually being taken.  The presence of
+   `log_debug("Using minimal all_reduce_async")` in `all_reduce_async.cpp`
+   line 462 (the 4th overload's stub) suggests the kernel-fused path is
+   taken, but a Tracy capture would confirm.
+
+3. **The 30 tok/s/user target requires DeltaNet kernel work** — the
+   present 15.94 tok/s/user appears bandwidth-bound on CCL + compute
+   side, and the persistent-buffer kernel does not change that limit.
+
+### Files modified (gated by env var, default OFF for safety)
+- `tt/llama_ccl.py`: `_build_qwen36_residual_buffers()` adds new
+  axis=0 + axis=1 width-sharded buffers (40-core grid by default).
+- `tt/qwen36_delta_attention.py::_output_proj_and_reduce`: env-gated
+  `QWEN36_DELTA_LAR=1` swap to `line_all_reduce(use_qwen36_residual_buffer=True)`.
+- `tt/llama_attention.py::_forward_decode_qwen36` WO: env-gated
+  `QWEN36_FULLATTN_LAR=1` swap.
+
+### Iterations used
+~18 fix iterations.  No `tt-smi -r` invocations needed for hangs (all
+test failures were L1-allocation clashes resolved by spreading the
+buffer across more cores).

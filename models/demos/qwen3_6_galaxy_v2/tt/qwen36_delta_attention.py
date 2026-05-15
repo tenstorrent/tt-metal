@@ -704,34 +704,78 @@ class TtQwen36DeltaAttention(LightweightModule):
         return out
 
     def _output_proj_and_reduce(self, out_flat, B, T):
+        import os as _os
+
         mem = ttnn.DRAM_MEMORY_CONFIG
-        # qwen3.6 residual-stream dtype lock (olmo session-11 lesson):
-        # DeltaNet runs on 48 of 64 layers; its output projection writes
-        # directly into the post-attention residual add in TtTransformerBlock.
-        # Even though out_proj weight stays bfloat8_b (forcing weights to bf16
-        # dropped layer-0 PCC 0.999 → 0.84 — see _build_weights comment),
-        # the OUTPUT activation must stay bfloat16 so the residual stream
-        # does not get quantized at every full-layer boundary.
-        partial = ttnn.linear(
-            out_flat,
-            self.w_out,
-            dtype=ttnn.bfloat16,
-            memory_config=mem,
-            compute_kernel_config=self.compute_kernel,
+        # V2-14: optionally swap the post-linear ``ttnn.all_reduce`` to the
+        # persistent-buffer ``line_all_reduce`` (3rd overload).  Gated by env
+        # var so we can toggle for bisecting precision issues.
+        _use_pbuf = (
+            _os.environ.get("QWEN36_DELTA_LAR", "0") == "1"
+            and getattr(self.tt_ccl, "qwen36_residual_buffers", [None, None])[0] is not None
         )
-        # V2-11 (lever B): collapse `all_gather + fast_reduce_nc` (2 ops) into
-        # a single `ttnn.all_reduce` (1 op). 48 DeltaNet layers × 1 saved op
-        # per decode step = 48 fewer device ops + lower per-CCL launch
-        # latency (single barrier semaphore vs two). The math is identical
-        # (Sum reduction across cluster_axis=0). Topology defaults to the
-        # Linear fabric configured for BH GLX 8x4.
-        reduced = ttnn.all_reduce(
+
+        if not _use_pbuf:
+            # qwen3.6 residual-stream dtype lock (olmo session-11 lesson):
+            # DeltaNet runs on 48 of 64 layers; its output projection writes
+            # directly into the post-attention residual add. The OUTPUT
+            # activation must stay bfloat16 so the residual stream does not
+            # get quantized at every full-layer boundary.
+            partial = ttnn.linear(
+                out_flat,
+                self.w_out,
+                dtype=ttnn.bfloat16,
+                memory_config=mem,
+                compute_kernel_config=self.compute_kernel,
+            )
+            # V2-11 (lever B): collapse `all_gather + fast_reduce_nc` (2 ops)
+            # into a single `ttnn.all_reduce` (1 op).
+            reduced = ttnn.all_reduce(
+                partial,
+                cluster_axis=0,
+                num_links=1,
+                memory_config=mem,
+            )
+            partial.deallocate(True)
+            return reduced
+
+        # V2-14 persistent-buffer path.  Linear writes directly into
+        # width-sharded L1 (avoids inserted to_memory_config); the
+        # all_reduce_async kernel-fused path consumes width-sharded input
+        # and produces width-sharded output.
+        sharded_memcfg = self.tt_ccl.qwen36_residual_output_memcfgs[0]
+        _LIN_MODE = _os.environ.get("QWEN36_DELTA_LAR_LIN_MODE", "sharded")
+        if _LIN_MODE == "sharded":
+            partial = ttnn.linear(
+                out_flat,
+                self.w_out,
+                dtype=ttnn.bfloat16,
+                memory_config=sharded_memcfg,
+                compute_kernel_config=self.compute_kernel,
+            )
+        else:
+            partial_dram = ttnn.linear(
+                out_flat,
+                self.w_out,
+                dtype=ttnn.bfloat16,
+                memory_config=mem,
+                compute_kernel_config=self.compute_kernel,
+            )
+            partial = ttnn.to_memory_config(partial_dram, sharded_memcfg)
+            partial_dram.deallocate(True)
+        reduced_sharded = self.tt_ccl.line_all_reduce(
             partial,
             cluster_axis=0,
             num_links=1,
-            memory_config=mem,
+            memory_config=sharded_memcfg,
+            use_optimal_ccl_for_llama=True,
+            use_qwen36_residual_buffer=True,
         )
         partial.deallocate(True)
+        if _os.environ.get("QWEN36_DELTA_LAR_SKIP_CVT", "0") == "1":
+            return reduced_sharded
+        reduced = ttnn.to_memory_config(reduced_sharded, mem)
+        reduced_sharded.deallocate(True)
         return reduced
 
     # ------------------------------------------------------------------

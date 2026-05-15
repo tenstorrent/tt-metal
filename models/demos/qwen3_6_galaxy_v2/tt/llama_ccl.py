@@ -110,7 +110,19 @@ class TT_CCL:
         self.barrier_semaphore_idx = [0, 0]
         self.persistent_buffers = {}
         self.all_gather_buffers = {}
+        # V2-14: qwen3.6 residual-stream persistent buffers for the 3rd-overload
+        # ``ttnn.experimental.all_reduce_async`` (width-sharded full-dim=5120
+        # output). Sized for ring=8 on axis=0 and ring=4 on axis=1.
+        # Populated only when ``is_qwen36`` and mode == "decode".
+        self.qwen36_residual_buffers = [None, None]
+        self.qwen36_residual_input_memcfgs = [None, None]
+        self.qwen36_residual_output_memcfgs = [None, None]
         if mode == "decode":
+            # V2-14: build qwen36 residual buffers FIRST so they get placed
+            # near the top of the L1 stack.  Allocating them after KV cache /
+            # other persistent buffers ran into a static-CB clash on core (0,0).
+            if self.is_qwen36:
+                self._build_qwen36_residual_buffers()
             self.persistent_buffers = self.get_persistent_buffers()
             self.all_gather_buffers = self.get_all_gather_buffers()
             self.reduce_scatter_buffers = self.get_decode_reduce_scatter_buffers()
@@ -494,6 +506,74 @@ class TT_CCL:
 
         return persistent_buffers
 
+    # ------------------------------------------------------------------
+    # V2-14: qwen3.6 residual-stream persistent buffers
+    # ------------------------------------------------------------------
+    # Separate pair of width-sharded persistent buffers for the full-dim=5120
+    # residual reduction at the DeltaNet ``_output_proj_and_reduce`` (axis=0,
+    # 48 DeltaNet layers) and the full-attn ``_forward_decode_qwen36`` WO
+    # (axis=1, 16 layers).  The buffer is spread across more cores than the
+    # output (default 40 vs 10) to keep per-core L1 reservation under the
+    # static-CB collision threshold.
+    def _build_qwen36_residual_buffers(self):
+        assert self.is_qwen36, "_build_qwen36_residual_buffers requires is_qwen36"
+        # Off by default — opt in via env var so the L1 footprint is only
+        # paid when the swap is enabled.  See V2-14 in PERF.md.  Auto-enable
+        # when the swap env vars are set so callers don't need both.
+        _auto_on = (
+            os.environ.get("QWEN36_RESIDUAL_BUF_ON", "0") == "1"
+            or os.environ.get("QWEN36_DELTA_LAR", "0") == "1"
+            or os.environ.get("QWEN36_FULLATTN_LAR", "0") == "1"
+        )
+        if not _auto_on:
+            return
+
+        M = 32
+        H = 5120  # qwen3.6 residual-stream dim
+        # Number of cores for the buffer; default 40 keeps per-core L1
+        # reservation similar to the existing FF2 buffer.  Buffer's grid
+        # must contain output's grid (output stays on the 10-core
+        # DECODE_RESIDUAL grid for downstream compatibility).
+        num_cores_buf = int(os.environ.get("QWEN36_RESIDUAL_CORES", "40"))
+        rows_required = num_cores_buf // 5
+        residual_core_range = ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(5, max(0, rows_required - 1)))
+        residual_core_range_set = ttnn.CoreRangeSet([residual_core_range])
+
+        # Output / input shard widths: per-core w = H / num_cores_buf.
+        per_core_w = H // num_cores_buf
+
+        cluster_shape = tuple(self.cluster_shape) if not isinstance(self.cluster_shape, tuple) else self.cluster_shape
+
+        # Output memcfg (same for both axes): width-sharded on the buffer's
+        # core grid.  Shard shape (32, per_core_w).
+        residual_output_memcfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(residual_core_range_set, [M, per_core_w], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+        _BUILD_AXES = os.environ.get("QWEN36_RESIDUAL_BUF_AXES", "0,1").split(",")
+        _BUILD_AXES = tuple(int(a) for a in _BUILD_AXES if a.strip())
+        for cluster_axis in _BUILD_AXES:
+            ring_size = cluster_shape[cluster_axis]
+            buf_per_core_w = per_core_w * ring_size
+            buf_mem_cfg = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(residual_core_range_set, [M, buf_per_core_w], ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            tt_buffer = ttnn.from_torch(
+                torch.zeros((*cluster_shape, M, buf_per_core_w * num_cores_buf)),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                memory_config=buf_mem_cfg,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+            )
+            self.qwen36_residual_buffers[cluster_axis] = tt_buffer
+            self.qwen36_residual_output_memcfgs[cluster_axis] = residual_output_memcfg
+            self.qwen36_residual_input_memcfgs[cluster_axis] = residual_output_memcfg
+
     def get_decode_reduce_scatter_buffers(self):
         """
         Currently, this is hardcoded with llama specific shapes.
@@ -843,10 +923,19 @@ class TT_CCL:
         use_noc1_only=False,
         use_optimal_ccl_for_llama=False,
         batch_size=1,
+        use_qwen36_residual_buffer=False,
     ):
         if self.mode == "decode":
             if lm_head:
                 persistent_buffer = self.tt_lm_head_buffer_l1
+            elif use_qwen36_residual_buffer:
+                # V2-14: qwen3.6 residual-stream full-dim=5120 reduction.
+                assert self.is_qwen36, "use_qwen36_residual_buffer requires is_qwen36"
+                persistent_buffer = self.qwen36_residual_buffers[cluster_axis]
+                assert persistent_buffer is not None, (
+                    f"qwen36 residual buffer for cluster_axis={cluster_axis} not built — "
+                    f"check _build_qwen36_residual_buffers was called"
+                )
             else:
                 persistent_buffer = self.persistent_buffers[cluster_axis]
             output_tensor_mesh = ttnn.experimental.all_reduce_async(

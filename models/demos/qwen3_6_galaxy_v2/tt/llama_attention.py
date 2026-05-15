@@ -1871,27 +1871,74 @@ class TtLlamaAttention(LightweightModule):
         attn_flat.deallocate(True)
         gate_sig.deallocate(True)
 
-        # WO projection + all-reduce across cols.
-        dense_partial = ttnn.linear(
-            gated,
-            self.wo,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
+        # V2-14: optional persistent-buffer ``line_all_reduce`` swap for the
+        # full-attn WO reduction (cluster_axis=1, 16 layers × 64L decode).
+        # Gated by env var QWEN36_FULLATTN_LAR=1.
+        import os as _os_v214
+
+        _use_pbuf_fa = (
+            _os_v214.environ.get("QWEN36_FULLATTN_LAR", "0") == "1"
+            and getattr(self.tt_ccl, "qwen36_residual_buffers", [None, None])[1] is not None
         )
-        gated.deallocate(True)
-        # V2-11 (lever B, full-attention variant): collapse `all_gather +
-        # fast_reduce_nc` into a single `ttnn.all_reduce`. 16 full-attention
-        # layers × 1 saved op per decode step. Mirrors the DeltaNet
-        # _output_proj_and_reduce swap (qwen36_delta_attention.py). Math
-        # identical (Sum reduction across cluster_axis=1).
-        dense_out_full = ttnn.all_reduce(
-            dense_partial,
-            cluster_axis=1,
-            num_links=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        dense_partial.deallocate(True)
+
+        if not _use_pbuf_fa:
+            # WO projection + all-reduce across cols (original path).
+            dense_partial = ttnn.linear(
+                gated,
+                self.wo,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+            )
+            gated.deallocate(True)
+            # V2-11 (lever B, full-attention variant): collapse `all_gather +
+            # fast_reduce_nc` into a single `ttnn.all_reduce`. 16 full-attention
+            # layers × 1 saved op per decode step. Math identical (Sum reduction
+            # across cluster_axis=1).
+            dense_out_full = ttnn.all_reduce(
+                dense_partial,
+                cluster_axis=1,
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            dense_partial.deallocate(True)
+        else:
+            sharded_memcfg = self.tt_ccl.qwen36_residual_output_memcfgs[1]
+            _LIN_MODE = _os_v214.environ.get("QWEN36_FULLATTN_LAR_LIN_MODE", "sharded")
+            if _LIN_MODE == "sharded":
+                dense_partial = ttnn.linear(
+                    gated,
+                    self.wo,
+                    dtype=ttnn.bfloat16,
+                    memory_config=sharded_memcfg,
+                    compute_kernel_config=self.compute_kernel_config_hifi4,
+                )
+                gated.deallocate(True)
+            else:
+                dense_partial_dram = ttnn.linear(
+                    gated,
+                    self.wo,
+                    dtype=ttnn.bfloat16,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    compute_kernel_config=self.compute_kernel_config_hifi4,
+                )
+                gated.deallocate(True)
+                dense_partial = ttnn.to_memory_config(dense_partial_dram, sharded_memcfg)
+                dense_partial_dram.deallocate(True)
+            dense_out_sharded = self.tt_ccl.line_all_reduce(
+                dense_partial,
+                cluster_axis=1,
+                num_links=1,
+                memory_config=sharded_memcfg,
+                use_optimal_ccl_for_llama=True,
+                use_qwen36_residual_buffer=True,
+            )
+            dense_partial.deallocate(True)
+            if _os_v214.environ.get("QWEN36_FULLATTN_LAR_SKIP_CVT", "0") == "1":
+                dense_out_full = dense_out_sharded
+            else:
+                dense_out_full = ttnn.to_memory_config(dense_out_sharded, ttnn.DRAM_MEMORY_CONFIG)
+                dense_out_sharded.deallocate(True)
 
         # V2-decode: ttnn.linear of rank-3 LHS @ rank-4 weight returns rank-4.
         # Collapse leading singleton(s) back to rank-3 before slicing so the
