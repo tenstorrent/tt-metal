@@ -282,8 +282,7 @@ void validate_matmul_reuse_work_split(
     const uint32_t num_output_blocks_total = (B * Mt / per_core_M) * (Nt / per_core_N);
     TT_FATAL(
         num_output_blocks_total > 0,
-        "Matmul reuse-optimized produced zero output blocks (B={} Mt={} Nt={} per_core_M={} per_core_N={}); see "
-        "matmul_multicore_reuse_optimized_program_factory",
+        "matmul reuse produced zero output blocks (B={}, Mt={}, Nt={}, per_core_M={}, per_core_N={})",
         B,
         Mt,
         Nt,
@@ -315,13 +314,12 @@ void validate_matmul_reuse_work_split(
 
     TT_FATAL(
         num_cores > 0,
-        "split_work_to_cores produced zero cores for matmul reuse-optimized (num_output_blocks_total={})",
+        "matmul reuse requires at least one active core, got 0 (num_output_blocks_total={})",
         num_output_blocks_total);
     const uint32_t num_evenly_divided_output_blocks = num_output_blocks_total / num_cores;
     TT_FATAL(
         num_evenly_divided_output_blocks > 0,
-        "Not all cores from core_range was used! num_output_blocks_total={} num_cores={} (matmul reuse-optimized; "
-        "matches matmul_multicore_reuse_optimized_program_factory)",
+        "num_output_blocks_total ({}) must be >= num_cores ({}); some cores would have no work",
         num_output_blocks_total,
         num_cores);
 }

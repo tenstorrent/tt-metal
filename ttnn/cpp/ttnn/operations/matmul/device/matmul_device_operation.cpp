@@ -54,12 +54,11 @@ void validate_matmul_matrix_dimensions(
     const uint32_t Kt_a = operations::matmul::utilities::get_K_dim(a_shape_padded, in0_tile);
     const uint32_t Kt_b = b_shape_padded[-2] / in1_tile.get_height();
     TT_FATAL(
-        Kt_a > 0 && Kt_b > 0, "Matmul contracted dimension in tiles must be positive (Kt_a={}, Kt_b={})", Kt_a, Kt_b);
-    TT_FATAL(
-        Kt_a == Kt_b,
-        "Padded tile count along contracted dimension must match between operands (Kt_a={}, Kt_b={})",
+        Kt_a > 0 && Kt_b > 0,
+        "K dimension in tiles must be positive (input A: {} K-tiles, input B: {} K-tiles)",
         Kt_a,
         Kt_b);
+    TT_FATAL(Kt_a == Kt_b, "K dimension in tiles must match between input A ({}) and input B ({})", Kt_a, Kt_b);
 }
 
 void validate_matmul_tile_constraints(
@@ -154,10 +153,14 @@ void validate_matmul_block_and_subblock_configuration(
                                   is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
                     TT_FATAL(
                         program_config.per_core_M % program_config.out_subblock_h == 0,
-                        "per_core_M must be divisible by out_subblock_h");
+                        "per_core_M ({}) must be divisible by out_subblock_h ({})",
+                        program_config.per_core_M,
+                        program_config.out_subblock_h);
                     TT_FATAL(
                         program_config.per_core_N % program_config.out_subblock_w == 0,
-                        "per_core_N must be divisible by out_subblock_w");
+                        "per_core_N ({}) must be divisible by out_subblock_w ({})",
+                        program_config.per_core_N,
+                        program_config.out_subblock_w);
                 }
                 TT_FATAL(
                     attributes.compute_kernel_config.has_value(),
@@ -310,19 +313,9 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                 const uint32_t num_cores = grid.x * grid.y;
 
                 if (program_config.gather_in0) {
-                    TT_FATAL(
-                        !transpose_a,
-                        "Transpose A is ({}) not supported for gather_in0, please use a different program "
-                        "configuration",
-                        transpose_a);
-                    TT_FATAL(
-                        !transpose_b,
-                        "Transpose B is ({}) not supported for gather_in0, please use a different program "
-                        "configuration",
-                        transpose_b);
-                    TT_FATAL(
-                        input_tensor_a.is_sharded(),
-                        "gather_in0 matmul requires input A to be sharded (ring workers use A.shard_spec().grid)");
+                    TT_FATAL(!transpose_a, "transpose_a is not supported with gather_in0");
+                    TT_FATAL(!transpose_b, "transpose_b is not supported with gather_in0");
+                    TT_FATAL(input_tensor_a.is_sharded(), "gather_in0 requires input A to be sharded");
                     auto* device = input_tensor_a.device();
                     const auto& sub_device_ids = device->get_sub_device_ids();
                     TT_FATAL(
@@ -331,8 +324,7 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                         const tt::tt_metal::CoreRangeSet& worker_cores = input_tensor_a.shard_spec().value().grid;
                         TT_FATAL(
                             !program_config.hop_cores.intersects(worker_cores),
-                            "hop_cores must not overlap gather worker cores (input A shard grid). hop_cores={}, "
-                            "workers={}",
+                            "hop_cores must not overlap with input A shard grid. hop_cores={}, workers={}",
                             program_config.hop_cores,
                             worker_cores);
                     }
@@ -355,9 +347,8 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                     if (program_config.mcast_in0) {
                         TT_FATAL(
                             num_blocks_y == 1,
-                            "matmul_multicore_reuse_mcast_1d requires num_blocks_y == 1 (M <= per_core_M) for "
-                            "mcast_in0. "
-                            "Got M={}, per_core_M={}, num_blocks_y={}.",
+                            "mcast_in0 requires M ({}) to fit within a single per_core_M block ({}), got "
+                            "num_blocks_y={}",
                             Mt,
                             per_core_M,
                             num_blocks_y);
@@ -386,8 +377,7 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                 TT_FATAL(
                     num_blocks_y <= grid.y,
                     "Num output blocks along y ({}) must be smaller than or equal to the number of rows in compute "
-                    "grid "
-                    "({})!",
+                    "grid ({})!",
                     num_blocks_y,
                     grid.y);
                 check_output_shard_grid_within_extent(
