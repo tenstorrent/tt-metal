@@ -35,9 +35,12 @@ from ttnn.operations.ccl import MoEActivationFunction
 
 from ttnn.experimental.moe_compute_utils import (
     prepare_w0_w1_tensor_for_moe_compute,
+    prepare_w0_w1_tensor_with_bias,
     prepare_w2_tensor_for_moe_compute,
+    prepare_w2_tensor_with_bias,
     get_weight_core_shard_maps,
     get_weight_mem_configs,
+    auto_output_width_shard_dim,
 )
 
 # Reuse 6U test helpers verbatim. The intent is that this single-card test
@@ -75,6 +78,7 @@ def _run_moe_compute_single_card_test(
     output_width_shard_dim,
     dtype,
     activation_type,
+    has_bias=False,
 ):
     """
     Single-card MoE compute test body. cluster_axis is fixed to None
@@ -116,7 +120,6 @@ def _run_moe_compute_single_card_test(
 
     # Single device, no CCL: cluster_axis is None.
     cluster_axis = None
-    has_bias = False  # M1 only validates the no-bias path.
     num_layers = 1
     num_iterations = 1
 
@@ -248,6 +251,18 @@ def _run_moe_compute_single_card_test(
     torch_w1 = create_torch_w1(num_layers, experts_per_device, hidden_size, N)
     torch_w2 = create_torch_w2(num_layers, experts_per_device, N, hidden_size)
 
+    # Bias tensors (mirrors test_moe_compute_6U.run_moe_compute_test bias block).
+    # Use the same _bias_std and PyTorch shape conventions so the prepare-with-bias
+    # functions emit byte-identical tile padding to the 1x16 reference.
+    torch_b0 = torch_b1 = torch_b2 = None
+    if has_bias:
+        _bias_std = 0.12
+        torch_b0 = (torch.randn(num_layers, experts_per_device, N, dtype=torch.float32) * _bias_std).to(torch.bfloat16)
+        torch_b1 = (torch.randn(num_layers, experts_per_device, N, dtype=torch.float32) * _bias_std).to(torch.bfloat16)
+        torch_b2 = (torch.randn(num_layers, experts_per_device, hidden_size, dtype=torch.float32) * _bias_std).to(
+            torch.bfloat16
+        )
+
     matmul_goldens = compute_matmul_golden(
         tilize_golden_outputs,
         torch_w0,
@@ -258,9 +273,9 @@ def _run_moe_compute_single_card_test(
         num_devices,
         tokens_per_device,
         hidden_size,
-        torch_b0=None,
-        torch_b1=None,
-        torch_b2=None,
+        torch_b0=torch_b0,
+        torch_b1=torch_b1,
+        torch_b2=torch_b2,
         activation_type=activation_type,
     )
 
@@ -276,9 +291,14 @@ def _run_moe_compute_single_card_test(
         mesh_device=mesh_device,
     )
 
-    torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(
-        torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, w0_w1_shard_map
-    )
+    if has_bias:
+        torch_w0_w1_reordered = prepare_w0_w1_tensor_with_bias(
+            torch_w0, torch_w1, torch_b0, torch_b1, num_layers, experts_per_device, hidden_size, N, w0_w1_shard_map
+        )
+    else:
+        torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(
+            torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, w0_w1_shard_map
+        )
     tt_w0_w1 = ttnn.from_torch(
         torch_w0_w1_reordered,
         dtype=ttnn.bfloat4_b,
@@ -288,9 +308,14 @@ def _run_moe_compute_single_card_test(
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    torch_w2_reordered = prepare_w2_tensor_for_moe_compute(
-        torch_w2, num_layers, experts_per_device, N, hidden_size, w2_shard_map, w0_w1_shard_map
-    )
+    if has_bias:
+        torch_w2_reordered = prepare_w2_tensor_with_bias(
+            torch_w2, torch_b2, num_layers, experts_per_device, N, hidden_size, w2_shard_map, w0_w1_shard_map
+        )
+    else:
+        torch_w2_reordered = prepare_w2_tensor_for_moe_compute(
+            torch_w2, num_layers, experts_per_device, N, hidden_size, w2_shard_map, w0_w1_shard_map
+        )
     tt_w2 = ttnn.from_torch(
         torch_w2_reordered,
         dtype=ttnn.bfloat4_b,
@@ -485,6 +510,82 @@ def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape):
         output_width_shard_dim=4,  # DeepSeekRingConfig::OUTPUT_WIDTH_SHARD_DIM
         dtype=ttnn.bfloat16,
         activation_type=MoEActivationFunction.SILU,
+    )
+
+
+# DS-v3 + bias: same shape class as the baseline test above, with has_bias=True.
+# Provides a controlled bias-only delta — if this regresses while no-bias DS-v3
+# still passes, the failure is bias-specific (b0/b1 K-padding or b2 N-append),
+# not a shape/formula issue.
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "trace_region_size": 500000,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_single_card_deepseek_with_bias(mesh_device, mesh_shape):
+    """compute_only=True on a 1x1 WH mesh, DeepSeek-shaped workload, has_bias=True."""
+    _run_moe_compute_single_card_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        experts_per_device=8,
+        tokens_per_device=32,
+        selected_experts_k=8,
+        N=2048,
+        hidden_size=7168,
+        output_height_shard_dim=4,
+        output_width_shard_dim=4,
+        dtype=ttnn.bfloat16,
+        activation_type=MoEActivationFunction.SILU,
+        has_bias=True,
+    )
+
+
+# GPT-OSS canonical config from MODELS_1x16 (test_moe_compute_6U.py:121):
+#   experts_per_device=4, has_bias=True, activation=SWIGLU, output_width_shard_dim=3.
+# This single test exercises FOUR distinct BH-specific gaps the baseline DS-v3 test misses:
+#   1. The w2_shard_tiles COMPLEMENTARY branch — for Ht=Nt=90, n_big_ht + n_big_nt == n_cores
+#      when n_cores=12 (90%12 + 90%12 = 6+6 = 12). DS-v3 (balanced 64/8) never enters this branch.
+#   2. The bank-run loop on a NON-BALANCED shard map — shard_tiles(90, c, 12) is [8,7,8,7,8,...],
+#      while DS-v3 at N=8 is [8]*8 (perfectly balanced).
+#   3. The bias path on a non-DS shape (b0/b1 K-padding, b2 N-append, has_bias=True kernel
+#      branch with the cb_c2c_ones_tile + bias-row matmul).
+#   4. SWIGLU activation, which PR #43932 was the first to actually exercise (commit 3918012f6e1).
+#
+# Setting TT_MOE_BH_N=12 in the environment forces the kernel to run at N=12 to hit gap (1);
+# leaving it unset uses the default (16), which still exercises gaps (2)-(4) plus a different
+# bank-run partition than DS-v3. Both configurations should pass.
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "trace_region_size": 500000,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape):
+    """compute_only=True on a 1x1 WH mesh, GPT-OSS-shaped workload (hidden=N=2880, SWIGLU+bias)."""
+    _run_moe_compute_single_card_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        experts_per_device=4,
+        tokens_per_device=32,
+        selected_experts_k=4,
+        N=2880,
+        hidden_size=2880,
+        output_height_shard_dim=4,
+        output_width_shard_dim=auto_output_width_shard_dim(2880),  # = 3 (Ht=90; 90%3==0)
+        dtype=ttnn.bfloat16,
+        activation_type=MoEActivationFunction.SWIGLU,
+        has_bias=True,
     )
 
 
