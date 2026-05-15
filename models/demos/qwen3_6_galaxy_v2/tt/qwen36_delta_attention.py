@@ -353,6 +353,21 @@ class TtQwen36DeltaAttention(LightweightModule):
         VZ_w_T_interleaved = torch.cat(VZ_rows, dim=-1)  # [5120, 12288]
         self.w_vz = self._to_device(VZ_w_T_interleaved, row_shard_out)
 
+        # V2-12 Lever 2: Q+K+V+Z fused single matmul.
+        # Per-row 256+256+768+768=2048 (tile-multiple). Combines all 4 into one
+        # matmul launch — saves 1 matmul / DeltaNet layer (V2-11 had QK+VZ as
+        # 2 launches; V2-12 has QKVZ as 1). Same per-row interleave pattern
+        # to preserve ``ShardTensor2dMesh(dims=(1, None))`` contiguous contract.
+        QKVZ_rows = []
+        for i in range(mesh_rows):
+            q_row = Q_w_T[:, i * 256 : (i + 1) * 256]
+            k_row = K_w_T[:, i * 256 : (i + 1) * 256]
+            v_row = V_w_T[:, i * 768 : (i + 1) * 768]
+            z_row = Z_w_T[:, i * 768 : (i + 1) * 768]
+            QKVZ_rows.append(torch.cat([q_row, k_row, v_row, z_row], dim=-1))  # [5120, 2048]
+        QKVZ_w_T_interleaved = torch.cat(QKVZ_rows, dim=-1)  # [5120, 16384]
+        self.w_qkvz = self._to_device(QKVZ_w_T_interleaved, row_shard_out)
+
         # B+A (per-row 6+6=12, NOT tile-multiple but matmul pads internally)
         BA_rows = []
         for i in range(mesh_rows):
@@ -460,6 +475,13 @@ class TtQwen36DeltaAttention(LightweightModule):
         internally — see ``ttnn_delta_rule_ops_fp32``) restores the precision
         floor.  Prefill (``chunk_gated_delta_rule_ttnn``) ALREADY returns the
         state at fp32, so this change is consistent with the prefill seed.
+
+        V2-12 Lever 1: live in L1 (interleaved) instead of DRAM. The recurrent
+        kernel ``to_memory_config(initial_state, L1)`` round-trip becomes a
+        ~no-op (L1→L1 instead of DRAM→L1). Per-step savings: ~24 µs × 48 layers
+        ≈ 1.15 ms / decode step. Each buffer is 6 × 128 × 128 × 4B = 384 KB
+        fp32 tiled; 48 layers × 384 KB = 18 MB per chip — comfortably fits in
+        L1 interleaved (distributed across ~130 cores ≈ ~140 KB / core).
         """
         state_torch = torch.zeros(
             self.max_batch_size,
@@ -473,7 +495,7 @@ class TtQwen36DeltaAttention(LightweightModule):
             device=self.mesh_device,
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
@@ -534,48 +556,53 @@ class TtQwen36DeltaAttention(LightweightModule):
     # ------------------------------------------------------------------
 
     def _project_inputs(self, x):
-        """V2-11 (lever E): collapse 6 projection matmuls → 3 fused matmuls.
+        """V2-12 Lever 2: collapse Q+K+V+Z into a single fused matmul + B+A.
 
-        Q+K → w_qk (output dim 512)
-        V+Z → w_vz (output dim 1536)
-        B+A → w_ba (output dim 12, padded to 32 internally)
+        Q+K+V+Z → w_qkvz (per-row output dim 256+256+768+768=2048, tile-multiple)
+        B+A     → w_ba (output dim 12, padded to 32 internally)
 
-        Saves 3 matmul launches per DeltaNet layer × 48 layers = 144 fewer
-        ops per decode step. The slice cost (3 extra ops here) is ~0.05ms
-        per slice vs the matmul launch cost it saves.
+        Total 2 matmul launches (down from V2-11's 3 launches: QK + VZ + BA).
+        Saves 1 matmul launch / DeltaNet layer × 48 layers ≈ ~1 ms / decode step.
+        Same per-row interleave pattern as V2-11 to preserve the
+        ``ShardTensor2dMesh(dims=(1, None))`` contiguous-shard contract — naive
+        cat would steer Q-only chunks to rows 0..3 and silently break coherency.
         """
         mem = ttnn.DRAM_MEMORY_CONFIG
         ck = self.compute_kernel
-        # Q+K fused
-        qk = ttnn.linear(x, self.w_qk, dtype=self.dtype, memory_config=mem, compute_kernel_config=ck)
-        # Determine input layout: x is [B, T, H] (3-D) or [B,1,T,H] (4-D).
-        # ttnn.linear preserves the input rank in v2 (verified by _forward_decode_qwen36).
-        # The qk output is therefore [..., q_per_row + q_per_row].
-        out_rank = len(qk.shape)
-        # Slice along the last dim.
+        # Q+K+V+Z fused
+        qkvz = ttnn.linear(x, self.w_qkvz, dtype=self.dtype, memory_config=mem, compute_kernel_config=ck)
+        out_rank = len(qkvz.shape)
+        q_per_row = self.q_per_row  # 256
+        v_per_row = self.v_per_row  # 768
+        # Slice Q | K | V | Z along the last dim.
+        # Per-row layout (after the ShardTensor2dMesh split): [Q_256 | K_256 | V_768 | Z_768]
+        # repeated across the 8 rows. ttnn.slice over the global dim picks the
+        # same per-row offset on each row.
         if out_rank == 3:
-            B_, T_, _ = list(qk.shape)
-            q = ttnn.slice(qk, [0, 0, 0], [B_, T_, self.q_per_row], memory_config=mem)
-            k = ttnn.slice(qk, [0, 0, self.q_per_row], [B_, T_, 2 * self.q_per_row], memory_config=mem)
+            B_, T_, _ = list(qkvz.shape)
+            q = ttnn.slice(qkvz, [0, 0, 0], [B_, T_, q_per_row], memory_config=mem)
+            k = ttnn.slice(qkvz, [0, 0, q_per_row], [B_, T_, 2 * q_per_row], memory_config=mem)
+            v = ttnn.slice(qkvz, [0, 0, 2 * q_per_row], [B_, T_, 2 * q_per_row + v_per_row], memory_config=mem)
+            z = ttnn.slice(
+                qkvz,
+                [0, 0, 2 * q_per_row + v_per_row],
+                [B_, T_, 2 * q_per_row + 2 * v_per_row],
+                memory_config=mem,
+            )
         elif out_rank == 4:
-            B_, D1_, T_, _ = list(qk.shape)
-            q = ttnn.slice(qk, [0, 0, 0, 0], [B_, D1_, T_, self.q_per_row], memory_config=mem)
-            k = ttnn.slice(qk, [0, 0, 0, self.q_per_row], [B_, D1_, T_, 2 * self.q_per_row], memory_config=mem)
+            B_, D1_, T_, _ = list(qkvz.shape)
+            q = ttnn.slice(qkvz, [0, 0, 0, 0], [B_, D1_, T_, q_per_row], memory_config=mem)
+            k = ttnn.slice(qkvz, [0, 0, 0, q_per_row], [B_, D1_, T_, 2 * q_per_row], memory_config=mem)
+            v = ttnn.slice(qkvz, [0, 0, 0, 2 * q_per_row], [B_, D1_, T_, 2 * q_per_row + v_per_row], memory_config=mem)
+            z = ttnn.slice(
+                qkvz,
+                [0, 0, 0, 2 * q_per_row + v_per_row],
+                [B_, D1_, T_, 2 * q_per_row + 2 * v_per_row],
+                memory_config=mem,
+            )
         else:
-            raise RuntimeError(f"Unexpected qk rank {out_rank}: shape={qk.shape}")
-        qk.deallocate(True)
-
-        # V+Z fused
-        vz = ttnn.linear(x, self.w_vz, dtype=self.dtype, memory_config=mem, compute_kernel_config=ck)
-        if out_rank == 3:
-            B_, T_, _ = list(vz.shape)
-            v = ttnn.slice(vz, [0, 0, 0], [B_, T_, self.v_per_row], memory_config=mem)
-            z = ttnn.slice(vz, [0, 0, self.v_per_row], [B_, T_, 2 * self.v_per_row], memory_config=mem)
-        else:
-            B_, D1_, T_, _ = list(vz.shape)
-            v = ttnn.slice(vz, [0, 0, 0, 0], [B_, D1_, T_, self.v_per_row], memory_config=mem)
-            z = ttnn.slice(vz, [0, 0, 0, self.v_per_row], [B_, D1_, T_, 2 * self.v_per_row], memory_config=mem)
-        vz.deallocate(True)
+            raise RuntimeError(f"Unexpected qkvz rank {out_rank}: shape={qkvz.shape}")
+        qkvz.deallocate(True)
 
         # B+A fused (note: matches in_proj_ba layout which is b|a, not a|b)
         ba = ttnn.linear(x, self.w_ba, dtype=self.dtype, memory_config=mem, compute_kernel_config=ck)

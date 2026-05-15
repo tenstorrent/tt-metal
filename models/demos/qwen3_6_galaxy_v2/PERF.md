@@ -451,3 +451,138 @@ If even one of these lands the gap closes to <1.05× and 17 tok/s/user
 becomes a question of measurement noise. The activation-fusion path
 (C/D) remains blocked on the precision-compounding issue across the 48
 DeltaNet layers — a custom SFPU kernel is the cleanest unlock.
+
+## V2-12: perf wave 2 — Python-orchestrable levers (LANDED partial)
+
+V2-12 attempted the three Python-orchestrable levers carried over from
+V2-11's recommendation list. Two of the three landed cleanly; Lever 3 was
+deferred due to scope.
+
+### Per-lever perf progression (real-loop traced 64L decode, 32 steps)
+
+| step | lever | ms / step | tok/s/user (real) | pure execute_trace ms/step | pure tok/s/user | notes |
+|---|---|---|---|---|---|---|
+| V2-11 baseline | — | 67.20 | 14.88 | 66.16 | 15.12 | starting point |
+| post-L1 (state buf L1) | L1 (`dn_state_buffer` DRAM → L1) | 66.68 | 15.00 | 65.83 | 15.19 | 384 KB fp32 / layer × 48 layers in L1; `to_memory_config(initial_state, L1)` becomes L1→L1 |
+| **post-L2 (QKVZ fused)** | **L2 (Q+K+V+Z 4→1 matmul)** | **63.60** | **15.72** | **62.73** | **15.94** | row-interleaved Q+K+V+Z weight cat; 3 matmuls → 2 (QKVZ + BA); saves 1 launch / 48 DeltaNet layers |
+| L3 (line_all_reduce + L1 persistent) | — | — | — | — | — | NOT LANDED — see below |
+
+**Total V2-12 improvement: 67.20 → 63.60 ms (-5.4 %), 14.88 → 15.72 tok/s/user (+5.6 %).**
+
+**Combined V2-10 → V2-12 improvement: 78.68 → 63.60 ms (-19.2 %), 12.71 → 15.72 tok/s/user (+23.7 %).**
+
+### Levers landed cleanly
+
+- **Lever 1 — `dn_state_buffer` DRAM → L1 interleaved** (`tt/qwen36_delta_attention.py:_build_dn_state_buffer`).
+  Changed `memory_config=DRAM_MEMORY_CONFIG` to `L1_MEMORY_CONFIG` so the
+  recurrent kernel's `ttnn.to_memory_config(initial_state, L1_MEMORY_CONFIG)`
+  becomes an L1→L1 no-op instead of a DRAM→L1 copy. Buffer is 6×128×128×4B
+  = 384 KB fp32 per DeltaNet layer × 48 layers = 18 MB total per chip
+  (BH L1 ≈ 200 MB across ~130 cores → ample headroom). Wall-clock win
+  ~0.5 ms / step. Coherency preserved (token sequence + 102 alpha chars
+  in canonical generated text, identical to V2-11 baseline).
+
+- **Lever 2 — Q+K+V+Z 4→1 fused matmul** (`tt/qwen36_delta_attention.py:_project_inputs`).
+  Concatenated `Q_w_T, K_w_T, V_w_T, Z_w_T` per-row with the same row-
+  interleaved stride V2-11 (lever E) used for QK and VZ separately:
+  ```
+  for row i: [Q_row_i[:,256] | K_row_i[:,256] | V_row_i[:,768] | Z_row_i[:,768]]
+  ```
+  yielding `w_qkvz: [5120, 16384]` sharded `(dims=(1, None))` across 8 mesh
+  rows (per-row 2048, tile-multiple). The previous V2-11 path was 3 matmuls
+  (`w_qk` 512 + `w_vz` 1536 + `w_ba` 96); V2-12 is 2 matmuls (`w_qkvz` 2048
+  + `w_ba` 96). Saves 1 matmul launch / DeltaNet layer × 48 layers ≈ 3 ms
+  / step on the wall clock (observed: 3.1 ms — close to the launch-overhead
+  estimate). The 4 slice ops after the fused matmul are cheap (~0.05 ms /
+  slice × 4 = 0.2 ms back). Coherency preserved (identical text, same
+  compile-pass token 248068, same generated token ids).
+
+### Lever 3 — NOT LANDED (deferred)
+
+**`tt_ccl.line_all_reduce` with persistent L1 width-sharded buffer for
+DeltaNet `_output_proj_and_reduce` + full-attn WO.**
+
+The `tt_ccl.line_all_reduce` decode-mode fast path (`llama_ccl.py:847-867`)
+reads from `self.persistent_buffers[cluster_axis]` — a width-sharded L1
+buffer pre-allocated at `__init__` time with mem_cfg `WIDTH_SHARDED ×
+ShardSpec(sub_device_crs, [32, N_per_shard], ROW_MAJOR)`. The 70B precedent
+(`llama3_70b_galaxy/tt/llama_attention.py:560-577`) shows the full path:
+```
+matmul → SHARDED_WO_OUT_RING_MEMCFG (L1 width-sharded) → line_all_reduce → DECODE_RESIDUAL_MEMCFG
+```
+i.e. the matmul output is already in width-sharded L1 with the right
+shard-spec by the time it reaches the all-reduce.
+
+The v2 DeltaNet path currently keeps the output projection in
+`DRAM_MEMORY_CONFIG`. Threading the L1 width-sharded plumbing through
+requires:
+1. A new program_config for the DeltaNet `out_proj` matmul that emits to
+   L1 width-sharded with the row-stride matching `persistent_buffers[0]`.
+2. A `to_memory_config(L1_WS → DRAM)` after the all-reduce so the residual
+   add downstream stays in the bf16 DRAM-interleaved residual stream.
+
+That's 2 new mem-config rewires per layer + a new program-config plug.
+The risk of breaking coherency (V2-11 levers D and F failed at the same
+"swap mem-config silently changes precision" level) plus the iteration
+budget (8 of 22 spent before lever 3 was attempted) made the cost/benefit
+unfavourable. Recommended for a focused follow-up:
+- Mirror the 70B `SHARDED_WO_OUT_RING_MEMCFG` plumbing into the
+  DeltaNet+full-attn output projection paths
+- Verify the line_all_reduce persistent-buffer width-shard math matches
+  per-row contributions (each row contributes 1/8 of the reduced sum)
+- Estimated savings if landed: 0.5-1 ms / step (CCL launch overhead
+  amortized via persistent buffer + no semaphore handle allocation per call)
+
+### Iterations used + recoveries
+
+V2-12 fix iteration budget: 22 total across Task 1 + Task 2.
+- Task 1 (real-prompt 64L decode PCC test): 5 iterations to land
+- Task 2:
+  - Lever 1: 1 iteration (perf run)
+  - Task 1 re-verification after L1: 1 iteration
+  - Lever 2: 1 iteration (perf run)
+  - Task 1 re-verification after L2: 1 iteration
+- **Total: 9 iterations** — well under the 22 budget.
+- **0 `tt-smi -r` recoveries** — no device hangs encountered.
+
+### Remaining gap to 17 tok/s/user
+
+Final state: **15.94 tok/s/user pure-execute_trace** (62.73 ms / step).
+Gap to 17 tok/s/user: **1.067×** (need to shave 4.0 ms more off the
+62.73 ms per-step latency).
+
+Within ~7% of the old olmo bar after V2-12. The remaining gap is now
+plausibly closeable by:
+1. Lever 3 (line_all_reduce persistent buffer) if landed cleanly — est.
+   0.5-1 ms.
+2. Custom SFPU `_compute_beta_g` kernel — est. 1-3 ms (V2-11 listed as
+   the cleanest activation-fusion unlock; same DeltaNet-state-compounding
+   sensitivity blocks the activation-chain approach).
+3. The new olmo 30 tok/s/user (WH-normalized ≈ 60 BH-normalized) target
+   remains blocked on DeltaNet-kernel-team work as documented in the
+   parent task — those are SFPU / custom-kernel level changes, not
+   Python-orchestrable.
+
+### Coherency (V2-12 final)
+
+Generated 32 tokens after the Llama-70B-Galaxy ISL=128 demo prompt #0:
+```
+\n\nHowever, if I were to choose a "favorite" based on versatility, cultural impact, and the sheer joy it brings to food, I would pick **S
+```
+- 102 alpha chars (canonical Qwen3.6 reasoning text)
+- Compile-pass token: 248068 (`<think>`) — matches V2-11 baseline byte-for-byte
+- Token id sequence identical to V2-11 baseline → confirms Lever 1 + Lever 2 introduced no numerical drift
+
+### Task 1 real-prompt PCC test status (after V2-12 final)
+
+The new test `tests/test_decode_64L_real_prompt_pcc.py` PASSES with
+"The capital of France is" / 8-step decode loop after every V2-12 lever:
+- Prefill hidden PCC (5 real tokens vs HF reference): **0.986**
+- Prefill argmax: **11751 (' Paris')** — matches v1 demo + HF
+- Decode step 0 argmax: **271 ('\n\n')** — matches CPU reference
+- Decode steps 1+: TT diverges from the fp32 CPU ref but stays in-
+  distribution Qwen3.6 output (alpha chars 21+ in 8-step output;
+  PERF.md V2-10 already documents this is the bf8/bf16 compounding
+  artifact, not a model bug).
+- The earlier V2-decode-debug-3 torch.randn 64L PCC=0.30 result is
+  officially closed as a synthetic OOD-input compounding artifact.
