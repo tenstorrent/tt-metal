@@ -387,86 +387,6 @@ class MoeRoutedExpertOp:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def setup_dram_matmul(
-        device,
-        weights_tensor,
-        output_tensor=None,
-        working_buf_tensor=None,
-        core_ranges=None,
-        cb_in1_index=None,
-        cb_out_index=None,
-        fp32_dest_acc_en=False,
-        num_subblocks_k=4,
-    ):
-        """
-        Set up parameters and CB descriptors for a DRAM streaming matmul operation.
-        When working_buf_tensor is None, CB in1 descriptor and buf_addr are deferred
-        to the overlap function (backed by SDPA buffer instead).
-        When output_tensor is None, CB out descriptor is deferred to overlap function.
-        """
-        weights_tile = weights_tensor.get_tile()
-        weights_shard_shape = weights_tensor.memory_config().shard_spec.shape
-        K = weights_shard_shape[0]
-        per_core_n = weights_shard_shape[1] // weights_tile.tile_shape[1]
-        Kt = K // weights_tile.tile_shape[0]
-
-        subblock_k = Kt // num_subblocks_k
-        assert Kt % num_subblocks_k == 0, f"Kt ({Kt}) must be divisible by num_subblocks ({num_subblocks_k})"
-
-        weights_tile_size = weights_tile.get_tile_size(weights_tensor.dtype)
-        in1_page_size, in1_num_pages = MoeOp.get_max_page_size_and_num_pages(device, subblock_k, weights_tile_size)
-        in1_block_size_bytes = subblock_k * weights_tile_size
-
-        num_buffers = 3
-        in1_total_size = num_buffers * in1_block_size_bytes
-
-        cb_in1_descriptor = None
-        in1_buf_addr = 0
-        if working_buf_tensor is not None:
-            cb_in1_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in1_index, working_buf_tensor)
-            in1_buf_addr = _fused_base_addr(working_buf_tensor)
-
-        cb_out_descriptor = None
-        if output_tensor is not None:
-            cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_index, output_tensor)
-
-        # subblock_w
-        if fp32_dest_acc_en:
-            max_subblock_w = 8 if per_core_n <= 8 else 4
-        else:
-            max_subblock_w = 16 if per_core_n <= 16 else 8
-        subblock_w = max_subblock_w
-        while subblock_w > 1 and per_core_n % subblock_w != 0:
-            subblock_w -= 1
-
-        tile_r_dim = weights_tile.tile_shape[0]
-
-        return {
-            "per_core_n": per_core_n,
-            "Kt": Kt,
-            "tile_r_dim": tile_r_dim,
-            "num_subblocks_k": num_subblocks_k,
-            "subblock_k": subblock_k,
-            "subblock_w": subblock_w,
-            "in1_page_size": in1_page_size,
-            "in1_num_pages": in1_num_pages,
-            "in1_block_size_bytes": in1_block_size_bytes,
-            "in1_total_size": in1_total_size,
-            "out_num_tiles": per_core_n,
-            "in1_tensor_addr": _fused_base_addr(weights_tensor),
-            "in1_buf_addr": in1_buf_addr,
-            "cb_in1_descriptor": cb_in1_descriptor,
-            "cb_out_descriptor": cb_out_descriptor,
-            "weights_dtype": weights_tensor.dtype,
-            "weights_tile": weights_tile,
-            # Single-tensor (dense / non-routed) path runs exactly one "expert".
-            # _setup_dimensions reads gate_proj_params["num_active_experts"] unconditionally
-            # (e.g. for down_proj gather/mcast sizing) — provide 1 so the dense path matches
-            # the MoE setup_matmul_expert_dram contract.
-            "num_active_experts": 1,
-        }
-
-    @staticmethod
     def setup_matmul_expert_dram(
         mesh_device,
         cts_list,
@@ -482,9 +402,9 @@ class MoeRoutedExpertOp:
     ):
         """Set up MatmulExpertCompressedDRAM infrastructure for one projection (Phase 1B).
 
-        Mirrors :meth:`setup_dram_matmul` but operates on a list of 256 uniform-bfp4_b
-        ``CompressedTensor`` objects (one per expert, TP8-sharded) and produces the
-        per-device meta + fmt tables required by ``MatmulExpertCompressedDRAM``.
+        Operates on a list of 256 uniform-bfp4_b ``CompressedTensor`` objects (one per
+        expert, TP8-sharded) and produces the per-device meta + fmt tables required
+        by ``MatmulExpertCompressedDRAM``.
 
         Args:
             mesh_device: TP8 mesh device.
@@ -506,8 +426,6 @@ class MoeRoutedExpertOp:
               - ``block_sizes_l1_addr_per_device`` (dict[MeshCoordinate -> list[(core, addr)]])
               - ``per_core_values_per_device`` (dict[MeshCoordinate -> {bank_id, vc, ...}])
               - ``num_active_experts``, ``num_total_experts``, ``cores_per_dram_bank``
-              - ``num_in1_buffers`` (triple-buffered = 3)
-              - ``is_dram_flags`` (list of 1s for Phase 1B — all experts are DRAM)
 
         Note: does NOT allocate per-core index / table_idx / cb_fmt / pipeline_sem —
         those live at the MoE-kernel scope (shared across gate/up/down) and are owned
@@ -657,22 +575,12 @@ class MoeRoutedExpertOp:
             f"({cb_in1_dram_total_bytes}); both must size the same CB."
         )
 
-        # Subblock width for compute kernel — mirrors setup_dram_matmul (fp32_dest_acc_en=False for MoE).
-        max_subblock_w = 16 if per_core_n <= 16 else 8
-        subblock_w = max_subblock_w
-        while subblock_w > 1 and per_core_n % subblock_w != 0:
-            subblock_w -= 1
-        tile_r_dim = data0_tile.tile_shape[0]
-
         return {
             "per_core_n": per_core_n,
             "Kt": Kt,
             "num_tiles_k": Kt,
             "subblock_k": subblock_k,
             "subblock_n": subblock_n,
-            "subblock_w": subblock_w,
-            "tile_r_dim": tile_r_dim,
-            "fp32_dest_acc_en": 0,
             "num_subblocks_k": num_subblocks_k,
             "k_parallel_per_bank": k_parallel_per_bank,
             "num_subblocks_k_local": num_subblocks_k_local,
@@ -709,8 +617,6 @@ class MoeRoutedExpertOp:
             "num_total_experts": num_total_experts,
             "cores_per_dram_bank": cores_per_dram_bank,
             "cores_per_bank": cores_per_dram_bank,
-            "num_in1_buffers": num_in1_buffers,
-            "is_dram_flags": is_dram_flags,
             "cb_in1_size_bytes": cb_in1_dram_total_bytes,
             "noc_max_page_size": noc_max_page_size,
             "accum_experts": accum_experts,
@@ -718,7 +624,6 @@ class MoeRoutedExpertOp:
             "index_l1_addr": 0,
             # Legacy compatibility for _overlap_cbs_with_sdpa_buffer.
             "in1_total_size": in1_total_size,
-            "in1_block_size_bytes": in1_block_size_bytes,
             "weights_tile": data0_tile,
             "weights_dtype": data0.dtype,
             # Compressed storage is bfp4_b (576 B / 32x32 tile). cb_in1 must match
@@ -727,7 +632,7 @@ class MoeRoutedExpertOp:
             "cb_page_size": max_tile_size,
             "cb_data_format": ttnn.bfloat4_b,
             "in1_buf_addr": 0,
-            # Legacy aliases used elsewhere in build() (setup_dram_matmul shape)
+            # Placeholder descriptors — populated by _overlap_cbs_with_sdpa_buffer.
             "cb_in1_descriptor": None,
             "cb_out_descriptor": None,
         }
@@ -740,62 +645,24 @@ class MoeRoutedExpertOp:
         per_core_n,
         cb_scalar_index,
         cb_scalar_src_index,
-        scalar_src_tensor=None,
-        in0_tensor=None,
-        in1_tensor=None,
-        out_tensor=None,
-        scalar_buf_tensor=None,
     ):
         """
-        Set up parameters and CB descriptors for element-wise multiply with CB aliasing and scalar multiply.
-        When tensors are None, their CB descriptors are deferred to the overlap function.
+        Set up parameters for element-wise multiply with CB aliasing and scalar multiply.
+        CB descriptors for in0/in1/out/scalar are wired by the SDPA overlap function.
         """
         # Inputs (matmul outputs) are 1x32 tiles; scalar broadcast requires 1x32,
         # so the mul runs as per_core_n × 1x32 mul_tiles per expert.
         mul_num_tiles = per_core_n
 
-        TILE_1x32 = ttnn.Tile((1, 32))
-        tile_1x32_size = TILE_1x32.get_tile_size(ttnn.bfloat16)
-        tile_1x32_desc = ttnn.TileDescriptor(TILE_1x32)
-
-        cb_in0_descriptor = None
-        if in0_tensor is not None:
-            cb_in0_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in0_index, in0_tensor)
-            cb_in0_descriptor.total_size = mul_num_tiles * tile_1x32_size
-            cb_in0_descriptor.format_descriptors[0].tile = tile_1x32_desc
-            cb_in0_descriptor.format_descriptors[0].page_size = tile_1x32_size
-
-        cb_in1_descriptor = None
-        if in1_tensor is not None:
-            cb_in1_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in1_index, in1_tensor)
-            cb_in1_descriptor.total_size = mul_num_tiles * tile_1x32_size
-            cb_in1_descriptor.format_descriptors[0].tile = tile_1x32_desc
-            cb_in1_descriptor.format_descriptors[0].page_size = tile_1x32_size
-
-        cb_out_descriptor = None
-        if out_tensor is not None:
-            cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_index, out_tensor)
-            cb_out_descriptor.total_size = mul_num_tiles * tile_1x32_size
-            cb_out_descriptor.format_descriptors[0].tile = tile_1x32_desc
-            cb_out_descriptor.format_descriptors[0].page_size = tile_1x32_size
-
-        cb_scalar_src_descriptor = None
-        if scalar_src_tensor is not None:
-            cb_scalar_src_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_scalar_src_index, scalar_src_tensor)
-
-        cb_scalar_descriptor = None
-        if scalar_buf_tensor is not None:
-            cb_scalar_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_scalar_index, scalar_buf_tensor)
-
         return {
             "mul_num_tiles": mul_num_tiles,
-            "cb_in0_descriptor": cb_in0_descriptor,
-            "cb_in1_descriptor": cb_in1_descriptor,
-            "cb_out_descriptor": cb_out_descriptor,
+            "cb_in0_descriptor": None,
+            "cb_in1_descriptor": None,
+            "cb_out_descriptor": None,
             "cb_scalar_index": cb_scalar_index,
             "cb_scalar_src_index": cb_scalar_src_index,
-            "cb_scalar_descriptor": cb_scalar_descriptor,
-            "cb_scalar_src_descriptor": cb_scalar_src_descriptor,
+            "cb_scalar_descriptor": None,
+            "cb_scalar_src_descriptor": None,
         }
 
     @staticmethod
@@ -806,29 +673,15 @@ class MoeRoutedExpertOp:
         width_per_core,
         total_width,
         core_ranges,
-        in0_tensor=None,
-        in1_tensor=None,
         out_tensor=None,
     ):
         """
         Set up parameters and CB descriptors for element-wise add with per-core indexing.
 
         Used after down_proj to add fused_add tensor. Each core uses sender_index to
-        offset into the replicated in1 tensor.
-
-        Args:
-            cb_in0_index: CB index for first input
-            cb_in1_index: CB index for second input
-            cb_out_index: CB index for output
-            width_per_core: Per-core width in elements (e.g., 896)
-            total_width: Total replicated width in elements (e.g., 7168)
-            core_ranges: CoreRangeSet of compute cores
-            in0_tensor: Optional first input tensor (CB descriptor overridden by SDPA overlap)
-            in1_tensor: Optional second input tensor (CB descriptor overridden by SDPA overlap)
-            out_tensor: Optional output tensor (CB descriptor overridden by SDPA overlap)
-
-        Returns:
-            Dictionary with eltwise_add parameters and CB descriptors
+        offset into the replicated in1 tensor. cb_in0/cb_in1 descriptors are wired
+        by the SDPA overlap function. ``out_tensor`` is provided when the add output
+        is the final (non-reduce) tensor; otherwise CB out is also wired by overlap.
         """
         compute_cores_list = ttnn.corerange_to_cores(core_ranges, row_wise=True)
 
@@ -849,20 +702,6 @@ class MoeRoutedExpertOp:
 
         num_tiles = 1  # Single 32x32 CB view tile
 
-        cb_in0_descriptor = None
-        if in0_tensor is not None:
-            cb_in0_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in0_index, in0_tensor)
-            cb_in0_descriptor.total_size = in0_size_bytes
-            cb_in0_descriptor.format_descriptors[0].tile = cb_tile_desc
-            cb_in0_descriptor.format_descriptors[0].page_size = in0_size_bytes
-
-        cb_in1_descriptor = None
-        if in1_tensor is not None:
-            cb_in1_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in1_index, in1_tensor)
-            cb_in1_descriptor.total_size = in1_size_bytes
-            cb_in1_descriptor.format_descriptors[0].tile = cb_tile_desc
-            cb_in1_descriptor.format_descriptors[0].page_size = in0_size_bytes
-
         cb_out_descriptor = None
         if out_tensor is not None:
             cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_index, out_tensor)
@@ -880,8 +719,8 @@ class MoeRoutedExpertOp:
             "slice_size_bytes": slice_size_bytes,
             "cb_in0_wait_tiles": in0_wait_tiles,
             "cb_in1_wait_tiles": in1_wait_tiles,
-            "cb_in0_descriptor": cb_in0_descriptor,
-            "cb_in1_descriptor": cb_in1_descriptor,
+            "cb_in0_descriptor": None,
+            "cb_in1_descriptor": None,
             "cb_out_descriptor": cb_out_descriptor,
             "sender_index_core_values": sender_index_core_values,
         }
@@ -1437,14 +1276,13 @@ class MoeRoutedExpertOp:
 
         # ==================================================================
         # MatmulExpertCompressedDRAM: gate_proj (Phase 1B)
-        # Falls back to legacy setup_dram_matmul when ttnn.Tensor is passed
-        # instead of a CompressedTensor list.
         # ==================================================================
-        mesh_device_for_matmul_expert = (
-            gate_proj_weights_tensor[0].get_data_tensors()[0].device()
-            if isinstance(gate_proj_weights_tensor, list)
-            else device
+        assert isinstance(gate_proj_weights_tensor, list), (
+            "gate_proj_weights_tensor must be a list[CompressedTensor] (TP8). Dense MLPs use "
+            "prepare_dense_routed_experts_compressed_tp8; MoE layers use compressed_tp8=True."
         )
+        assert isinstance(up_proj_weights_tensor, list), "up_proj_weights_tensor must be a list[CompressedTensor]"
+        mesh_device_for_matmul_expert = gate_proj_weights_tensor[0].get_data_tensors()[0].device()
         # MoE routes top-8 of N_total experts → num_active_experts=8. Dense MLP has no
         # routing; cts_list contains exactly the experts to run (one CompressedTensor
         # per chunk from prepare_dense_routed_experts_compressed_tp8), so
@@ -1454,53 +1292,37 @@ class MoeRoutedExpertOp:
         # cb_index or index_l1_addr — every device runs the same [0..N-1] sequence
         # against its own TP-sliced weights.
         gate_up_num_active_experts = 8 if enable_routing else len(gate_proj_weights_tensor)
-        if isinstance(gate_proj_weights_tensor, list):
-            # K-split: 2 cores per bank split K; primary (= K-reducer at k_slice_idx=1)
-            # holds the full K matmul output; sender (= k_slice_idx=0) NOC-writes its
-            # partial to primary's cb_out and primary PACKs with l1_acc to sum. Shares
-            # cb_in1 with up_proj — both must use the same cores_per_bank/subblock_k.
-            gate_proj_params = MoeRoutedExpertOp.setup_matmul_expert_dram(
-                mesh_device=mesh_device_for_matmul_expert,
-                cts_list=gate_proj_weights_tensor,
-                num_subblocks_k=4,
-                subblock_n=1,
-                cores_per_dram_bank=2,
-                k_parallel_per_bank=2,
-                primary_at_last_offset=True,
-                num_active_experts=gate_up_num_active_experts,
-                primary_worker_cores=gate_proj_worker_cores,
-            )
-        else:
-            raise AssertionError(
-                "gate_proj: setup_dram_matmul (single ttnn.Tensor) path is no longer supported "
-                "after the TP8 changes. Pass weights as a list[CompressedTensor] (TP8) so "
-                "MoeRoutedExpertOp dispatches to setup_matmul_expert_dram. Dense MLPs use "
-                "prepare_dense_routed_experts_compressed_tp8; MoE layers use compressed_tp8=True."
-            )
+        # K-split: 2 cores per bank split K; primary (= K-reducer at k_slice_idx=1)
+        # holds the full K matmul output; sender (= k_slice_idx=0) NOC-writes its
+        # partial to primary's cb_out and primary PACKs with l1_acc to sum. Shares
+        # cb_in1 with up_proj — both must use the same cores_per_bank/subblock_k.
+        gate_proj_params = MoeRoutedExpertOp.setup_matmul_expert_dram(
+            mesh_device=mesh_device_for_matmul_expert,
+            cts_list=gate_proj_weights_tensor,
+            num_subblocks_k=4,
+            subblock_n=1,
+            cores_per_dram_bank=2,
+            k_parallel_per_bank=2,
+            primary_at_last_offset=True,
+            num_active_experts=gate_up_num_active_experts,
+            primary_worker_cores=gate_proj_worker_cores,
+        )
 
         # ==================================================================
         # MatmulExpertCompressedDRAM: up_proj (Phase 1B)
         # ==================================================================
-        if isinstance(up_proj_weights_tensor, list):
-            # K-split: matches gate_proj's config exactly (shared cb_in1 + same 16-core grid).
-            up_proj_params = MoeRoutedExpertOp.setup_matmul_expert_dram(
-                mesh_device=mesh_device_for_matmul_expert,
-                cts_list=up_proj_weights_tensor,
-                num_subblocks_k=4,
-                subblock_n=1,
-                cores_per_dram_bank=2,
-                k_parallel_per_bank=2,
-                primary_at_last_offset=True,
-                num_active_experts=gate_up_num_active_experts,
-                primary_worker_cores=gate_proj_worker_cores,
-            )
-        else:
-            raise AssertionError(
-                "up_proj: setup_dram_matmul (single ttnn.Tensor) path is no longer supported "
-                "after the TP8 changes. Pass weights as a list[CompressedTensor] (TP8) so "
-                "MoeRoutedExpertOp dispatches to setup_matmul_expert_dram. Dense MLPs use "
-                "prepare_dense_routed_experts_compressed_tp8; MoE layers use compressed_tp8=True."
-            )
+        # K-split: matches gate_proj's config exactly (shared cb_in1 + same 16-core grid).
+        up_proj_params = MoeRoutedExpertOp.setup_matmul_expert_dram(
+            mesh_device=mesh_device_for_matmul_expert,
+            cts_list=up_proj_weights_tensor,
+            num_subblocks_k=4,
+            subblock_n=1,
+            cores_per_dram_bank=2,
+            k_parallel_per_bank=2,
+            primary_at_last_offset=True,
+            num_active_experts=gate_up_num_active_experts,
+            primary_worker_cores=gate_proj_worker_cores,
+        )
 
         # ==================================================================
         # Eltwise Mul: silu(gate_proj) * up_proj [* expert_scale if routing]
@@ -1571,30 +1393,23 @@ class MoeRoutedExpertOp:
         # ==================================================================
         # See gate/up note above: derive num_active_experts so dense MLP (one CT,
         # enable_routing=False) runs exactly one expert iteration per device.
+        assert isinstance(down_proj_weights_tensor, list), "down_proj_weights_tensor must be a list[CompressedTensor]"
         down_num_active_experts = 8 if enable_routing else len(down_proj_weights_tensor)
-        if isinstance(down_proj_weights_tensor, list):
-            down_proj_params = MoeRoutedExpertOp.setup_matmul_expert_dram(
-                mesh_device=mesh_device_for_matmul_expert,
-                cts_list=down_proj_weights_tensor,
-                # 16 streamer cores (2 per bank): each bank's two cores split N
-                # (per_core_n=14 halves to 7 per core), then sender NOC-writes
-                # its accum onto the primary so downstream sees the same per-bank
-                # N output as the 1-core layout — invisible to gate/up.
-                num_subblocks_k=1,
-                subblock_n=7,
-                cores_per_dram_bank=2,
-                primary_at_last_offset=True,
-                num_active_experts=down_num_active_experts,
-                accum_experts=1,
-                primary_worker_cores=gate_proj_worker_cores,
-            )
-        else:
-            raise AssertionError(
-                "down_proj: setup_dram_matmul (single ttnn.Tensor) path is no longer supported "
-                "after the TP8 changes. Pass weights as a list[CompressedTensor] (TP8) so "
-                "MoeRoutedExpertOp dispatches to setup_matmul_expert_dram. Dense MLPs use "
-                "prepare_dense_routed_experts_compressed_tp8; MoE layers use compressed_tp8=True."
-            )
+        down_proj_params = MoeRoutedExpertOp.setup_matmul_expert_dram(
+            mesh_device=mesh_device_for_matmul_expert,
+            cts_list=down_proj_weights_tensor,
+            # 16 streamer cores (2 per bank): each bank's two cores split N
+            # (per_core_n=14 halves to 7 per core), then sender NOC-writes
+            # its accum onto the primary so downstream sees the same per-bank
+            # N output as the 1-core layout — invisible to gate/up.
+            num_subblocks_k=1,
+            subblock_n=7,
+            cores_per_dram_bank=2,
+            primary_at_last_offset=True,
+            num_active_experts=down_num_active_experts,
+            accum_experts=1,
+            primary_worker_cores=gate_proj_worker_cores,
+        )
 
         # Wire index_l1_addr for MatmulExpertCompressedDRAM. The routing output
         # indices L1 buffer address is the same across mesh devices when allocations
@@ -2131,8 +1946,6 @@ class MoeRoutedExpertOp:
             ("down_proj_primary_at_last_offset", ctx.down_proj_params["primary_at_last_offset"]),
             ("down_proj_gather_sync_sem_addr", ctx.down_proj_params["gather_sync_sem_addr"]),
             ("down_proj_cb_internal_acc", ctx.down_proj_cb_internal_acc),
-            # Testing flag (routing only)
-            ("use_hardcoded_expert_index", 1 if ctx.use_hardcoded_expert_index else 0),
             # Routing flag
             ("enable_routing", 1 if ctx.enable_routing else 0),
             # ReduceToOne reader args (CB indices + common RT arg base)
@@ -2291,9 +2104,6 @@ class MoeRoutedExpertOp:
             ("gate_proj_num_tiles_k", ctx.gate_proj_params["num_tiles_k"]),
             ("gate_proj_subblock_k", ctx.gate_proj_params["subblock_k"]),
             ("gate_proj_subblock_n", ctx.gate_proj_params["subblock_n"]),
-            ("gate_proj_subblock_w", ctx.gate_proj_params["subblock_w"]),
-            ("gate_proj_tile_r_dim", ctx.gate_proj_params["tile_r_dim"]),
-            ("gate_proj_fp32_dest_acc_en", ctx.gate_proj_params["fp32_dest_acc_en"]),
             ("gate_proj_num_subblocks_k", ctx.gate_proj_params["num_subblocks_k"]),
             ("gate_proj_per_core_n", ctx.gate_proj_params["per_core_n"]),
             ("gate_proj_num_active_experts", ctx.gate_proj_params["num_active_experts"]),
@@ -2327,9 +2137,6 @@ class MoeRoutedExpertOp:
             ("up_proj_num_tiles_k", ctx.up_proj_params["num_tiles_k"]),
             ("up_proj_subblock_k", ctx.up_proj_params["subblock_k"]),
             ("up_proj_subblock_n", ctx.up_proj_params["subblock_n"]),
-            ("up_proj_subblock_w", ctx.up_proj_params["subblock_w"]),
-            ("up_proj_tile_r_dim", ctx.up_proj_params["tile_r_dim"]),
-            ("up_proj_fp32_dest_acc_en", ctx.up_proj_params["fp32_dest_acc_en"]),
             ("up_proj_num_subblocks_k", ctx.up_proj_params["num_subblocks_k"]),
             ("up_proj_per_core_n", ctx.up_proj_params["per_core_n"]),
             ("up_proj_num_active_experts", ctx.up_proj_params["num_active_experts"]),
@@ -2372,9 +2179,6 @@ class MoeRoutedExpertOp:
             ("down_proj_num_tiles_k", ctx.down_proj_params["num_tiles_k"]),
             ("down_proj_subblock_k", ctx.down_proj_params["subblock_k"]),
             ("down_proj_subblock_n", ctx.down_proj_params["subblock_n"]),
-            ("down_proj_subblock_w", ctx.down_proj_params["subblock_w"]),
-            ("down_proj_tile_r_dim", ctx.down_proj_params["tile_r_dim"]),
-            ("down_proj_fp32_dest_acc_en", ctx.down_proj_params["fp32_dest_acc_en"]),
             ("down_proj_num_subblocks_k", ctx.down_proj_params["num_subblocks_k"]),
             ("down_proj_per_core_n", ctx.down_proj_params["per_core_n"]),
             ("down_proj_num_active_experts", ctx.down_proj_params["num_active_experts"]),
@@ -2403,8 +2207,6 @@ class MoeRoutedExpertOp:
             ("gate_proj_index_offset", 0),
             ("up_proj_index_offset", 0),
             ("down_proj_index_offset", 0),
-            # Testing flag (routing only)
-            ("use_hardcoded_expert_index", 1 if ctx.use_hardcoded_expert_index else 0),
             # Routing flag
             ("enable_routing", 1 if ctx.enable_routing else 0),
             # Eltwise add compute

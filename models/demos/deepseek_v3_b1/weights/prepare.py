@@ -148,7 +148,7 @@ class DenseRoutedExpertWeights(UploadableMixin):
     routed_down_proj: list[ttnn.Tensor]
 
 
-# Must match MoeRoutedExpertOp.setup_dram_matmul(..., num_subblocks_k=4) for stride checks.
+# Must match MoeRoutedExpertOp.setup_matmul_expert_dram(..., num_subblocks_k=4) for stride checks.
 _MOE_DRAM_MATMUL_NUM_SUBBLOCKS_K = 4
 
 
@@ -1576,7 +1576,6 @@ def prepare_routed_expert_weights(
                     f"BSPM file required for MoE layer {layer_idx} but not found: {bspm_path}. "
                     f"Pass bspm_dir=None (or omit --bspm-dir) to use uniform BFP4 fallback."
                 )
-            logger.info("Loading BSPM for layer {}: {}", layer_idx, bspm_path)
 
         # --- BSPM-or-uniform CompressedTensor TP8 path ---
         if compressed_tp8:
@@ -1617,13 +1616,7 @@ def prepare_routed_expert_weights(
         tgt_up = _moe_routed_expert_tensor_target("routed_up_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, device)
         tgt_down = _moe_routed_expert_tensor_target("routed_down_proj", _ROUTED_DOWN_K, _ROUTED_DOWN_N, device)
 
-        def _preprocess_gate(t: dict[str, torch.Tensor], k: str) -> torch.Tensor:
-            return moe_routed_expert_torch_for_cache(t[k].T.contiguous(), num_banks)
-
-        def _preprocess_up(t: dict[str, torch.Tensor], k: str) -> torch.Tensor:
-            return moe_routed_expert_torch_for_cache(t[k].T.contiguous(), num_banks)
-
-        def _preprocess_down(t: dict[str, torch.Tensor], k: str) -> torch.Tensor:
+        def _preprocess_proj(t: dict[str, torch.Tensor], k: str) -> torch.Tensor:
             return moe_routed_expert_torch_for_cache(t[k].T.contiguous(), num_banks)
 
         routed_gate_proj: list[ttnn.Tensor] = []
@@ -1639,7 +1632,7 @@ def prepare_routed_expert_weights(
                 fp_g,
                 device,
                 move_to_device=move_to_device,
-                preprocess=lambda t, _gk=gk: {"routed_gate_proj": _preprocess_gate(t, _gk)},
+                preprocess=lambda t, _gk=gk: {"routed_gate_proj": _preprocess_proj(t, _gk)},
                 raw_tensors=lambda _gk=gk: {_gk: state_dict[_gk]},
             )
             if not isinstance(gw, ttnn.Tensor):
@@ -1655,7 +1648,7 @@ def prepare_routed_expert_weights(
                 fp_u,
                 device,
                 move_to_device=move_to_device,
-                preprocess=lambda t, _uk=uk: {"routed_up_proj": _preprocess_up(t, _uk)},
+                preprocess=lambda t, _uk=uk: {"routed_up_proj": _preprocess_proj(t, _uk)},
                 raw_tensors=lambda _uk=uk: {_uk: state_dict[_uk]},
             )
             if not isinstance(uw, ttnn.Tensor):
@@ -1671,7 +1664,7 @@ def prepare_routed_expert_weights(
                 fp_d,
                 device,
                 move_to_device=move_to_device,
-                preprocess=lambda t, _dk=dk: {"routed_down_proj": _preprocess_down(t, _dk)},
+                preprocess=lambda t, _dk=dk: {"routed_down_proj": _preprocess_proj(t, _dk)},
                 raw_tensors=lambda _dk=dk: {_dk: state_dict[_dk]},
             )
             if not isinstance(dw, ttnn.Tensor):

@@ -37,7 +37,6 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     prepare_spec_weights,
 )
 from models.demos.deepseek_v3_b1.weights.transforms.sram_experts import SramExpertCoreGrids, SramHotExpertConfig
-from models.demos.deepseek_v3_b1.weights.upload import Uploadable, two_phase_upload
 
 
 class WeightProvider(Protocol):
@@ -259,11 +258,7 @@ class CacheWeightProvider:
         )
         return CacheConfig(cache=self._cache, context=context)
 
-    def _upload_prepared_weights(self, device: ttnn.MeshDevice, host_weights: Uploadable):
-        return two_phase_upload(device, host_weights)
-
     def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
-        # TODO: Re-enable two-phase upload here after fast-dispatch lifecycle is managed globally.
         return prepare_embedding_weights(
             self._state_dict,
             device,

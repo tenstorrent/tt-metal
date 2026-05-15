@@ -283,13 +283,6 @@ def create_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--bspm-variant",
-        type=str,
-        choices=("B",),
-        default="B",
-        help="BitSculpt allocation variant letter (default: B)",
-    )
-    parser.add_argument(
         "--bspm-budget",
         type=float,
         default=3.5,
@@ -318,7 +311,6 @@ def run_teacher_forced_demo(
     no_eos_stop: bool = False,
     chunk_accuracy_token_size: int | None = None,
     bspm_dir: Path | None = None,
-    bspm_variant: str = "B",
     bspm_budget: float = 3.5,
 ) -> TeacherForcedResult | None:
     """Run teacher-forced inference on mesh id 0; returns result only on mesh 0."""
@@ -336,7 +328,6 @@ def run_teacher_forced_demo(
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
             bspm_dir=bspm_dir,
-            bspm_variant=bspm_variant,
             bspm_budget=bspm_budget,
         )
 
@@ -430,7 +421,6 @@ def main(argv: list[str] | None = None) -> int:
         no_eos_stop=args.no_eos_stop,
         chunk_accuracy_token_size=args.chunk_accuracy,
         bspm_dir=args.bspm_dir,
-        bspm_variant=args.bspm_variant,
         bspm_budget=args.bspm_budget,
     )
 

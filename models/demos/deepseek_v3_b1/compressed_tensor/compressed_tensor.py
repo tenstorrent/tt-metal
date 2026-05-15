@@ -829,13 +829,9 @@ class CompressedTensor:
 
         alignment = _get_alignment(memory_config.buffer_type)
         global_max = max(sz for dev_sizes in all_shard_sizes.values() for sz in dev_sizes)
-        # Single-device path historically rounded up to ``alignment`` even
-        # when the global max was smaller; preserve that floor so warm-load
-        # tensors land at byte-identical sizes.
-        # Defensive floor for multi-device: if every shard is empty (e.g.
-        # all-bfp0 assignment), _align(0, alignment) = 0 which would yield
-        # page_size 0 in the C++ buffer path and SIGFPE. Match _pack_single_device
-        # by ensuring at least `alignment`.
+        # Defensive floor: if every shard is empty (e.g. all-bfp0 assignment),
+        # _align(0, alignment) = 0 would yield page_size 0 in the C++ buffer
+        # path and SIGFPE. Ensure at least `alignment`.
         self.max_shard_size = max(_align(global_max, alignment), alignment)
 
         logical_shape = ttnn.Shape(list(self.shape))
