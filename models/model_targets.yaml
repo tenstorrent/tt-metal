@@ -381,10 +381,10 @@ targets:
             seq_len: 128
             status: active
             perf:
-              prefill_time_to_first_token: 400
+              prefill_time_to_first_token: 45.5
               prefill_tolerance: 1.15
-              decode_t/s/u: 3.0
-              decode_t/s: 380.0
+              decode_t/s/u: 27.5
+              decode_t/s: 3522.3
               decode_tolerance: 1.15
             accuracy: {}
 
@@ -657,18 +657,6 @@ targets:
             perf: {}
             accuracy: {}
             owner_id: U053W15B6JF # Djordje Ivanovic
-            team: models
-  gpt-oss-120b-high-batch-galaxy:
-    aliases: ["gpt-oss-120b-high-batch-galaxy"]
-    skus:
-      wh_galaxy_perf:
-        entries:
-          - batch_size: 128
-            seq_len: null
-            status: TODO
-            perf: {}
-            accuracy: {}
-            owner_id: U08TJ70UFRT # Stuti Raizada
             team: models
   whisper:
     aliases: ["whisper"]
