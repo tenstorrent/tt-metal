@@ -2,11 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""HF-equivalent patch embedding: ``nn.Conv2d`` (square stride=kernel) as Unfold + ``ttnn.linear``."""
+"""HF-equivalent patch embedding: ``nn.Conv2d`` (square stride=kernel) using ``ttnn.conv2d``."""
 
 from __future__ import annotations
 
-import torch
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
@@ -41,9 +40,9 @@ class TtPixtralPatchConv(LightweightModule):
 
         self.bias = (
             ttnn.as_tensor(
-                torch.reshape(state_dict[f"{state_dict_prefix}_linear.bias"], (1, -1)),
+                state_dict[f"{state_dict_prefix}_linear.bias"].reshape(1, 1, 1, -1),
                 dtype=dtype,
-                layout=ttnn.TILE_LAYOUT,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -52,16 +51,14 @@ class TtPixtralPatchConv(LightweightModule):
             else None
         )
 
-        self._unfold = torch.nn.Unfold(kernel_size=self.kernel_size, stride=self.stride)
-
         weight = state_dict[f"{state_dict_prefix}_linear.weight"]
-        if weight.ndim == 4:
-            weight = weight.reshape(out_channels, -1).T
+        if weight.ndim == 2:
+            weight = weight.T.reshape(out_channels, in_channels, kernel_size, kernel_size)
 
-        self._linear_weight = ttnn.as_tensor(
+        self._conv_weight = ttnn.as_tensor(
             weight,
             dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -74,29 +71,58 @@ class TtPixtralPatchConv(LightweightModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        patch_conv_core_grid = ttnn.CoreGrid(y=8, x=8)
+        self.conv_config = ttnn.Conv2dConfig(
+            weights_dtype=dtype,
+            output_layout=ttnn.TILE_LAYOUT,
+            core_grid=ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(patch_conv_core_grid.x - 1, patch_conv_core_grid.y - 1),
+                    )
+                }
+            ),
+            override_sharding_config=True,
+        )
 
-    def forward(self, x: torch.Tensor) -> ttnn.Tensor:
-        x = self._unfold(x)
-        x = x.permute(0, 2, 1)
-
+    def forward(self, x) -> ttnn.Tensor:
+        batch_size, _, height, width = x.shape
         x = ttnn.as_tensor(
             x,
             dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
+        x = ttnn.permute(x, [0, 2, 3, 1])
+        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-        return ttnn.linear(
-            x,
-            self._linear_weight,
-            bias=self.bias,
+        output, [out_height, out_width] = ttnn.conv2d(
+            input_tensor=x,
+            weight_tensor=self._conv_weight,
+            bias_tensor=self.bias,
+            in_channels=self.in_channels,
+            out_channels=self.out_channels,
+            batch_size=batch_size,
+            input_height=height,
+            input_width=width,
+            kernel_size=(self.kernel_size, self.kernel_size),
+            stride=(self.stride, self.stride),
+            padding=(0, 0),
+            dilation=(1, 1),
+            groups=1,
+            device=self.mesh_device,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
+            conv_config=self.conv_config,
+            compute_config=self.compute_kernel_config,
+            return_output_dim=True,
+            return_weights_and_bias=False,
         )
+        ttnn.deallocate(x)
+        return ttnn.reshape(output, (batch_size, out_height * out_width, self.out_channels))
 
 
 __all__ = ["TtPixtralPatchConv"]

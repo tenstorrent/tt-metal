@@ -48,7 +48,11 @@ class MistralTTVisionMLP(LightweightModule):
         if w1_t.shape != w3_t.shape:
             raise ValueError(f"w1 and w3 must match for fused SwiGLU matmul; got {w1_t.shape} vs {w3_t.shape}")
         # Single matmul over x for gate+up cuts duplicate activation reads and one matmul enqueue vs separate w1/w3 linears.
-        self.w1_w3 = as_tensor(torch.cat([w1_t, w3_t], dim=-1), dtype)
+        w1_tt = as_tensor(w1_t, dtype)
+        w3_tt = as_tensor(w3_t, dtype)
+        self.w1_w3 = ttnn.concat([w1_tt, w3_tt], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(w1_tt)
+        ttnn.deallocate(w3_tt)
         self.w2 = as_tensor(get_weight("w2"), dtype)
 
         self.compute_kernel_config = args.compute_kernel_config_hifi2
