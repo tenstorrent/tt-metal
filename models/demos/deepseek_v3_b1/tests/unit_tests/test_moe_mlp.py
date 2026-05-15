@@ -242,7 +242,6 @@ def create_routed_expert_tensors(
     state_dict,
     is_moe=True,
     layer_idx=None,
-    compressed_tp8=False,
     num_routed_experts=256,
 ):
     """
@@ -393,20 +392,12 @@ def create_routed_expert_tensors(
             is_moe=True,
             num_routed_experts=num_experts,
             move_to_device=True,
-            compressed_tp8=compressed_tp8,
+            compressed_tp8=True,
         )
-        gate_proj_expert_tensors = routed_weights.routed_gate_proj
-        up_proj_expert_tensors = routed_weights.routed_up_proj
-        down_proj_expert_tensors = routed_weights.routed_down_proj
-        if compressed_tp8:
-            # Phase 1B: pass full CompressedTensor list (one per expert) to op().
-            gate_proj_weights = gate_proj_expert_tensors
-            up_proj_weights = up_proj_expert_tensors
-            down_proj_weights = down_proj_expert_tensors
-        else:
-            gate_proj_weights = gate_proj_expert_tensors[0]
-            up_proj_weights = up_proj_expert_tensors[0]
-            down_proj_weights = down_proj_expert_tensors[0]
+        # MoeOp.op() expects list[CompressedTensor] (one per expert).
+        gate_proj_weights = routed_weights.routed_gate_proj
+        up_proj_weights = routed_weights.routed_up_proj
+        down_proj_weights = routed_weights.routed_down_proj
     else:
         # Dense MLP: slice gate/up (7168, 18432) and down (18432, 7168) into 8 experts of 2048 each
         gate_key = f"{layer_key}.mlp.gate_proj.weight"
@@ -965,7 +956,6 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         state_dict=state_dict,
         is_moe=True,
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
-        compressed_tp8=True,
         num_routed_experts=num_routed_experts,
     )
     sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
@@ -1306,7 +1296,6 @@ def test_moe_fused_no_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_
         state_dict=state_dict,
         is_moe=True,
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
-        compressed_tp8=True,
         num_routed_experts=num_routed_experts,
     )
     sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end

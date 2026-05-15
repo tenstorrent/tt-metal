@@ -400,7 +400,7 @@ class MoeRoutedExpertOp:
         primary_worker_cores=None,
         k_parallel_per_bank=1,
     ):
-        """Set up MatmulExpertCompressedDRAM infrastructure for one projection (Phase 1B).
+        """Set up MatmulExpertCompressedDRAM infrastructure for one projection.
 
         Operates on a list of 256 uniform-bfp4_b ``CompressedTensor`` objects (one per
         expert, TP8-sharded) and produces the per-device meta + fmt tables required
@@ -551,7 +551,7 @@ class MoeRoutedExpertOp:
 
         max_tile_size = _TILE_SIZES[1]
         data0_tile = data0.get_tile()
-        # pr42896 sizes cb_in1_dram as subblock_k × subblock_n × num_in1_buffers × max_tile_size.
+        # cb_in1_dram sized as subblock_k × subblock_n × num_in1_buffers × max_tile_size.
         cb_in1_dram_total_bytes = num_in1_buffers * subblock_k * subblock_n * max_tile_size
         noc_max_page_size = 16384  # Blackhole NOC max burst
 
@@ -620,7 +620,7 @@ class MoeRoutedExpertOp:
             "cb_in1_size_bytes": cb_in1_dram_total_bytes,
             "noc_max_page_size": noc_max_page_size,
             "accum_experts": accum_experts,
-            # Filled in by caller after routing tensor is known (Phase 1B: stub 0)
+            # Filled in by caller after routing tensor is known (stub 0 until then).
             "index_l1_addr": 0,
             # Legacy compatibility for _overlap_cbs_with_sdpa_buffer.
             "in1_total_size": in1_total_size,
@@ -937,6 +937,13 @@ class MoeRoutedExpertOp:
         from device properties and weight tensor shapes. Their CB descriptors are overridden by
         _overlap_cbs_with_sdpa_buffer in the production path.
         """
+        assert isinstance(gate_proj_weights_tensor, list), (
+            "gate_proj_weights_tensor must be a list[CompressedTensor] (TP8). Dense MLPs use "
+            "prepare_dense_routed_experts_compressed_tp8; MoE layers use compressed_tp8=True."
+        )
+        assert isinstance(up_proj_weights_tensor, list), "up_proj_weights_tensor must be a list[CompressedTensor]"
+        assert isinstance(down_proj_weights_tensor, list), "down_proj_weights_tensor must be a list[CompressedTensor]"
+
         # ==================================================================
         # Extract global semaphore addresses
         # ==================================================================
@@ -1032,18 +1039,9 @@ class MoeRoutedExpertOp:
         add_cb_in1 = cb_id_context.get_cb_id(data_format, TD_32x32)
         add_cb_out = cb_id_context.get_cb_id(data_format, TD_32x32)
 
-        # Tensor-backed CBs (format from weight tensors).
-        # Phase 1B: when using CompressedTensor lists, probe the first CT's data tensor.
-        gate_proj_weights_probe = (
-            gate_proj_weights_tensor[0].get_data_tensors()[0]
-            if isinstance(gate_proj_weights_tensor, list)
-            else gate_proj_weights_tensor
-        )
-        down_proj_weights_probe = (
-            down_proj_weights_tensor[0].get_data_tensors()[0]
-            if isinstance(down_proj_weights_tensor, list)
-            else down_proj_weights_tensor
-        )
+        # Tensor-backed CBs (format from weight tensors). Probe the first CT's data tensor.
+        gate_proj_weights_probe = gate_proj_weights_tensor[0].get_data_tensors()[0]
+        down_proj_weights_probe = down_proj_weights_tensor[0].get_data_tensors()[0]
         gate_proj_cb_in1 = cb_id_context.get_cb_id(
             gate_proj_weights_probe.dtype, ttnn.TileDescriptor(gate_proj_weights_probe.get_tile())
         )
@@ -1051,7 +1049,7 @@ class MoeRoutedExpertOp:
         down_proj_cb_in1 = cb_id_context.get_cb_id(
             down_proj_weights_probe.dtype, ttnn.TileDescriptor(down_proj_weights_probe.get_tile())
         )
-        # MatmulExpertCompressedDRAM input activation CBs (Phase 1B).
+        # MatmulExpertCompressedDRAM input activation CBs.
         # gate_proj/up_proj in0 = rmsnorm-mcast destination; down_proj in0 = down_mcast destination.
         gate_proj_cb_in0 = gate_mm_input_cb
         up_proj_cb_in0 = gate_mm_input_cb
@@ -1275,13 +1273,8 @@ class MoeRoutedExpertOp:
             expert_scale_mcast_data_size_bytes = index_tile_size
 
         # ==================================================================
-        # MatmulExpertCompressedDRAM: gate_proj (Phase 1B)
+        # MatmulExpertCompressedDRAM: gate_proj
         # ==================================================================
-        assert isinstance(gate_proj_weights_tensor, list), (
-            "gate_proj_weights_tensor must be a list[CompressedTensor] (TP8). Dense MLPs use "
-            "prepare_dense_routed_experts_compressed_tp8; MoE layers use compressed_tp8=True."
-        )
-        assert isinstance(up_proj_weights_tensor, list), "up_proj_weights_tensor must be a list[CompressedTensor]"
         mesh_device_for_matmul_expert = gate_proj_weights_tensor[0].get_data_tensors()[0].device()
         # MoE routes top-8 of N_total experts → num_active_experts=8. Dense MLP has no
         # routing; cts_list contains exactly the experts to run (one CompressedTensor
@@ -1309,7 +1302,7 @@ class MoeRoutedExpertOp:
         )
 
         # ==================================================================
-        # MatmulExpertCompressedDRAM: up_proj (Phase 1B)
+        # MatmulExpertCompressedDRAM: up_proj
         # ==================================================================
         # K-split: matches gate_proj's config exactly (shared cb_in1 + same 16-core grid).
         up_proj_params = MoeRoutedExpertOp.setup_matmul_expert_dram(
@@ -1389,11 +1382,10 @@ class MoeRoutedExpertOp:
         )
 
         # ==================================================================
-        # MatmulExpertCompressedDRAM: down_proj (Phase 1B)
+        # MatmulExpertCompressedDRAM: down_proj
         # ==================================================================
         # See gate/up note above: derive num_active_experts so dense MLP (one CT,
         # enable_routing=False) runs exactly one expert iteration per device.
-        assert isinstance(down_proj_weights_tensor, list), "down_proj_weights_tensor must be a list[CompressedTensor]"
         down_num_active_experts = 8 if enable_routing else len(down_proj_weights_tensor)
         down_proj_params = MoeRoutedExpertOp.setup_matmul_expert_dram(
             mesh_device=mesh_device_for_matmul_expert,
@@ -1687,7 +1679,7 @@ class MoeRoutedExpertOp:
             mcast_data_receiver_semaphore_addr=mcast_data_receiver_semaphore_addr,
             gather_noc0_receiver_semaphore_addr=gather_noc0_receiver_semaphore_addr,
             gather_noc1_receiver_semaphore_addr=gather_noc1_receiver_semaphore_addr,
-            # MatmulExpertCompressedDRAM CB indices (Phase 1B)
+            # MatmulExpertCompressedDRAM CB indices
             gate_proj_cb_in0=gate_proj_cb_in0,
             gate_proj_cb_fmt=gate_proj_cb_fmt,
             gate_proj_cb_out_silu=gate_proj_cb_out_silu,
@@ -1842,7 +1834,7 @@ class MoeRoutedExpertOp:
             ("add_cb_in1", ctx.add_cb_in1),
             ("add_cb_in0_wait_tiles", ctx.add_params["cb_in0_wait_tiles"]),
             ("add_cb_in1_wait_tiles", ctx.add_params["cb_in1_wait_tiles"]),
-            # gate_proj MatmulExpertCompressedDRAM reader (Phase 1C — pr42896 API)
+            # gate_proj MatmulExpertCompressedDRAM reader
             ("gate_proj_cb_in0", ctx.gate_proj_cb_in0),
             ("gate_proj_cb_in1", ctx.gate_proj_cb_in1),
             ("gate_proj_cb_out", ctx.gate_proj_cb_out),
@@ -2096,7 +2088,7 @@ class MoeRoutedExpertOp:
             ("gate_eps", ctx.gate_params["eps"] if ctx.enable_routing else 0),
             ("gate_scaling_factor", ctx.gate_params["scaling_factor"] if ctx.enable_routing else 0),
             ("gate_enable_sigmoid", ctx.gate_params["enable_sigmoid"] if ctx.enable_routing else 0),
-            # gate_proj MatmulExpertCompressedDRAM compute (Phase 1C — pr42896 API)
+            # gate_proj MatmulExpertCompressedDRAM compute
             ("gate_proj_cb_in0", ctx.gate_proj_cb_in0),
             ("gate_proj_cb_in1", ctx.gate_proj_cb_in1),
             ("gate_proj_cb_out", ctx.gate_proj_cb_out),
@@ -2391,7 +2383,7 @@ class MoeRoutedExpertOp:
             ),
         ]
 
-        # MatmulExpertCompressedDRAM per-core descriptors (Phase 1C — pr42896 API).
+        # MatmulExpertCompressedDRAM per-core descriptors.
         # Values populated from first device's per-coord dict as a shared default;
         # `_setup_per_device_args` overwrites per-device for correctness on mesh
         # devices where addresses may differ.
@@ -5239,21 +5231,14 @@ class MoeOp:
                 ctx.gate_output_scores_tensor,
                 ctx.gate_output_indices_tensor,
             ]
+        # Expert tensors kept alive through the backing/fmt/meta tensors added below
+        # (per-projection). The CT data tensors themselves are already uploaded to L1
+        # as CompressedTensors.
         for wt in [ctx.gate_proj_weights_tensor, ctx.up_proj_weights_tensor, ctx.down_proj_weights_tensor]:
-            if isinstance(wt, list):
-                # Phase 1B CompressedTensor list path — expert tensors kept alive through
-                # the backing/fmt/meta tensors added below (per-projection). The CT data
-                # tensors themselves are already uploaded to L1 as CompressedTensors.
-                for ct in wt:
-                    for data_t in ct.get_data_tensors():
-                        io_tensors += [data_t]
-            else:
-                backing = getattr(wt, "data", None)
-                if backing is not None:
-                    io_tensors += [backing, wt.assignment]
-                else:
-                    io_tensors += [wt]
-        # MatmulExpertCompressedDRAM backing + meta/fmt/table_idx tensors (Phase 1B)
+            for ct in wt:
+                for data_t in ct.get_data_tensors():
+                    io_tensors += [data_t]
+        # MatmulExpertCompressedDRAM backing + meta/fmt/table_idx tensors
         for proj_params in (
             self.ctx.routed_ctx.gate_proj_params,
             self.ctx.routed_ctx.up_proj_params,
@@ -5361,7 +5346,7 @@ class MoeOp:
         self.bcast_dst_nodes = []
         self.device_kernel_defines = list(self.kernel_defines)
 
-        # MatmulExpertCompressedDRAM per-device descriptor override (Phase 1B).
+        # MatmulExpertCompressedDRAM per-device descriptor override.
         # Replaces the first-coord defaults written by _build_core_descriptors with
         # values for this specific mesh coordinate.
         routed_ctx = self.ctx.routed_ctx
