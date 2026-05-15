@@ -17,6 +17,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include <variant>
 #include <tt-metalium/sub_device_types.hpp>
@@ -544,8 +545,22 @@ Tensor floor_div(const Tensor& input_a, const Tensor& input_b, const std::option
 // outer(a, b) treats each input's last dim as a vector and broadcasts the
 // leading dims: a:[..., N], b:[..., M] -> [..., N, M], equivalent to
 // a.unsqueeze(-1) * b.unsqueeze(-2).
+//
+// Sharded inputs are routed through interleaved DRAM before the unsqueeze:
+// reshape's shard-spec recomputation does not handle the rank change for
+// most shard strategies (only height-sharded 2D works natively), so the
+// safe contract is "sharded inputs accepted but materialized as
+// interleaved internally". Output sharding remains caller-controlled via
+// the output_mem_config kwarg.
 Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::multiply(ttnn::unsqueeze(input_a, -1), ttnn::unsqueeze(input_b, -2), std::nullopt, output_mem_config);
+    auto to_interleaved = [](const Tensor& t) {
+        return t.is_sharded() ? ttnn::sharded_to_interleaved(t, ttnn::DRAM_MEMORY_CONFIG) : t;
+    };
+    return ttnn::multiply(
+        ttnn::unsqueeze(to_interleaved(input_a), -1),
+        ttnn::unsqueeze(to_interleaved(input_b), -2),
+        std::nullopt,
+        output_mem_config);
 }
 
 Tensor polyval(
