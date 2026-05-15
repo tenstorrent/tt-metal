@@ -24,8 +24,8 @@ def postprocess(pred_logits_tt, pred_boxes_tt, orig_sizes, score_threshold=0.3):
  
     import ttnn
 
-    logits = ttnn.to_torch(pred_logits_tt).squeeze(1)   # (B, num_queries, num_classes)
-    boxes  = ttnn.to_torch(pred_boxes_tt).squeeze(1)    # (B, num_queries, 4)
+    logits = ttnn.to_torch(pred_logits_tt).squeeze(1).float()   # (B, num_queries, num_classes)
+    boxes  = ttnn.to_torch(pred_boxes_tt).squeeze(1).float()    # (B, num_queries, 4)
 
     scores = logits.sigmoid()                            # (B, num_queries, num_classes)
     scores, labels = scores.max(dim=-1)                  # (B, num_queries)
