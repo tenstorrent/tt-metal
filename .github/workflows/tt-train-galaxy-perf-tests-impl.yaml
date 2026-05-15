@@ -133,8 +133,6 @@ jobs:
             uv pip list
             uv pip install "gitpython==3.1.47" "pydantic==2.9.2" "numpy>=1.24.4,<2" "pyyaml>=5.4"
 
-            # HF_HOME=/mnt/MLPerf/huggingface
-
             ${{ matrix.test-group.cmd }}
       - name: Upload metrics data to AWS SFTP bucket
         timeout-minutes: 5
