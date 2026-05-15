@@ -275,12 +275,12 @@ class CacheWeightProvider:
         )
 
     def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
-        return prepare_moe_layer_weights(
+        host_weights = prepare_moe_layer_weights(
             device,
             self._state_dict,
             layer_id,
             num_routed_experts=NUM_ROUTED_EXPERTS,
-            move_to_device=True,
+            move_to_device=False,
             cache_config=self._cache_config(device),
             sram_hot_experts=self._sram_hot_experts,
             sram_core_grids=self._sram_core_grids,
@@ -291,15 +291,17 @@ class CacheWeightProvider:
             bspm_budget=self._bspm_budget,
             compressed_tp8=True,
         )
+        return self._upload_prepared_weights(device, host_weights)
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
-        return prepare_dense_layer_weights(
+        host_weights = prepare_dense_layer_weights(
             device,
             self._state_dict,
             layer_id,
-            move_to_device=True,
+            move_to_device=False,
             cache_config=self._cache_config(device),
         )
+        return self._upload_prepared_weights(device, host_weights)
 
     def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
         # TODO: Re-enable two-phase upload here after fast-dispatch lifecycle is managed globally.

@@ -80,12 +80,14 @@ def _deallocate_layer(layer: DeepSeekV3DenseLayerWeights | DeepSeekV3MoELayerWei
     ttnn.deallocate(layer.shared_down_proj, force=True)
     if isinstance(layer, DeepSeekV3MoELayerWeights):
         ttnn.deallocate(layer.gate_bias, force=True)
-    for t in layer.routed_gate_proj:
-        ttnn.deallocate(t, force=True)
-    for t in layer.routed_up_proj:
-        ttnn.deallocate(t, force=True)
-    for t in layer.routed_down_proj:
-        ttnn.deallocate(t, force=True)
+    for projection in (layer.routed_gate_proj, layer.routed_up_proj, layer.routed_down_proj):
+        for t in projection:
+            # TP8 path stores CompressedTensors in these lists (data + assignment per CT);
+            # the legacy uniform-BFP4 path stores plain ttnn.Tensors.
+            if isinstance(t, CompressedTensor):
+                t.deallocate(force=True)
+            else:
+                ttnn.deallocate(t, force=True)
 
 
 def _core_range_set_to_tuples(crs):
