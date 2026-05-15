@@ -183,6 +183,8 @@ class LTXPipeline:
         self.positional_embedding_max_pos = positional_embedding_max_pos or [20, 2048, 2048]
         self.timestep_scale_multiplier = timestep_scale_multiplier
 
+        self.is_fsdp: bool = False
+        self.dynamic_load: bool = False
         self.transformer: LTXTransformerModel | None = None
         self.text_encoder: GemmaTokenizerEncoderPair | None = None
         self.gemma_encoder = None  # TTNN Gemma encoder (device)
@@ -210,41 +212,58 @@ class LTXPipeline:
         topology: ttnn.Topology | None = None,
         is_fsdp: bool | None = None,
         mode: str = "av",
+        pipeline_class: type["LTXPipeline"] | None = None,
     ) -> "LTXPipeline":
         """Factory method matching Wan's create_pipeline pattern.
 
         Auto-configures parallel settings from mesh shape and loads checkpoint.
         """
         mesh_shape = tuple(mesh_device.shape)
-        # Default configs per mesh shape.
-        # BH Galaxy (4x8): sp_axis=1 (8 chips), tp_axis=0 (4 chips), Ring topology — mirrors Wan BH 4x8 config.
-        device_configs = {
-            (1, 1): {
-                "sp_axis": 0,
-                "tp_axis": 1,
-                "num_links": 1,
-                "dynamic_load": False,
-                "topology": ttnn.Topology.Linear,
-                "is_fsdp": False,
-            },
-            (2, 4): {
-                "sp_axis": 0,
-                "tp_axis": 1,
+        device_configs: dict[tuple[int, int], dict] = {}
+        if ttnn.device.is_blackhole():
+            device_configs[(2, 4)] = {
+                "sp_axis": 1,
+                "tp_axis": 0,
                 "num_links": 2,
                 "dynamic_load": False,
                 "topology": ttnn.Topology.Linear,
                 "is_fsdp": False,
-            },
-            (4, 8): {
+            }
+            device_configs[(4, 8)] = {
                 "sp_axis": 1,
                 "tp_axis": 0,
                 "num_links": 2,
                 "dynamic_load": False,
                 "topology": ttnn.Topology.Ring,
                 "is_fsdp": False,
-            },
-        }
-        defaults = device_configs.get(mesh_shape, device_configs[(2, 4)])
+            }
+            defaults = device_configs.get(mesh_shape, device_configs[(2, 4)])
+        else:
+            device_configs[(1, 8)] = {
+                "sp_axis": 1,
+                "tp_axis": 0,
+                "num_links": 1,
+                "dynamic_load": False,
+                "topology": ttnn.Topology.Linear,
+                "is_fsdp": False,
+            }
+            device_configs[(2, 4)] = {
+                "sp_axis": 0,
+                "tp_axis": 1,
+                "num_links": 2,
+                "dynamic_load": False,
+                "topology": ttnn.Topology.Linear,
+                "is_fsdp": False,
+            }
+            device_configs[(4, 8)] = {
+                "sp_axis": 1,
+                "tp_axis": 0,
+                "num_links": 4,
+                "dynamic_load": False,
+                "topology": ttnn.Topology.Ring,
+                "is_fsdp": False,
+            }
+            defaults = device_configs.get(mesh_shape, device_configs[(2, 4)])
         sp_axis = sp_axis if sp_axis is not None else defaults["sp_axis"]
         tp_axis = tp_axis if tp_axis is not None else defaults["tp_axis"]
         num_links = num_links if num_links is not None else defaults["num_links"]
@@ -259,17 +278,44 @@ class LTXPipeline:
         )
         ccl_manager = CCLManager(mesh_device, topology=topology)
 
-        pipeline = LTXPipeline(
+        pipeline_cls = pipeline_class or LTXPipeline
+        pipeline = pipeline_cls(
             mesh_device=mesh_device,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
             mode=mode,
         )
+        pipeline.is_fsdp = is_fsdp
+        pipeline.dynamic_load = dynamic_load
 
         if checkpoint_path:
             pipeline.load_from_checkpoint(checkpoint_path)
 
         return pipeline
+
+    def prepare_vae_config_from_checkpoint(self, checkpoint_path: str) -> None:
+        """Read VAE decoder metadata from a safetensors checkpoint for lazy loading."""
+        import json
+
+        with open(checkpoint_path, "rb") as f:
+            header_size = int.from_bytes(f.read(8), "little")
+            header = json.loads(f.read(header_size))
+        vae_cfg = json.loads(header.get("__metadata__", {}).get("config", "{}")).get("vae", {})
+        self._vae_checkpoint_path = checkpoint_path
+        self._vae_decoder_blocks = vae_cfg.get("decoder_blocks", [])
+        self._vae_causal = vae_cfg.get("causal_decoder", False)
+        self._vae_base_channels = vae_cfg.get("decoder_base_channels", 128)
+
+    def load_transformer_from_checkpoint(self, checkpoint_path: str) -> None:
+        """Load only the diffusion transformer weights and stash VAE config."""
+        from safetensors.torch import load_file
+
+        raw = load_file(checkpoint_path)
+        prefix = "model.diffusion_model."
+        transformer_sd = {k[len(prefix) :]: v for k, v in raw.items() if k.startswith(prefix)}
+        del raw
+        self.prepare_vae_config_from_checkpoint(checkpoint_path)
+        self.load_transformer(transformer_sd)
 
     def load_transformer(self, state_dict: dict[str, torch.Tensor]) -> None:
         """Load transformer weights from a state dict."""
