@@ -231,7 +231,6 @@ static void track_eth_progress_timeout(
 struct core_setup {
     std::shared_ptr<tt_metal::Program> program;
     std::shared_ptr<distributed::MeshDevice> mesh_device;
-    distributed::MeshCoordinateRange device_range;
     const CoreCoord core;
     uint32_t iter_l1_addr;
     uint32_t expected_count;
@@ -244,30 +243,27 @@ struct core_setup {
 
 template <typename FIXTURE>
 [[maybe_unused]]
-static void wait_to_finish_eth_timeout_cores(FIXTURE* fixture, std::vector<struct core_setup>& cores) {
+static void wait_to_finish_eth_timeout_cores(
+    FIXTURE* fixture,
+    std::map<std::shared_ptr<distributed::MeshDevice>, std::shared_ptr<tt_metal::Program>>& programs) {
     /* ==================== */
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     std::map<std::shared_ptr<distributed::MeshDevice>, std::shared_ptr<distributed::MeshWorkload>> devices;
 
-    for (auto& cs : cores) {
-        devices[cs.mesh_device] = std::make_shared<distributed::MeshWorkload>();
+    for (const auto& [dev, _] : programs) {
+        devices[dev] = std::make_shared<distributed::MeshWorkload>();
     }
 
     for (const auto& [dev, workload] : devices) {
-        for (auto& cs : cores) {
-            if (cs.mesh_device != dev) {
-                continue;
-            }
-
-            devices[cs.mesh_device]->add_program(cs.device_range, std::move(*cs.program));
-            break;
-        }
+        devices[dev]->add_program(device_range, std::move(*programs[dev]));
     }
 
     for (const auto& [dev, workload] : devices) {
         fixture->RunProgram(dev, *workload, true);
     }
 
-    for (const auto& [dev, workload] : devices) {
+    for (const auto& [dev, _] : devices) {
         fixture->FinishCommands(dev);
     }
 

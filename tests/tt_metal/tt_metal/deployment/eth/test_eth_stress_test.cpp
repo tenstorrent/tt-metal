@@ -83,15 +83,11 @@ static void run_test_stress(
         0,
         programs[recv_mesh_device].get());
 
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-
     double threshold = get_eth_bw() * 0.7;
 
     cores.emplace_back(
         programs[send_mesh_device],
         send_mesh_device,
-        device_range,
         send_core,
         iter_l1_address,
         transfer_count,
@@ -104,7 +100,6 @@ static void run_test_stress(
     cores.emplace_back(
         programs[recv_mesh_device],
         recv_mesh_device,
-        device_range,
         recv_core,
         iter_l1_address,
         transfer_count,
@@ -188,7 +183,7 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet05StressTest) {
         }
     }
 
-    wait_to_finish_eth_timeout_cores(this, cores);
+    wait_to_finish_eth_timeout_cores(this, programs);
 
     bool pass = true;
 
