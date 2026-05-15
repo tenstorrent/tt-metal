@@ -91,8 +91,21 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWRmProgram
     CoreRangeSet all_cores, core_group_1, core_group_2;
     uint32_t num_rows_per_core_group_1, num_rows_per_core_group_2;
 
+    const bool use_height_sharding =
+        a.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED;
+
     constexpr bool k_split_rows_row_wise = true;
-    if (operation_attributes.sub_core_grids.has_value()) {
+    if (use_height_sharding) {
+        const auto& shard_spec = a.shard_spec().value();
+        // Each shard holds shard_H rows of the flat (NC*H, W) view.
+        const uint32_t shard_H = shard_spec.shape[0];
+        all_cores = shard_spec.grid;
+        core_group_1 = all_cores;
+        core_group_2 = CoreRangeSet();
+        num_rows_per_core_group_1 = shard_H;
+        num_rows_per_core_group_2 = 0;
+        num_cores = all_cores.num_cores();
+    } else if (operation_attributes.sub_core_grids.has_value()) {
         std::tie(
             num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2) =
             tt::tt_metal::split_work_to_cores(*operation_attributes.sub_core_grids, num_rows, k_split_rows_row_wise);
