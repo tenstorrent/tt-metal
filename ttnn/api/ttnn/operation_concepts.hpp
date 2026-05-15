@@ -52,29 +52,24 @@ concept HasCreateAt = requires {
 template <typename T>
 concept MeshWorkloadFactoryConcept = HasMeshWorkloadType<T> && (HasCreateMeshWorkload<T> || HasCreateAt<T>);
 
-// Mesh-workload descriptor factory: defines a workload-scoped MeshDescriptor
-// type that holds both resources (GlobalSemaphores, etc.) and a declarative
-// `programs` vector of per-coord ProgramDescriptors. The factory builds the
-// entire workload in one call via `create_mesh_descriptor`. Replaces the
-// deprecated prepare_resources hook.
+// Mesh-workload descriptor factory: builds the entire workload in one call
+// via `create_mesh_descriptor`, returning a tt::tt_metal::MeshWorkloadDescriptor
+// that pairs declarative per-coord ProgramDescriptors with workload-scoped
+// resources (semaphores, buffers).  Replaces the deprecated prepare_resources
+// hook.
 //
-// This concept is a shape check — it confirms the MeshDescriptor type exists,
-// the descriptor exposes `programs`, and `create_mesh_descriptor` is a member.
-// The strict signature check (4 args, last is `MeshCoordinateRangeSet`,
-// returns `T::MeshDescriptor`) is enforced by `has_mesh_descriptor` in the
-// adapter, which has access to the device operation's typedefs. If a factory
-// satisfies this concept but provides a mismatched `create_mesh_descriptor`,
-// the adapter emits a clear `static_assert` failure rather than a deep
-// template error.
+// This concept is a shape check — it confirms `create_mesh_descriptor` is a
+// member.  The strict signature check (4 args, last is `MeshCoordinateRangeSet`,
+// returns `tt::tt_metal::MeshWorkloadDescriptor`) is enforced by
+// `has_mesh_workload_descriptor` in the adapter, which has access to the device
+// operation's typedefs.  A factory that satisfies this concept but provides a
+// mismatched `create_mesh_descriptor` triggers a clear `static_assert` failure
+// in the adapter rather than a deep template error.
 template <typename T>
-concept MeshDescriptorWorkloadConcept = requires { typename T::MeshDescriptor; } && requires {
-    &T::create_mesh_descriptor;
-} && requires(typename T::MeshDescriptor& d) {
-    { d.programs };
-};
+concept MeshWorkloadDescriptorConcept = requires { &T::create_mesh_descriptor; };
 
 template <typename T>
-concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } || MeshDescriptorWorkloadConcept<T>) &&
+concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } || MeshWorkloadDescriptorConcept<T>) &&
                                           !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T>;
 
 // Detect operations that put create_descriptor directly on the operation struct

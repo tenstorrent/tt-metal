@@ -18,6 +18,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/distributed/types.hpp"
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/mesh_workload_descriptor.hpp>
 #include <utility>
 
 namespace ttnn::operations::pool {
@@ -45,31 +46,14 @@ struct Pool2D {
     using tensor_return_value_t = std::vector<Tensor>;
 
     struct MultiCore {
-        // Workload-scoped state held in the cached AdaptedCachedMeshWorkload's
-        // shared_variables map (one entry per MeshCoordinateRange).
-        //  - reader_indices_device: encodes the per-core sliding-window halo
-        //    lookup table (built by sliding_window::move_config_tensor_to_device).
-        //  - scalar_config_device: only set for avg-pool variants where a single
-        //    scalar per core is insufficient (ceil_mode w/ ceil padding, or
-        //    !count_include_pad with non-zero padding) and divisor_override is
-        //    not set; built by create_scalar_config_tensor + Tensor::to_device.
-        // Both buffers must outlive program execution; the framework keeps the
-        // MeshDescriptor in the cache entry, so the backing buffers stay valid
-        // for as long as the cached workload does.
-        // Tensor's default ctor is explicit, so wrap in optional to satisfy the
-        // framework's `mesh_descriptor_t{}` value-init.
-        struct MeshDescriptor {
-            std::optional<Tensor> reader_indices_device;
-            std::optional<Tensor> scalar_config_device;
-            std::vector<std::pair<ttnn::MeshCoordinateRange, tt::tt_metal::ProgramDescriptor>> programs;
-        };
-
         // Builds the entire workload in one call (cache miss):
         //   1. Uploads the halo lookup table (and, for avg-pool variants that
-        //      need it, the per-stick scalar config tensor).
+        //      need it, the per-stick scalar config tensor) and parks the
+        //      backing MeshBuffers in the descriptor's `buffers` vector so
+        //      they outlive the cached workload.
         //   2. Loops `tensor_coords` and pushes a ProgramDescriptor per coord
         //      into `programs`.
-        static MeshDescriptor create_mesh_descriptor(
+        static tt::tt_metal::MeshWorkloadDescriptor create_mesh_descriptor(
             const operation_attributes_t& op_attr,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output_tensors,
