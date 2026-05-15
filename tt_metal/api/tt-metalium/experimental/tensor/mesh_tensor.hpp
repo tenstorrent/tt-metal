@@ -140,7 +140,7 @@ public:
     bool is_sharded() const;
 
     // For sharded tensors, at least one of ShardSpec or NdShardSpec will be provided.
-    const std::optional<ShardSpec>& legacy_shard_spec() const;
+    const std::optional<ShardSpec>& shard_spec() const;
     const std::optional<NdShardSpec>& nd_shard_spec() const;
 
     DeviceAddr address() const;
