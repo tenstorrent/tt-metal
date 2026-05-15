@@ -14,6 +14,7 @@
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
 #include "metal/ops/moe_group/moe_group.hpp"
+#include "metal/ops/moe_ungroup/moe_ungroup.hpp"
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
 #include "ops/binary_ops.hpp"
@@ -519,6 +520,31 @@ void py_module(nb::module_& m) {
             "         plan            [1,1,1,T_cap]   uint32).\n"
             "grouped_scores[i] = scores[plan[i], k_slot[i]]; both are 0/SENTINEL\n"
             "in pad slots.");
+        py_metal.def(
+            "moe_ungroup",
+            [](const ttnn::Tensor& expert_out,
+               const ttnn::Tensor& plan,
+               const ttnn::Tensor& offsets,
+               const ttnn::Tensor& grouped_scores,
+               uint32_t e_local,
+               uint32_t d,
+               uint32_t b,
+               uint32_t s) {
+                return ttml::metal::moe_ungroup(expert_out, plan, offsets, grouped_scores, e_local, d, b, s);
+            },
+            nb::arg("expert_out"),
+            nb::arg("plan"),
+            nb::arg("offsets"),
+            nb::arg("grouped_scores"),
+            nb::arg("e_local"),
+            nb::arg("d"),
+            nb::arg("b"),
+            nb::arg("s"),
+            "Ungroup expert outputs back to dense [D,B,S,H] ROW_MAJOR bf16,\n"
+            "fused with per-token weight scaling. expert_out is the FFN\n"
+            "output in moe_group's grouped layout; plan/offsets/grouped_scores\n"
+            "are direct outputs of moe_group (grouped_scores already encodes\n"
+            "scores[plan[i], k_slot] per row). Returns ungrouped [D,B,S,H].");
     }
 }
 
