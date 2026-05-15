@@ -73,8 +73,24 @@ targets:
             accuracy:
               top1: 90.0
               top5: 97.0
+      wh_n300:
+        entries:
+          - batch_size: 1
+            seq_len: 1024
+            status: active
+            perf: {}
+            accuracy:
+              top1: 90.0
+              top5: 97.0
       wh_llmbox_perf:
         entries:
+          - batch_size: 1
+            seq_len: 1024
+            status: active
+            perf: {}
+            accuracy:
+              top1: 90.0
+              top5: 98.0
           - batch_size: 1
             seq_len: 131072
             status: TODO

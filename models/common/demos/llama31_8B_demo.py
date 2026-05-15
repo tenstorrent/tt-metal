@@ -57,22 +57,6 @@ from models.tt_transformers.tt.model_config import DecodersPrecision
 # Constants and Expected Metrics
 # =============================================================================
 
-# Deprecated fallback for token-accuracy only.
-# Source of truth is models/model_targets.yaml; keep this table temporarily
-# until all active device/config entries are covered by centralized targets.
-DEPRECATED_PERF_MD_ACCURACY_FALLBACK = {
-    "performance": {
-        "N150": {"top1": 90, "top5": 97},
-        "N300": {"top1": 90, "top5": 97},
-        "T3K": {"top1": 90, "top5": 98},
-    },
-    "accuracy": {
-        "N150": {"top1": 96, "top5": 100},
-        "N300": {"top1": 96, "top5": 100},
-        "T3K": {"top1": 97, "top5": 100},
-    },
-}
-
 # Tolerance for performance validation (5%)
 PERF_TOLERANCE = 0.05
 
@@ -330,8 +314,8 @@ def get_device_name_from_mesh_shape(mesh_shape: tuple[int, int]) -> str:
     return mapping.get(mesh_shape, f"Unknown({mesh_shape})")
 
 
-def resolve_accuracy_baseline(opt_mode: str, device_name: str, batch_size: int) -> tuple[dict, str]:
-    """Resolve accuracy targets from centralized YAML with deprecated PERF fallback."""
+def resolve_accuracy_baseline(device_name: str, batch_size: int) -> tuple[dict, str]:
+    """Resolve accuracy targets from centralized YAML only."""
     yaml_accuracy = resolve_accuracy_targets(
         model_name="Llama-3.1-8B",
         sku=device_name,
@@ -349,11 +333,6 @@ def resolve_accuracy_baseline(opt_mode: str, device_name: str, batch_size: int) 
     )
     if yaml_accuracy and "top1" in yaml_accuracy and "top5" in yaml_accuracy:
         return {"top1": float(yaml_accuracy["top1"]), "top5": float(yaml_accuracy["top5"])}, "models/model_targets.yaml"
-
-    # Deprecated compatibility path for configurations not yet represented in YAML.
-    fallback = DEPRECATED_PERF_MD_ACCURACY_FALLBACK.get(opt_mode, {}).get(device_name)
-    if fallback:
-        return fallback, "PERF.md (deprecated fallback)"
 
     return {}, "no accuracy baseline found"
 
@@ -805,17 +784,16 @@ def test_mlp1d_llama_demo(
 
     # --- Validate Against Baseline ---
     # Performance metrics (tok_s_u, ttft_ms): MUST come from simple_text_demo.py baseline.
-    # Accuracy metrics (top1, top5): from centralized YAML, with deprecated PERF.md fallback.
+    # Accuracy metrics (top1, top5): MUST come from centralized YAML targets.
     # Baselines are collected at module load time, before any test opens mesh_device.
     baseline_metrics = _get_cached_baseline(device_name, batch_size, opt_mode)
 
     if measure_accuracy:
-        expected_for_validation, baseline_source = resolve_accuracy_baseline(opt_mode, device_name, batch_size)
-        if baseline_source == "PERF.md (deprecated fallback)":
-            logger.warning(
-                "Using deprecated PERF.md-derived fallback for token-accuracy thresholds; "
-                "please migrate this config to models/model_targets.yaml."
-            )
+        expected_for_validation, baseline_source = resolve_accuracy_baseline(device_name, batch_size)
+        assert expected_for_validation, (
+            f"Missing centralized accuracy targets for Llama-3.1-8B/{device_name}/batch-{batch_size}/seq-1024. "
+            "Add top1/top5 to models/model_targets.yaml."
+        )
         logger.info(f"Token-accuracy test runs without trace - validating top1/top5 from {baseline_source}")
     else:
         # Performance tests: MUST use baseline from simple_text_demo.py
