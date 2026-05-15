@@ -15,6 +15,19 @@ distributed::MeshWorkload MakeMeshWorkloadFromSpec(
 
     TT_FATAL(!spec.programs.empty(), "A MeshWorkloadSpec must contain at least one ProgramSpec");
 
+    // Pre-check that each range fits within the target mesh.
+    // (Overlap is caught downstream by MeshWorkload::add_program with a clear message;
+    // out-of-bounds is caught here because downstream enqueue surfaces it as a cryptic
+    // "MeshDeviceViewImpl::is_local rejects unknown coordinate" failure.)
+    const auto mesh_range = distributed::MeshCoordinateRange(mesh_device.shape());
+    for (const auto& entry : spec.programs) {
+        TT_FATAL(
+            mesh_range.contains(entry.first),
+            "MeshWorkloadSpec range {} is out of bounds for mesh of shape {}",
+            entry.first,
+            mesh_device.shape());
+    }
+
     distributed::MeshWorkload mesh_workload;
     for (const auto& [range, program_spec] : spec.programs) {
         mesh_workload.add_program(range, MakeProgramFromSpec(mesh_device, program_spec, skip_validation));

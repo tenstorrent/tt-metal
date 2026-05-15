@@ -22,8 +22,9 @@ namespace tt::tt_metal::experimental::metal2_host_api {
 // a collection of (MeshCoordinateRange, ProgramSpec) pairs.
 //
 // Each ProgramSpec is instantiated as a Program on the devices in its range.
-// A MeshWorkloadSpec need not cover the entire mesh.
-// A valid MeshWorkloadSpec must contain at least one program.
+// - Each device range must fit within the target mesh (need not cover the entire mesh)
+// - Device ranges must not overlap (at most one ProgramSpec per device)
+// - A valid MeshWorkloadSpec must contain at least one program.
 //
 struct MeshWorkloadSpec {
     std::vector<std::pair<distributed::MeshCoordinateRange, ProgramSpec>> programs;

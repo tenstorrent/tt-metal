@@ -71,6 +71,19 @@ TEST_F(MeshWorkloadSpecTestQuasar, SingleProgramSPMDSucceeds) {
     EXPECT_EQ(workload.get_programs().size(), 1u);
 }
 
+// Ranges outside the target mesh produce a clear API-boundary error rather than
+// propagating to a cryptic downstream failure at enqueue time.
+TEST_F(MeshWorkloadSpecTestQuasar, OutOfBoundsRangeFails) {
+    MeshWorkloadSpec spec;
+    // (1, 1) is out of bounds for a {1, 1} mesh — valid coords are only (0, 0).
+    distributed::MeshCoordinateRange out_of_bounds(distributed::MeshCoordinate(1, 1));
+    spec.programs.emplace_back(out_of_bounds, MakeMinimalValidProgramSpec());
+
+    EXPECT_THAT(
+        [&] { MakeMeshWorkloadFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("out of bounds")));
+}
+
 // ProgramSpec validation failures must propagate through MakeMeshWorkloadFromSpec —
 // proves the skip_validation=false default isn't silently dropped on the way in.
 TEST_F(MeshWorkloadSpecTestQuasar, InvalidProgramSpecPropagatesValidationFailure) {
