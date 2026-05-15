@@ -47,6 +47,7 @@ def create_cicd_json_for_data_analysis(
     github_pipeline_id = raw_pipeline["github_pipeline_id"]
     github_pipeline_start_ts = raw_pipeline["pipeline_start_ts"]
     workflow_attempt = github_pipeline_json["run_attempt"]
+    raw_pipeline["workflow_attempt"] = workflow_attempt
 
     github_job_id_to_annotations = get_github_job_id_to_annotations(workflow_outputs_dir, github_pipeline_id)
 
@@ -95,6 +96,7 @@ def create_cicd_json_for_data_analysis(
 
         # Remove 'steps' from raw_job to avoid double-passing of 'steps'
         raw_job = dict(raw_job)
+        raw_job["workflow_attempt"] = workflow_attempt
         raw_job.pop("steps", None)
         raw_job.pop("tt_smi_reset", None)
 
@@ -103,7 +105,7 @@ def create_cicd_json_for_data_analysis(
         if reset_data:
             for attempt in reset_data:
                 attempt["github_job_id"] = github_job_id
-
+                attempt["workflow_attempt"] = workflow_attempt
                 tt_smi_resets.append(TtSmiReset(**attempt))
 
         if github_job_id in [72824250364, 72824250365, 72824250368]:

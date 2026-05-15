@@ -67,6 +67,8 @@ def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline
     github_pipeline_link = github_pipeline_json["html_url"]
 
     pipeline_status = github_pipeline_json["conclusion"]
+    workflow_attempt = github_pipeline_json["run_attempt"]
+
 
     return {
         "github_pipeline_id": github_pipeline_id,
@@ -84,6 +86,7 @@ def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline
         "orchestrator": orchestrator,
         "github_pipeline_link": github_pipeline_link,
         "pipeline_status": pipeline_status,
+        "workflow_attempt": workflow_attempt,
     }
 
 
