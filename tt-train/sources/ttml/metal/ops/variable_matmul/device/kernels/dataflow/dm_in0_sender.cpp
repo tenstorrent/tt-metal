@@ -47,7 +47,7 @@ void kernel_main() {
     uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
+    uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
 #ifdef FUSE_TERNARY
     // Fuse addcmul - read runtime addresses before setting out_addr_rt_arg_idx
@@ -232,6 +232,14 @@ void kernel_main() {
     const TensorShape2D out0_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
 
     const uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
+    // Host computes defer_write_k_block using parent K (= worst-case K_blocks). When a K-axis
+    // OFFSETS_ROLE overrides K_tiles to a smaller per-iteration value, host's value can exceed
+    // runtime K_num_blocks-1; the in-loop check `k_iter == defer_write_k_block` then never
+    // fires, deferred writes accumulate in cb_id_out (cap 2), and once Mpc*Nbpc-1 >= 3 the
+    // chain deadlocks. Clamp here so the check fires at the last K iter at worst.
+    if (K_num_blocks > 0U) {
+        defer_write_k_block = std::min(defer_write_k_block, K_num_blocks - 1U);
+    }
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 
