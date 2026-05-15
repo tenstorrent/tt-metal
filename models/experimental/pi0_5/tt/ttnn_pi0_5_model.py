@@ -102,18 +102,17 @@ class Pi0_5ModelTTNN:
 
     def _precompute_bs1_adarms_cond(self) -> None:
         """
-        OPTIMIZATION: timesteps are deterministic (linspace 1.0 -> 0.0), so
-        `adarms_cond = time_mlp_out(silu(time_mlp_in(sincos(t))))` is constant
-        per step. Compute once at init and reuse for every inference call —
-        removes sincos + 2 linears + silu from each denoise step.
-
-        Only applicable when batch_size==1 (the dominant inference case).
+        adarms_cond is unused on the BS=1 fast path: when precomputed
+        block/final modulations are supplied (see _precompute_bs1_modulations),
+        every consumer of adarms_cond inside the expert block + final norm is
+        bypassed. Keep the per-step list as None sentinels so the fast-path
+        loop signature in sample_actions stays unchanged — this removes the
+        device-side sincos + 2 linears + silu chain (and the 10×
+        TilizeWithValPadding X=512 FLOAT32 + 10× X=1 BFLOAT16 it emitted at
+        init).
         """
         num_steps = self.denoise_config.num_steps
-        self._adarms_cond_per_step_bs1: List["ttnn.Tensor"] = []
-        for i in range(num_steps):
-            cond = self.suffix_embedding.embed_adarms_cond(self._timestep_per_step_bs1[i])
-            self._adarms_cond_per_step_bs1.append(cond)
+        self._adarms_cond_per_step_bs1: List[Optional["ttnn.Tensor"]] = [None] * num_steps
 
     def _precompute_bs1_modulations(self) -> None:
         """
