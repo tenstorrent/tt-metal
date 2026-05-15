@@ -37,6 +37,7 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     prepare_spec_weights,
 )
 from models.demos.deepseek_v3_b1.weights.transforms.sram_experts import SramExpertCoreGrids, SramHotExpertConfig
+from models.demos.deepseek_v3_b1.weights.upload import Uploadable, two_phase_upload
 
 
 class WeightProvider(Protocol):
@@ -258,6 +259,16 @@ class CacheWeightProvider:
         )
         return CacheConfig(cache=self._cache, context=context)
 
+    def _upload_prepared_weights(self, device: ttnn.MeshDevice, host_weights: Uploadable):
+        """Two-phase upload: FD-batched H2D for the FD grid, SD writes for the rest.
+
+        Used by ``load_moe_layer`` / ``load_dense_layer`` after host-staging
+        weights via ``prepare_*_weights(move_to_device=False)``. Tensors
+        already on device (e.g. attn L1 lockstep tensors uploaded eagerly
+        to seed the SRAM hot-expert trim) are passed through unchanged.
+        """
+        return two_phase_upload(device, host_weights)
+
     def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
         return prepare_embedding_weights(
             self._state_dict,
@@ -275,7 +286,13 @@ class CacheWeightProvider:
         )
 
     def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
-        return prepare_moe_layer_weights(
+        # Iteration 1 (correctness baseline): inline upload (move_to_device=True).
+        # Two-phase upload for routed-DRAM CTs is currently disabled here while
+        # we restore correctness; iteration 2 will re-enable it via deferred
+        # ``ttnn.from_torch(... device=mesh, mesh_mapper=...)`` inside the lockstep
+        # multi-device path (avoids the cache-rewrite Hazards A/B and the
+        # ``allocate + copy_host_to_device_tensor`` byte-equivalence risk).
+        host_weights = prepare_moe_layer_weights(
             device,
             self._state_dict,
             layer_id,
@@ -291,15 +308,18 @@ class CacheWeightProvider:
             bspm_budget=self._bspm_budget,
             compressed_tp8=True,
         )
+        return self._upload_prepared_weights(device, host_weights)
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
-        return prepare_dense_layer_weights(
+        # See load_moe_layer for iteration-1 rationale.
+        host_weights = prepare_dense_layer_weights(
             device,
             self._state_dict,
             layer_id,
             move_to_device=True,
             cache_config=self._cache_config(device),
         )
+        return self._upload_prepared_weights(device, host_weights)
 
     def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
         # TODO: Re-enable two-phase upload here after fast-dispatch lifecycle is managed globally.
