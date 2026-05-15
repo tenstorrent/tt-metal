@@ -8,7 +8,6 @@
 #include <numeric>
 
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/hal.hpp>
@@ -29,7 +28,7 @@ struct TransferDesc {
     uint32_t num_rows;
 };
 
-ConcatBlockShardedProgramFactory::cached_program_t ConcatBlockShardedProgramFactory::create(
+ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
     const ConcatParams& operation_attributes, const ConcatInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input_tensors = tensor_args.input_tensors;
     const uint32_t dim = operation_attributes.dim;
@@ -44,7 +43,7 @@ ConcatBlockShardedProgramFactory::cached_program_t ConcatBlockShardedProgramFact
         dim);
     const bool is_width_concat = dim == rank - 1;
 
-    Program program = CreateProgram();
+    ProgramDescriptor desc;
 
     const uint32_t num_input_tensors = input_tensors.size();
     const uint32_t cb_dst_id = 16;
@@ -146,23 +145,32 @@ ConcatBlockShardedProgramFactory::cached_program_t ConcatBlockShardedProgramFact
     const uint32_t out_units_w = to_units_w(output_shard_w);
     const uint32_t dst_stride_bytes = out_units_w * unit_size;
 
-    // Create input CBs
-    std::vector<CBHandle> cb_inputs(num_input_tensors);
+    // --- Circular Buffers ---
     for (uint32_t i = 0; i < num_input_tensors; i++) {
         const uint32_t in_num_units = to_units_h(input_shard_h[i]) * to_units_w(input_shard_w[i]);
-        const CircularBufferConfig cb_config = CircularBufferConfig(unit_size * in_num_units, {{i, cb_data_format}})
-                                                   .set_page_size(i, unit_size)
-                                                   .set_globally_allocated_address(*input_tensors[i].buffer());
-        cb_inputs[i] = CreateCircularBuffer(program, all_cores, cb_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = unit_size * in_num_units,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(i),
+                .data_format = cb_data_format,
+                .page_size = unit_size,
+            }}},
+            .buffer = input_tensors[i].buffer(),
+        });
     }
 
-    // Create output CB
     const uint32_t out_num_units = to_units_h(output_shard_h) * out_units_w;
-    const CircularBufferConfig out_cb_config =
-        CircularBufferConfig(unit_size * out_num_units, {{cb_dst_id, cb_data_format}})
-            .set_page_size(cb_dst_id, unit_size)
-            .set_globally_allocated_address(*output.buffer());
-    auto cb_output = CreateCircularBuffer(program, all_cores, out_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = unit_size * out_num_units,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_dst_id),
+            .data_format = cb_data_format,
+            .page_size = unit_size,
+        }}},
+        .buffer = output.buffer(),
+    });
 
     // Pre-compute physical core map indexed by grid position [gy][gx]
     std::vector<std::vector<CoreCoord>> physical_cores(grid_rows, std::vector<CoreCoord>(grid_cols));
@@ -312,27 +320,31 @@ ConcatBlockShardedProgramFactory::cached_program_t ConcatBlockShardedProgramFact
         max_num_transfers,
         max_transfers_per_risc);
 
-    // Pass 2: create kernels and split transfers between reader and writer RISCs.
+    // --- Kernel Descriptors ---
     // Both RISCs run the same kernel but with different subsets of transfers,
     // doubling effective NOC bandwidth (reader uses NOC0, writer uses NOC1).
     const std::vector<uint32_t> compile_time_args = {cb_dst_id};
 
-    KernelHandle reader_kernel_id = CreateKernel(
-        program,
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
-        "reader_writer_block_sharded_concat.cpp",
-        all_cores,
-        ReaderDataMovementConfig(compile_time_args));
+        "reader_writer_block_sharded_concat.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = compile_time_args;
+    reader_desc.config = ReaderConfigDescriptor{};
 
-    KernelHandle writer_kernel_id = CreateKernel(
-        program,
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
-        "reader_writer_block_sharded_concat.cpp",
-        all_cores,
-        WriterDataMovementConfig(compile_time_args));
+        "reader_writer_block_sharded_concat.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = compile_time_args;
+    writer_desc.config = WriterConfigDescriptor{};
 
     auto build_runtime_args = [](const std::vector<TransferDesc>& descs, uint32_t start, uint32_t count) {
-        std::vector<uint32_t> args;
+        KernelDescriptor::CoreRuntimeArgs args;
         args.reserve(1 + count * 9);
         args.push_back(count);
         for (uint32_t i = start; i < start + count; i++) {
@@ -350,6 +362,7 @@ ConcatBlockShardedProgramFactory::cached_program_t ConcatBlockShardedProgramFact
         return args;
     };
 
+    // --- Per-core runtime args ---
     for (uint32_t gy = 0; gy < grid_rows; gy++) {
         for (uint32_t gx = 0; gx < grid_cols; gx++) {
             const auto& transfers = all_transfers[gy * grid_cols + gx];
@@ -357,36 +370,17 @@ ConcatBlockShardedProgramFactory::cached_program_t ConcatBlockShardedProgramFact
             const uint32_t reader_count = (total + 1) / 2;  // ceil(total / 2)
             const uint32_t writer_count = total - reader_count;
 
-            auto reader_args = build_runtime_args(transfers, 0, reader_count);
-            auto writer_args = build_runtime_args(transfers, reader_count, writer_count);
-
             CoreCoord logical_core(start_x + gx, start_y + gy);
-            SetRuntimeArgs(program, reader_kernel_id, logical_core, reader_args);
-            SetRuntimeArgs(program, writer_kernel_id, logical_core, writer_args);
+            reader_desc.runtime_args.emplace_back(logical_core, build_runtime_args(transfers, 0, reader_count));
+            writer_desc.runtime_args.emplace_back(
+                logical_core, build_runtime_args(transfers, reader_count, writer_count));
         }
     }
 
-    return {
-        std::move(program),
-        {.num_input_tensors = num_input_tensors,
-         .cb_inputs = cb_inputs,
-         .cb_output = cb_output,
-         .all_cores = all_cores}};
-}
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
 
-void ConcatBlockShardedProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const ConcatParams& /*operation_attributes*/,
-    const ConcatInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    auto& program = cached_program.program;
-    const auto& shared_vars = cached_program.shared_variables;
-
-    for (uint32_t i = 0; i < shared_vars.num_input_tensors; i++) {
-        tt::tt_metal::UpdateDynamicCircularBufferAddress(
-            program, shared_vars.cb_inputs[i], *tensor_args.input_tensors[i].buffer());
-    }
-    tt::tt_metal::UpdateDynamicCircularBufferAddress(program, shared_vars.cb_output, *tensor_return_value.buffer());
+    return desc;
 }
 
 }  // namespace ttnn::prim
