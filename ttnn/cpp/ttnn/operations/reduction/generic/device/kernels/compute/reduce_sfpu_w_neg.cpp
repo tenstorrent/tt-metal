@@ -15,11 +15,7 @@
 #include "api/compute/pack.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_sfpu_helpers_compute.hpp"
-
-#ifdef TRISC_PACK
-#include "llk_pack_api.h"
-#endif
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
@@ -51,29 +47,27 @@ void kernel_main() {
 
     cb_wait_front(cb_scaler, onetile);
 
-    PACK((llk_pack_reduce_mask_config<false /*untilize*/, REDUCE_DIM>()));
+    PACK((llk_pack_reduce_mask_config<REDUCE_DIM>()));
 
     // W-axis reduce: outer iterates output rows (Ht), inner folds Wt input tiles per output.
     for (uint32_t nc = 0; nc < NC; ++nc) {
         for (uint32_t ht = 0; ht < Ht; ++ht) {
             tile_regs_acquire();
 
-            if (Wt > 1) {
+            negative_tile_init();
+            if constexpr (Wt > 1) {
                 compute_kernel_lib::detail::sfpu_reduce_max_fold_init<REDUCE_FORMAT>();
             }
 
             cb_wait_front(cb_input, onetile);
             copy_tile(cb_input, 0, acc_dst);
             cb_pop_front(cb_input, onetile);
-            negative_tile_init();
             negate(acc_dst);
 
             for (uint32_t wt = 1; wt < Wt; ++wt) {
                 cb_wait_front(cb_input, onetile);
                 copy_tile(cb_input, 0, work_dst);
-                negative_tile_init();
                 negate(work_dst);
-                compute_kernel_lib::detail::sfpu_reduce_max_fold_init<REDUCE_FORMAT>();
                 compute_kernel_lib::detail::sfpu_reduce_max_fold_tile<REDUCE_FORMAT>(acc_dst, work_dst, acc_dst);
                 cb_pop_front(cb_input, onetile);
             }
@@ -81,7 +75,6 @@ void kernel_main() {
             sfpu_reduce_init<REDUCE_OP, REDUCE_FORMAT>();
             sfpu_reduce<REDUCE_OP, REDUCE_FORMAT, REDUCE_DIM>(acc_dst, /*ct_dim=*/1, /*rt_dim=*/1);
 
-            negative_tile_init();
             negate(acc_dst);
 
 #ifdef REDUCE_POST_MUL

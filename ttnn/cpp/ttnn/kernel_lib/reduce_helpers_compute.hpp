@@ -288,6 +288,10 @@ struct NoOp {
  * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR) - required explicit parameter
  * @tparam input_policy Input handling policy (default: WaitAndPopPerTile - streaming mode)
  * @tparam reconfig_mode Data format reconfiguration mode (default: INPUT_AND_OUTPUT)
+ * @tparam sfpu_format Routes Int32/Float32 MAX to the SFPU path (Float32 for precision; Int32 has
+ *                     no FPU support). Default DataFormat::Invalid keeps the FPU/GMPOOL path.
+ *                     Only REDUCE_ROW/REDUCE_COL MAX are supported on the SFPU path; MIN is
+ *                     dispatched separately via reduce_sfpu_{h,w}_neg.cpp.
  *
  * @param input_dfb_id Input DataflowBuffer ID containing tiles to reduce
  * @param scaler_dfb_id DataflowBuffer ID containing scaler tile
@@ -369,6 +373,7 @@ template <
     ReduceDim reduce_dim,
     ReduceInputPolicy input_policy = ReduceInputPolicy::WaitAndPopPerTile,
     ReduceDataFormatReconfigMode reconfig_mode = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+    DataFormat sfpu_format = DataFormat::Invalid,
     typename AccumulateT = NoAccumulation,
     typename PostReduceOp = NoOp>
 ALWI void reduce(

@@ -186,9 +186,12 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
         post_mul_scaler_bits,       // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
     };
 
+    // reduce.cpp is REDUCE_FORMAT-aware and handles both FPU and SFPU; MIN keeps its dedicated
+    // -MAX(-x) kernel for each path.
     const std::string compute_kernel =
         std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/") +
-        (use_sfpu_reduce_path ? "reduce_sfpu" : "reduce") + (operation_attributes.negate ? "_w_neg" : "") + ".cpp";
+        (operation_attributes.negate ? (use_sfpu_reduce_path ? "reduce_sfpu_w_neg" : "reduce_w_neg") : "reduce") +
+        ".cpp";
 
     KernelDescriptor compute_desc_g1;
     compute_desc_g1.kernel_source = compute_kernel;
