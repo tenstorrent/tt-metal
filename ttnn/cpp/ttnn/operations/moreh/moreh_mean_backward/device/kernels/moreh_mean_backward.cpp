@@ -43,7 +43,6 @@ void kernel_main() {
                 using AddBcast = BinaryFpu<
                     cb_in1,
                     cb_in0,
-                    cb_intermed0,
                     BinaryFpuOp::Add,
                     BCAST_DIM,
                     BinaryDataFormatReconfig::Input,
@@ -81,7 +80,6 @@ void kernel_main() {
             using MulScalar = BinaryFpu<
                 cb_intermed0,
                 cb_scalar,
-                cb_out0,
                 BinaryFpuOp::Mul,
                 BroadcastDim::Scalar,
                 BinaryDataFormatReconfig::Input,

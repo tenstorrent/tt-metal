@@ -60,10 +60,9 @@ void kernel_main() {
             compute_kernel_lib::BinaryFpu<
                 cb_inp,
                 cb_inp,
-                cb_x2,
                 compute_kernel_lib::BinaryFpuOp::Mul,
                 compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::InputAndOutput,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
                 compute_kernel_lib::CopyTilePolicy::CumulativeWaitPopAtEnd,
                 compute_kernel_lib::CopyTilePolicy::CumulativeWaitPopAtEnd,
                 compute_kernel_lib::CbIndexMode::BlockIter,
@@ -73,7 +72,8 @@ void kernel_main() {
                 cb_x2,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::PackTilePolicy::UpfrontReservePushAtEnd,
-                compute_kernel_lib::PackTileIndexMode::BlockIter>{});
+                compute_kernel_lib::PackTileIndexMode::BlockIter,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
         /*
          * sum(x**2)

@@ -53,10 +53,9 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpu<
                     cb_input,
                     cb_x,
-                    cb_x,
                     compute_kernel_lib::BinaryFpuOp::Add,
                     compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::BinaryDataFormatReconfig::InputAndOutput,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
                     compute_kernel_lib::CopyTilePolicy::WaitAndPop,
                     compute_kernel_lib::CopyTilePolicy::WaitAndPop,
                     compute_kernel_lib::CbIndexMode::FirstTile,
@@ -64,14 +63,16 @@ void kernel_main() {
                 compute_kernel_lib::PackTile<
                     cb_x,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                    compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+                    compute_kernel_lib::PackTileIndexMode::FirstTile,
+                    compute_kernel_lib::PackTileReconfig::Output>{});
         }
     }
     // PARTIAL migration: inline power_tile_to_cb body as 4 eltwise_chain stages.
     //   Block A: x^p           (CopyTile<cb_x, WaitNoPop> + PowerIterative + [Recip] + PackTile<cb_xpow>)
     //   Block B: log(x)        (CopyTile<cb_x, NoWaitPop> + Log + PackTile<cb_logx>)
-    //   Block C: exp(log(x)*d) (BinaryFpu<cb_logx, cb_decimal, cb_exp_lxmd, Mul> + Exp + PackTile<cb_exp_lxmd>)
-    //   Block D: xpow * exp(.) (BinaryFpu<cb_xpow, cb_exp_lxmd, cb_y, Mul> + PackTile<cb_y>)
+    //   Block C: exp(log(x)*d) (BinaryFpu<cb_logx, cb_decimal, Mul> + Exp + PackTile<cb_exp_lxmd>)
+    //   Block D: xpow * exp(.) (BinaryFpu<cb_xpow, cb_exp_lxmd, Mul> + PackTile<cb_y>)
     {
         using namespace compute_kernel_lib;
 
@@ -119,7 +120,6 @@ void kernel_main() {
             BinaryFpu<
                 cb_logx,
                 cb_decimal,
-                cb_exp_lxmd,
                 BinaryFpuOp::Mul,
                 BroadcastDim::None,
                 BinaryDataFormatReconfig::Input,
@@ -141,7 +141,6 @@ void kernel_main() {
             BinaryFpu<
                 cb_xpow,
                 cb_exp_lxmd,
-                cb_y,
                 BinaryFpuOp::Mul,
                 BroadcastDim::None,
                 BinaryDataFormatReconfig::Input,

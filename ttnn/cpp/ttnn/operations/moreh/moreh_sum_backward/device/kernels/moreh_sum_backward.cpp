@@ -31,7 +31,6 @@ void kernel_main() {
             using AddBcast = BinaryFpu<
                 cb_in1,
                 cb_in0,
-                cb_out0,
                 BinaryFpuOp::Add,
                 BCAST_DIM,
                 BinaryDataFormatReconfig::None,

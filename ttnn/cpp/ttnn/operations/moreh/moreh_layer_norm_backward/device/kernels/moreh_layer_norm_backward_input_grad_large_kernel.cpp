@@ -84,30 +84,38 @@ void kernel_main() {
                         BinaryFpu<
                             cb_x,
                             cb_mean,
-                            cb_xmm,
                             BinaryFpuOp::Sub,
                             BroadcastDim::Col,
-                            BinaryDataFormatReconfig::InputAndOutput,
+                            BinaryDataFormatReconfig::Input,
                             CopyTilePolicy::WaitAndPop,
                             CopyTilePolicy::NoWaitNoPop,
                             CbIndexMode::FirstTile,
                             Dst::D0>{},
-                        PackTile<cb_xmm, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                        PackTile<
+                            cb_xmm,
+                            Dst::D0,
+                            PackTilePolicy::PerTileReserveAndPush,
+                            PackTileIndexMode::FirstTile,
+                            PackTileReconfig::Output>{});
                 } else {
                     eltwise_chain(
                         onetile,
                         BinaryFpu<
                             cb_x,
                             cb_mean,
-                            cb_xmm,
                             BinaryFpuOp::Sub,
                             BroadcastDim::Scalar,
-                            BinaryDataFormatReconfig::InputAndOutput,
+                            BinaryDataFormatReconfig::Input,
                             CopyTilePolicy::WaitAndPop,
                             CopyTilePolicy::NoWaitNoPop,
                             CbIndexMode::FirstTile,
                             Dst::D0>{},
-                        PackTile<cb_xmm, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                        PackTile<
+                            cb_xmm,
+                            Dst::D0,
+                            PackTilePolicy::PerTileReserveAndPush,
+                            PackTileIndexMode::FirstTile,
+                            PackTileReconfig::Output>{});
                 }
             }
 
@@ -270,7 +278,6 @@ void kernel_main() {
                 using MulElt = BinaryFpu<
                     cb_y,
                     cb_dycopy,
-                    /*CbOut=*/0,
                     BinaryFpuOp::Mul,
                     BroadcastDim::None,
                     BinaryDataFormatReconfig::Input,
@@ -342,7 +349,6 @@ void kernel_main() {
             using MulBcast = BinaryFpu<
                 cb_n_recip_n,
                 cb_rstd,
-                cb_recip_nrstd,
                 BinaryFpuOp::Mul,
                 BCAST_DIM,
                 BinaryDataFormatReconfig::Input,
@@ -459,7 +465,6 @@ void kernel_main() {
                 using MulElt = BinaryFpu<
                     cb_n_recip_n,
                     cb_dycopy,
-                    /*CbOut=*/0,
                     BinaryFpuOp::Mul,
                     BroadcastDim::None,
                     BinaryDataFormatReconfig::None,
@@ -480,30 +485,38 @@ void kernel_main() {
                         BinaryFpu<
                             cb_ndy,
                             cb_dysum,
-                            cb_ndymdysum,
                             BinaryFpuOp::Sub,
                             BroadcastDim::Col,
-                            BinaryDataFormatReconfig::InputAndOutput,
+                            BinaryDataFormatReconfig::Input,
                             CopyTilePolicy::WaitAndPop,
                             CopyTilePolicy::NoWaitNoPop,
                             CbIndexMode::FirstTile,
                             Dst::D0>{},
-                        PackTile<cb_ndymdysum, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                        PackTile<
+                            cb_ndymdysum,
+                            Dst::D0,
+                            PackTilePolicy::PerTileReserveAndPush,
+                            PackTileIndexMode::FirstTile,
+                            PackTileReconfig::Output>{});
                 } else {
                     eltwise_chain(
                         onetile,
                         BinaryFpu<
                             cb_ndy,
                             cb_dysum,
-                            cb_ndymdysum,
                             BinaryFpuOp::Sub,
                             BroadcastDim::Scalar,
-                            BinaryDataFormatReconfig::InputAndOutput,
+                            BinaryDataFormatReconfig::Input,
                             CopyTilePolicy::WaitAndPop,
                             CopyTilePolicy::NoWaitNoPop,
                             CbIndexMode::FirstTile,
                             Dst::D0>{},
-                        PackTile<cb_ndymdysum, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                        PackTile<
+                            cb_ndymdysum,
+                            Dst::D0,
+                            PackTilePolicy::PerTileReserveAndPush,
+                            PackTileIndexMode::FirstTile,
+                            PackTileReconfig::Output>{});
                 }
             }
 
@@ -555,30 +568,38 @@ void kernel_main() {
                         BinaryFpu<
                             cb_xmm,
                             cb_rstd,
-                            cb_y,
                             BinaryFpuOp::Mul,
                             BroadcastDim::Col,
-                            BinaryDataFormatReconfig::InputAndOutput,
+                            BinaryDataFormatReconfig::Input,
                             CopyTilePolicy::WaitAndPop,
                             CopyTilePolicy::NoWaitNoPop,
                             CbIndexMode::FirstTile,
                             Dst::D0>{},
-                        PackTile<cb_y, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                        PackTile<
+                            cb_y,
+                            Dst::D0,
+                            PackTilePolicy::PerTileReserveAndPush,
+                            PackTileIndexMode::FirstTile,
+                            PackTileReconfig::Output>{});
                 } else {
                     eltwise_chain(
                         onetile,
                         BinaryFpu<
                             cb_xmm,
                             cb_rstd,
-                            cb_y,
                             BinaryFpuOp::Mul,
                             BroadcastDim::Scalar,
-                            BinaryDataFormatReconfig::InputAndOutput,
+                            BinaryDataFormatReconfig::Input,
                             CopyTilePolicy::WaitAndPop,
                             CopyTilePolicy::NoWaitNoPop,
                             CbIndexMode::FirstTile,
                             Dst::D0>{},
-                        PackTile<cb_y, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                        PackTile<
+                            cb_y,
+                            Dst::D0,
+                            PackTilePolicy::PerTileReserveAndPush,
+                            PackTileIndexMode::FirstTile,
+                            PackTileReconfig::Output>{});
                 }
             }
 
@@ -592,30 +613,38 @@ void kernel_main() {
                         BinaryFpu<
                             cb_y,
                             cb_ydysum,
-                            cb_yydysum,
                             BinaryFpuOp::Mul,
                             BroadcastDim::Col,
-                            BinaryDataFormatReconfig::InputAndOutput,
+                            BinaryDataFormatReconfig::Input,
                             CopyTilePolicy::WaitAndPop,
                             CopyTilePolicy::NoWaitNoPop,
                             CbIndexMode::FirstTile,
                             Dst::D0>{},
-                        PackTile<cb_yydysum, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                        PackTile<
+                            cb_yydysum,
+                            Dst::D0,
+                            PackTilePolicy::PerTileReserveAndPush,
+                            PackTileIndexMode::FirstTile,
+                            PackTileReconfig::Output>{});
                 } else {
                     eltwise_chain(
                         onetile,
                         BinaryFpu<
                             cb_y,
                             cb_ydysum,
-                            cb_yydysum,
                             BinaryFpuOp::Mul,
                             BroadcastDim::Scalar,
-                            BinaryDataFormatReconfig::InputAndOutput,
+                            BinaryDataFormatReconfig::Input,
                             CopyTilePolicy::WaitAndPop,
                             CopyTilePolicy::NoWaitNoPop,
                             CbIndexMode::FirstTile,
                             Dst::D0>{},
-                        PackTile<cb_yydysum, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                        PackTile<
+                            cb_yydysum,
+                            Dst::D0,
+                            PackTilePolicy::PerTileReserveAndPush,
+                            PackTileIndexMode::FirstTile,
+                            PackTileReconfig::Output>{});
                 }
             }
 
@@ -627,7 +656,6 @@ void kernel_main() {
                 using SubElt = BinaryFpu<
                     cb_ndymdysum,
                     cb_yydysum,
-                    /*CbOut=*/0,
                     BinaryFpuOp::Sub,
                     BroadcastDim::None,
                     BinaryDataFormatReconfig::Input,
@@ -653,7 +681,6 @@ void kernel_main() {
                 using MulElt = BinaryFpu<
                     cb_tmp4,
                     cb_recip_nrstd,
-                    /*CbOut=*/0,
                     BinaryFpuOp::Mul,
                     BroadcastDim::None,
                     BinaryDataFormatReconfig::Input,

@@ -102,8 +102,8 @@ void kernel_main() {
         // PARTIAL migration: inline power_tile_to_cb body as 4 eltwise_chain stages.
         //   Block A: |x|^p          (CopyTile<cb_xabs, WaitNoPop> + PowerIterative + [Recip] + PackTile<cb_xpow>)
         //   Block B: log(|x|)       (CopyTile<cb_xabs, NoWaitPop> + Log + PackTile<cb_logx>)
-        //   Block C: exp(log * d)   (BinaryFpu<cb_logx, cb_decimal, cb_exp_lxmd, Mul> + Exp + PackTile<cb_exp_lxmd>)
-        //   Block D: xpow*exp       (BinaryFpu<cb_xpow, cb_exp_lxmd, cb_correct_xpow, Mul> + PackTile<cb_correct_xpow>)
+        //   Block C: exp(log * d)   (BinaryFpu<cb_logx, cb_decimal, Mul> + Exp + PackTile<cb_exp_lxmd>)
+        //   Block D: xpow*exp       (BinaryFpu<cb_xpow, cb_exp_lxmd, Mul> + PackTile<cb_correct_xpow>)
         {
             using namespace compute_kernel_lib;
             if (p_is_negative) {
@@ -162,7 +162,6 @@ void kernel_main() {
                 BinaryFpu<
                     cb_logx,
                     cb_decimal,
-                    cb_exp_lxmd,
                     BinaryFpuOp::Mul,
                     BroadcastDim::None,
                     BinaryDataFormatReconfig::Input,
@@ -183,7 +182,6 @@ void kernel_main() {
                 BinaryFpu<
                     cb_xpow,
                     cb_exp_lxmd,
-                    cb_correct_xpow,
                     BinaryFpuOp::Mul,
                     BroadcastDim::None,
                     BinaryDataFormatReconfig::Input,
@@ -218,10 +216,9 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpu<
                     cb_correct_xpow,
                     cb_xpowadd,
-                    cb_xpowadd,
                     compute_kernel_lib::BinaryFpuOp::Add,
                     compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::BinaryDataFormatReconfig::InputAndOutput,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
                     compute_kernel_lib::CopyTilePolicy::WaitAndPop,
                     compute_kernel_lib::CopyTilePolicy::WaitAndPop,
                     compute_kernel_lib::CbIndexMode::FirstTile,
@@ -229,7 +226,9 @@ void kernel_main() {
                 compute_kernel_lib::PackTile<
                     cb_xpowadd,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                    compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+                    compute_kernel_lib::PackTileIndexMode::FirstTile,
+                    compute_kernel_lib::PackTileReconfig::Output>{});
         }
     }
 

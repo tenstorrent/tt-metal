@@ -67,7 +67,6 @@ void kernel_main() {
             using MulScalar = BinaryFpu<
                 cb_intermed0,
                 cb_scalar,
-                cb_out0,
                 BinaryFpuOp::Mul,
                 BroadcastDim::Scalar,
                 BinaryDataFormatReconfig::Input,

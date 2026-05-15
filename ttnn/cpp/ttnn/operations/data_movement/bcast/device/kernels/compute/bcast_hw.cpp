@@ -43,7 +43,6 @@ void kernel_main() {
     using BinElt = BinaryFpu<
         cb_a,
         cb_b,
-        cb_out,
         FPU_OP,
         BroadcastDim::Scalar,
         BinaryDataFormatReconfig::None,
@@ -57,7 +56,6 @@ void kernel_main() {
     using BinElt = BinaryFpu<
         cb_a,
         cb_b,
-        cb_out,
         FPU_OP,
         BroadcastDim::Scalar,
         BinaryDataFormatReconfig::None,

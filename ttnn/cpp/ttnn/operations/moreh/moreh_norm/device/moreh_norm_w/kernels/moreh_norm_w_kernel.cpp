@@ -120,10 +120,9 @@ void kernel_main() {
                     compute_kernel_lib::BinaryFpu<
                         cb_correct_xpow,
                         cb_xpowadd,
-                        cb_xpowadd,
                         compute_kernel_lib::BinaryFpuOp::Add,
                         compute_kernel_lib::BroadcastDim::None,
-                        compute_kernel_lib::BinaryDataFormatReconfig::InputAndOutput,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
                         compute_kernel_lib::CopyTilePolicy::WaitAndPop,
                         compute_kernel_lib::CopyTilePolicy::WaitAndPop,
                         compute_kernel_lib::CbIndexMode::FirstTile,
@@ -131,7 +130,9 @@ void kernel_main() {
                     compute_kernel_lib::PackTile<
                         cb_xpowadd,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                        compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+                        compute_kernel_lib::PackTileIndexMode::FirstTile,
+                        compute_kernel_lib::PackTileReconfig::Output>{});
             }
         }
         // Sum(|x|^p)

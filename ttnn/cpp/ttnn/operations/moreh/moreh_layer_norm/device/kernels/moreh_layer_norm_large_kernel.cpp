@@ -325,7 +325,6 @@ void kernel_main() {
             using AddRsqrt = BinaryFpu<
                 cb_var,
                 cb_eps,
-                /*CbOut=*/0,
                 BinaryFpuOp::Add,
                 BroadcastDim::None,
                 BinaryDataFormatReconfig::Input,

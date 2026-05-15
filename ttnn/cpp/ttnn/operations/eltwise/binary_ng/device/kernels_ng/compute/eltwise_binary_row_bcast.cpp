@@ -100,7 +100,6 @@ void kernel_main() {
         using BinElt = BinaryFpu<
             cb_post_lhs,
             cb_post_rhs,
-            cb_out,
             FPU_OP,
             BroadcastDim::None,
             BinaryDataFormatReconfig::None,

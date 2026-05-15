@@ -87,7 +87,6 @@ ALWI void process_tile(uint32_t freq, uint32_t tile_start) {
         using BinElt = BinaryFpu<
             (uint32_t)cb_post_lhs,
             (uint32_t)cb_post_rhs,
-            (uint32_t)cb_out,
             FPU_OP,
             BroadcastDim::None,
             BinaryDataFormatReconfig::None,

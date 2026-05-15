@@ -27,10 +27,9 @@ ALWI void moreh_bin_chain() {
     using BinElt = BinaryFpu<
         CbA,
         CbB,
-        CbOut,
         Op,
         Bcast,
-        BinaryDataFormatReconfig::InputAndOutput,
+        BinaryDataFormatReconfig::Input,
         PopA ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
         PopB ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
         CbIndexMode::Pinned,

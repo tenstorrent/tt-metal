@@ -96,8 +96,7 @@ void kernel_main() {
     // (WaitAndPop) preserves reader-pushes-one-at-a-time semantics from prior block
     // model; num_tiles_per_cycle is unused.
     (void)num_tiles_per_cycle;
-    using BinElt =
-        BinaryFpu<cb_post_lhs, cb_post_rhs, cb_out, FPU_OP, BroadcastDim::None, BinaryDataFormatReconfig::None>;
+    using BinElt = BinaryFpu<cb_post_lhs, cb_post_rhs, FPU_OP, BroadcastDim::None, BinaryDataFormatReconfig::None>;
     using PackElt = PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>;
     eltwise_chain(num_tiles, BinElt{}, PackElt{});
 #endif

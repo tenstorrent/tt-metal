@@ -62,15 +62,19 @@ FORCE_INLINE void mul() {
         BinaryFpu<
             cb_a,
             cb_b,
-            cb_out,
             BinaryFpuOp::Mul,
             BroadcastDim::None,
-            BinaryDataFormatReconfig::InputAndOutput,
+            BinaryDataFormatReconfig::Input,
             CopyTilePolicy::WaitAndPop,
             CopyTilePolicy::WaitAndPop,
             CbIndexMode::FirstTile,
             Dst::D0>{},
-        PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            cb_out,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::Output>{});
 }
 
 template <uint32_t cb_a, uint32_t cb_b, uint32_t cb_out>
@@ -81,15 +85,19 @@ FORCE_INLINE void sum() {
         BinaryFpu<
             cb_a,
             cb_b,
-            cb_out,
             BinaryFpuOp::Add,
             BroadcastDim::None,
-            BinaryDataFormatReconfig::InputAndOutput,
+            BinaryDataFormatReconfig::Input,
             CopyTilePolicy::WaitAndPop,
             CopyTilePolicy::WaitAndPop,
             CbIndexMode::FirstTile,
             Dst::D0>{},
-        PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            cb_out,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::Output>{});
 }
 
 // Note: original copy() takes a runtime num_input_units to allow caller to pre-wait a block of N input tiles

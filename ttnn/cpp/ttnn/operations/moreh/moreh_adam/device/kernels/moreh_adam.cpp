@@ -40,15 +40,22 @@ ALWI void moreh_bin_chain() {
     using BinElt = BinaryFpu<
         CbA,
         CbB,
-        CbOut,
         Op,
         BroadcastDim::None,
-        BinaryDataFormatReconfig::InputAndOutput,
+        BinaryDataFormatReconfig::Input,
         PopA ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
         PopB ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
         CbIndexMode::Pinned,
         Dst::D0>;
-    eltwise_chain(1, BinElt{IdxA, IdxB}, PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+    eltwise_chain(
+        1,
+        BinElt{IdxA, IdxB},
+        PackTile<
+            CbOut,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::Output>{});
 }
 
 template <uint32_t CbIn, uint32_t CbOut, uint32_t Idx, bool Pop>
@@ -291,16 +298,20 @@ void kernel_main() {
                 BinaryFpu<
                     cb_one,
                     cb_tmp1,
-                    cb_tmp1,
                     BinaryFpuOp::Sub,
                     BroadcastDim::None,
-                    BinaryDataFormatReconfig::InputAndOutput,
+                    BinaryDataFormatReconfig::Input,
                     CopyTilePolicy::NoWaitNoPop,
                     CopyTilePolicy::WaitAndPop,
                     CbIndexMode::FirstTile,
                     Dst::D0>{},
                 Recip<Dst::D0>{},
-                PackTile<cb_tmp1, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                PackTile<
+                    cb_tmp1,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
         }
 
 #ifdef AMSGRAD
@@ -343,32 +354,40 @@ void kernel_main() {
                 BinaryFpu<
                     tmp_cb_max_exp_avg_sq,
                     cb_tmp1,
-                    cb_tmp1,
                     BinaryFpuOp::Mul,
                     BroadcastDim::None,
-                    BinaryDataFormatReconfig::InputAndOutput,
+                    BinaryDataFormatReconfig::Input,
                     CopyTilePolicy::WaitNoPop,
                     CopyTilePolicy::WaitAndPop,
                     CbIndexMode::FirstTile,
                     Dst::D0>{},
                 Sqrt<Approx::Exact, Dst::D0>{},
-                PackTile<cb_tmp1, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                PackTile<
+                    cb_tmp1,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
 #else
             eltwise_chain(
                 onetile,
                 BinaryFpu<
                     tmp_cb_exp_avg_sq,
                     cb_tmp1,
-                    cb_tmp1,
                     BinaryFpuOp::Mul,
                     BroadcastDim::None,
-                    BinaryDataFormatReconfig::InputAndOutput,
+                    BinaryDataFormatReconfig::Input,
                     CopyTilePolicy::WaitNoPop,
                     CopyTilePolicy::WaitAndPop,
                     CbIndexMode::FirstTile,
                     Dst::D0>{},
                 Sqrt<Approx::Exact, Dst::D0>{},
-                PackTile<cb_tmp1, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                PackTile<
+                    cb_tmp1,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
 #endif
         }
 #ifdef AMSGRAD
@@ -384,16 +403,20 @@ void kernel_main() {
                 BinaryFpu<
                     cb_tmp1,
                     cb_scalar_args,
-                    cb_tmp1,
                     BinaryFpuOp::Add,
                     BroadcastDim::None,
-                    BinaryDataFormatReconfig::InputAndOutput,
+                    BinaryDataFormatReconfig::Input,
                     CopyTilePolicy::WaitAndPop,
                     CopyTilePolicy::NoWaitNoPop,
                     CbIndexMode::Pinned,
                     Dst::D0>{first_tile, eps_tile},
                 Recip<Dst::D0>{},
-                PackTile<cb_tmp1, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                PackTile<
+                    cb_tmp1,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
         }
 
         // bias_correction1 = 1 - pow(beta1, step);
@@ -425,16 +448,20 @@ void kernel_main() {
                 BinaryFpu<
                     cb_one,
                     cb_tmp2,
-                    cb_tmp2,
                     BinaryFpuOp::Sub,
                     BroadcastDim::None,
-                    BinaryDataFormatReconfig::InputAndOutput,
+                    BinaryDataFormatReconfig::Input,
                     CopyTilePolicy::NoWaitNoPop,
                     CopyTilePolicy::WaitAndPop,
                     CbIndexMode::FirstTile,
                     Dst::D0>{},
                 Recip<Dst::D0>{},
-                PackTile<cb_tmp2, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                PackTile<
+                    cb_tmp2,
+                    Dst::D0,
+                    PackTilePolicy::PerTileReserveAndPush,
+                    PackTileIndexMode::FirstTile,
+                    PackTileReconfig::Output>{});
         }
 
         // cb_tmp2 = lr * cb_tmp2;

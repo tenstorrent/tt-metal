@@ -49,10 +49,9 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpu<
                     input_cb,
                     partial_prod_cb,
-                    partial_prod_cb,
                     compute_kernel_lib::BinaryFpuOp::Mul,
                     compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::BinaryDataFormatReconfig::InputAndOutput,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
                     compute_kernel_lib::CopyTilePolicy::WaitAndPop,
                     compute_kernel_lib::CopyTilePolicy::WaitAndPop,
                     compute_kernel_lib::CbIndexMode::FirstTile,
@@ -60,7 +59,9 @@ void kernel_main() {
                 compute_kernel_lib::PackTile<
                     partial_prod_cb,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                    compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+                    compute_kernel_lib::PackTileIndexMode::FirstTile,
+                    compute_kernel_lib::PackTileReconfig::Output>{});
         }
 
         // Final iter: final_output = input[N-1] * partial_prod.
@@ -69,10 +70,9 @@ void kernel_main() {
             compute_kernel_lib::BinaryFpu<
                 input_cb,
                 partial_prod_cb,
-                final_output_cb,
                 compute_kernel_lib::BinaryFpuOp::Mul,
                 compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::InputAndOutput,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
                 compute_kernel_lib::CopyTilePolicy::WaitAndPop,
                 compute_kernel_lib::CopyTilePolicy::WaitAndPop,
                 compute_kernel_lib::CbIndexMode::FirstTile,
@@ -80,6 +80,8 @@ void kernel_main() {
             compute_kernel_lib::PackTile<
                 final_output_cb,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+                compute_kernel_lib::PackTileIndexMode::FirstTile,
+                compute_kernel_lib::PackTileReconfig::Output>{});
     }
 }

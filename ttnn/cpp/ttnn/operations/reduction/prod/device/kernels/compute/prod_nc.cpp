@@ -35,10 +35,9 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpu<
                     cb_in0,
                     cb_in1,
-                    cb_out0,
                     compute_kernel_lib::BinaryFpuOp::Mul,
                     compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::BinaryDataFormatReconfig::InputAndOutput,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
                     compute_kernel_lib::CopyTilePolicy::WaitAndPop,
                     compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
                     compute_kernel_lib::CbIndexMode::FirstTile,
@@ -46,7 +45,9 @@ void kernel_main() {
                 compute_kernel_lib::PackTile<
                     cb_out0,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                    compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+                    compute_kernel_lib::PackTileIndexMode::FirstTile,
+                    compute_kernel_lib::PackTileReconfig::Output>{});
         } else {
             // Seed: cb_intermed0 = cb_in0 * cb_in1 (cb_in1 caller-managed).
             compute_kernel_lib::eltwise_chain(
@@ -54,10 +55,9 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpu<
                     cb_in0,
                     cb_in1,
-                    cb_intermed0,
                     compute_kernel_lib::BinaryFpuOp::Mul,
                     compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::BinaryDataFormatReconfig::InputAndOutput,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
                     compute_kernel_lib::CopyTilePolicy::WaitAndPop,
                     compute_kernel_lib::CopyTilePolicy::NoWaitNoPop,
                     compute_kernel_lib::CbIndexMode::FirstTile,
@@ -65,7 +65,9 @@ void kernel_main() {
                 compute_kernel_lib::PackTile<
                     cb_intermed0,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                    compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+                    compute_kernel_lib::PackTileIndexMode::FirstTile,
+                    compute_kernel_lib::PackTileReconfig::Output>{});
 
             // Middle iters: cb_intermed0 = cb_in0 * cb_intermed0 (in-place).
             for (uint32_t j = 1; j < num_input_tiles - 1; ++j) {
@@ -74,10 +76,9 @@ void kernel_main() {
                     compute_kernel_lib::BinaryFpu<
                         cb_in0,
                         cb_intermed0,
-                        cb_intermed0,
                         compute_kernel_lib::BinaryFpuOp::Mul,
                         compute_kernel_lib::BroadcastDim::None,
-                        compute_kernel_lib::BinaryDataFormatReconfig::InputAndOutput,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
                         compute_kernel_lib::CopyTilePolicy::WaitAndPop,
                         compute_kernel_lib::CopyTilePolicy::WaitAndPop,
                         compute_kernel_lib::CbIndexMode::FirstTile,
@@ -85,7 +86,9 @@ void kernel_main() {
                     compute_kernel_lib::PackTile<
                         cb_intermed0,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                        compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+                        compute_kernel_lib::PackTileIndexMode::FirstTile,
+                        compute_kernel_lib::PackTileReconfig::Output>{});
             }
 
             // Final iter: cb_out0 = cb_in0 * cb_intermed0.
@@ -94,10 +97,9 @@ void kernel_main() {
                 compute_kernel_lib::BinaryFpu<
                     cb_in0,
                     cb_intermed0,
-                    cb_out0,
                     compute_kernel_lib::BinaryFpuOp::Mul,
                     compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::BinaryDataFormatReconfig::InputAndOutput,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
                     compute_kernel_lib::CopyTilePolicy::WaitAndPop,
                     compute_kernel_lib::CopyTilePolicy::WaitAndPop,
                     compute_kernel_lib::CbIndexMode::FirstTile,
@@ -105,7 +107,9 @@ void kernel_main() {
                 compute_kernel_lib::PackTile<
                     cb_out0,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                    compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+                    compute_kernel_lib::PackTileIndexMode::FirstTile,
+                    compute_kernel_lib::PackTileReconfig::Output>{});
         }
     }
 }

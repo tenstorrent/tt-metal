@@ -20,10 +20,9 @@ void kernel_main() {
             compute_kernel_lib::BinaryFpu<
                 tt::CBIndex::c_0,
                 tt::CBIndex::c_1,
-                tt::CBIndex::c_24,
                 compute_kernel_lib::BinaryFpuOp::Mul,
                 compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::InputAndOutput,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
                 compute_kernel_lib::CopyTilePolicy::WaitAndPop,
                 compute_kernel_lib::CopyTilePolicy::WaitAndPop,
                 compute_kernel_lib::CbIndexMode::FirstTile,
@@ -31,7 +30,9 @@ void kernel_main() {
             compute_kernel_lib::PackTile<
                 tt::CBIndex::c_24,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+                compute_kernel_lib::PackTileIndexMode::FirstTile,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
         // reduce-w
         compute_kernel_lib::reduce<

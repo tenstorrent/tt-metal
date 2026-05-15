@@ -337,15 +337,19 @@ void scale() {
         BinaryFpu<
             cb_normalized_scores,
             cb_route_scale_scalar,
-            cb_out_weights,
             BinaryFpuOp::Mul,
             BroadcastDim::Scalar,
-            BinaryDataFormatReconfig::InputAndOutput,
+            BinaryDataFormatReconfig::Input,
             CopyTilePolicy::WaitAndPop /* A: pre-waited normalized scores, popped per iter */,
             CopyTilePolicy::NoWaitNoPop /* B: held scalar, caller-managed lifecycle */,
             CbIndexMode::FirstTile,
             Dst::D0>{},
-        PackTile<cb_out_weights, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+        PackTile<
+            cb_out_weights,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::Output>{});
 }
 
 }  // namespace blocks

@@ -10,8 +10,9 @@ namespace {
 // File-local helper: BinaryFpu(Op) on (CbA[idxA], CbB[idxB]) -> CbOut, single tile,
 // PerTile policies with WaitAndPop / WaitNoPop driven by PopA / PopB. Mirrors the
 // `*_tiles_to_cb` moreh helpers (FP32_DEST_ACC reconfig is folded into the chain via
-// BinaryDataFormatReconfig::InputAndOutput — emits unconditionally, equivalent to the
-// _with_dt wrappers under FP32_DEST_ACC and a no-op otherwise on bf16-only).
+// BinaryDataFormatReconfig::Input on BinaryFpu + PackTileReconfig::Output on PackTile —
+// emits unconditionally, equivalent to the _with_dt wrappers under FP32_DEST_ACC and
+// a no-op otherwise on bf16-only).
 template <
     compute_kernel_lib::BinaryFpuOp Op,
     uint32_t CbA,
@@ -26,15 +27,22 @@ ALWI void moreh_bin_chain() {
     using BinElt = BinaryFpu<
         CbA,
         CbB,
-        CbOut,
         Op,
         BroadcastDim::None,
-        BinaryDataFormatReconfig::InputAndOutput,
+        BinaryDataFormatReconfig::Input,
         PopA ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
         PopB ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
         CbIndexMode::Pinned,
         Dst::D0>;
-    eltwise_chain(1, BinElt{IdxA, IdxB}, PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+    eltwise_chain(
+        1,
+        BinElt{IdxA, IdxB},
+        PackTile<
+            CbOut,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::Output>{});
 }
 
 template <uint32_t CbIn, uint32_t CbOut, uint32_t Idx, bool Pop>

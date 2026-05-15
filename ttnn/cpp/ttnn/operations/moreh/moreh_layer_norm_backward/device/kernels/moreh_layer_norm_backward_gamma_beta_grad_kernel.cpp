@@ -197,30 +197,38 @@ void kernel_main() {
                             BinaryFpu<
                                 cb_xmm,
                                 cb_rstd,
-                                cb_y,
                                 BinaryFpuOp::Mul,
                                 BroadcastDim::Col,
-                                BinaryDataFormatReconfig::InputAndOutput,
+                                BinaryDataFormatReconfig::Input,
                                 CopyTilePolicy::WaitAndPop,
                                 CopyTilePolicy::WaitAndPop,
                                 CbIndexMode::FirstTile,
                                 Dst::D0>{},
-                            PackTile<cb_y, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                            PackTile<
+                                cb_y,
+                                Dst::D0,
+                                PackTilePolicy::PerTileReserveAndPush,
+                                PackTileIndexMode::FirstTile,
+                                PackTileReconfig::Output>{});
                     } else {
                         eltwise_chain(
                             onetile,
                             BinaryFpu<
                                 cb_xmm,
                                 cb_rstd,
-                                cb_y,
                                 BinaryFpuOp::Mul,
                                 BroadcastDim::Scalar,
-                                BinaryDataFormatReconfig::InputAndOutput,
+                                BinaryDataFormatReconfig::Input,
                                 CopyTilePolicy::WaitAndPop,
                                 CopyTilePolicy::WaitAndPop,
                                 CbIndexMode::FirstTile,
                                 Dst::D0>{},
-                            PackTile<cb_y, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                            PackTile<
+                                cb_y,
+                                Dst::D0,
+                                PackTilePolicy::PerTileReserveAndPush,
+                                PackTileIndexMode::FirstTile,
+                                PackTileReconfig::Output>{});
                     }
                 }
 
@@ -231,7 +239,6 @@ void kernel_main() {
                     using MulElt = BinaryFpu<
                         cb_y,
                         cb_dycopy,
-                        /*CbOut=*/0,
                         BinaryFpuOp::Mul,
                         BroadcastDim::None,
                         BinaryDataFormatReconfig::Input,

@@ -28,10 +28,9 @@ ALWI void fpu_binary_to_cb_chain() {
     using BinElt = BinaryFpu<
         CbA,
         CbB,
-        CbOut,
         Op,
         BroadcastDim::None,
-        BinaryDataFormatReconfig::InputAndOutput,
+        BinaryDataFormatReconfig::Input,
         PopA ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
         PopB ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop>;
     using PackElt = PackTile<

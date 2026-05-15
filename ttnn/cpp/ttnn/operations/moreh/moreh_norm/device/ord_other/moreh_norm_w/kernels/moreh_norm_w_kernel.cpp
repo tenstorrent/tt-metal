@@ -160,10 +160,9 @@ void kernel_main() {
                     compute_kernel_lib::BinaryFpu<
                         cb_val,
                         cb_cal,
-                        cb_cal,
                         compute_kernel_lib::BinaryFpuOp::Add,
                         compute_kernel_lib::BroadcastDim::None,
-                        compute_kernel_lib::BinaryDataFormatReconfig::InputAndOutput,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
                         compute_kernel_lib::CopyTilePolicy::WaitAndPop,
                         compute_kernel_lib::CopyTilePolicy::WaitAndPop,
                         compute_kernel_lib::CbIndexMode::FirstTile,
@@ -171,7 +170,9 @@ void kernel_main() {
                     compute_kernel_lib::PackTile<
                         cb_cal,
                         compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
+                        compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush,
+                        compute_kernel_lib::PackTileIndexMode::FirstTile,
+                        compute_kernel_lib::PackTileReconfig::Output>{});
 #else
                 // BLOCKED: binary_max_tile held-DEST pattern; no BinaryMax in eltwise_chain.
                 tile_regs_acquire();

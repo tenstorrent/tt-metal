@@ -308,7 +308,6 @@ void kernel_main() {
             compute_kernel_lib::BinaryFpu<
                 cb_exps,
                 cb_recipsumexps,
-                cb_out0,
                 compute_kernel_lib::BinaryFpuOp::Mul,
                 compute_kernel_lib::BroadcastDim::Col,
                 compute_kernel_lib::BinaryDataFormatReconfig::None,

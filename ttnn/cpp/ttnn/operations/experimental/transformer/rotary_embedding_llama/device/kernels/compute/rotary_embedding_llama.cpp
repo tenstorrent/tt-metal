@@ -91,7 +91,6 @@ void kernel_main() {
                     compute_kernel_lib::BinaryFpu<
                         rotated_in_interm_cb,
                         sin_cb,
-                        sin_interm_cb,
                         compute_kernel_lib::BinaryFpuOp::Mul,
                         compute_kernel_lib::BroadcastDim::None,
                         compute_kernel_lib::BinaryDataFormatReconfig::None,
@@ -114,7 +113,6 @@ void kernel_main() {
                     compute_kernel_lib::BinaryFpu<
                         in_cb,
                         cos_cb,
-                        cos_interm_cb,
                         compute_kernel_lib::BinaryFpuOp::Mul,
                         compute_kernel_lib::BroadcastDim::None,
                         compute_kernel_lib::BinaryDataFormatReconfig::None,
@@ -169,7 +167,6 @@ void kernel_main() {
                     compute_kernel_lib::BinaryFpu<
                         cos_interm_cb,
                         sin_interm_cb,
-                        out_cb,
                         compute_kernel_lib::BinaryFpuOp::Add,
                         compute_kernel_lib::BroadcastDim::None,
                         compute_kernel_lib::BinaryDataFormatReconfig::None,
