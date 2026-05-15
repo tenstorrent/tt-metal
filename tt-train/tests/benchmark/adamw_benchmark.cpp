@@ -3,8 +3,6 @@
 
 #include <benchmark/benchmark.h>
 
-#include <chrono>
-
 #include "benchmark_utils.hpp"
 #include "metal/optimizers/adamw/adamw.hpp"
 #include "test_utils/random_data.hpp"
@@ -19,12 +17,7 @@ struct AdamWShape {
     std::string name;
 };
 
-struct TestConfig {
-    int num_warmup_iterations = 3;
-    int num_measurement_iterations = 20;
-};
-
-const TestConfig test_config = {
+constexpr ttml::benchmark_utils::BenchmarkIterationConfig test_config = {
     .num_warmup_iterations = 5,
     .num_measurement_iterations = 50,
 };
@@ -44,7 +37,7 @@ void BM_AdamW(benchmark::State& state) {
     const int shape_index = static_cast<int>(state.range(0));
     const auto& adamw_shape = adamw_shapes[shape_index];
 
-    const auto device_id = 0;
+    constexpr int device_id = 0;
     auto device = ttnn::device::open_mesh_device(device_id);
     device->enable_program_cache();
 
@@ -78,7 +71,7 @@ void BM_AdamW(benchmark::State& state) {
     const float weight_decay = 0.01f;
 
     // Warmup
-    for (int i = 0; i < test_config.num_warmup_iterations; ++i) {
+    ttml::benchmark_utils::run_iterations(static_cast<uint32_t>(test_config.num_warmup_iterations), [&]() {
         auto result = ttml::metal::adamw(
             param,
             grad,
@@ -94,35 +87,29 @@ void BM_AdamW(benchmark::State& state) {
             weight_decay);
         tt::tt_metal::distributed::Synchronize(device.get(), std::nullopt);
         result.deallocate();
-    }
+    });
 
     for ([[maybe_unused]] auto _ : state) {
-        auto total_time = std::chrono::duration<double>::zero();
-
-        for (int iter = 0; iter < test_config.num_measurement_iterations; ++iter) {
-            auto start = std::chrono::high_resolution_clock::now();
-            auto result = ttml::metal::adamw(
-                param,
-                grad,
-                exp_avg,
-                exp_avg_sq,
-                std::nullopt,
-                lr,
-                beta1,
-                beta2,
-                beta1_pow,
-                beta2_pow,
-                epsilon,
-                weight_decay);
-            tt::tt_metal::distributed::Synchronize(device.get(), std::nullopt);
-            auto end = std::chrono::high_resolution_clock::now();
-            total_time += end - start;
-            result.deallocate();
-        }
-
-        double avg_time_s = total_time.count() / test_config.num_measurement_iterations;
-        double time_us = avg_time_s * 1e6;
-        double gb_per_s = static_cast<double>(total_dram_bytes) / avg_time_s / 1e9;
+        const double avg_time_s =
+            ttml::benchmark_utils::measure_average_iteration_time_s(test_config.num_measurement_iterations, [&]() {
+                auto result = ttml::metal::adamw(
+                    param,
+                    grad,
+                    exp_avg,
+                    exp_avg_sq,
+                    std::nullopt,
+                    lr,
+                    beta1,
+                    beta2,
+                    beta1_pow,
+                    beta2_pow,
+                    epsilon,
+                    weight_decay);
+                tt::tt_metal::distributed::Synchronize(device.get(), std::nullopt);
+                result.deallocate();
+            });
+        const double time_us = avg_time_s * 1e6;
+        const double gb_per_s = static_cast<double>(total_dram_bytes) / avg_time_s / 1e9;
 
         state.SetIterationTime(avg_time_s);
         state.SetLabel(adamw_shape.name);

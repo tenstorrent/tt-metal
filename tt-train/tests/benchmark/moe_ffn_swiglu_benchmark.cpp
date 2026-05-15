@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
-#include <numeric>
 #include <random>
 #include <sstream>
 #include <string>
@@ -16,6 +15,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
+#include "benchmark_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/moe_ffn_swiglu_op.hpp"
 #include "test_utils/random_data.hpp"
@@ -99,7 +99,7 @@ Stats summarize(const std::vector<double>& times_us) {
     if (times_us.empty()) {
         return s;
     }
-    s.avg_us = std::accumulate(times_us.begin(), times_us.end(), 0.0) / static_cast<double>(times_us.size());
+    s.avg_us = ttml::benchmark_utils::average(times_us);
     s.min_us = *std::min_element(times_us.begin(), times_us.end());
     s.max_us = *std::max_element(times_us.begin(), times_us.end());
     std::vector<double> sorted = times_us;
@@ -147,12 +147,8 @@ CaseResult run_case(const Case& c, uint32_t num_warmup, uint32_t num_measure) {
         return std::chrono::duration<double, std::micro>(t1 - t0).count();
     };
 
-    for (uint32_t i = 0; i < num_warmup; ++i) {
-        (void)run_forward();
-    }
-    for (uint32_t i = 0; i < num_measure; ++i) {
-        fwd_times.push_back(run_forward());
-    }
+    ttml::benchmark_utils::run_iterations(num_warmup, [&]() { (void)run_forward(); });
+    ttml::benchmark_utils::run_iterations(num_measure, [&]() { fwd_times.push_back(run_forward()); });
 
     // Forward+backward timing pass.
     std::vector<double> fb_times;
@@ -170,12 +166,8 @@ CaseResult run_case(const Case& c, uint32_t num_warmup, uint32_t num_measure) {
         return std::chrono::duration<double, std::micro>(t1 - t0).count();
     };
 
-    for (uint32_t i = 0; i < num_warmup; ++i) {
-        (void)run_fwd_bwd();
-    }
-    for (uint32_t i = 0; i < num_measure; ++i) {
-        fb_times.push_back(run_fwd_bwd());
-    }
+    ttml::benchmark_utils::run_iterations(num_warmup, [&]() { (void)run_fwd_bwd(); });
+    ttml::benchmark_utils::run_iterations(num_measure, [&]() { fb_times.push_back(run_fwd_bwd()); });
 
     CaseResult r;
     r.forward = summarize(fwd_times);

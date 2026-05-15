@@ -9,7 +9,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
-#include <numeric>
 #include <string>
 #include <tt-metalium/distributed.hpp>
 #include <vector>
@@ -61,10 +60,6 @@ const std::vector<ModelShape>& all_models() {
     return models;
 }
 
-double avg(const std::vector<double>& values) {
-    return std::accumulate(values.begin(), values.end(), 0.0) / static_cast<double>(values.size());
-}
-
 size_t cumulative_peak_from_captured_traces() {
     long long cumulative_current = 0;
     long long cumulative_peak = 0;
@@ -78,7 +73,7 @@ size_t cumulative_peak_from_captured_traces() {
     return static_cast<size_t>(std::max(0LL, cumulative_peak));
 }
 
-RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t batch_size, bool use_fused) {
+RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, const uint32_t batch_size, const bool use_fused) {
     auto* const device = &ttml::autograd::ctx().get_device();
     device->clear_program_cache();
 
@@ -206,13 +201,6 @@ RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t b
     return result;
 }
 
-double pct(double fused, double baseline) {
-    if (baseline == 0.0) {
-        return 0.0;
-    }
-    return (fused - baseline) / baseline * 100.0;
-}
-
 struct RowSummary {
     uint32_t batch = 0;
     double baseline_total_ms = 0.0;
@@ -255,21 +243,10 @@ int main() {
                 sweep_cfg.stacked_blocks = static_cast<uint32_t>(parsed);
             }
         }
-        if (const char* env_warmup = std::getenv("TTML_SWIGLU_BENCH_WARMUP")) {
-            sweep_cfg.num_warmup = static_cast<uint32_t>(std::stoul(env_warmup));
-        }
-        if (const char* env_measure = std::getenv("TTML_SWIGLU_BENCH_MEASURE")) {
-            sweep_cfg.num_measure = static_cast<uint32_t>(std::stoul(env_measure));
-        }
-        if (const char* env_batches = std::getenv("TTML_SWIGLU_BENCH_BATCHES")) {
-            auto parsed = ttml::benchmark_utils::parse_u32_csv(env_batches);
-            if (!parsed.empty()) {
-                sweep_cfg.batch_sizes = std::move(parsed);
-            }
-        }
-        if (const char* env_models = std::getenv("TTML_SWIGLU_BENCH_MODELS")) {
-            sweep_cfg.model_filter = ttml::benchmark_utils::parse_string_csv(env_models);
-        }
+        ttml::benchmark_utils::override_u32_from_env("TTML_SWIGLU_BENCH_WARMUP", sweep_cfg.num_warmup);
+        ttml::benchmark_utils::override_u32_from_env("TTML_SWIGLU_BENCH_MEASURE", sweep_cfg.num_measure);
+        ttml::benchmark_utils::override_u32_csv_from_env("TTML_SWIGLU_BENCH_BATCHES", sweep_cfg.batch_sizes);
+        ttml::benchmark_utils::override_string_csv_from_env("TTML_SWIGLU_BENCH_MODELS", sweep_cfg.model_filter);
         const auto& models = all_models();
 
         const tt::tt_metal::distributed::MeshShape mesh(1, 1);
@@ -296,17 +273,18 @@ int main() {
                 const auto baseline = run_single(model, sweep_cfg, batch_size, /*use_fused=*/false);
                 const auto fused = run_single(model, sweep_cfg, batch_size, /*use_fused=*/true);
 
-                const double b_total = avg(baseline.step_times);
-                const double f_total = avg(fused.step_times);
+                const double b_total = ttml::benchmark_utils::average(baseline.step_times);
+                const double f_total = ttml::benchmark_utils::average(fused.step_times);
 
                 rows.push_back(RowSummary{
                     .batch = batch_size,
                     .baseline_total_ms = b_total,
                     .fused_total_ms = f_total,
-                    .total_pct = pct(f_total, b_total),
+                    .total_pct = ttml::benchmark_utils::relative_change_pct(f_total, b_total),
                     .baseline_dram_kb = static_cast<double>(baseline.dram_peak) / 1024.0,
                     .fused_dram_kb = static_cast<double>(fused.dram_peak) / 1024.0,
-                    .dram_pct = pct(static_cast<double>(fused.dram_peak), static_cast<double>(baseline.dram_peak)),
+                    .dram_pct = ttml::benchmark_utils::relative_change_pct(
+                        static_cast<double>(fused.dram_peak), static_cast<double>(baseline.dram_peak)),
                 });
             }
             print_model_table(model, rows);

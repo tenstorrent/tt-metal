@@ -31,7 +31,6 @@
 
 #include <chrono>
 #include <cstdint>
-#include <cstdlib>
 #include <stdexcept>
 #include <string>
 #include <tt-metalium/distributed.hpp>
@@ -81,37 +80,12 @@ const std::vector<ModelShape>& all_models() {
     return models;
 }
 
-double reduction_pct(double baseline, double fused) {
-    if (baseline == 0.0) {
-        return 0.0;
-    }
-    return (baseline - fused) / baseline * 100.0;
-}
-
-double speedup_x(double baseline, double fused) {
-    if (fused == 0.0) {
-        return 0.0;
-    }
-    return baseline / fused;
-}
-
 SweepConfig load_sweep_config_from_env() {
     SweepConfig sweep_cfg{};
-    if (const char* env_warmup = std::getenv("TTML_POLYNORM_BENCH_WARMUP")) {
-        sweep_cfg.num_warmup = static_cast<uint32_t>(std::stoul(env_warmup));
-    }
-    if (const char* env_measure = std::getenv("TTML_POLYNORM_BENCH_MEASURE")) {
-        sweep_cfg.num_measure = static_cast<uint32_t>(std::stoul(env_measure));
-    }
-    if (const char* env_batches = std::getenv("TTML_POLYNORM_BENCH_BATCHES")) {
-        auto parsed = ttml::benchmark_utils::parse_u32_csv(env_batches);
-        if (!parsed.empty()) {
-            sweep_cfg.batch_sizes = std::move(parsed);
-        }
-    }
-    if (const char* env_models = std::getenv("TTML_POLYNORM_BENCH_MODELS")) {
-        sweep_cfg.model_filter = ttml::benchmark_utils::parse_string_csv(env_models);
-    }
+    ttml::benchmark_utils::override_u32_from_env("TTML_POLYNORM_BENCH_WARMUP", sweep_cfg.num_warmup);
+    ttml::benchmark_utils::override_u32_from_env("TTML_POLYNORM_BENCH_MEASURE", sweep_cfg.num_measure);
+    ttml::benchmark_utils::override_u32_csv_from_env("TTML_POLYNORM_BENCH_BATCHES", sweep_cfg.batch_sizes);
+    ttml::benchmark_utils::override_string_csv_from_env("TTML_POLYNORM_BENCH_MODELS", sweep_cfg.model_filter);
     if (sweep_cfg.num_measure == 0U) {
         throw std::invalid_argument("TTML_POLYNORM_BENCH_MEASURE must be greater than zero.");
     }
@@ -136,10 +110,10 @@ std::vector<BenchmarkCase> make_benchmark_cases(const SweepConfig& cfg) {
 RunResult run_single_mode(
     const ModelShape& shape,
     const SweepConfig& cfg,
-    uint32_t batch_size,
-    uint32_t sequence_length,
-    ttml::ops::PolyNorm3ForwardVariant polynorm3_forward_variant,
-    ttml::ops::PolyNorm3BackwardVariant polynorm3_backward_variant,
+    const uint32_t batch_size,
+    const uint32_t sequence_length,
+    const ttml::ops::PolyNorm3ForwardVariant polynorm3_forward_variant,
+    const ttml::ops::PolyNorm3BackwardVariant polynorm3_backward_variant,
     const tt::tt_metal::distributed::MeshShape& mesh) {
     ttml::autograd::ctx().open_device(mesh);
     auto* const device = &ttml::autograd::ctx().get_device();
@@ -243,8 +217,8 @@ void print_forward_table(const std::vector<RowSummary>& rows) {
             row.total_composite_ms,
             row.fw_fused_total_ms,
             saved_ms,
-            speedup_x(row.total_composite_ms, row.fw_fused_total_ms),
-            reduction_pct(row.total_composite_ms, row.fw_fused_total_ms));
+            ttml::benchmark_utils::speedup_x(row.total_composite_ms, row.fw_fused_total_ms),
+            ttml::benchmark_utils::reduction_pct(row.total_composite_ms, row.fw_fused_total_ms));
     }
 }
 
@@ -265,8 +239,8 @@ void print_backward_table(const std::vector<RowSummary>& rows) {
             row.total_composite_ms,
             row.bw_fused_total_ms,
             saved_ms,
-            speedup_x(row.total_composite_ms, row.bw_fused_total_ms),
-            reduction_pct(row.total_composite_ms, row.bw_fused_total_ms));
+            ttml::benchmark_utils::speedup_x(row.total_composite_ms, row.bw_fused_total_ms),
+            ttml::benchmark_utils::reduction_pct(row.total_composite_ms, row.bw_fused_total_ms));
     }
 }
 
@@ -291,11 +265,11 @@ void print_total_table(const std::vector<RowSummary>& rows) {
             row.total_composite_ms,
             row.total_fused_ms,
             saved_ms,
-            speedup_x(row.total_composite_ms, row.total_fused_ms),
-            reduction_pct(row.total_composite_ms, row.total_fused_ms),
+            ttml::benchmark_utils::speedup_x(row.total_composite_ms, row.total_fused_ms),
+            ttml::benchmark_utils::reduction_pct(row.total_composite_ms, row.total_fused_ms),
             row.dram_composite_mb,
             row.dram_fused_mb,
-            reduction_pct(row.dram_composite_mb, row.dram_fused_mb));
+            ttml::benchmark_utils::reduction_pct(row.dram_composite_mb, row.dram_fused_mb));
     }
 }
 
