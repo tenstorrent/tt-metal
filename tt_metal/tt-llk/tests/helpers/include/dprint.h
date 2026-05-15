@@ -5,6 +5,13 @@
 // To use device print in an LLK test, build with -DDEBUG_PRINT_ENABLED
 // by setting device_print_build=DevicePrintBuild.Yes in TestConfig.
 // All print calls compile to nothing when the macro is not set.
+//
+// PROCESSOR_INDEX and LLK_DEVICE_PRINT_BUFFER_BASE are passed in by
+// test_config.py at build time; see RISC_INFO and DEVICE_PRINT_BUFFER_BASE.
+// Disabled under COVERAGE: coverage linker scripts grow TRISC sections way
+// past the device print buffer slot, so they can't share L1.
+// The alternative would require a lot more hacks; the only proper solution
+// is fixing the LLK infra memory layout across the board.
 
 #pragma once
 
@@ -12,26 +19,8 @@
 
 #include <cstdint>
 
-// This mapping is arbitrary; currently it loosely mirrors Metal, but
-// it doesn't need to. It just needs to agree with device_print.py.
-#if defined(LLK_TRISC_UNPACK)
-#define PROCESSOR_INDEX 2
-#elif defined(LLK_TRISC_MATH)
-#define PROCESSOR_INDEX 3
-#elif defined(LLK_TRISC_PACK)
-#define PROCESSOR_INDEX 4
-#elif defined(LLK_TRISC_ISOLATE_SFPU)
-#define PROCESSOR_INDEX 5 // Quasar
-#endif
-
 // Mirrored in tests/python_tests/helpers/test_config.py.
-// Disabled under COVERAGE: coverage linker scripts grow TRISC sections way
-// past this slot, so device print can't share L1 with them.
-// The header is guarded to compile out device print under coverage.
-// The alternative would require a lot more hacks; the only proper solution
-// is fixing the LLK infra memory layout across the board.
-#define LLK_DEVICE_PRINT_BUFFER_BASE 0x15000 // Consumed by dprint_buffer.h
-#define DPRINT_BUFFER_SIZE           1024    // Overrides dprint_common.h
+#define DPRINT_BUFFER_SIZE 1024 // Overrides dprint_common.h
 
 #define USE_DEVICE_PRINT
 
@@ -49,12 +38,9 @@ inline __attribute__((always_inline)) void invalidate_l1_cache()
 #endif
 }
 
-// This header has to be included after the above definitions.
-#include "api/debug/device_print.h"
-
-#else
-
-#define DEVICE_PRINT(fmt, ...)
-#define DEVICE_PRINT_INITIALIZE_LOCK()
-
 #endif // DEBUG_PRINT_ENABLED
+
+// We need to include this header after the above definitions.
+// Unconditionally included, as DEVICE_PRINT invocations
+// compile to nothing if the above macro is not defined.
+#include "api/debug/device_print.h"

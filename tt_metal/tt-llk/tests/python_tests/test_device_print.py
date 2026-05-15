@@ -50,8 +50,11 @@ def test_device_print():
 
     # We print 2048 iterations (weighing 8 bytes each) to force a drain.
     # Whether this test hits the stall path depends on the buffer size.
-    assert "w=0\n" in full, "Missing first wrap iteration"
-    assert "w=2047\n" in full, "Missing last wrap iteration; possible message loss"
+    missing = [i for i in range(2048) if f"w={i}\n" not in full]
+    assert not missing, (
+        f"Missing {len(missing)} of 2048 wrap iterations; "
+        f"first 10 missing: {missing[:10]}"
+    )
 
     # Pack
     assert "pack: i64=-1000000" in full

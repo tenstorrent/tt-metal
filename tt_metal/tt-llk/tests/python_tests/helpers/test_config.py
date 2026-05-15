@@ -46,6 +46,7 @@ from .device import (
     set_tensix_soft_reset,
     wait_brisc_boot_ready,
 )
+from .device_print import aux_size_for
 from .format_config import (
     BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
     FORMATS_CONFIG_STRUCT_COMPILETIME,
@@ -242,6 +243,18 @@ class TestConfig:
     )
     PROCESSOR_COUNT: ClassVar[int] = 0
     DEVICE_PRINT_BUFFER_SIZE: ClassVar[int] = 0
+
+    # Single source of truth that maps component, risc_id and display name.
+    # Passed to dprint.h through -DPROCESSOR_INDEX at build time, and
+    # _risc_names_tensix and make_device_print_parser in device_print.py.
+    # The kernel needs it to tell the host who it is when it prints, and
+    # the host needs it to map it into a string and find the ELF on disk.
+    RISC_INFO: ClassVar[dict[str, tuple[int, str]]] = {
+        "unpack": (2, "UNPACK"),
+        "math": (3, "MATH"),
+        "pack": (4, "PACK"),
+        "sfpu": (5, "SFPU"),  # Quasar only
+    }
 
     @staticmethod
     def setup_arch():
@@ -546,6 +559,17 @@ class TestConfig:
                 "the coverage linker scripts grow TRISC sections past the device "
                 "print buffer slot. Disable coverage or device print."
             )
+
+        if (
+            device_print_build == DevicePrintBuild.Yes
+            and TestConfig.PROCESSOR_COUNT == 0
+        ):
+            raise RuntimeError(
+                "TestConfig.setup_arch() must be called before constructing a "
+                "TestConfig with device_print_build=Yes; PROCESSOR_COUNT is 0."
+            )
+
+        self._prepared = False
 
         if TestConfig.SPEED_OF_LIGHT:
             templates += runtimes
@@ -1170,10 +1194,14 @@ class TestConfig:
                     else f""
                 )
                 trisc_define = "ISOLATE_SFPU" if name == "sfpu" else name.upper()
+                risc_id, _ = TestConfig.RISC_INFO[name]
+                device_print_flags = ""
+                if self.device_print_build == DevicePrintBuild.Yes:
+                    device_print_flags = f"-DLLK_DEVICE_PRINT_BUFFER_BASE={TestConfig.DEVICE_PRINT_BUFFER_BASE:#x} "
                 compile_command = (
                     f"{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.ARCH_SPECIFIC_OPTIONS} {TestConfig.OPTIONS_ALL} -I{TestConfig.TESTS_WORKING_DIR} "
                     f"-I{TestConfig.RISCV_SOURCES} -I{VARIANT_DIR} {local_options_compile} {optional_kernel_flags} "
-                    f"-DLLK_TRISC_{trisc_define} {TestConfig.OPTIONS_LINK} {COVERAGES_DEPS} "
+                    f"-DLLK_TRISC_{trisc_define} -DPROCESSOR_INDEX={risc_id} {device_print_flags}{TestConfig.OPTIONS_LINK} {COVERAGES_DEPS} "
                     f"-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / name}.ld -T{TestConfig.LINKER_SCRIPTS}/sections.ld "
                     f"-x c++ - -lc -o {VARIANT_ELF_DIR / name}.elf"
                 )
@@ -1256,13 +1284,14 @@ class TestConfig:
             else self.boot_mode
         )
 
-        # Zero the device print buffer before each kernel run so the
-        # first DEVICE_PRINT() observes a clean wpos=rpos=0 state.
+        # Zero the device print buffer header before each kernel run so the
+        # first DEVICE_PRINT() observes wpos=rpos=0 and a free lock. The data
+        # area doesn't need clearing — the kernel always overwrites at wpos.
         if self.device_print_build == DevicePrintBuild.Yes:
             write_words_to_device(
                 TestConfig.TENSIX_LOCATION,
                 TestConfig.DEVICE_PRINT_BUFFER_BASE,
-                [0] * (TestConfig.DEVICE_PRINT_BUFFER_SIZE // 4),
+                [0] * (aux_size_for(TestConfig.PROCESSOR_COUNT) // 4),
             )
 
         if (
@@ -1408,17 +1437,23 @@ class TestConfig:
             f"Timeout reached: waited {timeout} seconds for {', '.join(trisc_hangs)}"
         )
 
-    def run(self, poll_callback=None):
+    def prepare(self):
+        """Hash + build_elfs once. Safe to call from run() or earlier."""
+        if self._prepared:
+            return
         self.generate_variant_hash()
+        if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
+            self.build_elfs()
+        self._prepared = True
+
+    def run(self, poll_callback=None):
+        self.prepare()
 
         logger.debug(
             "Running variant={} | location={}",
             self.variant_id[:12],
             TestConfig.TENSIX_LOCATION,
         )
-
-        if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
-            self.build_elfs()
 
         logger.debug(
             "ELF directory: {}",
@@ -1438,17 +1473,6 @@ class TestConfig:
                 self.variant_stimuli.load_from_cache()
 
             self.variant_stimuli.write(TestConfig.TENSIX_LOCATION)
-
-        if self.device_print_build == DevicePrintBuild.Yes:
-            # Zero wpos/rpos/lock so acquire_lock() starts on a free lock and
-            # the parser reads from offset 0.
-            # See device_print_common.h for layout.
-            risc_state_padded = (TestConfig.PROCESSOR_COUNT + 3) // 4 * 4
-            write_to_device(
-                TestConfig.TENSIX_LOCATION,
-                TestConfig.DEVICE_PRINT_BUFFER_BASE,
-                b"\x00" * 8 + b"\x00" * risc_state_padded + b"\x00" * 4,
-            )
 
         self.run_elf_files()
         self.wait_for_tensix_operations_finished(poll_callback=poll_callback)

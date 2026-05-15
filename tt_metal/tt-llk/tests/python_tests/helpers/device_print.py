@@ -39,7 +39,7 @@ _STRING_INFO_LAYOUT: dict[int, tuple[int, str]] = {
 
 # Aux struct (device_print_common.h): wpos:4 | rpos:4 | risc_state[N]:N padded
 # up to 4-byte boundary | lock:4. N = PROCESSOR_COUNT, which varies per arch.
-def _aux_size_for(processor_count: int) -> int:
+def aux_size_for(processor_count: int) -> int:
     return 4 + 4 + (processor_count + 3) // 4 * 4 + 4
 
 
@@ -49,14 +49,14 @@ DEVICE_PRINT_WRITE_STALL_FLAG = 1 << 31
 WRAP_INFO_ID = 0xFFFF
 NEW_KERNEL_PAYLOAD_SENTINEL = 1023  # max_message_payload_size, used as "no payload" tag
 
-# Map DevicePrintHeader.risc_id into human-readable names.
-# Indexed by PROCESSOR_INDEX in dprint.h, it's the opposite of that mapping.
-RISC_NAMES_TENSIX = {
-    2: "UNPACK",
-    3: "MATH",
-    4: "PACK",
-    5: "SFPU",  # Quasar
-}
+
+# Map DevicePrintHeader.risc_id (with PROCESSOR_INDEX passed to the build)
+# into human-readable names. Derived from TestConfig.RISC_INFO.
+def _risc_names_tensix() -> dict[int, str]:
+    from helpers.test_config import TestConfig  # Local to avoid circular import
+
+    return {risc_id: name for risc_id, name in TestConfig.RISC_INFO.values()}
+
 
 # Map type character -> (struct format, byte size, optional formatter override).
 # Pointer types ('s', 'p') are filled in per-ELF — see _type_table_for().
@@ -254,7 +254,7 @@ class ElfStrings:
         return self._strings_data[offset:end].decode("utf-8", errors="replace")
 
 
-def _decode_aux(buf: bytes) -> tuple[int, int]:
+def _decode_wpos_rpos(buf: bytes) -> tuple[int, int]:
     wpos, rpos = struct.unpack_from("<II", buf, 0)
     return wpos, rpos
 
@@ -267,8 +267,9 @@ class DevicePrintParser:
     """Reads the on-device DEVICE_PRINT ring buffer and renders records as text.
 
     Construct with a {risc_id: elf_path} mapping (risc_id matches the value written
-    into DevicePrintHeader.risc_id by the kernel, and PROCESSOR_INDEX in dprint.h).
-    Call drain(location) after a kernel run to pull and decode all pending records.
+    into DevicePrintHeader.risc_id by the kernel, and PROCESSOR_INDEX passed by the
+    build to dprint.h). Call poll(location) during the run and final_drain(location)
+    after to pull and decode all pending records.
     """
 
     def __init__(
@@ -280,11 +281,12 @@ class DevicePrintParser:
     ):
         self.buffer_base = buffer_base
         self.total_buffer_size = total_buffer_size
-        self.aux_size = _aux_size_for(processor_count)
+        self.aux_size = aux_size_for(processor_count)
         self.data_size = total_buffer_size - self.aux_size
         self.elfs: dict[int, ElfStrings] = {}
         for risc_id, p in elf_paths.items():
             self.elfs[risc_id] = ElfStrings(str(p))
+        self._risc_names: dict[int, str] = _risc_names_tensix()
         self._poll_rpos: int = 0
 
     def _walk_records(self, data_slice: bytes) -> list[str]:
@@ -308,7 +310,7 @@ class DevicePrintParser:
             ):
                 break  # Wrap-around marker; caller handles crossing to offset 0
 
-            risc_name = RISC_NAMES_TENSIX.get(risc_id, f"risc{risc_id}")
+            risc_name = self._risc_names.get(risc_id, f"risc{risc_id}")
             elf = self.elfs.get(risc_id)
 
             if is_kernel and message_payload == NEW_KERNEL_PAYLOAD_SENTINEL:
@@ -339,24 +341,16 @@ class DevicePrintParser:
             args_blob = data_slice[pos + 4 : pos + 4 + message_payload]
             rendered = self._render(fmt, args_blob, elf)
 
-            kind = "kernel" if is_kernel else "fw"
-            out.append(f"[{risc_name}|{kind}|{file_str}:{info.line}] {rendered}")
+            out.append(f"[{risc_name}|{file_str}:{info.line}] {rendered}")
             pos += 4 + message_payload
 
         return out
 
-    def drain(self, location: str = "0,0") -> list[str]:
-        """One-shot read of the full buffer after kernel completion. Does not update device rpos."""
-        raw = read_from_device(
-            location, self.buffer_base, num_bytes=self.total_buffer_size
-        )
-        wpos, rpos = _decode_aux(raw)
-        wpos = _strip_stall(wpos)
-
-        data = bytes(raw[self.aux_size :])
-        if rpos > wpos:  # Wrapped around
-            return self._walk_records(data[rpos:]) + self._walk_records(data[:wpos])
-        return self._walk_records(data[rpos:wpos])
+    # When the buffer is full, the kernel sets WRITE_STALL_FLAG
+    # and waits for host to drain and set RESET_BUFFER_MAGIC.
+    # We'd spin forever if the kernel hangs while holding up
+    # the flag, so we bound the poll loop; 64 is reasonable.
+    _MAX_STALL_RESETS_PER_POLL: int = 64
 
     def poll(self, location: str = "0,0") -> list[str]:
         """Incremental drain: read new data since last poll, advance device rpos.
@@ -364,11 +358,11 @@ class DevicePrintParser:
         """
         out: list[str] = []
 
-        while True:
+        for _ in range(self._MAX_STALL_RESETS_PER_POLL):
             aux_raw = read_from_device(
                 location, self.buffer_base, num_bytes=self.aux_size
             )
-            wpos_raw, _ = _decode_aux(aux_raw)
+            wpos_raw, _ = _decode_wpos_rpos(aux_raw)
 
             stall = bool(wpos_raw & DEVICE_PRINT_WRITE_STALL_FLAG)
             wpos = _strip_stall(wpos_raw)
@@ -406,10 +400,13 @@ class DevicePrintParser:
                 self._poll_rpos = 0
                 continue  # Re-read wpos to catch data kernel wrote after reset
 
-            break
+            write_words_to_device(location, self.buffer_base + 4, [self._poll_rpos])
+            return out
 
-        write_words_to_device(location, self.buffer_base + 4, [self._poll_rpos])
-        return out
+        raise RuntimeError(
+            f"DevicePrintParser.poll(): stall flag still set after "
+            f"{self._MAX_STALL_RESETS_PER_POLL} resets, kernel likely hung."
+        )
 
     def final_drain(self, location: str = "0,0") -> list[str]:
         """Last poll after kernel finishes. Resets poll state for the next run."""
@@ -503,18 +500,14 @@ class DevicePrintParser:
 def make_device_print_parser(configuration) -> DevicePrintParser:
     """Build a DevicePrintParser for the given configuration's ELFs.
 
-    configuration.generate_variant_hash() must have been called before this.
+    configuration.prepare() must have been called before this so the ELFs exist.
     """
     from helpers.test_config import TestConfig  # Local to avoid circular import
 
-    # Maps KERNEL_COMPONENTS names to the TensixProcessorTypes index written into
-    # DevicePrintHeader.risc_id (and the PROCESSOR_INDEX macro in dprint.h).
-    COMPONENT_TO_RISC_ID: dict[str, int] = {
-        "unpack": 2,
-        "math": 3,
-        "pack": 4,
-        "sfpu": 5,
-    }
+    if TestConfig.PROCESSOR_COUNT == 0:
+        raise RuntimeError(
+            "TestConfig.setup_arch() must be called before make_device_print_parser()."
+        )
 
     variant_elf_dir = (
         TestConfig.ARTEFACTS_DIR
@@ -523,7 +516,7 @@ def make_device_print_parser(configuration) -> DevicePrintParser:
         / "elf"
     )
     elf_paths = {
-        COMPONENT_TO_RISC_ID[name]: variant_elf_dir / f"{name}.elf"
+        TestConfig.RISC_INFO[name][0]: variant_elf_dir / f"{name}.elf"
         for name in TestConfig.KERNEL_COMPONENTS
     }
     return DevicePrintParser(
@@ -541,8 +534,7 @@ def run_with_device_print(configuration):
     """
     from helpers.test_config import TestConfig
 
-    configuration.generate_variant_hash()
-    configuration.build_elfs()  # ELFs must exist before the parser reads them
+    configuration.prepare()  # ELFs must exist before the parser reads them
     parser = make_device_print_parser(configuration)
     all_lines: list[str] = []
 
