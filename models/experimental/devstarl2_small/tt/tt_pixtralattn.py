@@ -8,7 +8,6 @@ Uses ``apply_rotary_pos_emb_vision_tt`` for Devstral-compatible RoPE.
 
 import os
 
-import torch
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
@@ -103,8 +102,9 @@ class TtMistralImageAttention(LightweightModule):
                 if heads_out:
                     weight = weight.transpose(-1, -2)
                 weight = weight.reshape(dim, self.n_heads, self.head_dim)
-                padding = torch.zeros(dim, self.n_heads, padding_size, dtype=weight.dtype)
-                weight = torch.cat([weight, padding], dim=-1)
+                padded = weight.new_zeros((dim, self.n_heads, padded_head_dim))
+                padded[:, :, : self.head_dim] = weight
+                weight = padded
                 weight = weight.reshape(dim, self.n_heads * padded_head_dim)
                 if heads_out:
                     weight = weight.transpose(-1, -2)
@@ -114,25 +114,19 @@ class TtMistralImageAttention(LightweightModule):
         wk_padded = pad_head_dim(self.state_dict[wk_str])
         wv_padded = pad_head_dim(self.state_dict[wv_str])
         wo_padded = pad_head_dim(self.state_dict[wo_str], heads_out=False)
-        wq_chunked, wk_chunked, wv_chunked = (
-            torch.chunk(w, configuration.num_devices) for w in [wq_padded, wk_padded, wv_padded]
-        )
+
+        def pack_qkv_for_sharding(wq, wk, wv):
+            local_width = wq.shape[0] // configuration.num_devices
+            packed = wq.new_empty((configuration.num_devices, self.hidden_size, local_width * 3))
+            for index, weight in enumerate((wq, wk, wv)):
+                start = index * local_width
+                packed[:, :, start : start + local_width] = weight.reshape(
+                    configuration.num_devices, local_width, self.hidden_size
+                ).transpose(-1, -2)
+            return packed.transpose(0, 1).reshape(self.hidden_size, -1)
 
         self.wqkv = ttnn.as_tensor(
-            torch.concat(
-                [
-                    torch.concat(
-                        [
-                            torch.transpose(wq_chunked[i], -2, -1),
-                            torch.transpose(wk_chunked[i], -2, -1),
-                            torch.transpose(wv_chunked[i], -2, -1),
-                        ],
-                        dim=-1,
-                    )
-                    for i in range(configuration.num_devices)
-                ],
-                dim=-1,
-            ),
+            pack_qkv_for_sharding(wq_padded, wk_padded, wv_padded),
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
             dtype=self.dtype,
@@ -141,7 +135,7 @@ class TtMistralImageAttention(LightweightModule):
         )
 
         self.wo = ttnn.as_tensor(
-            torch.transpose(wo_padded, -2, -1),
+            wo_padded.transpose(-1, -2),
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-2),
             dtype=self.dtype,
