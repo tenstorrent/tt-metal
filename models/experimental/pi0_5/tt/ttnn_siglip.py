@@ -20,15 +20,119 @@ Optimizations over baseline:
 """
 
 import math
-from typing import Dict
+import os
+from typing import Dict, Optional, Tuple
 
 import torch
 import ttnn
 import tt_lib.fallback_ops as fallback_ops  # For position embedding interpolation (native TTNN interpolate not available)
 
 from models.experimental.pi0_5.common.configs import SigLIPConfig
-from models.experimental.pi0_5.tt.ttnn_common import sdpa_prefill_chunk_sizes, tensor_1d_to_2d_ttnn
-from models.experimental.pi0_5.tt.ttnn_gemma import build_matmul_pcfg
+from models.experimental.pi0_5.tt.ttnn_common import (
+    get_sdpa_compute_kernel_config,
+    get_sdpa_exp_approx_mode,
+    sdpa_prefill_chunk_sizes,
+    tensor_1d_to_2d_ttnn,
+)
+from models.experimental.pi0_5.tt.ttnn_gemma import build_matmul_pcfg, build_sharded_norm_pcfg, _RMS_NORM_COMPUTE_CONFIG
+
+
+# Tier 2 — ViT-BH-style block-sharded encoder data path for SigLIP.
+# Single env-controllable switch so we can revert at runtime without rebuild.
+#
+# When enabled, hidden states stay block-sharded across the entire 27-layer
+# encoder, only re-tiling for SDPA (which wants its own height-sharded layout
+# for the attention heads). Eliminates the 108 LN-pair reshards we measured
+# in the microbench (~7 ms) and lets the QKV/O-proj/FC1/FC2 matmuls run on
+# block-sharded inputs (avoids DRAM re-read; +15-20% matmul throughput).
+#
+# Common grid: 12x8 = 96 cores. Picked because:
+#   x=12 divides 36 hidden tiles (1152/32) cleanly
+#   y=8  divides 16 M tiles (2*256/32 for batch=2, seq=256) cleanly
+#   x=12 divides 144 QKV-out tiles (3*16*96/32) cleanly
+#   x=12 divides 144 padded-intermediate tiles (4608/32) — see PADDING below.
+#
+# PADDING: SigLIP intermediate=4304 → 135 tiles, doesn't divide grid_x=12.
+# We pad weights to 144 tiles (4608) at load time (6.7% extra weight memory).
+# GELU(0)=0 so the padding columns produce zero downstream, harmless.
+_SIGLIP_BS_GRID = (12, 8)  # (x, y) — 96 cores
+_SIGLIP_INTERMEDIATE_PADDED_TILES = 144  # 144*32 = 4608 (padded from 4304/135)
+_SIGLIP_INTERMEDIATE_PADDED = _SIGLIP_INTERMEDIATE_PADDED_TILES * 32
+
+
+def _siglip_bs_enabled() -> bool:
+    """Master switch for SigLIP block-sharded encoder path. Default ON."""
+    v = os.environ.get("PI0_SIGLIP_BS")
+    if v is None:
+        return True
+    return v.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _make_bs_memcfg(b: int, m: int, hidden: int, grid_x: int, grid_y: int) -> "ttnn.MemoryConfig":
+    """Build a block-sharded L1 memcfg for an encoder-data-path tensor."""
+    return ttnn.create_sharded_memory_config(
+        (b, 1, m, hidden),
+        core_grid=ttnn.CoreGrid(y=grid_y, x=grid_x),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+
+def _build_bs_matmul_pcfg(
+    m_tiles: int,
+    k_tiles: int,
+    n_tiles: int,
+    grid_x: int,
+    grid_y: int,
+    *,
+    in0_block_w: Optional[int] = None,
+    activation=None,
+    dst_budget: int = 4,
+) -> "ttnn.MatmulMultiCoreReuseMultiCastProgramConfig":
+    """Build a 2D block-sharded matmul program config on a FIXED grid.
+
+    Stricter variant of build_matmul_pcfg: the grid is pinned (so the BS output
+    uses the same shard spec across all matmuls in the encoder) and we require
+    exact divisibility.
+
+    `in0_block_w` MUST divide per-core K-tiles (= k_tiles / grid_x), since the
+    matmul kernel reads activations in blocks of size in0_block_w along the K
+    dim *within each core's shard*. ViT-BH-hiRes uses `in0_block_w = per_core_K`
+    (i.e. process the full per-core K slice in one inner iteration). We default
+    to the largest divisor of per_core_K that's ≤ 4 to keep CBs small.
+    """
+    assert m_tiles % grid_y == 0, f"m_tiles {m_tiles} must divide grid_y {grid_y}"
+    assert n_tiles % grid_x == 0, f"n_tiles {n_tiles} must divide grid_x {grid_x}"
+    assert k_tiles % grid_x == 0, f"k_tiles {k_tiles} must divide grid_x {grid_x}"
+
+    per_core_M = m_tiles // grid_y
+    per_core_N = n_tiles // grid_x
+    per_core_K = k_tiles // grid_x
+
+    if in0_block_w is None:
+        in0_block_w = min(per_core_K, 4)
+    while in0_block_w > 1 and per_core_K % in0_block_w != 0:
+        in0_block_w -= 1
+    in0_block_w = max(1, in0_block_w)
+
+    out_subblock_w = min(per_core_N, dst_budget)
+    while out_subblock_w > 1 and per_core_N % out_subblock_w != 0:
+        out_subblock_w -= 1
+    out_subblock_h = max(1, dst_budget // out_subblock_w)
+    out_subblock_h = min(per_core_M, out_subblock_h)
+    while out_subblock_h > 1 and per_core_M % out_subblock_h != 0:
+        out_subblock_h -= 1
+
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(grid_x, grid_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=activation,
+    )
 
 
 # ============================================================================
@@ -334,12 +438,114 @@ class SigLIPAttentionTTNN:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        self.compute_kernel_config_sdpa = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
+        # SDPA compute kernel — env-controllable for A/B testing. See ttnn_common.py.
+        # Default (PI0_SDPA_HIFI=2, PI0_SDPA_EXP_APPROX=1) matches ViT-BH-hiRes §5.4
+        # apart from math_fidelity (we run HiFi2 by default, ViT uses HiFi4).
+        self.compute_kernel_config_sdpa = get_sdpa_compute_kernel_config()
+
+        # Tier 2 — precompute QKV/O-proj tile dims for BS path.
+        # QKV out = 3 * num_heads * padded_head_dim. For SigLIP base:
+        # 3 * 16 * 96 = 4608 = 144 tiles. O-proj input = 16 * 96 = 1536 = 48 tiles.
+        self._qkv_n_tiles = int(self.wqkv.shape[-1]) // 32  # expected 144
+        self._oproj_k_tiles = int(self.wo.shape[-2]) // 32  # expected 48
+        self._oproj_n_tiles = int(self.wo.shape[-1]) // 32  # expected 36
+
+    def forward_bs(
+        self,
+        hidden_states: ttnn.Tensor,
+        bs_memcfg_hidden: "ttnn.MemoryConfig",
+        bs_memcfg_qkv: "ttnn.MemoryConfig",
+        bs_memcfg_attn: "ttnn.MemoryConfig",
+    ) -> ttnn.Tensor:
+        """ViT-BH-style attention with block-sharded data path.
+
+        Round-trip: BS in → QKV(BS) → L1 → nlp_create_qkv_heads → DRAM →
+        SDPA → L1 → nlp_concat_heads → BS → O-proj(BS) → BS out (4D).
+        """
+        gx, gy = _SIGLIP_BS_GRID
+        b = int(hidden_states.shape[0])
+        seq_len = int(hidden_states.shape[-2])
+        hidden_t = int(hidden_states.shape[-1]) // 32  # 36
+        m_tiles = (b * seq_len) // 32  # 16
+
+        # 1) QKV linear — BS in → BS out
+        qkv_pcfg = _build_bs_matmul_pcfg(
+            m_tiles,
+            hidden_t,
+            self._qkv_n_tiles,
+            gx,
+            gy,
+            dst_budget=4,
         )
+        xqkv = ttnn.linear(
+            hidden_states,
+            self.wqkv,
+            bias=self.bqkv,
+            dtype=ttnn.bfloat8_b,
+            memory_config=bs_memcfg_qkv,
+            compute_kernel_config=self.compute_kernel_config_hifi4,
+            program_config=qkv_pcfg,
+        )
+
+        # 2) BS → L1 interleaved for nlp_create_qkv_heads.
+        xqkv = ttnn.sharded_to_interleaved(xqkv, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        q_heads, k_heads, v_heads = ttnn.experimental.nlp_create_qkv_heads(
+            xqkv,
+            num_heads=self.num_heads,
+            num_kv_heads=self.num_heads,
+            transpose_k_heads=False,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(xqkv)
+
+        # 3) SDPA — runs on its own grid, accepts L1 inputs.
+        q_chunk, k_chunk = sdpa_prefill_chunk_sizes(seq_len, seq_len)
+        sdpa_cfg = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.grid_size,
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
+            exp_approx_mode=get_sdpa_exp_approx_mode(),
+        )
+        attn_output = ttnn.transformer.scaled_dot_product_attention(
+            q_heads,
+            k_heads,
+            v_heads,
+            is_causal=False,
+            scale=self.scale,
+            program_config=sdpa_cfg,
+            compute_kernel_config=self.compute_kernel_config_sdpa,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(q_heads)
+        ttnn.deallocate(k_heads)
+        ttnn.deallocate(v_heads)
+
+        # 4) Concat heads back to L1, then reshard to BS for O-proj.
+        attn_concat = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(attn_output)
+        attn_concat = ttnn.to_memory_config(attn_concat, bs_memcfg_attn)
+
+        # 5) O-proj — BS in → BS out.
+        oproj_pcfg = _build_bs_matmul_pcfg(
+            m_tiles,
+            self._oproj_k_tiles,
+            self._oproj_n_tiles,
+            gx,
+            gy,
+            dst_budget=4,
+        )
+        output = ttnn.linear(
+            attn_concat,
+            self.wo,
+            bias=self.bo,
+            dtype=ttnn.bfloat8_b,
+            memory_config=bs_memcfg_hidden,
+            compute_kernel_config=self.compute_kernel_config_hifi4,
+            program_config=oproj_pcfg,
+        )
+        ttnn.deallocate(attn_concat)
+        return output  # 4D BS
 
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         """
@@ -418,12 +624,13 @@ class SigLIPAttentionTTNN:
         # Chunk sizes aligned with tt_transformers prefill SDPA (64 vs 2048-boundary heuristic)
         q_chunk, k_chunk = sdpa_prefill_chunk_sizes(seq_len, seq_len)
 
-        # SDPA configuration - use full device grid for maximum parallelism
+        # SDPA configuration - use full device grid for maximum parallelism.
+        # exp_approx_mode env-controllable for A/B (default True, ViT-BH-hiRes uses False).
         sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.grid_size,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
-            exp_approx_mode=True,
+            exp_approx_mode=get_sdpa_exp_approx_mode(),
         )
 
         # SDPA - stays entirely on device, L1 output feeds the o-proj matmul.
@@ -512,8 +719,20 @@ class SigLIPMLPTTNN:
         self.config = config
         self.device = device
 
-        # FC1 (input -> intermediate) - BF8_B for 2x DRAM bandwidth savings
-        fc1_weight = weights["mlp.fc1.weight"].T.contiguous()
+        # Tier 2 BS path: pad intermediate (4304) → 4608 (144 tiles) so FC1/FC2
+        # align on grid_x=12. Padding columns become zeros (GELU(0)=0 → safe).
+        # Falls back to unpadded if BS path disabled.
+        self.bs_enabled = _siglip_bs_enabled()
+        orig_intermediate = weights["mlp.fc1.weight"].shape[0]  # (intermediate, hidden)
+        self._intermediate_padded = _SIGLIP_INTERMEDIATE_PADDED if self.bs_enabled else orig_intermediate
+        pad_n = self._intermediate_padded - orig_intermediate
+
+        # FC1 weight: torch shape (intermediate, hidden) → T → (hidden, intermediate)
+        # When BS is on, right-pad the OUT dim (intermediate) to 4608.
+        fc1_w_torch = weights["mlp.fc1.weight"]
+        if pad_n > 0:
+            fc1_w_torch = torch.nn.functional.pad(fc1_w_torch, (0, 0, 0, pad_n))  # pad rows
+        fc1_weight = fc1_w_torch.T.contiguous()
         self.fc1_weight = ttnn.from_torch(
             fc1_weight,
             dtype=ttnn.bfloat8_b,
@@ -523,12 +742,20 @@ class SigLIPMLPTTNN:
         )
 
         if "mlp.fc1.bias" in weights:
-            self.fc1_bias = tensor_1d_to_2d_ttnn(weights["mlp.fc1.bias"], device, dtype=ttnn.bfloat16)
+            fc1_b_torch = weights["mlp.fc1.bias"]
+            if pad_n > 0:
+                fc1_b_torch = torch.nn.functional.pad(fc1_b_torch, (0, pad_n))
+            self.fc1_bias = tensor_1d_to_2d_ttnn(fc1_b_torch, device, dtype=ttnn.bfloat16)
         else:
             self.fc1_bias = None
 
-        # FC2 (intermediate -> output) - BF8_B for 2x DRAM bandwidth savings
-        fc2_weight = weights["mlp.fc2.weight"].T.contiguous()
+        # FC2 weight: torch shape (hidden, intermediate) → T → (intermediate, hidden)
+        # When BS is on, top-pad the IN dim (intermediate) to 4608 — zero-padding
+        # rows means the padded inputs (from FC1's zero outputs) contribute zero.
+        fc2_w_torch = weights["mlp.fc2.weight"]
+        if pad_n > 0:
+            fc2_w_torch = torch.nn.functional.pad(fc2_w_torch, (0, pad_n, 0, 0))  # pad cols
+        fc2_weight = fc2_w_torch.T.contiguous()
         self.fc2_weight = ttnn.from_torch(
             fc2_weight,
             dtype=ttnn.bfloat8_b,
@@ -554,6 +781,62 @@ class SigLIPMLPTTNN:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+
+    def forward_bs(
+        self,
+        hidden_states: ttnn.Tensor,
+        bs_memcfg_hidden: "ttnn.MemoryConfig",
+        bs_memcfg_intermediate: "ttnn.MemoryConfig",
+    ) -> ttnn.Tensor:
+        """Block-sharded BS forward path: BS in → FC1 BS → FC2 BS out.
+
+        hidden_states is 4D (b, 1, m, hidden) in block-sharded L1 on grid (12,8).
+        Returns same shape/layout for the next residual add.
+        """
+        b = int(hidden_states.shape[0])
+        m_padded = int(hidden_states.shape[-2])
+        hidden_t = int(hidden_states.shape[-1]) // 32  # 36
+        m_tiles = (b * m_padded) // 32  # 16 for b=2, m=256
+        gx, gy = _SIGLIP_BS_GRID
+
+        fc1_pcfg = _build_bs_matmul_pcfg(
+            m_tiles,
+            hidden_t,
+            _SIGLIP_INTERMEDIATE_PADDED_TILES,
+            gx,
+            gy,
+            activation=(ttnn.UnaryOpType.GELU, True),
+            dst_budget=4,
+        )
+        x = ttnn.linear(
+            hidden_states,
+            self.fc1_weight,
+            bias=self.fc1_bias,
+            dtype=ttnn.bfloat8_b,
+            memory_config=bs_memcfg_intermediate,
+            compute_kernel_config=self.compute_kernel_config,
+            program_config=fc1_pcfg,
+        )
+
+        fc2_pcfg = _build_bs_matmul_pcfg(
+            m_tiles,
+            _SIGLIP_INTERMEDIATE_PADDED_TILES,
+            hidden_t,
+            gx,
+            gy,
+            dst_budget=4,
+        )
+        output = ttnn.linear(
+            x,
+            self.fc2_weight,
+            bias=self.fc2_bias,
+            dtype=ttnn.bfloat8_b,
+            memory_config=bs_memcfg_hidden,
+            compute_kernel_config=self.compute_kernel_config,
+            program_config=fc2_pcfg,
+        )
+        ttnn.deallocate(x)
+        return output
 
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         """
@@ -717,6 +1000,125 @@ class SigLIPBlockTTNN:
         self.attention = SigLIPAttentionTTNN(config, weights, device)
         self.mlp = SigLIPMLPTTNN(config, weights, device)
 
+        # Sharded LayerNorm config (ViT-BH §5.3). SigLIP hidden=1152 → 36 tiles.
+        # M is built lazily on first call since it depends on (batch, seq_len).
+        self._ln_sharded_pcfg = None
+        self._ln_sharded_memcfg = None
+        self._ln_sharded_m_padded = 0
+
+        # Tier 2 — BS forward path master switch + cached LN PCFG on the
+        # encoder common grid (12, 8) so LN matches the matmul shard spec.
+        self.bs_enabled = _siglip_bs_enabled()
+        self._bs_ln_pcfg = None
+        self._bs_ln_grid_cached = None
+
+    def _get_bs_ln_pcfg(self, b: int, m_padded: int) -> "ttnn.LayerNormShardedMultiCoreProgramConfig":
+        """LN program config on the SIGLIP_BS_GRID (12, 8). Cached."""
+        key = (b, m_padded)
+        if self._bs_ln_pcfg is not None and self._bs_ln_grid_cached == key:
+            return self._bs_ln_pcfg
+        gx, gy = _SIGLIP_BS_GRID
+        m_tiles = (b * m_padded) // 32  # 16 for b=2 m=256
+        hidden_tiles = self.config.hidden_size // 32  # 36
+        assert m_tiles % gy == 0, f"BS LN: m_tiles {m_tiles} must divide gy {gy}"
+        assert hidden_tiles % gx == 0, f"BS LN: hidden_tiles {hidden_tiles} must divide gx {gx}"
+        block_h = m_tiles // gy  # 2
+        block_w = hidden_tiles // gx  # 3
+        self._bs_ln_pcfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(gx, gy),
+            subblock_w=block_w,
+            block_h=block_h,
+            block_w=block_w,
+            inplace=False,
+        )
+        self._bs_ln_grid_cached = key
+        return self._bs_ln_pcfg
+
+    def _get_sharded_ln(self, b: int, m_padded: int):
+        key = (b, m_padded)
+        if self._ln_sharded_pcfg is None or self._ln_sharded_m_padded != key:
+            total_m_tiles = (b * m_padded) // 32
+            hidden_tiles = self.config.hidden_size // 32  # 1152/32 = 36
+            cfg = build_sharded_norm_pcfg(
+                total_m_tiles, hidden_tiles, max_grid_x=12, max_grid_y=min(8, max(1, total_m_tiles))
+            )
+            if cfg is not None:
+                pc, memcfg_factory, _grid = cfg
+                self._ln_sharded_pcfg = pc
+                self._ln_sharded_memcfg = memcfg_factory(b, m_padded, m_padded, self.config.hidden_size)
+                self._ln_sharded_m_padded = key
+            else:
+                self._ln_sharded_pcfg = None
+                self._ln_sharded_memcfg = None
+        return self._ln_sharded_pcfg, self._ln_sharded_memcfg
+
+    def _sharded_layer_norm(self, x, weight, bias):
+        b = x.shape[0]
+        m_padded = x.shape[1]
+        sh_pc, sh_mc = self._get_sharded_ln(b, m_padded)
+        if sh_pc is None:
+            return ttnn.layer_norm(
+                x,
+                weight=weight,
+                bias=bias,
+                epsilon=self.config.layer_norm_eps,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+        x_sh = ttnn.to_memory_config(x, sh_mc)
+        out = ttnn.layer_norm(
+            x_sh,
+            weight=weight,
+            bias=bias,
+            epsilon=self.config.layer_norm_eps,
+            program_config=sh_pc,
+            memory_config=sh_mc,
+            compute_kernel_config=_RMS_NORM_COMPUTE_CONFIG,
+        )
+        if x_sh is not x:
+            ttnn.deallocate(x_sh)
+        out = ttnn.sharded_to_interleaved(out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        return out
+
+    def _sharded_layer_norm_bs(self, x_bs, weight, bias, bs_memcfg):
+        """LN with BS in → BS out (NO s2i at exit). Input must already be BS
+        on _SIGLIP_BS_GRID."""
+        b = int(x_bs.shape[0])
+        m_padded = int(x_bs.shape[-2])
+        pc = self._get_bs_ln_pcfg(b, m_padded)
+        return ttnn.layer_norm(
+            x_bs,
+            weight=weight,
+            bias=bias,
+            epsilon=self.config.layer_norm_eps,
+            program_config=pc,
+            memory_config=bs_memcfg,
+            compute_kernel_config=_RMS_NORM_COMPUTE_CONFIG,
+        )
+
+    def forward_bs(
+        self,
+        hidden_states: ttnn.Tensor,
+        bs_memcfg_hidden: "ttnn.MemoryConfig",
+        bs_memcfg_qkv: "ttnn.MemoryConfig",
+        bs_memcfg_attn: "ttnn.MemoryConfig",
+        bs_memcfg_intermediate: "ttnn.MemoryConfig",
+    ) -> ttnn.Tensor:
+        """Full block in BS: input 4D BS → output 4D BS. No internal reshards
+        except for the SDPA round-trip inside attention."""
+        normed = self._sharded_layer_norm_bs(hidden_states, self.ln1_weight, self.ln1_bias, bs_memcfg_hidden)
+        attn = self.attention.forward_bs(normed, bs_memcfg_hidden, bs_memcfg_qkv, bs_memcfg_attn)
+        ttnn.deallocate(normed)
+        # Residual add on BS — both operands share bs_memcfg_hidden.
+        hidden_states = ttnn.add(hidden_states, attn, memory_config=bs_memcfg_hidden)
+        ttnn.deallocate(attn)
+
+        normed = self._sharded_layer_norm_bs(hidden_states, self.ln2_weight, self.ln2_bias, bs_memcfg_hidden)
+        mlp_out = self.mlp.forward_bs(normed, bs_memcfg_hidden, bs_memcfg_intermediate)
+        ttnn.deallocate(normed)
+        hidden_states = ttnn.add(hidden_states, mlp_out, memory_config=bs_memcfg_hidden)
+        ttnn.deallocate(mlp_out)
+        return hidden_states
+
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         """
         Forward pass using native TTNN operations.
@@ -727,14 +1129,8 @@ class SigLIPBlockTTNN:
         Returns:
             TTNN tensor (batch_size, seq_len, hidden_size)
         """
-        # Pre-attention LayerNorm
-        normed = ttnn.layer_norm(
-            hidden_states,
-            weight=self.ln1_weight,
-            bias=self.ln1_bias,
-            epsilon=self.config.layer_norm_eps,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        # Pre-attention LayerNorm (sharded if available)
+        normed = self._sharded_layer_norm(hidden_states, self.ln1_weight, self.ln1_bias)
 
         # Native TTNN attention with padded head dim workaround
         attn_output = self.attention.forward(normed)
@@ -744,14 +1140,8 @@ class SigLIPBlockTTNN:
         hidden_states = ttnn.add(hidden_states, attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_output)
 
-        # Pre-MLP LayerNorm
-        normed = ttnn.layer_norm(
-            hidden_states,
-            weight=self.ln2_weight,
-            bias=self.ln2_bias,
-            epsilon=self.config.layer_norm_eps,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        # Pre-MLP LayerNorm (sharded if available)
+        normed = self._sharded_layer_norm(hidden_states, self.ln2_weight, self.ln2_bias)
 
         # MLP with residual - use L1 for intermediate computation
         mlp_output = self.mlp.forward(normed)
@@ -852,6 +1242,11 @@ class SigLIPVisionTowerTTNN:
             block_weights = self._get_layer_weights(weights, i)
             self.blocks.append(SigLIPBlockTTNN(config, block_weights, device))
 
+        # Tier 2 — BS encoder data path. Memcfgs built lazily on first forward
+        # since they depend on the actual (batch, seq_len) at runtime.
+        self.bs_enabled = _siglip_bs_enabled()
+        self._bs_memcfgs_cache: Dict[Tuple[int, int], Tuple] = {}
+
         # Final layer norm weights (handle both formats)
         post_ln_weight = weights.get("post_layernorm.weight") or weights.get("vision_model.post_layernorm.weight")
         post_ln_bias = weights.get("post_layernorm.bias") or weights.get("vision_model.post_layernorm.bias")
@@ -864,6 +1259,22 @@ class SigLIPVisionTowerTTNN:
         else:
             self.post_ln_weight = None
             self.post_ln_bias = None
+
+    def _get_bs_memcfgs(self, b: int, m_padded: int):
+        key = (b, m_padded)
+        if key not in self._bs_memcfgs_cache:
+            gx, gy = _SIGLIP_BS_GRID
+            total_m = b * m_padded  # collapse leading dims into M
+            # Hidden-shape BS memcfg (LN + O-proj + FC2 out + residual stream).
+            mc_hidden = _make_bs_memcfg(1, total_m, self.config.hidden_size, gx, gy)
+            # QKV-shape BS memcfg (after fused QKV linear). N = 144*32 = 4608.
+            mc_qkv = _make_bs_memcfg(1, total_m, 144 * 32, gx, gy)
+            # O-proj input shape after concat_heads = num_heads*padded_head_dim = 1536.
+            mc_attn = _make_bs_memcfg(1, total_m, 48 * 32, gx, gy)
+            # Intermediate BS memcfg (after FC1; padded to 4608).
+            mc_intermediate = _make_bs_memcfg(1, total_m, _SIGLIP_INTERMEDIATE_PADDED, gx, gy)
+            self._bs_memcfgs_cache[key] = (mc_hidden, mc_qkv, mc_attn, mc_intermediate)
+        return self._bs_memcfgs_cache[key]
 
     def _get_layer_weights(
         self,
@@ -952,9 +1363,24 @@ class SigLIPVisionTowerTTNN:
 
             hidden_states = ttnn.add(hidden_states, positional_embeddings, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        # Run through TTNN transformer blocks
-        for block in self.blocks:
-            hidden_states = block.forward(hidden_states)
+        if self.bs_enabled:
+            # Tier 2 — enter BS once before the encoder loop, exit once after.
+            # Saves 27*2*2=108 LN reshards + lets matmuls consume BS directly.
+            b, num_patches, hidden = hidden_states.shape
+            # Reshape to 4D (1, 1, b*num_patches, hidden) for block-sharding.
+            hidden_states = ttnn.reshape(hidden_states, (1, 1, int(b) * int(num_patches), int(hidden)))
+            mc_hidden, mc_qkv, mc_attn, mc_intermediate = self._get_bs_memcfgs(int(b), int(num_patches))
+            hidden_states = ttnn.to_memory_config(hidden_states, mc_hidden, dtype=ttnn.bfloat16)
+
+            for block in self.blocks:
+                hidden_states = block.forward_bs(hidden_states, mc_hidden, mc_qkv, mc_attn, mc_intermediate)
+
+            # Exit BS once: BS → L1 interleaved → 3D shape for post_ln + projector.
+            hidden_states = ttnn.sharded_to_interleaved(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
+            hidden_states = ttnn.reshape(hidden_states, (int(b), int(num_patches), int(hidden)))
+        else:
+            for block in self.blocks:
+                hidden_states = block.forward(hidden_states)
 
         # Final layer norm (on device)
         if self.post_ln_weight is not None:

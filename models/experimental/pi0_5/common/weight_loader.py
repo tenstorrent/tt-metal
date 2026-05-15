@@ -61,10 +61,16 @@ class PI0Config:
 
     @classmethod
     def from_json(cls, json_path: Union[str, Path]) -> "PI0Config":
-        """Load config from JSON file."""
+        """Load config from JSON file.
+
+        Filters out any keys not present in the dataclass (e.g. lerobot's
+        `type`, `dtype`, `device`, training-only fields) so checkpoints
+        produced by lerobot/openpi can be loaded directly.
+        """
         with open(json_path, "r") as f:
             data = json.load(f)
-        return cls(**data)
+        valid_keys = set(cls.__dataclass_fields__)
+        return cls(**{k: v for k, v in data.items() if k in valid_keys})
 
 
 def load_pi0_state_dict(
@@ -135,6 +141,9 @@ def categorize_weights(state_dict: Dict[str, torch.Tensor]) -> Dict[str, Dict[st
         if key.startswith("action_in_proj") or key.startswith("action_out_proj"):
             categorized["pi0_projections"][key] = value
         elif key.startswith("action_time_mlp"):
+            categorized["pi0_projections"][key] = value
+        elif key.startswith("time_mlp_in") or key.startswith("time_mlp_out"):
+            # pi05_base uses un-prefixed time MLP keys (vs pi0's action_time_mlp_*)
             categorized["pi0_projections"][key] = value
         elif key.startswith("state_proj"):
             categorized["pi0_projections"][key] = value

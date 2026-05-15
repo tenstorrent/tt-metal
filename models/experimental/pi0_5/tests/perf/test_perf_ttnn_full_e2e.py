@@ -32,7 +32,7 @@ CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_base"
 
 NUM_WARMUP = 0
 NUM_ITERS = 1
-LANG_SEQ_LEN = 16
+LANG_SEQ_LEN = 256
 SEED = 0
 TRACE_REGION_SIZE = 80_000_000
 
