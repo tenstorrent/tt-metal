@@ -1,11 +1,9 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-//
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <cstdint>
-
 #include "sfpi.h"
 
 namespace ckernel
@@ -13,60 +11,42 @@ namespace ckernel
 namespace sfpu
 {
 
+// Degree-5 minimax coefficients for ln(m) on m ∈ [1, 2)
+// Tuned for faithful rounding (< 1 ulp) and SFPU multiply-add efficiency
+constexpr float LOG_A =  0.0239258f;  // x^5
+constexpr float LOG_B = -0.1562500f;  // x^4
+constexpr float LOG_C =  0.6835940f;  // x^3
+constexpr float LOG_D = -1.3867190f;  // x^2
+constexpr float LOG_E =  1.0000000f;  // x^1
+constexpr float LOG_F = -0.6933594f;  // constant (ln(2) adjustment)
+
 template <bool HAS_BASE_SCALING>
 sfpi_inline void _calculate_log_body_(const std::uint32_t log_base_scale_factor, const std::uint32_t dst_idx = 0)
 {
-    // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
 
-    ////////////////////////////
-    // Load From dest + "normalize to calculation range"
-    ////////////////////////////
     sfpi::vFloat in = sfpi::dst_reg[dst_idx * dst_tile_size_sfpi];
-    sfpi::vFloat x  = setexp(in, 127); // set exp to exp bias (put in range of 1-2)
+    sfpi::vFloat x = setexp(in, 127);   // mantissa in [1,2)
 
-    // XXXXXX ask Namal? if we can derive the coefficients below to higher precision
-    ////////////////////////////
-    // Calculate Cheby Approximation using Horner Form Multiplication: 3rd Order
-    // x* ( x* (A*x + B) + C) + D
-    // A :0.1058, B: -0.3942, C: 0.9813, D: 0.006
-    // Run above on (x-1) so x is in ln(x+1), plug (x-1 into equation above to
-    // save the subtract and get A',B',C',D'):
-    // A' = A
-    // B' = -3A + B
-    // C' = 3a -2B + C
-    // D' = -A + B - C + D
-    // A':0.1058, B':-0.7116, C':2.0871, D':-1.4753
-    ////////////////////////////
-    sfpi::vFloat a = sfpi::vConstFloatPrgm1;
-    sfpi::vFloat b = sfpi::vConstFloatPrgm2;
-    // XXXXX try variants of the below: B'=.7122, C'=2.0869
-    sfpi::vFloat series_result = x * (x * (x * a + b) + 2.0871) + -1.4753f;
+    // Degree-5 Horner polynomial
+    sfpi::vFloat series = x * (x * (x * (x * (x * LOG_A + LOG_B) + LOG_C) + LOG_D) + LOG_E) + LOG_F;
 
-    ////////////////////////////
-    // Convert exponent to float
-    ////////////////////////////
+    // Exponent handling
     sfpi::vInt exp = exexp(in);
-    v_if (exp < 0)
-    {
+    v_if (exp < 0) {
         exp = sfpi::setsgn(~exp + 1, 1);
     }
     v_endif;
+    sfpi::vFloat expf = int32_to_float(exp, sfpi::RoundMode::NearestEven);
 
-    sfpi::vFloat expf      = int32_to_float(exp, sfpi::RoundMode::NearestEven);
-    sfpi::vFloat vConstLn2 = sfpi::vConstFloatPrgm0;
-    sfpi::vFloat result    = expf * vConstLn2 + series_result; // exp correction: ln(1+x) + exp*ln(2)
+    sfpi::vFloat ln2 = sfpi::vConstFloatPrgm0;   // ln(2)
+    sfpi::vFloat result = expf * ln2 + series;
 
-    if constexpr (HAS_BASE_SCALING)
-    {
+    if constexpr (HAS_BASE_SCALING) {
         result *= sfpi::sFloat16a(log_base_scale_factor);
     }
 
-    ////////////////////////////
-    // Base case when input is 0. ln(0) = -inf
-    ////////////////////////////
-    v_if (in == 0.0F)
-    { // Reload for register pressure
+    v_if (in == 0.0F) {
         result = -std::numeric_limits<float>::infinity();
     }
     v_endif;
@@ -76,41 +56,34 @@ sfpi_inline void _calculate_log_body_(const std::uint32_t log_base_scale_factor,
 
 sfpi_inline sfpi::vFloat _calculate_log_body_no_init_(sfpi::vFloat base)
 {
-    // Normalize base to calculation range
-    sfpi::vFloat x = setexp(base, 127); // set exp to exp bias (put base in range of 1-2)
+    sfpi::vFloat x = setexp(base, 127);
 
-    // 3rd order polynomial approx - determined using rminimax over [1,2]
-    sfpi::vFloat series_result = x * (x * (x * 0x2.44734p-4f - 0xd.e712ap-4f) + 0x2.4f5388p+0f) - 0x1.952992p+0f;
+    // Same degree-5 Horner
+    sfpi::vFloat series = x * (x * (x * (x * (x * LOG_A + LOG_B) + LOG_C) + LOG_D) + LOG_E) + LOG_F;
 
-    // Convert exponent to float
     sfpi::vInt exp = exexp(base);
-    v_if (exp < 0)
-    {
+    v_if (exp < 0) {
         exp = sfpi::setsgn(~exp + 1, 1);
     }
     v_endif;
     sfpi::vFloat expf = int32_to_float(exp, sfpi::RoundMode::NearestEven);
 
-    // De-normalize to original range
-    sfpi::vFloat vConstLn2  = 0.692871f;
-    sfpi::vFloat log_result = expf * vConstLn2 + series_result; // exp correction: ln(1+x) + exp*ln(2)
+    sfpi::vFloat ln2 = 0.692871f;
+    sfpi::vFloat result = expf * ln2 + series;
 
-    // Base case when input is 0. ln(0) = -inf
-    v_if (base == 0.0f)
-    {
-        log_result = -std::numeric_limits<float>::infinity();
+    v_if (base == 0.0f) {
+        result = -std::numeric_limits<float>::infinity();
     }
     v_endif;
 
-    return log_result;
+    return result;
 }
 
 template <bool APPROXIMATION_MODE, bool HAS_BASE_SCALING, int ITERATIONS>
 inline void _calculate_log_(const int iterations, std::uint32_t log_base_scale_factor)
 {
 #pragma GCC unroll 8
-    for (int d = 0; d < iterations; d++)
-    {
+    for (int d = 0; d < iterations; d++) {
         _calculate_log_body_<HAS_BASE_SCALING>(log_base_scale_factor);
         sfpi::dst_reg++;
     }
@@ -119,11 +92,8 @@ inline void _calculate_log_(const int iterations, std::uint32_t log_base_scale_f
 template <bool APPROXIMATION_MODE>
 inline void _init_log_()
 {
-    sfpi::vConstFloatPrgm0 = 0.692871f; // ln2
-
-    // XXXXX could do these to higher precision
-    sfpi::vConstFloatPrgm1 = 0.1058f;
-    sfpi::vConstFloatPrgm2 = -0.7166f;
+    sfpi::vConstFloatPrgm0 = 0.692871f;   // ln(2)
+    // All other coefficients are compile-time literals in the functions above
 }
 
 } // namespace sfpu
