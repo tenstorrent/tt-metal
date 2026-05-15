@@ -306,14 +306,14 @@ void kernel_main() {
             offsets[e + 1U] = round_up(running, 32U);
         }
 
-        // Pre-fill plan / grouped_scores / k_slot DRAM with sentinels in
-        // PLAN_CHUNK-entry bursts. plan: 0xFFFFFFFF; grouped_scores: 0;
-        // k_slot: 0xFFFF. Reuse the per-expert staging slots (the first
-        // PLAN_CHUNK entries of each — they're untouched until phase 3).
-        // Three sentinel patterns, one fused loop — staging buffer is L1 so
-        // these stores are cheap relative to the per-iter NOC-async-writes
-        // below that broadcast the same 32-entry pattern across t_cap DRAM.
-        for (uint32_t i = 0; i < PLAN_CHUNK; ++i) {
+        // Pre-fill plan / grouped_scores / k_slot DRAM with sentinels.
+        // plan: 0xFFFFFFFF; grouped_scores: 0; k_slot: 0xFFFF. Reuse the
+        // per-expert staging slots — they hold e_local * PLAN_CHUNK entries
+        // each and are untouched until phase 3, so stamp them full and burst
+        // at that size to minimize NOC-issue count (t_cap / stamp_entries
+        // writes per buffer instead of t_cap / PLAN_CHUNK).
+        const uint32_t stamp_entries = (e_local * PLAN_CHUNK <= t_cap) ? (e_local * PLAN_CHUNK) : t_cap;
+        for (uint32_t i = 0; i < stamp_entries; ++i) {
             plan_stage[i] = SENTINEL;
             gs_stage[i] = 0U;
             ks_stage[i] = K_SLOT_SENTINEL;
@@ -321,8 +321,8 @@ void kernel_main() {
         uint64_t plan_base_noc = get_noc_addr(0, plan_addrgen);
         uint64_t gs_base_noc = get_noc_addr(0, gs_addrgen);
         uint64_t ks_base_noc = get_noc_addr(0, ks_addrgen);
-        for (uint32_t base = 0; base < t_cap; base += PLAN_CHUNK) {
-            uint32_t n = (base + PLAN_CHUNK <= t_cap) ? PLAN_CHUNK : (t_cap - base);
+        for (uint32_t base = 0; base < t_cap; base += stamp_entries) {
+            uint32_t n = (base + stamp_entries <= t_cap) ? stamp_entries : (t_cap - base);
             noc_async_write((uint32_t)plan_stage, plan_base_noc + base * sizeof(uint32_t), n * sizeof(uint32_t));
             noc_async_write((uint32_t)gs_stage, gs_base_noc + base * sizeof(uint16_t), n * sizeof(uint16_t));
             noc_async_write((uint32_t)ks_stage, ks_base_noc + base * sizeof(uint16_t), n * sizeof(uint16_t));
