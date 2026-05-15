@@ -448,10 +448,10 @@ void kernel_main() {
                 K_block_tiles /*kt_dim*/);
             reconfig_data_format(in1_cb, in0_cb_for_matmul);
             pack_reconfig_data_format(intermediate_cb);
-            // Accumulation buffer. Explicitly disable the L1 packer accumulator so k=0's
-            // pack overwrites intermediate_cb instead of adding onto whatever the previous
-            // program (e.g. ttnn::multiply between moe-ffn experts) left in L1. Without
-            // this, zero-input rows can produce non-zero output via stale accumulator.
+            // Defensive: ensure L1 packer accumulator is off before k=0 pack of the FIRST
+            // iter (subsequent iters get acc=0 from the per-iter disable below). Without
+            // this, a preceding op (e.g. swiglu_bw between bwd matmuls) leaving acc=1 would
+            // cause k=0 to add onto stale intermediate_cb L1 data.
             PACK((llk_pack_reconfig_l1_acc(0)));
             cb_reserve_back(intermediate_cb, out_block_num_tiles);
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
