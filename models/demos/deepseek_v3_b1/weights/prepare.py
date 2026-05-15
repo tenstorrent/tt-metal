@@ -1319,7 +1319,10 @@ def prepare_moe_routed_experts_bspm_tp8(
     tp = mesh_rows * mesh_cols
 
     results: list[list[CompressedTensor]] = [[], [], []]
+    routed_t0 = time.perf_counter()
+    proj_elapsed: list[float] = [0.0, 0.0, 0.0]
     for proj_idx, (proj_name, shard_dim, proj_subblock_k, proj_subblock_n) in enumerate(proj_specs):
+        proj_t0 = time.perf_counter()
         keys = [_key(layer_idx, f"mlp.experts.{e}.{proj_name}.weight") for e in range(num_routed_experts)]
         sample_w = state_dict[keys[0]]
         K, N = sample_w.shape[1], sample_w.shape[0]
@@ -1395,6 +1398,18 @@ def prepare_moe_routed_experts_bspm_tp8(
             if (e + 1) % 32 == 0:
                 mode = "BSPM TP8" if bspm_data is not None else "compressed TP8 (uniform)"
                 logger.info("  {}: uploaded {}/{} experts ({})", proj_name, e + 1, num_routed_experts, mode)
+        proj_elapsed[proj_idx] = time.perf_counter() - proj_t0
+
+    mode = "BSPM TP8" if bspm_data is not None else "compressed TP8 (uniform)"
+    logger.info(
+        "Routed experts (compressed TP8) for layer {} done in {:.3f}s " "[gate={:.3f}s, up={:.3f}s, down={:.3f}s] ({})",
+        layer_idx,
+        time.perf_counter() - routed_t0,
+        proj_elapsed[0],
+        proj_elapsed[1],
+        proj_elapsed[2],
+        mode,
+    )
 
     routed = MoERoutedExpertWeights(
         routed_gate_proj=results[0],
@@ -1454,7 +1469,10 @@ def prepare_dense_routed_experts_compressed_tp8(
     tp = mesh_rows * mesh_cols
 
     results: list[list[CompressedTensor]] = [[], [], []]
+    routed_t0 = time.perf_counter()
+    proj_elapsed: list[float] = [0.0, 0.0, 0.0]
     for proj_idx, (proj_name, K, N, shard_dim, proj_subblock_n) in enumerate(proj_specs):
+        proj_t0 = time.perf_counter()
         proj_key = _key(layer_idx, f"mlp.{proj_name}.weight")
 
         if shard_dim == 1:
@@ -1526,6 +1544,18 @@ def prepare_dense_routed_experts_compressed_tp8(
                 move_to_device=move_to_device,
             )
             results[proj_idx].append(ct)
+        proj_elapsed[proj_idx] = time.perf_counter() - proj_t0
+
+    logger.info(
+        "Dense routed experts (compressed TP8) for layer {} done in {:.3f}s "
+        "[gate={:.3f}s, up={:.3f}s, down={:.3f}s, {} chunks/proj]",
+        layer_idx,
+        time.perf_counter() - routed_t0,
+        proj_elapsed[0],
+        proj_elapsed[1],
+        proj_elapsed[2],
+        _dn_num_routed,
+    )
 
     return DenseRoutedExpertWeights(
         routed_gate_proj=results[0],
@@ -1701,6 +1731,7 @@ def prepare_dense_layer_weights(
     """Prepare fused weights for a single dense decoder layer."""
     logger.info("Preparing dense layer {}...", layer_idx)
     t0 = time.perf_counter()
+    t_attn_start = time.perf_counter()
     attn = prepare_attention_weights(
         device,
         state_dict,
@@ -1709,11 +1740,23 @@ def prepare_dense_layer_weights(
         move_to_device=move_to_device,
         cache_config=cache_config,
     )
+    attn_elapsed = time.perf_counter() - t_attn_start
+    t_shared_start = time.perf_counter()
     shared = prepare_shared_expert_weights(
         device, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device, cache_config=cache_config
     )
+    shared_elapsed = time.perf_counter() - t_shared_start
+    t_routed_start = time.perf_counter()
     routed = prepare_routed_expert_weights(
         device, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device, cache_config=cache_config
+    )
+    routed_elapsed = time.perf_counter() - t_routed_start
+    logger.info(
+        "Dense layer {} stages: attn={:.3f}s, shared={:.3f}s, routed={:.3f}s",
+        layer_idx,
+        attn_elapsed,
+        shared_elapsed,
+        routed_elapsed,
     )
     assert isinstance(routed, DenseRoutedExpertWeights)
     result = DeepSeekV3DenseLayerWeights(
@@ -1803,6 +1846,7 @@ def prepare_moe_layer_weights(
     """
     logger.info("Preparing MoE layer {}...", layer_idx)
     t0 = time.perf_counter()
+    t_attn_start = time.perf_counter()
     attn = prepare_attention_weights(
         device,
         state_dict,
@@ -1811,9 +1855,13 @@ def prepare_moe_layer_weights(
         move_to_device=move_to_device,
         cache_config=cache_config,
     )
+    attn_elapsed = time.perf_counter() - t_attn_start
+    t_shared_start = time.perf_counter()
     shared = prepare_shared_expert_weights(
         device, state_dict, layer_idx, is_moe=True, move_to_device=move_to_device, cache_config=cache_config
     )
+    shared_elapsed = time.perf_counter() - t_shared_start
+    t_routed_start = time.perf_counter()
     routed = prepare_routed_expert_weights(
         device,
         state_dict,
@@ -1826,6 +1874,14 @@ def prepare_moe_layer_weights(
         bspm_variant=bspm_variant,
         bspm_budget=bspm_budget,
         compressed_tp8=compressed_tp8,
+    )
+    routed_elapsed = time.perf_counter() - t_routed_start
+    logger.info(
+        "MoE layer {} stages: attn={:.3f}s, shared={:.3f}s, routed={:.3f}s",
+        layer_idx,
+        attn_elapsed,
+        shared_elapsed,
+        routed_elapsed,
     )
     assert isinstance(attn.gate_mm, OverlappedTensor)
     assert attn.gate_bias is not None
@@ -1858,6 +1914,7 @@ def prepare_moe_layer_weights(
         assert sram_core_grids is not None, "sram_core_grids required when sram_hot_experts specifies this layer"
         assert sram_assigner is not None, "sram_assigner required when sram_hot_experts specifies this layer"
         assert worker_l1_size is not None, "worker_l1_size required when sram_hot_experts specifies this layer"
+        t_sram_start = time.perf_counter()
 
         # Attn-first regime: stage attention's L1 lockstep tensors on device
         # *now* so the SRAM trim sees real allocator addresses for them.
@@ -1933,6 +1990,12 @@ def prepare_moe_layer_weights(
             cache_config=cache_config,
         )
         result = _dataclass_replace(result, sram_slots=sram_slots)
+        logger.info(
+            "MoE layer {} stages: sram_hot_experts={:.3f}s ({} candidates)",
+            layer_idx,
+            time.perf_counter() - t_sram_start,
+            len(sram_expert_indices),
+        )
 
     logger.info("MoE layer {} done in {:.3f}s", layer_idx, time.perf_counter() - t0)
     return result
