@@ -314,6 +314,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
         .runtime_arguments_schema =
             {
                 .named_runtime_args = {"l1_result_addr"},
+                .named_common_runtime_args = {},
             },
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
     };
@@ -327,6 +328,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
     experimental::metal2_host_api::ProgramSpec spec{
         .program_id = "compute_kernel_tls",
         .kernels = {compute_kernel_spec},
+        .dataflow_buffers = {},
+        .remote_dataflow_buffers = {},
+        .semaphores = {},
+        .tensor_parameters = {},
         .work_units = {main_wu},
     };
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
