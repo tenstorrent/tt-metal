@@ -24,10 +24,14 @@ from transformers.modeling_outputs import Seq2SeqLMOutput
 from transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2 import format_speech_generation_kwargs
 
 from models.experimental.seamless_m4t_v2_large.tt.tt_code_hifigan import TTSeamlessM4Tv2CodeHifiGan
-from models.experimental.seamless_m4t_v2_large.tt.tt_speech_encoder import TTSeamlessM4Tv2SpeechEncoder
+from models.experimental.seamless_m4t_v2_large.tt.tt_speech_encoder import (
+    SpeechEncoderTraceMasks,
+    TTSeamlessM4Tv2SpeechEncoder,
+)
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_decoder import TTSeamlessM4Tv2Decoder
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_encoder import TTSeamlessM4Tv2Encoder
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_to_unit import (
+    T2UTraceHardUpsampleCumsums,
     TTSeamlessM4Tv2TextToUnitForConditionalGeneration,
 )
 
@@ -582,15 +586,19 @@ class TTSeamlessM4Tv2Model:
             compute_kernel_config=self._lm_head_compute,
         )
 
-    def _encode_text(
+    def materialize_text_encoder_trace_tensors(
         self,
         input_ids: ttnn.Tensor,
         attention_mask: Optional[ttnn.Tensor],
-    ) -> Tuple[ttnn.Tensor, ttnn.Tensor, bool]:
-        """Text encoder. Returns ``(encoder_out, encoder_attn_2d_padded, attn_owned)``.
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, bool]:
+        """Build text-encoder padded ids, positions, and 4D self mask **once** (outside ``begin_trace_capture``).
 
-        ``attn_owned=True`` means the caller must ``ttnn.deallocate`` the returned attn tensor;
-        ``False`` means it aliases the input ``attention_mask`` (no padding was needed).
+        Matches the tensor construction in ``_encode_text`` before ``text_encoder.forward``. Pair with
+        ``forward_text_e2e_prefill_trace`` so trace capture avoids ``ttnn.full`` / ``concat`` padding ops.
+
+        Returns:
+            ``(ids_padded, position_ids, encoder_self_mask_4d, encoder_attn_2d_padded, attn_owned)`` —
+            same ``attn_owned`` contract as ``_encode_text``.
         """
         batch = int(input_ids.shape[0])
         seq = int(input_ids.shape[1])
@@ -602,10 +610,25 @@ class TTSeamlessM4Tv2Model:
             attn_owned = True
         else:
             attn_padded = _pad_mask_to(attention_mask, padded_seq, self.device)
-            attn_owned = attn_padded is not attention_mask  # _pad_mask_to is a no-op when already aligned
+            attn_owned = attn_padded is not attention_mask
 
         pos_tt = _tt_position_ids(ids_padded, self.pad_token_id)
         enc_mask_4d = _build_encoder_self_mask_4d(attn_padded, device=self.device)
+        return ids_padded, pos_tt, enc_mask_4d, attn_padded, attn_owned
+
+    def _encode_text(
+        self,
+        input_ids: ttnn.Tensor,
+        attention_mask: Optional[ttnn.Tensor],
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor, bool]:
+        """Text encoder. Returns ``(encoder_out, encoder_attn_2d_padded, attn_owned)``.
+
+        ``attn_owned=True`` means the caller must ``ttnn.deallocate`` the returned attn tensor;
+        ``False`` means it aliases the input ``attention_mask`` (no padding was needed).
+        """
+        ids_padded, pos_tt, enc_mask_4d, attn_padded, attn_owned = self.materialize_text_encoder_trace_tensors(
+            input_ids, attention_mask
+        )
         enc_out = self.text_encoder.forward(ids_padded, pos_tt, enc_mask_4d)
         if ids_padded is not input_ids:
             ttnn.deallocate(ids_padded)
@@ -613,21 +636,7 @@ class TTSeamlessM4Tv2Model:
         ttnn.deallocate(enc_mask_4d)
         return enc_out, attn_padded, attn_owned
 
-    def _encode_speech(
-        self,
-        input_features: ttnn.Tensor,
-        attention_mask: Optional[ttnn.Tensor],
-    ) -> Tuple[ttnn.Tensor, ttnn.Tensor, bool]:
-        """Speech encoder with adaptor subsampling.
-
-        Returns ``(encoder_out, encoder_attn_2d, attn_owned=True)`` — the subsampled mask is always
-        a fresh tensor that the caller must deallocate.
-        """
-        batch = int(input_features.shape[0])
-        seq_in = int(input_features.shape[1])
-        mask_2d = attention_mask if attention_mask is not None else _ones_mask(batch, seq_in, self.device)
-        owned_input_mask = attention_mask is None
-
+    def _speech_attention_uint_to_conv_bf16(self, mask_2d: ttnn.Tensor) -> ttnn.Tensor:
         # NOTE: ``ttnn.typecast(uint32, bf16)`` is broken (returns 2^31 for value 1 at most tile
         # positions). Reliable path is ``uint32 → int32 → bf16`` with TILE layout for both casts.
         mask_tile_u = ttnn.to_layout(mask_2d, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -635,27 +644,22 @@ class TTSeamlessM4Tv2Model:
         ttnn.deallocate(mask_tile_u)
         mask_bf16_tile = ttnn.typecast(mask_tile_i, ttnn.bfloat16)
         ttnn.deallocate(mask_tile_i)
-        enc_out = self.speech_encoder.forward(input_features, conv_attention_mask_1d=mask_bf16_tile)
-        ttnn.deallocate(mask_bf16_tile)
+        return mask_bf16_tile
 
-        sub_lens_tt = _subsampled_lens_dev(mask_2d, self.adaptor_kernel_size, self.adaptor_stride)
-        if owned_input_mask:
-            ttnn.deallocate(mask_2d)
-        # One tiny scalar readback (B ints) — needed for the ``ttnn.slice`` end index.
+    def _speech_encoder_trim_pad_and_cross_attn(
+        self, enc_raw: ttnn.Tensor, sub_lens_tt: ttnn.Tensor, batch: int
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Apply subsampled-length slice/pad and build ``[B, padded_src]`` encoder attention (deallocs ``sub_lens_tt``)."""
         sub_lens = _read_int_row(sub_lens_tt)[:batch]
-        physical_len = int(enc_out.shape[1])
+        physical_len = int(enc_raw.shape[1])
         logical_len = max(1, min(min(sub_lens), physical_len))
         padded_len = _tile_align(logical_len)
 
-        # Step 1: drop encoder output beyond ``logical_len``. HF masks these positions out, so
-        # leaving raw encoder values there leaks into cross-attention (small but consistent PCC drop
-        # vs HF, ~0.97 instead of >0.99). Slicing to ``logical_len`` first matches HF behaviour.
+        enc_out = enc_raw
         if physical_len > logical_len:
             sliced = ttnn.slice(enc_out, [0, 0, 0], [batch, logical_len, self.hidden_size], (1, 1, 1))
             ttnn.deallocate(enc_out)
             enc_out = sliced
-        # Step 2: zero-pad ``[logical_len, padded_len)`` so tile-aligned ops see explicit zeros
-        # (matches HF's masked-out semantics; the attention mask below also zeroes them).
         if logical_len < padded_len:
             pad_tail = ttnn.full(
                 [batch, padded_len - logical_len, self.hidden_size],
@@ -672,7 +676,88 @@ class TTSeamlessM4Tv2Model:
 
         enc_attn_tt = _tt_speech_enc_attn(sub_lens_tt, padded_len, self.device)
         ttnn.deallocate(sub_lens_tt)
+        return enc_out, enc_attn_tt
+
+    def _encode_speech(
+        self,
+        input_features: ttnn.Tensor,
+        attention_mask: Optional[ttnn.Tensor],
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor, bool]:
+        """Speech encoder with adaptor subsampling.
+
+        Returns ``(encoder_out, encoder_attn_2d, attn_owned=True)`` — the subsampled mask is always
+        a fresh tensor that the caller must deallocate.
+        """
+        batch = int(input_features.shape[0])
+        seq_in = int(input_features.shape[1])
+        mask_2d = attention_mask if attention_mask is not None else _ones_mask(batch, seq_in, self.device)
+        owned_input_mask = attention_mask is None
+
+        mask_bf16_tile = self._speech_attention_uint_to_conv_bf16(mask_2d)
+        enc_raw = self.speech_encoder.forward(input_features, conv_attention_mask_1d=mask_bf16_tile)
+        ttnn.deallocate(mask_bf16_tile)
+
+        sub_lens_tt = _subsampled_lens_dev(mask_2d, self.adaptor_kernel_size, self.adaptor_stride)
+        if owned_input_mask:
+            ttnn.deallocate(mask_2d)
+
+        enc_out, enc_attn_tt = self._speech_encoder_trim_pad_and_cross_attn(enc_raw, sub_lens_tt, batch)
         return enc_out, enc_attn_tt, True
+
+    def materialize_speech_encoder_trace_tensors(
+        self,
+        input_features: ttnn.Tensor,
+        attention_mask: Optional[ttnn.Tensor],
+    ) -> Tuple[ttnn.Tensor, Optional[ttnn.Tensor], int, int, ttnn.Tensor, SpeechEncoderTraceMasks]:
+        """Prepare speech-encoder trace inputs **outside** ``begin_trace_capture``.
+
+        Builds ``SpeechEncoderTraceMasks`` (conformer + adapter additive masks, depthwise left pads,
+        and warmed relative-position index caches) so ``speech_encoder.forward(..., trace_masks=…)``
+        matches ``_encode_speech`` math without mask-building or ``from_torch`` inside trace capture.
+
+        Runs one probe ``speech_encoder.forward`` with those masks to learn ``physical_len``, performs
+        subsampled-length **host readback** here, and preallocates a zero ``pad_tail`` when tile padding
+        is required.
+
+        Returns:
+            ``(conv_mask_bf16, pad_tail_or_none, logical_len, physical_len, enc_attn_2d, trace_masks)``.
+        """
+        batch = int(input_features.shape[0])
+        seq_in = int(input_features.shape[1])
+        mask_2d = attention_mask if attention_mask is not None else _ones_mask(batch, seq_in, self.device)
+        owned_input_mask = attention_mask is None
+
+        conv_mask_bf16 = self._speech_attention_uint_to_conv_bf16(mask_2d)
+        sub_lens_tt = _subsampled_lens_dev(mask_2d, self.adaptor_kernel_size, self.adaptor_stride)
+        if owned_input_mask:
+            ttnn.deallocate(mask_2d)
+
+        trace_masks = self.speech_encoder.materialize_trace_attention_masks(conv_mask_bf16, batch=batch, seq=seq_in)
+        probe_enc = self.speech_encoder.forward(
+            input_features, conv_attention_mask_1d=conv_mask_bf16, trace_masks=trace_masks
+        )
+        physical_len = int(probe_enc.shape[1])
+        ttnn.deallocate(probe_enc)
+
+        sub_lens = _read_int_row(sub_lens_tt)[:batch]
+        logical_len = max(1, min(min(sub_lens), physical_len))
+        padded_len = _tile_align(logical_len)
+
+        pad_tail: Optional[ttnn.Tensor] = None
+        if logical_len < padded_len:
+            pad_tail = ttnn.full(
+                [batch, padded_len - logical_len, self.hidden_size],
+                0.0,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        enc_attn_tt = _tt_speech_enc_attn(sub_lens_tt, padded_len, self.device)
+        ttnn.deallocate(sub_lens_tt)
+
+        return conv_mask_bf16, pad_tail, logical_len, physical_len, enc_attn_tt, trace_masks
 
     def _decode_and_lm_head(
         self,
@@ -711,6 +796,189 @@ class TTSeamlessM4Tv2Model:
         logits = self._lm_head(dec_out)
         ttnn.deallocate(dec_out)
         return logits
+
+    def materialize_decoder_trace_tensors(
+        self,
+        encoder_attn_2d: ttnn.Tensor,
+        decoder_input_ids: ttnn.Tensor,
+        decoder_attention_mask: Optional[ttnn.Tensor],
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        """Build decoder masks and padded ids **once** on device (for use outside ``begin_trace_capture``).
+
+        ``forward_decoder_and_lm_head_trace`` consumes these tensors and does **not** free them so
+        the same buffers survive compile + trace capture + ``execute_trace`` replay.
+        """
+        batch = int(decoder_input_ids.shape[0])
+        dec_seq = int(decoder_input_ids.shape[1])
+        padded_dec_seq = _tile_align(dec_seq)
+
+        ids_padded = _pad_input_ids_to(decoder_input_ids, padded_dec_seq, self.pad_token_id, self.device)
+
+        if decoder_attention_mask is None:
+            dec_attn_padded = _ones_mask(batch, padded_dec_seq, self.device)
+            attn_owned = True
+        else:
+            dec_attn_padded = _pad_mask_to(decoder_attention_mask, padded_dec_seq, self.device)
+            attn_owned = dec_attn_padded is not decoder_attention_mask
+
+        pos_tt = _tt_position_ids(ids_padded, self.pad_token_id)
+        causal_4d = _build_causal_with_padding_4d(dec_attn_padded, batch, padded_dec_seq, self.device)
+        if attn_owned:
+            ttnn.deallocate(dec_attn_padded)
+        cross_4d = _build_cross_attn_mask_4d(encoder_attn_2d, tgt_seq=padded_dec_seq, device=self.device)
+
+        return ids_padded, pos_tt, causal_4d, cross_4d
+
+    def forward_decoder_and_lm_head_trace(
+        self,
+        encoder_hidden: ttnn.Tensor,
+        ids_padded: ttnn.Tensor,
+        pos_tt: ttnn.Tensor,
+        causal_4d: ttnn.Tensor,
+        cross_4d: ttnn.Tensor,
+    ) -> ttnn.Tensor:
+        """Decoder + ``lm_head`` only — **no** padding or mask construction. Caller owns ``encoder_hidden`` and mask tensors."""
+        dec_out = self.text_decoder.forward(ids_padded, pos_tt, encoder_hidden, causal_4d, cross_4d)
+        logits = self._lm_head(dec_out)
+        ttnn.deallocate(dec_out)
+        return logits
+
+    def forward_text_e2e_prefill_trace(
+        self,
+        enc_ids_padded: ttnn.Tensor,
+        enc_pos: ttnn.Tensor,
+        enc_self_mask_4d: ttnn.Tensor,
+        dec_ids_padded: ttnn.Tensor,
+        dec_pos: ttnn.Tensor,
+        dec_causal_4d: ttnn.Tensor,
+        dec_cross_4d: ttnn.Tensor,
+    ) -> ttnn.Tensor:
+        """Text encoder → text decoder → ``lm_head`` with **no** padding or host-dependent mask ops.
+
+        Intended for ``begin_trace_capture``: all masks and padded ids must be built via
+        ``materialize_text_encoder_trace_tensors`` and ``materialize_decoder_trace_tensors`` beforehand.
+        Does not deallocate ``enc_ids_padded``, positions, masks, or encoder hidden states — those
+        buffers must remain stable for trace replay (same contract as ``forward_decoder_and_lm_head_trace``).
+        """
+        enc_out = self.text_encoder.forward(enc_ids_padded, enc_pos, enc_self_mask_4d)
+        dec_out = self.text_decoder.forward(dec_ids_padded, dec_pos, enc_out, dec_causal_4d, dec_cross_4d)
+        logits = self._lm_head(dec_out)
+        ttnn.deallocate(dec_out)
+        return logits
+
+    def forward_speech_e2e_prefill_trace(
+        self,
+        input_features: ttnn.Tensor,
+        conv_mask_bf16: ttnn.Tensor,
+        speech_trace_masks: SpeechEncoderTraceMasks,
+        pad_tail: Optional[ttnn.Tensor],
+        logical_len: int,
+        physical_len: int,
+        dec_ids_padded: ttnn.Tensor,
+        dec_pos: ttnn.Tensor,
+        dec_causal_4d: ttnn.Tensor,
+        dec_cross_4d: ttnn.Tensor,
+    ) -> ttnn.Tensor:
+        """Speech encoder (with prebuilt masks) → trim/pad → text decoder → ``lm_head``.
+
+        ``materialize_speech_encoder_trace_tensors`` supplies ``conv_mask_bf16``, ``speech_trace_masks``,
+        optional ``pad_tail``, and integer lengths. Trace capture should not rebuild additive masks,
+        depthwise zero pads, or relative-position index tensors.
+        """
+        batch = int(input_features.shape[0])
+        enc_raw = self.speech_encoder.forward(
+            input_features,
+            conv_attention_mask_1d=conv_mask_bf16,
+            trace_masks=speech_trace_masks,
+        )
+        enc_mid = enc_raw
+        if physical_len > logical_len:
+            enc_mid = ttnn.slice(enc_raw, [0, 0, 0], [batch, logical_len, self.hidden_size], (1, 1, 1))
+            ttnn.deallocate(enc_raw)
+        if pad_tail is not None:
+            enc_out = ttnn.concat([enc_mid, pad_tail], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(enc_mid)
+        else:
+            enc_out = enc_mid
+
+        dec_out = self.text_decoder.forward(dec_ids_padded, dec_pos, enc_out, dec_causal_4d, dec_cross_4d)
+        logits = self._lm_head(dec_out)
+        ttnn.deallocate(dec_out)
+        return logits
+
+    def forward_text_e2e_plus_t2u_trace(
+        self,
+        enc_ids_padded: ttnn.Tensor,
+        enc_pos: ttnn.Tensor,
+        enc_self_mask_4d: ttnn.Tensor,
+        dec_ids_padded: ttnn.Tensor,
+        dec_pos: ttnn.Tensor,
+        dec_causal_4d: ttnn.Tensor,
+        dec_cross_4d: ttnn.Tensor,
+        t2u_inputs_embeds: ttnn.Tensor,
+        t2u_encoder_attn_4d: ttnn.Tensor,
+        t2u_char_input_ids: ttnn.Tensor,
+        t2u_char_count_per_id: List[int],
+        t2u_reference_discrete_durations: List[int],
+        t2u_hard_cums: T2UTraceHardUpsampleCumsums,
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Text E2E prefill trace + T2U forward (T2U inputs and hard-upsample cums pre-materialized)."""
+        text_logits = self.forward_text_e2e_prefill_trace(
+            enc_ids_padded, enc_pos, enc_self_mask_4d, dec_ids_padded, dec_pos, dec_causal_4d, dec_cross_4d
+        )
+        t2u_logits, _ = self.t2u.forward(
+            t2u_inputs_embeds,
+            t2u_encoder_attn_4d,
+            t2u_char_input_ids,
+            t2u_char_count_per_id,
+            reference_discrete_durations=t2u_reference_discrete_durations,
+            hard_upsample_cums=t2u_hard_cums,
+            trace_no_profiler=True,
+        )
+        return (text_logits, t2u_logits)
+
+    def forward_speech_e2e_plus_t2u_trace(
+        self,
+        input_features: ttnn.Tensor,
+        conv_mask_bf16: ttnn.Tensor,
+        speech_trace_masks: SpeechEncoderTraceMasks,
+        pad_tail: Optional[ttnn.Tensor],
+        logical_len: int,
+        physical_len: int,
+        dec_ids_padded: ttnn.Tensor,
+        dec_pos: ttnn.Tensor,
+        dec_causal_4d: ttnn.Tensor,
+        dec_cross_4d: ttnn.Tensor,
+        t2u_inputs_embeds: ttnn.Tensor,
+        t2u_encoder_attn_4d: ttnn.Tensor,
+        t2u_char_input_ids: ttnn.Tensor,
+        t2u_char_count_per_id: List[int],
+        t2u_reference_discrete_durations: List[int],
+        t2u_hard_cums: T2UTraceHardUpsampleCumsums,
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Speech E2E prefill trace + T2U forward (T2U inputs and hard-upsample cums pre-materialized)."""
+        text_logits = self.forward_speech_e2e_prefill_trace(
+            input_features,
+            conv_mask_bf16,
+            speech_trace_masks,
+            pad_tail,
+            logical_len,
+            physical_len,
+            dec_ids_padded,
+            dec_pos,
+            dec_causal_4d,
+            dec_cross_4d,
+        )
+        t2u_logits, _ = self.t2u.forward(
+            t2u_inputs_embeds,
+            t2u_encoder_attn_4d,
+            t2u_char_input_ids,
+            t2u_char_count_per_id,
+            reference_discrete_durations=t2u_reference_discrete_durations,
+            hard_upsample_cums=t2u_hard_cums,
+            trace_no_profiler=True,
+        )
+        return (text_logits, t2u_logits)
 
     def _decoder_hidden(
         self,
