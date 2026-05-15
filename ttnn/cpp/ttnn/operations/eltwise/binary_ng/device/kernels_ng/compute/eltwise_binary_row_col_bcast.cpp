@@ -105,9 +105,13 @@ ALWI void process_tile(uint32_t freq, uint32_t tile_start) {
             BroadcastDim::None,
             BinaryDataFormatReconfig::None,
             CopyTilePolicy::NoWaitNoPop,
-            CopyTilePolicy::NoWaitNoPop>;
-        using PackElt = PackTile<(uint32_t)cb_out, Dst::D0, PackTilePolicy::NoReserveNoPush>;
-        eltwise_chain(num_tiles_per_cycle, BinElt{}, PackElt{});
+            CopyTilePolicy::NoWaitNoPop,
+            CbIndexMode::BlockIter,
+            Dst::D0,
+            CbIndexMode::BlockIter>;
+        using PackElt =
+            PackTile<(uint32_t)cb_out, Dst::D0, PackTilePolicy::NoReserveNoPush, PackTileIndexMode::BlockIter>;
+        eltwise_chain<num_tiles_per_cycle>(num_tiles_per_cycle, BinElt{}, PackElt{});
         exp_cb_out.push_back(num_tiles_per_cycle);
 #else
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_left, cb_right);
