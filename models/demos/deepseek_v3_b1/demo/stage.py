@@ -942,6 +942,11 @@ class BaseLMHeadStage(StageKind):
         d = self._lmhead_state
         pipeline_config = ctx.pipeline_config
         my_stage_idx = ctx.my_stage_idx
+        # TODO(remove): one-shot L1 dump to identify buffer at 192768 on matmul cores
+        # (related to program 12 CB clash on rank 14). Remove after diagnosis.
+        if not getattr(self, "_l1_dumped", False):
+            ttnn.dump_device_memory_state(ctx.mesh_device, prefix="lmhead-stage14 ")
+            self._l1_dumped = True
         LMHeadSampling.op(
             d["input_tensor_mesh"],
             d["intermediate_tensor_mesh"],

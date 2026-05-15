@@ -591,7 +591,7 @@ class LMHeadSampling:
                 sample_device, eh_subblock_k, eh_proj_tile_size
             )
             eh_in1_block_size_bytes = eh_subblock_k * eh_proj_tile_size
-            eh_num_in1_buffers = 3  # Triple buffering
+            eh_num_in1_buffers = 2  # Double buffering: saves 30,464 B of static L1 (CB 9) on matmul cores [0,0-9,9].
             eh_in1_CB_tiles = eh_subblock_k * eh_num_in1_buffers
             eh_in1_CB_size = eh_in1_CB_tiles * eh_proj_tile_size
         else:

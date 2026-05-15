@@ -18,7 +18,7 @@ FABRIC_PACKET_SIZE_BYTES = 15232
 
 # TODO: Store these values inside the stages and fetch based on pipeline config
 DEFAULT_WORKER_L1_SIZE = 1431568
-LM_HEAD_WORKER_L1_SIZE = 1478872
+LM_HEAD_WORKER_L1_SIZE = 1453716
 LM_HEAD_RANK_64_PROCS = 62
 LM_HEAD_RANK_16_PROCS = 14
 
@@ -60,18 +60,9 @@ def _needs_extended_worker_l1(num_procs: int, *, enable_speculative_decode: bool
 
 def _worker_l1_size_for_rank(num_procs: int, *, enable_speculative_decode: bool = True) -> int:
     """Select worker L1 size for rank-specific LM-head memory requirements."""
-    selected = (
-        LM_HEAD_WORKER_L1_SIZE
-        if _needs_extended_worker_l1(num_procs=num_procs, enable_speculative_decode=enable_speculative_decode)
-        else DEFAULT_WORKER_L1_SIZE
-    )
-    logger.info(
-        "rank-debug TT_MESH_ID={} num_procs={} worker_l1_size={}",
-        os.environ.get("TT_MESH_ID"),
-        num_procs,
-        selected,
-    )
-    return selected
+    if _needs_extended_worker_l1(num_procs=num_procs, enable_speculative_decode=enable_speculative_decode):
+        return LM_HEAD_WORKER_L1_SIZE
+    return DEFAULT_WORKER_L1_SIZE
 
 
 @contextlib.contextmanager
