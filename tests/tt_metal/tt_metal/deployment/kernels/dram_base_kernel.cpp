@@ -2,6 +2,8 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "patterns/patterns.hpp"
+#include "patterns/dram_pattern_fill.hpp"
+#include "patterns/sync_mailbox.hpp"
 #include "common_dram.hpp"
 #include "dram_utils.hpp"
 #include "timestamp.hpp"
@@ -51,6 +53,97 @@ static inline uint32_t dram_read_word_from_bank(
 
     volatile uint32_t* scratch_words = (volatile uint32_t*)scratch_l1_addr;
     return scratch_words[word_index];
+}
+
+static inline void dram_record_classified_failure(
+    volatile DramBaseResult* result,
+    volatile uint32_t* sync_mb,
+    uint32_t bank_id,
+    uint64_t bank_offset_base,
+    uint32_t read_noc,
+    uint32_t scratch_l1_addr,
+    uint32_t fail_byte_offset,
+    uint32_t expected,
+    uint32_t observed) {
+    uint32_t reread0 = dram_read_word_from_bank(bank_id, bank_offset_base, fail_byte_offset, read_noc, scratch_l1_addr);
+    uint32_t reread1 = dram_read_word_from_bank(bank_id, bank_offset_base, fail_byte_offset, read_noc, scratch_l1_addr);
+    uint32_t reread2 = dram_read_word_from_bank(bank_id, bank_offset_base, fail_byte_offset, read_noc, scratch_l1_addr);
+    uint32_t reread3 = dram_read_word_from_bank(bank_id, bank_offset_base, fail_byte_offset, read_noc, scratch_l1_addr);
+    uint32_t reread4 = dram_read_word_from_bank(bank_id, bank_offset_base, fail_byte_offset, read_noc, scratch_l1_addr);
+
+    const bool all_same = (reread0 == reread1) && (reread0 == reread2) && (reread0 == reread3) && (reread0 == reread4);
+
+    uint32_t classified_kind = DRAM_FAILURE_READ;
+    if (all_same) {
+        if (reread0 == expected) {
+            classified_kind = DRAM_FAILURE_READ;
+        } else {
+            classified_kind = DRAM_FAILURE_WRITE;
+        }
+    } else {
+        classified_kind = DRAM_FAILURE_READ;
+    }
+
+    if (classified_kind == DRAM_FAILURE_WRITE) {
+        result->suspected_write_failures++;
+    } else {
+        result->suspected_read_failures++;
+    }
+
+    if (result->failures == 0u) {
+        result->first_fail_addr = fail_byte_offset;
+        result->first_expected = expected;
+        result->first_observed = observed;
+        result->failure_kind = classified_kind;
+        result->readback_count = 5u;
+        result->readback_data[0] = reread0;
+        result->readback_data[1] = reread1;
+        result->readback_data[2] = reread2;
+        result->readback_data[3] = reread3;
+        result->readback_data[4] = reread4;
+
+        sync_mb[MB_FIRST_FAIL_ADDR] = result->first_fail_addr;
+        sync_mb[MB_FIRST_EXPECTED] = result->first_expected;
+        sync_mb[MB_FIRST_OBSERVED] = result->first_observed;
+        sync_mb[MB_FAILURE_KIND] = result->failure_kind;
+    }
+}
+
+static inline void dram_consume_compare_helper_result(
+    volatile DramBaseResult* result,
+    volatile uint32_t* sync_mb,
+    uint32_t result_idx,
+    uint32_t first_addr_idx,
+    uint32_t first_expected_idx,
+    uint32_t first_observed_idx,
+    uint32_t bank_id,
+    uint64_t bank_offset_base,
+    uint32_t read_noc,
+    uint32_t scratch_l1_addr) {
+    const uint32_t helper_failures = sync_mb[result_idx];
+
+    if (helper_failures == 0u) {
+        return;
+    }
+
+    const uint32_t fail_byte_offset = sync_mb[first_addr_idx];
+    const uint32_t expected = sync_mb[first_expected_idx];
+    const uint32_t observed = sync_mb[first_observed_idx];
+
+    if (fail_byte_offset != 0xFFFFFFFFu) {
+        dram_record_classified_failure(
+            result,
+            sync_mb,
+            bank_id,
+            bank_offset_base,
+            read_noc,
+            scratch_l1_addr,
+            fail_byte_offset,
+            expected,
+            observed);
+    }
+
+    result->failures += helper_failures;
 }
 
 static inline bool dram_should_inject_write_error(uint32_t global_word_index) {
@@ -185,20 +278,235 @@ static inline void dram_reset_result(volatile DramBaseResult* result, const Dram
     }
 }
 
-// This is the original single-job kernel body, minimally refactored.
-// Main change: it now accepts p/result/status instead of reading one job from runtime args.
+struct DramChunkState {
+    uint32_t offset = 0u;
+    uint32_t transfer_bytes = 0u;
+    uint32_t word_count = 0u;
+    uint32_t base_word_index = 0u;
+    uint32_t gen_slot = 0u;
+    uint32_t gen_l1_addr = 0u;
+    uint32_t obs_slot = 0u;
+    uint32_t obs_l1_addr = 0u;
+};
+
+static inline uint32_t dram_get_gen_l1_addr(volatile uint32_t* sync_mb, uint32_t slot) {
+    return (slot == DRAM_GEN_SLOT_PING) ? sync_mb[MB_GEN_PING_L1_ADDR] : sync_mb[MB_GEN_PONG_L1_ADDR];
+}
+
+static inline uint32_t dram_get_obs_l1_addr(volatile uint32_t* sync_mb, uint32_t slot) {
+    return (slot == DRAM_OBS_SLOT_PING) ? sync_mb[MB_OBS_PING_L1_ADDR] : sync_mb[MB_OBS_PONG_L1_ADDR];
+}
+
+static inline DramChunkState dram_make_chunk_state(
+    uint32_t offset, uint32_t transfer_bytes, uint32_t chunk_index, volatile uint32_t* sync_mb) {
+    DramChunkState c{};
+
+    c.offset = offset;
+    c.transfer_bytes = transfer_bytes;
+    c.word_count = transfer_bytes / sizeof(uint32_t);
+    c.base_word_index = offset / sizeof(uint32_t);
+
+    c.gen_slot = chunk_index & 1u;
+    c.obs_slot = chunk_index & 1u;
+
+    c.gen_l1_addr = dram_get_gen_l1_addr(sync_mb, c.gen_slot);
+    c.obs_l1_addr = dram_get_obs_l1_addr(sync_mb, c.obs_slot);
+
+    return c;
+}
+
+static inline void dram_start_generate_chunk(
+    const DramChunkState& c, volatile uint32_t* sync_mb, uint32_t generate_tag) {
+    sync_mb[MB_GEN_ACTIVE_SLOT] = c.gen_slot;
+    sync_mb[MB_GEN_ACTIVE_L1_ADDR] = c.gen_l1_addr;
+
+    sync_mb[MB_GENERATE_L1_ADDR] = c.gen_l1_addr;
+    sync_mb[MB_GENERATE_WORD_COUNT] = c.word_count;
+    sync_mb[MB_GENERATE_BASE_WORD_INDEX] = c.base_word_index;
+
+    sync_mb[MB_GENERATE_MATH_DONE] = 0u;
+    sync_mb[MB_GENERATE_PACK_DONE] = 0u;
+
+    noc_async_write_barrier();
+    sync_mb[MB_GENERATE_START] = generate_tag;
+    noc_async_write_barrier();
+}
+
+static inline bool dram_wait_generate_chunk(
+    volatile uint32_t* sync_mb,
+    volatile DramJobQueueCtrl* ctrl,
+    volatile CoreProgressStatus* status,
+    uint32_t generate_tag) {
+    while ((sync_mb[MB_GENERATE_MATH_DONE] != generate_tag) || (sync_mb[MB_GENERATE_PACK_DONE] != generate_tag)) {
+        noc_async_read_barrier();
+
+        if (dram_stop_requested(ctrl)) {
+            sync_mb[MB_STOP] = 1u;
+            sync_mb[MB_ERROR] = MB_ERROR_STOP_REQUESTED;
+            status->current_stage = DRAM_PROGRESS_STAGE_DONE;
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static inline void dram_start_ncrisc_io_chunk(
+    const DramChunkState& c, volatile uint32_t* sync_mb, uint32_t ncrisc_tag) {
+    sync_mb[MB_GEN_ACTIVE_SLOT] = c.gen_slot;
+    sync_mb[MB_GEN_ACTIVE_L1_ADDR] = c.gen_l1_addr;
+
+    sync_mb[MB_OBS_ACTIVE_SLOT] = c.obs_slot;
+    sync_mb[MB_OBS_ACTIVE_L1_ADDR] = c.obs_l1_addr;
+
+    sync_mb[MB_CURRENT_OFFSET_BYTES] = c.offset;
+    sync_mb[MB_CURRENT_TRANSFER_BYTES] = c.transfer_bytes;
+    sync_mb[MB_CURRENT_WORD_COUNT] = c.word_count;
+    sync_mb[MB_CURRENT_BASE_WORD] = c.base_word_index;
+
+    sync_mb[MB_NCRISC_ERROR] = MB_ERROR_NONE;
+
+    noc_async_write_barrier();
+    sync_mb[MB_NCRISC_START] = ncrisc_tag;
+    noc_async_write_barrier();
+}
+
+static inline bool dram_wait_ncrisc_io_chunk(
+    volatile uint32_t* sync_mb,
+    volatile DramJobQueueCtrl* ctrl,
+    volatile CoreProgressStatus* status,
+    uint32_t ncrisc_tag) {
+    while (sync_mb[MB_NCRISC_DONE] != ncrisc_tag) {
+        noc_async_read_barrier();
+
+        if (dram_stop_requested(ctrl)) {
+            sync_mb[MB_STOP] = 1u;
+            sync_mb[MB_ERROR] = MB_ERROR_STOP_REQUESTED;
+            status->current_stage = DRAM_PROGRESS_STAGE_DONE;
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static inline bool run_one_dram_job(
     const DramTestParameters& p,
     volatile DramBaseResult* result,
     uint32_t* expect_words,
     uint32_t* observe_words,
     volatile CoreProgressStatus* status,
-    volatile DramJobQueueCtrl* ctrl) {
+    volatile DramJobQueueCtrl* ctrl,
+    volatile uint32_t* sync_mb) {
+    (void)expect_words;
+    (void)observe_words;
+
     const uint64_t bank_offset_base = dram_test_bank_offset(p);
 
     dram_reset_result(result, p);
 
+    sync_mb[MB_STOP] = 0u;
+    sync_mb[MB_ERROR] = MB_ERROR_NONE;
+
+    sync_mb[MB_JOB_ID] = p.job_id;
+    sync_mb[MB_BANK_ID] = p.bank_id;
+    sync_mb[MB_BANK_OFFSET_LO] = p.bank_offset_lo;
+    sync_mb[MB_BANK_OFFSET_HI] = p.bank_offset_hi;
+    sync_mb[MB_TOTAL_BYTES] = p.total_bytes;
+    sync_mb[MB_CHUNK_BYTES] = p.chunk_bytes;
+    sync_mb[MB_PATTERN_ID_GLOBAL] = p.pattern_id;
+    sync_mb[MB_SEED_GLOBAL] = p.seed;
+    sync_mb[MB_PASS_INDEX_GLOBAL] = p.pass_index;
+    sync_mb[MB_REPEAT_INDEX_GLOBAL] = p.repeat_index;
+
+    sync_mb[MB_RESULT_L1_ADDR] = p.result_l1_addr;
+    sync_mb[MB_EXPECT_L1_ADDR] = p.expect_l1_addr;
+    sync_mb[MB_OBSERVE_L1_ADDR] = p.observe_l1_addr;
+
+    if (sync_mb[MB_GEN_PING_L1_ADDR] == 0u) {
+        sync_mb[MB_GEN_PING_L1_ADDR] = p.expect_l1_addr;
+    }
+
+    if (sync_mb[MB_GEN_PONG_L1_ADDR] == 0u) {
+        sync_mb[MB_GEN_PONG_L1_ADDR] = p.expect_l1_addr;
+    }
+
+    sync_mb[MB_GEN_ACTIVE_SLOT] = DRAM_GEN_SLOT_PING;
+    sync_mb[MB_GEN_ACTIVE_L1_ADDR] = sync_mb[MB_GEN_PING_L1_ADDR];
+
+    if (sync_mb[MB_OBS_PING_L1_ADDR] == 0u) {
+        sync_mb[MB_OBS_PING_L1_ADDR] = p.observe_l1_addr;
+    }
+
+    if (sync_mb[MB_OBS_PONG_L1_ADDR] == 0u) {
+        sync_mb[MB_OBS_PONG_L1_ADDR] = p.observe_l1_addr;
+    }
+
+    sync_mb[MB_OBS_ACTIVE_SLOT] = DRAM_OBS_SLOT_PING;
+    sync_mb[MB_OBS_ACTIVE_L1_ADDR] = sync_mb[MB_OBS_PING_L1_ADDR];
+
+    sync_mb[MB_WRITE_NOC] = p.write_noc;
+    sync_mb[MB_READ_NOC] = p.read_noc;
+    sync_mb[MB_MAX_BURST_LEN] = p.max_burst_len;
+    sync_mb[MB_TRANSFER_LEN_MODE] = p.transfer_len_mode;
+    sync_mb[MB_SKIP_WRITES] = p.skip_writes;
+    sync_mb[MB_SKIP_READS] = p.skip_reads;
+
+    sync_mb[MB_CURRENT_STAGE] = MB_STAGE_JOB_START;
+    sync_mb[MB_CURRENT_CHUNK] = 0u;
+    sync_mb[MB_TOTAL_CHUNKS] = 0u;
+    sync_mb[MB_TRANSFERS] = 0u;
+    sync_mb[MB_WORDS_CHECKED] = 0u;
+    sync_mb[MB_FAILURES] = 0u;
+    sync_mb[MB_FIRST_FAIL_ADDR] = 0xFFFFFFFFu;
+    sync_mb[MB_FIRST_EXPECTED] = 0u;
+    sync_mb[MB_FIRST_OBSERVED] = 0u;
+    sync_mb[MB_FAILURE_KIND] = DRAM_FAILURE_NONE;
+    sync_mb[MB_SUSPECTED_WRITE_FAILURES] = 0u;
+    sync_mb[MB_SUSPECTED_READ_FAILURES] = 0u;
+
+    //    sync_mb[MB_NCRISC_START] = 0u;
+    //    sync_mb[MB_NCRISC_DONE] = 0u;
+    sync_mb[MB_NCRISC_ERROR] = MB_ERROR_NONE;
+    sync_mb[MB_NCRISC_ACTIVE_OFFSET_BYTES] = 0u;
+    sync_mb[MB_NCRISC_ACTIVE_TRANSFER_BYTES] = 0u;
+
+    //    sync_mb[MB_GENERATE_START] = 0u;
+    //    sync_mb[MB_GENERATE_DONE] = 0u;
+    sync_mb[MB_GENERATE_L1_ADDR] = 0u;
+    sync_mb[MB_GENERATE_WORD_COUNT] = 0u;
+    sync_mb[MB_GENERATE_BASE_WORD_INDEX] = 0u;
+    //    sync_mb[MB_GENERATE_MATH_DONE] = 0u;
+    //    sync_mb[MB_GENERATE_PACK_DONE] = 0u;
+
+    //    sync_mb[MB_COMPARE_START] = 0u;
+    //    sync_mb[MB_COMPARE_DONE] = 0u;
+    sync_mb[MB_COMPARE_SOURCE_L1_ADDR] = 0u;
+    sync_mb[MB_COMPARE_OBSERVED_L1_ADDR] = 0u;
+    sync_mb[MB_COMPARE_WORD_COUNT] = 0u;
+    sync_mb[MB_COMPARE_BASE_BYTE_OFFSET] = 0u;
+
+    //    sync_mb[MB_COMPARE_MATH_DONE] = 0u;
+    sync_mb[MB_COMPARE_MATH_RESULT] = 0u;
+    sync_mb[MB_COMPARE_MATH_FIRST_ADDR] = 0xFFFFFFFFu;
+    sync_mb[MB_COMPARE_MATH_FIRST_EXPECTED] = 0u;
+    sync_mb[MB_COMPARE_MATH_FIRST_OBSERVED] = 0u;
+
+    //    sync_mb[MB_COMPARE_PACK_DONE] = 0u;
+    sync_mb[MB_COMPARE_PACK_RESULT] = 0u;
+    sync_mb[MB_COMPARE_PACK_FIRST_ADDR] = 0xFFFFFFFFu;
+    sync_mb[MB_COMPARE_PACK_FIRST_EXPECTED] = 0u;
+    sync_mb[MB_COMPARE_PACK_FIRST_OBSERVED] = 0u;
+
+    //    sync_mb[MB_COMPARE_UNPACK_DONE] = 0u;
+    sync_mb[MB_COMPARE_UNPACK_RESULT] = 0u;
+    sync_mb[MB_COMPARE_UNPACK_FIRST_ADDR] = 0xFFFFFFFFu;
+    sync_mb[MB_COMPARE_UNPACK_FIRST_EXPECTED] = 0u;
+    sync_mb[MB_COMPARE_UNPACK_FIRST_OBSERVED] = 0u;
+
     if (dram_stop_requested(ctrl)) {
+        sync_mb[MB_STOP] = 1u;
+        sync_mb[MB_ERROR] = MB_ERROR_STOP_REQUESTED;
         status->current_stage = DRAM_PROGRESS_STAGE_DONE;
         return false;
     }
@@ -208,6 +516,13 @@ static inline bool run_one_dram_job(
         result->first_fail_addr = 0u;
         result->first_expected = 0u;
         result->first_observed = p.chunk_bytes;
+
+        sync_mb[MB_ERROR] = MB_ERROR_BAD_CONFIG;
+        sync_mb[MB_FAILURES] = result->failures;
+        sync_mb[MB_FIRST_FAIL_ADDR] = result->first_fail_addr;
+        sync_mb[MB_FIRST_EXPECTED] = result->first_expected;
+        sync_mb[MB_FIRST_OBSERVED] = result->first_observed;
+
         noc_async_write_barrier();
         result->job_id = p.job_id;
         noc_async_write_barrier();
@@ -223,121 +538,230 @@ static inline bool run_one_dram_job(
         rng_state = 1u;
     }
 
-    DramXoshiro128ppState xoshiro_state = dram_pattern_random_xoshiro128pp_init(p.seed ^ p.pass_index);
+    uint32_t generate_request_tag = sync_mb[MB_GENERATE_START];
+    uint32_t ncrisc_request_tag = sync_mb[MB_NCRISC_START];
+    uint32_t compare_request_tag = sync_mb[MB_COMPARE_START];
 
-    const bool use_checkerboard_fastpath = (p.pattern_id == DRAM_PATTERN_CHECKERBOARD);
-    const bool use_counter_fastpath = (p.pattern_id == DRAM_PATTERN_COUNTER);
-    const bool use_address_fastpath = (p.pattern_id == DRAM_PATTERN_ADDRESS);
-    const bool use_marching_one_bits_fastpath = (p.pattern_id == DRAM_PATTERN_MARCHING_ONE_BITS);
-    const bool use_marching_zero_bits_fastpath = (p.pattern_id == DRAM_PATTERN_MARCHING_ZERO_BITS);
+    uint32_t next_offset = 0u;
+    uint32_t chunk_index = 0u;
 
-    if (use_checkerboard_fastpath) {
-        const uint32_t precompute_word_count = p.chunk_bytes / sizeof(uint32_t);
+    bool have_current = false;
+    DramChunkState current_chunk{};
+
+    bool have_next = false;
+    DramChunkState next_chunk{};
+
+    if (next_offset < p.total_bytes) {
+        const uint32_t remaining_bytes = p.total_bytes - next_offset;
+        const uint32_t transfer_bytes = dram_choose_transfer_len(p, remaining_bytes, rng_state);
+
+        current_chunk = dram_make_chunk_state(next_offset, transfer_bytes, chunk_index, sync_mb);
+
         dram_status_heartbeat(status, DRAM_PROGRESS_STAGE_PREPARE);
+        sync_mb[MB_CURRENT_STAGE] = MB_STAGE_PREPARE;
+        sync_mb[MB_CURRENT_CHUNK] = chunk_index;
 
-        uint64_t t0 = timestamp();
-        dram_pattern_checkerboard_fill_buffer(expect_words, precompute_word_count, p.pass_index);
-        uint64_t t1 = timestamp();
-        total_prepare_ticks += (t1 - t0);
+        const uint64_t prep_t0 = timestamp();
+
+        ++generate_request_tag;
+        if (generate_request_tag == 0u) {
+            generate_request_tag = 1u;
+        }
+
+        dram_start_generate_chunk(current_chunk, sync_mb, generate_request_tag);
+
+        if (!dram_wait_generate_chunk(sync_mb, ctrl, status, generate_request_tag)) {
+            return false;
+        }
+
+        const uint64_t prep_t1 = timestamp();
+        total_prepare_ticks += (prep_t1 - prep_t0);
+
+        next_offset += transfer_bytes;
+        chunk_index++;
+        have_current = true;
     }
 
-    for (uint32_t offset = 0; offset < p.total_bytes;) {
+    while (have_current) {
         if (dram_stop_requested(ctrl)) {
+            sync_mb[MB_STOP] = 1u;
+            sync_mb[MB_ERROR] = MB_ERROR_STOP_REQUESTED;
             status->current_stage = DRAM_PROGRESS_STAGE_DONE;
             return false;
         }
 
-        uint32_t remaining_bytes = p.total_bytes - offset;
-        uint32_t transfer_bytes = dram_choose_transfer_len(p, remaining_bytes, rng_state);
-        const uint32_t word_count = transfer_bytes / sizeof(uint32_t);
-        const uint32_t base_word_index = offset / sizeof(uint32_t);
+        sync_mb[MB_CURRENT_CHUNK] = result->transfers;
+        sync_mb[MB_CURRENT_OFFSET_BYTES] = current_chunk.offset;
+        sync_mb[MB_CURRENT_TRANSFER_BYTES] = current_chunk.transfer_bytes;
+        sync_mb[MB_CURRENT_WORD_COUNT] = current_chunk.word_count;
+        sync_mb[MB_CURRENT_BASE_WORD] = current_chunk.base_word_index;
 
-        if (!use_checkerboard_fastpath) {
-            dram_status_heartbeat(status, DRAM_PROGRESS_STAGE_PREPARE);
-
-            uint64_t t0 = timestamp();
-            if (use_counter_fastpath) {
-                dram_pattern_counter_fill_buffer(expect_words, word_count, p.seed, base_word_index);
-            } else if (use_address_fastpath) {
-                dram_pattern_address_fill_buffer(expect_words, word_count, p.repeat_index, base_word_index);
-            } else if (use_marching_one_bits_fastpath) {
-                const uint32_t value = dram_pattern_marching_one_bits(p.pass_index);
-                dram_pattern_constant_fill_buffer(expect_words, word_count, value);
-            } else if (use_marching_zero_bits_fastpath) {
-                const uint32_t value = dram_pattern_marching_zero_bits(p.pass_index);
-                dram_pattern_constant_fill_buffer(expect_words, word_count, value);
-            } else {
-                for (uint32_t i = 0; i < word_count; ++i) {
-                    if (p.pattern_id == DRAM_PATTERN_RANDOM) {
-                        rng_state = dram_pattern_random_step(rng_state);
-                        expect_words[i] = rng_state;
-                    } else if (p.pattern_id == DRAM_PATTERN_RANDOM_XOSHIRO128PP) {
-                        expect_words[i] = dram_pattern_random_xoshiro128pp_next(xoshiro_state);
-                    } else {
-                        expect_words[i] = dram_pattern_generate(
-                            p.pattern_id, p.seed, p.pass_index, base_word_index + i, p.repeat_index);
-                    }
-                }
-            }
-            uint64_t t1 = timestamp();
-            total_prepare_ticks += (t1 - t0);
-        }
+        const uint64_t io_t0 = timestamp();
 
         if (!p.skip_writes) {
             dram_status_heartbeat(status, DRAM_PROGRESS_STAGE_WRITE);
+            sync_mb[MB_CURRENT_STAGE] = MB_STAGE_WRITE;
+        } else if (!p.skip_reads) {
+            dram_status_heartbeat(status, DRAM_PROGRESS_STAGE_READ);
+            sync_mb[MB_CURRENT_STAGE] = MB_STAGE_READ;
+        }
 
-            uint64_t write_dram_noc_addr = get_noc_addr_from_bank_id<true>(
-                p.bank_id, (uint32_t)(bank_offset_base + (uint64_t)offset), p.write_noc);
-
-            uint64_t t0 = timestamp();
-            noc_async_write(p.expect_l1_addr, write_dram_noc_addr, transfer_bytes);
-            noc_async_write_barrier();
-
-#if INSERT_WRITE_ERRORS
-            for (uint32_t i = 0; i < word_count; ++i) {
-                const uint32_t global_word_index = base_word_index + i;
-                if (dram_should_inject_write_error(global_word_index)) {
-                    uint32_t wrong_word = expect_words[i] ^ 0x00000001u;
-                    uint64_t word_dram_noc_addr = get_noc_addr_from_bank_id<true>(
-                        p.bank_id,
-                        (uint32_t)(bank_offset_base + (uint64_t)offset + (uint64_t)i * sizeof(uint32_t)),
-                        p.write_noc);
-                    uint32_t* inject_word_ptr = (uint32_t*)p.observe_l1_addr;
-                    inject_word_ptr[0] = wrong_word;
-                    noc_async_write(p.observe_l1_addr, word_dram_noc_addr, sizeof(uint32_t));
-                    noc_async_write_barrier();
-                }
+        if (!p.skip_writes || !p.skip_reads) {
+            ++ncrisc_request_tag;
+            if (ncrisc_request_tag == 0u) {
+                ncrisc_request_tag = 1u;
             }
+
+            dram_start_ncrisc_io_chunk(current_chunk, sync_mb, ncrisc_request_tag);
+        }
+
+        have_next = false;
+
+        if (next_offset < p.total_bytes) {
+            const uint32_t remaining_bytes = p.total_bytes - next_offset;
+            const uint32_t transfer_bytes = dram_choose_transfer_len(p, remaining_bytes, rng_state);
+
+            next_chunk = dram_make_chunk_state(next_offset, transfer_bytes, chunk_index, sync_mb);
+
+            dram_status_heartbeat(status, DRAM_PROGRESS_STAGE_PREPARE);
+            sync_mb[MB_CURRENT_STAGE] = MB_STAGE_PREPARE;
+
+            const uint64_t prep_t0 = timestamp();
+
+            ++generate_request_tag;
+            if (generate_request_tag == 0u) {
+                generate_request_tag = 1u;
+            }
+
+            dram_start_generate_chunk(next_chunk, sync_mb, generate_request_tag);
+
+            if (!dram_wait_generate_chunk(sync_mb, ctrl, status, generate_request_tag)) {
+                return false;
+            }
+
+            const uint64_t prep_t1 = timestamp();
+            total_prepare_ticks += (prep_t1 - prep_t0);
+
+            next_offset += transfer_bytes;
+            chunk_index++;
+            have_next = true;
+        }
+
+        if (!p.skip_writes || !p.skip_reads) {
+            if (!dram_wait_ncrisc_io_chunk(sync_mb, ctrl, status, ncrisc_request_tag)) {
+                return false;
+            }
+
+            const uint64_t io_t1 = timestamp();
+
+            if (sync_mb[MB_NCRISC_ERROR] != MB_ERROR_NONE) {
+                result->failures = 1u;
+                result->first_fail_addr = current_chunk.offset;
+                result->first_expected = 0u;
+                result->first_observed = sync_mb[MB_NCRISC_ERROR];
+                result->failure_kind = DRAM_FAILURE_READ;
+
+                sync_mb[MB_FAILURES] = result->failures;
+                sync_mb[MB_FIRST_FAIL_ADDR] = result->first_fail_addr;
+                sync_mb[MB_FIRST_EXPECTED] = result->first_expected;
+                sync_mb[MB_FIRST_OBSERVED] = result->first_observed;
+                sync_mb[MB_FAILURE_KIND] = result->failure_kind;
+                sync_mb[MB_ERROR] = sync_mb[MB_NCRISC_ERROR];
+
+                result->transfers++;
+                status->heartbeat_tick++;
+
+                sync_mb[MB_TRANSFERS] = result->transfers;
+                sync_mb[MB_WORDS_CHECKED] = result->words_checked;
+                sync_mb[MB_FAILURES] = result->failures;
+
+#if DRAM_TEST_INJECT_TENSIX_HEARTBEAT_STALL
+                if ((p.job_id == DRAM_TEST_STALL_JOB_ID) && (result->transfers >= DRAM_TEST_STALL_AFTER_TRANSFERS)) {
+                    status->current_stage = DRAM_PROGRESS_STAGE_VERIFY;
+                    status->current_job_id = p.job_id;
+                    sync_mb[MB_CURRENT_STAGE] = MB_STAGE_VERIFY;
+
+                    while (true) {
+                        // Intentional watchdog validation hang.
+                    }
+                }
 #endif
-            uint64_t t1 = timestamp();
-            total_write_ticks += (t1 - t0);
+
+                current_chunk = next_chunk;
+                have_current = have_next;
+                continue;
+            }
+
+            if (!p.skip_writes) {
+                total_write_ticks += (io_t1 - io_t0);
+            }
+
+            if (!p.skip_reads) {
+                total_read_ticks += (io_t1 - io_t0);
+            }
         }
 
         if (!p.skip_reads) {
-            dram_status_heartbeat(status, DRAM_PROGRESS_STAGE_READ);
-
-            uint64_t read_dram_noc_addr =
-                get_noc_addr_from_bank_id<true>(p.bank_id, (uint32_t)(bank_offset_base + (uint64_t)offset), p.read_noc);
-
-            uint64_t t0 = timestamp();
-            noc_async_read(read_dram_noc_addr, p.observe_l1_addr, transfer_bytes);
-            noc_async_read_barrier();
-            uint64_t t1 = timestamp();
-            total_read_ticks += (t1 - t0);
+            uint32_t* active_expect_words = reinterpret_cast<uint32_t*>(current_chunk.gen_l1_addr);
+            uint32_t* active_observe_words = reinterpret_cast<uint32_t*>(current_chunk.obs_l1_addr);
 
             dprint_top_2kb_of_bank_if_in_range(
-                p, bank_offset_base, offset, transfer_bytes, expect_words, observe_words);
+                p,
+                bank_offset_base,
+                current_chunk.offset,
+                current_chunk.transfer_bytes,
+                active_expect_words,
+                active_observe_words);
 
             dram_status_heartbeat(status, DRAM_PROGRESS_STAGE_VERIFY);
+            sync_mb[MB_CURRENT_STAGE] = MB_STAGE_VERIFY;
 
-            for (uint32_t i = 0; i < word_count; ++i) {
+            const uint32_t q1 = current_chunk.word_count >> 2;
+
+            ++compare_request_tag;
+            if (compare_request_tag == 0u) {
+                compare_request_tag = 1u;
+            }
+
+            sync_mb[MB_COMPARE_SOURCE_L1_ADDR] = current_chunk.gen_l1_addr;
+            sync_mb[MB_COMPARE_OBSERVED_L1_ADDR] = current_chunk.obs_l1_addr;
+            sync_mb[MB_COMPARE_WORD_COUNT] = current_chunk.word_count;
+            sync_mb[MB_COMPARE_BASE_BYTE_OFFSET] = current_chunk.offset;
+
+            sync_mb[MB_COMPARE_MATH_RESULT] = 0u;
+            sync_mb[MB_COMPARE_PACK_RESULT] = 0u;
+            sync_mb[MB_COMPARE_UNPACK_RESULT] = 0u;
+
+            sync_mb[MB_COMPARE_MATH_FIRST_ADDR] = 0xFFFFFFFFu;
+            sync_mb[MB_COMPARE_MATH_FIRST_EXPECTED] = 0u;
+            sync_mb[MB_COMPARE_MATH_FIRST_OBSERVED] = 0u;
+
+            sync_mb[MB_COMPARE_PACK_FIRST_ADDR] = 0xFFFFFFFFu;
+            sync_mb[MB_COMPARE_PACK_FIRST_EXPECTED] = 0u;
+            sync_mb[MB_COMPARE_PACK_FIRST_OBSERVED] = 0u;
+
+            sync_mb[MB_COMPARE_UNPACK_FIRST_ADDR] = 0xFFFFFFFFu;
+            sync_mb[MB_COMPARE_UNPACK_FIRST_EXPECTED] = 0u;
+            sync_mb[MB_COMPARE_UNPACK_FIRST_OBSERVED] = 0u;
+
+            noc_async_write_barrier();
+            sync_mb[MB_COMPARE_MATH_DONE] = 0u;
+            sync_mb[MB_COMPARE_PACK_DONE] = 0u;
+            sync_mb[MB_COMPARE_UNPACK_DONE] = 0u;
+            sync_mb[MB_COMPARE_START] = compare_request_tag;
+            noc_async_write_barrier();
+
+            for (uint32_t i = 0; i < q1; ++i) {
                 if ((i & 0x3FFu) == 0u && dram_stop_requested(ctrl)) {
+                    sync_mb[MB_STOP] = 1u;
+                    sync_mb[MB_ERROR] = MB_ERROR_STOP_REQUESTED;
                     status->current_stage = DRAM_PROGRESS_STAGE_DONE;
                     return false;
                 }
-                const uint32_t global_word_index = base_word_index + i;
-                uint32_t expected = expect_words[i];
-                uint32_t observed = observe_words[i];
+
+                const uint32_t global_word_index = current_chunk.base_word_index + i;
+                const uint32_t expected = active_expect_words[i];
+                uint32_t observed = active_observe_words[i];
 
 #if INSERT_READ_ERRORS
                 if (dram_should_inject_read_error(global_word_index)) {
@@ -349,68 +773,92 @@ static inline bool run_one_dram_job(
 
                 if (observed != expected) {
                     dram_status_heartbeat(status, DRAM_PROGRESS_STAGE_REREAD);
+                    sync_mb[MB_CURRENT_STAGE] = MB_STAGE_REREAD;
 
-                    const uint32_t fail_byte_offset = offset + i * sizeof(uint32_t);
-                    const uint32_t scratch_l1_addr = p.observe_l1_addr;
+                    const uint32_t fail_byte_offset = current_chunk.offset + i * sizeof(uint32_t);
 
-                    uint32_t reread0 = dram_read_word_from_bank(
-                        p.bank_id, bank_offset_base, fail_byte_offset, p.read_noc, scratch_l1_addr);
-                    uint32_t reread1 = dram_read_word_from_bank(
-                        p.bank_id, bank_offset_base, fail_byte_offset, p.read_noc, scratch_l1_addr);
-                    uint32_t reread2 = dram_read_word_from_bank(
-                        p.bank_id, bank_offset_base, fail_byte_offset, p.read_noc, scratch_l1_addr);
-                    uint32_t reread3 = dram_read_word_from_bank(
-                        p.bank_id, bank_offset_base, fail_byte_offset, p.read_noc, scratch_l1_addr);
-                    uint32_t reread4 = dram_read_word_from_bank(
-                        p.bank_id, bank_offset_base, fail_byte_offset, p.read_noc, scratch_l1_addr);
-
-                    bool all_same =
-                        (reread0 == reread1) && (reread0 == reread2) && (reread0 == reread3) && (reread0 == reread4);
-
-                    uint32_t classified_kind = DRAM_FAILURE_READ;
-                    if (all_same) {
-                        if (reread0 == expected) {
-                            classified_kind = DRAM_FAILURE_READ;
-                        } else {
-                            classified_kind = DRAM_FAILURE_WRITE;
-                        }
-                    } else {
-                        classified_kind = DRAM_FAILURE_READ;
-                    }
-
-                    if (classified_kind == DRAM_FAILURE_WRITE) {
-                        result->suspected_write_failures++;
-                    } else {
-                        result->suspected_read_failures++;
-                    }
-
-                    if (result->failures == 0u) {
-                        result->first_fail_addr = fail_byte_offset;
-                        result->first_expected = expected;
-                        result->first_observed = observed;
-                        result->failure_kind = classified_kind;
-                        result->readback_count = 5u;
-                        result->readback_data[0] = reread0;
-                        result->readback_data[1] = reread1;
-                        result->readback_data[2] = reread2;
-                        result->readback_data[3] = reread3;
-                        result->readback_data[4] = reread4;
-                    }
+                    dram_record_classified_failure(
+                        result,
+                        sync_mb,
+                        p.bank_id,
+                        bank_offset_base,
+                        p.read_noc,
+                        current_chunk.obs_l1_addr,
+                        fail_byte_offset,
+                        expected,
+                        observed);
 
                     result->failures++;
+
                     dram_status_heartbeat(status, DRAM_PROGRESS_STAGE_VERIFY);
+                    sync_mb[MB_CURRENT_STAGE] = MB_STAGE_VERIFY;
                 }
             }
+
+            while ((sync_mb[MB_COMPARE_MATH_DONE] != compare_request_tag) ||
+                   (sync_mb[MB_COMPARE_PACK_DONE] != compare_request_tag) ||
+                   (sync_mb[MB_COMPARE_UNPACK_DONE] != compare_request_tag)) {
+                noc_async_read_barrier();
+
+                if (dram_stop_requested(ctrl)) {
+                    sync_mb[MB_STOP] = 1u;
+                    sync_mb[MB_ERROR] = MB_ERROR_STOP_REQUESTED;
+                    status->current_stage = DRAM_PROGRESS_STAGE_DONE;
+                    return false;
+                }
+            }
+
+            result->words_checked += (current_chunk.word_count - q1);
+
+            dram_consume_compare_helper_result(
+                result,
+                sync_mb,
+                MB_COMPARE_MATH_RESULT,
+                MB_COMPARE_MATH_FIRST_ADDR,
+                MB_COMPARE_MATH_FIRST_EXPECTED,
+                MB_COMPARE_MATH_FIRST_OBSERVED,
+                p.bank_id,
+                bank_offset_base,
+                p.read_noc,
+                current_chunk.obs_l1_addr);
+
+            dram_consume_compare_helper_result(
+                result,
+                sync_mb,
+                MB_COMPARE_PACK_RESULT,
+                MB_COMPARE_PACK_FIRST_ADDR,
+                MB_COMPARE_PACK_FIRST_EXPECTED,
+                MB_COMPARE_PACK_FIRST_OBSERVED,
+                p.bank_id,
+                bank_offset_base,
+                p.read_noc,
+                current_chunk.obs_l1_addr);
+
+            dram_consume_compare_helper_result(
+                result,
+                sync_mb,
+                MB_COMPARE_UNPACK_RESULT,
+                MB_COMPARE_UNPACK_FIRST_ADDR,
+                MB_COMPARE_UNPACK_FIRST_EXPECTED,
+                MB_COMPARE_UNPACK_FIRST_OBSERVED,
+                p.bank_id,
+                bank_offset_base,
+                p.read_noc,
+                current_chunk.obs_l1_addr);
         }
 
-        offset += transfer_bytes;
         result->transfers++;
         status->heartbeat_tick++;
+
+        sync_mb[MB_TRANSFERS] = result->transfers;
+        sync_mb[MB_WORDS_CHECKED] = result->words_checked;
+        sync_mb[MB_FAILURES] = result->failures;
 
 #if DRAM_TEST_INJECT_TENSIX_HEARTBEAT_STALL
         if ((p.job_id == DRAM_TEST_STALL_JOB_ID) && (result->transfers >= DRAM_TEST_STALL_AFTER_TRANSFERS)) {
             status->current_stage = DRAM_PROGRESS_STAGE_VERIFY;
             status->current_job_id = p.job_id;
+            sync_mb[MB_CURRENT_STAGE] = MB_STAGE_VERIFY;
 
             while (true) {
                 // Intentional watchdog validation hang.
@@ -423,11 +871,22 @@ static inline bool run_one_dram_job(
             }
         }
 #endif
+
+        current_chunk = next_chunk;
+        have_current = have_next;
     }
 
     result->prepare_ticks = total_prepare_ticks;
     result->write_ticks = total_write_ticks;
     result->read_ticks = total_read_ticks;
+
+    sync_mb[MB_CURRENT_STAGE] = MB_STAGE_JOB_DONE;
+    sync_mb[MB_TRANSFERS] = result->transfers;
+    sync_mb[MB_WORDS_CHECKED] = result->words_checked;
+    sync_mb[MB_FAILURES] = result->failures;
+    sync_mb[MB_SUSPECTED_WRITE_FAILURES] = result->suspected_write_failures;
+    sync_mb[MB_SUSPECTED_READ_FAILURES] = result->suspected_read_failures;
+
     noc_async_write_barrier();
     result->job_id = p.job_id;
     noc_async_write_barrier();
@@ -443,14 +902,18 @@ void kernel_main() {
     const uint32_t observe_l1_addr = get_arg_val<uint32_t>(5);
     const uint32_t queue_capacity = get_arg_val<uint32_t>(6);
     const uint32_t wake_flag_l1_addr = get_arg_val<uint32_t>(7);
+    const uint32_t sync_mailbox_l1_addr = get_arg_val<uint32_t>(8);
 
-    volatile DramJobQueueCtrl* ctrl = (volatile DramJobQueueCtrl*)queue_ctrl_l1_addr;
-    volatile DramWorkItem* jobs = (volatile DramWorkItem*)queue_jobs_l1_addr;
-    volatile CoreProgressStatus* status = (volatile CoreProgressStatus*)status_l1_addr;
-    volatile DramBaseResult* result_ring = (volatile DramBaseResult*)result_ring_l1_addr;
+    (void)wake_flag_l1_addr;
 
-    uint32_t* expect_words = (uint32_t*)expect_l1_addr;
-    uint32_t* observe_words = (uint32_t*)observe_l1_addr;
+    volatile DramJobQueueCtrl* ctrl = reinterpret_cast<volatile DramJobQueueCtrl*>(queue_ctrl_l1_addr);
+    volatile DramWorkItem* jobs = reinterpret_cast<volatile DramWorkItem*>(queue_jobs_l1_addr);
+    volatile CoreProgressStatus* status = reinterpret_cast<volatile CoreProgressStatus*>(status_l1_addr);
+    volatile DramBaseResult* result_ring = reinterpret_cast<volatile DramBaseResult*>(result_ring_l1_addr);
+    volatile uint32_t* sync_mb = reinterpret_cast<volatile uint32_t*>(sync_mailbox_l1_addr);
+
+    uint32_t* expect_words = reinterpret_cast<uint32_t*>(expect_l1_addr);
+    uint32_t* observe_words = reinterpret_cast<uint32_t*>(observe_l1_addr);
 
     status->magic = DRAM_PROGRESS_MAGIC;
     status->state = DRAM_PROGRESS_STATE_IDLE;
@@ -461,8 +924,29 @@ void kernel_main() {
 
     if (ctrl->magic != DRAM_JOB_QUEUE_MAGIC || ctrl->capacity != queue_capacity) {
         status->state = DRAM_PROGRESS_STATE_ERROR;
+        if (sync_mb[MB_MAGIC] == DRAM_SYNC_MAILBOX_MAGIC) {
+            sync_mb[MB_ERROR] = MB_ERROR_BAD_CONFIG;
+            sync_mb[MB_STOP] = 1u;
+        }
         return;
     }
+
+    if (sync_mb[MB_MAGIC] != DRAM_SYNC_MAILBOX_MAGIC) {
+        status->state = DRAM_PROGRESS_STATE_ERROR;
+        return;
+    }
+
+    /*
+     * IMPORTANT:
+     * Do not reset MB_*_START or MB_*_DONE here after helper kernels have started,
+     * unless this is guaranteed to happen before NCRISC/compute observe the mailbox.
+     *
+     * Host zero_mailbox initialization is enough.
+     */
+
+    sync_mb[MB_STOP] = 0u;
+    sync_mb[MB_ERROR] = MB_ERROR_NONE;
+    sync_mb[MB_CURRENT_STAGE] = MB_STAGE_IDLE;
 
     while (true) {
         noc_async_read_barrier();
@@ -488,11 +972,11 @@ void kernel_main() {
             status->current_job_id = job.job_id;
             dram_status_heartbeat(status, DRAM_PROGRESS_STAGE_JOB_START);
 
-            DramTestParameters p =
-                dram_make_params_from_work_item(job, (uint32_t)&result_ring[slot], expect_l1_addr, observe_l1_addr);
+            DramTestParameters p = dram_make_params_from_work_item(
+                job, reinterpret_cast<uint32_t>(&result_ring[slot]), expect_l1_addr, observe_l1_addr);
 
             const bool job_completed =
-                run_one_dram_job(p, &result_ring[slot], expect_words, observe_words, status, ctrl);
+                run_one_dram_job(p, &result_ring[slot], expect_words, observe_words, status, ctrl, sync_mb);
 
             noc_async_write_barrier();
 
@@ -522,6 +1006,11 @@ void kernel_main() {
             break;
         }
     }
+
+    sync_mb[MB_STOP] = 1u;
+    sync_mb[MB_CURRENT_STAGE] = MB_STAGE_JOB_DONE;
+
+    noc_async_write_barrier();
 
     status->state = DRAM_PROGRESS_STATE_DONE;
     dram_status_heartbeat(status, DRAM_PROGRESS_STAGE_DONE);
