@@ -249,6 +249,9 @@ TEST_F(MeshEndToEnd2x4Tests, UntracedEltwiseAddTest) {
     }
 }
 
+// Config struct intentionally uses partial designated initializers; remaining fields take their defaults.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
 class MeshEndToEnd2x4TraceTests : public MeshDeviceFixtureBase {
 protected:
     MeshEndToEnd2x4TraceTests() :
@@ -258,6 +261,7 @@ protected:
             .trace_region_size = 3072,  // 1024 per workload necessary
         }) {}
 };
+#pragma clang diagnostic pop
 
 TEST_F(MeshEndToEnd2x4TraceTests, EltwiseAddTest) {
     constexpr uint8_t kAddOpId = 0;

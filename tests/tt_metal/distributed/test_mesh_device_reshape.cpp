@@ -42,6 +42,10 @@ std::vector<MeshShape> get_mesh_shapes() {
     return kMeshShapes.get();
 }
 
+// Config structs intentionally use partial designated initializers; remaining fields take their defaults.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
+
 class MeshConfigurationTest : public MeshDeviceFixtureBase, public ::testing::WithParamInterface<MeshShape> {
 public:
     MeshConfigurationTest() :
@@ -49,6 +53,8 @@ public:
             .mesh_shape = GetParam(),
         }) {}
 };
+
+#pragma clang diagnostic pop
 
 TEST_P(MeshConfigurationTest, MeshConfigurations) { EXPECT_EQ(mesh_device_->shape(), GetParam()); }
 
@@ -63,6 +69,8 @@ TEST_P(MeshConfigurationTest, GetMappedDevices) {
 // Test all possible mesh configurations on T3000
 INSTANTIATE_TEST_SUITE_P(AllMeshShapes, MeshConfigurationTest, ::testing::ValuesIn(get_mesh_shapes()));
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
 class MeshDeviceReshapeRoundtripTest : public MeshDeviceFixtureBase,
                                        public ::testing::WithParamInterface<std::tuple<MeshShape, MeshShape>> {
 public:
@@ -71,6 +79,7 @@ public:
             .mesh_shape = std::get<0>(GetParam()),
         }) {}
 };
+#pragma clang diagnostic pop
 
 TEST_P(MeshDeviceReshapeRoundtripTest, ReshapeBetweenConfigurations) {
     const auto& [old_shape, new_shape] = GetParam();
@@ -108,6 +117,8 @@ INSTANTIATE_TEST_SUITE_P(
     MeshDeviceReshapeRoundtripTest,
     ::testing::Combine(::testing::ValuesIn(get_mesh_shapes()), ::testing::ValuesIn(get_mesh_shapes())));
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
 class MeshDevice1x8ReshapeTest : public MeshDeviceFixtureBase {
 public:
     MeshDevice1x8ReshapeTest() :
@@ -115,6 +126,7 @@ public:
             .mesh_shape = MeshShape{1, 8},
         }) {}
 };
+#pragma clang diagnostic pop
 
 TEST_F(MeshDevice1x8ReshapeTest, InvalidRequestedShape) {
     auto& system_mesh = tt::tt_metal::MetalContext::instance().get_system_mesh();
@@ -176,6 +188,8 @@ TEST_F(MeshDevice1x8ReshapeTest, InvalidTotalDeviceCount) {
     EXPECT_EQ(mesh_device_->shape(), MeshShape(1, 8));
 }
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
 class MeshDevice2x2ReshapeTest : public MeshDeviceFixtureBase {
 public:
     MeshDevice2x2ReshapeTest() :
@@ -183,6 +197,7 @@ public:
             .mesh_shape = MeshShape{2, 2},
         }) {}
 };
+#pragma clang diagnostic pop
 
 TEST_F(MeshDevice2x2ReshapeTest, From1x4To2x2Valid) {
     // Fetch the device ids for a physically connected 2x2 mesh.
@@ -208,6 +223,8 @@ TEST_F(MeshDevice2x2ReshapeTest, From1x4To2x2Valid) {
         ElementsAre(physical_device_ids[0], physical_device_ids[1], physical_device_ids[2], physical_device_ids[3]));
 }
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
 class MeshDevice2x2WithOffsetReshapeTest : public MeshDeviceFixtureBase,
                                            public testing::WithParamInterface<MeshCoordinate> {
 public:
@@ -217,6 +234,7 @@ public:
             .mesh_offset = GetParam(),
         }) {}
 };
+#pragma clang diagnostic pop
 
 TEST_P(MeshDevice2x2WithOffsetReshapeTest, From2x2To1x4ThenBackTo2x2) {
     auto mesh_2x2_device_ids = mesh_device_->get_device_ids();

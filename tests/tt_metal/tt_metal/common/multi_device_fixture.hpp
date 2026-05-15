@@ -185,6 +185,10 @@ protected:
     Config config_;
 };
 
+// Config structs intentionally use partial designated initializers; remaining fields take their defaults.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
+
 class MeshDeviceFixture4x8DispatchAgnostic : public MeshDeviceFixtureBase {
 protected:
     MeshDeviceFixture4x8DispatchAgnostic() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{4, 8}}) {}
@@ -333,5 +337,7 @@ protected:
             .fabric_tensix_config = tt_fabric::FabricTensixConfig::UDM,
             .fabric_udm_mode = tt_fabric::FabricUDMMode::ENABLED}) {}
 };
+
+#pragma clang diagnostic pop
 
 }  // namespace tt::tt_metal

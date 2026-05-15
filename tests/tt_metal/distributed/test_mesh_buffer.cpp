@@ -471,7 +471,7 @@ TEST_F(MeshBufferTest2x4, SweepShardAndConcat) {
         {64, 128}, {128, 128}, {32, 1024}, {1024, 32}, {512, 64}, {2048, 2048}};
     std::vector<Shape2D> shard_shapes = {{32, 32}, {32, 64}, {32, 128}, {128, 32}, {128, 32}, {512, 1024}};
     for (auto shard_orientation : {ShardOrientation::COL_MAJOR, ShardOrientation::ROW_MAJOR}) {
-        for (int i = 0; i < global_buffer_shapes.size(); i++) {
+        for (size_t i = 0; i < global_buffer_shapes.size(); i++) {
             Shape2D global_buffer_shape = global_buffer_shapes[i];
             Shape2D shard_shape = shard_shapes[i];
 
@@ -534,7 +534,7 @@ TEST_F(MeshBufferTestSuite, InterleavedShardsReadWrite) {
 
         std::uniform_int_distribution<int> gen_num_tiles(1, 1024);
         std::mt19937 rng(seed);
-        for (int i = 0; i < NUM_ITERS; i++) {
+        for (uint32_t i = 0; i < NUM_ITERS; i++) {
             uint32_t num_random_tiles = gen_num_tiles(rng);
             ReplicatedBufferConfig global_buffer_config = {
                 .size = num_random_tiles * single_tile_size,
@@ -609,7 +609,7 @@ TEST_F(MeshBufferTestSuite, RowMajorShardingAndReplication) {
             std::vector<uint32_t>(global_buffer_read_shape.height() * global_buffer_read_shape.width(), 0);
         EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(), dst_vec, mesh_buffer_read_view);
 
-        for (int i = 0; i < dst_vec.size(); i++) {
+        for (size_t i = 0; i < dst_vec.size(); i++) {
             EXPECT_EQ(dst_vec[i], i % (src_vec.size()));
         }
     }
@@ -658,7 +658,7 @@ TEST_F(MeshBufferTestSuite, ColMajorShardingAndReplication) {
         std::vector<uint32_t> dst_vec =
             std::vector<uint32_t>(global_buffer_read_shape.height() * global_buffer_read_shape.width(), 0);
         EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(), dst_vec, mesh_buffer_read_view);
-        for (int i = 0; i < dst_vec.size(); i++) {
+        for (size_t i = 0; i < dst_vec.size(); i++) {
             EXPECT_EQ(
                 (i / global_buffer_read_shape.width()) * global_buffer_shape.width() + i % global_buffer_shape.width(),
                 dst_vec[i]);
@@ -684,7 +684,7 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWrite) {
     uint32_t num_devices = rows * cols;
 
     for (auto shard_orientation : {ShardOrientation::COL_MAJOR, ShardOrientation::ROW_MAJOR}) {
-        for (int i = 0; i < NUM_ITERS; i++) {
+        for (uint32_t i = 0; i < NUM_ITERS; i++) {
             Shape2D global_buffer_shape = {
                 gen_num_datums(rng) * constants::TILE_HEIGHT * rows,
                 gen_num_datums(rng) * constants::TILE_WIDTH * cols};
@@ -744,7 +744,7 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWriteMultiThread) {
             uint32_t num_devices = rows * cols;
 
             for (auto shard_orientation : {ShardOrientation::COL_MAJOR, ShardOrientation::ROW_MAJOR}) {
-                for (int i = 0; i < NUM_ITERS; i++) {
+                for (uint32_t i = 0; i < NUM_ITERS; i++) {
                     Shape2D global_buffer_shape = {
                         gen_num_datums(rng) * constants::TILE_HEIGHT * rows,
                         gen_num_datums(rng) * constants::TILE_WIDTH * cols};

@@ -401,7 +401,7 @@ int main(int argc, char** argv) {
         std::chrono::duration<double> elapsed_seconds{};
         if (source_mem_g < 4 || source_mem_g == 6) {
             // Cache stuff
-            for (int i = 0; i < warmup_iterations_g; i++) {
+            for (uint32_t i = 0; i < warmup_iterations_g; i++) {
                 tt::tt_metal::distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
             }
             tt::tt_metal::distributed::Finish(cq);
@@ -432,7 +432,7 @@ int main(int argc, char** argv) {
                         }
 
                         if (hammer_pcie_type_g == 0) {
-                            for (int i = 0; i < page_size_g / sizeof(uint32_t); i++) {
+                            for (size_t i = 0; i < page_size_g / sizeof(uint32_t); i++) {
                                 pcie_base[offset++] = 0;
                             }
                         } else {
@@ -457,7 +457,7 @@ int main(int argc, char** argv) {
             uint32_t dispatch_l1_unreserved_base =
                 MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
                     CommandQueueDeviceAddrType::UNRESERVED);
-            for (int i = 0; i < warmup_iterations_g; i++) {
+            for (uint32_t i = 0; i < warmup_iterations_g; i++) {
                 if (source_mem_g == 4) {
                     tt::tt_metal::MetalContext::instance().get_cluster().read_core(
                         vec, sizeof(uint32_t), tt_cxy_pair(device_id, w), dispatch_l1_unreserved_base);
@@ -471,7 +471,7 @@ int main(int argc, char** argv) {
             }
 
             auto start = std::chrono::system_clock::now();
-            for (int i = 0; i < iterations_g; i++) {
+            for (uint32_t i = 0; i < iterations_g; i++) {
                 if (source_mem_g == 4) {
                     tt::tt_metal::MetalContext::instance().get_cluster().read_core(
                         vec, page_size_g, tt_cxy_pair(device_id, w), dispatch_l1_unreserved_base);

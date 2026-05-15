@@ -129,9 +129,13 @@ void run_connector(const LoopbackConfig& cfg) {
                                 << " data=" << cfg.data_size << ")";
 }
 
+// Config struct intentionally uses partial designated initializers; remaining fields take their defaults.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
 class MultiProcLoopbackFixture : public MeshDeviceFixtureBase {
 protected:
     MultiProcLoopbackFixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{1, 1}}) {}
+#pragma clang diagnostic pop
 
     void SetUp() override {
         ASSERT_EQ(g_world_size, 2) << "This test requires exactly 2 MPI ranks";

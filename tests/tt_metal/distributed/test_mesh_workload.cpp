@@ -254,7 +254,7 @@ TEST_F(MeshWorkloadTestSuite, TestMeshWorkloadOnActiveEth) {
     uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
     std::vector<std::shared_ptr<MeshWorkload>> workloads = {};
     log_info(tt::LogTest, "Create {} workloads", num_workloads);
-    for (int i = 0; i < num_workloads; i++) {
+    for (uint32_t i = 0; i < num_workloads; i++) {
         std::shared_ptr<MeshWorkload> workload = std::make_shared<MeshWorkload>();
         for (const auto& device_coord : MeshCoordinateRange(mesh_device_->shape())) {
             if (mesh_device_->impl().is_local(device_coord)) {
@@ -267,7 +267,7 @@ TEST_F(MeshWorkloadTestSuite, TestMeshWorkloadOnActiveEth) {
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
         workloads.push_back(workload);
     }
-    for (int i = 0; i < num_iters; i++) {
+    for (uint32_t i = 0; i < num_iters; i++) {
         if (i % 100 == 0) {
             log_info(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
         }
@@ -310,7 +310,7 @@ TEST_F(MeshWorkloadTest2x4, SimultaneousMeshWorkloads) {
     std::vector<std::shared_ptr<MeshWorkload>> mesh_workloads = {};
 
     log_info(tt::LogTest, "Compile and load {} MeshWorkloads", num_programs);
-    for (int i = 0; i < num_programs; i += 2) {
+    for (uint32_t i = 0; i < num_programs; i += 2) {
         std::shared_ptr<MeshWorkload> random_workload = std::make_shared<MeshWorkload>();
         if (i % 2) {
             MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{0, 3});
@@ -328,7 +328,7 @@ TEST_F(MeshWorkloadTest2x4, SimultaneousMeshWorkloads) {
     }
     programs = tt::tt_metal::distributed::test::utils::create_random_programs(
         num_programs, mesh_device_->compute_with_storage_grid_size(), seed);
-    for (int i = 0; i < num_programs; i += 4) {
+    for (uint32_t i = 0; i < num_programs; i += 4) {
         std::shared_ptr<MeshWorkload> random_workload = std::make_shared<MeshWorkload>();
         MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{1, 0});
         MeshCoordinateRange devices_1(MeshCoordinate{0, 1}, MeshCoordinate{1, 1});
@@ -343,7 +343,7 @@ TEST_F(MeshWorkloadTest2x4, SimultaneousMeshWorkloads) {
     }
     programs = tt::tt_metal::distributed::test::utils::create_random_programs(
         num_heterogeneous_programs, mesh_device_->compute_with_storage_grid_size(), seed);
-    for (int i = 0; i < num_heterogeneous_programs; i += 8) {
+    for (uint32_t i = 0; i < num_heterogeneous_programs; i += 8) {
         std::shared_ptr<MeshWorkload> random_workload = std::make_shared<MeshWorkload>();
         MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{0, 0});
         MeshCoordinateRange devices_1(MeshCoordinate{0, 1}, MeshCoordinate{0, 1});
@@ -366,7 +366,7 @@ TEST_F(MeshWorkloadTest2x4, SimultaneousMeshWorkloads) {
         mesh_workloads.push_back(random_workload);
     }
 
-    for (int i = 0; i < num_iterations; i++) {
+    for (uint32_t i = 0; i < num_iterations; i++) {
         if (i % 100 == 0) {
             log_info(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
         }
@@ -431,7 +431,7 @@ TEST_F(MeshWorkloadTest4x8, SimultaneousMeshWorkloads) {
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
         num_programs_0, mesh_device_->compute_with_storage_grid_size(), seed);
 
-    for (int i = 0; i < num_programs_0; i += 2) {
+    for (uint32_t i = 0; i < num_programs_0; i += 2) {
         std::shared_ptr<MeshWorkload> random_workload = std::make_shared<MeshWorkload>();
         MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{1, 7});
         MeshCoordinateRange devices_1(MeshCoordinate{2, 0}, MeshCoordinate{3, 7});
@@ -444,7 +444,7 @@ TEST_F(MeshWorkloadTest4x8, SimultaneousMeshWorkloads) {
     programs = tt::tt_metal::distributed::test::utils::create_random_programs(
         num_programs_0, mesh_device_->compute_with_storage_grid_size(), seed);
 
-    for (int i = 0; i < num_programs_0; i += 2) {
+    for (uint32_t i = 0; i < num_programs_0; i += 2) {
         std::shared_ptr<MeshWorkload> random_workload = std::make_shared<MeshWorkload>();
         MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{3, 3});
         MeshCoordinateRange devices_1(MeshCoordinate{0, 4}, MeshCoordinate{3, 7});
@@ -457,7 +457,7 @@ TEST_F(MeshWorkloadTest4x8, SimultaneousMeshWorkloads) {
     programs = tt::tt_metal::distributed::test::utils::create_random_programs(
         num_programs_1, mesh_device_->compute_with_storage_grid_size(), seed);
 
-    for (int i = 0; i < num_programs_1; i += 4) {
+    for (uint32_t i = 0; i < num_programs_1; i += 4) {
         std::shared_ptr<MeshWorkload> random_workload = std::make_shared<MeshWorkload>();
         MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{0, 7});
         MeshCoordinateRange devices_1(MeshCoordinate{1, 0}, MeshCoordinate{1, 7});
@@ -474,7 +474,7 @@ TEST_F(MeshWorkloadTest4x8, SimultaneousMeshWorkloads) {
 
     programs = tt::tt_metal::distributed::test::utils::create_random_programs(
         num_programs_1, mesh_device_->compute_with_storage_grid_size(), seed);
-    for (int i = 0; i < num_programs_1; i += 8) {
+    for (uint32_t i = 0; i < num_programs_1; i += 8) {
         std::shared_ptr<MeshWorkload> random_workload = std::make_shared<MeshWorkload>();
         MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{3, 0});
         MeshCoordinateRange devices_1(MeshCoordinate{0, 1}, MeshCoordinate{3, 1});
@@ -496,7 +496,7 @@ TEST_F(MeshWorkloadTest4x8, SimultaneousMeshWorkloads) {
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
         mesh_workloads.push_back(random_workload);
     }
-    for (int i = 0; i < num_iterations; i++) {
+    for (uint32_t i = 0; i < num_iterations; i++) {
         if (i % 100 == 0) {
             log_info(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
         }
@@ -525,7 +525,7 @@ TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkload) {
     // Create multiple mesh workloads on grids of random sizes.
     // Compile the workload (lower + send binaries to mesh device here as well)
     log_info(tt::LogTest, "Compile and load {} MeshWorkloads", num_programs);
-    for (int i = 0; i < num_programs; i += 1) {
+    for (uint32_t i = 0; i < num_programs; i += 1) {
         // Choose a grid of random dimensions and run a MeshWorkload on it
         MeshCoordinateRange device_range(MeshCoordinate{0, 0}, MeshCoordinate{gen_row(rng) - 1, gen_col(rng) - 1});
         auto random_workload = std::make_shared<MeshWorkload>();
@@ -533,7 +533,7 @@ TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkload) {
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
         mesh_workloads.push_back(random_workload);
     }
-    for (int i = 0; i < num_iterations; i++) {
+    for (uint32_t i = 0; i < num_iterations; i++) {
         if (i % 100 == 0) {
             log_info(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
         }
@@ -842,7 +842,7 @@ TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkloadMultiThread) {
             // Create multiple mesh workloads on grids of random sizes.
             // Compile the workload (lower + send binaries to mesh device here as well)
             log_info(tt::LogTest, "Compile and load {} MeshWorkloads", num_programs);
-            for (int i = 0; i < num_programs; i += 1) {
+            for (uint32_t i = 0; i < num_programs; i += 1) {
                 // Choose a grid of random dimensions and run a MeshWorkload on it
                 MeshCoordinateRange device_range(
                     MeshCoordinate{0, 0}, MeshCoordinate{gen_row(rng) - 1, gen_col(rng) - 1});
@@ -851,7 +851,7 @@ TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkloadMultiThread) {
                 EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
                 mesh_workloads.push_back(random_workload);
             }
-            for (int i = 0; i < num_iterations; i++) {
+            for (uint32_t i = 0; i < num_iterations; i++) {
                 if (i % 100 == 0) {
                     log_info(tt::LogTest, "Run MeshWorkloads thread {} for iteration {}", thread_idx, i);
                 }

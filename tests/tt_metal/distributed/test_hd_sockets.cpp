@@ -85,8 +85,8 @@ void test_h2d_socket(
 
     // Write a single page at a time
     const auto& cluster = MetalContext::instance().get_cluster();
-    for (int i = 0; i < num_iterations; i++) {
-        std::iota(src_vec.begin(), src_vec.end(), i);
+    for (uint32_t i = 0; i < num_iterations; i++) {
+        std::iota(src_vec.begin(), src_vec.end(), static_cast<int>(i));
         for (uint32_t j = 0; j < num_writes; j++) {
             input_socket.write(src_vec.data() + (j * page_size_words), 1);
         }
