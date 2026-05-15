@@ -175,7 +175,7 @@ class TtLMHead(LightweightModule):
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_HIFI2,
         is_balanced: bool = False,
         weight_cache_path: Optional[Path] = None,
-        mode: LMHeadMode = "column",
+        mode: LMHeadMode = "row",
     ):
         """
         Initialize TtLMHead module.
