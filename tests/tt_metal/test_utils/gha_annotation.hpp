@@ -42,10 +42,10 @@ struct annotation {
     annotation_level level{annotation_level::notice};
     std::string_view message = {};
     std::string_view file = {};
-    std::optional<std::uint_least32_t> line;
-    std::optional<std::uint_least32_t> end_line;
-    std::optional<std::uint_least32_t> column;
-    std::optional<std::uint_least32_t> end_column;
+    std::optional<std::uint_least32_t> line = std::nullopt;
+    std::optional<std::uint_least32_t> end_line = std::nullopt;
+    std::optional<std::uint_least32_t> column = std::nullopt;
+    std::optional<std::uint_least32_t> end_column = std::nullopt;
     std::string_view title = {};
 };
 
