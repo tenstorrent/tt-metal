@@ -350,22 +350,31 @@ class TtMistral4MoELayer(LightweightModule):
         state_dict: dict,
         layer_prefix: str,
         expert_dtype: ttnn.DataType = ttnn.bfloat16,
+        expert_seq_pad_to: int = 0,
     ):
         super().__init__()
         self.mesh_device = mesh_device
         self.num_devices = mesh_device.get_num_devices()
         self.num_experts = NUM_EXPERTS
         self.num_active = NUM_ACTIVE_EXPERTS
+        # P4: pad seq dim to this value before expert matmuls (0 = disabled).
+        # Disabled for short-seq PCC/smoke tests; set to e.g. 512 for
+        # production prefill where seq ∈ [33, 511] to improve M-dim utilization.
+        self.expert_seq_pad_to = expert_seq_pad_to
 
         assert self.num_experts % self.num_devices == 0, (
             f"num_experts ({self.num_experts}) must be divisible by " f"num_devices ({self.num_devices})"
         )
         self.experts_per_device = self.num_experts // self.num_devices
 
+        # LoFi: 2× faster matmul throughput vs HiFi2.  Expert weights are
+        # bfloat4_b (4-bit), so the extra precision HiFi2 would provide is
+        # consumed by weight quantization noise — LoFi matches the fidelity
+        # level that actually matters here.
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
@@ -457,6 +466,7 @@ class TtMistral4MoELayer(LightweightModule):
 
         # ── Shared expert ──────────────────────────────────────────────────
         # bfloat8_b: 36 layers × 3 shared-expert weights × 8 MB = 0.86 GB vs 1.73 GB at bf16.
+        # LoFi: matches the effective precision of bfloat8_b weights.
         self.shared_expert = TtMistral4SharedMLP(
             mesh_device=mesh_device,
             state_dict=state_dict,
@@ -465,8 +475,8 @@ class TtMistral4MoELayer(LightweightModule):
             dtype=ttnn.bfloat8_b,
             compute_kernel_config=ttnn.init_device_compute_kernel_config(
                 mesh_device.arch(),
-                math_fidelity=ttnn.MathFidelity.HiFi2,
-                math_approx_mode=False,
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=True,
                 fp32_dest_acc_en=False,
                 packer_l1_acc=True,
             ),
@@ -556,66 +566,93 @@ class TtMistral4MoELayer(LightweightModule):
         Returns:   [1, 1, seq, HIDDEN_SIZE]  (replicated on all devices)
         """
         seq_len = x.shape[2]
+        EPD = self.experts_per_device
 
-        # routing_weights: [1, 1, seq, experts_per_device] per device
+        # ── Routing weights (always at true seq_len) ───────────────────────
         routing_weights = self._compute_routing_weights(x, seq_len)
+        # routing_weights: [1, 1, seq, EPD] per device
 
-        # ── Batched expert matmul ──────────────────────────────────────────
-        # TTNN matmul does not broadcast dim=0 (only dim=1 under restricted
-        # conditions).  Expand x to [EPD, 1, seq, H] so both operands match.
-        x_exp = ttnn.repeat(x, ttnn.Shape([self.experts_per_device, 1, 1, 1]), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if x_exp.layout != ttnn.TILE_LAYOUT:
-            x_exp = ttnn.to_layout(x_exp, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # ── P4: optional sequence padding for better M-dim tile utilization ─
+        # Pad x and routing_weights to expert_seq_pad_to along the seq dim.
+        # Padded positions carry zero routing weights, so they contribute
+        # zero to the expert sum and are discarded by the final slice.
+        # Only beneficial when seq_len is in [32, expert_seq_pad_to); for
+        # the short-seq PCC/smoke tests expert_seq_pad_to=0 (disabled).
+        expert_seq = seq_len
+        x_expert = x  # will be padded if expert_seq_pad_to is active
+        if self.expert_seq_pad_to > 0 and seq_len < self.expert_seq_pad_to:
+            expert_seq = self.expert_seq_pad_to
+            pad_len = expert_seq - seq_len
+            x_expert = ttnn.pad(
+                x,
+                [[0, 0], [0, 0], [0, pad_len], [0, 0]],
+                value=0.0,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )  # [1, 1, expert_seq, H]
+            routing_weights = ttnn.pad(
+                routing_weights,
+                [[0, 0], [0, 0], [0, pad_len], [0, 0]],
+                value=0.0,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )  # [1, 1, expert_seq, EPD]
 
-        # [EPD, 1, seq, H] × [EPD, 1, H, I] → [EPD, 1, seq, I]
-        gate_all = ttnn.matmul(
-            x_exp,
+        # ── Batched expert forward (no Python loop) ────────────────────────
+        # Expand x_expert: [1, 1, expert_seq, H] → [EPD, 1, expert_seq, H]
+        x_expanded = ttnn.repeat(x_expert, [EPD, 1, 1, 1])
+        if x_expert is not x:
+            ttnn.deallocate(x_expert)
+
+        # Gate + SiLU: [EPD,1,expert_seq,H] @ [EPD,1,H,I] → [EPD,1,expert_seq,I]
+        gate_out = ttnn.matmul(
+            x_expanded,
             self.expert_gate,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )  # [EPD, 1, seq, I]
+        )
+        gate_out = ttnn.silu(gate_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        up_all = ttnn.matmul(
-            x_exp,
+        # Up: [EPD,1,expert_seq,H] @ [EPD,1,H,I] → [EPD,1,expert_seq,I]
+        up_out = ttnn.matmul(
+            x_expanded,
             self.expert_up,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )  # [EPD, 1, seq, I]
-        ttnn.deallocate(x_exp)
+        )
+        ttnn.deallocate(x_expanded)
 
-        # SiLU(gate) * up
-        gate_silu = ttnn.silu(gate_all, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(gate_all)
-        hidden_all = ttnn.multiply(gate_silu, up_all, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [EPD, 1, seq, I]
-        ttnn.deallocate(gate_silu)
-        ttnn.deallocate(up_all)
+        hidden = ttnn.multiply(gate_out, up_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(gate_out)
+        ttnn.deallocate(up_out)
 
-        # [EPD, 1, seq, I] × [EPD, 1, I, H] → [EPD, 1, seq, H]
-        expert_out_all = ttnn.matmul(
-            hidden_all,
+        # Down: [EPD,1,expert_seq,I] @ [EPD,1,I,H] → [EPD,1,expert_seq,H]
+        expert_out = ttnn.matmul(
+            hidden,
             self.expert_down,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )  # [EPD, 1, seq, H]
-        ttnn.deallocate(hidden_all)
+        )
+        ttnn.deallocate(hidden)
 
-        # Scale each expert's output by its routing weight.
-        # routing_weights [1, 1, seq, EPD] → [EPD, 1, seq, 1]
-        routing_t = ttnn.permute(routing_weights, [3, 0, 2, 1])
+        # ── Apply routing weights and reduce across experts ────────────────
+        # routing_weights [1,1,expert_seq,EPD] → [EPD,1,expert_seq,1]
+        routing_t = ttnn.permute(routing_weights, [3, 1, 2, 0])
         ttnn.deallocate(routing_weights)
 
-        # [EPD, 1, seq, H] * [EPD, 1, seq, 1] (broadcasts last dim)
-        weighted_all = ttnn.multiply(expert_out_all, routing_t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(expert_out_all)
+        weighted = ttnn.multiply(expert_out, routing_t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(expert_out)
         ttnn.deallocate(routing_t)
 
-        # Sum across local experts: [EPD, 1, seq, H] → [1, seq, H] → [1, 1, seq, H]
-        partial = ttnn.sum(weighted_all, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(weighted_all)
-        partial = ttnn.reshape(partial, [1, 1, seq_len, HIDDEN_SIZE])
+        # Sum over expert dim: [EPD,1,expert_seq,H] → [1,expert_seq,H] → [1,1,expert_seq,H]
+        partial = ttnn.sum(weighted, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(weighted)
+        partial = ttnn.reshape(partial, [1, 1, expert_seq, HIDDEN_SIZE])
+
+        # Slice back to true seq_len if we padded
+        if expert_seq > seq_len:
+            partial = ttnn.slice(partial, [0, 0, 0, 0], [1, 1, seq_len, HIDDEN_SIZE])
 
         # ── All-reduce routed expert outputs across devices ─────────────────
         routed_out = _all_reduce_sum(partial, self.mesh_device, self.num_devices)

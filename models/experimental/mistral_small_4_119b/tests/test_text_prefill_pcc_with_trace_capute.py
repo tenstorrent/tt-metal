@@ -21,7 +21,7 @@ PCC note:
 Run manually::
 
     export MISTRAL4_PREFILL_PCC=1
-    export MISTRAL4_PREFILL_N_LAYERS=36    # optional; default 2
+    export MISTRAL4_PREFILL_N_LAYERS=2    # optional; default 2
     export MESH_DEVICE=T3K                 # optional; T3K=1x8, P150x4=1x4, single=1x1
     pytest models/experimental/mistral_small_4_119b/tests/test_text_prefill_pcc.py -v -s --timeout=0
 """
@@ -264,10 +264,15 @@ def test_mistral_small_4_prefill_pcc(reset_seeds, mesh_device):
     cos_full, sin_full = rotary(hidden0, position_ids)
     model.cache_rope_tables(cos_full, sin_full)
 
-    logger.info(f"Running TTNN prefill (seq_len={seq_len})...")
-    _log_mem("before TTNN prefill")
-    ttnn_logits_host = model.prefill(input_ids)  # [1, seq_len, vocab]
-    _log_mem("after TTNN prefill")
+    logger.info(f"Compiling prefill trace (seq_len={seq_len})...")
+    _log_mem("before compile_trace")
+    model.compile_trace(seq_len)
+    _log_mem("after compile_trace")
+
+    logger.info(f"Running TTNN prefill (traced, seq_len={seq_len})...")
+    _log_mem("before TTNN prefill_traced")
+    ttnn_logits_host = model.prefill_traced(input_ids)  # [1, seq_len, vocab]
+    _log_mem("after TTNN prefill_traced")
     ttnn_logits = ttnn_logits_host[0].to(torch.float32)  # [seq_len, vocab]
 
     # ── PCC check at each position ─────────────────────────────────────────

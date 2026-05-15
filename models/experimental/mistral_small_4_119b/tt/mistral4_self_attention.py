@@ -47,7 +47,6 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.mistral_small_4_119b.constants import (
     HEAD_DIM,
-    KV_A_PROJ_OUT,
     KV_B_PROJ_OUT_PER_HEAD,
     KV_LORA_RANK,
     N_HEADS,
@@ -229,8 +228,6 @@ class TtMistral4Attention(LightweightModule):
         self.qk_rope_head_dim = QK_ROPE_HEAD_DIM
         self.v_head_dim = V_HEAD_DIM
         self.kv_lora_rank = KV_LORA_RANK
-        self.kv_a_proj_out = KV_A_PROJ_OUT
-        self.kv_b_per_head = KV_B_PROJ_OUT_PER_HEAD
         self.scale = 1.0 / math.sqrt(self.head_dim)
 
         if compute_kernel_config is None:
@@ -270,23 +267,52 @@ class TtMistral4Attention(LightweightModule):
             mesh_device,
         )  # [1, 1, Q_LORA_RANK / TILE, TILE]
 
-        self.q_b_proj = _load_weight(
-            state_dict,
-            p + "q_b_proj.weight",
-            transpose=True,
-            dtype=ttnn.bfloat16,
-            mesh_device=mesh_device,
-            transform_fn=_deinterleave_q_b_proj,
+        # q_b_proj: split once at init → q_nope_w + q_rope_w (eliminates 2 slices/layer)
+        _q_b_scale = state_dict.get((p + "q_b_proj.weight").replace(".weight", ".weight_scale_inv"))
+        _q_b = _deinterleave_q_b_proj(
+            _torch_for_ttnn_upload(state_dict[p + "q_b_proj.weight"], _q_b_scale).T.contiguous()
         )  # [Q_LORA_RANK, N_HEADS * HEAD_DIM]
-
-        self.kv_a_proj = _load_weight(
-            state_dict,
-            p + "kv_a_proj_with_mqa.weight",
-            transpose=True,
+        _q_b3 = _q_b.reshape(Q_LORA_RANK, N_HEADS, HEAD_DIM)
+        _q_nope = _q_b3[:, :, :QK_NOPE_HEAD_DIM].reshape(Q_LORA_RANK, N_HEADS * QK_NOPE_HEAD_DIM).contiguous()
+        _q_rope = _q_b3[:, :, QK_NOPE_HEAD_DIM:].reshape(Q_LORA_RANK, N_HEADS * QK_ROPE_HEAD_DIM).contiguous()
+        self.q_nope_w = ttnn.as_tensor(
+            _q_nope,
             dtype=ttnn.bfloat16,
-            mesh_device=mesh_device,
-            transform_fn=_deinterleave_kv_a_proj,
-        )  # [HIDDEN_SIZE, KV_A_PROJ_OUT]
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )  # [Q_LORA_RANK, N_HEADS * QK_NOPE_HEAD_DIM]
+        self.q_rope_w = ttnn.as_tensor(
+            _q_rope,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )  # [Q_LORA_RANK, N_HEADS * QK_ROPE_HEAD_DIM]
+
+        # kv_a_proj: split once at init → kv_latent_w + k_rope_raw_w (eliminates 2 slices/layer)
+        _kv_a_scale = state_dict.get((p + "kv_a_proj_with_mqa.weight").replace(".weight", ".weight_scale_inv"))
+        _kv_a = _deinterleave_kv_a_proj(
+            _torch_for_ttnn_upload(state_dict[p + "kv_a_proj_with_mqa.weight"], _kv_a_scale).T.contiguous()
+        )  # [HIDDEN_SIZE, KV_LORA_RANK + QK_ROPE_HEAD_DIM]; nope cols first, rope cols second
+        self.kv_latent_w = ttnn.as_tensor(
+            _kv_a[:, :KV_LORA_RANK].contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )  # [HIDDEN_SIZE, KV_LORA_RANK]
+        self.k_rope_raw_w = ttnn.as_tensor(
+            _kv_a[:, KV_LORA_RANK:].contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )  # [HIDDEN_SIZE, QK_ROPE_HEAD_DIM]
 
         self.kv_a_norm = _load_norm_weight(
             state_dict,
@@ -295,13 +321,29 @@ class TtMistral4Attention(LightweightModule):
             mesh_device,
         )  # [1, 1, KV_LORA_RANK / TILE, TILE]
 
-        self.kv_b_proj = _load_weight(
-            state_dict,
-            p + "kv_b_proj.weight",
-            transpose=True,
+        # kv_b_proj: split once at init → k_nope_w + v_w (eliminates 2 slices/layer)
+        _kv_b_scale = state_dict.get((p + "kv_b_proj.weight").replace(".weight", ".weight_scale_inv"))
+        _kv_b = _torch_for_ttnn_upload(state_dict[p + "kv_b_proj.weight"], _kv_b_scale).T.contiguous()
+        # [KV_LORA_RANK, N_HEADS * KV_B_PROJ_OUT_PER_HEAD]
+        _kv_b3 = _kv_b.reshape(KV_LORA_RANK, N_HEADS, KV_B_PROJ_OUT_PER_HEAD)
+        _k_nope = _kv_b3[:, :, :QK_NOPE_HEAD_DIM].reshape(KV_LORA_RANK, N_HEADS * QK_NOPE_HEAD_DIM).contiguous()
+        _v = _kv_b3[:, :, QK_NOPE_HEAD_DIM:].reshape(KV_LORA_RANK, N_HEADS * V_HEAD_DIM).contiguous()
+        self.k_nope_w = ttnn.as_tensor(
+            _k_nope,
             dtype=ttnn.bfloat16,
-            mesh_device=mesh_device,
-        )  # [KV_LORA_RANK, KV_B_PROJ_OUT_TOTAL]
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )  # [KV_LORA_RANK, N_HEADS * QK_NOPE_HEAD_DIM]
+        self.v_w = ttnn.as_tensor(
+            _v,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )  # [KV_LORA_RANK, N_HEADS * V_HEAD_DIM]
 
         self.o_proj = _load_weight(
             state_dict,
@@ -347,22 +389,33 @@ class TtMistral4Attention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        q = ttnn.linear(
+        q_nope_flat = ttnn.linear(
             q_latent,
-            self.q_b_proj,
+            self.q_nope_w,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )  # [1, 1, seq, N_HEADS * HEAD_DIM]
+        )  # [1, 1, seq, N_HEADS * QK_NOPE_HEAD_DIM]
+        q_rope_flat = ttnn.linear(
+            q_latent,
+            self.q_rope_w,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1, 1, seq, N_HEADS * QK_ROPE_HEAD_DIM]
         ttnn.deallocate(q_latent)
 
-        q = ttnn.reshape(q, [1, seq_len, self.n_heads, self.head_dim])
-        q = ttnn.transpose(q, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        # [1, N_HEADS, seq, HEAD_DIM]
+        q_nope_t = ttnn.reshape(q_nope_flat, [1, seq_len, self.n_heads, self.qk_nope_head_dim])
+        ttnn.deallocate(q_nope_flat)
+        q_nope = ttnn.transpose(q_nope_t, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # [1, N_HEADS, seq, QK_NOPE_HEAD_DIM]
+        ttnn.deallocate(q_nope_t)
 
-        q_nope = ttnn.slice(q, [0, 0, 0, 0], [1, self.n_heads, seq_len, self.qk_nope_head_dim])
-        q_rope = ttnn.slice(q, [0, 0, 0, self.qk_nope_head_dim], [1, self.n_heads, seq_len, self.head_dim])
-        ttnn.deallocate(q)
+        q_rope_t = ttnn.reshape(q_rope_flat, [1, seq_len, self.n_heads, self.qk_rope_head_dim])
+        ttnn.deallocate(q_rope_flat)
+        q_rope = ttnn.transpose(q_rope_t, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # [1, N_HEADS, seq, QK_ROPE_HEAD_DIM]
+        ttnn.deallocate(q_rope_t)
 
         q_rope_rotated = ttnn.experimental.rotary_embedding_hf(
             q_rope, cos, sin, is_decode_mode=False, compute_kernel_config=self.compute_kernel_config
@@ -375,17 +428,20 @@ class TtMistral4Attention(LightweightModule):
         # q_full: [1, N_HEADS, seq, HEAD_DIM]
 
         # ── KV projection ─────────────────────────────────────────────────
-        kv_combined = ttnn.linear(
+        kv_latent = ttnn.linear(
             x,
-            self.kv_a_proj,
+            self.kv_latent_w,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )  # [1, 1, seq, KV_A_PROJ_OUT]
-
-        kv_latent = ttnn.slice(kv_combined, [0, 0, 0, 0], [1, 1, seq_len, self.kv_lora_rank])
-        k_rope_raw = ttnn.slice(kv_combined, [0, 0, 0, self.kv_lora_rank], [1, 1, seq_len, self.kv_a_proj_out])
-        ttnn.deallocate(kv_combined)
+        )  # [1, 1, seq, KV_LORA_RANK]
+        k_rope_raw = ttnn.linear(
+            x,
+            self.k_rope_raw_w,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1, 1, seq, QK_ROPE_HEAD_DIM]
 
         kv_latent_normed = ttnn.rms_norm(
             kv_latent,
@@ -393,25 +449,36 @@ class TtMistral4Attention(LightweightModule):
             epsilon=NORM_EPS,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        # Keep kv_latent alive; will be reused for kv_b_proj
+        # kv_latent kept alive until after k_nope/v linears are launched
 
-        kv = ttnn.linear(
+        k_nope_flat = ttnn.linear(
             kv_latent_normed,
-            self.kv_b_proj,
+            self.k_nope_w,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )  # [1, 1, seq, KV_B_PROJ_OUT_TOTAL]
+        )  # [1, 1, seq, N_HEADS * QK_NOPE_HEAD_DIM]
+        v_flat = ttnn.linear(
+            kv_latent_normed,
+            self.v_w,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1, 1, seq, N_HEADS * V_HEAD_DIM]
         ttnn.deallocate(kv_latent)
         ttnn.deallocate(kv_latent_normed)
 
-        kv = ttnn.reshape(kv, [1, seq_len, self.n_heads, self.kv_b_per_head])
-        kv = ttnn.transpose(kv, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        # [1, N_HEADS, seq, KV_B_PER_HEAD=192]
+        k_nope_t = ttnn.reshape(k_nope_flat, [1, seq_len, self.n_heads, self.qk_nope_head_dim])
+        ttnn.deallocate(k_nope_flat)
+        k_nope = ttnn.transpose(k_nope_t, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # [1, N_HEADS, seq, QK_NOPE_HEAD_DIM]
+        ttnn.deallocate(k_nope_t)
 
-        k_nope = ttnn.slice(kv, [0, 0, 0, 0], [1, self.n_heads, seq_len, self.qk_nope_head_dim])
-        v = ttnn.slice(kv, [0, 0, 0, self.qk_nope_head_dim], [1, self.n_heads, seq_len, self.kv_b_per_head])
-        ttnn.deallocate(kv)
+        v_t = ttnn.reshape(v_flat, [1, seq_len, self.n_heads, self.v_head_dim])
+        ttnn.deallocate(v_flat)
+        v = ttnn.transpose(v_t, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # [1, N_HEADS, seq, V_HEAD_DIM]
+        ttnn.deallocate(v_t)
 
         k_rope_rotated = ttnn.experimental.rotary_embedding_hf(
             k_rope_raw, cos, sin, is_decode_mode=False, compute_kernel_config=self.compute_kernel_config
@@ -419,12 +486,9 @@ class TtMistral4Attention(LightweightModule):
         # [1, 1, seq, QK_ROPE_HEAD_DIM]
         ttnn.deallocate(k_rope_raw)
 
-        # Broadcast k_rope to all heads by repeating along dim=1
-        k_rope_expanded = ttnn.concat(
-            [k_rope_rotated] * self.n_heads,
-            dim=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )  # [1, N_HEADS, seq, QK_ROPE_HEAD_DIM]
+        # Broadcast k_rope to all heads — single repeat op instead of 32-way concat
+        k_rope_expanded = ttnn.repeat(k_rope_rotated, [1, self.n_heads, 1, 1])
+        # [1, N_HEADS, seq, QK_ROPE_HEAD_DIM]
         ttnn.deallocate(k_rope_rotated)
 
         k_full = ttnn.concat([k_nope, k_rope_expanded], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -550,21 +614,27 @@ class TtMistral4Attention(LightweightModule):
             memory_config=_mem,
         )
         q_latent = ttnn.rms_norm(q_latent, weight=self.q_a_norm, epsilon=NORM_EPS, memory_config=_mem)
-        q = ttnn.linear(
+
+        q_nope_flat = ttnn.linear(
             q_latent,
-            self.q_b_proj,
+            self.q_nope_w,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
-            memory_config=_mem,
-        )
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1, 1, 1, N_HEADS * QK_NOPE_HEAD_DIM]
+        q_rope_flat = ttnn.linear(
+            q_latent,
+            self.q_rope_w,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1, 1, 1, N_HEADS * QK_ROPE_HEAD_DIM]
         ttnn.deallocate(q_latent)
 
-        q = ttnn.reshape(q, [1, self.n_heads, 1, self.head_dim])
-        q_nope = ttnn.slice(q, [0, 0, 0, 0], [1, self.n_heads, 1, self.qk_nope_head_dim], memory_config=_mem)
-        q_rope = ttnn.slice(
-            q, [0, 0, 0, self.qk_nope_head_dim], [1, self.n_heads, 1, self.head_dim], memory_config=_mem
-        )
-        ttnn.deallocate(q)
+        q_nope = ttnn.reshape(q_nope_flat, [1, self.n_heads, 1, self.qk_nope_head_dim])
+        ttnn.deallocate(q_nope_flat)
+        q_rope = ttnn.reshape(q_rope_flat, [1, self.n_heads, 1, self.qk_rope_head_dim])
+        ttnn.deallocate(q_rope_flat)
 
         q_rope_rotated = _apply_rope_ttnn(q_rope, cos, sin, 1, self.n_heads, self.qk_rope_head_dim, _mem)
         ttnn.deallocate(q_rope)
@@ -574,40 +644,52 @@ class TtMistral4Attention(LightweightModule):
         # q_full: [1, N_HEADS, 1, HEAD_DIM]
 
         # ── KV path (seq_len=1) ────────────────────────────────────────
-        kv_combined = ttnn.linear(
+        kv_latent = ttnn.linear(
             x,
-            self.kv_a_proj,
+            self.kv_latent_w,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
-            memory_config=_mem,
-        )
-        kv_latent = ttnn.slice(kv_combined, [0, 0, 0, 0], [1, 1, 1, self.kv_lora_rank], memory_config=_mem)
-        k_rope_raw = ttnn.slice(
-            kv_combined, [0, 0, 0, self.kv_lora_rank], [1, 1, 1, self.kv_a_proj_out], memory_config=_mem
-        )
-        ttnn.deallocate(kv_combined)
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1, 1, 1, KV_LORA_RANK]
+        k_rope_raw = ttnn.linear(
+            x,
+            self.k_rope_raw_w,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1, 1, 1, QK_ROPE_HEAD_DIM]
 
-        kv_latent_normed = ttnn.rms_norm(kv_latent, weight=self.kv_a_norm, epsilon=NORM_EPS, memory_config=_mem)
-        kv = ttnn.linear(
+        kv_latent_normed = ttnn.rms_norm(
+            kv_latent,
+            weight=self.kv_a_norm,
+            epsilon=NORM_EPS,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        k_nope_flat = ttnn.linear(
             kv_latent_normed,
-            self.kv_b_proj,
+            self.k_nope_w,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
-            memory_config=_mem,
-        )
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1, 1, 1, N_HEADS * QK_NOPE_HEAD_DIM]
+        v_new_flat = ttnn.linear(
+            kv_latent_normed,
+            self.v_w,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1, 1, 1, N_HEADS * V_HEAD_DIM]
         ttnn.deallocate(kv_latent)
         ttnn.deallocate(kv_latent_normed)
 
-        kv = ttnn.reshape(kv, [1, self.n_heads, 1, self.kv_b_per_head])
-        k_nope = ttnn.slice(kv, [0, 0, 0, 0], [1, self.n_heads, 1, self.qk_nope_head_dim], memory_config=_mem)
-        v_new = ttnn.slice(
-            kv, [0, 0, 0, self.qk_nope_head_dim], [1, self.n_heads, 1, self.kv_b_per_head], memory_config=_mem
-        )
-        ttnn.deallocate(kv)
+        k_nope = ttnn.reshape(k_nope_flat, [1, self.n_heads, 1, self.qk_nope_head_dim])
+        ttnn.deallocate(k_nope_flat)
+        v_new = ttnn.reshape(v_new_flat, [1, self.n_heads, 1, self.v_head_dim])
+        ttnn.deallocate(v_new_flat)
 
         k_rope_rotated = _apply_rope_ttnn(k_rope_raw, cos, sin, 1, 1, self.qk_rope_head_dim, _mem)
         ttnn.deallocate(k_rope_raw)
-        k_rope_expanded = ttnn.concat([k_rope_rotated] * self.n_heads, dim=1, memory_config=_mem)
+        k_rope_expanded = ttnn.repeat(k_rope_rotated, [1, self.n_heads, 1, 1])
         ttnn.deallocate(k_rope_rotated)
         k_full = ttnn.concat([k_nope, k_rope_expanded], dim=-1, memory_config=_mem)
         ttnn.deallocate(k_nope)

@@ -72,6 +72,7 @@ class TtMistral4DecoderLayer(LightweightModule):
         state_dict: dict,
         layer_idx: int,
         compute_kernel_config,
+        expert_seq_pad_to: int = 0,
     ):
         super().__init__()
         self.compute_kernel_config = compute_kernel_config
@@ -97,6 +98,7 @@ class TtMistral4DecoderLayer(LightweightModule):
             state_dict=state_dict,
             layer_prefix=prefix,
             expert_dtype=ttnn.bfloat4_b,
+            expert_seq_pad_to=expert_seq_pad_to,
         )
 
     def forward(
@@ -208,6 +210,7 @@ class TtMistral4TextPrefillLogits:
         state_dict: dict,
         text_config,
         num_decoder_layers: int,
+        expert_seq_pad_to: int = 0,
     ):
         self.mesh_device = mesh_device
         self.num_decoder_layers = num_decoder_layers
@@ -215,7 +218,7 @@ class TtMistral4TextPrefillLogits:
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
+            math_approx_mode=True,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
@@ -241,6 +244,7 @@ class TtMistral4TextPrefillLogits:
                     state_dict=state_dict,
                     layer_idx=i,
                     compute_kernel_config=self.compute_kernel_config,
+                    expert_seq_pad_to=expert_seq_pad_to,
                 )
             )
 

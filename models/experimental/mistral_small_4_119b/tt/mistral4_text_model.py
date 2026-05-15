@@ -59,6 +59,7 @@ class TtMistral4TextModel:
         text_config,
         num_decoder_layers: int = EXPECTED_NUM_LAYERS,
         max_seq_len: int = 4096,
+        expert_seq_pad_to: int = 0,
     ):
         self.mesh_device = mesh_device
         self.num_decoder_layers = num_decoder_layers
@@ -93,6 +94,7 @@ class TtMistral4TextModel:
                 state_dict=state_dict,
                 layer_idx=i,
                 compute_kernel_config=self.compute_kernel_config,
+                expert_seq_pad_to=expert_seq_pad_to,
             )
             self.decoder_layers.append(layer)
             self.kv_caches.append(layer.attn.allocate_kv_cache(max_seq_len))
