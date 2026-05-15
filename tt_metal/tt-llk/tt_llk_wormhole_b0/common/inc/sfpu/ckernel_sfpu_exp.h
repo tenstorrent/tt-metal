@@ -308,8 +308,6 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat val)
 template <bool SCALE_EN, bool is_fp32_dest_acc_en, bool CLAMP_NEGATIVE, int ITERATIONS>
 inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor)
 {
-    constexpr std::uint32_t input_type = is_fp32_dest_acc_en ? InstrModLoadStore::FP32 : InstrModLoadStore::FP16B;
-
     // Iteration-invariant constants:
     //   LREG3 = 127.0f                      (bias term in z = x/ln2 + 127)
     //   LREG5 = 7.839635491371155e-08f      (poly coeff c1)
@@ -358,7 +356,7 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor)
     TTI_REPLAY(0, BODY_LEN, 1, 1);
 
     // val = sfpi::dst_reg[0]
-    TTI_SFPLOAD(p_sfpu::LREG0, input_type, ADDR_MOD_3, 0);
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
 
     if constexpr (SCALE_EN)
     {
@@ -424,7 +422,7 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor)
     }
 
     // sfpi::dst_reg[0] = y; sfpi::dst_reg++;
-    TTI_SFPSTORE(p_sfpu::LREG0, input_type, ADDR_MOD_3, 0);
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
     TTI_INCRWC(0, 2, 0, 0);
 
 #pragma GCC unroll 8
