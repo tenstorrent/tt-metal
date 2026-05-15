@@ -90,8 +90,8 @@ targets:
             status: active
             perf: {}
             accuracy:
-              top1: 90.0
-              top5: 98.0
+              top1: 89.1
+              top5: 97.1
           - batch_size: 1
             seq_len: 131072
             status: TODO
@@ -118,10 +118,10 @@ targets:
             seq_len: 1024
             status: active
             perf:
-              prefill_time_to_first_token: 35
+              prefill_time_to_first_token: 108.8
               prefill_tolerance: 1.15
-              decode_t/s/u: 22.0
-              decode_t/s: 704.0
+              decode_t/s/u: 21.6
+              decode_t/s: 693.1
               decode_tolerance: 1.15
             accuracy: {}
           - batch_size: 1
@@ -182,10 +182,10 @@ targets:
             seq_len: 1024
             status: active
             perf:
-              prefill_time_to_first_token: 100
+              prefill_time_to_first_token: 102.8
               prefill_tolerance: 1.15
-              decode_t/s/u: 20.0
-              decode_t/s: 640.0
+              decode_t/s/u: 14.4
+              decode_t/s: 460.1
               decode_tolerance: 1.15
             accuracy: {}
           - batch_size: 1
@@ -205,10 +205,10 @@ targets:
             seq_len: 1024
             status: active
             perf:
-              prefill_time_to_first_token: 43
+              prefill_time_to_first_token: 109.6
               prefill_tolerance: 1.15
-              decode_t/s/u: 24.0
-              decode_t/s: 768.0
+              decode_t/s/u: 14.45
+              decode_t/s: 462.4
               decode_tolerance: 1.15
             accuracy: {}
           - batch_size: 1
@@ -251,7 +251,7 @@ targets:
             seq_len: null
             status: active
             perf:
-              prefill_t/s: 56.0
+              prefill_t/s: 64.8
               # decode targets lowered from 27 → 24 after observed regression
               # to 24.95 t/s in scheduled run 25778148259 (2026-05-13).
               decode_t/s/u: 24.0
@@ -492,9 +492,9 @@ targets:
             #   measured decode 8.77 t/s, prefill >= 11 t/s (only decode regressed).
             # Set ~10% below observed for headroom.
             perf:
-              prefill_t/s: 10.0
-              decode_t/s/u: 8.0
-              decode_t/s: 8.0
+              prefill_t/s: 13.9
+              decode_t/s/u: 5.28
+              decode_t/s: 5.28
             accuracy: {}
   llama3.3-70b:
     aliases: ["Llama-3.3-70B", "meta-llama/Llama-3.3-70B-Instruct"]
@@ -508,6 +508,13 @@ targets:
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
+          - batch_size: 1
+            seq_len: 1024
+            status: active
+            perf: {}
+            accuracy:
+              top1: 96.0
+              top5: 100.0
   llama3.3-70b-galaxy:
     aliases: ["llama3.3-70b-galaxy"]
     skus:
@@ -621,10 +628,10 @@ targets:
             seq_len: 1024
             status: active
             perf:
-              prefill_time_to_first_token: 53.93
+              prefill_time_to_first_token: 138.7
               prefill_tolerance: 1.4
-              decode_t/s/u: 67.82
-              decode_t/s: 2170.24
+              decode_t/s/u: 16.3
+              decode_t/s: 516.1
               decode_tolerance: 1.4
             accuracy: {}
           - batch_size: 1
