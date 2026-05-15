@@ -4,7 +4,9 @@
 """
 Tenstorrent RMSNorm for Devstral-2 large (Ministral3 text stack, ~12k hidden).
 
-Wraps :class:`TtMinistralRMSNorm` with Blackhole-specific handling for **wide** hidden (~12k):
+Builds on :class:`models.common.rmsnorm.RMSNorm` with the same per-layer weight keys as the small
+Ministral3 stack (``attention_norm`` / ``ffn_norm``), plus Blackhole-specific handling for **wide**
+hidden (~12k):
 
 - **Distributed** path: ``rms_norm_pre_all_gather`` / post all-gather can overflow L1 without a
   multicore program config; mitigated with ``LayerNormShardedMultiCoreProgramConfig`` + seq chunks.
@@ -23,7 +25,6 @@ import ttnn
 
 from models.common.rmsnorm import RMSNorm
 from models.common.utility_functions import is_blackhole
-from models.experimental.devstarl2_small.tt.tt_ministralrmsnorm import TtMinistralRMSNorm
 from models.tt_transformers.tt.common import Mode
 
 TILE = 32
@@ -58,7 +59,7 @@ def _resolve_norm_core_grid(mesh_device, hidden_dim: int) -> ttnn.CoreGrid:
     )
 
 
-class TtDevstral2LargeRMSNorm(TtMinistralRMSNorm):
+class TtDevstral2LargeRMSNorm(RMSNorm):
     """
     Ministral3 RMSNorm for very wide models on Blackhole + fabric mesh.
 
@@ -82,8 +83,7 @@ class TtDevstral2LargeRMSNorm(TtMinistralRMSNorm):
     ):
         self._hidden_dim = args.dim
         if model_final_norm:
-            RMSNorm.__init__(
-                self,
+            super().__init__(
                 device=mesh_device,
                 dim=args.dim,
                 state_dict=state_dict,
@@ -99,14 +99,21 @@ class TtDevstral2LargeRMSNorm(TtMinistralRMSNorm):
                 tt_ccl=tt_ccl,
             )
         else:
+            weight_key = "ffn_norm" if post_attention else "attention_norm"
             super().__init__(
-                mesh_device,
-                args,
-                state_dict,
-                weight_cache_path,
-                layer_num,
-                tt_ccl,
-                post_attention=post_attention,
+                device=mesh_device,
+                dim=args.dim,
+                eps=args.norm_eps,
+                state_dict=state_dict,
+                weight_key=weight_key,
+                layer_num=None,
+                state_dict_prefix=args.get_state_dict_prefix("", layer_num),
+                weight_cache_path=None if args.dummy_weights else weight_cache_path,
+                weight_dtype=ttnn.bfloat16,
+                is_distributed=args.is_distributed_norm,
+                add_unit_offset=args.rms_norm_add_unit_offset,
+                ccl_topology=args.ccl_topology(),
+                tt_ccl=tt_ccl,
             )
 
     def _bh_wide_norm_program_config(self, x: ttnn.Tensor) -> ttnn.LayerNormShardedMultiCoreProgramConfig:
@@ -348,5 +355,4 @@ class TtDevstral2LargeRMSNorm(TtMinistralRMSNorm):
 __all__ = [
     "DEVSTRAL2_LARGE_L1_SMALL_SIZE",
     "TtDevstral2LargeRMSNorm",
-    "TtMinistralRMSNorm",
 ]
