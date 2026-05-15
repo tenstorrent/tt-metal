@@ -103,6 +103,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/semaphore.h
     inc/api/compute/binary_fmod.h
     inc/api/compute/gcd.h
+    inc/api/compute/isclose.h
     inc/api/compute/layernorm.h
     inc/api/compute/lcm.h
     inc/api/compute/logsigmoid.h
