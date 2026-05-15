@@ -21,11 +21,10 @@ from __future__ import annotations
 
 import math
 
-
+import torch
 import ttnn
 from models.experimental.mistral_small_4_119b.constants import (
     VISION_HEAD_DIM,
-    VISION_HIDDEN_SIZE,
     VISION_NUM_HEADS,
 )
 from models.experimental.mistral_small_4_119b.tt.mistral4_self_attention import _load_weight
@@ -48,11 +47,31 @@ class TtPixtralAttention:
         self.head_dim = VISION_HEAD_DIM
         self.scale = 1.0 / math.sqrt(self.head_dim)
 
+        grid = mesh_device.compute_with_storage_grid_size()
+        self.sdpa_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=grid,
+            q_chunk_size=128,
+            k_chunk_size=128,
+            exp_approx_mode=False,
+        )
+
         p = layer_prefix + "attention."
-        # HF stores [out, in]; transpose for ttnn.linear.
-        self.q_proj = _load_weight(state_dict, p + "q_proj.weight", True, dtype, mesh_device)
-        self.k_proj = _load_weight(state_dict, p + "k_proj.weight", True, dtype, mesh_device)
-        self.v_proj = _load_weight(state_dict, p + "v_proj.weight", True, dtype, mesh_device)
+
+        # Fused QKV: concat [q, k, v] along output dim then transpose for ttnn.linear.
+        # HF weights are [out_features, in_features]; concat on dim=0 → [3*H, H], then .T → [H, 3*H].
+        q_w = state_dict[p + "q_proj.weight"].to(torch.bfloat16)
+        k_w = state_dict[p + "k_proj.weight"].to(torch.bfloat16)
+        v_w = state_dict[p + "v_proj.weight"].to(torch.bfloat16)
+        wqkv = torch.cat([q_w, k_w, v_w], dim=0).T.contiguous()  # [H, 3*H]
+        self.wqkv = ttnn.as_tensor(
+            wqkv,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )  # [VISION_HIDDEN_SIZE, 3 * VISION_HIDDEN_SIZE]
+
         self.o_proj = _load_weight(state_dict, p + "o_proj.weight", True, dtype, mesh_device)
 
     def forward(
@@ -70,38 +89,26 @@ class TtPixtralAttention:
         """
         seq_len = x.shape[-2]
 
-        # ── q/k/v projections ────────────────────────────────────────────
-        q = ttnn.linear(
+        # ── Fused QKV projection → [1, 1, seq, 3*hidden] ────────────────
+        qkv = ttnn.linear(
             x,
-            self.q_proj,
+            self.wqkv,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        k = ttnn.linear(
-            x,
-            self.k_proj,
-            compute_kernel_config=self.compute_kernel_config,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        v = ttnn.linear(
-            x,
-            self.v_proj,
-            compute_kernel_config=self.compute_kernel_config,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        )  # [1, 1, seq, 3 * VISION_HIDDEN_SIZE]
 
-        # ── reshape to [1, n_heads, seq, head_dim] ──────────────────────
-        q = ttnn.reshape(q, [1, seq_len, self.n_heads, self.head_dim])
-        q = ttnn.transpose(q, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        k = ttnn.reshape(k, [1, seq_len, self.n_heads, self.head_dim])
-        k = ttnn.transpose(k, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        v = ttnn.reshape(v, [1, seq_len, self.n_heads, self.head_dim])
-        v = ttnn.transpose(v, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # ── Split into heads: each [1, n_heads, seq, head_dim] ──────────
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv,
+            num_heads=self.n_heads,
+            num_kv_heads=self.n_heads,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(qkv)
 
-        # ── apply 2D RoPE to q and k (fused half-split kernel) ──────────
+        # ── Apply 2D RoPE to q and k ─────────────────────────────────────
         q_rot = ttnn.experimental.rotary_embedding_hf(
             q, cos, sin, is_decode_mode=False, compute_kernel_config=self.compute_kernel_config
         )
@@ -111,26 +118,25 @@ class TtPixtralAttention:
         ttnn.deallocate(q)
         ttnn.deallocate(k)
 
-        # ── SDPA (non-causal) ───────────────────────────────────────────
+        # ── SDPA (non-causal) ────────────────────────────────────────────
         attn = ttnn.transformer.scaled_dot_product_attention(
             q_rot,
             k_rot,
             v,
             is_causal=False,
             scale=self.scale,
+            program_config=self.sdpa_program_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1, n_heads, seq, head_dim]
         ttnn.deallocate(q_rot)
         ttnn.deallocate(k_rot)
         ttnn.deallocate(v)
 
-        # ── concat heads → [1, 1, seq, hidden] ──────────────────────────
-        attn_t = ttnn.transpose(attn, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # ── Concat heads → [1, 1, seq, hidden] ──────────────────────────
+        attn_flat = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(attn)
-        attn_flat = ttnn.reshape(attn_t, [1, 1, seq_len, VISION_HIDDEN_SIZE])
-        ttnn.deallocate(attn_t)
 
-        # ── output projection ───────────────────────────────────────────
+        # ── Output projection ────────────────────────────────────────────
         out = ttnn.linear(
             attn_flat,
             self.o_proj,

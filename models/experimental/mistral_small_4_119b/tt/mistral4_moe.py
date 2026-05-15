@@ -229,22 +229,28 @@ class TtMistral4SharedMLP(LightweightModule):
     ):
         super().__init__()
         self.compute_kernel_config = compute_kernel_config
+        self.intermediate_size = intermediate_size
 
-        self.gate_proj = _load_replicated(
-            state_dict,
-            prefix + "gate_proj.weight",
-            transpose=True,
+        # Fused gate+up weight: swiglu(z) = z[:I] * SiLU(z[I:])
+        # Place up in the first half and gate in the second so that
+        # swiglu produces SiLU(gate_proj(x)) * up_proj(x).
+        gate_w = _bf16(
+            state_dict[prefix + "gate_proj.weight"],
+            state_dict.get(prefix + "gate_proj.weight_scale_inv"),
+        )  # [I, H]
+        up_w = _bf16(
+            state_dict[prefix + "up_proj.weight"],
+            state_dict.get(prefix + "up_proj.weight_scale_inv"),
+        )  # [I, H]
+        gate_up_w = torch.cat([up_w, gate_w], dim=0).T.contiguous()  # [H, 2I]
+        self.gate_up_proj = ttnn.as_tensor(
+            gate_up_w,
             dtype=dtype,
-            mesh_device=mesh_device,
-        )  # [HIDDEN_SIZE, intermediate_size]
-
-        self.up_proj = _load_replicated(
-            state_dict,
-            prefix + "up_proj.weight",
-            transpose=True,
-            dtype=dtype,
-            mesh_device=mesh_device,
-        )  # [HIDDEN_SIZE, intermediate_size]
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )  # [HIDDEN_SIZE, 2 * intermediate_size]
 
         self.down_proj = _load_replicated(
             state_dict,
@@ -259,30 +265,63 @@ class TtMistral4SharedMLP(LightweightModule):
         Args:  x: [1, 1, seq, HIDDEN_SIZE]
         Returns:   [1, 1, seq, HIDDEN_SIZE]
         """
-        gate = ttnn.linear(
+        seq_len = x.shape[2]
+        I = self.intermediate_size
+        gate_up = ttnn.linear(
             x,
-            self.gate_proj,
-            activation="silu",
+            self.gate_up_proj,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        up = ttnn.linear(
-            x,
-            self.up_proj,
-            compute_kernel_config=self.compute_kernel_config,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        hidden = ttnn.multiply(gate, up, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        )  # [1, 1, seq, 2I] — up in [0:I], gate in [I:2I]
+
+        # Split along the last dim (tile-aligned at I=2048); avoids ttnn.swiglu which
+        # pads the seq dim to tile size and breaks non-tile-aligned seq lengths.
+        up = ttnn.slice(gate_up, [0, 0, 0, 0], [1, 1, seq_len, I], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        gate = ttnn.slice(gate_up, [0, 0, 0, I], [1, 1, seq_len, 2 * I], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(gate_up)
+
+        gate_silu = ttnn.silu(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(gate)
+        hidden = ttnn.multiply(gate_silu, up, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(gate_silu)
         ttnn.deallocate(up)
+
         out = ttnn.linear(
             hidden,
             self.down_proj,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(hidden)
+        return out
+
+    def forward_decode(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """Decode variant: all activations in L1 (seq=1 tensors are tiny)."""
+        _mem = ttnn.L1_MEMORY_CONFIG
+        I = self.intermediate_size
+        gate_up = ttnn.linear(
+            x,
+            self.gate_up_proj,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=_mem,
+        )
+        up = ttnn.slice(gate_up, [0, 0, 0, 0], [1, 1, 1, I], memory_config=_mem)
+        gate = ttnn.slice(gate_up, [0, 0, 0, I], [1, 1, 1, 2 * I], memory_config=_mem)
+        ttnn.deallocate(gate_up)
+        gate_silu = ttnn.silu(gate, memory_config=_mem)
+        ttnn.deallocate(gate)
+        hidden = ttnn.multiply(gate_silu, up, memory_config=_mem)
+        ttnn.deallocate(gate_silu)
+        ttnn.deallocate(up)
+        out = ttnn.linear(
+            hidden,
+            self.down_proj,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=_mem,
         )
         ttnn.deallocate(hidden)
         return out
@@ -518,107 +557,65 @@ class TtMistral4MoELayer(LightweightModule):
         """
         seq_len = x.shape[2]
 
-        # ── Routing weights ────────────────────────────────────────────────
-        routing_weights = self._compute_routing_weights(x, seq_len)
         # routing_weights: [1, 1, seq, experts_per_device] per device
+        routing_weights = self._compute_routing_weights(x, seq_len)
 
-        # ── Dense expert loop (Python-level, TTNN compute) ─────────────────
-        # Input must be replicated; gate/up weight shape per expert:
-        #   [1, HIDDEN_SIZE, EXPERT_INTERMEDIATE_SIZE]
-        # Expand x to [experts_per_device, 1, seq, HIDDEN] for bmm, or loop.
-        #
-        # We use a Python loop over local experts (64 per device) for clarity.
-        # Each iter: gate(x), up(x), silu*up, down → scale by routing weight.
+        # ── Batched expert matmul ──────────────────────────────────────────
+        # TTNN matmul does not broadcast dim=0 (only dim=1 under restricted
+        # conditions).  Expand x to [EPD, 1, seq, H] so both operands match.
+        x_exp = ttnn.repeat(x, ttnn.Shape([self.experts_per_device, 1, 1, 1]), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if x_exp.layout != ttnn.TILE_LAYOUT:
+            x_exp = ttnn.to_layout(x_exp, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        partial = None  # accumulates weighted expert outputs on each device
+        # [EPD, 1, seq, H] × [EPD, 1, H, I] → [EPD, 1, seq, I]
+        gate_all = ttnn.matmul(
+            x_exp,
+            self.expert_gate,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [EPD, 1, seq, I]
 
-        for local_e in range(self.experts_per_device):
-            # Routing weight for this expert: [1, 1, seq, 1]
-            w_e = ttnn.slice(
-                routing_weights,
-                [0, 0, 0, local_e],
-                [1, 1, seq_len, local_e + 1],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+        up_all = ttnn.matmul(
+            x_exp,
+            self.expert_up,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [EPD, 1, seq, I]
+        ttnn.deallocate(x_exp)
 
-            # Check if any token routes to this expert (all-zero weight → skip)
-            # For correctness, always compute (skip optimisation for bring-up).
+        # SiLU(gate) * up
+        gate_silu = ttnn.silu(gate_all, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(gate_all)
+        hidden_all = ttnn.multiply(gate_silu, up_all, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [EPD, 1, seq, I]
+        ttnn.deallocate(gate_silu)
+        ttnn.deallocate(up_all)
 
-            # Expert weights for local_e: slice [local_e:local_e+1, 1, in, out]
-            gate_w = ttnn.slice(
-                self.expert_gate,
-                [local_e, 0, 0, 0],
-                [local_e + 1, 1, HIDDEN_SIZE, EXPERT_INTERMEDIATE_SIZE],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )  # [1, 1, HIDDEN_SIZE, intermediate]
-            gate_w = ttnn.reshape(gate_w, [HIDDEN_SIZE, EXPERT_INTERMEDIATE_SIZE])
+        # [EPD, 1, seq, I] × [EPD, 1, I, H] → [EPD, 1, seq, H]
+        expert_out_all = ttnn.matmul(
+            hidden_all,
+            self.expert_down,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [EPD, 1, seq, H]
+        ttnn.deallocate(hidden_all)
 
-            up_w = ttnn.slice(
-                self.expert_up,
-                [local_e, 0, 0, 0],
-                [local_e + 1, 1, HIDDEN_SIZE, EXPERT_INTERMEDIATE_SIZE],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            up_w = ttnn.reshape(up_w, [HIDDEN_SIZE, EXPERT_INTERMEDIATE_SIZE])
-
-            down_w = ttnn.slice(
-                self.expert_down,
-                [local_e, 0, 0, 0],
-                [local_e + 1, 1, EXPERT_INTERMEDIATE_SIZE, HIDDEN_SIZE],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            down_w = ttnn.reshape(down_w, [EXPERT_INTERMEDIATE_SIZE, HIDDEN_SIZE])
-
-            # Expert forward: SiLU(gate_proj(x)) * up_proj(x) → down_proj
-            gate_out = ttnn.linear(
-                x,
-                gate_w,
-                activation="silu",
-                compute_kernel_config=self.compute_kernel_config,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )  # [1, 1, seq, intermediate]
-            ttnn.deallocate(gate_w)
-
-            up_out = ttnn.linear(
-                x,
-                up_w,
-                compute_kernel_config=self.compute_kernel_config,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )  # [1, 1, seq, intermediate]
-            ttnn.deallocate(up_w)
-
-            hidden = ttnn.multiply(gate_out, up_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(gate_out)
-            ttnn.deallocate(up_out)
-
-            expert_out = ttnn.linear(
-                hidden,
-                down_w,
-                compute_kernel_config=self.compute_kernel_config,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )  # [1, 1, seq, HIDDEN_SIZE]
-            ttnn.deallocate(hidden)
-            ttnn.deallocate(down_w)
-
-            # Scale by routing weight (broadcast [1,1,seq,1] → [1,1,seq,H])
-            weighted = ttnn.multiply(expert_out, w_e, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(expert_out)
-            ttnn.deallocate(w_e)
-
-            if partial is None:
-                partial = weighted
-            else:
-                partial = ttnn.add(partial, weighted, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                ttnn.deallocate(weighted)
-
+        # Scale each expert's output by its routing weight.
+        # routing_weights [1, 1, seq, EPD] → [EPD, 1, seq, 1]
+        routing_t = ttnn.permute(routing_weights, [3, 0, 2, 1])
         ttnn.deallocate(routing_weights)
 
-        # If all routing weights are zero (edge case with experts_per_device > num_active)
-        if partial is None:
-            partial = ttnn.zeros_like(x)
+        # [EPD, 1, seq, H] * [EPD, 1, seq, 1] (broadcasts last dim)
+        weighted_all = ttnn.multiply(expert_out_all, routing_t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(expert_out_all)
+        ttnn.deallocate(routing_t)
+
+        # Sum across local experts: [EPD, 1, seq, H] → [1, seq, H] → [1, 1, seq, H]
+        partial = ttnn.sum(weighted_all, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(weighted_all)
+        partial = ttnn.reshape(partial, [1, 1, seq_len, HIDDEN_SIZE])
 
         # ── All-reduce routed expert outputs across devices ─────────────────
         routed_out = _all_reduce_sum(partial, self.mesh_device, self.num_devices)
@@ -634,3 +631,75 @@ class TtMistral4MoELayer(LightweightModule):
         ttnn.deallocate(shared_out)
 
         return out  # [1, 1, seq, HIDDEN_SIZE] replicated on all devices
+
+    def forward_decode(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """
+        Single-token decode step — expert matmul activations in L1.
+
+        Routing tensors stay in DRAM (they're already tiny and routing ops have
+        limited memory_config support).  The partial sum before all_gather must
+        be in DRAM since ttnn.all_gather requires DRAM buffers.
+        """
+        _mem = ttnn.L1_MEMORY_CONFIG
+
+        # routing_weights: [1, 1, 1, EPD] per device (DRAM — routing is tiny)
+        routing_weights = self._compute_routing_weights(x, 1)
+
+        # ── Batched expert matmul in L1 ───────────────────────────────────────
+        x_exp = ttnn.repeat(x, ttnn.Shape([self.experts_per_device, 1, 1, 1]), memory_config=_mem)
+        if x_exp.layout != ttnn.TILE_LAYOUT:
+            x_exp = ttnn.to_layout(x_exp, ttnn.TILE_LAYOUT, memory_config=_mem)
+
+        gate_all = ttnn.matmul(
+            x_exp,
+            self.expert_gate,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=_mem,
+        )
+        up_all = ttnn.matmul(
+            x_exp,
+            self.expert_up,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=_mem,
+        )
+        ttnn.deallocate(x_exp)
+
+        gate_silu = ttnn.silu(gate_all, memory_config=_mem)
+        ttnn.deallocate(gate_all)
+        hidden_all = ttnn.multiply(gate_silu, up_all, memory_config=_mem)
+        ttnn.deallocate(gate_silu)
+        ttnn.deallocate(up_all)
+
+        expert_out_all = ttnn.matmul(
+            hidden_all,
+            self.expert_down,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=_mem,
+        )
+        ttnn.deallocate(hidden_all)
+
+        routing_t = ttnn.permute(routing_weights, [3, 0, 2, 1], memory_config=_mem)
+        ttnn.deallocate(routing_weights)
+
+        weighted_all = ttnn.multiply(expert_out_all, routing_t, memory_config=_mem)
+        ttnn.deallocate(expert_out_all)
+        ttnn.deallocate(routing_t)
+
+        # partial must be DRAM — ttnn.all_gather requires DRAM input
+        partial = ttnn.sum(weighted_all, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(weighted_all)
+        partial = ttnn.reshape(partial, [1, 1, 1, HIDDEN_SIZE])
+
+        routed_out = _all_reduce_sum(partial, self.mesh_device, self.num_devices)
+        if partial is not routed_out:
+            ttnn.deallocate(partial)
+
+        shared_out = self.shared_expert.forward_decode(x)
+
+        out = ttnn.add(routed_out, shared_out, memory_config=_mem)
+        ttnn.deallocate(routed_out)
+        ttnn.deallocate(shared_out)
+        return out

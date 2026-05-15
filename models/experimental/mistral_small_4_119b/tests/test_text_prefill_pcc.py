@@ -21,7 +21,7 @@ PCC note:
 Run manually::
 
     export MISTRAL4_PREFILL_PCC=1
-    export MISTRAL4_PREFILL_N_LAYERS=2    # optional; default 2
+    export MISTRAL4_PREFILL_N_LAYERS=36    # optional; default 2
     export MESH_DEVICE=T3K                 # optional; T3K=1x8, P150x4=1x4, single=1x1
     pytest models/experimental/mistral_small_4_119b/tests/test_text_prefill_pcc.py -v -s --timeout=0
 """

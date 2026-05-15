@@ -244,12 +244,19 @@ class TtMistral3ForConditionalGeneration:
         self,
         img_embeds_host: torch.Tensor,
         input_ids: torch.Tensor,
+        position_embeddings=None,
     ) -> torch.Tensor:
         """
         Same as ``prefill_multimodal`` but returns full ``[1, seq_len, vocab_size]``
         bf16 CPU logits — used by PCC tests to compare against an HF reference.
+
+        If ``position_embeddings`` is provided as a ``(cos, sin)`` tuple, the RoPE
+        tables are cached from it (equivalent to calling ``cache_rope_tables`` first).
+        Otherwise ``cache_rope_tables`` must have been called already.
         """
         assert self.text_model is not None, "load_text() must be called first"
+        if position_embeddings is not None:
+            self.text_model.cache_rope_tables(*position_embeddings)
         inputs_embeds = self._build_inputs_embeds(input_ids, img_embeds_host)
         return self.text_model.prefill_from_embeds(inputs_embeds)
 
