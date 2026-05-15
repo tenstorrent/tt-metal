@@ -32,10 +32,13 @@ const int num_iters = 10;
 const float b = -4.775f;
 const float c = 2.0315f;
 
+// NS sees G of size [min(rows, cols), min(rows, cols)] after transpose-if-tall.
+// TinyLlama [5632,2048] and [2048,2048] → G = 2048².
+// Llama 70B [28672,8192] and [8192,8192] → G = 8192².
 const std::vector<Shape> shapes = {
-    {2048, "2048"},
+    {2048, "2048 (TinyLlama)"},
     {4096, "4096"},
-    {8192, "8192"},
+    {8192, "8192 (Llama 70B)"},
 };
 
 ttnn::Tensor make_random_tensor(uint32_t M, ttnn::distributed::MeshDevice* device, uint32_t seed) {
@@ -128,15 +131,15 @@ void BM_GramPolynomial(benchmark::State& state) {
 
     // Print results table
     std::cout << "\n  b=" << b << ", c=" << c << "\n";
-    std::cout << "  ┌───────┬──────────────────┬──────────────────┬─────────────┐\n";
-    std::cout << "  │ Shape │ gram_polynomial  │ composite (ttnn) │ speedup     │\n";
-    std::cout << "  ├───────┼──────────────────┼──────────────────┼─────────────┤\n";
+    std::cout << "  ┌──────────────────┬──────────────────┬──────────────────┬─────────────┐\n";
+    std::cout << "  │ Shape            │ gram_polynomial  │ composite (ttnn) │ speedup     │\n";
+    std::cout << "  ├──────────────────┼──────────────────┼──────────────────┼─────────────┤\n";
     for (const auto& r : results) {
         char line[256];
         std::snprintf(
             line,
             sizeof(line),
-            "  │ %5s │ %6.0f us %3.0f TF │ %6.0f us %3.0f TF │      %5.2fx │",
+            "  │ %-16s │ %6.0f us %3.0f TF │ %6.0f us %3.0f TF │      %5.2fx │",
             r.name.c_str(),
             r.fused_us,
             r.fused_tf,
@@ -145,7 +148,7 @@ void BM_GramPolynomial(benchmark::State& state) {
             r.composite_us / r.fused_us);
         std::cout << line << "\n";
     }
-    std::cout << "  └───────┴──────────────────┴──────────────────┴─────────────┘\n";
+    std::cout << "  └──────────────────┴──────────────────┴──────────────────┴─────────────┘\n";
     std::cout << std::flush;
 
     state.SetIterationTime(results.back().fused_us * 1e-6);
