@@ -1119,47 +1119,26 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         f"Rigged gate experts mismatch: expected={expected_top8_sorted.tolist()}, " f"got={tt_top8_sorted.tolist()}"
     )
 
-    # Per-device golden: each device runs TP8-shared + TP8-routed experts and the
-    # reduce output is the sum across the 4x2 mesh. Residual only on ROOT1.
-    # Mirrors test_mlp_with_reduce:1542-1573 but for the routed-MoE case.
-    K_down = s.K_down
-    routed_n_per_device = RoutedExpert.GATE_PROJ_N // num_devices  # 2048/8 = 256
-    routed_k_per_device = RoutedExpert.GATE_PROJ_N // num_devices  # down K per device
-    expected_per_device = []
-    for device_idx in range(num_devices):
-        shared_gate_shard = s.torch_gate_weights[:, device_idx * K_down : (device_idx + 1) * K_down]
-        shared_up_shard = s.torch_up_weights[:, device_idx * K_down : (device_idx + 1) * K_down]
-        shared_down_shard = s.torch_down_weights[device_idx * K_down : (device_idx + 1) * K_down, :]
-
-        # TP8 slice per routed expert: gate/up column-parallel, down row-parallel.
-        gate_slice_start = device_idx * routed_n_per_device
-        gate_slice_end = gate_slice_start + routed_n_per_device
-        down_slice_start = device_idx * routed_k_per_device
-        down_slice_end = down_slice_start + routed_k_per_device
-        gate_dict_d = {e: w[:, :, :, gate_slice_start:gate_slice_end] for e, w in r.expert_weights_dict.items()}
-        up_dict_d = {e: w[:, :, :, gate_slice_start:gate_slice_end] for e, w in r.up_proj_weights_dict.items()}
-        down_dict_d = {e: w[:, :, down_slice_start:down_slice_end, :] for e, w in r.down_proj_weights_dict.items()}
-
-        _, _, device_expected = MoeOp.golden(
-            r.torch_input,
-            shared_gate_weights=shared_gate_shard,
-            shared_up_weights=shared_up_shard,
-            shared_down_weights=shared_down_shard,
-            gate_proj_weights_dict=gate_dict_d,
-            up_proj_weights_dict=up_dict_d,
-            down_proj_weights_dict=down_dict_d,
-            rmsnorm_gamma=r.torch_rmsnorm_gamma,
-            routing_weights_tensor=r.torch_gate_mm_weights,
-            bias_tensor=r.torch_bias,
-            rmsnorm_epsilon=1e-6,
-            routing_mode=True,
-            eps=r.gate_eps,
-            scaling_factor=r.gate_scaling_factor,
-            include_residual=(device_idx == root_device_idx),
-        )
-        expected_per_device.append(device_expected)
-
-    expected_reduce_output = sum(expected_per_device)
+    # Single golden over the full (un-sharded) weights. The hardware does TP8 sharding
+    # + reduce-to-one across the 4x2 mesh; the reduced output on ROOT1 should match the
+    # non-distributed reference. Residual is folded in once on ROOT1 by the kernel.
+    _, _, expected_reduce_output = MoeOp.golden(
+        r.torch_input,
+        shared_gate_weights=s.torch_gate_weights,
+        shared_up_weights=s.torch_up_weights,
+        shared_down_weights=s.torch_down_weights,
+        gate_proj_weights_dict=r.expert_weights_dict,
+        up_proj_weights_dict=r.up_proj_weights_dict,
+        down_proj_weights_dict=r.down_proj_weights_dict,
+        rmsnorm_gamma=r.torch_rmsnorm_gamma,
+        routing_weights_tensor=r.torch_gate_mm_weights,
+        bias_tensor=r.torch_bias,
+        rmsnorm_epsilon=1e-6,
+        routing_mode=True,
+        eps=r.gate_eps,
+        scaling_factor=r.gate_scaling_factor,
+        include_residual=True,
+    )
 
     # Get actual reduce output from ROOT1 device and extract valid portion (remove per-core padding).
     reduce_output_torch = ttnn.to_torch(
@@ -1173,18 +1152,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         r.per_core_down_proj_N,
     )
 
-    _exp_flat = expected_reduce_output.float().flatten()
-    _hw_flat = reduce_output_valid.float().flatten()
-    _diff = _hw_flat - _exp_flat
-    _rel = _diff.abs() / (_exp_flat.abs() + 1e-9)
-    logger.info(
-        f"ELEMENTWISE: mean_diff={_diff.mean().item():.4f} "
-        f"mean_abs_diff={_diff.abs().mean().item():.4f} "
-        f"max_abs_diff={_diff.abs().max().item():.4f} (atol) "
-        f"rtol_p50={_rel.quantile(0.5).item():.4f} rtol_p95={_rel.quantile(0.95).item():.4f}"
-    )
-
-    passing, pcc_output = comp_pcc(_exp_flat, _hw_flat, 0.97)
+    passing, pcc_output = comp_pcc(expected_reduce_output.float(), reduce_output_valid.float(), 0.97)
     logger.info(f"Reduce output PCC: {pcc_output}")
 
     # --- Reference model comparison ---
