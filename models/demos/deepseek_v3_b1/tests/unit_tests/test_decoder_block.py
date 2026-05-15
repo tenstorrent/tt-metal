@@ -1071,6 +1071,12 @@ def test_decoder(
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.parametrize("num_internal_iterations", [1])
 @pytest.mark.parametrize("slot_id, num_slots", [(0, 2), (1, 2)])
+# Dense-MLP SRAM placement. DRAM list stays full (8 chunks) for sizing/CB probes;
+# placement selects which chunks the kernel processes via the SRAM matmul instead
+# of the DRAM matmul (the latter iterates 8 slots and skips SRAM-flagged ones).
+#   all-dram → 0 chunks via SRAM (baseline)
+#   all-sram → 8 chunks via SRAM (n_dram_active=0 → DRAM chain skipped at runtime)
+@pytest.mark.parametrize("dense_placement", ["all-dram", "all-sram"])
 @pytest.mark.requires_grid_size((13, 10))
 def test_decoder_mlp(
     bh_2d_mesh_device,
@@ -1089,6 +1095,7 @@ def test_decoder_mlp(
     num_internal_iterations,
     slot_id,
     num_slots,
+    dense_placement,
     get_reference_model_state_dict,
 ):
     """Test TTNN decoder fused operation for a dense (MLP) layer with enable_routing=False."""
@@ -1108,8 +1115,24 @@ def test_decoder_mlp(
         seed=RoutedExpert.SEED,
     )
 
+    # Dense placement → which dense-MLP chunks go to SRAM. DRAM list stays full
+    # regardless; kernel skip via num_dram_experts_pre_selected = 8 - len(sram).
+    if dense_placement == "all-dram":
+        dense_sram_expert_ids = []
+    elif dense_placement == "all-sram":
+        dense_sram_expert_ids = list(range(8))  # all 8 chunks via SRAM
+    else:
+        raise ValueError(f"unknown dense_placement: {dense_placement}")
+    logger.info(f"Dense placement {dense_placement!r}: sram_expert_ids={dense_sram_expert_ids}")
+
     logger.info("Preparing dense layer weights on device...")
-    layer_weights = prepare_dense_layer_weights(submesh, state_dict, DENSE_LAYER_IDX, move_to_device=True)
+    layer_weights = prepare_dense_layer_weights(
+        submesh,
+        state_dict,
+        DENSE_LAYER_IDX,
+        move_to_device=True,
+        sram_expert_ids=dense_sram_expert_ids,
+    )
 
     logger.info("Creating dense decoder block tensors...")
     d = create_decoder_block_tensors(

@@ -1853,8 +1853,13 @@ def prepare_dense_layer_weights(
     *,
     move_to_device: bool = False,
     cache_config: CacheConfig | None = None,
+    sram_expert_ids: list = (),
 ) -> DeepSeekV3DenseLayerWeights:
-    """Prepare fused weights for a single dense decoder layer."""
+    """Prepare fused weights for a single dense decoder layer.
+
+    ``sram_expert_ids``: chunk indices [0..7] to place in SRAM. DRAM list stays
+    full regardless — kernel skips SRAM-flagged slots via num_dram_experts_pre_selected.
+    """
     logger.info("Preparing dense layer {}...", layer_idx)
     t0 = time.perf_counter()
     attn = prepare_attention_weights(
@@ -1872,6 +1877,12 @@ def prepare_dense_layer_weights(
         device, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device, cache_config=cache_config
     )
     assert isinstance(routed, DenseRoutedExpertWeights)
+    sram_gate, sram_up, sram_down = _build_dense_sram_routed_weights(
+        device,
+        state_dict,
+        layer_idx,
+        list(sram_expert_ids),
+    )
     result = DeepSeekV3DenseLayerWeights(
         q_a_proj=attn.q_a_proj,
         q_b_proj=attn.q_b_proj,
@@ -1889,6 +1900,9 @@ def prepare_dense_layer_weights(
         routed_gate_proj=routed.routed_gate_proj,
         routed_up_proj=routed.routed_up_proj,
         routed_down_proj=routed.routed_down_proj,
+        sram_gate_proj=sram_gate,
+        sram_up_proj=sram_up,
+        sram_down_proj=sram_down,
     )
     logger.info("Dense layer {} done in {:.3f}s", layer_idx, time.perf_counter() - t0)
     return result
@@ -2060,6 +2074,102 @@ def _build_moe_sram_routed_weights(
         sram_n_parallel=DownProj.NUM_MATMUL_CORES,
         sram_per_core_N=_sram_down_per_core_N,
         per_expert_assignment_per_device=down_asg,
+    )
+    return sram_gate, sram_up, sram_down
+
+
+def _build_dense_sram_routed_weights(
+    device,
+    state_dict: dict[str, torch.Tensor],
+    layer_idx: int,
+    sram_expert_ids: list[int],
+) -> tuple[list, list, list]:
+    """Build SRAM-resident gate/up/down CompressedTensors for dense-MLP chunks.
+
+    Dense layers split their MLP into a shared portion (first MOE_INTERMEDIATE_SIZE
+    cols/rows) + 8 routed-equivalent chunks. ``sram_expert_ids`` selects which chunks
+    go to SRAM by chunk index [0..7]; each chunk has the same shape as a MoE routed
+    expert, so the SRAM weight layout matches the MoE SRAM path exactly.
+
+    Uniform BFP4 (no BSPM) — dense path uses the same uniform assignment as the
+    DRAM dense build (prepare_dense_routed_experts_compressed_tp8).
+    """
+    if not sram_expert_ids:
+        return [], [], []
+
+    from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensorAssigner
+    from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
+    from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
+    from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert as _RE
+
+    moe_tp = device.shape[0] * device.shape[1]
+    N_per_dev = _RE.GATE_PROJ_N // moe_tp
+    K_per_dev_down = _RE.GATE_PROJ_N // moe_tp
+    tile_w = _RE.TILE_W
+    _dn_shared = D.MOE_INTERMEDIATE_SIZE
+    _dn_expert_n = D.MOE_INTERMEDIATE_SIZE
+
+    a_cores, b_cores = SharedExpertOp.build_ab_grids()
+    sram_gate_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in a_cores])
+    sram_up_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in b_cores])
+    sram_down_core_grid = DownProj.build_matmul_core_grid()
+
+    _sram_per_core_N = (N_per_dev // tile_w) // 8
+    _sram_down_per_core_N = (_RE.K // tile_w) // DownProj.NUM_MATMUL_CORES
+
+    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp4"])
+
+    def _per_device_gate_up_dense(proj_name: str) -> dict[int, list[torch.Tensor]]:
+        full_kn = state_dict[_key(layer_idx, f"mlp.{proj_name}.weight")].T.contiguous()  # (K, N_full)
+        out: dict[int, list[torch.Tensor]] = {}
+        for chunk_idx in sram_expert_ids:
+            start = _dn_shared + chunk_idx * _dn_expert_n
+            end = start + _dn_expert_n
+            chunk_kn = full_kn[:, start:end].contiguous()  # (K, _dn_expert_n)
+            out[chunk_idx] = [chunk_kn[:, d * N_per_dev : (d + 1) * N_per_dev].contiguous() for d in range(moe_tp)]
+        return out
+
+    def _per_device_down_dense() -> dict[int, list[torch.Tensor]]:
+        full_kn = state_dict[_key(layer_idx, "mlp.down_proj.weight")].T.contiguous()  # (K_full, N_HIDDEN)
+        out: dict[int, list[torch.Tensor]] = {}
+        for chunk_idx in sram_expert_ids:
+            start = _dn_shared + chunk_idx * _dn_expert_n
+            end = start + _dn_expert_n
+            chunk_kn = full_kn[start:end, :].contiguous()  # (_dn_expert_n, N_HIDDEN)
+            out[chunk_idx] = [
+                chunk_kn[d * K_per_dev_down : (d + 1) * K_per_dev_down, :].contiguous() for d in range(moe_tp)
+            ]
+        return out
+
+    sram_gate = build_sram_expert_weights(
+        sram_expert_ids=sram_expert_ids,
+        full_torch_weights_per_device=_per_device_gate_up_dense("gate_proj"),
+        assigner=assigner,
+        mesh_device=device,
+        core_grid=sram_gate_core_grid,
+        sram_k_per_core=(_RE.K // tile_w) // 8,
+        sram_n_parallel=8,
+        sram_per_core_N=_sram_per_core_N,
+    )
+    sram_up = build_sram_expert_weights(
+        sram_expert_ids=sram_expert_ids,
+        full_torch_weights_per_device=_per_device_gate_up_dense("up_proj"),
+        assigner=assigner,
+        mesh_device=device,
+        core_grid=sram_up_core_grid,
+        sram_k_per_core=(_RE.K // tile_w) // 8,
+        sram_n_parallel=8,
+        sram_per_core_N=_sram_per_core_N,
+    )
+    sram_down = build_sram_expert_weights(
+        sram_expert_ids=sram_expert_ids,
+        full_torch_weights_per_device=_per_device_down_dense(),
+        assigner=assigner,
+        mesh_device=device,
+        core_grid=sram_down_core_grid,
+        sram_k_per_core=K_per_dev_down // tile_w,
+        sram_n_parallel=DownProj.NUM_MATMUL_CORES,
+        sram_per_core_N=_sram_down_per_core_N,
     )
     return sram_gate, sram_up, sram_down
 

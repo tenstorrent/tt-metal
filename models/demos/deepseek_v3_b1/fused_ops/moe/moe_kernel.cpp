@@ -1625,8 +1625,15 @@ void kernel_main() {
         uint32_t n_sram_active = 0;
         uint32_t n_dram_active = 0;
 #else
+        // Dense MLP: DRAM list stays full (=gate_proj_num_active_experts, typically 8)
+        // for matmul sizing/CB-descriptor probes, but SRAM-flagged slots are skipped
+        // via raw_idx synthesis (num_dram_experts_pre_selected cutoff). So the runtime
+        // DRAM count for dram_invoke_* helpers / ELTWISE_ADD do_add is the cutoff =
+        // gate_proj_num_active_experts - sram_num_active_experts. When all chunks
+        // are placed in SRAM, n_dram_active=0 → dram_invoke_* early-returns and
+        // EltwiseAddOrCopy copies shared_output through (no cb_in0 wait).
         uint32_t n_sram_active = get_named_compile_time_arg_val("sram_gather_num_active_experts");
-        uint32_t n_dram_active = get_named_compile_time_arg_val("gate_proj_num_active_experts");
+        uint32_t n_dram_active = get_named_compile_time_arg_val("gate_proj_num_active_experts") - n_sram_active;
 #endif
 
 #ifdef ENABLE_ROUTING

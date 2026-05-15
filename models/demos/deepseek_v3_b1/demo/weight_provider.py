@@ -72,7 +72,13 @@ class WeightProvider(Protocol):
     ) -> DeepSeekV3MoELayerWeights:
         ...
 
-    def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
+    def load_dense_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        sram_expert_ids_override: list[int] | None = None,
+    ) -> DeepSeekV3DenseLayerWeights:
         ...
 
     def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
@@ -308,13 +314,20 @@ class CacheWeightProvider:
             sram_expert_ids=resolve_sram_expert_ids(layer_id, sram_expert_ids_override),
         )
 
-    def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
+    def load_dense_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        sram_expert_ids_override: list[int] | None = None,
+    ) -> DeepSeekV3DenseLayerWeights:
         return prepare_dense_layer_weights(
             device,
             self._state_dict,
             layer_id,
             move_to_device=True,
             cache_config=self._cache_config(device),
+            sram_expert_ids=resolve_sram_expert_ids(layer_id, sram_expert_ids_override),
         )
 
     def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
@@ -400,9 +413,21 @@ class SyntheticWeightProvider:
             sram_expert_ids=resolve_sram_expert_ids(layer_id, sram_expert_ids_override),
         )
 
-    def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
+    def load_dense_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        sram_expert_ids_override: list[int] | None = None,
+    ) -> DeepSeekV3DenseLayerWeights:
         sd = _build_synthetic_dense_state_dict(layer_id)
-        return prepare_dense_layer_weights(device, sd, layer_id, move_to_device=True)
+        return prepare_dense_layer_weights(
+            device,
+            sd,
+            layer_id,
+            move_to_device=True,
+            sram_expert_ids=resolve_sram_expert_ids(layer_id, sram_expert_ids_override),
+        )
 
     def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
         sd = _build_synthetic_mtp_state_dict()
@@ -458,8 +483,20 @@ class StateDictWeightProvider:
             sram_expert_ids=resolve_sram_expert_ids(layer_id, sram_expert_ids_override),
         )
 
-    def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
-        return prepare_dense_layer_weights(device, self._state_dict, layer_id, move_to_device=True)
+    def load_dense_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        sram_expert_ids_override: list[int] | None = None,
+    ) -> DeepSeekV3DenseLayerWeights:
+        return prepare_dense_layer_weights(
+            device,
+            self._state_dict,
+            layer_id,
+            move_to_device=True,
+            sram_expert_ids=resolve_sram_expert_ids(layer_id, sram_expert_ids_override),
+        )
 
     def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
         return prepare_mtp_weights(self._state_dict, device, move_to_device=True)

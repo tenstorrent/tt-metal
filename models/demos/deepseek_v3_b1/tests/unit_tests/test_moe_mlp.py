@@ -1982,13 +1982,17 @@ def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict)
 # Per-device dense-MLP placement of the 8 routed-N chunks across SRAM vs DRAM.
 #   all-dram      → existing baseline (all 8 chunks via DRAM matmul).
 #   half-half     → chunks 0..3 via DRAM, 4..7 via SRAM (per-device).
-#   7sram-1dram   → chunk 0 via DRAM, chunks 1..7 via SRAM (op.py requires
-#                   ≥1 DRAM chunk for sizing/CB-descriptor probes).
-# All three are mathematically equivalent — chunks partition the N dim and
+#   7sram-1dram   → chunk 0 via DRAM, chunks 1..7 via SRAM.
+#   all-sram      → all 8 chunks via SRAM. DRAM weight list still allocated
+#                   (full 8 chunks) so op.py's sizing/CB-descriptor probes
+#                   work; kernel synthesizes raw_idx with EXPERT_SRAM_FLAG
+#                   on every slot (num_dram_experts_pre_selected=0) so the
+#                   DRAM matmul iterates all 8 and skips every one.
+# All variants are mathematically equivalent — chunks partition the N dim and
 # down_proj's accum_experts sums their (M, K) contributions.
 @pytest.mark.parametrize(
     "dense_placement",
-    ["all-dram", "half-half", "7sram-1dram"],
+    ["all-dram", "half-half", "7sram-1dram", "all-sram"],
 )
 @pytest.mark.requires_grid_size((13, 10))
 @pytest.mark.timeout(1200)
@@ -2045,6 +2049,11 @@ def test_mlp_with_reduce(
         if _num_dense_chunks < 2:
             pytest.skip("7sram-1dram requires >=2 chunks")
         sram_expert_ids = list(range(1, _num_dense_chunks))  # 1 in DRAM (chunk 0), N-1 in SRAM
+    elif dense_placement == "all-sram":
+        # DRAM weight list stays full (all 8 chunks allocated for sizing/CB
+        # probes) but every slot is SRAM-flagged at the kernel — DRAM matmul
+        # iterates and skips all 8, SRAM matmul processes all 8.
+        sram_expert_ids = list(range(_num_dense_chunks))
     else:
         raise ValueError(f"unknown dense_placement: {dense_placement}")
 
