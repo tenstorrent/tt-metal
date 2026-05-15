@@ -189,24 +189,24 @@ void run_single_dfb_program(
     const bool need_in_tensor = (producer_type == DFBPorCType::DM);
     const bool need_out_tensor = (consumer_type == DFBPorCType::DM);
 
-    MeshTensor in_tensor;
-    MeshTensor out_tensor;
+    std::optional<MeshTensor> in_tensor;
+    std::optional<MeshTensor> out_tensor;
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, total_entries);
     if (need_in_tensor) {
         in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
         log_info(
             tt::LogTest,
             "In Tensor:  [address: {} B, size: {} B]",
-            in_tensor.mesh_buffer().get_reference_buffer()->address(),
-            in_tensor.mesh_buffer().get_reference_buffer()->size());
+            in_tensor->mesh_buffer().get_reference_buffer()->address(),
+            in_tensor->mesh_buffer().get_reference_buffer()->size());
     }
     if (need_out_tensor) {
         out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
         log_info(
             tt::LogTest,
             "Out Tensor: [address: {} B, size: {} B]",
-            out_tensor.mesh_buffer().get_reference_buffer()->address(),
-            out_tensor.mesh_buffer().get_reference_buffer()->size());
+            out_tensor->mesh_buffer().get_reference_buffer()->address(),
+            out_tensor->mesh_buffer().get_reference_buffer()->size());
     }
 
     const auto consumer_pattern = is_all ? experimental::metal2_host_api::DFBAccessPattern::ALL
@@ -353,10 +353,10 @@ void run_single_dfb_program(
 
     std::vector<experimental::metal2_host_api::TensorParameter> tensor_parameters;
     if (need_in_tensor) {
-        tensor_parameters.push_back({.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()});
+        tensor_parameters.push_back({.unique_id = IN_TENSOR, .spec = in_tensor->tensor_spec()});
     }
     if (need_out_tensor) {
-        tensor_parameters.push_back({.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()});
+        tensor_parameters.push_back({.unique_id = OUT_TENSOR, .spec = out_tensor->tensor_spec()});
     }
 
     experimental::metal2_host_api::ProgramSpec spec{
@@ -406,10 +406,10 @@ void run_single_dfb_program(
     }
     run_params.kernel_run_params = {producer_params, consumer_params};
     if (need_in_tensor) {
-        run_params.tensor_args.push_back({.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)});
+        run_params.tensor_args.push_back({.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(*in_tensor)});
     }
     if (need_out_tensor) {
-        run_params.tensor_args.push_back({.tensor_parameter_name = OUT_TENSOR, .tensor = std::cref(out_tensor)});
+        run_params.tensor_args.push_back({.tensor_parameter_name = OUT_TENSOR, .tensor = std::cref(*out_tensor)});
     }
     experimental::metal2_host_api::SetProgramRunParameters(program, run_params);
 
@@ -500,12 +500,12 @@ void run_single_dfb_program(
     // so the I/O flow is inlined here to skip operations on unallocated tensors.
     const bool verify_output = (consumer_type == DFBPorCType::DM);
     if (need_in_tensor) {
-        detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), input);
+        detail::WriteToBuffer(*in_tensor->mesh_buffer().get_reference_buffer(), input);
         if (arch == ARCH::QUASAR) {
             // TODO #38042: Need to wait for data to be written, the barrier needs to be uplifted for Quasar
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
             std::vector<uint32_t> rdback_dram;
-            detail::ReadFromBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), rdback_dram);
+            detail::ReadFromBuffer(*in_tensor->mesh_buffer().get_reference_buffer(), rdback_dram);
             tt_driver_atomics::mfence();
             EXPECT_EQ(rdback_dram, input);
         }
@@ -515,7 +515,7 @@ void run_single_dfb_program(
 
     if (verify_output) {
         std::vector<uint32_t> output;
-        detail::ReadFromBuffer(*out_tensor.mesh_buffer().get_reference_buffer(), output);
+        detail::ReadFromBuffer(*out_tensor->mesh_buffer().get_reference_buffer(), output);
         const std::vector<uint32_t>& expected = tensix_dm_expected ? *tensix_dm_expected : input;
         if (expected != output) {
             log_info(tt::LogTest, "Printing expected");

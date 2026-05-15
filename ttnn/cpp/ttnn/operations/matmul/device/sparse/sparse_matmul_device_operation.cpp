@@ -8,6 +8,7 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 
 #include <tt-metalium/work_split.hpp>
 
@@ -341,6 +342,10 @@ SparseMatmulParams create_sparse_matmul_attributes(
 
     auto matmul_struct =
         create_matmul_attributes(input_tensor_a, input_tensor_b, matmul_attributes, {optional_output_tensors.at(0)});
+    if (matmul_struct.program_config.has_value()) {
+        auto device_grid = input_tensor_a.device()->compute_with_storage_grid_size();
+        operations::matmul::normalize_program_config(matmul_struct.program_config.value(), device_grid);
+    }
     return SparseMatmulParams{
         parameters.nnz,
         parameters.is_input_a_sparse,

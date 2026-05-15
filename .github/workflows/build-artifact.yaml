@@ -84,6 +84,11 @@ on:
         type: string
         default: ""
         description: 'Commit SHA to test (default: HEAD)'
+      wheel-ref:
+        required: false
+        type: string
+        default: ""
+        description: "Git ref used only for wheel checkout/versioning"
       use-artifacts-from-run:
         required: false
         type: string
@@ -223,6 +228,11 @@ on:
         description: >-
           Git fetch depth for the checkout step. Must be large enough to
           include all tags and history needed for `git describe`.
+      wheel-ref:
+        required: false
+        type: string
+        default: ""
+        description: "Git ref used only for wheel checkout/versioning"
       publish-artifact:
         required: false
         type: boolean
@@ -251,7 +261,7 @@ jobs:
       toolchain: ${{ steps.parse.outputs.toolchain }}
       enable-lto: ${{ steps.parse.outputs.enable-lto }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
@@ -294,7 +304,7 @@ jobs:
       packages-artifact-name: ${{ steps.download.outputs.packages-artifact-name }}
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
@@ -437,7 +447,7 @@ jobs:
           echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_ENV"
 
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           ref: ${{ inputs.ref || github.sha }}
@@ -649,6 +659,6 @@ jobs:
         ${{ inputs.manylinux-docker-image ||
             needs.build-docker-image.outputs.manylinux-tag ||
             'docker-image-unresolved!' }}
-      ref: ${{ inputs.ref || '' }}
+      ref: ${{ inputs.wheel-ref || inputs.ref || '' }}
       tracy: ${{ inputs.tracy }}
       enable-lto: ${{ inputs.enable-lto || false }}
