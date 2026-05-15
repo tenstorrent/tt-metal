@@ -7,7 +7,7 @@ import warnings
 
 from loguru import logger
 
-from models.demos.utils.model_targets import resolve_perf_targets
+from models.demos.utils.model_targets import resolve_accuracy_targets, resolve_perf_targets
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler, perf_target_check
 
 TOLERANCE_FAMILY_ALIASES = {
@@ -24,6 +24,25 @@ METRIC_NAME_ALIASES = {
 
 class PerfRegressionWarning(UserWarning):
     """Warning emitted when measured perf drifts from configured thresholds."""
+
+
+def resolve_accuracy_baseline(
+    model_name: str,
+    sku: str,
+    batch_size: int | None = None,
+    seq_len: int | None = None,
+) -> tuple[dict[str, float], str]:
+    """Resolve top1/top5 accuracy baselines from centralized YAML targets only."""
+    yaml_accuracy = resolve_accuracy_targets(
+        model_name=model_name,
+        sku=sku,
+        batch_size=batch_size,
+        seq_len=seq_len,
+    )
+    if yaml_accuracy and "top1" in yaml_accuracy and "top5" in yaml_accuracy:
+        return {"top1": float(yaml_accuracy["top1"]), "top5": float(yaml_accuracy["top5"])}, "models/model_targets.yaml"
+
+    return {}, "no accuracy baseline found"
 
 
 def _normalize_metric_aliases(metrics: dict, source_name: str) -> dict:

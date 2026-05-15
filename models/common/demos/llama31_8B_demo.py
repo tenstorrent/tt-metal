@@ -42,7 +42,7 @@ from loguru import logger
 
 import ttnn
 from models.common.sampling import SamplingParams
-from models.demos.utils.model_targets import resolve_accuracy_targets
+from models.demos.utils.llm_demo_utils import resolve_accuracy_baseline
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
@@ -312,20 +312,6 @@ def get_device_name_from_mesh_shape(mesh_shape: tuple[int, int]) -> str:
         (1, 8): "T3K",
     }
     return mapping.get(mesh_shape, f"Unknown({mesh_shape})")
-
-
-def resolve_accuracy_baseline(device_name: str, batch_size: int) -> tuple[dict, str]:
-    """Resolve accuracy targets from centralized YAML only."""
-    yaml_accuracy = resolve_accuracy_targets(
-        model_name="Llama-3.1-8B",
-        sku=device_name,
-        batch_size=batch_size,
-        seq_len=1024,
-    )
-    if yaml_accuracy and "top1" in yaml_accuracy and "top5" in yaml_accuracy:
-        return {"top1": float(yaml_accuracy["top1"]), "top5": float(yaml_accuracy["top5"])}, "models/model_targets.yaml"
-
-    return {}, "no accuracy baseline found"
 
 
 # =============================================================================
@@ -780,7 +766,12 @@ def test_mlp1d_llama_demo(
     baseline_metrics = _get_cached_baseline(device_name, batch_size, opt_mode)
 
     if measure_accuracy:
-        expected_for_validation, baseline_source = resolve_accuracy_baseline(device_name, batch_size)
+        expected_for_validation, baseline_source = resolve_accuracy_baseline(
+            model_name="Llama-3.1-8B",
+            sku=device_name,
+            batch_size=batch_size,
+            seq_len=1024,
+        )
         assert expected_for_validation, (
             f"Missing centralized accuracy targets for Llama-3.1-8B/{device_name}/batch-{batch_size}/seq-1024. "
             "Add top1/top5 to models/model_targets.yaml."
