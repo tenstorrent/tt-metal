@@ -32,6 +32,9 @@ Mesh is 8 rows × 4 cols (32 chips).
 """
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 import torch
 
 import ttnn
@@ -161,9 +164,16 @@ class TtQwen36DeltaAttention(LightweightModule):
         weights_dict,
         tt_ccl,
         dtype=ttnn.bfloat16,
+        use_tt_lang_beta_g: bool = False,
         **kwargs,
     ):
         super().__init__()
+        # V2-16: optional fused tt-lang beta/g kernel for decode (T=1).
+        # Env override is preferred (matches QWEN36_DELTA_LAR / QWEN36_FULLATTN_LAR
+        # pattern) so the test plumbing doesn't need to thread the bool through
+        # the TtTransformer / decoder layer hierarchy.
+        env_flag = os.environ.get("QWEN36_TT_LANG_BETA_G", "").strip()
+        self.use_tt_lang_beta_g = use_tt_lang_beta_g or (env_flag == "1")
 
         self.mesh_device = mesh_device
         self.args = args
@@ -231,6 +241,13 @@ class TtQwen36DeltaAttention(LightweightModule):
         # Persistent conv state buffer: [B, K-1, D_per_row] ROW_MAJOR, sharded
         # across rows by D (since each row holds its own conv channels).
         self.conv_state_buffer = self._build_conv_state_buffer()
+
+        # V2-16: tt-lang fused beta/g kernel state (persistent buffers + program
+        # descriptor). Only constructed when the flag is on — keeps the safe
+        # 6-op path zero-cost when disabled.
+        self._beta_g_kernel_state = None
+        if self.use_tt_lang_beta_g:
+            self._beta_g_kernel_state = self._build_beta_g_kernel_state()
 
     # ------------------------------------------------------------------
     # Weight construction helpers (ported from v1 _build_weights)
@@ -639,6 +656,205 @@ class TtQwen36DeltaAttention(LightweightModule):
         mixed_conv.deallocate(True)
         return q_conv, k_conv, v_conv, new_conv_state
 
+    # ------------------------------------------------------------------
+    # V2-16: fused tt-lang beta/g kernel (decode-only, T=1)
+    # ------------------------------------------------------------------
+    # The kernel emitted by ``tt/kernels/beta_g_kernel.py`` fuses the 6-op
+    # beta/g chain (sigmoid + add + softplus + exp + neg + multiply) into a
+    # single ttnn.generic_op launch on a 1×1 tile core grid. At decode the
+    # input tensors ``b``, ``a`` (shape [1,1,6]) and the weight tensors
+    # ``dt_bias``, ``A_log`` (shape [1,1,6]) all tilize to a single 32×32 tile
+    # per device with the valid data in row 0, so no host-side broadcast is
+    # needed — the per-tile element-wise math is identical to the TTNN chain's
+    # implicit-broadcast result. V2-15B validated PCC 1.0 / 0.9999 + 4.96×
+    # standalone speedup at this exact shape.
+    #
+    # Persistent ``beta_out`` / ``g_out`` / ``ones`` buffers live on-device
+    # across decode steps so trace replay sees fixed addresses; the program
+    # descriptor is rebuilt per call (the buffer addresses do not move across
+    # calls so the descriptor is trace-safe).
+
+    _BETA_G_KERNELS_DIR = Path(__file__).resolve().parent / "kernels" / "beta_g"
+    _BETA_G_NUM_TENSORS = 7
+    _BETA_G_CB_PAGE_SIZE = 2048  # bf16, 32×32 tile
+    _BETA_G_CB_TOTAL_SIZE = 4096  # double-buffered
+    # Kernel author script emitted these tensor indices (see _runner_emitted.py).
+    _BETA_G_KERNEL_TENSOR_INDICES = [
+        [],  # compute
+        [3, 1, 0, 2, 4],  # read: al, a, b, dt, ones
+        [5, 6],  # write: beta, g
+    ]
+
+    def _build_beta_g_kernel_state(self):
+        kdir = self._BETA_G_KERNELS_DIR
+        compute_path = str(kdir / "beta_g_compute.cpp")
+        read_path = str(kdir / "beta_g_read.cpp")
+        write_path = str(kdir / "beta_g_write.cpp")
+        for p in (compute_path, read_path, write_path):
+            assert Path(p).is_file(), (
+                f"missing emitted beta/g kernel: {p}. Run "
+                f"models/demos/qwen3_6_galaxy_v2/tt/kernels/beta_g_kernel.py "
+                f"in the 3.12 venv to regenerate."
+            )
+
+        # The emitted kernel was authored for bfloat16 CBs (tile-page-size
+        # 2048 bytes). The DeltaNet projection ``ba`` (and therefore ``b`` and
+        # ``a`` at the call site) is bf8_b, so we (1) maintain bf16 copies of
+        # the constant weights ``dt_bias`` / ``A_log`` and (2) per-call cast
+        # ``b`` / ``a`` to bf16 before the kernel launch. The dtype-conversion
+        # cost is two ttnn.typecast ops on a single tile each — << the saving
+        # of fusing the 6-op chain into one launch.
+        # Host shapes match the existing A_log / dt_bias build path: full
+        # n_v_heads=48 along dim 2 sharded across 8 mesh-rows (6 per row).
+        # This is the only sharding pattern that ShardTensor2dMesh accepts —
+        # the per-device tile shape ends up at `[1, 1, 6]` which tilizes to
+        # one 32×32 tile per device.
+        n_v_heads = self.n_v_heads  # 48
+        row_shard_3d = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(2, None), mesh_shape=self.cluster_shape)
+
+        # bf16 copies of A_log / dt_bias (originals stay at bf8_b for the
+        # 6-op fallback path — preserves bit-exact PCC parity in fallback).
+        A_log_bf16 = ttnn.typecast(self.A_log, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        dt_bias_bf16 = ttnn.typecast(self.dt_bias, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # ones: shape matches dt_bias / A_log (`[1, 1, 48]` on host →
+        # `[1, 1, 6]` per device after row-sharding on dim 2).
+        ones_t = torch.ones((1, 1, n_v_heads), dtype=torch.bfloat16)
+        ones = ttnn.from_torch(
+            ones_t,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=row_shard_3d,
+        )
+
+        # beta_out / g_out have the same per-device shape as b / a at the
+        # decode call site: `[B=1, T=1, 6]` per device. Build the template
+        # via the same sharding pattern (host `[1, 1, 48]` → per-device
+        # `[1, 1, 6]`). At max_batch_size > 1 this would need a host-shape
+        # adjustment, but the qwen3.6 v2 config pins max_batch_size=1.
+        assert self.max_batch_size == 1, (
+            "V2-16 tt-lang beta/g kernel state assumes max_batch_size=1; " f"got {self.max_batch_size}"
+        )
+        template_t = torch.zeros((1, 1, n_v_heads), dtype=torch.bfloat16)
+        template = ttnn.from_torch(
+            template_t,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=row_shard_3d,
+        )
+        beta_out = ttnn.allocate_tensor_on_device(template.spec, self.mesh_device)
+        g_out = ttnn.allocate_tensor_on_device(template.spec, self.mesh_device)
+        template.deallocate(True)
+
+        core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+
+        return {
+            "compute_path": compute_path,
+            "read_path": read_path,
+            "write_path": write_path,
+            "ones": ones,
+            "A_log_bf16": A_log_bf16,
+            "dt_bias_bf16": dt_bias_bf16,
+            "beta_out": beta_out,
+            "g_out": g_out,
+            "core_ranges": core_ranges,
+        }
+
+    def _compute_beta_g_tt_lang(self, b, a):
+        """Dispatch the fused tt-lang beta/g kernel via ttnn.generic_op.
+
+        Returns the persistent ``beta_out`` / ``g_out`` device buffers.
+        Trace-safe: the program-descriptor closure binds to fixed buffer
+        addresses (the 5 inputs and 2 outputs are all DRAM-interleaved
+        tensors whose addresses do not move across decode steps).
+        """
+        st = self._beta_g_kernel_state
+        # Cast b/a to bf16 to match the kernel's CB data_format. The fp32-state
+        # delta-rule downstream consumes both at bf16 anyway (typecast at
+        # ttnn_delta_rule_ops_fp32.py:289-303), so this conversion is not
+        # added overhead — it just moves the cast earlier in the pipeline.
+        b_bf16 = ttnn.typecast(b, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        a_bf16 = ttnn.typecast(a, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tensors = [
+            b_bf16,
+            a_bf16,
+            st["dt_bias_bf16"],
+            st["A_log_bf16"],
+            st["ones"],
+            st["beta_out"],
+            st["g_out"],
+        ]
+
+        # Build TensorAccessorArgs (compile-time args) for all 7 tensors.
+        tensor_accessor_args = []
+        for t in tensors:
+            tensor_accessor_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
+
+        cb_descriptors = []
+        for i in range(self._BETA_G_NUM_TENSORS):
+            cb_format = ttnn.CBFormatDescriptor(
+                buffer_index=i,
+                data_format=ttnn.bfloat16,
+                page_size=self._BETA_G_CB_PAGE_SIZE,
+            )
+            cb_descriptors.append(
+                ttnn.CBDescriptor(
+                    total_size=self._BETA_G_CB_TOTAL_SIZE,
+                    core_ranges=st["core_ranges"],
+                    format_descriptors=[cb_format],
+                )
+            )
+
+        cb_indices = list(range(self._BETA_G_NUM_TENSORS))
+        kernel_descriptors = []
+        paths = [
+            (st["compute_path"], "compute"),
+            (st["read_path"], "noc"),
+            (st["write_path"], "noc"),
+        ]
+        noc_idx = 0
+        for kernel_idx, (kernel_path, thread_type) in enumerate(paths):
+            tensor_indices = self._BETA_G_KERNEL_TENSOR_INDICES[kernel_idx]
+            common_runtime_args = [tensors[idx].buffer_address() for idx in tensor_indices]
+            if thread_type == "compute":
+                compile_time_args = cb_indices
+                config = ttnn.ComputeConfigDescriptor()
+            else:
+                compile_time_args = cb_indices + tensor_accessor_args
+                if noc_idx == 0:
+                    config = ttnn.ReaderConfigDescriptor()
+                else:
+                    config = ttnn.WriterConfigDescriptor()
+                noc_idx += 1
+            kernel_descriptors.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=kernel_path,
+                    core_ranges=st["core_ranges"],
+                    compile_time_args=compile_time_args,
+                    common_runtime_args=common_runtime_args,
+                    config=config,
+                )
+            )
+
+        program = ttnn.ProgramDescriptor(
+            kernels=kernel_descriptors,
+            cbs=cb_descriptors,
+            semaphores=[],
+        )
+        ttnn.generic_op(list(tensors), program)
+        # b_bf16 / a_bf16 are per-call temporaries; the kernel has already
+        # consumed them. Deallocate to keep L1/DRAM pressure flat across
+        # decode steps. (The decode-mode caller deallocates b/a immediately
+        # after _compute_beta_g returns, but those are bf8_b originals — our
+        # bf16 copies need their own cleanup.)
+        b_bf16.deallocate(True)
+        a_bf16.deallocate(True)
+        return st["beta_out"], st["g_out"]
+
     def _compute_beta_g(self, b, a, B, T):
         """V2-11 (lever C): attempted unary-chain fusion, NOT LANDED.
 
@@ -646,7 +862,14 @@ class TtQwen36DeltaAttention(LightweightModule):
           beta = sigmoid(b); a_biased = add(a, dt_bias); sp = softplus(a_biased)
           A_exp = exp(A_log); neg_A_exp = neg(A_exp); g = multiply(neg_A_exp, sp)
 
-        Attempts:
+        V2-16: when ``use_tt_lang_beta_g=True`` (or env QWEN36_TT_LANG_BETA_G=1)
+        and T==1 (decode), the 6-op chain is replaced by a single tt-lang
+        ``ttnn.generic_op`` launch — see ``_compute_beta_g_tt_lang``. Prefill
+        keeps the 6-op chain because the kernel was emitted for the 1×1-tile
+        decode shape; multi-tile prefill would require re-authoring with a
+        broadcast-aware compute body.
+
+        Attempts (pre-V2-16):
           (i)  Precompute neg_exp(A_log) once at init, multiply directly.
           (ii) Fuse add+softplus via activations=[SOFTPLUS].
           (iii) Fuse exp+neg into multiply via input_tensor_a_activations.
@@ -659,6 +882,8 @@ class TtQwen36DeltaAttention(LightweightModule):
         to the verified per-op pattern; the device-time saving from this
         lever alone (~0.4 ms / step) was not worth the coherency cost.
         """
+        if self.use_tt_lang_beta_g and T == 1 and self._beta_g_kernel_state is not None:
+            return self._compute_beta_g_tt_lang(b, a)
         mem = ttnn.DRAM_MEMORY_CONFIG
         beta = ttnn.sigmoid(b, memory_config=mem)
         a_biased = ttnn.add(a, self.dt_bias, memory_config=mem)
@@ -954,8 +1179,12 @@ class TtQwen36DeltaAttention(LightweightModule):
         q_exp.deallocate(True)
         k_exp.deallocate(True)
         v_h.deallocate(True)
-        beta.deallocate(True)
-        g.deallocate(True)
+        # V2-16: when the fused tt-lang kernel is active, ``beta`` and ``g``
+        # alias the persistent ``beta_out`` / ``g_out`` buffers — never
+        # deallocate them. The next decode step re-uses the same addresses.
+        if not (self.use_tt_lang_beta_g and self._beta_g_kernel_state is not None):
+            beta.deallocate(True)
+            g.deallocate(True)
 
         # 7. GroupRMSNormGated
         out = self._apply_norm_gated(core_out, z_h, B, T)

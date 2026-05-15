@@ -32,9 +32,12 @@ COMPUTE_KERNEL_CPP = str(KERNELS_DIR / "beta_g_compute.cpp")
 READ_KERNEL_CPP = str(KERNELS_DIR / "beta_g_read.cpp")
 WRITE_KERNEL_CPP = str(KERNELS_DIR / "beta_g_write.cpp")
 
+# V2-16: kernel re-authored at the real decode tile shape (1×1 = single tile).
+# Real decode at max_batch_size=1 produces b/a/dt_bias/A_log tensors of shape
+# `[1, 1, 6]` → tilized to one 32×32 tile each.
 TILE = 32
-ROWS = 2
-COLS = 2
+ROWS = 1
+COLS = 1
 
 # Tensor order MUST match the kernel author script (kernels/beta_g_kernel.py):
 #   inputs : [b, a, dt, A_log, ones]    (5 tensors)

@@ -10,9 +10,9 @@ GRID_ROWS = 1
 NUM_TENSORS = 7
 
 KERNEL_PATHS = [
-    ("/tmp/tt-admin/ttlang_kernel_beta_g_compute_1605d43c.cpp", "compute"),
-    ("/tmp/tt-admin/ttlang_kernel_beta_g_read_3a55eadc.cpp", "noc"),
-    ("/tmp/tt-admin/ttlang_kernel_beta_g_write_b9301a2f.cpp", "noc"),
+    ("/tmp/tt-admin/ttlang_kernel_beta_g_compute_9535f0e6.cpp", "compute"),
+    ("/tmp/tt-admin/ttlang_kernel_beta_g_read_845794c5.cpp", "noc"),
+    ("/tmp/tt-admin/ttlang_kernel_beta_g_write_6b925c85.cpp", "noc"),
 ]
 
 KERNEL_TENSOR_INDICES = [

@@ -58,12 +58,14 @@ ttl = _ttl_pkg  # noqa: F841 (used in kernel source text)
 # Hardware operates on 32x32 tiles.
 TILE_SIZE = 32
 
-# Kernel-validation shape: 2x2 tiles per tensor. Real model uses
-# `[B=32, T=1, n_v_per_row=6]` which tilizes to `[32, 32, 32]` -- one tile.
-# We pick a 2x2 layout to exercise multi-tile iteration without inflating the
-# compile budget.
-ROWS = 2
-COLS = 2
+# V2-16: real decode shape is `[B=1, T=1, n_v_per_row=6]` which tilizes to a
+# single 32×32 tile per device (B and T are 1; n_v_per_row=6 pads to 32).
+# `dt_bias` / `A_log` are `[1, 1, n_v_per_row]` -> also one tile with identical
+# valid-data layout (row 0). At decode (max_batch_size=1) the host-side
+# broadcast is trivial — every tensor is one tile of 32×6 valid data padded
+# out to 32×32 — so we can run the kernel element-wise on a single tile.
+ROWS = 1
+COLS = 1
 
 OUT_DIR = Path(__file__).resolve().parent / "beta_g"
 OUT_DIR.mkdir(parents=True, exist_ok=True)

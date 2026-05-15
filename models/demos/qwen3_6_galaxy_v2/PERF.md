@@ -957,3 +957,151 @@ reasons no speedup materialised on BH GLX 8×4:
 ~18 fix iterations.  No `tt-smi -r` invocations needed for hangs (all
 test failures were L1-allocation clashes resolved by spreading the
 buffer across more cores).
+
+## V2-16: tt-lang fused beta/g kernel — integrated into decode (2026-05-15)
+
+V2-15B validated a tt-lang-authored single-launch fused beta/g kernel
+in isolation at PCC 1.0 / 0.9999 with a 4.96× standalone speedup at a
+2×2-tile validation shape. V2-16 re-emits the kernel at the real decode
+tile shape (1×1 tile) and wires it through `_compute_beta_g` behind the
+env-gated `QWEN36_TT_LANG_BETA_G=1` flag.
+
+### Re-authored kernel
+- `tt/kernels/beta_g_kernel.py`: ROWS = COLS = 1
+- Emitted C++ artifact sizes (vs 2×2):
+  - `beta_g_compute.cpp` 2918 B (was 3552 B)
+  - `beta_g_read.cpp`    2633 B (was 3339 B)
+  - `beta_g_write.cpp`   1188 B (was 1657 B)
+- Standalone test (`tests/test_beta_g_tt_lang_kernel.py`, ROWS=COLS=1):
+  - beta PCC = 1.000000 · g PCC = 0.999979
+  - chain  : 281.82 µs/call · kernel : 57.87 µs/call · **speedup 4.87×**
+
+### Integration
+- `tt/qwen36_delta_attention.py`:
+  - `__init__` gains `use_tt_lang_beta_g: bool = False` + env-var override
+    `QWEN36_TT_LANG_BETA_G=1`.
+  - `_build_beta_g_kernel_state()` allocates persistent `beta_out`,
+    `g_out`, `ones`, plus bf16 copies of `A_log`, `dt_bias` (the
+    `ba` linear emits bf8_b → kernel CBs are bf16, so the constant
+    weights are pre-cast once at init; `b` / `a` get a per-call cast).
+  - `_compute_beta_g_tt_lang(b, a)` builds the `ttnn.ProgramDescriptor`
+    per call (closure binds to fixed buffer addresses — trace-safe) and
+    dispatches via `ttnn.generic_op` on `CoreRange(0,0,0,0)`.
+  - `_compute_beta_g(b, a, B, T)` dispatches to `_tt_lang` path when
+    `T==1` and the flag is on; prefill path keeps the 6-op chain (the
+    kernel was emitted for single-tile decode shape only).
+  - `forward_decode` skips `beta.deallocate(True)` / `g.deallocate(True)`
+    when the kernel is active — those tensors alias the persistent
+    `beta_out` / `g_out` buffers across decode steps.
+
+Lines added: ~150 (kernel state builder + dispatch + flag plumbing,
+plus the deallocation guard in `forward_decode`). All gated behind the
+env var; default behaviour with the flag unset is bit-identical to V2-15.
+
+### Per-step measured latency (32-step traced loop, in-trace decode)
+
+| variant                              | mean ms/step (TRACED) | tok/s/user |
+|--------------------------------------|----------------------:|-----------:|
+| baseline V2-15 (6-op TTNN chain)     |                 62.72 |     15.94  |
+| V2-16 (`QWEN36_TT_LANG_BETA_G=1`)    |                 62.10 |     16.10  |
+
+**Delta: 0.62 ms / step (1.0%)**. Below the V2-16 acceptance target of
+≥ 3 ms / step. The 4.87× standalone-test speedup did not materialize
+inside trace replay — see analysis below.
+
+### Coherency (V2-16 final, kernel ON)
+`test_decode_perf_intrace.py`: 32 traced decode steps after the
+`input_data_questions_prefill_128.json[0]` prompt produce
+`'\n\n2. **Identify Key Elements:**\n   - The user is asking for my "favorite condiment"...'`
+(82 alpha chars — in-distribution Qwen3.6 reasoning text, no mojibake).
+The exact trajectory differs from the kernel-OFF baseline (`'However,
+if I were to choose a "favorite"...'`) — bf16 vs bf8_b precision of the
+beta/g intermediates is the only difference, but as documented in V2-10,
+the 64-layer bf8/bf16 compounding steers the per-step trajectory while
+keeping the output in-distribution.
+
+### 64L real-prompt PCC (V2-16, kernel ON)
+`test_decode_64L_real_prompt_pcc.py`:
+- Prefill argmax = ' Paris' (matches HF reference) ✓
+- Decode step 0 argmax = 271 (`'\n\n'`, matches HF reference) ✓
+- Steps 1-7: in-distribution Qwen3.6 tokens (30 alpha chars over 8 steps),
+  exact match drops after step 0 (same as kernel-OFF baseline — V2-10
+  documented that bf8/bf16 quantization compounding across 64 layers
+  steers the per-step trajectory but stays in-distribution).
+
+Acceptance: ' Paris' + decode step-0 token match HF reference ✓.
+
+### Why the 4.87× standalone speedup shrinks to 1.0% in trace
+The standalone V2-15B / V2-16 perf test measures host-driven dispatch:
+each TTNN op fires a `ttnn::launch_program` from the host, accumulating
+~50 µs of Python + CCL setup overhead per launch. Replacing 6 launches
+with 1 kernel saves ~280 µs / call → 4.87× on host-driven dispatch.
+
+Inside `ttnn.execute_trace(...)` the per-op dispatch overhead is mostly
+amortized — the trace replays a pre-baked command buffer at hardware
+speed, so the saving collapses to the actual device-time difference
+between the 6-op chain and the 1-op kernel. For sigmoid + add + softplus
++ exp + neg + multiply over a single 32×32 tile, that's a handful of
+microseconds, not 280 µs. Across 48 DeltaNet layers per step, that
+adds up to the 0.62 ms / step observed.
+
+Two additional secondary costs eat into the kernel saving:
+1. **Per-call typecast of b and a from bf8_b → bf16**: 2 extra ttnn ops
+   per call × 48 layers / step. Standalone test used native bf16 inputs.
+2. **Trace-time program-descriptor reconstruction**: each call to
+   `_compute_beta_g_tt_lang` builds a fresh `ProgramDescriptor` with the
+   current buffer addresses. Trace replay captures the resulting
+   `generic_op` invocation, but the host-side closure work is still
+   re-executed at trace capture (negligible at replay).
+
+### Final perf numbers
+- Real-loop traced 64L decode: **62.10 ms/step → 16.10 tok/s/user**
+  (baseline 62.72 ms/step / 15.94 tok/s/user; kernel-only delta 0.62 ms)
+- Target 17 tok/s/user (≤ 58.8 ms/step): **NOT MET** — still 3.3 ms short.
+- Coherency: PRESERVED (canonical Qwen3.6 reasoning, no mojibake).
+- 64L PCC: PRESERVED (' Paris' + decode step-0 match HF reference).
+
+### V2-17 recommendation
+The decode critical path inside trace is now ~62 ms / step and the
+DeltaNet beta/g is no longer a meaningful slice — Tracy on V2-13
+(`PERF.md` § V2-tracy) showed beta/g consumes < 2 % of decode device
+time. To clear 17 tok/s/user, V2-17 should target the dominant device-
+time consumers identified in the V2-tracy split:
+
+1. **DeltaNet recurrent kernel chain** (`recurrent_gated_delta_rule_ttnn_fp32`):
+   the per-token fp32 state update and l2_norm dominate. Authoring a
+   fused tt-lang kernel for the whole inner block (one launch covering
+   q·scale, transpose, fp32 cast, exp(g), state update, dot product)
+   would save the per-op dispatch overhead × 48 layers.
+2. **CCL (`line_all_reduce` on the residual)**: still ~10-15 ms / step
+   per V2-tracy. V2-14 documented why the simple swap didn't pay off;
+   profile the actual fabric utilization to confirm whether the path
+   is bandwidth-limited or compute-launch-overhead-limited at BH.
+3. **Per-call bf8_b → bf16 typecast inside the kernel path**: if the
+   kernel author script can be re-targeted to consume bf8_b CBs
+   directly (sigmoid/exp/log SFPU support bf8_b on Wormhole — needs
+   confirmation on BH), the two typecasts per layer / step are removed
+   and the kernel saving widens by ~5-10 µs / call.
+
+### Iterations + tt-smi resets
+3 fix iterations:
+1. Re-author kernel for 1×1 tile shape (one-line ROWS/COLS edit).
+2. Wire integration; first run failed with `ShardTensor2dMesh` chunks
+   mismatch — host tensor was `[1,1,6]` (per-row), should be `[1,1,48]`
+   (full n_v_heads) for the row-shard.
+3. Final run passed both perf and PCC gates.
+
+0 `tt-smi -r` invocations. 1 sequential device run per test (perf test
+× 2 [baseline + kernel], 64L PCC test × 1).
+
+### Files modified
+- `tt/kernels/beta_g_kernel.py` (ROWS=COLS=1; comment update)
+- `tt/kernels/beta_g/*.cpp` (regenerated — single-tile loop body)
+- `tt/kernels/beta_g/_runner_emitted.py` (regenerated)
+- `tt/qwen36_delta_attention.py` (~150 lines: kernel state builder,
+  dispatch, deallocation guard, env flag)
+- `tests/test_beta_g_tt_lang_kernel.py` (ROWS=COLS=1)
+
+### 17 tok/s/user cleared
+No — final 16.10 tok/s/user, still 3 ms / step short of the 58.8 ms / step
+threshold for 17 tok/s/user. See V2-17 recommendations above.
