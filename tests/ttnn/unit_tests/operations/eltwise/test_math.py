@@ -27,6 +27,12 @@ def run_math_unary_test(
     pcc_check=False,
     pcc=0.9999,
 ):
+    """Run a single-input math op on a random bf16 tensor in [0, 1) and assert vs the torch golden.
+
+    Default ``ulp=1`` covers kernels that are bit-exact in bf16 or accurate to one bf16 ULP over
+    [0, 1). Callers override ``ulp`` when the kernel has a larger expected error, or set
+    ``pcc_check=True`` with an op-specific ``pcc`` when ULP is not the appropriate tolerance.
+    """
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
@@ -229,6 +235,14 @@ def test_triu(device, h, w):
 
 
 def run_math_unary_test_recip(device, h, w, ttnn_function, ulp=1):
+    """Reciprocal on random bf16 inputs in ``[-100, 100] + 0.0001`` (non-zero).
+
+    Default ``ulp=1``; ``test_recip`` overrides to 2 to cover an additional bf16 ULP of error from
+    the reciprocal hardware approximation near the tails of this range. The ``1/+0 = +inf`` edge
+    case is covered separately by ``test_recip_fixed[fill_value=0.0]`` so the test can assert the
+    sign of the resulting infinity, which a generic ``allow_nonfinite=True`` ULP check on a random
+    tensor cannot do.
+    """
     torch.manual_seed(0)
 
     low = -100

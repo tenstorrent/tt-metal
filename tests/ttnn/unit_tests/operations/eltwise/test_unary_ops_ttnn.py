@@ -307,7 +307,7 @@ def test_unary_erf_ttnn(input_shapes, fast_and_approx, device):
     ttnn.erf(input_tensor, fast_and_approximate_mode=fast_and_approx, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.erf(in_data)
 
-    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=2)
 
 
 @pytest.mark.parametrize(

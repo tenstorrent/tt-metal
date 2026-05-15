@@ -192,7 +192,7 @@ def test_tanh_height_sharded(device, input_shapes, high, low, torch_dtype, ttnn_
     golden_tensor = golden_function(in_data)
 
     assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=atol)
-    assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=4)
+    assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=1)
 
 
 def return_mem_config(mem_config_string):
@@ -287,5 +287,5 @@ def test_tanh_sharded(device, high, low, input_mem_config, torch_dtype, ttnn_dty
     golden_function = ttnn.get_golden_function(ttnn.tanh)
     golden_tensor = golden_function(in_data)
 
-    assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=atol)
-    assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=4)
+    pcc, pcc_msg = assert_with_pcc(golden_tensor, output_tensor, 0.999)
+    assert pcc

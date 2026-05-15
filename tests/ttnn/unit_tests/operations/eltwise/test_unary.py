@@ -43,6 +43,13 @@ def create_full_range_tensor(input_shapes, dtype):
 def run_unary_test(
     device, h, w, ttnn_function, layout=ttnn.TILE_LAYOUT, ulp=2, allow_nonfinite=False, pcc_check=False, pcc=0.9999
 ):
+    """Run a single-input unary op on a random bf16 tensor in [0, 1) and assert vs the torch golden.
+
+    Default ``ulp=2`` covers kernels with up to ~1 ULP error plus the additional ULP that bf16
+    round-to-nearest of intermediate values can introduce. Callers override ``ulp`` when the kernel
+    has a different expected error, or set ``pcc_check=True`` with an op-specific ``pcc`` when ULP
+    is not the appropriate tolerance.
+    """
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
@@ -75,7 +82,7 @@ def run_unary_with_approx_mode_test(
     output_tensor = ttnn.to_torch(output_tensor)
 
     if approx_mode:
-        # Fast-approximate path is intentionally looser than the ULP ≤ 5 cap; verify with PCC instead.
+        # Fast-approximate path has a wider expected error than the ULP ≤ 5 cap; verify with PCC instead.
         assert_with_pcc(torch_output_tensor, output_tensor, approx_pcc)
     else:
         assert_with_ulp(torch_output_tensor, output_tensor, ulp)

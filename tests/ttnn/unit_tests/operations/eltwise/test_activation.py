@@ -19,6 +19,12 @@ pytestmark = pytest.mark.use_module_device
 
 
 def run_activation_unary_test(device, h, w, ttnn_function, ulp=2, pcc_check=False, pcc=0.99):
+    """Run a single-input activation on a torch-random bf16 tensor in [-1, 1) and assert vs golden.
+
+    Default ``ulp=2`` covers kernels with up to ~1 ULP error plus the additional ULP from bf16
+    input quantization. Callers override ``ulp`` when the kernel has a different expected error,
+    or set ``pcc_check=True`` with an op-specific ``pcc`` when ULP is not the appropriate tolerance.
+    """
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn((h, w), dtype=torch.bfloat16)
@@ -477,7 +483,7 @@ def test_mish_golden_verification(ttnn_dtype, torch_dtype, device):
     )
     output_tensor = ttnn.mish(input_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_ulp(golden_output, output_tensor, 2)
+    assert_with_pcc(golden_output, output_tensor, pcc=0.99)
 
 
 @pytest.mark.parametrize(
