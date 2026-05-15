@@ -355,7 +355,7 @@ Column notes:
 - Candidate detected → add row immediately (even before Opus, with status TBD)
 - After layer filter → update Status to `❌ Layer filter`, fill Opus columns as N/A
 - After Opus → update Opus Verdict/Reasoning and Status
-- After any dispatch → add run link to Runs Dispatched column immediately
+- After any dispatch → add run link to Runs Dispatched column immediately AND DM the run URL to Evan in Slack
 - After run completes → append result (PASS/FAIL) to that run link inline
 - After final verdict → update Status
 
