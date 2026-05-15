@@ -20,6 +20,7 @@ import torch
 import ttnn
 
 logger = logging.getLogger(__name__)
+from models.demos.ace_step_v1_5.tests._dit_decoder_pcc_common import assert_pcc_print
 from models.demos.ace_step_v1_5.torch_ref.vae.oobleck_decoder import (
     OobleckDecoder,
     OobleckDecoderBlock,
@@ -33,9 +34,6 @@ from models.demos.ace_step_v1_5.ttnn_impl.vae import (
     TtSnake1d,
 )
 from models.demos.ace_step_v1_5.ttnn_impl.vae.weight_utils import _fused_or_passthrough, _maybe_bias
-from tests.ttnn.utils_for_testing import assert_with_pcc
-
-_PCC = 0.99
 
 
 @dataclass(frozen=True)
@@ -89,8 +87,7 @@ def test_snake1d_pcc(device, torch_seed):
     y_tt = ttnn.to_layout(y_tt, ttnn.ROW_MAJOR_LAYOUT)
     y_tt_torch = ttnn.to_torch(y_tt).float()
 
-    ok, msg = assert_with_pcc(y_ref_btc, y_tt_torch, pcc=_PCC)
-    logger.info(f"[ace_step_v1_5][vae.snake1d] {msg} (threshold={_PCC}, ok={ok})")
+    assert_pcc_print("vae_snake1d", y_ref_btc, y_tt_torch)
 
 
 def _residual_weights_dict(mod: OobleckResidualUnit) -> dict:
@@ -126,8 +123,7 @@ def test_residual_unit_pcc(device, torch_seed):
     y_tt = tt_mod(x_tt)
     y_tt_torch = ttnn.to_torch(y_tt).float()
 
-    ok, msg = assert_with_pcc(y_ref_btc, y_tt_torch, pcc=_PCC)
-    logger.info(f"[ace_step_v1_5][vae.residual_unit] {msg} (threshold={_PCC}, ok={ok})")
+    assert_pcc_print("vae_residual_unit", y_ref_btc, y_tt_torch)
 
 
 def _block_weights_dict(mod: OobleckDecoderBlock) -> dict:
@@ -170,8 +166,7 @@ def test_decoder_block_pcc(device, torch_seed):
     y_tt = tt_mod(x_tt)
     y_tt_torch = ttnn.to_torch(y_tt).float()
 
-    ok, msg = assert_with_pcc(y_ref_btc, y_tt_torch, pcc=_PCC)
-    logger.info(f"[ace_step_v1_5][vae.decoder_block] {msg} (threshold={_PCC}, ok={ok})")
+    assert_pcc_print("vae_decoder_block", y_ref_btc, y_tt_torch)
 
 
 def test_decoder_tiny_pcc(device, torch_seed):
@@ -206,5 +201,4 @@ def test_decoder_tiny_pcc(device, torch_seed):
     y_tt = tt_dec(x_tt)
     y_tt_torch = ttnn.to_torch(y_tt).float()
 
-    ok, msg = assert_with_pcc(y_ref_btc, y_tt_torch, pcc=_PCC)
-    logger.info(f"[ace_step_v1_5][vae.decoder_tiny] {msg} (threshold={_PCC}, ok={ok})")
+    assert_pcc_print("vae_decoder_tiny", y_ref_btc, y_tt_torch)

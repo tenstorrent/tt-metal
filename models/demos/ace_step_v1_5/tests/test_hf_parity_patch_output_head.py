@@ -12,6 +12,8 @@ import pytest
 import torch
 import torch.nn as nn
 
+from models.demos.ace_step_v1_5.tests._dit_decoder_pcc_common import assert_pcc_print
+
 
 def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     a = a.float().flatten()
@@ -140,9 +142,7 @@ def test_hf_base_proj_in_patch_embed_pcc(device, seq_len: int):
     y_tt, _meta = tt_proj_in.forward(x_tt)
     y_tt_torch = ttnn.to_torch(y_tt).float()
 
-    score = _pcc(y_ref, y_tt_torch)
-    print(f"[ace_step_v1_5][HF][PCC] proj_in patch embed: {score:.6f}", flush=True)
-    assert score >= 0.99
+    assert_pcc_print("hf_proj_in_patch_embed", y_ref, y_tt_torch)
 
 
 @pytest.mark.parametrize("seq_len", [257])
@@ -215,6 +215,4 @@ def test_hf_base_output_head_pcc(device, seq_len: int):
     y_tt = tt_head.forward(x_tt, temb_tt, meta)
     y_tt_torch = ttnn.to_torch(y_tt).float()
 
-    score = _pcc(y_ref, y_tt_torch)
-    print(f"[ace_step_v1_5][HF][PCC] output head: {score:.6f}", flush=True)
-    assert score >= 0.99
+    assert_pcc_print("hf_output_head", y_ref, y_tt_torch)
