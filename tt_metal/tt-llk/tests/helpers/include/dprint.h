@@ -6,8 +6,9 @@
 // by setting device_print_build=DevicePrintBuild.Yes in TestConfig.
 // All print calls compile to nothing when the macro is not set.
 //
-// PROCESSOR_INDEX and LLK_DEVICE_PRINT_BUFFER_BASE are passed in by
-// test_config.py at build time; see RISC_INFO and DEVICE_PRINT_BUFFER_BASE.
+// PROCESSOR_INDEX, LLK_DEVICE_PRINT_BUFFER_BASE and DPRINT_BUFFER_SIZE are
+// passed in by test_config.py at build time; see RISC_INFO,
+// DEVICE_PRINT_BUFFER_BASE and DEVICE_PRINT_PER_THREAD_SIZE.
 // Disabled under COVERAGE: coverage linker scripts grow TRISC sections way
 // past the device print buffer slot, so they can't share L1.
 // The alternative would require a lot more hacks; the only proper solution
@@ -18,9 +19,6 @@
 #if defined(DEBUG_PRINT_ENABLED) && !defined(COVERAGE)
 
 #include <cstdint>
-
-// Mirrored in tests/python_tests/helpers/test_config.py.
-#define DPRINT_BUFFER_SIZE 1024 // Overrides dprint_common.h
 
 #define USE_DEVICE_PRINT
 

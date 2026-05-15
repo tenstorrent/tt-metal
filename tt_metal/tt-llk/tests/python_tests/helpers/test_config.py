@@ -239,7 +239,7 @@ class TestConfig:
     # is disabled under coverage so the conflict doesn't matter.
     DEVICE_PRINT_BUFFER_BASE: ClassVar[int] = 0x15000
     DEVICE_PRINT_PER_THREAD_SIZE: ClassVar[int] = (
-        1024  # matches DPRINT_BUFFER_SIZE in dprint.h
+        1024  # passed to the build as -DDPRINT_BUFFER_SIZE
     )
     PROCESSOR_COUNT: ClassVar[int] = 0
     DEVICE_PRINT_BUFFER_SIZE: ClassVar[int] = 0
@@ -1197,7 +1197,10 @@ class TestConfig:
                 risc_id, _ = TestConfig.RISC_INFO[name]
                 device_print_flags = ""
                 if self.device_print_build == DevicePrintBuild.Yes:
-                    device_print_flags = f"-DLLK_DEVICE_PRINT_BUFFER_BASE={TestConfig.DEVICE_PRINT_BUFFER_BASE:#x} "
+                    device_print_flags = (
+                        f"-DLLK_DEVICE_PRINT_BUFFER_BASE={TestConfig.DEVICE_PRINT_BUFFER_BASE:#x} "
+                        f"-DDPRINT_BUFFER_SIZE={TestConfig.DEVICE_PRINT_PER_THREAD_SIZE} "
+                    )
                 compile_command = (
                     f"{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.ARCH_SPECIFIC_OPTIONS} {TestConfig.OPTIONS_ALL} -I{TestConfig.TESTS_WORKING_DIR} "
                     f"-I{TestConfig.RISCV_SOURCES} -I{VARIANT_DIR} {local_options_compile} {optional_kernel_flags} "
