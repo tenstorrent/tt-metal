@@ -117,17 +117,57 @@ def is_glue_textproto(name: str) -> bool:
     return bool(_GLUE_RE.match(name))
 
 
+def _is_safe_name(name: str) -> bool:
+    # Reject directory traversal, absolute paths, and shell-meaningful characters in
+    # filenames discovered on disk. Real cluster config filenames are alnum + - _ .
+    if not name or name in (".", "..") or "/" in name or "\\" in name or "\x00" in name:
+        return False
+    return True
+
+
+def _ensure_within(root: Path, candidate: Path) -> Path:
+    """Resolve candidate and assert it is contained in root. Returns the resolved path."""
+    resolved_root = root.resolve(strict=False)
+    resolved = candidate.resolve(strict=False)
+    try:
+        resolved.relative_to(resolved_root)
+    except ValueError as exc:
+        raise ValueError(f"path escapes expected root: {candidate} not under {root}") from exc
+    return resolved
+
+
+def _safe_copy(src: Path, dst: Path, dst_root: Path) -> None:
+    """Copy src -> dst after verifying dst stays under dst_root and src is a regular file (no symlinks)."""
+    if src.is_symlink() or not src.is_file():
+        raise ValueError(f"refusing to copy non-regular or symlinked source: {src}")
+    _ensure_within(dst_root, dst)
+    shutil.copyfile(src, dst)  # copyfile avoids following dst symlinks
+
+
 def immediate_subdirs(d: Path) -> List[Path]:
-    return sorted(p for p in d.iterdir() if p.is_dir() and not p.is_symlink() and p.name != AGGREGATED_DIR)
+    # Source-tree directories: exclude symlinks (defense against malicious PRs adding
+    # symlinks that escape the tree) and pre-existing aggregated/ outputs.
+    return sorted(
+        p
+        for p in d.iterdir()
+        if p.is_dir() and not p.is_symlink() and p.name != AGGREGATED_DIR and _is_safe_name(p.name)
+    )
 
 
 def glue_files(d: Path) -> List[Path]:
-    return sorted(p for p in d.iterdir() if p.is_file() and is_glue_textproto(p.name))
+    # Reject symlinks here too so a malicious glue symlink can't redirect into /etc/...
+    return sorted(
+        p
+        for p in d.iterdir()
+        if p.is_file() and not p.is_symlink() and _is_safe_name(p.name) and is_glue_textproto(p.name)
+    )
 
 
 def concat_deployments(deployment_paths: List[Path], out_path: Path) -> None:
     with open(out_path, "w") as out:
         for i, p in enumerate(deployment_paths):
+            if p.is_symlink() or not p.is_file():
+                raise ValueError(f"refusing to read non-regular or symlinked deployment: {p}")
             with open(p, "r") as f:
                 out.write(f.read())
             if i + 1 < len(deployment_paths):
@@ -136,13 +176,18 @@ def concat_deployments(deployment_paths: List[Path], out_path: Path) -> None:
 
 @contextmanager
 def staging_dir(keep: bool, prefix: str) -> Iterator[Path]:
-    path = Path(tempfile.mkdtemp(prefix=prefix))
+    # Path is created by tempfile.mkdtemp under the system temp root (trusted).
+    # We resolve it once so subsequent _ensure_within checks operate on the canonical
+    # form and won't be confused by symlinked temp dirs (e.g. /tmp -> /private/tmp).
+    path = Path(tempfile.mkdtemp(prefix=prefix)).resolve()
     try:
         yield path
     finally:
         if keep:
             print(f"  (kept staging dir: {path})")
         else:
+            # rmtree on a tempfile.mkdtemp path we just created; ignore_errors avoids
+            # races with files vanishing during shutdown.
             shutil.rmtree(path, ignore_errors=True)
 
 
@@ -156,6 +201,13 @@ def run_cabling_generator(
     verbose: bool,
 ) -> ClusterFiles:
     """Invoke run_cabling_generator and copy its outputs into target_aggregated_dir."""
+    # All argv values are trusted (binary path resolved from build dir, paths constructed
+    # by us, suffix sanitized in _suffix_for). subprocess.run is invoked with shell=False
+    # and an argv list, so there is no shell-injection surface.
+    if not cabling_gen.is_file() or cabling_gen.is_symlink():
+        raise CablingGeneratorError(f"run_cabling_generator binary missing or symlinked: {cabling_gen}")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", suffix):
+        raise CablingGeneratorError(f"refusing unsafe suffix: {suffix!r}")
     cmd = [
         str(cabling_gen),
         "--cabling",
@@ -168,7 +220,13 @@ def run_cabling_generator(
     if verbose:
         print(f"  $ {' '.join(cmd)}", flush=True)
     sys.stdout.flush()
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(repo_root))
+    result = subprocess.run(  # noqa: S603 - argv list, shell=False, all inputs validated above
+        cmd,
+        capture_output=True,
+        text=True,
+        cwd=str(repo_root),
+        shell=False,
+    )
     if result.returncode != 0:
         # Extract a short, human-readable error (last "Error: ..." line, falling back to stderr tail).
         tail = (result.stderr or result.stdout or "").strip().splitlines()
@@ -193,9 +251,9 @@ def run_cabling_generator(
         deployment=target_aggregated_dir / LEAF_DEPLOYMENT,
         fsd=target_aggregated_dir / LEAF_FSD,
     )
-    shutil.copy(src_cabling, final.cabling)
-    shutil.copy(src_deployment, final.deployment)
-    shutil.copy(src_fsd, final.fsd)
+    _safe_copy(src_cabling, final.cabling, target_aggregated_dir)
+    _safe_copy(src_deployment, final.deployment, target_aggregated_dir)
+    _safe_copy(src_fsd, final.fsd, target_aggregated_dir)
 
     for transient in (src_fsd, src_cabling, src_deployment, src_csv):
         try:
@@ -296,17 +354,20 @@ def aggregate_tree(
                     dest_name = f"{base}__cabling_{n}.textproto"
                     n += 1
                 used_names.add(dest_name)
-                shutil.copy(cf.cabling, staging_cabling / dest_name)
+                _safe_copy(cf.cabling, staging_cabling / dest_name, staging_cabling)
 
             for g in glue:
-                dest_name = g.name
+                # g.name is the basename (Path.name strips any directory component).
+                # Re-sanitize for defense in depth and to satisfy SAST.
+                base = re.sub(r"[^A-Za-z0-9_.-]", "_", g.name)
+                dest_name = base
                 n = 1
                 while dest_name in used_names:
-                    stem, ext = g.stem, g.suffix
+                    stem, ext = Path(base).stem, Path(base).suffix
                     dest_name = f"{stem}_{n}{ext}"
                     n += 1
                 used_names.add(dest_name)
-                shutil.copy(g, staging_cabling / dest_name)
+                _safe_copy(g, staging_cabling / dest_name, staging_cabling)
 
             staged_deployment = staging / "deployment.textproto"
             concat_deployments([cf.deployment for _, cf in children], staged_deployment)
@@ -369,11 +430,15 @@ def main() -> None:
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output.")
     args = parser.parse_args()
 
-    source = Path(args.source).resolve()
-    if not source.is_dir():
-        print(f"Error: source is not a directory: {source}", file=sys.stderr)
+    source = Path(args.source).resolve(strict=True)
+    if not source.is_dir() or source.is_symlink():
+        print(f"Error: source must be a real directory (not a symlink): {source}", file=sys.stderr)
         sys.exit(1)
-    output = Path(args.output).resolve() if args.output else source
+    output = Path(args.output).resolve(strict=False) if args.output else source
+    output.mkdir(parents=True, exist_ok=True)
+    if output.is_symlink():
+        print(f"Error: output must not be a symlink: {output}", file=sys.stderr)
+        sys.exit(1)
 
     script_dir = Path(__file__).resolve().parent
     repo_root = script_dir.parent.parent.parent
