@@ -175,10 +175,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     static constexpr bool UNTILIZE          = false;
     int run                                 = 0;
 
-    const bool TILIZE = true;
+    static constexpr bool TILIZE = true;
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>>(
         formats_array[run].pack_src, formats_array[run].pack_dst, 16 * 16 * 4 /* tile_size */);
-    _llk_pack_init_wrapper_<llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>, false>(formats_array[run].pack_dst);
+    _llk_pack_init_wrapper_<llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>, false /* zero_output */>(formats_array[run].pack_dst);
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
 
     _llk_packer_wait_for_math_done_();
@@ -194,7 +194,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     run = 1;                                   // second L1-to-L1 run, we access the second set of formats_array in our array
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(formats_array[run].pack_src, formats_array[run].pack_dst, 16 * 16 * 4);
-    _llk_pack_init_<ckernel::PackMode::Default, false, false>();
+    _llk_pack_init_<ckernel::PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */>();
 #endif
 
     _llk_packer_wait_for_math_done_();

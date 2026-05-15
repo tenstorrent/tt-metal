@@ -409,12 +409,12 @@ inline void _llk_pack_init_(
     // so we can skip the workaround which involves unswizzling rows in the tile.
     if (skip_bh_tilize_workaround && pack_mode == PackMode::Tilize)
     {
-        llk_pack_internal_bh::pack_init_apply<PackMode::Default, zero_output, skip_addrmod_config, skip_packer_strides, false>(
+        llk_pack_internal_bh::pack_init_apply<PackMode::Default, zero_output, skip_addrmod_config, skip_packer_strides, false /* skip_final_adcxx */>(
             pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles);
     }
     else
     {
-        llk_pack_internal_bh::pack_init_apply<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, false>(
+        llk_pack_internal_bh::pack_init_apply<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, false /* skip_final_adcxx */>(
             pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles);
     }
 }

@@ -133,7 +133,7 @@ ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
 #ifndef ARCH_QUASAR
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(new_cb_id)));
     if constexpr (is_tile_dim_reconfig_en) {
-        PACK((llk_pack_init<PackMode::Default, false, true /* skip_addrmod_config */>(new_cb_id)));
+        PACK((llk_pack_init<PackMode::Default, false /* zero_output */, true /* skip_addrmod_config */>(new_cb_id)));
     }
 #endif  // TODO: AM; add Quasar implementation
 }
@@ -164,7 +164,7 @@ ALWI void pack_reconfig_data_format(const uint32_t old_cb_id, const uint32_t new
 #ifndef ARCH_QUASAR
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(old_cb_id, new_cb_id)));
     if constexpr (is_tile_dim_reconfig_en) {
-        PACK((llk_pack_init<PackMode::Default, false, true /* skip_addrmod_config */>(new_cb_id)));
+        PACK((llk_pack_init<PackMode::Default, false /* zero_output */, true /* skip_addrmod_config */>(new_cb_id)));
     }
 #endif  // TODO: AM; add Quasar implementation
 }

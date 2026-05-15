@@ -128,7 +128,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // --- Phase 1: Init for standard 32x32 tiles ---
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, 16 * 16 * 4, FACE_R_DIM, TILE_C_DIM, 4);
 
-    _llk_pack_init_with_src_wrapper_<PackMode::Default, false>(formats.pack_src, formats.pack_dst, FACE_R_DIM, TILE_C_DIM, 4, false, false, 1);
+    _llk_pack_init_with_src_wrapper_<PackMode::Default, false /* zero_output */>(
+        formats.pack_src, formats.pack_dst, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */, false /* partial_face */, false /* narrow_tile */, 1 /* num_tiles */);
 
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     reconfigure_packer_l1_acc(params.L1_ACC);
@@ -139,14 +140,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
         formats.pack_src, formats.pack_dst, 16 * 16 * 4, params.TEST_FACE_R_DIM, params.in0_tile_c_dim, params.num_faces);
 
-    _llk_pack_init_<ckernel::PackMode::Default, false, false, false>(formats.pack_src, params.TEST_FACE_R_DIM, params.in0_tile_c_dim, params.num_faces, 1);
+    _llk_pack_init_<ckernel::PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, false /* skip_packer_strides */>(
+        formats.pack_src, params.TEST_FACE_R_DIM, params.in0_tile_c_dim, params.num_faces, 1 /* num_tiles */);
 
     // Replace MOP with the block-contiguous version (REPLAY + W-per-tile).
     _llk_pack_block_contiguous_mop_config_<>(params.TEST_FACE_R_DIM, params.num_faces);
 #else
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
         formats.pack_src, formats.pack_dst, 16 * 16 * 4, params.TEST_FACE_R_DIM, TILE_C_DIM, params.num_faces);
-    _llk_pack_init_wrapper_<PackMode::Default, false>(formats.pack_dst, params.TEST_FACE_R_DIM, TILE_C_DIM, params.num_faces);
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, params.TEST_FACE_R_DIM, TILE_C_DIM, params.num_faces);
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>();
 #endif
 

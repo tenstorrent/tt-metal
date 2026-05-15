@@ -119,7 +119,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         TILE_C_DIM,
         params.num_faces,
         params.PARTIAL_FACE_PACK);
-    _llk_pack_init_wrapper_<PackMode::Default, false>(
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
         formats.pack_dst, params.in0_tile_r_dim < FACE_R_DIM ? params.in0_tile_r_dim : FACE_R_DIM, TILE_C_DIM, params.num_faces);
     _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_packer_wait_for_math_done_();

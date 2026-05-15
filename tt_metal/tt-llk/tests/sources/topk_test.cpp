@@ -444,7 +444,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             1 /* num_tiles */);
                     }
 
-                    _llk_pack_init_wrapper_<PackMode::Default, false>(pack_dst_format);
+                    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(pack_dst_format);
 
                     const int tile_dest_offset = stage_index * NUM_TILES_PER_STAGE;
 

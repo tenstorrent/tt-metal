@@ -84,7 +84,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Configure packer hardware
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);
 
-    _llk_pack_init_wrapper_<PackMode::Default, false>(formats.pack_dst);
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
 
     _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>();
 

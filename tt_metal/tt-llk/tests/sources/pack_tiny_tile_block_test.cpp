@@ -126,8 +126,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.pack_src, formats.pack_dst, 16 * 16 * 4, params.TEST_FACE_R_DIM, params.in0_tile_c_dim, params.num_faces);
 
     // Standard init sets addr_mods and strides for the tile shape.
-    _llk_pack_init_with_src_wrapper_<PackMode::Default, false>(
-        formats.pack_src, formats.pack_dst, params.TEST_FACE_R_DIM, params.in0_tile_c_dim, params.num_faces, false, false, 1);
+    _llk_pack_init_with_src_wrapper_<PackMode::Default, false /* zero_output */>(
+        formats.pack_src,
+        formats.pack_dst,
+        params.TEST_FACE_R_DIM,
+        params.in0_tile_c_dim,
+        params.num_faces,
+        false /* partial_face */,
+        false /* narrow_tile */,
+        1 /* num_tiles */);
 
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 

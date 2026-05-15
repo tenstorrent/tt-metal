@@ -57,7 +57,7 @@ ALWI void compressed_custom_mm_block_init(
 
     PACK((llk_pack_dest_init<fp32_dest_acc_en, PackMode::Default>()));
     PACK((llk_pack_hw_configure<fp32_dest_acc_en>(out_cb_id)));
-    PACK((llk_pack_init<PackMode::Default, false>(out_cb_id)));
+    PACK((llk_pack_init<PackMode::Default, false /* zero_output */>(out_cb_id)));
     if constexpr (dense_packing) {
         // Reduce packing stride from tile to tile to 32 rows instead of 64
         PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(

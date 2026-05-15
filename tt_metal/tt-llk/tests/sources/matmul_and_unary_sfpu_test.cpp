@@ -122,7 +122,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     int run = 0; // first L1-to-L1 run, we access the first set of formats_array in our array
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
         formats_array[run].pack_src, formats_array[run].pack_dst, 16 * 16 * 4 /* tile_size */);
-    _llk_pack_init_wrapper_<PackMode::Default, false>(formats_array[run].pack_dst);
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats_array[run].pack_dst);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
     _llk_packer_wait_for_math_done_();
@@ -135,7 +135,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     run = 1; // second L1-to-L1 run, we access the second set of formats_array in our array
     _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(formats_array[run].pack_src, formats_array[run].pack_dst, params.TILE_SIZE_PACK);
 
-    _llk_pack_init_wrapper_<PackMode::Default, false>(formats_array[run].pack_dst);
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats_array[run].pack_dst);
 
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>();
 

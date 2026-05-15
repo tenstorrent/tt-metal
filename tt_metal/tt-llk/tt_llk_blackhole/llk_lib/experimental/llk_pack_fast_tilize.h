@@ -286,5 +286,5 @@ inline void _llk_pack_fast_tilize_uninit_(
     set_packer_strides<PackMode::Default>(pack_src_format, TILE_C_DIM);
     // Restore X counter, addr_mods, and MOP via _llk_pack_init_ (aligned with WH approach)
     TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
-    _llk_pack_init_<PackMode::Default, false, false>(FACE_R_DIM, TILE_C_DIM, 4);
+    _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */>(FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */, 1 /* num_tiles */);
 }

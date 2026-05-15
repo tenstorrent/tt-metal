@@ -104,7 +104,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK);
-    _llk_pack_init_wrapper_<PackMode::Default, false>(formats.pack_dst);
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_packer_wait_for_math_done_();
     for (std::uint32_t i = 0; i < params.TILE_CNT; i++)

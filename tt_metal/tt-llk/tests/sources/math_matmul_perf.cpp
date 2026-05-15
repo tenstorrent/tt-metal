@@ -224,7 +224,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             TILE_C_DIM,
             num_faces,
             PARTIAL_FACE_PACK);
-        _llk_pack_init_wrapper_<PackMode::Default, false>(formats.pack_dst, in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM, TILE_C_DIM, num_faces);
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
+            formats.pack_dst, in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }

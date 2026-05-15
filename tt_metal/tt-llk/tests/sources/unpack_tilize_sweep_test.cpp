@@ -62,7 +62,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #endif
 
-const bool TILIZE = true;
+static constexpr bool TILIZE = true;
 
 #ifdef LLK_TRISC_MATH
 
@@ -116,7 +116,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>>(
         formats.pack_src, formats.pack_dst, DATUM_COUNT, FACE_R_DIM, TILE_C_DIM, params.num_faces);
-    _llk_pack_init_wrapper_<llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>, false>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, params.num_faces);
+    _llk_pack_init_wrapper_<llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>, false /* zero_output */>(
+        formats.pack_dst, FACE_R_DIM, TILE_C_DIM, params.num_faces);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
     _llk_packer_wait_for_math_done_();

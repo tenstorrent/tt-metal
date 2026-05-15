@@ -166,7 +166,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     static constexpr bool TILIZE = true;
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>>(
         formats_array[run].pack_src, formats_array[run].pack_dst, 16 * 16 * 4 /* tile_size */);
-    _llk_pack_init_wrapper_<llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>, false>(formats_array[run].pack_dst);
+    _llk_pack_init_wrapper_<llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>, false /* zero_output */>(formats_array[run].pack_dst);
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
 
     _llk_packer_wait_for_math_done_();
@@ -188,7 +188,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         tile_size); // need to reconfigure data formats_array for next pack, also calls set_packer_strides to readjust strides after pack tilizing
 
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_init_<ckernel::PackMode::Default, false, false>();
+    _llk_pack_init_<ckernel::PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */>();
 #endif
 
     _llk_packer_wait_for_math_done_();

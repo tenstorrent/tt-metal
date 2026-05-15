@@ -89,7 +89,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 {
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, 16 * 16 /* tile_size */);
 
-    _llk_pack_init_wrapper_<PackMode::Default, false>(formats.pack_dst);
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
 
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>();
 

@@ -97,7 +97,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         face_r_dim,
         tile_c_dim,
         num_faces,
-        false);  // partial_face
+        false /* partial_face */);
 }
 
 // TODO NC: Clean up as the part of tt-metal#34499

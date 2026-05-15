@@ -34,7 +34,7 @@ ALWI void sdpa_custom_mm_block_init(
 
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>()));
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(out_cb_id)));
-    PACK((llk_pack_init<PackMode::Default, false>(out_cb_id)));
+    PACK((llk_pack_init<PackMode::Default, false /* zero_output */>(out_cb_id)));
 
     sdpa_custom_mm_block_init_pack_short();
 }

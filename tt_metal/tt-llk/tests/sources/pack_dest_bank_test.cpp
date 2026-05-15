@@ -130,8 +130,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<false, tilize_en>>(
         formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */, FACE_R_DIM, TILE_C_DIM, params.num_faces);
-    _llk_pack_init_with_src_wrapper_<llk_test_pack_mode_v<false, tilize_en>, false>(
-        formats.pack_src, formats.pack_dst, FACE_R_DIM, TILE_C_DIM, params.num_faces, false, false, num_tiles_in_block);
+    _llk_pack_init_with_src_wrapper_<llk_test_pack_mode_v<false, tilize_en>, false /* zero_output */>(
+        formats.pack_src,
+        formats.pack_dst,
+        FACE_R_DIM,
+        TILE_C_DIM,
+        params.num_faces,
+        false /* partial_face */,
+        false /* narrow_tile */,
+        num_tiles_in_block /* num_tiles */);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     reconfigure_packer_l1_acc(params.L1_ACC);
 

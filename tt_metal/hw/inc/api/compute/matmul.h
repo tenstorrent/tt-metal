@@ -255,7 +255,7 @@ ALWI void mm_block_init(
 
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(out_cb_id)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>()));
-    PACK((llk_pack_init<PackMode::Default, false>(out_cb_id)));
+    PACK((llk_pack_init<PackMode::Default, false /* zero_output */>(out_cb_id)));
 #else
     ASSERT(transpose == 0);  // matmul transpose not yet implemented for Quasar
     UNPACK((llk_unpack_hw_configure(in1_cb_id, in0_cb_id)));

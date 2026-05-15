@@ -205,8 +205,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
             formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */);
-        _llk_pack_init_with_src_wrapper_<PackMode::Default, false>(
-            formats.pack_src, formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces, false, false, TILE_CNT);
+        _llk_pack_init_with_src_wrapper_<PackMode::Default, false /* zero_output */>(
+            formats.pack_src, formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces, false /* partial_face */, false /* narrow_tile */, TILE_CNT /* num_tiles */);
         reconfigure_packer_l1_acc(L1_ACC);
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_packer_wait_for_math_done_();

@@ -94,7 +94,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #endif
 
-const bool TILIZE = true;
+static constexpr bool TILIZE = true;
 
 #ifdef LLK_TRISC_MATH
 
@@ -214,7 +214,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>>(
             formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);
-        _llk_pack_init_wrapper_<llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>, false>(formats.pack_dst);
+        _llk_pack_init_wrapper_<llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>, false /* zero_output */>(formats.pack_dst);
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }

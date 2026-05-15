@@ -51,8 +51,8 @@ class Packer(BasePacker):
         num_faces = operation.output.tile_shape.total_num_faces()
         dest_sync = f"DstSync::Sync{operation.dest_sync.name}"
         return (
-            f"    _llk_pack_init_<{bh_pack_mode}, false, false>(\n"
-            f"        {config.sentinel.pack_src_format}, {face_r_dim}, TILE_C_DIM, {num_faces}, 1\n"
+            f"    _llk_pack_init_<{bh_pack_mode}, false /* zero_output */, false /* skip_addrmod_config */>(\n"
+            f"        {config.sentinel.pack_src_format}, {face_r_dim}, TILE_C_DIM, {num_faces}, 1 /* num_tiles */\n"
             f"    );\n"
             f"    _llk_pack_dest_init_<{dest_sync}, {dest_acc}>();\n"
         )
