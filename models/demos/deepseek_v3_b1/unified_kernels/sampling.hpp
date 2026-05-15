@@ -456,9 +456,9 @@ void trisc_fused_softmax_top_p_sampling_block() {
     cb_wait_front(temp_cb, 1);
 
     const uint16_t temp_bf16 = static_cast<uint16_t>(read_tile_value(temp_cb, 0, 0));
-    DPRINT_UNPACK({
-        DPRINT << "[SP-DBG] temp_bf16 (raw u16) = " << HEX() << temp_bf16 << DEC() << ENDL();
-    });
+    // DPRINT_UNPACK({
+    //     DPRINT << "[SP-DBG] temp_bf16 (raw u16) = " << HEX() << temp_bf16 << DEC() << ENDL();
+    // });
     
     cb_pop_front(temp_cb, 1);
 
@@ -466,25 +466,25 @@ void trisc_fused_softmax_top_p_sampling_block() {
     // (broadcast scaler, expect 1.0 for MAX-reduce), and temp_bf16 BEFORE
     // Step 1's reduce. If reduce produces all zeros, either the input,
     // the scaler, or the temperature is wrong.
-    DPRINT_UNPACK({
-        DPRINT << "[SP-DBG] temp_bf16 (raw u16) = " << HEX() << temp_bf16 << DEC() << ENDL();
-        DPRINT << "[SP-DBG] in_cb row 0 (32 top-k scores):" << ENDL()
-               << TileSlice(
-                      in_cb,
-                      0,
-                      SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                      true,
-                      true)
-               << ENDL();
-        DPRINT << "[SP-DBG] scaler_cb (f0,r0,c0) -- expect 1.0 for MAX reduce:" << ENDL()
-               << TileSlice(
-                      scaler_cb,
-                      0,
-                      SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1},
-                      true,
-                      true)
-               << ENDL();
-    });
+    // DPRINT_UNPACK({
+    //     DPRINT << "[SP-DBG] temp_bf16 (raw u16) = " << HEX() << temp_bf16 << DEC() << ENDL();
+    //     DPRINT << "[SP-DBG] in_cb row 0 (32 top-k scores):" << ENDL()
+    //            << TileSlice(
+    //                   in_cb,
+    //                   0,
+    //                   SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+    //                   true,
+    //                   true)
+    //            << ENDL();
+    //     DPRINT << "[SP-DBG] scaler_cb (f0,r0,c0) -- expect 1.0 for MAX reduce:" << ENDL()
+    //            << TileSlice(
+    //                   scaler_cb,
+    //                   0,
+    //                   SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1},
+    //                   true,
+    //                   true)
+    //            << ENDL();
+    // });
 
     // Step 1: Compute DST[0, 0, 0] = max(x_i, dim=0), x_i = in_cb
 {
@@ -554,10 +554,10 @@ void trisc_fused_softmax_top_p_sampling_block() {
     tile_regs_wait();
     pack_reconfig_data_format(exp_cb);
     pack_tile(0, exp_cb);
-    DPRINT_PACK({
-        DPRINT << "[SP-DBG] Step 4 exp_cb col 0 (exp(x-max)*temp):" << ENDL()
-               << TileSlice(exp_cb, 0, SliceRange::h0_32_w0(), true, true) << ENDL();
-    });
+    // DPRINT_PACK({
+    //     DPRINT << "[SP-DBG] Step 4 exp_cb col 0 (exp(x-max)*temp):" << ENDL()
+    //            << TileSlice(exp_cb, 0, SliceRange::h0_32_w0(), true, true) << ENDL();
+    // });
     cb_push_back(exp_cb, 1);
     tile_regs_release();
     
@@ -686,24 +686,60 @@ void trisc_fused_softmax_top_p_sampling_block() {
     // dead. See the `sampling_*_first_column` block above for the layout
     // proof and cycle accounting (32 SFPU vec ops -> 8 per LLK call).
     le_binary_tile_init();
-    // MATH((sampling_le_binary_tile_first_column(0, 1, 2)));
+    MATH((sampling_le_binary_tile_first_column(0, 1, 2)));
     // DPRINT_MATH(DPRINT << "[SP-DBG-DST] After Step 12 (le_binary first-column DST[2]=(cumsum<=p)):" << ENDL());
     // dprint_tensix_dest_reg(2);
-    // Step 13: DST[2] *= FLT_MAX. Below-cutoff lanes blow up to ~+FLT_MAX
-    // so the upcoming Pass 4 MIN-reduce skips them; above-cutoff lanes
-    // stay at 0.
-    constexpr uint32_t BIG_VAL_FP32_U32 = 0x7F7FFFFFu;
+    // Step 13: DST[2] *= BIG. Below-cutoff lanes blow up to ~BIG so the
+    // upcoming Pass 4 MIN-reduce skips them; above-cutoff lanes stay at 0.
+    //
+    // Sentinel must be:
+    //   1) strictly larger than any possible cumsum value (1.0), so
+    //      below-cutoff lanes are bigger than every above-cutoff lane and
+    //      MIN(filtered_cumsum) lands on a true above-cutoff cumsum value.
+    //   2) FINITE after the fp32 -> bf16 pack at Step 16. The original
+    //      value here was FLT_MAX (0x7F7FFFFF) which rounds up to bf16
+    //      `+inf` under RNE -- and Blackhole's MIN-reduce on a column
+    //      that contains inf returns inf (kept_min == inf) instead of
+    //      the smallest finite entry. That propagated to recip(inf)=0
+    //      at Step 18 and the rescaled CDF being all zeros at Step 19,
+    //      which made BRISC's scan find no `1` in the mask and fall
+    //      back to `global_indices[K-1]`.
+    //
+    // 100.0f satisfies both: bf16(100.0)=0x42C8 stays finite, and 100 >>
+    // 1.0 so it dominates the MIN comparison cleanly.
+    constexpr uint32_t BIG_VAL_FP32_U32 = 0x42C80000u;  // 100.0f
     binop_with_scalar_tile_init();
     MATH((sampling_mul_unary_tile_first_column(2, BIG_VAL_FP32_U32)));
     // DPRINT_MATH(DPRINT << "[SP-DBG-DST] After Step 13 (mul_unary first-column DST[2]*=FLT_MAX):" << ENDL());
     // dprint_tensix_dest_reg(2);
-    // Step 14: DST[3] = cumsum + (mask * FLT_MAX) = filtered cumsum.
+    // Step 14: DST[3] = cumsum + (mask * BIG) = filtered cumsum.
     // Additive (not multiplicative) so above-cutoff lanes carry through
     // bit-exact -- the rescale numerator in Pass 4 reads the original
     // cumsum from out_cb, not this filtered one.
     add_binary_tile_init();
     MATH((sampling_add_binary_tile_first_column(0, 2, 3)));
     // DPRINT_MATH(DPRINT << "[SP-DBG-DST] After Step 14 (add_binary first-column DST[3]=DST[0]+DST[2]):" << ENDL());
+    // dprint_tensix_dest_reg(3);
+    // Step 14b: DST[3] *= -1. The Pass 4 reduce was originally designed as
+    // MIN(filtered_cumsum) to pick the smallest above-cutoff cumsum (i.e.
+    // cum_kept = first cumsum >= p). BUT Blackhole's reduce hardware has
+    // only TTI_GMPOOL (MAX) and TTI_GAPOOL (SUM/AVG) -- there is no MIN
+    // pool instruction. `PoolType::MIN` in llk_math_reduce.h silently
+    // falls through to the SUM branch (`TTI_GAPOOL`), producing the SUM
+    // instead of the MIN. (Confirmed empirically: pre-fix dprint of
+    // Step 17 col 0 returned ~132 = 101 + 0.96 + 0.99 + 0.996*29, and
+    // col 2 returned 3200 = 100*32 -- both are SUMs, not MINs.)
+    //
+    // Workaround: negate the filtered cumsum here so MAX picks the
+    // largest negative value, which is the negation of the smallest
+    // above-cutoff cumsum. After Step 17 we negate again to recover
+    // +cum_kept before recip in Step 18. This costs two extra unary
+    // SFPU passes on col 0 only (~16 vec ops), routed through the same
+    // mul_unary_first_column helper already initialized for Step 13.
+    constexpr uint32_t NEG_ONE_FP32_U32 = 0xBF800000u;  // -1.0f
+    binop_with_scalar_tile_init();
+    MATH((sampling_mul_unary_tile_first_column(3, NEG_ONE_FP32_U32)));
+    // DPRINT_MATH(DPRINT << "[SP-DBG-DST] After Step 14b (DST[3] *= -1; MAX-reduce input):" << ENDL());
     // dprint_tensix_dest_reg(3);
     tile_regs_commit();
     tile_regs_wait();
@@ -715,7 +751,7 @@ void trisc_fused_softmax_top_p_sampling_block() {
     pack_reconfig_data_format(out_cb);
     pack_tile(0, out_cb);
     // DPRINT_PACK({
-    //     DPRINT << "[SP-DBG] Step 15 out_cb col 0 (cumsum):" << ENDL()
+    //     DPRINT << "[SP-DBG] Step 15 out_cb col 0 (cumsum - just packed):" << ENDL()
     //            << TileSlice(out_cb, 0, SliceRange::h0_32_w0(), true, true) << ENDL();
     // });
     cb_push_back(out_cb, 1);
@@ -748,26 +784,44 @@ void trisc_fused_softmax_top_p_sampling_block() {
     //                   true)
     //            << ENDL();
     // });
-    // Step 17: Compute DST[0, 0, 0] = min(filtered_cumsum_i, dim=0), filtered_cumsum_i comes from DST in Step 14
-    // The result will be a scalar value of cum_kept, which is the minimum value of the filtered cumsum that is strictly >= p
-    // NOTE: for better annotation, from now on cum_kept = min(filtered_cumsum_i, dim=0)
+    // Step 17: Compute DST[0, 0, 0] = max(-filtered_cumsum_i, dim=0), where the
+    // -filtered_cumsum_i was produced in Step 14b. The result is -cum_kept;
+    // Step 17b negates it back to +cum_kept = min(filtered_cumsum_i, dim=0),
+    // which is the smallest above-cutoff cumsum -- the canonical top-P
+    // "sum of kept probs" denominator.
+    //
+    // MAX (not MIN) here because Blackhole's reduce hardware lacks a MIN
+    // pool; see the Step 14b comment for the full story.
     reconfig_data_format(exp_cb, scaler_cb);
     tile_regs_acquire();
 }
 {
     DeviceZoneScopedN("SP-TOPP-TRISC-12");
     sampling_reduce_init<
-        PoolType::MIN,
+        PoolType::MAX,
         ReduceDim::REDUCE_COL,
         false,
         MathFidelity::HiFi4>(exp_cb, scaler_cb, in_cb);
     sampling_reduce_tile<
-        PoolType::MIN,
+        PoolType::MAX,
         ReduceDim::REDUCE_COL,
         false,
         MathFidelity::HiFi4>(exp_cb, scaler_cb, 0, 0, 0);
     reduce_uninit();
-    // DPRINT_MATH(DPRINT << "[SP-DBG-DST] After Step 17 (REDUCE_COL MIN(filtered_cumsum) -> DST[0] cum_kept at f0,r0,c0):" << ENDL());
+    // DPRINT_MATH(DPRINT << "[SP-DBG-DST] After Step 17 (REDUCE_COL MAX(-filtered_cumsum) -> DST[0] = -cum_kept at f0,r0,c0):" << ENDL());
+    // dprint_tensix_dest_reg(0);
+}
+{
+    DeviceZoneScopedN("SP-TOPP-TRISC-12b");
+    // Step 17b: DST[0] *= -1 to recover +cum_kept from MAX(-filtered).
+    // Only the (face0,row0,col0) lane is consumed by Step 18's recip and
+    // Step 19's SRCB_BCAST_ALL, but mul_unary_first_column negates the
+    // whole col-0 strip uniformly -- harmless because nothing else reads
+    // col 0 of DST[0] downstream.
+    constexpr uint32_t NEG_ONE_FP32_U32 = 0xBF800000u;  // -1.0f
+    binop_with_scalar_tile_init();
+    MATH((sampling_mul_unary_tile_first_column(0, NEG_ONE_FP32_U32)));
+    // DPRINT_MATH(DPRINT << "[SP-DBG-DST] After Step 17b (DST[0] *= -1; expect +cum_kept at f0,r0,c0):" << ENDL());
     // dprint_tensix_dest_reg(0);
 }
 {
@@ -836,7 +890,6 @@ void trisc_fused_softmax_top_p_sampling_block() {
     cb_pop_front(exp_cb, 1);
     cb_pop_front(rand_bcast_cb, 1);
     cb_pop_front(scaler_cb, 1);
-
 }
 
 
@@ -1934,31 +1987,19 @@ struct TopKSampling {
                         if constexpr (CTArgs::enable_metadata) {
                             auto metadata_ptr = reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(
                                 CTArgs::metadata_output_l1_addr);
-                            // volatile-qualified fields don't deduce with std::min/max literals; load scalars first.
-                            float temperature = std::max(static_cast<float>(metadata_ptr->temperature), 0.6f);
+                            float temperature = std::max(static_cast<float>(metadata_ptr->temperature), 1.0f);
                             inv_temp_bf16 = float_to_bf16_packed(1.0f / temperature);
-                            K = static_cast<uint32_t>(32);
-                            // std::min(
-                            //     std::max(static_cast<uint32_t>(metadata_ptr->k), static_cast<uint32_t>(1)),
-                            //     static_cast<uint32_t>(32));
+                            K = std::min(
+                                std::max(static_cast<uint32_t>(metadata_ptr->k), static_cast<uint32_t>(1)),
+                                static_cast<uint32_t>(32));
                             p = std::min(
-                                std::max(static_cast<float>(metadata_ptr->p), 0.95f), 1.0f);
-                        
-                            DPRINT << "[SP-DBG] BRISC: temperature=" << temperature << ", inv_temp_bf16=" << BF16(inv_temp_bf16).val << ", K=" << K << ", p=" << p << ENDL();
-                        
-                            }
+                                std::max(static_cast<float>(metadata_ptr->p), 0.0f), 1.0f);                        
+                        }
 
                         {
                             DeviceZoneScopedN("SP-FC-STAGE");
-                            // temp_cb is a scalar-carrier CB: TRISC pulls inv_temp out
-                            // via the read_tile_value mailbox at the top of the fused
-                            // pipeline and feeds it into exp_tile<scale_en=true>.
-                            generate_bcast_unary_scalar(CTArgs::temp_cb, inv_temp_bf16);
 
-                            // p / rand broadcasts get fed to element-wise SFPU compares
-                            // (le/ge_binary_tile) against the *transposed* cumsum, which
-                            // lives on column 0 of DST. generate_bcast_col_scalar fills
-                            // column 0 of F0+F2 -- exactly the lanes that need real data.
+                            generate_bcast_unary_scalar(CTArgs::temp_cb, inv_temp_bf16);
                             generate_bcast_col_scalar(CTArgs::p_bcast_cb, bf16_pack_to_uint32(float_to_bf16_rne(p)));
 
                             cb_reserve_back(CTArgs::softmax_in_cb, 1);
@@ -1997,17 +2038,13 @@ struct TopKSampling {
                             auto rand_u16 =
                                 reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::rand_cb));
                             rand = rand_u16[0];
+                            DPRINT << "[SP-DBG] rand=" << rand << ENDL();
                             generate_bcast_col_scalar(CTArgs::rand_bcast_cb, bf16_pack_to_uint32(rand));
                         }
 
                         {
                             DeviceZoneScopedN("SP-FC-WAIT");
                             cb_wait_front(CTArgs::softmax_out_cb, 1);
-                            // mask_cb (TRISC -> BRISC). NOT softmax_in_cb:
-                            // softmax_in_cb is BRISC -> TRISC only; routing the
-                            // mask through it would mix producers and BRISC's
-                            // tiles_received atomic increment would race the
-                            // TRISC pack-side absolute STOREREG.
                             cb_wait_front(CTArgs::mask_cb, 1);
                         }
 
@@ -2019,15 +2056,6 @@ struct TopKSampling {
                         uint32_t selected_index;
                         {
                             DeviceZoneScopedN("SP-FC-LOOKUP");
-                            // Defensive fallback: last kept token. TRISC's mask is
-                            // monotone 0..0,1..1 down column 0 with at least one 1 in
-                            // [0, K) (the last kept lane has rescaled CDF = 1.0 >=
-                            // rand for rand in [0, 1]), but we still cover the bf16-
-                            // noise edge where the boundary lane lands a hair under.
-                            //
-                            // tile_idx hops down column 0 of the transposed mask:
-                            //   i in [0, 16):  F0[i, 0]              -> u16 idx i*16
-                            //   i in [16, 32): F2[i-16, 0]            -> u16 idx 2*FACE_ELEMS + (i-16)*16
                             selected_index = global_indices[K - 1];
                             for (uint32_t i = 0; i < K; ++i) {
                                 const uint32_t tile_idx =
@@ -2039,6 +2067,7 @@ struct TopKSampling {
                                     break;
                                 }
                             }
+                            DPRINT << "[SP-DBG] selected_index=" << selected_index << ENDL();
                         }
                         {
                             DeviceZoneScopedN("SP-FC-FINISH");
