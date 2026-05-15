@@ -232,6 +232,7 @@ struct core_setup {
     std::shared_ptr<tt_metal::Program> program;
     std::shared_ptr<distributed::MeshDevice> mesh_device;
     const CoreCoord core;
+    std::string locinfo;
     uint32_t iter_l1_addr;
     uint32_t expected_count;
     uint32_t delta_time_addr;
@@ -705,6 +706,7 @@ bool bandwidth_check_cores(std::span<struct core_setup> cores) {
     bool pass = true;
 
     for (const auto& cs : cores) {
+        log_info(tt::LogTest, "bandwidth_check: {}", cs.locinfo);
         auto* const dev = cs.mesh_device->get_devices()[0];
         pass &= bandwidth_check(dev, cs.core, cs.delta_time_addr, cs.total_transferred, cs.bw_threshold);
     }
@@ -717,6 +719,7 @@ bool data_check_cores(std::span<struct core_setup> cores) {
     bool pass = true;
 
     for (const auto& cs : cores) {
+        log_info(tt::LogTest, "data_check: {}", cs.locinfo);
         auto* const dev = cs.mesh_device->get_devices()[0];
         pass &= data_check(dev, cs.core, cs.recv_l1_address, cs.inp);
     }

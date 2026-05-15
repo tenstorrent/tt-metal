@@ -29,6 +29,7 @@ static void run_test_stress(
     const CoreCoord& recv_core,
     DataMovementProcessor processor0,
     span<uint32_t> inputs,
+    string locinfo,
     vector<struct core_setup>& cores,
     map<shared_ptr<distributed::MeshDevice>, shared_ptr<tt_metal::Program>> programs) {
     /* =================== */
@@ -89,6 +90,7 @@ static void run_test_stress(
         programs[send_mesh_device],
         send_mesh_device,
         send_core,
+        locinfo,
         iter_l1_address,
         transfer_count,
         send_delta_addr,
@@ -101,6 +103,7 @@ static void run_test_stress(
         programs[recv_mesh_device],
         recv_mesh_device,
         recv_core,
+        std::move(locinfo),
         iter_l1_address,
         transfer_count,
         send_delta_addr,
@@ -163,6 +166,8 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet05StressTest) {
                 const auto processor = static_cast<DataMovementProcessor>(0);
 
                 log_info(tt::LogTest, "    running on {}", processor);
+                string locinfo =
+                    fmt::format("sender: [{}], receiver: [{}], processor: [{}]", sender_core, receiver_core, processor);
                 // bool passed = run_test_stress(
                 run_test_stress(
                     this,
@@ -172,6 +177,7 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet05StressTest) {
                     receiver_core,
                     processor,
                     inputs,
+                    std::move(locinfo),
                     cores,
                     programs);
                 // if (!passed) {
