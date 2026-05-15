@@ -140,11 +140,13 @@ void kernel_main() {
         uint32_t page_end = get_arg_val<uint32_t>(rt_args++);
         uint32_t zi_done_semaphore_id = get_arg_val<uint32_t>(rt_args++);
         uint32_t zi_done_sem_address = get_semaphore(zi_done_semaphore_id);
-
-        fill_zero_buffer(zi_cb_id);
         uint32_t zero_buf = get_write_ptr(zi_cb_id);
 
-        zero_pages(zero_buf, page_start, page_end, aligned_output_page_size, output_addr_gen);
+        {
+            // DeviceZoneScopedN("combine-zero-init-writing");
+            fill_zero_buffer(zi_cb_id);
+            zero_pages(zero_buf, page_start, page_end, aligned_output_page_size, output_addr_gen);
+        }
 
         volatile tt_l1_ptr uint32_t* zi_done_sem_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zi_done_sem_address);
@@ -210,11 +212,14 @@ void kernel_main() {
     const auto experts_tok_counter_addr_gen = TensorAccessor(experts_tok_counter_args, experts_tok_counter_addr);
     cb_reserve_back(cb_experts_tok_counter_id, experts_tok_counter_pages);
     uint32_t counter_base_addr = get_write_ptr(cb_experts_tok_counter_id);
-    for (uint32_t i = 0; i < experts_tok_counter_pages; i++) {
-        noc_async_read_page(
-            i, experts_tok_counter_addr_gen, counter_base_addr + i * aligned_experts_tok_counter_page_size);
+    {
+        // DeviceZoneScopedN("combine-reading-expert-token-counts");
+        for (uint32_t i = 0; i < experts_tok_counter_pages; i++) {
+            noc_async_read_page(
+                i, experts_tok_counter_addr_gen, counter_base_addr + i * aligned_experts_tok_counter_page_size);
+        }
+        noc_async_read_barrier();
     }
-    noc_async_read_barrier();
 
     // Expert token counts: flat [num_routed_experts] array per device.
     // Decompose linearized_mesh_coord into (row, col) using physical mesh dims,
@@ -234,6 +239,7 @@ void kernel_main() {
     //   [0]: receive_buf_addr  — sender's c_18 L1 offset (where idle NOC-writes untilized data)
     //   [1]: metadata_buf_addr — sender's c_19 L1 offset (where idle NOC-writes routing metadata)
     {
+        // DeviceZoneScopedN("combine-sender-multicast-sending");
         constexpr uint32_t counter_total_size = experts_tok_counter_pages * aligned_experts_tok_counter_page_size;
 
         volatile tt_l1_ptr uint32_t* trailer_slot =
@@ -306,12 +312,8 @@ void kernel_main() {
                 if (*data_ready_sem_ptrs[c] == 0) {
                     continue;
                 }
-
-                {
-                    DeviceZoneScopedN("combine-reader-waiting-for-idle-core-data");
-                    noc_semaphore_inc(self_data_ready_noc_addrs[c], (uint32_t)-1);
-                    noc_async_atomic_barrier();
-                }
+                noc_semaphore_inc(self_data_ready_noc_addrs[c], (uint32_t)-1);
+                noc_async_atomic_barrier();
 
                 uint32_t slot = read_slots[c];
                 volatile tt_l1_ptr uint32_t* ring_meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
@@ -323,7 +325,7 @@ void kernel_main() {
                     idle_finished[c] = true;
                     idle_done_count++;
                     {
-                        DeviceZoneScopedN("combine-reader-incrmenting-credit-semaphore");
+                        // DeviceZoneScopedN("combine-reader-idle-done");
                         noc_semaphore_inc(idle_credits_noc_addrs[c], 1);
                         noc_async_atomic_barrier();
                     }
@@ -349,18 +351,17 @@ void kernel_main() {
                     route_info[3] = 0;
                     cb_push_back(cb_route_info_id, 1);
 
-                    cb_reserve_back(cb_output_for_writer_id, 1);
-                    uint32_t output_dst = get_write_ptr(cb_output_for_writer_id);
-                    noc_async_read(get_noc_addr(buffer_scratch_addr), output_dst, aligned_output_page_size);
-                    noc_async_read_barrier();
-                    cb_push_back(cb_output_for_writer_id, 1);
+                    {
+                        // DeviceZoneScopedN("combine-reader-sending-data-writer-CB");
+                        cb_reserve_back(cb_output_for_writer_id, 1);
+                        uint32_t output_dst = get_write_ptr(cb_output_for_writer_id);
+                        noc_async_read(get_noc_addr(buffer_scratch_addr), output_dst, aligned_output_page_size);
+                        noc_async_read_barrier();
+                        cb_push_back(cb_output_for_writer_id, 1);
+                    }
                 }
-
-                {
-                    DeviceZoneScopedN("combine-reader-incrmenting-credit-semaphore");
-                    noc_semaphore_inc(idle_credits_noc_addrs[c], 1);
-                    noc_async_atomic_barrier();
-                }
+                noc_semaphore_inc(idle_credits_noc_addrs[c], 1);
+                noc_async_atomic_barrier();
             }
         }
     }

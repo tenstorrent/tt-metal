@@ -8,15 +8,19 @@
 // Deployed on idle cores to speed up zero-init process by spreading out across more banks.
 //
 // In TILE_LAYOUT, after zero-init completes this kernel also owns the per-row routing
-// decision: it waits for compute to push a batch onto cb_untilize_id, then walks the
-// batch's metadata one row at a time.  Local rows (dst_chip == this chip) are written
-// straight to the output tensor in DRAM with no sender involvement.  Non-local rows
-// run a credit-based per-row handshake against the sender's receive_buf: we hold a
-// k_s-way slice of receive_buf (SLOTS_PER_IDLE deep), consume one credit, write the
-// row to the next slot in our ring, barrier, then inc data_ready so the sender can
-// read and fabric-forward that row.  The sender ++ credits_sem on this core when it
-// frees a slot.  The loop exits when compute pushes ROUTE_INFO_SENTINEL on
-// cb_stop_signal_id.
+// decision.  It walks the same expert/batch iteration as reader_untilize and the compute
+// kernel (driven off the multicasted per-expert token counts in c_1), so no per-batch
+// signal CB is needed.  For each batch it waits for compute to push a batch onto
+// cb_untilize_id and for reader_untilize to land batch_count metadata pages on
+// cb_metadata_batch_id, then walks the batch's metadata one row at a time.  Local rows
+// (dst_chip == this chip) are written straight to the output tensor in DRAM with no
+// sender involvement.  Non-local rows run a credit-based per-row handshake against the
+// sender's receive_buf: we hold a k_s-way slice of receive_buf (SLOTS_PER_IDLE deep),
+// consume one credit, write the row to the next slot in our ring, barrier, then inc
+// data_ready so the sender can read and fabric-forward that row.  The sender ++
+// credits_sem on this core when it frees a slot.  After the expert/batch loop the
+// kernel writes a ROUTE_INFO_SENTINEL into the sender's metadata ring to signal
+// per-idle-core completion.
 //
 
 #include <cstdint>
@@ -55,11 +59,13 @@ void kernel_main() {
     }
 
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
-
-    fill_zero_buffer(cb_zero_buffer_id);
     uint32_t zero_buffer_addr = get_write_ptr(cb_zero_buffer_id);
 
-    zero_pages(zero_buffer_addr, page_start, page_end, aligned_output_page_size, output_addr_gen);
+    {
+        // DeviceZoneScopedN("combine-zero-init-idle-core");
+        fill_zero_buffer(cb_zero_buffer_id);
+        zero_pages(zero_buffer_addr, page_start, page_end, aligned_output_page_size, output_addr_gen);
+    }
 
     // Signal all sender/reader cores that zero-init is complete
     for (uint32_t c = 0; c < num_sender_cores; c++) {
@@ -69,40 +75,49 @@ void kernel_main() {
     noc_async_atomic_barrier();
 
 #if IS_TILE_LAYOUT
-    // ===== Untilized-data send path (moved from reader_untilize.cpp steps 3-7) =====
+    // ===== Untilized-data send path =====
     //
     // Compile-time args (appended after the zero-init TensorAccessorArgs block):
     //   +0: cb_untilize_id                        - CB into which compute pushes untilized batches
-    //   +1: cb_stop_signal_id                     - CB for compute -> this-kernel per-batch / stop signal
-    //   +2: cb_experts_tok_counter_id             - CB c_1 multicasted by sender; sender's
+    //   +1: cb_experts_tok_counter_id             - CB c_1 multicasted by sender; sender's
     //                                               receive_buf_addr lives at the trailer
-    //   +3: experts_tok_counter_pages             - number of counter pages multicasted
-    //   +4: aligned_experts_tok_counter_page_size - aligned counter page size (L1 stride)
-    //   +5: read_batch_size                       - number of rows per untilize batch
-    //   +6: cb_metadata_batch_id                  - CB this kernel pops per-batch metadata pages
-    //                                               from (pushed by reader_untilize on this same
-    //                                               core; sender no longer writes to it)
-    //   +7: num_experts_per_tok                   - number of experts each token is routed to (for output_page_idx)
-    //   +8: aligned_dispatched_metadata_page_size - aligned metadata page size (stride in cb_metadata_batch_id)
-    //   +9: linearized_mesh_coord                 - this chip's linearized (row, col) in the mesh;
+    //   +2: experts_tok_counter_pages             - number of counter pages multicasted
+    //   +3: aligned_experts_tok_counter_page_size - aligned counter page size (L1 stride)
+    //   +4: read_batch_size                       - number of rows per untilize batch (== tile_height)
+    //   +5: cb_metadata_batch_id                  - CB this kernel pops per-batch metadata pages
+    //                                               from (pushed by reader_untilize on this same core)
+    //   +6: num_experts_per_tok                   - number of experts each token is routed to (for output_page_idx)
+    //   +7: aligned_dispatched_metadata_page_size - aligned metadata page size (stride in cb_metadata_batch_id)
+    //   +8: linearized_mesh_coord                 - this chip's linearized (row, col) in the mesh;
     //                                               metadata[t][0] == this value means the t-th row
     //                                               of the batch stays local
+    //   +9: experts_per_chip                      - count of experts mapped to this chip (counter array stride)
+    //  +10: counter_offset                        - uint32 offset into counter buffer for this chip
+    //  +11: max_dispatch_buffer_token_size        - per-chip dispatch capacity (overflow clamp)
+    //  +12: full_ct_dim                           - hidden_size / tile_width (tiles per batch, for start_page_tiled)
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
-    constexpr uint32_t cb_stop_signal_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
     constexpr uint32_t cb_experts_tok_counter_id =
-        get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 2);
+        get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
     constexpr uint32_t experts_tok_counter_pages =
-        get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 3);
+        get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 2);
     constexpr uint32_t aligned_experts_tok_counter_page_size =
-        get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 4);
-    constexpr uint32_t read_batch_size = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 5);
-    constexpr uint32_t cb_metadata_batch_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 6);
-    constexpr uint32_t num_experts_per_tok = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 7);
+        get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 3);
+    constexpr uint32_t read_batch_size = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 4);
+    constexpr uint32_t cb_metadata_batch_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 5);
+    constexpr uint32_t num_experts_per_tok = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 6);
     constexpr uint32_t aligned_dispatched_metadata_page_size =
-        get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 8);
+        get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 7);
     constexpr uint32_t linearized_mesh_coord =
-        get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 9);
+        get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 8);
+    constexpr uint32_t experts_per_chip = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 9);
+    constexpr uint32_t counter_offset = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 10);
+    constexpr uint32_t max_dispatch_buffer_token_size =
+        get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 11);
+    constexpr uint32_t full_ct_dim = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 12);
     constexpr uint32_t counter_data_total_size = experts_tok_counter_pages * aligned_experts_tok_counter_page_size;
+    // read_batch_size doubles as tile_height: one tile-row of input -> read_batch_size element rows.
+    constexpr uint32_t tile_height = read_batch_size;
+    constexpr uint32_t tiles_per_batch = full_ct_dim;
 
     // Runtime args appended after the sender_sem_noc_addrs loop above:
     //   counter_ready_semaphore_id   - sem the sender increments once after its counter multicast
@@ -118,6 +133,8 @@ void kernel_main() {
     //                                  back, atomically suck the value, and dec(-N).
     //   core_id                      - this idle's local index (0..k_s-1) inside the sender's
     //                                  group; used to pick our k_s-way slice of receive_buf.
+    //   num_idle_cores               - k_s, size of the owning sender's idle group (for round-robin)
+    //   expert_start_idx / expert_end_idx - expert range owned by the sender (drives batch iteration)
     constexpr uint32_t SLOTS_PER_IDLE = 16;
     uint32_t counter_ready_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t sender_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
@@ -125,6 +142,9 @@ void kernel_main() {
     uint32_t data_ready_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t credits_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t core_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t num_idle_cores = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t expert_start_idx = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t expert_end_idx = get_arg_val<uint32_t>(rt_args_idx++);
 
     uint64_t sender_data_ready_noc_addr =
         get_noc_addr(sender_noc_x, sender_noc_y, get_semaphore(data_ready_semaphore_id));
@@ -159,94 +179,115 @@ void kernel_main() {
     uint32_t local_credits = SLOTS_PER_IDLE;
     uint32_t write_slot = 0;
 
-    // Per-row routing: each batch processes its rows one at a time.  Local-destined rows are
-    // written straight to the output tensor in DRAM.  Non-local-destined rows are written
-    // into our k_s-way slice of the sender's receive_buf at the next write_slot position
-    // (mod SLOTS_PER_IDLE).  Credit-based flow control keeps us from outrunning the sender:
-    // we hold a local credit counter (init SLOTS_PER_IDLE) that drops by one per non-local
-    // write, and the sender ++ our credits_sem each time it frees a slot.  data_ready on
-    // the sender is ++ once per non-local row written.
-    while (true) {
-        cb_wait_front(cb_stop_signal_id, 1);
-        volatile tt_l1_ptr uint32_t* stop_signal_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_stop_signal_id));
-        uint32_t signal_value = stop_signal_ptr[0];
-        cb_pop_front(cb_stop_signal_id, 1);
-        if (signal_value == ROUTE_INFO_SENTINEL) {
-            break;
+    // Snapshot per-expert token counts from the multicasted counter buffer.  This kernel and
+    // the compute kernel (untilize_combine) iterate experts/batches the same way reader_untilize
+    // does, so neither needs a per-batch signal from the other — each walks the same sequence
+    // and consumes its own CBs (cb_untilize_id, cb_metadata_batch_id) in lock-step via the
+    // producer-consumer protocol.
+    const volatile tt_l1_ptr uint32_t* counts_l1_src =
+        reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(counter_cb_base) + counter_offset;
+    uint32_t local_expert_counts[experts_per_chip];
+    for (uint32_t e = 0; e < experts_per_chip; e++) {
+        local_expert_counts[e] = counts_l1_src[e];
+    }
+
+    // Accumulate dispatch-buffer offset for experts below our range using raw counts (host
+    // laid the buffer out tile-aligned; skipped experts use their raw counts here, matching
+    // reader_untilize).
+    uint32_t start_page_tiled = 0;
+    for (uint32_t e = 0; e < expert_start_idx; e++) {
+        start_page_tiled += ((local_expert_counts[e] + tile_height - 1) / tile_height) * tiles_per_batch;
+    }
+
+    // Per-row routing per batch: local rows go straight to DRAM; non-local rows flow through
+    // a credit-based ring into the sender's receive_buf.  Credit accounting (local_credits +
+    // credits_sem) outlives the batch loop — slots in our ring are reused across batches.
+    for (uint32_t local_expert = expert_start_idx; local_expert < expert_end_idx; local_expert++) {
+        uint32_t expert_tokens = local_expert_counts[local_expert];
+        uint32_t start_token = (start_page_tiled / tiles_per_batch) * tile_height;
+        // Mirror reader_dispatch's overflow guard so we never route past the dispatch buffer.
+        if (start_token >= max_dispatch_buffer_token_size) {
+            expert_tokens = 0;
+        } else if (start_token + expert_tokens > max_dispatch_buffer_token_size) {
+            expert_tokens = max_dispatch_buffer_token_size - start_token;
         }
-        uint32_t batch_count = signal_value;
 
-        // Wait for compute to finish untilizing this batch and for reader_untilize to land
-        // the corresponding metadata pages in the metadata CB.
-        cb_wait_front(cb_untilize_id, read_batch_size);
-        cb_wait_front(cb_metadata_batch_id, batch_count);
+        uint32_t actual_batches = (expert_tokens + read_batch_size - 1) / read_batch_size;
 
-        uint32_t untilize_read_ptr = get_read_ptr(cb_untilize_id);
-        uint32_t metadata_read_ptr = get_read_ptr(cb_metadata_batch_id);
+        for (uint32_t batch_idx = core_id; batch_idx < actual_batches; batch_idx += num_idle_cores) {
+            uint32_t batch_token_start = batch_idx * read_batch_size;
+            uint32_t batch_count = ((batch_token_start + read_batch_size) <= expert_tokens)
+                                       ? read_batch_size
+                                       : (expert_tokens - batch_token_start);
 
-        // Per-row processing.  Local rows are written straight to the output tensor with no
-        // sender involvement.  Non-local rows use credit-based flow control: we hold a local
-        // credit counter (initialized to SLOTS_PER_IDLE), one credit per free slot in our
-        // ring on the sender's receive_buf.  Before each non-local row we consume a credit
-        // (waiting and atomically sucking from credits_sem if we're empty), write the row
-        // into our slice at write_slot, barrier, then ++ data_ready so the sender can read
-        // and fabric-forward that row.  Sender ++ credits_sem each time it consumes a row,
-        // releasing the slot for reuse.
-        for (uint32_t t = 0; t < batch_count; t++) {
-            const volatile tt_l1_ptr uint32_t* metadata = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(
-                metadata_read_ptr + t * aligned_dispatched_metadata_page_size);
-            uint32_t dst_chip = metadata[0];
-            uint32_t untilize_row_addr = untilize_read_ptr + t * aligned_output_page_size;
+            // Wait for compute to finish untilizing this batch and for reader_untilize to land
+            // the corresponding metadata pages.
+            cb_wait_front(cb_untilize_id, read_batch_size);
+            cb_wait_front(cb_metadata_batch_id, batch_count);
 
-            if (dst_chip == linearized_mesh_coord) {
-                uint32_t dst_token_idx = metadata[1];
-                uint32_t dst_topk_indice = metadata[2];
-                uint32_t output_page_idx = dst_token_idx * num_experts_per_tok + dst_topk_indice;
-                noc_async_write_page(output_page_idx, output_addr_gen, untilize_row_addr);
-                noc_async_writes_flushed();
-            } else {
-                if (local_credits == 0) {
-                    noc_semaphore_wait_min(credits_sem_ptr, 1);
-                    uint32_t n = *credits_sem_ptr;
-                    noc_semaphore_inc(self_credits_noc_addr, (uint32_t)(-(int32_t)n));
+            uint32_t untilize_read_ptr = get_read_ptr(cb_untilize_id);
+            uint32_t metadata_read_ptr = get_read_ptr(cb_metadata_batch_id);
+
+            for (uint32_t t = 0; t < batch_count; t++) {
+                const volatile tt_l1_ptr uint32_t* metadata = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(
+                    metadata_read_ptr + t * aligned_dispatched_metadata_page_size);
+                uint32_t dst_chip = metadata[0];
+                uint32_t untilize_row_addr = untilize_read_ptr + t * aligned_output_page_size;
+
+                if (dst_chip == linearized_mesh_coord) {
+                    // DeviceZoneScopedN("combine-local-row-write");
+                    uint32_t dst_token_idx = metadata[1];
+                    uint32_t dst_topk_indice = metadata[2];
+                    uint32_t output_page_idx = dst_token_idx * num_experts_per_tok + dst_topk_indice;
+                    noc_async_write_page(output_page_idx, output_addr_gen, untilize_row_addr);
+                    noc_async_writes_flushed();
+                } else {
+                    if (local_credits == 0) {
+                        noc_semaphore_wait_min(credits_sem_ptr, 1);
+                        uint32_t n = *credits_sem_ptr;
+                        noc_semaphore_inc(self_credits_noc_addr, (uint32_t)(-(int32_t)n));
+                        noc_async_atomic_barrier();
+                        local_credits += n;
+                    }
+
+                    // Write routing metadata (dst_chip, dst_token_idx, dst_topk_indice) to
+                    // sender's c_19 metadata ring slot so sender can read from L1 instead of DRAM.
+                    uint64_t meta_dst_addr =
+                        our_metadata_slice_noc_addr + write_slot * aligned_dispatched_metadata_page_size;
+                    uint32_t meta_src_addr = metadata_read_ptr + t * aligned_dispatched_metadata_page_size;
+                    noc_async_write(meta_src_addr, meta_dst_addr, 12);  // 3 × uint32
+
+                    // Write untilized row data to sender's c_18 receive_buf ring slot.
+                    uint64_t dst_addr = our_slice_noc_addr + write_slot * aligned_output_page_size;
+                    uint32_t off = 0;
+                    {
+                        // DeviceZoneScopedN("combine-fabric-row-write");
+                        while (off < aligned_output_page_size) {
+                            uint32_t chunk = (aligned_output_page_size - off > (uint32_t)NOC_MAX_BURST_SIZE)
+                                                 ? (uint32_t)NOC_MAX_BURST_SIZE
+                                                 : (aligned_output_page_size - off);
+                            noc_async_write(untilize_row_addr + off, dst_addr + off, chunk);
+                            off += chunk;
+                        }
+                        noc_async_write_barrier();  // ensures both metadata and row data have landed
+                    }
+
+                    noc_semaphore_inc(sender_data_ready_noc_addr, 1);
                     noc_async_atomic_barrier();
-                    local_credits += n;
+
+                    write_slot = (write_slot + 1) % SLOTS_PER_IDLE;
+                    local_credits--;
                 }
-
-                // Write routing metadata (dst_chip, dst_token_idx, dst_topk_indice) to
-                // sender's c_19 metadata ring slot so sender can read from L1 instead of DRAM.
-                uint64_t meta_dst_addr =
-                    our_metadata_slice_noc_addr + write_slot * aligned_dispatched_metadata_page_size;
-                uint32_t meta_src_addr = metadata_read_ptr + t * aligned_dispatched_metadata_page_size;
-                noc_async_write(meta_src_addr, meta_dst_addr, 12);  // 3 × uint32
-
-                // Write untilized row data to sender's c_18 receive_buf ring slot.
-                uint64_t dst_addr = our_slice_noc_addr + write_slot * aligned_output_page_size;
-                uint32_t off = 0;
-                while (off < aligned_output_page_size) {
-                    uint32_t chunk = (aligned_output_page_size - off > (uint32_t)NOC_MAX_BURST_SIZE)
-                                         ? (uint32_t)NOC_MAX_BURST_SIZE
-                                         : (aligned_output_page_size - off);
-                    noc_async_write(untilize_row_addr + off, dst_addr + off, chunk);
-                    off += chunk;
-                }
-                noc_async_write_barrier();  // ensures both metadata and row data have landed
-
-                noc_semaphore_inc(sender_data_ready_noc_addr, 1);
-                noc_async_atomic_barrier();
-
-                write_slot = (write_slot + 1) % SLOTS_PER_IDLE;
-                local_credits--;
             }
-        }
-        // Make sure any local writes that hit only the writes-flushed path complete before
-        // we release the CBs (sender's per-row handshake already barriered the non-local
-        // writes).
-        noc_async_write_barrier();
+            // Make sure any local writes that hit only the writes-flushed path complete before
+            // we release the CBs (sender's per-row handshake already barriered the non-local
+            // writes).
+            noc_async_write_barrier();
 
-        cb_pop_front(cb_metadata_batch_id, batch_count);
-        cb_pop_front(cb_untilize_id, read_batch_size);
+            cb_pop_front(cb_metadata_batch_id, batch_count);
+            cb_pop_front(cb_untilize_id, read_batch_size);
+        }
+        start_page_tiled += ((expert_tokens + tile_height - 1) / tile_height) * tiles_per_batch;
     }
 
     // All batches processed — send job-done sentinel to sender so it knows this idle
