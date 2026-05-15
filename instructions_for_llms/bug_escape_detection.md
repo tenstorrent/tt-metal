@@ -307,9 +307,14 @@ Every GHA run URL dispatched during this campaign must be recorded on this page 
 after dispatch — not just at the end. If someone asks "where are we?", the answer is always
 "check Confluence" — not a Slack status report.
 
-**Page format: one flat table with ALL candidates** (filtered, dismissed, and active).
-Never use separate sections per status. Never omit filtered/dismissed candidates.
-Update the row in-place as each candidate progresses through the pipeline.
+**Page format: one flat table** with layer-filtered and active candidates only.
+Do NOT include Opus-dismissed candidates (`SKIP_LIKELY_NOISE`, `SKIP_UNRELATED`) — they add noise.
+Layer-filtered candidates (`❌ Layer filter`) ARE included since they document what was checked.
+Never use separate sections per status.
+
+**Use the Confluence HTML macro for the table** — NOT the native Confluence table editor.
+Wrap the table in `<div style="overflow-x:auto;">` inside an `ac:structured-macro name="html"` block
+so it scrolls horizontally rather than squishing columns.
 
 **Table columns (required, in this order):**
 
@@ -322,9 +327,9 @@ Column notes:
 - `HW`: runner type, e.g. `Galaxy (WH)`, `LLMBox (WH)`, `LoudBox (BH)`, `T3000 (WH)`
 - `Last Fail` / `First Pass`: date only (YYYY-MM-DD), linked commit SHA
 - `Runs Dispatched`: all GHA run links with result, e.g. `BEFORE [12345](url) → PASS; AFTER [12346](url) → FAIL`
-- `Opus Verdict`: `PROCEED_TO_BISECT` / `SKIP_LIKELY_NOISE` / `SKIP_UNRELATED` / `N/A` (layer filtered)
-- `Opus Reasoning`: 1–2 sentence summary
-- `Status`: one of `🔍 Under Investigation`, `✅ Confirmed`, `❌ Layer filter`, `❌ Opus dismissed`, `⏳ Inconclusive`
+- `Opus Verdict`: `PROCEED_TO_BISECT` / `N/A` (layer filtered — Opus was not run)
+- `Opus Reasoning`: 1–2 sentence summary (empty/`—` for layer-filtered rows)
+- `Status`: one of `🔍 Under Investigation`, `✅ Confirmed`, `❌ Layer filter`, `⏳ Inconclusive`
 
 **Update the table after EVERY state transition:**
 - Candidate detected → add row immediately (even before Opus, with status TBD)
