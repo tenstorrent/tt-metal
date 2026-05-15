@@ -267,7 +267,8 @@ void RunSetUnicastRouteTest(
                     .eth_mode = tt_metal::Eth::IDLE,
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .compile_args = {},
-                    .defines = defines});
+                    .defines = defines,
+                    .named_compile_args = {}});
         } else {
             kernel = tt_metal::CreateKernel(
                 programs[src_idx],

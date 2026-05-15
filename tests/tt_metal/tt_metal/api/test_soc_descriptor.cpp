@@ -66,7 +66,7 @@ TEST(SOC, TensixValidateLogicalToPhysicalCoreCoordHostMapping) {
         devices_to_open.push_back(device_id);
     }
     auto devices = detail::CreateDevices(devices_to_open);
-    for (int device_id = 0; device_id < num_devices; device_id++) {
+    for (size_t device_id = 0; device_id < num_devices; device_id++) {
         tt_metal::IDevice* device = devices[device_id];
         uint32_t harvested_rows_mask =
             tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id);
@@ -77,8 +77,8 @@ TEST(SOC, TensixValidateLogicalToPhysicalCoreCoordHostMapping) {
         auto tensix_harvest_axis = tt::tt_metal::MetalContext::instance().hal().get_tensix_harvest_axis();
 
         CoreCoord logical_grid_size = device->logical_grid_size();
-        for (int x = 0; x < logical_grid_size.x; x++) {
-            for (int y = 0; y < logical_grid_size.y; y++) {
+        for (size_t x = 0; x < logical_grid_size.x; x++) {
+            for (size_t y = 0; y < logical_grid_size.y; y++) {
                 CoreCoord logical_core_coord(x, y);
                 CoreCoord physical_core_coord = soc_desc.get_physical_tensix_core_from_logical(logical_core_coord);
                 EXPECT_TRUE(!harvested_rows.contains(

@@ -219,6 +219,7 @@ void run_single_dfb_program(
         .entry_size = entry_size,
         .num_entries = dfb_config.num_entries,
         .data_format_metadata = dfb_config.data_format,
+        .alias_with = {},
         .disable_implicit_sync = !dfb_config.enable_implicit_sync,
     };
 
@@ -251,6 +252,7 @@ void run_single_dfb_program(
                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
             }},
+            .semaphore_bindings = {},
             .tensor_bindings = {{
                 .tensor_parameter_name = IN_TENSOR,
                 .accessor_name = "src_tensor",  // kernel: ta::src_tensor
@@ -261,8 +263,12 @@ void run_single_dfb_program(
                     {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_implicit_sync ? 1u : 0u)},
                     {"num_producers", dfb_config.num_producers},
                 },
-            .runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}},
+            .runtime_arguments_schema = {
+                .named_runtime_args = {"chunk_offset", "entries_per_core"},
+                .named_common_runtime_args = {},
+            },
             .config_spec = dm_producer_cfg,
+            .dfb_compute_self_loop_scopes = {},
         };
     } else {
         producer_spec = experimental::metal2_host_api::KernelSpec{
@@ -277,8 +283,11 @@ void run_single_dfb_program(
                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
             }},
+            .semaphore_bindings = {},
+            .tensor_bindings = {},
             .compile_time_arg_bindings = {{"num_entries_per_producer", num_entries_per_producer}},
             .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+            .dfb_compute_self_loop_scopes = {},
         };
     }
 
@@ -296,6 +305,7 @@ void run_single_dfb_program(
                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
                 .access_pattern = consumer_pattern,
             }},
+            .semaphore_bindings = {},
             .tensor_bindings = {{
                 .tensor_parameter_name = OUT_TENSOR,
                 .accessor_name = "dst_tensor",  // kernel: ta::dst_tensor
@@ -307,8 +317,12 @@ void run_single_dfb_program(
                     {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_implicit_sync ? 1u : 0u)},
                     {"num_consumers", dfb_config.num_consumers},
                 },
-            .runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}},
+            .runtime_arguments_schema = {
+                .named_runtime_args = {"chunk_offset", "entries_per_core"},
+                .named_common_runtime_args = {},
+            },
             .config_spec = dm_consumer_cfg,
+            .dfb_compute_self_loop_scopes = {},
         };
     } else {
         consumer_spec = experimental::metal2_host_api::KernelSpec{
@@ -323,8 +337,11 @@ void run_single_dfb_program(
                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
                 .access_pattern = consumer_pattern,
             }},
+            .semaphore_bindings = {},
+            .tensor_bindings = {},
             .compile_time_arg_bindings = {{"num_entries_per_consumer", num_entries_per_consumer}},
             .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+            .dfb_compute_self_loop_scopes = {},
         };
     }
 
@@ -346,6 +363,8 @@ void run_single_dfb_program(
         .program_id = "single_dfb",
         .kernels = {producer_spec, consumer_spec},
         .dataflow_buffers = {dfb_spec},
+        .remote_dataflow_buffers = {},
+        .semaphores = {},
         .tensor_parameters = tensor_parameters,
         .work_units = {wu},
     };
@@ -365,11 +384,23 @@ void run_single_dfb_program(
     };
 
     experimental::metal2_host_api::ProgramRunParams run_params;
-    experimental::metal2_host_api::ProgramRunParams::KernelRunParams producer_params{.kernel_spec_name = PRODUCER};
+    experimental::metal2_host_api::ProgramRunParams::KernelRunParams producer_params{
+        .kernel_spec_name = PRODUCER,
+        .named_runtime_args = {},
+        .named_common_runtime_args = {},
+        .runtime_varargs = {},
+        .common_runtime_varargs = {},
+    };
     if (producer_type == DFBPorCType::DM) {
         producer_params.named_runtime_args = build_dm_named_rtas();
     }
-    experimental::metal2_host_api::ProgramRunParams::KernelRunParams consumer_params{.kernel_spec_name = CONSUMER};
+    experimental::metal2_host_api::ProgramRunParams::KernelRunParams consumer_params{
+        .kernel_spec_name = CONSUMER,
+        .named_runtime_args = {},
+        .named_common_runtime_args = {},
+        .runtime_varargs = {},
+        .common_runtime_varargs = {},
+    };
     if (consumer_type == DFBPorCType::DM) {
         consumer_params.named_runtime_args = build_dm_named_rtas();
     }
@@ -639,6 +670,7 @@ void run_concurrent_dfbs_program(
             .entry_size = entry_size,
             .num_entries = entries_per_dfb,
             .data_format_metadata = dfb_config.data_format,
+            .alias_with = {},
             .disable_implicit_sync = !dfb_config.enable_implicit_sync,
         });
 
@@ -654,6 +686,7 @@ void run_concurrent_dfbs_program(
                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
             }},
+            .semaphore_bindings = {},
             .tensor_bindings = {{
                 .tensor_parameter_name = IN_TENSOR,
                 .accessor_name = "src_tensor",
@@ -668,6 +701,7 @@ void run_concurrent_dfbs_program(
                 experimental::metal2_host_api::DataMovementConfiguration{
                     .gen2_data_movement_config =
                         experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+            .dfb_compute_self_loop_scopes = {},
         });
         kernel_names.push_back(producer_name);
 
@@ -683,6 +717,7 @@ void run_concurrent_dfbs_program(
                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
             }},
+            .semaphore_bindings = {},
             .tensor_bindings = {{
                 .tensor_parameter_name = OUT_TENSOR,
                 .accessor_name = "dst_tensor",
@@ -697,6 +732,7 @@ void run_concurrent_dfbs_program(
                 experimental::metal2_host_api::DataMovementConfiguration{
                     .gen2_data_movement_config =
                         experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+            .dfb_compute_self_loop_scopes = {},
         });
         kernel_names.push_back(consumer_name);
     }
@@ -711,6 +747,8 @@ void run_concurrent_dfbs_program(
         .program_id = "concurrent_dfbs",
         .kernels = kernel_specs,
         .dataflow_buffers = dfb_specs,
+        .remote_dataflow_buffers = {},
+        .semaphores = {},
         .tensor_parameters =
             {
                 {.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
@@ -725,8 +763,13 @@ void run_concurrent_dfbs_program(
     experimental::metal2_host_api::ProgramRunParams run_params;
     run_params.kernel_run_params.reserve(kernel_names.size());
     for (const auto& name : kernel_names) {
-        run_params.kernel_run_params.push_back(
-            experimental::metal2_host_api::ProgramRunParams::KernelRunParams{.kernel_spec_name = name});
+        run_params.kernel_run_params.push_back(experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+            .kernel_spec_name = name,
+            .named_runtime_args = {},
+            .named_common_runtime_args = {},
+            .runtime_varargs = {},
+            .common_runtime_varargs = {},
+        });
     }
     run_params.tensor_args = {
         {.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)},
@@ -797,9 +840,13 @@ void run_concurrent_tensix_dm_dfbs_program(
             experimental::metal2_host_api::KernelSpec::SourceFilePath{
                 "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_seq_producer.cpp"},
         .num_threads = 1,
-        .compiler_options = {.defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}},
+        .compiler_options = {.include_paths = {}, .defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}},
+        .dfb_bindings = {},
+        .semaphore_bindings = {},
+        .tensor_bindings = {},
         .compile_time_arg_bindings = {{"num_entries_per_producer", entries_per_dfb}},
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        .dfb_compute_self_loop_scopes = {},
     };
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         producer_spec.dfb_bindings.push_back(experimental::metal2_host_api::KernelSpec::DFBBinding{
@@ -835,6 +882,7 @@ void run_concurrent_tensix_dm_dfbs_program(
             .entry_size = entry_size,
             .num_entries = entries_per_dfb,
             .data_format_metadata = dfb_config.data_format,
+            .alias_with = {},
             .disable_implicit_sync = !dfb_config.enable_implicit_sync,
         });
 
@@ -855,6 +903,7 @@ void run_concurrent_tensix_dm_dfbs_program(
                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
             }},
+            .semaphore_bindings = {},
             .tensor_bindings = {{
                 .tensor_parameter_name = out_tensor_name,
                 .accessor_name = "dst_tensor",
@@ -868,6 +917,7 @@ void run_concurrent_tensix_dm_dfbs_program(
                 experimental::metal2_host_api::DataMovementConfiguration{
                     .gen2_data_movement_config =
                         experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+            .dfb_compute_self_loop_scopes = {},
         });
         kernel_names.push_back(consumer_name);
     }
@@ -882,6 +932,8 @@ void run_concurrent_tensix_dm_dfbs_program(
         .program_id = "concurrent_tensix_dm_dfbs",
         .kernels = kernel_specs,
         .dataflow_buffers = dfb_specs,
+        .remote_dataflow_buffers = {},
+        .semaphores = {},
         .tensor_parameters = tensor_parameters,
         .work_units = {wu},
     };
@@ -891,8 +943,13 @@ void run_concurrent_tensix_dm_dfbs_program(
     experimental::metal2_host_api::ProgramRunParams run_params;
     run_params.kernel_run_params.reserve(kernel_names.size());
     for (const auto& name : kernel_names) {
-        run_params.kernel_run_params.push_back(
-            experimental::metal2_host_api::ProgramRunParams::KernelRunParams{.kernel_spec_name = name});
+        run_params.kernel_run_params.push_back(experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+            .kernel_spec_name = name,
+            .named_runtime_args = {},
+            .named_common_runtime_args = {},
+            .runtime_varargs = {},
+            .common_runtime_varargs = {},
+        });
     }
     run_params.tensor_args.reserve(num_dfbs);
     for (uint32_t i = 0; i < num_dfbs; ++i) {
@@ -1019,7 +1076,10 @@ void run_sequential_dfbs_program(
             experimental::metal2_host_api::KernelSpec::SourceFilePath{
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_seq_producer.cpp"},
         .num_threads = num_producers,
-        .compiler_options = {.defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}},
+        .compiler_options = {.include_paths = {}, .defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}},
+        .dfb_bindings = {},
+        .semaphore_bindings = {},
+        .tensor_bindings = {},
         .compile_time_arg_bindings =
             {
                 {"num_entries_per_producer", num_entries_per_producer},
@@ -1030,6 +1090,7 @@ void run_sequential_dfbs_program(
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     // Consumer kernel: same layout, plus per-DFB entries_per_consumer_<i> /
@@ -1040,7 +1101,10 @@ void run_sequential_dfbs_program(
             experimental::metal2_host_api::KernelSpec::SourceFilePath{
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_seq_consumer.cpp"},
         .num_threads = num_consumers,
-        .compiler_options = {.defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}},
+        .compiler_options = {.include_paths = {}, .defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}},
+        .dfb_bindings = {},
+        .semaphore_bindings = {},
+        .tensor_bindings = {},
         .compile_time_arg_bindings =
             {
                 {"implicit_sync", static_cast<uint32_t>(configs[0].enable_implicit_sync ? 1u : 0u)},
@@ -1050,6 +1114,7 @@ void run_sequential_dfbs_program(
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     // Build per-DFB DataflowBufferSpec, TensorParameter, and bindings (dfb_<i> /
@@ -1072,6 +1137,7 @@ void run_sequential_dfbs_program(
             .entry_size = entry_size,
             .num_entries = num_entries,
             .data_format_metadata = configs[i].data_format,
+            .alias_with = {},
             .disable_implicit_sync = !configs[i].enable_implicit_sync,
         });
         tensor_parameters.push_back(experimental::metal2_host_api::TensorParameter{
@@ -1120,6 +1186,8 @@ void run_sequential_dfbs_program(
         .program_id = "sequential_dfbs",
         .kernels = {producer_spec, consumer_spec},
         .dataflow_buffers = dfb_specs,
+        .remote_dataflow_buffers = {},
+        .semaphores = {},
         .tensor_parameters = tensor_parameters,
         .work_units = {wu},
     };
@@ -1128,8 +1196,20 @@ void run_sequential_dfbs_program(
 
     experimental::metal2_host_api::ProgramRunParams run_params;
     run_params.kernel_run_params = {
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{.kernel_spec_name = PRODUCER},
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{.kernel_spec_name = CONSUMER},
+        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+            .kernel_spec_name = PRODUCER,
+            .named_runtime_args = {},
+            .named_common_runtime_args = {},
+            .runtime_varargs = {},
+            .common_runtime_varargs = {},
+        },
+        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+            .kernel_spec_name = CONSUMER,
+            .named_runtime_args = {},
+            .named_common_runtime_args = {},
+            .runtime_varargs = {},
+            .common_runtime_varargs = {},
+        },
     };
     run_params.tensor_args.reserve(2 * num_dfbs);
     for (uint32_t i = 0; i < num_dfbs; ++i) {
@@ -1206,6 +1286,7 @@ void run_in_dfb_out_dfb_program(
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = dm2tensix_config.data_format,
+        .alias_with = {},
         .disable_implicit_sync = !dm2tensix_config.enable_implicit_sync,
     };
     experimental::metal2_host_api::DataflowBufferSpec out_dfb_spec{
@@ -1213,6 +1294,7 @@ void run_in_dfb_out_dfb_program(
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = tensix2dm_config.data_format,
+        .alias_with = {},
         .disable_implicit_sync = !tensix2dm_config.enable_implicit_sync,
     };
 
@@ -1228,6 +1310,7 @@ void run_in_dfb_out_dfb_program(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
+        .semaphore_bindings = {},
         .tensor_bindings = {{
             .tensor_parameter_name = IN_TENSOR,
             .accessor_name = "src_tensor",
@@ -1238,11 +1321,15 @@ void run_in_dfb_out_dfb_program(
                 {"implicit_sync", static_cast<uint32_t>(dm2tensix_config.enable_implicit_sync ? 1u : 0u)},
                 {"num_producers", dm2tensix_config.num_producers},
             },
-        .runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}},
+        .runtime_arguments_schema = {
+            .named_runtime_args = {"chunk_offset", "entries_per_core"},
+            .named_common_runtime_args = {},
+        },
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::KernelSpec compute_spec{
@@ -1267,8 +1354,11 @@ void run_in_dfb_out_dfb_program(
                     .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
                 },
             },
+        .semaphore_bindings = {},
+        .tensor_bindings = {},
         .compile_time_arg_bindings = {{"num_entries", num_entries_per_unpacker}},
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::KernelSpec consumer_spec{
@@ -1284,6 +1374,7 @@ void run_in_dfb_out_dfb_program(
             .access_pattern = out_is_all ? experimental::metal2_host_api::DFBAccessPattern::ALL
                                          : experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
+        .semaphore_bindings = {},
         .tensor_bindings = {{
             .tensor_parameter_name = OUT_TENSOR,
             .accessor_name = "dst_tensor",
@@ -1295,11 +1386,15 @@ void run_in_dfb_out_dfb_program(
                 {"implicit_sync", static_cast<uint32_t>(tensix2dm_config.enable_implicit_sync ? 1u : 0u)},
                 {"num_consumers", tensix2dm_config.num_consumers},
             },
-        .runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}},
+        .runtime_arguments_schema = {
+            .named_runtime_args = {"chunk_offset", "entries_per_core"},
+            .named_common_runtime_args = {},
+        },
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{
@@ -1312,6 +1407,8 @@ void run_in_dfb_out_dfb_program(
         .program_id = "in_dfb_out_dfb",
         .kernels = {producer_spec, compute_spec, consumer_spec},
         .dataflow_buffers = {in_dfb_spec, out_dfb_spec},
+        .remote_dataflow_buffers = {},
+        .semaphores = {},
         .tensor_parameters =
             {
                 {.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
@@ -1329,10 +1426,28 @@ void run_in_dfb_out_dfb_program(
             {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}};
     };
 
-    experimental::metal2_host_api::ProgramRunParams::KernelRunParams producer_params{.kernel_spec_name = PRODUCER};
+    experimental::metal2_host_api::ProgramRunParams::KernelRunParams producer_params{
+        .kernel_spec_name = PRODUCER,
+        .named_runtime_args = {},
+        .named_common_runtime_args = {},
+        .runtime_varargs = {},
+        .common_runtime_varargs = {},
+    };
     producer_params.named_runtime_args = build_named_rtas();
-    experimental::metal2_host_api::ProgramRunParams::KernelRunParams compute_params{.kernel_spec_name = COMPUTE};
-    experimental::metal2_host_api::ProgramRunParams::KernelRunParams consumer_params{.kernel_spec_name = CONSUMER};
+    experimental::metal2_host_api::ProgramRunParams::KernelRunParams compute_params{
+        .kernel_spec_name = COMPUTE,
+        .named_runtime_args = {},
+        .named_common_runtime_args = {},
+        .runtime_varargs = {},
+        .common_runtime_varargs = {},
+    };
+    experimental::metal2_host_api::ProgramRunParams::KernelRunParams consumer_params{
+        .kernel_spec_name = CONSUMER,
+        .named_runtime_args = {},
+        .named_common_runtime_args = {},
+        .runtime_varargs = {},
+        .common_runtime_varargs = {},
+    };
     consumer_params.named_runtime_args = build_named_rtas();
 
     experimental::metal2_host_api::ProgramRunParams run_params;
@@ -1898,6 +2013,7 @@ static void run_intra_tensix_dfb_program(
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = dfb_config.data_format,
+        .alias_with = {},
         .disable_implicit_sync = !dfb_config.enable_implicit_sync,
     };
 
@@ -1924,12 +2040,15 @@ static void run_intra_tensix_dfb_program(
                     .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
                 },
             },
+        .semaphore_bindings = {},
+        .tensor_bindings = {},
         .compile_time_arg_bindings =
             {
                 {"entries_per_neo", entries_per_neo},
                 {"words_per_entry", words_per_entry},
             },
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{
@@ -1942,13 +2061,22 @@ static void run_intra_tensix_dfb_program(
         .program_id = "intra_tensix_dfb",
         .kernels = {compute_spec},
         .dataflow_buffers = {intra_dfb_spec},
+        .remote_dataflow_buffers = {},
+        .semaphores = {},
+        .tensor_parameters = {},
         .work_units = {wu},
     };
 
     Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::metal2_host_api::ProgramRunParams run_params;
-    run_params.kernel_run_params = {{.kernel_spec_name = COMPUTE}};
+    run_params.kernel_run_params = {{
+        .kernel_spec_name = COMPUTE,
+        .named_runtime_args = {},
+        .named_common_runtime_args = {},
+        .runtime_varargs = {},
+        .common_runtime_varargs = {},
+    }};
     experimental::metal2_host_api::SetProgramRunParameters(program, run_params);
 
     const uint32_t total_size = num_entries * entry_size;
@@ -2038,6 +2166,7 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B) {
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = remapper_dfb_config.data_format,
+        .alias_with = {},
         .disable_implicit_sync = !remapper_dfb_config.enable_implicit_sync,
     };
     experimental::metal2_host_api::DataflowBufferSpec intra_dfb_spec{
@@ -2045,6 +2174,7 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B) {
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = intra_dfb_config.data_format,
+        .alias_with = {},
         .disable_implicit_sync = !intra_dfb_config.enable_implicit_sync,
     };
 
@@ -2060,6 +2190,7 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B) {
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
+        .semaphore_bindings = {},
         .tensor_bindings = {{
             .tensor_parameter_name = IN_TENSOR,
             .accessor_name = "src_tensor",
@@ -2070,11 +2201,15 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B) {
                 {"implicit_sync", 1u},
                 {"num_producers", 1u},
             },
-        .runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}},
+        .runtime_arguments_schema = {
+            .named_runtime_args = {"chunk_offset", "entries_per_core"},
+            .named_common_runtime_args = {},
+        },
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     // Combined compute kernel: BLOCKED consumer of remapper DFB ("remapper_in"),
@@ -2107,6 +2242,8 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B) {
                     .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
                 },
             },
+        .semaphore_bindings = {},
+        .tensor_bindings = {},
         .compile_time_arg_bindings =
             {
                 {"num_entries_consumer", num_entries},
@@ -2114,6 +2251,7 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B) {
                 {"words_per_entry", words_per_entry},
             },
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{
@@ -2126,6 +2264,8 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B) {
         .program_id = "intra_and_remapper",
         .kernels = {dm_producer_spec, compute_spec},
         .dataflow_buffers = {remapper_dfb_spec, intra_dfb_spec},
+        .remote_dataflow_buffers = {},
+        .semaphores = {},
         .tensor_parameters = {{.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()}},
         .work_units = {wu},
     };
@@ -2134,11 +2274,22 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B) {
 
     using NodeNamedRTAs = experimental::metal2_host_api::ProgramRunParams::KernelRunParams::NodeNamedRTAs;
     experimental::metal2_host_api::ProgramRunParams::KernelRunParams dm_producer_params{
-        .kernel_spec_name = DM_PRODUCER};
+        .kernel_spec_name = DM_PRODUCER,
+        .named_runtime_args = {},
+        .named_common_runtime_args = {},
+        .runtime_varargs = {},
+        .common_runtime_varargs = {},
+    };
     dm_producer_params.named_runtime_args = std::vector<NodeNamedRTAs>{NodeNamedRTAs{
         experimental::metal2_host_api::NodeCoord{logical_core.x, logical_core.y},
         {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}};
-    experimental::metal2_host_api::ProgramRunParams::KernelRunParams compute_params{.kernel_spec_name = COMPUTE};
+    experimental::metal2_host_api::ProgramRunParams::KernelRunParams compute_params{
+        .kernel_spec_name = COMPUTE,
+        .named_runtime_args = {},
+        .named_common_runtime_args = {},
+        .runtime_varargs = {},
+        .common_runtime_varargs = {},
+    };
 
     experimental::metal2_host_api::ProgramRunParams run_params;
     run_params.kernel_run_params = {dm_producer_params, compute_params};
