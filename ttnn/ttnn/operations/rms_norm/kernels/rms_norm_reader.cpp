@@ -66,40 +66,63 @@ void kernel_main() {
             scaler_f);
     }
 
-    // ---- Step 2: stream input data ----
-    if constexpr (INPUT_IS_RM) {
-        // RM input: read `total_units` rows starting at `start_unit`. The helper
-        // pushes Wt tile-sized pages per 32-row block and handles partial-H by
-        // pushing a full Wt-page block with stale rows in the last partial chunk
-        // (compute produces garbage there; writer skips them).
-        const auto input_accessor = TensorAccessor(input_args, input_addr);
-        dataflow_kernel_lib::read_sticks_for_tilize<cb_input_raw_rm, dataflow_kernel_lib::TilizeGranularity::TILE>(
-            input_accessor, total_units, input_row_bytes, start_unit);
-    } else {
-        // TILE input: stream Wt tiles per chunk = total_units tiles total.
-        const uint32_t input_tile_bytes = get_tile_size(cb_input_tiles);
-        const auto input_accessor = TensorAccessor(input_args, input_addr, input_tile_bytes);
-        for (uint32_t i = 0; i < total_units; ++i) {
-            cb_reserve_back(cb_input_tiles, 1);
-            const uint32_t l1_write_addr = get_write_ptr(cb_input_tiles);
-            noc_async_read_tile(start_unit + i, input_accessor, l1_write_addr);
-            noc_async_read_barrier();
-            cb_push_back(cb_input_tiles, 1);
-        }
-    }
+    // ---- Step 2: per-chunk streaming loop ----
+    // Compute kernel consumes gamma + input per chunk. To avoid producer/consumer
+    // deadlock, the reader pushes them in the same order, per chunk:
+    //   for each chunk: push gamma (1 stick) → push input (Wt tiles or 32 sticks)
+    // An aggregated read_sticks_for_tilize over all chunks would fill cb_input_raw_rm
+    // before any gamma is pushed, and compute would block on cb_gamma_rm while the
+    // reader blocks on a full cb_input_raw_rm.
 
-    // ---- Step 3: stream gamma (1 stick per chunk) ----
-    if constexpr (HAS_GAMMA) {
-        // Gamma is a single row of W elements at page 0. The reader pushes it
-        // ONCE per chunk so compute can re-tilize it each time.
-        const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr);
-        const uint64_t gamma_noc_addr = gamma_accessor.get_noc_addr(0);
-        for (uint32_t c = 0; c < num_chunks; ++c) {
+    constexpr uint32_t TILE_DIM = 32;
+
+    // Input accessor — RM uses stick-indexed (no tile_bytes), TILE uses tile-indexed.
+    const auto input_accessor = [&] {
+        if constexpr (INPUT_IS_RM) {
+            return TensorAccessor(input_args, input_addr);
+        } else {
+            return TensorAccessor(input_args, input_addr, get_tile_size(cb_input_tiles));
+        }
+    }();
+
+    [[maybe_unused]] const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr);
+    [[maybe_unused]] const uint64_t gamma_noc_addr = HAS_GAMMA ? gamma_accessor.get_noc_addr(0) : 0;
+
+    for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+        // Push gamma BEFORE input — matches compute's consumption order (compute tilizes
+        // gamma first per chunk, then input). cb_gamma_rm sized 1 → reader blocks here
+        // until compute pops the previous chunk's gamma, which is the natural backpressure.
+        if constexpr (HAS_GAMMA) {
             cb_reserve_back(cb_gamma_rm, 1);
             const uint32_t l1_write_addr = get_write_ptr(cb_gamma_rm);
             noc_async_read(gamma_noc_addr, l1_write_addr, gamma_row_bytes);
             noc_async_read_barrier();
             cb_push_back(cb_gamma_rm, 1);
+        }
+
+        // Push input for this chunk.
+        if constexpr (INPUT_IS_RM) {
+            // Compute valid rows for this chunk (handles partial-H on the last chunk).
+            const uint32_t chunk_first_row = start_unit + chunk * TILE_DIM;
+            const uint32_t global_end = start_unit + total_units;
+            const uint32_t rows_remaining = (chunk_first_row < global_end) ? (global_end - chunk_first_row) : 0;
+            const uint32_t rows_this_chunk = (rows_remaining < TILE_DIM) ? rows_remaining : TILE_DIM;
+
+            // Single block per chunk. Helper pushes Wt tile-sized pages even on partial-H
+            // (rows beyond rows_this_chunk are stale; compute produces garbage there;
+            // writer skips them via write_sticks_after_untilize).
+            dataflow_kernel_lib::read_sticks_for_tilize<cb_input_raw_rm, dataflow_kernel_lib::TilizeGranularity::TILE>(
+                input_accessor, rows_this_chunk, input_row_bytes, chunk_first_row);
+        } else {
+            // TILE input: Wt tiles per chunk.
+            const uint32_t chunk_first_tile = start_unit + chunk * Wt;
+            for (uint32_t wt = 0; wt < Wt; ++wt) {
+                cb_reserve_back(cb_input_tiles, 1);
+                const uint32_t l1_write_addr = get_write_ptr(cb_input_tiles);
+                noc_async_read_tile(chunk_first_tile + wt, input_accessor, l1_write_addr);
+                noc_async_read_barrier();
+                cb_push_back(cb_input_tiles, 1);
+            }
         }
     }
 }
