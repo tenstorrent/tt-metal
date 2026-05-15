@@ -170,7 +170,7 @@ emit_missing_ttexalens_warning() {
         echo "TT_PROBE: Install with: uv pip install -r tools/triage/requirements.txt"
     fi
 }
-trap emit_missing_ttexalens_warning EXIT
+trap '_emit_device_timing; emit_missing_ttexalens_warning' EXIT
 
 # --- Dev-mode instrumentation ---
 # Mirrors run_safe_pytest.sh --dev. On hardware this enables ebreak ASSERTs and
