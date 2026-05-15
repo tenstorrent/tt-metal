@@ -8,11 +8,25 @@ GELU Backward ULP Precision Tests
 This test validates the accuracy of ttnn.experimental.gelu_bw (GELU derivative) across
 the BFloat16 range using the same methodology as test_gelu_floor_value_bug.py.
 
-MATHEMATICAL FORMULA:
-GELU'(x) = grad * (cdf + x * pdf)
-where:
-  cdf = 0.5 * (1 + erf(x / sqrt(2)))  -- CDF of standard normal distribution
-  pdf = exp(-x^2 / 2) / sqrt(2*pi)    -- PDF of standard normal distribution
+Two derivative formulas are covered:
+
+1. Exact erf-based GELU derivative (approximate="none"):
+   GELU'(x) = grad * (cdf + x * pdf)
+   where:
+     cdf = 0.5 * (1 + erf(x / sqrt(2)))  -- CDF of standard normal distribution
+     pdf = exp(-x^2 / 2) / sqrt(2*pi)    -- PDF of standard normal distribution
+   Tests: TestGeluBwDerivativeAtZero, TestGeluBwPositiveValues, TestGeluBwNegativeValues,
+          TestGeluBwNearZero, TestGeluBwLocalMinimum, TestGeluBwWithGradientScaling,
+          test_gelu_bw_ulp_summary
+
+2. Tanh-approximated GELU derivative (approximate="tanh"):
+   GELU_tanh(x) = 0.5 * x * (1 + tanh(beta * (x + kappa * x^3)))
+   GELU_tanh'(x) = 0.5 * (1 + tanh(z)) + 0.5 * x * (1 - tanh(z)^2) * beta * (1 + 3*kappa*x^2)
+   where:
+     z = beta * (x + kappa * x^3)
+     beta = sqrt(2/pi), kappa = 0.044715
+   Tests: TestGeluBwTanhDerivativeAtZero, TestGeluBwTanhPositiveValues,
+          TestGeluBwTanhNearZero, TestGeluBwTanhWithGradientScaling, TestGeluBwTanhShapes
 
 Hardware Model: Tenstorrent SFPU uses DAZ+FTZ (Denormals-Are-Zero + Flush-To-Zero)
 Per tech_reports/Handling_Special_Value/special_values.md: "denormals | all | 0x0"
