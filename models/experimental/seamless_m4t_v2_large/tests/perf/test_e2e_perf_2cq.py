@@ -77,6 +77,16 @@ _TASKS: Dict[str, Tuple[bool, str, bool]] = {
     "asr": (True, "eng", False),
 }
 
+# Measured E2E global batches/s (same units as logged ``FPS``) for ``prep_perf_report`` expected latency.
+_EXPECTED_E2E_THROUGHPUT_FPS: Dict[str, float] = {
+    "t2tt": 54.94,
+    "s2tt": 22.92,
+    "t2st": 29.61,
+    "s2st": 16.73,
+    "asr": 22.25,
+}
+_E2E_TASK_THROUGHPUT_PARAMS = [(t, _EXPECTED_E2E_THROUGHPUT_FPS[t]) for t in _TASKS]
+
 
 def _assert_text_logits_pcc_local(
     ref_logits: torch.Tensor, logits_tt: ttnn.Tensor, *, ctx: str, pcc: float = PCC_THRESHOLD
@@ -622,8 +632,7 @@ def _run_pipeline(
     indirect=True,
 )
 @pytest.mark.parametrize("batch_size_per_device", (1,))
-@pytest.mark.parametrize("expected_inference_throughput", (0.02,))
-@pytest.mark.parametrize("task", list(SEAMLESS_E2E_TASKS.keys()))
+@pytest.mark.parametrize("task,expected_inference_throughput", _E2E_TASK_THROUGHPUT_PARAMS)
 def test_seamless_m4t_v2_large_e2e_perf_2cq(
     device, batch_size_per_device, expected_inference_throughput: float, task: str
 ):
@@ -830,8 +839,7 @@ def _dealloc_speech_trace_masks(m: Any) -> None:
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("device_params", [_DEVICE_PARAMS_2CQ_TRACE], indirect=True)
 @pytest.mark.parametrize("batch_size_per_device", (1,))
-@pytest.mark.parametrize("expected_inference_throughput", (0.02,))
-@pytest.mark.parametrize("task", list(SEAMLESS_E2E_TASKS.keys()))
+@pytest.mark.parametrize("task,expected_inference_throughput", _E2E_TASK_THROUGHPUT_PARAMS)
 def test_seamless_m4t_v2_large_e2e_perf_2cq_trace(
     device, batch_size_per_device, expected_inference_throughput: float, task: str
 ):
