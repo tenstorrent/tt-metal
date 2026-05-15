@@ -117,6 +117,7 @@ static const VerifyCase kVerifyCases[] = {
     {4096, 11008, 2, 15, "WideK_4096x11008"},
     {333, 384, 5, 5, "NonAligned_M333"},
     {2049, 2048, 30, 30, "NonAligned_M2049"},
+    {8192, 28672, 100, 200, "Llama70B_8192x28672"},
 };
 
 INSTANTIATE_TEST_SUITE_P(AllShapes, KSplitGramMatmulVerifyTest, ::testing::ValuesIn(kVerifyCases), CaseName);

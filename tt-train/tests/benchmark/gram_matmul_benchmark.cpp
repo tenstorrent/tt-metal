@@ -31,7 +31,7 @@ struct GramMatmulShape {
 const int num_warmup = 3;
 const int num_iters = 10;
 
-// Shapes from Llama 1.1B, 7B, 30B hidden/MLP dimensions
+// Shapes from Llama 1.1B, 7B, 30B, 70B hidden/MLP dimensions.
 const std::vector<GramMatmulShape> shapes = {
     {2048, 2048, "2048x2048"},
     {2048, 5632, "2048x5632"},
@@ -39,6 +39,7 @@ const std::vector<GramMatmulShape> shapes = {
     {4096, 11008, "4096x11008"},
     {4096, 16384, "4096x16384"},
     {8192, 8192, "8192x8192"},
+    {8192, 28672, "8192x28672"},
 };
 
 ttnn::Tensor make_random_tensor(uint32_t M, uint32_t K, ttnn::distributed::MeshDevice* device, uint32_t seed) {
@@ -140,15 +141,20 @@ void BM_GramMatmul(benchmark::State& state) {
     // Print results table
     // Cell format: "%6.0f us %3.0f TF" = 16 chars
     std::cout << "\n";
-    std::cout << "  ┌────────────┬──────────────────┬──────────────────┬──────────────────┬────────────┬─────────┐\n";
-    std::cout << "  │   Shape    │  gram_matmul     │  minimal_matmul  │  ttnn::matmul    │ vs minimal │ vs ttnn │\n";
-    std::cout << "  ├────────────┼──────────────────┼──────────────────┼──────────────────┼────────────┼─────────┤\n";
+    std::cout << "  "
+                 "┌────────────────────────┬──────────────────┬──────────────────┬──────────────────┬────────────┬─────"
+                 "────┐\n";
+    std::cout << "  │ Shape                  │  gram_matmul     │  minimal_matmul  │  ttnn::matmul    │ vs minimal │ "
+                 "vs ttnn │\n";
+    std::cout << "  "
+                 "├────────────────────────┼──────────────────┼──────────────────┼──────────────────┼────────────┼─────"
+                 "────┤\n";
     for (const auto& r : results) {
-        char line[256];
+        char line[320];
         std::snprintf(
             line,
             sizeof(line),
-            "  │ %10s │ %6.0f us %3.0f TF │ %6.0f us %3.0f TF │ %6.0f us %3.0f TF │     %5.2fx │  %5.2fx │",
+            "  │ %-22s │ %6.0f us %3.0f TF │ %6.0f us %3.0f TF │ %6.0f us %3.0f TF │     %5.2fx │  %5.2fx │",
             r.name.c_str(),
             r.gram_us,
             r.gram_tf,
@@ -160,7 +166,9 @@ void BM_GramMatmul(benchmark::State& state) {
             r.ttnn_us / r.gram_us);
         std::cout << line << "\n";
     }
-    std::cout << "  └────────────┴──────────────────┴──────────────────┴──────────────────┴────────────┴─────────┘\n";
+    std::cout << "  "
+                 "└────────────────────────┴──────────────────┴──────────────────┴──────────────────┴────────────┴─────"
+                 "────┘\n";
     std::cout << std::flush;
 
     state.SetIterationTime(results.back().gram_us * 1e-6);
