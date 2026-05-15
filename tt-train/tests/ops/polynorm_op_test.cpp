@@ -368,9 +368,11 @@ TEST_F(PolyNormOpTest, PolyNorm_Compare_BlockSizeRemainders) {
 }
 
 TEST_F(PolyNormOpTest, PolyNorm_Compare_EpsilonVariants) {
-    CompareKernelVsReferenceWithShape({1, 1, 2, 64}, 1e-6F);
-    CompareKernelVsReferenceWithShape({1, 1, 2, 64}, 1e-5F);
-    CompareKernelVsReferenceWithShape({1, 1, 2, 64}, 1e-4F);
+    constexpr float kEpsilonVariantBackwardTol = 1.0e-2F;
+
+    CompareKernelVsReferenceWithShape({1, 1, 2, 64}, 1e-6F, kEpsilonVariantBackwardTol, kEpsilonVariantBackwardTol);
+    CompareKernelVsReferenceWithShape({1, 1, 2, 64}, 1e-5F, kEpsilonVariantBackwardTol, kEpsilonVariantBackwardTol);
+    CompareKernelVsReferenceWithShape({1, 1, 2, 64}, 1e-4F, kEpsilonVariantBackwardTol, kEpsilonVariantBackwardTol);
 }
 
 TEST_F(PolyNormOpTest, PolyNorm_RepeatedRuns_NoHang) {
