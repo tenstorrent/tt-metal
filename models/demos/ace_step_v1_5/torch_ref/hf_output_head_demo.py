@@ -320,6 +320,7 @@ def run_hf_output_head_demo(
     input_pt: str | None = None,
     noise_std: float = 1.0,
     offline: bool = False,
+    return_tensors: bool = False,
 ) -> dict:
     """
     Programmatic entrypoint used by pytest.
@@ -419,7 +420,7 @@ def run_hf_output_head_demo(
 
     y_f = y.float()
     t_p = int(patches.shape[1])
-    return {
+    result = {
         "repo_id": repo_id,
         "snapshot_dir": str(snapshot_dir),
         "model_dir": str(model_dir),
@@ -447,6 +448,19 @@ def run_hf_output_head_demo(
             "first8": [float(v) for v in y_f.reshape(-1)[:8].tolist()],
         },
     }
+    if return_tensors:
+        result["tensors"] = {
+            "y_torch": y.detach().cpu(),
+            "patches": patches.detach().cpu(),
+            "temb": temb.detach().cpu(),
+            "x_latent": x.detach().cpu(),
+            "meta": {
+                "original_seq_len": int(meta.original_seq_len),
+                "pad_length": int(meta.pad_length),
+                "patch_size": int(meta.patch_size),
+            },
+        }
+    return result
 
 
 if __name__ == "__main__":
