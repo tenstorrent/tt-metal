@@ -1,6 +1,6 @@
 # PI0.5 (`pi0_5`) — Tenstorrent
 
-End-to-end TTNN implementation of the **π₀.₅** (PI0.5) vision-language-action policy on Blackhole, with a PyTorch reference, LIBERO simulator integration, and a real-weights perf path that runs at **~96 ms / chunk** (~520 actions/s) with trace+2CQ.
+End-to-end TTNN implementation of the **π₀.₅** (PI0.5) vision-language-action policy on Blackhole, with a PyTorch reference, LIBERO simulator integration, and a real-weights perf path that runs at **~64.85 ms / chunk** (~770 actions/s) with trace+2CQ.
 
 This package is **self-contained** — it does not import from `models/experimental/pi0/`.
 
@@ -195,18 +195,42 @@ All tests below are skipped automatically if `models/experimental/pi0_5/weights/
 
 ### PCC (correctness) tests
 
+The suite is layered: per-component → sub-model → end-to-end → diagnostic drilldowns. All TTNN-vs-torch tests need a Blackhole device and the real `pi05_base` weights.
+
 ```bash
-# Run all PCC tests (no device required for some; the *_real_weights tests
-# need a Blackhole device for the TTNN path)
+# Run the whole suite
 PYTHONPATH=$PWD python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/
 
-# Individual:
-python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/test_pcc_suffix.py            # suffix layer (sincos+MLP, time_mlp_out silu)
-python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/test_pcc_adarms_gemma.py      # AdaRMS Gemma block
-python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/test_pcc_e2e_reference.py     # E2E reference (no device)
-python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/test_pcc_real_weights.py      # E2E pytorch with real pi05_base weights
-python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/test_pcc_ttnn_real_weights.py # E2E TTNN with real weights — needs device
+# Component-level (TTNN module vs torch reference)
+python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/test_pcc_gemma_vs_torch.py     # GemmaMLPTTNN
+python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/test_pcc_prefix_vs_torch.py    # PrefixEmbeddingTTNN
+python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/test_pcc_siglip_vs_torch.py    # SigLIPVisionTowerTTNN
+python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/test_pcc_suffix_vs_torch.py    # Pi0_5SuffixEmbeddingTTNN
+
+# Sub-model
+python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/test_pcc_paligemma_vs_torch.py # PaliGemma backbone (VLM + Expert)
+
+# End-to-end (full 10-step denoise)
+python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/test_pcc_pi05_model_vs_torch.py    # single seed
+python models/experimental/pi0_5/tests/pcc/test_pcc_pi05_per_step_vs_torch.py                     # primary gate: 10-seed E2E sweep
+
+# Diagnostic block-level drilldowns
+python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/test_pcc_vlm_block_drilldown.py     # one VLM block, sub-step PCC
+python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/test_pcc_expert_block_drilldown.py  # one AdaRMS expert block
 ```
+
+**Primary gate:** `test_pcc_pi05_per_step_vs_torch.py` runs the real `sample_actions()` path across N seeds (default 10) and gates on the **mean** E2E PCC. E2E PCC is intrinsically seed-sensitive because flow-matching with random initial noise is a chaotic dynamical system — a 10-step Euler integration of a learned velocity field amplifies tiny per-step bf16 drift differently per input. The sweep is the implementation-quality signal; a single seed is not.
+
+**Latest E2E PCC distribution (10-seed sweep, real `pi05_base` weights):**
+
+| metric | value |
+|---|---|
+| mean | **0.991** |
+| stdev | 0.007 |
+| min | 0.978 |
+| max | 0.998 |
+| pass rate (PCC ≥ 0.95) | **10/10** |
+| per-step velocity PCC (worst step, single seed) | 0.993 |
 
 ### Perf tests (Blackhole)
 
@@ -214,22 +238,22 @@ python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/test_pcc_ttnn_rea
 # Headline: full sample_actions with trace
 PYTHONPATH=$PWD python_env/bin/pytest -xvs \
   models/experimental/pi0_5/tests/perf/test_perf_ttnn_full_e2e_trace.py
-#  → Per-call avg ≈ 96-103 ms (N=10),  Action throughput ≈ 487-520 actions/s
+#  → Per-call avg ≈ 64-65 ms (N=10),  Action throughput ≈ 770 actions/s
 
 # Without trace
 PYTHONPATH=$PWD python_env/bin/pytest -xvs \
   models/experimental/pi0_5/tests/perf/test_perf_ttnn_full_e2e.py
 ```
 
-**Latest measured trace-mode perf (Blackhole, N=10, after the matmul-sharding port from `pi0_p150`):**
+**Latest measured trace-mode perf (Blackhole, N=10, with SigLIP block-sharded encoder + adaRMS expert + sharded LayerNorm/RMSNorm):**
 
 | metric | value |
 |---|---|
-| per-call latency | **96.26 ms** |
-| chunk throughput | 9.74 chunks/s |
-| action throughput | **519.4 actions/s** |
-| jitter (stddev) | 0.04 ms |
+| per-call latency | **64.85 ms** |
+| chunk throughput | 15.42 chunks/s |
+| action throughput | **770 actions/s** |
 | trace capture (one-time) | ~475 ms |
+
 
 ---
 
@@ -313,17 +337,7 @@ python_env/bin/python -u models/experimental/pi0_5/eval/libero_rollout.py \
 # → 80 episodes, ~50 min wall, 80 mp4s organized as N{4,10}/<suite>/...
 ```
 
-### Latest measured task success (TTNN, 1 init/task, after the silu fix + perf port)
 
-| Suite | N=4 | N=10 |
-|---|---|---|
-| libero_spatial | 9/10 (90%) | 9/10 (90%) |
-| libero_object | 9/10 (90%) | 9/10 (90%) |
-| libero_goal | 7/10 (70%) | 8/10 (80%) |
-| libero_10 (long-horizon) | 7/10 (70%) | 7/10 (70%) |
-| **total** | **32/40 (80%)** | **33/40 (82.5%)** |
-
-Per-chunk inference: ~225 ms at N=4, ~490 ms at N=10 (untraced, includes per-chunk host→device transfers; trace mode is ~100 ms at N=10).
 
 ---
 
@@ -352,21 +366,6 @@ huggingface-cli login
 |---|---|---|---|
 | `pi05_base` | [`lerobot/pi05_base`](https://huggingface.co/lerobot/pi05_base) | ~14.5 GB | PCC tests, perf tests, general inference |
 | `pi05_libero_finetuned` | [`lerobot/pi05_libero_finetuned_v044`](https://huggingface.co/lerobot/pi05_libero_finetuned_v044) | ~7.5 GB | LIBERO simulator evaluation |
-
-### Checkpoint format
-
-The expert checkpoint must contain the adaRMS modulation tensors per layer:
-
-```
-model.layers.{i}.input_layernorm.dense.weight     # (3 * width, width)
-model.layers.{i}.input_layernorm.dense.bias       # (3 * width,)             optional
-model.layers.{i}.post_attention_layernorm.dense.weight
-model.layers.{i}.post_attention_layernorm.dense.bias
-```
-
-…and the suffix checkpoint must contain `time_mlp_in.{weight,bias}` / `time_mlp_out.{weight,bias}` in addition to `action_in_proj` and `action_out_proj`. `state_proj` and `action_time_mlp_*` from PI0 are **not** used.
-
-If your checkpoint uses different names, add a rename pass in `Pi0_5WeightLoader.state_dict` (already strips lerobot's `model.` prefix automatically).
 
 ---
 
