@@ -1,0 +1,190 @@
+name: "(triage) Promote issue and notify assignees"
+
+# Dispatched by BrAIn after reviewing duplicates and selecting assignees.
+# Promotes the issue (removes triage label, adds assignees) OR closes as duplicate,
+# then DMs each assignee on Slack.
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "GitHub issue number to operate on"
+        required: true
+        type: string
+      assignees:
+        description: "Comma-separated GitHub handles to assign and DM (used when promote=true)"
+        required: false
+        default: ""
+        type: string
+      promote:
+        description: "true = remove triage label, add assignees; false = skip (use with close_as_duplicate_of)"
+        required: false
+        default: "true"
+        type: string
+      close_as_duplicate_of:
+        description: "Close this issue as a duplicate of this issue number (leave blank to promote instead)"
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Promote and notify
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          INPUT_ISSUE_NUMBER: ${{ inputs.issue_number }}
+          INPUT_ASSIGNEES: ${{ inputs.assignees }}
+          INPUT_PROMOTE: ${{ inputs.promote }}
+          INPUT_CLOSE_AS_DUPLICATE_OF: ${{ inputs.close_as_duplicate_of }}
+        run: |
+          python3 << 'PYEOF'
+          import json, os, urllib.request, urllib.parse, urllib.error
+
+          REPO = "tenstorrent/tt-metal"
+          GH_TOKEN = os.environ["GH_TOKEN"]
+          SLACK_TOKEN = os.environ["SLACK_BOT_TOKEN"]
+          ISSUE_NUM = int(os.environ["INPUT_ISSUE_NUMBER"])
+          ASSIGNEES = [a.strip() for a in os.environ.get("INPUT_ASSIGNEES", "").split(",") if a.strip()]
+          PROMOTE = os.environ.get("INPUT_PROMOTE", "true").lower() == "true"
+          CLOSE_AS_DUP_OF = os.environ.get("INPUT_CLOSE_AS_DUPLICATE_OF", "").strip()
+
+          # GitHub handle -> Slack UID (team roster)
+          GH_TO_SLACK = {
+              "tt-rkim":      "U014XCQ9CF8",
+              "ttmchiou":     "U085LTYEC00",
+              "blozano-tt":   "U07J3K6KS1K",
+              "afuller-TT":   "U088NCP32NP",
+              "roseli-TT":    "U08DEGUJY3H",
+              "ebanerjeeTT":  "U08GTDV8MDH",
+              "nsextonTT":    "U08TVGQGGAE",
+              "arshahTT":     "U0908S3LUMD",
+              "jlakisTT":     "U0982FCD80N",
+              "jbakerTT":     "U096E1BFQQ0",
+          }
+
+          def gh_api(method, path, body=None):
+              url = f"https://api.github.com/{path}"
+              data = json.dumps(body).encode() if body else None
+              req = urllib.request.Request(url, data=data, method=method, headers={
+                  "Authorization": f"token {GH_TOKEN}",
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "Content-Type": "application/json",
+              })
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  return json.loads(r.read())
+
+          def slack_call(endpoint, payload=None, params=None):
+              if params:
+                  url = f"https://slack.com/api/{endpoint}?" + urllib.parse.urlencode(params)
+                  req = urllib.request.Request(url, headers={"Authorization": f"Bearer {SLACK_TOKEN}"})
+              else:
+                  data = json.dumps(payload).encode()
+                  req = urllib.request.Request(
+                      f"https://slack.com/api/{endpoint}",
+                      data=data,
+                      headers={"Authorization": f"Bearer {SLACK_TOKEN}", "Content-Type": "application/json"}
+                  )
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  return json.loads(r.read())
+
+          def lookup_uid_by_email(email):
+              try:
+                  resp = slack_call("users.lookupByEmail", params={"email": email})
+                  if resp.get("ok"):
+                      return resp["user"]["id"]
+              except Exception as e:
+                  print(f"  email lookup {email}: {e}")
+              return None
+
+          def resolve_slack_uid(gh_handle):
+              uid = GH_TO_SLACK.get(gh_handle)
+              if uid:
+                  return uid
+              # Fallback: try tenstorrent.com email patterns
+              # Handles like "bkeith-TT" -> try bkeith@tenstorrent.com
+              clean = gh_handle.lower().replace("-tt", "").replace("tt-", "")
+              for email in [f"{clean}@tenstorrent.com"]:
+                  uid = lookup_uid_by_email(email)
+                  if uid:
+                      print(f"  Resolved {gh_handle} -> {uid} via {email}")
+                      return uid
+              return None
+
+          # Fetch issue details
+          issue = gh_api("GET", f"repos/{REPO}/issues/{ISSUE_NUM}")
+          issue_url = issue["html_url"]
+          issue_title = issue["title"]
+          print(f"Operating on issue #{ISSUE_NUM}: {issue_title}")
+
+          if CLOSE_AS_DUP_OF:
+              # Close as duplicate
+              dup_num = int(CLOSE_AS_DUP_OF)
+              try:
+                  dup_issue = gh_api("GET", f"repos/{REPO}/issues/{dup_num}")
+                  dup_url = dup_issue["html_url"]
+              except Exception:
+                  dup_url = f"https://github.com/{REPO}/issues/{dup_num}"
+
+              gh_api("POST", f"repos/{REPO}/issues/{ISSUE_NUM}/comments", {
+                  "body": f"Closing as duplicate of #{dup_num}: {dup_url}\n\nIdentified during automated triage."
+              })
+              gh_api("POST", f"repos/{REPO}/issues/{ISSUE_NUM}/labels", {"labels": ["duplicate"]})
+              gh_api("PATCH", f"repos/{REPO}/issues/{ISSUE_NUM}", {
+                  "state": "closed",
+                  "state_reason": "not_planned",
+              })
+              print(f"Closed #{ISSUE_NUM} as duplicate of #{dup_num}")
+
+          elif PROMOTE:
+              print(f"Promoting issue #{ISSUE_NUM}, assignees: {ASSIGNEES}")
+
+              if ASSIGNEES:
+                  gh_api("POST", f"repos/{REPO}/issues/{ISSUE_NUM}/assignees", {"assignees": ASSIGNEES})
+
+              # Remove 'triage' label
+              try:
+                  req = urllib.request.Request(
+                      f"https://api.github.com/repos/{REPO}/issues/{ISSUE_NUM}/labels/triage",
+                      method="DELETE",
+                      headers={
+                          "Authorization": f"token {GH_TOKEN}",
+                          "Accept": "application/vnd.github+json",
+                      }
+                  )
+                  urllib.request.urlopen(req, timeout=30)
+                  print("  Removed 'triage' label")
+              except Exception as e:
+                  print(f"  Could not remove triage label: {e}")
+
+              assignee_mentions = " ".join(f"@{a}" for a in ASSIGNEES) if ASSIGNEES else "(none)"
+              gh_api("POST", f"repos/{REPO}/issues/{ISSUE_NUM}/comments", {
+                  "body": (
+                      f"Issue promoted from triage and assigned to: {assignee_mentions}\n\n"
+                      f"Duplicate check passed. Ready for investigation."
+                  )
+              })
+
+              # DM each assignee on Slack
+              for handle in ASSIGNEES:
+                  uid = resolve_slack_uid(handle)
+                  if uid:
+                      msg = (
+                          f"Hey <@{uid}>! You've been assigned to a triage issue in tt-metal:\n\n"
+                          f"*#{ISSUE_NUM}* - {issue_title}\n{issue_url}\n\n"
+                          f"This passed the duplicate check and is ready for investigation. "
+                          f"Please take a look when you get a chance!"
+                      )
+                      resp = slack_call("chat.postMessage", {"channel": uid, "text": msg})
+                      print(f"  DM'd {handle} ({uid}): ok={resp.get('ok')} error={resp.get('error')!r}")
+                  else:
+                      print(f"  No Slack UID for {handle} - skipping DM")
+
+          print("Done.")
+          PYEOF
