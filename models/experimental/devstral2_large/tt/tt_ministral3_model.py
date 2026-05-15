@@ -34,6 +34,7 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.devstral2_large.tt.model_utils import (
+    devstral_to_memory_if_needed,
     get_decode_mem_config_after_hidden_dim_concat,
 )
 from models.experimental.devstral2_large.tt.tt_ministral3_decoder_layer import (
@@ -142,7 +143,7 @@ class TtMinistral3Model(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG if self.prefetcher is None else skip_mem_cfg,
         )
         out = ttnn.unsqueeze_to_4D(embd_out)
-        return ttnn.to_memory_config(out, skip_mem_cfg)
+        return devstral_to_memory_if_needed(out, skip_mem_cfg)
 
     def _default_position_ids_tt(self, batch_size: int, seq_len: int, *, past_seen_tokens: int = 0) -> ttnn.Tensor:
         """Contiguous indices ``past_seen_tokens .. past_seen_tokens+seq_len-1`` per row (uint32, ROW_MAJOR)."""
@@ -259,7 +260,7 @@ class TtMinistral3Model(LightweightModule):
                 if self.prefetcher is None and not self.args.is_galaxy
                 else skip_mem_cfg
             )
-            hidden_states = ttnn.to_memory_config(hidden_states, post_hidden_concat)
+            hidden_states = devstral_to_memory_if_needed(hidden_states, post_hidden_concat)
 
         b = int(hidden_states.shape[0])
         s = int(hidden_states.shape[2])
