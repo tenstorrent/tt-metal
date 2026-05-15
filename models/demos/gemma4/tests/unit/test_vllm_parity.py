@@ -11,10 +11,10 @@ attention machinery that's specific to the vLLM-shape path. The
 existing ``test_attention.py`` / ``test_layer.py`` / ``test_model.py``
 suite covers the uniform-shape side of that comparison.
 
-Each test runs at the system's largest available mesh, matching the
-e2e tests' parametrization — so on an 8-device runner 31B is exercised
-at TP=8 as it would be in vLLM serving, not at an unrealistic 1x1
-where the full-attention concat-heads CB overflows L1.
+Single-device tests only — these exercise correctness of cache
+indexing, not CCL, so a full mesh adds time without adding signal. See
+[[feedback_single_device_tests]] for the same rationale applied to
+other unit tests.
 """
 
 import pytest
@@ -23,7 +23,6 @@ import torch
 import ttnn
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.attention import Gemma4Attention, Gemma4AttentionConfig
-from models.demos.gemma4.tt.ccl import CCLManager
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 
@@ -49,20 +48,10 @@ def test_layout_matches_unifier_for_gemma4_e2b():
     head_dim=256, full head_dim=512), starting from a requested
     ``block_size=64``: sliding's page_size is half of full's, so the
     unifier doubles sliding's block_size to 128 while full stays at 64.
-
-    Other variants (E4B, 26B-A4B, 31B) have sliding's per-block bytes
-    ≥ full's (more sliding kv-heads), so the unifier either no-ops or
-    doubles *full* instead — opposite of E2B. The assertions below are
-    E2B-specific; skip on those variants.
     """
     hf_config = TestFactory.create_hf_config()
-    sliding_units = hf_config.num_key_value_heads * hf_config.head_dim
-    full_units = hf_config.num_global_key_value_heads * hf_config.global_head_dim
-    if sliding_units >= full_units:
-        pytest.skip(
-            f"Sliding per-block bytes ({sliding_units}) ≥ full ({full_units}) — "
-            "unifier doesn't double sliding for this variant"
-        )
+    if hf_config.head_dim == getattr(hf_config, "global_head_dim", hf_config.head_dim):
+        pytest.skip("Model has uniform head_dim — unifier is a no-op on this variant")
 
     layout = Gemma4VllmLayout.from_hf_config(
         hf_config,
@@ -208,48 +197,7 @@ def _from_device(tensor, mesh_device):
     return ttnn.to_torch(tensor)
 
 
-def _kv_torch_to_tt(k_torch, mesh_device, *, num_kv_heads, num_attention_heads, tp, num_devices):
-    """Send a [1, num_kv_heads, seq, head_dim] KV tensor to the mesh in
-    the same layout production's K_proj weight sharding produces.
-
-    * Single device: bare ``from_torch``.
-    * Sharded (``num_kv_heads >= tp``): ``ShardTensorToMesh(dim=1)`` —
-      contiguous chunk of ``num_kv_heads/tp`` heads per device.
-    * GQA-replicated (``num_kv_heads < tp``): build a per-device stack
-      on dim 0 with each device i's KV head chosen via the production
-      mapping ``kv_idx = (i * q_per_device) * num_kv_heads //
-      num_attention_heads`` (see ``attention/weights.py``).
-    """
-    is_mesh = num_devices > 1
-    if not is_mesh:
-        return ttnn.from_torch(
-            k_torch.to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-        )
-    kv_replicated = num_kv_heads < tp
-    if not kv_replicated:
-        return ttnn.from_torch(
-            k_torch.to(torch.bfloat16),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
-        )
-    q_per_device = num_attention_heads // tp
-    per_device_slices = []
-    for dev_i in range(num_devices):
-        kv_idx = (dev_i * q_per_device) * num_kv_heads // num_attention_heads
-        per_device_slices.append(k_torch[:, kv_idx : kv_idx + 1, :, :])
-    stacked = torch.cat(per_device_slices, dim=0)
-    return ttnn.from_torch(
-        stacked.to(torch.bfloat16),
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
-    )
-
-
-@parametrize_mesh_with_fabric()
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 @pytest.mark.parametrize("layer_type", ["sliding_attention", "full_attention"], ids=["sliding", "full"])
 def test_attention_paged_decode_via_harness(layer_type, mesh_device, reset_seeds, request):
     """Single-layer paged decode using the vllm-harness-allocated cache.
@@ -271,10 +219,6 @@ def test_attention_paged_decode_via_harness(layer_type, mesh_device, reset_seeds
         pytest.skip(f"No {layer_type} layer in this model")
 
     hf_config = TestFactory.create_hf_config()
-    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
-    num_devices = mesh_device.get_num_devices() if hasattr(mesh_device, "get_num_devices") else 1
-    is_mesh = num_devices > 1
-
     # Build a tiny vllm-style layout — just enough layers to land a
     # ``layer_idx`` of the requested type and (for ``full_attention``)
     # also include the first sliding so HMA sharing is exercised.
@@ -291,8 +235,6 @@ def test_attention_paged_decode_via_harness(layer_type, mesh_device, reset_seeds
         max_model_len=cache_len + 64,
         requested_block_size=requested_block_size,
         num_layers=n_layers,
-        tp=tp,
-        num_devices=num_devices,
     )
 
     hf_layer = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx)
@@ -300,13 +242,12 @@ def test_attention_paged_decode_via_harness(layer_type, mesh_device, reset_seeds
     config = Gemma4AttentionConfig(hf_config, layer_idx)
 
     state_dict = {k: v.clone() for k, v in hf_attn.state_dict().items() if not k.startswith("v_norm")}
-    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp))
-    ccl_manager = CCLManager(mesh_device, num_links=1) if tp > 1 else None
+    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=1))
     tt_attn = Gemma4Attention(
         mesh_device=mesh_device,
         config=config,
         state_dict=state_dict,
-        ccl_manager=ccl_manager,
+        ccl_manager=None,
         mesh_config=mesh_config,
         program_config=None,
         layer_idx=layer_idx,
@@ -321,52 +262,16 @@ def test_attention_paged_decode_via_harness(layer_type, mesh_device, reset_seeds
     req = pool.allocate_request(num_prefill_tokens=cache_len)
     per_layer_pts = pool.per_layer_page_tables(req)
     pt_torch = per_layer_pts[layer_idx]
-    pt_tt = ttnn.from_torch(
-        pt_torch,
-        device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.int32,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
-    )
+    pt_tt = ttnn.from_torch(pt_torch, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
 
     # Fill K/V with random reference content at the request's blocks.
-    # On multi-device, _kv_torch_to_tt mirrors production K_proj sharding
-    # so each device receives the slice its Q heads will attend against.
     k_ref = torch.randn(1, config.num_key_value_heads, cache_len, config.head_dim)
     v_ref = torch.randn(1, config.num_key_value_heads, cache_len, config.head_dim)
-    k_fill = _kv_torch_to_tt(
-        k_ref,
-        mesh_device,
-        num_kv_heads=config.num_key_value_heads,
-        num_attention_heads=config.num_attention_heads,
-        tp=tp,
-        num_devices=num_devices,
-    )
-    v_fill = _kv_torch_to_tt(
-        v_ref,
-        mesh_device,
-        num_kv_heads=config.num_key_value_heads,
-        num_attention_heads=config.num_attention_heads,
-        tp=tp,
-        num_devices=num_devices,
-    )
+    k_fill = ttnn.from_torch(k_ref.to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    v_fill = ttnn.from_torch(v_ref.to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     k_cache_tt, v_cache_tt = kv_per_layer[layer_idx]
-    # Per-block element-count invariant under HMA cross-group sharing:
-    # input_kv * eff_bs * input_hd == cache_kv * cache_bs * cache_hd
-    # → eff_bs = cache_kv * cache_bs * cache_hd // (input_kv * input_hd)
-    # Required when sliding (kv=8/16) and full (kv=2/4) layers share one buffer
-    # on 26B-A4B / 31B at small TP. Mirrors the production helper at
-    # models/demos/gemma4/tt/attention/operations.py:effective_block_size.
-    # input_kv is the per-device kv-heads of the *fill* tensor (what
-    # _kv_torch_to_tt produces above), which matches production's
-    # split_qkv_heads_decode: 1 under GQA replication, else config.kv // tp.
-    # This may differ from cache.padded_shape[1] when the buffer was
-    # allocated for a different layer type under HMA (e.g. full layer
-    # reading a sliding-allocated cache on 26B-A4B at TP=4).
-    input_kv_per_dev = 1 if config.num_key_value_heads < tp else config.num_key_value_heads // tp
-    effective_block_size = (k_cache_tt.padded_shape[1] * k_cache_tt.padded_shape[2] * k_cache_tt.padded_shape[-1]) // (
-        input_kv_per_dev * config.head_dim
-    )
+    li = layout.per_layer[layer_idx]
+    effective_block_size = k_cache_tt.padded_shape[2] * k_cache_tt.padded_shape[-1] // config.head_dim
     # Same call shape ``attention/prefill.py`` uses on the vllm path.
     ttnn.experimental.paged_fill_cache(k_cache_tt, k_fill, pt_tt, batch_idx=0, block_size=effective_block_size)
     ttnn.experimental.paged_fill_cache(v_cache_tt, v_fill, pt_tt, batch_idx=0, block_size=effective_block_size)
@@ -406,14 +311,12 @@ def test_attention_paged_decode_via_harness(layer_type, mesh_device, reset_seeds
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
     )
     position_idx_tt = ttnn.from_torch(
         torch.tensor([[cache_len]], dtype=torch.int32),
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=ttnn.int32,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
     )
     tt_output = tt_attn(
         x_tt,
@@ -423,7 +326,7 @@ def test_attention_paged_decode_via_harness(layer_type, mesh_device, reset_seeds
         token_index=cache_len,
         page_table=pt_tt,
     )
-    tt_output_torch = _from_device(tt_output, mesh_device).squeeze(0).float()
+    tt_output_torch = ttnn.to_torch(tt_output).squeeze(0).float()
     passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=get_pcc_threshold(request))
     assert passing, (
         f"vllm-harness paged decode (layer_type={layer_type}, "
@@ -435,7 +338,7 @@ def test_attention_paged_decode_via_harness(layer_type, mesh_device, reset_seeds
 # ── KV-sharing alias round trip ──────────────────────────────────────
 
 
-@parametrize_mesh_with_fabric()
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 def test_kv_shared_alias_round_trip(mesh_device, reset_seeds):
     """A shared layer reads what its source wrote, via the alias.
 
@@ -448,7 +351,7 @@ def test_kv_shared_alias_round_trip(mesh_device, reset_seeds):
     """
     hf_config = TestFactory.create_hf_config()
     try:
-        find_layer_idx(hf_config, "sliding_attention")
+        sliding_idx = find_layer_idx(hf_config, "sliding_attention")
     except ValueError:
         pytest.skip("No sliding layer in this model")
 
@@ -458,10 +361,6 @@ def test_kv_shared_alias_round_trip(mesh_device, reset_seeds):
     if hf_config.layer_types[1] != "sliding_attention":
         pytest.skip("Test assumes layer 1 is also sliding (Gemma4 layer-type pattern)")
 
-    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
-    num_devices = mesh_device.get_num_devices() if hasattr(mesh_device, "get_num_devices") else 1
-    is_mesh = num_devices > 1
-
     layout = Gemma4VllmLayout.from_hf_config(
         hf_config,
         num_blocks=8,
@@ -469,8 +368,6 @@ def test_kv_shared_alias_round_trip(mesh_device, reset_seeds):
         requested_block_size=64,
         num_layers=2,
         kv_shared_map={1: 0},
-        tp=tp,
-        num_devices=num_devices,
     )
     assert layout.kv_shared_map == {1: 0}
 
@@ -486,32 +383,12 @@ def test_kv_shared_alias_round_trip(mesh_device, reset_seeds):
     pool = Gemma4VllmRequestPool(layout)
     req = pool.allocate_request(num_prefill_tokens=64)
     per_layer_pts = pool.per_layer_page_tables(req)
-    pt_layer_0 = ttnn.from_torch(
-        per_layer_pts[0],
-        device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.int32,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
-    )
+    pt_layer_0 = ttnn.from_torch(per_layer_pts[0], device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
 
-    # Per-device K shape matches the harness-allocated cache shape; data
-    # content doesn't matter (the test only checks Python identity of
-    # the alias, not data correctness — that's covered by the
-    # full-model parity tests).
+    k_ref = torch.randn(1, config0.num_key_value_heads, 64, config0.head_dim)
+    k_fill = ttnn.from_torch(k_ref.to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     k_cache_tt, _ = kv_per_layer[0]
-    num_local_kv_heads = k_cache_tt.padded_shape[1]
-    k_ref = torch.randn(1, num_local_kv_heads, 64, config0.head_dim)
-    k_fill = ttnn.from_torch(
-        k_ref.to(torch.bfloat16),
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
-    )
-    # See test_attention_paged_decode_via_harness for the asymmetric-kv formula.
-    eff_bs = (k_cache_tt.padded_shape[1] * k_cache_tt.padded_shape[2] * k_cache_tt.padded_shape[-1]) // (
-        num_local_kv_heads * config0.head_dim
-    )
+    eff_bs = k_cache_tt.padded_shape[2] * k_cache_tt.padded_shape[-1] // config0.head_dim
     ttnn.experimental.paged_fill_cache(k_cache_tt, k_fill, pt_layer_0, batch_idx=0, block_size=eff_bs)
 
     # Read back: tensor identity guarantees this is the same buffer.
@@ -522,7 +399,7 @@ def test_kv_shared_alias_round_trip(mesh_device, reset_seeds):
 # ── Decoder layer via harness ────────────────────────────────────────
 
 
-@parametrize_mesh_with_fabric()
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 def test_layer_forward_decode_via_harness(mesh_device, reset_seeds, request):
     """Decoder-layer decode with the vLLM harness allocator.
 
@@ -558,17 +435,13 @@ def test_layer_forward_decode_via_harness(mesh_device, reset_seeds, request):
     model_args = _create_gemma4_model_args(hf_text_config)
     attn_cfg = Gemma4AttentionConfig(model_args, layer_idx)
 
-    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
-    num_devices = mesh_device.get_num_devices() if hasattr(mesh_device, "get_num_devices") else 1
-    is_mesh = num_devices > 1
-    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp))
-    ccl_manager = CCLManager(mesh_device, num_links=1) if tp > 1 else None
+    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=1))
     tt_layer = Gemma4DecoderLayer(
         mesh_device=mesh_device,
         hf_config=model_args,
         state_dict=tt_state,
         layer_idx=layer_idx,
-        ccl_manager=ccl_manager,
+        ccl_manager=None,
         dtype=ttnn.bfloat16,
         tensor_cache_path=None,
         mesh_config=mesh_config,
@@ -585,8 +458,6 @@ def test_layer_forward_decode_via_harness(mesh_device, reset_seeds, request):
         max_model_len=cache_len + 64,
         requested_block_size=64,
         num_layers=1,
-        tp=tp,
-        num_devices=num_devices,
     )
     kv_per_layer = allocate_vllm_kv_cache(mesh_device, layout, dtype=ttnn.bfloat16)
     tt_layer.self_attn.kv_cache = kv_per_layer[layer_idx]
@@ -596,39 +467,17 @@ def test_layer_forward_decode_via_harness(mesh_device, reset_seeds, request):
     req = pool.allocate_request(num_prefill_tokens=cache_len)
     per_layer_pts = pool.per_layer_page_tables(req)
     pt_tt = ttnn.from_torch(
-        per_layer_pts[layer_idx],
-        device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.int32,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
+        per_layer_pts[layer_idx], device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32
     )
     k_data = torch.randn(1, attn_cfg.num_key_value_heads, cache_len, attn_cfg.head_dim)
     v_data = torch.randn(1, attn_cfg.num_key_value_heads, cache_len, attn_cfg.head_dim)
     k_cache_tt, v_cache_tt = kv_per_layer[layer_idx]
-    # See test_attention_paged_decode_via_harness for the asymmetric-kv formula.
-    # input_kv is the per-device kv-heads count of the *fill* tensor
-    # (what _kv_torch_to_tt produces below), which mirrors production's
-    # split_qkv_heads_decode: 1 under GQA replication, else attn_cfg.kv // tp.
-    # Differs from cache.padded_shape[1] under HMA cross-group sharing.
-    input_kv_per_dev = 1 if attn_cfg.num_key_value_heads < tp else attn_cfg.num_key_value_heads // tp
-    eff_bs = (k_cache_tt.padded_shape[1] * k_cache_tt.padded_shape[2] * k_cache_tt.padded_shape[-1]) // (
-        input_kv_per_dev * attn_cfg.head_dim
+    eff_bs = k_cache_tt.padded_shape[2] * k_cache_tt.padded_shape[-1] // attn_cfg.head_dim
+    k_fill = ttnn.from_torch(
+        k_data.to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
     )
-    k_fill = _kv_torch_to_tt(
-        k_data,
-        mesh_device,
-        num_kv_heads=attn_cfg.num_key_value_heads,
-        num_attention_heads=attn_cfg.num_attention_heads,
-        tp=tp,
-        num_devices=num_devices,
-    )
-    v_fill = _kv_torch_to_tt(
-        v_data,
-        mesh_device,
-        num_kv_heads=attn_cfg.num_key_value_heads,
-        num_attention_heads=attn_cfg.num_attention_heads,
-        tp=tp,
-        num_devices=num_devices,
+    v_fill = ttnn.from_torch(
+        v_data.to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
     )
     ttnn.experimental.paged_fill_cache(k_cache_tt, k_fill, pt_tt, batch_idx=0, block_size=eff_bs)
     ttnn.experimental.paged_fill_cache(v_cache_tt, v_fill, pt_tt, batch_idx=0, block_size=eff_bs)
@@ -657,14 +506,12 @@ def test_layer_forward_decode_via_harness(mesh_device, reset_seeds, request):
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
     )
     position_idx_tt = ttnn.from_torch(
         torch.tensor([[cache_len]], dtype=torch.int32),
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=ttnn.int32,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
     )
     tt_output = tt_layer(
         x_tt,
@@ -675,7 +522,7 @@ def test_layer_forward_decode_via_harness(mesh_device, reset_seeds, request):
         is_decode=True,
         token_index=cache_len,
     )
-    tt_output_torch = _from_device(tt_output, mesh_device).squeeze(0).float()
+    tt_output_torch = ttnn.to_torch(tt_output).squeeze(0).float()
     passing, pcc_msg = compare_tensors(tt_output_torch, hf_output, pcc_threshold=get_pcc_threshold(request))
     assert passing, f"layer-decode-via-harness PCC too low: {pcc_msg}"
 
@@ -683,7 +530,7 @@ def test_layer_forward_decode_via_harness(mesh_device, reset_seeds, request):
 # ── Multi-layer parity: uniform vs vLLM-shape ────────────────────────
 
 
-@parametrize_mesh_with_fabric()
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 def test_full_model_parity_uniform_vs_vllm(mesh_device, reset_seeds, request):
     """Run a multi-layer Gemma4 model twice and compare logits.
 
@@ -710,11 +557,16 @@ def test_full_model_parity_uniform_vs_vllm(mesh_device, reset_seeds, request):
     from ...tests.test_factory import num_layers_for_full_attention_group
     from ..unit.test_model import _create_hf_model, _create_hf_text_config, _hf_model_state_to_tt_state
 
-    # Smallest variant of the layer pattern that includes both sliding
-    # and full layers (4 sliding + 1 full for Gemma4-E2B). That covers
-    # the cross-group HMA sharing path.
+    # Single device — pick the smallest variant of the layer pattern
+    # that includes both sliding and full layers (4 sliding + 1 full
+    # for Gemma4-E2B). That covers the cross-group HMA sharing path.
+    hf_config_for_count = TestFactory.create_hf_config()
     base_for_count = _create_hf_text_config(vocab_size=256, num_layers=1)
     num_layers = num_layers_for_full_attention_group(base_for_count)
+
+    # Skip if even the small model overflows L1 on this device.
+    if hf_config_for_count.hidden_size > 4096:
+        pytest.skip("Parity test runs on small-hidden variants only on single device")
 
     hf_text_config = _create_hf_text_config(vocab_size=256, num_layers=num_layers)
     hf_model = _create_hf_model(hf_text_config)
@@ -724,34 +576,26 @@ def test_full_model_parity_uniform_vs_vllm(mesh_device, reset_seeds, request):
 
     seq_len = 32
     decode_steps = 4
-    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
-    num_devices = mesh_device.get_num_devices() if hasattr(mesh_device, "get_num_devices") else 1
-    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp))
-    ccl_manager = CCLManager(mesh_device, num_links=1) if tp > 1 else None
+    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=1))
 
-    # Single shared model across both passes — weights are heavy enough on
-    # 26B-A4B (128 experts × 6 layers) that two simultaneous instances OOM
-    # the per-bank DRAM budget on wh_llmbox. The model's own kv_cache feeds
-    # the uniform pass via the kv_cache=None fall-through, and the vLLM pass
-    # supplies its harness-allocated cache + per-layer page tables as
-    # explicit kwargs. Both passes touch disjoint cache buffers so neither
-    # pollutes the other's state.
-    tt_model = Gemma4Model(
-        mesh_device=mesh_device,
-        hf_config=model_args,
-        state_dict=tt_state,
-        ccl_manager=ccl_manager,
-        dtype=ttnn.bfloat16,
-        tensor_cache_path=None,
-        mesh_config=mesh_config,
-        max_seq_len=seq_len + decode_steps + 32,
-        max_local_batch_size=1,
-        num_layers=num_layers,
-    )
+    def _build_model():
+        return Gemma4Model(
+            mesh_device=mesh_device,
+            hf_config=model_args,
+            state_dict=tt_state,
+            ccl_manager=None,
+            dtype=ttnn.bfloat16,
+            tensor_cache_path=None,
+            mesh_config=mesh_config,
+            max_seq_len=seq_len + decode_steps + 32,
+            max_local_batch_size=1,
+            num_layers=num_layers,
+        )
 
     tokens = torch.randint(0, model_args.vocab_size, (1, seq_len), dtype=torch.long)
 
-    # ── Uniform path: prefill ───────────────────────────────────────
+    # ── Uniform path: prefill + N decode steps ──────────────────────
+    tt_model_uniform = _build_model()
     replicate = _replicate_mapper(mesh_device)
     tt_tokens = ttnn.from_torch(
         tokens.to(torch.int32),
@@ -760,16 +604,16 @@ def test_full_model_parity_uniform_vs_vllm(mesh_device, reset_seeds, request):
         dtype=ttnn.uint32,
         mesh_mapper=replicate,
     )
-    tt_embeds = tt_model.embed_tokens(tt_tokens)
+    tt_embeds = tt_model_uniform.embed_tokens(tt_tokens)
     tt_embeds = ttnn.reshape(tt_embeds, (1, 1, seq_len, model_args.hidden_size))
     tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
-    uniform_prefill_logits = tt_model(
+    uniform_prefill_logits = tt_model_uniform(
         tt_embeds, rope_mats=None, position_idx=None, page_table=None, kv_caches=None, is_decode=False
     )
     uniform_prefill_torch = _from_device(uniform_prefill_logits, mesh_device).float()
-    uniform_prefill_logits.deallocate(True)
 
-    # ── vLLM path: same model, harness-allocated cache + page tables ─
+    # ── vLLM path: same prefill ─────────────────────────────────────
+    tt_model_vllm = _build_model()
     requested_block_size = 64
     max_model_len = seq_len + decode_steps + 32
     layout = Gemma4VllmLayout.from_hf_config(
@@ -781,13 +625,15 @@ def test_full_model_parity_uniform_vs_vllm(mesh_device, reset_seeds, request):
         max_model_len=max_model_len,
         requested_block_size=requested_block_size,
         num_layers=num_layers,
-        tp=tp,
-        num_devices=num_devices,
     )
     kv_per_layer = allocate_vllm_kv_cache(mesh_device, layout, dtype=ttnn.bfloat16)
     pool = Gemma4VllmRequestPool(layout)
     req = pool.allocate_request(num_prefill_tokens=seq_len)
     per_layer_pts = pool.per_layer_page_tables(req)
+    # Stash as the model expects (``_active_page_tables_per_layer``
+    # populated by :class:`HybridAttentionForCausalLM`'s route helper
+    # under vLLM; we set it directly here without the bridge).
+    tt_model_vllm._active_page_tables_per_layer = per_layer_pts
 
     tt_tokens_v = ttnn.from_torch(
         tokens.to(torch.int32),
@@ -796,19 +642,17 @@ def test_full_model_parity_uniform_vs_vllm(mesh_device, reset_seeds, request):
         dtype=ttnn.uint32,
         mesh_mapper=replicate,
     )
-    tt_embeds_v = tt_model.embed_tokens(tt_tokens_v)
+    tt_embeds_v = tt_model_vllm.embed_tokens(tt_tokens_v)
     tt_embeds_v = ttnn.reshape(tt_embeds_v, (1, 1, seq_len, model_args.hidden_size))
     tt_embeds_v = ttnn.to_layout(tt_embeds_v, ttnn.TILE_LAYOUT)
-    vllm_prefill_logits = tt_model.ttnn_prefill_forward(
+    vllm_prefill_logits = tt_model_vllm.ttnn_prefill_forward(
         tt_embeds_v,
         page_table=None,
         kv_cache=kv_per_layer,
         input_ids_torch=tokens,
         embeds_torch=None,
-        page_tables_per_layer=per_layer_pts,
     )
     vllm_prefill_torch = _from_device(vllm_prefill_logits, mesh_device).float()
-    vllm_prefill_logits.deallocate(True)
 
     # Prefill parity — same prompt + same weights + same RoPE, the
     # only difference is paged cache layout. Mismatch here is a bug in
@@ -836,17 +680,9 @@ def test_full_model_parity_uniform_vs_vllm(mesh_device, reset_seeds, request):
 
 
 def _build_parity_models(
-    mesh_device,
-    hf_text_config,
-    model_args,
-    tt_state,
-    mesh_config,
-    num_layers,
-    max_total_len,
-    uniform_paged_cfg,
-    ccl_manager=None,
+    mesh_device, hf_text_config, model_args, tt_state, mesh_config, num_layers, max_total_len, uniform_paged_cfg
 ):
-    """Build the Gemma4Model(s) used by the parity tests.
+    """Build two Gemma4Model instances backed by different kv-cache layouts.
 
     Originally returned two distinct instances (one owning the uniform
     kv-cache, the other with ``create_kv_cache=False`` so its forward
@@ -875,7 +711,7 @@ def _build_parity_models(
         mesh_device=mesh_device,
         hf_config=model_args,
         state_dict=tt_state,
-        ccl_manager=ccl_manager,
+        ccl_manager=None,
         dtype=ttnn.bfloat16,
         tensor_cache_path=None,
         mesh_config=mesh_config,
@@ -884,7 +720,20 @@ def _build_parity_models(
         num_layers=num_layers,
         paged_attention_config=uniform_paged_cfg,
     )
-    return tt_model, tt_model
+    tt_model_vllm = Gemma4Model(
+        mesh_device=mesh_device,
+        hf_config=model_args,
+        state_dict=tt_state,
+        ccl_manager=None,
+        dtype=ttnn.bfloat16,
+        tensor_cache_path=None,
+        mesh_config=mesh_config,
+        max_seq_len=max_total_len,
+        max_local_batch_size=1,
+        num_layers=num_layers,
+        create_kv_cache=False,
+    )
+    return tt_model_uniform, tt_model_vllm
 
 
 def _decode_step_inputs(model, mesh_device, token_id, position):
@@ -1042,7 +891,10 @@ def test_full_model_parity_decode_uniform_vs_vllm(layer_set, decode_steps, mesh_
     from ...tests.test_factory import num_layers_for_full_attention_group
     from ..unit.test_model import _create_hf_model, _create_hf_text_config, _hf_model_state_to_tt_state
 
+    hf_config_for_count = TestFactory.create_hf_config()
     base_for_count = _create_hf_text_config(vocab_size=256, num_layers=1)
+    if hf_config_for_count.hidden_size > 4096:
+        pytest.skip("decode-parity test runs on small-hidden variants only on single device")
 
     if layer_set == "small":
         num_layers = num_layers_for_full_attention_group(base_for_count)
@@ -1083,10 +935,7 @@ def test_full_model_parity_decode_uniform_vs_vllm(layer_set, decode_steps, mesh_
 
     seq_len = 32
     max_total_len = seq_len + decode_steps + 32
-    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
-    num_devices = mesh_device.get_num_devices() if hasattr(mesh_device, "get_num_devices") else 1
-    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp))
-    ccl_manager = CCLManager(mesh_device, num_links=1) if tp > 1 else None
+    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=1))
 
     # ── Uniform paged config ────────────────────────────────────────
     uniform_block_size = 64
@@ -1097,15 +946,7 @@ def test_full_model_parity_decode_uniform_vs_vllm(layer_set, decode_steps, mesh_
     uniform_paged_cfg = PagedAttentionConfig(block_size=uniform_block_size, max_num_blocks=uniform_num_blocks)
 
     tt_model_uniform, tt_model_vllm = _build_parity_models(
-        mesh_device,
-        hf_text_config,
-        model_args,
-        tt_state,
-        mesh_config,
-        num_layers,
-        max_total_len,
-        uniform_paged_cfg,
-        ccl_manager=ccl_manager,
+        mesh_device, hf_text_config, model_args, tt_state, mesh_config, num_layers, max_total_len, uniform_paged_cfg
     )
 
     # ── Harness allocation for the vllm path ────────────────────────
@@ -1119,8 +960,6 @@ def test_full_model_parity_decode_uniform_vs_vllm(layer_set, decode_steps, mesh_
         max_model_len=max_total_len,
         requested_block_size=requested_block_size,
         num_layers=num_layers,
-        tp=tp,
-        num_devices=num_devices,
     )
     kv_vllm = allocate_vllm_kv_cache(mesh_device, layout, dtype=ttnn.bfloat16)
     pool = Gemma4VllmRequestPool(layout)
@@ -1309,7 +1148,7 @@ def _augment_state_with_pli_weights(state_dict, hf_text_config, num_layers, pref
     return state_dict
 
 
-@parametrize_mesh_with_fabric()
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 @pytest.mark.parametrize("decode_steps", [4, 16], ids=lambda n: f"steps{n}")
 @pytest.mark.parametrize("layer_set", ["small", "all_kv_shared"], ids=["small", "all-kv-shared"])
 def test_full_model_parity_decode_with_pli(layer_set, decode_steps, mesh_device, reset_seeds, request):
@@ -1329,6 +1168,10 @@ def test_full_model_parity_decode_with_pli(layer_set, decode_steps, mesh_device,
 
     from ...tests.test_factory import num_layers_for_full_attention_group
     from ..unit.test_model import _create_hf_model, _hf_model_state_to_tt_state
+
+    hf_config_for_count = TestFactory.create_hf_config()
+    if hf_config_for_count.hidden_size > 4096:
+        pytest.skip("PLI parity test runs on small-hidden variants only on single device")
 
     if layer_set == "small":
         base = _create_hf_text_config_with_pli(vocab_size=256, num_layers=1, pli_size=64)
@@ -1359,24 +1202,13 @@ def test_full_model_parity_decode_with_pli(layer_set, decode_steps, mesh_device,
 
     seq_len = 32
     max_total_len = seq_len + decode_steps + 32
-    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
-    num_devices = mesh_device.get_num_devices() if hasattr(mesh_device, "get_num_devices") else 1
-    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp))
-    ccl_manager = CCLManager(mesh_device, num_links=1) if tp > 1 else None
+    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=1))
 
     uniform_block_size = 64
     uniform_num_blocks = max(16, (max_total_len + uniform_block_size - 1) // uniform_block_size * 2)
     uniform_paged_cfg = PagedAttentionConfig(block_size=uniform_block_size, max_num_blocks=uniform_num_blocks)
     tt_model_uniform, tt_model_vllm = _build_parity_models(
-        mesh_device,
-        hf_text_config,
-        model_args,
-        tt_state,
-        mesh_config,
-        num_layers,
-        max_total_len,
-        uniform_paged_cfg,
-        ccl_manager=ccl_manager,
+        mesh_device, hf_text_config, model_args, tt_state, mesh_config, num_layers, max_total_len, uniform_paged_cfg
     )
     # Sanity: PLI weights actually loaded on both sides.
     assert tt_model_uniform.per_layer_input_weights, "uniform model missing PLI weights"
@@ -1389,8 +1221,6 @@ def test_full_model_parity_decode_with_pli(layer_set, decode_steps, mesh_device,
         max_model_len=max_total_len,
         requested_block_size=requested_block_size,
         num_layers=num_layers,
-        tp=tp,
-        num_devices=num_devices,
     )
     kv_vllm = allocate_vllm_kv_cache(mesh_device, layout, dtype=ttnn.bfloat16)
     pool = Gemma4VllmRequestPool(layout)
@@ -1503,7 +1333,7 @@ def test_full_model_parity_decode_with_pli(layer_set, decode_steps, mesh_device,
 # ── Trace-replay parity: the path the chat-completion server actually uses ──
 
 
-@parametrize_mesh_with_fabric()
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 @pytest.mark.parametrize("decode_steps", [4], ids=lambda n: f"steps{n}")
 @pytest.mark.parametrize("layer_set", ["small", "all_kv_shared"], ids=["small", "all-kv-shared"])
 @pytest.mark.parametrize("pli", [False, True], ids=["no-pli", "pli"])
@@ -1539,6 +1369,10 @@ def test_full_model_parity_decode_trace(layer_set, decode_steps, pli, mesh_devic
 
     from ...tests.test_factory import num_layers_for_full_attention_group
     from ..unit.test_model import _create_hf_model, _hf_model_state_to_tt_state
+
+    hf_config_for_count = TestFactory.create_hf_config()
+    if hf_config_for_count.hidden_size > 4096:
+        pytest.skip("trace-parity test runs on small-hidden variants only on single device")
 
     # ── Build config ─────────────────────────────────────────────────
     if pli:
@@ -1587,23 +1421,12 @@ def test_full_model_parity_decode_trace(layer_set, decode_steps, pli, mesh_devic
 
     seq_len = 32
     max_total_len = seq_len + decode_steps + 32
-    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
-    num_devices = mesh_device.get_num_devices() if hasattr(mesh_device, "get_num_devices") else 1
-    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp))
-    ccl_manager = CCLManager(mesh_device, num_links=1) if tp > 1 else None
+    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=1))
     uniform_block_size = 64
     uniform_num_blocks = max(16, (max_total_len + uniform_block_size - 1) // uniform_block_size * 2)
     uniform_paged_cfg = PagedAttentionConfig(block_size=uniform_block_size, max_num_blocks=uniform_num_blocks)
     tt_model_uniform, tt_model_vllm = _build_parity_models(
-        mesh_device,
-        hf_text_config,
-        model_args,
-        tt_state,
-        mesh_config,
-        num_layers,
-        max_total_len,
-        uniform_paged_cfg,
-        ccl_manager=ccl_manager,
+        mesh_device, hf_text_config, model_args, tt_state, mesh_config, num_layers, max_total_len, uniform_paged_cfg
     )
 
     # ── Wrap each model in a minimal Generator ──────────────────────
@@ -1620,8 +1443,6 @@ def test_full_model_parity_decode_trace(layer_set, decode_steps, pli, mesh_devic
         max_model_len=max_total_len,
         requested_block_size=requested_block_size,
         num_layers=num_layers,
-        tp=tp,
-        num_devices=num_devices,
     )
     kv_vllm = allocate_vllm_kv_cache(mesh_device, layout, dtype=ttnn.bfloat16)
     pool = Gemma4VllmRequestPool(layout)
@@ -1754,7 +1575,7 @@ def test_full_model_parity_decode_trace(layer_set, decode_steps, pli, mesh_devic
 # ── Warmup-then-inference trace parity: the exact vLLM production flow ──
 
 
-@parametrize_mesh_with_fabric()
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 @pytest.mark.parametrize("decode_steps", [4], ids=lambda n: f"steps{n}")
 @pytest.mark.parametrize("layer_set", ["small", "all_kv_shared"], ids=["small", "all-kv-shared"])
 @pytest.mark.parametrize("pli", [False, True], ids=["no-pli", "pli"])
@@ -1796,6 +1617,10 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
     from ...tests.test_factory import num_layers_for_full_attention_group
     from ..unit.test_model import _create_hf_model, _hf_model_state_to_tt_state
 
+    hf_config_for_count = TestFactory.create_hf_config()
+    if hf_config_for_count.hidden_size > 4096:
+        pytest.skip("warmup-then-inference test runs on small-hidden variants only on single device")
+
     if pli:
         if layer_set == "small":
             base = _create_hf_text_config_with_pli(vocab_size=256, num_layers=1, pli_size=64)
@@ -1834,23 +1659,12 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
 
     seq_len = 32
     max_total_len = seq_len + decode_steps + 32
-    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
-    num_devices = mesh_device.get_num_devices() if hasattr(mesh_device, "get_num_devices") else 1
-    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp))
-    ccl_manager = CCLManager(mesh_device, num_links=1) if tp > 1 else None
+    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=1))
     uniform_block_size = 64
     uniform_num_blocks = max(16, (max_total_len + uniform_block_size - 1) // uniform_block_size * 2)
     uniform_paged_cfg = PagedAttentionConfig(block_size=uniform_block_size, max_num_blocks=uniform_num_blocks)
     tt_model_uniform, tt_model_vllm = _build_parity_models(
-        mesh_device,
-        hf_text_config,
-        model_args,
-        tt_state,
-        mesh_config,
-        num_layers,
-        max_total_len,
-        uniform_paged_cfg,
-        ccl_manager=ccl_manager,
+        mesh_device, hf_text_config, model_args, tt_state, mesh_config, num_layers, max_total_len, uniform_paged_cfg
     )
 
     gen_uniform = Gemma4Generator(model=[tt_model_uniform], model_args=[model_args], mesh_device=mesh_device)
@@ -1863,8 +1677,6 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
         max_model_len=max_total_len,
         requested_block_size=requested_block_size,
         num_layers=num_layers,
-        tp=tp,
-        num_devices=num_devices,
     )
     kv_vllm = allocate_vllm_kv_cache(mesh_device, layout, dtype=ttnn.bfloat16)
 
