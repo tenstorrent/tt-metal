@@ -43,7 +43,7 @@ HostTensor create_simple_host_tensor(const Shape& shape, DataType dtype = DataTy
 
 // Type trait tests verifying HostTensor's semantic constraints
 
-TEST(HostTensorTypeTraitsTest, IsDefaultConstructible) { EXPECT_TRUE(std::is_default_constructible_v<HostTensor>); }
+TEST(HostTensorTypeTraitsTest, IsDefaultConstructible) { EXPECT_FALSE(std::is_default_constructible_v<HostTensor>); }
 
 TEST(HostTensorTypeTraitsTest, IsDestructible) { EXPECT_TRUE(std::is_destructible_v<HostTensor>); }
 
@@ -169,20 +169,6 @@ TEST(HostTensorTest, CopyAssignment) {
     EXPECT_EQ(tensor.logical_shape(), shape);
 }
 
-TEST(HostTensorTest, CopyConstructionFromDefaultConstructed) {
-    HostTensor default_tensor;
-    const HostTensor& copied(default_tensor);
-    (void)copied;
-    // Both should be in default-constructed state (no assertions, just shouldn't crash)
-}
-
-TEST(HostTensorTest, CopyAssignmentFromDefaultConstructed) {
-    HostTensor default_tensor;
-    [[maybe_unused]] auto tensor = create_simple_host_tensor(Shape{2, 64});
-    tensor = default_tensor;
-    // tensor should now be in default-constructed state (no assertions, just shouldn't crash)
-}
-
 TEST(HostTensorTest, TensorSpecAccess) {
     Shape shape{4, 32};
     auto tensor = create_simple_host_tensor(shape, DataType::FLOAT32);
@@ -271,6 +257,41 @@ TEST(HostTensorTest, NdShardSpecNotSet) {
 
     // INTERLEAVED memory config should not have nd shard spec
     EXPECT_FALSE(tensor.nd_shard_spec().has_value());
+}
+
+TEST(HostTensorTest, IsValuelessAfterMoveReturnsFalse) {
+    // A freshly constructed tensor is not valueless.
+    auto tensor = create_simple_host_tensor(Shape{4, 32});
+    EXPECT_FALSE(tensor.is_valueless_after_move());
+
+    // Copy construction leaves neither source nor destination valueless.
+    HostTensor copy(tensor);  // NOLINT(performance-unnecessary-copy-initialization)
+    EXPECT_FALSE(tensor.is_valueless_after_move());
+    EXPECT_FALSE(copy.is_valueless_after_move());
+
+    // Copy assignment leaves neither source nor destination valueless.
+    auto target = create_simple_host_tensor(Shape{1, 8});
+    target = tensor;
+    EXPECT_FALSE(tensor.is_valueless_after_move());
+    EXPECT_FALSE(target.is_valueless_after_move());
+}
+
+TEST(HostTensorTest, IsValuelessAfterMoveReturnsTrueAfterMoveConstruction) {
+    auto tensor = create_simple_host_tensor(Shape{4, 32});
+    HostTensor moved(std::move(tensor));
+
+    EXPECT_TRUE(tensor.is_valueless_after_move());  // NOLINT(bugprone-use-after-move)
+    EXPECT_FALSE(moved.is_valueless_after_move());
+}
+
+TEST(HostTensorTest, IsValuelessAfterMoveReturnsTrueAfterMoveAssignment) {
+    auto source = create_simple_host_tensor(Shape{4, 32});
+    auto target = create_simple_host_tensor(Shape{1, 8});
+
+    target = std::move(source);
+
+    EXPECT_TRUE(source.is_valueless_after_move());  // NOLINT(bugprone-use-after-move)
+    EXPECT_FALSE(target.is_valueless_after_move());
 }
 
 }  // namespace

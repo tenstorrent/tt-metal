@@ -10,7 +10,7 @@
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/tile_move_copy.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 #include "llk_math_eltwise_binary.h"
 
@@ -34,11 +34,11 @@ void kernel_main() {
     constexpr uint32_t cb_acc = tt::CBIndex::c_4;
     constexpr uint32_t cb_ineg = tt::CBIndex::c_5;
 
-    experimental::CircularBuffer cb_input_obj(cb_input);
-    experimental::CircularBuffer cb_scaler_obj(cb_scaler);
-    experimental::CircularBuffer cb_output_obj(cb_output);
-    experimental::CircularBuffer cb_acc_obj(cb_acc);
-    experimental::CircularBuffer cb_ineg_obj(cb_ineg);
+    CircularBuffer cb_input_obj(cb_input);
+    CircularBuffer cb_scaler_obj(cb_scaler);
+    CircularBuffer cb_output_obj(cb_output);
+    CircularBuffer cb_acc_obj(cb_acc);
+    CircularBuffer cb_ineg_obj(cb_ineg);
 
     compute_kernel_hw_startup(cb_input, cb_scaler, cb_output);
 

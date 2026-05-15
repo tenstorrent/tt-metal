@@ -1,4 +1,4 @@
-name: "⚙️ Compile for Quasar"
+name: "LLK Compile for Quasar"
 
 on:
   workflow_call:
@@ -55,7 +55,7 @@ jobs:
     container:
       image: ${{ inputs.docker_image }}
 
-    name: "🦄 Compile for Quasar (group ${{ matrix.test_group }}/${{ inputs.test_splits }})"
+    name: "Compile for Quasar (group ${{ matrix.test_group }}/${{ inputs.test_splits }})"
     steps:
       # Step 1: Checkout the repository
       - name: Checkout code
@@ -83,7 +83,7 @@ jobs:
           cd tests/python_tests/
 
           echo "Compiling Quasar..."
-          pytest -q --compile-producer -n 40 \
+          pytest -q --compile-producer -n 35 \
                 -m "${{ inputs.pytest_markers }}" \
                 --splits $TEST_SPLITS --group ${{ matrix.test_group }} \
                 --override-ini="addopts=-v" --tb=short --timeout=60 \
@@ -107,5 +107,6 @@ jobs:
           report_paths: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-quasar-compile.xml
           check_name: Quasar Compile Tests
           detailed_summary: true
-          include_passed: true
+          job_summary: false
+          include_passed: false
           fail_on_failure: false

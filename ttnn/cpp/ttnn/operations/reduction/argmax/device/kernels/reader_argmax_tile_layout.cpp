@@ -6,6 +6,9 @@
 #include "argmax_common.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 #include <stdint.h>
 
@@ -51,12 +54,16 @@ void kernel_main() {
 
     using dst_accessor_type = decltype(s_dst);
 
+    Noc noc;
+    CircularBuffer src_cb(src_cb_idx);
+    CircularBuffer dst_cb(dst_cb_idx);
+
     // CB for input data.
-    const uint32_t src_cb_addr = get_write_ptr(src_cb_idx);
+    const uint32_t src_cb_addr = src_cb.get_write_ptr();
     constexpr DataFormat src_data_format = get_dataformat(src_cb_idx);
 
     // CB for output data.
-    const uint32_t dst_cb_addr = get_write_ptr(dst_cb_idx);
+    const uint32_t dst_cb_addr = dst_cb.get_write_ptr();
 
     auto default_val = get_default_value<src_data_format>();
     // C++ type representation of the src/dst data formats
@@ -123,12 +130,11 @@ void kernel_main() {
             for (uint32_t j = 0; j < input_width; j++) {
                 // Number of input tiles in the last two dimensions.
                 constexpr uint32_t inner_size = input_height * input_width;
-                const int src_tile_id = outer_index * inner_size + i * input_width + j;
+                const uint32_t src_tile_id = outer_index * inner_size + i * input_width + j;
 
                 // Fetch the next tile
-                const uint64_t src_noc_addr = get_noc_addr(src_tile_id, s_src);
-                noc_async_read(src_noc_addr, src_cb_addr, src_page_size);
-                noc_async_read_barrier();
+                noc.async_read(s_src, src_cb, src_page_size, {.page_id = src_tile_id}, {.offset_bytes = 0});
+                noc.async_read_barrier();
 
                 uint32_t tile_rows_processed = 0;
                 process_input_tile<src_element_type, src_data_format>(
@@ -142,7 +148,7 @@ void kernel_main() {
             collect_row_major_output<keepdim>(arg_max, units_generated, output_ctx);
 
             if (output_ctx.collected_count >= output_page_elements) {
-                write_to_output<dst_accessor_type, keepdim>(s_dst, output_ctx);
+                write_to_output<dst_accessor_type, keepdim>(noc, s_dst, output_ctx);
             }
         }
     }

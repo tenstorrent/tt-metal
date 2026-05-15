@@ -797,6 +797,9 @@ class TestConfig:
         if self.profiler_build == ProfilerBuild.Yes:
             OPTIONS_COMPILE += "-DLLK_PROFILER "
 
+        if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
+            OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
+
         return (OPTIONS_COMPILE, MEMORY_LAYOUT_LD_SCRIPT, NON_COVERAGE_OPTIONS_COMPILE)
 
     def build_shared_artefacts(self):
@@ -1238,7 +1241,7 @@ class TestConfig:
             if TestConfig.ARCH != ChipArchitecture.QUASAR:
                 commit_brisc_command(TestConfig.TENSIX_LOCATION, BriscCmd.RESET_TRISCS)
         else:
-            set_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
+            commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
 
         VARIANT_ELF_DIR = (
             TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <span>
+
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -28,14 +30,28 @@ Program MakeProgramFromSpec(
 // COMPLETENESS: You must specify runtime args (named and vararg alike) for every
 // (kernel, node) pair that requires runtime arguments. Missing entries will cause an error.
 //
-// For high-performance inner loops, prefer the in-place power user API below.
-// If stateful behavior of parameters is required, use the power user API.
+// For high-performance inner loops, prefer the power user APIs below.
+// If stateful behavior of parameters is required, use the power user APIs.
 void SetProgramRunParameters(Program& program, const ProgramRunParams& params);
+
+// Fast-path partial update: refresh ONLY the TensorArgs of an existing Program.
+// All other ProgramRunParams (named/vararg RTAs and CRTAs, DFB params) retain their values
+// from the most recent SetProgramRunParameters call.
+//
+// PRE-CONDITION: SetProgramRunParameters must have been called previously.
+//
+// COMPLETENESS: A TensorArg must be specified for every TensorParameter declared in the
+// ProgramSpec, exactly once. The supplied MeshTensor's TensorSpec must match the
+// TensorParameter's declared spec.
+//
+// USE CASE: Program re-enqueue loops where the only per-enqueue ProgramRunParams variation
+// is in the tensor args (i.e. which specific MeshTensors are operated on by the Program).
+void UpdateTensorArgs(Program& program, std::span<const ProgramRunParams::TensorArg> tensor_args);
 
 // Power-user API for updating the mutable parameters of a Program in-place.
 // ProgramRunParamsView is a non-owning view into the Program's command buffers,
 // enabling in-place modification of mutable Program parameters.
-// (Sketch only; not yet implemented)
+// (Sketch only; not yet implemented. TBD if needed at all.)
 ProgramRunParamsView& GetProgramRunParamsView(Program& program);
 
 // Useful? Might want to expose a const view for debug/test use?

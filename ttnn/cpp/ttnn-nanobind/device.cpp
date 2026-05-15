@@ -10,8 +10,10 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -32,13 +34,16 @@
 #include "ttnn/device.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 // #include "ttnn/operations/experimental/auto_format/auto_format.hpp" // TODO_NANOBIND
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/memory_reporter.hpp>
 #include <tt-metalium/experimental/kernel_cache.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
+#include <tt-metalium/experimental/realtime_profiler.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 using namespace tt::tt_metal;
@@ -47,6 +52,10 @@ namespace nb = nanobind;
 // NOLINTBEGIN(bugprone-unused-raii)
 
 namespace {
+
+// Prevent Python callback GC while registered.  Keyed by handle returned from C++
+// RegisterProgramRealtimeProfilerCallback. Access only from the Python thread (always under GIL), so no mutex needed.
+std::unordered_map<uint64_t, PyObject*> python_realtime_callback_refs;
 
 void ttnn_device(nb::module_& mod) {
     mod.def(
@@ -132,6 +141,27 @@ void py_device_module_types(nb::module_& m_device) {
     nb::class_<SubDeviceId>(m_device, "SubDeviceId", "ID of a sub-device.");
 
     nb::class_<SubDeviceManagerId>(m_device, "SubDeviceManagerId", "ID of a sub-device manager.");
+
+    nb::class_<tt::tt_metal::experimental::ProgramRealtimeRecord>(
+        m_device, "ProgramRealtimeRecord", "Record containing real-time profiler data from a device.")
+        .def_ro("program_id", &tt::tt_metal::experimental::ProgramRealtimeRecord::program_id, "Runtime program ID")
+        .def_ro(
+            "start_timestamp",
+            &tt::tt_metal::experimental::ProgramRealtimeRecord::start_timestamp,
+            "Device start timestamp (raw ticks)")
+        .def_ro(
+            "end_timestamp",
+            &tt::tt_metal::experimental::ProgramRealtimeRecord::end_timestamp,
+            "Device end timestamp (raw ticks)")
+        .def_ro(
+            "frequency",
+            &tt::tt_metal::experimental::ProgramRealtimeRecord::frequency,
+            "Device clock frequency (cycles per ns)")
+        .def_ro("chip_id", &tt::tt_metal::experimental::ProgramRealtimeRecord::chip_id, "Device chip ID")
+        .def_ro(
+            "kernel_sources",
+            &tt::tt_metal::experimental::ProgramRealtimeRecord::kernel_sources,
+            "Kernel source paths for this program");
 
     nb::class_<tt::tt_metal::detail::MemoryView>(
         m_device, "MemoryView", "Class representing view of the memory (dram, l1, l1_small, trace) of a device.")
@@ -448,6 +478,50 @@ void device_module(nb::module_& m_device) {
         nb::arg("buffer_type").noconvert(),
         get_memory_view_doc.data());
 
+    constexpr std::string_view get_allocator_base_address_doc = R"doc(
+        Return the base address (in bytes) of the device's allocator region for the given buffer type.
+
+        For ``ttnn.BufferType.L1`` this is the worker-L1 unreserved base, i.e. the lowest address
+        that the allocator is allowed to hand out for tensor / buffer storage on Tensix worker
+        cores. Combined with the worker-L1 size (queryable via :py:func:`ttnn.get_memory_view`), it
+        defines the address range available for compute-time L1 allocations.
+
+        +------------------+----------------------------------+-----------------------+-------------+----------+
+        | Argument         | Description                      | Data type             | Valid range | Required |
+        +==================+==================================+=======================+=============+==========+
+        | device           | Device to query                  | ttnn.Device           |             | Yes      |
+        | buffer_type      | Allocator region (L1 / DRAM)     | ttnn.BufferType       |             | Yes      |
+        +------------------+----------------------------------+-----------------------+-------------+----------+
+    )doc";
+    auto buffer_type_to_hal_mem_type = [](const BufferType& buffer_type) {
+        switch (buffer_type) {
+            case BufferType::DRAM: return HalMemType::DRAM;
+            case BufferType::L1:
+            case BufferType::L1_SMALL:
+            case BufferType::TRACE: return HalMemType::L1;
+            default:
+                throw std::invalid_argument(
+                    "GetAllocatorBaseAddress: unsupported buffer_type=" +
+                    std::to_string(static_cast<int>(buffer_type)));
+        }
+    };
+    m_device.def(
+        "GetAllocatorBaseAddress",
+        [buffer_type_to_hal_mem_type](IDevice* device, const BufferType& buffer_type) {
+            return device->allocator()->get_base_allocator_addr(buffer_type_to_hal_mem_type(buffer_type));
+        },
+        nb::arg("device").noconvert(),
+        nb::arg("buffer_type").noconvert(),
+        get_allocator_base_address_doc.data());
+    m_device.def(
+        "GetAllocatorBaseAddress",
+        [buffer_type_to_hal_mem_type](MeshDevice* device, const BufferType& buffer_type) {
+            return device->allocator()->get_base_allocator_addr(buffer_type_to_hal_mem_type(buffer_type));
+        },
+        nb::arg("device").noconvert(),
+        nb::arg("buffer_type").noconvert(),
+        get_allocator_base_address_doc.data());
+
     constexpr std::string_view synchronize_device_doc = R"doc(
                 Synchronize the device with host by waiting for all operations to complete.
                 If cq_id is provided then only the operations associated with that cq_id are waited for,
@@ -477,7 +551,10 @@ void device_module(nb::module_& m_device) {
         synchronize_device_doc.data(),
         nb::arg("device"),
         nb::arg("cq_id") = nb::none(),
-        nb::arg("sub_device_ids") = std::vector<SubDeviceId>());
+        nb::arg("sub_device_ids") = std::vector<SubDeviceId>(),
+        // Release GIL: sync can block a long time; other threads need it to run Python (e.g. real-time profiler
+        // callbacks).
+        nb::call_guard<nb::gil_scoped_release>());
     m_device.def(
         "ReadDeviceProfiler",
         [](MeshDevice* mesh_device) {
@@ -577,6 +654,79 @@ void device_module(nb::module_& m_device) {
         nb::arg("device"),
         R"doc(
         Experimental: Returns whether asynchronous slow dispatch is currently enabled on the given device.
+        )doc");
+
+    m_device.def(
+        "RegisterProgramRealtimeProfilerCallback",
+        [](const nb::callable& callback) -> uint64_t {
+            PyObject* raw_cb = callback.ptr();
+            Py_INCREF(raw_cb);
+
+            auto handle = tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback(
+                [raw_cb](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
+                    nb::gil_scoped_acquire gil;
+                    (nb::handle(raw_cb))(nb::cast(record, nb::rv_policy::copy));
+                });
+
+            python_realtime_callback_refs[handle] = raw_cb;
+            return handle;
+        },
+        nb::arg("callback"),
+        R"doc(
+            Register a callback to be invoked when real-time profiler data arrives from a device.
+            The callback receives a ProgramRealtimeRecord and is called from the real-time profiler
+            receiver thread.
+
+            Multiple callbacks can be registered.
+
+            Args:
+                callback: A callable that accepts a single ProgramRealtimeRecord argument.
+
+            Returns:
+                int: A handle that can be passed to UnregisterProgramRealtimeProfilerCallback.
+
+            Example:
+                >>> def my_callback(record):
+                ...     print(f"Program {record.program_id} on chip {record.chip_id}")
+                >>> handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(my_callback)
+        )doc");
+
+    m_device.def(
+        "UnregisterProgramRealtimeProfilerCallback",
+        [](uint64_t handle) {
+            tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback(handle);
+            auto it = python_realtime_callback_refs.find(handle);
+            if (it != python_realtime_callback_refs.end()) {
+                Py_DECREF(it->second);
+                python_realtime_callback_refs.erase(it);
+            }
+        },
+        nb::arg("handle"),
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Unregister a previously registered real-time profiler callback.
+            This call waits for any in-flight invocations of the callback to finish.
+
+            Args:
+                handle (int): The handle returned by RegisterProgramRealtimeProfilerCallback.
+        )doc");
+
+    m_device.def(
+        "IsProgramRealtimeProfilerActive",
+        []() { return tt::tt_metal::experimental::IsProgramRealtimeProfilerActive(); },
+        R"doc(
+            Returns True if the real-time profiler is currently running on at least one chip.
+
+            Returns False when the profiler was silently disabled for the current run
+            (for example, ETH dispatch, remote-only mesh, or a platform that can't reserve
+            a tensix dispatch core). Tests that want to collect RT records should call this
+            after opening the device and skip their verification when it returns False —
+            registered callbacks will simply never fire in that case.
+
+            Example:
+                >>> mesh_device = ttnn.open_mesh_device(...)
+                >>> if not ttnn.device.IsProgramRealtimeProfilerActive():
+                ...     pytest.skip("Real-time profiler not active on this configuration")
         )doc");
 }
 
