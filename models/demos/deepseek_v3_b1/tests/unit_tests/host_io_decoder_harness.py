@@ -470,6 +470,115 @@ def _check_metadata_consistency(metadata_path: Path, decoder_layer_idx: int) -> 
             f"n_layers={n_layers}; loader will likely fail to find the layer file"
         )
 
+    # moe_layer_offset mismatch is the load-bearing one. The harness routes
+    # decoder_layer_idx < NUM_DENSE_LAYERS to the dense weight loader and >= to
+    # the MoE loader. If the trace was produced with a different offset (e.g.
+    # Kimi K2.6 = 1 vs DeepSeek V3 = 3), the harness will silently route
+    # decoder_layer_idx in the ambiguous range to the wrong path and crash
+    # mid-forward with a confusing weight-shape error. Surface the conflict at
+    # preflight, naming the specific decoder_layer_idx in the danger zone.
+    trace_moe_offset = metadata.get("moe_layer_offset")
+    if trace_moe_offset is not None and trace_moe_offset != NUM_DENSE_LAYERS:
+        lo, hi = sorted([int(trace_moe_offset), NUM_DENSE_LAYERS])
+        if lo <= decoder_layer_idx < hi:
+            logger.warning(
+                f"{metadata_path}: moe_layer_offset={trace_moe_offset} but harness "
+                f"is configured for NUM_DENSE_LAYERS={NUM_DENSE_LAYERS}. "
+                f"decoder_layer_idx={decoder_layer_idx} falls in the ambiguous "
+                f"range [{lo}, {hi}): the trace treats it as "
+                f"{'dense' if decoder_layer_idx < trace_moe_offset else 'MoE'} "
+                f"but the harness will route it to "
+                f"{'dense' if decoder_layer_idx < NUM_DENSE_LAYERS else 'MoE'} — "
+                f"this WILL load wrong-arity weights and crash on-device. "
+                f"Pick a different layer or use a harness with matching "
+                f"NUM_DENSE_LAYERS."
+            )
+        else:
+            logger.warning(
+                f"{metadata_path}: moe_layer_offset={trace_moe_offset} differs from "
+                f"harness NUM_DENSE_LAYERS={NUM_DENSE_LAYERS}, but decoder_layer_idx="
+                f"{decoder_layer_idx} is outside the ambiguous range [{lo}, {hi}) "
+                f"so dense/MoE dispatch agrees for this layer. Other layer indices "
+                f"in [{lo}, {hi}) would be misrouted."
+            )
+
+
+def _write_dumps(
+    config: HostIoDecoderSweepConfig,
+    *,
+    collected: dict[str, dict[int, torch.Tensor]],
+    kv_cache_torch: torch.Tensor | None,
+    schedule: MultiTurnSchedule,
+) -> None:
+    """Write per-(slot, prompt) hidden-state and KV-cache dumps per ``config.dump_format``.
+
+    Extracted from ``run_sweep``'s Phase 5 so the dispatch logic — which gets
+    a bit dense once two formats and two independent toggles are involved — can
+    be unit-tested in isolation against fake collected/kv_cache inputs.
+
+    Layout summary:
+      - ``dump_format="pt"`` (default, back-compat):
+            <dump_dir>/output_hidden_states_slot_{NN}_<prompt>.pt   torch.save (L_p, HIDDEN_SIZE) bf16
+            <dump_dir>/kv_cache_slot_{NN}_<prompt>.pt               torch.save (1, L_p, kvpe_dim) bf16
+      - ``dump_format="safetensors"`` (bit_sculpt diff-friendly):
+            <dump_dir>/<prompt>/decoder_output_layer_{L}_slot_{NN}.safetensors
+              tensor key: "decoder_output_layer_{L}", shape (L_p, HIDDEN_SIZE) bf16
+            <dump_dir>/<prompt>/kv_cache_layer_{L}_slot_{NN}.safetensors
+              tensor key: "kv_post_transform_layer_{L}", shape (L_p, 576) bf16
+              (squeezed from the harness's (1, L_p, 576) to match bit_sculpt's
+              kv_post_transform tensor exactly)
+
+    Slot suffix is always present on safetensors filenames even at
+    ``num_replication_slots=1`` so Mode A and Mode B share one filename schema;
+    bit_sculpt's tracer doesn't fan out across slots, so this suffix is
+    TT-specific. Caller is responsible for the ``dump_*`` knob gating; this
+    helper is a no-op if both dump flags are False.
+    """
+    if not (config.dump_hidden_states or config.dump_kv_cache):
+        return
+    assert (
+        config.dump_dir is not None
+    ), "dump_dir is None but a dump knob is True (__post_init__ should have caught this)"
+    logger.info(f"Phase 5: per-(slot, prompt) dumps to {config.dump_dir}")
+
+    if config.dump_hidden_states:
+        for prompt_name in config.prompt_names:
+            for slot in range(config.num_replication_slots):
+                if config.dump_format == "pt":
+                    out_path = config.dump_dir / f"output_hidden_states_slot_{slot:02d}_{prompt_name}.pt"
+                    torch.save(collected[prompt_name][slot], out_path)
+                else:
+                    prompt_dir = config.dump_dir / prompt_name
+                    prompt_dir.mkdir(parents=True, exist_ok=True)
+                    out_path = (
+                        prompt_dir / f"decoder_output_layer_{config.decoder_layer_idx}_slot_{slot:02d}.safetensors"
+                    )
+                    tensor_key = f"decoder_output_layer_{config.decoder_layer_idx}"
+                    safetensors_save_file({tensor_key: collected[prompt_name][slot]}, str(out_path))
+                logger.info(f"Wrote {out_path}")
+
+    if config.dump_kv_cache:
+        assert kv_cache_torch is not None, "dump_kv_cache=True but kv_cache_torch is None"
+        for prompt_idx, prompt_name in enumerate(config.prompt_names):
+            start, end = schedule.range_for(prompt_idx)
+            for slot in range(config.num_replication_slots):
+                kv_slice = kv_cache_torch[slot, :, start:end, :]
+                if config.dump_format == "pt":
+                    out_path = config.dump_dir / f"kv_cache_slot_{slot:02d}_{prompt_name}.pt"
+                    torch.save(kv_slice, out_path)
+                    logger.info(f"Wrote {out_path} shape={tuple(kv_slice.shape)}")
+                else:
+                    # bit_sculpt stores kv_post_transform_layer_{i} as (T, 576);
+                    # the harness pulls the cache as (1, L_p, 576), so squeeze
+                    # dim 0 to match the reference contract exactly.
+                    kv_slice_2d = kv_slice.squeeze(0).contiguous()
+                    prompt_dir = config.dump_dir / prompt_name
+                    prompt_dir.mkdir(parents=True, exist_ok=True)
+                    out_path = prompt_dir / f"kv_cache_layer_{config.decoder_layer_idx}_slot_{slot:02d}.safetensors"
+                    tensor_key = f"kv_post_transform_layer_{config.decoder_layer_idx}"
+                    safetensors_save_file({tensor_key: kv_slice_2d}, str(out_path))
+                    logger.info(f"Wrote {out_path} shape={tuple(kv_slice_2d.shape)}")
+
 
 def _load_reference_trace(
     trace_dir: Path,
@@ -1177,55 +1286,11 @@ def run_sweep(
             logger.info(f"prompt={prompt_name!r} KV cross-slot OK for positions [{start}, {end})")
 
     # =========================================================================
-    # Phase 5: Per-(prompt, slot) dumps
+    # Phase 5: Per-(slot, prompt) dumps — full dispatch lives in _write_dumps so
+    # the format / toggle logic stays unit-testable. Skipped entirely if both
+    # dump knobs are False.
     # =========================================================================
-    if config.dump_hidden_states or config.dump_kv_cache:
-        assert config.dump_dir is not None  # __post_init__ guarantees this
-        logger.info(f"Phase 5: per-(prompt, slot) dumps to {config.dump_dir}")
-
-    if config.dump_hidden_states:
-        # safetensors layout matches bit_sculpt's DebugTracer convention so
-        # downstream tooling can diff TT dumps against the reference traces
-        # without a format-conversion step. The slot suffix is appended after
-        # the layer suffix; bit_sculpt does not produce per-slot files (its
-        # tracer runs the full model once, not N replicated slots), so this
-        # extension is TT-specific.
-        for prompt_name in config.prompt_names:
-            for slot in range(config.num_replication_slots):
-                if config.dump_format == "pt":
-                    out_path = config.dump_dir / f"output_hidden_states_slot_{slot:02d}_{prompt_name}.pt"
-                    torch.save(collected[prompt_name][slot], out_path)
-                else:
-                    prompt_dir = config.dump_dir / prompt_name
-                    prompt_dir.mkdir(parents=True, exist_ok=True)
-                    out_path = (
-                        prompt_dir / f"decoder_output_layer_{config.decoder_layer_idx}_slot_{slot:02d}.safetensors"
-                    )
-                    tensor_key = f"decoder_output_layer_{config.decoder_layer_idx}"
-                    safetensors_save_file({tensor_key: collected[prompt_name][slot]}, str(out_path))
-                logger.info(f"Wrote {out_path}")
-
-    if config.dump_kv_cache:
-        assert kv_cache_torch is not None  # guaranteed by need_kv_cache above
-        for prompt_idx, prompt_name in enumerate(config.prompt_names):
-            start, end = schedule.range_for(prompt_idx)
-            for slot in range(config.num_replication_slots):
-                kv_slice = kv_cache_torch[slot, :, start:end, :]
-                if config.dump_format == "pt":
-                    out_path = config.dump_dir / f"kv_cache_slot_{slot:02d}_{prompt_name}.pt"
-                    torch.save(kv_slice, out_path)
-                    logger.info(f"Wrote {out_path} shape={tuple(kv_slice.shape)}")
-                else:
-                    # bit_sculpt stores kv_post_transform_layer_{i} as (T, 576);
-                    # the harness pulls the cache as (1, L_p, 576), so squeeze
-                    # dim 0 to match the reference contract exactly.
-                    kv_slice_2d = kv_slice.squeeze(0).contiguous()
-                    prompt_dir = config.dump_dir / prompt_name
-                    prompt_dir.mkdir(parents=True, exist_ok=True)
-                    out_path = prompt_dir / f"kv_cache_layer_{config.decoder_layer_idx}_slot_{slot:02d}.safetensors"
-                    tensor_key = f"kv_post_transform_layer_{config.decoder_layer_idx}"
-                    safetensors_save_file({tensor_key: kv_slice_2d}, str(out_path))
-                    logger.info(f"Wrote {out_path} shape={tuple(kv_slice_2d.shape)}")
+    _write_dumps(config, collected=collected, kv_cache_torch=kv_cache_torch, schedule=schedule)
 
     logger.info("run_sweep complete")
     return SweepResult(

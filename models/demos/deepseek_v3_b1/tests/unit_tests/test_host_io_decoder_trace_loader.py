@@ -15,13 +15,35 @@ from pathlib import Path
 
 import pytest
 import torch
+from loguru import logger as loguru_logger
 from safetensors.torch import save_file as safetensors_save_file
 
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions as D
 from models.demos.deepseek_v3_b1.tests.unit_tests.host_io_decoder_harness import (
+    NUM_DENSE_LAYERS,
+    HostIoDecoderSweepConfig,
+    MultiTurnSchedule,
+    _check_metadata_consistency,
     _load_reference_trace,
     _resolve_trace_format,
+    _write_dumps,
 )
+
+
+@pytest.fixture
+def loguru_warnings() -> list[str]:
+    """Collect ``logger.warning(...)`` messages from the harness's loguru logger.
+
+    pytest's stock ``caplog`` only intercepts the stdlib ``logging`` module, but
+    the harness uses ``loguru``. The standard recipe is to attach a custom sink
+    for the test, append messages to a list, then remove the sink at teardown.
+    """
+    messages: list[str] = []
+    sink_id = loguru_logger.add(lambda msg: messages.append(str(msg)), level="WARNING")
+    try:
+        yield messages
+    finally:
+        loguru_logger.remove(sink_id)
 
 
 def _make_pt_trace(trace_dir: Path, prompt: str, seq_len: int = 4) -> None:
@@ -275,3 +297,254 @@ def test_load_safetensors_wrong_hidden_dim_raises(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="last dim must equal"):
         _load_reference_trace(tmp_path, "p", decoder_layer_idx=0, trace_format="safetensors")
+
+
+# ----- metadata.json consistency -----
+
+
+def _write_metadata(prompt_dir: Path, **overrides) -> Path:
+    """Write a minimal bit_sculpt-style metadata.json with optional overrides."""
+    prompt_dir.mkdir(parents=True, exist_ok=True)
+    base = {
+        "n_layers": 61,
+        "hidden_dim": D.HIDDEN_SIZE,
+        "kv_lora_rank": 512,
+        "qk_rope_head_dim": 64,
+        "moe_layer_offset": NUM_DENSE_LAYERS,
+    }
+    base.update(overrides)
+    path = prompt_dir / "metadata.json"
+    path.write_text(json.dumps(base))
+    return path
+
+
+def test_metadata_consistency_matching_offset_silent(tmp_path: Path, loguru_warnings) -> None:
+    """DeepSeek trace (moe_layer_offset=3) against DeepSeek harness — no warning."""
+    path = _write_metadata(tmp_path, moe_layer_offset=NUM_DENSE_LAYERS)
+    _check_metadata_consistency(path, decoder_layer_idx=4)
+    assert not any("moe_layer_offset" in m for m in loguru_warnings)
+
+
+def test_metadata_consistency_kimi_layer_in_danger_zone(tmp_path: Path, loguru_warnings) -> None:
+    """Kimi trace (offset=1) loaded against DeepSeek harness (=3) — layer 1 is the bug.
+
+    The harness will route layer_idx=1 to the *dense* path (1 < NUM_DENSE_LAYERS=3),
+    but the trace was produced treating layer 1 as MoE (1 >= moe_layer_offset=1).
+    The warning must name the conflict and the specific layer.
+    """
+    path = _write_metadata(tmp_path, moe_layer_offset=1)
+    _check_metadata_consistency(path, decoder_layer_idx=1)
+    joined = "\n".join(loguru_warnings)
+    assert "moe_layer_offset=1" in joined
+    assert "ambiguous" in joined
+    assert "decoder_layer_idx=1" in joined
+    assert "MoE" in joined and "dense" in joined
+
+
+def test_metadata_consistency_kimi_layer_outside_danger_zone(tmp_path: Path, loguru_warnings) -> None:
+    """Kimi trace, layer 30 — both Kimi (offset=1) and DeepSeek (=3) agree it's MoE.
+
+    A warning still fires (the offsets disagree at all), but it explicitly notes
+    the chosen layer is *outside* the ambiguous range and dense/MoE dispatch
+    agrees for this case.
+    """
+    path = _write_metadata(tmp_path, moe_layer_offset=1)
+    _check_metadata_consistency(path, decoder_layer_idx=30)
+    joined = "\n".join(loguru_warnings)
+    assert "outside the ambiguous range" in joined
+
+
+def test_metadata_consistency_hidden_dim_mismatch_warns(tmp_path: Path, loguru_warnings) -> None:
+    path = _write_metadata(tmp_path, hidden_dim=9999)
+    _check_metadata_consistency(path, decoder_layer_idx=4)
+    assert any("hidden_dim=9999" in m for m in loguru_warnings)
+
+
+def test_metadata_consistency_missing_file_silent(tmp_path: Path, loguru_warnings) -> None:
+    """Loader must not warn when metadata.json is simply absent."""
+    _check_metadata_consistency(tmp_path / "nonexistent_metadata.json", decoder_layer_idx=4)
+    assert loguru_warnings == []
+
+
+# ----- dump path -----
+#
+# Pure-host tests for _write_dumps: fabricate a sweep result (collected dict +
+# fake KV cache + schedule), call _write_dumps, verify each output file exists
+# with the right name, tensor key, and shape. Covers both formats and the two
+# independent toggles (dump_hidden_states / dump_kv_cache).
+#
+# KVPE_DIM constant is fixed at 576 in the harness (kv_lora_rank 512 + qk_rope_head_dim 64);
+# matches bit_sculpt's kv_post_transform layout.
+_KVPE_DIM = 576
+
+
+def _build_dump_config(
+    *,
+    dump_dir: Path,
+    dump_format: str,
+    decoder_layer_idx: int = 4,
+    prompt_names: tuple[str, ...] = ("smoke",),
+    num_replication_slots: int = 1,
+    dump_hidden_states: bool = True,
+    dump_kv_cache: bool = True,
+) -> HostIoDecoderSweepConfig:
+    """Build a sweep config configured for dumping; non-dump knobs are placeholders."""
+    return HostIoDecoderSweepConfig(
+        decoder_layer_idx=decoder_layer_idx,
+        hidden_states_dir=dump_dir,  # not consumed by _write_dumps; placeholder
+        prompt_names=prompt_names,
+        num_replication_slots=num_replication_slots,
+        dump_hidden_states=dump_hidden_states,
+        dump_kv_cache=dump_kv_cache,
+        dump_dir=dump_dir,
+        dump_format=dump_format,
+    )
+
+
+def _build_fake_collected(prompt_lengths: dict[str, int], num_slots: int) -> dict[str, dict[int, torch.Tensor]]:
+    return {
+        prompt: {slot: torch.randn(L, D.HIDDEN_SIZE, dtype=torch.bfloat16) for slot in range(num_slots)}
+        for prompt, L in prompt_lengths.items()
+    }
+
+
+def _build_fake_kv_cache(total_length: int, num_slots_total: int, max_seq_len: int = 64) -> torch.Tensor:
+    """Mimic the harness's get_kv_cache_host shape: (num_slots, 1, max_seq_len, kvpe_dim)."""
+    assert total_length <= max_seq_len
+    return torch.randn(num_slots_total, 1, max_seq_len, _KVPE_DIM, dtype=torch.bfloat16)
+
+
+def test_write_dumps_pt_format_back_compat(tmp_path: Path) -> None:
+    """Default dump_format='pt': filenames + tensor shapes match the pre-PR contract."""
+    config = _build_dump_config(dump_dir=tmp_path, dump_format="pt")
+    collected = _build_fake_collected({"smoke": 4}, num_slots=1)
+    kv_cache = _build_fake_kv_cache(total_length=4, num_slots_total=2)
+    schedule = MultiTurnSchedule(prompt_lengths=(4,))
+
+    _write_dumps(config, collected=collected, kv_cache_torch=kv_cache, schedule=schedule)
+
+    # Hidden state dump: torch.save dict with raw tensor at canonical name.
+    hs_path = tmp_path / "output_hidden_states_slot_00_smoke.pt"
+    assert hs_path.exists()
+    loaded_hs = torch.load(hs_path, map_location="cpu")
+    assert torch.equal(loaded_hs, collected["smoke"][0])
+
+    # KV dump retains the leading (1,) under .pt format.
+    kv_path = tmp_path / "kv_cache_slot_00_smoke.pt"
+    assert kv_path.exists()
+    loaded_kv = torch.load(kv_path, map_location="cpu")
+    assert loaded_kv.shape == (1, 4, _KVPE_DIM)
+    assert torch.equal(loaded_kv, kv_cache[0, :, 0:4, :])
+
+
+def test_write_dumps_safetensors_format_matches_bit_sculpt(tmp_path: Path) -> None:
+    """dump_format='safetensors': per-prompt dir, bit_sculpt-canonical tensor keys, (T, 576) KV."""
+    from safetensors.torch import load_file as safetensors_load_file
+
+    config = _build_dump_config(dump_dir=tmp_path, dump_format="safetensors", decoder_layer_idx=4)
+    collected = _build_fake_collected({"smoke": 4}, num_slots=1)
+    kv_cache = _build_fake_kv_cache(total_length=4, num_slots_total=2)
+    schedule = MultiTurnSchedule(prompt_lengths=(4,))
+
+    _write_dumps(config, collected=collected, kv_cache_torch=kv_cache, schedule=schedule)
+
+    hs_path = tmp_path / "smoke" / "decoder_output_layer_4_slot_00.safetensors"
+    assert hs_path.exists()
+    hs = safetensors_load_file(str(hs_path))
+    assert set(hs.keys()) == {"decoder_output_layer_4"}
+    assert torch.equal(hs["decoder_output_layer_4"], collected["smoke"][0])
+
+    kv_path = tmp_path / "smoke" / "kv_cache_layer_4_slot_00.safetensors"
+    assert kv_path.exists()
+    kv = safetensors_load_file(str(kv_path))
+    assert set(kv.keys()) == {"kv_post_transform_layer_4"}
+    # Critical: (1, L_p, 576) -> (L_p, 576). The leading dim must be squeezed.
+    assert kv["kv_post_transform_layer_4"].shape == (4, _KVPE_DIM)
+    assert torch.equal(kv["kv_post_transform_layer_4"], kv_cache[0, 0, 0:4, :])
+
+
+def test_write_dumps_mode_b_writes_per_slot_files(tmp_path: Path) -> None:
+    """num_replication_slots=4: produces 4 hidden-state + 4 KV files per prompt."""
+    config = _build_dump_config(dump_dir=tmp_path, dump_format="safetensors", num_replication_slots=4)
+    collected = _build_fake_collected({"smoke": 4}, num_slots=4)
+    kv_cache = _build_fake_kv_cache(total_length=4, num_slots_total=8)
+    schedule = MultiTurnSchedule(prompt_lengths=(4,))
+
+    _write_dumps(config, collected=collected, kv_cache_torch=kv_cache, schedule=schedule)
+
+    prompt_dir = tmp_path / "smoke"
+    hs_files = sorted(prompt_dir.glob("decoder_output_layer_4_slot_*.safetensors"))
+    kv_files = sorted(prompt_dir.glob("kv_cache_layer_4_slot_*.safetensors"))
+    assert [f.name for f in hs_files] == [f"decoder_output_layer_4_slot_{i:02d}.safetensors" for i in range(4)]
+    assert [f.name for f in kv_files] == [f"kv_cache_layer_4_slot_{i:02d}.safetensors" for i in range(4)]
+
+
+def test_write_dumps_multi_prompt_slices_kv_correctly(tmp_path: Path) -> None:
+    """Two prompts at disjoint position ranges: each KV dump is the prompt's slice only."""
+    from safetensors.torch import load_file as safetensors_load_file
+
+    config = _build_dump_config(dump_dir=tmp_path, dump_format="safetensors", prompt_names=("a", "b"))
+    collected = _build_fake_collected({"a": 3, "b": 5}, num_slots=1)
+    kv_cache = _build_fake_kv_cache(total_length=8, num_slots_total=2)
+    schedule = MultiTurnSchedule(prompt_lengths=(3, 5))
+
+    _write_dumps(config, collected=collected, kv_cache_torch=kv_cache, schedule=schedule)
+
+    kv_a = safetensors_load_file(str(tmp_path / "a" / "kv_cache_layer_4_slot_00.safetensors"))
+    kv_b = safetensors_load_file(str(tmp_path / "b" / "kv_cache_layer_4_slot_00.safetensors"))
+    # prompt "a" occupies positions [0, 3); prompt "b" occupies [3, 8).
+    assert kv_a["kv_post_transform_layer_4"].shape == (3, _KVPE_DIM)
+    assert kv_b["kv_post_transform_layer_4"].shape == (5, _KVPE_DIM)
+    assert torch.equal(kv_a["kv_post_transform_layer_4"], kv_cache[0, 0, 0:3, :])
+    assert torch.equal(kv_b["kv_post_transform_layer_4"], kv_cache[0, 0, 3:8, :])
+
+
+def test_write_dumps_only_hidden_states(tmp_path: Path) -> None:
+    """dump_hidden_states=True, dump_kv_cache=False: no KV files written, kv_cache_torch=None OK."""
+    config = _build_dump_config(
+        dump_dir=tmp_path,
+        dump_format="safetensors",
+        dump_hidden_states=True,
+        dump_kv_cache=False,
+    )
+    collected = _build_fake_collected({"smoke": 4}, num_slots=1)
+    schedule = MultiTurnSchedule(prompt_lengths=(4,))
+
+    _write_dumps(config, collected=collected, kv_cache_torch=None, schedule=schedule)
+
+    assert (tmp_path / "smoke" / "decoder_output_layer_4_slot_00.safetensors").exists()
+    assert not list((tmp_path / "smoke").glob("kv_cache_layer_*"))
+
+
+def test_write_dumps_only_kv_cache(tmp_path: Path) -> None:
+    """dump_kv_cache=True, dump_hidden_states=False: no hidden-state files written."""
+    config = _build_dump_config(
+        dump_dir=tmp_path,
+        dump_format="safetensors",
+        dump_hidden_states=False,
+        dump_kv_cache=True,
+    )
+    collected = _build_fake_collected({"smoke": 4}, num_slots=1)
+    kv_cache = _build_fake_kv_cache(total_length=4, num_slots_total=2)
+    schedule = MultiTurnSchedule(prompt_lengths=(4,))
+
+    _write_dumps(config, collected=collected, kv_cache_torch=kv_cache, schedule=schedule)
+
+    assert (tmp_path / "smoke" / "kv_cache_layer_4_slot_00.safetensors").exists()
+    assert not list((tmp_path / "smoke").glob("decoder_output_layer_*"))
+
+
+def test_write_dumps_both_off_is_noop(tmp_path: Path) -> None:
+    """Both knobs off: _write_dumps writes nothing and tolerates kv_cache_torch=None."""
+    # Bypass __post_init__ validation by setting dump_dir=None (allowed when both knobs off).
+    config = HostIoDecoderSweepConfig(
+        decoder_layer_idx=4,
+        hidden_states_dir=tmp_path,
+        prompt_names=("smoke",),
+        dump_hidden_states=False,
+        dump_kv_cache=False,
+        dump_dir=None,
+    )
+    schedule = MultiTurnSchedule(prompt_lengths=(4,))
+    _write_dumps(config, collected={}, kv_cache_torch=None, schedule=schedule)
+    assert list(tmp_path.iterdir()) == []
