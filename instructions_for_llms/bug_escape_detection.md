@@ -330,7 +330,7 @@ Column notes:
 - `Runs Dispatched`: all GHA run links with result, e.g. `BEFORE [12345](url) → PASS; AFTER [12346](url) → FAIL`
 - `Opus Verdict`: `PROCEED_TO_BISECT` / `N/A` (layer filtered — Opus was not run)
 - `Opus Reasoning`: 1–2 sentence summary (empty/`—` for layer-filtered rows)
-- `Status`: one of `🔍 Under Investigation`, `✅ Confirmed`, `❌ Refuted`, `⏳ Inconclusive`
+- `Status`: one of `⏳ Pending`, `🔍 Under Investigation`, `✅ Confirmed`, `❌ Refuted`, `⏸ Inconclusive`
 
 **Update the table after EVERY state transition:**
 - Candidate detected → add row immediately (even before Opus, with status TBD)
