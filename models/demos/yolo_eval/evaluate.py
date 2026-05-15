@@ -102,7 +102,7 @@ def evaluation(
     num_iterations = 500
 
     if model_type == "torch_model":
-        if model_name in ["YOLOv10", "YOLOv11n", "YOLOv8s"]:
+        if model_name in ["YOLOv10", "YOLOv11n", "YOLOv11s", "YOLOv8s"]:
             num_iterations = 105
         elif model_name in ["YOLOv9c", "YOLOv7", "YOLOv6l"]:
             num_iterations = 20
@@ -178,6 +178,7 @@ def evaluation(
             "YOLOv8x",
             "YOLOv8l",
             "YOLOv11n",
+            "YOLOv11s",
             "YOLOv11l",
             "YOLOv9c",
             "YOLOv7",
@@ -203,6 +204,7 @@ def evaluation(
             "YOLOv8x",
             "YOLOv8l",
             "YOLOv11n",
+            "YOLOv11s",
             "YOLOv11l",
             "YOLOv7",
             "YOLOv12x",
@@ -236,7 +238,7 @@ def evaluation(
             if model_name in ["YOLOv11"]:
                 preds = model(ttnn_im)
                 preds = ttnn.to_torch(preds, dtype=torch.float32)
-            elif model_name in ["YOLOv11n", "YOLOv11l", "YOLOv8x", "YOLOv7", "YOLOv6l"]:
+            elif model_name in ["YOLOv11n", "YOLOv11s", "YOLOv11l", "YOLOv8x", "YOLOv7", "YOLOv6l"]:
                 preds = model.run(ttnn_im)
                 preds = ttnn.to_torch(preds, dtype=torch.float32)
             elif model_name == "YOLOv8l":
@@ -323,7 +325,7 @@ def evaluation(
             if model_name != "YOLOv7":
                 save_yolo_predictions_by_model(results, save_dir, source_list[index], model_type)
             index += 1
-    if model_type == "tt_metal":
+    if model_type == "tt_model":
         if model_name in ["YOLOv8x"]:
             model.release_yolov8x_trace_2cqs_inference()
         elif model_name in [
@@ -333,6 +335,7 @@ def evaluation(
             "YOLOv8s",
             "YOLOv8l",
             "YOLOv11n",
+            "YOLOv11s",
             "YOLOv11l",
             "YOLOv7",
             "YOLOv6l",
@@ -669,17 +672,72 @@ def test_yolov11n(device, model_type, res, reset_seeds, model_location_generator
     [("tt_model"), ("torch_model")],
 )
 @pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "l1_small_size": yolov8l_l1_small_size_for_res(1280, 1280),
-            "trace_region_size": yolov8l_trace_region_size_e2e_for_res(1280, 1280),
-            "num_command_queues": 2,
-        }
-    ],
-    indirect=True,
+    "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
 )
-@pytest.mark.parametrize("res", [(1280, 1280)], ids=["1280"])
+@pytest.mark.parametrize("res", [(640, 640)])
+def test_yolov11s(device, model_type, res, reset_seeds, model_location_generator):
+    from models.demos.yolov11s.common import load_torch_model
+    from models.demos.yolov11s.runner.performant_runner import YOLOv11sPerformantRunner
+
+    if model_type == "torch_model":
+        model = load_torch_model(model_location_generator=model_location_generator)
+        model = model.eval()
+    else:
+        model = YOLOv11sPerformantRunner(
+            device,
+            device_batch_size=1,
+            act_dtype=ttnn.bfloat16,
+            weight_dtype=ttnn.bfloat16,
+            model_location_generator=model_location_generator,
+            resolution=res,
+        )
+        logger.info("Inferencing using ttnn Model")
+
+    save_dir = "models/demos/yolov11s/demo/runs"
+
+    input_dtype = ttnn.bfloat16
+    input_layout = ttnn.ROW_MAJOR_LAYOUT
+
+    evaluation(
+        device=device,
+        res=res,
+        model_type=model_type,
+        model=model,
+        input_dtype=input_dtype,
+        input_layout=input_layout,
+        save_dir=save_dir,
+        model_name="YOLOv11s",
+    )
+
+
+@pytest.mark.parametrize(
+    "model_type",
+    [("tt_model"), ("torch_model")],
+)
+@pytest.mark.parametrize(
+    "res,device_params",
+    [
+        pytest.param(
+            (640, 640),
+            {
+                "l1_small_size": yolov8l_l1_small_size_for_res(640, 640),
+                "trace_region_size": yolov8l_trace_region_size_e2e_for_res(640, 640),
+                "num_command_queues": 2,
+            },
+            id="640",
+        ),
+        pytest.param(
+            (1280, 1280),
+            {
+                "l1_small_size": yolov8l_l1_small_size_for_res(1280, 1280),
+                "trace_region_size": yolov8l_trace_region_size_e2e_for_res(1280, 1280),
+                "num_command_queues": 2,
+            },
+            id="1280",
+        ),
+    ],
+    indirect=["device_params"],
+)
 def test_yolov8l(device, model_type, res, reset_seeds, model_location_generator):
     from models.demos.yolov8l.common import load_torch_model
     from models.demos.yolov8l.runner.performant_runner import YOLOv8lPerformantRunner
@@ -720,17 +778,29 @@ def test_yolov8l(device, model_type, res, reset_seeds, model_location_generator)
     [("tt_model"), ("torch_model")],
 )
 @pytest.mark.parametrize(
-    "device_params",
+    "res,device_params",
     [
-        {
-            "l1_small_size": yolov11_l1_small_size_for_res(1280, 1280),
-            "trace_region_size": yolov11_trace_region_size_e2e_for_res(1280, 1280),
-            "num_command_queues": 2,
-        }
+        pytest.param(
+            (640, 640),
+            {
+                "l1_small_size": yolov11_l1_small_size_for_res(640, 640),
+                "trace_region_size": yolov11_trace_region_size_e2e_for_res(640, 640),
+                "num_command_queues": 2,
+            },
+            id="640",
+        ),
+        pytest.param(
+            (1280, 1280),
+            {
+                "l1_small_size": yolov11_l1_small_size_for_res(1280, 1280),
+                "trace_region_size": yolov11_trace_region_size_e2e_for_res(1280, 1280),
+                "num_command_queues": 2,
+            },
+            id="1280",
+        ),
     ],
-    indirect=True,
+    indirect=["device_params"],
 )
-@pytest.mark.parametrize("res", [(1280, 1280)], ids=["1280"])
 def test_yolov11l(device, model_type, res, reset_seeds, model_location_generator):
     from models.demos.yolov11l.common import load_torch_model
     from models.demos.yolov11l.runner.performant_runner import YOLOv11PerformantRunner

@@ -69,6 +69,26 @@ To run the test of ttnn vs ground truth, please follow the following commands:
  pytest models/demos/yolo_eval/evaluate.py::test_yolov11n[res0-device_params0-tt_model]
  ```
 
+**YoloV11s:** <br>
+**_For 640x640,_**<br>
+ ```sh
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov11s[res0-device_params0-tt_model]
+ ```
+
+**YoloV8l:** <br>
+**_For 640x640 or 1280x1280,_**<br>
+ ```sh
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov8l[640-device_params0-tt_model]
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov8l[1280-device_params0-tt_model]
+ ```
+
+**YoloV11l:** <br>
+**_For 640x640 or 1280x1280,_**<br>
+ ```sh
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov11l[640-device_params0-tt_model]
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov11l[1280-device_params0-tt_model]
+ ```
+
 **YoloV7:** <br>
 **_For 640x640,_**<br>
  ```sh
@@ -156,6 +176,26 @@ pytest models/demos/yolo_eval/evaluate.py::test_run_yolov4_eval[resolution1-1-ac
 **_For 640x640,_**<br>
  ```sh
  pytest models/demos/yolo_eval/evaluate.py::test_yolov11n[res0-device_params0-torch_model]
+ ```
+
+**YoloV11s:** <br>
+**_For 640x640,_**<br>
+ ```sh
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov11s[res0-device_params0-torch_model]
+ ```
+
+**YoloV8l:** <br>
+**_For 640x640 or 1280x1280,_**<br>
+ ```sh
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov8l[640-device_params0-torch_model]
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov8l[1280-device_params0-torch_model]
+ ```
+
+**YoloV11l:** <br>
+**_For 640x640 or 1280x1280,_**<br>
+ ```sh
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov11l[640-device_params0-torch_model]
+ pytest models/demos/yolo_eval/evaluate.py::test_yolov11l[1280-device_params0-torch_model]
  ```
 
 **YoloV7:** <br>

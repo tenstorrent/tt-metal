@@ -79,12 +79,14 @@ Throughput on **T3K (1×8 mesh):** eight **1280×1280** images at a time—each 
 pytest models/demos/yolov8l/tests/test_sahi_parallel_chunks.py
 ```
 
-### 6) COCO subset eval (mAP-style metric vs FiftyOne val, 1280×1280)
-Same harness as `yolov8s` / `yolov8x` in `models/demos/yolo_eval/evaluate.py` (subset size and metric definition match that script). Resolution and device buffers match the 1280² demo (`yolov8l_l1_small_size_for_res` / `yolov8l_trace_region_size_e2e_for_res`).
+### 6) COCO subset eval (mAP-style metric vs FiftyOne val, 640×640 and 1280×1280)
+Same harness as `yolov8s` / `yolov8x` in `models/demos/yolo_eval/evaluate.py` (subset size and metric definition match that script). `l1_small_size` / `trace_region_size` scale with resolution via `yolov8l_l1_small_size_for_res` / `yolov8l_trace_region_size_e2e_for_res`.
 
-Bracket order is `res`-`device_params`-`model_type` (same as `test_yolov8s[...]`); `res` is id `1280`:
+Bracket order is `res`-`device_params`-`model_type` (same as `test_yolov8s[...]`); `res` ids are `640` and `1280`:
 
 ```bash
+pytest models/demos/yolo_eval/evaluate.py::test_yolov8l[640-device_params0-tt_model]
+pytest models/demos/yolo_eval/evaluate.py::test_yolov8l[640-device_params0-torch_model]
 pytest models/demos/yolo_eval/evaluate.py::test_yolov8l[1280-device_params0-tt_model]
 pytest models/demos/yolo_eval/evaluate.py::test_yolov8l[1280-device_params0-torch_model]
 ```
