@@ -89,28 +89,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int in1_offset      = params.SRC1_TILE_IDX * tile_stride;
     const int out_offset      = params.DST_TILE_IDX * tile_stride;
 
-    _llk_math_eltwise_sfpu_start_(0);
-
-    for (std::uint32_t face = 0; face < NUM_FACES; face++)
-    {
 #if defined(SFPU_INT_OP_MUL)
-        _mul_int32_<false>(num_sfpu_iterations, in0_offset, in1_offset, out_offset);
+    _llk_math_eltwise_binary_sfpu_params_<false>(
+        _mul_int32_<false, 8>, 0, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
 #elif defined(SFPU_INT_OP_GT)
-        calculate_binary_comp_int32<false, 8, SfpuType::gt>(num_sfpu_iterations, in0_offset, in1_offset, out_offset);
+    _llk_math_eltwise_binary_sfpu_params_<false>(
+        calculate_binary_comp_int32<false, 8, SfpuType::gt>, 0, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
 #elif defined(SFPU_INT_OP_LT)
-        calculate_binary_comp_int32<false, 8, SfpuType::lt>(num_sfpu_iterations, in0_offset, in1_offset, out_offset);
+    _llk_math_eltwise_binary_sfpu_params_<false>(
+        calculate_binary_comp_int32<false, 8, SfpuType::lt>, 0, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
 #elif defined(SFPU_INT_OP_LE)
-        calculate_binary_comp_int32<false, 8, SfpuType::le>(num_sfpu_iterations, in0_offset, in1_offset, out_offset);
+    _llk_math_eltwise_binary_sfpu_params_<false>(
+        calculate_binary_comp_int32<false, 8, SfpuType::le>, 0, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
 #elif defined(SFPU_INT_OP_GE)
-        calculate_binary_comp_int32<false, 8, SfpuType::ge>(num_sfpu_iterations, in0_offset, in1_offset, out_offset);
+    _llk_math_eltwise_binary_sfpu_params_<false>(
+        calculate_binary_comp_int32<false, 8, SfpuType::ge>, 0, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
 #else
-        _calculate_add_(src_format, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
+    _llk_math_eltwise_binary_sfpu_params_<false>(
+        _add_int_<false, 8, 0, false>, 0, src_format, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
 #endif
-        _llk_math_eltwise_sfpu_inc_dst_face_addr_();
-    }
-
-
-    _llk_math_eltwise_sfpu_done_();
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
 }

@@ -14,7 +14,8 @@ namespace ckernel
 {
 namespace sfpu
 {
-inline void _calculate_add_(const DataFormat fmt, const int iterations, const int in0_offset_idx, const int in1_offset_idx, const int out_offset_idx)
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, int INSTRUCTION_MODE = 0, bool SIGN_MAGNITUDE_FORMAT = false>
+inline void _add_int_(const DataFormat fmt, const int iterations, const int in0_offset_idx, const int in1_offset_idx, const int out_offset_idx)
 {
     LLK_ASSERT(fmt == DataFormat::Int32 || fmt == DataFormat::Float16_b, "Only Int32 and Float16_b are currently supported for SFPU add on Quasar");
 
@@ -27,36 +28,20 @@ inline void _calculate_add_(const DataFormat fmt, const int iterations, const in
         TT_SFPLOAD(p_sfpu::LREG0, instr_mod, ADDR_MOD_7, 0, in0_offset_idx + (d << 1));
         TT_SFPLOAD(p_sfpu::LREG1, instr_mod, ADDR_MOD_7, 0, in1_offset_idx + (d << 1));
 
-        if (is_int)
-        {
-            // On Quasar, SFPU kernels should assume that integer inputs are in 2's complement format
-            // TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::sfp_sfpcast_mod::SM32_TO_2SC); // Sign+Mag -> 2SC
-            // TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::sfp_sfpcast_mod::SM32_TO_2SC); // Sign+Mag-> 2SC
+        // On Quasar, SFPU kernels should assume that integer inputs are in 2's complement format
+        // TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::sfp_sfpcast_mod::SM32_TO_2SC); // Sign+Mag -> 2SC
+        // TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::sfp_sfpcast_mod::SM32_TO_2SC); // Sign+Mag-> 2SC
 
-            TTI_SFPIADD(
-                0x0,
-                p_sfpu::LREG0,
-                p_sfpu::LREG1,
-                p_sfpu::sfp_binary_mod::SFPIADD_DISABLE_CC); // SFPIADD needs to explicitly disable CC output since CC exu is enabled by default
+        TTI_SFPIADD(
+            0x0,
+            p_sfpu::LREG0,
+            p_sfpu::LREG1,
+            p_sfpu::sfp_binary_mod::SFPIADD_DISABLE_CC); // SFPIADD needs to explicitly disable CC output since CC exu is enabled by default
 
-            // TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::sfp_sfpcast_mod::TWO_SC_TO_SM); // 2SC -> Sing+Mag
+        // TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::sfp_sfpcast_mod::TWO_SC_TO_SM); // 2SC -> Sing+Mag
 
-            TT_SFPSTORE(p_sfpu::LREG1, instr_mod, ADDR_MOD_7, 0, out_offset_idx + (d << 1));
-        }
-        else
-        {
-            TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, 0x0);
-
-            TT_SFPSTORE(p_sfpu::LREG2, instr_mod, ADDR_MOD_7, 0, out_offset_idx + (d << 1));
-        }
+        TT_SFPSTORE(p_sfpu::LREG1, instr_mod, ADDR_MOD_7, 0, out_offset_idx + (d << 1));
     }
-}
-
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, int INSTRUCTION_MODE = 0, bool SIGN_MAGNITUDE_FORMAT = false>
-inline void _add_int_(const int iterations, const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
-{
-    static_assert(!SIGN_MAGNITUDE_FORMAT, "Quasar uses 2's complement natively; sign-magnitude not supported");
-    _calculate_add_(DataFormat::Int32, iterations, dst_index_in0, dst_index_in1, dst_index_out);
 }
 
 } // namespace sfpu
