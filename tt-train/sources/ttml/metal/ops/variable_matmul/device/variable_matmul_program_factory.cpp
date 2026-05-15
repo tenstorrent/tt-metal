@@ -160,12 +160,9 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     // ----- M tile counts (from actual_M — used for both compile-time and runtime args) -----
     uint32_t actual_padded_M_tiles = tt::round_up(actual_M_tiles, in0_parallel_axis_cores);
     uint32_t padded_N_tiles = tt::round_up(N_tiles, in1_parallel_axis_cores);
-    uint32_t padded_K_tiles = tt::round_up(K_tiles, K_block_tiles);
 
     uint32_t actual_M_tiles_per_core = actual_padded_M_tiles / in0_parallel_axis_cores;
     uint32_t N_tiles_per_core = padded_N_tiles / in1_parallel_axis_cores;
-
-    uint32_t K_blocks = padded_K_tiles / K_block_tiles;
 
     uint32_t actual_M_blocks_per_core = tt::div_up(actual_M_tiles_per_core, M_block_tiles);
     uint32_t N_blocks_per_core = tt::div_up(N_tiles_per_core, N_block_tiles);
@@ -309,6 +306,13 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         in1_defines["IN0_AXIS_CORES"] = std::to_string(in0_axis_cores_ct);
         compute_offsets_defines["IN0_AXIS_CORES"] = std::to_string(in0_axis_cores_ct);
     }
+    // Y_AXIS_CORES: number of cores along the Y direction. Used by dm kernels to compute
+    // `defer_write_k_block = core_y * ceil(K_num_blocks / Y_AXIS_CORES)` from runtime
+    // K_num_blocks (which can shrink when a K-axis OffsetsRole overrides K_tiles from
+    // on-device offsets). The host can't know runtime K, so it passes core.y instead of a
+    // pre-computed defer value; the kernel runs the stagger formula after the K override.
+    in0_defines["Y_AXIS_CORES"] = std::to_string(grid_size.y);
+    in1_defines["Y_AXIS_CORES"] = std::to_string(grid_size.y);
 
     // ----- Kernel compile-time args -----
     // Layout matches original minimal_matmul exactly (22 args for in0, 21 for in1) so TensorAccessor
@@ -544,8 +548,8 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
             .defines = compute_defines});
 
     // ----- Per-core runtime args -----
-    uint32_t k_blocks_per_core =
-        tt::div_up(K_blocks, (transpose_core_grid ? in1_parallel_axis_cores : in0_parallel_axis_cores));
+    // defer_write_k_block stagger is computed kernel-side from runtime K_num_blocks +
+    // Y_AXIS_CORES (CT). Host just hands the kernel core.y here.
 
     auto cores = corerange_to_cores(core_grid, num_cores, true);
 
@@ -593,8 +597,9 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         uint32_t N_start_tile = N_tiles_per_core * in1_idx;
         uint32_t N_end_tile = N_tiles_per_core * (in1_idx + 1);
 
-        uint32_t defer_write_k_block = core.y * k_blocks_per_core;
-        defer_write_k_block = std::min(defer_write_k_block, K_blocks - 1);
+        // Pass core.y to the kernel; it computes defer_write_k_block from runtime K_num_blocks
+        // and Y_AXIS_CORES so the stagger is correct even when on-device offsets shrink K.
+        const uint32_t defer_write_k_block = core.y;
 
         bool is_in0_sink = core == in0_core_order.back();
         bool is_in1_sink = core == in1_core_order.back();
@@ -837,12 +842,9 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
     // exceeds in0's or in1_k_offset > 0; otherwise in0/weight K match (weight provides K_w).
     const bool in1_parent_k = operation_attributes.in1_k_offset_tiles > 0 || parent_K_tiles_in1 > parent_K_tiles_in0;
     const uint32_t K_tiles_rt = in1_parent_k ? parent_K_tiles_in0 : parent_K_tiles_in1;
-    const uint32_t padded_K_tiles_rt = tt::round_up(K_tiles_rt, sv.K_block_tiles);
-    const uint32_t K_blocks_rt = padded_K_tiles_rt / sv.K_block_tiles;
-    const uint32_t k_blocks_per_core_rt =
-        tt::div_up(K_blocks_rt, sv.transpose_core_grid ? sv.in1_parallel_axis_cores : sv.in0_parallel_axis_cores);
 
-    // defer_write_k_block is per-core, depends on K_blocks (variable). Updated below per core.
+    // defer_write_k_block is computed kernel-side from runtime K_num_blocks + Y_AXIS_CORES.
+    // Host just passes core.y at that RT-arg slot.
     constexpr uint32_t IN0_DEFER_WRITE_K_BLOCK_IDX = 12;
     constexpr uint32_t IN1_DEFER_WRITE_K_BLOCK_IDX = 11;
 
@@ -879,8 +881,9 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
         uint32_t M_start_tile = actual_M_tiles_per_core * in0_idx;
         uint32_t M_end_tile = actual_M_tiles_per_core * (in0_idx + 1);
 
-        uint32_t defer_write_k_block = core.y * k_blocks_per_core_rt;
-        defer_write_k_block = std::min(defer_write_k_block, K_blocks_rt - 1U);
+        // Kernel computes defer_write_k_block from runtime K_num_blocks (post K-axis offset
+        // override) using Y_AXIS_CORES — just pass core.y.
+        const uint32_t defer_write_k_block = core.y;
 
         // Update in0 args
         if (in1_idx == 0) {
