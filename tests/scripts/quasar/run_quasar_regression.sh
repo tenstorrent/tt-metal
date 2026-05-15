@@ -204,6 +204,12 @@ run_start=$SECONDS
 trap 'echo ""; echo "*** Interrupted ***"; print_summary; exit 130' INT
 test_num=0
 
+# Associative array: log_base path -> how many times we've used that stem (for
+# _2, _3 suffixes). Do not use ${arr["$key"]:-0} — keys can contain '/' and bash
+# misparses :- with the subscript, yielding "operand expected". With set -u,
+# use ${arr["$key"]-0} (hyphen only) so a missing key is not an unbound read.
+declare -A log_base_counts=()
+
 for entry in "${test_entries[@]}"; do
     IFS="$SEP" read -r group filter config envvars <<< "$entry"
 
@@ -270,7 +276,7 @@ for entry in "${test_entries[@]}"; do
     logger_env=()
     if [[ -n "$LOG_DIR" ]]; then
         log_base="$LOG_DIR/${config}_${group}_${resolved_name}"
-        count=${log_base_counts["$log_base"]:-0}
+        count="${log_base_counts["$log_base"]-0}"
         count=$((count + 1))
         log_base_counts["$log_base"]=$count
         if [[ $count -gt 1 ]]; then
