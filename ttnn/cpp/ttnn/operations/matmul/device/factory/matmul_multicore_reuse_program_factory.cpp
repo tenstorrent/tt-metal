@@ -26,6 +26,7 @@ static MatmulMultiCoreReuseProgramFactory::cached_program_t create_program(
     tt::DataFormat in1_cb_data_format,
     tt::DataFormat out_cb_data_format,
     MathFidelity math_fidelity,
+    bool dst_full_sync_en,
     ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t num_cores_x,
     uint32_t B,
@@ -153,6 +154,7 @@ static MatmulMultiCoreReuseProgramFactory::cached_program_t create_program(
         all_cores,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
+            .dst_full_sync_en = dst_full_sync_en,
             .compile_args = compute_kernel_args,
             .defines = mm_kernel_defines,
             .named_compile_args = {
@@ -347,6 +349,7 @@ MatmulMultiCoreReuseProgramFactory::cached_program_t MatmulMultiCoreReuseProgram
         in1_cb_data_format,
         out_cb_data_format,
         math_fidelity,
+        ttnn::get_dst_full_sync_en(operation_attributes.compute_kernel_config),
         ttnn::get_throttle_level(operation_attributes.compute_kernel_config),
         num_cores_x,
         B,
