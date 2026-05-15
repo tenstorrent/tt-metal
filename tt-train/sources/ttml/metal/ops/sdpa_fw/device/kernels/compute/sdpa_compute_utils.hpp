@@ -374,6 +374,7 @@ void recip_tile_inplace(uint32_t cb_in_idx) {
     reconfig_data_format(cb_in_idx, cb_in_idx);
     copy_tile_init(cb_in_idx);
     copy_tile(cb_in_idx, /* tile_idx */ 0, dst_idx);
+    recip_tile_init</* legacy_compat */ false>();
     MATH((recip_tile_first_column(dst_idx)));
     tile_regs_commit();
 
