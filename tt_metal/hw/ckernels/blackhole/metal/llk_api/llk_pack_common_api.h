@@ -90,6 +90,22 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         false);  // partial_face
 }
 
+template <bool is_fp32_dest_acc_en>
+inline void llk_pack_reconfig_data_format_disaggregated(
+    const std::uint32_t new_output, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4) {
+    const std::uint32_t output_id = get_output_id(new_output);
+    const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
+
+    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
+        pack_src_format[output_id],
+        pack_dst_format[output_id],
+        get_local_cb_interface(output_id).fifo_page_size,
+        face_r_dim,
+        tile_c_dim,
+        num_faces,
+        false);  // partial_face
+}
+
 // TODO NC: Clean up as the part of tt-metal#34499
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const std::uint32_t new_output) {

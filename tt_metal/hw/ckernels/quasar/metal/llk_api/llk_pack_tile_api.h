@@ -4,6 +4,7 @@
 
 #pragma once
 #include "llk_pack_common_api.h"
+#include "llk_pack.h"
 
 /*************************************************************************
  * LLK PACK (tile / block)
