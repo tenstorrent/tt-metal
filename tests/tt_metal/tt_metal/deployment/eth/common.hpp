@@ -117,6 +117,50 @@ static inline void prepare_receiver(
     tt_metal::SetRuntimeArgs(*recv_program, recv_kernel, recv_core, {});
 }
 
+[[maybe_unused]]
+static void prepare_bidir(
+    tt::tt_metal::IDevice* const send_device,
+    const CoreCoord& send_core,
+    uint32_t transfer_size,
+    uint32_t transfer_count,
+    uint32_t send_delta_addr,
+    std::span<uint32_t> inputs,
+    DataMovementProcessor processor,
+    uint32_t num_bytes_per_send,
+    uint32_t iter_l1_address,
+    uint32_t send_l1_address,
+    uint32_t recv_l1_address,
+    uint32_t channel0,
+    uint32_t channel1,
+    tt_metal::Program* send_program) {
+    /* =================== */
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        send_device->id(), send_device->ethernet_core_from_logical_core(send_core), inputs, send_l1_address);
+
+    auto send_eth_config = tt_metal::EthernetConfig{
+        .noc = tt_metal::NOC::NOC_0,
+        .processor = processor,
+        .compile_args =
+            {
+                channel0,
+                channel1,
+                iter_l1_address,
+                num_bytes_per_send,
+                transfer_size,
+                transfer_count,
+                send_delta_addr,
+                send_l1_address,
+                recv_l1_address,
+            },
+    };
+    eth_test_common::set_arch_specific_eth_config(send_eth_config);
+
+    auto send_kernel = tt_metal::CreateKernel(
+        *send_program, "tests/tt_metal/tt_metal/deployment/kernels/eth_bidir_kernel.cpp", send_core, send_eth_config);
+
+    tt_metal::SetRuntimeArgs(*send_program, send_kernel, send_core, {});
+}
+
 template <typename FIXTURE>
 [[maybe_unused]]
 static void wait_to_finish(
