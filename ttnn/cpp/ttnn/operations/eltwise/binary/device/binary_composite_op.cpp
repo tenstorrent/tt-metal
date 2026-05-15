@@ -15,10 +15,9 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
-#include "ttnn/device.hpp"
+#include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include <variant>
 #include <tt-metalium/sub_device_types.hpp>
 
@@ -542,55 +541,11 @@ Tensor floor_div(const Tensor& input_a, const Tensor& input_b, const std::option
         result);
 }
 
-/**
- * outer product = matrix multiply when a = [1,1,N,1] and b = [1,1,1,M]
- * and result is of size [1,1,N,M].
- * - implementation supports any 1D "squeezable tensor" at input operands
- *   by running reshape.
- */
-Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& /*output_mem_config*/) {
-    const ttnn::Shape& s_a = input_a.logical_shape();
-    const ttnn::Shape& s_b = input_b.logical_shape();
-    auto num_ones = [](const ttnn::Shape& s) -> uint32_t {
-        uint32_t num1s = 0;
-        for (uint32_t idx = 0; idx < 4; idx++) {
-            num1s += (uint32_t)(s[idx] == 1);
-        }
-        return num1s;
-    };
-
-    // check if 3 dimensions are 1
-    TT_FATAL((num_ones(s_a) >= 3), "3 dimensions are required to be 1 for use with outer product");
-    TT_FATAL((num_ones(s_b) >= 3), "3 dimensions are required to be 1 for use with outer product");
-
-    const bool skip_reshape_a = (s_a[0] == 1 && s_a[1] == 1 && s_a[2] >= 1 && s_a[3] == 1);
-    const bool skip_reshape_b = (s_b[0] == 1 && s_b[1] == 1 && s_b[2] == 1 && s_b[3] >= 1);
-
-    Tensor a_slim = input_a;
-    Tensor b_slim = input_b;
-
-    if (!skip_reshape_a) {
-        uint32_t a_volume = s_a[0] * s_a[1] * s_a[2] * s_a[3];
-        a_slim = ttnn::reshape(input_a, ttnn::Shape{std::array<uint32_t, 4>{1, 1, a_volume, 1}});
-    }
-    if (!skip_reshape_b) {
-        uint32_t b_volume = s_b[0] * s_b[1] * s_b[2] * s_b[3];
-        b_slim = ttnn::reshape(input_b, ttnn::Shape{std::array<uint32_t, 4>{1, 1, 1, b_volume}});
-    }
-    a_slim = ttnn::to_layout(a_slim, ttnn::TILE_LAYOUT);
-    b_slim = ttnn::to_layout(b_slim, ttnn::TILE_LAYOUT);
-
-    auto* device = ttnn::GetDefaultDevice();
-    if (device != nullptr) {
-        if (a_slim.storage_type() != tt::tt_metal::StorageType::DEVICE) {
-            a_slim = a_slim.to_device(device);
-        }
-        if (b_slim.storage_type() != tt::tt_metal::StorageType::DEVICE) {
-            b_slim = b_slim.to_device(device);
-        }
-    }
-
-    return ttnn::matmul(a_slim, b_slim);
+// outer(a, b) treats each input's last dim as a vector and broadcasts the
+// leading dims: a:[..., N], b:[..., M] -> [..., N, M], equivalent to
+// a.unsqueeze(-1) * b.unsqueeze(-2).
+Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::multiply(ttnn::unsqueeze(input_a, -1), ttnn::unsqueeze(input_b, -2), std::nullopt, output_mem_config);
 }
 
 Tensor polyval(
