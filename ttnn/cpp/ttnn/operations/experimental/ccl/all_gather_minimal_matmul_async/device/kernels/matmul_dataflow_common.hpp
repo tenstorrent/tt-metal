@@ -126,7 +126,22 @@ void compute_actual_k_block(
         k_left_start_tile = my_rank * k_tiles_per_device + device_k_block_iter * k_tiles_per_block;
         k_right_start_tile = k_left_start_tile + k_left_tiles;
     } else {
-#ifdef AGMM_UNI_RING
+#ifdef AGMM_DUAL_UNI_RING
+        // Dual uni-ring: bidirectional half-block ring on Linear. Ring A (leftward) brings
+        // k_left half of slice (my_rank + K) % N; ring B (rightward) brings k_right half of
+        // slice (my_rank - K + N) % N. Wraps are via fabric multi-hop unicast.
+        int32_t fwd_rank = my_rank + device_iter;
+        if ((uint32_t)fwd_rank >= num_devices) {
+            fwd_rank -= num_devices;
+        }
+        k_left_start_tile = fwd_rank * k_tiles_per_device + device_k_block_iter * k_tiles_per_block;
+
+        int32_t bwd_rank = my_rank - device_iter;
+        if (bwd_rank < 0) {
+            bwd_rank += num_devices;
+        }
+        k_right_start_tile = bwd_rank * k_tiles_per_device + device_k_block_iter * k_tiles_per_block + k_left_tiles;
+#elif defined(AGMM_UNI_RING)
         // Uni-ring on Linear: slice at iter K = (my_rank + K) mod N. Data flows leftward
         // around a virtual ring (Dev k -> Dev k-1 each iter; Dev 0 long-sends to Dev N-1).
         uint32_t actual_device_rank = my_rank + device_iter;
@@ -169,55 +184,74 @@ void compute_actual_k_block(
     }
 #ifdef IS_IN0
 #ifndef AGMM_NO_FABRIC
-    if (device_iter > 0 && is_first_n_block) {
-        // When we are not reading from local, and we are in the first forward pass through n, wait for data to arrive
+    if (is_first_n_block) {
         if (is_injector_core) {
-#ifdef AGMM_UNI_RING
+#ifdef AGMM_DUAL_UNI_RING
+            // Dual uni-ring: each iter, k_left half arrives via ring A and k_right half via
+            // ring B (signaled at the receiver's sem_backward and sem_forward respectively).
+            // Wait for both. Same per-m_block off-by-K_blocks_per_device bug as AGMM_UNI_RING
+            // — each ring's sender fires K_num_blocks sem incs per m_block but the receiver
+            // only consumes (N-1)*K_blocks_per_device of them via this wait. At the last
+            // K-block iter of each m_block, advance BOTH sem_targets by K_blocks_per_device
+            // to consume the iter N-1 extras and keep sends and waits in lockstep across
+            // m_block boundaries.
+            if (device_iter > 0) {
+                noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + 1);
+                sem_target_forward += 1;
+                noc_semaphore_wait_min(out_ready_semaphore_backward, sem_target_backward + 1);
+                sem_target_backward += 1;
+            }
+            if (k_block_iter == total_k_block_count - 1) {
+                sem_target_forward += k_blocks_per_device;
+                sem_target_backward += k_blocks_per_device;
+            }
+#elif defined(AGMM_UNI_RING)
             // Uni-ring: one slice per iter from "successor" (Dev k+1 normally; for Dev N-1,
             // from Dev 0 via long send). All sends use out_ready_semaphore_forward at the
             // receiver — single sem per iter.
             //
-            // Sender fires K_num_blocks sem incs per m_block (iter 0..N-1). The receiver
-            // only enters this wait at device_iter > 0, so it consumes (N-1)*K_blocks_per_device
-            // sem incs per m_block here — leaving K_blocks_per_device extra (from sender's
-            // iter N-1 sends, which carry data the receiver doesn't need). Without
-            // compensation, sem accumulates past sem_target and the NEXT m_block's first
-            // wait passes BEFORE sender has written that m_block's data, causing stale
-            // reads. Fix: at the last K-block iter of each m_block, advance sem_target by
-            // k_blocks_per_device to consume those extras and keep the counter in lockstep
-            // with the sender across m_block boundaries.
-            noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + 1);
-            sem_target_forward += 1;
+            // Sender fires K_num_blocks sem incs per m_block (iter 0..N-1). Receiver waits
+            // (N-1)*K_blocks_per_device times — leaves K_blocks_per_device extra sem incs
+            // unconsumed per m_block. Without compensation, sem accumulates past sem_target
+            // and the NEXT m_block's first wait passes BEFORE sender has written that
+            // m_block's data, causing stale reads. Fix: at the last K-block iter of each
+            // m_block, advance sem_target by K_blocks_per_device to consume those extras.
+            if (device_iter > 0) {
+                noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + 1);
+                sem_target_forward += 1;
+            }
             if (k_block_iter == total_k_block_count - 1) {
                 sem_target_forward += k_blocks_per_device;
             }
 #else
-            if constexpr (IsLinear) {
-                // Linear: each device_iter delivers from exactly one direction.
-                //   device_iter <= num_targets_fwd: source is forward of me; data arrives via
-                //     backward relay chain, increments out_ready_semaphore_forward.
-                //   device_iter > num_targets_fwd: source is backward of me; data arrives via
-                //     forward relay chain, increments out_ready_semaphore_backward.
-                // Per chain per iter, exactly 1 sem inc arrives at this chain's injector.
-                if (device_iter <= num_targets_fwd_rt) {
-                    noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + 1);
-                    sem_target_forward += 1;
+            if (device_iter > 0) {
+                if constexpr (IsLinear) {
+                    // Linear: each device_iter delivers from exactly one direction.
+                    //   device_iter <= num_targets_fwd: source is forward of me; data arrives via
+                    //     backward relay chain, increments out_ready_semaphore_forward.
+                    //   device_iter > num_targets_fwd: source is backward of me; data arrives via
+                    //     forward relay chain, increments out_ready_semaphore_backward.
+                    // Per chain per iter, exactly 1 sem inc arrives at this chain's injector.
+                    if (device_iter <= num_targets_fwd_rt) {
+                        noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + 1);
+                        sem_target_forward += 1;
+                    } else {
+                        noc_semaphore_wait_min(out_ready_semaphore_backward, sem_target_backward + 1);
+                        sem_target_backward += 1;
+                    }
                 } else {
-                    noc_semaphore_wait_min(out_ready_semaphore_backward, sem_target_backward + 1);
-                    sem_target_backward += 1;
-                }
-            } else {
-                // Ring: both halves arrive simultaneously from both directions.
-                if constexpr (HasForwardTargets) {
-                    noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + in0_core_order_size);
-                    sem_target_forward += in0_core_order_size;
-                }
-                if constexpr (HasBackwardTargets) {
-                    noc_semaphore_wait_min(out_ready_semaphore_backward, sem_target_backward + in0_core_order_size);
-                    sem_target_backward += in0_core_order_size;
+                    // Ring: both halves arrive simultaneously from both directions.
+                    if constexpr (HasForwardTargets) {
+                        noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + in0_core_order_size);
+                        sem_target_forward += in0_core_order_size;
+                    }
+                    if constexpr (HasBackwardTargets) {
+                        noc_semaphore_wait_min(out_ready_semaphore_backward, sem_target_backward + in0_core_order_size);
+                        sem_target_backward += in0_core_order_size;
+                    }
                 }
             }
-#endif  // AGMM_UNI_RING
+#endif  // AGMM_UNI_RING / AGMM_DUAL_UNI_RING
         }
     }
 #endif  // !AGMM_NO_FABRIC
@@ -887,12 +921,15 @@ FORCE_INLINE PacketHeaders allocate_and_init_packet_headers(
     const AddrGen& in0_reader,
     uint32_t num_tiles_to_write_per_packet,
     uint32_t in3_tile_size) {
-    PacketHeaders hdrs;
+    PacketHeaders hdrs{};  // zero-initialized (nullptrs) when !valid
+    if (!valid) {
+        return hdrs;
+    }
     hdrs.scatter_hdr = PacketHeaderPool::allocate_header();
     hdrs.unicast_hdr = PacketHeaderPool::allocate_header();
     hdrs.sem_inc_hdr = PacketHeaderPool::allocate_header();
 
-    if (valid) {
+    {
         uint16_t page_size = tt::tt_fabric::linear::addrgen_detail::get_page_size(in0_reader);
         uint64_t dummy_addrs[4] = {0, 0, 0, 0};
         uint16_t chunk_sizes[3] = {page_size, page_size, page_size};

@@ -61,7 +61,22 @@ constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info_backwa
     ccl_routing_utils::get_line_unicast_route_info_from_args<
         mux_arg_count + ccl_routing_utils::num_line_unicast_args>();
 
+#ifdef AGMM_DUAL_UNI_RING
+// Long routes used by end devices for the ring wraps. forward_long is meaningful only at
+// Dev 0 (carries k_left half N-1 hops fwd to Dev N-1); backward_long only at Dev N-1
+// (carries k_right half N-1 hops bwd to Dev 0). Placeholders elsewhere.
+constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info_forward_long =
+    ccl_routing_utils::get_line_unicast_route_info_from_args<
+        mux_arg_count + 2 * ccl_routing_utils::num_line_unicast_args>();
+
+constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info_backward_long =
+    ccl_routing_utils::get_line_unicast_route_info_from_args<
+        mux_arg_count + 3 * ccl_routing_utils::num_line_unicast_args>();
+
+constexpr uint32_t ct_arg_count = mux_arg_count + 4 * ccl_routing_utils::num_line_unicast_args;
+#else
 constexpr uint32_t ct_arg_count = mux_arg_count + 2 * ccl_routing_utils::num_line_unicast_args;
+#endif
 #else
 constexpr uint32_t ct_arg_count = 27;
 #endif
@@ -259,6 +274,25 @@ void kernel_main() {
 
     auto pkt_hdrs_forward = allocate_and_init_packet_headers(
         detail::valid_targets(0), unicast_route_info_forward, in0_reader, num_tiles_to_write_per_packet, in3_tile_size);
+
+#ifdef AGMM_DUAL_UNI_RING
+    // Long-route packet headers for the dual uni-ring wraps. Allocated only at the end
+    // devices that USE them (Dev 0 for forward_long → ring A long to Dev N-1; Dev N-1
+    // for backward_long → ring B long to Dev 0). Allocating at interior devices would
+    // exhaust the per-RISC packet header pool (~8 max; 4 sets * 3 = 12 exceeds).
+    auto pkt_hdrs_forward_long = allocate_and_init_packet_headers(
+        detail::valid_targets(0) && (num_targets_backward_direction == 0),  // Dev 0 only
+        unicast_route_info_forward_long,
+        in0_reader,
+        num_tiles_to_write_per_packet,
+        in3_tile_size);
+    auto pkt_hdrs_backward_long = allocate_and_init_packet_headers(
+        detail::valid_targets(1) && (num_targets_forward_direction == 0),  // Dev N-1 only
+        unicast_route_info_backward_long,
+        in0_reader,
+        num_tiles_to_write_per_packet,
+        in3_tile_size);
+#endif
 #endif
 #endif
 
@@ -338,6 +372,13 @@ void kernel_main() {
                 uint32_t current_K_block_tiles = is_tail_k_block ? K_block_tail_tiles : K_block_tiles;
                 bool k_block_odd = (actual_k_block % K_blocks_per_device) & 1;
                 uint32_t k_left_tiles, k_right_tiles;
+#ifdef AGMM_DUAL_UNI_RING
+                // Dual uni-ring: bidirectional half-block, same split as Ring topology.
+                // k_left flows via ring A (leftward) carrying forward-source half; k_right
+                // flows via ring B (rightward) carrying backward-source half.
+                k_left_tiles = k_block_odd ? (K_block_tiles - (K_block_tiles / 2)) : (K_block_tiles / 2);
+                k_right_tiles = k_block_odd ? (K_block_tiles / 2) : (K_block_tiles - k_left_tiles);
+#else
                 if constexpr (is_linear) {
                     // Linear: full block from one direction. Tail block has current_K_block_tiles
                     // valid tiles + (K_block_tiles - current_K_block_tiles) zero-fill tiles to
@@ -350,6 +391,7 @@ void kernel_main() {
                     k_left_tiles = k_block_odd ? (K_block_tiles - (K_block_tiles / 2)) : (K_block_tiles / 2);
                     k_right_tiles = k_block_odd ? (K_block_tiles / 2) : (K_block_tiles - k_left_tiles);
                 }
+#endif
                 compute_actual_k_block<
                     (num_targets_forward_direction > 0),
                     (num_targets_backward_direction > 0),
@@ -373,6 +415,7 @@ void kernel_main() {
                     k_left_tiles,
                     k_block_left_tile,
                     k_block_right_tile);
+#ifndef AGMM_DUAL_UNI_RING
                 if constexpr (is_linear) {
                     // For Linear tail, the right half is pure zero-fill padding (no real tiles).
                     // Point past the logical K end so read_in0_block_sync's `j < logical_d1` check
@@ -381,6 +424,7 @@ void kernel_main() {
                         k_block_right_tile = K_tiles;
                     }
                 }
+#endif
                 if (is_injector_core) {
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
                         in0_reader,
@@ -431,7 +475,112 @@ void kernel_main() {
                 }
 #ifdef USE_MUX
 #ifndef AGMM_NO_FABRIC
-#ifdef AGMM_UNI_RING
+#ifdef AGMM_DUAL_UNI_RING
+                // Dual uni-ring: every iter, every device sends TWO half-blocks — one each
+                // direction. Ring A (k_left) flows leftward to predecessor; ring B (k_right)
+                // flows rightward to successor. Dev 0 uses mux_backward for both (ring A long,
+                // ring B short). Dev N-1 uses mux_forward for both (ring A short, ring B long).
+                // Interior devices use both muxes (mux_forward for ring A, mux_backward for B).
+                // All sends signal sem_backward (ring A — k_left arrivals) or sem_forward
+                // (ring B — k_right arrivals) at the receiver.
+                if (n_block_iter == 0) {
+                    DeviceZoneScopedN("send");
+                    // ---- Ring A: k_left half to predecessor ----
+                    if constexpr (num_targets_backward_direction == 0) {
+                        // Dev 0: long send via mux_backward + pkt_hdrs_forward_long
+                        if constexpr (num_targets_forward_direction > 0) {
+                            if (in0_core_order_index >= backward_in0_core_order_index &&
+                                in0_core_order_index < forward_in0_core_order_index) {
+                                forward_half_block_to_fabric_neighbor(
+                                    m_tile,
+                                    k_block_left_tile,
+                                    current_M_block_tiles,
+                                    k_left_tiles,
+                                    k_right_tiles,
+                                    num_tiles_to_write_per_packet,
+                                    in0_start_address,
+                                    K_tiles,
+                                    in0_reader,
+                                    mux_connection_handle_backward,
+                                    pkt_hdrs_forward_long,
+                                    in0_tile_size,
+                                    out_ready_sem_injector_noc_addr_backward_in_pkt,
+                                    /*write_left_half=*/true,
+                                    M_tiles,
+                                    true);
+                            }
+                        }
+                    } else {
+                        // Dev k > 0: short send via mux_forward + pkt_hdrs_backward
+                        if (in0_core_order_index >= forward_in0_core_order_index) {
+                            forward_half_block_to_fabric_neighbor(
+                                m_tile,
+                                k_block_left_tile,
+                                current_M_block_tiles,
+                                k_left_tiles,
+                                k_right_tiles,
+                                num_tiles_to_write_per_packet,
+                                in0_start_address,
+                                K_tiles,
+                                in0_reader,
+                                mux_connection_handle_forward,
+                                pkt_hdrs_backward,
+                                in0_tile_size,
+                                out_ready_sem_injector_noc_addr_backward_in_pkt,
+                                /*write_left_half=*/true,
+                                M_tiles,
+                                true);
+                        }
+                    }
+                    // ---- Ring B: k_right half to successor ----
+                    if constexpr (num_targets_forward_direction == 0) {
+                        // Dev N-1: long send via mux_forward + pkt_hdrs_backward_long
+                        if constexpr (num_targets_backward_direction > 0) {
+                            if (in0_core_order_index >= forward_in0_core_order_index) {
+                                forward_half_block_to_fabric_neighbor(
+                                    m_tile,
+                                    k_block_right_tile,
+                                    current_M_block_tiles,
+                                    k_left_tiles,
+                                    k_right_tiles,
+                                    num_tiles_to_write_per_packet,
+                                    in0_start_address,
+                                    K_tiles,
+                                    in0_reader,
+                                    mux_connection_handle_forward,
+                                    pkt_hdrs_backward_long,
+                                    in0_tile_size,
+                                    out_ready_sem_injector_noc_addr_forward_in_pkt,
+                                    /*write_left_half=*/false,
+                                    M_tiles,
+                                    true);
+                            }
+                        }
+                    } else {
+                        // Dev k < N-1: short send via mux_backward + pkt_hdrs_forward
+                        if (in0_core_order_index >= backward_in0_core_order_index &&
+                            in0_core_order_index < forward_in0_core_order_index) {
+                            forward_half_block_to_fabric_neighbor(
+                                m_tile,
+                                k_block_right_tile,
+                                current_M_block_tiles,
+                                k_left_tiles,
+                                k_right_tiles,
+                                num_tiles_to_write_per_packet,
+                                in0_start_address,
+                                K_tiles,
+                                in0_reader,
+                                mux_connection_handle_backward,
+                                pkt_hdrs_forward,
+                                in0_tile_size,
+                                out_ready_sem_injector_noc_addr_forward_in_pkt,
+                                /*write_left_half=*/false,
+                                M_tiles,
+                                true);
+                        }
+                    }
+                }
+#elif defined(AGMM_UNI_RING)
                 // Uni-ring: every iter, every device sends ONE full K-block to its predecessor
                 // in the virtual ring. Dev 0 (num_targets_backward_direction == 0) long-sends
                 // to Dev N-1 via mux_backward (forward direction, N-1 hops; the routing was

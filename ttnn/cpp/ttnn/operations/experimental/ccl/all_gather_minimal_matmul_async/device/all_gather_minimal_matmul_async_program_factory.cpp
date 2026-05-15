@@ -546,8 +546,21 @@ all_gather_minimal_matmul_async_factory_helper(
     // (N-1 hops). Trades the multi-hop compute-level chain relay for a multi-hop fabric
     // unicast — collapses the ~200us critical-path stall at end devices to ~3us.
     const char* uni_ring_env = std::getenv("AGMM_UNI_RING");
-    const bool agmm_uni_ring =
+    bool agmm_uni_ring =
         (uni_ring_env != nullptr && std::string(uni_ring_env) == "1") && (topology == ttnn::ccl::Topology::Linear);
+    // AGMM_DUAL_UNI_RING env var: like AGMM_UNI_RING, but runs TWO uni-rings simultaneously
+    // (one in each direction) carrying k_left and k_right halves of each K-block. Mirrors
+    // the bidirectional half-block scheme of the Ring topology, but implements the wrap
+    // via fabric multi-hop unicast. Distributes fabric work across both mux ports at
+    // interior devices (~50% per-port load reduction) and halves the long-send transit
+    // time at end devices. Mutually exclusive with AGMM_UNI_RING (dual takes priority).
+    const char* dual_uni_ring_env = std::getenv("AGMM_DUAL_UNI_RING");
+    const bool agmm_dual_uni_ring = (dual_uni_ring_env != nullptr && std::string(dual_uni_ring_env) == "1") &&
+                                    (topology == ttnn::ccl::Topology::Linear);
+    if (agmm_dual_uni_ring) {
+        defines["AGMM_DUAL_UNI_RING"] = "1";
+        agmm_uni_ring = false;  // dual takes priority
+    }
     if (agmm_uni_ring) {
         defines["AGMM_UNI_RING"] = "1";
     }
@@ -576,6 +589,24 @@ all_gather_minimal_matmul_async_factory_helper(
     // deliveries — exactly what we want.
     if (agmm_uni_ring && ring_index == 0) {
         unicast_forward_args[1] = ring_size - 1;  // distance_in_hops = N-1
+    }
+
+    // Dual uni-ring routing: builds 2 additional route arg sets (forward_long, backward_long)
+    // for the multi-hop wrap sends. For 1D fabric the route is just {mesh_id=0, distance=N-1}
+    // at Dev 0 (forward_long) and Dev N-1 (backward_long). Other devices get zero placeholders
+    // (those routes are unused at those positions, gated by num_targets_* CT args in the kernel).
+    std::array<uint32_t, 2> unicast_forward_long_args = {0, 0};
+    std::array<uint32_t, 2> unicast_backward_long_args = {0, 0};
+    if (agmm_dual_uni_ring) {
+        TT_FATAL(
+            tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig()),
+            "AGMM_DUAL_UNI_RING currently only supports 1D fabric config");
+        if (ring_index == 0) {
+            unicast_forward_long_args = {0, ring_size - 1};  // long send to Dev N-1
+        }
+        if (ring_index == ring_size - 1) {
+            unicast_backward_long_args = {0, ring_size - 1};  // long send to Dev 0
+        }
     }
 
     uint32_t in0_addr = ag_output_tensor.buffer()->address();
@@ -729,6 +760,16 @@ all_gather_minimal_matmul_async_factory_helper(
         in0_receiver_fabric_compile_time_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
     in0_receiver_fabric_compile_time_args.insert(
         in0_receiver_fabric_compile_time_args.end(), unicast_backward_args.begin(), unicast_backward_args.end());
+    if (agmm_dual_uni_ring) {
+        in0_receiver_fabric_compile_time_args.insert(
+            in0_receiver_fabric_compile_time_args.end(),
+            unicast_forward_long_args.begin(),
+            unicast_forward_long_args.end());
+        in0_receiver_fabric_compile_time_args.insert(
+            in0_receiver_fabric_compile_time_args.end(),
+            unicast_backward_long_args.begin(),
+            unicast_backward_long_args.end());
+    }
     append_accessors(
         in0_receiver_fabric_compile_time_args,
         ag_output_tensor,

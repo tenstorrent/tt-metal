@@ -202,6 +202,11 @@ void kernel_main() {
                     uint32_t current_K_block_tiles = is_tail_k_block ? K_block_tail_tiles : K_block_tiles;
                     bool k_block_odd = (actual_k_block % K_blocks_per_device) & 1;
                     uint32_t k_left_tiles, k_right_tiles;
+#ifdef AGMM_DUAL_UNI_RING
+                    // Dual uni-ring: bidirectional half-block split matching in0.
+                    k_left_tiles = k_block_odd ? (K_block_tiles - (K_block_tiles / 2)) : (K_block_tiles / 2);
+                    k_right_tiles = k_block_odd ? (K_block_tiles / 2) : (K_block_tiles - k_left_tiles);
+#else
                     if constexpr (is_linear) {
                         // Linear: full block from one direction. Tail block has current_K_block_tiles
                         // valid tiles + (K_block_tiles - current_K_block_tiles) zero-fill tiles to
@@ -213,6 +218,7 @@ void kernel_main() {
                         k_left_tiles = k_block_odd ? (K_block_tiles - (K_block_tiles / 2)) : (K_block_tiles / 2);
                         k_right_tiles = k_block_odd ? (K_block_tiles / 2) : (K_block_tiles - k_left_tiles);
                     }
+#endif
                     compute_actual_k_block<(num_targets_forward_direction > 0), true, is_linear>(
                         k_block_iter,
                         K_num_blocks,
@@ -226,6 +232,7 @@ void kernel_main() {
                         k_left_tiles,
                         k_block_left_tile,
                         k_block_right_tile);
+#ifndef AGMM_DUAL_UNI_RING
                     if constexpr (is_linear) {
                         // For Linear tail, the right half is pure zero-fill padding. Point past the
                         // logical K end so read_in1_block_sync's `i < logical_d0` check triggers
@@ -234,6 +241,7 @@ void kernel_main() {
                             k_block_right_tile = K_tiles;
                         }
                     }
+#endif
                     read_in1_block_sync<K_block_tiles, N_block_tiles>(
                         in1_reader,
                         in1_shape,
