@@ -9,7 +9,10 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
+#include <map>
+#include <string>
 #include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 
 using namespace tt;
@@ -313,16 +316,22 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     };
 
     // Compute defines
-    KernelDescriptor::Defines compute_defines;
+    std::map<std::string, std::string> mm_kernel_defines;
     if (packer_l1_acc_en) {
-        compute_defines.emplace_back("PACKER_L1_ACC", "1");
+        mm_kernel_defines["PACKER_L1_ACC"] = "1";
     }
     if (fp32_dest_acc_en) {
-        compute_defines.emplace_back("FP32_DEST_ACC_EN", "1");
+        mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
     if (in1_transpose_tile) {
-        compute_defines.emplace_back("IN1_TRANSPOSE_TILE", "1");
+        mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
     }
+    const auto throttle_level = ttnn::get_throttle_level(operation_attributes.compute_kernel_config);
+    ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
+        device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+    KernelDescriptor::Defines compute_defines{mm_kernel_defines.begin(), mm_kernel_defines.end()};
 
     // Build per-core runtime args
     bool row_major = false;
@@ -418,7 +427,10 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     compute_kernel_desc.defines = compute_defines;
     compute_kernel_desc.runtime_args = std::move(compute_runtime_args_g1);
     compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode};
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode};
     program_descriptor.kernels.push_back(std::move(compute_kernel_desc));
 
     // Core group 2 compute kernel (if needed)
@@ -455,7 +467,10 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         compute_kernel_desc_g2.defines = compute_defines;
         compute_kernel_desc_g2.runtime_args = std::move(compute_runtime_args_g2);
         compute_kernel_desc_g2.config = ComputeConfigDescriptor{
-            .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode};
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
+            .math_approx_mode = math_approx_mode};
         program_descriptor.kernels.push_back(std::move(compute_kernel_desc_g2));
     }
 
