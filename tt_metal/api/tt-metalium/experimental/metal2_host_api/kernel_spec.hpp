@@ -295,7 +295,7 @@ struct KernelSpec {
         // If the INTER case were enabled, we would need an additional field to describe
         // the inter-thread communication pattern here.
     };
-    std::vector<DFBComputeSelfLoopScope> dfb_compute_self_loop_scopes;
+    std::vector<DFBComputeSelfLoopScope> dfb_compute_self_loop_scopes = {};
 };
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api

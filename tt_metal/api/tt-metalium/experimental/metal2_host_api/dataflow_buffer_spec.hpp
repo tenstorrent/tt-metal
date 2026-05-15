@@ -104,7 +104,7 @@ struct DataflowBufferSpec {
     //   - All members must target the same node set
     //     (derived from their bound kernels' WorkUnitSpecs).
     using DFBIdentifiers = std::vector<DFBSpecName>;
-    DFBIdentifiers alias_with;  // empty vector means no aliasing
+    DFBIdentifiers alias_with = {};  // empty vector means no aliasing
 
     // Disable implicit sync
     // Implicit sync is handled via ISR (available on Gen2 only)

@@ -71,7 +71,7 @@ uint32_t get_runtime_arg_addr(
     switch (processor_class) {
         case tt::tt_metal::HalProcessorClassType::DM:
             TT_FATAL(
-                0 <= processor_id && processor_id < num_dm,
+                0 <= processor_id && processor_id < static_cast<int>(num_dm),
                 "processor_id {} must be 0 to {} for DM",
                 processor_id,
                 num_dm - 1);
