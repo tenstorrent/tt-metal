@@ -217,6 +217,7 @@ void compute_actual_k_block(
             // m_block's data, causing stale reads. Fix: at the last K-block iter of each
             // m_block, advance sem_target by K_blocks_per_device to consume those extras.
             if (device_iter > 0) {
+                DeviceZoneScopedSumN1("in0_wait_sem");
                 noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + 1);
                 sem_target_forward += 1;
             }

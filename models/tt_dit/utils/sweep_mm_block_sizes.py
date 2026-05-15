@@ -877,7 +877,11 @@ def test_mm_sweep(device_config, shape):
     write_csv_header(CSV_FILE)
 
     try:
-        run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+        # Enable sum profiling when MM_SWEEP_KERNEL_PROFILE=1 so DeviceZoneScopedSumN1/N2
+        # zones emit ZONE_TOTAL events to profile_log_device.csv. Off by default to keep
+        # the standard sweep path unchanged.
+        _sum = os.environ.get("MM_SWEEP_KERNEL_PROFILE") == "1"
+        run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"], sum_profiling=_sum)
     finally:
         os.environ.pop("MM_SWEEP_VALID_COMBOS_FILE", None)
         os.environ.pop("TT_METAL_PROFILER_MID_RUN_DUMP", None)
@@ -1028,7 +1032,8 @@ def main():
         )
 
         try:
-            run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+            _sum2 = os.environ.get("MM_SWEEP_KERNEL_PROFILE") == "1"
+            run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"], sum_profiling=_sum2)
         except Exception as e:
             print(f"  Sweep FAILED: {str(e)[:200]}")
             continue
