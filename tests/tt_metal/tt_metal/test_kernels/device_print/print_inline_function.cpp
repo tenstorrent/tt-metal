@@ -6,58 +6,58 @@
 #include "api/compute/common.h"
 
 /**
- * IIUC what happens is that the DEVICE_PRINT (roughly)expands to a lambda has a
- * []() {
- *     static __attribute__((section("..."))) ...
- * }();
+ * Bug: DEVICE_PRINT inside an `inline` function is silently dropped by the host.
  *
- * When this expansion happens inside of an inline function,
- * because there can be many definition of the inline function across different TUs, there can be many definitions of
- * the static variable. The compiler will put the definitions into a comdata (or linkonce, not certain which) section so
- * that it can later merge the together, so that there is only one object behind the static variable. When this happens,
- * it will in certian casses ignore the __attribute__((section("..."))) and put the variable into .data instead.
+ * Why:
+ *   DEVICE_PRINT expands to a lambda containing a
+ *     `static __attribute__((section(".device_print_strings_info"))) ... allocated_string_info`
+ *   Inside an `inline` function the lambda's static gets emitted into a COMDAT/linkonce (not my
+ *   area of expertise, but this is my current understanding) group so it can be deduplicated
+ *   across TUs. The compiler might drop the `section` attribute and place the variable in `.data`
+ *   instead.
  *
- * This will then result in the device implementation calling begin_write_message with a 0xFFB... (where .data is
- * located on device) pointer instead of 0x065.... (where string_info should be located) pointer. begin write message
- * will then do (ptr - 0x065... / sizeof(string_info)) & 0xFFFF resulting in a unexpected info_id being passed to the
- * host. The host will then be unable to interpret the DEVICE_PRINT and siliently drop it.
+ *   The device-side `begin_message_write` then receives a `.data` address (~0xFFB...)
+ *   instead of a `.device_print_strings_info` address (~0x065...). Its
+ *     `info_id = ((ptr - strings_info_base) / sizeof(DevicePrintStringInfo)) & 0xFFFF`
+ *   computation produces a garbage info_id, the host can't resolve the string, and the
+ *   message is silently dropped.
  *
- * If you compile this code and look at the objdump you will see
+ * Evidence — broken (function declared `inline`):
+ *   `allocated_string_info` for the inline function ends up in `.data`:
+ *
  * ```
  * ffb00820 l     O .data	00000010 _ZZZ28inline_function_device_printvENKUlDpOT_E_clIJEEEDaS1_E21allocated_string_info
- * 06500000 l     O .device_print_strings_info	00000010
- * _ZZZ11kernel_mainvENKUlDpOT_E_clIJEEEDaS1_E21allocated_string_info
+ * 06500000 l     O .device_print_strings_info	00000010 _ZZZ11kernel_mainvENKUlDpOT_E_clIJEEEDaS1_E21allocated_string_info
  * ```
- * as you can see the allocated_string_info in the inline function silently moved to .data
- * resulting in the following function call
+ *
+ * so the call site passes a `.data` pointer (0xFFB00820) to begin_message_write:
  *
  * ```
  * DEVICE_PRINT("INLINE!!!\n");
- * 6a68:	03018593          	addi	a1,gp,48 # ffb00820
- * <_ZZZ28inline_function_device_printvENKUlDpOT_E_clIJEEEDaS1_E21allocated_string_info> 6a6c:	00500513          	li
- * a0,5 6a70:	188000ef          	jal	6bf8
- * <_ZN19device_print_detail19begin_message_writeENS_10structures17DevicePrintHeaderEj.isra.0>
+ * 6a68:	03018593          	addi	a1,gp,48 # ffb00820 <_ZZZ28inline_function_device_printvENKUlDpOT_E_clIJEEEDaS1_E21allocated_string_info>
+ * 6a6c:	00500513          	li      a0,5
+ * 6a70:	188000ef          	jal	    6bf8 <_ZN19device_print_detail19begin_message_writeENS_10structures17DevicePrintHeaderEj.isra.0>
  * ```
  *
- * as you can see the address being passed in is 0xFFB00820 instead of 0x065xxxxx, which causes the host to not
- * recognize the message and drop it.
+ * Evidence — fixed (remove `inline`):
+ *   `allocated_string_info` is correctly placed in `.device_print_strings_info`:
  *
- * however, if you remove the inline from the inline_function_device_print, you will see the following objdump
  * ```
- * 06500010 l     O .device_print_strings_info	00000010
- * _ZZZ28inline_function_device_printvENKUlDpOT_E_clIJEEEDaS1_E21allocated_string_info 06500020 l     O
- * .device_print_strings_info	00000010 _ZZZ11kernel_mainvENKUlDpOT_E2_clIJEEEDaS1_E21allocated_string_info
+ * 06500010 l     O .device_print_strings_info	00000010 _ZZZ28inline_function_device_printvENKUlDpOT_E_clIJEEEDaS1_E21allocated_string_info
+ * 06500020 l     O .device_print_strings_info	00000010 _ZZZ11kernel_mainvENKUlDpOT_E2_clIJEEEDaS1_E21allocated_string_info
  * ```
- * the allocated_string_info is correctly placed in the .device_print_strings_info section, and the function call will
- * be
+ *
+ * and the call site passes the correct address (0x06500010):
+ *
  * ```
  * DEVICE_PRINT("INLINE!!!\n");
- * 6a64:	01040593          	addi	a1,s0,16 # 6500010
- * <_ZZZ28inline_function_device_printvENKUlDpOT_E_clIJEEEDaS1_E21allocated_string_info> 6a68:	00500513          	li
- * a0,5 6a6c:	188000ef          	jal	6bf4
- * <_ZN19device_print_detail19begin_message_writeENS_10structures17DevicePrintHeaderEj.isra.0>
+ * 6a64:	01040593          	addi	a1,s0,16 # 6500010 <_ZZZ28inline_function_device_printvENKUlDpOT_E_clIJEEEDaS1_E21allocated_string_info>
+ * 6a68:	00500513          	li      a0,5
+ * 6a6c:	188000ef          	jal     6bf4  <_ZN19device_print_detail19begin_message_writeENS_10structures17DevicePrintHeaderEj.isra.0>
  * ```
- * which is correct.
+ *
+ * What I don't understand is why this doesn't happen when I remove the unrelated const definition from
+ * the inline function >:( .
  */
 inline void inline_function_device_print() {
     const ct_string kernel = CTSTR("THIS IS REQUIRED TO BREAK THE FOLLOWING DEVICE_PRINT");
