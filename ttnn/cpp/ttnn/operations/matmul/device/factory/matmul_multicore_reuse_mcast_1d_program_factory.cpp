@@ -5382,6 +5382,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig config =
         std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config);
 
+    if (!config.allowed_worker_cores.has_value()) {
+        config.allowed_worker_cores = CoreRangeSet(CoreRange(
+            CoreCoord(0, 0),
+            CoreCoord(config.compute_with_storage_grid_size.x - 1, config.compute_with_storage_grid_size.y - 1)));
+    }
     auto resolved_grid = config.allowed_worker_cores.value().bounding_box().grid_size();
 
     return matmul_multi_core_reuse_mcast_1d_optimized_(
@@ -5430,6 +5435,11 @@ MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory::create_mesh_workload(
             const ttnn::MeshCoordinateRange mesh_coord_range{mesh_coord, mesh_coord};
             auto pc = std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
                 attributes.program_config.value());
+            if (!pc.allowed_worker_cores.has_value()) {
+                pc.allowed_worker_cores = CoreRangeSet(CoreRange(
+                    CoreCoord(0, 0),
+                    CoreCoord(pc.compute_with_storage_grid_size.x - 1, pc.compute_with_storage_grid_size.y - 1)));
+            }
             auto mesh_grid = pc.allowed_worker_cores.value().bounding_box().grid_size();
             DeviceComputeKernelConfig ckc = attributes.compute_kernel_config.value();
             tt_metal::Program program{};
