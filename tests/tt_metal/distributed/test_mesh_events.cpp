@@ -281,7 +281,7 @@ TEST_F(MeshEventsTestSuite, MultiCQNonBlockingReads) {
     std::vector<std::vector<distributed::ShardDataTransfer>> read_shards = {};
     std::vector<std::vector<uint32_t>> output_shard_data = {};
 
-    for (int i = 0; i < NUM_ITERS; i++) {
+    for (uint32_t i = 0; i < NUM_ITERS; i++) {
         // Initialize different input data across iterations
         input_shard_data.push_back(std::vector<uint32_t>(dram_buffer_size / sizeof(uint32_t)));
         std::iota(input_shard_data.back().begin(), input_shard_data.back().end(), i);
@@ -299,7 +299,7 @@ TEST_F(MeshEventsTestSuite, MultiCQNonBlockingReads) {
     std::vector<MeshEvent> write_events;
     std::vector<MeshEvent> read_events;
 
-    for (int i = 0; i < NUM_ITERS; i++) {
+    for (uint32_t i = 0; i < NUM_ITERS; i++) {
         if (i > 0) {
             // Wait for read to complete before writing, since the same
             // buffer is used across iterations

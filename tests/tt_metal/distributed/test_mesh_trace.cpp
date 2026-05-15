@@ -110,9 +110,9 @@ TEST_F(MeshTraceTestSuite, Sanity) {
     uint32_t num_trace_setup_teardown_loops = 10;
 
     MeshCoordinateRange all_devices(mesh_device_->shape());
-    for (int outer_loop = 0; outer_loop < num_trace_setup_teardown_loops; outer_loop++) {
+    for (uint32_t outer_loop = 0; outer_loop < num_trace_setup_teardown_loops; outer_loop++) {
         std::vector<std::shared_ptr<MeshWorkload>> mesh_workloads = {};
-        for (int i = 0; i < num_workloads_per_trace * num_traces; i++) {
+        for (uint32_t i = 0; i < num_workloads_per_trace * num_traces; i++) {
             auto workload = std::make_shared<MeshWorkload>();
             auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
                 1, mesh_device_->compute_with_storage_grid_size(), seed);
@@ -122,9 +122,9 @@ TEST_F(MeshTraceTestSuite, Sanity) {
         }
 
         std::vector<MeshTraceId> trace_ids = {};
-        for (int trace_idx = 0; trace_idx < num_traces; trace_idx++) {
+        for (uint32_t trace_idx = 0; trace_idx < num_traces; trace_idx++) {
             auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
-            for (int workload_idx = 0; workload_idx < num_workloads_per_trace; workload_idx++) {
+            for (uint32_t workload_idx = 0; workload_idx < num_workloads_per_trace; workload_idx++) {
                 EnqueueMeshWorkload(
                     mesh_device_->mesh_command_queue(),
                     *mesh_workloads[(trace_idx * num_workloads_per_trace) + workload_idx],
@@ -134,7 +134,7 @@ TEST_F(MeshTraceTestSuite, Sanity) {
             trace_ids.push_back(trace_id);
         }
 
-        for (int i = 0; i < num_iters; i++) {
+        for (uint32_t i = 0; i < num_iters; i++) {
             for (auto trace_id : trace_ids) {
                 mesh_device_->replay_mesh_trace(0, trace_id, false);
             }
@@ -495,7 +495,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
         for (const auto& device_coord : right_col) {
             std::vector<uint32_t> dst_vec;
             ReadShard(mesh_device_->mesh_command_queue(), dst_vec, output_buf, device_coord);
-            for (int j = 0; j < dst_vec.size(); j++) {
+            for (size_t j = 0; j < dst_vec.size(); j++) {
                 EXPECT_EQ(dst_vec[j], src_vec[j] + 3);
             }
         }
@@ -564,7 +564,7 @@ void run_heterogenous_trace_sweep(
     std::vector<std::shared_ptr<MeshWorkload>> mesh_workloads = {};
 
     for (const auto& workload_grid : workload_grids) {
-        for (int i = 0; i < num_workloads; i++) {
+        for (uint32_t i = 0; i < num_workloads; i++) {
             auto workload = std::make_shared<MeshWorkload>();
             for (const auto& program_grid : workload_grid) {
                 auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
