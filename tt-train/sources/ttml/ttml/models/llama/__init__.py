@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass, field
 from math import lcm
 from typing import Optional
@@ -21,6 +22,22 @@ from ttml.modules import (
 from .. import RunnerType, WeightTyingType, memory_efficient_runner
 from .autograd_ops import SliceLastDim
 from .transformer import LlamaBlock, RMSNormLayer, compute_swiglu_intermediate_size
+
+
+@contextlib.contextmanager
+def py_zone(name: str, color: int = 0):
+    """Open a Tracy host zone for the duration of the with-block.
+
+    Pure host-side: no device dispatch, nests under whatever Tracy zone is
+    currently open. Used here to label coarse forward-pass regions (Embedding,
+    Block, LMHead) on the host timeline. Forward-only; no backward zone is
+    emitted.
+    """
+    ttnn.start_tracy_zone(__file__, name, 0, color)
+    try:
+        yield
+    finally:
+        ttnn.stop_tracy_zone(name, color)
 
 
 @dataclass(frozen=True)
@@ -144,6 +161,7 @@ class Llama(AbstractModuleBase):
                 config.hidden_size,
                 self.padded_vocab_size,
                 has_bias=False,
+                weight_init=ttml.init.normal(0.0, 0.02),
                 gather_output=True,
                 axis_name="tp",
             )
@@ -153,6 +171,7 @@ class Llama(AbstractModuleBase):
                 config.hidden_size,
                 self.padded_vocab_size,
                 False,
+                weight_init=ttml.init.normal(0.0, 0.02),
             )
 
         self.tok_emb = Embedding(
@@ -220,34 +239,37 @@ class Llama(AbstractModuleBase):
             input_val_padded = ttnn.pad(input.get_value(), padding=padding, value=0.0)
             input_padded = ttml.autograd.create_tensor(input_val_padded)
 
-        tok_emb_out = self.tok_emb(input_padded)
+        with py_zone("[Model] Embedding"):
+            tok_emb_out = self.tok_emb(input_padded)
 
-        out = tok_emb_out
-        if padded_seq_len != actual_seq_len:
-            slice_start = [0, 0, 0, 0]
-            slice_end = [
-                tok_emb_out.shape()[0],
-                tok_emb_out.shape()[1],
-                actual_seq_len,
-                tok_emb_out.shape()[3],
-            ]
-            step = [1, 1, 1, 1]
-            out_val = ttnn.slice(tok_emb_out.get_value(), slice_start, slice_end, step)
-            out = ttml.autograd.create_tensor(out_val)
+            out = tok_emb_out
+            if padded_seq_len != actual_seq_len:
+                slice_start = [0, 0, 0, 0]
+                slice_end = [
+                    tok_emb_out.shape()[0],
+                    tok_emb_out.shape()[1],
+                    actual_seq_len,
+                    tok_emb_out.shape()[3],
+                ]
+                step = [1, 1, 1, 1]
+                out_val = ttnn.slice(tok_emb_out.get_value(), slice_start, slice_end, step)
+                out = ttml.autograd.create_tensor(out_val)
 
         for layer_idx, block in enumerate(self.blocks):
-            extra_args = () if kv_cache is None else (kv_cache, layer_idx, new_tokens)
-            if self.config.runner_type == ttml.models.RunnerType.MemoryEfficient:
-                out = memory_efficient_runner(block, out, mask, *extra_args)
-            elif self.config.runner_type == ttml.models.RunnerType.Default:
-                out = block(out, mask, *extra_args)
-            else:
-                raise ValueError("Unknown runner type. Supported runner types ['default', 'memory_efficient']")
+            with py_zone("[Model] Block"):
+                extra_args = () if kv_cache is None else (kv_cache, layer_idx, new_tokens)
+                if self.config.runner_type == ttml.models.RunnerType.MemoryEfficient:
+                    out = memory_efficient_runner(block, out, mask, *extra_args)
+                elif self.config.runner_type == ttml.models.RunnerType.Default:
+                    out = block(out, mask, *extra_args)
+                else:
+                    raise ValueError("Unknown runner type. Supported runner types ['default', 'memory_efficient']")
 
-        out = self.ln_fc(out)
-        logits = self.fc(out)
-        if self.padded_vocab_size != self.config.vocab_size:
-            logits = SliceLastDim.apply(logits, self.config.vocab_size)
+        with py_zone("[Model] LMHead"):
+            out = self.ln_fc(out)
+            logits = self.fc(out)
+            if self.padded_vocab_size != self.config.vocab_size:
+                logits = SliceLastDim.apply(logits, self.config.vocab_size)
         return logits
 
 

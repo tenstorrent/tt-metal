@@ -218,16 +218,30 @@ void enqueue_mesh_workload(
         return;
     }
 
-    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    {
+        // Single Tracy zone per ttnn op dispatch, dynamically named with the op's
+        // type name so the timeline reads "Matmul", "Softmax", ... instead of a
+        // shared "TT_DNN_DEVICE_OP" label. The static source location ("ttnn_op_host")
+        // is unique to this site (no source-location pool inflation) and serves as
+        // a clear host-side fallback label.
+        // Duration measures host dispatch time (EnqueueMeshWorkload returns
+        // before the device finishes); see ops_perf_results CSV for device
+        // kernel duration per op.
+        ZoneScopedN("ttnn_op_host");
+        auto op_name_for_zone = get_operation_name<mesh_device_operation_t>(operation_attributes);
+        ZoneName(op_name_for_zone.data(), op_name_for_zone.size());
 
-    TracyOpMeshWorkload(
-        mesh_device,
-        workload,
-        mesh_device_operation_t{},
-        operation_attributes,
-        tensor_args,
-        tensor_return_value,
-        program_cache_hit);
+        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+
+        TracyOpMeshWorkload(
+            mesh_device,
+            workload,
+            mesh_device_operation_t{},
+            operation_attributes,
+            tensor_args,
+            tensor_return_value,
+            program_cache_hit);
+    }
 }
 
 // Dispatches `fn` to `program_factory` through either the `MeshWorkloadFactoryConcept` directly, or through the adapted

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import os
+import contextlib
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 
@@ -100,6 +101,23 @@ def _async_read_to_host(tensors: List[Any], mesh_device: Any) -> Tuple[List[Any]
 
 def _round_up(x: int) -> int:
     return ((x + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
+
+
+@contextlib.contextmanager
+def py_zone(name: str, color: int = 0):
+    """Open a Tracy host zone for the duration of the with-block.
+
+    Pure host-side: no device dispatch, nests under whatever Tracy zone is
+    currently open. Duplicated here (rather than imported from
+    ``llama_completer``) because ``llama_completer`` imports
+    ``LlamaCompositeKV`` from this module -- importing ``py_zone`` back
+    would form a circular import at module-load time.
+    """
+    ttnn.start_tracy_zone(__file__, name, 0, color)
+    try:
+        yield
+    finally:
+        ttnn.stop_tracy_zone(name, color)
 
 
 class LlamaGRPOCompleter(GRPOCompleter):
@@ -455,54 +473,64 @@ class LlamaGRPOCompleter(GRPOCompleter):
             return arr
 
         for i in range(tokens_to_complete):
-            if kv_cache.get_cache_position() == 0:
-                processed = 0
-                new_tokens = prompt_tokens_np.shape[1]
-                token_tensor = self._tokens_to_tensor(prompt_tokens_np, B)
-            else:
-                processed = N - 1
-                new_tokens = 1
-                token_tensor = ttnn.pad(
-                    last_token_column,
-                    [(0, 0), (0, 0), (0, 0), (0, TILE_SIZE - 1)],
-                    ctx._pad_token,
+            with py_zone("[C] token_tensor"):
+                if kv_cache.get_cache_position() == 0:
+                    processed = 0
+                    new_tokens = prompt_tokens_np.shape[1]
+                    token_tensor = self._tokens_to_tensor(prompt_tokens_np, B)
+                else:
+                    processed = N - 1
+                    new_tokens = 1
+                    token_tensor = ttnn.pad(
+                        last_token_column,
+                        [(0, 0), (0, 0), (0, 0), (0, TILE_SIZE - 1)],
+                        ctx._pad_token,
+                    )
+                    token_tensor = ttml.autograd.Tensor(token_tensor, False)
+
+            with py_zone("[C] mask"):
+                mask = self._create_causal_mask(processed, new_tokens, pad_lengths, B)
+
+            with py_zone("[C] _model"):
+                logits = self._model(token_tensor, mask, kv_cache=kv_cache, new_tokens=new_tokens)
+
+            with py_zone("[C] sample"):
+                next_token_tensor = ttml.ops.sample.sample_op(
+                    logits, ctx.temperature, np.random.randint(low=1e7), logits_mask_tensor
                 )
-                token_tensor = ttml.autograd.Tensor(token_tensor, False)
 
-            mask = self._create_causal_mask(processed, new_tokens, pad_lengths, B)
-            logits = self._model(token_tensor, mask, kv_cache=kv_cache, new_tokens=new_tokens)
-
-            next_token_tensor = ttml.ops.sample.sample_op(
-                logits, ctx.temperature, np.random.randint(low=1e7), logits_mask_tensor
-            )
-
-            last_token_column = ttnn.slice(
-                next_token_tensor.get_value(),
-                [0, 0, new_tokens - 1, 0],
-                [B_local, 1, new_tokens, 1],
-            )
+            with py_zone("[C] last_token_column"):
+                last_token_column = ttnn.slice(
+                    next_token_tensor.get_value(),
+                    [0, 0, new_tokens - 1, 0],
+                    [B_local, 1, new_tokens, 1],
+                )
 
             generated_columns.append(last_token_column)
             chunk_columns.append(last_token_column)
             N += 1
 
-            deallocate_tensors([token_tensor, mask, logits, next_token_tensor])
+            with py_zone("[C] deallocate"):
+                deallocate_tensors([token_tensor, mask, logits, next_token_tensor])
 
             if (i + 1) % CHUNK == 0:
-                if pending_event is not None:
-                    ttnn.event_synchronize(mesh_event=pending_event)
-                    chunk_np = np.stack(
-                        [h.to_numpy(mesh_composer=composer).reshape(B) for h in pending_hosts],
-                        axis=1,
-                    )
-                    done |= np.isin(chunk_np, stop_arr).any(axis=1)
-                    if done.all():
-                        break
+                with py_zone("[C] sync"):
+                    if pending_event is not None:
+                        ttnn.event_synchronize(mesh_event=pending_event)
+                        chunk_np = np.stack(
+                            [h.to_numpy(mesh_composer=composer).reshape(B) for h in pending_hosts],
+                            axis=1,
+                        )
+                        done |= np.isin(chunk_np, stop_arr).any(axis=1)
+                        if done.all():
+                            break
 
-                pending_hosts, pending_event = _async_read_to_host(chunk_columns, mesh_device)
-                chunk_columns = []
+                    pending_hosts, pending_event = _async_read_to_host(chunk_columns, mesh_device)
+                    chunk_columns = []
 
-        completions_np = to_np(generated_columns)
+        with py_zone("[C] completions_np"):
+            completions_np = to_np(generated_columns)
+
         deallocate_tensors(generated_columns)
         deallocate_tensors([logits_mask_tensor])
         kv_cache.reset()

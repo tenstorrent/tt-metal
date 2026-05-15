@@ -6,12 +6,30 @@
 
 from __future__ import annotations
 
+import contextlib
 from typing import Optional
 
+import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, Parameter, RunMode, LinearLayer, ColumnParallelLinear, RowParallelLinear
 
 from .gqattn import GroupedQueryAttention
+
+
+@contextlib.contextmanager
+def py_zone(name: str, color: int = 0):
+    """Open a Tracy host zone for the duration of the with-block.
+
+    Pure host-side: no device dispatch, nests under whatever Tracy zone is
+    currently open. Used here to label LlamaBlock / LlamaMLP forward
+    sub-regions on the host timeline. Forward-only; no backward zone is
+    emitted.
+    """
+    ttnn.start_tracy_zone(__file__, name, 0, color)
+    try:
+        yield
+    finally:
+        ttnn.stop_tracy_zone(name, color)
 
 
 def compute_swiglu_intermediate_size(hidden_size: int, multiple_of: int = 256) -> int:
@@ -85,6 +103,7 @@ class LlamaMLP(AbstractModuleBase):
                 embedding_size,
                 intermediate_size,
                 has_bias=False,
+                weight_init=ttml.init.normal(0.0, 0.02),
                 gather_output=False,
                 axis_name="tp",
             )
@@ -92,6 +111,7 @@ class LlamaMLP(AbstractModuleBase):
                 embedding_size,
                 intermediate_size,
                 has_bias=False,
+                weight_init=ttml.init.normal(0.0, 0.02),
                 gather_output=False,
                 axis_name="tp",
             )
@@ -99,6 +119,7 @@ class LlamaMLP(AbstractModuleBase):
                 intermediate_size,
                 embedding_size,
                 has_bias=False,
+                weight_init=ttml.init.normal(0.0, 0.02),
                 input_is_parallel=True,
                 axis_name="tp",
             )
@@ -107,16 +128,19 @@ class LlamaMLP(AbstractModuleBase):
                 embedding_size,
                 intermediate_size,
                 False,
+                weight_init=ttml.init.normal(0.0, 0.02),
             )
             self.w3 = LinearLayer(
                 embedding_size,
                 intermediate_size,
                 False,
+                weight_init=ttml.init.normal(0.0, 0.02),
             )
             self.w2 = LinearLayer(
                 intermediate_size,
                 embedding_size,
                 False,
+                weight_init=ttml.init.normal(0.0, 0.02),
             )
 
     def forward(self, input: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
@@ -128,10 +152,16 @@ class LlamaMLP(AbstractModuleBase):
         Returns:
             Output tensor after MLP
         """
-        swished = ttml.ops.unary.silu(self.w1(input))
-        gate = self.w3(input)
+        with py_zone("[MLP] W1"):
+            swished = ttml.ops.unary.silu(self.w1(input))
+
+        with py_zone("[MLP] W3"):
+            gate = self.w3(input)
+
         gated = ttml.ops.binary.mul(swished, gate)
-        x = self.w2(gated)
+
+        with py_zone("[MLP] W2"):
+            x = self.w2(gated)
 
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
             x = ttml.ops.dropout.dropout(x, self.dropout_prob)
@@ -183,13 +213,23 @@ class LlamaBlock(AbstractModuleBase):
         new_tokens: Optional[int] = None,
     ) -> ttml.autograd.Tensor:
         residual = input
-        h = self.attention_norm(input)
-        h = self.attention(h, mask, kv_cache, layer_idx, new_tokens)
+
+        with py_zone("[Block] AttnNorm"):
+            h = self.attention_norm(input)
+
+        with py_zone("[Block] Attn"):
+            h = self.attention(h, mask, kv_cache, layer_idx, new_tokens)
+
         h = ttml.ops.binary.add(h, residual)
 
         residual = h
-        x = self.mlp_norm(h)
-        x = self.mlp(x)
+
+        with py_zone("[Block] MLPNorm"):
+            x = self.mlp_norm(h)
+
+        with py_zone("[Block] MLP"):
+            x = self.mlp(x)
+
         x = ttml.ops.binary.add(x, residual)
 
         return x
