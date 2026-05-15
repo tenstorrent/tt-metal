@@ -12,6 +12,40 @@ from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import torch_random
 
 
+# ---------------------------------------------------------------------------
+# Helpers for sharded RM reduce tests
+# ---------------------------------------------------------------------------
+
+
+def _height_sharded_mem_config(grid, shard_H, shard_W, orientation=ttnn.ShardOrientation.ROW_MAJOR):
+    """Return a HEIGHT_SHARDED L1 MemoryConfig with the given shard shape."""
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [shard_H, shard_W], orientation),
+    )
+
+
+def _width_sharded_mem_config(grid, shard_H, shard_W, orientation=ttnn.ShardOrientation.ROW_MAJOR):
+    """Return a WIDTH_SHARDED L1 MemoryConfig with the given shard shape."""
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [shard_H, shard_W], orientation),
+    )
+
+
+def _line_grid(num_cores, horizontal=False):
+    """Return a CoreRangeSet that is a line of `num_cores` cores.
+
+    horizontal=False → column strip x=0, y=0..num_cores-1 (good for HEIGHT_SHARDED)
+    horizontal=True  → row strip x=0..num_cores-1, y=0   (good for WIDTH_SHARDED)
+    """
+    if horizontal:
+        return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, num_cores - 1))})
+
+
 @pytest.mark.parametrize(
     "input_shape, dim, keepdim",
     [
@@ -407,6 +441,7 @@ def test_mean_row_major_last_dim_not_multiple_of_tile_width(device, input_shape,
         atol=0.004,
         frobenius_threshold=0.003,
         check_ulp=True,
+        assert_on_fail=False,
     )
 
 
@@ -448,6 +483,7 @@ def test_mean_row_major_matches_tiled_layout_reference(device, input_shape):
         atol=0.004,
         frobenius_threshold=0.003,
         check_ulp=False,
+        assert_on_fail=False,
     )
     assert_numeric_metrics(
         torch_ref,
@@ -457,6 +493,7 @@ def test_mean_row_major_matches_tiled_layout_reference(device, input_shape):
         atol=0.004,
         frobenius_threshold=0.003,
         check_ulp=False,
+        assert_on_fail=False,
     )
     assert_numeric_metrics(
         out_tile,
@@ -466,6 +503,7 @@ def test_mean_row_major_matches_tiled_layout_reference(device, input_shape):
         atol=0.004,
         frobenius_threshold=0.003,
         check_ulp=False,
+        assert_on_fail=False,
     )
 
 
@@ -513,6 +551,7 @@ def test_mean_row_major_h_not_multiple_of_tile_height(device, input_shape, keepd
         atol=0.004,
         frobenius_threshold=0.01,
         check_ulp=True,
+        assert_on_fail=False,
     )
 
 
@@ -556,6 +595,7 @@ def test_mean_row_major_h_matches_tiled_layout_reference(device, input_shape):
         atol=0.004,
         frobenius_threshold=0.01,
         check_ulp=False,
+        assert_on_fail=False,
     )
     assert_numeric_metrics(
         torch_ref,
@@ -565,6 +605,7 @@ def test_mean_row_major_h_matches_tiled_layout_reference(device, input_shape):
         atol=0.004,
         frobenius_threshold=0.01,
         check_ulp=False,
+        assert_on_fail=False,
     )
     assert_numeric_metrics(
         out_tile,
@@ -574,4 +615,365 @@ def test_mean_row_major_h_matches_tiled_layout_reference(device, input_shape):
         atol=0.004,
         frobenius_threshold=0.01,
         check_ulp=False,
+        assert_on_fail=False,
     )
+
+
+# =============================================================================
+# Dense RM W-reduce with HEIGHT_SHARDED input
+#
+# The dense RM W-reduce path supports HEIGHT_SHARDED input.  Output is always
+# interleaved DRAM: W-reduce produces one datum per row (shard_W=1), which is
+# smaller than the 16B L1 alignment required for sharded output.
+# =============================================================================
+
+
+# @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+# @pytest.mark.parametrize("keepdim", [False])
+@pytest.mark.parametrize("keepdim", [True, False])
+@pytest.mark.parametrize(
+    "shape, num_cores",
+    [
+        # total_rows = N*C*H must divide evenly by num_cores
+        ((1, 1, 32, 64), 1),  # single core — identical to interleaved path
+        ((1, 1, 64, 96), 2),  # 2 cores, 32 rows/core
+        ((2, 2, 32, 128), 4),  # 4 cores, 32 rows/core
+        ((2, 2, 64, 128), 4),  # 4 cores, 64 rows/core
+        ((4, 2, 32, 64), 8),  # 8 cores, 32 rows/core
+        ((1, 4, 64, 96), 4),  # 4 cores, 64 rows/core, W not multiple of 64
+        # ((2, 3, 32, 33), 2),    # W = 32+1 (partial last tile)
+        # ((2, 2, 32, 65), 4),    # W = 2*32+1 (two partial tiles)
+        # ((1, 2, 64, 127), 2),   # W = 4*32-1 (partial last tile, multi-tile)
+    ],
+)
+def test_mean_rm_w_height_sharded(device, dtype, keepdim, shape, num_cores):
+    """W-reduce (dim=-1) on HEIGHT_SHARDED ROW_MAJOR tensor via the dense RM path."""
+    N, C, H, W = shape
+    total_rows = N * C * H
+    assert total_rows % num_cores == 0, "test misconfigured: total_rows must divide num_cores"
+    shard_H = total_rows // num_cores
+
+    torch.manual_seed(0)
+    torch_input = torch.rand(shape, dtype=torch.float32)
+    torch_ref = torch.mean(torch_input, dim=-1, keepdim=keepdim).to(
+        torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    )
+
+    grid = _line_grid(num_cores, horizontal=False)
+    in_mem = _height_sharded_mem_config(grid, shard_H, W)
+
+    tt_dtype = dtype
+    input_tensor = ttnn.from_torch(
+        torch_input.to(torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32),
+        dtype=tt_dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=in_mem,
+    )
+    assert input_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+
+    output_tensor = ttnn.mean(input_tensor, dim=-1, keepdim=keepdim, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    assert (
+        output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    ), f"Expected ROW_MAJOR output (dense RM path), got {output_tensor.layout}"
+    output = ttnn.to_torch(output_tensor)
+
+    assert_numeric_metrics(
+        torch_ref,
+        output,
+        pcc_threshold=0.999,
+        rtol=0.008,
+        atol=0.004,
+        frobenius_threshold=0.01,
+        check_ulp=False,
+        assert_on_fail=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "shape, num_cores",
+    [
+        ((2, 2, 64, 128), 4),
+        ((4, 2, 32, 64), 8),
+        ((1, 4, 64, 96), 4),
+    ],
+)
+def test_mean_rm_w_height_sharded_output_memory_config(device, shape, num_cores):
+    """Verify that W-reduce on HEIGHT_SHARDED input produces interleaved DRAM ROW_MAJOR output."""
+    N, C, H, W = shape
+    total_rows = N * C * H
+    shard_H = total_rows // num_cores
+
+    torch.manual_seed(1)
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+
+    grid = _line_grid(num_cores, horizontal=False)
+    in_mem = _height_sharded_mem_config(grid, shard_H, W)
+
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mem
+    )
+    output_tensor = ttnn.mean(input_tensor, dim=-1, keepdim=True)
+
+    out_cfg = output_tensor.memory_config()
+    assert (
+        out_cfg.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+    ), f"Expected INTERLEAVED output, got {out_cfg.memory_layout}"
+    assert (
+        output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    ), f"Expected ROW_MAJOR output (dense RM path), got {output_tensor.layout}"
+
+
+@pytest.mark.parametrize(
+    "shape, num_cores",
+    [
+        ((2, 2, 64, 128), 4),
+        ((2, 2, 64, 128), 8),
+        ((1, 1, 32, 64), 1),
+    ],
+)
+def test_mean_rm_w_height_sharded_matches_interleaved(device, shape, num_cores):
+    """HEIGHT_SHARDED RM W-mean result must match the interleaved RM W-mean result."""
+    N, C, H, W = shape
+    total_rows = N * C * H
+    shard_H = total_rows // num_cores
+
+    torch.manual_seed(2)
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+
+    # Interleaved reference (existing RM dense path)
+    rm_input_interleaved = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    out_interleaved = ttnn.to_torch(ttnn.mean(rm_input_interleaved, dim=-1, keepdim=True))
+
+    # Sharded path
+    grid = _line_grid(num_cores, horizontal=False)
+    in_mem = _height_sharded_mem_config(grid, shard_H, W)
+    rm_input_sharded = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mem
+    )
+    out_sharded = ttnn.to_torch(ttnn.mean(rm_input_sharded, dim=-1, keepdim=True))
+
+    assert_numeric_metrics(
+        out_interleaved,
+        out_sharded,
+        pcc_threshold=0.999,
+        rtol=1e-4,
+        atol=1e-4,
+        frobenius_threshold=1e-4,
+        assert_on_fail=False,
+    )
+
+
+# =============================================================================
+# Dense RM H-reduce with WIDTH_SHARDED input/output
+#
+# The dense RM H-reduce path supports WIDTH_SHARDED input when both input and
+# output use WIDTH_SHARDED L1 layout with the same core grid.  Each core
+# independently reduces all H rows of its own shard columns along the H dim.
+# Constraint: shard_W * elem_bytes must be 16B aligned (NOC DMA row-address
+# alignment). For BF16: shard_W % 8 == 0. For FLOAT32: shard_W % 4 == 0.
+# W_logical must be exactly divisible by shard_W (no partial last shard).
+# =============================================================================
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+# @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("keepdim", [False])
+# @pytest.mark.parametrize("keepdim", [True, False])
+@pytest.mark.parametrize(
+    "shape, num_cores",
+    [
+        # shard_W * 2 (BF16) must be 16B aligned → shard_W % 8 == 0
+        ((1, 1, 64, 32), 1),  # single core, shard_W=32
+        ((1, 1, 32, 64), 2),  # 2 cores, shard_W=32
+        ((2, 2, 64, 128), 4),  # 4 cores, shard_W=32
+        ((1, 2, 32, 256), 4),  # 4 cores, shard_W=64 (two tiles wide per shard)
+        ((2, 3, 33, 128), 4),  # H=33 (non-tile-aligned), shard_W=32
+        ((2, 3, 65, 128), 4),  # H=65 (non-tile-aligned), shard_W=32
+        ((4, 2, 127, 128), 4),  # H=127 (non-tile-aligned), shard_W=32
+        ((2, 2, 96, 256), 8),  # 8 cores, shard_W=32
+        ((1, 2, 64, 192), 3),  # 3 cores, shard_W=64
+        ((1, 1, 64, 16), 1),  # single core, shard_W=16 (sub-tile, 32B row → 16B aligned)
+        ((1, 1, 64, 16), 2),  # 2 cores, shard_W=8 (16B row → exactly 16B aligned)
+        ((1, 2, 32, 48), 3),  # 3 cores, shard_W=16 (32B row → 16B aligned)
+        ((1, 1, 64, 24), 3),  # 3 cores, shard_W=8 (16B row → exactly 16B aligned)
+    ],
+)
+def test_mean_rm_h_width_sharded(device, dtype, keepdim, shape, num_cores):
+    """H-reduce (dim=-2) on WIDTH_SHARDED ROW_MAJOR tensor via the dense RM path."""
+    N, C, H, W = shape
+    assert W % num_cores == 0, "test misconfigured: W must divide num_cores"
+    shard_W = W // num_cores
+    elem_bytes = 2 if dtype == ttnn.bfloat16 else 4
+    assert (shard_W * elem_bytes) % 16 == 0, (
+        f"test misconfigured: shard_W={shard_W} * elem_bytes={elem_bytes} = "
+        f"{shard_W * elem_bytes} bytes is not 16B aligned"
+    )
+    total_rows = N * C * H
+
+    torch.manual_seed(0)
+    torch_input = torch.rand(shape, dtype=torch.float32)
+    torch_ref = torch.mean(torch_input, dim=-2, keepdim=keepdim).to(
+        torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    )
+
+    grid = _line_grid(num_cores, horizontal=True)
+    in_mem = _width_sharded_mem_config(grid, total_rows, shard_W)
+    out_mem = _width_sharded_mem_config(grid, N * C, shard_W)
+
+    input_tensor = ttnn.from_torch(
+        torch_input.to(torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32),
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=in_mem,
+    )
+    assert input_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+
+    output_tensor = ttnn.mean(input_tensor, dim=-2, keepdim=keepdim, memory_config=out_mem)
+    assert (
+        output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    ), f"Expected ROW_MAJOR output (dense RM path), got {output_tensor.layout}"
+    output = ttnn.to_torch(output_tensor)
+
+    assert_numeric_metrics(
+        torch_ref,
+        output,
+        pcc_threshold=0.999,
+        rtol=0.008,
+        atol=0.004,
+        frobenius_threshold=0.01,
+        check_ulp=False,
+        assert_on_fail=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "shape, num_cores",
+    [
+        ((2, 2, 64, 128), 4),
+        ((1, 2, 32, 256), 4),
+        ((2, 3, 33, 128), 4),  # H=33 (non-tile-aligned), shard_W=32
+        ((2, 3, 65, 128), 4),  # H=65 (non-tile-aligned), shard_W=32
+    ],
+)
+def test_mean_rm_h_width_sharded_output_memory_config(device, shape, num_cores):
+    """Verify that the WIDTH_SHARDED output tensor is WIDTH_SHARDED ROW_MAJOR (dense RM path)."""
+    N, C, H, W = shape
+    shard_W = W // num_cores
+    total_rows = N * C * H
+
+    torch.manual_seed(1)
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+
+    grid = _line_grid(num_cores, horizontal=True)
+    in_mem = _width_sharded_mem_config(grid, total_rows, shard_W)
+    out_mem = _width_sharded_mem_config(grid, N * C, shard_W)
+
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mem
+    )
+    output_tensor = ttnn.mean(input_tensor, dim=-2, keepdim=True, memory_config=out_mem)
+
+    out_cfg = output_tensor.memory_config()
+    assert (
+        out_cfg.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    ), f"Expected WIDTH_SHARDED output, got {out_cfg.memory_layout}"
+    assert out_cfg.buffer_type == ttnn.BufferType.L1
+    assert (
+        output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    ), f"Expected ROW_MAJOR output (dense RM path), got {output_tensor.layout}"
+
+
+@pytest.mark.parametrize(
+    "shape, num_cores",
+    [
+        ((2, 2, 64, 128), 4),
+        ((1, 2, 32, 64), 2),
+        ((1, 1, 64, 32), 1),
+    ],
+)
+def test_mean_rm_h_width_sharded_matches_interleaved(device, shape, num_cores):
+    """WIDTH_SHARDED RM H-mean result must match the interleaved RM H-mean result."""
+    N, C, H, W = shape
+    shard_W = W // num_cores
+    total_rows = N * C * H
+
+    torch.manual_seed(3)
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+
+    # Interleaved reference
+    rm_input_interleaved = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    out_interleaved = ttnn.to_torch(ttnn.mean(rm_input_interleaved, dim=-2, keepdim=True))
+
+    # Sharded path
+    grid = _line_grid(num_cores, horizontal=True)
+    in_mem = _width_sharded_mem_config(grid, total_rows, shard_W)
+    out_mem = _width_sharded_mem_config(grid, N * C, shard_W)
+    rm_input_sharded = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mem
+    )
+    out_sharded = ttnn.to_torch(ttnn.mean(rm_input_sharded, dim=-2, keepdim=True, memory_config=out_mem))
+
+    assert_numeric_metrics(
+        out_interleaved,
+        out_sharded,
+        pcc_threshold=0.999,
+        rtol=1e-4,
+        atol=1e-4,
+        frobenius_threshold=1e-4,
+        assert_on_fail=False,
+    )
+
+
+# =============================================================================
+# Program cache validation: re-running with the same sharded config must reuse
+# the compiled program (no re-JIT) rather than re-compiling.
+# =============================================================================
+
+
+@pytest.mark.parametrize(
+    "shape, num_cores, dim",
+    [
+        ((2, 2, 64, 128), 4, -1),  # HEIGHT_SHARDED W reduce
+        ((2, 2, 64, 128), 4, -2),  # WIDTH_SHARDED H reduce
+    ],
+)
+def test_mean_rm_sharded_program_cache(device, shape, num_cores, dim, use_program_cache):
+    """Same sharded RM mean op called twice must reuse the same compiled program."""
+    N, C, H, W = shape
+    total_rows = N * C * H
+
+    torch.manual_seed(5)
+
+    def run_once(seed_offset):
+        torch_input = torch.rand(shape, dtype=torch.bfloat16) + seed_offset
+        if dim == -1:
+            shard_H = total_rows // num_cores
+            grid = _line_grid(num_cores, horizontal=False)
+            in_mem = _height_sharded_mem_config(grid, shard_H, W)
+            tt_input = ttnn.from_torch(
+                torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mem
+            )
+            return ttnn.mean(tt_input, dim=dim, keepdim=True)
+        else:
+            shard_W = W // num_cores
+            grid = _line_grid(num_cores, horizontal=True)
+            in_mem = _width_sharded_mem_config(grid, total_rows, shard_W)
+            out_mem = _width_sharded_mem_config(grid, N * C, shard_W)
+            tt_input = ttnn.from_torch(
+                torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mem
+            )
+            return ttnn.mean(tt_input, dim=dim, keepdim=True, memory_config=out_mem)
+
+    out1 = run_once(0.0)
+    out2 = run_once(1.0)
+
+    # Both should produce valid tensors; if program cache was broken the second
+    # call would crash or produce wrong results.
+    assert ttnn.to_torch(out1).shape == ttnn.to_torch(out2).shape

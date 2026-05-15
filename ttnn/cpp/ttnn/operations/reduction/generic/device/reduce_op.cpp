@@ -109,17 +109,31 @@ Tensor reduce(
         /*default_fp32_acc=*/true));
     ttnn::verify_numerical_configuration(arch, compute_kernel_config);
 
-    // Dense row-major mean (same shapes as tilized mean): require 4D [N,C,H,W], mean along W or H, BF16/FLOAT32,
-    // and interleaved buffers. Other ROW_MAJOR cases (sum/max/min, other dims, dtypes, sharded I/O) fall back to
-    // tilize + tile reduce — matching default tiled coverage from generic_reductions.
-    const bool rm_dense_eligible_shape =
-        input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR && input_tensor.logical_shape().rank() == 4 &&
-        (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
-         input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) &&
-        !input_tensor.memory_config().is_sharded() && !output_mem_config.is_sharded() &&
-        reduce_math == tt::tt_metal::ReduceOpMath::AVG;
-    const bool use_rm_dense_w = rm_dense_eligible_shape && reduce_dim == tt::tt_metal::ReduceOpDim::W;
-    const bool use_rm_dense_h = rm_dense_eligible_shape && reduce_dim == tt::tt_metal::ReduceOpDim::H;
+    // Dense row-major mean: require 4D [N,C,H,W], mean along W or H, BF16/FLOAT32.
+    // Interleaved I/O is always eligible. Sharded I/O is eligible only for the matching
+    // sharding orientation: HEIGHT_SHARDED for W-reduce, WIDTH_SHARDED for H-reduce.
+    // All other ROW_MAJOR cases (sum/max/min, other dims, dtypes, or mismatched sharding)
+    // fall back to tilize + tile reduce.
+    const bool rm_base_eligible = input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
+                                  input_tensor.logical_shape().rank() == 4 &&
+                                  (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+                                   input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) &&
+                                  reduce_math == tt::tt_metal::ReduceOpMath::AVG;
+    const auto in_mem_layout = input_tensor.memory_config().memory_layout();
+    const auto out_mem_layout = output_mem_config.memory_layout();
+    // W-reduce: interleaved I/O, or HEIGHT_SHARDED input with non-sharded output.
+    // HEIGHT_SHARDED output is not supported: W-reduce produces W=1 per row, making
+    // the shard page (shard_W=1 * datum) smaller than the 16B alignment required by
+    // sharded_to_interleaved. The reader/writer already handle interleaved output correctly.
+    const bool use_rm_dense_w =
+        rm_base_eligible && reduce_dim == tt::tt_metal::ReduceOpDim::W &&
+        ((!input_tensor.memory_config().is_sharded() && !output_mem_config.is_sharded()) ||
+         (in_mem_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED && !output_mem_config.is_sharded()));
+    // H-reduce: interleaved or WIDTH_SHARDED (both sides must agree).
+    const bool use_rm_dense_h = rm_base_eligible && reduce_dim == tt::tt_metal::ReduceOpDim::H &&
+                                ((!input_tensor.memory_config().is_sharded() && !output_mem_config.is_sharded()) ||
+                                 (in_mem_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED &&
+                                  out_mem_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED));
     const bool use_rm_dense = use_rm_dense_w || use_rm_dense_h;
 
     // High-level mean uses AVG with scaler (1/N). On the tiled path, GMPOOL AVG matches that intent. On the dense
