@@ -20,6 +20,8 @@ enum VectorMode
     Invalid   = 0xFF,
 };
 
+// TRIGGER RTL CI SIM FOR QSR
+
 enum class ReduceDim : std::uint8_t
 {
     REDUCE_ROW,
