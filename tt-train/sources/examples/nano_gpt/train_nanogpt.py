@@ -59,6 +59,7 @@ from ttml.common.utils import (
     round_up_to_tile,
     get_tt_metal_runtime_root,
     create_optimizer,
+    get_available_device_memory_in_bytes,
     get_loss_over_devices,
     summary,
 )
@@ -1651,6 +1652,10 @@ def main():
             num_devices = ttml.mesh().num_devices()
             peak_tflops = get_device_peak_tflops_bf16() * num_devices
             print(f"  - Mesh peak: {peak_tflops:.1f} TFLOPS (bf16, {num_devices} devices)")
+
+        # Get the available device DRAM
+        available_dram = get_available_device_memory_in_bytes()
+        print(f"  - Available Device Memory: {available_dram/(1024*1024):,.2f} MB")
 
         # Training loop
         start_time = time.time()

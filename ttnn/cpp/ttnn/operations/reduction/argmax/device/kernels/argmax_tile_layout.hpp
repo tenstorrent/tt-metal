@@ -7,6 +7,10 @@
 #include "tt-metalium/constants.hpp"
 #include "api/debug/assert.h"
 #include "api/debug/waypoint.h"
+#include "api/dataflow/noc.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
+#include "api/tensor/noc_traits.h"
 
 constexpr uint32_t face_width = tt::constants::FACE_WIDTH;
 constexpr uint32_t face_height = tt::constants::FACE_HEIGHT;
@@ -268,12 +272,13 @@ void collect_row_major_output(uint32_t new_values[], uint32_t count, OutputConte
  * @param[in] output_ctx Parameters related to the output tensor
  */
 template <typename AccessorType, bool keepdim>
-void write_to_output(AccessorType& output_accessor, OutputContext& output_ctx) {
+void write_to_output(const Noc& noc, AccessorType& output_accessor, OutputContext& output_ctx) {
     const uint32_t output_page_elements = output_ctx.write_out_count;
     uint32_t collected_count = output_ctx.collected_count;
     uint32_t output_page_id = output_ctx.output_page_id;
 
     auto dst_cb_addr = output_ctx.output_cb_addr;
+    CoreLocalMem<uint32_t> dst_cb_mem(dst_cb_addr);
 
     uint32_t sent_count = 0;
     while (collected_count > 0) {
@@ -289,14 +294,13 @@ void write_to_output(AccessorType& output_accessor, OutputContext& output_ctx) {
         }
 
         const uint32_t write_size = output_page_elements * sizeof(uint32_t);
-        uint64_t dst_noc_addr = get_noc_addr(output_page_id, output_accessor);
-        noc_async_write(dst_cb_addr, dst_noc_addr, write_size);
+        noc.async_write(dst_cb_mem, output_accessor, write_size, {.offset_bytes = 0}, {.page_id = output_page_id});
 
         sent_count += output_page_elements;
         collected_count -= output_page_elements;
         output_page_id++;
 
-        noc_async_write_barrier();
+        noc.async_write_barrier();
     }
 
     output_ctx.collected_count = 0;

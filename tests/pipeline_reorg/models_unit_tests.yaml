@@ -335,29 +335,50 @@
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
-# GPT-OSS 20B unit tests: disabled — segfaulting on CI
-# - name: GPT-OSS 20B unit tests (T3K)
-#   cmd: |
-#     uv pip install -r models/demos/gpt_oss/requirements.txt
-#     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=openai/gpt-oss-20b
-#     pytest models/demos/gpt_oss/tests/unit -k "1x8" --timeout 600
-#   model: gpt-oss-20b
-#   skus:
-#     wh_llmbox_perf:
-#       timeout: 15
-#       tier: 2
-#   owner_id: U08TJ70UFRT # Harry Andrews
-#   team: models
-
-- name: GPT-OSS 120B unit tests (Galaxy, high batch)
+# GPT-OSS unit tests: uses HF config only (no weights). parametrize_mesh_with_fabric()
+# picks the largest fitting mesh shape per SKU when CI=true, so one yaml entry
+# covers N150 (1x1), T3K/llmbox (1x8), and Galaxy (4x8) without per-SKU -k filters.
+- name: GPT-OSS 20B unit tests
   cmd: |
     uv pip install -r models/demos/gpt_oss/requirements.txt
-    export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/
-    pytest --timeout 1500 models/demos/gpt_oss/tests/unit -k "4x8 and decode_high_throughput"
-  model: gpt-oss-120b-high-batch-galaxy
+    export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-20b
+    pytest --timeout 600 models/demos/gpt_oss/tests/unit/
+  model: gpt-oss-20b
   skus:
-    wh_galaxy_perf:
+    # Wormhole
+    wh_llmbox:
+      timeout: 10
+      tier: 2
+    # Blackhole
+    bh_p150:
+      timeout: 10
+      tier: 2
+    bh_quietbox_2:
+      timeout: 10
+      tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: GPT-OSS 120B unit tests
+  cmd: |
+    uv pip install -r models/demos/gpt_oss/requirements.txt
+    export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-120b
+    pytest --timeout 1500 models/demos/gpt_oss/tests/unit
+  model: gpt-oss-120b
+  skus:
+    # Wormhole
+    wh_llmbox:
       timeout: 25
+      tier: 1
+    wh_galaxy:
+      timeout: 30
+      tier: 1
+    # Blackhole
+    bh_quietbox_2:
+      timeout: 30
+      tier: 1
+    bh_galaxy:
+      timeout: 30
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models

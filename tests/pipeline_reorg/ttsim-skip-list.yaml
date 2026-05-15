@@ -3,28 +3,6 @@
 #
 # Structure: Each architecture has its own section with all tests to skip.
 # Tests that apply to all architectures are duplicated in each section.
-#
-# arch_skip_groups: lists entire ttnn-tests.yaml test-group names to skip for
-# a given arch. The workflow gates the pytest run step on this lookup, so the
-# job reports success without running. Use this for arch-wide breakage where
-# a fix is in flight; remove the entry once the underlying issue is resolved.
-
-arch_skip_groups:
-  wormhole_b0: []
-  # https://github.com/tenstorrent/tt-metal/actions/runs/25732791096
-  # All BH ttsim ttnn-pytests groups below fail; fix in progress.
-  blackhole:
-    - ttnn data movement group
-    - ttnn conv group
-    - ttnn eltwise group 1
-    - ttnn eltwise group 2
-    - ttnn pool group
-    - ttnn fused group 1
-    - ttnn fused group 2
-    - ttnn misc ops group
-    - ttnn sdpa group
-    - ttnn reduce group
-    - core ttnn unit test group
 
 wormhole_b0:
   # Job-level timeouts -- can be cut down still
@@ -98,6 +76,43 @@ blackhole:
   - tests/ttnn/unit_tests/operations/fused/test_softmax.py
   - tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py
   - tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py
+
+  # ERROR: UndefinedBehavior: tensix_execute_unpacr: src_a row=64
+  # https://github.com/tenstorrent/tt-metal/issues/44308
+  - tests/ttnn/unit_tests/base_functionality/test_async.py
+  - tests/ttnn/unit_tests/base_functionality/test_cpp_logging.py
+  - tests/ttnn/unit_tests/base_functionality/test_graph_capture.py
+  - tests/ttnn/unit_tests/base_functionality/test_multi_device.py
+  - tests/ttnn/unit_tests/base_functionality/test_tilize_pad_cb.py
+  - tests/ttnn/unit_tests/base_functionality/test_tilize_untilize_2D.py
+  - tests/ttnn/unit_tests/base_functionality/test_to_and_from_device.py
+  - tests/ttnn/unit_tests/base_functionality/test_to_layout.py
+  - tests/ttnn/unit_tests/base_functionality/test_torch_conversion.py
+  - tests/ttnn/unit_tests/operations/conv/test_conv1d.py
+  - tests/ttnn/unit_tests/operations/conv/test_conv_transpose2d.py
+  - tests/ttnn/unit_tests/operations/conv/test_prepare_conv_weights.py
+  - tests/ttnn/unit_tests/operations/conv/data_movement/test_fold_op.py
+  - tests/ttnn/unit_tests/operations/data_movement/test_convert_to_hwc.py
+  - tests/ttnn/unit_tests/operations/data_movement/test_embedding.py
+  - tests/ttnn/unit_tests/operations/data_movement/test_repeat.py
+  - tests/ttnn/unit_tests/operations/data_movement/test_slice.py
+  - tests/ttnn/unit_tests/operations/data_movement/test_stack.py
+  - tests/ttnn/unit_tests/operations/data_movement/test_tilize.py
+  - tests/ttnn/unit_tests/operations/data_movement/test_tilize_with_val_padding.py
+  - tests/ttnn/unit_tests/operations/data_movement/test_tilize_with_zero_padding.py
+  - tests/ttnn/unit_tests/operations/data_movement/test_tilizer.py
+  - tests/ttnn/unit_tests/operations/deepseek/test_deepseek_moe_post_combine_reduce.py
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py
+  - tests/ttnn/unit_tests/operations/fused/test_group_norm.py
+  - tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py
+  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py
+  - tests/ttnn/unit_tests/operations/pool/test_adaptive_pool2d.py
+  - tests/ttnn/unit_tests/operations/pool/test_avgpool2d.py
+  - tests/ttnn/unit_tests/operations/pool/test_global_avg_pool2d.py
+  - tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py
+  - tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py
+  - tests/ttnn/unit_tests/operations/transformers/test_paged_cache_flexible_geometry.py
+  - tests/ttnn/unit_tests/operations/transformers/test_paged_fused_update_cache.py
 
   # ZEROACC failures
   # https://github.com/tenstorrent/ttsim-private/issues/326

@@ -398,6 +398,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
             mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
                 .chip_type = tt::umd::ChipType::SIMULATION,
+                .num_host_mem_ch_per_mmio_device = 1,
                 .sdesc_path = sdesc_path,
                 .cluster_descriptor = mock_cluster_desc.get(),
                 .simulator_directory = rtoptions_.get_simulator_path(),
@@ -405,6 +406,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
         } else {
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
                 .chip_type = tt::umd::ChipType::SIMULATION,
+                .num_host_mem_ch_per_mmio_device = 1,
                 .target_devices = {0},
                 .simulator_directory = rtoptions_.get_simulator_path(),
             });
@@ -472,7 +474,7 @@ void Cluster::start_driver(umd::DeviceParams& device_params) const {
     // May block waiting for other processes to release the device.
     this->driver_->start_device(device_params);
 
-    if (this->target_type_ == TargetDevice::Silicon && device_params.init_device) {
+    if ((this->target_type_ == TargetDevice::Silicon || this->target_type_ == TargetDevice::Simulator) && device_params.init_device) {
         // Configure TLBs on all MMIO devices in parallel
         std::vector<std::shared_future<void>> futures;
         const auto& mmio_device_ids = driver_->get_target_mmio_device_ids();
@@ -968,6 +970,8 @@ void Cluster::read_sysmem(
     TT_ASSERT(this->cluster_desc_->is_chip_mmio_capable(src_device_id));
     this->driver_->read_from_sysmem(vec, addr, channel & HOST_MEM_CHANNELS_MASK, size_in_bytes, src_device_id);
 }
+
+void Cluster::advance_device_execution(ChipId device_id) const { this->driver_->advance_device_execution(device_id); }
 
 std::unique_ptr<tt::umd::SysmemBuffer> Cluster::allocate_sysmem_buffer(
     ChipId device_id, size_t sysmem_buffer_size, bool map_to_noc) const {
