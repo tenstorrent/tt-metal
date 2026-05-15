@@ -2642,10 +2642,7 @@ public:
         bool /*wait_for_host_writes*/ = false) override {
         const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
         const uint32_t entry_size = memmap.prefetch_q_entry_size_bytes();
-        const bool is_quasar = (this->device_->arch() == tt::ARCH::QUASAR);
-        TT_FATAL(
-            is_quasar || entry_size == 4,
-            "Entry size must be 32 bits for worker cores used to launch prefetcher in this test");
+        TT_FATAL(entry_size == 4, "Entry size must be 32 bits for worker cores used to launch prefetcher in this test");
         const uint32_t dispatch_buffer_pages = memmap.dispatch_buffer_pages();
 
         const CoreCoord pref_logical = Common::sd_prefetch_core;
@@ -2683,7 +2680,7 @@ public:
         // WH/BH stage commands in PCIe hugepage; Quasar has no hugepage and uses DRAM bank 0 (kSdQuasarIssueBase).
         uint32_t dev_hugepage_base = 0;
         void* host_hugepage_base = nullptr;
-        if (!is_quasar) {
+        if (this->device_->arch() != tt::ARCH::QUASAR) {
             dev_hugepage_base = memmap.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
 
             const ChipId mmio_id =
@@ -2720,9 +2717,7 @@ public:
         const std::vector<uint32_t> prefetch_q_zeros(prefetch_q_size / sizeof(uint32_t), 0u);
         cluster.write_core(prefetch_q_zeros.data(), prefetch_q_size, prefetch_cxy, prefetch_q_base);
 
-        // FetchQ entries go through the static TLB on WH/BH so each write hits L1 directly.
-        // Quasar doesn't support static TLB windows; write_core is used instead (see write_prefetcher_cmd).
-        tt::umd::TlbWindow* prefetch_q_tlb = is_quasar ? nullptr : cluster.get_static_tlb_window(prefetch_cxy);
+        tt::umd::TlbWindow* prefetch_q_tlb = cluster.get_static_tlb_window(prefetch_cxy);
 
         uint32_t prefetch_q_dev_ptr = prefetch_q_base;
         const uint32_t prefetch_q_dev_fence = prefetch_q_base + prefetch_q_size;
@@ -2737,7 +2732,7 @@ public:
         // cmd_size_bytes must be a multiple of 64 (host alignment) and cmd_size_entry is the
         // pre-computed FetchQ value (may have MSB stall flag set for exec_buf).
         auto write_prefetcher_cmd = [&](const uint32_t* src, uint32_t cmd_size_bytes, uint32_t cmd_size_entry) {
-            if (is_quasar) {
+            if (this->device_->arch() == tt::ARCH::QUASAR) {
                 // DRAM path: write commands to DRAM bank 0. Wrap to base on overflow.
                 if (dram_write_offset + cmd_size_bytes > Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE) {
                     dram_write_offset = 0;
@@ -2748,7 +2743,6 @@ public:
                     kSdQuasarIssueBase + dram_write_offset,
                     std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(src), cmd_size_bytes));
                 dram_write_offset += cmd_size_bytes;
-                cluster.write_core(&cmd_size_entry, sizeof(uint32_t), prefetch_cxy, prefetch_q_dev_ptr);
             } else {
                 const uint64_t host_offset = static_cast<uint64_t>(
                     reinterpret_cast<char*>(host_mem_ptr) - static_cast<char*>(host_hugepage_base));
@@ -2757,8 +2751,8 @@ public:
                     "SD prefetch: command stream exceeds SD_HUGEPAGE_ISSUE_BUFFER_SIZE");
                 tt::tt_metal::memcpy_to_device<true>(host_mem_ptr, src, cmd_size_bytes);
                 host_mem_ptr += cmd_size_bytes / sizeof(uint32_t);
-                prefetch_q_tlb->write32(prefetch_q_dev_ptr, cmd_size_entry);
             }
+            prefetch_q_tlb->write32(prefetch_q_dev_ptr, cmd_size_entry);
             prefetch_q_dev_ptr += entry_size;
             if (prefetch_q_dev_ptr >= prefetch_q_dev_fence) {
                 prefetch_q_dev_ptr = prefetch_q_base;
@@ -2793,7 +2787,7 @@ public:
         write_cmd(CommandBuilder::build_dispatch_terminate(/*include_dispatch_s*/ false));
         write_cmd(CommandBuilder::build_prefetch_terminate());
 
-        if (is_quasar) {
+        if (this->device_->arch() == tt::ARCH::QUASAR) {
             // Ensure all DRAM command writes are visible to the kernel before LaunchProgram.
             cluster.dram_barrier(this->device_->id());
         }
@@ -2866,7 +2860,7 @@ public:
             dev_completion_base,
             Common::SD_COMPLETION_QUEUE_SIZE);
 
-        if (is_quasar) {
+        if (this->device_->arch() == tt::ARCH::QUASAR) {
             // Quasar has no PCIe endpoint — both kernels' NOC addressing must resolve to DRAM bank 0.
             prefetch_defines["IS_CQ_DRAM_BACKED"] = "1";
             prefetch_defines["DRAM_BACKED_CQ_BANK_ID"] = "0";
@@ -2877,7 +2871,7 @@ public:
         // LOAD-BEARING ORDER: on Quasar, the experimental kernel API auto-assigns DM0 to the first
         // kernel created on a given core and DM1 to the second. Prefetch must be first to get DM0.
         KernelHandle prefetch_kernel;
-        if (is_quasar) {
+        if (this->device_->arch() == tt::ARCH::QUASAR) {
             prefetch_kernel = tt::tt_metal::experimental::quasar::CreateKernel(
                 program,
                 "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
@@ -2900,7 +2894,7 @@ public:
         tt_metal::SetRuntimeArgs(program, prefetch_kernel, pref_logical, {0u, 0u, 0u});
 
         KernelHandle dispatch_kernel;
-        if (is_quasar) {
+        if (this->device_->arch() == tt::ARCH::QUASAR) {
             dispatch_kernel = tt::tt_metal::experimental::quasar::CreateKernel(
                 program,
                 "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
