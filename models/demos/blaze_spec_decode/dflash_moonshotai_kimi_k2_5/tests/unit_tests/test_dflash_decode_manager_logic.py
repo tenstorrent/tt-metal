@@ -5,25 +5,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
-import math
-from pathlib import Path
 from types import SimpleNamespace
-from typing import Callable
+from typing import Any, Callable
 
 import pytest
 
-from models.demos.blaze_spec_decode.dflash_block_diffusion_moonshotai_kimi_k2_5.tests.unit_tests.dflash_golden_ops import (
+from models.demos.blaze_spec_decode.dflash_moonshotai_kimi_k2_5.tests.unit_tests.dflash_golden_ops import (
     golden_accepted_after_anchor,
 )
-from models.demos.blaze_spec_decode.dflash_block_diffusion_moonshotai_kimi_k2_5.tests.unit_tests.dflash_test_modes import (
+from models.demos.blaze_spec_decode.dflash_moonshotai_kimi_k2_5.tests.unit_tests.dflash_test_modes import (
     USE_GOLDEN_PARAMS,
     require_golden_or_not_implemented,
 )
-
-
-FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "dflash_block_diffusion"
-RUN_INFERENCE_TRACE = FIXTURE_DIR / "run_inference_trace.json"
+from models.demos.blaze_spec_decode.dflash_moonshotai_kimi_k2_5.tests.unit_tests.dflash_test_utils import (
+    assert_decode_manager_outputs_match,
+    expected_decode_manager_outputs,
+    load_validated_dflash_reference,
+)
 
 
 class TokenType:
@@ -48,6 +46,8 @@ class CandidateToken:
 class DFlashVerificationResult:
     anchor_pos: int
     target_posterior: list[CandidateToken]
+    accepted_after_anchor: int
+    committed_tokens: int
 
 
 class _TraceBackedModel:
@@ -91,16 +91,18 @@ class _TraceBackedModel:
 class _DFlashTraceBackedPipeline:
     """Temporary host-side seam until the Blaze spec-decode pipeline exposes DFlash block proposals."""
 
-    def __init__(self, trace: dict, model: _TraceBackedModel) -> None:
+    def __init__(self, reference: dict, model: _TraceBackedModel) -> None:
         self.pipeline = SimpleNamespace(my_stage_idx=0)
         self.model = model
-        self._trace = trace
-        self._draft_blocks = list(trace["host_draft_blocks"])
+        self._reference = reference
+        self._trace = reference["host_trace"]
+        self._draft_blocks = list(self._trace["draft_blocks"])
         self.last_inference_stats: dict[str, int | float] = {}
 
     def prefill_forward(self, prompt_token_ids: list[int]) -> list[CandidateToken]:
-        assert prompt_token_ids == self._trace["params"]["prompt_token_ids"]
-        return [_token_from_dict(packet["token"]) for packet in self._trace["device_to_host"]["prefill_results"]]
+        assert prompt_token_ids == self._reference["prompt"]["input_ids"][0].tolist()
+        first_block = self._draft_blocks[0]
+        return [CandidateToken(token_id=int(first_block["token_ids"][0]), pos=int(first_block["anchor_pos"]))]
 
     def run_inference(
         self,
@@ -112,8 +114,7 @@ class _DFlashTraceBackedPipeline:
         return_generated_tokens: bool = False,
     ) -> list[int] | None:
         del think_token_ids
-        params = self._trace["params"]
-        block_size = int(params["block_size"])
+        block_size = int(self._reference["config"]["runtime_block_size"])
         max_length = len(prompt_token_ids) + max_new_tokens
         output_by_pos = {pos: token_id for pos, token_id in enumerate(prompt_token_ids)}
 
@@ -143,6 +144,8 @@ class _DFlashTraceBackedPipeline:
 
             accepted_after_anchor = golden_accepted_after_anchor(block_token_ids, posterior_token_ids)
             committed = accepted_after_anchor + 1
+            assert accepted_after_anchor == verified.accepted_after_anchor
+            assert committed == verified.committed_tokens
             acceptance_lengths.append(committed)
             num_accepts += accepted_after_anchor
             if accepted_after_anchor < block_size - 1:
@@ -168,11 +171,11 @@ class _DFlashTraceBackedPipeline:
             "average_committed_tokens": sum(acceptance_lengths) / len(acceptance_lengths),
         }
         self.acceptance_lengths = acceptance_lengths
-        self.output_token_ids = [output_by_pos[pos] for pos in range(max_length)]
+        output_length = len(prompt_token_ids) + len(generated_tokens)
+        self.output_token_ids = [output_by_pos[pos] for pos in range(output_length)]
         return generated_tokens if return_generated_tokens else None
 
     def _write_dflash_block(self, block_token_ids: list[int], *, anchor_pos: int) -> None:
-        params = self._trace["params"]
         for offset, token_id in enumerate(block_token_ids):
             self.model.write_input(
                 token_id,
@@ -180,124 +183,73 @@ class _DFlashTraceBackedPipeline:
                 user_id=0,
                 position_id=anchor_pos + offset,
                 token_type=TokenType.BASE if offset == 0 else TokenType.SPEC,
-                temperature=float(params["temperature"]),
-                top_k=int(params["top_k"]),
-                probability_mass_threshold=float(params["top_p"]),
             )
 
 
-def _require_keys(value: dict, keys: tuple[str, ...], context: str) -> None:
-    missing = [key for key in keys if key not in value]
-    assert not missing, f"{context} missing required key(s): {missing}"
-
-
-def _token_from_dict(value: dict) -> CandidateToken:
-    return CandidateToken(token_id=int(value["token_id"]), pos=int(value["pos"]))
-
-
 def _packet_to_decode_result(packet: dict) -> DFlashVerificationResult:
+    anchor_pos = int(packet["anchor_pos"])
     return DFlashVerificationResult(
-        anchor_pos=int(packet["anchor_pos"]),
-        target_posterior=[_token_from_dict(token) for token in packet["target_posterior"]],
+        anchor_pos=anchor_pos,
+        target_posterior=[
+            CandidateToken(token_id=int(token_id), pos=anchor_pos + offset + 1)
+            for offset, token_id in enumerate(packet["target_posterior_token_ids"])
+        ],
+        accepted_after_anchor=int(packet["accepted_after_anchor"]),
+        committed_tokens=int(packet["committed_tokens"]),
     )
 
 
-def _load_trace(path: Path = RUN_INFERENCE_TRACE) -> dict:
-    with path.open("r", encoding="utf-8") as trace_file:
-        trace = json.load(trace_file)
-    return _validate_trace(trace, str(path))
-
-
-def _validate_trace(trace: dict, context: str) -> dict:
-    _require_keys(
-        trace,
-        (
-            "schema_version",
-            "name",
-            "approach",
-            "target_model",
-            "draft_model",
-            "implementation_status",
-            "params",
-            "device_to_host",
-            "host_draft_blocks",
-            "expected_host",
-            "metadata",
-        ),
-        context,
-    )
-    assert trace["schema_version"] == 1
-    assert trace["approach"] == "dflash_block_diffusion"
-    assert trace["target_model"] == "moonshotai/Kimi-K2.5"
-    assert trace["draft_model"] == "z-lab/Kimi-K2.5-DFlash"
-    assert trace["implementation_status"]["production_hook"] == "missing"
-
-    _require_keys(
-        trace["params"],
-        ("prompt_token_ids", "max_new_tokens", "eos_token_id", "block_size", "temperature", "top_k", "top_p"),
-        f"{context}.params",
-    )
-    _require_keys(trace["device_to_host"], ("prefill_results", "read_results"), f"{context}.device_to_host")
-    _require_keys(
-        trace["expected_host"],
-        ("generated_tokens", "output_token_ids", "acceptance_lengths", "read_count", "writes"),
-        f"{context}.expected_host",
-    )
-    assert len(trace["host_draft_blocks"]) == len(trace["device_to_host"]["read_results"])
-    return trace
-
-
-def _normalize_expected_write(write: dict) -> dict[str, int | str]:
-    return {
-        "token_id": int(write["token_id"]),
-        "type": write["type"],
-        "pos": int(write["pos"]),
-        "user_id": int(write["user_id"]),
-        "prefill_id": int(write["prefill_id"]),
-    }
-
-
-def _make_trace_backed_pipeline(trace: dict) -> tuple[_DFlashTraceBackedPipeline, _TraceBackedModel]:
-    read_results = [_packet_to_decode_result(packet) for packet in trace["device_to_host"]["read_results"]]
+def _make_trace_backed_pipeline(reference: dict) -> tuple[_DFlashTraceBackedPipeline, _TraceBackedModel]:
+    read_results = [
+        _packet_to_decode_result(packet) for packet in reference["host_trace"]["target_verification_packets"]
+    ]
     fake_model = _TraceBackedModel(read_results)
-    return _DFlashTraceBackedPipeline(trace, fake_model), fake_model
+    return _DFlashTraceBackedPipeline(reference, fake_model), fake_model
 
 
-@pytest.mark.parametrize("use_golden", USE_GOLDEN_PARAMS)
-def test_run_inference_dflash_block_diffusion_replays_golden_trace(use_golden: bool) -> None:
-    trace = _load_trace()
-    require_golden_or_not_implemented(use_golden, "ModelPipeline.run_inference with DFlash block proposals")
-    pipeline, fake_model = _make_trace_backed_pipeline(trace)
+def _run_golden_decode_manager_logic(reference: dict) -> dict[str, Any]:
+    pipeline, fake_model = _make_trace_backed_pipeline(reference)
     emitted_tokens: list[int] = []
+    params = reference["host_trace"].get("params", {})
 
     generated_tokens = pipeline.run_inference(
-        trace["params"]["prompt_token_ids"],
-        trace["params"]["max_new_tokens"],
+        reference["prompt"]["input_ids"][0].tolist(),
+        int(reference["metadata"]["max_new_tokens"]),
         on_token=emitted_tokens.append,
-        eos_token_id=trace["params"]["eos_token_id"],
+        eos_token_id=params.get("eos_token_id"),
         return_generated_tokens=True,
     )
 
     fake_model.assert_fully_consumed()
-    assert generated_tokens == trace["expected_host"]["generated_tokens"]
-    assert emitted_tokens == trace["expected_host"]["generated_tokens"]
-    assert pipeline.output_token_ids == trace["expected_host"]["output_token_ids"]
-    assert pipeline.acceptance_lengths == trace["expected_host"]["acceptance_lengths"]
-    assert fake_model.writes == [_normalize_expected_write(write) for write in trace["expected_host"]["writes"]]
-    assert fake_model.read_count == trace["expected_host"]["read_count"]
-    assert pipeline.last_inference_stats["num_accepts"] == trace["metadata"]["num_accepts"]
-    assert pipeline.last_inference_stats["num_rejects"] == trace["metadata"]["num_rejects"]
-    assert math.isclose(
-        pipeline.last_inference_stats["average_committed_tokens"],
-        trace["metadata"]["average_committed_tokens"],
-    )
-
-
-def test_run_inference_dflash_block_diffusion_documents_missing_model_pipeline_hook() -> None:
-    trace = _load_trace()
-
-    assert trace["implementation_status"] == {
-        "production_hook": "missing",
-        "expected_hook": "ModelPipeline.run_inference with DFlash block proposals",
-        "temporary_test_seam": "_DFlashTraceBackedPipeline",
+    return {
+        "generated_tokens": generated_tokens,
+        "emitted_tokens": emitted_tokens,
+        "output_token_ids": pipeline.output_token_ids,
+        "acceptance_lengths": pipeline.acceptance_lengths,
+        "writes": fake_model.writes,
+        "read_count": fake_model.read_count,
+        "stats": pipeline.last_inference_stats,
     }
+
+
+def _run_device_decode_manager_logic(reference: dict) -> dict[str, Any]:
+    del reference
+    require_golden_or_not_implemented(False, "ModelPipeline.run_inference with DFlash block proposals")
+    raise AssertionError("unreachable")
+
+
+def _run_decode_manager_logic(reference: dict, *, use_golden: bool) -> dict[str, Any]:
+    if use_golden:
+        return _run_golden_decode_manager_logic(reference)
+    return _run_device_decode_manager_logic(reference)
+
+
+@pytest.mark.parametrize("use_golden", USE_GOLDEN_PARAMS)
+def test_dflash_spec_decode_manager_logic_matches_golden_reference(use_golden: bool) -> None:
+    # Host-loop contract: write draft blocks, consume verifier packets, and emit accepted tokens.
+    reference = load_validated_dflash_reference()
+    expected = expected_decode_manager_outputs(reference)
+
+    actual = _run_decode_manager_logic(reference, use_golden=use_golden)
+
+    assert_decode_manager_outputs_match(actual, expected)

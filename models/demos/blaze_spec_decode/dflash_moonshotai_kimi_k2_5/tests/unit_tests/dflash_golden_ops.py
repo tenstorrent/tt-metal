@@ -5,8 +5,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import copy
-import json
 import math
 from pathlib import Path
 from typing import Any
@@ -41,8 +39,8 @@ class DFlashConfig:
     rope_scaling: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_fixture(cls, fixture: dict) -> "DFlashConfig":
-        raw = fixture["config"]
+    def from_reference(cls, reference: dict) -> "DFlashConfig":
+        raw = reference["config"]
         return cls(
             vocab_size=int(raw["vocab_size"]),
             hidden_size=int(raw["hidden_size"]),
@@ -104,23 +102,141 @@ class GoldenReplayResult:
     host_writes: list[dict[str, int | str]]
 
 
-def load_stage_fixture(path: Path, expected_stage: str) -> dict:
-    with path.open("r", encoding="utf-8") as f:
-        fixture = json.load(f)
-    assert fixture["schema_version"] == 1
-    assert fixture["approach"] == "dflash_block_diffusion"
-    assert fixture["target_model"] == "moonshotai/Kimi-K2.5"
-    assert fixture["draft_model"] == "z-lab/Kimi-K2.5-DFlash"
-    assert fixture["stage"] == expected_stage
-    return fixture
+DFLASH_STAGE_MESH_SHAPE = (4, 2)
+DFLASH_STAGE_SLOTS_PER_GALAXY = 4
 
 
-def tensor(value: list, dtype: torch.dtype = torch.float32) -> torch.Tensor:
-    return torch.tensor(value, dtype=dtype)
+def load_full_dflash_reference(path: Path) -> dict:
+    try:
+        reference = torch.load(path, map_location="cpu", weights_only=False)
+    except TypeError:
+        reference = torch.load(path, map_location="cpu")
+
+    metadata = reference["metadata"]
+    assert reference["schema_version"] == 1
+    assert metadata["approach"] == "dflash"
+    assert metadata["target_model"] == "moonshotai/Kimi-K2.5"
+    assert metadata["draft_model"] == "z-lab/Kimi-K2.5-DFlash"
+    assert metadata["weights_policy"].startswith("Drafter and target weights are loaded from checkpoint/state dict")
+    return reference
 
 
-def assert_close(actual: torch.Tensor, expected: list, *, atol: float = 1e-5, rtol: float = 1e-5) -> None:
-    torch.testing.assert_close(actual, tensor(expected), atol=atol, rtol=rtol)
+def dflash_full_drafter_device_fit(config: dict) -> dict[str, Any]:
+    num_layers = int(config["num_hidden_layers"])
+    full_model_stage_count = num_layers + 2  # pre-decoder fused + every decoder layer + post-decoder fused
+    stage_devices = DFLASH_STAGE_MESH_SHAPE[0] * DFLASH_STAGE_MESH_SHAPE[1]
+    galaxies_required = math.ceil(full_model_stage_count / DFLASH_STAGE_SLOTS_PER_GALAXY)
+    minimum_stage_devices = full_model_stage_count * stage_devices
+    minimum_galaxy_devices = galaxies_required * DFLASH_STAGE_SLOTS_PER_GALAXY * stage_devices
+    if galaxies_required == 1:
+        smallest_config = "one_blackhole_galaxy"
+    elif galaxies_required == 4:
+        smallest_config = "one_blackhole_pod_four_galaxies"
+    else:
+        smallest_config = f"{galaxies_required}_blackhole_galaxies"
+
+    return {
+        "stage_mesh_shape": list(DFLASH_STAGE_MESH_SHAPE),
+        "stage_devices": stage_devices,
+        "stage_slots_per_galaxy": DFLASH_STAGE_SLOTS_PER_GALAXY,
+        "num_decoder_layer_stages": num_layers,
+        "full_model_stage_count": full_model_stage_count,
+        "galaxies_required": galaxies_required,
+        "minimum_stage_devices": minimum_stage_devices,
+        "minimum_galaxy_devices": minimum_galaxy_devices,
+        "fits_one_galaxy": galaxies_required <= 1,
+        "fits_four_galaxy_pod": galaxies_required <= 4,
+        "smallest_viable_config": smallest_config,
+        "reason": (
+            f"pre-decoder fused + {num_layers} decoder-layer stage instances + "
+            "post-decoder fused, with each stage mapped to a 4x2 mesh"
+        ),
+    }
+
+
+def golden_full_dflash_drafter(reference: dict) -> dict[str, Any]:
+    config = reference["config"]
+    host_trace = reference["host_trace"]
+    passes = reference["stages"]["passes"]
+
+    stage_outputs = []
+    for pass_record in passes:
+        combined = pass_record["combined_drafter"]["expected"]
+        stage_outputs.append(
+            {
+                "pass_index": int(pass_record["pass_index"]),
+                "anchor_position": int(pass_record["anchor_position"]),
+                "final_hidden": combined["final_hidden"],
+                "draft_logits": combined["draft_logits"],
+                "draft_token_ids": combined["draft_token_ids"],
+                "host_packet": combined["host_packet"],
+            }
+        )
+    return {
+        "device_fit": dflash_full_drafter_device_fit(config),
+        "host_trace": {
+            "generated_token_ids": host_trace["generated_token_ids"],
+            "output_token_ids": host_trace["output_token_ids"],
+            "acceptance_lengths": host_trace["acceptance_lengths"],
+            "verification_passes": host_trace["verification_passes"],
+            "average_committed_tokens": host_trace["average_committed_tokens"],
+        },
+        "stage_outputs": stage_outputs,
+    }
+
+
+def golden_pre_decoder_fused_stages(reference: dict) -> list[dict[str, Any]]:
+    return [
+        {
+            "pass_index": int(pass_record["pass_index"]),
+            "anchor_position": int(pass_record["anchor_position"]),
+            "target_context": pass_record["pre_decoder_fused"]["expected"]["target_context"],
+            "position_cos": pass_record["pre_decoder_fused"]["expected"]["position_cos"],
+            "position_sin": pass_record["pre_decoder_fused"]["expected"]["position_sin"],
+            "decoder_input": pass_record["pre_decoder_fused"]["expected"]["decoder_input"],
+        }
+        for pass_record in reference["stages"]["passes"]
+    ]
+
+
+def golden_decoder_layer_stages(reference: dict) -> list[dict[str, Any]]:
+    outputs = []
+    for pass_record in reference["stages"]["passes"]:
+        for layer_record in pass_record["decoder_layers"]:
+            outputs.append(
+                {
+                    "pass_index": int(pass_record["pass_index"]),
+                    "anchor_position": int(pass_record["anchor_position"]),
+                    "layer_idx": int(layer_record["layer_idx"]),
+                    "hidden_states": layer_record["expected"]["hidden_states"],
+                }
+            )
+    return outputs
+
+
+def golden_post_decoder_fused_stages(reference: dict) -> list[dict[str, Any]]:
+    return [
+        _captured_stage_output(pass_record, pass_record["post_decoder_fused"]["expected"])
+        for pass_record in reference["stages"]["passes"]
+    ]
+
+
+def golden_combined_drafter_stages(reference: dict) -> list[dict[str, Any]]:
+    return [
+        _captured_stage_output(pass_record, pass_record["combined_drafter"]["expected"])
+        for pass_record in reference["stages"]["passes"]
+    ]
+
+
+def _captured_stage_output(pass_record: dict, expected: dict) -> dict[str, Any]:
+    return {
+        "pass_index": int(pass_record["pass_index"]),
+        "anchor_position": int(pass_record["anchor_position"]),
+        "final_hidden": expected["final_hidden"],
+        "draft_logits": expected["draft_logits"],
+        "draft_token_ids": expected["draft_token_ids"],
+        "host_packet": expected["host_packet"],
+    }
 
 
 class RMSNorm(nn.Module):
@@ -235,10 +351,26 @@ class DFlashAttention(nn.Module):
         self.head_dim = config.head_dim
         self.num_heads = config.num_attention_heads
         self.num_kv_heads = config.num_key_value_heads
-        self.q_proj = nn.Linear(config.hidden_size, config.num_attention_heads * config.head_dim, bias=config.attention_bias)
-        self.k_proj = nn.Linear(config.hidden_size, config.num_key_value_heads * config.head_dim, bias=config.attention_bias)
-        self.v_proj = nn.Linear(config.hidden_size, config.num_key_value_heads * config.head_dim, bias=config.attention_bias)
-        self.o_proj = nn.Linear(config.num_attention_heads * config.head_dim, config.hidden_size, bias=config.attention_bias)
+        self.q_proj = nn.Linear(
+            config.hidden_size,
+            config.num_attention_heads * config.head_dim,
+            bias=config.attention_bias,
+        )
+        self.k_proj = nn.Linear(
+            config.hidden_size,
+            config.num_key_value_heads * config.head_dim,
+            bias=config.attention_bias,
+        )
+        self.v_proj = nn.Linear(
+            config.hidden_size,
+            config.num_key_value_heads * config.head_dim,
+            bias=config.attention_bias,
+        )
+        self.o_proj = nn.Linear(
+            config.num_attention_heads * config.head_dim,
+            config.hidden_size,
+            bias=config.attention_bias,
+        )
         self.q_norm = RMSNorm(config.head_dim, config.rms_norm_eps)
         self.k_norm = RMSNorm(config.head_dim, config.rms_norm_eps)
 
@@ -356,107 +488,6 @@ def golden_extract_context_feature(
     return torch.cat([hidden_states[layer_id + 1] for layer_id in layer_ids], dim=-1)
 
 
-def golden_pre_decoder_fused_stage(fixture: dict) -> dict:
-    config = DFlashConfig.from_fixture(fixture)
-    inputs = fixture["inputs"]
-    weights = fixture["weights"]
-
-    base_hidden = tensor(inputs["base_hidden"])
-    target_hidden = tensor(inputs["target_hidden"])
-    noise_embedding = tensor(inputs["noise_embedding"])
-    position_ids = torch.tensor(inputs["position_ids"], dtype=torch.long)
-    lm_head_weight = tensor(weights["target_lm_head_weight"])
-
-    base_norm = RMSNorm(config.hidden_size, config.rms_norm_eps).eval()
-    _copy_parameter(base_norm.weight, weights["base_norm_weight"])
-    drafter = KimiDFlashDraftModel(config).eval()
-    _copy_parameter(drafter.fc.weight, weights["fc_weight"])
-    _copy_parameter(drafter.hidden_norm.weight, weights["hidden_norm_weight"])
-
-    with torch.inference_mode():
-        base_logits = base_norm(base_hidden) @ lm_head_weight.T
-        target_context = drafter.hidden_norm(drafter.fc(target_hidden))
-        cos, sin = drafter.rotary_emb(position_ids, noise_embedding.dtype, noise_embedding.device)
-
-    return {
-        "base_logits": base_logits,
-        "base_token_id": int(greedy_sample(base_logits.unsqueeze(1))[:, 0][0].item()),
-        "target_context": target_context,
-        "position_cos": cos,
-        "position_sin": sin,
-        "decoder_input": noise_embedding,
-    }
-
-
-def golden_decoder_layer_stage(fixture: dict) -> torch.Tensor:
-    config = DFlashConfig.from_fixture(fixture)
-    inputs = fixture["inputs"]
-    layer = _decoder_layer_from_fixture(config, fixture["weights"]).eval()
-
-    with torch.inference_mode():
-        return layer(
-            tensor(inputs["hidden_states"]),
-            tensor(inputs["target_context"]),
-            (tensor(inputs["position_cos"]), tensor(inputs["position_sin"])),
-        )
-
-
-def golden_post_decoder_fused_stage(fixture: dict) -> dict:
-    config = DFlashConfig.from_fixture(fixture)
-    inputs = fixture["inputs"]
-    weights = fixture["weights"]
-
-    hidden_states = tensor(inputs["hidden_states"])
-    final_norm = RMSNorm(config.hidden_size, config.rms_norm_eps).eval()
-    _copy_parameter(final_norm.weight, weights["final_norm_weight"])
-    lm_head_weight = tensor(weights["target_lm_head_weight"])
-
-    with torch.inference_mode():
-        final_hidden = final_norm(hidden_states)
-        draft_logits = final_hidden[:, 1 - config.block_size :, :] @ lm_head_weight.T
-        draft_token_ids = greedy_sample(draft_logits)
-
-    anchor_position = int(inputs["anchor_position"])
-    return {
-        "final_hidden": final_hidden,
-        "draft_logits": draft_logits,
-        "draft_token_ids": draft_token_ids,
-        "host_packet": {
-            "type": "DRAFT_BLOCK_PROPOSAL",
-            "anchor_position": anchor_position,
-            "token_ids": draft_token_ids.tolist()[0],
-            "positions": list(range(anchor_position + 1, anchor_position + config.block_size)),
-        },
-    }
-
-
-def golden_combined_drafter(fixture: dict, fixture_dir: Path) -> dict:
-    stage_fixtures = [
-        load_stage_fixture(fixture_dir / rel_path, _expected_stage_from_fixture_name(rel_path))
-        for rel_path in fixture["stage_fixture_paths"]
-    ]
-    assert stage_fixtures[0]["stage"] == "pre_decoder_fused"
-    assert stage_fixtures[-1]["stage"] == "post_decoder_fused"
-
-    pre = golden_pre_decoder_fused_stage(stage_fixtures[0])
-    hidden_states = pre["decoder_input"]
-    target_context = pre["target_context"]
-    position_cos = pre["position_cos"]
-    position_sin = pre["position_sin"]
-
-    for layer_fixture in stage_fixtures[1:-1]:
-        layer_fixture = copy.deepcopy(layer_fixture)
-        layer_fixture["inputs"]["hidden_states"] = hidden_states.tolist()
-        layer_fixture["inputs"]["target_context"] = target_context.tolist()
-        layer_fixture["inputs"]["position_cos"] = position_cos.tolist()
-        layer_fixture["inputs"]["position_sin"] = position_sin.tolist()
-        hidden_states = golden_decoder_layer_stage(layer_fixture)
-
-    post_fixture = copy.deepcopy(stage_fixtures[-1])
-    post_fixture["inputs"]["hidden_states"] = hidden_states.tolist()
-    return golden_post_decoder_fused_stage(post_fixture)
-
-
 def golden_accepted_after_anchor(block_token_ids: list[int], target_posterior_token_ids: list[int]) -> int:
     block_output_ids = torch.tensor([block_token_ids], dtype=torch.long)
     posterior = torch.tensor([target_posterior_token_ids], dtype=torch.long)
@@ -530,37 +561,3 @@ def golden_replay_dflash_lossless_trace(trace: dict) -> GoldenReplayResult:
         acceptance_lengths=acceptance_lengths,
         host_writes=host_writes,
     )
-
-
-def _decoder_layer_from_fixture(config: DFlashConfig, weights: dict) -> DFlashDecoderLayer:
-    layer = DFlashDecoderLayer(config)
-    _copy_parameter(layer.input_layernorm.weight, weights["input_layernorm_weight"])
-    _copy_parameter(layer.self_attn.q_proj.weight, weights["q_proj_weight"])
-    _copy_parameter(layer.self_attn.k_proj.weight, weights["k_proj_weight"])
-    _copy_parameter(layer.self_attn.v_proj.weight, weights["v_proj_weight"])
-    _copy_parameter(layer.self_attn.o_proj.weight, weights["o_proj_weight"])
-    _copy_parameter(layer.self_attn.q_norm.weight, weights["q_norm_weight"])
-    _copy_parameter(layer.self_attn.k_norm.weight, weights["k_norm_weight"])
-    _copy_parameter(layer.post_attention_layernorm.weight, weights["post_attention_layernorm_weight"])
-    _copy_parameter(layer.mlp.gate_proj.weight, weights["gate_proj_weight"])
-    _copy_parameter(layer.mlp.up_proj.weight, weights["up_proj_weight"])
-    _copy_parameter(layer.mlp.down_proj.weight, weights["down_proj_weight"])
-    return layer
-
-
-def _copy_parameter(parameter: nn.Parameter, value: list) -> None:
-    with torch.no_grad():
-        parameter.copy_(tensor(value, dtype=parameter.dtype))
-
-
-def _expected_stage_from_fixture_name(rel_path: str) -> str:
-    name = Path(rel_path).name
-    if name == "stage_pre_decoder_fused.json":
-        return "pre_decoder_fused"
-    if name == "stage_post_decoder_fused.json":
-        return "post_decoder_fused"
-    prefix = "stage_decoder_layer_"
-    suffix = ".json"
-    if name.startswith(prefix) and name.endswith(suffix):
-        return f"decoder_layer_{int(name[len(prefix) : -len(suffix)])}"
-    raise AssertionError(f"Unexpected DFlash stage fixture path: {rel_path}")
