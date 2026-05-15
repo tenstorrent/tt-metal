@@ -253,10 +253,11 @@ inline __attribute__((always_inline)) void noc_clear_all_packet_tags() {
 }
 
 // Kernels that do not explicitly set transaction IDs should naturally use transaction ID 0 for multicast writes after
-// kernel handoff. Only write-capable command buffers matter for this assert.
+// kernel handoff. Only write/atomic-capable command buffers matter for this assert.
 inline __attribute__((always_inline)) bool ncrisc_noc_packet_tags_cleared(uint32_t noc) {
     return NOC_CMD_BUF_READ_REG(noc, NCRISC_WR_CMD_BUF, NOC_PACKET_TAG) == 0 &&
-           NOC_CMD_BUF_READ_REG(noc, NCRISC_WR_REG_CMD_BUF, NOC_PACKET_TAG) == 0;
+           NOC_CMD_BUF_READ_REG(noc, NCRISC_WR_REG_CMD_BUF, NOC_PACKET_TAG) == 0 &&
+           NOC_CMD_BUF_READ_REG(noc, NCRISC_AT_CMD_BUF, NOC_PACKET_TAG) == 0;
 }
 
 // Restores cmd_buf from state; waits for cmd_buf ready before writing.
