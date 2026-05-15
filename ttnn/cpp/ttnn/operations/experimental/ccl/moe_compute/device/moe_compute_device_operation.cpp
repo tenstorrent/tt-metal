@@ -113,10 +113,23 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
 
     // Validate intermediate_tiles >= matmul_num_cores (at least 1 tile per ring core).
     // Both Full and ComputeOnly paths use the same matmul ring kernels, so this applies in both modes.
+    //
+    // matmul_num_cores must match the actual matmul ring size produced by program_factory:
+    //   - WH: ring = num DRAM banks = 12 (1:1, no padding). args.bh_ring_size is forced to 12
+    //     in invoke() for WH, so reading either source returns the same value.
+    //   - BH: ring = bh_ring_size (8 / 12 / 16). program_factory.cpp pads the 8 DRAM-adjacent
+    //     cores up to bh_ring_size via kBhMatmulExtras (lines 200-225 in that file). Using the
+    //     raw DRAM bank count here (=8 on BH always) would under-report and reject shapes
+    //     whose width_shard_dim divides bh_ring_size but not 8 — e.g. GPT-OSS at hidden=2880
+    //     forces output_width_shard_dim=3, valid at N=12 (12%3=0) but the early validate using
+    //     raw 8 would fail (8%3≠0). args.bh_ring_size is already resolved by invoke() before
+    //     this validate runs.
     auto* mesh_device = tensor_args.tilize_input_tensor.device();
-    const auto matmul_cores =
-        mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
-    const uint32_t matmul_num_cores = matmul_cores.size();
+    const uint32_t matmul_num_cores =
+        (mesh_device->arch() == tt::ARCH::BLACKHOLE)
+            ? args.bh_ring_size
+            : mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default)
+                  .size();
     const uint32_t intermediate_tiles = intermediate_size / 32;
     TT_FATAL(
         intermediate_tiles >= matmul_num_cores,

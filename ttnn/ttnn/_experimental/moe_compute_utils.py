@@ -83,17 +83,24 @@ import ttnn
 
 
 def _get_bh_ring_size():
-    """BH ring size, configurable via env var TT_MOE_BH_N. Supported: {8, 12, 16}; default 16.
+    """BH ring size, configurable via env var TT_MOE_BH_N. Supported: {8, 12, 16}; default 12.
 
-    Must align with C++ get_bh_ring_size() in moe_compute_program_factory.cpp. WH always uses N=12.
+    Default rationale: N=12 = LCM(3, 4) over the canonical model set (PR #43932's
+    MODELS_1x16/1x8 all have output_width_shard_dim ∈ {3, 4}). The op validates
+    matmul_num_cores % output_width_shard_dim == 0, so N=12 is the smallest BH ring
+    size that satisfies every shipped model (DS-family at width_dim=4 and GPT-OSS at
+    width_dim=3). N=8 and N=16 reject shapes with width_dim=3. Matches WH's hardcoded
+    ring=12. MUST stay in sync with C++ resolve_bh_ring_size() default in
+    moe_compute_program_factory.cpp.
+
     All BH N values use HEIGHT_SHARDED weights with leading dim = num_banks (=8); N=8 is 1:1
     with banks, N=12/16 cross banks via the bank-run loop in dm0.cpp.
 
-    Raises ValueError on an invalid env value; returns 16 only when the env var is unset.
+    Raises ValueError on an invalid env value; returns 12 only when the env var is unset.
     """
     env = os.environ.get("TT_MOE_BH_N")
     if env is None:
-        return 16
+        return 12
     try:
         n = int(env)
     except ValueError:
@@ -810,7 +817,7 @@ def get_weight_core_shard_maps(mesh_device, hidden_size: int, intermediate_size:
 
     Ring length:
     - WH: target_ring_size = num_dram_banks = 12 (1:1 ring-to-bank).
-    - BH: target_ring_size = _get_bh_ring_size() (env var TT_MOE_BH_N, default 16).
+    - BH: target_ring_size = _get_bh_ring_size() (env var TT_MOE_BH_N, default 12).
           When target_ring_size > num_dram_banks (=8), the shard_map has extra entries
           for the synthetic ring positions that the C++ program_factory appends via
           kBhMatmulExtras. The prepare functions emit a matching target_ring_size-slot

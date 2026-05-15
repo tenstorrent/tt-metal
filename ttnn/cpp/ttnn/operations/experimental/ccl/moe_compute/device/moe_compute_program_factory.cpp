@@ -36,7 +36,13 @@ namespace ttnn::experimental::prim {
 // BH ring size resolver. Resolution order:
 //   1. If `explicit_value` is provided, validate ({8, 12, 16}) and return it; fatal on invalid.
 //   2. Else if env var TT_MOE_BH_N is set, validate and return it; fatal on invalid.
-//   3. Else return the default (16).
+//   3. Else return the default (12).
+// Default is 12 because it equals LCM(3, 4) over the canonical model set in PR #43932:
+// every model in MODELS_1x16/1x8 has output_width_shard_dim ∈ {3, 4}, so N=12 satisfies
+// the op-side `matmul_num_cores % output_width_shard_dim == 0` validate for all of them
+// (e.g. DS-v3 width_dim=4 → 12%4=0; GPT-OSS width_dim=3 → 12%3=0). N=8 or N=16 reject
+// shapes with width_dim=3 (GPT-OSS, future Ht%4≠0 models). Matches WH's hardcoded ring=12.
+//
 // The chosen N feeds the templatized MoeRingConfig<Ht, Nt, N, has_bias> in moe_ring_common.h.
 // N=8 maps 1:1 to BH's 8 DRAM banks; N=12/16 use HEIGHT_SHARDED (8 banks) + bank-run reads.
 // Resolved per call (no static cache) so the op kwarg path can pass different N values within
@@ -57,7 +63,7 @@ uint32_t resolve_bh_ring_size(std::optional<uint32_t> explicit_value) {
             env);
         return static_cast<uint32_t>(parsed);
     }
-    return 16u;  // Default when neither kwarg nor env var is set.
+    return 12u;  // Default when neither kwarg nor env var is set. See header comment for rationale.
 }
 
 uint32_t get_bh_ring_size() { return resolve_bh_ring_size(std::nullopt); }
