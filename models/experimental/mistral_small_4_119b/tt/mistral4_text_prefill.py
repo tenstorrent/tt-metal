@@ -49,12 +49,13 @@ def _rms_norm(
     x: ttnn.Tensor,
     weight: ttnn.Tensor,
     compute_kernel_config,
+    memory_config=ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
     return ttnn.rms_norm(
         x,
         weight=weight,
         epsilon=NORM_EPS,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=memory_config,
         compute_kernel_config=compute_kernel_config,
     )
 
@@ -164,19 +165,20 @@ class TtMistral4DecoderLayer(LightweightModule):
         current_pos: int,
         cur_pos_tensor: ttnn.Tensor = None,
     ) -> ttnn.Tensor:
-        """Decode one token, updating the KV cache at current_pos."""
+        """Decode one token — all activations in L1; only all_reduce crosses DRAM."""
+        _mem = ttnn.L1_MEMORY_CONFIG
         residual = x
-        normed = _rms_norm(x, self.input_norm_w, self.compute_kernel_config)
+        normed = _rms_norm(x, self.input_norm_w, self.compute_kernel_config, _mem)
         attn_out = self.attn.forward_decode(normed, cos, sin, kv_cache, current_pos, cur_pos_tensor)
         ttnn.deallocate(normed)
-        x = ttnn.add(residual, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.add(residual, attn_out, memory_config=_mem)
         ttnn.deallocate(attn_out)
 
         residual = x
-        normed = _rms_norm(x, self.post_attn_norm_w, self.compute_kernel_config)
-        moe_out = self.moe.forward(normed)
+        normed = _rms_norm(x, self.post_attn_norm_w, self.compute_kernel_config, _mem)
+        moe_out = self.moe.forward_decode(normed)
         ttnn.deallocate(normed)
-        x = ttnn.add(residual, moe_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.add(residual, moe_out, memory_config=_mem)
         ttnn.deallocate(moe_out)
         return x
 
