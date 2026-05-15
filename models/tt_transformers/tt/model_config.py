@@ -9,7 +9,7 @@ import os
 from enum import Enum, auto
 from functools import lru_cache
 from pathlib import Path
-from typing import Tuple
+from typing import Optional, Tuple
 
 import torch
 from loguru import logger
@@ -24,6 +24,7 @@ from models.tt_transformers.tt.common import (
     encode_prompt_hf,
     get_base_model_name,
     get_out_subblock_w,
+    get_padded_prefill_len,
     nearest_multiple,
     num_to_core_range_set,
     rope_scaling_model_factory,
@@ -483,6 +484,9 @@ class ModelArgs:
         "Qwen2.5-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-32B-Instruct",
         "Meta-Llama-3-8B": "models/tt_transformers/model_params/Meta-Llama-3-8B",
         "Meta-Llama-3-8B-Instruct": "models/tt_transformers/model_params/Meta-Llama-3-8B",
+        "Qwen3-Embedding-0.6B": "models/tt_transformers/model_params/Qwen3-Embedding-0.6B",
+        "Qwen3-Embedding-4B": "models/tt_transformers/model_params/Qwen3-Embedding-4B",
+        "Qwen3-Embedding-8B": "models/tt_transformers/model_params/Qwen3-Embedding-8B",
     }
 
     MAX_QKV_MM_SEQ_LEN = 2048
@@ -583,7 +587,8 @@ class ModelArgs:
             self.instruct = True
 
         # Check for supported batches since previous logic that contained the check was removed because it was unused
-        supported_batches = {1, 2, 4, 8, 16, 32}
+        # 25: common embedding throughput batch (e.g. Qwen3-Embedding perf tests)
+        supported_batches = {1, 2, 4, 8, 16, 25, 32}
         if self.max_batch_size not in supported_batches:
             raise ValueError(f"Batch size {self.max_batch_size} not supported")
 
@@ -1147,16 +1152,14 @@ class ModelArgs:
                 if seq_len > 1024:
                     to_warmup_seq_lens = to_warmup_seq_lens[: to_warmup_seq_lens.index(seq_len)]
                     break
-        if self.base_model_name == "Mistral-Small-3.1-24B":
-            to_warmup_seq_lens = [s for s in to_warmup_seq_lens if s <= self.max_seq_len]
         return to_warmup_seq_lens
 
     # =========================================================================
     # RESIDUAL MEMORY CONFIGS
     # =========================================================================
     @lru_cache(maxsize=None)
-    def get_residual_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
-        """Get the memory config for decode residual tensors."""
+    def get_residual_mem_config(self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None):
+        """Get the memory config for residual tensors (decode: sharded L1; prefill: L1 for short-seq on single-chip)."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
                 num_residual_worker_cores = 32 if self.num_devices == 4 else 16
@@ -1187,15 +1190,39 @@ class ModelArgs:
                     use_height_and_width_as_shard_shape=True,
                 )
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
+
+    def padded_prefill_len(self, seq_len: int) -> int:
+        return get_padded_prefill_len(seq_len)
+
+    def use_short_seq_l1_prefill(self, seq_len: int = None):
+        force_dram = os.getenv("TT_PREFILL_FORCE_DRAM", "0") == "1"
+        if force_dram:
+            return False
+        if self.is_galaxy:
+            return False
+        if self.num_devices != 1:
+            return False
+        if self.max_batch_size != 1:
+            return False
+        if self.base_model_name not in ("Qwen3-Embedding-0.6B", "Qwen3-Embedding-4B"):
+            return False
+        max_short = int(os.getenv("TT_SHORT_SEQ_L1_PREFILL_MAX", "512"))
+        effective_seq_len = self.max_seq_len if seq_len is None else seq_len
+        return effective_seq_len <= max_short
+
+    def get_prefill_activation_mem_config(self, seq_len: int = None):
+        return ttnn.L1_MEMORY_CONFIG if self.use_short_seq_l1_prefill(seq_len) else ttnn.DRAM_MEMORY_CONFIG
 
     # =========================================================================
     # MLP PROGRAM AND MEMORY CONFIGS
     # =========================================================================
     @lru_cache(maxsize=None)
-    def get_mlp_input_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_mlp_input_mem_config(
+        self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         """Get the sharded memory config for MLP input."""
         if mode == Mode.DECODE:
             if self.is_galaxy:
@@ -1219,7 +1246,7 @@ class ModelArgs:
                     use_height_and_width_as_shard_shape=True,
                 )
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1335,7 +1362,9 @@ class ModelArgs:
             raise ValueError(f"Invalid mode: {mode}")
 
     @lru_cache(maxsize=None)
-    def get_mlp_ff1_3_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_mlp_ff1_3_mem_config(
+        self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         if mode == Mode.DECODE:
             if prefetcher is not None:
                 return ttnn.create_sharded_memory_config(
@@ -1350,12 +1379,12 @@ class ModelArgs:
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
     @lru_cache(maxsize=None)
-    def get_mlp_ff2_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_mlp_ff2_mem_config(self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None):
         if mode == Mode.DECODE:
             if prefetcher is not None:
                 return ttnn.create_sharded_memory_config(
@@ -1370,13 +1399,13 @@ class ModelArgs:
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
     # NOTE: Cannot use @lru_cache here because tensor parameter would cause memory leak
     # by keeping references to all tensors passed to this function
-    def get_mlp_ff2_all_reduce_mem_config(self, mode: Mode, tensor: ttnn.Tensor):
+    def get_mlp_ff2_all_reduce_mem_config(self, mode: Mode, tensor: ttnn.Tensor, prefill_seq_len: Optional[int] = None):
         if mode == Mode.DECODE:
             if self.is_galaxy:
                 return (
@@ -1399,7 +1428,7 @@ class ModelArgs:
             else:
                 return tensor.memory_config()
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1450,7 +1479,7 @@ class ModelArgs:
 
     # NOTE: get_mlp_act_mem_config is a TG-specific MLP to memory config
     @lru_cache(maxsize=None)
-    def get_mlp_act_mem_config(self, mode: Mode):
+    def get_mlp_act_mem_config(self, mode: Mode, prefill_seq_len: Optional[int] = None):
         """Get the memory config for MLP activation (TG specific)."""
         if mode == Mode.DECODE:
             if self.dim >= 4096:
@@ -1469,7 +1498,7 @@ class ModelArgs:
                     ttnn.ShardSpec(full_grid, [32, nearest_32(56)], ttnn.ShardOrientation.ROW_MAJOR),
                 )
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1549,7 +1578,9 @@ class ModelArgs:
             raise ValueError(f"Invalid mode: {mode}")
 
     @lru_cache(maxsize=None)
-    def get_attn_input_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_attn_input_mem_config(
+        self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         if mode == Mode.DECODE:
             if prefetcher is not None:
                 return ttnn.create_sharded_memory_config(
@@ -1581,7 +1612,7 @@ class ModelArgs:
                     use_height_and_width_as_shard_shape=True,
                 )
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1654,7 +1685,9 @@ class ModelArgs:
         return self.base_model_name == "Llama-3.1-8B" and seq_len == 128 and self.is_galaxy_8_device_row_submesh
 
     @lru_cache(maxsize=None)
-    def get_attn_qkv_mm_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_attn_qkv_mm_mem_config(
+        self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         """Get the memory config for QKV matmul output in attention."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -1674,12 +1707,14 @@ class ModelArgs:
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
     @lru_cache(maxsize=None)
-    def get_attn_qkv_all_reduce_output_mem_config(self, mode: Mode, mesh_cols: int = 1, prefetcher: Prefetcher = None):
+    def get_attn_qkv_all_reduce_output_mem_config(
+        self, mode: Mode, mesh_cols: int = 1, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         """Get the memory config for QKV all-reduce output in attention."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -1703,22 +1738,24 @@ class ModelArgs:
                     use_height_and_width_as_shard_shape=True,
                 )
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
     @lru_cache(maxsize=None)
-    def get_attn_create_head_input_mem_config(self, mode: Mode):
+    def get_attn_create_head_input_mem_config(self, mode: Mode, prefill_seq_len: Optional[int] = None):
         """Get the memory config for create_head input (TG specific)."""
         if mode == Mode.DECODE:
             return self.model_config["CREATE_HEAD_INPUT_MEMCFG"]
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
     @lru_cache(maxsize=None)
-    def get_attn_create_head_output_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_attn_create_head_output_mem_config(
+        self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         """Get the memory config for create_qkv_heads output in attention."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -1744,13 +1781,17 @@ class ModelArgs:
                 else:
                     return ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
     @lru_cache(maxsize=None)
     def get_attn_sdpa_output_mem_config(
-        self, mode: Mode, batch_size_per_device_group: int = 1, prefetcher: Prefetcher = None
+        self,
+        mode: Mode,
+        batch_size_per_device_group: int = 1,
+        prefetcher: Prefetcher = None,
+        prefill_seq_len: Optional[int] = None,
     ):
         """Get the memory config for SDPA output in attention."""
         if mode == Mode.DECODE:
@@ -1777,12 +1818,14 @@ class ModelArgs:
                     use_height_and_width_as_shard_shape=True,
                 )
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
     @lru_cache(maxsize=None)
-    def get_attn_concat_heads_output_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_attn_concat_heads_output_mem_config(
+        self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         """Get the memory config for attention concat_heads output before WO matmul."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -1813,12 +1856,14 @@ class ModelArgs:
                     ),
                 )
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
     @lru_cache(maxsize=None)
-    def get_attn_all_gather_output_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_attn_all_gather_output_mem_config(
+        self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         """Get the memory config for attention all-gather output."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -1847,7 +1892,7 @@ class ModelArgs:
                     ),
                 )
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1966,7 +2011,9 @@ class ModelArgs:
             raise ValueError(f"Invalid mode: {mode}")
 
     @lru_cache(maxsize=None)
-    def get_attn_wo_output_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_attn_wo_output_mem_config(
+        self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         """Get the memory config for WO matmul output in attention."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -1983,12 +2030,14 @@ class ModelArgs:
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
     @lru_cache(maxsize=None)
-    def get_attn_dense_output_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_attn_dense_output_mem_config(
+        self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         """Get the memory config for dense output (after all-reduce) in attention."""
         if mode == Mode.DECODE:
             if self.ccl_topology() == ttnn.Topology.Ring and prefetcher is None:
@@ -2011,13 +2060,18 @@ class ModelArgs:
                 else:
                     return self.get_residual_mem_config(Mode.DECODE, None)
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
     @lru_cache(maxsize=None)
     def get_attn_all_reduce_output_mem_config(
-        self, mode: Mode, hidden_size: int = 0, mesh_rows: int = 1, prefetcher: Prefetcher = None
+        self,
+        mode: Mode,
+        hidden_size: int = 0,
+        mesh_rows: int = 1,
+        prefetcher: Prefetcher = None,
+        prefill_seq_len: Optional[int] = None,
     ):
         """Get the memory config for attention all-reduce output (TG specific configs)."""
         if mode == Mode.DECODE:
@@ -2039,12 +2093,14 @@ class ModelArgs:
                 else:
                     return self.get_residual_mem_config(Mode.DECODE, None)
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
     @lru_cache(maxsize=None)
-    def get_attn_gather_users_mem_config(self, mode: Mode, mesh_cols: int = 1, prefetcher: Prefetcher = None):
+    def get_attn_gather_users_mem_config(
+        self, mode: Mode, mesh_cols: int = 1, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         """Get the memory config for gather users in attention (TG path)."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -2064,7 +2120,7 @@ class ModelArgs:
             else:
                 return self.model_config["GATHER_USERS_MEMCFG"](mesh_cols)
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -2562,13 +2618,14 @@ class ModelArgs:
 
         mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
 
-        # input goes to DRAM
+        prefill_memcfg = self.get_prefill_activation_mem_config(seq_len=x_bsh.shape[1])
+        # No DRAM fallback here: tensor memcfg must match get_residual_mem_config (decoder assert).
         xs_1BSH = ttnn.from_torch(
             x_1BSH,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=prefill_memcfg,
             mesh_mapper=mesh_mapper,
         )
         return xs_1BSH
@@ -3489,6 +3546,11 @@ class ModelArgs:
             "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
             "Mistral-Small-3.1-24B": "mistralai/Mistral-Small-3.1-24B-Instruct-2503",
             "Phi-3-mini-128k-instruct": "microsoft/Phi-3-mini-128k-instruct",
+            # Qwen3 embedding checkpoints share the same tokenizer/vocab as same-sized Qwen3 dense LMs.
+            # Used when the embedding repo is missing from the HF hub cache (common in offline CI).
+            "Qwen3-Embedding-0.6B": "Qwen/Qwen3-0.6B",
+            "Qwen3-Embedding-4B": "Qwen/Qwen3-4B",
+            "Qwen3-Embedding-8B": "Qwen/Qwen3-8B",
         }
 
         logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
@@ -3546,12 +3608,21 @@ class ModelArgs:
                     fallback_tokenizer_path = "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
                 elif "phi-3-mini" in model_name_lower and "128k" in model_name_lower and "instruct" in model_name_lower:
                     fallback_tokenizer_path = "microsoft/Phi-3-mini-128k-instruct"
+                elif "qwen3" in model_name_lower and "embedding" in model_name_lower:
+                    if "0.6b" in model_name_lower:
+                        fallback_tokenizer_path = "Qwen/Qwen3-0.6B"
+                    elif "embedding-4b" in model_name_lower or "embedding_4b" in model_name_lower:
+                        fallback_tokenizer_path = "Qwen/Qwen3-4B"
+                    elif "embedding-8b" in model_name_lower or "embedding_8b" in model_name_lower:
+                        fallback_tokenizer_path = "Qwen/Qwen3-8B"
 
             if fallback_tokenizer_path:
                 logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
                 try:
                     tokenizer = AutoTokenizer.from_pretrained(
-                        fallback_tokenizer_path, local_files_only=os.getenv("CI") == "true"
+                        fallback_tokenizer_path,
+                        local_files_only=os.getenv("CI") == "true",
+                        trust_remote_code=self.trust_remote_code_hf,
                     )
                     logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
                 except Exception as fallback_e:

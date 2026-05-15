@@ -213,6 +213,30 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+- name: Qwen3-Embedding-4B e2e tests
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3-Embedding-4B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-Embedding-4B
+    pytest --timeout 210 models/demos/wormhole/qwen3_embedding_8b/demo/demo.py -k "dp1-batch1-seq128"
+  model: qwen3-embedding-4b
+  skus:
+    wh_n150:
+      timeout: 3
+      tier: 3
+  owner_id: U088413NP0Q # Ashai Reddy Ginuga
+  team: runtime
+
+- name: Qwen3-Embedding-0.6B e2e tests
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3-Embedding-0.6B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-Embedding-0.6B
+    pytest --timeout 210 models/demos/wormhole/qwen3_embedding_8b/demo/demo.py -k "dp1-batch1-seq128"
+  model: qwen3-embedding-0.6b
+  skus:
+    wh_n150:
+      timeout: 3
+      tier: 3
+  owner_id: U088413NP0Q # Ashai Reddy Ginuga
+  team: runtime
+
 # Qwen2.5-72B: disabled, ci-token-matching hanging on CI
 # - name: Qwen2.5-72B e2e tests
 #   cmd: |

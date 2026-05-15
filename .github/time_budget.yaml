@@ -124,6 +124,8 @@ runtime:
     bh_p150b_civ2: 13
     bh_quietbox: 5
     bh_loudbox: 5
+  e2e:
+    wh_n150: 10
   unit:
     wh_n150_civ2: 217
     wh_n300_civ2: 74
