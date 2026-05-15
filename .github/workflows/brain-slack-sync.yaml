@@ -95,7 +95,7 @@ jobs:
               if AFTER_TS:
                   return AFTER_TS
               days = int(DAYS_BACK) if DAYS_BACK else 7
-              ts = time.time() - days * 86400
+              ts = int(time.time() - days * 86400)  # integer to avoid float formatting issues
               dt = datetime.datetime.utcfromtimestamp(ts).isoformat()
               print(f"[DEBUG] computed oldest={ts} ({dt} UTC)")
               return str(ts)
