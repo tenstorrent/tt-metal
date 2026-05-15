@@ -30,7 +30,11 @@ import torch
 import ttnn
 
 from models.experimental.pi0_5.common.configs import GemmaConfig
-from models.experimental.pi0_5.tt.ttnn_common import sdpa_prefill_chunk_sizes
+from models.experimental.pi0_5.tt.ttnn_common import (
+    get_sdpa_compute_kernel_config,
+    get_sdpa_exp_approx_mode,
+    sdpa_prefill_chunk_sizes,
+)
 
 
 # ============================================================================
@@ -389,14 +393,6 @@ class GemmaAttentionTTNN:
         self.cos_meta = cos_meta
         self.sin_meta = sin_meta
 
-        # Compute kernel config for attention (HiFi4 for precision-critical ops)
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
-
         # HiFi2 config for projections (faster, less precision needed)
         self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -405,15 +401,10 @@ class GemmaAttentionTTNN:
             packer_l1_acc=True,
         )
 
-        # SDPA compute config — packer_l1_acc=True keeps softmax accumulators
-        # on-chip (matches the SigLIP / ViT-BH-hiRes §5.4 path). Running 10×
-        # per inference in the denoise loop, this is a cheap precision win.
-        self.compute_kernel_config_sdpa = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+        # SDPA compute config — env-controllable for A/B testing. See ttnn_common.py.
+        # Default = HiFi2 + fp32_dest_acc=True + packer_l1_acc=True. Bump
+        # PI0_SDPA_HIFI=4 to match ViT-BH-hiRes precision regime.
+        self.compute_kernel_config_sdpa = get_sdpa_compute_kernel_config()
 
     def forward(
         self,
@@ -549,7 +540,7 @@ class GemmaAttentionTTNN:
             compute_with_storage_grid_size=self.grid_size,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
-            exp_approx_mode=True,
+            exp_approx_mode=get_sdpa_exp_approx_mode(),
         )
 
         attn_output = ttnn.transformer.scaled_dot_product_attention(

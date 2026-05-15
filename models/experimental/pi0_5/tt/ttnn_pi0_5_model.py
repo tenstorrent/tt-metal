@@ -156,9 +156,10 @@ class Pi0_5ModelTTNN:
         )
         torch_suffix = Pi0_5SuffixEmbedding(suffix_cfg, pi0_weights)
         timesteps = torch.tensor([1.0 - i / num_steps for i in range(num_steps)], dtype=torch.bfloat16)
-        # adarms_cond_per_step[step] shape (1, W) in bf16 — matches the
-        # original device-side compute precision (HiFi2 bf16 matmul / bf16
-        # output) to keep numerics bit-identical to the prior precompute.
+        # bf16 here matches the device-side HiFi2 bf16 matmul output that
+        # this precompute replaces. Tried fp32 host compute: +0.0007 e2e PCC
+        # (within noise), no win — the bf16 quantization happens at upload
+        # regardless of host dtype, so the host precision doesn't matter.
         adarms_cond_per_step: List[torch.Tensor] = []
         for i in range(num_steps):
             c = torch_suffix.embed_timestep_adarms(timesteps[i : i + 1]).to(torch.bfloat16)
@@ -445,12 +446,12 @@ class Pi0_5ModelTTNN:
             ttnn.deallocate(velocity_scaled)
             x_t_ttnn = x_t_new
 
-        # Slice off the phantom rows we padded for the keep_padded fast path.
-        if keep_padded_expert:
-            ah = self.config.action_horizon
-            ah_padded = ((ah + 31) // 32) * 32
-            if ah_padded > ah:
-                x_t_ttnn = ttnn.slice(x_t_ttnn, [0, 0, 0], [1, ah, self.config.action_dim])
+        # Slice off the phantom rows (we always host-pad x_t to ah_padded
+        # at init / sample-call time, regardless of keep_padded).
+        ah = self.config.action_horizon
+        ah_padded = ((ah + 31) // 32) * 32
+        if ah_padded > ah and x_t_ttnn.shape[1] != ah:
+            x_t_ttnn = ttnn.slice(x_t_ttnn, [0, 0, 0], [1, ah, self.config.action_dim])
 
         return x_t_ttnn
 

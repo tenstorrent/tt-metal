@@ -27,7 +27,12 @@ import ttnn
 import tt_lib.fallback_ops as fallback_ops  # For position embedding interpolation (native TTNN interpolate not available)
 
 from models.experimental.pi0_5.common.configs import SigLIPConfig
-from models.experimental.pi0_5.tt.ttnn_common import sdpa_prefill_chunk_sizes, tensor_1d_to_2d_ttnn
+from models.experimental.pi0_5.tt.ttnn_common import (
+    get_sdpa_compute_kernel_config,
+    get_sdpa_exp_approx_mode,
+    sdpa_prefill_chunk_sizes,
+    tensor_1d_to_2d_ttnn,
+)
 from models.experimental.pi0_5.tt.ttnn_gemma import build_matmul_pcfg, build_sharded_norm_pcfg, _RMS_NORM_COMPUTE_CONFIG
 
 
@@ -334,16 +339,10 @@ class SigLIPAttentionTTNN:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        # SDPA compute kernel — match ViT-BH-hiRes (§5.4): packer_l1_acc=True
-        # to keep softmax accumulators on-chip and reduce L1 traffic. HiFi2 vs
-        # HiFi4: BH HiFi2 already gives sufficient softmax precision for SigLIP;
-        # leaving HiFi4 as a future A/B if accuracy regresses.
-        self.compute_kernel_config_sdpa = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+        # SDPA compute kernel — env-controllable for A/B testing. See ttnn_common.py.
+        # Default (PI0_SDPA_HIFI=2, PI0_SDPA_EXP_APPROX=1) matches ViT-BH-hiRes §5.4
+        # apart from math_fidelity (we run HiFi2 by default, ViT uses HiFi4).
+        self.compute_kernel_config_sdpa = get_sdpa_compute_kernel_config()
 
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         """
@@ -422,12 +421,13 @@ class SigLIPAttentionTTNN:
         # Chunk sizes aligned with tt_transformers prefill SDPA (64 vs 2048-boundary heuristic)
         q_chunk, k_chunk = sdpa_prefill_chunk_sizes(seq_len, seq_len)
 
-        # SDPA configuration - use full device grid for maximum parallelism
+        # SDPA configuration - use full device grid for maximum parallelism.
+        # exp_approx_mode env-controllable for A/B (default True, ViT-BH-hiRes uses False).
         sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.grid_size,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
-            exp_approx_mode=True,
+            exp_approx_mode=get_sdpa_exp_approx_mode(),
         )
 
         # SDPA - stays entirely on device, L1 output feeds the o-proj matmul.
