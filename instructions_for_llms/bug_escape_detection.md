@@ -237,7 +237,7 @@ Do NOT create BEFORE/AFTER branches during binary search; that is only done in S
 1. Get commit list: `GET /repos/tenstorrent/tt-metal/compare/{last_failing}...{first_passing}` → N commits (chronological order).
 2. If N ≤ 1: that commit is the fix. Save to `campaign-state.json` and proceed to Step 5.
 3. Pick midpoint M = commit at index N//2.
-4. Create a branch at M. Dispatch a **pruned** run (see Step 5 pruning instructions). Save run ID to `campaign-state.json`.
+4. Create a branch at M. Before dispatching, **prune the test matrix** to the single failing test (see Step 5 pruning instructions — this is mandatory for every dispatch regardless of hardware type). Save run ID to `campaign-state.json`.
 5. Wait for completion:
    - **PASS** → fix is in the earlier half. New range = commits 0…N//2 (inclusive of M).
    - **FAIL** → fix is in the later half. New range = commits N//2…N-1.
@@ -492,10 +492,12 @@ doesn't contain the test at all.
 **Fix**: Always query `CICD_JOB.NAME` from Snowflake for a recent run of the test, then
 find the corresponding workflow file via the GitHub workflows API. See Step 5.
 
-### 3. Skipping test matrix pruning before verification dispatch
+### 3. Skipping test matrix pruning before any dispatch
 
 **Error**: Dispatching the full workflow instead of narrowing to the one failing test.
-This wastes Galaxy hardware on dozens of unrelated tests and makes results harder to interpret.
+This wastes hardware time on every runner type — T3K, LoudBox, Galaxy, all of them —
+on dozens of unrelated tests and makes results harder to interpret.
 
-**Fix**: Always edit the `TESTS_YAML_PATH` file on both branches to contain only the failing
-test group before dispatching. This is mandatory, not optional.
+**Fix**: Always edit the `TESTS_YAML_PATH` file on the branch to contain only the failing
+test group before dispatching. This is mandatory for EVERY dispatch: binary search midpoints,
+hypothesis tests, and final BEFORE/AFTER verification. No exceptions.
