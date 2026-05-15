@@ -33,6 +33,7 @@ struct BinaryNgParams {
     const CoreRangeSet worker_grid;
     std::optional<DeviceComputeKernelConfig> compute_kernel_config;
     std::optional<CoreRangeSet> sub_core_grids;
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     SubtileBroadcastType subtile_broadcast_type = SubtileBroadcastType::NONE;
     bool is_sfpu = false;
     bool is_quant_op = false;

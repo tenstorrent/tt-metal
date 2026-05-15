@@ -1,8 +1,6 @@
 # Device 2.0 Data Movement API Migration Guide
 
-This guide helps developers migrate from legacy data movement APIs to the new experimental Device 2.0 APIs located in `tt_metal/hw/inc/experimental/`.
-
-> **Note**: These APIs are experimental and subject to change.
+This guide helps developers migrate from legacy data movement APIs to the new Device 2.0 APIs located in `tt_metal/hw/inc/api/`.
 
 ## Table of Contents
 
@@ -21,7 +19,7 @@ This guide helps developers migrate from legacy data movement APIs to the new ex
 
 ## Overview
 
-The Device 2.0 experimental APIs provide a more object-oriented, type-safe interface for data movement operations on Tenstorrent hardware. Key benefits include:
+The Device 2.0 APIs provide a more object-oriented, type-safe interface for data movement operations on Tenstorrent hardware. Key benefits include:
 
 - **Type Safety**: Template-based traits system prevents common errors at compile time
 - **Cleaner Abstractions**: Object-oriented wrappers around raw addresses and operations
@@ -33,56 +31,56 @@ The Device 2.0 experimental APIs provide a more object-oriented, type-safe inter
 Include the following headers based on your needs:
 
 ```cpp
-#include "experimental/noc.h"            // Core NoC operations
-#include "experimental/circular_buffer.h" // CircularBuffer wrapper
-#include "experimental/core_local_mem.h"  // Safe L1 memory pointers
-#include "experimental/endpoints.h"       // Unicast/Multicast/AllocatorBank endpoints
-#include "experimental/noc_semaphore.h"   // Semaphore synchronization
-#include "experimental/tensor.h"          // TensorAccessor traits
-#include "experimental/lock.h"            // RAII lock utilities
+#include "api/dataflow/noc.h"        // Core NoC operations
+#include "api/dataflow/circular_buffer.h" // CircularBuffer wrapper
+#include "api/core_local_mem.h"  // Safe L1 memory pointers
+#include "api/dataflow/endpoints.h"       // Unicast/Multicast/AllocatorBank endpoints
+#include "api/dataflow/noc_semaphore.h"   // Semaphore synchronization
+#include "api/tensor/noc_traits.h"          // TensorAccessor traits
+#include "api/lock.h"                    // RAII lock utilities
 ```
 
 ## Key Classes
 
-### `experimental::Noc`
+### `Noc`
 
 The central class for NoC operations. Wraps a Noc index and provides methods for async reads, writes, multicasts, and barriers.
 
 ```cpp
-experimental::Noc noc;           // Uses default noc_index
-experimental::Noc noc1(1);       // Explicitly use NoC 1
+Noc noc;           // Uses default noc_index
+Noc noc1(1);       // Explicitly use NoC 1
 ```
 
-### `experimental::CircularBuffer`
+### `CircularBuffer`
 
 Provides circular buffer operations.
 
 ```cpp
-experimental::CircularBuffer cb(cb_id);
+CircularBuffer cb(cb_id);
 cb.reserve_back(num_pages);
 cb.push_back(num_pages);
 cb.wait_front(num_pages);
 cb.pop_front(num_pages);
 ```
 
-### `experimental::CoreLocalMem<T>`
+### `CoreLocalMem<T>`
 
 Provides a safe zero overhead way to access a given type in L1 memory.
 
 ```cpp
-experimental::CoreLocalMem<uint32_t> mem(address);
+CoreLocalMem<uint32_t> mem(address);
 mem[0] = value;              // Array-style access
 auto val = *mem;             // Dereference
 mem++;                       // Pointer arithmetic
 auto addr = mem.get_address();
 ```
 
-### `experimental::Semaphore`
+### `Semaphore`
 
 Provides a semaphore for synchronization.
 
 ```cpp
-experimental::Semaphore<> sem(semaphore_id);
+Semaphore<> sem(semaphore_id);
 sem.up(value);               // Local increment
 sem.down(value);             // Blocking decrement
 sem.wait(value);             // Wait for exact value
@@ -93,9 +91,9 @@ sem.wait_min(value);         // Wait for minimum value
 
 Endpoints are used as sources or destinations for the `Noc` interface. Depending on which endpoint is provided, additional arguments can be passed in to `src_args_t` or `dst_args_t` of each `Noc` action to specify additional metadata such as offset or size.
 
-- `experimental::UnicastEndpoint` - For unicast NoC addresses
-- `experimental::MulticastEndpoint` - For multicast NoC addresses
-- `experimental::AllocatorBank<AllocatorBankType>` - For DRAM/L1 bank addressing
+- `UnicastEndpoint` - For unicast NoC addresses
+- `MulticastEndpoint` - For multicast NoC addresses
+- `AllocatorBank<AllocatorBankType>` - For DRAM/L1 bank addressing
 
 ---
 
@@ -112,11 +110,11 @@ noc_async_read(src_noc_addr, dst_l1_addr, size_bytes);
 noc_async_read_barrier();
 ```
 
-**New Experimental API:**
+**New API:**
 ```cpp
-experimental::Noc noc;
-experimental::UnicastEndpoint src;
-experimental::CoreLocalMem<uint32_t> dst(dst_l1_addr);
+Noc noc;
+UnicastEndpoint src;
+CoreLocalMem<uint32_t> dst(dst_l1_addr);
 
 noc.async_read(
     src,                                    // Source endpoint
@@ -137,11 +135,11 @@ noc_async_write(src_l1_addr, dst_noc_addr, size_bytes);
 noc_async_write_barrier();
 ```
 
-**New Experimental API:**
+**New API:**
 ```cpp
-experimental::Noc noc;
-experimental::CoreLocalMem<uint32_t> src(src_l1_addr);
-experimental::UnicastEndpoint dst;
+Noc noc;
+CoreLocalMem<uint32_t> src(src_l1_addr);
+UnicastEndpoint dst;
 
 noc.async_write(
     src,                                    // Source
@@ -164,11 +162,11 @@ for (...) {
 }
 ```
 
-**New Experimental API:**
+**New API:**
 ```cpp
-experimental::Noc noc;
-experimental::UnicastEndpoint dst;
-experimental::CoreLocalMem<uint32_t> src(src_addr);
+Noc noc;
+UnicastEndpoint dst;
+CoreLocalMem<uint32_t> src(src_addr);
 
 noc.set_async_write_state<Noc::ResponseMode::NON_POSTED>(
     dst, size_bytes, {.noc_x = x, .noc_y = y, .addr = base_addr}
@@ -188,11 +186,11 @@ uint64_t mcast_addr = get_noc_multicast_addr(x_start, y_start, x_end, y_end, l1_
 noc_async_write_multicast(src_l1_addr, mcast_addr, size_bytes, num_dests);
 ```
 
-**New Experimental API:**
+**New API:**
 ```cpp
-experimental::Noc noc;
-experimental::CoreLocalMem<uint32_t> src(src_l1_addr);
-experimental::CircularBuffer cb(cb_id);  // Or any destination with mcast traits
+Noc noc;
+CoreLocalMem<uint32_t> src(src_l1_addr);
+CircularBuffer cb(cb_id);  // Or any destination with mcast traits
 
 noc.async_write_multicast<Noc::McastMode::EXCLUDE_SRC>(
     src,
@@ -207,9 +205,9 @@ noc.async_write_multicast<Noc::McastMode::EXCLUDE_SRC>(
 
 #### Transaction ID Support
 
-**New Experimental API (Transaction IDs):**
+**New API (Transaction IDs):**
 ```cpp
-experimental::Noc noc;
+Noc noc;
 constexpr uint32_t trid = 0;
 
 // Write with transaction ID
@@ -241,9 +239,9 @@ uint32_t read_ptr = get_read_ptr(cb_id);
 cb_pop_front(cb_id, num_tiles);
 ```
 
-**New Experimental API:**
+**New API:**
 ```cpp
-experimental::CircularBuffer cb(cb_id);
+CircularBuffer cb(cb_id);
 
 cb.reserve_back(num_tiles);
 uint32_t write_ptr = cb.get_write_ptr();
@@ -258,11 +256,11 @@ cb.pop_front(num_tiles);
 
 #### Using CircularBuffer with Noc
 
-**New Experimental API:**
+**New API:**
 ```cpp
-experimental::Noc noc;
-experimental::CircularBuffer cb(cb_id);
-experimental::UnicastEndpoint remote;
+Noc noc;
+CircularBuffer cb(cb_id);
+UnicastEndpoint remote;
 
 // Read into circular buffer
 cb.reserve_back(1);
@@ -279,13 +277,13 @@ cb.push_back(1);
 
 #### Selecting Read/Write Pointer for Noc Async Read/Write API
 
-Use `experimental::use<>()` to explicitly select which pointer to use:
+Use `use<>()` to explicitly select which pointer to use:
 
 ```cpp
-using experimental::CircularBuffer;
-using experimental::use;
+using CircularBuffer;
+using use;
 
-experimental::CircularBuffer cb(cb_id);
+CircularBuffer cb(cb_id);
 
 // Use read pointer explicitly
 auto cb_read_view = use<CircularBuffer::AddrSelector::READ_PTR>(cb);
@@ -310,9 +308,9 @@ noc_semaphore_set(sem_addr, 0);
 noc_semaphore_wait(sem_addr, 1);
 ```
 
-**New Experimental API:**
+**New API:**
 ```cpp
-experimental::Semaphore<> sem(sem_id);
+Semaphore<> sem(sem_id);
 sem.set(0);
 sem.wait(1);
 // Or use sem.wait_min(1) for >= comparison
@@ -326,10 +324,10 @@ uint64_t remote_sem_addr = get_noc_addr(noc_x, noc_y, get_semaphore(sem_id));
 noc_semaphore_inc(remote_sem_addr, 1);
 ```
 
-**New Experimental API:**
+**New API:**
 ```cpp
-experimental::Noc noc;
-experimental::Semaphore<> sem(sem_id);
+Noc noc;
+Semaphore<> sem(sem_id);
 sem.up(noc, noc_x, noc_y, 1);  // Atomic remote increment
 ```
 
@@ -341,10 +339,10 @@ uint64_t mcast_addr = get_noc_multicast_addr(x0, y0, x1, y1, get_semaphore(sem_i
 noc_semaphore_set_multicast(local_sem_addr, mcast_addr, num_dests);
 ```
 
-**New Experimental API:**
+**New API:**
 ```cpp
-experimental::Noc noc;
-experimental::Semaphore<> sem(sem_id);
+Noc noc;
+Semaphore<> sem(sem_id);
 sem.set_multicast<Noc::McastMode::EXCLUDE_SRC>(
     noc, x0, y0, x1, y1, num_dests
 );
@@ -368,23 +366,23 @@ uint32_t value = data[0];
 data++;
 ```
 
-**New Experimental API:**
+**New API:**
 ```cpp
-experimental::CoreLocalMem<uint32_t> mem(address);
+CoreLocalMem<uint32_t> mem(address);
 uint32_t value = mem[0];    // Bounds-checked in debug mode
 mem++;                       // Type-safe pointer arithmetic
 ```
 
 #### Struct Access
 
-**New Experimental API:**
+**New API:**
 ```cpp
 struct MyStruct {
     uint32_t field1;
     uint64_t field2;
 };
 
-experimental::CoreLocalMem<MyStruct> struct_mem(address);
+CoreLocalMem<MyStruct> struct_mem(address);
 struct_mem->field1 = 42;
 struct_mem->field2 = 100;
 ```
@@ -392,7 +390,7 @@ struct_mem->field2 = 100;
 #### Pointer Arithmetic
 
 ```cpp
-experimental::CoreLocalMem<uint32_t> mem(base_addr);
+CoreLocalMem<uint32_t> mem(base_addr);
 
 // Navigate through memory
 auto mid = mem + offset;           // Offset by elements
@@ -436,9 +434,9 @@ void kernel_main() {
 **Migrated Kernel:**
 ```cpp
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -448,8 +446,8 @@ void kernel_main() {
     uint32_t tile_size = get_tile_size(cb_id);
     const auto accessor = TensorAccessor(tensor_args, src_addr, tile_size);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb(cb_id);
+    Noc noc;
+    CircularBuffer cb(cb_id);
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; tile_id++) {
         cb.reserve_back(1);
@@ -489,9 +487,9 @@ void kernel_main() {
 
 **Migrated Kernel:**
 ```cpp
-#include "experimental/noc.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -499,9 +497,9 @@ void kernel_main() {
     uint32_t neighbor_y = get_arg_val<uint32_t>(2);
     uint32_t num_bytes = get_arg_val<uint32_t>(3);
 
-    experimental::Noc noc;
-    experimental::CoreLocalMem<uint32_t> mem(src_addr);
-    experimental::UnicastEndpoint remote;
+    Noc noc;
+    CoreLocalMem<uint32_t> mem(src_addr);
+    UnicastEndpoint remote;
 
     // Write to neighbor
     noc.async_write(
@@ -533,7 +531,7 @@ void kernel_main() {
 
 1. **Static assertion failure: "NoC transactions are not supported for this type"**
    - Ensure your type has a `noc_traits_t` specialization
-   - Include the appropriate header (e.g., `experimental/tensor.h` for `TensorAccessor`)
+   - Include the appropriate header (e.g., `api/tensor/noc_traits.h` for `TensorAccessor`)
 
 2. **"CircularBuffer without mcast range can only be used as L1 source"**
    - CircularBuffers require explicit mcast range for multicast destinations

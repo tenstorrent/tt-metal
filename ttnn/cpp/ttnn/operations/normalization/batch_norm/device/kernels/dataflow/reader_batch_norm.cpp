@@ -6,9 +6,9 @@
 #include <cstring>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
@@ -34,9 +34,9 @@ void kernel_main() {
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
     const auto src = TensorAccessor(src_args, src_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_id_src_obj(cb_id_src);
-    experimental::CircularBuffer cb_id_eps_obj(cb_id_eps);
+    Noc noc;
+    CircularBuffer cb_id_src_obj(cb_id_src);
+    CircularBuffer cb_id_eps_obj(cb_id_eps);
 
     uint32_t tiles_per_batch = HtWt * C;
     uint32_t start_n = start_tile_id / tiles_per_batch;

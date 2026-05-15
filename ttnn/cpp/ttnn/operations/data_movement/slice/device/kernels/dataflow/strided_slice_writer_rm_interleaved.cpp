@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t page_size = get_compile_time_arg_val(0);
@@ -17,8 +17,8 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_out0 = 24;
 
-    // Create experimental CircularBuffer for Device 2.0 API
-    experimental::CircularBuffer cb_out0(cb_id_out0);
+    // Create CircularBuffer for Device 2.0 API
+    CircularBuffer cb_out0(cb_id_out0);
     const uint32_t start_id = 0;
     uint32_t i_stick = start_id;
     uint32_t sticks_read = 0;

@@ -461,11 +461,27 @@ void py_module(nb::module_& m) {
         py_unary.def("clip", &ttml::ops::clip, nb::arg("tensor"), nb::arg("lo"), nb::arg("hi"));
         py_unary.def(
             "polynorm3",
-            &ttml::ops::polynorm3,
+            [](const ttml::autograd::TensorPtr& tensor,
+               const ttml::autograd::TensorPtr& weight,
+               const ttml::autograd::TensorPtr& bias,
+               const float epsilon,
+               const bool fused_forward,
+               const bool fused_backward) {
+                const auto forward_variant = fused_forward
+                                                 ? ttml::ops::PolyNorm3ForwardVariant::Fused
+                                                 : ttml::ops::PolyNorm3ForwardVariant::CompositeComparisonOnly;
+                const auto backward_variant = fused_backward
+                                                  ? ttml::ops::PolyNorm3BackwardVariant::Fused
+                                                  : ttml::ops::PolyNorm3BackwardVariant::CompositeComparisonOnly;
+                return ttml::ops::polynorm3(tensor, weight, bias, epsilon, forward_variant, backward_variant);
+            },
             nb::arg("tensor"),
             nb::arg("weight"),
             nb::arg("bias"),
-            nb::arg("epsilon") = 1e-5F);
+            nb::arg("epsilon") = 1e-5F,
+            nb::kw_only(),
+            nb::arg("fused_forward") = true,
+            nb::arg("fused_backward") = true);
         py_unary.def("mean", &ttml::ops::mean, nb::arg("tensor"));
         // py_unary.def("sum", &ttml::ops::sum,
         //              nb::arg("tensor"));

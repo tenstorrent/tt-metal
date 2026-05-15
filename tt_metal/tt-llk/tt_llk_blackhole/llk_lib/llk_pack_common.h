@@ -86,16 +86,6 @@ inline void set_dst_write_addr(const std::uint32_t tile_index)
     TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_index);
 }
 
-inline void _llk_pack_debug_dump_(std::uint8_t *data, std::uint32_t byte_size)
-{
-    debug_dump(data, byte_size);
-}
-
-inline void _llk_pack_debug_dump_seek_(std::uint8_t offset)
-{
-    debug_dump_seek(offset);
-}
-
 TT_ALWAYS_INLINE void _llk_pack_relu_config_(const std::uint32_t config)
 {
     ReluType mode     = (config & 0xf) == 0 ? ReluType::NO_RELU : ((config & 0xf) == 3 ? ReluType::MAX_THRESHOLD_RELU : ReluType::MIN_THRESHOLD_RELU);
