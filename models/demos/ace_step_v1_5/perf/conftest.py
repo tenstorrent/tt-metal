@@ -10,7 +10,8 @@ which may yield a ``MeshDevice`` handle. ACE-Step VAE conv helpers are validated
 ``device`` so Tracy/pytest runs match that path.
 
 Perf runs enable L1 placement for reshape/permute outputs (``perf1``/``perf2`` stacked ~49 % of
-device time in those ops with ``in0:dram_interleaved``). Demos leave these unset (DRAM default).
+device time in those ops with ``in0:dram_interleaved``), DiT attn / MLP gate-up (``ACE_STEP_DIT_LINEAR_PERF``), condition encoder linears
+(``ACE_STEP_COND_LINEAR_PERF``), and VAE conv L1 paths (``ACE_STEP_VAE_CONV_PERF``). Demos leave these unset (DRAM default).
 """
 
 from __future__ import annotations
@@ -24,6 +25,12 @@ _DEFAULT_L1_SMALL = int(os.environ.get("ACE_STEP_L1_SMALL_SIZE", "98304"))
 # Enable unless explicitly disabled (e.g. debugging demo parity inside perf/).
 if os.environ.get("ACE_STEP_TM_OUTPUT_L1", "").strip() == "":
     os.environ.setdefault("ACE_STEP_TM_OUTPUT_L1", "1")
+if os.environ.get("ACE_STEP_DIT_LINEAR_PERF", "").strip() == "":
+    os.environ.setdefault("ACE_STEP_DIT_LINEAR_PERF", "1")
+if os.environ.get("ACE_STEP_COND_LINEAR_PERF", "").strip() == "":
+    os.environ.setdefault("ACE_STEP_COND_LINEAR_PERF", "1")
+if os.environ.get("ACE_STEP_VAE_CONV_PERF", "").strip() == "":
+    os.environ.setdefault("ACE_STEP_VAE_CONV_PERF", "1")
 
 
 @pytest.fixture(scope="session")

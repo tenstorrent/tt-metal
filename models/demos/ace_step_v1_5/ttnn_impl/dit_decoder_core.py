@@ -73,7 +73,16 @@ def _ace_step_log_ttnn_tensor(tag: str, t, *, ttnn) -> None:
 
 
 from ._ttnn import get_ttnn
-from .math_perf_env import ace_step_permute_kwargs, ace_step_reshape_kwargs
+from .math_perf_env import (
+    ace_step_dit_attn_linear_program_config,
+    ace_step_dit_fused_wkv_linear_program_config,
+    ace_step_dit_linear_l1_memory_config,
+    ace_step_dit_linear_perf_enabled,
+    ace_step_dit_mlp_gate_up_linear_program_config,
+    ace_step_init_dit_linear_compute_kernel_config,
+    ace_step_permute_kwargs,
+    ace_step_reshape_kwargs,
+)
 
 
 def _require_ttnn():
@@ -473,6 +482,10 @@ class TtAceStepAttentionSDPA:
         mesh_device,
         dtype=None,
         rotary_embedding: Optional[TtHfRotaryEmbedding] = None,
+        linear_compute_kernel_config=None,
+        dit_linear_perf: bool = False,
+        activation_l1_memory_config=None,
+        linear_output_l1_memory_config=None,
     ):
         ttnn = _require_ttnn()
         transformer = getattr(ttnn, "transformer", None)
@@ -577,6 +590,58 @@ class TtAceStepAttentionSDPA:
         )
         self.eps = float(cfg.rms_norm_eps)
 
+        self._linear_ck = linear_compute_kernel_config
+        self._dit_linear_perf = bool(dit_linear_perf)
+        self._act_l1 = activation_l1_memory_config
+        self._linear_out_l1 = linear_output_l1_memory_config
+        self._fused_kv_dim = int(self.n_kv * self.d_head) * 2
+        self._wkv_pc_cache: dict = {}
+
+    def _l1_activation(self, t):
+        if self._act_l1 is None:
+            return t
+        return self.ttnn.to_memory_config(t, self._act_l1)
+
+    def _linear_kwargs(self, *, seq_len: int, in_dim: int, out_dim: int) -> dict:
+        kw: dict = {}
+        if self._linear_ck is not None:
+            kw["compute_kernel_config"] = self._linear_ck
+        if self._dit_linear_perf:
+            pc = ace_step_dit_attn_linear_program_config(
+                self.mesh_device,
+                seq_len=int(seq_len),
+                in_dim=int(in_dim),
+                out_dim=int(out_dim),
+            )
+            if pc is not None:
+                kw["program_config"] = pc
+        if self._linear_out_l1 is not None:
+            kw["memory_config"] = self._linear_out_l1
+        return kw
+
+    def _wkv_linear_kwargs(self, *, seq_len: int, in_dim: int) -> dict:
+        """HiFi2 + L1 + wide-N program config for fused ``wkv`` (256×2048×2048 family)."""
+        kw: dict = {}
+        if self._linear_ck is not None:
+            kw["compute_kernel_config"] = self._linear_ck
+        if self._dit_linear_perf:
+            key = (int(seq_len), int(in_dim))
+            pc = self._wkv_pc_cache.get(key)
+            if pc is None:
+                pc = ace_step_dit_fused_wkv_linear_program_config(
+                    self.mesh_device,
+                    seq_len=int(seq_len),
+                    hidden_size=int(in_dim),
+                    fused_kv_dim=self._fused_kv_dim,
+                )
+                if pc is not None:
+                    self._wkv_pc_cache[key] = pc
+            if pc is not None:
+                kw["program_config"] = pc
+        if self._linear_out_l1 is not None:
+            kw["memory_config"] = self._linear_out_l1
+        return kw
+
     def __call__(
         self,
         hidden_states,
@@ -593,12 +658,21 @@ class TtAceStepAttentionSDPA:
         _pk = ace_step_permute_kwargs(ttnn)
         _trace = _ace_step_attn_trace_print(debug_prefix)
         x = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)  # [B,1,S,D]
-        q = ttnn.linear(x, self.wq, bias=self.bq, transpose_b=True)
+        s_q = int(x.shape[2])
+        d_in = int(x.shape[-1])
+        x = self._l1_activation(x)
+        lin_q = self._linear_kwargs(seq_len=s_q, in_dim=d_in, out_dim=self.d_model)
+        q = ttnn.linear(x, self.wq, bias=self.bq, transpose_b=True, **lin_q)
         if encoder_hidden_states is None:
-            kv = ttnn.linear(x, self.wkv, bias=self.bkv, transpose_b=True)
+            lin_kv = self._wkv_linear_kwargs(seq_len=s_q, in_dim=d_in)
+            kv = ttnn.linear(x, self.wkv, bias=self.bkv, transpose_b=True, **lin_kv)
         else:
             enc = ttnn.to_layout(encoder_hidden_states, ttnn.TILE_LAYOUT)
-            kv = ttnn.linear(enc, self.wkv, bias=self.bkv, transpose_b=True)
+            s_enc = int(enc.shape[2])
+            d_enc = int(enc.shape[-1])
+            enc = self._l1_activation(enc)
+            lin_kv = self._wkv_linear_kwargs(seq_len=s_enc, in_dim=d_enc)
+            kv = ttnn.linear(enc, self.wkv, bias=self.bkv, transpose_b=True, **lin_kv)
 
         B = int(q.shape[0])
         S = int(q.shape[2])
@@ -902,7 +976,9 @@ class TtAceStepAttentionSDPA:
         ctx = ttnn.reshape(ctx, (B, 1, S_ctx, H * Dh), **_sr)
         if S_ctx != S:
             ctx = ttnn.slice(ctx, (0, 0, 0, 0), (B, 1, S, H * Dh))
-        out = ttnn.linear(ctx, self.wo, bias=self.bo, transpose_b=True)
+        ctx = self._l1_activation(ctx)
+        lin_o = self._linear_kwargs(seq_len=S, in_dim=H * Dh, out_dim=self.d_model)
+        out = ttnn.linear(ctx, self.wo, bias=self.bo, transpose_b=True, **lin_o)
         if _trace:
             _ace_step_log_ttnn_tensor(f"{debug_prefix}attn_out_B1SD", out, ttnn=ttnn)
         if debug is not None and debug.get("enabled", False):
@@ -916,7 +992,18 @@ class TtQwen3MLP:
     """
 
     def __init__(
-        self, *, state_dict: dict, base_address: str, mesh_device, hidden_size: int, intermediate_size: int, dtype=None
+        self,
+        *,
+        state_dict: dict,
+        base_address: str,
+        mesh_device,
+        hidden_size: int,
+        intermediate_size: int,
+        dtype=None,
+        linear_compute_kernel_config=None,
+        dit_linear_perf: bool = False,
+        activation_l1_memory_config=None,
+        linear_output_l1_memory_config=None,
     ):
         ttnn = _require_ttnn()
         self.ttnn = ttnn
@@ -945,11 +1032,48 @@ class TtQwen3MLP:
         self.hidden_size = int(hidden_size)
         self.intermediate_size = int(intermediate_size)
 
+        self._linear_ck = linear_compute_kernel_config
+        self._dit_linear_perf = bool(dit_linear_perf)
+        self._act_l1 = activation_l1_memory_config
+        self._linear_out_l1 = linear_output_l1_memory_config
+        self._gate_up_pc_cache: dict = {}
+
+    def _l1_activation(self, t):
+        if self._act_l1 is None:
+            return t
+        return self.ttnn.to_memory_config(t, self._act_l1)
+
+    def _gate_up_linear_kwargs(self, *, seq_len: int) -> dict:
+        """HiFi2 + L1 + wide-N program config for ``gate_proj`` / ``up_proj`` (256×3072×3072)."""
+        kw: dict = {}
+        if self._linear_ck is not None:
+            kw["compute_kernel_config"] = self._linear_ck
+        if self._dit_linear_perf:
+            key = int(seq_len)
+            pc = self._gate_up_pc_cache.get(key)
+            if pc is None:
+                pc = ace_step_dit_mlp_gate_up_linear_program_config(
+                    self.mesh_device,
+                    seq_len=int(seq_len),
+                    hidden_size=self.hidden_size,
+                    intermediate_size=self.intermediate_size,
+                )
+                if pc is not None:
+                    self._gate_up_pc_cache[key] = pc
+            if pc is not None:
+                kw["program_config"] = pc
+        if self._linear_out_l1 is not None:
+            kw["memory_config"] = self._linear_out_l1
+        return kw
+
     def __call__(self, x, *, debug: Optional[dict] = None, debug_prefix: str = ""):
         ttnn = self.ttnn
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        gate = ttnn.linear(x, self.w_gate, bias=None, transpose_b=True)
-        up = ttnn.linear(x, self.w_up, bias=None, transpose_b=True)
+        s = int(x.shape[2])
+        x = self._l1_activation(x)
+        lin_gu = self._gate_up_linear_kwargs(seq_len=s)
+        gate = ttnn.linear(x, self.w_gate, bias=None, transpose_b=True, **lin_gu)
+        up = ttnn.linear(x, self.w_up, bias=None, transpose_b=True, **lin_gu)
         if debug is not None and debug.get("enabled", False):
             debug[f"{debug_prefix}gate_lin"] = gate
             debug[f"{debug_prefix}up_lin"] = up
@@ -977,6 +1101,10 @@ class TtAceStepDiTLayer:
         mesh_device,
         dtype=None,
         rotary_embedding: Optional[TtHfRotaryEmbedding] = None,
+        linear_compute_kernel_config=None,
+        dit_linear_perf: bool = False,
+        activation_l1_memory_config=None,
+        linear_output_l1_memory_config=None,
     ) -> None:
         ttnn = _require_ttnn()
         self.ttnn = ttnn
@@ -1024,6 +1152,12 @@ class TtAceStepDiTLayer:
             except Exception:
                 self.attention_type = "full_attention"
 
+        _attn_kw = dict(
+            linear_compute_kernel_config=linear_compute_kernel_config,
+            dit_linear_perf=dit_linear_perf,
+            activation_l1_memory_config=activation_l1_memory_config,
+            linear_output_l1_memory_config=linear_output_l1_memory_config,
+        )
         # Attention modules
         self.self_attn = TtAceStepAttentionSDPA(
             cfg=cfg,
@@ -1032,6 +1166,7 @@ class TtAceStepDiTLayer:
             mesh_device=mesh_device,
             dtype=self.dtype,
             rotary_embedding=rotary_embedding,
+            **_attn_kw,
         )
         self.cross_attn = TtAceStepAttentionSDPA(
             cfg=cfg,
@@ -1040,6 +1175,7 @@ class TtAceStepDiTLayer:
             mesh_device=mesh_device,
             dtype=self.dtype,
             rotary_embedding=None,
+            **_attn_kw,
         )
 
         # MLP sizes (from config.json; store in state dict as well, but we pass explicit)
@@ -1053,6 +1189,7 @@ class TtAceStepDiTLayer:
             hidden_size=d,
             intermediate_size=intermediate,
             dtype=self.dtype,
+            **_attn_kw,
         )
 
         # Scale-shift table: [1,6,D]
@@ -1245,6 +1382,10 @@ class TtAceStepDiTCore:
             dtype=self.dtype,
         )
 
+        dit_linear_perf = ace_step_dit_linear_perf_enabled()
+        linear_ck = ace_step_init_dit_linear_compute_kernel_config(mesh_device) if dit_linear_perf else None
+        l1_mc = ace_step_dit_linear_l1_memory_config(ttnn) if dit_linear_perf else None
+
         self.layers: List[TtAceStepDiTLayer] = [
             TtAceStepDiTLayer(
                 cfg=cfg,
@@ -1253,6 +1394,10 @@ class TtAceStepDiTCore:
                 mesh_device=mesh_device,
                 dtype=self.dtype,
                 rotary_embedding=self._rotary,
+                linear_compute_kernel_config=linear_ck,
+                dit_linear_perf=dit_linear_perf,
+                activation_l1_memory_config=l1_mc,
+                linear_output_l1_memory_config=l1_mc,
             )
             for i in range(int(cfg.num_hidden_layers))
         ]
