@@ -3,20 +3,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
-#include "api/dataflow/circular_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t bank_id = get_arg_val<uint32_t>(1);
-    uint32_t num_tiles = get_arg_val<uint32_t>(2);
+    uint32_t dst_addr = get_arg(args::dst_addr);
+    uint32_t bank_id = get_arg(args::bank_id);
+    uint32_t num_tiles = get_arg(args::num_tiles);
 
     Noc noc;
     constexpr uint32_t ublock_size_tiles = 1;
 
-    constexpr uint32_t cb_out_id = tt::CBIndex::c_16;
-    CircularBuffer buff_out(cb_out_id);
-    const uint32_t ublock_size_bytes = get_tile_size(cb_out_id) * ublock_size_tiles;
+    DataflowBuffer buff_out(dfb::in);
+    const uint32_t ublock_size_bytes = buff_out.get_entry_size() * ublock_size_tiles;
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
         buff_out.wait_front(ublock_size_tiles);
