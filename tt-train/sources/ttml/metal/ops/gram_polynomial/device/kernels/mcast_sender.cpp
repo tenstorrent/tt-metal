@@ -120,7 +120,7 @@ void kernel_main() {
                             uint32_t dram_tile = global_row * logical_K_tiles + k_col;
                             noc_async_read_tile(dram_tile, reader, base_addr + cb_offset);
                         } else {
-                            fill_tile_zeros(base_addr + cb_offset, tile_size);
+                            fill_zeros_async(base_addr + cb_offset, tile_size);
                         }
                     }
                 }
