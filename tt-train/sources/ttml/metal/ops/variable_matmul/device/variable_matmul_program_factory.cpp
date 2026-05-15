@@ -397,8 +397,8 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         static_cast<uint32_t>(transpose_a),  // 22: transpose_a
         static_cast<uint32_t>(
             operation_attributes.in0_row_offset_tiles > 0 || operation_attributes.effective_M_tiles > 0 ||
-            operation_attributes.in0_k_offset_tiles > 0 || parent_K_tiles_in0 > K_tiles ||
-            input_k_active),                                           // 23: use_offset
+            operation_attributes.in0_k_offset_tiles > 0 || parent_K_tiles_in0 > K_tiles || input_k_active ||
+            input_and_weight_k_active),                                // 23: use_offset (must match sender)
         static_cast<uint32_t>(tensor_args.output_tensor.has_value()),  // 24: use_out_offset
     };
     append_accessors(in0_receiver_compile_time_args, input_tensor, output_tensor);
