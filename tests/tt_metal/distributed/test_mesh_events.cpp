@@ -146,7 +146,7 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
     mesh_workload.add_program(devices_0, std::move(*programs[0]));
     mesh_workload.add_program(devices_1, std::move(*programs[1]));
 
-    for (int iter = 0; iter < num_iters; iter++) {
+    for (uint32_t iter = 0; iter < num_iters; iter++) {
         std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(src0_bufs[0]->size(), iter + 2);
         std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(src1_bufs[0]->size(), iter + 3);
 
@@ -327,7 +327,7 @@ TEST_F(MeshEventsTestSuite, MultiCQNonBlockingReads) {
 TEST_F(MeshEventsTestSuite, EventQuery) {
     uint32_t NUM_ITERS = 500;
     // Stress EventQuery API and ensure that an event is marked as completed post synchronization.
-    for (auto i = 0; i < NUM_ITERS; i++) {
+    for (uint32_t i = 0; i < NUM_ITERS; i++) {
         auto event = mesh_device_->mesh_command_queue(0).enqueue_record_event_to_host();
         if (i % 10 == 0) {
             EventSynchronize(event);
