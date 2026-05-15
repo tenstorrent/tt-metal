@@ -346,7 +346,7 @@ class TtAceStepInstrumentalConditionEncoder:
             parts.append(text_pad)
         else:
             text_pad = None
-        enc = ttnn.concat(parts, dim=1)
+        enc = ttnn.concat([ttnn.to_layout(p, ttnn.TILE_LAYOUT) for p in parts], dim=1)
         enc_mask = np.concatenate(
             [
                 np.ones((1, 2 + valid), dtype=np.float32),
@@ -404,7 +404,7 @@ class TtAceStepInstrumentalConditionEncoder:
                 ttnn.slice(text_proj, (0, text_valid, 0), (1, int(text_np.shape[1]), self.lyric_encoder.hidden_size))
             )
             mask_parts.append(np.zeros((1, int(text_np.shape[1]) - text_valid), dtype=np.float32))
-        enc = ttnn.concat(parts, dim=1)
+        enc = ttnn.concat([ttnn.to_layout(p, ttnn.TILE_LAYOUT) for p in parts], dim=1)
         enc_mask = np.concatenate(mask_parts, axis=1).astype(np.float32)
 
         src_np = _to_numpy_f32(payload["src_latents"])
