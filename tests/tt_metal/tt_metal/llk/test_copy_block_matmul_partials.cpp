@@ -104,6 +104,7 @@ void run_single_core_copy_block_matmul_partials_quasar(
         .entry_size = single_tile_size,
         .num_entries = num_input_tiles,
         .data_format_metadata = data_format,
+        .alias_with = {},
         // Match pre-migration behavior: legacy DataflowBufferConfig set enable_implicit_sync=false.
         .disable_implicit_sync = true,
     };
@@ -112,6 +113,7 @@ void run_single_core_copy_block_matmul_partials_quasar(
         .entry_size = single_tile_size,
         .num_entries = num_output_tiles,
         .data_format_metadata = data_format,
+        .alias_with = {},
         // Match pre-migration behavior: legacy DataflowBufferConfig set enable_implicit_sync=false.
         .disable_implicit_sync = true,
     };
@@ -128,12 +130,17 @@ void run_single_core_copy_block_matmul_partials_quasar(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
+        .semaphore_bindings = {},
+        .tensor_bindings = {},
+        .compile_time_arg_bindings = {},
         .runtime_arguments_schema =
-            {.named_runtime_args = {"src_addr", "src_dram_bank_id", "num_tiles", "ublock_size_tiles", "reader_only"}},
+            {.named_runtime_args = {"src_addr", "src_dram_bank_id", "num_tiles", "ublock_size_tiles", "reader_only"},
+             .named_common_runtime_args = {}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
@@ -148,12 +155,17 @@ void run_single_core_copy_block_matmul_partials_quasar(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
+        .semaphore_bindings = {},
+        .tensor_bindings = {},
+        .compile_time_arg_bindings = {},
         .runtime_arguments_schema =
-            {.named_runtime_args = {"dst_addr", "dst_dram_bank_id", "num_tiles", "ublock_size_tiles", "writer_only"}},
+            {.named_runtime_args = {"dst_addr", "dst_dram_bank_id", "num_tiles", "ublock_size_tiles", "writer_only"},
+             .named_common_runtime_args = {}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines compute_defines;
@@ -167,7 +179,7 @@ void run_single_core_copy_block_matmul_partials_quasar(
             experimental::metal2_host_api::KernelSpec::SourceFilePath{
                 "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_block_matmul_partials.cpp"},
         .num_threads = 1,
-        .compiler_options = {.defines = compute_defines},
+        .compiler_options = {.include_paths = {}, .defines = compute_defines},
         .dfb_bindings =
             {{
                  .dfb_spec_name = SRC0_DFB,
@@ -181,12 +193,16 @@ void run_single_core_copy_block_matmul_partials_quasar(
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
+        .semaphore_bindings = {},
+        .tensor_bindings = {},
         .compile_time_arg_bindings = {{"num_tiles", num_tiles}, {"num_single_transfer", test_config.compute_ublock}},
         .config_spec =
             experimental::metal2_host_api::ComputeConfiguration{
                 .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
                 .dst_full_sync_en = test_config.dst_full_sync_en,
+                .unpack_to_dest_mode = {},
             },
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{
@@ -199,6 +215,9 @@ void run_single_core_copy_block_matmul_partials_quasar(
         .program_id = "single_core_copy_block_matmul_partials",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {src0_dfb_spec, dst_dfb_spec},
+        .remote_dataflow_buffers = {},
+        .semaphores = {},
+        .tensor_parameters = {},
         .work_units = {wu},
     };
 
@@ -219,6 +238,9 @@ void run_single_core_copy_block_matmul_partials_quasar(
                        {"num_tiles", num_tiles},
                        {"ublock_size_tiles", test_config.reader_ublock},
                        {"reader_only", 0u}}}},
+            .named_common_runtime_args = {},
+            .runtime_varargs = {},
+            .common_runtime_varargs = {},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
@@ -230,9 +252,16 @@ void run_single_core_copy_block_matmul_partials_quasar(
                        {"num_tiles", num_tiles},
                        {"ublock_size_tiles", test_config.writer_ublock},
                        {"writer_only", 0u}}}},
+            .named_common_runtime_args = {},
+            .runtime_varargs = {},
+            .common_runtime_varargs = {},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = COMPUTE,
+            .named_runtime_args = {},
+            .named_common_runtime_args = {},
+            .runtime_varargs = {},
+            .common_runtime_varargs = {},
         },
     };
     experimental::metal2_host_api::SetProgramRunParameters(program, params);

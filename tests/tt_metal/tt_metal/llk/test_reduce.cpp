@@ -456,6 +456,7 @@ void run_single_core_reduce_program_quasar(
         .num_entries = num_buffer_tiles,
         .data_format_metadata = tt::DataFormat::Float16_b,
         .tile_format_metadata = test_config.tile_shape,
+        .alias_with = {},
         .disable_implicit_sync = true,
     };
     experimental::metal2_host_api::DataflowBufferSpec src1_dfb_spec{
@@ -464,6 +465,7 @@ void run_single_core_reduce_program_quasar(
         .num_entries = 2,
         .data_format_metadata = tt::DataFormat::Float16_b,
         .tile_format_metadata = tt_metal::Tile({32, 32}),
+        .alias_with = {},
         .disable_implicit_sync = true,
     };
     experimental::metal2_host_api::DataflowBufferSpec dst_dfb_spec{
@@ -472,6 +474,7 @@ void run_single_core_reduce_program_quasar(
         .num_entries = num_output_buffer_tiles,
         .data_format_metadata = tt::DataFormat::Float16_b,
         .tile_format_metadata = test_config.tile_shape,
+        .alias_with = {},
         .disable_implicit_sync = true,
     };
 
@@ -496,7 +499,7 @@ void run_single_core_reduce_program_quasar(
         .unique_id = READER,
         .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{reader_kernel_path},
         .num_threads = 1,
-        .compiler_options = {.defines = reader_defines},
+        .compiler_options = {.include_paths = {}, .defines = reader_defines},
         .dfb_bindings =
             {{
                  .dfb_spec_name = SRC0_DFB,
@@ -510,13 +513,15 @@ void run_single_core_reduce_program_quasar(
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
+        .semaphore_bindings = {},
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .compile_time_arg_bindings = reader_cta_bindings,
-        .runtime_arguments_schema = {.named_runtime_args = reader_named_runtime_args},
+        .runtime_arguments_schema = {.named_runtime_args = reader_named_runtime_args, .named_common_runtime_args = {}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
@@ -531,12 +536,15 @@ void run_single_core_reduce_program_quasar(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
+        .semaphore_bindings = {},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
-        .runtime_arguments_schema = {.named_runtime_args = {"num_tiles"}},
+        .compile_time_arg_bindings = {},
+        .runtime_arguments_schema = {.named_runtime_args = {"num_tiles"}, .named_common_runtime_args = {}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::KernelSpec compute_spec{
@@ -544,7 +552,7 @@ void run_single_core_reduce_program_quasar(
         .source =
             experimental::metal2_host_api::KernelSpec::SourceFilePath{get_compute_kernel_name(test_config.reduce_dim)},
         .num_threads = 1,
-        .compiler_options = {.defines = build_reduce_defines(test_config)},
+        .compiler_options = {.include_paths = {}, .defines = build_reduce_defines(test_config)},
         .dfb_bindings =
             {{
                  .dfb_spec_name = SRC0_DFB,
@@ -564,13 +572,17 @@ void run_single_core_reduce_program_quasar(
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
+        .semaphore_bindings = {},
+        .tensor_bindings = {},
         .compile_time_arg_bindings = {{"Ht", dims.Ht}, {"Wt", dims.Wt}, {"NC", dims.NC}},
         .config_spec =
             experimental::metal2_host_api::ComputeConfiguration{
                 .math_fidelity = test_config.math_fidelity,
                 .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
                 .dst_full_sync_en = test_config.dst_full_sync_en,
+                .unpack_to_dest_mode = {},
             },
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{
@@ -583,6 +595,8 @@ void run_single_core_reduce_program_quasar(
         .program_id = "single_core_reduce",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {src0_dfb_spec, src1_dfb_spec, dst_dfb_spec},
+        .remote_dataflow_buffers = {},
+        .semaphores = {},
         .tensor_parameters =
             {
                 {.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
@@ -610,13 +624,23 @@ void run_single_core_reduce_program_quasar(
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = READER,
             .named_runtime_args = {{.node = node, .args = reader_named_rtas}},
+            .named_common_runtime_args = {},
+            .runtime_varargs = {},
+            .common_runtime_varargs = {},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
             .named_runtime_args = {{.node = node, .args = {{"num_tiles", writer_num_tiles}}}},
+            .named_common_runtime_args = {},
+            .runtime_varargs = {},
+            .common_runtime_varargs = {},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = COMPUTE,
+            .named_runtime_args = {},
+            .named_common_runtime_args = {},
+            .runtime_varargs = {},
+            .common_runtime_varargs = {},
         },
     };
     params.tensor_args = {

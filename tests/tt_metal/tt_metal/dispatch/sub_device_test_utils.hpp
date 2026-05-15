@@ -95,7 +95,7 @@ inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_eth_s
         waiter_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/persistent_remote_waiter.cpp",
         waiter_core,
-        EthernetConfig{.noc = NOC::RISCV_0_default, .processor = dm_processor});
+        EthernetConfig{.noc = NOC::RISCV_0_default, .processor = dm_processor, .compile_args = {}, .defines = {}, .named_compile_args = {}});
     std::array<uint32_t, 7> waiter_rt_args = {
         global_sem.address(),
         incrementer_cores.num_cores(),

@@ -433,6 +433,9 @@ static void matmul_tile_quasar(
                        {"in0_block_size_bytes", in0_block_size_bytes},
                        {"in1_block_size_bytes", in1_block_size_bytes},
                        {"with_bias", with_bias_arg}}}},
+            .named_common_runtime_args = {},
+            .runtime_varargs = {},
+            .common_runtime_varargs = {},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
@@ -440,9 +443,16 @@ static void matmul_tile_quasar(
                 {{.node = node,
                   .args =
                       {{"dst_addr", ctx.dst_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", ctx.num_tiles}}}},
+            .named_common_runtime_args = {},
+            .runtime_varargs = {},
+            .common_runtime_varargs = {},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = COMPUTE,
+            .named_runtime_args = {},
+            .named_common_runtime_args = {},
+            .runtime_varargs = {},
+            .common_runtime_varargs = {},
         },
     };
     experimental::metal2_host_api::SetProgramRunParameters(program, params);

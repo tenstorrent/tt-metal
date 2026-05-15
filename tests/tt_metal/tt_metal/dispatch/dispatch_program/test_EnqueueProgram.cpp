@@ -138,6 +138,8 @@ KernelHandle create_kernel(
                     .noc = static_cast<NOC>(processor_id),
                     .processor = static_cast<DataMovementProcessor>(processor_id),
                     .compile_args = compile_args,
+                    .defines = {},
+                    .named_compile_args = {},
                 });
         case HalProgrammableCoreType::DRAM:
         case HalProgrammableCoreType::COUNT: TT_THROW("bad core type"); break;
@@ -248,7 +250,9 @@ void test_dummy_EnqueueProgram_with_runtime_args(
         tt::tt_metal::EthernetConfig{
             .noc = static_cast<tt_metal::NOC>(erisc_processor),
             .processor = erisc_processor,
-            .defines = dummy_defines0});
+            .compile_args = {},
+            .defines = dummy_defines0,
+            .named_compile_args = {}});
 
     constexpr int k_NumDummyArgs = 9;
     vector<uint32_t> dummy_kernel0_args(k_NumDummyArgs);
@@ -1353,13 +1357,13 @@ TEST_F(UnitMeshCQFixture, ActiveEthTwoRiscsHandshake) {
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/local_handshake_2.cpp",
                 eth_core,
-                tt::tt_metal::EthernetConfig{.noc = tt::tt_metal::NOC::NOC_0, .processor = DataMovementProcessor::RISCV_0}
+                tt::tt_metal::EthernetConfig{.noc = tt::tt_metal::NOC::NOC_0, .processor = DataMovementProcessor::RISCV_0, .compile_args = {}, .defines = {}, .named_compile_args = {}}
             );
             auto secondary = CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/local_handshake_2.cpp",
                 eth_core,
-                tt::tt_metal::EthernetConfig{.noc = tt::tt_metal::NOC::NOC_1, .processor = DataMovementProcessor::RISCV_1}
+                tt::tt_metal::EthernetConfig{.noc = tt::tt_metal::NOC::NOC_1, .processor = DataMovementProcessor::RISCV_1, .compile_args = {}, .defines = {}, .named_compile_args = {}}
             );
 
             uint32_t unreserved_l1 = hal::get_erisc_l1_unreserved_base();

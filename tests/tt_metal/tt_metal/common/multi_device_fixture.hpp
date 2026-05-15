@@ -95,12 +95,12 @@ protected:
     struct Config {
         // If specified, the fixture will open a mesh device with the specified shape and offset.
         // Otherwise, SystemMesh shape with zero offset will be used.
-        std::optional<tt::tt_metal::distributed::MeshShape> mesh_shape;
-        std::optional<tt::tt_metal::distributed::MeshCoordinate> mesh_offset;
+        std::optional<tt::tt_metal::distributed::MeshShape> mesh_shape = std::nullopt;
+        std::optional<tt::tt_metal::distributed::MeshCoordinate> mesh_offset = std::nullopt;
 
         // If specified, the associated tests will run only if the machine architecture matches the specified
         // architecture.
-        std::optional<tt::ARCH> arch;
+        std::optional<tt::ARCH> arch = std::nullopt;
 
         int num_cqs = 1;
         uint32_t l1_small_size = DEFAULT_L1_SMALL_SIZE;

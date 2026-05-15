@@ -131,7 +131,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateMismatchedTensorSpecs) {
 
     std::vector<Tensor> tensors;
     tensors.reserve(unit_meshes.size());
-    for (int i = 0; i < unit_meshes.size(); i++) {
+    for (size_t i = 0; i < unit_meshes.size(); i++) {
         if (i % 2 == 0) {
             tensors.push_back(create_device_tensor(
                 tt::tt_metal::TensorSpec(

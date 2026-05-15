@@ -364,7 +364,7 @@ void run_single_core_broadcast(
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp",
             core,
             tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = 1, .compile_args = reader_cta, .defines = defines});
+                .num_threads_per_cluster = 1, .compile_args = reader_cta, .defines = defines, .named_compile_args = {}, .compiler_include_paths = {}});
 
         writer_cta = {out_dfb};
         writer_kernel = tt_metal::experimental::quasar::CreateKernel(
@@ -372,7 +372,7 @@ void run_single_core_broadcast(
             "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
             tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = 1, .compile_args = writer_cta});
+                .num_threads_per_cluster = 1, .compile_args = writer_cta, .defines = {}, .named_compile_args = {}, .compiler_include_paths = {}});
 
         compute_cta = {inp0_dfb, inp1_dfb, out_dfb};
         binary_kernel = tt_metal::experimental::quasar::CreateKernel(
@@ -382,8 +382,11 @@ void run_single_core_broadcast(
             tt_metal::experimental::quasar::QuasarComputeConfig{
                 .num_threads_per_cluster = 1,
                 .math_fidelity = test_config.math_fidelity,
+                .unpack_to_dest_mode = {},
                 .compile_args = compute_cta,
-                .defines = defines});
+                .defines = defines,
+                .named_compile_args = {},
+                .compiler_include_paths = {}});
 
         tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
             program_, inp0_dfb, reader_kernel, binary_kernel);

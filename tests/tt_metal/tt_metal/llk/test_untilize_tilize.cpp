@@ -587,12 +587,14 @@ static void run_quasar_tilize_untilize_test(
         .entry_size = input_single_tile_size,
         .num_entries = dfb_num_entries,
         .data_format_metadata = data_format,
+        .alias_with = {},
     };
     experimental::metal2_host_api::DataflowBufferSpec output_dfb_spec{
         .unique_id = OUTPUT_DFB,
         .entry_size = output_single_tile_size,
         .num_entries = dfb_num_entries,
         .data_format_metadata = output_data_format,
+        .alias_with = {},
     };
 
     experimental::metal2_host_api::KernelSpec reader_spec{
@@ -607,13 +609,17 @@ static void run_quasar_tilize_untilize_test(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
+        .semaphore_bindings = {},
+        .tensor_bindings = {},
         .compile_time_arg_bindings = {{"use_dfbs", 1u}},
         .runtime_arguments_schema =
-            {.named_runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
+            {.named_runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"},
+             .named_common_runtime_args = {}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
@@ -628,13 +634,17 @@ static void run_quasar_tilize_untilize_test(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
+        .semaphore_bindings = {},
+        .tensor_bindings = {},
         .compile_time_arg_bindings = {{"use_dfbs", 1u}},
         .runtime_arguments_schema =
-            {.named_runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
+            {.named_runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"},
+             .named_common_runtime_args = {}},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_compute_self_loop_scopes = {},
     };
 
     std::string compute_kernel;
@@ -685,12 +695,16 @@ static void run_quasar_tilize_untilize_test(
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
+        .semaphore_bindings = {},
+        .tensor_bindings = {},
         .compile_time_arg_bindings = compute_cta_bindings,
         .config_spec =
             experimental::metal2_host_api::ComputeConfiguration{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .dst_full_sync_en = dst_full_sync_en,
+                .unpack_to_dest_mode = {},
             },
+        .dfb_compute_self_loop_scopes = {},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{
@@ -703,6 +717,9 @@ static void run_quasar_tilize_untilize_test(
         .program_id = "quasar_tilize_untilize",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
+        .remote_dataflow_buffers = {},
+        .semaphores = {},
+        .tensor_parameters = {},
         .work_units = {wu},
     };
 
@@ -745,6 +762,9 @@ static void run_quasar_tilize_untilize_test(
                        {"src_bank_id", 0u},
                        {"num_tiles", num_tiles},
                        {"dram_page_stride", src_tile_stride_bytes}}}},
+            .named_common_runtime_args = {},
+            .runtime_varargs = {},
+            .common_runtime_varargs = {},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = WRITER,
@@ -755,9 +775,16 @@ static void run_quasar_tilize_untilize_test(
                        {"dst_bank_id", 0u},
                        {"num_tiles", num_tiles},
                        {"dram_page_stride", dst_tile_stride_bytes}}}},
+            .named_common_runtime_args = {},
+            .runtime_varargs = {},
+            .common_runtime_varargs = {},
         },
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
             .kernel_spec_name = COMPUTE,
+            .named_runtime_args = {},
+            .named_common_runtime_args = {},
+            .runtime_varargs = {},
+            .common_runtime_varargs = {},
         },
     };
     experimental::metal2_host_api::SetProgramRunParameters(program, params);

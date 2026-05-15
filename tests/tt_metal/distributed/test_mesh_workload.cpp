@@ -705,7 +705,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
                         dst_vec,
                         output_buffers[(col_idx * worker_grid_size.y) + row_idx],
                         device_coord);
-                    for (int i = 0; i < dst_vec.size(); i++) {
+                    for (size_t i = 0; i < dst_vec.size(); i++) {
                         float ref_val = std::pow(2, (iter % 2) + 1);
                         if (i >= 512) {
                             ref_val = std::pow(2, 2 * ((iter % 2) + 1));

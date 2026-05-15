@@ -264,7 +264,7 @@ private:
             compile_args.push_back(static_cast<uint32_t>(HalProgrammableCoreType::ACTIVE_ETH));
             const auto proc = this->get_processor(true);
             config = EthernetConfig{
-                .noc = static_cast<NOC>(proc), .processor = proc, .compile_args = compile_args, .defines = defines};
+                .noc = static_cast<NOC>(proc), .processor = proc, .compile_args = compile_args, .defines = defines, .named_compile_args = {}};
             eth_test_common::set_arch_specific_eth_config(std::get<EthernetConfig>(config));
         } else {
             compile_args.push_back(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));

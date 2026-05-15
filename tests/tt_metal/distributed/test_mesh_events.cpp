@@ -146,7 +146,7 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
     mesh_workload.add_program(devices_0, std::move(*programs[0]));
     mesh_workload.add_program(devices_1, std::move(*programs[1]));
 
-    for (int iter = 0; iter < num_iters; iter++) {
+    for (uint32_t iter = 0; iter < num_iters; iter++) {
         std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(src0_bufs[0]->size(), iter + 2);
         std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(src1_bufs[0]->size(), iter + 3);
 
@@ -281,7 +281,7 @@ TEST_F(MeshEventsTestSuite, MultiCQNonBlockingReads) {
     std::vector<std::vector<distributed::ShardDataTransfer>> read_shards = {};
     std::vector<std::vector<uint32_t>> output_shard_data = {};
 
-    for (int i = 0; i < NUM_ITERS; i++) {
+    for (uint32_t i = 0; i < NUM_ITERS; i++) {
         // Initialize different input data across iterations
         input_shard_data.push_back(std::vector<uint32_t>(dram_buffer_size / sizeof(uint32_t)));
         std::iota(input_shard_data.back().begin(), input_shard_data.back().end(), i);
@@ -299,7 +299,7 @@ TEST_F(MeshEventsTestSuite, MultiCQNonBlockingReads) {
     std::vector<MeshEvent> write_events;
     std::vector<MeshEvent> read_events;
 
-    for (int i = 0; i < NUM_ITERS; i++) {
+    for (uint32_t i = 0; i < NUM_ITERS; i++) {
         if (i > 0) {
             // Wait for read to complete before writing, since the same
             // buffer is used across iterations
@@ -327,7 +327,7 @@ TEST_F(MeshEventsTestSuite, MultiCQNonBlockingReads) {
 TEST_F(MeshEventsTestSuite, EventQuery) {
     uint32_t NUM_ITERS = 500;
     // Stress EventQuery API and ensure that an event is marked as completed post synchronization.
-    for (auto i = 0; i < NUM_ITERS; i++) {
+    for (auto i = 0u; i < NUM_ITERS; i++) {
         auto event = mesh_device_->mesh_command_queue(0).enqueue_record_event_to_host();
         if (i % 10 == 0) {
             EventSynchronize(event);
