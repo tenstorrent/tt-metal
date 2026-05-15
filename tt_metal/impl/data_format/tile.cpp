@@ -98,7 +98,7 @@ uint32_t Tile::get_tile_size(const DataFormat& format) const {
         case DataFormat::UInt32:
         case DataFormat::Int32:
         case DataFormat::RawUInt32: return (tile_hw * 4);
-        case DataFormat::Tf32: throw std::invalid_argument("TF32 unsupported atm");
+        case DataFormat::Tf32: return (tile_hw * 4);
         case DataFormat::Invalid: throw std::invalid_argument("Invalid data format");
         default: throw std::invalid_argument("Unknown format");
     }

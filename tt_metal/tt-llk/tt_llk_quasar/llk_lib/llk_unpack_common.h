@@ -107,13 +107,7 @@ inline void _llk_unpack_reconfig_data_format_src_(const std::uint32_t unpack_src
 
     const auto out_fmt = static_cast<std::uint8_t>(unpack_dst_format);
 
-    // Select stall mask for the chosen unpacker. The _RMW macro expands to (addr, shamt, mask) and
-    // cannot be folded into a single variable, so the cfg_rmw call stays branched per unpacker.
-    constexpr std::uint32_t unpacker_stall_mask = (UNP_SEL == p_unpacr::UNP_A)   ? p_stall::UNPACK0
-                                                  : (UNP_SEL == p_unpacr::UNP_B) ? p_stall::UNPACK1
-                                                                                 : p_stall::UNPACK2;
-    TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, unpacker_stall_mask);
-
+    // No STALLWAIT needed: THCON_UNPACKER<N>_REG0_OUT_DATA_FORMAT is a shadow register on Quasar (TEN-4169 INT_DESCALE bug is unrelated and PACKER-side).
     if constexpr (UNP_SEL == p_unpacr::UNP_A)
     {
         cfg_rmw(THCON_UNPACKER0_REG0_OUT_DATA_FORMAT_RMW, out_fmt);
