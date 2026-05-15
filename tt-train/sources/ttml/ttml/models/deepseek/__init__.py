@@ -14,12 +14,16 @@ Implements the DeepSeek-V3 architecture:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+import os
+from math import lcm
+from typing import Literal, Optional
 
+import ttnn
 import ttml
-from ttml.modules import AbstractModuleBase, Embedding, LinearLayer, ModuleList
+from ttml.modules import AbstractModuleBase, ColumnParallelLinear, Embedding, LinearLayer, ModuleList
 
 from .. import RunnerType, memory_efficient_runner
+from ..llama.autograd_ops import SliceLastDim
 from .transformer import RMSNormLayer, DeepSeekBlock
 
 
@@ -45,6 +49,8 @@ class DeepSeekConfig:
     n_limited_groups: int = 1
     score_func: str = "sigmoid"
     route_scale: float = 2.5
+    # "sparse" uses moe_group/moe_ungroup; "dense" uses on-device masked experts.
+    moe_type: Literal["sparse", "dense"] = "sparse"
     # MLA (q_lora_rank=0 means direct Q projection without LoRA bottleneck)
     q_lora_rank: int = 256
     kv_lora_rank: int = 128
@@ -61,6 +67,52 @@ class DeepSeekConfig:
     # chip in that axis holds all routed experts with each expert's
     # intermediate dim sharded across the axis. Set to None to disable.
     moe_tp_axis_name: str | None = None
+    # Full-model TP on the named mesh axis ``"tp"`` (attention, dense MLP,
+    # LM head, and sparse MoE). When True, ``SparseMoETP`` uses ``"tp"``
+    # directly; ``moe_tp_axis_name`` is only for MoE-only TP experiments
+    # when this flag is False.
+    use_tp: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.use_tp:
+            return
+        mesh = ttml.maybe_mesh()
+        if mesh is None or not mesh.has_axis("tp"):
+            raise ValueError("DeepSeekConfig.use_tp=True requires an active mesh with a 'tp' axis")
+        tp_size = mesh.axis_size("tp")
+        if self.n_heads % tp_size != 0:
+            raise ValueError(
+                "DeepSeek TP: n_heads must be divisible by TP size. " f"n_heads={self.n_heads}, tp_size={tp_size}"
+            )
+        if self.inter_dim % tp_size != 0:
+            raise ValueError(
+                "DeepSeek TP: inter_dim must be divisible by TP size. " f"inter_dim={self.inter_dim}, tp_size={tp_size}"
+            )
+        if self.moe_inter_dim % tp_size != 0:
+            raise ValueError(
+                "DeepSeek TP: moe_inter_dim must be divisible by TP size. "
+                f"moe_inter_dim={self.moe_inter_dim}, tp_size={tp_size}"
+            )
+        # for name, width in (("inter_dim", self.inter_dim), ("moe_inter_dim", self.moe_inter_dim)):
+        #     local_width = width // tp_size
+        #     if local_width % 32 != 0:
+        #         raise ValueError(
+        #             f"DeepSeek TP: local {name} shard must be divisible by 32 tiles. "
+        #             f"{name}={width}, tp_size={tp_size}, local_shard={local_width}"
+        #         )
+        qk_out = self.n_heads * (self.qk_nope_head_dim + self.qk_rope_head_dim)
+        kv_up_out = self.n_heads * (self.qk_nope_head_dim + self.v_head_dim)
+        attn_out = self.n_heads * self.v_head_dim
+        for name, width in (
+            ("n_heads * qk_head_dim", qk_out),
+            ("n_heads * (qk_nope_head_dim + v_head_dim)", kv_up_out),
+            ("n_heads * v_head_dim", attn_out),
+        ):
+            if width % tp_size != 0:
+                raise ValueError(
+                    f"DeepSeek TP: {name}={width} must be divisible by TP size ({tp_size}) "
+                    "(MLA parallel linears shard the head-merged feature dim)."
+                )
 
 
 class DeepSeek(AbstractModuleBase):
@@ -74,15 +126,28 @@ class DeepSeek(AbstractModuleBase):
         super().__init__()
         self.config = config
 
-        padded_vocab = ((config.vocab_size + 31) // 32) * 32
-        self.tok_emb = Embedding(padded_vocab, config.dim)
+        if config.use_tp:
+            tp_size = ttml.mesh().axis_size("tp")
+            align = lcm(32, tp_size)
+            self.padded_vocab_size = ((config.vocab_size + align - 1) // align) * align
+            self.head = ColumnParallelLinear(
+                config.dim,
+                self.padded_vocab_size,
+                has_bias=False,
+                gather_output=True,
+                axis_name="tp",
+            )
+        else:
+            self.padded_vocab_size = ((config.vocab_size + 31) // 32) * 32
+            self.head = LinearLayer(config.dim, self.padded_vocab_size, has_bias=False)
+
+        self.tok_emb = Embedding(self.padded_vocab_size, config.dim)
 
         rope_params = ttml.ops.rope.build_rope_params(config.max_seq_len, config.qk_rope_head_dim, config.rope_theta)
 
         self.blocks = ModuleList([DeepSeekBlock(layer_id, config, rope_params) for layer_id in range(config.n_layers)])
 
         self.norm = RMSNormLayer(config.dim)
-        self.head = LinearLayer(config.dim, padded_vocab, has_bias=False)
 
     def forward(
         self,
@@ -104,14 +169,22 @@ class DeepSeek(AbstractModuleBase):
 
         x = self.tok_emb(tokens)
 
+        read_profiler_after_block = os.environ.get("TTML_TRACY_READ_RESULTS_AFTER_BLOCK", "0") == "1"
+        profiler_device = ttml.autograd.AutoContext.get_instance().get_device() if read_profiler_after_block else None
+
         for block in self.blocks:
             if self.config.runner_type == RunnerType.MemoryEfficient:
                 x = memory_efficient_runner(block, x, mask)
             else:
                 x = block(x, mask)
+            if read_profiler_after_block:
+                ttnn.ReadDeviceProfiler(profiler_device)
 
         x = self.norm(x)
-        return self.head(x)
+        logits = self.head(x)
+        if self.padded_vocab_size != self.config.vocab_size:
+            logits = SliceLastDim.apply(logits, self.config.vocab_size)
+        return logits
 
     def get_moe_layers(self):
         """Get all MoE layers for external load balance updates."""

@@ -14,7 +14,8 @@ Supported ``model_type``:
 
 - ``llama``    — any combination of DDP and TP (uses the ``"tp"`` mesh axis).
 - ``gpt2``     — DDP only; TP is rejected.
-- ``deepseek`` — DDP only; TP is rejected. Optional MoE TP uses ``moe_tp_axis``.
+- ``deepseek`` — DDP and/or TP on the ``"tp"`` axis (MLA, dense MLP, LM head,
+  sparse MoE). Optional MoE-only TP on a non-TP mesh uses ``moe_tp_axis``.
 - ``qwen3``    — DDP only; TP is rejected.
 """
 
@@ -297,12 +298,11 @@ def build_mesh(device_config: DeviceConfig) -> ttml.Mesh:
     the number of mesh dims, and assignment order is DP -> TP. CP/PP are
     out of scope here.
 
-    Exception: some models (e.g. DeepSeek) do not implement the general
-    tensor-parallel model path (`enable_tp=true`), but still want a 2D mesh
-    for DDP + MoE-TP experimentation. In that case, allow `enable_ddp=true`
-    with `enable_tp=false` on a 2D mesh by naming axis 0 as "dp" and leaving
+    Exception: some models still want a 2D mesh for DDP + MoE-only TP
+    without general TP. In that case, allow `enable_ddp=true` with
+    `enable_tp=false` on a 2D mesh by naming axis 0 as "dp" and leaving
     other axes unnamed; the caller may rename a remaining axis (e.g. to
-    "moe_tp") for MoE sharding.
+    "moe_tp") for MoE sharding via ``moe_tp_axis``.
     """
     shape = tuple(int(s) for s in device_config.mesh_shape)
     n = len(shape)
@@ -926,13 +926,13 @@ def create_model_from_config(model_config: ModelConfig, use_tp: bool = False) ->
     When ``use_tp`` is True the named device mesh must already expose a "tp"
     axis (set up by ``build_mesh`` from ``DeviceConfig.enable_tp``).
 
-    Only the Python Llama integrates with the named-mesh TP path; gpt2,
-    deepseek, and qwen3 hard-error on TP since they have no use_tp implementation here.
+    ``Llama`` and ``DeepSeek`` integrate with the named-mesh TP path; ``gpt2``
+    and ``qwen3`` hard-error on TP here.
 
     Args:
         model_config: Universal model configuration.
         use_tp: Whether the active mesh has a "tp" axis the model should
-            shard across. Forwarded to ``LlamaConfig.use_tp``.
+            shard across. Forwarded to ``LlamaConfig.use_tp`` / ``DeepSeekConfig.use_tp``.
 
     Returns:
         A NanoGPT, Llama, DeepSeek, or Qwen3 model instance.
@@ -986,10 +986,6 @@ def create_model_from_config(model_config: ModelConfig, use_tp: bool = False) ->
         )
         return Llama(llama_config)
     elif model_config.model_type == "deepseek":
-        if use_tp:
-            raise ValueError(
-                "model_type=deepseek has no TP path on the named-mesh API; use model_type=llama for DP+TP."
-            )
         inter_dim = model_config.inter_dim
         if inter_dim is None:
             inter_dim = ((4 * model_config.embedding_dim * 2) // 3 + 255) // 256 * 256
@@ -1018,6 +1014,7 @@ def create_model_from_config(model_config: ModelConfig, use_tp: bool = False) ->
             rope_theta=model_config.theta,
             runner_type=model_config.runner_type,
             moe_tp_axis_name=model_config.moe_tp_axis_name or None,
+            use_tp=use_tp,
         )
         return DeepSeek(deepseek_config)
     elif model_config.model_type == "qwen3":
@@ -1417,10 +1414,10 @@ def main():
     mesh = build_mesh(device_config)
 
     # Optional MoE tensor-parallel axis: YAML `moe_tp_axis` is an index into
-    # `mesh_shape`. `SparseMoETP` reads `DeepSeekConfig.moe_tp_axis_name` and
-    # looks up that name on the mesh. If `build_mesh` already named that
-    # dimension (e.g. "tp" for general tensor parallel), reuse it; otherwise
-    # replace the placeholder `_i` name with "moe_tp".
+    # `mesh_shape`. When ``enable_tp`` is false, ``SparseMoETP`` reads
+    # ``DeepSeekConfig.moe_tp_axis_name`` (set here) for the shard axis.
+    # When ``enable_tp`` is true, full-model TP uses the ``"tp"`` axis and
+    # ``SparseMoETP`` ignores this name in favor of ``"tp"``.
     moe_ax = device_config.moe_tp_axis
     if moe_ax != -1:
         shape = tuple(int(s) for s in device_config.mesh_shape)
@@ -1448,6 +1445,7 @@ def main():
     if args.track_memory:
         print("\nMemory tracking enabled")
         memory_guard = MemoryUsageTracker.begin_capture()
+        os.environ["TTML_TRACK_MEMORY"] = "1"
 
     ttml.autograd.AutoContext.get_instance().set_seed(training_config.seed)
     np.random.seed(training_config.seed)
@@ -1605,9 +1603,9 @@ def main():
             print(f"    Runner type: {runner_type_str}")
             print(f"    Weight tying: {weight_tying_str}")
 
-            # Create model. Pass use_tp so Llama configures ColumnParallelLinear
-            # against the "tp" axis of the active mesh (no-op for non-Llama and
-            # an error for non-Llama with TP).
+            # Create model. Pass use_tp so Llama / DeepSeek configure
+            # ColumnParallelLinear / RowParallelLinear against the "tp" axis
+            # of the active mesh (no-op when TP is disabled).
             model = create_model_from_config(model_config, use_tp=device_config.enable_tp)
             if args.print_summary:
                 summary(model)
@@ -1809,6 +1807,7 @@ def main():
                         MemoryUsageTracker.end_capture("FIRST_ITERATION_COMPLETE")
                         MemoryUsageTracker.print_memory_usage()
                         MemoryUsageTracker.clear()
+                        os.environ["TTML_TRACK_MEMORY"] = "0"
                         if memory_guard:
                             memory_guard.release()
 

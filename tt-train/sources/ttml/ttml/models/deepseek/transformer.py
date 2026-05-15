@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import ttml
-from ttml.modules import AbstractModuleBase, LinearLayer, Parameter
+from ttml.modules import AbstractModuleBase, ColumnParallelLinear, LinearLayer, Parameter, RowParallelLinear
 
 
 class RMSNormLayer(AbstractModuleBase):
@@ -25,11 +25,34 @@ class RMSNormLayer(AbstractModuleBase):
 class DeepSeekMLP(AbstractModuleBase):
     """SwiGLU feed-forward network: w2(silu(w1(x)) * w3(x))."""
 
-    def __init__(self, dim: int, inter_dim: int) -> None:
+    def __init__(self, dim: int, inter_dim: int, *, use_tp: bool = False) -> None:
         super().__init__()
-        self.w1 = LinearLayer(dim, inter_dim, has_bias=False)
-        self.w3 = LinearLayer(dim, inter_dim, has_bias=False)
-        self.w2 = LinearLayer(inter_dim, dim, has_bias=False)
+        if use_tp:
+            self.w1 = ColumnParallelLinear(
+                dim,
+                inter_dim,
+                has_bias=False,
+                gather_output=False,
+                axis_name="tp",
+            )
+            self.w3 = ColumnParallelLinear(
+                dim,
+                inter_dim,
+                has_bias=False,
+                gather_output=False,
+                axis_name="tp",
+            )
+            self.w2 = RowParallelLinear(
+                inter_dim,
+                dim,
+                has_bias=False,
+                input_is_parallel=True,
+                axis_name="tp",
+            )
+        else:
+            self.w1 = LinearLayer(dim, inter_dim, has_bias=False)
+            self.w3 = LinearLayer(dim, inter_dim, has_bias=False)
+            self.w2 = LinearLayer(inter_dim, dim, has_bias=False)
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         return self.w2(ttml.ops.binary.mul(ttml.ops.unary.silu(self.w1(x)), self.w3(x)))
@@ -51,19 +74,26 @@ class DeepSeekBlock(AbstractModuleBase):
 
         super().__init__()
         self.attn = MultiHeadLatentAttention(config, rope_params)
+        use_tp = bool(getattr(config, "use_tp", False))
         if layer_id < config.n_dense_layers:
-            self.ffn = DeepSeekMLP(config.dim, config.inter_dim)
+            self.ffn = DeepSeekMLP(config.dim, config.inter_dim, use_tp=use_tp)
         else:
             moe_type = str(getattr(config, "moe_type", "sparse")).lower()
             if moe_type == "dense":
                 self.ffn = MoE(config)
             elif moe_type == "sparse":
-                tp_name = getattr(config, "moe_tp_axis_name", None)
                 mesh = _ttml.maybe_mesh()
-                use_moe_tp = (
-                    tp_name is not None and mesh is not None and mesh.has_axis(tp_name) and mesh.axis_size(tp_name) > 1
-                )
-                self.ffn = SparseMoETP(config) if use_moe_tp else SparseMoE(config)
+                if use_tp:
+                    self.ffn = SparseMoETP(config)
+                else:
+                    tp_name = getattr(config, "moe_tp_axis_name", None)
+                    use_moe_tp = (
+                        tp_name is not None
+                        and mesh is not None
+                        and mesh.has_axis(tp_name)
+                        and mesh.axis_size(tp_name) > 1
+                    )
+                    self.ffn = SparseMoETP(config) if use_moe_tp else SparseMoE(config)
             else:
                 raise ValueError(
                     f"DeepSeekBlock: unknown moe_type={moe_type!r}; expected 'sparse' or 'dense' "

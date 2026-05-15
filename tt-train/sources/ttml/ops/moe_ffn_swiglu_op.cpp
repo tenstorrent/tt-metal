@@ -4,6 +4,8 @@
 
 #include "moe_ffn_swiglu_op.hpp"
 
+#include <fmt/format.h>
+
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -13,6 +15,7 @@
 #include "autograd/graph_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "ttnn/api/ttnn/distributed/api.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 
@@ -41,6 +44,32 @@ const ttml::metal::VariableMatmulConfig kVarMmConfigTransposeB = [] {
     return c;
 }();
 
+std::vector<uint32_t> offsets_to_vector_first_shard(const ttnn::Tensor& offsets) {
+    auto offset_shards = ttnn::distributed::get_device_tensors(offsets);
+    if (offset_shards.empty()) {
+        throw std::runtime_error("moe_ffn_swiglu_fw: offsets tensor has no device/host shards.");
+    }
+    // In mesh runs moe_group emits replicated offsets, but the host storage can
+    // be distributed across the mesh. to_vector() needs one buffer, so read one
+    // shard only if all shards agree. This is valid for TP-only and for tensors
+    // replicated over the whole mesh. It is NOT valid for DDP+TP if the batch is
+    // sharded over DP: each DP row can route different tokens and produce
+    // different offsets, while this host-loop op has only one set of
+    // variable-matmul runtime args.
+    auto first = offset_shards.front().to_vector<uint32_t>();
+    for (size_t i = 1; i < offset_shards.size(); ++i) {
+        auto current = offset_shards[i].to_vector<uint32_t>();
+        if (current != first) {
+            throw std::runtime_error(fmt::format(
+                "moe_ffn_swiglu_fw: offsets differ across mesh shards (first differing shard {}). "
+                "The current host-loop FFN supports only replicated offsets; DDP+TP with batch-sharded "
+                "SparseMoETP needs per-shard variable_matmul runtime args.",
+                i));
+        }
+    }
+    return first;
+}
+
 }  // namespace
 
 autograd::TensorPtr moe_ffn_swiglu_fw(
@@ -67,7 +96,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         throw std::runtime_error("moe_ffn_swiglu_fw: w_gate[0] inner dim must equal grouped's hidden_dim.");
     }
 
-    auto offsets_host = offsets.to_vector<uint32_t>();
+    auto offsets_host = offsets_to_vector_first_shard(offsets);
     if (offsets_host.size() != num_experts + 1U) {
         throw std::runtime_error("moe_ffn_swiglu_fw: offsets size must be num_experts + 1.");
     }
