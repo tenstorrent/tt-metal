@@ -374,8 +374,8 @@ Always fetch the current page content before updating so you don't clobber concu
 07:05Z  Post summary to Slack #ai-sw-infra
 ```
 
-All dispatches happen in the nightly window when P300-viommu, LoudBox, and LLMBox runners
-are online. The watchdog task at 07:00Z checks for stalled campaigns (no progress in 3+ hours)
+**Nightly window: 11:00 PM – 6:00 AM EST (04:00 – 11:00 UTC).** All dispatches happen in this
+window when P300-viommu, LoudBox, and LLMBox runners are online. The watchdog task at 07:00Z checks for stalled campaigns (no progress in 3+ hours)
 and posts an alert.
 
 ---
@@ -405,7 +405,9 @@ Subagents may only: read data (Snowflake, GitHub API, logs), analyze, and return
 
 ## What NOT to Do
 
-- Do NOT dispatch two bisects simultaneously for the same hardware type (contends for runners)
+- Do NOT dispatch two bisects simultaneously for the same hardware type (contends for runners).
+  Single-card types (N150, N300, P150, P150b, P300, P100): no per-night cap, but still one active
+  bisect per hardware type at a time. T3K: max 5 bisects per night. Galaxy: max 3 bisects per night.
 - Do NOT start verification without a completed bisect result
 - Do NOT skip writing to `seen-escapes.json` even for fast refutals — prevents re-analysis
 - Do NOT delete branches until verification is complete
@@ -420,7 +422,10 @@ For the initial 60-day scan:
 2. Layer pre-filter eliminates ~50%. Run in one pass (no hardware needed).
 3. Opus pre-classification: batch process, 8 candidates at a time max (rate limit).
 4. Bisect: queue candidates by hardware type, dispatch in nightly windows over multiple nights.
-   - Stagger: 3 bisects per night max to avoid runner contention.
+   - Single-card (N150, N300, P150, P150b, P300, P100): no per-night cap. Only constraint: no
+     two concurrent bisects on the same hardware type.
+   - T3K: max 5 bisects per night.
+   - Galaxy: max 3 bisects per night.
    - Multi-night campaign: 5-10 nights to process all survivors.
 5. Verification: same nightly cadence.
 6. Confluence page seeded with all confirmed escapes from the backfill.
