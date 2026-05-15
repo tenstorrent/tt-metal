@@ -23,6 +23,9 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_gather
+from models.experimental.devstral2_large.tt.model_utils import (
+    get_decode_mem_config_after_hidden_dim_concat,
+)
 from models.experimental.devstral2_large.tt.tt_ministralattn import TtDevstral2LargeAttention
 from models.experimental.devstral2_large.tt.tt_ministralmlp import TtDevstral2LargeMLP
 from models.experimental.devstral2_large.tt.tt_ministralrmsnorm import TtDevstral2LargeRMSNorm
@@ -185,10 +188,16 @@ class TtMinistral3DecoderLayer(LightweightModule):
         x = hidden_states
         residual = x
         skip_mem_cfg = self.args.get_residual_mem_config(mode, self.prefetcher)
+        decode_full_hidden_mem = None
+        if mode == Mode.DECODE and self.prefetcher is None and not TG:
+            decode_full_hidden_mem = get_decode_mem_config_after_hidden_dim_concat(self.args, mode, self.prefetcher)
 
-        assert (
-            x.memory_config() == skip_mem_cfg
-        ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
+        assert x.memory_config() == skip_mem_cfg or (
+            decode_full_hidden_mem is not None and x.memory_config() == decode_full_hidden_mem
+        ), (
+            "decoder input memcfg mismatch: "
+            f"{x.memory_config()} not in (residual={skip_mem_cfg}, full_hidden={decode_full_hidden_mem})"
+        )
 
         rot_mats = (
             rot_mats_local if (hasattr(self.self_attn, "is_sliding") and self.self_attn.is_sliding) else rot_mats_global
@@ -244,12 +253,15 @@ class TtMinistral3DecoderLayer(LightweightModule):
                 dtype=self.self_attn.ccl_dtype,
             )
 
-        attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
+        attn_residual_mem = skip_mem_cfg
+        if mode == Mode.DECODE and self.prefetcher is None and not TG and int(attn_out.shape[-1]) == int(self.args.dim):
+            attn_residual_mem = get_decode_mem_config_after_hidden_dim_concat(self.args, mode, self.prefetcher)
+        attn_out = ttnn.to_memory_config(attn_out, attn_residual_mem)
 
         hidden_states = ttnn.add(
             residual,
             attn_out,
-            memory_config=skip_mem_cfg,
+            memory_config=attn_residual_mem,
             dtype=ttnn.bfloat16 if TG else None,
         )
         residual = hidden_states
@@ -277,6 +289,16 @@ class TtMinistral3DecoderLayer(LightweightModule):
                 dtype=self.args.ccl_dtype,
             )
 
+        mlp_add_mem = skip_mem_cfg
+        if (
+            mode == Mode.DECODE
+            and self.prefetcher is None
+            and not TG
+            and int(residual.shape[-1]) == int(self.args.dim)
+            and int(hidden_states.shape[-1]) == int(self.args.dim)
+        ):
+            mlp_add_mem = get_decode_mem_config_after_hidden_dim_concat(self.args, mode, self.prefetcher)
+
         activation_dtype = self.args.decoders_optimizations.get_tensor_dtype(
             decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
         )
@@ -284,7 +306,7 @@ class TtMinistral3DecoderLayer(LightweightModule):
         out = ttnn.add(
             residual,
             hidden_states,
-            memory_config=skip_mem_cfg,
+            memory_config=mlp_add_mem,
             dtype=self.args.ccl_dtype
             if TG and not self.args.is_distributed_norm(mode)
             else activation_dtype or ttnn.bfloat16,
