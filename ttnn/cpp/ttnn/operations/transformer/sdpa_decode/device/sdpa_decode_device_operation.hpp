@@ -55,6 +55,7 @@ Tensor sdpa_decode(
     uint32_t k_chunk_size,
     std::optional<bool> share_cache,
     std::optional<bool> use_mla,
-    std::optional<uint32_t> head_dim_v);
+    std::optional<uint32_t> head_dim_v,
+    std::optional<uint32_t> block_size_override = std::nullopt);
 
 }  // namespace ttnn::prim
