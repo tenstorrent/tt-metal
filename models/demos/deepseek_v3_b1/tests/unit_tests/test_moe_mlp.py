@@ -12,7 +12,6 @@ Run:
     pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_moe.py -v -s
 """
 
-import os
 from typing import Any, NamedTuple
 
 import pytest
@@ -1092,7 +1091,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
 
     # ── Run fused MoE op with reduce (looping inside kernel) ──
     moe_semaphores = MoeOp.create_semaphores(submesh)
-    num_iterations = 100
+    num_iterations = TestConfig.NUM_ITERATIONS
     ttnn_result_scores, ttnn_result_indices, ttnn_result_reduce = MoeOp.op(
         r.ttnn_residual_mcast_src,
         r.ttnn_gate_mm_weights,
@@ -1240,6 +1239,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         logger.info(
             f"ref_block_output sum={ref_block_output.sum().item():.3f} " f"mean={ref_block_output.mean().item():.3f}"
         )
+        assert passing_ref, f"Reference MoE comparison PCC failed: {pcc_ref}"
 
     assert passing, f"Reduce output PCC check failed: {pcc_output}"
 
@@ -1296,31 +1296,6 @@ def test_moe_fused_no_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_
         winning_experts_by_group,
     )
 
-    # DEBUG: Optionally zero shared expert weights on the device to isolate the
-    # shared chain from the routed path. Set MOE_ZERO_SHARED_WEIGHTS=1 to enable.
-    zero_shared_on_device = os.environ.get("MOE_ZERO_SHARED_WEIGHTS") == "1"
-    if zero_shared_on_device:
-        gate_key = f"model.layers.{ROUTED_EXPERT_LAYER_IDX}.mlp.shared_experts.gate_proj.weight"
-        up_key = f"model.layers.{ROUTED_EXPERT_LAYER_IDX}.mlp.shared_experts.up_proj.weight"
-        down_key = f"model.layers.{ROUTED_EXPERT_LAYER_IDX}.mlp.shared_experts.down_proj.weight"
-        state_dict[gate_key] = torch.zeros_like(state_dict[gate_key])
-        state_dict[up_key] = torch.zeros_like(state_dict[up_key])
-        state_dict[down_key] = torch.zeros_like(state_dict[down_key])
-        logger.info("DEBUG: Zeroed shared expert weights on device (MOE_ZERO_SHARED_WEIGHTS=1)")
-
-    # DEBUG: Optionally zero ALL routed expert weights on the device to isolate the
-    # shared chain within the fused kernel. Set MOE_ZERO_ROUTED_WEIGHTS=1 to enable.
-    zero_routed_on_device = os.environ.get("MOE_ZERO_ROUTED_WEIGHTS") == "1"
-    if zero_routed_on_device:
-        num_zeroed = 0
-        for _e in range(num_routed_experts):
-            for _proj in ("gate_proj", "up_proj", "down_proj"):
-                _k = f"model.layers.{ROUTED_EXPERT_LAYER_IDX}.mlp.experts.{_e}.{_proj}.weight"
-                if _k in state_dict:
-                    state_dict[_k] = torch.zeros_like(state_dict[_k])
-                    num_zeroed += 1
-        logger.info(f"DEBUG: Zeroed {num_zeroed} routed expert weight tensors (MOE_ZERO_ROUTED_WEIGHTS=1)")
-
     # TP8-sharded routed weights; shared/input replicated. create_final_output=True
     # so the per-device add output has a backing tensor we can read back.
     mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
@@ -1346,37 +1321,6 @@ def test_moe_fused_no_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_
         is_moe=True,
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
     )
-
-    # WEIGHT SANITY: read shared_down_weights back per-device and compare to torch slice
-    # to rule out weight loading as the source of the shared-expert PCC bug.
-    try:
-        ttnn_down_back = ttnn.to_torch(
-            s.ttnn_down_weights, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
-        ).float()
-        # Shape (1024, 14336) → should contain per-device (256,7168) shards concatenated on row.
-        logger.info(f"WEIGHT_CHECK: ttnn_down_back shape={tuple(ttnn_down_back.shape)}")
-        K_down_pd = s.K_down
-        N_total = 7168
-        for d in range(num_devices):
-            row_start = d * K_down_pd
-            row_end = (d + 1) * K_down_pd
-            # The flattened tensor when ConcatMeshToTensor(dim=0) interleaves per mesh_row, mesh_col
-            # Each device contributes (K_down_pd, mesh_cols * N_total) = (256, 14336)
-            # So the per-device shard occupies rows [d*256 : (d+1)*256]
-            dev_shard = ttnn_down_back[row_start:row_end]
-            # dev_shard should equal torch's (256, N_total) per-device slice.
-            # But the torch_down_weights layout has 8 K-slices; device d uses slice d.
-            exp_shard_torch = s.torch_down_weights[d * K_down_pd : (d + 1) * K_down_pd].float()
-            # Only first N_total columns are valid per-device (rest may be padding/replicated).
-            dev_first = dev_shard[:, :N_total]
-            delta = (dev_first - exp_shard_torch).abs()
-            logger.info(
-                f"  WEIGHT d={d}: ttnn_shard[:,:{N_total}] vs torch shard  abs_sum_diff={delta.sum().item():.3f} "
-                f"max_diff={delta.max().item():.3f} "
-                f"torch_abs={exp_shard_torch.abs().sum().item():.1f} ttnn_abs={dev_first.abs().sum().item():.1f}"
-            )
-    except Exception as _e:
-        logger.warning(f"WEIGHT_CHECK skipped: {_e}")
 
     # SDPA buffers (required by fused MoE for CB memory overlap).
     device_grid_size = submesh.compute_with_storage_grid_size()
@@ -1466,39 +1410,11 @@ def test_moe_fused_no_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_
     K_down = s.K_down
     routed_n_per_device = RoutedExpert.GATE_PROJ_N // num_devices
     routed_k_per_device = RoutedExpert.GATE_PROJ_N // num_devices
-    # When shared weights are zeroed on device, match the golden to device reality.
-    golden_gate_weights = torch.zeros_like(s.torch_gate_weights) if zero_shared_on_device else s.torch_gate_weights
-    golden_up_weights = torch.zeros_like(s.torch_up_weights) if zero_shared_on_device else s.torch_up_weights
-    golden_down_weights = torch.zeros_like(s.torch_down_weights) if zero_shared_on_device else s.torch_down_weights
-    # ── Diagnostic: per-slice shared weight magnitudes and expected partial shared outputs ──
-    import torch as _tdiag
-
-    _x = r.torch_input.float()
-    _var = _x.pow(2).mean(-1, keepdim=True)
-    _norm_x = ((_x * _tdiag.rsqrt(_var + 1e-6)) * r.torch_rmsnorm_gamma.float()).bfloat16().float()
-    _norm_x_2d = _norm_x.reshape(1, -1)
-    for _d in range(num_devices):
-        _g = golden_gate_weights[:, _d * K_down : (_d + 1) * K_down]
-        _u = golden_up_weights[:, _d * K_down : (_d + 1) * K_down]
-        _dw = golden_down_weights[_d * K_down : (_d + 1) * K_down, :]
-        _hidden = _tdiag.nn.functional.silu(_norm_x_2d @ _g.float()) * (_norm_x_2d @ _u.float())
-        _partial = _hidden @ _dw.float()
-        logger.info(
-            f"DIAG d={_d}: gate_slice abs_sum={_g.abs().sum().item():.3f} "
-            f"up_slice abs_sum={_u.abs().sum().item():.3f} "
-            f"down_slice abs_sum={_dw.abs().sum().item():.3f} "
-            f"partial_shared abs_sum={_partial.abs().sum().item():.3f}"
-        )
-        _hid_bf16 = _hidden.flatten().bfloat16().view(_tdiag.int16).numpy().astype("uint16")
-        for _lo, _label in [(0, "0-7"), (32, "32-39"), (128, "128-135"), (240, "240-247")]:
-            _hex = ",".join(f"{v:04x}" for v in _hid_bf16[_lo : _lo + 8])
-            logger.info(f"GR_GOLDEN d={_d} {_label}:{_hex}")
-
     expected_per_device = []
     for device_idx in range(num_devices):
-        shared_gate_shard = golden_gate_weights[:, device_idx * K_down : (device_idx + 1) * K_down]
-        shared_up_shard = golden_up_weights[:, device_idx * K_down : (device_idx + 1) * K_down]
-        shared_down_shard = golden_down_weights[device_idx * K_down : (device_idx + 1) * K_down, :]
+        shared_gate_shard = s.torch_gate_weights[:, device_idx * K_down : (device_idx + 1) * K_down]
+        shared_up_shard = s.torch_up_weights[:, device_idx * K_down : (device_idx + 1) * K_down]
+        shared_down_shard = s.torch_down_weights[device_idx * K_down : (device_idx + 1) * K_down, :]
 
         gate_slice_start = device_idx * routed_n_per_device
         gate_slice_end = gate_slice_start + routed_n_per_device
@@ -1543,115 +1459,6 @@ def test_moe_fused_no_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_
             f"Device {d}: golden sum={gv.sum().item():.3f} mean={gv.mean().item():.3f} "
             f"hw sum={hv.sum().item():.3f} mean={hv.mean().item():.3f} PCC={pcc_d}"
         )
-
-    # ─── Hypothesis probes for shared-expert contribution ───
-    # Three alt goldens per device (routed slice per-device as always):
-    #   (a) SHARED_SLICE0: use device 0's shared slice everywhere
-    #   (b) SHARED_FULL:   use full shared weights (no TP slice) on every device
-    #   (c) NO_SHARED:     zero out shared contribution (pass zeros for gate/up/down)
-    shared_gate_slice0 = s.torch_gate_weights[:, 0:K_down]
-    shared_up_slice0 = s.torch_up_weights[:, 0:K_down]
-    shared_down_slice0 = s.torch_down_weights[0:K_down, :]
-    shared_gate_full = s.torch_gate_weights  # [K, K_down*num_devices]
-    shared_up_full = s.torch_up_weights
-    shared_down_full = s.torch_down_weights
-    shared_gate_zero = torch.zeros_like(shared_gate_slice0)
-    shared_up_zero = torch.zeros_like(shared_up_slice0)
-    shared_down_zero = torch.zeros_like(shared_down_slice0)
-
-    def _alt_golden(device_idx, sh_gate, sh_up, sh_down):
-        gate_slice_start = device_idx * routed_n_per_device
-        gate_slice_end = gate_slice_start + routed_n_per_device
-        down_slice_start = device_idx * routed_k_per_device
-        down_slice_end = down_slice_start + routed_k_per_device
-        gate_dict_d = {e: w[:, :, :, gate_slice_start:gate_slice_end] for e, w in r.expert_weights_dict.items()}
-        up_dict_d = {e: w[:, :, :, gate_slice_start:gate_slice_end] for e, w in r.up_proj_weights_dict.items()}
-        down_dict_d = {e: w[:, :, down_slice_start:down_slice_end, :] for e, w in r.down_proj_weights_dict.items()}
-        _, _, alt = MoeOp.golden(
-            r.torch_input,
-            shared_gate_weights=sh_gate,
-            shared_up_weights=sh_up,
-            shared_down_weights=sh_down,
-            gate_proj_weights_dict=gate_dict_d,
-            up_proj_weights_dict=up_dict_d,
-            down_proj_weights_dict=down_dict_d,
-            rmsnorm_gamma=r.torch_rmsnorm_gamma,
-            routing_weights_tensor=r.torch_gate_mm_weights,
-            bias_tensor=r.torch_bias,
-            rmsnorm_epsilon=1e-6,
-            routing_mode=True,
-            eps=r.gate_eps,
-            scaling_factor=r.gate_scaling_factor,
-            include_residual=True,
-        )
-        return alt
-
-    for device_idx in range(num_devices):
-        hv = per_device_hw_valid[device_idx].flatten().float()
-        alts = {}
-        for tag, sh_gate, sh_up, sh_down in (
-            ("SHARED_SLICE0", shared_gate_slice0, shared_up_slice0, shared_down_slice0),
-            ("SHARED_FULL", shared_gate_full, shared_up_full, shared_down_full),
-            ("NO_SHARED", shared_gate_zero, shared_up_zero, shared_down_zero),
-        ):
-            alt = _alt_golden(device_idx, sh_gate, sh_up, sh_down)
-            av = alt.flatten().float()
-            _, pcc_alt = comp_pcc(av, hv, 0.0)
-            alts[tag] = av
-            logger.info(f"Device {device_idx}: {tag} alt_golden sum={av.sum().item():.3f} PCC_vs_hw={pcc_alt}")
-
-        # Effective shared contribution = hw - no_shared_golden
-        # Expected shared = correct_golden - no_shared_golden
-        expected_shared = expected_per_device[device_idx].flatten().float() - alts["NO_SHARED"]
-        effective_shared = hv - alts["NO_SHARED"]
-        ratio = effective_shared.abs().sum().item() / max(expected_shared.abs().sum().item(), 1e-9)
-        _, pcc_shared = comp_pcc(expected_shared, effective_shared, 0.0)
-        logger.info(
-            f"Device {device_idx}: EFFECTIVE_SHARED sum={effective_shared.sum().item():.3f} "
-            f"abs_sum={effective_shared.abs().sum().item():.3f} | EXPECTED_SHARED "
-            f"sum={expected_shared.sum().item():.3f} abs_sum={expected_shared.abs().sum().item():.3f} | "
-            f"ratio={ratio:.4f} PCC={pcc_shared}"
-        )
-
-        # Per-DRAM-core-chunk diagnostic: split the 7168-element N dim into 8 chunks of 896
-        # (one per DRAM core). Report per-chunk EFFECTIVE vs EXPECTED ratio + PCC.
-        # If only some chunks are correct, the shared-mcast is delivering to a subset.
-
-        N_per_dram = 896
-        eff_chunks = effective_shared.reshape(-1, 8, N_per_dram)
-        exp_chunks = expected_shared.reshape(-1, 8, N_per_dram)
-        for c in range(8):
-            e = eff_chunks[:, c, :].flatten()
-            x = exp_chunks[:, c, :].flatten()
-            r_c = e.abs().sum().item() / max(x.abs().sum().item(), 1e-9)
-            _, pcc_c = comp_pcc(x, e, 0.0)
-            logger.info(
-                f"  d{device_idx} dram_chunk{c}: eff_abs={e.abs().sum().item():.1f} "
-                f"exp_abs={x.abs().sum().item():.1f} ratio={r_c:.3f} PCC={pcc_c:.4f}"
-            )
-
-    # Cross-device correlation: does device d's effective_shared match some other device's expected_shared?
-    all_alts_no_shared = []
-    all_expected_shared = []
-    all_effective_shared = []
-    shared_gate_zero_glob = torch.zeros_like(shared_gate_slice0)
-    shared_up_zero_glob = torch.zeros_like(shared_up_slice0)
-    shared_down_zero_glob = torch.zeros_like(shared_down_slice0)
-    for d in range(num_devices):
-        alt = _alt_golden(d, shared_gate_zero_glob, shared_up_zero_glob, shared_down_zero_glob)
-        av = alt.flatten().float()
-        all_alts_no_shared.append(av)
-        all_expected_shared.append(expected_per_device[d].flatten().float() - av)
-        all_effective_shared.append(per_device_hw_valid[d].flatten().float() - av)
-    logger.info("CROSS-DEVICE PCC: effective_shared(row) vs expected_shared(col) — look for off-diagonal matches")
-    header = "        | " + " | ".join([f"exp_d{c}" for c in range(num_devices)])
-    logger.info(header)
-    for r in range(num_devices):
-        row = [f"eff_d{r} |"]
-        for c in range(num_devices):
-            _, p = comp_pcc(all_expected_shared[c], all_effective_shared[r], 0.0)
-            row.append(f"{p:+.3f}")
-        logger.info(" ".join(row))
 
     # Assert all devices pass; report any that fail before raising.
     failures = [(d, p) for d, p in enumerate(per_device_pcc) if p < 0.97]

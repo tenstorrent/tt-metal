@@ -91,13 +91,6 @@ def create_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--bspm-variant",
-        type=str,
-        choices=("B",),
-        default="B",
-        help="BitSculpt allocation variant letter (default: B)",
-    )
-    parser.add_argument(
         "--bspm-budget",
         type=float,
         default=3.5,
@@ -192,7 +185,6 @@ def run_demo(
     enable_sram_hot_experts: bool = False,
     sram_hot_experts_ceiling: int = 64,
     bspm_dir: Path | None = None,
-    bspm_variant: str = "B",
     bspm_budget: float = 3.5,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
@@ -218,7 +210,6 @@ def run_demo(
             enable_sram_hot_experts=enable_sram_hot_experts,
             sram_hot_experts_ceiling=sram_hot_experts_ceiling,
             bspm_dir=bspm_dir,
-            bspm_variant=bspm_variant,
             bspm_budget=bspm_budget,
         )
 
@@ -315,7 +306,6 @@ def main(argv: list[str] | None = None) -> int:
         enable_sram_hot_experts=args.enable_sram_hot_experts,
         sram_hot_experts_ceiling=args.sram_hot_experts_ceiling,
         bspm_dir=args.bspm_dir,
-        bspm_variant=args.bspm_variant,
         bspm_budget=args.bspm_budget,
     )
     print(end="", file=sys.stdout, flush=True)

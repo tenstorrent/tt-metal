@@ -226,8 +226,6 @@ struct MatmulExpertCompressedDRAM {
         // primary_at_last_offset mirror — see ReaderCTArgs for semantics.
         uint32_t cores_per_bank_,
         uint32_t core_in_bank_idx_,
-        uint32_t next_core_noc_x_,
-        uint32_t next_core_noc_y_,
         uint32_t primary_at_last_offset_,
         uint32_t gather_sync_sem_addr_,
         uint32_t cb_internal_acc_,
@@ -273,8 +271,6 @@ struct MatmulExpertCompressedDRAM {
         // primary_at_last_offset mirror — see ReaderCTArgs for semantics.
         static constexpr uint32_t cores_per_bank = cores_per_bank_;
         static constexpr uint32_t core_in_bank_idx = core_in_bank_idx_;
-        static constexpr uint32_t next_core_noc_x = next_core_noc_x_;
-        static constexpr uint32_t next_core_noc_y = next_core_noc_y_;
         static constexpr bool primary_at_last_offset = primary_at_last_offset_ != 0;
         static constexpr bool is_in_bank_primary = (core_in_bank_idx + 1 == cores_per_bank);
         static constexpr bool is_in_bank_secondary = !is_in_bank_primary;
