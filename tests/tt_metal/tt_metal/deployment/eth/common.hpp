@@ -210,7 +210,10 @@ static void track_eth_progress_timeout(
         std::this_thread::sleep_for(10ms);
 
         uint32_t curr_send = read_eth_l1_u32(send_device, send_core, iter_l1_addr);
-        uint32_t curr_recv = read_eth_l1_u32(recv_device, recv_core, iter_l1_addr);
+        uint32_t curr_recv = expected_count;
+        if (recv_device) {
+            curr_recv = read_eth_l1_u32(recv_device, recv_core, iter_l1_addr);
+        }
 
         if ((curr_send == expected_count) && (curr_recv == expected_count)) {
             break;
@@ -218,7 +221,12 @@ static void track_eth_progress_timeout(
 
         // log_info(tt::LogTest, "Read {} {}, waiting until {}", curr_send, curr_recv, expected_count);
 
-        if (curr_send == prev_send || curr_recv == prev_recv) {
+        if ((curr_send == prev_send) && (curr_send != expected_count)) {
+            log_critical(tt::LogTest, "Timed out! You probably need to reset the device (tt-smi -r)");
+            exit(1);
+        }
+
+        if ((curr_recv == prev_recv) && (curr_recv != expected_count)) {
             log_critical(tt::LogTest, "Timed out! You probably need to reset the device (tt-smi -r)");
             exit(1);
         }
@@ -242,10 +250,27 @@ struct core_setup {
     std::span<uint32_t> inp;
 };
 
+[[maybe_unused]]
+static void track_eth_progress_timeout_cores(std::span<struct core_setup> cores) {
+    std::vector<std::thread> threads;
+
+    for (const auto& c : cores) {
+        threads.emplace_back([&] {
+            auto* const device = c.mesh_device->get_devices()[0];
+            track_eth_progress_timeout(device, nullptr, c.core, c.core, c.iter_l1_addr, c.expected_count);
+        });
+    }
+
+    for (auto& t : threads) {
+        t.join();
+    }
+}
+
 template <typename FIXTURE>
 [[maybe_unused]]
 static void wait_to_finish_eth_timeout_cores(
     FIXTURE* fixture,
+    std::span<struct core_setup> cores,
     std::map<std::shared_ptr<distributed::MeshDevice>, std::shared_ptr<tt_metal::Program>>& programs) {
     /* ==================== */
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -264,35 +289,11 @@ static void wait_to_finish_eth_timeout_cores(
         fixture->RunProgram(dev, *workload, true);
     }
 
+    track_eth_progress_timeout_cores(cores);
+
     for (const auto& [dev, _] : devices) {
         fixture->FinishCommands(dev);
     }
-
-#if 0
-
-    distributed::MeshWorkload send_workload;
-    distributed::MeshWorkload recv_workload_;
-    distributed::MeshWorkload& recv_workload = same_device ? send_workload : recv_workload_;
-
-    send_workload.add_program(device_range, std::move(send_program));
-    if (!same_device) {
-        recv_workload.add_program(device_range, std::move(recv_program));
-    }
-
-    fixture->RunProgram(send_mesh_device, send_workload, true);
-    if (!same_device) {
-        fixture->RunProgram(recv_mesh_device, recv_workload, true);
-    }
-
-    auto* const send_device = send_mesh_device->get_devices()[0];
-    auto* const recv_device = recv_mesh_device->get_devices()[0];
-    // track_eth_progress_timeout(send_device, recv_device, send_core, recv_core, iter_l1_addr, expected_count);
-
-    fixture->FinishCommands(send_mesh_device);
-    if (!same_device) {
-        fixture->FinishCommands(recv_mesh_device);
-    }
-#endif
 }
 
 template <typename FIXTURE>

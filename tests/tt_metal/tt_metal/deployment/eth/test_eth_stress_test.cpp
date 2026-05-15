@@ -189,7 +189,7 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet05StressTest) {
         }
     }
 
-    wait_to_finish_eth_timeout_cores(this, programs);
+    wait_to_finish_eth_timeout_cores(this, cores, programs);
 
     bool pass = true;
 
