@@ -1,5 +1,5 @@
 # LLK smoke — PR-gate python_tests (no coverage, 2-way split, markers not perf and not nightly and not quasar).
-# PYTEST_MARKERS and LLK_PYTEST_LOG_MODE are set by llk-smoke-impl.yaml (pytest-log-mode input).
+# PYTEST_MARKERS is set by llk-smoke-impl.yaml / workflow_call inputs. ci-quiet log mode is hard-coded.
 
 - name: llk_smoke_wormhole group 1/2
   split_group: 1
@@ -8,16 +8,8 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    case "${LLK_PYTEST_LOG_MODE:-verbose}" in
-      ci-quiet)
-        PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-        PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
-        ;;
-      verbose|*)
-        PYTEST_COMPILE_EXTRA=""
-        PYTEST_RUN_EXTRA='--override-ini=addopts=-v'
-        ;;
-    esac
+    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
     pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
       -m "$PYTEST_MARKERS" \
       --splits 2 --group 1 --timeout=60 \
@@ -40,16 +32,8 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    case "${LLK_PYTEST_LOG_MODE:-verbose}" in
-      ci-quiet)
-        PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-        PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
-        ;;
-      verbose|*)
-        PYTEST_COMPILE_EXTRA=""
-        PYTEST_RUN_EXTRA='--override-ini=addopts=-v'
-        ;;
-    esac
+    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
     pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
       -m "$PYTEST_MARKERS" \
       --splits 2 --group 2 --timeout=60 \
@@ -72,16 +56,8 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    case "${LLK_PYTEST_LOG_MODE:-verbose}" in
-      ci-quiet)
-        PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-        PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
-        ;;
-      verbose|*)
-        PYTEST_COMPILE_EXTRA=""
-        PYTEST_RUN_EXTRA='--override-ini=addopts=-v'
-        ;;
-    esac
+    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
     pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
       -m "$PYTEST_MARKERS" \
       --splits 2 --group 1 --timeout=60 \
@@ -104,16 +80,8 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    case "${LLK_PYTEST_LOG_MODE:-verbose}" in
-      ci-quiet)
-        PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-        PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
-        ;;
-      verbose|*)
-        PYTEST_COMPILE_EXTRA=""
-        PYTEST_RUN_EXTRA='--override-ini=addopts=-v'
-        ;;
-    esac
+    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
     pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
       -m "$PYTEST_MARKERS" \
       --splits 2 --group 2 --timeout=60 \

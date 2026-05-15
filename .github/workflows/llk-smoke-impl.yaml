@@ -16,11 +16,6 @@ on:
         required: false
         type: string
         default: "not perf and not nightly and not quasar"
-      pytest-log-mode:
-        description: "verbose = current per-test CI logs; ci-quiet = minimal stream, failures + summaries"
-        required: false
-        type: string
-        default: "verbose"
 
 permissions:
   checks: write
@@ -102,7 +97,7 @@ jobs:
         working-directory: ${{ env.LLK_PATH }}
         env:
           PYTEST_MARKERS: ${{ inputs.pytest-markers }}
-          LLK_PYTEST_LOG_MODE: ${{ inputs.pytest-log-mode }}
+          LLK_PYTEST_LOG_MODE: ci-quiet
         run: |
           ${{ matrix.test-group.cmd }}
 
