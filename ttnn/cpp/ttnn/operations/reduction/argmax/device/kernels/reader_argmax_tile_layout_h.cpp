@@ -82,6 +82,8 @@ void kernel_main() {
 
     OutputContext output_ctx((uint32_t*)stack_unused, 1, dst_cb_addr, output_page_elements);
 
+    Noc noc;
+
     constexpr uint32_t inner_size = input_height * input_width;
 
     for (uint32_t outer_index = 0; outer_index < outer_dim_size; outer_index++) {
@@ -113,7 +115,7 @@ void kernel_main() {
                 collect_row_major_output<false>(&arg_maxs[local_w], 1, output_ctx);
 
                 if (output_ctx.collected_count >= output_page_elements) {
-                    write_to_output<dst_accessor_type, false>(s_dst, output_ctx);
+                    write_to_output<dst_accessor_type, false>(noc, s_dst, output_ctx);
                 }
             }
         }
