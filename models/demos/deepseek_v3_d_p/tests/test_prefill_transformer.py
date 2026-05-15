@@ -1069,16 +1069,6 @@ def test_prefill_transformer_from_trace(
         f"Trace={ref_token_id} [{repr(ref_token_text)}], "
         f"Match={'YES' if token_match else 'NO' if token_match is not None else 'N/A'}"
     )
-    gate_suffix = f"_{gate_fallback_mode.name.lower()}"
-    plot_pcc_results(
-        pcc_results,
-        trace_dir,
-        dataset_name=trace_dir.name,
-        gate_fallback_mode=str(gate_fallback_mode),
-        threshold=trace_threshold,
-        filename=f"pcc_results{gate_suffix}.png",
-        annotation=first_token_annotation,
-    )
 
     # --- CI PCC summary (Mermaid charts + markdown table for $GITHUB_STEP_SUMMARY) ---
     output_pcc = {}
