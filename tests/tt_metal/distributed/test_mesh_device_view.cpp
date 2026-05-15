@@ -86,7 +86,8 @@ TEST(MeshDeviceViewTest, GetLineCoordinates2x2WithOffset) {
         MeshDeviceView::get_line_coordinates(/*length*/ 2, /*mesh_shape*/ Shape2D(2, 2), /*mesh_offset*/ Shape2D(1, 0));
     ASSERT_THAT(line_coords, SizeIs(2));
     EXPECT_EQ(line_coords[0], MeshCoordinate(1, 0));
-    EXPECT_EQ(line_coords[1], MeshCoordinate(1, 1));
+    // Hamiltonian cycle for 2x2 is (0,0),(0,1),(1,1),(1,0). Rotated to start at (1,0): next is (0,0).
+    EXPECT_EQ(line_coords[1], MeshCoordinate(0, 0));
 }
 
 TEST(MeshDeviceViewTest, GetLineCoordinates3x3) {
@@ -173,6 +174,126 @@ TEST(MeshDeviceViewTest, GetLineCoordinatesRingPreferredButNotRequired) {
     std::set<MeshCoordinate> unique_coords_9(line_coords_9.begin(), line_coords_9.end());
     EXPECT_EQ(unique_coords_9.size(), 9);  // All nodes should be unique
     // Function succeeds, ring formation is preferred but not required
+}
+
+// Helper to verify Hamiltonian cycle properties:
+// 1. Correct length
+// 2. All coordinates unique
+// 3. All consecutive pairs are adjacent (Manhattan distance 1)
+// 4. Last coordinate is adjacent to first (ring closure)
+void VerifyHamiltonianCycle(const std::vector<MeshCoordinate>& coords, size_t expected_size) {
+    ASSERT_EQ(coords.size(), expected_size);
+
+    // All unique
+    std::set<MeshCoordinate> unique(coords.begin(), coords.end());
+    EXPECT_EQ(unique.size(), expected_size) << "Not all coordinates are unique";
+
+    auto is_adjacent = [](const MeshCoordinate& a, const MeshCoordinate& b) -> bool {
+        size_t row_diff = (a[0] > b[0]) ? (a[0] - b[0]) : (b[0] - a[0]);
+        size_t col_diff = (a[1] > b[1]) ? (a[1] - b[1]) : (b[1] - a[1]);
+        return (row_diff == 1 && col_diff == 0) || (row_diff == 0 && col_diff == 1);
+    };
+
+    // All consecutive pairs adjacent
+    for (size_t i = 0; i + 1 < coords.size(); ++i) {
+        EXPECT_TRUE(is_adjacent(coords[i], coords[i + 1]))
+            << "Coordinates at index " << i << " " << coords[i] << " and " << i + 1 << " " << coords[i + 1]
+            << " are not adjacent";
+    }
+
+    // Ring closure: last adjacent to first
+    if (coords.size() > 1) {
+        EXPECT_TRUE(is_adjacent(coords.back(), coords.front()))
+            << "Last coordinate " << coords.back() << " is not adjacent to first " << coords.front()
+            << " (ring not closed)";
+    }
+}
+
+TEST(MeshDeviceViewTest, GetLineCoordinates2x4) {
+    auto line_coords =
+        MeshDeviceView::get_line_coordinates(/*length*/ 8, /*mesh_shape*/ Shape2D(2, 4), /*mesh_offset*/ Shape2D(0, 0));
+    VerifyHamiltonianCycle(line_coords, 8);
+    // Verify identical to the old perimeter traversal (backward compatibility)
+    EXPECT_EQ(line_coords[0], MeshCoordinate(0, 0));
+    EXPECT_EQ(line_coords[1], MeshCoordinate(0, 1));
+    EXPECT_EQ(line_coords[2], MeshCoordinate(0, 2));
+    EXPECT_EQ(line_coords[3], MeshCoordinate(0, 3));
+    EXPECT_EQ(line_coords[4], MeshCoordinate(1, 3));
+    EXPECT_EQ(line_coords[5], MeshCoordinate(1, 2));
+    EXPECT_EQ(line_coords[6], MeshCoordinate(1, 1));
+    EXPECT_EQ(line_coords[7], MeshCoordinate(1, 0));
+}
+
+TEST(MeshDeviceViewTest, GetLineCoordinates4x2) {
+    auto line_coords =
+        MeshDeviceView::get_line_coordinates(/*length*/ 8, /*mesh_shape*/ Shape2D(4, 2), /*mesh_offset*/ Shape2D(0, 0));
+    VerifyHamiltonianCycle(line_coords, 8);
+    // Verify identical to the old perimeter traversal (backward compatibility)
+    EXPECT_EQ(line_coords[0], MeshCoordinate(0, 0));
+    EXPECT_EQ(line_coords[1], MeshCoordinate(0, 1));
+    EXPECT_EQ(line_coords[2], MeshCoordinate(1, 1));
+    EXPECT_EQ(line_coords[3], MeshCoordinate(2, 1));
+    EXPECT_EQ(line_coords[4], MeshCoordinate(3, 1));
+    EXPECT_EQ(line_coords[5], MeshCoordinate(3, 0));
+    EXPECT_EQ(line_coords[6], MeshCoordinate(2, 0));
+    EXPECT_EQ(line_coords[7], MeshCoordinate(1, 0));
+}
+
+TEST(MeshDeviceViewTest, GetLineCoordinates4x4) {
+    auto line_coords = MeshDeviceView::get_line_coordinates(
+        /*length*/ 16, /*mesh_shape*/ Shape2D(4, 4), /*mesh_offset*/ Shape2D(0, 0));
+    VerifyHamiltonianCycle(line_coords, 16);
+}
+
+TEST(MeshDeviceViewTest, GetLineCoordinates8x4) {
+    // The Galaxy case: 32 devices in an 8x4 grid
+    auto line_coords = MeshDeviceView::get_line_coordinates(
+        /*length*/ 32, /*mesh_shape*/ Shape2D(8, 4), /*mesh_offset*/ Shape2D(0, 0));
+    VerifyHamiltonianCycle(line_coords, 32);
+}
+
+TEST(MeshDeviceViewTest, GetLineCoordinates4x8) {
+    auto line_coords = MeshDeviceView::get_line_coordinates(
+        /*length*/ 32, /*mesh_shape*/ Shape2D(4, 8), /*mesh_offset*/ Shape2D(0, 0));
+    VerifyHamiltonianCycle(line_coords, 32);
+}
+
+TEST(MeshDeviceViewTest, GetLineCoordinates2x8) {
+    auto line_coords = MeshDeviceView::get_line_coordinates(
+        /*length*/ 16, /*mesh_shape*/ Shape2D(2, 8), /*mesh_offset*/ Shape2D(0, 0));
+    VerifyHamiltonianCycle(line_coords, 16);
+}
+
+TEST(MeshDeviceViewTest, GetLineCoordinates3x4) {
+    // Odd rows, even cols — uses transposed Hamiltonian cycle
+    auto line_coords = MeshDeviceView::get_line_coordinates(
+        /*length*/ 12, /*mesh_shape*/ Shape2D(3, 4), /*mesh_offset*/ Shape2D(0, 0));
+    VerifyHamiltonianCycle(line_coords, 12);
+}
+
+TEST(MeshDeviceViewTest, GetLineCoordinates4x4WithOffset) {
+    auto line_coords = MeshDeviceView::get_line_coordinates(
+        /*length*/ 16, /*mesh_shape*/ Shape2D(4, 4), /*mesh_offset*/ Shape2D(2, 1));
+    VerifyHamiltonianCycle(line_coords, 16);
+    EXPECT_EQ(line_coords[0], MeshCoordinate(2, 1));
+}
+
+TEST(MeshDeviceViewTest, GetLineCoordinates1x8) {
+    auto line_coords =
+        MeshDeviceView::get_line_coordinates(/*length*/ 8, /*mesh_shape*/ Shape2D(1, 8), /*mesh_offset*/ Shape2D(0, 0));
+    ASSERT_THAT(line_coords, SizeIs(8));
+    for (size_t i = 0; i < 8; ++i) {
+        EXPECT_EQ(line_coords[i], MeshCoordinate(0, static_cast<uint32_t>(i)));
+    }
+}
+
+TEST(MeshDeviceViewTest, GetLineCoordinates8x1) {
+    auto line_coords =
+        MeshDeviceView::get_line_coordinates(/*length*/ 8, /*mesh_shape*/ Shape2D(8, 1), /*mesh_offset*/ Shape2D(0, 0));
+    ASSERT_THAT(line_coords, SizeIs(8));
+    for (size_t i = 0; i < 8; ++i) {
+        EXPECT_EQ(line_coords[i], MeshCoordinate(static_cast<uint32_t>(i), 0));
+    }
 }
 
 using MeshDeviceView2x4Test = MeshDevice2x4Fixture;
