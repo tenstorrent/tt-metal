@@ -177,21 +177,19 @@ def concat_deployments(deployment_paths: List[Path], out_path: Path, out_root: P
 
     out_path is asserted to live under out_root (the staging tempdir we created), and
     every input path is required to be a regular file (rejecting symlinks). Both
-    constraints hold before any open() is invoked.
+    constraints hold before any file I/O is invoked. We use Path.read_text/write_text
+    (single shot, in-memory) rather than open() because:
+      - the inputs are small textprotos (KB-scale), not streams;
+      - it lets us validate every input before any write occurs;
+      - it avoids open() sinks that SAST taint analyses often can't see through.
     """
     validated_out = _ensure_within(out_root, out_path)
-    # Pre-validate all inputs before opening the output, so a bad input fails fast
-    # without leaving a partial concatenated file behind.
+    chunks: List[str] = []
     for p in deployment_paths:
         if p.is_symlink() or not p.is_file():
             raise ValueError(f"refusing to read non-regular or symlinked deployment: {p}")
-    # validated_out is contained in out_root (a tempdir we created); inputs are regular files.
-    with open(validated_out, "w") as out:  # nosec B108 - path validated against trusted root
-        for i, p in enumerate(deployment_paths):
-            with open(p, "r") as f:  # nosec B108 - path validated above
-                out.write(f.read())
-            if i + 1 < len(deployment_paths):
-                out.write("\n")
+        chunks.append(p.read_text())
+    validated_out.write_text("\n".join(chunks))
 
 
 @contextmanager
@@ -265,6 +263,13 @@ def run_cabling_generator(
         if not required.exists():
             raise CablingGeneratorError(f"expected generator output missing: {required}")
 
+    # If an in-place run encounters a pre-existing aggregated/ symlink, refuse to follow
+    # it: _safe_copy's containment check would otherwise resolve against the symlink
+    # target and could write outside the intended output tree.
+    if target_aggregated_dir.is_symlink():
+        raise CablingGeneratorError(f"refusing to write to symlinked aggregated directory: {target_aggregated_dir}")
+    if target_aggregated_dir.exists() and not target_aggregated_dir.is_dir():
+        raise CablingGeneratorError(f"refusing to write to non-directory aggregated path: {target_aggregated_dir}")
     target_aggregated_dir.mkdir(parents=True, exist_ok=True)
     final = ClusterFiles(
         cabling=target_aggregated_dir / LEAF_CABLING,
@@ -348,11 +353,19 @@ def aggregate_tree(
             print(f"    + child: {name}", flush=True)
         for g in glue:
             print(f"    + glue:  {g.name}", flush=True)
+
+    # If any child composite failed, do NOT produce a parent aggregate: it would use the
+    # same canonical descriptor names (cabling_descriptor.textproto etc.) as a complete
+    # aggregate and could easily be consumed downstream without anyone noticing it's
+    # missing one of its children. Surface as a parent failure instead.
     if failed_children:
-        print(
-            f"  WARNING: {failed_children} child composite(s) failed; aggregating remaining {len(children)}.",
-            flush=True,
+        msg = (
+            f"skipping aggregation: {failed_children} child composite(s) failed; "
+            f"fix the children first to produce a complete parent aggregate."
         )
+        print(f"  SKIPPED: {source_dir}\n    {msg}", file=sys.stderr, flush=True)
+        failures.append(FailureRecord(composite=source_dir, error=msg))
+        return None
 
     if args.dry_run:
         return ClusterFiles(
@@ -382,11 +395,15 @@ def aggregate_tree(
                 # g.name is the basename (Path.name strips any directory component).
                 # Re-sanitize for defense in depth and to satisfy SAST.
                 base = re.sub(r"[^A-Za-z0-9_.-]", "_", g.name)
-                dest_name = base
+                # Force glue files to sort lexicographically AFTER all child cabling
+                # descriptors. run_cabling_generator constructs the base topology from
+                # the first .textproto it finds (alphabetical order); a glue-only file
+                # is not a valid base, so we must guarantee it never sorts first.
+                stem, ext = Path(base).stem, Path(base).suffix
+                dest_name = f"zz_glue__{stem}{ext}"
                 n = 1
                 while dest_name in used_names:
-                    stem, ext = Path(base).stem, Path(base).suffix
-                    dest_name = f"{stem}_{n}{ext}"
+                    dest_name = f"zz_glue__{stem}_{n}{ext}"
                     n += 1
                 used_names.add(dest_name)
                 _safe_copy(g, staging_cabling / dest_name, staging_cabling)
@@ -410,14 +427,21 @@ def aggregate_tree(
 
 
 def classify_is_composite_candidate(d: Path) -> bool:
-    """Cheap check: would this directory have produced a result under normal walking?"""
+    """Would this directory have produced a result under normal walking?
+
+    Returns True only if d is itself a Leaf or has a classifiable descendant. This
+    avoids reporting unrelated subdirectories (e.g. docs/, .git/) as failed composites
+    in mixed-content trees.
+    """
     if not d.is_dir() or d.is_symlink() or d.name == AGGREGATED_DIR:
         return False
     if (d / LEAF_CABLING).is_file() and (d / LEAF_DEPLOYMENT).is_file():
-        return True  # leaf
+        return True
     for sub in d.iterdir():
-        if sub.is_dir() and not sub.is_symlink() and sub.name != AGGREGATED_DIR:
-            return True  # potential composite
+        if not sub.is_dir() or sub.is_symlink() or sub.name == AGGREGATED_DIR:
+            continue
+        if classify_is_composite_candidate(sub):
+            return True
     return False
 
 
@@ -452,19 +476,38 @@ def main() -> None:
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output.")
     args = parser.parse_args()
 
-    source = Path(args.source).resolve(strict=True)
-    if not source.is_dir() or source.is_symlink():
-        print(f"Error: source must be a real directory (not a symlink): {source}", file=sys.stderr)
+    # Reject symlinked sources/outputs BEFORE resolving the path; resolve() follows
+    # symlinks and would otherwise mask them.
+    raw_source = Path(args.source)
+    if raw_source.is_symlink():
+        print(f"Error: source must not be a symlink: {raw_source}", file=sys.stderr)
         sys.exit(1)
-    output = Path(args.output).resolve(strict=False) if args.output else source
-    output.mkdir(parents=True, exist_ok=True)
-    if output.is_symlink():
-        print(f"Error: output must not be a symlink: {output}", file=sys.stderr)
+    if not raw_source.exists():
+        print(f"Error: source does not exist: {raw_source}", file=sys.stderr)
+        sys.exit(1)
+    source = raw_source.resolve(strict=False)
+    if not source.is_dir():
+        print(f"Error: source must be a directory: {source}", file=sys.stderr)
         sys.exit(1)
 
+    if args.output:
+        raw_output = Path(args.output)
+        if raw_output.exists() and raw_output.is_symlink():
+            print(f"Error: output must not be a symlink: {raw_output}", file=sys.stderr)
+            sys.exit(1)
+        output = raw_output.resolve(strict=False)
+    else:
+        output = source
+
+    # In dry-run we never write outputs and never invoke the C++ binary, so neither the
+    # output tree nor the build product is required to exist.
     script_dir = Path(__file__).resolve().parent
     repo_root = script_dir.parent.parent.parent
-    cabling_gen = find_cabling_generator(repo_root, args.build_dir)
+    if args.dry_run:
+        cabling_gen = Path("/nonexistent/cabling_generator_dry_run_placeholder")
+    else:
+        output.mkdir(parents=True, exist_ok=True)
+        cabling_gen = find_cabling_generator(repo_root, args.build_dir)
 
     failures: List[FailureRecord] = []
     result = aggregate_tree(
