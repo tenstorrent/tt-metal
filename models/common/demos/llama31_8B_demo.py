@@ -325,15 +325,6 @@ def resolve_accuracy_baseline(device_name: str, batch_size: int) -> tuple[dict, 
     if yaml_accuracy and "top1" in yaml_accuracy and "top5" in yaml_accuracy:
         return {"top1": float(yaml_accuracy["top1"]), "top5": float(yaml_accuracy["top5"])}, "models/model_targets.yaml"
 
-    yaml_accuracy = resolve_accuracy_targets(
-        model_name="Llama-3.1-8B",
-        sku=device_name,
-        batch_size=batch_size,
-        seq_len=None,
-    )
-    if yaml_accuracy and "top1" in yaml_accuracy and "top5" in yaml_accuracy:
-        return {"top1": float(yaml_accuracy["top1"]), "top5": float(yaml_accuracy["top5"])}, "models/model_targets.yaml"
-
     return {}, "no accuracy baseline found"
 
 
