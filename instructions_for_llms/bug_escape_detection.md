@@ -307,9 +307,10 @@ Every GHA run URL dispatched during this campaign must be recorded on this page 
 after dispatch — not just at the end. If someone asks "where are we?", the answer is always
 "check Confluence" — not a Slack status report.
 
-**Page format: one flat table** with layer-filtered and active candidates only.
-Do NOT include Opus-dismissed candidates (`SKIP_LIKELY_NOISE`, `SKIP_UNRELATED`) — they add noise.
-Layer-filtered candidates (`❌ Layer filter`) ARE included since they document what was checked.
+**Page format: one flat table** containing ONLY candidates that reached hardware.
+A candidate appears in this table if and only if Opus returned `PROCEED_TO_BISECT`.
+Do NOT include layer-filtered candidates — they were eliminated before any hardware ran.
+Do NOT include Opus-dismissed candidates (`SKIP_LIKELY_NOISE`, `SKIP_UNRELATED`).
 Never use separate sections per status.
 
 **Use the native Confluence storage format table** with `data-layout="full-width"` and
@@ -329,7 +330,7 @@ Column notes:
 - `Runs Dispatched`: all GHA run links with result, e.g. `BEFORE [12345](url) → PASS; AFTER [12346](url) → FAIL`
 - `Opus Verdict`: `PROCEED_TO_BISECT` / `N/A` (layer filtered — Opus was not run)
 - `Opus Reasoning`: 1–2 sentence summary (empty/`—` for layer-filtered rows)
-- `Status`: one of `🔍 Under Investigation`, `✅ Confirmed`, `❌ Layer filter`, `⏳ Inconclusive`
+- `Status`: one of `🔍 Under Investigation`, `✅ Confirmed`, `❌ Refuted`, `⏳ Inconclusive`
 
 **Update the table after EVERY state transition:**
 - Candidate detected → add row immediately (even before Opus, with status TBD)
