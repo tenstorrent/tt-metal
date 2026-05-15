@@ -110,6 +110,12 @@ constexpr uint32_t TILE_H = 32U;
 constexpr uint32_t SENTINEL = 0xFFFFFFFFU;
 constexpr uint16_t K_SLOT_SENTINEL = 0xFFFFU;
 constexpr uint32_t PLAN_CHUNK = 32U;
+constexpr uint32_t PREFILL_SEED_ENTRIES = 32U;
+// Wide L1 seed words: each uint64 covers two plan uint32s or four k_slot uint16s.
+constexpr uint64_t PLAN_SEED_U64 = (static_cast<uint64_t>(SENTINEL) << 32) | static_cast<uint64_t>(SENTINEL);
+constexpr uint64_t KS_SEED_U64 =
+    (static_cast<uint64_t>(K_SLOT_SENTINEL) << 48) | (static_cast<uint64_t>(K_SLOT_SENTINEL) << 32) |
+    (static_cast<uint64_t>(K_SLOT_SENTINEL) << 16) | static_cast<uint64_t>(K_SLOT_SENTINEL);
 constexpr uint32_t MD_ROW_STRIDE_U16 = md_aligned_page / sizeof(uint16_t);
 constexpr uint32_t SC_ROW_STRIDE_U16 = sc_aligned_page / sizeof(uint16_t);  // bf16 stride per row
 // SHARED_SLOT_U32 is defined above from CT arg 10. Each shared-table slot is
@@ -306,25 +312,48 @@ void kernel_main() {
             offsets[e + 1U] = round_up(running, 32U);
         }
 
-        // Pre-fill plan / grouped_scores / k_slot DRAM with sentinels.
-        // plan: 0xFFFFFFFF; grouped_scores: 0; k_slot: 0xFFFF. Reuse the
-        // per-expert staging slots — they hold e_local * PLAN_CHUNK entries
-        // each and are untouched until phase 3, so stamp them full and burst
-        // at that size to minimize NOC-issue count (t_cap / stamp_entries
-        // writes per buffer instead of t_cap / PLAN_CHUNK).
-        const uint32_t stamp_entries = (e_local * PLAN_CHUNK <= t_cap) ? (e_local * PLAN_CHUNK) : t_cap;
-        for (uint32_t i = 0; i < stamp_entries; ++i) {
-            plan_stage[i] = SENTINEL;
-            gs_stage[i] = 0U;
-            ks_stage[i] = K_SLOT_SENTINEL;
+        // Pre-fill plan / grouped_scores / k_slot DRAM. Build larger plan and
+        // k-slot stamps in the existing per-expert staging buffers by seeding
+        // 32 entries then self-copy doubling. grouped_scores uses
+        // firmware-zeroed L1, so it needs no staging buffer.
+        const uint32_t prefill_stamp_entries = e_local * PLAN_CHUNK;
+        volatile tt_l1_ptr uint64_t* plan_seed = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(plan_stage);
+        constexpr uint32_t plan_seed_u64 = (PREFILL_SEED_ENTRIES * sizeof(uint32_t)) / sizeof(uint64_t);
+        for (uint32_t i = 0; i < plan_seed_u64; ++i) {
+            plan_seed[i] = PLAN_SEED_U64;
         }
+
+        volatile tt_l1_ptr uint64_t* ks_seed = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(ks_stage);
+        constexpr uint32_t ks_seed_u64 = (PREFILL_SEED_ENTRIES * sizeof(uint16_t)) / sizeof(uint64_t);
+        for (uint32_t i = 0; i < ks_seed_u64; ++i) {
+            ks_seed[i] = KS_SEED_U64;
+        }
+
+        uint64_t plan_stamp_noc = get_noc_addr((uint32_t)plan_stage);
+        uint64_t ks_stamp_noc = get_noc_addr((uint32_t)ks_stage);
+        uint32_t stamp_entries = PREFILL_SEED_ENTRIES;
+        while (stamp_entries < prefill_stamp_entries) {
+            uint32_t copy_entries = stamp_entries;
+            if (stamp_entries + copy_entries > prefill_stamp_entries) {
+                copy_entries = prefill_stamp_entries - stamp_entries;
+            }
+            noc_async_read(plan_stamp_noc, (uint32_t)(plan_stage + stamp_entries), copy_entries * sizeof(uint32_t));
+            noc_async_read(ks_stamp_noc, (uint32_t)(ks_stage + stamp_entries), copy_entries * sizeof(uint16_t));
+            noc_async_read_barrier();
+            stamp_entries += copy_entries;
+        }
+
         uint64_t plan_base_noc = get_noc_addr(0, plan_addrgen);
         uint64_t gs_base_noc = get_noc_addr(0, gs_addrgen);
         uint64_t ks_base_noc = get_noc_addr(0, ks_addrgen);
-        for (uint32_t base = 0; base < t_cap; base += stamp_entries) {
-            uint32_t n = (base + stamp_entries <= t_cap) ? stamp_entries : (t_cap - base);
+        constexpr uint32_t gs_entries_per_burst = MEM_ZEROS_SIZE / sizeof(uint16_t);
+        for (uint32_t base = 0; base < t_cap; base += prefill_stamp_entries) {
+            uint32_t n = (base + prefill_stamp_entries <= t_cap) ? prefill_stamp_entries : (t_cap - base);
             noc_async_write((uint32_t)plan_stage, plan_base_noc + base * sizeof(uint32_t), n * sizeof(uint32_t));
-            noc_async_write((uint32_t)gs_stage, gs_base_noc + base * sizeof(uint16_t), n * sizeof(uint16_t));
+            for (uint32_t off = 0; off < n; off += gs_entries_per_burst) {
+                uint32_t m = (off + gs_entries_per_burst <= n) ? gs_entries_per_burst : (n - off);
+                noc_async_write(MEM_ZEROS_BASE, gs_base_noc + (base + off) * sizeof(uint16_t), m * sizeof(uint16_t));
+            }
             noc_async_write((uint32_t)ks_stage, ks_base_noc + base * sizeof(uint16_t), n * sizeof(uint16_t));
         }
 
@@ -523,6 +552,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* plan_l1_buf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(plan_l1_addr);
 
     uint32_t tile_row = my_worker_start;
+    const uint64_t zeros_noc = get_noc_addr(MEM_ZEROS_BASE);
+    constexpr uint32_t zero_chunk_bytes = MEM_ZEROS_SIZE;
     for (uint32_t step = 0; step < my_active_count; ++step, tile_row += worker_stride) {
         uint64_t plan_noc = get_noc_addr(0, plan_addrgen) + tile_row * TILE_H * sizeof(uint32_t);
         noc_async_read(plan_noc, plan_l1_addr, TILE_H * sizeof(uint32_t));
@@ -540,15 +571,26 @@ void kernel_main() {
                 uint32_t src = plan_l1_buf[r];
                 uint32_t row_dst = dst + r * hidden_chunk_bytes;
                 if (src == SENTINEL) {
-                    volatile tt_l1_ptr uint16_t* p = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(row_dst);
-                    for (uint32_t i = 0; i < hidden_chunk_bytes / 2U; ++i) p[i] = 0U;
+                    uint32_t remaining = hidden_chunk_bytes;
+                    uint32_t off = 0;
+                    while (remaining > 0U) {
+                        uint32_t n = remaining > zero_chunk_bytes ? zero_chunk_bytes : remaining;
+                        noc_async_read(zeros_noc, row_dst + off, n);
+                        off += n;
+                        remaining -= n;
+                    }
                 } else {
                     uint64_t row_noc = get_noc_addr(src, dispatched_addrgen) + chunk_off_bytes;
                     noc_async_read(row_noc, row_dst, read_bytes);
                     if (pad_bytes > 0U) {
-                        volatile tt_l1_ptr uint16_t* p =
-                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(row_dst + read_bytes);
-                        for (uint32_t i = 0; i < pad_bytes / 2U; ++i) p[i] = 0U;
+                        uint32_t remaining = pad_bytes;
+                        uint32_t off = 0;
+                        while (remaining > 0U) {
+                            uint32_t n = remaining > zero_chunk_bytes ? zero_chunk_bytes : remaining;
+                            noc_async_read(zeros_noc, row_dst + read_bytes + off, n);
+                            off += n;
+                            remaining -= n;
+                        }
                     }
                 }
             }
