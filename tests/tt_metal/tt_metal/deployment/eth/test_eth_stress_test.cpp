@@ -38,7 +38,7 @@ static void run_test_stress(
     auto* const recv_device = recv_mesh_device->get_devices()[0];
 
     TEST_PARAM(uint32_t, transfer_size, 160 * 1024, "ETH_TEST_TRANSFER_SIZE");
-    TEST_PARAM(uint32_t, transfer_count, 20 << 10, "ETH_TEST_TRANSFER_COUNT");
+    TEST_PARAM(uint32_t, transfer_count, 2 << 20, "ETH_TEST_TRANSFER_COUNT");
 
     uint32_t num_bytes_per_send = transfer_size / 2;
     uint64_t total_transferred = (uint64_t)transfer_size * transfer_count;
