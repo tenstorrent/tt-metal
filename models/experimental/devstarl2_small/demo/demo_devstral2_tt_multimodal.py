@@ -45,6 +45,9 @@ back to the real length for PCC. Logits use **TT** ``LMHead`` on the last-token 
 If the LM head hits Wormhole L1 circular-buffer limits, use ``--lm-head-cpu`` (chunked torch matmul),
 lower shards via ``--lm-head-max-device-cols``, or env ``DEVSTRAL2_LM_HEAD_MAX_COLUMNS_PER_DEVICE``.
 
+**Performance logs:** boxed sections for context / generation; ``▶`` lines for phase timings.
+Set ``DEVSTRAL2_DEMO_PERF_LOG_STEPS=1`` for per-generation-step detail (verbose).
+
 **Context length:** with no ``--max-seq-len``, **Blackhole** uses ``max_seq_len`` ≥ **256000** (via
 ``default_devstral_demo_max_seq_len``); **Wormhole** uses a prompt-sized default to avoid DRAM OOM from
 full KV preallocation at 256K.
@@ -54,6 +57,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import time
 import types
 
 import torch
@@ -66,6 +70,19 @@ from transformers.models.mistral3.modeling_mistral3 import Mistral3Model
 import ttnn
 from models.common.sampling import SamplingGenerator, SamplingParams, format_sampling_params
 from models.common.utility_functions import comp_allclose, comp_pcc
+from models.experimental.devstarl2_small.devstral_utils.demo_perf import (
+    log_gen_step_summary,
+    log_gen_step_timings,
+    log_generation_done,
+    log_generation_start,
+    log_hf_context_after,
+    log_hf_context_before,
+    log_model_output,
+    log_perf_ms,
+    log_tt_context_budget,
+    log_tt_prefill_context,
+    perf_log_generation_steps,
+)
 from models.experimental.devstarl2_small.devstral_utils import (
     DEFAULT_MODEL_ID,
     DEVSTRAL_DEMO_BLACKHOLE_DEFAULT_MAX_SEQ_LEN,
@@ -75,6 +92,7 @@ from models.experimental.devstarl2_small.devstral_utils import (
     default_devstral_demo_max_seq_len,
     demo_lm_head_max_columns_per_device,
     devstral_tt_kv_cache_max_seq_len,
+    devstral_validate_demo_kv_dram_budget,
     devstral_supports_on_device_sampling,
     eos_token_ids,
     host_input_ids_to_tt_replicated,
@@ -205,10 +223,13 @@ def main():
     os.environ["HF_MODEL"] = args.model_id
     apply_devstral_hf_trust_patches()
 
+    t_mesh = time.perf_counter()
     mesh_device = open_devstral_demo_mesh(max(1, min(args.mesh_width, ttnn.get_num_devices())))
+    log_perf_ms("tt.open_mesh_device", t_mesh)
     try:
         dtype_tt = ttnn.bfloat16
 
+        t_tok = time.perf_counter()
         tokenizer = MistralCommonBackend.from_pretrained(
             args.model_id,
             trust_remote_code=True,
@@ -241,6 +262,7 @@ def main():
             )
 
         input_ids = tokenized["input_ids"]
+        log_perf_ms("tt.tokenizer_load_and_apply_chat_template", t_tok)
         prompt_len = int(input_ids.shape[1])
         extra_tokens = max(0, args.max_new_tokens)
         need = prompt_len + extra_tokens + 2048
@@ -262,6 +284,7 @@ def main():
                 max_seq = args.max_seq_len
             logger.info(f"TT max_seq_len={max_seq} (explicit --max-seq-len; need={need}).")
 
+        t_margs = time.perf_counter()
         model_args = ModelArgs(
             mesh_device,
             max_batch_size=1,
@@ -271,8 +294,11 @@ def main():
             cache_hf=True,
         )
         model_args.max_kv_cache_seq_len = devstral_tt_kv_cache_max_seq_len(model_args, need)
-        logger.info(
-            f"KV cache tensor seq dim={model_args.max_kv_cache_seq_len} (RoPE TT max_seq_len={max_seq}; run need≈{need})."
+        log_tt_context_budget(
+            prompt_tokens=prompt_len,
+            budget_need_tokens=need,
+            rope_max_seq_len=max_seq,
+            kv_cache_seq_dim=model_args.max_kv_cache_seq_len,
         )
         model_args.is_distributed_norm = types.MethodType(lambda self, mode: False, model_args)
 
@@ -284,6 +310,7 @@ def main():
                 f"Checkpoint load failed (memory, hub, FP8, etc.): {exc}\n"
                 "Ensure HF access, enough RAM, and compatible transformers."
             ) from exc
+        log_perf_ms("tt.ModelArgs_init_and_load_state_dict", t_margs)
 
         if args.text_layers is not None:
             if args.text_layers < 1 or args.text_layers > model_args.full_model_n_layers:
@@ -295,6 +322,14 @@ def main():
                 logger.warning(
                     "Partial --text-layers: TT generation will not match full-model reference/inference.py quality."
                 )
+
+        if not args.hf_generate:
+            devstral_validate_demo_kv_dram_budget(
+                model_args,
+                prompt_tokens=prompt_len,
+                kv_seq_len=model_args.max_kv_cache_seq_len,
+                mesh_device=mesh_device,
+            )
 
         hf_full = model_args.cached_hf_model
         if hf_full is None:
@@ -312,6 +347,7 @@ def main():
 
         shared_tt_ccl = TT_CCL(mesh_device)
 
+        t_tt_model = time.perf_counter()
         tt_model = TtMinistral3Model(
             mesh_device=mesh_device,
             tt_ccl=shared_tt_ccl,
@@ -325,6 +361,7 @@ def main():
             original_max_position_embeddings=rope_params.get("original_max_position_embeddings"),
             ministral_text_config=text_cfg,
         )
+        log_perf_ms("tt.TtMinistral3Model_init", t_tt_model)
 
         sd_prefix = model_args.get_state_dict_prefix("", None)
         out_key = f"{sd_prefix}output.weight"
@@ -332,6 +369,7 @@ def main():
             raise RuntimeError(f"Missing {out_key!r} in meta state dict (required for LM head).")
         lm_head_weight_cpu: torch.Tensor | None = None
         tt_lm_head: LMHead | None = None
+        t_lmsetup = time.perf_counter()
         if args.lm_head_cpu:
             lm_head_weight_cpu = meta_state_dict[out_key].detach().to(torch.bfloat16).cpu().contiguous()
             logger.info(
@@ -359,6 +397,8 @@ def main():
                 max_columns_per_device=lm_head_max_cols,
             )
 
+        log_perf_ms("tt.lm_head_setup", t_lmsetup)
+
         use_device_sampling = (
             not args.lm_head_cpu
             and not args.cpu_sampling
@@ -377,6 +417,7 @@ def main():
 
         sampling: SamplingGenerator | None = None
         sampling_empty_slots: list[int] | None = None
+        t_samp = time.perf_counter()
         if use_device_sampling:
             sampling = SamplingGenerator(
                 args=model_args,
@@ -398,6 +439,8 @@ def main():
             formatted_sampling = format_sampling_params(sampling_in, len(sampling_empty_slots))
             sampling.reset_sampling_params(formatted_sampling)
             sampling.seed_manager.reset_seed(formatted_sampling.seed, sampling_empty_slots)
+
+        log_perf_ms("tt.sampling_generator_setup", t_samp)
 
         _sampling_splits = model_args.num_devices if list(mesh_device.shape) != [1, 1] else 2
         if sampling is not None and model_args.vocab_size // _sampling_splits <= 64 * 1024:
@@ -424,13 +467,21 @@ def main():
             f"TT language model prefill ({model_args.n_layers} decoder layers; TT embed + TtMinistral3RotaryEmbedding); "
             f"prompt template: {'simple-chat' if args.simple_chat else 'inference_fixtures (inference.py)'}."
         )
+        t_prompt_prefill = time.perf_counter()
         tt_lm_torch = tt_prefill_hidden_states_from_ids(
             input_ids, pad_token_id, mesh_device, tt_model, seq_len_lm, model_args
         )
+        log_perf_ms("tt.prompt_prefill_tt_prefill_hidden_states_from_ids", t_prompt_prefill)
 
         logger.info(f"TT prefill hidden states shape (batch, seq, dim): {tuple(tt_lm_torch.shape)}")
+        log_tt_prefill_context(
+            language_prompt_tokens=seq_len_lm,
+            tt_prefill_padded_len=target_lm,
+            rope_max_seq_len=max_seq,
+        )
 
         if args.verify:
+            t_verify = time.perf_counter()
             text_root = text_model_root(hf_inner)
             rotary = text_root.rotary_emb
             rotary.eval()
@@ -463,6 +514,7 @@ def main():
             logger.info(f"PCC (HF ref on HF embeddings vs full TT prefill): {msg}")
             if not pcc_ok:
                 logger.warning(f"PCC check did not reach threshold: {msg}")
+            log_perf_ms("tt.verify_hf_reference_vs_tt_prefill", t_verify)
 
         if args.max_new_tokens <= 0:
             pass
@@ -474,12 +526,27 @@ def main():
                     torch.cuda.manual_seed_all(args.seed)
             prompt_vec = tokenized["input_ids"][0]
             input_ids_gen = tokenized["input_ids"].to(gen_device)
+            _hf_prompt_tok = int(input_ids_gen.shape[1])
+            log_hf_context_before(
+                prompt_tokens=_hf_prompt_tok,
+                max_new_tokens=int(REFERENCE_GENERATE_KWARGS.get("max_new_tokens", 0)),
+            )
             logger.info(f"HF baseline generate {REFERENCE_GENERATE_KWARGS} on {gen_device} …")
+            t_hf_gen = time.perf_counter()
             with torch.inference_mode():
                 out = hf_full.generate(input_ids_gen, **REFERENCE_GENERATE_KWARGS)
+            log_perf_ms("tt.hf_baseline_model.generate", t_hf_gen)
             seq = out[0]
+            log_hf_context_after(
+                output_tokens=int(seq.numel()),
+                prompt_tokens=_hf_prompt_tok,
+            )
             answer_text = tokenizer.decode(seq[len(prompt_vec) :].tolist(), skip_special_tokens=False)
-            logger.info(f"HF generate baseline ({seq.numel() - prompt_vec.numel()} new tokens):\n{answer_text}")
+            log_model_output(
+                backend="HF baseline",
+                text=answer_text,
+                new_tokens=int(seq.numel()) - _hf_prompt_tok,
+            )
         else:
             do_sample = prefer_stochastic_sampling
             if args.seed is not None:
@@ -493,7 +560,9 @@ def main():
                     "No eos_token_id on config/text_config/tokenizer; TT loop will only stop at --max-new-tokens."
                 )
             gen_sl = seq_len_lm
+            t_ids_tt = time.perf_counter()
             ids_tt_gen = host_input_ids_to_tt_replicated(mesh_device, input_ids)
+            log_perf_ms("tt.host_input_ids_to_tt_replicated", t_ids_tt)
 
             mode = "greedy" if not prefer_stochastic_sampling else f"sample (T={args.temperature})"
             lm_mode = "CPU lm_head (chunked torch)" if args.lm_head_cpu else "TT lm_head"
@@ -502,27 +571,47 @@ def main():
                 if sampling is not None
                 else "CPU softmax / argmax on TT logits (host)"
             )
-            logger.info(
-                f"TT generation: up to {args.max_new_tokens} new tokens, {mode}; "
-                f"TT decoder + {lm_mode}; {samp_mode}. Prompt ids buffered on TT (ttnn.concat / pad)."
+            log_generation_start(
+                backend="TT",
+                current_sequence_tokens=gen_sl,
+                prompt_tokens=prompt_len,
+                max_new_tokens=args.max_new_tokens,
+                mode=mode,
+                lm_mode=lm_mode,
+                sampling_mode=samp_mode,
+                extra="Prompt ids on device (ttnn.concat / pad)",
             )
             try:
-                for _step in range(args.max_new_tokens):
+                sum_prefill_s = 0.0
+                sum_lm_s = 0.0
+                sum_post_lm_s = 0.0
+                sum_append_s = 0.0
+                n_gen_steps = 0
+                t_loop = time.perf_counter()
+                for step_i in range(args.max_new_tokens):
                     tok_slot = (gen_sl - 1) % 32
+                    t_pf = time.perf_counter()
                     if sampling is not None:
                         sampling.seed_manager.get_new_values()
                     tt_out = tt_forward_prefill_from_device_ids(
                         ids_tt_gen, gen_sl, pad_token_id, mesh_device, tt_model, model_args
                     )
+                    dt_prefill = time.perf_counter() - t_pf
+
                     if sampling is not None:
                         assert tt_lm_head is not None
+                        t_lm = time.perf_counter()
                         logits_tt = tt_lm_head_logits_block(tt_out, gen_sl - 1, model_args, tt_lm_head)
+                        dt_lm = time.perf_counter() - t_lm
+                        t_po = time.perf_counter()
                         sample_result = sampling.sample(logits_tt, enable_trace=False)
                         tt_next = sample_result[0] if isinstance(sample_result, tuple) else sample_result
                         next_scalar = tt_sampling_output_token_id(tt_next, tok_slot)
                         ttnn.deallocate(logits_tt)
                         ttnn.deallocate(tt_out)
+                        dt_post = time.perf_counter() - t_po
                     else:
+                        t_lm = time.perf_counter()
                         if args.lm_head_cpu:
                             assert lm_head_weight_cpu is not None
                             logits_row = cpu_lm_head_logits_last_token(
@@ -533,22 +622,66 @@ def main():
                             logits_row = tt_lm_head_logits_last_token(
                                 tt_out, gen_sl - 1, mesh_device, model_args, tt_lm_head
                             )
+                        dt_lm = time.perf_counter() - t_lm
+                        t_po = time.perf_counter()
                         ttnn.deallocate(tt_out)
                         if do_sample:
                             probs = torch.softmax(logits_row.float().squeeze(0) / max(args.temperature, 1e-6), dim=-1)
                             next_scalar = int(torch.multinomial(probs, num_samples=1).item())
                         else:
                             next_scalar = int(logits_row.argmax(dim=-1).item())
+                        dt_post = time.perf_counter() - t_po
+
+                    sum_prefill_s += dt_prefill
+                    sum_lm_s += dt_lm
+                    sum_post_lm_s += dt_post
+                    n_gen_steps += 1
+                    if perf_log_generation_steps():
+                        log_gen_step_timings(
+                            step_index=step_i,
+                            sequence_tokens=gen_sl,
+                            phase_seconds={
+                                "prefill": dt_prefill,
+                                "lm_head": dt_lm,
+                                "post": dt_post,
+                            },
+                        )
 
                     if next_scalar in eos_ids:
                         break
+                    t_ap = time.perf_counter()
                     ids_tt_gen = tt_append_uint32_token(ids_tt_gen, next_scalar, mesh_device)
+                    sum_append_s += time.perf_counter() - t_ap
                     gen_sl += 1
 
+                loop_elapsed = time.perf_counter() - t_loop
+                log_perf_ms("tt.autoregressive_loop_wall", t_loop)
+                if n_gen_steps > 0:
+                    inv = 1.0 / float(n_gen_steps)
+                    log_gen_step_summary(
+                        n_steps=n_gen_steps,
+                        wall_seconds=loop_elapsed,
+                        avg_phase_seconds={
+                            "LM prefill": sum_prefill_s * inv,
+                            "LM head": sum_lm_s * inv,
+                            "sample / post": sum_post_lm_s * inv,
+                            "append token (TT)": sum_append_s * inv,
+                        },
+                        throughput_value=float(n_gen_steps) / loop_elapsed,
+                    )
+
+                log_generation_done(
+                    backend="TT",
+                    final_sequence_tokens=gen_sl,
+                    prompt_tokens=prompt_len,
+                )
+
+                t_pull = time.perf_counter()
                 ids_host = tt_replicated_ids_to_torch_long(mesh_device, ids_tt_gen, gen_sl)
+                log_perf_ms("tt.tt_replicated_ids_to_torch_long", t_pull)
                 answer_ids = ids_host[prompt_len:]
                 answer_text = tokenizer.decode(answer_ids.tolist(), skip_special_tokens=False)
-                logger.info(f"TT stack + TT lm_head generated ({answer_ids.numel()} tokens):\n{answer_text}")
+                log_model_output(backend="TT", text=answer_text, new_tokens=answer_ids.numel())
             finally:
                 ttnn.deallocate(ids_tt_gen)
     finally:

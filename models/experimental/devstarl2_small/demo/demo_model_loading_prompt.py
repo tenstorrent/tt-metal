@@ -39,19 +39,38 @@ Usage (repo root)::
     # Cap TT RoPE ``max_seq_len`` / override KV budgeting (same flags as text multimodal demo)
     python models/experimental/devstarl2_small/demo/demo_model_loading_prompt.py --backend tt \\
         --max-seq-len 8192
+
+    # ~256K-token multimodal prompt (generate JSON first, then run demo):
+    python models/experimental/devstarl2_small/scripts/make_long_context_prompt.py \\
+        --target-tokens 256000 --vision-square-pixels 1540 \\
+        --output models/experimental/devstarl2_small/reference/messages_256k.json
+    python models/experimental/devstarl2_small/demo/demo_model_loading_prompt.py --backend tt \\
+        --messages-json models/experimental/devstarl2_small/reference/messages_256k.json \\
+        --vision-square-pixels 1540 --max-new-tokens 1
+
+Logs use boxed ``───`` sections for context and generation, and ``▶`` lines for per-phase
+timings. Set ``DEVSTRAL2_DEMO_PERF_LOG_STEPS=1`` for per-step generation detail.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import time
 import types
 from pathlib import Path
+from typing import Any
 
 import torch
 from loguru import logger
 from PIL import Image
-from transformers import AutoModelForImageTextToText, AutoProcessor, MistralCommonBackend
+from transformers import AutoModelForImageTextToText, AutoProcessor
+
+try:
+    from transformers import MistralCommonBackend
+except ImportError:  # transformers<5: use processor.tokenizer in run_tt (see load_tt_tokenizer).
+    MistralCommonBackend = None  # type: ignore[misc, assignment]
 from transformers.models.ministral3.configuration_ministral3 import Ministral3Config
 from transformers.models.mistral3.modeling_mistral3 import Mistral3Model
 from transformers.models.pixtral.modeling_pixtral import position_ids_in_meshgrid
@@ -59,10 +78,23 @@ from transformers.models.pixtral.modeling_pixtral import position_ids_in_meshgri
 import ttnn
 from models.common.sampling import SamplingGenerator, SamplingParams, format_sampling_params
 from models.experimental.devstarl2_small.demo import demo_devstral2_tt_multimodal as _tt_demo
+from models.experimental.devstarl2_small.devstral_utils.demo_perf import (
+    log_gen_step_summary,
+    log_gen_step_timings,
+    log_generation_done,
+    log_generation_start,
+    log_hf_context_after,
+    log_hf_context_before,
+    log_model_output,
+    log_perf_ms,
+    log_tt_context_budget,
+    perf_log_generation_steps,
+)
 from models.experimental.devstarl2_small.devstral_utils import (
     DEVSTRAL_DEMO_BLACKHOLE_DEFAULT_MAX_SEQ_LEN,
     default_devstral_demo_max_seq_len,
     devstral_tt_kv_cache_max_seq_len,
+    devstral_validate_demo_kv_dram_budget,
     devstral_supports_on_device_sampling,
     pad_input_ids_and_positions_for_tt_prefill,
     tt_lm_head_logits_block,
@@ -87,6 +119,23 @@ MODEL_LOADING_MESSAGES = [
         ],
     }
 ]
+
+
+def load_chat_messages_from_json(path: Path) -> list[dict[str, Any]]:
+    """Load OpenAI-style chat messages from JSON (list or ``make_long_context_prompt.py`` output)."""
+    with path.open(encoding="utf-8") as f:
+        data = json.load(f)
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict) and isinstance(data.get("messages"), list):
+        meta = data.get("metadata")
+        if isinstance(meta, dict) and meta.get("measured_tokens") is not None:
+            logger.info(
+                f"Loaded long-context messages from {path} "
+                f"(metadata: {meta.get('measured_tokens'):,} measured tokens, mode={meta.get('mode')!r})."
+            )
+        return data["messages"]
+    raise ValueError(f"Expected a JSON list or object with 'messages' key in {path}")
 
 
 def _resize_image_max_edge(image: Image.Image, max_edge: int) -> Image.Image:
@@ -243,6 +292,7 @@ def run_hf(
     seed: int | None,
     vision_max_edge: int,
     vision_square_pixels: int | None,
+    messages: list[dict[str, Any]] | None = None,
 ) -> None:
     if not image_path.is_file():
         raise FileNotFoundError(
@@ -250,6 +300,7 @@ def run_hf(
             "Add sample.jpeg under models/experimental/devstarl2_small/reference/."
         )
 
+    t0 = time.perf_counter()
     processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
     model = AutoModelForImageTextToText.from_pretrained(
         model_id,
@@ -258,6 +309,7 @@ def run_hf(
         trust_remote_code=True,
     )
     model.eval()
+    log_perf_ms("hf.load_processor_and_model", t0)
     device = next(model.parameters()).device
 
     image = Image.open(image_path).convert("RGB")
@@ -272,13 +324,16 @@ def run_hf(
     else:
         logger.info(f"HF: image within vision-max-edge={vision_max_edge} ({image.size}), no thumbnail.")
 
+    chat_messages = messages if messages is not None else MODEL_LOADING_MESSAGES
     prompt = processor.apply_chat_template(
-        MODEL_LOADING_MESSAGES,
+        chat_messages,
         add_generation_prompt=True,
         tokenize=False,
     )
     inputs = processor(text=prompt, images=image, return_tensors="pt")
     inputs = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
+    _prompt_tok = int(inputs["input_ids"].shape[1])
+    log_hf_context_before(prompt_tokens=_prompt_tok, max_new_tokens=max_new_tokens)
 
     if seed is not None:
         torch.manual_seed(seed)
@@ -286,10 +341,22 @@ def run_hf(
             torch.cuda.manual_seed_all(seed)
 
     logger.info(f"HF multimodal generate (max_new_tokens={max_new_tokens}) on {device} …")
+    t_gen = time.perf_counter()
     with torch.inference_mode():
         output_ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
+    log_perf_ms("hf.model.generate", t_gen)
+    log_hf_context_after(
+        output_tokens=int(output_ids.shape[1]),
+        prompt_tokens=_prompt_tok,
+    )
+    t_dec = time.perf_counter()
     output_text = processor.batch_decode(output_ids, skip_special_tokens=True)[0]
-    logger.info(f"HF output:\n{output_text}")
+    log_perf_ms("hf.processor.batch_decode", t_dec)
+    log_model_output(
+        backend="HF",
+        text=output_text,
+        new_tokens=int(output_ids.shape[1]) - _prompt_tok,
+    )
 
 
 def run_tt(
@@ -307,6 +374,7 @@ def run_tt(
     vision_square_pixels: int | None,
     cpu_sampling: bool,
     max_seq_len_override: int | None,
+    messages: list[dict[str, Any]] | None = None,
 ) -> None:
     if not image_path.is_file():
         raise FileNotFoundError(f"TT multimodal path requires an image file; missing {image_path}.")
@@ -318,6 +386,7 @@ def run_tt(
     do_sample = ref_do_sample if not greedy else False
     gen_temperature = temperature if not greedy else float(REFERENCE_GENERATE_KWARGS["temperature"])
 
+    t_hf_prep = time.perf_counter()
     processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
     image = Image.open(image_path).convert("RGB")
     orig_sz = image.size
@@ -335,8 +404,9 @@ def run_tt(
         )
     elif vision_max_edge > 0:
         logger.info(f"TT vision: image within vision-max-edge={vision_max_edge} ({image.size}), no thumbnail.")
+    chat_messages = messages if messages is not None else MODEL_LOADING_MESSAGES
     prompt = processor.apply_chat_template(
-        MODEL_LOADING_MESSAGES,
+        chat_messages,
         add_generation_prompt=True,
         tokenize=False,
     )
@@ -347,12 +417,15 @@ def run_tt(
     if not isinstance(image_sizes, torch.Tensor):
         raise TypeError(f"Expected image_sizes tensor from processor, got {type(image_sizes)}")
     image_sizes_list = _image_sizes_list_from_batch(image_sizes)
+    log_perf_ms("tt.hf_processor_chat_template_and_pixel_batch", t_hf_prep)
 
     prompt_len = int(input_ids.shape[1])
     extra_tokens = max(0, max_new_tokens)
     need = prompt_len + extra_tokens + 2048
 
+    t_mesh = time.perf_counter()
     mesh_device = _tt_demo.open_devstral_demo_mesh(max(1, min(mesh_width, ttnn.get_num_devices())))
+    log_perf_ms("tt.open_mesh_device", t_mesh)
     try:
         if max_seq_len_override is None:
             max_seq = default_devstral_demo_max_seq_len(mesh_device, need)
@@ -375,6 +448,7 @@ def run_tt(
 
         dtype_tt = ttnn.bfloat16
 
+        t_ckpt = time.perf_counter()
         logger.info("Loading checkpoint via ModelArgs.load_state_dict() …")
         model_args = ModelArgs(
             mesh_device,
@@ -385,17 +459,27 @@ def run_tt(
             cache_hf=True,
         )
         model_args.max_kv_cache_seq_len = devstral_tt_kv_cache_max_seq_len(model_args, need)
-        logger.info(
-            f"KV cache tensor seq dim={model_args.max_kv_cache_seq_len} "
-            f"(RoPE TT max_seq_len={max_seq}; run need≈{need})."
+        log_tt_context_budget(
+            prompt_tokens=prompt_len,
+            budget_need_tokens=need,
+            rope_max_seq_len=max_seq,
+            kv_cache_seq_dim=model_args.max_kv_cache_seq_len,
         )
         model_args.is_distributed_norm = types.MethodType(lambda self, mode: False, model_args)
         meta_state_dict = model_args.load_state_dict()
+        log_perf_ms("tt.model_args_init_and_load_state_dict", t_ckpt)
 
         if text_layers is not None:
             if text_layers < 1 or text_layers > model_args.full_model_n_layers:
                 raise ValueError(f"--text-layers must be in [1, {model_args.full_model_n_layers}], got {text_layers}")
             model_args.n_layers = text_layers
+
+        devstral_validate_demo_kv_dram_budget(
+            model_args,
+            prompt_tokens=prompt_len,
+            kv_seq_len=model_args.max_kv_cache_seq_len,
+            mesh_device=mesh_device,
+        )
 
         hf_full = model_args.cached_hf_model
         if hf_full is None:
@@ -416,6 +500,7 @@ def run_tt(
         vision_cfg = hf_full.config.vision_config
         image_token_id = int(hf_full.config.image_token_id)
 
+        t_tt_dev = time.perf_counter()
         tt_devstral = TtDevstral2SmallModel(
             mesh_device=mesh_device,
             tt_ccl=TT_CCL(mesh_device),
@@ -428,7 +513,9 @@ def run_tt(
             vision_config=vision_cfg,
             vision_n_layers=None,
         )
+        log_perf_ms("tt.TtDevstral2SmallModel_init", t_tt_dev)
 
+        t_vis = time.perf_counter()
         pos_vision = _vision_position_ids_tt(hf_inner, pixel_values, image_sizes_list, mesh_device)
         img_tt = tt_devstral.get_projected_image_features(pixel_values, image_sizes_list, pos_vision)
         ttnn.deallocate(pos_vision)
@@ -438,6 +525,7 @@ def run_tt(
         while img_torch.dim() > 2:
             img_torch = img_torch.squeeze(0)
         img_rows = img_torch.reshape(-1, img_torch.shape[-1]).contiguous()
+        log_perf_ms("tt.vision_projector_and_rows_to_torch", t_vis)
 
         sd_prefix = model_args.get_state_dict_prefix("", None)
         out_key = f"{sd_prefix}output.weight"
@@ -446,6 +534,7 @@ def run_tt(
 
         lm_head_weight_cpu: torch.Tensor | None = None
         tt_lm_head: LMHead | None = None
+        t_lmsetup = time.perf_counter()
         if lm_head_cpu:
             lm_head_weight_cpu = meta_state_dict[out_key].detach().to(torch.bfloat16).cpu().contiguous()
             logger.info(
@@ -468,6 +557,8 @@ def run_tt(
                 max_columns_per_device=lm_head_max_cols,
             )
 
+        log_perf_ms("tt.lm_head_setup", t_lmsetup)
+
         use_device_sampling = (
             not lm_head_cpu
             and not cpu_sampling
@@ -487,6 +578,7 @@ def run_tt(
 
         sampling: SamplingGenerator | None = None
         sampling_empty_slots: list[int] | None = None
+        t_samp = time.perf_counter()
         if use_device_sampling:
             sampling = SamplingGenerator(
                 args=model_args,
@@ -509,16 +601,32 @@ def run_tt(
             sampling.reset_sampling_params(formatted_sampling)
             sampling.seed_manager.reset_seed(formatted_sampling.seed, sampling_empty_slots)
 
-        tokenizer = MistralCommonBackend.from_pretrained(
-            model_id,
-            trust_remote_code=True,
-            local_files_only=os.getenv("CI") == "true",
-        )
+        log_perf_ms("tt.sampling_generator_setup", t_samp)
+
+        t_tok = time.perf_counter()
+        if MistralCommonBackend is not None:
+            tokenizer = MistralCommonBackend.from_pretrained(
+                model_id,
+                trust_remote_code=True,
+                local_files_only=os.getenv("CI") == "true",
+            )
+        else:
+            tokenizer = getattr(processor, "tokenizer", None)
+            if tokenizer is None:
+                raise RuntimeError(
+                    "transformers has no MistralCommonBackend (need transformers>=5) and "
+                    "AutoProcessor has no .tokenizer; cannot load tokenizer for TT decode."
+                )
+            logger.warning(
+                "MistralCommonBackend unavailable (transformers<5); using processor.tokenizer for pad/eos/decode."
+            )
         pad_token_id = getattr(tokenizer, "pad_token_id", None)
         if pad_token_id is None:
             pad_token_id = 0
         else:
             pad_token_id = int(pad_token_id)
+
+        log_perf_ms("tt.tokenizer_for_decode", t_tok)
 
         if seed is not None:
             torch.manual_seed(seed)
@@ -535,9 +643,15 @@ def run_tt(
             if sampling is not None
             else "PyTorch softmax / multinomial / argmax on TT logits (host)"
         )
-        logger.info(
-            f"TT TtDevstral2SmallModel: up to {max_new_tokens} new tokens, {mode}; {lm_mode}; {samp_mode}; "
-            f"image {image_path} + describe prompt."
+        log_generation_start(
+            backend="TT",
+            current_sequence_tokens=int(current_ids.shape[1]),
+            prompt_tokens=prompt_len,
+            max_new_tokens=max_new_tokens,
+            mode=mode,
+            lm_mode=lm_mode,
+            sampling_mode=samp_mode,
+            extra=f"image {image_path.name}",
         )
 
         emb_layer = hf_inner.get_input_embeddings()
@@ -547,10 +661,20 @@ def run_tt(
 
         tt_lm = tt_devstral.language_model
 
-        for _step in range(max_new_tokens):
+        sum_merge_s = 0.0
+        sum_prefill_s = 0.0
+        sum_lm_s = 0.0
+        sum_post_lm_s = 0.0
+        n_gen_steps = 0
+        t_loop = time.perf_counter()
+        for step_i in range(max_new_tokens):
             sl = int(current_ids.shape[1])
+            t_m = time.perf_counter()
             merged = _merge_image_into_text_embeds(hf_inner, current_ids, img_rows, image_token_id)
             merged_bf = merged.to(torch.bfloat16)
+            dt_merge = time.perf_counter() - t_m
+
+            t_p = time.perf_counter()
             tt_out = _tt_prefill_from_merged_embeds(
                 current_ids,
                 merged_bf,
@@ -561,19 +685,25 @@ def run_tt(
                 model_args,
                 sl,
             )
+            dt_prefill = time.perf_counter() - t_p
 
             if sampling is not None:
                 assert tt_lm_head is not None
                 tok_slot = (sl - 1) % 32
+                t_lm = time.perf_counter()
                 sampling.seed_manager.get_new_values()
                 logits_tt = tt_lm_head_logits_block(tt_out, sl - 1, model_args, tt_lm_head)
+                dt_lm = time.perf_counter() - t_lm
+                t_po = time.perf_counter()
                 sample_result = sampling.sample(logits_tt, enable_trace=False)
                 tt_next = sample_result[0] if isinstance(sample_result, tuple) else sample_result
                 next_scalar = tt_sampling_output_token_id(tt_next, tok_slot)
                 ttnn.deallocate(logits_tt)
                 ttnn.deallocate(tt_out)
                 next_id = torch.tensor([[next_scalar]], device=id_device, dtype=torch.long)
+                dt_post = time.perf_counter() - t_po
             else:
+                t_lm = time.perf_counter()
                 if lm_head_cpu:
                     assert lm_head_weight_cpu is not None
                     logits_row = _tt_demo.cpu_lm_head_logits_last_token(
@@ -584,6 +714,8 @@ def run_tt(
                     logits_row = _tt_demo.tt_lm_head_logits_last_token(
                         tt_out, sl - 1, mesh_device, model_args, tt_lm_head
                     )
+                dt_lm = time.perf_counter() - t_lm
+                t_po = time.perf_counter()
                 ttnn.deallocate(tt_out)
                 if do_sample:
                     probs = torch.softmax(logits_row.float().squeeze(0) / max(gen_temperature, 1e-6), dim=-1)
@@ -591,14 +723,54 @@ def run_tt(
                 else:
                     next_id = logits_row.argmax(dim=-1, keepdim=True)
                 next_id = next_id.to(id_device)
+                dt_post = time.perf_counter() - t_po
+
+            sum_merge_s += dt_merge
+            sum_prefill_s += dt_prefill
+            sum_lm_s += dt_lm
+            sum_post_lm_s += dt_post
+            n_gen_steps += 1
+            if perf_log_generation_steps():
+                log_gen_step_timings(
+                    step_index=step_i,
+                    sequence_tokens=sl,
+                    phase_seconds={
+                        "merge": dt_merge,
+                        "prefill": dt_prefill,
+                        "lm_head": dt_lm,
+                        "post": dt_post,
+                    },
+                )
 
             if eos_ids and int(next_id.item()) in eos_ids:
                 break
             current_ids = torch.cat([current_ids, next_id], dim=1)
 
+        loop_elapsed = time.perf_counter() - t_loop
+        log_perf_ms("tt.autoregressive_loop_wall", t_loop)
+        if n_gen_steps > 0:
+            inv = 1.0 / float(n_gen_steps)
+            log_gen_step_summary(
+                n_steps=n_gen_steps,
+                wall_seconds=loop_elapsed,
+                avg_phase_seconds={
+                    "merge (host)": sum_merge_s * inv,
+                    "text LM prefill": sum_prefill_s * inv,
+                    "LM head": sum_lm_s * inv,
+                    "sample / post": sum_post_lm_s * inv,
+                },
+                throughput_value=float(n_gen_steps) / loop_elapsed,
+            )
+
+        log_generation_done(
+            backend="TT",
+            final_sequence_tokens=int(current_ids.shape[1]),
+            prompt_tokens=prompt_len,
+        )
+
         answer_ids = current_ids[0, prompt_len:]
         answer_text = tokenizer.decode(answer_ids.tolist(), skip_special_tokens=False)
-        logger.info(f"TT generated ({answer_ids.numel()} tokens):\n{answer_text}")
+        log_model_output(backend="TT", text=answer_text, new_tokens=answer_ids.numel())
     finally:
         ttnn.close_mesh_device(mesh_device)
 
@@ -658,10 +830,22 @@ def main() -> None:
         help="HF and TT: resize image to exactly S×S (LANCZOS) before processor (e.g. 1540 for HF-style "
         "square vision). Overrides vision-max-edge when set.",
     )
+    parser.add_argument(
+        "--messages-json",
+        type=Path,
+        default=None,
+        help="Optional chat messages JSON (from scripts/make_long_context_prompt.py) instead of the default prompt.",
+    )
     args = parser.parse_args()
 
     if args.vision_square_pixels is not None and args.vision_square_pixels <= 0:
         parser.error("--vision-square-pixels must be a positive integer when set.")
+
+    custom_messages = None
+    if args.messages_json is not None:
+        if not args.messages_json.is_file():
+            parser.error(f"--messages-json file not found: {args.messages_json}")
+        custom_messages = load_chat_messages_from_json(args.messages_json)
 
     if args.backend == "hf":
         run_hf(
@@ -671,6 +855,7 @@ def main() -> None:
             seed=args.seed,
             vision_max_edge=args.vision_max_edge,
             vision_square_pixels=args.vision_square_pixels,
+            messages=custom_messages,
         )
     else:
         run_tt(
@@ -688,6 +873,7 @@ def main() -> None:
             vision_square_pixels=args.vision_square_pixels,
             cpu_sampling=args.cpu_sampling,
             max_seq_len_override=args.max_seq_len,
+            messages=custom_messages,
         )
 
 

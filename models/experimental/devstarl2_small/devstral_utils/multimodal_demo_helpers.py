@@ -5,9 +5,11 @@
 from __future__ import annotations
 
 import os
+import types
 
 import torch
 import torch.nn.functional as F
+from loguru import logger
 from transformers.models.mistral3.modeling_mistral3 import Mistral3Model
 
 import ttnn
@@ -99,6 +101,33 @@ def pad_input_ids_and_positions_for_tt_prefill(
     return input_ids_pad, position_ids_pad, seq_len
 
 
+def devstral_model_args_for_kv_estimate(
+    mesh_device: ttnn.MeshDevice,
+    *,
+    model_id: str | None = None,
+    max_seq_len: int = DEVSTRAL_DEMO_BLACKHOLE_DEFAULT_MAX_SEQ_LEN,
+) -> ModelArgs:
+    """
+    ``ModelArgs`` for KV budgeting scripts (no checkpoint weights).
+
+    Uses ``dummy_weights=False`` so HF config loads from ``HF_MODEL`` / ``model_id``
+    (``dummy_weights=True`` only supports hard-coded ``LOCAL_HF_PARAMS`` Llama/Mistral-7B names).
+    """
+    if model_id is not None:
+        os.environ["HF_MODEL"] = model_id
+    apply_devstral_hf_trust_patches()
+    model_args = ModelArgs(
+        mesh_device,
+        max_batch_size=1,
+        max_seq_len=max_seq_len,
+        dummy_weights=False,
+        use_hf_rope=True,
+        cache_hf=False,
+    )
+    model_args.is_distributed_norm = types.MethodType(lambda self, mode: False, model_args)
+    return model_args
+
+
 def open_devstral_demo_mesh(mesh_width: int):
     device_params = {
         "trace_region_size": 30000000,
@@ -126,11 +155,161 @@ def devstral_tt_kv_cache_max_seq_len(model_args: ModelArgs, run_need_tokens: int
     Third dimension allocated for KV cache tensors (:class:`~models.tt_transformers.tt.attention.Attention`).
     Matches TT prefill padding rules (KV tile / ``wo`` chunk) and clamps to ``model_args.max_seq_len``.
     ``ModelArgs.max_seq_len`` can stay at 262144 for HF RoPE while KV uses this tighter bound so DRAM fits.
+
+    Optional env ``DEVSTRAL2_MAX_KV_CACHE_SEQ_LEN`` caps KV length (must be ≥ prompt + new tokens).
     """
     need = int(run_need_tokens)
     cols = int(model_args.cluster_shape[1])
     capped = tt_prefill_target_seqlen(need, int(model_args.n_kv_heads), cols)
-    return min(int(capped), int(model_args.max_seq_len))
+    capped = min(int(capped), int(model_args.max_seq_len))
+    env_cap = os.getenv("DEVSTRAL2_MAX_KV_CACHE_SEQ_LEN", "").strip()
+    if env_cap:
+        capped = min(capped, int(env_cap))
+    return capped
+
+
+def devstral_dense_kv_tensor_bytes(
+    model_args: ModelArgs,
+    kv_seq_len: int,
+    *,
+    bytes_per_element: int = 2,
+) -> int:
+    """Bytes for one dense K **or** V DRAM tensor (``TtMinistralAttention.init_kv_cache`` shape)."""
+    batch = int(model_args.max_batch_size)
+    n_devices = max(int(model_args.num_devices), 1)
+    n_local_kv = int(model_args.n_kv_heads) // n_devices
+    head_dim = int(model_args.head_dim)
+    elems = batch * n_local_kv * int(kv_seq_len) * head_dim
+    return elems * bytes_per_element
+
+
+def devstral_dense_kv_total_bytes(
+    model_args: ModelArgs,
+    kv_seq_len: int,
+    *,
+    n_layers: int | None = None,
+    bytes_per_element: int = 2,
+) -> int:
+    """Total DRAM for dense K+V across decoder layers (upper bound for demo budgeting)."""
+    layers = int(n_layers if n_layers is not None else model_args.n_layers)
+    per = devstral_dense_kv_tensor_bytes(model_args, kv_seq_len, bytes_per_element=bytes_per_element)
+    return per * 2 * layers
+
+
+def devstral_validate_demo_kv_dram_budget(
+    model_args: ModelArgs,
+    *,
+    prompt_tokens: int,
+    kv_seq_len: int,
+    mesh_device: ttnn.MeshDevice,
+) -> None:
+    """
+      Fail before ``TtMinistral3Model`` init when dense KV for this prompt cannot fit on device DRAM.
+
+      A ~256K-token prompt forces ~500+ MiB **per layer** for K (and again for V). After checkpoint weights
+    load, Blackhole banks often have only tens of MiB free — see ``TT_FATAL: Out of Memory`` in
+    ``init_kv_cache``.
+    """
+    kv_seq_len = int(kv_seq_len)
+    prompt_tokens = int(prompt_tokens)
+
+    if prompt_tokens > kv_seq_len:
+        raise RuntimeError(
+            f"Prompt length ({prompt_tokens:,} tokens) exceeds KV cache allocation "
+            f"(max_kv_cache_seq_len={kv_seq_len:,}). "
+            "Shorten the prompt, omit --messages-json, or raise DEVSTRAL2_MAX_KV_CACHE_SEQ_LEN only if "
+            "DRAM can fit a larger dense cache."
+        )
+
+    per_tensor = devstral_dense_kv_tensor_bytes(model_args, kv_seq_len)
+    total = devstral_dense_kv_total_bytes(model_args, kv_seq_len)
+    per_mib = per_tensor / (1024 * 1024)
+    total_gib = total / (1024**3)
+
+    fail_mb = os.getenv("DEVSTRAL2_KV_FAIL_TENSOR_MB", "400").strip()
+    fail_bytes = int(float(fail_mb) * 1024 * 1024) if fail_mb else 400 * 1024 * 1024
+
+    env_cap = os.getenv("DEVSTRAL2_MAX_KV_TENSOR_MB", "").strip()
+    if env_cap:
+        fail_bytes = min(fail_bytes, int(float(env_cap) * 1024 * 1024))
+
+    single_chip = int(model_args.num_devices) <= 1
+    if single_chip and per_tensor > fail_bytes:
+        bh = ttnn.device.is_blackhole(mesh_device)
+        arch = "Blackhole" if bh else "device"
+        raise RuntimeError(
+            f"Refusing to allocate dense KV on {arch}: one K/V tensor needs ~{per_mib:.0f} MiB at "
+            f"kv_seq_len={kv_seq_len:,} ({model_args.n_layers} layers → ~{total_gib:.1f} GiB K+V total). "
+            f"With the full Devstral checkpoint on a single chip, DRAM is already ~99% full; "
+            f"your OOM (~{per_mib:.0f} MiB per tensor) is expected.\n\n"
+            "What works today:\n"
+            "  • Shorter context on TT: do not use messages_256k.json; use default prompt or "
+            "--target-tokens 4096 in make_long_context_prompt.py.\n"
+            "  • RoPE-only 256K cap without a 256K prompt: default BH max_seq_len stays 256K but "
+            "prompt_tokens stays small (KV tracks prompt size).\n"
+            "  • Bring-up: --text-layers 1 (may still OOM if one layer KV > free DRAM).\n"
+            "  • HF path: --backend hf (GPU host RAM).\n"
+            "  • Optional cap: export DEVSTRAL2_MAX_KV_CACHE_SEQ_LEN=8192 and use a matching short prompt.\n\n"
+            "True 256K-token TT inference needs paged KV / multi-device sharding (not this dense demo path)."
+        )
+
+    warn_mb = os.getenv("DEVSTRAL2_KV_WARN_TENSOR_MB", "128").strip()
+    if warn_mb and single_chip and per_tensor > int(float(warn_mb) * 1024 * 1024):
+        logger.warning(
+            f"Large dense KV: ~{per_mib:.0f} MiB per K/V tensor, kv_seq_len={kv_seq_len:,}, "
+            f"~{total_gib:.1f} GiB across {model_args.n_layers} layers — may OOM after weight load."
+        )
+
+
+def devstral_estimate_max_prompt_tokens_dense_kv(
+    model_args: ModelArgs,
+    mesh_device: ttnn.MeshDevice,
+    *,
+    known_good_tokens: int = 4096,
+    per_tensor_budget_mb: float | None = None,
+    search_hi: int = 200_000,
+) -> int:
+    """
+    Upper bound on **language** prompt tokens for dense per-layer KV on a single chip.
+
+    Uses linear growth of one K/V tensor vs ``kv_seq_len`` (after TT prefill padding) and a
+    per-tensor DRAM budget. Default budget **30 MiB** is derived from typical Blackhole free DRAM
+    after loading the full Devstral checkpoint (~tens of MiB per bank; your 256K OOM showed
+    ~31 MiB largest free block).
+
+    Calibrate: ``export DEVSTRAL2_KV_PER_TENSOR_BUDGET_MB=32`` (try ~16K tokens) if 4K is stable.
+    """
+    if int(model_args.num_devices) > 1:
+        # More devices → fewer n_local_kv_heads per chip; budget is per device group (conservative).
+        pass
+
+    budget_mb = per_tensor_budget_mb
+    if budget_mb is None:
+        env_mb = os.getenv("DEVSTRAL2_KV_PER_TENSOR_BUDGET_MB", "").strip()
+        budget_mb = float(env_mb) if env_mb else 30.0
+
+    budget_bytes = int(budget_mb * 1024 * 1024)
+    cols = int(model_args.cluster_shape[1])
+    n_kv = int(model_args.n_kv_heads)
+
+    known_good_tokens = max(128, int(known_good_tokens))
+
+    lo = known_good_tokens
+    hi = max(lo, int(search_hi))
+    best = lo
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        kv_len = tt_prefill_target_seqlen(mid, n_kv, cols)
+        per = devstral_dense_kv_tensor_bytes(model_args, kv_len)
+        if per <= budget_bytes:
+            best = mid
+            lo = mid + 1
+        else:
+            hi = mid - 1
+
+    if ttnn.device.is_blackhole(mesh_device):
+        best = min(best, DEVSTRAL_DEMO_BLACKHOLE_DEFAULT_MAX_SEQ_LEN)
+    return best
 
 
 def squeeze_tt_hidden_to_bsh(tt_lm_out: ttnn.Tensor, mesh_device, seq_len_keep: int) -> torch.Tensor:
