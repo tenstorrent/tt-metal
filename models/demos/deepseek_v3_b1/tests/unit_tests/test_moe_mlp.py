@@ -892,11 +892,20 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
+@pytest.mark.parametrize(
+    "expert_upload_mode",
+    [
+        pytest.param("rigged_groups1", marks=pytest.mark.skip_post_commit),
+        "full_groups",
+    ],
+)
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
 @pytest.mark.timeout(1200)
-def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict):
+def test_moe_fused_with_reduce(
+    bh_2d_mesh_device, expert_upload_mode, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict
+):
     """
     Test fused MoE with reduce_to_one on 4x2 mesh.
 
@@ -904,6 +913,9 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
     then results are reduced (summed) across all devices to ROOT1.
 
     Gate is rigged so grouped top-k picks deterministic winners.
+    expert_upload_mode:
+      - "rigged_groups1": load only 32 experts (group 0); rig routing within group 0.
+      - "full_groups":    load all 256 experts; rig routing across groups 0/2/5/7.
     """
     num_devices = TestConfig.NUM_DEVICES_4x2
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
@@ -918,10 +930,24 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
     M = RoutedExpert.M
     K = RoutedExpert.K
 
-    logger.info(f"Testing fused MoE with reduce: K={K}")
+    logger.info(f"Testing fused MoE with reduce: K={K} expert_upload_mode={expert_upload_mode}")
 
-    # Fast iteration: load only 32 experts (group 0) and rig routing to stay within that group.
-    num_routed_experts = 32
+    if expert_upload_mode == "rigged_groups1":
+        num_routed_experts = 32
+        winning_groups = [0]
+        winning_experts_by_group = {0: [1, 9, 4, 19, 7, 23, 3, 28]}
+    elif expert_upload_mode == "full_groups":
+        num_routed_experts = 256
+        winning_groups = [0, 2, 5, 7]
+        winning_experts_by_group = {
+            0: [1, 9],
+            2: [4, 19],
+            5: [7, 23],
+            7: [3, 28],
+        }
+    else:
+        raise ValueError(f"Unknown expert_upload_mode: {expert_upload_mode}")
+
     state_dict = get_reference_model_state_dict(
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
         is_moe=True,
@@ -929,11 +955,6 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         num_routed_experts=num_routed_experts,
         include_global=False,
     )
-    # Only group 0 is loaded (num_routed_experts=32). Within-group expert IDs match the
-    # original 256-expert rigging (which spread 2 experts across each of groups 0/2/5/7),
-    # collapsed into group 0.
-    winning_groups = [0]
-    winning_experts_by_group = {0: [1, 9, 4, 19, 7, 23, 3, 28]}
     expected_expert_ids = rig_moe_gate_for_expected_experts(
         state_dict,
         ROUTED_EXPERT_LAYER_IDX,
