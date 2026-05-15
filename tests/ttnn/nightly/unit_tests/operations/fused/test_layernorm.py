@@ -10,7 +10,7 @@ import torch
 import ttnn
 
 
-from models.common.utility_functions import torch2tt_tensor
+from models.common.utility_functions import pad_by_zero, torch2tt_tensor, run_for_blackhole
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 TEST_PADDING_VALUE = -42
@@ -50,13 +50,8 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
             gamma = torch.rand(test_shape[3]) * 2 - 1
             beta = torch.rand(test_shape[3]) * 2.0 - 1.1
 
-        # Build gamma_t/beta_t with torch2tt_tensor so the ttnn tensors keep their original
-        # logical width and only tile padding is added. Can't use pad_by_zero here because it
-        # zero-pads in torch before constructing the ttnn tensors, expanding the ***logical***
-        # width to the tile boundary, producing gamma and beta whose logical widths don't match
-        # the input's logical width.
-        gamma_t = torch2tt_tensor(gamma, device, tt_memory_config=in0_mem_config, tt_dtype=gamma_dtype)
-        beta_t = torch2tt_tensor(beta, device, tt_memory_config=in0_mem_config, tt_dtype=gamma_dtype)
+        gamma_t = pad_by_zero(gamma, device, in0_mem_config, gamma_dtype)[0]
+        beta_t = pad_by_zero(beta, device, in0_mem_config, gamma_dtype)[0]
 
         compute_kernel_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
@@ -231,6 +226,79 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
 def test_layernorm_mix_precision(test_id, in_dtype, gamma_dtype, in0_mem_config, out_mem_config, device):
     torch.manual_seed(0)
     run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_config, out_mem_config, device)
+
+
+@run_for_blackhole("blackhole specific test")
+def test_layer_norm_block_sharded_height_pad(device):
+    """
+    Test for feature request issue #43801: block-sharded layer_norm where Mt (height in tiles)
+    is not evenly divisible by num_cores in the H direction, so the bottom row of
+    cores carries trailing shard-pad tiles.
+
+    Tensor [32, 1, 96, 512] (Mt=96) sharded [320, 64] on grid (0,0)-(7,9):
+      num_cores_r = 10, block_h = 10, but 96/10 = 9 (with 4 trailing pad tiles per
+      column-of-cores). The op previously rejected this with a strict
+      Mt/num_cores_r == block_h check; relaxing to div_up is correct because the
+      kernel processes block_h tile-rows per core regardless of overall Mt.
+    """
+    torch.manual_seed(0)
+    channels = 512
+
+    x_torch = torch.randn(32, 1, 96, channels, dtype=torch.bfloat16)
+    weight_torch = torch.randn(channels, dtype=torch.bfloat16)
+    bias_torch = torch.randn(channels, dtype=torch.bfloat16)
+    epsilon = 1e-5
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 9))})
+    shard_spec = ttnn.ShardSpec(shard_grid, [320, 64], ttnn.ShardOrientation.ROW_MAJOR)
+    in_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    x = ttnn.from_torch(
+        x_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_mem_config
+    )
+    weight = ttnn.from_torch(
+        weight_torch.reshape(1, 1, channels // 32, 32),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    bias = ttnn.from_torch(
+        bias_torch.reshape(1, 1, channels // 32, 32),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+    )
+
+    out = ttnn.layer_norm(
+        x,
+        weight=weight,
+        bias=bias,
+        epsilon=epsilon,
+        compute_kernel_config=compute_kernel_config,
+    )
+    out_torch = ttnn.to_torch(out)
+
+    ref = torch.nn.functional.layer_norm(
+        x_torch.to(torch.float32), [channels], weight_torch.to(torch.float32), bias_torch.to(torch.float32), epsilon
+    ).to(torch.bfloat16)
+
+    assert_numeric_metrics(
+        ref,
+        out_torch,
+        pcc_threshold=0.999,
+        rtol=0.006,
+        atol=0.018,
+        frobenius_threshold=0.003,
+    )
 
 
 @pytest.mark.parametrize("h", [22, 1632, 8192, 16384])
