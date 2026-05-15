@@ -420,9 +420,9 @@ class TtMistral4Attention(LightweightModule):
         ttnn.deallocate(k_rope_raw)
 
         # Broadcast k_rope to all heads by repeating along dim=1
-        k_rope_expanded = ttnn.concat(
-            [k_rope_rotated] * self.n_heads,
-            dim=1,
+        k_rope_expanded = ttnn.repeat(
+            k_rope_rotated,
+            ttnn.Shape([1, self.n_heads, 1, 1]),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1, N_HEADS, seq, QK_ROPE_HEAD_DIM]
         ttnn.deallocate(k_rope_rotated)
@@ -607,7 +607,7 @@ class TtMistral4Attention(LightweightModule):
 
         k_rope_rotated = _apply_rope_ttnn(k_rope_raw, cos, sin, 1, 1, self.qk_rope_head_dim, _mem)
         ttnn.deallocate(k_rope_raw)
-        k_rope_expanded = ttnn.concat([k_rope_rotated] * self.n_heads, dim=1, memory_config=_mem)
+        k_rope_expanded = ttnn.repeat(k_rope_rotated, ttnn.Shape([1, self.n_heads, 1, 1]), memory_config=_mem)
         ttnn.deallocate(k_rope_rotated)
         k_full = ttnn.concat([k_nope, k_rope_expanded], dim=-1, memory_config=_mem)
         ttnn.deallocate(k_nope)
