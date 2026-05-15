@@ -22,6 +22,12 @@ from .tt_adain_resblk_1d import (
     TTAdainResBlk1dParams,
     preprocess_tt_adain_resblk_1d,
 )
+from .tt_adain_resblock1 import (
+    TTAdaINResBlock1,
+    TTAdaINResBlock1Params,
+    TTAdaINResBlock1StageParams,
+    preprocess_tt_adain_resblock1,
+)
 from .tt_duration_encoder import (
     TTDurationEncoder,
     TTDurationEncoderLayerParams,
@@ -42,7 +48,17 @@ from .tt_custom_albert import (
     TTCustomAlbertParams,
     preprocess_tt_custom_albert,
 )
+from .tt_linear_norm import (
+    TTLinearNorm,
+    TTLinearNormParams,
+    preprocess_tt_linear_norm,
+)
 from .tt_lstm import TTLSTMParams, preprocess_tt_lstm_1layer, tt_bilstm_nlc
+from .tt_prosody_predictor import (
+    TTProsodyPredictor,
+    TTProsodyPredictorParams,
+    preprocess_tt_prosody_predictor,
+)
 from .tt_text_encoder import (
     TTTextEncoder,
     TTTextEncoderConvLNBlock,
@@ -59,6 +75,9 @@ __all__ = [
     "TTAdaLayerNormParams",
     "TTAdainResBlk1d",
     "TTAdainResBlk1dParams",
+    "TTAdaINResBlock1",
+    "TTAdaINResBlock1Params",
+    "TTAdaINResBlock1StageParams",
     "TTAlbertLayer",
     "TTAlbertLayerParams",
     "TTCustomAlbert",
@@ -69,6 +88,10 @@ __all__ = [
     "TTConv1dParams",
     "TTConvTranspose1dParams",
     "TTLSTMParams",
+    "TTLinearNorm",
+    "TTLinearNormParams",
+    "TTProsodyPredictor",
+    "TTProsodyPredictorParams",
     "TTTextEncoder",
     "TTTextEncoderConvLNBlock",
     "TTTextEncoderConvLNBlockParams",
@@ -77,11 +100,14 @@ __all__ = [
     "TTUpSample1d",
     "preprocess_tt_adain_1d",
     "preprocess_tt_adain_resblk_1d",
+    "preprocess_tt_adain_resblock1",
     "preprocess_tt_ada_layer_norm",
     "preprocess_tt_custom_albert",
     "preprocess_tt_duration_encoder",
     "preprocess_tt_instance_norm_1d",
+    "preprocess_tt_linear_norm",
     "preprocess_tt_lstm_1layer",
+    "preprocess_tt_prosody_predictor",
     "preprocess_tt_text_encoder",
     "tt_bilstm_nlc",
     "tt_instance_norm_1d_nlc",
