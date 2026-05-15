@@ -158,7 +158,7 @@ int main() {
 
     size_t num_failures = 0;
     auto total_values = result_data.size() * 2;
-    for (int i = 0; i < total_values; i++) {
+    for (size_t i = 0; i < total_values; i++) {
         if (!is_close(static_cast<float>(c_bf16[i]), static_cast<float>(golden_bf16[i]))) {
             num_failures++;
         }
