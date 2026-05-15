@@ -56,7 +56,7 @@ inline std::vector<uint32_t> gold_standard_flatten(std::vector<uint32_t> src_vec
 
     uint32_t start_dram_addr_offset_for_tensor_row = 0;
 
-    for (int i = 0; i < num_tile_rows; i++) {
+    for (uint32_t i = 0; i < num_tile_rows; i++) {
         for (uint32_t j = 0; j < 32; j++) {
             uint32_t src_addr_ = start_dram_addr_offset_for_tensor_row;
             for (uint32_t k = 0; k < num_tile_cols; k++) {

@@ -51,7 +51,7 @@ bool run_dm(
     L1AddressInfo sender_l1_info =
         tt::tt_metal::unit_tests::dm::get_l1_address_and_size(mesh_device, test_config.sender_core_coord);
 
-    for (int i = 0; i < test_config.num_subordinates; i++) {
+    for (uint32_t i = 0; i < test_config.num_subordinates; i++) {
         L1AddressInfo receiver_l1_info =
             tt::tt_metal::unit_tests::dm::get_l1_address_and_size(mesh_device, test_config.receiver_core_coords[i]);
 
@@ -158,7 +158,7 @@ bool run_dm(
     // Initialize receiver memory to known pattern
     uint32_t init_words = test_config.same_destination ? 1 : test_config.num_writes;
     std::vector<uint32_t> init_data(init_words, 0x00000000);  // Initialize to zero
-    for (int i = 0; i < test_config.num_subordinates; i++) {
+    for (uint32_t i = 0; i < test_config.num_subordinates; i++) {
         tt_metal::detail::WriteToDeviceL1(device, test_config.receiver_core_coords[i], l1_base_address, init_data);
     }
     MetalContext::instance().get_cluster().l1_barrier(device->id());
@@ -175,7 +175,7 @@ bool run_dm(
 
     // Validation
     bool pass = true;
-    for (int i = 0; i < test_config.num_subordinates; i++) {
+    for (uint32_t i = 0; i < test_config.num_subordinates; i++) {
         // Read back and validate results
         std::vector<uint32_t> output_data;
         uint32_t read_bytes = init_words * sizeof(uint32_t);
