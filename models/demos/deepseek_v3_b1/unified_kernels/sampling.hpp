@@ -165,7 +165,7 @@ ALWI void sampling_reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb, 
         MATH((tensix_sync()));
         MATH((reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11)));
     }
-    PACK((llk_pack_reduce_mask_config<false /*untilize*/, reduce_dim>()));
+    PACK((llk_pack_reduce_mask_config<reduce_dim, ckernel::PackMode::Default>()));
 #else
     UNPACK((llk_unpack_AB_reduce_init<reduce_dim>(icb, icb_scaler)));
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, math_fidelity>(icb)));
@@ -1616,7 +1616,7 @@ struct TopKSampling {
             // Matmul leaves the PACK MOP in block-contiguous mode; re-init to standard tile-by-tile
             // so that subsequent pack_tile() calls in run_top32_llk produce correct results.
             ckernel::pack_reconfig_data_format(CTArgs::topk_out_scores_cb);
-            PACK((llk_pack_init<false, false, false>(CTArgs::topk_out_scores_cb)));
+            PACK((llk_pack_init(CTArgs::topk_out_scores_cb)));
 
             // Phase 1: LLK top-32 sort (all active cores, k==32 only)
             if constexpr (IsActiveCore && CTArgs::topk_k <= 32) {
