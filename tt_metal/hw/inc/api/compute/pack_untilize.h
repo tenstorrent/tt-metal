@@ -38,12 +38,9 @@ namespace ckernel {
  * - full-sync mode (16-bit mode): 16 tiles
  * - full-sync mode (32-bit mode): 8 tiles
  *
- * NOTE: This function allows the user to specify `face_r_dim` and `num_faces` through function parameters. Setting these
- * parameters results in an expensive MMIO write and cannot be avoided currently.
- * This should be addressed more systematically within the issue tt-metal#22820, since these two values can be inferred
- * from the circular buffer description, the same way as it is done in `llk_pack_hw_configure`. This
- * would remove the need for `llk_pack_untilize_hw_configure_disaggregated` altogether and we would pay the price
- * of the MMIO write only once, in `compute_kernel_hw_startup`.
+ * NOTE: This function allows the user to specify `face_r_dim` and `num_faces` through function parameters. PACK
+ * reconfiguration must use these explicit values, since they can differ from the output circular buffer metadata for
+ * non-default untilize blocks.
  *
  * Return value: None
  *
@@ -73,7 +70,7 @@ ALWI void pack_untilize_dest_init(
     // Needed for setting swizzle_32b:
     MATH((llk_math_reconfig_remap(true)));
 #endif  // TODO NC: A workaround for tt-metal#17132. Should be addressed more systematically in tt-llk#989
-    PACK((llk_pack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE, PackMode::Default>(ocb, face_r_dim, num_faces)));
+    PACK((llk_pack_reconfig_data_format_disaggregated<DST_ACCUM_MODE>(ocb, face_r_dim, num_faces)));
     PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, false, narrow_row, row_num_datums, dense>(
         ocb, face_r_dim, num_faces)));
     PACK((llk_init_packer_dest_offset_registers<PackMode::Untilize, false>()));
@@ -98,12 +95,7 @@ ALWI void pack_untilize_dest_init(
  * - full-sync mode (16-bit mode): 16 tiles
  * - full-sync mode (32-bit mode): 8 tiles
  *
- * NOTE: This function uses default `face_r_dim` and `num_faces` values (16 and 4, respectively). Setting these
- * parameters results in an expensive MMIO write and cannot be avoided currently.
- * This should be addressed more systematically within the issue tt-metal#22820, since these two values can be inferred
- * from the circular buffer description, the same way as it is done in `llk_pack_hw_configure`. This
- * would remove the need for `llk_pack_untilize_hw_configure_disaggregated` altogether and we would pay the price
- * of the MMIO write only once, in `compute_kernel_hw_startup`.
+ * NOTE: This function uses default `face_r_dim` and `num_faces` values (16 and 4, respectively).
  *
  * Return value: None
  *

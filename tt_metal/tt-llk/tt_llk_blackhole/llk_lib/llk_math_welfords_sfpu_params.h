@@ -3,12 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <algorithm>
 #include <cstdint>
 #include <utility>
 
 #include "llk_math_eltwise_ternary_sfpu.h"
-#include "llk_sfpu_types.h"
 
 template <typename Callable, typename... ARGS>
 inline void _llk_math_welfords_sfpu_params_(Callable&& sfpu_func, std::uint32_t dst_index0, ARGS&&... args)
