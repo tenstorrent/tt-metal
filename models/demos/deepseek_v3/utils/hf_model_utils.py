@@ -223,58 +223,6 @@ def dequantize_weight_tensor(
     return out[original_slices].to(dtype).contiguous()
 
 
-def dequantize_weight_tensor_hf(
-    tensor: torch.Tensor,
-    inv_scale: torch.Tensor,
-    block_shape: tuple[int, ...] | list[int],
-    *,
-    dtype: torch.dtype = torch.bfloat16,
-) -> torch.Tensor:
-    """HuggingFace-style FP8 dequantization matching ``transformers.Fp8Dequantize``.
-
-    Replicates the exact computation order used by HuggingFace's
-    ``transformers.integrations.finegrained_fp8.Fp8Dequantize.convert()``
-    (including the padded fallback for non-block-aligned shapes) so that the
-    resulting bfloat16 weights are bit-identical to those produced by
-    ``AutoModelForCausalLM.from_pretrained`` with FP8 quantized checkpoints.
-
-    Key differences from ``dequantize_weight_tensor``:
-      * Converts FP8 to ``inv_scale.dtype`` (not explicitly float32).
-      * Uses ``F.pad`` for non-aligned shapes.
-      * Out-of-place multiply (``*``) instead of in-place ``mul_``.
-    """
-    if tensor.ndim != 2:
-        raise ValueError(f"HF-style dequant expects 2-D weight tensors, got ndim={tensor.ndim}")
-    if len(block_shape) != 2:
-        raise ValueError(f"block_shape must have length 2, got {len(block_shape)}")
-
-    orig_rows, cols = tensor.shape
-    block_m, block_n = int(block_shape[0]), int(block_shape[1])
-
-    compute_dtype = inv_scale.dtype
-    quantized = tensor.to(compute_dtype)
-
-    pad_rows = (block_m - orig_rows % block_m) % block_m
-    pad_cols = (block_n - cols % block_n) % block_n
-
-    if pad_rows > 0 or pad_cols > 0:
-        quantized = torch.nn.functional.pad(quantized, (0, pad_cols, 0, pad_rows))
-
-    padded_rows, padded_cols = quantized.shape[-2:]
-
-    reshaped = quantized.reshape(-1, padded_rows // block_m, block_m, padded_cols // block_n, block_n)
-    expanded_scales = inv_scale.reshape(-1, padded_rows // block_m, padded_cols // block_n)
-    expanded_scales = expanded_scales.unsqueeze(-1).unsqueeze(2)
-
-    dequantized = reshaped * expanded_scales
-    dequantized = dequantized.reshape(padded_rows, padded_cols)
-
-    if pad_rows > 0 or pad_cols > 0:
-        dequantized = dequantized[:orig_rows, :cols]
-
-    return dequantized.to(dtype).contiguous()
-
-
 def dequantize_state_dict(
     state_dict: Mapping[str, torch.Tensor],
     hf_config: PretrainedConfig,
@@ -291,34 +239,6 @@ def dequantize_state_dict(
         scale_name = f"{name}_scale_inv"
         if scale_name in state_dict:
             dequantized_state_dict[name] = dequantize_weight_tensor(
-                tensor, state_dict[scale_name], block_shape, dtype=dtype
-            )
-            continue
-
-        if tensor.dtype == torch.float8_e4m3fn:
-            raise ValueError(f"Found float8 tensor '{name}' without matching inverse scale '{scale_name}'.")
-        dequantized_state_dict[name] = tensor.to(dtype).contiguous() if tensor.is_floating_point() else tensor.clone()
-
-    return dequantized_state_dict
-
-
-def dequantize_state_dict_hf(
-    state_dict: Mapping[str, torch.Tensor],
-    hf_config: PretrainedConfig,
-    dtype: torch.dtype = torch.bfloat16,
-) -> dict[str, torch.Tensor]:
-    """Like ``dequantize_state_dict`` but uses the HF-style dequantization path."""
-    dequantized_state_dict: dict[str, torch.Tensor] = {}
-    block_shape = get_weight_block_shape(hf_config)
-
-    for name in sorted(key for key in state_dict.keys() if not key.endswith("_scale_inv")):
-        tensor = state_dict[name]
-        if tensor is None:
-            raise ValueError(f"Expected tensor {name} to exist in state_dict but it was None")
-
-        scale_name = f"{name}_scale_inv"
-        if scale_name in state_dict:
-            dequantized_state_dict[name] = dequantize_weight_tensor_hf(
                 tensor, state_dict[scale_name], block_shape, dtype=dtype
             )
             continue

@@ -344,15 +344,15 @@ def load_and_compute_layer_by_layer(
     """
     from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
     from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
-    from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict
     from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
     from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
     from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
     from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
     from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
+    from models.demos.deepseek_v3_d_p.utils.hf_model_utils import dequantize_state_dict
 
     if dequant_method == "hf":
-        from models.demos.deepseek_v3.utils.hf_model_utils import dequantize_state_dict_hf as dequantize_state_dict
+        from models.demos.deepseek_v3_d_p.utils.hf_model_utils import dequantize_state_dict_hf as dequantize_state_dict
 
         logger.info("Using HuggingFace-style FP8 dequantization (v2)")
     elif dequant_method != "tt":
