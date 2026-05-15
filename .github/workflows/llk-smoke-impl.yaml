@@ -97,7 +97,6 @@ jobs:
         working-directory: ${{ env.LLK_PATH }}
         env:
           PYTEST_MARKERS: ${{ inputs.pytest-markers }}
-          LLK_PYTEST_LOG_MODE: ci-quiet
         run: |
           ${{ matrix.test-group.cmd }}
 
