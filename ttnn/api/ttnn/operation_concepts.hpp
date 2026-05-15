@@ -53,23 +53,23 @@ template <typename T>
 concept MeshWorkloadFactoryConcept = HasMeshWorkloadType<T> && (HasCreateMeshWorkload<T> || HasCreateAt<T>);
 
 // Mesh-workload descriptor factory: builds the entire workload in one call
-// via `create_mesh_workload_descriptor`, returning a tt::tt_metal::MeshWorkloadDescriptor
+// via `create_workload_descriptor`, returning a tt::tt_metal::WorkloadDescriptor
 // that pairs declarative per-coord ProgramDescriptors with workload-scoped
 // resources (semaphores, buffers).  Replaces the deprecated prepare_resources
 // hook.
 //
-// This concept is a shape check — it confirms `create_mesh_workload_descriptor` is a
+// This concept is a shape check — it confirms `create_workload_descriptor` is a
 // member.  The strict signature check (4 args, last is `MeshCoordinateRangeSet`,
-// returns `tt::tt_metal::MeshWorkloadDescriptor`) is enforced by
-// `has_mesh_workload_descriptor` in the adapter, which has access to the device
+// returns `tt::tt_metal::WorkloadDescriptor`) is enforced by
+// `has_workload_descriptor` in the adapter, which has access to the device
 // operation's typedefs.  A factory that satisfies this concept but provides a
-// mismatched `create_mesh_workload_descriptor` triggers a clear `static_assert` failure
+// mismatched `create_workload_descriptor` triggers a clear `static_assert` failure
 // in the adapter rather than a deep template error.
 template <typename T>
-concept MeshWorkloadDescriptorConcept = requires { &T::create_mesh_workload_descriptor; };
+concept WorkloadDescriptorConcept = requires { &T::create_workload_descriptor; };
 
 template <typename T>
-concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } || MeshWorkloadDescriptorConcept<T>) &&
+concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } || WorkloadDescriptorConcept<T>) &&
                                           !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T>;
 
 // Detect operations that put create_descriptor directly on the operation struct

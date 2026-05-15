@@ -13,7 +13,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
 #include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/mesh_workload_descriptor.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include "ttnn/operations/pool/upsample/device/upsample_device_operation_types.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
@@ -33,11 +33,11 @@ struct UpsampleMultiCoreInterleavedProgramFactory {
 };
 
 struct UpsampleMultiCoreShardedProgramFactory {
-    // create_mesh_workload_descriptor() uploads the per-core halo lookup config
+    // create_workload_descriptor() uploads the per-core halo lookup config
     // tensor and parks its backing MeshBuffer on the returned
-    // MeshWorkloadDescriptor (held by the program cache) so its lifetime
+    // WorkloadDescriptor (held by the program cache) so its lifetime
     // outlives the cached programs.
-    static tt::tt_metal::MeshWorkloadDescriptor create_mesh_workload_descriptor(
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const UpsampleParams& operation_attributes,
         const Tensor& input_tensor,
         Tensor& output_tensor,

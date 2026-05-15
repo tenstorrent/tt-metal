@@ -7,7 +7,7 @@
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/mesh_workload_descriptor.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
@@ -37,7 +37,7 @@ using AdaptedCachedMeshWorkload = tt::tt_metal::program_cache::detail::AdaptedCa
 // no lambda dispatch, and no virtual call.
 //
 // Used to walk `tensor_args_t` / `tensor_return_value_t` (op input/output
-// tuples of Tensors).  The MeshWorkloadDescriptor's buffer vector is read
+// tuples of Tensors).  The WorkloadDescriptor's buffer vector is read
 // directly — its element types are known, no reflection needed.
 //
 // Default specialisation is a no-op so unreflectable / unknown leaves are
@@ -308,11 +308,11 @@ public:
     //      For each mesh coordinate the framework calls create_descriptor() and
     //      builds a Program from the returned descriptor.
     //
-    //   2) Workload-scoped ops (declarative MeshWorkloadDescriptor):
-    //        static tt::tt_metal::MeshWorkloadDescriptor T::create_mesh_workload_descriptor(
+    //   2) Workload-scoped ops (declarative WorkloadDescriptor):
+    //        static tt::tt_metal::WorkloadDescriptor T::create_workload_descriptor(
     //            attrs, args, ret, const MeshCoordinateRangeSet& tensor_coords);
     //
-    //      create_mesh_workload_descriptor() runs ONCE per workload (cache miss) and
+    //      create_workload_descriptor() runs ONCE per workload (cache miss) and
     //      returns the whole workload in one shot: GlobalSemaphores allocated
     //      and Synchronize barriers run as part of building the descriptor, and
     //      `programs` populated with per-coord ProgramDescriptors. Resources
@@ -328,23 +328,23 @@ public:
     struct DescriptorMeshWorkloadAdapter {
         // --- Contract detection ---
 
-        // Contract (2): does the factory define a static create_mesh_workload_descriptor
+        // Contract (2): does the factory define a static create_workload_descriptor
         // that takes the tensor coord range set AND returns a
-        // tt::tt_metal::MeshWorkloadDescriptor?  The return-type check pins
+        // tt::tt_metal::WorkloadDescriptor?  The return-type check pins
         // the contract so an accidental wrong signature surfaces as a clean
         // concept failure rather than silent fallback to contract (1).
-        static constexpr bool has_mesh_workload_descriptor = requires(
+        static constexpr bool has_workload_descriptor = requires(
             const operation_attributes_t& a,
             const tensor_args_t& t,
             tensor_return_value_t& r,
             const ttnn::MeshCoordinateRangeSet& tc) {
             {
-                DescriptorFactory::create_mesh_workload_descriptor(a, t, r, tc)
-            } -> std::same_as<tt::tt_metal::MeshWorkloadDescriptor>;
+                DescriptorFactory::create_workload_descriptor(a, t, r, tc)
+            } -> std::same_as<tt::tt_metal::WorkloadDescriptor>;
         };
 
         // Signature-mismatch guard: a factory that defines a
-        // `create_mesh_workload_descriptor` with a wrong signature/return type would
+        // `create_workload_descriptor` with a wrong signature/return type would
         // silently fall through to the contract-1 path (which then tries
         // `create_descriptor` and produces a deep template error).  Surface
         // the problem clearly at concept-check time.
@@ -354,21 +354,21 @@ public:
                 const tensor_args_t& t,
                 tensor_return_value_t& r,
                 const ttnn::MeshCoordinateRangeSet& tc) {
-                DescriptorFactory::create_mesh_workload_descriptor(a, t, r, tc);
-            } || has_mesh_workload_descriptor,
-            "Factory has create_mesh_workload_descriptor but its return type isn't "
-            "tt::tt_metal::MeshWorkloadDescriptor. "
-            "Expected: static tt::tt_metal::MeshWorkloadDescriptor create_mesh_workload_descriptor("
+                DescriptorFactory::create_workload_descriptor(a, t, r, tc);
+            } || has_workload_descriptor,
+            "Factory has create_workload_descriptor but its return type isn't "
+            "tt::tt_metal::WorkloadDescriptor. "
+            "Expected: static tt::tt_metal::WorkloadDescriptor create_workload_descriptor("
             "const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&, "
             "const ttnn::MeshCoordinateRangeSet&)");
 
         struct shared_variables_t {
             // The mesh workload descriptor — built ONCE per workload (cache
-            // miss) by create_mesh_workload_descriptor() and held here so its resource
+            // miss) by create_workload_descriptor() and held here so its resource
             // members (semaphores, buffers) outlive the cached workload via
             // the program cache.  Default-constructed (empty vectors) for
             // contract (1) factories.
-            tt::tt_metal::MeshWorkloadDescriptor mesh_workload_descriptor;
+            tt::tt_metal::WorkloadDescriptor workload_descriptor;
             // Resolved buffer bindings for the fast cache-hit path.
             // Non-empty when the factory used emplace_runtime_args() with
             // Buffer* args (or, for contract 2, declared any CB buffer binding).
@@ -391,11 +391,11 @@ public:
         static ttsl::SmallVector<tt::tt_metal::Buffer*, 16> collect_tensor_buffers(
             const tensor_args_t& tensor_args,
             const tensor_return_value_t& tensor_return_value,
-            const tt::tt_metal::MeshWorkloadDescriptor& mesh_workload_descriptor) {
+            const tt::tt_metal::WorkloadDescriptor& workload_descriptor) {
             ttsl::SmallVector<tt::tt_metal::Buffer*, 16> buffers;
             extract_tensor_buffers_into(tensor_args, buffers);
             extract_tensor_buffers_into(tensor_return_value, buffers);
-            for (const auto& mb : mesh_workload_descriptor.buffers) {
+            for (const auto& mb : workload_descriptor.buffers) {
                 buffers.push_back(mb->get_reference_buffer());
             }
             return buffers;
@@ -427,8 +427,8 @@ public:
         }
 
         // Build a ProgramDescriptor for one mesh coordinate (contract 1).
-        // The declarative MeshDescriptor path (contract 2) does NOT go through
-        // this — it iterates `mesh_descriptor.programs` directly.
+        // The declarative WorkloadDescriptor path (contract 2) does NOT go through
+        // this — it iterates `workload_descriptor.programs` directly.
         static tt::tt_metal::ProgramDescriptor invoke_per_coord(
             const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
@@ -454,35 +454,33 @@ public:
             tt::tt_metal::distributed::MeshWorkload mesh_workload;
             std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-            if constexpr (has_mesh_workload_descriptor) {
+            if constexpr (has_workload_descriptor) {
                 // Contract (2) — declarative: the factory builds the entire
-                // MeshWorkloadDescriptor (resources + per-coord programs) in
+                // WorkloadDescriptor (resources + per-coord programs) in
                 // one call.  Resources (GlobalSemaphores, MeshBuffers) are
                 // allocated and any Synchronize barrier is run as part of
-                // create_mesh_workload_descriptor(); we then iterate `programs` to
+                // create_workload_descriptor(); we then iterate `programs` to
                 // populate the cached MeshWorkload.
                 //
                 // `programs` is moved out before the loop — each per-range
                 // shared_variables copy only needs to carry the resources
                 // (semaphores, buffers) and resolved bindings.  The per-coord
                 // ProgramDescriptors have already been consumed into Programs.
-                tt::tt_metal::MeshWorkloadDescriptor mesh_workload_descriptor =
-                    DescriptorFactory::create_mesh_workload_descriptor(
-                        attrs, tensor_args, tensor_return_value, tensor_coords);
-                auto programs = std::move(mesh_workload_descriptor.programs);
+                tt::tt_metal::WorkloadDescriptor workload_descriptor = DescriptorFactory::create_workload_descriptor(
+                    attrs, tensor_args, tensor_return_value, tensor_coords);
+                auto programs = std::move(workload_descriptor.programs);
                 for (auto& [device_range, desc] : programs) {
                     tt::tt_metal::Program program{desc};
-                    auto tensor_buffers =
-                        collect_tensor_buffers(tensor_args, tensor_return_value, mesh_workload_descriptor);
+                    auto tensor_buffers = collect_tensor_buffers(tensor_args, tensor_return_value, workload_descriptor);
                     auto resolved = tt::tt_metal::resolve_bindings(program, desc, tensor_buffers);
                     mesh_workload.add_program(device_range, std::move(program));
                     shared_variables[device_range] = shared_variables_t{
-                        .mesh_workload_descriptor = mesh_workload_descriptor, .resolved_bindings = std::move(resolved)};
+                        .workload_descriptor = workload_descriptor, .resolved_bindings = std::move(resolved)};
                 }
                 return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
             } else {
                 // Contract (1) — simple per-coord create_descriptor.
-                tt::tt_metal::MeshWorkloadDescriptor empty_descriptor;
+                tt::tt_metal::WorkloadDescriptor empty_descriptor;
 
                 const auto build_and_add_program =
                     [&](const ttnn::MeshCoordinateRange& device_range,
@@ -518,16 +516,16 @@ public:
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                 auto& sv = cached_workload.shared_variables.at(coordinate_range);
 
-                if constexpr (has_mesh_workload_descriptor) {
+                if constexpr (has_workload_descriptor) {
                     // Contract (2) — declarative: there is no slow-path rebuild
-                    // because re-running create_mesh_workload_descriptor would re-allocate
+                    // because re-running create_workload_descriptor would re-allocate
                     // workload-scoped resources (GlobalSemaphores, MeshBuffers).
                     // CB bindings are always populated by resolve_bindings, so the
                     // fast path covers cache hits even when the factory only sets
                     // `desc.cbs[i].buffer` and declares no rt-arg buffer bindings.
                     if (!sv.resolved_bindings.empty()) {
                         auto current_buffers =
-                            collect_tensor_buffers(tensor_args, tensor_return_value, sv.mesh_workload_descriptor);
+                            collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
                         tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, current_buffers);
                     }
                 } else {
@@ -540,7 +538,7 @@ public:
                     // through to the slow-path rebuild instead.
                     if (!sv.resolved_bindings.rt_args.empty()) {
                         auto current_buffers =
-                            collect_tensor_buffers(tensor_args, tensor_return_value, sv.mesh_workload_descriptor);
+                            collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
                         tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, current_buffers);
                     } else {
                         const ttnn::MeshCoordinate mesh_coord = coordinate_range.start_coord();

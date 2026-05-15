@@ -9,7 +9,6 @@
 #include <tt-metalium/program_descriptors.hpp>
 
 #include <memory>
-#include <utility>
 #include <vector>
 
 namespace tt::tt_metal {
@@ -21,7 +20,7 @@ class MeshBuffer;
 /**
  * Declarative description of a mesh-scoped workload.
  *
- * A MeshWorkloadDescriptor pairs the per-coord ProgramDescriptors that make up
+ * A WorkloadDescriptor pairs the per-coord ProgramDescriptors that make up
  * the workload with the workload-scoped resources those programs reference.
  * The framework realises it into a MeshWorkload on cache miss and keeps the
  * descriptor alive for the cached workload's lifetime so that:
@@ -34,7 +33,7 @@ class MeshBuffer;
  *   - Resources are flat vectors (not named slots) so factories with N
  *     semaphores or N buffers can grow without changing the schema.
  */
-struct MeshWorkloadDescriptor {
+struct WorkloadDescriptor {
     // Workload-scoped resources, allocated by the factory during workload
     // build and kept alive for the lifetime of the cached MeshWorkload.
     std::vector<GlobalSemaphore> semaphores;
@@ -43,7 +42,10 @@ struct MeshWorkloadDescriptor {
     // Per-coord program descriptors.  Each entry covers a contiguous
     // MeshCoordinateRange and is materialised into one Program added to the
     // resulting MeshWorkload.
-    using PerCoordProgram = std::pair<distributed::MeshCoordinateRange, ProgramDescriptor>;
+    struct PerCoordProgram {
+        distributed::MeshCoordinateRange range;
+        ProgramDescriptor descriptor;
+    };
     std::vector<PerCoordProgram> programs;
 };
 

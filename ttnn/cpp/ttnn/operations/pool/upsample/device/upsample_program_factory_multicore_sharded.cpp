@@ -346,7 +346,7 @@ ProgramDescriptor build_sharded_upsample_program(
         input_nsticks_per_core,
         output_nsticks_per_core);
 
-    // The config buffer lives on the MeshWorkloadDescriptor so it outlives
+    // The config buffer lives on the WorkloadDescriptor so it outlives
     // this descriptor and the cached Program (the config CB references the
     // buffer pointer directly via UpdateDynamicCircularBufferAddress).
     constexpr tt::DataFormat config_df = tt::DataFormat::RawUInt16;
@@ -406,7 +406,7 @@ ProgramDescriptor build_sharded_upsample_program(
 
 }  // namespace
 
-tt::tt_metal::MeshWorkloadDescriptor UpsampleMultiCoreShardedProgramFactory::create_mesh_workload_descriptor(
+tt::tt_metal::WorkloadDescriptor UpsampleMultiCoreShardedProgramFactory::create_workload_descriptor(
     const UpsampleParams& operation_attributes,
     const Tensor& input_tensor,
     Tensor& output_tensor,
@@ -452,8 +452,8 @@ tt::tt_metal::MeshWorkloadDescriptor UpsampleMultiCoreShardedProgramFactory::cre
     auto config_mesh_buffer = config_tensor_dev.device_storage().get_mesh_buffer_leak_ownership();
     tt::tt_metal::Buffer* config_buffer = config_mesh_buffer->get_reference_buffer();
 
-    tt::tt_metal::MeshWorkloadDescriptor mesh_workload_descriptor;
-    mesh_workload_descriptor.buffers.push_back(std::move(config_mesh_buffer));
+    tt::tt_metal::WorkloadDescriptor workload_descriptor;
+    workload_descriptor.buffers.push_back(std::move(config_mesh_buffer));
 
     // Single-device op: the per-coord program is structurally identical for
     // every coord in `tensor_coords` (upsample doesn't depend on cluster
@@ -462,14 +462,14 @@ tt::tt_metal::MeshWorkloadDescriptor UpsampleMultiCoreShardedProgramFactory::cre
     auto desc = build_sharded_upsample_program(
         operation_attributes, input_tensor, output_tensor, config_buffer, config_tensor_width);
     auto ranges = tensor_coords.ranges();
-    mesh_workload_descriptor.programs.reserve(ranges.size());
+    workload_descriptor.programs.reserve(ranges.size());
     for (size_t i = 0; i + 1 < ranges.size(); ++i) {
-        mesh_workload_descriptor.programs.emplace_back(ranges[i], desc);
+        workload_descriptor.programs.push_back({ranges[i], desc});
     }
     if (!ranges.empty()) {
-        mesh_workload_descriptor.programs.emplace_back(ranges.back(), std::move(desc));
+        workload_descriptor.programs.push_back({ranges.back(), std::move(desc)});
     }
-    return mesh_workload_descriptor;
+    return workload_descriptor;
 }
 
 }  // namespace ttnn::prim

@@ -96,12 +96,12 @@ static program_factory_t select_program_factory(
     const operation_attributes_t&, const tensor_args_t&);
 ```
 
-**Mesh-workload ops with workload-scoped state — `MeshDescriptor` pattern:**
+**Mesh-workload ops with workload-scoped state — `WorkloadDescriptor` pattern:**
 
 Most ops only need `create_descriptor`. But mesh-workload ops that allocate
 `GlobalSemaphore`s or call `Synchronize` need to do that **once per workload**
 (not once per coord, not once per dispatch). For those ops, define a
-declarative `MeshDescriptor` that owns both the workload-scoped resources
+declarative `WorkloadDescriptor` that owns both the workload-scoped resources
 **and** the per-coord program descriptors:
 
 ```cpp
@@ -113,8 +113,8 @@ struct MyMeshFactory {
     //     coord-range, if multiple coords share the same program).
     //
     // GlobalSemaphore has no default constructor; wrap each in
-    // std::optional<> so MeshDescriptor is value-initialisable.
-    struct MeshDescriptor {
+    // std::optional<> so WorkloadDescriptor is value-initialisable.
+    struct WorkloadDescriptor {
         std::optional<ttnn::GlobalSemaphore> semaphore;
         // ... any other workload-wide resources
         std::vector<std::pair<ttnn::MeshCoordinateRange, tt::tt_metal::ProgramDescriptor>> programs;
@@ -126,7 +126,7 @@ struct MyMeshFactory {
     //   2. Loop over `tensor_coords` and push a ProgramDescriptor per coord
     //      into `programs`.
     // The framework iterates `programs` verbatim to build the MeshWorkload.
-    static MeshDescriptor create_mesh_descriptor(
+    static WorkloadDescriptor create_workload_descriptor(
         const operation_attributes_t&,
         const tensor_args_t&,
         tensor_return_value_t&,
@@ -134,10 +134,10 @@ struct MyMeshFactory {
 };
 ```
 
-When the framework adapter sees `T::MeshDescriptor` + `T::create_mesh_descriptor`
+When the framework adapter sees `T::WorkloadDescriptor` + `T::create_workload_descriptor`
 + a `programs` field on the descriptor, it dispatches through this contract:
 
-1. **Cache miss**: calls `create_mesh_descriptor` ONCE. The factory allocates
+1. **Cache miss**: calls `create_workload_descriptor` ONCE. The factory allocates
    resources and populates `programs`. The adapter then turns each
    `(MeshCoordinateRange, ProgramDescriptor)` pair into a `Program` and adds
    it to the cached `MeshWorkload`.
@@ -151,7 +151,7 @@ When the framework adapter sees `T::MeshDescriptor` + `T::create_mesh_descriptor
 > Single-device ops without workload-scoped state continue to use just
 > `create_descriptor` (no workload concept). Only ops that need to allocate
 > something once per workload (`GlobalSemaphore`s, halo lookup tables uploaded
-> to device, etc.) need the declarative `MeshDescriptor` pattern above.
+> to device, etc.) need the declarative `WorkloadDescriptor` pattern above.
 
 ### 1.3 Program factory implementation (`create_descriptor`)
 
@@ -399,7 +399,7 @@ See the Bernoulli operation for another complete example:
 - Factory: `ttnn/cpp/ttnn/operations/bernoulli/device/bernoulli_program_factory.cpp`
 - Header: `ttnn/cpp/ttnn/operations/bernoulli/device/bernoulli_device_operation.hpp`
 
-See `pool/generic` for a complete declarative `MeshDescriptor` example
+See `pool/generic` for a complete declarative `WorkloadDescriptor` example
 whose descriptor carries device-uploaded helper tensors (halo lookup
 table, avg-pool scalar config) alongside the per-coord programs:
 - Header: `ttnn/cpp/ttnn/operations/pool/generic/device/pool_op.hpp`

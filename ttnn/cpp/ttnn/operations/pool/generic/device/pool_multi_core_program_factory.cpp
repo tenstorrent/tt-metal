@@ -294,7 +294,7 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
 
     TT_FATAL(
         reader_indices_buffer != nullptr,
-        "Pool2D::MultiCore::create_mesh_workload_descriptor must populate the reader-indices buffer before building "
+        "Pool2D::MultiCore::create_workload_descriptor must populate the reader-indices buffer before building "
         "programs");
 
     const bool is_block_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
@@ -645,8 +645,8 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
     uint32_t config_cb_id = INVALID_CB_ID;
     tt::tt_metal::Buffer* config_buffer = nullptr;
     if (!one_scalar_per_core) {
-        // The scalar config tensor was uploaded once in create_mesh_workload_descriptor
-        // and parked in MeshWorkloadDescriptor::buffers; the framework keeps it
+        // The scalar config tensor was uploaded once in create_workload_descriptor
+        // and parked in WorkloadDescriptor::buffers; the framework keeps it
         // alive for the cached workload's lifetime.  scalar_config_buffer must
         // be non-null whenever !one_scalar_per_core (avg-pool with non-trivial
         // scalar layout).
@@ -972,7 +972,7 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
 
 namespace {
 // Common preamble shared between the resource-allocation phase and the
-// per-coord program build of create_mesh_workload_descriptor(): pulls per-op fields out
+// per-coord program build of create_workload_descriptor(): pulls per-op fields out
 // of the SlidingWindowConfig and computes the parallel config / output shape
 // pieces we need in both phases.  Lives in an anonymous namespace because it's
 // purely a local helper for this factory.
@@ -1027,7 +1027,7 @@ PoolSetup compute_pool_setup(const Pool2D::operation_attributes_t& op_attr, cons
 }
 }  // namespace
 
-tt::tt_metal::MeshWorkloadDescriptor Pool2D::MultiCore::create_mesh_workload_descriptor(
+tt::tt_metal::WorkloadDescriptor Pool2D::MultiCore::create_workload_descriptor(
     const operation_attributes_t& op_attr,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensors,
@@ -1038,7 +1038,7 @@ tt::tt_metal::MeshWorkloadDescriptor Pool2D::MultiCore::create_mesh_workload_des
 
     // Build the per-core sliding-window halo lookup table on host, then upload it.
     // The resulting MeshBuffer must outlive the program, so we park its
-    // shared_ptr on the MeshWorkloadDescriptor (held by the program cache).
+    // shared_ptr on the WorkloadDescriptor (held by the program cache).
     std::vector<uint32_t> op_trace_metadata =
         ttnn::operations::sliding_window::generate_op_trace_metadata(sliding_window_config);
     std::vector<sliding_window::ShardBoundary> shard_boundaries =
@@ -1055,10 +1055,10 @@ tt::tt_metal::MeshWorkloadDescriptor Pool2D::MultiCore::create_mesh_workload_des
         input.device(),
         op_attr.config_tensor_in_dram);
 
-    tt::tt_metal::MeshWorkloadDescriptor mesh_workload_descriptor;
+    tt::tt_metal::WorkloadDescriptor workload_descriptor;
     auto reader_indices_mesh_buffer = reader_indices_on_device.device_storage().get_mesh_buffer_leak_ownership();
     tt::tt_metal::Buffer* reader_indices_buffer = reader_indices_mesh_buffer->get_reference_buffer();
-    mesh_workload_descriptor.buffers.push_back(std::move(reader_indices_mesh_buffer));
+    workload_descriptor.buffers.push_back(std::move(reader_indices_mesh_buffer));
 
     // For avg-pool, decide whether a single bf16 scalar per core is sufficient.  When it isn't
     // (ceil_mode w/ ceil_pad, or !count_include_pad with non-zero padding, both with no
@@ -1116,12 +1116,11 @@ tt::tt_metal::MeshWorkloadDescriptor Pool2D::MultiCore::create_mesh_workload_des
 
         Tensor config_tensor_on_device = config_tensor.to_device(
             input.device(), op_attr.config_tensor_in_dram ? DRAM_MEMORY_CONFIG : l1_small_memory_config);
-        mesh_workload_descriptor.buffers.push_back(
+        workload_descriptor.buffers.push_back(
             config_tensor_on_device.device_storage().get_mesh_buffer_leak_ownership());
     }
-    tt::tt_metal::Buffer* scalar_config_buffer = mesh_workload_descriptor.buffers.size() > 1
-                                                     ? mesh_workload_descriptor.buffers[1]->get_reference_buffer()
-                                                     : nullptr;
+    tt::tt_metal::Buffer* scalar_config_buffer =
+        workload_descriptor.buffers.size() > 1 ? workload_descriptor.buffers[1]->get_reference_buffer() : nullptr;
 
     // Single-device op: the kernel program is structurally identical for every
     // coord in `tensor_coords` (Pool2D doesn't depend on cluster position).
@@ -1180,14 +1179,14 @@ tt::tt_metal::MeshWorkloadDescriptor Pool2D::MultiCore::create_mesh_workload_des
         output_layout,
         op_attr.config_tensor_in_dram);
     auto ranges = tensor_coords.ranges();
-    mesh_workload_descriptor.programs.reserve(ranges.size());
+    workload_descriptor.programs.reserve(ranges.size());
     for (size_t i = 0; i + 1 < ranges.size(); ++i) {
-        mesh_workload_descriptor.programs.emplace_back(ranges[i], desc);
+        workload_descriptor.programs.push_back({ranges[i], desc});
     }
     if (!ranges.empty()) {
-        mesh_workload_descriptor.programs.emplace_back(ranges.back(), std::move(desc));
+        workload_descriptor.programs.push_back({ranges.back(), std::move(desc)});
     }
-    return mesh_workload_descriptor;
+    return workload_descriptor;
 }
 
 }  // namespace ttnn::operations::pool
