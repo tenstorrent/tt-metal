@@ -31,6 +31,12 @@ metal_infra:
     bh_llmbox: 0
     bh_loudbox: 0
     bh_qb: 0
+    # Triage tests (tools/tests/triage/) — tests/pipeline_reorg/triage_tests.yaml
+    wh_n150_civ2: 15
+    wh_n150_civ2_bare: 30
+    bh_p150b_civ2: 30
+    bh_p150b_civ2_viommu: 15
+    bh_p150b_civ2_viommu_prio: 15
   unit:
     N150: 0
     N300: 0

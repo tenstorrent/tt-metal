@@ -1,14 +1,14 @@
 name: "(triage) On-demand triage tests"
-run-name: "(triage) ${{ inputs.runner-labels }}${{ inputs.ref && format(' @ {0}', inputs.ref) || '' }}"
+run-name: "(triage) ${{ inputs.enabled-skus }}${{ inputs.ref && format(' @ {0}', inputs.ref) || '' }}"
 
 on:
   workflow_dispatch:
     inputs:
-      runner-labels:
-        description: 'Comma-separated runner labels (e.g. "N150,P150b"). Valid: N150, N300, P150b, P100, N150-viommu, P150b-viommu, P150b-viommu-prio'
+      enabled-skus:
+        description: 'Comma-separated SKUs from .github/sku_config.yaml (e.g. "wh_n150_civ2,bh_p150b_civ2"). Valid: wh_n150_civ2, wh_n150_civ2_bare, bh_p150b_civ2, bh_p150b_civ2_viommu, bh_p150b_civ2_viommu_prio.'
         required: true
         type: string
-        default: "N150"
+        default: "wh_n150_civ2"
       ref:
         description: 'Git ref (branch, tag, or commit SHA) to build. Leave empty to use the branch selected in "Use workflow from".'
         required: false
@@ -31,40 +31,17 @@ on:
         required: false
         type: boolean
         default: true
-      timeout:
-        description: 'Test timeout in minutes'
+      timeout-minutes-override:
+        description: 'If > 0, skip time budget verification and use this as the job timeout in minutes.'
         required: false
         type: number
-        default: 30
+        default: 0
 
 permissions:
   packages: write
   contents: read
 
 jobs:
-  generate-matrix:
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.parse.outputs.matrix }}
-    steps:
-      - name: Parse runner-labels into matrix
-        id: parse
-        run: |
-          set -euo pipefail
-          raw='${{ inputs.runner-labels }}'
-          matrix=$(echo "$raw" \
-            | tr ',' '\n' \
-            | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
-            | grep -v '^$' \
-            | jq -R . \
-            | jq -sc '{"runner-label": .}')
-          if [[ "$(echo "$matrix" | jq '.["runner-label"] | length')" -eq 0 ]]; then
-            echo "Error: no runner labels parsed from input: \"$raw\"" >&2
-            exit 1
-          fi
-          echo "Matrix: $matrix"
-          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
-
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -78,17 +55,15 @@ jobs:
       ref: ${{ inputs.ref }}
 
   triage-tests:
-    needs: [build-artifact, generate-matrix]
+    needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/triage.yaml
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.generate-matrix.outputs.matrix) }}
     with:
-      runner-label: ${{ matrix.runner-label }}
+      enabled-skus: ${{ inputs.enabled-skus }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       run-hang-report-test: ${{ inputs.run-hang-report-test }}
       reset-device-after-hang: ${{ inputs.reset-device-after-hang }}
-      timeout: ${{ inputs.timeout }}
+      timeout-minutes-override: ${{ inputs.timeout-minutes-override }}
+      ref: ${{ inputs.ref }}

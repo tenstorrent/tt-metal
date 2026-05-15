@@ -400,19 +400,14 @@ jobs:
 
   triage-tests:
     needs: [ build, find-changes ]
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: ${{ github.event_name == 'merge_group'
-            && fromJSON('["N150-viommu","P150b-viommu-prio"]')
-            || fromJSON('["N150-viommu","P150b-viommu"]') }}
     uses: ./.github/workflows/triage.yaml
     with:
-      runner-label: ${{ matrix.platform }}
+      enabled-skus: ${{ github.event_name == 'merge_group'
+          && 'wh_n150_civ2,bh_p150b_civ2_viommu_prio'
+          || 'wh_n150_civ2,bh_p150b_civ2_viommu' }}
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
-      timeout: 11
 
   load-llk-unit-test-matrix:
     needs: find-changes

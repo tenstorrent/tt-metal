@@ -1,0 +1,28 @@
+# =============================================================================
+# Triage tests definitions
+# =============================================================================
+# Tests in this file are consumed by .github/workflows/triage.yaml.
+#
+# Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
+# Per-SKU timeouts are summed and validated against
+# metal_infra.sanity.<sku> in .github/time_budget.yaml.
+# =============================================================================
+
+- name: "triage tests"
+  cmd: |
+    mkdir -p generated/test_reports
+    uv pip install -r tools/triage/requirements.txt
+    pytest -v -s ./tools/tests/triage/ $IGNORE_ARGS
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+    wh_n150_civ2_bare:
+      timeout: 30
+    bh_p150b_civ2:
+      timeout: 30
+    bh_p150b_civ2_viommu:
+      timeout: 15
+    bh_p150b_civ2_viommu_prio:
+      timeout: 15
+  team: metal_infra
+  owner_id: U0AK4BVCFM0 # TODO: update to triage tools maintainer's Slack ID

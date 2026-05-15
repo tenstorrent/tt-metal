@@ -492,13 +492,9 @@ jobs:
     needs: [build-artifact, generate-arch-matrix]
     if: ${{ needs.generate-arch-matrix.outputs.matrix-wormhole-only != '[]' }}
     secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-wormhole-only) }}
     uses: ./.github/workflows/triage.yaml
     with:
-      runner-label: ${{ matrix.test-group.runner-label }}
+      enabled-skus: "wh_n150_civ2_bare"
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

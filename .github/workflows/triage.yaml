@@ -3,13 +3,15 @@ name: "[internal] Triage tests impl"
 on:
   workflow_call:
     inputs:
-      runner-label:
+      enabled-skus:
         required: true
         type: string
-      timeout:
+        description: "Comma-separated SKUs (e.g. wh_n150_civ2,bh_p150b_civ2_viommu). Maps to runs_on via .github/sku_config.yaml."
+      timeout-minutes-override:
         required: false
         type: number
-        default: 30
+        default: 0
+        description: "If > 0, skip time budget verification and use this as the job timeout."
       docker-image:
         required: true
         type: string
@@ -39,10 +41,58 @@ on:
         description: 'Reset device after a hang is detected (TT_METAL_RESET_DEVICE_AFTER_HANG)'
         default: true
         type: boolean
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Commit SHA to test (default: HEAD)"
 
 jobs:
+  load-test-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/triage_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+
+      - name: Install dependencies
+        run: |
+          pip3 install PyYAML
+
+      - name: Verify test timeouts against budget
+        if: ${{ inputs.timeout-minutes-override == 0 }}
+        run: |
+          set -e
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "sanity"
+
+      - name: Build test matrix based on enabled SKUs
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml
+
   triage-tests:
-    name: Triage tests ${{ inputs.runner-label }}
+    needs: load-test-matrix
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -59,14 +109,13 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    runs-on: >-
-      ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner-label) }}
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
           path: docker-job
+          ref: ${{ inputs.ref || github.sha }}
       - name: ⬇️  Setup Job
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
@@ -77,19 +126,17 @@ jobs:
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
           auto-triage: false # Disable auto-triage because we need to run triage tests explicitly
-      - name: Run triage tests
-        timeout-minutes: ${{ inputs.timeout }}
+      - name: ${{ matrix.test-group.name }}
+        timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
         run: |
-            mkdir -p generated/test_reports
-            uv pip install -r tools/triage/requirements.txt
-            IGNORE_ARGS=""
-            if [[ "${{ inputs.run-hang-report-test }}" != "true" ]]; then
-              IGNORE_ARGS="--ignore=./tools/tests/triage/test_hang_report.py"
-            fi
-            if [[ "${{ inputs.reset-device-after-hang }}" == "true" ]]; then
-              export TT_METAL_RESET_DEVICE_AFTER_HANG=1
-            fi
-            pytest -v -s ./tools/tests/triage/ $IGNORE_ARGS
+          IGNORE_ARGS=""
+          if [[ "${{ inputs.run-hang-report-test }}" != "true" ]]; then
+            IGNORE_ARGS="--ignore=./tools/tests/triage/test_hang_report.py"
+          fi
+          if [[ "${{ inputs.reset-device-after-hang }}" == "true" ]]; then
+            export TT_METAL_RESET_DEVICE_AFTER_HANG=1
+          fi
+          ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
