@@ -125,7 +125,9 @@ void kernel_main() {
     //                  K_tiles on cb_ctrl[3].
     {
         constexpr uint32_t kRole = OFFSETS_ROLE;
-        static_assert(kRole == 1U || kRole == 2U || kRole == 3U || kRole == 4U, "Unsupported OFFSETS_ROLE value.");
+        static_assert(
+            kRole == 1U || kRole == 2U || kRole == 3U || kRole == 4U || kRole == 5U || kRole == 6U,
+            "Unsupported OFFSETS_ROLE value.");
         const uint32_t offsets_addr = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 7);
         const uint32_t offsets_start_index = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 8);
         constexpr uint32_t offsets_args_cta_offset =
@@ -140,7 +142,7 @@ void kernel_main() {
         noc_async_read(get_noc_addr(0, offsets_acc), offsets_l1_addr, kPageBytes);
         noc_async_read_barrier();
         volatile tt_l1_ptr uint32_t* offsets_stage = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(offsets_l1_addr);
-#if OFFSETS_ROLE == 1 || OFFSETS_ROLE == 2
+#if OFFSETS_ROLE == 1 || OFFSETS_ROLE == 2 || OFFSETS_ROLE == 5
         {
             const uint32_t in0_idx = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 9);
             const uint32_t row_start = offsets_stage[offsets_start_index];
@@ -149,10 +151,11 @@ void kernel_main() {
             // Empty-expert (actual=0) → M_blocks_per_core=0 (loop skipped). Still clamp
             // M_tiles to >=1 for shape construction (TensorShape2D asserts d0>0).
             M_tiles = actual_eff_M > 0U ? actual_eff_M : 1U;
-#if OFFSETS_ROLE == 1
-            // OutputRow + this kernel is the writer (transpose_core_grid) → override
-            // out_row_offset_tiles. dm_in0_sender publishes M values to cb_ctrl; we re-derive
-            // them locally here (both kernels read the same offsets).
+#if OFFSETS_ROLE == 1 || OFFSETS_ROLE == 5
+            // OutputRow (1) / InputAndOutputRow (5) + this kernel is the writer
+            // (transpose_core_grid) → override out_row_offset_tiles. dm_in0_sender publishes
+            // M values to cb_ctrl; we re-derive them locally here (both kernels read the
+            // same offsets).
             if constexpr (is_output_writer) {
                 out_row_offset_tiles = row_start / 32U;
             }
@@ -183,6 +186,15 @@ void kernel_main() {
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(tt::CBIndex::c_8));
             ctrl_l1[3] = K_tiles;
             cb_push_back(tt::CBIndex::c_8, 1U);
+        }
+#elif OFFSETS_ROLE == 6
+        {
+            // InputAndWeightK: this kernel owns in1_k_offset + K_tiles override. dm_in0_sender
+            // owns in0_k_offset + the cb_ctrl publish of K_tiles for compute.
+            const uint32_t row_start = offsets_stage[offsets_start_index];
+            const uint32_t row_end = offsets_stage[offsets_start_index + 1U];
+            in1_k_offset_tiles = row_start / 32U;
+            K_tiles = (row_end - row_start) / 32U;
         }
 #endif
     }

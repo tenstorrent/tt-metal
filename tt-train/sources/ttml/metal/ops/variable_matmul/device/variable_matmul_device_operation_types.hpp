@@ -52,6 +52,20 @@ enum class OffsetsRole : uint32_t {
     // Reads offsets[start_index] and uses (value / TILE_HEIGHT) as in1_k_offset_tiles
     // (matmul-K start offset on the weight parent). Same shape rules as InputK on the in1 side.
     WeightK = 4,
+    // Combined InputRow + OutputRow: reads offsets[start..start+2] and uses the same range
+    // for BOTH the in0 read window AND the output write window. Lets moe_ffn use a single
+    // shared output tensor of shape [T_cap, N] instead of E per-expert intermediates —
+    // each expert's matmul reads grouped[offsets[e]:offsets[e+1]] and writes into the
+    // corresponding row range of the shared output. Overrides in0_row_offset_tiles +
+    // out_row_offset_tiles (when this kernel is the writer) + effective_M + per-core M
+    // values. The upper-bound constraint on per-expert size disappears: every expert's
+    // actual rows fit naturally into its slice of the shared [T_cap, N] tensor.
+    InputAndOutputRow = 5,
+    // Combined InputK + WeightK: reads offsets[start..start+2] and uses the same range
+    // for BOTH the in0 K-slice and the in1 K-slice. Used in moe_ffn backward dW matmuls
+    // where both operands are shared [T_cap, *] tensors and only the expert's K-row range
+    // should participate in the K-reduce.
+    InputAndWeightK = 6,
 };
 
 struct VariableMatmulParams {

@@ -171,12 +171,14 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
         const auto role = operation_attributes.offsets_role;
         TT_FATAL(
             role == OffsetsRole::OutputRow || role == OffsetsRole::InputRow || role == OffsetsRole::InputK ||
-                role == OffsetsRole::WeightK,
+                role == OffsetsRole::WeightK || role == OffsetsRole::InputAndOutputRow ||
+                role == OffsetsRole::InputAndWeightK,
             "variable_matmul: unsupported OffsetsRole value.");
-        if (role == OffsetsRole::OutputRow) {
+        if (role == OffsetsRole::OutputRow || role == OffsetsRole::InputAndOutputRow) {
             TT_FATAL(
                 tensor_args.output_tensor.has_value(),
-                "variable_matmul: OffsetsRole::OutputRow requires a caller-provided output_tensor.");
+                "variable_matmul: OffsetsRole::OutputRow / InputAndOutputRow requires a caller-provided "
+                "output_tensor.");
         }
         const auto& off = tensor_args.offsets_tensor.value();
         TT_FATAL(off.dtype() == ttnn::DataType::UINT32, "variable_matmul: offsets_tensor must be UINT32.");
@@ -250,9 +252,15 @@ ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(
     const bool in1_parent_k_mode = operation_attributes.in1_k_offset_tiles > 0 || K_w_tiles > K_in_tiles;
     const bool in0_parent_k_mode =
         operation_attributes.in0_k_offset_tiles > 0 || (!in1_parent_k_mode && K_in_tiles > K_w_tiles);
+    // InputAndWeightK overrides both in0 and in1 K-offsets at runtime; force both use_offset
+    // flags true so hash matches the program factory's CTA computation (otherwise the cached
+    // program's compile-time flags would diverge from what compute_program_hash predicted).
+    const bool input_and_weight_k_active =
+        operation_attributes.offsets_role == OffsetsRole::InputAndWeightK && tensor_args.offsets_tensor.has_value();
     const bool use_offset = operation_attributes.in0_row_offset_tiles > 0 ||
-                            operation_attributes.effective_M_tiles > 0 || in0_parent_k_mode;
-    const bool use_offset_in1 = in1_parent_k_mode;
+                            operation_attributes.effective_M_tiles > 0 || in0_parent_k_mode ||
+                            input_and_weight_k_active;
+    const bool use_offset_in1 = in1_parent_k_mode || input_and_weight_k_active;
     // physical_volume / padded[-1] gives the count along the *stored* outer dim. With
     // transpose_a that's K-tiles; without, M-tiles. Either way, actual_M (for the matmul) is
     // along the stored *other* dim: padded_shape[-2] when transpose_a, [-1] otherwise — both

@@ -363,17 +363,19 @@ void kernel_main() {
     // OFFSETS_ROLE=InputK/WeightK overrides K_tiles from cb_ctrl[3].
     uint32_t K_tiles = get_arg_val<uint32_t>(argidx++);
 
-#if defined(OFFSETS_ROLE) && (OFFSETS_ROLE == 1 || OFFSETS_ROLE == 2 || OFFSETS_ROLE == 3 || OFFSETS_ROLE == 4)
-    // OutputRow / InputRow / InputK / WeightK: a dm kernel publishes overrides on cb_ctrl
-    // after reading on-device offsets.
-    //   OutputRow (1): ctrl[0..2] = (M_start, M_end, M_blocks_per_core) (in0 publishes).
-    //   InputRow  (2): ctrl[0..2] = (M_start, M_end, M_blocks_per_core) (in0 publishes).
-    //   InputK    (3): ctrl[3]    = K_tiles (in0 publishes).
-    //   WeightK   (4): ctrl[3]    = K_tiles (in1 publishes).
+#if defined(OFFSETS_ROLE) && (OFFSETS_ROLE == 1 || OFFSETS_ROLE == 2 || OFFSETS_ROLE == 3 || OFFSETS_ROLE == 4 || \
+                              OFFSETS_ROLE == 5 || OFFSETS_ROLE == 6)
+    // Each role's cb_ctrl payload:
+    //   OutputRow         (1): ctrl[0..2] = (M_start, M_end, M_blocks_per_core).
+    //   InputRow          (2): ctrl[0..2] = (M_start, M_end, M_blocks_per_core).
+    //   InputK            (3): ctrl[3]    = K_tiles.
+    //   WeightK           (4): ctrl[3]    = K_tiles.
+    //   InputAndOutputRow (5): ctrl[0..2] = (M_start, M_end, M_blocks_per_core).
+    //   InputAndWeightK   (6): ctrl[3]    = K_tiles.
     {
         constexpr uint32_t cb_ctrl_id = tt::CBIndex::c_8;
         cb_wait_front(cb_ctrl_id, 1U);
-#if OFFSETS_ROLE == 1 || OFFSETS_ROLE == 2
+#if OFFSETS_ROLE == 1 || OFFSETS_ROLE == 2 || OFFSETS_ROLE == 5
         M_start_tile = read_tile_value(cb_ctrl_id, 0U, 0U);
         M_end_tile = read_tile_value(cb_ctrl_id, 0U, 1U);
         M_blocks_per_core = read_tile_value(cb_ctrl_id, 0U, 2U);
