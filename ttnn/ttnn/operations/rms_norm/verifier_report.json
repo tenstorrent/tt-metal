@@ -1,0 +1,25 @@
+{
+  "summary": {
+    "total": 2535,
+    "supported_pass": 210,
+    "supported_fail": 0,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 840,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 1470,
+    "invalid_unexpected": 0,
+    "no_axes_found": 15
+  },
+  "loud_categories": {
+    "xpass_drift": [],
+    "supported_fail": [],
+    "xfail_wrong_mode": [],
+    "supported_marked_xfail": [],
+    "invalid_unexpected": []
+  },
+  "note": "Slim version: full per-test details (210 supported_pass, 840 xfail_expected, 1470 invalid_skipped) elided to fit the 500 KB pre-commit cap. Regenerate with python3 -m eval.verify_supported <results_dir> ttnn.operations.rms_norm --output <out>.json"
+}

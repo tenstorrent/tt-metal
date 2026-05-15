@@ -42,9 +42,12 @@ using ckl::BroadcastDim;
 using ckl::CbIndexMode;
 using ckl::CopyTile;
 using ckl::CopyTilePolicy;
+using ckl::CopyTileReconfig;
 using ckl::Dst;
 using ckl::PackTile;
+using ckl::PackTileIndexMode;
 using ckl::PackTilePolicy;
+using ckl::PackTileReconfig;
 using ckl::Square;
 
 namespace {
@@ -113,11 +116,31 @@ void kernel_main() {
 
         // Phase 2 — Stage A: x → x^2. NoWaitNoPop on input (caller pre-waited; tiles
         // stay queued for stage D's WaitAndPop). BlockIter walks tile 0..Wt-1.
+        //
+        // Format reconfig (CopyTileReconfig::Input + PackTileReconfig::Output) is
+        // critical when gamma_dtype != input_dtype on the TILE input path: after
+        // Phase 0's gamma tilize the unpack/pack registers are configured for
+        // gamma_dtype, and without these reconfigs Stage A would read fp32
+        // cb_input_tiles via the bf16 srcA path (or vice versa) and produce
+        // wildly wrong x² values. For the RM input path the subsequent Phase 1a
+        // tilize re-establishes the input dtype's format, but expressing the
+        // reconfig at Stage A unifies both paths and is compile-time-elided when
+        // the prior pack/srcA CB already matched.
         ckl::eltwise_chain(
             Wt,
-            CopyTile<cb_input_tiles, Dst::D0, CopyTilePolicy::NoWaitNoPop, CbIndexMode::BlockIter>{},
+            CopyTile<
+                cb_input_tiles,
+                Dst::D0,
+                CopyTilePolicy::NoWaitNoPop,
+                CbIndexMode::BlockIter,
+                CopyTileReconfig::Input>{},
             Square<Dst::D0>{},
-            PackTile<cb_x_sq, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+            PackTile<
+                cb_x_sq,
+                Dst::D0,
+                PackTilePolicy::PerTileReserveAndPush,
+                PackTileIndexMode::FirstTile,
+                PackTileReconfig::Output>{});
 
         // Phase 3 — Stage B: mean(x^2) via SUM/REDUCE_ROW with scaler=1/W.
         // BulkWaitBulkPop: helper waits Wt tiles upfront, processes with indexed access,

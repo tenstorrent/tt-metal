@@ -70,7 +70,17 @@ def create_program_descriptor(
 
     Wt = (W + TILE_DIM - 1) // TILE_DIM
     Ht = (H + TILE_DIM - 1) // TILE_DIM
-    num_chunks = NC * Ht
+
+    # num_chunks: number of 32-row tile-height blocks the kernel iterates over.
+    # For RM input/output, chunks are over the FLAT row sequence (TensorAccessor
+    # sees a contiguous list of `NC*H` sticks with no inter-batch padding).
+    # For TILE input/output, H is required to be a multiple of 32, so
+    # `ceil(NC*H/32) == NC*Ht`. The unified formula `ceil(NC*H/32)` is correct
+    # for both, and — crucially — fixes the NC>1 + partial-H + RM case where
+    # `NC*Ht` over-counts chunks (the reader pushes data for `NC*H` rows but
+    # compute would iterate over `NC*Ht*32 > NC*H` rows' worth of chunks,
+    # blocking on empty trailing chunks).
+    num_chunks = (NC * H + TILE_DIM - 1) // TILE_DIM
 
     # Partial-W (only meaningful for RM input — TILE requires W%32==0).
     partial_w = W % TILE_DIM
@@ -105,20 +115,22 @@ def create_program_descriptor(
 
     # --- Reader: total rows / tiles to stream ---
     if input_is_rm:
-        # Total rows across all chunks (last chunk may be partial — read only valid rows).
-        # For NC=1: total_rows = H. For NC>1 with tile-aligned H: total_rows = NC*H = NC*Ht*32.
-        # Mixed NC>1 + partial H is not in scope for v1.
+        # Total rows across all chunks. RM tensor is a flat sequence of sticks
+        # — the partial last chunk (rows < 32) is handled by the reader's
+        # rows_this_chunk computation. Works uniformly for NC=1, NC>1, and
+        # tile-aligned / partial-H mixes now that num_chunks tracks the flat
+        # row count rather than NC*Ht.
         total_input_units = NC * H  # rows
         input_start_unit = 0
     else:
-        total_input_units = NC * Ht * Wt  # tiles
+        total_input_units = num_chunks * Wt  # tiles (= NC*Ht*Wt when H%32==0)
         input_start_unit = 0
 
     if output_is_rm:
         total_output_units = NC * H  # rows
         output_start_unit = 0
     else:
-        total_output_units = NC * Ht * Wt  # tiles
+        total_output_units = num_chunks * Wt  # tiles
         output_start_unit = 0
 
     # --- CB sizes ---
