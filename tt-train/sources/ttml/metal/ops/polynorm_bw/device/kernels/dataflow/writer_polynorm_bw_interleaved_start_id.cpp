@@ -26,7 +26,7 @@ void kernel_main() {
     constexpr auto cb_packed_partials_output = tt::CBIndex::c_22;
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t dL_dx_Wt = get_compile_time_arg_val(1);
-    constexpr uint32_t packed_partials_wt = get_compile_time_arg_val(2);
+    constexpr uint32_t packed_partials_tiles_per_row = get_compile_time_arg_val(2);
 
     const uint32_t dL_dx_tile_bytes = get_tile_size(cb_dL_dx_output);
     const uint32_t packed_partials_tile_bytes = get_tile_size(cb_packed_partials_output);
@@ -50,9 +50,9 @@ void kernel_main() {
         write_tiles_by_row(
             cb_packed_partials_output,
             packed_partials_output_addr_generator,
-            r * packed_partials_wt,
-            packed_partials_wt,
+            r * packed_partials_tiles_per_row,
+            packed_partials_tiles_per_row,
             packed_partials_tile_bytes,
-            packed_partials_wt);
+            packed_partials_tiles_per_row);
     }
 }
