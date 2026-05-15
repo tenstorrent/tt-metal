@@ -208,7 +208,7 @@ std::vector<ChipId> get_physical_chip_sequence(uint32_t num_seq_chips) {
     for (uint32_t i = 0; i < num_rows; i++) {
         ChipId logical_chip_id = start_logical_chip_id;
         for (uint32_t j = 0; j < num_cols; j++) {
-            if (logical_chip_id > physical_chip_ids.size()) {
+            if (static_cast<size_t>(logical_chip_id) > physical_chip_ids.size()) {
                 throw std::runtime_error("Failed to setup neighbor map, logical chip id exceeding bounds");
             }
             ChipId phys_chip_id =
@@ -222,11 +222,11 @@ std::vector<ChipId> get_physical_chip_sequence(uint32_t num_seq_chips) {
     // try to get the chips from the rows first
     std::vector<ChipId> chip_seq;
     if (num_seq_chips <= num_cols) {
-        for (auto i = 0; i < num_seq_chips; i++) {
+        for (uint32_t i = 0; i < num_seq_chips; i++) {
             chip_seq.push_back(physical_chip_matrix[0][i]);
         }
     } else if (num_seq_chips <= num_rows) {
-        for (auto i = 0; i < num_seq_chips; i++) {
+        for (uint32_t i = 0; i < num_seq_chips; i++) {
             chip_seq.push_back(physical_chip_matrix[i][0]);
         }
     }
@@ -457,8 +457,8 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
 
     std::vector<CoreCoord> worker_logical_cores;
     auto grid_size = devices[0]->compute_with_storage_grid_size();
-    for (auto i = 0; i < grid_size.x; i++) {
-        for (auto j = 0; j < grid_size.y; j++) {
+    for (uint32_t i = 0; i < grid_size.x; i++) {
+        for (uint32_t j = 0; j < grid_size.y; j++) {
             worker_logical_cores.push_back(CoreCoord({i, j}));
         }
     }
@@ -484,7 +484,7 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
     uint8_t num_assigned_receivers = 0;
     // each of the senders starting from the 2nd device in the seq will send packets to the 1st device
     // each of the receivers starting from the 2nd device in the seq will receive packets from the 1st device
-    for (auto i = 1; i < num_devices - 1; i++) {
+    for (uint32_t i = 1; i < num_devices - 1; i++) {
         auto num_local_senders = num_senders_per_chip + offset;
         assign_worker_cores(devices[i], num_local_senders, i, true /* is_sender */);
         num_assigned_senders += num_local_senders;
@@ -527,7 +527,7 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
         return src_device_idx - 1;
     };
 
-    for (auto i = 0; i < devices.size(); i++) {
+    for (size_t i = 0; i < devices.size(); i++) {
         program_handles[i] = tt_metal::CreateProgram();
 
         // use logical core (0,0) for the mux kernel
@@ -597,7 +597,7 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
     }
 
     log_info(LogTest, "Running programs");
-    for (auto i = 0; i < devices.size(); i++) {
+    for (size_t i = 0; i < devices.size(); i++) {
         fixture->RunProgramNonblocking(devices[i], program_handles[i]);
     }
 
@@ -626,7 +626,7 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
 
         log_info(LogTest, "Receivers done, terminating mux kernel");
         std::vector<uint32_t> mux_termination_signal(1, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
-        for (auto i = 0; i < devices.size(); i++) {
+        for (size_t i = 0; i < devices.size(); i++) {
             tt::tt_metal::detail::WriteToDeviceL1(
                 devices[i]->get_devices()[0],
                 worker_logical_cores[0],
@@ -636,7 +636,7 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
     }
 
     log_info(LogTest, "Waiting for programs");
-    for (auto i = 0; i < devices.size(); i++) {
+    for (size_t i = 0; i < devices.size(); i++) {
         fixture->WaitForSingleProgramDone(devices[i], program_handles[i]);
     }
 

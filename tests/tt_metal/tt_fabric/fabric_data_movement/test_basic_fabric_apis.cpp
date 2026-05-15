@@ -273,7 +273,9 @@ void RunSetUnicastRouteTest(
                 "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_fabric_set_unicast_route.cpp",
                 {logical_cores[src_idx]},
                 tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .defines = defines});
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .compile_args = {},
+                    .defines = defines});
         }
 
         tt_metal::SetRuntimeArgs(programs[src_idx], kernel, logical_cores[src_idx], runtime_args);

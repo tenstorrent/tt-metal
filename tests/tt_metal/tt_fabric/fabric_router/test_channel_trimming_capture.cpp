@@ -1113,7 +1113,7 @@ TEST_F(Fabric2DChannelTrimmingFixture, DirectionalChannelForwardedTo) {
                  {RoutingDirection::E, RoutingDirection::W, RoutingDirection::N, RoutingDirection::S}) {
                 auto neighbors = control_plane.get_intra_chip_neighbors(candidate_src, dir);
                 for (auto n : neighbors) {
-                    if (n == j) {
+                    if (static_cast<uint32_t>(n) == j) {
                         is_direct_neighbor = true;
                         break;
                     }
