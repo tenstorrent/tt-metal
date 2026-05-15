@@ -600,7 +600,7 @@ template <
     Dst DstSlot = Dst::D0,
     CopyTilePolicy Policy = CopyTilePolicy::WaitAndPop,
     CbIndexMode IndexMode = CbIndexMode::FirstTile,
-    CopyTileReconfig Reconfig = CopyTileReconfig::None>
+    CopyTileReconfig Reconfig = CopyTileReconfig::Input>
 struct CopyTile;
 
 template <
@@ -622,7 +622,7 @@ template <
     DestReuseType ReuseType,
     Dst DstIn = Dst::D0,
     Dst DstOut = Dst::D0,
-    DestReuseReconfig Reconfig = DestReuseReconfig::None,
+    DestReuseReconfig Reconfig = DestReuseReconfig::Input,
     CopyTilePolicy Policy = CopyTilePolicy::WaitAndPop,
     CbIndexMode IndexMode = CbIndexMode::FirstTile>
 struct DestReuseBinary;
@@ -633,7 +633,7 @@ template <
     uint32_t CbOut = 0,
     Dst DstSlot = Dst::D0,
     CopyTilePolicy Policy = CopyTilePolicy::WaitAndPop,
-    UnaryBcastReconfig Reconfig = UnaryBcastReconfig::None>
+    UnaryBcastReconfig Reconfig = UnaryBcastReconfig::Input>
 struct UnaryBcast;
 
 template <
@@ -641,7 +641,7 @@ template <
     Dst DstSlot = Dst::D0,
     PackTilePolicy Policy = PackTilePolicy::PerTileReserveAndPush,
     PackTileIndexMode IndexMode = PackTileIndexMode::FirstTile,
-    PackTileReconfig Reconfig = PackTileReconfig::None>
+    PackTileReconfig Reconfig = PackTileReconfig::Output>
 struct PackTile;
 
 template <
@@ -649,7 +649,7 @@ template <
     Dst FirstSlot,
     uint32_t NTiles,
     PackTilePolicy Policy = PackTilePolicy::PerTileReserveAndPush,
-    PackTileReconfig Reconfig = PackTileReconfig::None>
+    PackTileReconfig Reconfig = PackTileReconfig::Output>
 struct PackTileBlock;
 
 // Fill / Rand forward declarations — implementations live in eltwise_fill.hpp / eltwise_rand.hpp.
