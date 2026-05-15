@@ -103,7 +103,7 @@ inline void _llk_pack_reconfig_l1_acc_(const std::uint32_t enable)
     reconfigure_packer_l1_acc(enable);
 }
 
-template <PackMode pack_mode = PackMode::Default, ReduceDim dim>
+template <ReduceDim dim, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_reduce_mask_config_()
 {
     ckernel::packer::pck_edge_offset_u pack_edge_offset = {.val = 0};

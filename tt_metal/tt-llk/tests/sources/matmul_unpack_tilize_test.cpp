@@ -116,8 +116,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         DataCopyType::A2D,
         is_fp32_dest_acc_en,
         BroadcastType::NONE,
-        llk_test_pack_mode_v<false, TILIZE>,
-        is_int_fpu_en>(4 /* num_faces */, formats_array[run].math);
+        is_int_fpu_en,
+        llk_test_pack_mode_v<false, TILIZE>>(4 /* num_faces */, formats_array[run].math);
 
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats_array[run].math, formats_array[run].math);
@@ -163,7 +163,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     static constexpr bool UNTILIZE          = false;
 
     int run           = 0; // first L1-to-L1 run, we access the first set of formats_array in our array
-    const bool TILIZE = true;
+    static constexpr bool TILIZE = true;
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>>(
         formats_array[run].pack_src, formats_array[run].pack_dst, 16 * 16 * 4 /* tile_size */);
     _llk_pack_init_wrapper_<llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>, false>(formats_array[run].pack_dst);

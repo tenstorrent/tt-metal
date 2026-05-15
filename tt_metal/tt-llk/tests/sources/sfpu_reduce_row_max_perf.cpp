@@ -105,8 +105,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             DataCopyType::A2D,
             is_fp32_dest_acc_en,
             BroadcastType::NONE,
-            PackMode::Default,
-            false /* is_int_fpu_en */>(4 /* num_faces */, formats.math);
+            false /* is_int_fpu_en */,
+            PackMode::Default>(4 /* num_faces */, formats.math);
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 

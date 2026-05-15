@@ -78,8 +78,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         DataCopyType::A2D,
         is_fp32_dest_acc_en,
         BroadcastType::NONE,
-        llk_test_pack_mode_v<false, TILIZE>,
-        is_int_fpu_en>(num_faces, formats.math, is_8bit_format /* skip_bh_tilize_workaround */);
+        is_int_fpu_en,
+        llk_test_pack_mode_v<false, TILIZE>>(num_faces, formats.math, is_8bit_format /* skip_bh_tilize_workaround */);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
     const std::uint32_t tiles_in_block = params.NUM_TILES_IN_BLOCK;

@@ -55,8 +55,8 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
           DataCopyType::A2D,
           DST_ACCUM_MODE,
           BroadcastType::NONE,
-          PackMode::Tilize,
-          false /*is_int_en*/>(icb)));
+          false /*is_int_en*/,
+          PackMode::Tilize>(icb)));
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_init<PackMode::Tilize, false>(ocb, 1, icb)));
 #endif
@@ -133,8 +133,8 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
           DataCopyType::A2D,
           DST_ACCUM_MODE,
           BroadcastType::NONE,
-          PackMode::Tilize,
-          false /*is_int_en*/>(new_icb)));
+          false /*is_int_en*/,
+          PackMode::Tilize>(new_icb)));
     // This reconfig call checks if old operand has different data format to
     // new operand idx, otherwise no reconfig call occurs
     UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(old_icb, new_icb)));

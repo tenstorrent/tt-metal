@@ -11,7 +11,7 @@
 
 template <ReduceDim dim, PackMode pack_mode = PackMode::Default>
 inline void llk_pack_reduce_mask_config() {
-    _llk_pack_reduce_mask_config_<pack_mode, dim>();
+    _llk_pack_reduce_mask_config_<dim, pack_mode>();
 }
 
 inline void llk_pack_reduce_mask_clear() { _llk_pack_reduce_mask_clear_(); }

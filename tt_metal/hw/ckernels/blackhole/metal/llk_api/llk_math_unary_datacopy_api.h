@@ -44,8 +44,8 @@ template <
     DataCopyType type,
     bool is_fp32_dest_acc_en,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
-    PackMode pack_mode = PackMode::Default,
-    bool is_int_fpu_en = false>
+    bool is_int_fpu_en = false,
+    PackMode pack_mode = PackMode::Default>
 inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand = 0) {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Tilize,
@@ -58,7 +58,7 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand = 0
     // tilize workaround. 8bit datums in input format do not require the tilize workaround on blackhole.
     const std::uint32_t src_format = get_operand_src_format(operand_id);
     const bool is_input_8bit_format = IS_8BIT_FORMAT(src_format);
-    _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, pack_mode, is_int_fpu_en>(
+    _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en, pack_mode>(
         num_faces, dst_format, is_input_8bit_format);
 }
 

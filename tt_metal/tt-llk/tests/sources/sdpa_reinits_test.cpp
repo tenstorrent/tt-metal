@@ -236,7 +236,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_init_with_src_wrapper_<PackMode::Default, false>(
         pack_src_format1, pack_dst_format1, 16 /* face_r_dim */, TILE_C_DIM, 4 /* num_faces */, false, false, 1 /* num_tiles */);
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, false /* is_fp32_dest_acc_en */, PackMode::Default>();
-    _llk_pack_reduce_mask_config_<PackMode::Default, ckernel::ReduceDim::REDUCE_ROW>();
+    _llk_pack_reduce_mask_config_<ckernel::ReduceDim::REDUCE_ROW>();
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {
         _llk_packer_wait_for_math_done_();

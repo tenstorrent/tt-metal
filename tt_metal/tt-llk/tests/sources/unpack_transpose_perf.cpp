@@ -83,8 +83,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             DataCopyType::A2D,
             is_fp32_dest_acc_en,
             BroadcastType::NONE,
-            PackMode::Default,
-            false /* is_int_fpu_en */>(TILE_NUM_FACES, formats.math);
+            false /* is_int_fpu_en */,
+            PackMode::Default>(TILE_NUM_FACES, formats.math);
         PROFILER_SYNC();
     }
 

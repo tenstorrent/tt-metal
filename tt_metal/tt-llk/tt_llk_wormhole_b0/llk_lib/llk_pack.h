@@ -265,12 +265,12 @@ inline void _llk_pack_uninit_(const std::uint32_t face_r_dim)
     TT_SETADCXX(p_setadc::PAC, face_r_dim * FACE_C_DIM - 1, 0x0);
 }
 
-template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_path = PackMode::Default>
+template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t address)
 {
     static_assert(
-        pack_path == PackMode::Default || pack_path == PackMode::Untilize, "Wormhole B0: _llk_pack_ supports PackMode::Default and PackMode::Untilize only");
-    if constexpr (pack_path != PackMode::Untilize)
+        pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Wormhole B0: _llk_pack_ supports PackMode::Default and PackMode::Untilize only");
+    if constexpr (pack_mode != PackMode::Untilize)
     {
         if (llk_pack_internal::configured_num_tiles > 1)
         {
@@ -302,7 +302,7 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
 
     mop_run(1, 1);
 
-    if constexpr (pack_path == PackMode::Untilize)
+    if constexpr (pack_mode == PackMode::Untilize)
     {
         TTI_PACR(ADDR_MOD_2, 0, 0xf, 0, 0, 1, 1); // close tile
     }

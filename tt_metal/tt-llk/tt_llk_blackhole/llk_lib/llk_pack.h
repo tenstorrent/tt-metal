@@ -424,11 +424,11 @@ inline void _llk_pack_uninit_()
     // No state to restore - Blackhole pack_init sets PAC X counter to FACE_C_DIM - 1 which is the default
 }
 
-template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_path = PackMode::Default>
+template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t address)
 {
     static_assert(
-        pack_path == PackMode::Default || pack_path == PackMode::Untilize, "Blackhole: _llk_pack_ supports PackMode::Default and PackMode::Untilize only");
+        pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Blackhole: _llk_pack_ supports PackMode::Default and PackMode::Untilize only");
     set_dst_write_addr(tile_index);
 
     program_packer_destination(address);

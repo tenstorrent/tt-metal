@@ -45,8 +45,8 @@ template <
     DataCopyType type,
     bool is_fp32_dest_acc_en,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
-    PackMode pack_mode = PackMode::Default,
-    bool is_int_fpu_en = false>
+    bool is_int_fpu_en = false,
+    PackMode pack_mode = PackMode::Default>
 inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand = 0) {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize || pack_mode == PackMode::Tilize,

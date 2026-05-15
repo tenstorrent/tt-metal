@@ -80,7 +80,7 @@ class DatacopyFpu(Fpu):
 
         return (
             f"    // Operation {stage}: Datacopy FPU\n"
-            f"    _llk_math_eltwise_unary_datacopy_init_<{data_copy_type}, {dest_acc}, {broadcast_type}, {pack_mode}, {is_int_fpu_en}>(\n"
+            f"    _llk_math_eltwise_unary_datacopy_init_<{data_copy_type}, {dest_acc}, {broadcast_type}, {is_int_fpu_en}, {pack_mode}>(\n"
             f"        {num_faces}, {config.sentinel.math_format}\n"
             f"    );\n"
         )

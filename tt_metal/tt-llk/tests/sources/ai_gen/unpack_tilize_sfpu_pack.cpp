@@ -56,7 +56,7 @@ using namespace ckernel::sfpu;
 void run_kernel(RUNTIME_PARAMETERS /*params*/)
 {
     // Initialize datacopy operation (copy src A to dest)
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, PackMode::Default, false /* is_int_fpu_en */>(
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         4 /* num_faces */, formats.math);
 
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
@@ -88,7 +88,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 {
     // Configure packer hardware for standard pack (no untilize)
     static constexpr bool UNTILIZE = false;
-    const bool TILIZE   = false; // Input to pack is already in tile format
+    static constexpr bool TILIZE   = false; // Input to pack is already in tile format
 
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, TILIZE>>(
         formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);

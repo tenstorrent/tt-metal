@@ -387,8 +387,8 @@ template <
     DataCopyType type,
     bool is_fp32_dest_acc_en,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
-    PackMode pack_mode             = PackMode::Default,
-    bool is_int_fpu_en             = false>
+    bool is_int_fpu_en             = false,
+    PackMode pack_mode             = PackMode::Default>
 inline void _llk_math_eltwise_unary_datacopy_init_(
     const std::uint32_t num_faces = 4, const std::uint32_t dst_format = 255, const bool skip_bh_tilize_workaround = false)
 {

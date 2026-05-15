@@ -222,10 +222,9 @@ inline void _llk_pack_init_with_src_wrapper_(
     _llk_pack_init_<pack_mode, zero_output>(pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles, skip_bh_tilize_workaround);
 }
 
-template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
+template <DstSync Dst, bool is_fp32_dest_acc_en, [[maybe_unused]] PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_dest_init_wrapper_([[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM, [[maybe_unused]] const bool narrow_tile = false)
 {
-    (void)pack_mode;
     _llk_pack_dest_init_<Dst, is_fp32_dest_acc_en>();
 }
 

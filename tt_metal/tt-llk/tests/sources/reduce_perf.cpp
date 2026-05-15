@@ -179,7 +179,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("INIT")
         _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT);
         _llk_pack_init_wrapper_<PackMode::Default, false>(formats.pack_dst);
-        _llk_pack_reduce_mask_config_<PackMode::Default, REDUCE_DIM>();
+        _llk_pack_reduce_mask_config_<REDUCE_DIM>();
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
