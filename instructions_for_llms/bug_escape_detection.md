@@ -307,51 +307,32 @@ Every GHA run URL dispatched during this campaign must be recorded on this page 
 after dispatch — not just at the end. If someone asks "where are we?", the answer is always
 "check Confluence" — not a Slack status report.
 
-The page has four sections. Move each escape between sections as its status changes.
-Never delete an entry — only move it and update its status field.
+**Page format: one flat table with ALL candidates** (filtered, dismissed, and active).
+Never use separate sections per status. Never omit filtered/dismissed candidates.
+Update the row in-place as each candidate progresses through the pipeline.
 
-**Update the page after EVERY state transition:**
-- After dispatch (Step 4b midpoint or Step 5): add run links immediately
-- After each run completes: update PASS/FAIL result inline
-- After verdict: move to the appropriate section
+**Table columns (required, in this order):**
 
-**After Step 3 (Opus pre-classification passes) → add to "🔍 Under Investigation":**
-```
-### Candidate: {test_name[:60]}
+| Escape ID | Test File | Job | HW | Last Fail | Last Fail Commit | First Pass | First Pass Commit | Fail Rate | Runs Dispatched | Opus Verdict | Opus Reasoning | Status |
 
-- *Test*: {test_name}
-- *Test layer*: {test_layer}
-- *Fix layer (suspected)*: {suspected_fix_layer}
-- *Last failure*: [Run {last_failure_run_id}](https://github.com/tenstorrent/tt-metal/actions/runs/{last_failure_run_id})
-- *First success*: [Run {first_success_run_id}](https://github.com/tenstorrent/tt-metal/actions/runs/{first_success_run_id})
-- *Opus reasoning*: {opus_reasoning}
-- *Status*: Under Investigation — bisect dispatched {date}
-```
+Column notes:
+- `Escape ID`: `{test_case_id}__{last_failing_sha[:8]}`
+- `Test File`: basename + layer number, e.g. `test_foo.py (layer 4)`
+- `Job`: full GHA job name from Snowflake `CICD_JOB.NAME`
+- `HW`: runner type, e.g. `Galaxy (WH)`, `LLMBox (WH)`, `LoudBox (BH)`, `T3000 (WH)`
+- `Last Fail` / `First Pass`: date only (YYYY-MM-DD), linked commit SHA
+- `Runs Dispatched`: all GHA run links with result, e.g. `BEFORE [12345](url) → PASS; AFTER [12346](url) → FAIL`
+- `Opus Verdict`: `PROCEED_TO_BISECT` / `SKIP_LIKELY_NOISE` / `SKIP_UNRELATED` / `N/A` (layer filtered)
+- `Opus Reasoning`: 1–2 sentence summary
+- `Status`: one of `🔍 Under Investigation`, `✅ Confirmed`, `❌ Layer filter`, `❌ Opus dismissed`, `⏳ Inconclusive`
 
-**After Step 4 (bisect completes) → update the entry, still in "Under Investigation":**
-Add fix commit and bisect proof link. Update status to "Under Investigation — verification dispatched {date}".
-
-**After Step 5 (verification complete):**
-- CONFIRMED → move entry to "✅ Confirmed Escapes", update status, add before/after run links
-- REFUTED → move entry to "❌ Refuted", update status, add explanation of why it was refuted
-- INCONCLUSIVE_TIMEOUT → move entry to "⏳ Inconclusive", update status, note retry scheduled
-
-**Entry format once confirmed:**
-```
-### Escape #{N}: {fix_commit_message[:60]}
-
-- *Test*: {test_name}
-- *Test layer*: {test_layer}
-- *Fix layer*: {fix_layer}
-- *Type*: {fix_layer} → {test_layer} escape
-- *Last failure*: [Run {last_failure_run_id}](https://github.com/tenstorrent/tt-metal/actions/runs/{last_failure_run_id})
-- *First success*: [Run {first_success_run_id}](https://github.com/tenstorrent/tt-metal/actions/runs/{first_success_run_id})
-- *Fix commit*: [{fix_commit_sha[:8]}](https://github.com/tenstorrent/tt-metal/commit/{fix_commit_sha})
-- *Bisect proof*: [Run {bisect_run_id}](https://github.com/tenstorrent/tt-metal/actions/runs/{bisect_run_id})
-- *Verification*: BEFORE [Run {before_run_id}](https://github.com/tenstorrent/tt-metal/actions/runs/{before_run_id}) | AFTER [Run {after_run_id}](https://github.com/tenstorrent/tt-metal/actions/runs/{after_run_id})
-- *Reasoning*: {reasoning}
-- *Status*: Confirmed {date}
-```
+**Update the table after EVERY state transition:**
+- Candidate detected → add row immediately (even before Opus, with status TBD)
+- After layer filter → update Status to `❌ Layer filter`, fill Opus columns as N/A
+- After Opus → update Opus Verdict/Reasoning and Status
+- After any dispatch → add run link to Runs Dispatched column immediately
+- After run completes → append result (PASS/FAIL) to that run link inline
+- After final verdict → update Status
 
 Always fetch the current page content before updating so you don't clobber concurrent writes.
 
