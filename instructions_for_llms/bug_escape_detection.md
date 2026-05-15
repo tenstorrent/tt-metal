@@ -312,9 +312,9 @@ Do NOT include Opus-dismissed candidates (`SKIP_LIKELY_NOISE`, `SKIP_UNRELATED`)
 Layer-filtered candidates (`❌ Layer filter`) ARE included since they document what was checked.
 Never use separate sections per status.
 
-**Use the Confluence HTML macro for the table** — NOT the native Confluence table editor.
-Wrap the table in `<div style="overflow-x:auto;">` inside an `ac:structured-macro name="html"` block
-so it scrolls horizontally rather than squishing columns.
+**Use the native Confluence storage format table** with `data-layout="full-width"` and
+`data-table-display-mode="default"`. Set explicit column widths in `<colgroup>` (130–240px each)
+to prevent columns from being squished. Do NOT use the HTML macro — it is not enabled.
 
 **Table columns (required, in this order):**
 
