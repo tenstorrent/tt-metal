@@ -27,7 +27,7 @@ CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_base"
 
 NUM_WARMUP = 2
 NUM_ITERS = 20
-LANG_SEQ_LEN = 32  # tile-aligned
+LANG_SEQ_LEN = 256  # tile-aligned
 SEED = 0
 TRACE_REGION_SIZE = 134_217_728  # 128 MiB — full sample_actions trace ~81 MB
 

@@ -80,7 +80,11 @@ class Pi0_5LiberoAdapter:
         max_action_dim: int = 32,
         max_state_dim: int = 32,
         chunk_size: int = 50,
-        max_token_len: int = 200,
+        max_token_len: int = 256,  # tile-aligned: 256 image + 256 lang = 512 = 16×32
+        # NOTE: must match the m_padded values validated for sharded RMSNorm in
+        # ttnn_gemma._get_sharded_norm. 224 (gives 480) triggered an L1 CB clash
+        # because the sub-block sizing for 15 M-tiles doesn't fit the per-core
+        # L1 budget on BH; 256 (gives 512 = 16 M-tiles) is the validated path.
     ):
         self.backend = backend
         self.ttnn_device = ttnn_device
