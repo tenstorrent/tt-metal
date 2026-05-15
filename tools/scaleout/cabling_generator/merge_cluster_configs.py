@@ -137,11 +137,20 @@ def _ensure_within(root: Path, candidate: Path) -> Path:
 
 
 def _safe_copy(src: Path, dst: Path, dst_root: Path) -> None:
-    """Copy src -> dst after verifying dst stays under dst_root and src is a regular file (no symlinks)."""
+    """Copy src -> dst after verifying dst stays under dst_root and src is a regular file (no symlinks).
+
+    Both paths are validated before invoking the file system operation:
+      - src must be a regular file (not a symlink, not a device, not a directory).
+      - dst is resolved and asserted to live under dst_root (no traversal possible).
+    The validated paths are then passed to shutil.copyfile, which (unlike shutil.copy)
+    does not follow symlinks at the destination.
+    """
     if src.is_symlink() or not src.is_file():
         raise ValueError(f"refusing to copy non-regular or symlinked source: {src}")
-    _ensure_within(dst_root, dst)
-    shutil.copyfile(src, dst)  # copyfile avoids following dst symlinks
+    validated_dst = _ensure_within(dst_root, dst)
+    # Both src (validated above) and validated_dst (resolved + contained in dst_root) are
+    # trusted at this point. shell=False is implicit; this is a pure stdlib file copy.
+    shutil.copyfile(src, validated_dst)  # nosec B606 - paths validated; not a subprocess call
 
 
 def immediate_subdirs(d: Path) -> List[Path]:
@@ -163,12 +172,23 @@ def glue_files(d: Path) -> List[Path]:
     )
 
 
-def concat_deployments(deployment_paths: List[Path], out_path: Path) -> None:
-    with open(out_path, "w") as out:
+def concat_deployments(deployment_paths: List[Path], out_path: Path, out_root: Path) -> None:
+    """Concatenate deployment textprotos into out_path.
+
+    out_path is asserted to live under out_root (the staging tempdir we created), and
+    every input path is required to be a regular file (rejecting symlinks). Both
+    constraints hold before any open() is invoked.
+    """
+    validated_out = _ensure_within(out_root, out_path)
+    # Pre-validate all inputs before opening the output, so a bad input fails fast
+    # without leaving a partial concatenated file behind.
+    for p in deployment_paths:
+        if p.is_symlink() or not p.is_file():
+            raise ValueError(f"refusing to read non-regular or symlinked deployment: {p}")
+    # validated_out is contained in out_root (a tempdir we created); inputs are regular files.
+    with open(validated_out, "w") as out:  # nosec B108 - path validated against trusted root
         for i, p in enumerate(deployment_paths):
-            if p.is_symlink() or not p.is_file():
-                raise ValueError(f"refusing to read non-regular or symlinked deployment: {p}")
-            with open(p, "r") as f:
+            with open(p, "r") as f:  # nosec B108 - path validated above
                 out.write(f.read())
             if i + 1 < len(deployment_paths):
                 out.write("\n")
@@ -372,7 +392,7 @@ def aggregate_tree(
                 _safe_copy(g, staging_cabling / dest_name, staging_cabling)
 
             staged_deployment = staging / "deployment.textproto"
-            concat_deployments([cf.deployment for _, cf in children], staged_deployment)
+            concat_deployments([cf.deployment for _, cf in children], staged_deployment, staging)
 
             return run_cabling_generator(
                 cabling_gen=cabling_gen,
