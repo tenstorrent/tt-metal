@@ -33,11 +33,11 @@ struct UpsampleMultiCoreInterleavedProgramFactory {
 };
 
 struct UpsampleMultiCoreShardedProgramFactory {
-    // create_mesh_descriptor() uploads the per-core halo lookup config
+    // create_mesh_workload_descriptor() uploads the per-core halo lookup config
     // tensor and parks its backing MeshBuffer on the returned
     // MeshWorkloadDescriptor (held by the program cache) so its lifetime
     // outlives the cached programs.
-    static tt::tt_metal::MeshWorkloadDescriptor create_mesh_descriptor(
+    static tt::tt_metal::MeshWorkloadDescriptor create_mesh_workload_descriptor(
         const UpsampleParams& operation_attributes,
         const Tensor& input_tensor,
         Tensor& output_tensor,

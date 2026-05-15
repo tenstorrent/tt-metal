@@ -406,7 +406,7 @@ ProgramDescriptor build_sharded_upsample_program(
 
 }  // namespace
 
-tt::tt_metal::MeshWorkloadDescriptor UpsampleMultiCoreShardedProgramFactory::create_mesh_descriptor(
+tt::tt_metal::MeshWorkloadDescriptor UpsampleMultiCoreShardedProgramFactory::create_mesh_workload_descriptor(
     const UpsampleParams& operation_attributes,
     const Tensor& input_tensor,
     Tensor& output_tensor,

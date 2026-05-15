@@ -356,7 +356,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ApplyResolvedBindings_RepeatedApplic
 // Buffer* calls must produce empty ResolvedBindings, so the adapter falls through
 // to the slow path.  Before the fix, CB-only bindings made empty() return false,
 // causing the fast path to activate for factories that never opted in.
-TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CbOnlyBuffers_ReturnsEmpty) {
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CbOnly_PopulatesCbs_RtArgsEmpty) {
     auto buf_dram = MakeDramBuffer(device());
     auto buf_l1 = MakeL1Buffer(device());
 
@@ -382,10 +382,15 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CbOnlyBuffers_Return
     Program program{desc};
     ResolvedBindings resolved = resolve_bindings(program, desc, std::vector<Buffer*>{buf_l1.get()});
 
-    // No rt_arg bindings were declared, so both rt_args and cbs must be empty.
+    // resolve_bindings is policy-free: every CB `.buffer = ...` binding is
+    // resolved, even when no rt-arg buffer bindings are declared.  The caller
+    // (the adapter) decides whether to fast-path with a CB-only ResolvedBindings
+    // or to take a slow-path rebuild for factories that still bind raw uint32
+    // runtime args.  See DescriptorMeshWorkloadAdapter::apply_descriptor.
     EXPECT_TRUE(resolved.rt_args.empty());
-    EXPECT_TRUE(resolved.cbs.empty());
-    EXPECT_TRUE(resolved.empty());
+    EXPECT_EQ(resolved.cbs.size(), 1u);
+    EXPECT_EQ(resolved.cbs[0].tensor_buffer_idx, 0u);
+    EXPECT_FALSE(resolved.empty());
 }
 
 // Regression: when tensor_buffers contains the same Buffer* more than once

@@ -294,7 +294,8 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
 
     TT_FATAL(
         reader_indices_buffer != nullptr,
-        "Pool2D::MultiCore::create_mesh_descriptor must populate the reader-indices buffer before building programs");
+        "Pool2D::MultiCore::create_mesh_workload_descriptor must populate the reader-indices buffer before building "
+        "programs");
 
     const bool is_block_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     const bool is_width_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
@@ -644,7 +645,7 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
     uint32_t config_cb_id = INVALID_CB_ID;
     tt::tt_metal::Buffer* config_buffer = nullptr;
     if (!one_scalar_per_core) {
-        // The scalar config tensor was uploaded once in create_mesh_descriptor
+        // The scalar config tensor was uploaded once in create_mesh_workload_descriptor
         // and parked in MeshWorkloadDescriptor::buffers; the framework keeps it
         // alive for the cached workload's lifetime.  scalar_config_buffer must
         // be non-null whenever !one_scalar_per_core (avg-pool with non-trivial
@@ -971,7 +972,7 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
 
 namespace {
 // Common preamble shared between the resource-allocation phase and the
-// per-coord program build of create_mesh_descriptor(): pulls per-op fields out
+// per-coord program build of create_mesh_workload_descriptor(): pulls per-op fields out
 // of the SlidingWindowConfig and computes the parallel config / output shape
 // pieces we need in both phases.  Lives in an anonymous namespace because it's
 // purely a local helper for this factory.
@@ -1026,7 +1027,7 @@ PoolSetup compute_pool_setup(const Pool2D::operation_attributes_t& op_attr, cons
 }
 }  // namespace
 
-tt::tt_metal::MeshWorkloadDescriptor Pool2D::MultiCore::create_mesh_descriptor(
+tt::tt_metal::MeshWorkloadDescriptor Pool2D::MultiCore::create_mesh_workload_descriptor(
     const operation_attributes_t& op_attr,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensors,

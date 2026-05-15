@@ -24,10 +24,7 @@
 namespace tt::tt_metal {
 
 ResolvedBindings resolve_bindings(
-    Program& program,
-    const ProgramDescriptor& desc,
-    std::span<Buffer* const> tensor_buffers,
-    bool resolve_cb_bindings_unconditionally) {
+    Program& program, const ProgramDescriptor& desc, std::span<Buffer* const> tensor_buffers) {
     ResolvedBindings result;
 
     // If the same Buffer* appears in tensor_buffers more than once (e.g. matmul(X, X),
@@ -100,22 +97,12 @@ ResolvedBindings resolve_bindings(
         }
     }
 
-    // Resolve CB bindings when either (a) the factory opted into the fast path
-    // by declaring at least one runtime-arg buffer binding (whether via
-    // emplace_runtime_args or emplace_common_runtime_args), or (b) the caller
-    // explicitly asked for unconditional CB resolution.
-    //
-    // (a) is the contract-1 invariant: sharded ops that mix old-style
-    // runtime_args (raw uint32 addresses) with new-style `.buffer = ...` CBs
-    // must skip the fast path entirely so the slow-path rebuild can refresh
-    // both runtime_args and CBs on cache hits.  CB-only fast-path patching
-    // would leave runtime_args pointing at stale addresses.
-    //
-    // (b) is the contract-2 (declarative MeshDescriptor) opt-in: those ops
-    // have no slow-path rebuild — rebuilding would re-allocate workload-scoped
-    // resources — so the fast path must patch CBs even when there are no
-    // runtime-arg bindings to declare the opt-in.
-    if (!result.rt_args.empty() || resolve_cb_bindings_unconditionally) {
+    // Resolve every `.buffer = ...` CB binding the descriptor declares.  The
+    // resolver makes no policy decision about when CB patching is safe — that
+    // belongs to the caller (the adapter), which knows whether its workload
+    // contract supports a slow-path rebuild on cache hits.  See the
+    // contract-aware gate in DescriptorMeshWorkloadAdapter::apply_descriptor.
+    {
         auto program_cbs = program.circular_buffers();
         for (uint32_t ci = 0; ci < static_cast<uint32_t>(desc.cbs.size()); ++ci) {
             if (desc.cbs[ci].buffer) {

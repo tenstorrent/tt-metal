@@ -53,7 +53,7 @@ struct Pool2D {
         //      they outlive the cached workload.
         //   2. Loops `tensor_coords` and pushes a ProgramDescriptor per coord
         //      into `programs`.
-        static tt::tt_metal::MeshWorkloadDescriptor create_mesh_descriptor(
+        static tt::tt_metal::MeshWorkloadDescriptor create_mesh_workload_descriptor(
             const operation_attributes_t& op_attr,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output_tensors,

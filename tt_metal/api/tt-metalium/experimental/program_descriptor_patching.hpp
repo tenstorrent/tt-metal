@@ -65,7 +65,7 @@ struct ResolvedCbBinding {
 
 // All resolved bindings for one cached program. Non-empty when the factory
 // declared at least one buffer arg via KernelDescriptor::emplace_runtime_args(),
-// OR when CB bindings are present and resolve_cb_bindings_unconditionally=true
+// (or none, when the descriptor declares no buffer bindings at all)
 // (declarative MeshDescriptor path).
 struct ResolvedBindings {
     std::vector<ResolvedRtArgBinding> rt_args;
@@ -85,23 +85,16 @@ struct ResolvedBindings {
 // collect_tensor_buffers). Every binding Buffer* must appear in tensor_buffers;
 // TT_FATAL fires if a factory used a non-tensor buffer in emplace_runtime_args.
 //
-// resolve_cb_bindings_unconditionally:
-//   - false (default): CB bindings only resolved when at least one runtime-arg
-//     buffer binding is present.  Required for contract-1 factories that mix
-//     new-style `.buffer = ...` CBs with OLD-style runtime_args (raw uint32
-//     addresses) — for those, the slow-path rebuild must run on cache hits to
-//     refresh runtime_args, so fast-path CB-only patching would be incorrect.
-//   - true: CB bindings always resolved.  Required for the declarative
-//     MeshDescriptor path, which has no slow-path rebuild (rebuilding would
-//     reallocate workload-scoped resources) and therefore relies on the fast
-//     path to patch CB addresses even when there are no runtime-arg bindings.
+// The resolver is policy-free: it always resolves every binding the descriptor
+// declares, both runtime-arg bindings and CB `.buffer` bindings.  Deciding
+// whether the resulting `ResolvedBindings` is safe to fast-path on a given
+// cache hit is the caller's job (see DescriptorMeshWorkloadAdapter::apply_descriptor),
+// because the safety check depends on workload contract — specifically whether
+// a slow-path rebuild is available to refresh raw (non-binding) runtime args.
 //
 // Call immediately after Program{desc} on cache miss; store in shared_variables.
 ResolvedBindings resolve_bindings(
-    Program& program,
-    const ProgramDescriptor& desc,
-    std::span<Buffer* const> tensor_buffers,
-    bool resolve_cb_bindings_unconditionally = false);
+    Program& program, const ProgramDescriptor& desc, std::span<Buffer* const> tensor_buffers);
 
 // Apply resolved bindings to the cached program on a cache hit.
 // current_buffers must be the output of collect_tensor_buffers() for the
