@@ -87,7 +87,6 @@ def test_col_parallel_partition_preserves_multiset():
     padding kicks in, so we can compare directly to the input assignment."""
     K, N = 96, 2048
     mesh_shape = (2, 4)
-    tp = mesh_shape[0] * mesh_shape[1]
     w = torch.randn(K, N)
     assignment = _pattern_assignment(K // TILE_W, N // TILE_W)
 
@@ -197,7 +196,6 @@ def test_row_parallel_pad_uses_zero_code():
     # PAD_CODE: every rank's row block contributes (per_device_K // TILE_W) *
     # ((n_padded - N) // TILE_W) padded cells, plus any organic 3s scattered around.
     expected_pad = tp * (per_device_K // TILE_W) * ((n_padded - N) // TILE_W)
-    organic_pad_per_rank = int(np.sum(assignment == PAD_CODE)) // tp  # rough
     pad_cell_count = int(np.sum(stacked_assignment == PAD_CODE))
     assert pad_cell_count >= expected_pad, f"expected at least {expected_pad} pad cells, got {pad_cell_count}"
     # Tighter: per-rank contribution exactly matches the slice + pad behavior.
@@ -395,6 +393,8 @@ def test_disk_cache_hits_on_second_call(tmp_path):
     assert preprocess_calls == 1
     assert raw_tensor_calls == 1
     assert isinstance(result1, CompressedTensorBuildInputs)
+    preprocess_calls_after_miss = preprocess_calls
+    raw_tensor_calls_after_miss = raw_tensor_calls
 
     # Verify the expected compact-tile artifacts landed on disk.
     artifact_dirs = list((tmp_path / "objects").glob("*/*"))
@@ -413,8 +413,8 @@ def test_disk_cache_hits_on_second_call(tmp_path):
         raw_tensors=_raw_tensors,
         reconstruct=_reconstruct,
     )
-    assert preprocess_calls == 1, f"preprocess re-invoked on cache hit: {preprocess_calls}"
-    assert raw_tensor_calls == 1, f"raw_tensors re-invoked on cache hit: {raw_tensor_calls}"
+    assert preprocess_calls == preprocess_calls_after_miss, f"preprocess re-invoked on cache hit: {preprocess_calls}"
+    assert raw_tensor_calls == raw_tensor_calls_after_miss, f"raw_tensors re-invoked on cache hit: {raw_tensor_calls}"
 
     # Assignment must round-trip exactly through the on-disk artifact.
     np.testing.assert_array_equal(result2.assignment, flat_assignment)
