@@ -92,17 +92,25 @@ def bfp4b_to_float16b(operand: torch.Tensor, dimensions=None) -> torch.Tensor:
     signs = (u32 >> 31) & 1
     exps = (u32 >> 23) & 0xFF
     # bfp4_b has 3 mantissa bits: 1 implicit leading bit + 2 explicit bits.
-    # Hardware takes bits 23:21 of the 24-bit mantissa (with implicit leading 1).
-    mants = ((u32 & 0x7FFFFF) >> 21) | 0x4
+    # Keep the full 24-bit mantissa so the shared-exponent shift can round
+    # instead of truncating.
+    mants_full = (u32 & 0x7FFFFF) | (1 << 23)
 
     exps_blocks = exps.view(-1, BFP4_BLOCK)
-    mants_blocks = mants.view(-1, BFP4_BLOCK)
+    mants_blocks_full = mants_full.view(-1, BFP4_BLOCK)
     signs_blocks = signs.view(-1, BFP4_BLOCK)
 
     shared_exps = exps_blocks.max(dim=1, keepdim=True).values
 
     deltas = shared_exps - exps_blocks
-    shifted = mants_blocks >> deltas
+    total_shift = 21 + deltas
+    rounding = torch.where(
+        total_shift > 0,
+        1 << torch.clamp(total_shift - 1, min=0),
+        torch.zeros_like(total_shift),
+    )
+    shifted = (mants_blocks_full + rounding) >> total_shift
+    shifted = torch.clamp(shifted, max=7)
 
     # Scale: 2^(shared_exp - 127 - 2) = 2^(shared_exp - 129)
     values = shifted.float() * torch.exp2((shared_exps - 129).float())
