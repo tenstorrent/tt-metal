@@ -1331,6 +1331,8 @@ class ModelArgs:
                     M_block_size=8,
                     K_block_size=8,
                     N_block_size=8,
+                    subblock_h=2,
+                    subblock_w=2,
                     compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
                 )
             else:

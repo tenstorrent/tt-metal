@@ -345,10 +345,14 @@ class TtDevstral2LargeMLP(LightweightModule):
         use_minimal_matmul_w2 = mode != Mode.DECODE and (seq_len > 128 or self._dram_intermediates())
         if use_minimal_matmul_w2:
             grid = self.args.mlp2_grid(seq_len)
+            # Explicit 2×2 subblocks (default ctor used 1×1 here). Device perf report recommended
+            # a larger output subblock product for this matmul shape; 8×8 blocks stay divisible by 2.
             pc_2_minimal = ttnn.MinimalMatmulConfig(
                 M_block_size=8,
                 K_block_size=8,
                 N_block_size=8,
+                subblock_h=2,
+                subblock_w=2,
                 compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
             )
             w2_out = ttnn.experimental.minimal_matmul(
