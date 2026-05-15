@@ -20,8 +20,7 @@ on:
         default: "Ubuntu 22.04"
         options:
           - "Ubuntu 22.04"
-          - "Ubuntu 24.04"
-        description: "Platform to build and test"
+        description: "Platform to build and test (currently only Ubuntu 22.04 is supported by this workflow)"
       run-hang-report-test:
         description: 'Run hang report generation test (intentionally hangs a card)'
         required: false
