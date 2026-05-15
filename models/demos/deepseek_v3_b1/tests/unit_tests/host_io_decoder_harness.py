@@ -70,12 +70,15 @@ checkpoints of the migration plan. See ``host_io_decoder_stage_context.txt``
 from __future__ import annotations
 
 import contextlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Literal
 
 import torch
 from loguru import logger
+from safetensors.torch import load_file as safetensors_load_file
+from safetensors.torch import save_file as safetensors_save_file
 
 import ttnn
 from models.common.utility_functions import comp_pcc, is_slow_dispatch
@@ -189,6 +192,12 @@ class HostIoDecoderSweepConfig:
     validate_hidden_states_cross_trace: bool = False
     pcc_threshold: float = 0.97  # only consulted when validate_hidden_states_cross_trace is True
 
+    # --- trace I/O format ---
+    # Source format for reference traces read from ``hidden_states_dir``.
+    # ``"auto"`` probes ``<prompt>.pt`` then ``<prompt>/`` (bit_sculpt
+    # per-layer safetensors directory). Set explicitly to skip the probe.
+    trace_format: TraceFormat = "auto"
+
     # --- dump knobs ---
     # Disk dumps are OPT-IN: defaults are False so a validation-only run (or a
     # pure sweep) does not require ``--dump-dir`` and does not pay the cost of
@@ -196,6 +205,11 @@ class HostIoDecoderSweepConfig:
     dump_hidden_states: bool = False
     dump_kv_cache: bool = False
     dump_dir: Path | None = None  # required if any dump knob is True
+    # Output format for dumps. ``"pt"`` (current behavior) writes one
+    # ``torch.save`` per (slot, prompt). ``"safetensors"`` writes per-layer
+    # safetensors files matching bit_sculpt's ``DebugTracer`` layout — see
+    # Phase 5 in run_sweep for the exact path and tensor-key conventions.
+    dump_format: Literal["pt", "safetensors"] = "pt"
 
     # --- weights ---
     hf_model_path: Path = DEFAULT_HF_MODEL_PATH
@@ -239,6 +253,10 @@ class HostIoDecoderSweepConfig:
             )
         if not (0.0 < self.pcc_threshold <= 1.0):
             raise ValueError(f"pcc_threshold must be in (0, 1]; got {self.pcc_threshold}")
+        if self.trace_format not in ("auto", "pt", "safetensors"):
+            raise ValueError(f"trace_format must be 'auto', 'pt', or 'safetensors'; got {self.trace_format!r}")
+        if self.dump_format not in ("pt", "safetensors"):
+            raise ValueError(f"dump_format must be 'pt' or 'safetensors'; got {self.dump_format!r}")
         if (self.dump_hidden_states or self.dump_kv_cache) and self.dump_dir is None:
             raise ValueError("dump_dir is required when dump_hidden_states or dump_kv_cache is True")
 
@@ -294,47 +312,250 @@ class _SinglePipelineStage:
 # ---------------------------------------------------------------------------
 
 
-def _load_reference_trace(trace_dir: Path, prompt_name: str) -> dict[str, torch.Tensor]:
+# Trace format literal — accepted by _load_reference_trace and surfaced as a
+# config / CLI knob. "auto" resolves at preflight time by probing the filesystem
+# (``<prompt>.pt`` wins over ``<prompt>/`` so the .pt path remains the default
+# when both happen to exist).
+TraceFormat = Literal["auto", "pt", "safetensors"]
+
+
+def _resolve_trace_format(trace_dir: Path, prompt_name: str, requested: TraceFormat) -> Literal["pt", "safetensors"]:
+    """Resolve ``requested`` to a concrete format, probing disk if "auto".
+
+    Probe order for ``"auto"``: ``<trace_dir>/<prompt>.pt`` first (back-compat
+    with the original DeepSeek pipeclean traces), then ``<trace_dir>/<prompt>/``
+    as a directory (bit_sculpt per-layer safetensors layout). Raises
+    ``FileNotFoundError`` listing both probed paths if neither exists.
+    """
+    if requested != "auto":
+        return requested
+    pt_path = trace_dir / f"{prompt_name}.pt"
+    if pt_path.exists():
+        return "pt"
+    safetensors_dir = trace_dir / prompt_name
+    if safetensors_dir.is_dir():
+        return "safetensors"
+    raise FileNotFoundError(
+        f"Reference trace not found for prompt {prompt_name!r}. Probed: {pt_path} (pt), "
+        f"{safetensors_dir} (safetensors). Pass --trace-format explicitly to disambiguate."
+    )
+
+
+def _load_one_safetensors_tensor(path: Path) -> torch.Tensor:
+    """Load a safetensors file that holds exactly one tensor; return that tensor.
+
+    bit_sculpt's ``DebugTracer._save_step`` writes one safetensors file per
+    (layer, kind) pair, each containing a single tensor. The *key* inside the
+    file is the canonical name (``decoder_input_layer_0`` for layer 0's input,
+    ``decoder_output_layer_{i}`` for any layer output, ``kv_post_transform_layer_{i}``
+    for KV cache). Symlinks resolve transparently on the filesystem — the key
+    inside a symlinked ``decoder_input_layer_{i+1}.safetensors`` is still
+    ``decoder_output_layer_{i}`` (the symlink target's key).
+
+    We don't know the key a priori at every call site (input-file keys depend on
+    the layer index), so accept whatever single key is there.
+    """
+    if not path.exists():
+        raise FileNotFoundError(f"Safetensors file not found: {path}")
+    tensors = safetensors_load_file(str(path))
+    if len(tensors) != 1:
+        raise ValueError(
+            f"{path}: expected exactly one tensor in safetensors file, got {len(tensors)} "
+            f"(keys: {sorted(tensors.keys())})"
+        )
+    return next(iter(tensors.values()))
+
+
+def _list_step_dirs(prompt_dir: Path) -> list[Path]:
+    """Return ``prompt_dir/step_*`` subdirectories sorted by numeric suffix.
+
+    bit_sculpt's decode-trace mode writes ``step_0/`` (prefill) + ``step_1/`` ..
+    ``step_N/`` (one safetensors-bundle per generated token). Numeric sort —
+    not lexicographic — so ``step_10`` comes after ``step_2``.
+    """
+    steps: list[tuple[int, Path]] = []
+    for sub in prompt_dir.iterdir():
+        if not sub.is_dir():
+            continue
+        name = sub.name
+        if not name.startswith("step_"):
+            continue
+        suffix = name[len("step_") :]
+        if not suffix.isdigit():
+            continue
+        steps.append((int(suffix), sub))
+    steps.sort(key=lambda kv: kv[0])
+    return [path for _, path in steps]
+
+
+def _load_safetensors_layer_pair(prompt_dir: Path, decoder_layer_idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """Load (input, output) for ``decoder_layer_idx`` from a bit_sculpt safetensors prompt dir.
+
+    Two on-disk variants are accepted, matching ``DebugTracer.save`` (flat) vs
+    ``DebugTracer.save_decode_trace`` (per-step) in ``analysis/debug_trace.py``:
+
+    1. **Flat layout** — prefill-only trace::
+
+           {prompt_dir}/decoder_input_layer_{L}.safetensors
+           {prompt_dir}/decoder_output_layer_{L}.safetensors
+
+       Tensors are ``(T_prefill, HIDDEN_SIZE)``; returned as-is.
+
+    2. **Per-step layout** — decode-mode trace, detected by the presence of
+       ``step_0/``::
+
+           {prompt_dir}/step_0/decoder_input_layer_{L}.safetensors   (T_prefill, HIDDEN_SIZE)
+           {prompt_dir}/step_0/decoder_output_layer_{L}.safetensors  (T_prefill, HIDDEN_SIZE)
+           {prompt_dir}/step_1/decoder_input_layer_{L}.safetensors   (1, HIDDEN_SIZE)
+           {prompt_dir}/step_1/decoder_output_layer_{L}.safetensors  (1, HIDDEN_SIZE)
+           ...
+           {prompt_dir}/step_N/...
+
+       Concatenated along dim 0 to produce ``(T_prefill + N, HIDDEN_SIZE)`` —
+       the same contract as the flat layout. This is the step convention
+       documented in bit_sculpt's ``metadata.json[kv_cache_layout].step_convention``.
+    """
+    flat_input = prompt_dir / f"decoder_input_layer_{decoder_layer_idx}.safetensors"
+    flat_output = prompt_dir / f"decoder_output_layer_{decoder_layer_idx}.safetensors"
+    if flat_input.exists() and flat_output.exists():
+        return _load_one_safetensors_tensor(flat_input), _load_one_safetensors_tensor(flat_output)
+
+    step_dirs = _list_step_dirs(prompt_dir)
+    if not step_dirs:
+        raise FileNotFoundError(
+            f"{prompt_dir}: no flat decoder_input/output_layer_{decoder_layer_idx}.safetensors "
+            f"and no step_* subdirectories. Is this a valid bit_sculpt trace directory?"
+        )
+    inputs: list[torch.Tensor] = []
+    outputs: list[torch.Tensor] = []
+    for step_dir in step_dirs:
+        inputs.append(_load_one_safetensors_tensor(step_dir / f"decoder_input_layer_{decoder_layer_idx}.safetensors"))
+        outputs.append(_load_one_safetensors_tensor(step_dir / f"decoder_output_layer_{decoder_layer_idx}.safetensors"))
+    return torch.cat(inputs, dim=0), torch.cat(outputs, dim=0)
+
+
+def _check_metadata_consistency(metadata_path: Path, decoder_layer_idx: int) -> None:
+    """Soft-assert bit_sculpt metadata.json matches the harness's hardcoded dims.
+
+    The harness assumes DeepSeek V3 (HIDDEN_SIZE=7168, kv_lora_rank=512,
+    qk_rope_head_dim=64). Kimi K2.6 shares those three dims but differs on
+    moe_layer_offset (1 vs 3) and n_experts (384 vs 256) — neither of which the
+    *trace loader* cares about (those only matter when actually running the MoE
+    kernel). Log a warning rather than hard-fail on mismatch so the harness can
+    still consume a trace it can validate dimensions for.
+    """
+    if not metadata_path.exists():
+        return
+    try:
+        metadata = json.loads(metadata_path.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning(f"Could not read {metadata_path}: {e}")
+        return
+    expected = {
+        "hidden_dim": D.HIDDEN_SIZE,
+        "kv_lora_rank": 512,
+        "qk_rope_head_dim": 64,
+    }
+    for key, want in expected.items():
+        got = metadata.get(key)
+        if got is not None and got != want:
+            logger.warning(
+                f"{metadata_path}: {key}={got!r} does not match harness assumption {want!r}; "
+                f"trace may have been produced for a different model"
+            )
+    n_layers = metadata.get("n_layers")
+    if n_layers is not None and decoder_layer_idx >= n_layers:
+        logger.warning(
+            f"{metadata_path}: decoder_layer_idx={decoder_layer_idx} is out of range for "
+            f"n_layers={n_layers}; loader will likely fail to find the layer file"
+        )
+
+
+def _load_reference_trace(
+    trace_dir: Path,
+    prompt_name: str,
+    *,
+    decoder_layer_idx: int,
+    trace_format: TraceFormat = "auto",
+) -> dict[str, torch.Tensor]:
     """Load and validate one prompt's reference trace.
 
-    Expected on-disk format (per prompt):
+    Two on-disk layouts are supported, selected by ``trace_format``:
+
+    ``"pt"`` — single ``torch.save`` file per prompt (original DeepSeek
+    pipeclean format)::
+
         torch.save(
             {"input":  (L, HIDDEN_SIZE) bf16,
              "output": (L, HIDDEN_SIZE) bf16},
             f"{trace_dir}/{prompt_name}.pt",
         )
 
-    Returns the dict unchanged. Raises ``FileNotFoundError`` / ``ValueError`` if
-    the file's structure / shapes / dtypes don't match the contract.
+    ``"safetensors"`` — bit_sculpt's per-layer layout under a per-prompt dir::
+
+        {trace_dir}/{prompt_name}/
+            metadata.json                                  (optional, soft-checked)
+            decoder_input_layer_0.safetensors              (real file iff layer 0)
+            decoder_input_layer_{L}.safetensors            (symlink for L >= 1)
+            decoder_output_layer_{L}.safetensors           (real, all layers)
+            kv_cache_layer_{L}.safetensors                 (real, all layers)
+            ...
+
+    For the safetensors format, ``decoder_layer_idx`` selects which layer's
+    input/output pair to read; bit_sculpt stores every layer, the TT harness
+    only runs one.
+
+    ``"auto"`` resolves at the call site via :func:`_resolve_trace_format`.
+
+    Returns a dict ``{"input": (L, HIDDEN_SIZE) bf16, "output": (L, HIDDEN_SIZE) bf16}``
+    regardless of source format. Raises ``FileNotFoundError`` / ``ValueError``
+    on contract violations.
     """
-    path = trace_dir / f"{prompt_name}.pt"
-    if not path.exists():
-        raise FileNotFoundError(f"Reference trace not found: {path}")
-    # map_location="cpu" so traces saved on a CUDA host still load on a CPU host
-    # (the harness only consumes the tensors on host before pushing to ttnn).
-    trace = torch.load(path, map_location="cpu")
-    if not isinstance(trace, dict):
-        raise ValueError(f"{path}: expected dict, got {type(trace).__name__}")
-    if not set(trace.keys()) >= {"input", "output"}:
-        raise ValueError(f"{path}: missing required keys 'input'/'output'; got {sorted(trace.keys())}")
-    inp, out = trace["input"], trace["output"]
+    resolved_format = _resolve_trace_format(trace_dir, prompt_name, trace_format)
+
+    if resolved_format == "pt":
+        path = trace_dir / f"{prompt_name}.pt"
+        # map_location="cpu" so traces saved on a CUDA host still load on a CPU host
+        # (the harness only consumes the tensors on host before pushing to ttnn).
+        trace = torch.load(path, map_location="cpu")
+        if not isinstance(trace, dict):
+            raise ValueError(f"{path}: expected dict, got {type(trace).__name__}")
+        if not set(trace.keys()) >= {"input", "output"}:
+            raise ValueError(f"{path}: missing required keys 'input'/'output'; got {sorted(trace.keys())}")
+        inp, out = trace["input"], trace["output"]
+        source_desc = str(path)
+    else:
+        # safetensors: bit_sculpt's per-layer-per-kind layout. Supports two
+        # variants — flat (prefill-only, one tensor per (layer, kind)) and
+        # per-step decode-mode (step_0..step_N subdirs, concatenated along
+        # dim 0). See _load_safetensors_layer_pair for the layout contract.
+        prompt_dir = trace_dir / prompt_name
+        if not prompt_dir.is_dir():
+            raise FileNotFoundError(f"Safetensors trace directory not found: {prompt_dir}")
+        _check_metadata_consistency(prompt_dir / "metadata.json", decoder_layer_idx)
+        inp, out = _load_safetensors_layer_pair(prompt_dir, decoder_layer_idx)
+        source_desc = f"{prompt_dir} (safetensors, layer {decoder_layer_idx})"
+
+    # Shared contract checks — identical for both formats.
     if not (isinstance(inp, torch.Tensor) and isinstance(out, torch.Tensor)):
-        raise ValueError(f"{path}: 'input' and 'output' must be torch.Tensor")
+        raise ValueError(f"{source_desc}: 'input' and 'output' must be torch.Tensor")
     if inp.dtype != torch.bfloat16 or out.dtype != torch.bfloat16:
-        raise ValueError(f"{path}: expected bfloat16 tensors, got input={inp.dtype}, output={out.dtype}")
+        raise ValueError(f"{source_desc}: expected bfloat16 tensors, got input={inp.dtype}, output={out.dtype}")
     if inp.ndim != 2 or out.ndim != 2:
         raise ValueError(
-            f"{path}: expected 2D (seq_len, HIDDEN_SIZE) tensors, got input.shape={tuple(inp.shape)}, "
+            f"{source_desc}: expected 2D (seq_len, HIDDEN_SIZE) tensors, got input.shape={tuple(inp.shape)}, "
             f"output.shape={tuple(out.shape)}"
         )
     if inp.shape[-1] != D.HIDDEN_SIZE or out.shape[-1] != D.HIDDEN_SIZE:
         raise ValueError(
-            f"{path}: last dim must equal D.HIDDEN_SIZE ({D.HIDDEN_SIZE}), got "
+            f"{source_desc}: last dim must equal D.HIDDEN_SIZE ({D.HIDDEN_SIZE}), got "
             f"input.shape={tuple(inp.shape)}, output.shape={tuple(out.shape)}"
         )
     if inp.shape[0] != out.shape[0]:
-        raise ValueError(f"{path}: input and output seq_len mismatch: input={inp.shape[0]}, output={out.shape[0]}")
-    return trace
+        raise ValueError(
+            f"{source_desc}: input and output seq_len mismatch: input={inp.shape[0]}, output={out.shape[0]}"
+        )
+    return {"input": inp, "output": out}
 
 
 def _to_hidden_state_input(
@@ -478,7 +699,12 @@ def _preflight(
     traces: dict[str, dict[str, torch.Tensor]] = {}
     prompt_lengths: list[int] = []
     for prompt_name in config.prompt_names:
-        trace = _load_reference_trace(config.hidden_states_dir, prompt_name)
+        trace = _load_reference_trace(
+            config.hidden_states_dir,
+            prompt_name,
+            decoder_layer_idx=config.decoder_layer_idx,
+            trace_format=config.trace_format,
+        )
         traces[prompt_name] = trace
         prompt_lengths.append(int(trace["input"].shape[0]))
 
@@ -958,10 +1184,25 @@ def run_sweep(
         logger.info(f"Phase 5: per-(prompt, slot) dumps to {config.dump_dir}")
 
     if config.dump_hidden_states:
+        # safetensors layout matches bit_sculpt's DebugTracer convention so
+        # downstream tooling can diff TT dumps against the reference traces
+        # without a format-conversion step. The slot suffix is appended after
+        # the layer suffix; bit_sculpt does not produce per-slot files (its
+        # tracer runs the full model once, not N replicated slots), so this
+        # extension is TT-specific.
         for prompt_name in config.prompt_names:
             for slot in range(config.num_replication_slots):
-                out_path = config.dump_dir / f"output_hidden_states_slot_{slot:02d}_{prompt_name}.pt"
-                torch.save(collected[prompt_name][slot], out_path)
+                if config.dump_format == "pt":
+                    out_path = config.dump_dir / f"output_hidden_states_slot_{slot:02d}_{prompt_name}.pt"
+                    torch.save(collected[prompt_name][slot], out_path)
+                else:
+                    prompt_dir = config.dump_dir / prompt_name
+                    prompt_dir.mkdir(parents=True, exist_ok=True)
+                    out_path = (
+                        prompt_dir / f"decoder_output_layer_{config.decoder_layer_idx}_slot_{slot:02d}.safetensors"
+                    )
+                    tensor_key = f"decoder_output_layer_{config.decoder_layer_idx}"
+                    safetensors_save_file({tensor_key: collected[prompt_name][slot]}, str(out_path))
                 logger.info(f"Wrote {out_path}")
 
     if config.dump_kv_cache:
@@ -970,9 +1211,21 @@ def run_sweep(
             start, end = schedule.range_for(prompt_idx)
             for slot in range(config.num_replication_slots):
                 kv_slice = kv_cache_torch[slot, :, start:end, :]
-                out_path = config.dump_dir / f"kv_cache_slot_{slot:02d}_{prompt_name}.pt"
-                torch.save(kv_slice, out_path)
-                logger.info(f"Wrote {out_path} shape={tuple(kv_slice.shape)}")
+                if config.dump_format == "pt":
+                    out_path = config.dump_dir / f"kv_cache_slot_{slot:02d}_{prompt_name}.pt"
+                    torch.save(kv_slice, out_path)
+                    logger.info(f"Wrote {out_path} shape={tuple(kv_slice.shape)}")
+                else:
+                    # bit_sculpt stores kv_post_transform_layer_{i} as (T, 576);
+                    # the harness pulls the cache as (1, L_p, 576), so squeeze
+                    # dim 0 to match the reference contract exactly.
+                    kv_slice_2d = kv_slice.squeeze(0).contiguous()
+                    prompt_dir = config.dump_dir / prompt_name
+                    prompt_dir.mkdir(parents=True, exist_ok=True)
+                    out_path = prompt_dir / f"kv_cache_layer_{config.decoder_layer_idx}_slot_{slot:02d}.safetensors"
+                    tensor_key = f"kv_post_transform_layer_{config.decoder_layer_idx}"
+                    safetensors_save_file({tensor_key: kv_slice_2d}, str(out_path))
+                    logger.info(f"Wrote {out_path} shape={tuple(kv_slice_2d.shape)}")
 
     logger.info("run_sweep complete")
     return SweepResult(
