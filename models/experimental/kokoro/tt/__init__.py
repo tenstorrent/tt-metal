@@ -59,6 +59,11 @@ from .tt_prosody_predictor import (
     TTProsodyPredictorParams,
     preprocess_tt_prosody_predictor,
 )
+from .tt_torch_stft import (
+    TTTorchSTFT,
+    TTTorchSTFTParams,
+    preprocess_tt_torch_stft,
+)
 from .tt_text_encoder import (
     TTTextEncoder,
     TTTextEncoderConvLNBlock,
@@ -92,6 +97,8 @@ __all__ = [
     "TTLinearNormParams",
     "TTProsodyPredictor",
     "TTProsodyPredictorParams",
+    "TTTorchSTFT",
+    "TTTorchSTFTParams",
     "TTTextEncoder",
     "TTTextEncoderConvLNBlock",
     "TTTextEncoderConvLNBlockParams",
@@ -109,6 +116,7 @@ __all__ = [
     "preprocess_tt_lstm_1layer",
     "preprocess_tt_prosody_predictor",
     "preprocess_tt_text_encoder",
+    "preprocess_tt_torch_stft",
     "tt_bilstm_nlc",
     "tt_instance_norm_1d_nlc",
     "tt_conv1d_nlc",
