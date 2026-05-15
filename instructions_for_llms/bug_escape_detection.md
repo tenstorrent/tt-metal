@@ -193,47 +193,69 @@ If verdict is not PROCEED_TO_BISECT → write escape ID to `seen-escapes.json` w
 
 ---
 
-### Step 4: Bisect (after midnight, ~00:15Z)
+### Step 4: Find the Fix Commit
 
-Use the existing bisect workflow:
-https://github.com/tenstorrent/tt-metal/actions/workflows/bisect-dispatch.yaml
+**WARNING: Do NOT use `bisect-dispatch.yaml` for this step.**
+That workflow finds *breaking* commits (good=old passing, bad=new failing). We want the *fix*
+commit. Using it here will either error ("good is not ancestor of bad") or find the wrong commit.
 
-Dispatch via GitHub API:
-```
-POST /repos/tenstorrent/tt-metal/actions/workflows/bisect-dispatch.yaml/dispatches
-{
-  "ref": "main",
-  "inputs": {
-    "good_commit": "{first_passing_sha}",
-    "bad_commit":  "{last_failing_sha}",
-    "arch":        "blackhole",
-    "command":     "{test command, e.g. pytest tests/foo.py::test_bar -x}",
-    "timeout":     "60",
-    "retries":     "2",
-    "download_artifacts": "true"
-  }
-}
+**Step 4a — Snowflake oracle (free, try this first):**
+
+Query for all runs of the test between the last failure and first pass timestamps:
+
+```sql
+SELECT p.GIT_COMMIT_HASH, p.PIPELINE_START_TS, t.SUCCESS
+FROM TTDATASF.SW_TEST.CICD_TEST t
+JOIN TTDATASF.SW_TEST.CICD_JOB j ON t.CICD_JOB_ID = j.CICD_JOB_ID
+JOIN TTDATASF.SW_TEST.CICD_PIPELINE p ON j.CICD_PIPELINE_ID = p.CICD_PIPELINE_ID
+WHERE t.TEST_CASE_ID = {test_case_id}
+  AND p.PIPELINE_START_TS BETWEEN '{last_fail_ts}' AND '{first_pass_ts}'
+ORDER BY p.PIPELINE_START_TS ASC;
 ```
 
-Extract the test command from the failure log or from known workflow-to-test mappings.
+If intermediate runs exist, the last FAIL → first PASS transition identifies the fix commit.
+No hardware needed.
 
-Save bisect run ID to `campaign-state.json`.
+**Step 4b — Binary search when Snowflake has no intermediate data:**
 
-Poll every 15 minutes until terminal state (succeeded / failed / timed_out).
-Parse the final log message from the "Run Git Bisect" step — it contains the culprit commit SHA.
+1. `GET /repos/tenstorrent/tt-metal/compare/{last_failing}...{first_passing}` → N commits
+2. Pick the middle commit. Create a branch at that SHA and push it.
+3. Dispatch a **pruned** verification run on that branch (Step 5 for pruning details).
+4. PASS → fix is in first half. FAIL → fix is in second half.
+5. Repeat on the narrowed range. O(log N) hardware dispatches total.
 
-If timed out → write `status: "inconclusive_bisect_timeout"` to `seen-escapes.json`, stop.
+Save the identified fix commit SHA to `campaign-state.json`.
 
 ---
 
 ### Step 5: Verification
 
 Create two branches in the worktree:
-- `brain/escape-before-{escape_id}` at `git checkout {bisect_result}^` (parent)
-- `brain/escape-after-{escape_id}` at `git checkout {bisect_result}` (fix commit)
+- `brain/escape-before-{escape_id}` at `{fix_commit}^` (parent of fix)
+- `brain/escape-after-{escape_id}` at `{fix_commit}` (the fix commit itself)
 
-Dispatch the appropriate test workflow (blackhole-e2e-tests.yaml or blackhole-demo-tests.yaml)
-for each branch. Run them in parallel.
+**Before dispatching, look up the correct workflow and job.**
+Do NOT guess the workflow from memory. Query Snowflake for a recent run of the test:
+
+```sql
+SELECT DISTINCT j.NAME, j.GITHUB_JOB_LINK
+FROM TTDATASF.SW_TEST.CICD_TEST t
+JOIN TTDATASF.SW_TEST.CICD_JOB j ON t.CICD_JOB_ID = j.CICD_JOB_ID
+WHERE t.TEST_CASE_ID = {test_case_id}
+  AND j.JOB_START_TS >= DATEADD('day', -30, CURRENT_TIMESTAMP())
+LIMIT 3;
+```
+
+`j.NAME` gives the workflow and SKU (e.g. `models-unit-tests / Qwen3-32B unit tests (Galaxy) [wh_galaxy_perf]`).
+Cross-reference with `GET /repos/tenstorrent/tt-metal/actions/workflows` by name to get the workflow file and ID.
+
+**Prune the test matrix before dispatching.** Look up the `TESTS_YAML_PATH` env var in the
+`*-impl.yaml` workflow. Edit that YAML on both branches to contain only the failing test group,
+narrowed to the specific test function. Commit and push. Then dispatch.
+
+Dispatching the full workflow without pruning wastes Galaxy runner time on unrelated tests.
+
+Dispatch both branches in parallel.
 
 Wait for both to complete.
 
@@ -390,3 +412,32 @@ For the initial 60-day scan:
 6. Confluence page seeded with all confirmed escapes from the backfill.
 
 After backfill, switch to incremental mode. The `seen-escapes.json` file prevents re-analysis.
+
+---
+
+## Known Pitfalls
+
+### 1. Using the bisect workflow to find fix commits
+
+**Error**: `bisect-dispatch.yaml` finds breaking commits (good=old, bad=new). The campaign
+needs fix commits, which are in the opposite direction. The workflow will error or find the
+wrong commit if used for fix commit search.
+
+**Fix**: Use the Snowflake oracle (Step 4a) or binary search with pruned dispatches (Step 4b).
+
+### 2. Guessing the verification workflow from memory
+
+**Error**: Assuming which GitHub Actions workflow runs a given test without checking.
+Different tests run in different workflows — guessing leads to dispatching a workflow that
+doesn't contain the test at all.
+
+**Fix**: Always query `CICD_JOB.NAME` from Snowflake for a recent run of the test, then
+find the corresponding workflow file via the GitHub workflows API. See Step 5.
+
+### 3. Skipping test matrix pruning before verification dispatch
+
+**Error**: Dispatching the full workflow instead of narrowing to the one failing test.
+This wastes Galaxy hardware on dozens of unrelated tests and makes results harder to interpret.
+
+**Fix**: Always edit the `TESTS_YAML_PATH` file on both branches to contain only the failing
+test group before dispatching. This is mandatory, not optional.
