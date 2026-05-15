@@ -64,9 +64,6 @@ class RoutedExpertTensors(NamedTuple):
     up_proj_weights: Any
     down_proj_weights: Any
     final_output_tensor: Any
-    gate_proj_expert_tensors: Any
-    up_proj_expert_tensors: Any
-    down_proj_expert_tensors: Any
     torch_input: Any
     torch_gate_mm_weights: Any
     torch_bias: Any
@@ -428,9 +425,6 @@ def create_routed_expert_tensors(
         gate_proj_weights = routed_weights.routed_gate_proj
         up_proj_weights = routed_weights.routed_up_proj
         down_proj_weights = routed_weights.routed_down_proj
-        gate_proj_expert_tensors = None  # unused when is_moe=False
-        up_proj_expert_tensors = None
-        down_proj_expert_tensors = None
 
     if enable_routing:
         assert is_moe, "enable_routing=True is only supported with MoE weights"
@@ -507,9 +501,6 @@ def create_routed_expert_tensors(
         up_proj_weights=up_proj_weights,
         down_proj_weights=down_proj_weights,
         final_output_tensor=final_output_tensor,
-        gate_proj_expert_tensors=gate_proj_expert_tensors,
-        up_proj_expert_tensors=up_proj_expert_tensors,
-        down_proj_expert_tensors=down_proj_expert_tensors,
         torch_input=torch_input,
         torch_gate_mm_weights=torch_gate_mm_weights,
         torch_bias=torch_bias,
