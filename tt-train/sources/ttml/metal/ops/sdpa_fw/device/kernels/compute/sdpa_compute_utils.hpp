@@ -31,12 +31,14 @@ void calculate_recip_first_column() {
     constexpr int ITERATIONS_HALF_FACE = 4;
     for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
+        sfpi::vFloat out;
         if constexpr (DST_ACCUM_MODE) {
-            sfpi::dst_reg[0] = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
+            out = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
         } else {
-            sfpi::vFloat out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
-            sfpi::dst_reg[0] = sfpi::float_to_fp16b(out, sfpi::RoundMode::NearestEven);
+            out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
+            out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::NearestEven);
         }
+        sfpi::dst_reg[0] = out;
         sfpi::dst_reg += 2;
     }
 }
