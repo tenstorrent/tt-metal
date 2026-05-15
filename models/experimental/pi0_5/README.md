@@ -1,6 +1,6 @@
 # PI0.5 (`pi0_5`) — Tenstorrent
 
-End-to-end TTNN implementation of the **π₀.₅** (PI0.5) vision-language-action policy on Blackhole, with a PyTorch reference, LIBERO simulator integration, and a real-weights perf path that runs at **~96 ms / chunk** (~520 actions/s) with trace+2CQ.
+End-to-end TTNN implementation of the **π₀.₅** (PI0.5) vision-language-action policy on Blackhole, with a PyTorch reference, LIBERO simulator integration, and a real-weights perf path that runs at **~65 ms / chunk** (~770 actions/s) with trace+2CQ.
 
 This package is **self-contained** — it does not import from `models/experimental/pi0/`.
 
@@ -203,7 +203,32 @@ python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/test_pcc_adarms_g
 python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/test_pcc_e2e_reference.py     # E2E reference (no device)
 python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/test_pcc_real_weights.py      # E2E pytorch with real pi05_base weights
 python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/test_pcc_ttnn_real_weights.py # E2E TTNN with real weights — needs device
+
+# Per-step velocity + 10-seed e2e PCC distribution (the headline E2E correctness number):
+PYTHONPATH=$PWD python models/experimental/pi0_5/tests/pcc/test_pcc_pi05_per_step_vs_torch.py
+# Custom seed list:
+PI0_PCC_SEEDS="42,7,100" python models/experimental/pi0_5/tests/pcc/test_pcc_pi05_per_step_vs_torch.py
 ```
+
+### E2E PCC: why we report a distribution, not a single seed
+
+The e2e PCC of a 10-step flow-matching Euler integrator is intrinsically **seed-sensitive**: each rollout is a 10-step nonlinear ODE solve starting from random initial noise, so per-step bf16 drift is amplified differently for every input pattern. Single-seed PCC has stdev ≈ 0.006 (≈ 2% peak-to-peak range across seeds) — it is a Monte Carlo sample, not a precision metric.
+
+The right thing to report is the **mean e2e PCC across N seeds**. `test_pcc_pi05_per_step_vs_torch.py` runs a 10-seed sweep by default and gates on `mean ≥ 0.95`.
+
+**Latest measured E2E PCC distribution (10 seeds, Blackhole, pi05_base weights, SigLIP BS on):**
+
+| metric | value |
+|---|---|
+| mean    | **0.9910** |
+| median  | 0.9929 |
+| stdev   | 0.0070 |
+| min     | 0.9781 |
+| max     | 0.9980 |
+| ≥ 0.99  | 6 / 10 seeds |
+| ≥ 0.95  | 10 / 10 seeds |
+
+Per-step velocity PCC (worst across 10 denoise steps, single representative seed): **0.9933** (cosine ≈ 0.9994 per step; vs TTNN-internal bf16 trajectory).
 
 ### Perf tests (Blackhole)
 
@@ -211,7 +236,7 @@ python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/test_pcc_ttnn_rea
 # Headline: full sample_actions with trace + 2CQ (the published number)
 PYTHONPATH=$PWD python_env/bin/pytest -xvs \
   models/experimental/pi0_5/tests/perf/test_perf_ttnn_full_e2e_trace.py
-#  → Per-call avg ≈ 96-103 ms (N=10),  Action throughput ≈ 487-520 actions/s
+#  → Per-call avg ≈ 64-65 ms (N=10),  Action throughput ≈ 770 actions/s
 
 # Without trace — apples-to-apples vs untraced rollout (~200 ms / chunk)
 PYTHONPATH=$PWD python_env/bin/pytest -xvs \
@@ -233,15 +258,17 @@ PYTHONPATH=$PWD python_env/bin/pytest -xvs \
   models/experimental/pi0_5/tests/perf/test_denoise_step_accuracy.py
 ```
 
-**Latest measured trace-mode perf (Blackhole, N=10, after the matmul-sharding port from `pi0_p150`):**
+**Latest measured trace-mode perf (Blackhole, N=10, with ViT-BH-style block-sharded SigLIP encoder data path):**
 
 | metric | value |
 |---|---|
-| per-call latency | **96.26 ms** |
-| chunk throughput | 9.74 chunks/s |
-| action throughput | **519.4 actions/s** |
-| jitter (stddev) | 0.04 ms |
-| trace capture (one-time) | ~475 ms |
+| per-call latency | **64.85 ms** |
+| chunk throughput | 15.42 chunks/s |
+| action throughput | **770.98 actions/s** |
+| jitter (stddev) | 0.06 ms |
+| trace capture (one-time) | ~410 ms |
+
+The SigLIP encoder runs entirely in **L1 block-sharded layout on a common 12×8 = 96-core grid** (ViT-BH tech report §5.3 pattern). Hidden states stay block-sharded across all 27 encoder layers — only re-tiling for SDPA, which uses the full 13×10 grid. The 12×8 grid is the largest divisor-clean choice given hidden=1152 (36 tiles, divisible by 12) and M=512 (16 tiles, divisible by 8); going wider (e.g. 13×10) would need >8% weight/compute padding to keep tile divisibility, which doesn't pay back. Runtime master switch: `PI0_SIGLIP_BS=0` reverts to the interleaved-LN baseline at ~65.1 ms with no rebuild.
 
 ---
 

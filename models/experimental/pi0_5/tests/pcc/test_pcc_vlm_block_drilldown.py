@@ -212,16 +212,34 @@ def test_vlm_block_drilldown(device):
     cos_full = cos_sim(out_t, to_t(out_ttnn))
     print(f"  [6] Block output (full):         PCC={pcc_full:.6f}  cos={cos_full:.6f}")
 
+    # ------------------------------------------------------------------
+    # Step 7 — Integrated block.forward() on the SAME input
+    # ------------------------------------------------------------------
+    # Reproduce inputs to avoid seed-drift between the two paths.
+    hidden_ttnn_v2 = ttnn.from_torch(hidden, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    cos_ttnn_v2 = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    sin_ttnn_v2 = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    out_torch_full, _ = block_torch.forward(hidden, cos_t, sin_t)
+    out_ttnn_full, _ = block_ttnn.forward(hidden_ttnn_v2, cos_ttnn_v2, sin_ttnn_v2)
+    pcc_integrated = compute_pcc(out_torch_full, to_t(out_ttnn_full))
+    cos_integrated = cos_sim(out_torch_full, to_t(out_ttnn_full))
+    print(f"  [7] Integrated block.forward():  PCC={pcc_integrated:.6f}  cos={cos_integrated:.6f}")
+
     # ==================================================================
     # Summary
     # ==================================================================
-    print("\n" + "=" * 66)
+    print("\n" + "=" * 70)
     print("  VLM Block[0] sub-step PCC drilldown")
-    print("=" * 66)
-    print(f"  After RMSNorm1 .................. {pcc_ln1:.6f}")
-    print(f"  After Attention ................. {pcc_attn:.6f}  <-- attention path")
-    print(f"  After attn residual ............. {pcc_r1:.6f}")
-    print(f"  After RMSNorm2 .................. {pcc_ln2:.6f}")
-    print(f"  After MLP ....................... {pcc_mlp:.6f}")
-    print(f"  After full block ................ {pcc_full:.6f}")
-    print("=" * 66)
+    print("=" * 70)
+    print(f"  [1] After RMSNorm1 .................. {pcc_ln1:.6f}")
+    print(f"  [2] After Attention ................. {pcc_attn:.6f}  <-- attention path")
+    print(f"  [3] After attn residual ............. {pcc_r1:.6f}")
+    print(f"  [4] After RMSNorm2 .................. {pcc_ln2:.6f}")
+    print(f"  [5] After MLP ....................... {pcc_mlp:.6f}")
+    print(f"  [6] Piecewise full block ............ {pcc_full:.6f}")
+    print(f"  [7] Integrated block.forward() ...... {pcc_integrated:.6f}  <-- the production path")
+    print("=" * 70)
+    if pcc_integrated < pcc_full - 0.05:
+        print("  ⚠ Integrated path differs from piecewise — bug in block.forward!")
+    else:
+        print("  ✅ Integrated path matches piecewise — model ops are clean")
